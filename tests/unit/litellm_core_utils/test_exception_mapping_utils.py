@@ -28,6 +28,7 @@ from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.github_copilot.authenticator import DEFAULT_GITHUB_CLIENT_ID
 from litellm.llms.github_copilot.per_user_auth import GithubCopilotUserSession
+from litellm.llms.groq.chat.transformation import GroqChatCompletionStreamingHandler
 from litellm.llms.openai.common_utils import OpenAIError
 from litellm.llms.vertex_ai.common_utils import VertexAIError
 from litellm.proxy.common_utils.openai_error_payload import openai_error_type
@@ -3880,6 +3881,194 @@ def test_openai_error_never_mentions_the_copilot_app_permission(monkeypatch):
             extra_kwargs={},
         )
     assert "Copilot Requests" not in caught.value.message, caught.value.message
+
+
+_PROVIDER_WIRE_BODY: Final = {"error": {"message": "wire says no", "type": "invalid_request_error"}}
+
+
+@pytest.mark.parametrize(
+    ("status_code", "mapped_error"),
+    [
+        (400, litellm.BadRequestError),
+        (401, litellm.AuthenticationError),
+        (404, litellm.NotFoundError),
+        (429, litellm.RateLimitError),
+    ],
+)
+def test_mapped_anthropic_error_exposes_the_provider_reply(status_code: int, mapped_error: type[Exception]):
+    original: Final = AnthropicError(status_code=status_code, message=json.dumps(_PROVIDER_WIRE_BODY))
+    original.response = httpx.Response(status_code, json=_PROVIDER_WIRE_BODY, request=original.request)
+
+    with pytest.raises(mapped_error) as caught:
+        exception_type(
+            model="claude-sonnet-4-5",
+            original_exception=original,
+            custom_llm_provider="anthropic",
+            completion_kwargs={},
+            extra_kwargs={},
+        )
+
+    assert caught.value.response.status_code == status_code
+    assert caught.value.response.json() == _PROVIDER_WIRE_BODY
+
+
+def test_mapped_anthropic_529_reports_one_status_beside_the_provider_reply(quiet_exception_mapping: None) -> None:
+    wire_body: Final = {"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}}
+    original: Final = AnthropicError(status_code=529, message=json.dumps(wire_body))
+    original.response = httpx.Response(529, json=wire_body, request=original.request)
+
+    with pytest.raises(litellm.InternalServerError) as caught:
+        exception_type(
+            model="claude-sonnet-4-5",
+            original_exception=original,
+            custom_llm_provider="anthropic",
+            completion_kwargs={},
+            extra_kwargs={},
+        )
+
+    assert (caught.value.status_code, caught.value.response.status_code) == (500, 500)
+    assert caught.value.provider_status_code == 529
+    assert caught.value.response.json() == wire_body
+
+
+@pytest.mark.parametrize(
+    ("provider", "wire_status", "message", "mapped_error"),
+    [
+        ("replicate", 402, json.dumps(_PROVIDER_WIRE_BODY), litellm.APIError),
+        ("nlp_cloud", 522, json.dumps(_PROVIDER_WIRE_BODY), litellm.Timeout),
+        ("openai", 524, "A timeout occurred", litellm.Timeout),
+        ("openai", 503, "The server had an error processing your request.", litellm.InternalServerError),
+        ("mistral", 400, "Mistral API raised a streaming error", litellm.APIError),
+        ("openai", 504, "Request timed out", litellm.Timeout),
+    ],
+)
+def test_an_error_mapped_to_another_status_reports_that_status_on_the_provider_reply(
+    provider: str,
+    wire_status: int,
+    message: str,
+    mapped_error: type[litellm.APIError | litellm.Timeout | litellm.InternalServerError],
+    quiet_exception_mapping: None,
+) -> None:
+    request: Final = httpx.Request("POST", "https://provider.example/v1/predictions")
+    original: Final = BaseLLMException(
+        status_code=wire_status,
+        message=message,
+        request=request,
+        response=httpx.Response(wire_status, json=_PROVIDER_WIRE_BODY, request=request),
+    )
+
+    with pytest.raises(mapped_error) as caught:
+        exception_type(
+            model="provider-model",
+            original_exception=original,
+            custom_llm_provider=provider,
+            completion_kwargs={},
+            extra_kwargs={},
+        )
+
+    assert caught.value.status_code != wire_status
+    assert caught.value.response.status_code == caught.value.status_code
+    assert caught.value.response.json() == _PROVIDER_WIRE_BODY
+
+
+def test_a_streamed_groq_error_with_a_text_code_still_maps_to_an_api_error(quiet_exception_mapping: None) -> None:
+    with pytest.raises(OpenAIError) as streamed_failure:
+        GroqChatCompletionStreamingHandler(streaming_response=iter(()), sync_stream=True).chunk_parser(
+            {"error": {"code": "tool_use_failed", "message": "Failed to call a function"}}
+        )
+
+    with pytest.raises(litellm.APIError) as caught:
+        exception_type(
+            model="llama-3.3-70b-versatile",
+            original_exception=streamed_failure.value,
+            custom_llm_provider="groq",
+            completion_kwargs={},
+            extra_kwargs={},
+        )
+
+    assert type(caught.value) is litellm.APIError
+    assert "Failed to call a function" in str(caught.value)
+
+
+def test_litellm_proxy_error_keeps_the_reply_body_beside_the_forwarded_headers():
+    from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+
+    request: Final = httpx.Request("POST", "https://proxy.example/v1/responses")
+    upstream: Final = httpx.Response(400, json=_PROVIDER_WIRE_BODY, headers=_PROXY_HEADERS, request=request)
+    with pytest.raises(BaseLLMException) as provider_failure:
+        BaseLLMHTTPHandler()._handle_error(
+            e=httpx.HTTPStatusError("rejected", request=request, response=upstream), provider_config=None
+        )
+
+    with pytest.raises(litellm.BadRequestError) as caught:
+        exception_type(
+            model="gpt-5.6",
+            original_exception=provider_failure.value,
+            custom_llm_provider="litellm_proxy",
+            completion_kwargs={},
+            extra_kwargs={},
+        )
+
+    assert caught.value.response.json() == _PROVIDER_WIRE_BODY
+    assert dict(caught.value.response.headers) == dict(upstream.headers)
+
+
+def test_provider_reply_does_not_reclassify_an_invalid_bedrock_model_identifier():
+    from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+
+    wire_body: Final = {"message": "The provided model identifier is invalid."}
+    converse_like_url: Final = "https://bedrock-runtime.us-east-1.amazonaws.com/model/anthropic.claude/converse"
+    request: Final = httpx.Request("POST", converse_like_url)
+    rejection: Final = httpx.HTTPStatusError(
+        "rejected", request=request, response=httpx.Response(400, json=wire_body, request=request)
+    )
+
+    with pytest.raises(BaseLLMException) as provider_failure:
+        BaseLLMHTTPHandler()._handle_error(e=rejection, provider_config=None)
+    with pytest.raises(litellm.BadRequestError) as caught:
+        exception_type(
+            model="anthropic.claude-sonnet-4-5-20250929-v1:0",
+            original_exception=provider_failure.value,
+            custom_llm_provider="bedrock",
+            completion_kwargs={},
+            extra_kwargs={},
+        )
+
+    assert type(caught.value) is litellm.BadRequestError
+    assert caught.value.response.json() == wire_body
+
+
+def _anthropic_failure_answered_with(reply_status: int) -> BaseLLMException:
+    request: Final = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    return BaseLLMException(
+        status_code=400,
+        message="invalid_request_error: rejected",
+        request=request,
+        response=httpx.Response(reply_status, content=b"provider reply", request=request),
+    )
+
+
+def test_only_an_http_error_reply_is_exposed_as_the_provider_error():
+    with pytest.raises(litellm.BadRequestError) as answered_with_an_error:
+        exception_type(
+            model="claude-sonnet-4-5",
+            original_exception=_anthropic_failure_answered_with(400),
+            custom_llm_provider="anthropic",
+            completion_kwargs={},
+            extra_kwargs={},
+        )
+    with pytest.raises(litellm.BadRequestError) as answered_with_success:
+        exception_type(
+            model="claude-sonnet-4-5",
+            original_exception=_anthropic_failure_answered_with(200),
+            custom_llm_provider="anthropic",
+            completion_kwargs={},
+            extra_kwargs={},
+        )
+
+    assert answered_with_an_error.value.response.text == "provider reply"
+    assert answered_with_success.value.response.status_code != 200
+    assert answered_with_success.value.response.text == ""
 
 
 @pytest.mark.parametrize(

@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
+import { AppWindow } from "lucide-react";
 import { parseAsString, useQueryState } from "nuqs";
 import { ErrorState } from "@/components/shared/ErrorState";
 import { type UseQueryResult } from "@tanstack/react-query";
@@ -15,7 +16,7 @@ import { readsEveryApp, useGrantedApps } from "./useGrantedApps";
 import ApplicationsTable from "./ApplicationsTable";
 import AppSettingsDialog from "./AppSettingsDialog";
 import { Card } from "@/components/ui/card";
-import { Page } from "@/components/shared/Page";
+import { Page, PageContent } from "@/components/shared/Page";
 import { PageHeader, PageHeaderTitle, PageHeaderDescription } from "@/components/shared/PageHeader";
 import AppDefinitionSetting from "./AppDefinitionSetting";
 
@@ -49,22 +50,27 @@ function ManagedApps() {
   return (
     <Page>
       <PageHeader>
-        <PageHeaderTitle>{t("apps.title")}</PageHeaderTitle>
+        <PageHeaderTitle>
+          <AppWindow />
+          {t("apps.title")}
+        </PageHeaderTitle>
         <PageHeaderDescription>{t("apps.settingsHint")}</PageHeaderDescription>
       </PageHeader>
-      {resourceType && (
-        <ApplicationsList resources={resources} apps={apps} onOpen={(resourceId) => void setSelected(resourceId)} />
-      )}
-      {resource && (
-        <AppSettingsDialog
-          key={`${resource.resource_type}:${resource.resource_id}:${resource.app_id ?? "new"}`}
-          resource={resource}
-          onClose={() => void setSelected(null)}
-        />
-      )}
-      <section className={resourceType ? "border-t pt-6" : undefined}>
-        <AppDefinitionSetting />
-      </section>
+      <PageContent>
+        {resourceType && (
+          <ApplicationsList resources={resources} apps={apps} onOpen={(resourceId) => void setSelected(resourceId)} />
+        )}
+        {resource && (
+          <AppSettingsDialog
+            key={`${resource.resource_type}:${resource.resource_id}:${resource.app_id ?? "new"}`}
+            resource={resource}
+            onClose={() => void setSelected(null)}
+          />
+        )}
+        <section className={resourceType ? "border-t pt-6" : undefined}>
+          <AppDefinitionSetting />
+        </section>
+      </PageContent>
     </Page>
   );
 }
@@ -74,12 +80,17 @@ function GrantedApps({ apps }: { apps: readonly App[] }) {
   return (
     <Page>
       <PageHeader>
-        <PageHeaderTitle>{t("apps.title")}</PageHeaderTitle>
+        <PageHeaderTitle>
+          <AppWindow />
+          {t("apps.title")}
+        </PageHeaderTitle>
         <PageHeaderDescription>{t("apps.grantedHint")}</PageHeaderDescription>
       </PageHeader>
-      <Card className="gap-0 overflow-hidden py-0" aria-label={t("apps.list.title")}>
-        <ApplicationsTable rows={grantedApplicationRows(apps)} loading={false} />
-      </Card>
+      <PageContent>
+        <Card className="gap-0 overflow-hidden py-0" aria-label={t("apps.list.title")}>
+          <ApplicationsTable rows={grantedApplicationRows(apps)} loading={false} />
+        </Card>
+      </PageContent>
     </Page>
   );
 }

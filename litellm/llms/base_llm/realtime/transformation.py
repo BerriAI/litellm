@@ -118,6 +118,9 @@ class BaseRealtimeConfig(ABC):
     def builds_setup_from_session_update(self) -> bool:
         return False
 
+    def setup_must_complete_before_content(self, setup_message: Mapping[str, object]) -> bool:
+        return False
+
     def setup_session_update_rejection(
         self, model: str, session: Mapping[str, object], *, setup_sent: bool
     ) -> RealtimeSessionUpdateRejection | None:

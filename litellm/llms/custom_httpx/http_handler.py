@@ -47,6 +47,7 @@ from litellm.litellm_core_utils.request_timeout_resolver import (
 )
 from litellm.llms.base_llm.auth.token_exchange import JwtBearerTokenExchangeEngine, default_token_exchange_engine
 from litellm.llms.base_llm.auth.types import MintedToken
+from litellm.llms.custom_httpx.accept_encoding import ACCEPT_ENCODING_HEADER
 from litellm.llms.custom_httpx.aiohttp_pool_diagnostics import build_pool_wait_trace_config
 from litellm.llms.custom_httpx.http2_connection_spread import AsyncHTTP2ConnectionSpread
 from litellm.types.llms.custom_http import *
@@ -79,7 +80,7 @@ _RequestContent: TypeAlias = str | bytes | Iterable[bytes] | AsyncIterable[bytes
 
 _IPV4_LOCAL_ADDRESS: Final = "0.0.0.0"
 
-_HttpxTransportT: Final = TypeVar("_HttpxTransportT", httpx.BaseTransport, httpx.AsyncBaseTransport)
+_HttpxTransportT = TypeVar("_HttpxTransportT", httpx.BaseTransport, httpx.AsyncBaseTransport)
 
 HTTPEventHooks: TypeAlias = Mapping[str, list[Callable[..., object]]]
 
@@ -187,12 +188,10 @@ def get_default_headers() -> dict[str, str]:
 
     - Default: `User-Agent: litellm/{version}`
     - Override: set `LITELLM_USER_AGENT` to fully override the header value.
+    - `Accept-Encoding` offers everything httpx decodes but zstd (see accept_encoding.py).
     """
     user_agent: Final = os.environ.get("LITELLM_USER_AGENT")
-    if user_agent is not None:
-        return {"User-Agent": user_agent}
-
-    return {"User-Agent": default_user_agent()}
+    return {**ACCEPT_ENCODING_HEADER, "User-Agent": user_agent if user_agent is not None else default_user_agent()}
 
 
 def default_user_agent() -> str:

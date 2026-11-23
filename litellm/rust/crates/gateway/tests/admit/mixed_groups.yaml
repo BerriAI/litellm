@@ -1,0 +1,148 @@
+# The live proof config: one native group, a group with a deployment setting, a group that falls
+# back to it, and a provider the native route was not compared on.
+config:
+  model_list:
+    - model_name: claude
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+      model_info:
+        id: claude-a
+    - model_name: claude-tagged
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+        tags: [paid]
+    - model_name: claude-backed
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+    - model_name: deepseek
+      litellm_params:
+        model: deepseek/deepseek-chat
+        api_key: provider-key
+  router_settings:
+    fallbacks:
+      - claude-backed: [claude-tagged]
+  general_settings:
+    master_key: gateway-key
+
+requests:
+  - name: plain
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude, max_tokens: 16, messages: [{role: user, content: Say ok}]}
+    expect: rust
+
+  - name: x-api-key
+    headers: {x-api-key: gateway-key}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: rust
+
+  - name: streamed with beta and a session header
+    path: /v1/messages?beta=true
+    headers: {authorization: Bearer gateway-key, x-claude-code-session-id: 0af404e1, x-litellm-call-id: abc}
+    body: {model: claude, max_tokens: 16, stream: true, messages: []}
+    expect: rust
+
+  - name: other route
+    path: /v1/chat/completions
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude, messages: []}
+    expect: python
+    reason: route
+
+  - name: proxy header
+    headers: {authorization: Bearer gateway-key, x-litellm-tags: paid}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: headers
+
+  - name: coding agent while drop_params is unset
+    headers: {authorization: Bearer gateway-key, user-agent: 'claude-cli/2.1.0 (external, cli)'}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: headers
+
+  - name: compressed body
+    headers: {authorization: Bearer gateway-key, content-encoding: gzip}
+    raw: not gzip
+    expect: python
+    reason: headers
+
+  - name: other caller
+    headers: {authorization: Bearer sk-someone-else}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+
+  - name: no credential
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+
+  - name: proxy param
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude, max_tokens: 16, messages: [], user: end-user}
+    expect: python
+    reason: body
+
+  - name: metadata object
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude, max_tokens: 16, messages: [], metadata: {user_id: {session_id: abc}}}
+    expect: python
+    reason: body
+
+  - name: hosted tool
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude, max_tokens: 16, messages: [], tools: [{type: mcp, server_url: litellm_proxy/mcp/github}]}
+    expect: python
+    reason: body
+
+  - name: not json
+    headers: {authorization: Bearer gateway-key}
+    raw: '{"model":"claude"'
+    expect: python
+    reason: body
+
+  - name: tagged group
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude-tagged, max_tokens: 16, messages: []}
+    expect: python
+    reason: model
+
+  - name: group that falls back to the tagged one
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude-backed, max_tokens: 16, messages: []}
+    expect: python
+    reason: model
+    over: 'router_settings fallback to claude-tagged: model_list.litellm_params.tags'
+
+  - name: other provider
+    headers: {authorization: Bearer gateway-key}
+    body: {model: deepseek, max_tokens: 16, messages: []}
+    expect: python
+    reason: model
+
+  - name: unknown model
+    headers: {authorization: Bearer gateway-key}
+    body: {model: nope, max_tokens: 16, messages: []}
+    expect: python
+    reason: model
+
+  - name: a header outranks the caller and the body
+    headers: {authorization: Bearer sk-someone-else, x-litellm-tags: paid}
+    body: {model: deepseek, max_tokens: 16, messages: [], user: end-user}
+    expect: python
+    reason: headers
+
+  - name: the caller outranks the body
+    headers: {authorization: Bearer sk-someone-else}
+    body: {model: deepseek, max_tokens: 16, messages: [], user: end-user}
+    expect: python
+    reason: credential
+
+  - name: the body outranks the model
+    headers: {authorization: Bearer gateway-key}
+    body: {model: deepseek, max_tokens: 16, messages: [], user: end-user}
+    expect: python
+    reason: body

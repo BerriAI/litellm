@@ -1,3 +1,4 @@
+from collections import Counter
 from typing import Final
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -57,6 +58,11 @@ class _EmptyUserCache:
         return None
 
 
+def _reads_on_the_wire(redis: RespRedis) -> list[int]:
+    commands: Final = [command[0].upper() for command in redis.commands if command[0].upper() != "CLIENT"]
+    return [position for position, name in enumerate(commands) if name == "MGET"]
+
+
 def _increments(redis: RespRedis) -> set[str]:
     return {command[1] for command in redis.commands if command[0].upper() == "INCRBYFLOAT"}
 
@@ -74,7 +80,8 @@ async def test_increment_spend_counters_increments_all_buckets(monkeypatch: pyte
         reported: Final = await calls.reported(2)
 
     keys: Final = {"spend:key:hashed-tok", "spend:team:t1", "spend:team_member:u1:t1", "spend:user:u1"}
-    assert reported == ("MGET", "pipeline")
+    assert Counter[str](reported) == Counter[str]({"MGET": 1, "pipeline": 1})
+    assert _reads_on_the_wire(redis) == [0]
     assert _increments(redis) == keys
     assert redis.values == dict.fromkeys(keys, 5.0)
     assert user_cache.reads != [], "the step reads the budget windows from the auth cache"
@@ -196,7 +203,8 @@ async def test_increment_spend_counters_failing_scope_propagates_after_siblings_
         reported: Final = await calls.reported(2)
 
     assert reservation["finalized"] is False
-    assert reported == ("MGET", "pipeline")
+    assert Counter[str](reported) == Counter[str]({"MGET": 1, "pipeline": 1})
+    assert _reads_on_the_wire(redis) == [0]
     assert redis.values == dict.fromkeys(keys, 6.0)
 
 
@@ -254,7 +262,8 @@ async def test_increment_spend_counters_pipelines_all_scopes_in_one_redis_call(m
         reported: Final = await calls.reported(2)
         memory: Final = store.snapshot()
 
-    assert reported == ("MGET", "pipeline")
+    assert Counter[str](reported) == Counter[str]({"MGET": 1, "pipeline": 1})
+    assert _reads_on_the_wire(redis) == [0]
     assert _increments(redis) == set(_PENDING_SPEND_COUNTER_KEYS)
     assert memory == dict.fromkeys(_PENDING_SPEND_COUNTER_KEYS, 1.5)
 

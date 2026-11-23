@@ -47,6 +47,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     extract_nested_form_metadata,
     read_request_path_params,
     resolve_inference_model,
+    safe_get_request_parsed_body,
 )
 from litellm.proxy.pricing_currency import PRICING_CURRENCY_FIELD
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
@@ -113,6 +114,12 @@ def mark_invalid_virtual_key_error(exception: ProxyException, is_invalid_virtual
     )
     setattr(marked_exception, INVALID_VIRTUAL_KEY_ERROR_MARKER, True)
     return marked_exception
+
+
+def bearer_credential(authorization: str) -> str | None:
+    scheme, _, credential = authorization.partition(" ")
+    token: Final = credential.strip()
+    return token if scheme.lower() == "bearer" and token else None
 
 
 def get_request_ip_address(request: Request, use_x_forwarded_for: bool | None = False) -> str | None:
@@ -1257,6 +1264,19 @@ def enforce_team_s3_bucket_allowlist(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=f"Authentication Error, {rejection}")
 
 
+def request_fields_for_body_check(request: Request, request_data: Mapping[str, object]) -> Mapping[str, object]:
+    """A user-defined pass-through forwards its query string verbatim to the admin-set target, so query-only
+    fields there are not client-side overrides. Without the parsed-body cache, provenance is unknown."""
+    if not request_dispatched_to_pass_through_endpoint(request):
+        return request_data
+    body: Final[Mapping[str, object] | None] = safe_get_request_parsed_body(request)
+    if body is None:
+        return request_data
+    return MappingProxyType(
+        {key: value for key, value in request_data.items() if key in body or key not in request.query_params}
+    )
+
+
 async def pre_db_read_auth_checks(
     request: Request,
     request_data: dict,
@@ -1287,7 +1307,7 @@ async def pre_db_read_auth_checks(
     )
     request.state.deferred_model_body_check = defer_model_checks  # rebind-ok: hand state to auth
     is_request_body_safe(
-        request_body=request_data,
+        request_body=request_fields_for_body_check(request, request_data),
         general_settings=general_settings,
         llm_router=llm_router,
         model=request_data.get("model") or _model_from_route_path(route) or "",
@@ -2490,6 +2510,7 @@ _MODEL_ROUTING_SESSION_MODEL_ROUTE_MARKERS: Final = (
     "/realtime/client_secrets",
     "/realtime/translations/client_secrets",
     "/realtime/calls",
+    "/live/sessions",
 )
 _MODEL_ROUTING_ID_FIELDS: Final = (
     "file_id",
@@ -2884,10 +2905,11 @@ def get_model_from_request(
     return model
 
 
-_HandlerModelKind: TypeAlias = Literal["completion", "image_generation", "image_edit"]
+_HandlerModelKind: TypeAlias = Literal["completion", "image_generation", "image_edit", "path"]
 _MODEL_REQUEST_DATA: Final = TypeAdapter(Mapping[str, object])
 _HANDLER_MODEL_ROUTES: Final[tuple[tuple[re.Pattern[str], str, _HandlerModelKind], ...]] = (
-    (re.compile(r"^(?:/v1beta)?/models/(.+):(?:generateContent|streamGenerateContent)$"), "model_name", "completion"),
+    (re.compile(r"^(?:/v1beta)?/models/(.*):(?:generateContent|streamGenerateContent)$"), "model_name", "completion"),
+    (re.compile(r"^(?:/v1beta)?/models/(.*):countTokens$"), "model_name", "path"),
     (re.compile(r"^/openai/deployments/(.+)/images/generations$"), "model", "image_generation"),
     (re.compile(r"^/openai/deployments/(.+)/images/edits$"), "model", "image_edit"),
 )
@@ -2914,7 +2936,7 @@ def _handler_selected_model(
         path_model if isinstance(path_model, str) and path_model else route_model,
         kind=kind,
     )
-    return model if isinstance(model, str) and model else route_model
+    return model if isinstance(model, str) and model else route_model or None
 
 
 def _model_from_route_path(route: str) -> str | None:
@@ -2928,8 +2950,8 @@ def _model_from_route_path(route: str) -> str | None:
     if route.lower().startswith("/vertex"):
         vertex_model: Final = re.search(r"/models/([^:]+)", route)
         return vertex_model.group(1) if vertex_model else None
-    google_model: Final = re.search(r"/(?:v1beta|beta)/models/([^:]+):", route) or re.search(
-        r"^/models/([^:]+):", route
+    google_model: Final = re.search(r"/(?:v1beta|beta)/models/(.+):[A-Za-z]+$", route) or re.search(
+        r"^/models/(.+):[A-Za-z]+$", route
     )
     return google_model.group(1) if google_model else None
 

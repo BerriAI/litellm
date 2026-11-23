@@ -25,6 +25,7 @@ import litellm
 import litellm.proxy
 import litellm.proxy.proxy_server
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
 from litellm.proxy._types import (
     LiteLLM_AccessGroupTable,
     LiteLLM_TeamTableCachedObj,
@@ -1681,6 +1682,64 @@ async def test_user_api_key_auth_websocket():
         assert mock_user_api_key_auth.call_args.kwargs["api_key"] == "Bearer some_api_key"
 
 
+def _websocket_with_authorization(sent: list[Message], authorization: str) -> WebSocket:
+    async def receive() -> Message:
+        return {"type": "websocket.connect"}
+
+    async def send(message: Message) -> None:
+        sent.append(message)
+
+    return WebSocket(
+        {
+            "type": "websocket",
+            "path": "/v1/responses",
+            "query_string": b"model=gpt-5.4",
+            "headers": [(b"authorization", authorization.encode())],
+        },
+        receive,
+        send,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("authorization", ["bearer {key}", "BEARER {key}", "bEaReR {key}", "bearer  {key} "])
+async def test_user_api_key_auth_websocket_accepts_a_non_canonical_case_of_the_bearer_scheme(
+    authorization: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_websocket
+
+    monkeypatch.setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "general_settings", {})
+    sent: Final[list[Message]] = []
+
+    authorized: Final = await user_api_key_auth_websocket(
+        _websocket_with_authorization(sent, authorization.format(key=MASTER_KEY))
+    )
+
+    assert authorized.user_role == LitellmUserRoles.PROXY_ADMIN
+    assert authorized.api_key == LITELLM_PROXY_MASTER_KEY_ALIAS
+    assert sent == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("authorization", ["Basic {key}", "Bearer{key}", "bearer", "NotBearer {key}", "Token {key}"])
+async def test_user_api_key_auth_websocket_rejects_a_non_bearer_authorization_header(
+    authorization: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_websocket
+
+    monkeypatch.setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "general_settings", {})
+    sent: Final[list[Message]] = []
+
+    with pytest.raises(HTTPException) as rejection:
+        await user_api_key_auth_websocket(_websocket_with_authorization(sent, authorization.format(key=MASTER_KEY)))
+
+    assert rejection.value.status_code == 403
+    assert rejection.value.detail == "Invalid Authorization header format"
+    assert sent == [{"type": "websocket.close", "code": status.WS_1008_POLICY_VIOLATION, "reason": ""}]
+
+
 @pytest.mark.asyncio
 async def test_user_api_key_auth_websocket_carries_asgi_path():
     """
@@ -2034,6 +2093,36 @@ async def test_auth_custom_key_header_precedence_and_fallback(
 
     assert valid_token.user_role == LitellmUserRoles.PROXY_ADMIN
     assert valid_token.api_key == LITELLM_PROXY_MASTER_KEY_ALIAS
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("master_key", "presented"),
+    [
+        pytest.param("BEARER example-admin-secret", "BEARER example-admin-secret", id="raw_uppercase_master_key"),
+        pytest.param("bEaReR example-admin-secret", "bEaReR example-admin-secret", id="raw_mixed_case_master_key"),
+        pytest.param("example-admin-secret", "BEARER example-admin-secret", id="uppercase_scheme_then_master_key"),
+    ],
+)
+async def test_litellm_key_header_authenticates_a_raw_master_key_that_starts_with_a_bearer_scheme(
+    master_key: str, presented: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm.proxy.proxy_server, "master_key", master_key)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "general_settings", {})
+    request: Final = FastAPIRequest(
+        scope={
+            "type": "http",
+            "method": "GET",
+            "path": "/v1/models",
+            "headers": [(b"x-litellm-api-key", presented.encode())],
+        },
+        receive=AsyncMock(return_value={"type": "http.request", "body": b"", "more_body": False}),
+    )
+
+    authorized: Final = await user_api_key_auth(request=request, api_key="", custom_litellm_key_header=presented)
+
+    assert authorized.user_role == LitellmUserRoles.PROXY_ADMIN
+    assert authorized.api_key == LITELLM_PROXY_MASTER_KEY_ALIAS
 
 
 @pytest.mark.asyncio
@@ -2541,22 +2630,7 @@ def test_custom_auth_attaches_the_user_budget_even_when_it_does_not_enforce():
 
 
 def _rejected_websocket(sent: list[Message], bearer: str) -> WebSocket:
-    async def receive() -> Message:
-        return {"type": "websocket.connect"}
-
-    async def send(message: Message) -> None:
-        sent.append(message)
-
-    return WebSocket(
-        {
-            "type": "websocket",
-            "path": "/v1/responses",
-            "query_string": b"model=gpt-5.4",
-            "headers": [(b"authorization", f"Bearer {bearer}".encode())],
-        },
-        receive,
-        send,
-    )
+    return _websocket_with_authorization(sent, f"Bearer {bearer}")
 
 
 def _serve_virtual_key(monkeypatch: pytest.MonkeyPatch, user_key: str, token: UserAPIKeyAuth) -> None:
@@ -2959,6 +3033,13 @@ async def _presented_key(pairs: tuple[tuple[str, str], ...]) -> str | None:
     [
         pytest.param((("authorization", "Bearer sk-1"),), "sk-1", id="bearer"),
         pytest.param((("authorization", "bearer sk-1"),), "sk-1", id="lowercase_bearer"),
+        pytest.param((("authorization", "BEARER sk-1"),), "sk-1", id="uppercase_bearer"),
+        pytest.param((("authorization", "bEaReR sk-1"),), "sk-1", id="mixed_case_bearer"),
+        pytest.param((("authorization", "Bearer Bearer sk-1"),), "sk-1", id="doubled_scheme"),
+        pytest.param((("authorization", "bearer bearer sk-1"),), "sk-1", id="doubled_lowercase_scheme"),
+        pytest.param((("authorization", "BEARER"),), "", id="scheme_without_credential"),
+        pytest.param((("authorization", "BEARERsk-1"),), "", id="scheme_glued_to_credential"),
+        pytest.param((("authorization", "BEARER\tsk-1"),), "", id="tab_is_not_a_separator"),
         pytest.param((("authorization", "Basic sk-1"),), "sk-1", id="basic"),
         pytest.param((("authorization", "Bearer sk-Bearer 1"),), "sk-1", id="every_occurrence_stripped"),
         pytest.param((("authorization", "Token sk-1"),), "", id="unknown_scheme_is_no_key"),
@@ -2967,6 +3048,8 @@ async def _presented_key(pairs: tuple[tuple[str, str], ...]) -> str | None:
         pytest.param((("authorization", "AWS4-HMAC-SHA256 Signature=abc"),), "", id="aws_without_credential"),
         pytest.param((("x-litellm-api-key", "Bearer sk-1"),), "sk-1", id="litellm_header_bearer"),
         pytest.param((("x-litellm-api-key", "sk-1"),), "sk-1", id="litellm_header_raw"),
+        pytest.param((("x-litellm-api-key", "BEARER sk-1"),), "sk-1", id="litellm_header_uppercase_bearer"),
+        pytest.param((("x-litellm-api-key", "Bearer Bearer sk-1"),), "sk-1", id="litellm_header_doubled_scheme"),
         pytest.param(
             (("x-litellm-api-key", "AWS4-HMAC-SHA256 x"),),
             "AWS4-HMAC-SHA256 x",

@@ -495,17 +495,22 @@ class RealTimeStreaming:
         translation_session: bool = False,
         bridges_beta_client_to_ga: bool = False,
         drop_params: bool = False,
+        listens_only: bool = False,
         lazy_setup_deadline_seconds: float = REALTIME_LAZY_SETUP_DEADLINE_SECONDS,
         lazy_setup_content_grace_seconds: float = REALTIME_LAZY_SETUP_CONTENT_GRACE_SECONDS,
         clock: Callable[[], float] = time.monotonic,
     ):
         self.websocket: _ClientWebSocket = websocket
+        self._listens_only: Final = listens_only
         self._clock: Final = clock
+        self._joined_at: Final = clock()
+        self._call_closed_at: float | None = None
         self._lazy_setup_deadline: Final = clock() + lazy_setup_deadline_seconds
         self._lazy_setup_content_grace_seconds: Final = lazy_setup_content_grace_seconds
         self._held_client_content: tuple[str, ...] = ()
         self._held_client_content_bytes: int = 0
         self._held_client_content_deadline: float | None = None
+        self._awaiting_setup_complete: bool = False
         self._replay_scope: Final = client_websocket_scope(self.websocket)
         self.backend_ws = backend_ws
         self.logging_obj = logging_obj
@@ -844,6 +849,8 @@ class RealTimeStreaming:
         if not self._is_translation_session:
             return
         if event_obj.get("type") == "session.closed":
+            if self._call_closed_at is None:
+                self._call_closed_at = self._clock()
             usage: Final = as_str_mapping(event_obj.get("usage"))
             output_seconds: Final = (
                 normalized_audio_duration_seconds(usage.get("output_seconds")) if usage is not None else None
@@ -960,6 +967,11 @@ class RealTimeStreaming:
             ) is not None:
                 self._translation_usage_finalized = True
                 return
+        if self._listens_only and self._is_translation_session:
+            # A call the proxy only listens to sends its audio past the proxy and the provider reports no usage,
+            # and a microphone track sends audio for as long as the call runs.
+            ended_at: Final = self._clock() if self._call_closed_at is None else self._call_closed_at
+            self._translation_input_seconds = max(ended_at - self._joined_at, 0.0)
         if self._translation_output_seconds == 0 and self._translation_input_seconds == 0:
             return
         synthetic_usage: Final = (
@@ -977,6 +989,12 @@ class RealTimeStreaming:
         self._translation_usage_finalized = True
 
     async def _send_to_backend(self, message: str) -> bool:
+        if self._awaiting_setup_complete:
+            await self._hold_client_content_until_setup_complete(message)
+            return False
+        return await self._forward_to_backend(message)
+
+    async def _forward_to_backend(self, message: str) -> bool:
         """Send a message to the backend WebSocket.
 
         If a provider_config is set the message is first passed through
@@ -1027,6 +1045,7 @@ class RealTimeStreaming:
                     msg = self.maybe_inject_guardrail_auto_response_disable(msg)
                     await self.backend_ws.send(msg)
                     self._cache_session_configuration_request(msg)
+                    self._awaiting_setup_complete = self.provider_config.setup_must_complete_before_content(msg_obj)
                     sent = True
                 else:
                     is_content_message = isinstance(msg_obj, dict) and self.provider_config.is_content_message(msg_obj)
@@ -1238,11 +1257,41 @@ class RealTimeStreaming:
             and self._held_client_content_bytes + len(message.encode("utf-8")) <= RealTimeStreaming._MAX_BUFFERED_BYTES
         )
 
+    async def _hold_client_content_until_setup_complete(self, message: str) -> None:
+        if (
+            len(self._held_client_content) >= RealTimeStreaming._MAX_BUFFERED_MESSAGES
+            or self._held_client_content_bytes + len(message.encode("utf-8")) > RealTimeStreaming._MAX_BUFFERED_BYTES
+        ):
+            await self.websocket.send_text(
+                realtime_error_event(
+                    "The session is still being set up and its buffer is full, so this message was not sent. "
+                    "Retry after session.updated",
+                    error_type="invalid_request_error",
+                )
+            )
+            return
+        self._hold_client_content(message)
+
     def _hold_client_content(self, message: str) -> None:
         if self._held_client_content_deadline is None:
             self._held_client_content_deadline = self._clock() + self._lazy_setup_content_grace_seconds
         self._held_client_content = (*self._held_client_content, message)
         self._held_client_content_bytes += len(message.encode("utf-8"))
+
+    async def _release_content_held_for_setup_complete(self) -> None:
+        """Frames that arrive while these are being sent queue up behind them,
+        so the gate only opens once nothing is left to send."""
+        while self._held_client_content:
+            for message in self._take_held_client_content():
+                await self._forward_to_backend(message)
+        self._awaiting_setup_complete = False
+
+    def _take_held_client_content(self) -> Sequence[str]:
+        held: Final = self._collapse_buffered_audio_messages(list(self._held_client_content))
+        self._held_client_content = ()
+        self._held_client_content_bytes = 0
+        self._held_client_content_deadline = None
+        return held
 
     async def _send_held_client_content(self) -> None:
         held: Final = self._held_client_content
@@ -1619,11 +1668,15 @@ class RealTimeStreaming:
 
     _maybe_inject_guardrail_auto_response_disable = maybe_inject_guardrail_auto_response_disable
 
+    def _guardrail_callbacks(self) -> Sequence[object]:
+        """A session that only listens to a call it does not carry cannot hold back or replace a turn, so it screens nothing."""
+        return () if self._listens_only else litellm.callbacks
+
     def _has_realtime_guardrails_for_event_hooks(
         self,
         event_hooks: Sequence["GuardrailEventHooks"],
     ) -> bool:
-        return _guardrails_run_for_event_hooks(self.request_data, event_hooks, litellm.callbacks)
+        return _guardrails_run_for_event_hooks(self.request_data, event_hooks, self._guardrail_callbacks())
 
     def _has_audio_transcription_guardrails(self) -> bool:
         """Return True when a guardrail is configured for the audio/VAD transcript path.
@@ -1681,7 +1734,7 @@ class RealTimeStreaming:
             "user",
             event_hooks or (GuardrailEventHooks.realtime_input_transcription,),
             {**self.request_data, "stream": True},
-            litellm.callbacks,
+            self._guardrail_callbacks(),
         ):
             raise TypeError(f"Realtime guardrails cannot screen a {type(transcript).__name__} transcript")
         return False
@@ -1735,7 +1788,7 @@ class RealTimeStreaming:
             event_hooks if event_hooks is not None else (GuardrailEventHooks.realtime_input_transcription,),
             self.request_data,
             self.user_api_key_dict,
-            litellm.callbacks,
+            self._guardrail_callbacks(),
         )
         if not isinstance(block, RealtimeGuardrailBlock):
             return block
@@ -1794,6 +1847,8 @@ class RealTimeStreaming:
                 self._capture_translation_output_audio(event)
             is_session_created_event = isinstance(event, dict) and event.get("type") == "session.created"
             if is_session_created_event:
+                if self._awaiting_setup_complete:
+                    await self._release_content_held_for_setup_complete()
                 if self._uses_deferred_backend_setup() and not self._backend_setup_complete:
                     self._backend_setup_complete = True
                     self._flushing_pending_messages_until_setup = True
@@ -1953,7 +2008,10 @@ class RealTimeStreaming:
         try:
             await self._relay_backend_messages()
         except websockets.exceptions.ConnectionClosed as e:
-            verbose_logger.exception("Connection closed in backend to client send messages - %s", e)
+            if self._listens_only:
+                verbose_logger.warning("The provider closed the connection the proxy listens to a call on - %s", e)
+            else:
+                verbose_logger.exception("Connection closed in backend to client send messages - %s", e)
             close: Final = backend_close_from(e)
             self._flush_unbilled_transcription_usage()
             await self._log_session_end(e if self._backend_refused_session(close) else None)
@@ -1969,6 +2027,11 @@ class RealTimeStreaming:
             return BackendClose(code=1011, reason="proxy failed while relaying the upstream websocket")
 
     def _backend_refused_session(self, close: BackendClose) -> bool:
+        heard_nothing: Final = self._listens_only and self._is_translation_session and not self._backend_sent_frames
+        if heard_nothing and close.code in (1000, 1006):
+            # A translation call sends its listener nothing while nobody speaks, and the provider
+            # refuses to let a listener join a call that is over.
+            return False
         return (
             not self._backend_sent_non_error_frames
             and (close.code != 1000 or self._backend_sent_frames)
@@ -2443,7 +2506,7 @@ class RealTimeStreaming:
             return ClientLoopExit.RELAY_FAILED
 
     async def bidirectional_forward(self) -> None:
-        if self._is_translation_session and translation_guardrails_apply(self.request_data):
+        if self._is_translation_session and not self._listens_only and translation_guardrails_apply(self.request_data):
             await self.websocket.send_text(
                 realtime_error_event(TRANSLATION_GUARDRAILS_UNSUPPORTED_MESSAGE, error_type="guardrail_error")
             )

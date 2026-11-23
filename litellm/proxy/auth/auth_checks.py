@@ -379,6 +379,15 @@ def _metadata_is_mapping(metadata: object) -> bool:
     return isinstance(metadata, Mapping)
 
 
+class _MetadataScope(Protocol):
+    @property
+    def metadata(self) -> object: ...
+
+
+def _scope_metadata(scope: _MetadataScope | None) -> object:
+    return scope.metadata if scope is not None else None
+
+
 def _required_customer_headers(scopes: tuple[object, object, object]) -> tuple[str, ...]:
     return tuple(chain.from_iterable(map(_scope_required_customer_headers, scopes)))
 
@@ -425,8 +434,8 @@ async def missing_required_customer_header(
         _required_customer_headers(
             (
                 getattr(proxy_server, "general_settings", None),
-                getattr(team, "metadata", None),
-                getattr(authenticated, "metadata", None),
+                _scope_metadata(team),
+                _scope_metadata(authenticated),
             )
         ),
     )
@@ -1567,8 +1576,8 @@ async def common_checks(
         _required_customer_headers(
             (
                 general_settings,  # pyright: ignore[reportUnknownArgumentType]  # validated to Mapping[str, object] inside
-                getattr(team_object, "metadata", None),
-                getattr(valid_token, "metadata", None),
+                _scope_metadata(team_object),
+                _scope_metadata(valid_token),
             )
         )
         if _route_requires_customer_headers(route, request)
@@ -1696,12 +1705,12 @@ async def common_checks(
                 return
 
             await _user_multi_budget_check(user_object)
-            if user_object.max_budget is None:
+            user_budget: Final = user_object.effective_max_budget()
+            if user_budget is None:
                 return
 
             from litellm.proxy.proxy_server import get_current_spend
 
-            user_budget: Final = user_object.max_budget
             user_spend: Final = await get_current_spend(
                 counter_key=user_counter(user_object.user_id),
                 fallback_spend=user_object.spend or 0.0,
@@ -2097,8 +2106,11 @@ def resolve_effective_team_member_budget(
     member_budget: LiteLLM_BudgetTable | None,
     team_default_budget: LiteLLM_BudgetTable | None,
     now: datetime,
+    membership: LiteLLM_TeamMembership | None = None,
 ) -> float | None:
     if member_budget is not None and member_budget.max_budget is not None:
+        if membership is not None:
+            return membership.effective_budget_with_rollover(now)
         return member_budget.effective_max_budget(now)
     if team_default_budget is None or team_default_budget.max_budget is None or team_default_budget.max_budget <= 0:
         return None
@@ -7500,6 +7512,7 @@ async def _check_team_member_budget(
             member_budget=member_budget_row,
             team_default_budget=team_default_budget,
             now=now,
+            membership=loaded_membership,
         )
 
         if team_member_budget is not None:

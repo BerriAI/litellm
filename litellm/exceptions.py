@@ -121,9 +121,10 @@ def _upstream_body(response: object) -> bytes:
     if not isinstance(response, httpx.Response):
         return b""
     try:
-        return response.content
+        body: Final[object] = getattr(response, "content", b"")
     except httpx.ResponseNotRead:
         return b""
+    return body if isinstance(body, bytes) else b""
 
 
 def _request_without_credentials(upstream: object, fallback_url: str) -> httpx.Request:
@@ -155,11 +156,41 @@ def error_response_without_credentials(status_code: int, upstream: object, fallb
         request=_request_without_credentials(upstream, fallback_url),
     )
     _ = response.read()
-    response.headers = httpx.Headers(upstream.headers if isinstance(upstream, httpx.Response) else None)
+    if isinstance(upstream, httpx.Response):
+        response.headers = httpx.Headers(upstream.headers)
+        response.encoding = upstream.encoding or "utf-8"
     elapsed: Final = _upstream_elapsed(upstream)
     if elapsed is not None:
         response.elapsed = elapsed
     return response
+
+
+_PROVIDER_REPLY_FALLBACK_URL: Final = "https://docs.litellm.ai/docs"
+_RESPONSE_ATTRIBUTE: Final = "response"
+_HTTP_ERROR_STATUSES: Final = frozenset(range(400, 600))
+
+
+def _reported_status(failure: BaseException, current: object, provider_reply: httpx.Response) -> int:
+    if isinstance(current, httpx.Response):
+        return current.status_code
+    reported: Final[object] = getattr(failure, "status_code", None)
+    return reported if isinstance(reported, int) else provider_reply.status_code
+
+
+def with_provider_reply(failure: BaseException, provider_reply: object) -> BaseException:
+    current: Final[object] = getattr(failure, _RESPONSE_ATTRIBUTE, None)
+    if current is not None and (not isinstance(current, httpx.Response) or _upstream_body(current)):
+        return failure
+    if not isinstance(provider_reply, httpx.Response) or provider_reply.status_code not in _HTTP_ERROR_STATUSES:
+        return failure
+    if not _upstream_body(provider_reply):
+        return failure
+    status_code: Final = _reported_status(failure, current, provider_reply)
+    reply: Final = error_response_without_credentials(status_code, provider_reply, _PROVIDER_REPLY_FALLBACK_URL)
+    reply.headers = httpx.Headers(current.headers if isinstance(current, httpx.Response) else None)
+    reply.request = _request_without_credentials(current, _PROVIDER_REPLY_FALLBACK_URL)
+    setattr(failure, _RESPONSE_ATTRIBUTE, reply)
+    return failure
 
 
 _NO_UPSTREAM_REQUEST_URL: Final = "https://cloud.google.com/vertex-ai/"
