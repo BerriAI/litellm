@@ -85,6 +85,13 @@ def _next_sync_or_exhausted(it: Iterator[object]) -> object:
         return _SYNC_ITER_EXHAUSTED
 
 
+def _last_streamed_service_tier(chunks: Sequence[object]) -> str | None:
+    return next(
+        (tier for chunk in reversed(chunks) if isinstance(tier := getattr(chunk, "service_tier", None), str) and tier),
+        None,
+    )
+
+
 def _stamp_served_service_tier(response: ModelResponseStream, complete_streaming_response: ModelResponse) -> None:
     served_tier: Final = complete_streaming_response.model_dump().get("service_tier")
     if isinstance(served_tier, str) and served_tier:
@@ -1821,9 +1828,10 @@ class CustomStreamWrapper:
             model_response.choices[0].finish_reason == "stop" and self.tool_call
         ):  # don't overwrite for other - potential error finish reasons
             model_response.choices[0].finish_reason = "tool_calls"
-        if self.replayed_service_tier is None:
+        served_tier: Final = _last_streamed_service_tier(self.chunks) or self.replayed_service_tier
+        if served_tier is None:
             return model_response
-        return model_response.model_copy(update={"service_tier": self.replayed_service_tier})
+        return model_response.model_copy(update={"service_tier": served_tier})
 
     def _record_usage_only_chunk(self, model_response: "ModelResponseStream") -> None:
         """
