@@ -5184,6 +5184,36 @@ def test_output_item_done_with_stream_map_keeps_empty_delta():
     assert chunk.choices[0].finish_reason is None
 
 
+def test_response_completed_with_stream_map_emits_tool_calls_finish_reason():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    chunk: Final = OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(
+        {
+            "type": "response.completed",
+            "response": {"id": "resp_test", "output": []},
+        },
+        tool_call_index_map={0: 0},
+    )
+    assert chunk.choices[0].finish_reason == "tool_calls"
+
+
+def test_response_completed_without_tool_calls_keeps_stop_finish_reason():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    chunk: Final = OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(
+        {
+            "type": "response.completed",
+            "response": {"id": "resp_test", "output": []},
+        },
+        tool_call_index_map={},
+    )
+    assert chunk.choices[0].finish_reason == "stop"
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "tool_choice,expected_wire_tool_choice",

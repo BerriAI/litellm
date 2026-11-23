@@ -1065,6 +1065,8 @@ class OpenAIUnknownModelConfig(OpenAIGPTConfig):
 
 
 class OpenAIChatCompletionStreamingHandler(BaseModelResponseIterator):
+    seen_tool_calls: bool = False
+
     def _map_reasoning_to_reasoning_content(self, choices: list) -> list:
         """
         Map 'reasoning' field to 'reasoning_content' field in delta.
@@ -1115,6 +1117,24 @@ class OpenAIChatCompletionStreamingHandler(BaseModelResponseIterator):
                     message="Upstream generation aborted (finish_reason=abort)",
                 )
             choices: Final = self._map_reasoning_to_reasoning_content(raw_choices)
+            for choice in choices:
+                delta: Final = choice.get("delta") if isinstance(choice, dict) else getattr(choice, "delta", None)
+                if delta and (
+                    (isinstance(delta, dict) and delta.get("tool_calls"))
+                    or (hasattr(delta, "tool_calls") and delta.tool_calls)
+                ):
+                    self.seen_tool_calls = True
+
+                finish_reason: Final = (
+                    choice.get("finish_reason")
+                    if isinstance(choice, dict)
+                    else getattr(choice, "finish_reason", None)
+                )
+                if self.seen_tool_calls and finish_reason == "stop":
+                    if isinstance(choice, dict):
+                        choice["finish_reason"] = "tool_calls"
+                    elif hasattr(choice, "finish_reason"):
+                        choice.finish_reason = "tool_calls"
             fingerprint: Final = _OBJECT_MAPPING.validate_python(chunk).get("system_fingerprint")
 
             kwargs: Final[dict[str, object]] = {
