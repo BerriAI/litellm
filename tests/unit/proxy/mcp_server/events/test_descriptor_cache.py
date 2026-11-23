@@ -40,7 +40,7 @@ async def test_a_listing_is_reused_until_it_expires() -> None:
     cache: Final = DescriptorCache(clock=clock)
     await cache.get(_target(), upstream.load)
     clock.now = 59.0
-    await cache.get(_target(), upstream.load)
+    assert await cache.get(_target(), upstream.load) == (BUILD_FAILED,)
     clock.now = 61.0
     await cache.get(_target(), upstream.load)
     assert upstream.loads == [("srv-ci", "credential"), ("srv-ci", "credential")]
