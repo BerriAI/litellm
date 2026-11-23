@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from typing import Final
 
 import litellm
@@ -47,7 +48,7 @@ class OpenAILikeAnthropicMessagesConfig(AnthropicMessagesConfig):
         self,
         headers: dict[str, str],
         model: str,
-        messages: list[object],
+        messages: Sequence[object],
         optional_params: dict,
         litellm_params: dict,
         api_key: str | None = None,
@@ -149,15 +150,15 @@ class JSONProviderAnthropicMessagesConfig(OpenAILikeAnthropicMessagesConfig):
     def _resolve_api_key(self, api_key: str | None) -> str | None:
         return api_key or get_secret_str(self._provider.api_key_env) or litellm.api_key
 
-    def _resolve_api_base(self, api_base: str | None) -> str:
+    def _resolve_api_base(self, api_base: str | None, model: str) -> str:
         env_api_base: Final = get_secret_str(self._provider.api_base_env) if self._provider.api_base_env else None
-        return api_base or env_api_base or self._provider.base_url
+        return api_base or env_api_base or self._provider.default_base_url(model)
 
     def validate_anthropic_messages_environment(
         self,
         headers: dict[str, str],
         model: str,
-        messages: list[object],
+        messages: Sequence[object],
         optional_params: dict,
         litellm_params: dict,
         api_key: str | None = None,
@@ -183,7 +184,7 @@ class JSONProviderAnthropicMessagesConfig(OpenAILikeAnthropicMessagesConfig):
         stream: bool | None = None,
     ) -> str:
         return super().get_complete_url(
-            api_base=self._resolve_api_base(api_base),
+            api_base=self._resolve_api_base(api_base, model),
             api_key=api_key,
             model=model,
             optional_params=optional_params,

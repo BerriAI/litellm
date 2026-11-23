@@ -12,7 +12,7 @@ async fn main() -> Result<ExitCode, Error> {
         .args(["sqlx", "prepare"])
         .args(env::args().skip(1))
         .args(["--", "--all-targets", "--all-features"])
-        .current_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/../db"))
+        .current_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/../repositories"))
         .env("DATABASE_URL", postgres.url())
         .env("SQLX_OFFLINE", "false")
         .status()

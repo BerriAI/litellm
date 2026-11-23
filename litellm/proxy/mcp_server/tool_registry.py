@@ -1,9 +1,11 @@
 import asyncio
 import json
-from collections.abc import Callable, Generator, Mapping
+from collections.abc import Generator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import TYPE_CHECKING, Final
+
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm.proxy.types_utils.utils import get_instance_fn
@@ -16,6 +18,8 @@ else:
         from mcp.types import Tool as MCPToolSDKTool
     except ImportError:
         MCPToolSDKTool = None
+
+_RESOLVED_INSTANCE: Final = TypeAdapter(object)
 
 
 class MCPToolRegistry:
@@ -57,19 +61,21 @@ class MCPToolRegistry:
         name: str,
         description: str,
         input_schema: dict[str, object],
-        handler: Callable,
+        handler: object,
         *,
         server_id: str | None = None,
     ) -> None:
         """
         Register a new tool in the registry
         """
-        self.tools[name] = MCPTool(
-            name=name,
-            description=description,
-            input_schema=input_schema,
-            handler=handler,
-            server_id=server_id,
+        self.tools[name] = MCPTool.model_validate(
+            {
+                "name": name,
+                "description": description,
+                "input_schema": input_schema,
+                "handler": handler,
+                "server_id": server_id,
+            }
         )
         verbose_logger.debug("Registered tool: %s", name)
 
@@ -150,7 +156,7 @@ class MCPToolRegistry:
             # First check if it's a module path (e.g., "module.submodule.function")
             if handler_name is None:
                 raise ValueError(f"handler is required for tool {name}")
-            handler = get_instance_fn(handler_name, config_file_path)
+            handler = _RESOLVED_INSTANCE.validate_python(get_instance_fn(handler_name, config_file_path))
 
             if handler is None:
                 verbose_logger.warning("Warning: Could not find handler %s for tool %s", handler_name, name)

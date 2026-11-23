@@ -1,4 +1,4 @@
-from collections.abc import Generator, Mapping, Sequence
+from collections.abc import Generator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 from types import MappingProxyType
@@ -7,7 +7,6 @@ from typing import Final, TypeVar
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError, field_validator
 
 from litellm._logging import verbose_router_logger
-from litellm.exceptions import EndpointNotSupportedByModelError
 
 CHAT_ENDPOINT_BY_CALL: Final[Mapping[str, str]] = MappingProxyType(
     {
@@ -38,7 +37,7 @@ def _endpoint_path(endpoint: str) -> str:
 
 
 CHAT_ENDPOINTS: Final = frozenset(_endpoint_path(endpoint) for endpoint in CHAT_ENDPOINT_BY_CALL.values())
-_Deployment: Final = TypeVar("_Deployment", bound=Mapping[str, object])
+_Deployment = TypeVar("_Deployment", bound=Mapping[str, object])
 _ENFORCE_FLAG: Final = TypeAdapter(bool | None)
 _REQUEST_SELECTION: Final[ContextVar[tuple[str | None, str | None]]] = ContextVar(
     "router_request_endpoint", default=(None, None)
@@ -97,32 +96,3 @@ def warn_on_unenforced_endpoint_flag(model_name: str, model_info: Mapping[str, o
     )
     verbose_router_logger.warning(warning)
     return warning
-
-
-def non_chat_endpoints(deployment: Mapping[str, object]) -> frozenset[str] | None:
-    declared: Final = _enforced_endpoints(deployment.get("model_info"))
-    if declared is None:
-        return None
-    endpoints: Final = frozenset(declared)
-    normalized: Final = frozenset(_endpoint_path(endpoint) for endpoint in endpoints)
-    return endpoints if normalized.isdisjoint(CHAT_ENDPOINTS) else None
-
-
-def eligible_deployments(
-    model: str, deployments: Sequence[_Deployment]
-) -> tuple[_Deployment, ...] | EndpointNotSupportedByModelError:
-    endpoint, requested_model = _REQUEST_SELECTION.get()
-    if endpoint is None or not deployments:
-        return tuple(deployments)
-    eligible: Final = tuple(deployment for deployment in deployments if non_chat_endpoints(deployment) is None)
-    if eligible:
-        return eligible
-    requested: Final = requested_model or model
-    supported: Final = ", ".join(
-        sorted(frozenset[str]().union(*(non_chat_endpoints(deployment) or frozenset() for deployment in deployments)))
-    )
-    return EndpointNotSupportedByModelError(
-        message=f"{endpoint} is not supported by model={requested}. Supported endpoints: {supported or 'none'}",
-        model=model,
-        llm_provider="",
-    )

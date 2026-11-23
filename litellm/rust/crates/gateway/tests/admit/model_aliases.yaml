@@ -1,0 +1,39 @@
+# Python sends the model a name such as `claude-haiku-latest` stands for in the cost map, and the
+# native app would send the name as written, so a group with such a deployment goes to Python.
+config:
+  model_list:
+    - model_name: claude
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+    - model_name: claude-latest
+      litellm_params:
+        model: anthropic/claude-haiku-latest
+        api_key: provider-key
+    - model_name: azure-claude-latest
+      litellm_params:
+        model: azure_ai/claude-haiku-latest
+        api_key: provider-key
+        api_base: https://claude.services.ai.azure.com/anthropic
+  general_settings:
+    master_key: gateway-key
+
+requests:
+  - name: a model named as it is sent
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: rust
+
+  - name: a model named by an alias
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude-latest, max_tokens: 16, messages: []}
+    expect: python
+    reason: model
+    over: model_list.litellm_params.model alias claude-haiku-latest
+
+  - name: a model named by an alias the cost map holds under its provider
+    headers: {authorization: Bearer gateway-key}
+    body: {model: azure-claude-latest, max_tokens: 16, messages: []}
+    expect: python
+    reason: model
+    over: model_list.litellm_params.model alias azure_ai/claude-haiku-latest

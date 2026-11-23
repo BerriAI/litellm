@@ -3,20 +3,42 @@ Budget repository for database operations on LiteLLM_BudgetTable.
 """
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, TypeVar
 
+from pydantic import TypeAdapter
+
 from litellm.models.budget import LiteLLM_BudgetTable
+from litellm.repositories import rust_database
 from litellm.repositories.base_repository import BaseRepository
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import PrismaTableRepository
+from litellm.rust_bridge._native import RustBudgetRepository
 
 if TYPE_CHECKING:
     from prisma import models as prisma_models
 
 
-_Row: Final = TypeVar("_Row")
+_Row = TypeVar("_Row")
+_BUDGET_ROW: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+
+
+@dataclass(frozen=True, slots=True)
+class BudgetWithWindows:
+    """A budget row carrying concurrent budget windows, which only customer hierarchies support."""
+
+    budget_id: str
+
+
+def _budget_for_auth(budget_id: str, found: str | None) -> LiteLLM_BudgetTable | BudgetWithWindows | None:
+    if found is None:
+        return None
+    row: Final = _BUDGET_ROW.validate_json(found)
+    if row.get("budget_limits"):
+        return BudgetWithWindows(budget_id=budget_id)
+    return LiteLLM_BudgetTable.model_validate(row)
 
 
 async def create_budget_row(table: TableActions[_Row], data: Mapping[str, object], actor: str) -> _Row:
@@ -51,6 +73,28 @@ class BudgetRepository(BaseRepository[LiteLLM_BudgetTable]):
 
     async def find_by_id(self, budget_id: str, id_field: str = "budget_id") -> LiteLLM_BudgetTable | None:
         return await super().find_by_id(budget_id, id_field)
+
+    async def find_end_user_default(self, budget_id: str) -> LiteLLM_BudgetTable | BudgetWithWindows | None:
+        """The default budget ``budget_id`` for end users without one of their own."""
+        payload: Final = await rust_database.required_repository(RustBudgetRepository).find_end_user_default_budget(
+            budget_id
+        )
+        return _budget_for_auth(budget_id, payload)
+
+    async def find_team_member_default(self, budget_id: str) -> LiteLLM_BudgetTable | BudgetWithWindows | None:
+        """A team's default per-member budget ``budget_id``."""
+        payload: Final = await rust_database.required_repository(RustBudgetRepository).find_team_member_default_budget(
+            budget_id
+        )
+        return _budget_for_auth(budget_id, payload)
+
+    async def find_team_member_default_row(self, budget_id: str) -> Mapping[str, object] | None:
+        """Every column of a team's default per-member budget ``budget_id``, its budget windows included, read from
+        the writer because a member add links the budget it finds."""
+        payload: Final = await rust_database.required_repository(RustBudgetRepository).find_team_member_default_budget(
+            budget_id, use_writer=True
+        )
+        return None if payload is None else _BUDGET_ROW.validate_json(payload)
 
     async def create_budget(
         self,

@@ -158,7 +158,7 @@ class BedrockBatchesHandler:
             aws_external_id=aws_external_id,
             aws_session_tags=aws_session_tags,
         )
-        creds: Final = BedrockBatchesConfig().resolve_credentials(auth_params, region)
+        creds: Final = BedrockBatchesConfig().resolve_credentials(auth_params, region, kwargs)
         control_plane_endpoint: Final = configured_bedrock_control_plane_endpoint(
             kwargs.get("aws_bedrock_control_plane_endpoint")
         )
@@ -332,7 +332,7 @@ class BedrockBatchesHandler:
             openai_endpoint_for_bedrock_job_model,
         )
 
-        creds: Final = BedrockBatchesConfig().resolve_credentials(AwsAuthParams.model_validate(kwargs), region)
+        creds: Final = BedrockBatchesConfig().resolve_credentials(AwsAuthParams.model_validate(kwargs), region, kwargs)
         control_plane_endpoint: Final = configured_bedrock_control_plane_endpoint(
             kwargs.get("aws_bedrock_control_plane_endpoint")
         )

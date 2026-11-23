@@ -5,6 +5,7 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException
 
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.constants import CLI_JWT_EXPIRATION_HOURS
 from litellm.models.user import LiteLLM_UserTable
 from litellm.proxy._types import LitellmUserRoles
@@ -18,6 +19,7 @@ from litellm.proxy.mcp_server.proxy_api_credentials import (
     lookup_consent_teams_from_database,
     mint_proxy_credential,
 )
+from tests.unit.proxy.rust_auth_stores import RustAuthStores
 
 _LOAD_USER = "litellm.proxy.mcp_server.proxy_api_credentials.load_active_user_by_id"
 _FETCH_TEAMS = "litellm.proxy.mcp_server.proxy_api_credentials.fetch_cli_sso_team_details"
@@ -134,7 +136,9 @@ async def test_mint_honors_the_consented_team(load_user, fetch_teams):
 
 
 @pytest.mark.asyncio
-async def test_mint_reads_the_users_teams_from_the_database_not_a_stale_cached_row(fetch_teams, monkeypatch):
+async def test_mint_reads_the_users_teams_from_the_database_not_a_stale_cached_row(
+    fetch_teams, monkeypatch, rust_auth_stores: RustAuthStores
+):
     """JWT auth caches the user it creates before it adds that user to the JWT's team, and adding a member
     never evicts the cached row, so a mint off the cached row refused the very first token exchange as not
     a member. The mint has to read the database row, whatever the cache holds."""
@@ -142,12 +146,10 @@ async def test_mint_reads_the_users_teams_from_the_database_not_a_stale_cached_r
 
     cache = UserApiKeyCache()
     await cache.async_set_cache(
-        key="stale-cache-user", value=_user(user_id="stale-cache-user", teams=[]), model_type=LiteLLM_UserTable
+        AuthObject.user("stale-cache-user"), _user(user_id="stale-cache-user", teams=[]), model_type=LiteLLM_UserTable
     )
     prisma = MagicMock()
-    prisma.writer_db.litellm_usertable.find_unique = AsyncMock(
-        return_value=_user(user_id="stale-cache-user", teams=["team-a"])
-    )
+    rust_auth_stores.user.writer = {"stale-cache-user": _user(user_id="stale-cache-user", teams=["team-a"]).model_dump(mode="json")}
     monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
     monkeypatch.setattr(proxy_server, "prisma_client", prisma)
 
@@ -159,7 +161,9 @@ async def test_mint_reads_the_users_teams_from_the_database_not_a_stale_cached_r
 
 
 @pytest.mark.asyncio
-async def test_mint_refuses_a_user_scim_deactivated_after_the_cache_last_saw_them_active(fetch_teams, monkeypatch):
+async def test_mint_refuses_a_user_scim_deactivated_after_the_cache_last_saw_them_active(
+    fetch_teams, monkeypatch, rust_auth_stores: RustAuthStores
+):
     """SCIM deactivation writes the user row without evicting the cached copy, so a mint off the cache would
     keep issuing credentials for the management-object TTL. The mint reads the database row, so the
     deactivated user is refused on the first refresh after the deactivation."""
@@ -167,12 +171,12 @@ async def test_mint_refuses_a_user_scim_deactivated_after_the_cache_last_saw_the
 
     cache = UserApiKeyCache()
     await cache.async_set_cache(
-        key="deactivated-user", value=_user(user_id="deactivated-user", teams=["team-a"]), model_type=LiteLLM_UserTable
+        AuthObject.user("deactivated-user"),
+        _user(user_id="deactivated-user", teams=["team-a"]),
+        model_type=LiteLLM_UserTable,
     )
     prisma = MagicMock()
-    prisma.writer_db.litellm_usertable.find_unique = AsyncMock(
-        return_value=_user(user_id="deactivated-user", teams=["team-a"], metadata={"scim_active": False})
-    )
+    rust_auth_stores.user.writer = {"deactivated-user": _user(user_id="deactivated-user", teams=["team-a"], metadata={"scim_active": False}).model_dump(mode="json")}
     monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
     monkeypatch.setattr(proxy_server, "prisma_client", prisma)
 

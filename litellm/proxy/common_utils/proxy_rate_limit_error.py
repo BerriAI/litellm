@@ -60,6 +60,11 @@ PER_MODEL_RATE_LIMIT_DESCRIPTOR_KEYS: Final = frozenset(
         "model_per_customer_org",
         "model_per_customer_team",
         "model_per_customer_member",
+        "model_per_app",
+        "model_per_app_customer_org",
+        "model_per_app_customer_member",
+        "model_per_app_group",
+        "model_per_app_group_customer_org",
     }
 )
 DISABLE_FALLBACKS_ON_PER_MODEL_RATE_LIMITS_SETTING: Final = "disable_fallbacks_on_per_model_rate_limits"
@@ -86,7 +91,8 @@ _FALLBACK_ON_SATURATION_FLAG: Final[TypeAdapter[bool | None]] = TypeAdapter(bool
 
 def fallback_on_saturation_enabled(router_settings: object) -> bool:
     """Whether the key's or team's ``router_settings`` ask for fallbacks once the requested model reaches
-    ``saturation_threshold``, before the dynamic rate limiter admits or refuses the request on that model."""
+    ``saturation_threshold``, before the dynamic rate limiter admits or refuses the request on that model.
+    """
     raw_value: Final = _metadata_bucket(router_settings).get(FALLBACK_ON_SATURATION_SETTING)
     try:
         return _FALLBACK_ON_SATURATION_FLAG.validate_python(raw_value, strict=True) is True
@@ -156,7 +162,8 @@ def fallback_on_saturation_requested(request_data: Mapping[str, object]) -> bool
 
 def is_saturation_fallback(exc: "ProxyRateLimitError") -> bool:
     """Whether ``exc`` is the limiter asking for the fallback walk rather than refusing the request. The model it
-    names still has room, so when no fallback admits the request it goes back to that model instead of a 429."""
+    names still has room, so when no fallback admits the request it goes back to that model instead of a 429.
+    """
     return exc.descriptor_key == SATURATION_FALLBACK_DESCRIPTOR_KEY
 
 

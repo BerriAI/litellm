@@ -32,6 +32,7 @@ from litellm.llms.custom_httpx.http_handler import (
     HTTPHandler,
     get_httpx_client,
 )
+from litellm.types.litellm_params import MCP_HANDLER_KWARG_NAMES
 from litellm.types.llms.bedrock import GuardrailConfigBlock
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse, Usage
@@ -69,6 +70,26 @@ class _LlamaInvokeResponse(TypedDict):
 
 class _InvokeServiceTierParams(TypedDict):
     serviceTier: NotRequired[ReadOnly[object]]
+
+
+class _Ai21CompletionData(TypedDict):
+    text: ReadOnly[str]
+
+
+class _Ai21Completion(TypedDict):
+    data: ReadOnly[_Ai21CompletionData]
+
+
+class _Ai21InvokeResponse(TypedDict):
+    completions: ReadOnly[Sequence[_Ai21Completion]]
+
+
+class _TitanResult(TypedDict):
+    outputText: ReadOnly[str]
+
+
+class _TitanInvokeResponse(TypedDict):
+    results: ReadOnly[Sequence[_TitanResult]]
 
 
 _COHERE_INVOKE_RESPONSE: Final = TypeAdapter(_CohereInvokeResponse)
@@ -226,8 +247,11 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             provider=provider,
             custom_prompt_dict=custom_prompt_dict,
         )
-        inference_params = copy.deepcopy(optional_params)
-        inference_params = {k: v for k, v in inference_params.items() if k not in self.aws_authentication_params}
+        inference_params: Final = {
+            k: v
+            for k, v in copy.deepcopy(optional_params).items()
+            if k not in self.aws_authentication_params and k not in MCP_HANDLER_KWARG_NAMES
+        }
         request_data: dict = {}
         if provider == "cohere":
             if model.startswith("cohere.command-r"):
@@ -391,13 +415,15 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
                     json_mode=json_mode,
                 )
             elif provider == "ai21":
-                outputText = completion_response.get("completions")[0].get("data").get("text")
+                ai21_response: Final[_Ai21InvokeResponse] = completion_response
+                outputText = ai21_response.get("completions")[0].get("data").get("text")
             elif provider == "meta" or provider == "llama" or provider == "deepseek_r1":
                 outputText = _LLAMA_INVOKE_RESPONSE.validate_python(completion_response)["generation"]
             elif provider == "mistral":
                 outputText = litellm.AmazonMistralConfig.get_outputText(completion_response, model_response)
             else:  # amazon titan
-                outputText = completion_response.get("results")[0].get("outputText")
+                titan_response: Final[_TitanInvokeResponse] = completion_response
+                outputText = titan_response.get("results")[0].get("outputText")
         except Exception as e:
             raise BedrockError(
                 message=f"Error processing={raw_response.text}, Received error={e}",
