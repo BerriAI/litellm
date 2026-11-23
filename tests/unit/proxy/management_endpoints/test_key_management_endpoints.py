@@ -2537,6 +2537,32 @@ async def test_update_without_metadata_still_preserves_existing():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("resubmit_logging", [False, True])
+async def test_prepare_key_update_only_normalizes_credential_references_when_admin_resubmits_logging(
+    resubmit_logging: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entries: Final = [{"callback_name": "arize", "litellm_credential_name": "space-a", "callback_vars": {}}]
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [CredentialItem(credential_name="space-a", credential_values={"arize_api_key": "test-key"}, credential_info={})],
+    )
+    serialized: Final = json.dumps(entries)
+    existing_key: Final = LiteLLM_VerificationToken(token="hashed", metadata={"logging": serialized})
+    request: Final = (
+        UpdateKeyRequest(key="sk-1", metadata={"logging": serialized})
+        if resubmit_logging
+        else UpdateKeyRequest(key="sk-1", max_budget=100)
+    )
+    admin: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    result: Final = await prepare_key_update_data(data=request, existing_key_row=existing_key, user_api_key_dict=admin)
+
+    assert result["metadata"]["logging"] == (entries if resubmit_logging else serialized)
+
+
+@pytest.mark.asyncio
 async def test_prepare_key_update_data_encrypts_callback_vars(monkeypatch):
     """/key/update must encrypt callback_vars values before they reach the DB."""
     from litellm.proxy.common_utils.callback_utils import decrypt_callback_vars
@@ -24892,7 +24918,7 @@ def test_key_health_failure_body_carries_a_json_null_param():
     import litellm.proxy.proxy_server as ps
 
     app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
-        api_key="hashed-key", metadata={"logging": ["not-a-callback-object"]}
+        api_key="hashed-key", metadata={"logging": [{"callback_vars": {}}]}
     )
     try:
         response = client.post("/key/health", headers={"Authorization": "Bearer sk-test"})
@@ -24901,6 +24927,7 @@ def test_key_health_failure_body_carries_a_json_null_param():
 
     assert response.status_code == 500
     error = response.json()["error"]
+    assert "callback_name is required in key_logging" in error["message"]
     assert error["type"] == "internal_server_error"
     assert error["param"] is None
 
@@ -24999,6 +25026,18 @@ def test_non_admin_resaving_referencing_key_metadata_read_back_encrypted_is_not_
         raise_on_logging_credential_change({"note": "unrelated edit"}, key_row, internal_user)
 
     assert removed.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_non_admin_resaving_unchanged_referencing_logging_as_json_persists_a_list() -> None:
+    entries: Final = [{"callback_name": "arize", "litellm_credential_name": "owned-credential", "callback_vars": {}}]
+    key_row: Final = LiteLLM_VerificationToken(token="test-key", metadata={"logging": entries})
+    prepared: Final = await prepare_key_update_data(
+        UpdateKeyRequest(key="test-key", metadata={"logging": json.dumps(entries)}),
+        key_row,
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER),
+    )
+    assert prepared["metadata"]["logging"] == entries
 
 
 @pytest.mark.parametrize(
