@@ -237,6 +237,20 @@ def test_image_edit_multipart_n_that_is_not_a_number_is_left_alone(monkeypatch):
     assert captured["n"] == "two"
 
 
+def test_image_edit_bracketed_image_config_fields_reach_the_provider_as_sent(monkeypatch):
+    captured: Dict[str, Any] = {}
+
+    response = _image_edit_client(monkeypatch, captured).post(
+        "/v1/images/edits",
+        files={"image": ("tree.png", b"\x89PNG\r\n\x1a\n", "image/png")},
+        data={"model": "gpt-image-1", "prompt": "add a hat", "imageConfig[aspectRatio]": "9:16"},
+    )
+
+    assert response.status_code == 200
+    assert captured["imageConfig[aspectRatio]"] == "9:16"
+    assert "imageConfig" not in captured
+
+
 @pytest.mark.parametrize(
     "files, form, missing",
     [

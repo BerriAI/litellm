@@ -2909,6 +2909,13 @@ _STREAMS_A_CLIENT_READS_ANOTHER_WAY: Final = {
         _block_stop_sse(0),
         *_MESSAGE_END_SSE,
     ),
+    "text-on-a-data-line-starting-with-a-space": (
+        _message_start_sse(),
+        *_text_block_sse(0, "Sure. "),
+        _text_block_sse(0, f"Call me at {_PHONE}.")[1].replace(b"\ndata:", b"\n data:"),
+        _block_stop_sse(0),
+        *_MESSAGE_END_SSE,
+    ),
     "tool-input-delta-also-carrying-text": (
         *_PHONE_IN_A_TOOL_INPUT[:2],
         _anthropic_sse(

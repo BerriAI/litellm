@@ -17,13 +17,21 @@ from litellm.llms.gemini.empty_image_response import empty_image_response_error
 from litellm.llms.gemini.image_usage_transformation import transform_gemini_image_usage
 from litellm.llms.vertex_ai.common_utils import (
     get_vertex_base_url,
-    map_vertex_image_size,
     vertex_top_level_request_fields,
 )
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
+from litellm.llms.vertex_ai.gemini_image_params import (
+    map_vertex_gemini_image_params,
+    raise_unsupported_image_param,
+    vertex_gemini_image_config,
+)
 from litellm.llms.vertex_ai.request_labels import caller_labels_header_names, vertex_request_label_fields
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.images.main import ImageEditOptionalRequestParams
+from litellm.types.images.main import (
+    IMAGE_CONFIG_FIELDS,
+    ImageEditOptionalRequestParams,
+    UnsupportedImageParam,
+)
 from litellm.types.llms.vertex_ai import (
     GenerateContentResponseBody,
     HttpxContentType,
@@ -59,7 +67,15 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
     Uses generateContent API for Gemini models on Vertex AI
     """
 
-    SUPPORTED_PARAMS: list[str] = ["n", "size"]
+    SUPPORTED_PARAMS: list[str] = [
+        "n",
+        "size",
+        *IMAGE_CONFIG_FIELDS,
+        "aspectRatio",
+        "aspect_ratio",
+        "imageSize",
+        "image_size",
+    ]
 
     def __init__(self) -> None:
         BaseImageEditConfig.__init__(self)
@@ -74,14 +90,11 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
         model: str,
         drop_params: bool,
     ) -> dict[str, object]:
-        request_count: Final[Mapping[str, object]] = (
-            {"n": image_edit_optional_params["n"]} if "n" in image_edit_optional_params else {}
-        )
-        if "size" not in image_edit_optional_params:
-            return dict(request_count)
-
-        size: Final = image_edit_optional_params.get("size")
-        return {**request_count, **(map_vertex_image_size(size, model) or {"aspectRatio": "1:1"})}
+        params: Final[Mapping[str, object]] = image_edit_optional_params
+        image_params: Final = map_vertex_gemini_image_params(params, model, drop_params)
+        if isinstance(image_params, UnsupportedImageParam):
+            raise_unsupported_image_param(image_params, model)
+        return {**({"n": params["n"]} if "n" in params else {}), **image_params}
 
     def get_request_count(self, model: str, image_edit_optional_request_params: Mapping[str, object]) -> int:
         return image_request_count(image_edit_optional_request_params.get("n"), model=model, llm_provider="vertex_ai")
@@ -198,15 +211,10 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
         # Correct format for Vertex AI Gemini image editing
         contents: Final[dict[str, object]] = {"role": "USER", "parts": parts}
 
-        # Add image-specific configuration
-        image_config: Final = {
-            field: image_edit_optional_request_params[param]
-            for param, field in (("aspectRatio", "aspect_ratio"), ("imageSize", "image_size"))
-            if param in image_edit_optional_request_params
-        }
-
+        image_config: Final = vertex_gemini_image_config(image_edit_optional_request_params)
         generation_config: Final[dict[str, object]] = {
-            key: value for key, value in (("response_modalities", ["IMAGE"]), ("image_config", image_config)) if value
+            "responseModalities": ["IMAGE"],
+            **({"imageConfig": image_config} if image_config else {}),
         }
 
         label_fields: Final = (
