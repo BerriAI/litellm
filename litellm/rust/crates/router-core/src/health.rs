@@ -390,19 +390,18 @@ pub enum Outcome {
     Failure(AttemptError),
 }
 
-#[derive(Clone)]
-pub struct Health<C> {
-    cache: C,
+pub struct Health<'a, C> {
+    cache: &'a C,
     clock: Arc<dyn Clock>,
 }
 
-impl<C: RouterCache> Health<C> {
-    pub fn new(cache: C, clock: Arc<dyn Clock>) -> Self {
+impl<'a, C: RouterCache> Health<'a, C> {
+    pub fn new(cache: &'a C, clock: Arc<dyn Clock>) -> Self {
         Self { cache, clock }
     }
 
-    pub fn cache(&self) -> &C {
-        &self.cache
+    pub fn cache(&self) -> &'a C {
+        self.cache
     }
 
     pub(crate) fn now_time(&self) -> SystemTime {
@@ -753,8 +752,8 @@ mod tests {
         .unwrap()
     }
 
-    fn health() -> Health<InMemoryRouterCache> {
-        Health::new(InMemoryRouterCache::default(), Arc::new(SystemClock))
+    fn health(cache: &InMemoryRouterCache) -> Health<'_, InMemoryRouterCache> {
+        Health::new(cache, Arc::new(SystemClock))
     }
 
     fn settings(dynamic: RouterDynamicConfig) -> Settings {
@@ -772,7 +771,8 @@ mod tests {
         #[case] counted: u64,
         #[case] cooled: bool,
     ) {
-        let health = health();
+        let cache = InMemoryRouterCache::default();
+        let health = health(&cache);
         let deployment = Deployment::from_spec(deployment("a", serde_json::json!({}))).unwrap();
         let mut failure = AttemptError::new(FailureKind::RateLimit, Some(429));
         failure.outside_deployment = outside_deployment;
@@ -809,7 +809,8 @@ mod tests {
         #[case] status: u16,
         #[case] base_class: &str,
     ) {
-        let health = health();
+        let cache = InMemoryRouterCache::default();
+        let health = health(&cache);
         let deployment = Deployment::from_spec(deployment("a", serde_json::json!({}))).unwrap();
         let failure = AttemptError::new(kind, Some(status));
 
@@ -847,7 +848,8 @@ mod tests {
         let deployment = Deployment::from_spec(deployment("a", serde_json::json!({}))).unwrap();
         let failure = AttemptError::new(FailureKind::RateLimit, Some(429));
 
-        let cooldown = health()
+        let cache = InMemoryRouterCache::default();
+        let cooldown = health(&cache)
             .record_failure(
                 &settings,
                 &deployment,
@@ -1098,7 +1100,8 @@ mod tests {
         #[case] first_cools: bool,
         #[case] second_cools: bool,
     ) {
-        let health = health();
+        let cache = InMemoryRouterCache::default();
+        let health = health(&cache);
         let settings = settings(allowed_fails(allowed));
         let deployment = Deployment::from_spec(deployment("a", serde_json::json!({}))).unwrap();
         let fail = || async {
@@ -1121,7 +1124,8 @@ mod tests {
     #[rstest]
     #[tokio::test]
     async fn the_failure_ratio_spares_a_lone_deployment_that_fails_with_500s() {
-        let health = health();
+        let cache = InMemoryRouterCache::default();
+        let health = health(&cache);
         let deployment = Deployment::from_spec(deployment("a", serde_json::json!({}))).unwrap();
         let fail = || async {
             health
@@ -1144,7 +1148,8 @@ mod tests {
     #[rstest]
     #[tokio::test]
     async fn the_failure_ratio_cools_one_of_several_on_the_fifth_failure_of_a_minute() {
-        let health = health();
+        let cache = InMemoryRouterCache::default();
+        let health = health(&cache);
         let deployment = Deployment::from_spec(deployment("a", serde_json::json!({}))).unwrap();
         let fail = || async {
             health
@@ -1193,7 +1198,8 @@ mod tests {
         #[case] shape: GroupShape,
         #[case] next_counts: [f64; 3],
     ) {
-        let health = health();
+        let cache = InMemoryRouterCache::default();
+        let health = health(&cache);
         let deployment = Deployment::from_spec(deployment("a", info)).unwrap();
         health
             .record_failure(
@@ -1205,7 +1211,7 @@ mod tests {
             )
             .await
             .unwrap();
-        let cache = health.cache();
+        let cache = &cache;
         let next = |suffix| async move {
             cache
                 .increment_allowed_fails("a", suffix, MINUTE)
@@ -1294,7 +1300,8 @@ mod tests {
         #[case] info: serde_json::Value,
         #[case] cooled: bool,
     ) {
-        let health = health();
+        let cache = InMemoryRouterCache::default();
+        let health = health(&cache);
         let deployment = Deployment::from_spec(deployment("a", info)).unwrap();
         let mut failure = AttemptError::new(FailureKind::BadRequest, None);
         failure.status_absent = true;
@@ -1321,7 +1328,7 @@ mod tests {
     async fn usage_is_keyed_by_the_model_served(#[case] model: Option<&str>, #[case] keyed: &str) {
         let cache = InMemoryRouterCache::default();
         let clock = Arc::new(SystemClock);
-        let health = Health::new(cache.clone(), clock.clone());
+        let health = Health::new(&cache, clock.clone());
         let deployment = Deployment::from_spec(deployment("a", serde_json::json!({}))).unwrap();
 
         health
