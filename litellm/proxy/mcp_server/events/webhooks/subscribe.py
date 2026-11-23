@@ -165,7 +165,7 @@ def _upstream_params(subscription: _Subscription, settings: EventsSettings) -> J
         "arguments": dict(params.arguments),
         "delivery": {
             "mode": "webhook",
-            "url": callback_url(settings, subscription.base.id),
+            "url": callback_url(settings, subscription.base.id, subscription.base.upstream_secret),
             "secret": subscription.base.upstream_secret,
         },
         "cursor": subscription.opened.upstream,
@@ -217,7 +217,12 @@ async def _roll_back(
 ) -> None:
     """Undo an upstream subscription this request created but could not record."""
     current: Final = await subscription.request.store.get(subscription.base.id)
-    if current is not None and current.generation != subscription.base.generation and current.status != "terminated":
+    if (
+        current is not None
+        and current.upstream_secret == subscription.base.upstream_secret
+        and current.generation != subscription.base.generation
+        and current.status != "terminated"
+    ):
         return
     orphan: Final = subscription.base.model_copy(update={"upstream_subscription_id": upstream.id})
     await _unsubscribe_upstream(orphan, subscription.prepared, settings, runtime)
@@ -298,9 +303,8 @@ async def _retire_if_moved(
     """A row for a server the name no longer resolves to is ended there, so the new server starts fresh."""
     if row is None or row.status == "terminated" or row.server_id == prepared.resolved.target.server.server_id:
         return row
-    await store.terminate(row.id)
-    await store.drop_deliveries(row.id)
-    await end_upstream(row, settings, runtime)
+    if await store.end_if_current(row.id, row.upstream_subscription_id, row.generation):
+        await end_upstream(row, settings, runtime)
     return row.model_copy(update={"status": "terminated"})
 
 
@@ -417,14 +421,13 @@ async def unsubscribe(
         mismatch: Final = check_routing_headers(headers, params.name, params.arguments, prepared)
         if mismatch is not None:
             return Error(mismatch)
-    if not await events_store.hold_for_unsubscribe(sid, row.upstream_subscription_id):
+    if not await events_store.hold_for_unsubscribe(sid, row.upstream_subscription_id, row.generation):
         return Error(subscription_not_found())
-    await events_store.drop_deliveries(sid)
     if prepared is not None:
         await _unsubscribe_upstream(row, prepared, settings, runtime)
     else:
         await end_upstream(row, settings, runtime)
-    await events_store.delete_held(sid, row.upstream_subscription_id)
+    await events_store.delete_held(sid, row.upstream_subscription_id, row.generation)
     await runtime.record(
         EventActivity(
             call_type="mcp_event_subscribe",
@@ -464,7 +467,7 @@ async def _unsubscribe_upstream(
             {
                 "name": row.event_name,
                 "arguments": dict(row.arguments),
-                "delivery": {"url": callback_url(settings, row.id)},
+                "delivery": {"url": callback_url(settings, row.id, row.upstream_secret)},
             },
             routing_headers(row.event_name, row.arguments, prepared.descriptor),
         )
