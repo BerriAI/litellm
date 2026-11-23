@@ -52,6 +52,12 @@ def _text_document_data(block: Mapping[str, object]) -> str | None:
             return None
 
 
+def _shifts_a_document_index(documents: Sequence[Mapping[str, object]]) -> bool:
+    converted: Final = tuple(_text_document_data(document) is not None for document in documents)
+    first: Final = next((index for index, is_converted in enumerate(converted) if is_converted), len(converted))
+    return not all(converted[first:])
+
+
 @dataclass(frozen=True, slots=True)
 class _DroppedBreakpoint:
     cache_control: object
@@ -161,8 +167,7 @@ class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
         cites_documents: Final = has_text_documents and any(
             (as_str_mapping(document.get("citations")) or {}).get("enabled") is True for document in documents
         )
-        drop_citations: Final = cites_documents and drops_unsupported_params(litellm_params.drop_params)
-        if cites_documents and not drop_citations:
+        if cites_documents and not drops_unsupported_params(litellm_params.drop_params):
             raise UnsupportedParamsError(
                 message="GitHub Copilot text documents cannot preserve structured citations when converted to text. "
                 "Disable document citations, set drop_params to drop them, "
@@ -170,6 +175,7 @@ class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
                 model=model,
                 llm_provider="github_copilot",
             )
+        drop_citations: Final = cites_documents and _shifts_a_document_index(documents)
         normalized: Final = [
             {**message, "content": _text_document_content(message["content"], drop_citations)}
             if has_text_documents and message.get("role") == "user" and "content" in message

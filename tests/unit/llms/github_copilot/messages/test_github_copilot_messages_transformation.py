@@ -1,3 +1,4 @@
+from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from typing import Final
 from unittest.mock import MagicMock
@@ -317,20 +318,49 @@ def test_text_document_fallback_does_not_silently_break_document_citations(cited
         )
 
 
-def test_drop_params_drops_document_citations_instead_of_rejecting_the_request() -> None:
-    messages: Final = [
-        {
-            "role": "user",
-            "content": [
-                {"type": "document", "source": {"type": "text", "data": "Source"}, "citations": {"enabled": True}},
-                {
-                    "type": "document",
-                    "source": {"type": "url", "url": "https://example.com/report.pdf"},
-                    "citations": {"enabled": True},
-                },
-            ],
-        }
-    ]
+_CITED_TEXT_DOCUMENT: Final = {
+    "type": "document",
+    "source": {"type": "text", "data": "Source"},
+    "citations": {"enabled": True},
+}
+_CONVERTED_TEXT_DOCUMENT: Final = {"type": "text", "text": "Source"}
+_PDF: Final = {"type": "document", "source": {"type": "url", "url": "https://example.com/report.pdf"}}
+_CITED_PDF: Final = {**_PDF, "citations": {"enabled": True}}
+_REPLY: Final = {"role": "assistant", "content": "Read it."}
+
+
+def _user(content: list[object]) -> dict[str, object]:
+    return {"role": "user", "content": content}
+
+
+@pytest.mark.parametrize(
+    ("messages", "expected"),
+    [
+        pytest.param(
+            [_user([_CITED_TEXT_DOCUMENT, _CITED_PDF])],
+            [_user([_CONVERTED_TEXT_DOCUMENT, _PDF])],
+            id="pdf-after-converted-document",
+        ),
+        pytest.param(
+            [_user([_CITED_TEXT_DOCUMENT]), _REPLY, _user([_CITED_PDF])],
+            [_user([_CONVERTED_TEXT_DOCUMENT]), _REPLY, _user([_PDF])],
+            id="pdf-in-a-later-turn",
+        ),
+        pytest.param(
+            [_user([_CITED_PDF, _CITED_TEXT_DOCUMENT])],
+            [_user([_CITED_PDF, _CONVERTED_TEXT_DOCUMENT])],
+            id="pdf-before-converted-document",
+        ),
+        pytest.param(
+            [_user([_CITED_PDF]), _REPLY, _user([_CITED_TEXT_DOCUMENT])],
+            [_user([_CITED_PDF]), _REPLY, _user([_CONVERTED_TEXT_DOCUMENT])],
+            id="pdf-in-an-earlier-turn",
+        ),
+    ],
+)
+def test_drop_params_drops_citations_only_when_converting_shifts_a_document_index(
+    messages: Sequence[Mapping[str, object]], expected: Sequence[Mapping[str, object]]
+) -> None:
     result: Final = GithubCopilotAnthropicMessagesConfig().transform_anthropic_messages_request(
         model="claude-sonnet-5.5",
         messages=messages,
@@ -338,15 +368,7 @@ def test_drop_params_drops_document_citations_instead_of_rejecting_the_request()
         litellm_params=GenericLiteLLMParams(drop_params=True),
         headers={},
     )
-    assert result["messages"] == [
-        {
-            "role": "user",
-            "content": [
-                {"type": "text", "text": "Source"},
-                {"type": "document", "source": {"type": "url", "url": "https://example.com/report.pdf"}},
-            ],
-        }
-    ]
+    assert result["messages"] == expected
 
 
 def test_github_copilot_anthropic_messages_get_complete_url():
