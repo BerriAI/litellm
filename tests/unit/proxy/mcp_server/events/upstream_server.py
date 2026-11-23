@@ -31,6 +31,7 @@ class _Note(BaseModel):
 @dataclass
 class EventsUpstream:
     pages: tuple[tuple[str, ...], ...] = (("build.failed",),)
+    advertises_events: bool = True
     hang: bool = False
     seen: list[tuple[str, Mapping[str, str], dict[str, object]]] = field(
         default_factory=list
@@ -78,6 +79,8 @@ class EventsUpstream:
 @asynccontextmanager
 async def events_client(upstream: EventsUpstream, timeout: float = 5.0) -> AsyncGenerator[MCPClient, None]:
     server = Server[object]("events-upstream")
+    if upstream.advertises_events:
+        server.extensions["io.modelcontextprotocol/events"] = {}
     server.add_request_handler("events/list", _Params, upstream.list_events)
     server.add_request_handler("events/poll", _Params, upstream.poll)
     server.add_request_handler("events/stream", _Params, upstream.stream)
