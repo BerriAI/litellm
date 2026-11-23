@@ -387,6 +387,7 @@
         "issuer": {
           "label": "Trusted Okta Authorization Server",
           "required": "Select a trusted authorization server",
+          "autonomousRequiresCustom": "Choose a custom authorization server for autonomous execution.",
           "placeholder": "Select the gateway's trusted authorization server",
           "noneAvailable": "Add a trusted Okta issuer with an audience, agent_identity_provider: okta and okta_org to the gateway JWT settings.",
           "description": "Choose a custom authorization server for agent access tokens. An org authorization server is for delegated ID-JAG redemption."

@@ -481,6 +481,26 @@ describe("AddAgentForm submit payload", () => {
     expect(await screen.findByText(/agent_identity_provider: okta and okta_org/)).toBeInTheDocument();
   });
 
+  it("requires a custom authorization server for an autonomous-only Okta agent", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
+    const issuer = "https://example.okta.com";
+    vi.mocked(networking.apiClient.get).mockResolvedValue([issuer]);
+    renderForm();
+    await screen.findByLabelText("Agent Name");
+    await openAgentTypeMenu(user);
+    await user.click(await screen.findByText("Custom / Other"));
+    fireEvent.change(await screen.findByLabelText("Agent Name"), { target: { value: "org-agent" } });
+    await chooseSelectOption(user, screen.getByLabelText("Identity Provider"), "Okta");
+    await chooseSelectOption(user, screen.getByLabelText("Trusted Okta Authorization Server"), issuer);
+    fireEvent.change(screen.getByLabelText("Client ID"), { target: { value: "0oa1AgentClient" } });
+    await user.click(screen.getByRole("button", { name: /^Next/ }));
+    expect(await screen.findByText("Choose a custom authorization server for autonomous execution.")).toBeVisible();
+    await chooseSelectOption(user, screen.getByLabelText("Execution Mode"), "On behalf of a user");
+    await goToLastStepAndCreate(user);
+    expect(createdPayload().identity).toMatchObject({ provider: "okta", issuer });
+    expect(createdPayload().execution_mode).toBe("delegated");
+  });
+
   it("sends a custom Okta-bound agent without a synthesized agent card", async () => {
     const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
     const issuer = "https://example.okta.com/oauth2/aus1agents";

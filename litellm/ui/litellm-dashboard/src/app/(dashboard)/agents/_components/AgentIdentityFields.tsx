@@ -305,7 +305,13 @@ const OktaIdentityFields = ({
       <AgentFormField
         name="identity_okta_issuer"
         label={t("agents.identityFields.okta.issuer.label")}
-        rules={{ required: t("agents.identityFields.okta.issuer.required") }}
+        rules={{
+          required: t("agents.identityFields.okta.issuer.required"),
+          validate: (issuer, values) =>
+            (values.execution_mode ?? "autonomous") !== "autonomous" ||
+            (typeof issuer === "string" && issuer.includes("/oauth2/")) ||
+            t("agents.identityFields.okta.issuer.autonomousRequiresCustom"),
+        }}
         description={t("agents.identityFields.okta.issuer.description")}
       >
         {({ value, onChange, id }) => (

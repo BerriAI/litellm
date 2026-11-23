@@ -210,6 +210,29 @@ describe("AgentInfoView update payload", () => {
     expect(patchedPayload().identity).toBeNull();
   });
 
+  it("blocks an edit that switches an org issuer to autonomous-only execution", async () => {
+    const user = setup();
+    const issuer = "https://example.okta.com";
+    const identity = { provider: "okta", issuer, client_id: "0oa1AgentClient", required_scopes: [] };
+    vi.mocked(networking.getAgentInfo).mockResolvedValue({
+      ...A2A_AGENT,
+      identity: { ...identity, agent_id: "agent-1", tenant_id: issuer, revision: "rev", active: true },
+      identity_managed: true,
+      execution_mode: "delegated",
+      enabled: true,
+    } as never);
+    vi.mocked(networking.apiClient.get).mockImplementation(async (path) =>
+      path.includes("/identity/providers") ? [issuer] : { last_authenticated_at: null },
+    );
+    renderView();
+    await openEditor(user);
+    await user.click(screen.getByLabelText("Execution Mode"));
+    await user.click(await screen.findByRole("option", { name: "Autonomous" }));
+    await user.click(screen.getByRole("button", { name: "Save Changes" }));
+    expect(await screen.findByText("Choose a custom authorization server for autonomous execution.")).toBeVisible();
+    expect(networking.patchAgentCall).not.toHaveBeenCalled();
+  });
+
   it.each([
     { card: "complete", editCard: false },
     { card: "empty", editCard: false },
