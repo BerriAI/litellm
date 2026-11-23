@@ -509,7 +509,7 @@ class SkillsInjectionHook(CustomLogger):
 
     def _extract_tool_calls(self, response: object) -> Sequence[Mapping[str, object]]:
         """Extract tool calls from response, handling both formats."""
-        tool_calls: Final[list[Mapping[str, object]]] = []
+        tool_calls: Final = []
 
         # Get content - handle both dict and object responses
         response_mapping: Final = _dict_or_none(response)
@@ -627,7 +627,7 @@ class SkillsInjectionHook(CustomLogger):
                 return self._attach_files_to_response(current_response, generated_files)
 
             # Process tool calls
-            tool_results: list[dict[str, object]] = []
+            tool_results = []
             for tc in tool_calls:
                 tool_name = tc.get("name", "")
                 tool_id = tc.get("id", "")

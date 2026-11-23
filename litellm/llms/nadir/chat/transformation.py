@@ -39,9 +39,7 @@ def _reported_cost_usd(raw_response: httpx.Response) -> float | None:
 
 
 class NadirConfig(OpenAIGPTConfig):
-    def get_supported_openai_params(
-        self, model: str
-    ) -> list[str]:  # mutable-ok: return type fixed by the base interface
+    def get_supported_openai_params(self, model: str) -> list:  # mutable-ok: return type fixed by the base interface
         return list(_SUPPORTED_OPENAI_PARAMS)
 
     def transform_response(
@@ -50,10 +48,10 @@ class NadirConfig(OpenAIGPTConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: object,
-        request_data: dict[str, object],  # mutable-ok: signature fixed by the base interface
+        request_data: dict,  # mutable-ok: signature fixed by the base interface
         messages: list[AllMessageValues],  # mutable-ok: signature fixed by the base interface
-        optional_params: dict[str, object],  # mutable-ok: signature fixed by the base interface
-        litellm_params: dict[str, object],  # mutable-ok: signature fixed by the base interface
+        optional_params: dict,  # mutable-ok: signature fixed by the base interface
+        litellm_params: dict,  # mutable-ok: signature fixed by the base interface
         encoding: object,
         api_key: str | None = None,
         json_mode: bool | None = None,
