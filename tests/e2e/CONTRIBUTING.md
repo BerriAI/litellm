@@ -9,7 +9,7 @@ When contributing to this directory, please first discuss the change you wish to
 
 ## Setup
 
-The suites run against a live proxy, so bring one up first by running the litellm proxy locally. Point it at a config that prewires the example models the suites use (`gpt-5.5`, `claude-haiku-4-5`, `gemini-2.5-flash`, `openai-text-embedding-3-small`) with keys from your `.env`, and enables prompt storage, a redis cache, the fast budget rescheduler the quota suites rely on, and `router_settings.optional_pre_call_checks: ["prompt_caching"]`, which the router suite's prompt-cache affinity test reads back from `GET /router/settings` and fails without. If your test needs another model, a pricing override, or a guardrail declared up front, add it to that config and read it back in the test rather than hardcoding values
+The suites run against a live proxy, so bring one up first by running the litellm proxy locally. Point it at a config that prewires the example models the suites use (`gpt-5.5`, `claude-haiku-4-5`, `gemini-3.8-flash`, `openai-text-embedding-3-small`) with keys from your `.env`, and enables prompt storage, a redis cache, the fast budget rescheduler the quota suites rely on, and `router_settings.optional_pre_call_checks: ["prompt_caching"]`, which the router suite's prompt-cache affinity test reads back from `GET /router/settings` and fails without. If your test needs another model, a pricing override, or a guardrail declared up front, add it to that config and read it back in the test rather than hardcoding values
 
 ## Running the tests locally
 
@@ -25,7 +25,7 @@ The suites run against a live proxy, so bring one up first by running the litell
    GEMINI_API_KEY="..."
    ```
 
-2. Bring up a Postgres and a Redis for the proxy to use. The repo-root `docker-compose.yml` already defines a Postgres on `5432`; a `docker run -p 6379:6379 redis:7` covers Redis. Point `DATABASE_URL` / `REDIS_HOST` / `REDIS_PORT` at whatever you run. Tests that read Redis directly default to the deployed shape (TLS + cluster mode) whenever `REDIS_HOST` is set, so for a local standalone Redis also set `REDIS_CLUSTER=false` and `REDIS_SSL=false` (plus `REDIS_PASSWORD` when your Redis requires auth)
+2. Bring up a Postgres and a Redis for the proxy to use. The `litellm/deploy/compose/docker-compose.yml` already defines a Postgres on `5432`; a `docker run -p 6379:6379 redis:7` covers Redis. Point `DATABASE_URL` / `REDIS_HOST` / `REDIS_PORT` at whatever you run. Tests that read Redis directly default to the deployed shape (TLS + cluster mode) whenever `REDIS_HOST` is set, so for a local standalone Redis also set `REDIS_CLUSTER=false` and `REDIS_SSL=false` (plus `REDIS_PASSWORD` when your Redis requires auth)
 
 3. Start the identity provider the JWT API tests authenticate against, then the litellm proxy against your config, and confirm both are live. It is a real Keycloak, running the realm in `tests/e2e/idp_realm.json`, and the proxy trusts it because `JWT_PUBLIC_KEY_URL` points at that realm's JWKS. The proxy caches the JWKS for `public_key_ttl` (600s) and does not refetch on an unknown `kid`, so keep its data volume across restarts; restart the proxy if you deliberately replace that volume:
 
@@ -170,7 +170,7 @@ class TestPromptCompression:
 
     def test_prompt_compression_accumulate_spend(self, key_id, user_id):
         for _ in range(10):
-            response = self.resources.proxy.post("gemini-2.5-flash", key_id, user_id)
+            response = self.resources.proxy.post("gemini-3.8-flash", key_id, user_id)
         compressed_value = ...
         assert response.cost == compressed_value  # the cost was actually reduced
 ```
@@ -199,7 +199,7 @@ Mark live tests with `@pytest.mark.e2e` (on the class or the module). Pure cover
 
 Before you push
 
-1. Run `make lint-e2e-basedpyright` (or `make check` with your changes staged); the harness is fully typed and the gate allows zero basedpyright errors, enforced in CI on any PR touching `tests/e2e/**/*.py` or `tests/e2e_harness/**/*.py`
+1. Run `make lint-e2e-basedpyright` (or `make check` with your changes staged); the harness is fully typed and the gate allows zero basedpyright errors, enforced in CI on any PR touching `tests/e2e/**/*.py`, `tests/e2e_harness/**/*.py`, `litellm/**/*.py`, `pyproject.toml`, or `uv.lock`
 
 2. Add the models your test needs to the config your local proxy loads
 

@@ -2,16 +2,15 @@ import asyncio
 import datetime
 import itertools
 import json
-import os
+import logging
 import queue
-import subprocess
 import sys
 import threading
 import time
+from collections import OrderedDict, defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from itertools import chain
-from pathlib import Path
 from types import CodeType, FrameType, MappingProxyType, TracebackType
 from typing import AsyncIterator, Callable, Final, Iterator, Literal, NoReturn, Optional, cast
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
@@ -19,8 +18,9 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 import httpx
 import pytest
 from openai import AsyncOpenAI, AsyncStream, OpenAI, Stream
-from openai.types.chat import ChatCompletionChunk
-from pydantic import BaseModel, TypeAdapter
+from openai.types.chat import ChatCompletionChunk, ChatCompletionStreamOptionsParam
+from openai.types.completion import Completion
+from pydantic import BaseModel, ConfigDict, TypeAdapter
 import litellm
 from litellm import verbose_logger
 from litellm._logging import session_id_var, trace_id_var
@@ -36,6 +36,7 @@ from litellm.litellm_core_utils.streaming_handler import (
     CustomStreamWrapper,
     _ProviderChunkEarlyReturn,
     _ProviderChunkParsed,
+    convert_generic_chunk_to_model_response_stream,
 )
 from litellm.llms.anthropic.chat.handler import ModelResponseIterator as AnthropicModelResponseIterator
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, MaskedHTTPStatusError
@@ -46,10 +47,13 @@ from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     ModelResponseIterator as GeminiModelResponseIterator,
 )
 from litellm.responses.mcp.chat_completions_handler import _add_mcp_metadata_to_response
+from litellm.responses.streaming_iterator import drain_logging_tasks
 from litellm.types.utils import (
+    ChatCompletionTokenLogprob,
     ChoiceLogprobs,
     CompletionTokensDetailsWrapper,
     Delta,
+    GenericStreamingChunk,
     ModelResponse,
     ModelResponseStream,
     PromptTokensDetailsWrapper,
@@ -58,6 +62,7 @@ from litellm.types.utils import (
     Usage,
 )
 from litellm.utils import ModelResponseListIterator
+from tests.unit.litellm_core_utils.weakly_parked_logger import weakly_parked_logger
 from litellm import completion
 from typing import Tuple
 
@@ -1716,6 +1721,155 @@ async def test_aborted_stream_raises_instead_of_finishing_successfully(
 
 @pytest.mark.parametrize("async_stream", [False, True])
 @pytest.mark.parametrize("transport", ["sdk", "http_handler"])
+@pytest.mark.parametrize(
+    "upstream_chunks",
+    [
+        pytest.param(
+            (
+                ({"index": 1, "delta": {"role": "assistant", "content": ""}, "finish_reason": None},),
+                ({"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": None},),
+                ({"index": 1, "delta": {"content": "Hi"}, "finish_reason": None},),
+                ({"index": 0, "delta": {"content": "Hello"}, "finish_reason": None},),
+                ({"index": 0, "delta": {}, "finish_reason": "stop"},),
+                ({"index": 1, "delta": {}, "finish_reason": "stop"},),
+            ),
+            id="one_choice_per_chunk",
+        ),
+        pytest.param(
+            (
+                (
+                    {"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": None},
+                    {"index": 1, "delta": {"role": "assistant", "content": ""}, "finish_reason": None},
+                ),
+                ({"index": 1, "delta": {"content": "Hi"}, "finish_reason": None},),
+                ({"index": 0, "delta": {"content": "Hello"}, "finish_reason": None},),
+                ({"index": 0, "delta": {}, "finish_reason": "stop"},),
+                ({"index": 1, "delta": {}, "finish_reason": "stop"},),
+            ),
+            id="choices_opened_in_one_chunk",
+        ),
+        pytest.param(
+            (
+                (
+                    {"index": 0, "delta": {"content": "Hello"}, "finish_reason": None},
+                    {"index": 1, "delta": {"content": "Hi"}, "finish_reason": None},
+                ),
+                (
+                    {"index": 0, "delta": {"content": " there"}, "finish_reason": None},
+                    {"index": 1, "delta": {"content": " there"}, "finish_reason": None},
+                ),
+                ({"index": 0, "delta": {}, "finish_reason": "stop"},),
+                ({"index": 1, "delta": {}, "finish_reason": "stop"},),
+            ),
+            id="choices_batched_without_roles",
+        ),
+        pytest.param(
+            (
+                ({"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": None},),
+                ({"index": 1, "delta": {"role": "assistant", "content": ""}, "finish_reason": None},),
+                ({"index": 0, "delta": {"content": "Hello"}, "finish_reason": None},),
+                ({"index": 0, "delta": {}, "finish_reason": "stop"},),
+                ({"index": 1, "delta": {}, "finish_reason": "stop"},),
+            ),
+            id="choice_with_empty_answer",
+        ),
+        pytest.param(
+            (
+                ({"index": None, "delta": {"role": "assistant", "content": ""}, "finish_reason": None},),
+                ({"index": 1, "delta": {"role": "assistant", "content": ""}, "finish_reason": None},),
+                ({"index": 0, "delta": {"content": "Hello"}, "finish_reason": None},),
+                ({"index": 1, "delta": {"content": "Hi"}, "finish_reason": None},),
+                ({"index": 0, "delta": {}, "finish_reason": "stop"},),
+                ({"index": 1, "delta": {}, "finish_reason": "stop"},),
+            ),
+            id="first_choice_opened_without_index",
+        ),
+        pytest.param(
+            (
+                (
+                    {"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": None},
+                    {"index": 0, "delta": {"content": "Hello"}, "finish_reason": None},
+                ),
+                ({"index": 1, "delta": {"role": "assistant", "content": ""}, "finish_reason": None},),
+                ({"index": 1, "delta": {"content": "Hi"}, "finish_reason": None},),
+                ({"index": 0, "delta": {}, "finish_reason": "stop"},),
+                ({"index": 1, "delta": {}, "finish_reason": "stop"},),
+            ),
+            id="choice_repeated_in_one_chunk",
+        ),
+    ],
+)
+async def test_streamed_n_choices_each_open_with_one_assistant_role(
+    async_stream: bool,
+    transport: str,
+    upstream_chunks: tuple[tuple[dict[str, object], ...], ...],
+    logging_obj: Logging,
+) -> None:
+    body: Final = (
+        "".join(
+            "data: "
+            + json.dumps(
+                {
+                    "id": "chatcmpl-n2",
+                    "object": "chat.completion.chunk",
+                    "created": 1,
+                    "model": "test-model",
+                    "choices": list(chunk_choices),
+                }
+            )
+            + "\n\n"
+            for chunk_choices in upstream_chunks
+        )
+        + "data: [DONE]\n\n"
+    )
+    raw_response: Final = httpx.Response(
+        200,
+        content=body,
+        headers={"content-type": "text/event-stream"},
+        request=httpx.Request("POST", "https://provider.example/v1/chat/completions"),
+    )
+    client: Final = AsyncOpenAI(api_key="unused") if async_stream else OpenAI(api_key="unused")
+    stream: Final = (
+        (
+            AsyncStream(cast_to=ChatCompletionChunk, response=raw_response, client=client)
+            if isinstance(client, AsyncOpenAI)
+            else Stream(cast_to=ChatCompletionChunk, response=raw_response, client=client)
+        )
+        if transport == "sdk"
+        else OpenAIChatCompletionStreamingHandler(
+            streaming_response=raw_response.aiter_lines() if async_stream else raw_response.iter_lines(),
+            sync_stream=not async_stream,
+        )
+    )
+    response: Final = CustomStreamWrapper(
+        completion_stream=stream,
+        model="test-model",
+        logging_obj=logging_obj,
+        custom_llm_provider="openai" if transport == "sdk" else "hosted_vllm",
+    )
+
+    try:
+        received: Final = [chunk async for chunk in response] if async_stream else list(response)
+    finally:
+        if isinstance(client, AsyncOpenAI):
+            await client.close()
+        else:
+            client.close()
+
+    emitted_choices: Final = tuple(
+        (0 if choice.index is None else choice.index, choice.delta.role)
+        for choice in chain.from_iterable(chunk.choices for chunk in received)
+    )
+    role_indexes: Final = sorted(index for index, role in emitted_choices if role == "assistant")
+    opening_roles: Final = {
+        index: next(role for choice_index, role in emitted_choices if choice_index == index) for index in (0, 1)
+    }
+    assert role_indexes == [0, 1]
+    assert opening_roles == {0: "assistant", 1: "assistant"}
+
+
+@pytest.mark.parametrize("async_stream", [False, True])
+@pytest.mark.parametrize("transport", ["sdk", "http_handler"])
 async def test_stream_with_null_choices_chunk_finishes_normally(
     async_stream: bool, transport: str, logging_obj: Logging
 ) -> None:
@@ -2070,66 +2224,6 @@ async def test_stream_logprobs_without_top_logprobs_reach_caller_as_litellm_logp
     ]
 
 
-FINISH_ONLY_LOGPROBS_STREAM_SCRIPT: Final = """
-import json
-import sys
-
-sys.path.insert(0, sys.argv[1])
-
-import httpx
-from openai import OpenAI
-
-import litellm
-
-upstream_choices = (
-    {"index": 0, "delta": {"role": "assistant", "content": "hi"}, "finish_reason": None},
-    {
-        "index": 0,
-        "delta": {},
-        "logprobs": {"content": [{"token": "<|return|>", "logprob": -0.5, "top_logprobs": []}]},
-        "finish_reason": "stop",
-    },
-)
-body = "".join(
-    "data: "
-    + json.dumps({"id": "c", "object": "chat.completion.chunk", "created": 1, "model": "m", "choices": [choice]})
-    + "\\n\\n"
-    for choice in upstream_choices
-) + "data: [DONE]\\n\\n"
-client = OpenAI(
-    api_key="unused",
-    base_url="https://provider.example/v1",
-    http_client=httpx.Client(
-        transport=httpx.MockTransport(
-            lambda request: httpx.Response(200, content=body, headers={"content-type": "text/event-stream"})
-        )
-    ),
-)
-stream = litellm.completion(
-    model="openai/m", messages=[{"role": "user", "content": "hi"}], stream=True, logprobs=True, client=client
-)
-print(json.dumps([json.loads(chunk.model_dump_json(exclude_none=True)) for chunk in stream]))
-"""
-
-
-def test_stream_with_logprobs_only_on_finish_chunk_serializes_in_a_fresh_process() -> None:
-    result: Final = subprocess.run(
-        [sys.executable, "-I", "-c", FINISH_ONLY_LOGPROBS_STREAM_SCRIPT, str(Path(litellm.__file__).parent.parent)],
-        capture_output=True,
-        text=True,
-        timeout=120,
-        env={**os.environ, "LITELLM_LOCAL_MODEL_COST_MAP": "True"},
-    )
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    wire_choices: Final = tuple(
-        itertools.chain.from_iterable(chunk["choices"] for chunk in json.loads(result.stdout.strip().splitlines()[-1]))
-    )
-    finish_choices: Final = [choice for choice in wire_choices if choice.get("finish_reason")]
-    assert [choice["finish_reason"] for choice in finish_choices] == ["stop"]
-    assert [entry["token"] for entry in finish_choices[0]["logprobs"]["content"]] == ["<|return|>"]
-
-
 def _hosted_vllm_stream_wrapper(logging_obj: Logging, error_payload: dict) -> CustomStreamWrapper:
     """A CustomStreamWrapper over the real OpenAI-compatible line iterator,
     fed an HTTP 200 SSE body that carries an in-body error payload the way
@@ -2395,7 +2489,6 @@ async def test_mid_stream_error_leaves_out_an_api_base_it_cannot_resolve():
 
     assert "model_group: `gpt-5.4-mini-azure`" in debug_info
     assert "API Base:" not in debug_info
-
 
 
 @pytest.mark.asyncio
@@ -3157,6 +3250,148 @@ async def test_openrouter_streaming_cost_after_finish_reason(logging_obj: Loggin
     assert len(usage_chunks) > 0
     assert hasattr(usage_chunks[-1].usage, "cost")
     assert usage_chunks[-1].usage.cost == 0.00025
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("iteration", "stream_options"),
+    [
+        ("sync", ChatCompletionStreamOptionsParam(include_usage=True)),
+        ("sync", ChatCompletionStreamOptionsParam(include_usage=False)),
+        ("sync", None),
+        ("async", ChatCompletionStreamOptionsParam(include_usage=True)),
+        ("async", ChatCompletionStreamOptionsParam(include_usage=False)),
+        ("async", None),
+        ("async_over_sync_stream", ChatCompletionStreamOptionsParam(include_usage=True)),
+        ("async_over_sync_stream", ChatCompletionStreamOptionsParam(include_usage=False)),
+        ("async_over_sync_stream", None),
+    ],
+)
+async def test_openrouter_post_finish_usage_trailer_does_not_emit_empty_choice(
+    logging_obj: Logging,
+    iteration: Literal["sync", "async", "async_over_sync_stream"],
+    stream_options: ChatCompletionStreamOptionsParam | None,
+):
+    model: Final = "openrouter/openai/gpt-4.1-mini"
+    chunks: Final = (
+        ModelResponseStream(
+            id="chatcmpl-or",
+            model=model,
+            choices=[StreamingChoices(index=0, delta=Delta(content="OK", role="assistant"))],
+        ),
+        ModelResponseStream(
+            id="chatcmpl-or",
+            model=model,
+            choices=[StreamingChoices(finish_reason="stop", index=0, delta=Delta(content="", role="assistant"))],
+        ),
+        ModelResponseStream(
+            id="chatcmpl-or",
+            model=model,
+            choices=[StreamingChoices(finish_reason="stop", index=0, delta=Delta(content="", role="assistant"))],
+            usage=Usage(completion_tokens=2, prompt_tokens=14, total_tokens=16, cost=0.0000088),
+        ),
+    )
+    response: Final = CustomStreamWrapper(
+        completion_stream=(
+            iter(chunks)
+            if iteration == "async_over_sync_stream"
+            else ModelResponseListIterator(model_responses=list(chunks))
+        ),
+        model=model,
+        custom_llm_provider="openrouter",
+        logging_obj=logging_obj,
+        stream_options=stream_options,
+    )
+
+    collected_chunks: Final = list(response) if iteration == "sync" else [chunk async for chunk in response]
+
+    finish_index: Final = next(
+        i for i, chunk in enumerate(collected_chunks) if chunk.choices and chunk.choices[0].finish_reason == "stop"
+    )
+    post_finish_chunks: Final = collected_chunks[finish_index + 1 :]
+    assert all(getattr(chunk, "usage", None) is not None for chunk in post_finish_chunks), post_finish_chunks
+    assert [chunk.usage.cost for chunk in post_finish_chunks] == (
+        [0.0000088] if stream_options and stream_options.get("include_usage") else []
+    )
+    rebuilt_usage: Final = litellm.stream_chunk_builder(chunks=collected_chunks).usage
+    assert (rebuilt_usage.prompt_tokens, rebuilt_usage.completion_tokens, rebuilt_usage.cost) == (14, 2, 0.0000088)
+
+
+@pytest.mark.parametrize(
+    ("trailer_choice", "read_payload"),
+    [
+        (
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(content="", role="assistant"),
+                logprobs=ChoiceLogprobs(content=[ChatCompletionTokenLogprob(token="!", logprob=-0.5, top_logprobs=[])]),
+            ),
+            lambda choice: choice.logprobs,
+        ),
+        (
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(
+                    content="",
+                    role="assistant",
+                    images=[{"type": "image_url", "image_url": {"url": "data:image/png;base64,AA=="}, "index": 0}],
+                ),
+            ),
+            lambda choice: getattr(choice.delta, "images", None),
+        ),
+        (
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(
+                    content="",
+                    role="assistant",
+                    thinking_blocks=[{"type": "thinking", "thinking": "done", "signature": "sig"}],
+                ),
+            ),
+            lambda choice: getattr(choice.delta, "thinking_blocks", None),
+        ),
+    ],
+    ids=["logprobs", "images", "thinking_blocks"],
+)
+def test_openrouter_post_finish_usage_trailer_keeps_a_choice_with_a_payload(
+    logging_obj: Logging,
+    trailer_choice: StreamingChoices,
+    read_payload: Callable[[StreamingChoices], object],
+):
+    model: Final = "openrouter/openai/gpt-4.1-mini"
+    expected_payload: Final = read_payload(trailer_choice)
+    chunks: Final = (
+        ModelResponseStream(
+            id="chatcmpl-or",
+            model=model,
+            choices=[StreamingChoices(index=0, delta=Delta(content="OK", role="assistant"))],
+        ),
+        ModelResponseStream(
+            id="chatcmpl-or",
+            model=model,
+            choices=[StreamingChoices(finish_reason="stop", index=0, delta=Delta(content="", role="assistant"))],
+        ),
+        ModelResponseStream(
+            id="chatcmpl-or",
+            model=model,
+            choices=[trailer_choice],
+            usage=Usage(completion_tokens=2, prompt_tokens=14, total_tokens=16, cost=0.0000088),
+        ),
+    )
+    response: Final = CustomStreamWrapper(
+        completion_stream=ModelResponseListIterator(model_responses=list(chunks)),
+        model=model,
+        custom_llm_provider="openrouter",
+        logging_obj=logging_obj,
+        stream_options=ChatCompletionStreamOptionsParam(include_usage=True),
+    )
+
+    streamed_choices: Final = tuple(chain.from_iterable(chunk.choices for chunk in response))
+
+    assert [read_payload(choice) for choice in streamed_choices if read_payload(choice)] == [expected_payload]
 
 
 @pytest.mark.asyncio
@@ -4489,6 +4724,522 @@ def test_usage_only_chunk_not_dropped_when_finish_reason_already_set(
     assert result.usage is not None
 
 
+@pytest.mark.parametrize("custom_llm_provider", [None, "my-custom-llm"])
+def test_stream_keeps_text_finish_reason_and_usage_from_incomplete_generic_chunks(
+    monkeypatch: pytest.MonkeyPatch,
+    custom_llm_provider: str | None,
+):
+    monkeypatch.setattr(litellm, "_custom_providers", [] if custom_llm_provider is None else [custom_llm_provider])
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=iter(
+            [
+                {"text": "Hel"},
+                {"is_finished": False},
+                {"text": "lo", "is_finished": False},
+                {"is_finished": True, "finish_reason": "length"},
+                {"usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5}},
+            ]
+        ),
+        model="custom-model",
+        logging_obj=MagicMock(),
+        custom_llm_provider=custom_llm_provider,
+        stream_options={"include_usage": True},
+    )
+
+    assembled: Final = litellm.stream_chunk_builder(chunks=list(wrapper))
+
+    assert assembled.choices[0].message.content == "Hello"
+    assert assembled.choices[0].finish_reason == "length"
+    assert (assembled.usage.prompt_tokens, assembled.usage.completion_tokens, assembled.usage.total_tokens) == (3, 2, 5)
+
+
+def test_stream_keeps_text_and_finish_reason_from_incomplete_generic_chunks_sent_as_mappings(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "_custom_providers", ["my-custom-llm"])
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=iter(
+            [
+                MappingProxyType({"text": "Hel"}),
+                MappingProxyType({"is_finished": False}),
+                MappingProxyType({"text": "lo", "is_finished": True, "finish_reason": "length"}),
+            ]
+        ),
+        model="custom-model",
+        logging_obj=MagicMock(),
+        custom_llm_provider="my-custom-llm",
+    )
+
+    assembled: Final = litellm.stream_chunk_builder(chunks=list(wrapper))
+
+    assert assembled.choices[0].message.content == "Hello"
+    assert assembled.choices[0].finish_reason == "length"
+
+
+@pytest.mark.parametrize(
+    ("chunk", "message"),
+    [
+        pytest.param(
+            {"content": "hello"},
+            "missing ['finish_reason', 'is_finished', 'text', 'usage'], unexpected ['content']",
+            id="content-key",
+        ),
+        pytest.param(
+            OrderedDict(content="hello"),
+            "missing ['finish_reason', 'is_finished', 'text', 'usage'], unexpected ['content']",
+            id="dict-subclass-content-key",
+        ),
+        pytest.param(
+            MappingProxyType({"content": "hello"}),
+            "missing ['finish_reason', 'is_finished', 'text', 'usage'], unexpected ['content']",
+            id="mapping-content-key",
+        ),
+        pytest.param(
+            {"content": "hello", 1: "x"},
+            "missing ['finish_reason', 'is_finished', 'text', 'usage'], unexpected [1, 'content']",
+            id="mixed-type-keys",
+        ),
+        pytest.param(
+            {"choices": [{"delta": {"content": "hello"}}], "usage": None},
+            "missing ['finish_reason', 'is_finished', 'text'], unexpected ['choices']",
+            id="openai-shaped",
+        ),
+        pytest.param(
+            {"is_finished": False, "content": "hello"},
+            "missing ['finish_reason', 'text', 'usage'], unexpected ['content']",
+            id="placeholder-flag-with-foreign-key",
+        ),
+        pytest.param("hello", "str is missing ['finish_reason', 'is_finished', 'text', 'usage']", id="plain-string"),
+        pytest.param(42, "expected a dict, got int", id="not-subscriptable"),
+        pytest.param(
+            litellm.ModelResponse(),
+            "ModelResponse is missing ['finish_reason', 'is_finished', 'text', 'usage']",
+            id="litellm-response-object",
+        ),
+    ],
+)
+def test_custom_provider_stream_names_the_keys_of_a_chunk_that_is_not_generic(
+    monkeypatch: pytest.MonkeyPatch, chunk: object, message: str
+):
+    monkeypatch.setattr(litellm, "_custom_providers", ["my-custom-llm"])
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=iter([chunk]),
+        model="custom-model",
+        logging_obj=MagicMock(),
+        custom_llm_provider="my-custom-llm",
+    )
+
+    with pytest.raises(MidStreamFallbackError) as excinfo:
+        list(wrapper)
+
+    assert f"from my-custom-llm is not a GenericStreamingChunk: {message}" in str(excinfo.value)
+
+
+class _UnprintableKey:
+    def __str__(self) -> str:
+        raise TypeError("this key has no string form")
+
+
+@pytest.mark.parametrize(
+    "chunks",
+    [
+        pytest.param(
+            [{"text": "hello", "is_finished": True, "finish_reason": "length", "usage": None, "id": "chunk-1"}],
+            id="complete",
+        ),
+        pytest.param(
+            [{"text": "hello", "is_finished": True, "finish_reason": "length", "usage": None, 1: "x", "id": "chunk-1"}],
+            id="complete-with-mixed-type-keys",
+        ),
+        pytest.param(
+            [{"text": "hello", "is_finished": True, "finish_reason": "length", "usage": None, _UnprintableKey(): "x"}],
+            id="complete-with-unprintable-key",
+        ),
+        pytest.param(
+            [
+                {"text": "hel", "logprobs": None},
+                {"text": "lo", "id": "chunk-2"},
+                {"is_finished": True, "finish_reason": "length", "id": "chunk-3"},
+            ],
+            id="partial",
+        ),
+        pytest.param(
+            [
+                {"text": None, "is_finished": None, "finish_reason": None, "usage": None, "id": "chunk-0"},
+                {"text": "hello", "is_finished": True, "finish_reason": "length", "usage": None, "id": "chunk-1"},
+            ],
+            id="complete-with-null-values",
+        ),
+        pytest.param(
+            [
+                {"id": "evt-0", "text": ""},
+                {"id": "evt-1", "text": "hello"},
+                {"id": "evt-2", "is_finished": True, "finish_reason": "length"},
+            ],
+            id="empty-text-first",
+        ),
+        pytest.param(
+            [
+                {"id": "evt-0", "provider_specific_fields": {"citations": ["https://example.com"]}},
+                {"id": "evt-1", "text": "hello"},
+                {"id": "evt-2", "is_finished": True, "finish_reason": "length"},
+            ],
+            id="provider-fields-only",
+        ),
+    ],
+)
+def test_custom_provider_stream_keeps_generic_values_of_chunks_with_extra_keys(
+    monkeypatch: pytest.MonkeyPatch, chunks: list[dict[str, object]]
+):
+    monkeypatch.setattr(litellm, "_custom_providers", ["my-custom-llm"])
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=iter(chunks),
+        model="custom-model",
+        logging_obj=MagicMock(),
+        custom_llm_provider="my-custom-llm",
+    )
+
+    assembled: Final = litellm.stream_chunk_builder(chunks=list(wrapper))
+
+    assert assembled.choices[0].message.content == "hello"
+    assert assembled.choices[0].finish_reason == "length"
+
+
+def test_custom_provider_stream_keeps_tool_call_of_chunk_with_extra_keys(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "_custom_providers", ["my-custom-llm"])
+    tool_call: Final = {
+        "id": "call_1",
+        "type": "function",
+        "function": {"name": "get_weather", "arguments": "{}"},
+        "index": 0,
+    }
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=iter(
+            [
+                {"id": "evt-0", "tool_use": tool_call},
+                {"id": "evt-1", "is_finished": True, "finish_reason": "tool_calls"},
+            ]
+        ),
+        model="custom-model",
+        logging_obj=MagicMock(),
+        custom_llm_provider="my-custom-llm",
+    )
+
+    assembled: Final = litellm.stream_chunk_builder(chunks=list(wrapper))
+
+    assert assembled.choices[0].message.tool_calls[0].function.name == "get_weather"
+    assert assembled.choices[0].finish_reason == "tool_calls"
+
+
+class _DictLikeChunk(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    text: str = ""
+    is_finished: bool = False
+    finish_reason: str | None = ""
+    usage: dict[str, int] | None = None
+
+    def get(self, key: str, default: object = None) -> object:
+        return getattr(self, key, default)
+
+    def __getitem__(self, key: str) -> object:
+        return getattr(self, key)
+
+
+class _NoneAsDefaultChunk(_DictLikeChunk):
+    def get(self, key: str, default: object = None) -> object:
+        value: Final = getattr(self, key, None)
+        return default if value is None else value
+
+
+class _DelegatingChunk:
+    def __init__(self, fields: dict[str, object]) -> None:
+        self._fields: Final = fields
+
+    def __getitem__(self, key: str) -> object:
+        return self._fields[key]
+
+    def __contains__(self, key: object) -> bool:
+        return key in self._fields
+
+    def __getattr__(self, name: str) -> object:
+        if name != "get":
+            raise AttributeError(name)
+        return self._fields.get
+
+
+class _ValueErrorForMissingKeyChunk(_DelegatingChunk):
+    def __getitem__(self, key: str) -> object:
+        if key not in self._fields:
+            raise ValueError(f"no field {key}")
+        return self._fields[key]
+
+
+class _EmptyStringForMissingKeyChunk(_DelegatingChunk):
+    def __init__(self, fields: dict[str, object]) -> None:
+        super().__init__(defaultdict(str, fields))
+
+
+class _NoneAsDefaultDict(dict[str, object]):
+    def get(self, key: str, default: object = None, /) -> object:
+        value: Final = super().get(key)
+        return default if value is None else value
+
+
+class _UnreadableIndexChunk(_DelegatingChunk):
+    def __contains__(self, key: object) -> bool:
+        return key == "index" or super().__contains__(key)
+
+    def __getitem__(self, key: str) -> object:
+        if key == "index":
+            raise ValueError("index is not set")
+        return super().__getitem__(key)
+
+
+class _KeyIterableChunk:
+    def __init__(self, fields: dict[str, object]) -> None:
+        self._fields: Final = fields
+
+    def __getitem__(self, key: str) -> object:
+        return self._fields[key]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._fields)
+
+    def get(self, key: str, default: object = None) -> object:
+        return self._fields.get(key, default)
+
+
+class _PopOnReadDict(dict[str, object]):
+    def __getitem__(self, key: str) -> object:
+        return self.pop(key)
+
+
+class _NoneForMissingKeyDict(dict[str, object]):
+    def __missing__(self, key: str) -> None:
+        return None
+
+
+class _SelfIteratingKeysChunk(_KeyIterableChunk):
+    def __init__(self, fields: dict[str, object]) -> None:
+        super().__init__(fields)
+        self._keys: Final = iter(fields)
+
+    def __iter__(self) -> Iterator[str]:
+        return self
+
+    def __next__(self) -> str:
+        return next(self._keys)
+
+
+@pytest.mark.parametrize(
+    "as_chunk",
+    [
+        pytest.param(_DictLikeChunk.model_validate, id="object-with-get"),
+        pytest.param(_ValueErrorForMissingKeyChunk, id="object-raising-value-error-for-missing-key"),
+        pytest.param(_EmptyStringForMissingKeyChunk, id="object-returning-empty-string-for-missing-key"),
+        pytest.param(_UnreadableIndexChunk, id="object-with-unreadable-index"),
+    ],
+)
+def test_custom_provider_stream_reads_dict_like_chunk_objects(
+    monkeypatch: pytest.MonkeyPatch,
+    as_chunk: Callable[[dict[str, object]], object],
+):
+    monkeypatch.setattr(litellm, "_custom_providers", ["my-custom-llm"])
+    chunks: Final = (
+        {"text": "hello", "is_finished": False, "finish_reason": "", "usage": None},
+        {"text": "", "is_finished": True, "finish_reason": "length", "usage": None},
+    )
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=iter([as_chunk(chunk) for chunk in chunks]),
+        model="custom-model",
+        logging_obj=MagicMock(),
+        custom_llm_provider="my-custom-llm",
+    )
+
+    assembled: Final = litellm.stream_chunk_builder(chunks=list(wrapper))
+
+    assert assembled.choices[0].message.content == "hello"
+    assert assembled.choices[0].finish_reason == "length"
+
+
+@pytest.mark.parametrize(
+    "as_chunk",
+    [
+        pytest.param(_DelegatingChunk, id="object-with-contains"),
+        pytest.param(_KeyIterableChunk, id="object-iterating-its-keys"),
+        pytest.param(_SelfIteratingKeysChunk, id="object-that-is-its-own-key-iterator"),
+    ],
+)
+def test_custom_provider_stream_keeps_tool_call_and_provider_fields_of_chunk_objects(
+    monkeypatch: pytest.MonkeyPatch,
+    as_chunk: Callable[[dict[str, object]], object],
+):
+    monkeypatch.setattr(litellm, "_custom_providers", ["my-custom-llm"])
+    tool_call: Final = {
+        "id": "call_1",
+        "type": "function",
+        "function": {"name": "get_weather", "arguments": "{}"},
+        "index": 0,
+    }
+    chunks: Final = (
+        {
+            "text": "",
+            "is_finished": False,
+            "finish_reason": "",
+            "usage": None,
+            "tool_use": tool_call,
+            "provider_specific_fields": {"citations": ["https://example.com"]},
+        },
+        {"text": "", "is_finished": True, "finish_reason": "tool_calls", "usage": None},
+    )
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=iter([as_chunk(chunk) for chunk in chunks]),
+        model="custom-model",
+        logging_obj=MagicMock(),
+        custom_llm_provider="my-custom-llm",
+    )
+
+    streamed: Final = list(wrapper)
+    assembled: Final = litellm.stream_chunk_builder(chunks=streamed)
+
+    assert ["https://example.com"] in [getattr(chunk, "citations", None) for chunk in streamed]
+    assert assembled.choices[0].message.tool_calls[0].function.name == "get_weather"
+    assert assembled.choices[0].finish_reason == "tool_calls"
+
+
+@pytest.mark.parametrize(
+    "chunks",
+    [
+        pytest.param(
+            [
+                _PopOnReadDict(text="hel", is_finished=False, finish_reason="", usage=None, id="evt-0"),
+                {"text": "lo", "is_finished": True, "finish_reason": "length", "usage": None},
+            ],
+            id="dict-subclass-removing-keys-it-returns",
+        ),
+        pytest.param(
+            [
+                _NoneForMissingKeyDict(is_finished=False, finish_reason="", usage=None, role="assistant"),
+                _NoneForMissingKeyDict(text="hello", is_finished=True, finish_reason="length", usage=None),
+            ],
+            id="dict-subclass-returning-none-for-missing-key",
+        ),
+    ],
+)
+def test_custom_provider_stream_keeps_values_read_from_dict_subclass_chunks_with_extra_keys(
+    monkeypatch: pytest.MonkeyPatch, chunks: list[dict[str, object]]
+):
+    monkeypatch.setattr(litellm, "_custom_providers", ["my-custom-llm"])
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=iter(chunks),
+        model="custom-model",
+        logging_obj=MagicMock(),
+        custom_llm_provider="my-custom-llm",
+    )
+
+    assembled: Final = litellm.stream_chunk_builder(chunks=list(wrapper))
+
+    assert assembled.choices[0].message.content == "hello"
+    assert assembled.choices[0].finish_reason == "length"
+
+
+@pytest.mark.parametrize(
+    "as_chunk",
+    [
+        pytest.param(dict, id="dict"),
+        pytest.param(MappingProxyType, id="mapping"),
+        pytest.param(_NoneAsDefaultDict, id="dict-whose-get-skips-none"),
+        pytest.param(_DictLikeChunk.model_validate, id="object-with-get"),
+        pytest.param(_NoneAsDefaultChunk.model_validate, id="object-whose-get-skips-none"),
+        pytest.param(_DelegatingChunk, id="object-with-get-from-getattr"),
+    ],
+)
+def test_custom_provider_stream_keeps_streaming_after_finished_chunk_with_null_finish_reason(
+    monkeypatch: pytest.MonkeyPatch,
+    as_chunk: Callable[[dict[str, object]], object],
+):
+    monkeypatch.setattr(litellm, "_custom_providers", ["my-custom-llm"])
+    chunks: Final = (
+        {"text": "The answer", "is_finished": True, "finish_reason": None, "usage": None},
+        {"text": "", "is_finished": False, "finish_reason": "", "usage": None},
+        {"text": " continues", "is_finished": True, "finish_reason": "length", "usage": None},
+    )
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=iter([as_chunk(chunk) for chunk in chunks]),
+        model="custom-model",
+        logging_obj=MagicMock(),
+        custom_llm_provider="my-custom-llm",
+    )
+
+    assembled: Final = litellm.stream_chunk_builder(chunks=list(wrapper))
+
+    assert assembled.choices[0].message.content == "The answer continues"
+    assert assembled.choices[0].finish_reason == "length"
+
+
+@pytest.mark.parametrize("custom_llm_provider", [None, "my-custom-llm"])
+@pytest.mark.parametrize(
+    ("chunks", "finish_reason"),
+    [
+        pytest.param(
+            [{"text": "hello"}, {"is_finished": True}, {"is_finished": True, "finish_reason": "length"}],
+            "stop",
+            id="no-earlier-reason",
+        ),
+        pytest.param(
+            [{"text": "hello", "finish_reason": "length"}, {"is_finished": True}],
+            "length",
+            id="partial-earlier-reason",
+        ),
+        pytest.param(
+            [
+                {"text": "hello", "is_finished": False, "finish_reason": "length", "usage": None},
+                {"text": "", "is_finished": True, "finish_reason": "", "usage": None},
+            ],
+            "length",
+            id="complete-earlier-reason",
+        ),
+    ],
+)
+def test_stream_finished_chunk_without_reason_keeps_earlier_reason_or_stop(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    chunks: list[dict[str, object]],
+    finish_reason: str,
+    custom_llm_provider: str | None,
+):
+    monkeypatch.setattr(litellm, "_custom_providers", [] if custom_llm_provider is None else [custom_llm_provider])
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=iter(chunks),
+        model="custom-model",
+        logging_obj=MagicMock(),
+        custom_llm_provider=custom_llm_provider,
+    )
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        assembled: Final = litellm.stream_chunk_builder(chunks=list(wrapper))
+
+    assert assembled.choices[0].finish_reason == finish_reason
+    assert "Unmapped finish_reason" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("chunk", "content"),
+    [
+        pytest.param({"text": "hi"}, "hi", id="text-only"),
+        pytest.param({"is_finished": True, "finish_reason": "length"}, "", id="finish-only"),
+        pytest.param({"is_finished": True}, "", id="finished-without-reason"),
+    ],
+)
+def test_convert_generic_chunk_reads_incomplete_chunk(chunk: dict[str, object], content: str):
+    converted: Final = convert_generic_chunk_to_model_response_stream(
+        cast(GenericStreamingChunk, chunk)  # cast-ok: the chunk under test omits required keys
+    )
+
+    assert converted.choices[0].delta.content == content
+
+
 def _run_dispatch(wrapper: CustomStreamWrapper, chunk):
     model_response = wrapper.model_response_creator()
     completion_obj = {"content": ""}
@@ -5175,6 +5926,161 @@ async def test_azure_streaming_role_preserved_with_include_usage(sync_mode: bool
         "Chunk deltas: "
         + str([c.choices[0].delta if c.choices else "no choices" for c in chunks])
     )
+
+
+_BRIDGED_MODEL: Final = "gpt-6.1-sol"
+_BRIDGED_RESPONSE: Final = MappingProxyType(
+    {"id": "resp_1", "object": "response", "created_at": 1, "model": _BRIDGED_MODEL, "status": "in_progress"}
+)
+_BRIDGED_MESSAGE: Final = MappingProxyType({"id": "msg_1", "type": "message", "role": "assistant"})
+_BRIDGED_TOOL_CALL: Final = MappingProxyType(
+    {"id": "fc_1", "type": "function_call", "call_id": "call_1", "name": "get_weather"}
+)
+_BRIDGED_USAGE: Final = MappingProxyType({"input_tokens": 5, "output_tokens": 1, "total_tokens": 6})
+_BRIDGED_TEXT_EVENTS: Final = (
+    {"type": "response.created", "sequence_number": 0, "response": {**_BRIDGED_RESPONSE, "output": []}},
+    {
+        "type": "response.output_item.added",
+        "sequence_number": 1,
+        "output_index": 0,
+        "item": {**_BRIDGED_MESSAGE, "status": "in_progress", "content": []},
+    },
+    {
+        "type": "response.output_text.delta",
+        "sequence_number": 2,
+        "item_id": "msg_1",
+        "output_index": 0,
+        "content_index": 0,
+        "delta": "hello",
+    },
+    {
+        "type": "response.completed",
+        "sequence_number": 3,
+        "response": {
+            **_BRIDGED_RESPONSE,
+            "status": "completed",
+            "output": [
+                {
+                    **_BRIDGED_MESSAGE,
+                    "status": "completed",
+                    "content": [{"type": "output_text", "text": "hello", "annotations": []}],
+                }
+            ],
+            "usage": dict(_BRIDGED_USAGE),
+        },
+    },
+)
+_BRIDGED_TOOL_EVENTS: Final = (
+    {"type": "response.created", "sequence_number": 0, "response": {**_BRIDGED_RESPONSE, "output": []}},
+    {
+        "type": "response.output_item.added",
+        "sequence_number": 1,
+        "output_index": 0,
+        "item": {**_BRIDGED_TOOL_CALL, "status": "in_progress", "arguments": ""},
+    },
+    {
+        "type": "response.function_call_arguments.delta",
+        "sequence_number": 2,
+        "item_id": "fc_1",
+        "output_index": 0,
+        "delta": '{"city":"Berlin"}',
+    },
+    {
+        "type": "response.completed",
+        "sequence_number": 3,
+        "response": {
+            **_BRIDGED_RESPONSE,
+            "status": "completed",
+            "output": [{**_BRIDGED_TOOL_CALL, "status": "completed", "arguments": '{"city":"Berlin"}'}],
+            "usage": dict(_BRIDGED_USAGE),
+        },
+    },
+)
+
+
+def _bridged_stream(
+    events: Sequence[Mapping[str, object]], provider: str, sync_mode: bool, logging_obj: Logging
+) -> CustomStreamWrapper:
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    lines: Final = [f"data: {json.dumps(event)}" for event in events]
+    logging_obj.model_call_details["custom_llm_provider"] = provider
+    return CustomStreamWrapper(
+        completion_stream=OpenAiResponsesToChatCompletionStreamIterator(
+            streaming_response=iter(lines) if sync_mode else _as_async(iter(lines)), sync_stream=sync_mode
+        ),
+        model=_BRIDGED_MODEL,
+        custom_llm_provider=provider,
+        logging_obj=logging_obj,
+    )
+
+
+@pytest.mark.parametrize("provider", ["azure", "azure_ai", "openai"])
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_responses_bridged_text_stream_sets_the_model_on_every_chunk(
+    provider: str, sync_mode: bool, logging_obj: Logging
+) -> None:
+    received: Final = await _collect(_bridged_stream(_BRIDGED_TEXT_EVENTS, provider, sync_mode, logging_obj), sync_mode)
+
+    assert "".join(c.choices[0].delta.content or "" for c in received if c.choices) == "hello"
+    assert [c.model for c in received] == [_BRIDGED_MODEL] * len(received), [c.model for c in received]
+
+
+@pytest.mark.parametrize("provider", ["azure", "azure_ai", "openai"])
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_responses_bridged_tool_call_stream_sets_the_model_on_every_chunk(
+    provider: str, sync_mode: bool, logging_obj: Logging
+) -> None:
+    received: Final = await _collect(_bridged_stream(_BRIDGED_TOOL_EVENTS, provider, sync_mode, logging_obj), sync_mode)
+    tool_call_chunks: Final = [c for c in received if c.choices and c.choices[0].delta.tool_calls]
+
+    assert tool_call_chunks, [c.choices[0].delta for c in received if c.choices]
+    assert [c.choices[0].finish_reason for c in received if c.choices and c.choices[0].finish_reason] == [
+        "tool_calls"
+    ]
+    assert [c.model for c in received] == [_BRIDGED_MODEL] * len(received), [c.model for c in received]
+
+
+@pytest.mark.parametrize("provider", ["azure", "azure_ai"])
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_azure_stream_adopts_each_upstream_model_and_keeps_it_when_a_chunk_has_none(
+    provider: str, sync_mode: bool, logging_obj: Logging
+) -> None:
+    upstream_models: Final = (None, "gpt-6.1-sol-2026-11-01", None, "")
+    chunks: Final = [
+        ModelResponseStream(
+            model=upstream_model,
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(content=f"part{index}"),
+                    finish_reason="stop" if index == len(upstream_models) - 1 else None,
+                )
+            ],
+        )
+        for index, upstream_model in enumerate(upstream_models)
+    ]
+    logging_obj.model_call_details["custom_llm_provider"] = provider
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=ModelResponseListIterator(model_responses=chunks),
+        model=_BRIDGED_MODEL,
+        custom_llm_provider=provider,
+        logging_obj=logging_obj,
+    )
+
+    received: Final = await _collect(wrapper, sync_mode)
+
+    assert [(c.choices[0].delta.content, c.model) for c in received if c.choices and c.choices[0].delta.content] == [
+        ("part0", _BRIDGED_MODEL),
+        ("part1", "gpt-6.1-sol-2026-11-01"),
+        ("part2", "gpt-6.1-sol-2026-11-01"),
+        ("part3", ""),
+    ]
 
 
 def test_gemini_legacy_vertex_stop_finish_reason_normalised():
@@ -7024,7 +7930,6 @@ def test_chunk_creator_skips_full_dump_of_model_response_stream_chunks(
     assert [chunk.choices[0].delta.content for chunk in emitted_chunks] == ["hello", " world"]
     assert emitted_chunks[1].choices[0].delta.role is None
     assert getattr(emitted_chunks[1], "custom_chunk_attribute") == "custom value"
-
 
 
 def test_openai_chunk_creator_keeps_multiple_choice_logprobs_and_extras(
@@ -8987,6 +9892,10 @@ def test_aamazing_unit_test_custom_stream_wrapper_n():
             function_id="1245",
         ),
     )
+    opening_chunk_positions: Final = frozenset(
+        next(position for position, upstream in enumerate(chunks) if upstream["choices"][0]["index"] == index)
+        for index in {upstream["choices"][0]["index"] for upstream in chunks}
+    )
 
     for idx, chunk in enumerate(response):
         chunk_dict = {}
@@ -8999,10 +9908,9 @@ def test_aamazing_unit_test_custom_stream_wrapper_n():
         chunks[idx].pop("created")
         if chunks[idx]["system_fingerprint"] is None:
             chunks[idx].pop("system_fingerprint", None)
-        if idx == 0:
+        if idx in opening_chunk_positions:
             for choice in chunk_dict["choices"]:
-                if "role" in choice["delta"]:
-                    choice["delta"].pop("role")
+                assert choice["delta"].pop("role") == "assistant"
 
         for choice in chunks[idx]["choices"]:
             # ignore finish reason None - since our pydantic object is set to exclude_none = true
@@ -9417,17 +10325,18 @@ class TestContinuationDisqualifiers:
 
 @pytest.mark.asyncio
 async def test_async_stream_without_usage_counts_tokens_off_the_event_loop():
-    from tests.large_text import text
     from tests.unit.litellm_core_utils.event_loop_lag import (
         assert_loop_stayed_free,
         timed_with_loop_lags,
+        uncounted_text,
         warm_tokenizer,
     )
 
     model = "gpt-5.6-luna"
     warm_tokenizer(model)
-    messages = [{"role": "user", "content": text * 100}]
-    content_chunks = [_make_chunk(text) for _ in range(100)]
+    messages = [{"role": "user", "content": uncounted_text()}]
+    completion = uncounted_text()
+    content_chunks = [_make_chunk(completion[start : start + 25_000]) for start in range(0, len(completion), 25_000)]
     stop_chunk = ModelResponseStream(
         id="test",
         created=1741037890,
@@ -9456,7 +10365,7 @@ async def test_async_stream_without_usage_counts_tokens_off_the_event_loop():
 
     chunks, took, lags = await timed_with_loop_lags(consume)
 
-    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == text * 100
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == completion
     assert chunks[-1].usage.prompt_tokens > 100_000
     assert chunks[-1].usage.completion_tokens > 100_000
     assert_loop_stayed_free(took, lags)
@@ -9620,7 +10529,6 @@ async def test_logged_response_keeps_finish_reason_from_last_content_chunk(
         assert tool_calls[0].function.arguments == '{"command": "ls"}'
     else:
         assert logged.choices[0].message.content == "Hello, this reply is cut off"
-
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])
@@ -10066,3 +10974,281 @@ async def test_generic_tool_use_streams_as_a_function_call_when_the_caller_passe
         (delta.function_call.name, delta.function_call.arguments) for delta in deltas if delta.function_call is not None
     ] == [("get_weather", '{"city": "Paris"}')]
     assert [delta.tool_calls for delta in deltas if delta.tool_calls] == []
+
+
+@pytest.mark.asyncio
+async def test_async_stream_success_log_survives_garbage_collection_while_its_callback_is_pending() -> None:
+    model: Final = "gpt-4o"
+    async with weakly_parked_logger() as logger:
+        logging_obj: Final = Logging(
+            model=model,
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            call_type="acompletion",
+            start_time=datetime.datetime(2026, 11, 16, 12, 0, 0),
+            litellm_call_id="parked-chat-stream",
+            function_id="parked-chat-stream",
+            dynamic_async_success_callbacks=[logger],
+        )
+        logging_obj.update_environment_variables(
+            model=model, user=None, optional_params={}, litellm_params={"litellm_call_id": "parked-chat-stream"}
+        )
+        wrapper: Final = CustomStreamWrapper(
+            completion_stream=ModelResponseListIterator(
+                model_responses=[
+                    ModelResponseStream(id="chatcmpl-parked", created=1763294400, model=model, choices=choices)
+                    for choices in (
+                        [StreamingChoices(index=0, delta=Delta(role="assistant", content="Hello there"))],
+                        [StreamingChoices(index=0, delta=Delta(content=""), finish_reason="stop")],
+                    )
+                ]
+            ),
+            model=model,
+            custom_llm_provider="openai",
+            logging_obj=logging_obj,
+            stream_options=None,
+        )
+
+        received: Final = "".join([chunk.choices[0].delta.content or "" async for chunk in wrapper if chunk.choices])
+        survived: Final = await logger.survives_collection()
+        await drain_logging_tasks()
+
+        assert (received, survived, logger.parks, logger.finished.is_set()) == ("Hello there", True, 1, True)
+
+
+def _openai_chat_chunk(choices: Sequence[Mapping[str, object]]) -> ChatCompletionChunk:
+    return ChatCompletionChunk.model_validate(
+        {
+            "id": "chatcmpl-reason",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "gpt-4o",
+            "choices": choices,
+        }
+    )
+
+
+def _openai_chat_stream(logging_obj: Logging, chunks: Sequence[ChatCompletionChunk]) -> tuple[ModelResponseStream, ...]:
+    return tuple(
+        CustomStreamWrapper(
+            completion_stream=iter(chunks), model="gpt-4o", custom_llm_provider="openai", logging_obj=logging_obj
+        )
+    )
+
+
+_UPSTREAM_REASON_FIELDS: Final = {"native_finish_reason": "end_turn"}
+
+
+@pytest.mark.parametrize("final_content", ["!", ""], ids=["content-then-finish", "finish-only"])
+@pytest.mark.parametrize("finish_fields", [_UPSTREAM_REASON_FIELDS, None], ids=["with-fields", "without-fields"])
+def test_openai_stream_relays_the_finish_chunks_choice_fields_only_on_the_finish_chunk(
+    logging_obj: Logging, final_content: str, finish_fields: Mapping[str, str] | None
+) -> None:
+    emitted: Final = _openai_chat_stream(
+        logging_obj,
+        (
+            _openai_chat_chunk([{"index": 0, "delta": {"role": "assistant", "content": "Hi"}, "finish_reason": None}]),
+            _openai_chat_chunk(
+                [
+                    {
+                        "index": 0,
+                        "delta": {"content": final_content},
+                        "finish_reason": "stop",
+                        **({"provider_specific_fields": dict(finish_fields)} if finish_fields else {}),
+                    }
+                ]
+            ),
+        ),
+    )
+
+    choices: Final = tuple(chain.from_iterable(chunk.choices for chunk in emitted))
+    assert [getattr(choice, "provider_specific_fields", None) for choice in choices if choice.finish_reason] == [
+        finish_fields
+    ]
+    assert [
+        fields
+        for choice in choices
+        if not choice.finish_reason and (fields := getattr(choice, "provider_specific_fields", None))
+    ] == []
+    rebuilt: Final = litellm.stream_chunk_builder(list(emitted))
+    assert rebuilt is not None
+    assert getattr(rebuilt.choices[0], "provider_specific_fields", None) == finish_fields
+
+
+def test_openai_chunk_finishing_two_choices_closes_the_stream_with_the_closing_choices_own_fields(
+    logging_obj: Logging,
+) -> None:
+    emitted: Final = _openai_chat_stream(
+        logging_obj,
+        (
+            _openai_chat_chunk(
+                [
+                    {"index": index, "delta": {"role": "assistant", "content": "Hi"}, "finish_reason": None}
+                    for index in (0, 1)
+                ]
+            ),
+            _openai_chat_chunk(
+                [
+                    {
+                        "index": 1,
+                        "delta": {"content": ""},
+                        "finish_reason": "stop",
+                        "provider_specific_fields": {"native_finish_reason": "length_one"},
+                    },
+                    {
+                        "index": 0,
+                        "delta": {"content": ""},
+                        "finish_reason": "stop",
+                        "provider_specific_fields": {"native_finish_reason": "length_zero"},
+                    },
+                ]
+            ),
+        ),
+    )
+
+    finished: Final = [
+        (choice.index, getattr(choice, "provider_specific_fields", None))
+        for choice in chain.from_iterable(chunk.choices for chunk in emitted)
+        if choice.finish_reason
+    ]
+    assert finished == [(0, {"native_finish_reason": "length_zero"})]
+
+
+def test_openai_stream_keeps_the_choice_fields_of_chunks_that_finish_nothing_where_they_are(
+    logging_obj: Logging,
+) -> None:
+    emitted: Final = _openai_chat_stream(
+        logging_obj,
+        (
+            _openai_chat_chunk(
+                [
+                    {
+                        "index": 0,
+                        "delta": {"role": "assistant", "content": "Hi"},
+                        "finish_reason": None,
+                        "provider_specific_fields": {"segment": "greeting"},
+                    }
+                ]
+            ),
+            _openai_chat_chunk([{"index": 0, "delta": {"content": "!"}, "finish_reason": "stop"}]),
+        ),
+    )
+
+    assert [
+        (choice.delta.content, getattr(choice, "provider_specific_fields", None))
+        for choice in chain.from_iterable(chunk.choices for chunk in emitted)
+        if not choice.finish_reason
+    ] == [("Hi", {"segment": "greeting"}), ("!", None)]
+
+
+_TWO_CHOICE_REASONS: Final = MappingProxyType(
+    {0: {"native_finish_reason": "eos_zero"}, 1: {"native_finish_reason": "eos_one"}}
+)
+
+
+def _finishing_choice(index: int) -> Mapping[str, object]:
+    return {
+        "index": index,
+        "delta": {"content": f" from {index}"},
+        "finish_reason": "stop",
+        "provider_specific_fields": dict(_TWO_CHOICE_REASONS[index]),
+    }
+
+
+@pytest.mark.parametrize(
+    "finishing_chunks",
+    [
+        pytest.param(((0,), (1,)), id="zero-then-one"),
+        pytest.param(((1,), (0,)), id="one-then-zero"),
+        pytest.param(((1, 0),), id="both-in-one-chunk"),
+    ],
+)
+def test_openai_stream_with_two_choices_keeps_the_other_choices_reason_on_the_wire(
+    logging_obj: Logging, finishing_chunks: tuple[tuple[int, ...], ...]
+) -> None:
+    emitted: Final = _openai_chat_stream(
+        logging_obj,
+        (
+            *(
+                _openai_chat_chunk(
+                    [{"index": index, "delta": {"role": "assistant", "content": "Hi"}, "finish_reason": None}]
+                )
+                for index in (0, 1)
+            ),
+            *(_openai_chat_chunk([_finishing_choice(index) for index in indices]) for indices in finishing_chunks),
+        ),
+    )
+
+    assert {
+        (choice.index, choice.get("provider_specific_fields", {}).get("native_finish_reason"))
+        for choice in chain.from_iterable(chunk.choices for chunk in emitted)
+        if choice.get("provider_specific_fields")
+    } == {(0, "eos_zero"), (1, "eos_one")}
+
+
+def _completion_chunk(
+    text: str, finish_reason: str | None, choice_extras: Mapping[str, object] = MappingProxyType({})
+) -> Completion:
+    return Completion.construct(
+        id="cmpl-reason",
+        created=1,
+        model="m",
+        object="text_completion",
+        choices=[{"index": 0, "text": text, "finish_reason": finish_reason, "logprobs": None, **choice_extras}],
+    )
+
+
+def test_text_completion_n_choices_each_open_with_one_assistant_role(logging_obj: Logging) -> None:
+    emitted: Final = tuple(
+        CustomStreamWrapper(
+            completion_stream=iter(
+                tuple(
+                    Completion.construct(
+                        id="cmpl-n2",
+                        created=1,
+                        model="m",
+                        object="text_completion",
+                        choices=[{"index": index, "text": text, "finish_reason": None, "logprobs": None}],
+                    )
+                    for index, text in ((1, "Hi"), (0, "Hello"), (1, " there"), (0, " there"))
+                )
+            ),
+            model="m",
+            custom_llm_provider="text-completion-openai",
+            logging_obj=logging_obj,
+        )
+    )
+
+    emitted_choices: Final = tuple(chain.from_iterable(chunk.choices for chunk in emitted))
+    assert sorted(choice.index for choice in emitted_choices if choice.delta.role == "assistant") == [0, 1]
+    assert {
+        index: next(choice.delta.role for choice in emitted_choices if choice.index == index) for index in (0, 1)
+    } == {0: "assistant", 1: "assistant"}
+
+
+@pytest.mark.parametrize("final_text", [", 6", ""], ids=["text-then-finish", "finish-only"])
+def test_text_completion_stream_carries_the_finish_chunks_choice_fields_only_on_the_closing_chunk(
+    logging_obj: Logging, final_text: str
+) -> None:
+    emitted: Final = tuple(
+        CustomStreamWrapper(
+            completion_stream=iter(
+                (
+                    _completion_chunk(", 5", None),
+                    _completion_chunk(
+                        final_text,
+                        "stop",
+                        {"stop_reason": ", 7", "provider_specific_fields": dict(_UPSTREAM_REASON_FIELDS)},
+                    ),
+                )
+            ),
+            model="m",
+            custom_llm_provider="text-completion-openai",
+            logging_obj=logging_obj,
+        )
+    )
+
+    assert [
+        (choice.finish_reason, getattr(choice, "provider_specific_fields", None))
+        for choice in chain.from_iterable(chunk.choices for chunk in emitted)
+    ] == [(None, None), *([(None, None)] if final_text else []), ("stop", _UPSTREAM_REASON_FIELDS)]

@@ -398,6 +398,57 @@ async def test_build_agentic_loop_plan_missing_key_fallback():
     )
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("stream", "text_the_client_saw"),
+    [(True, [{"type": "text", "text": "I'll fetch your tides notes."}]), (False, [])],
+    ids=["streamed", "not_streamed"],
+)
+async def test_build_agentic_loop_plan_keeps_only_the_text_the_client_already_received(stream, text_the_client_saw):
+    logger = CompressionInterceptionLogger()
+    logger._compression_cache_by_call_id["call_text"] = ({"message_3": "tides notes"}, 9999999999.0)
+    logging_obj = MagicMock()
+    logging_obj.litellm_call_id = "call_text"
+    logging_obj.model_call_details = {"agentic_loop_params": {}}
+    thinking = {"type": "thinking", "thinking": "", "signature": "sig"}
+    tool_use = {"type": "tool_use", "id": "toolu_1", "name": "litellm_content_retrieve", "input": {"key": "message_3"}}
+    response = {
+        "role": "assistant",
+        "content": [
+            thinking,
+            {"type": "text", "text": "I'll fetch your tides notes."},
+            tool_use,
+            {"type": "text", "text": "Held back behind the call."},
+        ],
+    }
+    request_params = {"tools": [{"type": "custom", "name": "litellm_content_retrieve"}]}
+
+    should_run, tools = await logger.async_should_run_agentic_loop(
+        response=response,
+        model="claude-sonnet",
+        messages=[{"role": "user", "content": "quote my tides notes"}],
+        tools=request_params["tools"],
+        stream=stream,
+        custom_llm_provider="anthropic",
+        kwargs={},
+    )
+    plan = await logger.async_build_agentic_loop_plan(
+        tools=tools,
+        model="claude-sonnet",
+        messages=[{"role": "user", "content": "quote my tides notes"}],
+        response=response,
+        anthropic_messages_provider_config=None,
+        anthropic_messages_optional_request_params=request_params,
+        logging_obj=logging_obj,
+        stream=stream,
+        kwargs={},
+    )
+
+    assert should_run is True
+    assert plan.request_patch is not None
+    assert plan.request_patch.messages[-2]["content"] == [thinking, *text_the_client_saw, tool_use]
+
+
 def _stub_compress_result(original_tokens, compressed_tokens, cache):
     return {
         "messages": [{"role": "user", "content": "stubbed"}],
@@ -527,17 +578,17 @@ async def test_pre_call_hook_no_compression_records_no_savings(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_pre_call_hook_counts_tokens_off_the_event_loop():
-    from tests.large_text import text
     from tests.unit.litellm_core_utils.event_loop_lag import (
         assert_loop_stayed_free,
         timed_with_loop_lags,
+        uncounted_text,
         warm_tokenizer,
     )
 
     model = "anthropic/claude-fable-5"
     warm_tokenizer(model)
     logger = CompressionInterceptionLogger(compression_trigger=10_000_000)
-    messages = [{"role": "user", "content": text * 100}]
+    messages = [{"role": "user", "content": uncounted_text()}]
     kwargs = {"model": model, "messages": messages}
 
     result, took, lags = await timed_with_loop_lags(
