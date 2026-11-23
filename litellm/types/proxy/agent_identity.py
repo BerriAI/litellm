@@ -1,8 +1,8 @@
 from datetime import datetime
-from typing import Final, Literal, TypeAlias
+from typing import Annotated, Final, Literal, TypeAlias
 from uuid import UUID
 
-from pydantic import ConfigDict, Field, field_validator
+from pydantic import BeforeValidator, ConfigDict, Field, TypeAdapter, field_validator
 
 from litellm.types.llms.base import LiteLLMBaseModel
 
@@ -36,12 +36,37 @@ OKTA_CUSTOM_ISSUER_PATTERN: Final = r"^https://[^/?#]+/oauth2/[^/?#]+$"
 OKTA_ISSUER_PATTERN: Final = r"^https://[^/?#]+(/oauth2/[^/?#]+)?$"
 
 
+class OktaIdentityConfig(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    provider: Literal["okta"]
+    issuer: Annotated[str, Field(pattern=OKTA_ISSUER_PATTERN)]
+    client_id: Annotated[str, Field(pattern=r"^\S+$")]
+    required_scopes: tuple[Annotated[str, Field(pattern=r"^[\x21\x23-\x5B\x5D-\x7E]+$")], ...] = ()
+
+
+def identity_config_model(value: object) -> type[EntraIdentityConfig] | type[OktaIdentityConfig]:
+    match value:
+        case {"provider": "okta"} | OktaIdentityConfig():
+            return OktaIdentityConfig
+        case _:
+            return EntraIdentityConfig
+
+
+def _parse_identity(value: object) -> EntraIdentityConfig | OktaIdentityConfig:
+    return identity_config_model(value).model_validate(value)
+
+
+AgentIdentityConfig: TypeAlias = Annotated[EntraIdentityConfig | OktaIdentityConfig, BeforeValidator(_parse_identity)]
+AGENT_IDENTITY_CONFIG: Final[TypeAdapter[EntraIdentityConfig | OktaIdentityConfig]] = TypeAdapter(AgentIdentityConfig)
+
+
 class AgentIdentityBinding(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     agent_id: str
     active: bool = True
-    provider: Literal["microsoft_entra"]
+    provider: Literal["microsoft_entra", "okta"]
     tenant_id: str
     client_id: str
     service_principal_id: str | None = None

@@ -2819,9 +2819,13 @@
                   "$ref": "#/components/schemas/EntraIdentityConfig"
                 },
                 {
+                  "$ref": "#/components/schemas/OktaIdentityConfig"
+                },
+                {
                   "type": "null"
                 }
-              ]
+              ],
+              "title": "Identity"
             },
             "kill_switch": {
               "anyOf": [
@@ -2983,7 +2987,10 @@
               "title": "Last Authenticated At"
             },
             "provider": {
-              "const": "microsoft_entra",
+              "enum": [
+                "microsoft_entra",
+                "okta"
+              ],
               "title": "Provider",
               "type": "string"
             },
@@ -4700,6 +4707,42 @@
           "title": "OAuthFlows",
           "type": "object"
         },
+        "OktaIdentityConfig": {
+          "additionalProperties": false,
+          "properties": {
+            "client_id": {
+              "pattern": "^\\S+$",
+              "title": "Client Id",
+              "type": "string"
+            },
+            "issuer": {
+              "pattern": "^https://[^/?#]+(/oauth2/[^/?#]+)?$",
+              "title": "Issuer",
+              "type": "string"
+            },
+            "provider": {
+              "const": "okta",
+              "title": "Provider",
+              "type": "string"
+            },
+            "required_scopes": {
+              "default": [],
+              "items": {
+                "pattern": "^[\\x21\\x23-\\x5B\\x5D-\\x7E]+$",
+                "type": "string"
+              },
+              "title": "Required Scopes",
+              "type": "array"
+            }
+          },
+          "required": [
+            "provider",
+            "issuer",
+            "client_id"
+          ],
+          "title": "OktaIdentityConfig",
+          "type": "object"
+        },
         "OpenIdConnectSecurityScheme": {
           "description": "Defines a security scheme using OpenID Connect.",
           "properties": {
@@ -4787,9 +4830,13 @@
                   "$ref": "#/components/schemas/EntraIdentityConfig"
                 },
                 {
+                  "$ref": "#/components/schemas/OktaIdentityConfig"
+                },
+                {
                   "type": "null"
                 }
-              ]
+              ],
+              "title": "Identity"
             },
             "kill_switch": {
               "anyOf": [

@@ -27914,7 +27914,8 @@ export interface components {
             execution_mode?: "autonomous" | "delegated" | "both";
             /** Extra Headers */
             extra_headers?: string[] | null;
-            identity?: components["schemas"]["EntraIdentityConfig"] | null;
+            /** Identity */
+            identity?: components["schemas"]["EntraIdentityConfig"] | components["schemas"]["OktaIdentityConfig"] | null;
             kill_switch?: components["schemas"]["AgentKillSwitchConfig"] | null;
             /** Litellm Params */
             litellm_params?: {
@@ -28018,9 +28019,9 @@ export interface components {
             last_authenticated_at?: string | null;
             /**
              * Provider
-             * @constant
+             * @enum {string}
              */
-            provider: "microsoft_entra";
+            provider: "microsoft_entra" | "okta";
             /**
              * Required Roles
              * @default []
@@ -43771,6 +43772,23 @@ export interface components {
                 [key: string]: unknown;
             } | null;
         };
+        /** OktaIdentityConfig */
+        OktaIdentityConfig: {
+            /** Client Id */
+            client_id: string;
+            /** Issuer */
+            issuer: string;
+            /**
+             * Provider
+             * @constant
+             */
+            provider: "okta";
+            /**
+             * Required Scopes
+             * @default []
+             */
+            required_scopes: string[];
+        };
         /** OpenAIBoxAnswer */
         OpenAIBoxAnswer: {
             box: components["schemas"]["DecisionsBox"];
@@ -44786,7 +44804,8 @@ export interface components {
             execution_mode?: "autonomous" | "delegated" | "both";
             /** Extra Headers */
             extra_headers?: string[] | null;
-            identity?: components["schemas"]["EntraIdentityConfig"] | null;
+            /** Identity */
+            identity?: components["schemas"]["EntraIdentityConfig"] | components["schemas"]["OktaIdentityConfig"] | null;
             kill_switch?: components["schemas"]["AgentKillSwitchConfig"] | null;
             /** Litellm Params */
             litellm_params?: {

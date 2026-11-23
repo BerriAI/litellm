@@ -255,3 +255,21 @@ def test_empty_requirements_do_not_make_a_scope_less_human_token_valid(scope: ob
     binding: Final = BINDING.model_copy(update={"required_scopes": ()})
     result: Final = classify_agent_subject(binding, claims(oid=HUMAN, scp=scope), "both")
     assert isinstance(result, AgentIdentityFailure)
+
+@pytest.mark.parametrize("provider", ["microsoft_entra", "okta"])
+def test_supported_providers_round_trip_through_the_agent_request(provider: str) -> None:
+    from pydantic import TypeAdapter
+
+    from litellm.types.agents import PatchAgentRequest
+
+    client_id: Final = "11111111-1111-4111-8111-111111111111"
+    binding: Final = (
+        {"provider": provider, "tenant_id": client_id, "client_id": client_id}
+        if provider == "microsoft_entra"
+        else {"provider": provider, "issuer": "https://example.okta.test/oauth2/default", "client_id": "0oa123"}
+    )
+    adapter: Final = TypeAdapter(PatchAgentRequest)
+
+    parsed: Final = adapter.validate_python({"identity": binding})
+
+    assert adapter.dump_python(parsed, exclude_unset=True) == {"identity": binding}
