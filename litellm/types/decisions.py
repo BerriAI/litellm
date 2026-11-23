@@ -660,7 +660,7 @@ class DecisionsIRUsage:
 class DecisionsIRResponse:
     model: str | None
     answers: tuple[DecisionsIRAnswer, ...]
-    usage: DecisionsIRUsage
+    usage: DecisionsIRUsage | None
     extra: Mapping[str, object] = field(default_factory=lambda: _NO_EXTRA)
     reported_cost: float | None = None
 

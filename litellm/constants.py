@@ -918,6 +918,13 @@ OPENAI_TRANSCRIPTION_PARAMS: Final = [
     "timestamp_granularities",
 ]
 
+GNANI_REJECTED_OPENAI_TRANSCRIPTION_PARAMS: Final = (
+    "chunking_strategy",
+    "include",
+    "known_speaker_names",
+    "known_speaker_references",
+)
+
 OPENAI_EMBEDDING_PARAMS: Final = ["dimensions", "encoding_format", "user"]
 
 DEFAULT_EMBEDDING_PARAM_VALUES: Final = {
@@ -1104,6 +1111,7 @@ openai_compatible_providers: Final[list] = [
     "meta",  # Meta Model API (Muse Spark) - JSON-configured provider
     "cognition",
     "coralbricks",
+    "perplexity_orchestrator",
     "cortecs",
     "scx-ai",
     "prism",
@@ -2047,6 +2055,7 @@ SENTRY_DENYLIST: Final = [
     "authorization",
     "api-key",
     "x-api-key",
+    "x-api-key-id",
     "x-goog-api-key",
     "ocp-apim-subscription-key",
     "x-litellm-api-key",

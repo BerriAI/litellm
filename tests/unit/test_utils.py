@@ -1068,6 +1068,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                         "chat",
                         "completion",
                         "container",
+                        "decisions",
                         "image_edit",
                         "embedding",
                         "evaluation",
@@ -9441,6 +9442,19 @@ def test_get_valid_models_from_provider():
     valid_models = get_valid_models(custom_llm_provider="openai")
     assert len(valid_models) > 0
     assert "gpt-5-mini" in valid_models
+
+
+def test_get_valid_models_lists_a_json_provider_set_up_through_its_declared_key_variable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.utils import get_valid_models
+
+    monkeypatch.delenv("PERPLEXITYORCHESTRATOR_API_KEY", raising=False)
+    monkeypatch.delenv("PERPLEXITY_ORCHESTRATOR_API_KEY", raising=False)
+    monkeypatch.delenv("PERPLEXITYAI_API_KEY", raising=False)
+    monkeypatch.setenv("PERPLEXITY_API_KEY", "pplx-test-key")
+
+    assert "perplexity_orchestrator/anthropic/claude-haiku-5-5" in get_valid_models()
 
 
 @pytest.mark.parametrize(
