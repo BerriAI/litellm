@@ -11,8 +11,10 @@ from typing import Final
 
 import httpx
 import pytest
+import requests
 from openai.types.chat import ChatCompletionChunk
 
+from litellm.exceptions import APIError, InternalServerError, Timeout
 from litellm.litellm_core_utils.core_helpers import (
     _FINISH_REASON_MAP,
     RESPONSE_COST_HEADER,
@@ -33,6 +35,7 @@ from litellm.litellm_core_utils.core_helpers import (
     get_parent_otel_span_from_kwargs,
     get_provider_response_headers_from_hidden_params,
     int_of,
+    is_timed_out_call,
     iter_items,
     joined,
     json_contains,
@@ -700,6 +703,57 @@ class TestIsExpectedClientError:
             category=RateLimitErrorCategory.VENDOR_RATE_LIMIT,
         )
         assert is_expected_client_error(vendor_limit) is False
+
+
+def _raised_from(cause: Exception) -> Exception:
+    try:
+        raise RuntimeError("the token count failed") from cause
+    except RuntimeError as error:
+        return error
+
+
+_PROVIDER_REQUEST: Final = httpx.Request("POST", "http://provider.test/v1/chat/completions")
+
+
+def _timeout(status_code: int, reply: httpx.Response | requests.Response | None = None) -> Timeout:
+    return Timeout(
+        message="Read timed out", model="m", llm_provider="openai", exception_status_code=status_code, response=reply
+    )
+
+
+@pytest.mark.parametrize(
+    ("error", "timed_out"),
+    [
+        pytest.param(_timeout(408), True, id="time_limit"),
+        pytest.param(
+            _timeout(408, httpx.Response(408, request=_PROVIDER_REQUEST)),
+            True,
+            id="time_limit_with_a_reply_without_a_body",
+        ),
+        pytest.param(
+            _timeout(408, httpx.Response(408, json={"error": "the provider gave up"}, request=_PROVIDER_REQUEST)),
+            False,
+            id="provider_408",
+        ),
+        pytest.param(_timeout(408, requests.Response()), False, id="provider_408_with_a_requests_response"),
+        pytest.param(_timeout(504), False, id="provider_504"),
+        pytest.param(_timeout(500), False, id="timeout_with_another_status"),
+        pytest.param(
+            APIError(status_code=408, message="Request Timeout", llm_provider="openai", model="m"),
+            False,
+            id="408_that_is_not_a_timeout",
+        ),
+        pytest.param(
+            InternalServerError(message="Internal error", model="m", llm_provider="openai"), False, id="provider_500"
+        ),
+        pytest.param(_raised_from(_timeout(408)), False, id="error_caused_by_a_timeout"),
+        pytest.param(None, False, id="no_error"),
+    ],
+)
+def test_is_timed_out_call_is_true_only_for_a_408_timeout_that_carries_no_provider_reply(
+    error: BaseException | None, timed_out: bool
+) -> None:
+    assert is_timed_out_call(error) is timed_out
 
 
 class TestProviderResponseHeadersInHiddenParams:

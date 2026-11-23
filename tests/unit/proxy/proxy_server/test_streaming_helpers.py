@@ -34,6 +34,7 @@ from pydantic import BaseModel, model_serializer
 
 import litellm
 import litellm.proxy.proxy_server as ps
+from litellm._logging import verbose_proxy_logger
 from litellm.constants import RETURN_RAW_MODEL_NAME_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
@@ -1844,6 +1845,50 @@ async def test_a_mid_stream_failure_frame_carries_the_status_the_error_was_raise
 
     error_frames: Final = [frame for frame in frames if isinstance(frame, str) and frame.startswith('data: {"error":')]
     assert [_error_of(frame.removesuffix("\n\n")) for frame in error_frames] == [expected_error]
+
+
+def _timeout(status_code: int) -> litellm.Timeout:
+    return litellm.Timeout(
+        message="Read timed out", model="m", llm_provider="hosted_vllm", exception_status_code=status_code
+    )
+
+
+def _provider_408() -> litellm.Timeout:
+    request: Final = httpx.Request("POST", "http://provider.test/v1/chat/completions")
+    return litellm.Timeout(
+        message="Request Timeout",
+        model="m",
+        llm_provider="hosted_vllm",
+        response=httpx.Response(408, json={"error": "the provider gave up"}, request=request),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("raised", "client_error_tracebacks", "expect_traceback"),
+    [
+        pytest.param(_timeout(408), False, False, id="timed_out_call"),
+        pytest.param(_timeout(408), True, True, id="timed_out_call_with_client_error_tracebacks_on"),
+        pytest.param(_provider_408(), False, True, id="provider_408"),
+        pytest.param(_timeout(504), False, True, id="provider_504"),
+        pytest.param(RuntimeError("upstream blew up"), False, True, id="unexpected_failure"),
+    ],
+)
+async def test_a_mid_stream_failure_is_logged_with_a_traceback_unless_the_call_timed_out(
+    raised: Exception,
+    client_error_tracebacks: bool,
+    expect_traceback: bool,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "log_client_error_tracebacks", client_error_tracebacks)
+    monkeypatch.setattr(verbose_proxy_logger, "propagate", True)
+    with caplog.at_level(logging.ERROR, logger=verbose_proxy_logger.name):
+        _, _, frames = await _served(_async_iter_raises(raised))
+
+    records: Final = [r for r in caplog.records if "async_data_generator(): Exception occured" in r.getMessage()]
+    assert [frame.startswith('data: {"error":') for frame in frames] == [False, True, False]
+    assert [record.exc_info is not None for record in records] == [expect_traceback]
 
 
 @pytest.mark.asyncio

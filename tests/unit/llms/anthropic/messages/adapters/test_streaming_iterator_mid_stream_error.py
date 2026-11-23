@@ -16,6 +16,7 @@ Anthropic ``error`` event so the stream stays valid and the client can retry.
 
 import asyncio
 import json
+import logging
 import os
 import sys
 import threading
@@ -385,3 +386,67 @@ async def test_mid_stream_error_emits_error_event_without_logging_obj():
     events = await _drain_sse(_failing_wrapper(None))
 
     assert _parse_sse(events[-1])[0] == "error"
+
+
+def _timeout(status_code: int) -> litellm.Timeout:
+    return litellm.Timeout(
+        message="Read timed out", model="m", llm_provider="hosted_vllm", exception_status_code=status_code
+    )
+
+
+def _provider_408() -> litellm.Timeout:
+    request: Final = httpx.Request("POST", "http://provider.test/v1/chat/completions")
+    return litellm.Timeout(
+        message="Request Timeout",
+        model="m",
+        llm_provider="hosted_vllm",
+        response=httpx.Response(408, json={"error": "the provider gave up"}, request=request),
+    )
+
+
+def _in_chat_wrapper_envelope(provider_error: Exception) -> MidStreamFallbackError:
+    return MidStreamFallbackError(
+        message=str(provider_error),
+        model="m",
+        llm_provider="hosted_vllm",
+        original_exception=provider_error,
+        is_pre_first_chunk=False,
+    )
+
+
+@pytest.mark.parametrize(
+    ("raised", "client_error_tracebacks", "expect_traceback"),
+    [
+        pytest.param(lambda: _timeout(408), False, False, id="timed_out_call"),
+        pytest.param(
+            lambda: _in_chat_wrapper_envelope(_timeout(408)),
+            False,
+            False,
+            id="timed_out_call_in_chat_wrapper_envelope",
+        ),
+        pytest.param(
+            lambda: _in_chat_wrapper_envelope(_timeout(408)),
+            True,
+            True,
+            id="timed_out_call_with_client_error_tracebacks_on",
+        ),
+        pytest.param(lambda: _in_chat_wrapper_envelope(_provider_408()), False, True, id="provider_408"),
+        pytest.param(lambda: _in_chat_wrapper_envelope(_timeout(504)), False, True, id="provider_504"),
+        pytest.param(_bedrock_drop, False, True, id="provider_error"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_mid_stream_error_is_logged_with_a_traceback_unless_the_call_timed_out(
+    raised: Callable[[], Exception],
+    client_error_tracebacks: bool,
+    expect_traceback: bool,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "log_client_error_tracebacks", client_error_tracebacks)
+    with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+        events: Final = await _drain_sse(_failing_wrapper(None, raised))
+
+    records: Final = [r for r in caplog.records if r.getMessage().startswith("Anthropic Adapter - mid-stream error")]
+    assert _parse_sse(events[-1])[0] == "error"
+    assert [record.exc_info is not None for record in records] == [expect_traceback]

@@ -177,9 +177,14 @@ def _reported_status(failure: BaseException, current: object, provider_reply: ht
     return reported if isinstance(reported, int) else provider_reply.status_code
 
 
+def carries_provider_reply(failure: BaseException) -> bool:
+    current: Final[object] = getattr(failure, _RESPONSE_ATTRIBUTE, None)
+    return current is not None and (not isinstance(current, httpx.Response) or bool(_upstream_body(current)))
+
+
 def with_provider_reply(failure: BaseException, provider_reply: object) -> BaseException:
     current: Final[object] = getattr(failure, _RESPONSE_ATTRIBUTE, None)
-    if current is not None and (not isinstance(current, httpx.Response) or _upstream_body(current)):
+    if carries_provider_reply(failure):
         return failure
     if not isinstance(provider_reply, httpx.Response) or provider_reply.status_code not in _HTTP_ERROR_STATUSES:
         return failure

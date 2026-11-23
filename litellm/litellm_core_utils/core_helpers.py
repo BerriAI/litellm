@@ -532,6 +532,24 @@ def is_expected_client_error(exception: BaseException | None) -> bool:
     return 400 <= status < 500
 
 
+def is_timed_out_call(exception: BaseException | None) -> bool:
+    """
+    True for a ``litellm.Timeout`` the caller gets as a 408 that carries no
+    reply of a provider: litellm's own time limit ran out, an expected outcome
+    of that limit. A provider's 504, or its 408 with the provider's reply, is
+    mapped to ``litellm.Timeout`` too, an upstream failure that is never a
+    timed-out call. A provider's 408 with no reply cannot be told from the
+    time limit and counts as a timed-out call.
+    """
+    from litellm.exceptions import carries_provider_reply
+
+    return (
+        isinstance(exception, litellm.Timeout)
+        and exception.status_code == 408
+        and not carries_provider_reply(exception)
+    )
+
+
 def coerce_token_limit(value: object) -> int | None:
     """
     Coerce a max_input_tokens / max_output_tokens value to an int, treating a

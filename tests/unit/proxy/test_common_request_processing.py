@@ -14371,19 +14371,44 @@ async def test_a_late_passthrough_block_whose_block_stream_fails_still_ends_the_
     assert collected[-1] == b"data: [DONE]\n\n"
 
 
+def _timeout(status_code: int) -> litellm.Timeout:
+    return litellm.Timeout(
+        message="Read timed out", model="m", llm_provider="hosted_vllm", exception_status_code=status_code
+    )
+
+
+def _provider_408() -> litellm.Timeout:
+    request: Final = httpx.Request("POST", "http://provider.test/v1/chat/completions")
+    return litellm.Timeout(
+        message="Request Timeout",
+        model="m",
+        llm_provider="hosted_vllm",
+        response=httpx.Response(408, json={"error": "the provider gave up"}, request=request),
+    )
+
+
 @pytest.mark.parametrize(
-    "exc,expect_traceback",
+    "exc,client_error_tracebacks,expect_traceback",
     [
-        pytest.param(HTTPException(status_code=400, detail="Invalid model name passed in"), False, id="expected_400"),
-        pytest.param(ValueError("unexpected internal error"), True, id="unexpected_error"),
+        pytest.param(
+            HTTPException(status_code=400, detail="Invalid model name passed in"), False, False, id="expected_400"
+        ),
+        pytest.param(ValueError("unexpected internal error"), False, True, id="unexpected_error"),
+        pytest.param(_timeout(408), False, False, id="timed_out_call"),
+        pytest.param(_timeout(408), True, True, id="timed_out_call_with_client_error_tracebacks_on"),
+        pytest.param(_provider_408(), False, True, id="provider_408"),
+        pytest.param(_timeout(504), False, True, id="provider_504"),
     ],
 )
-def test_log_llm_api_exception_traceback_only_for_unexpected_errors(exc, expect_traceback, caplog):
+def test_log_llm_api_exception_traceback_only_for_unexpected_errors(
+    exc, client_error_tracebacks, expect_traceback, caplog, monkeypatch
+):
     """Regression for LIT-6043: expected 4xx errors log without formatting a
     traceback; unexpected errors keep logger.exception behavior."""
     from litellm._logging import verbose_proxy_logger
     from litellm.proxy.common_request_processing import log_llm_api_exception
 
+    monkeypatch.setattr(litellm, "log_client_error_tracebacks", client_error_tracebacks)
     verbose_proxy_logger.propagate = True
     try:
         with caplog.at_level("ERROR", logger="LiteLLM Proxy"):
@@ -15629,6 +15654,35 @@ class TestAnthropicMessagesStreamErrorFrame:
         assert payload["type"] == "error"
         assert payload["error"]["type"] == expected_error_type
         assert "upstream stopped sending" in payload["error"]["message"]
+
+    @pytest.mark.parametrize(
+        ("failure", "client_error_tracebacks", "expect_traceback"),
+        [
+            pytest.param(_timeout(408), False, False, id="timed_out_call"),
+            pytest.param(_timeout(408), True, True, id="timed_out_call_with_client_error_tracebacks_on"),
+            pytest.param(_provider_408(), False, True, id="provider_408"),
+            pytest.param(_timeout(504), False, True, id="provider_504"),
+            pytest.param(RuntimeError("upstream stopped sending"), False, True, id="unexpected_error"),
+        ],
+    )
+    async def test_mid_stream_failure_is_logged_with_a_traceback_unless_the_call_timed_out(
+        self,
+        failure: Exception,
+        client_error_tracebacks: bool,
+        expect_traceback: bool,
+        caplog: pytest.LogCaptureFixture,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from litellm._logging import verbose_proxy_logger
+
+        monkeypatch.setattr(litellm, "log_client_error_tracebacks", client_error_tracebacks)
+        monkeypatch.setattr(verbose_proxy_logger, "propagate", True)
+        with caplog.at_level("ERROR", logger="LiteLLM Proxy"):
+            frames: Final = [frame async for frame in self._sse_generator_failing_with(failure)]
+
+        records: Final = [r for r in caplog.records if "async_data_generator(): Exception occured" in r.getMessage()]
+        assert [frame.split("\n")[0] for frame in frames] == ["event: error"]
+        assert [record.exc_info is not None for record in records] == [expect_traceback]
 
     _CONTENT_DELTA_FRAME: Final = (
         b"event: content_block_delta\n"
