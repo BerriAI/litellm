@@ -439,6 +439,10 @@ class _ForwardedCompletionParams(ExtraItemsTypedDict, total=False, extra_items=o
     pass
 
 
+class _EmbeddingResponseFields(ExtraItemsTypedDict, total=False, extra_items=object):
+    pass
+
+
 @dataclass(frozen=True, slots=True)
 class _SupplementalProviderParams:
     params: GenericLiteLLMParams
@@ -7102,7 +7106,9 @@ async def aembedding(*args, **kwargs) -> EmbeddingResponse:
 
         response: EmbeddingResponse | None = None
         if isinstance(init_response, dict):
-            response = EmbeddingResponse(**init_response)
+            response = EmbeddingResponse(
+                **_EmbeddingResponseFields(**_REQUEST_KWARGS_ADAPTER.validate_python(init_response))
+            )
         elif isinstance(init_response, EmbeddingResponse):  ## CACHING SCENARIO
             response = init_response
         elif asyncio.iscoroutine(init_response):
