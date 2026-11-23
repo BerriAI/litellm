@@ -181,10 +181,10 @@ from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: 
     invalidate_cached_object_permissions,
     prepare_object_permission_upsert,
     set_object_permission,
+    stored_key_scope_fields,
     validate_key_mcp_servers_against_team,
     validate_key_search_tools_against_team,
     validate_key_vector_stores_against_team,
-    with_stored_key_scope,
 )
 from litellm.proxy.management_helpers.team_member_permission_checks import (
     TeamMemberPermissionChecks,
@@ -3789,7 +3789,7 @@ async def _process_single_key_update(
 
     updated_key_info.pop("token", None)
 
-    return with_stored_key_scope({**updated_key_info})
+    return {**updated_key_info, **stored_key_scope_fields(updated_key_info)}
 
 
 async def _with_validated_object_permission(
@@ -4597,7 +4597,7 @@ async def update_key_fn(
         if response is None:
             raise ValueError("Failed to update key got response = None")
 
-        return with_stored_key_scope({"key": key, **response["data"]})
+        return {"key": key, **response["data"], **stored_key_scope_fields(response["data"])}
         # update based on remaining passed in values
     except Exception as e:
         verbose_proxy_logger.exception("litellm.proxy.proxy_server.update_key_fn(): Exception occured - %s", e)
