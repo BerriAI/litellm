@@ -2069,6 +2069,19 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
         await install_background_interaction_settlement(
             prisma_client, router=lambda: llm_router, spend_logs_kept=lambda: disable_spend_logs is False
         )
+        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+            openai_passthrough_base_url,
+            openai_passthrough_poll_headers,
+        )
+        from litellm.proxy.pass_through_endpoints.pass_through_endpoints import pass_through_endpoint_logging
+
+        await resources.enter_async_context(
+            database_runtime.background_task(
+                pass_through_endpoint_logging.sweep_background_response_polls_periodically(
+                    api_base=openai_passthrough_base_url(), poll_headers=openai_passthrough_poll_headers
+                )
+            )
+        )
 
     # Start background health checks AFTER models are loaded and index is built
     if use_background_health_checks:

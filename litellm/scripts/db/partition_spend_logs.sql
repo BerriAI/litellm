@@ -18,6 +18,8 @@
 --   * Test on a staging copy first and take a backup.
 --   * Postgres cannot convert a populated table to partitioned in place, so this
 --     renames the old table aside and creates a fresh partitioned table.
+--   * Dependent views are repointed to the new table within the transaction.
+--     Drop directly dependent materialized views first and recreate afterwards.
 --   * The partition key ("startTime") must be part of the primary key, so the
 --     PK becomes composite ("request_id", "startTime"). LiteLLM's write path uses
 --     INSERT ... ON CONFLICT DO NOTHING, which is compatible with this.
@@ -38,6 +40,58 @@
 -- "day" and 7). To roll back, see litellm/scripts/db/unpartition_spend_logs.sql.
 
 BEGIN;
+
+LOCK TABLE "LiteLLM_SpendLogs" IN ACCESS EXCLUSIVE MODE;
+
+-- Capture the definitions before renaming the table so only the relation binding changes.
+CREATE TEMP TABLE spend_logs_views_to_repoint ON COMMIT DROP AS
+SELECT DISTINCT view_class.oid AS view_oid, view_class.relkind, view_class.reloptions,
+    format('%I.%I', view_schema.nspname, view_class.relname) AS qualified_name,
+    pg_get_viewdef(view_class.oid) AS definition
+FROM pg_depend dep
+JOIN pg_rewrite rule ON rule.oid = dep.objid
+JOIN pg_class view_class ON view_class.oid = rule.ev_class
+JOIN pg_namespace view_schema ON view_schema.oid = view_class.relnamespace
+WHERE dep.classid = 'pg_rewrite'::regclass
+  AND dep.refclassid = 'pg_class'::regclass
+  AND dep.refobjid = '"LiteLLM_SpendLogs"'::regclass
+  AND rule.rulename = '_RETURN'
+  AND view_class.relkind IN ('v', 'm');
+
+DO $$
+DECLARE
+    blocked_view regclass;
+BEGIN
+    IF EXISTS (
+        SELECT FROM pg_class spend
+        WHERE spend.oid = '"LiteLLM_SpendLogs"'::regclass
+          AND (spend.relrowsecurity OR spend.relforcerowsecurity
+               OR EXISTS (SELECT FROM pg_policy WHERE polrelid = spend.oid))
+    ) THEN
+        RAISE EXCEPTION 'LiteLLM_SpendLogs has row-level security settings or policies.'
+            USING HINT = 'Stop traffic before removing RLS settings and policies, and restore them on the replacement table before resuming traffic.';
+    END IF;
+
+    SELECT view_oid INTO blocked_view
+    FROM pg_temp.spend_logs_views_to_repoint
+    WHERE relkind = 'm'
+    LIMIT 1;
+    IF FOUND THEN
+        RAISE EXCEPTION 'Materialized view % depends on LiteLLM_SpendLogs. Drop it before running this script and recreate it afterwards.', blocked_view;
+    END IF;
+
+    SELECT captured.view_oid INTO blocked_view
+    FROM pg_temp.spend_logs_views_to_repoint captured
+    JOIN pg_rewrite rule ON rule.ev_class = captured.view_oid AND rule.rulename = '_RETURN'
+    JOIN pg_depend dep ON dep.objid = rule.oid AND dep.classid = 'pg_rewrite'::regclass
+    JOIN pg_constraint pk ON pk.oid = dep.refobjid AND dep.refclassid = 'pg_constraint'::regclass
+    WHERE pk.conrelid = '"LiteLLM_SpendLogs"'::regclass AND pk.contype = 'p'
+    LIMIT 1;
+    IF FOUND THEN
+        RAISE EXCEPTION 'View % depends on the current LiteLLM_SpendLogs primary key.', blocked_view
+            USING HINT = 'Rewrite the view to explicitly group or aggregate non-grouped spend log columns before partitioning.';
+    END IF;
+END $$;
 
 ALTER TABLE "LiteLLM_SpendLogs" RENAME TO "LiteLLM_SpendLogs_legacy";
 
@@ -126,12 +180,39 @@ BEGIN
     END LOOP;
 END $$;
 
+-- Preserve view OIDs so views of these views keep working without recreation.
+DO $$
+DECLARE
+    view_name text;
+    view_options text[];
+    view_definition text;
+    previous_lock_timeout text := current_setting('lock_timeout');
+BEGIN
+    -- Readers can hold a view lock while waiting for the spend table lock.
+    PERFORM set_config('lock_timeout', '1ms', true);
+    FOR view_name, view_options, view_definition IN
+        SELECT qualified_name, reloptions, definition
+        FROM pg_temp.spend_logs_views_to_repoint
+    LOOP
+        EXECUTE format('CREATE OR REPLACE VIEW %s %s AS %s', view_name,
+            CASE WHEN view_options IS NULL THEN ''
+                ELSE format('WITH (%s)', array_to_string(view_options, ', '))
+            END,
+            view_definition);
+    END LOOP;
+    PERFORM set_config('lock_timeout', previous_lock_timeout, true);
+EXCEPTION WHEN lock_not_available OR deadlock_detected THEN
+    RAISE EXCEPTION 'Could not rebind spend log view % while a conflicting lock is held.', view_name
+        USING ERRCODE = '55P03', HINT = 'Retry when queries against spend log views have stopped.';
+END $$;
+
 COMMIT;
 
 -- Backfill (optional). Rows route to the correct partition automatically.
 -- For large legacy tables, copy in time-bounded batches during a low-traffic
 -- window instead of one statement, or simply keep "LiteLLM_SpendLogs_legacy"
 -- read-only until its data ages past your retention, then DROP it.
+-- Views now read the new table, so legacy rows appear only after backfilling.
 --
 -- Backfilled rows older than oldest_day land in the DEFAULT partition, where
 -- they stay until retention deletes them row by row, and every partition the

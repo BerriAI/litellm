@@ -50,7 +50,7 @@ class AzureAnthropicChatCompletion(AnthropicChatCompletion):
         optional_params: dict,
         timeout: float | httpx.Timeout,
         litellm_params: dict,
-        acompletion: bool | None = None,
+        acompletion: object = None,
         logger_fn: object = None,
         headers: dict[str, object] = {},
         client=None,
