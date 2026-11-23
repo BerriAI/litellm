@@ -1,4 +1,4 @@
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Final, Literal
 
@@ -424,7 +424,7 @@ class ContextCachingEndpoints(VertexBase):
         vertex_project: str | None,
         vertex_location: str | None,
         vertex_auth_header: str | None,
-        extra_headers: dict | None = None,
+        extra_headers: Mapping[str, str] | None = None,
         cached_content: str | None = None,
         context_caching: bool = True,
         drop_params: bool = False,
@@ -576,7 +576,7 @@ class ContextCachingEndpoints(VertexBase):
         vertex_project: str | None,
         vertex_location: str | None,
         vertex_auth_header: str | None,
-        extra_headers: dict | None = None,
+        extra_headers: Mapping[str, str] | None = None,
         cached_content: str | None = None,
         context_caching: bool = True,
         drop_params: bool = False,
