@@ -396,8 +396,9 @@ class TestRecoGuardrailApiKey:
             initialize_guardrail(litellm_params, {"guardrail_name": "prod-reco"})
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("as_request_model", [False, True], ids=["loaded-from-db", "created-through-api"])
     async def test_stored_guardrail_with_unset_api_key_reference_keeps_tenant_auth(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch, as_request_model: bool
     ) -> None:
         monkeypatch.delenv("RECO_TEST_MISSING_API_KEY", raising=False)
         stored_params: Final = {
@@ -408,7 +409,11 @@ class TestRecoGuardrailApiKey:
         }
         handler: Final = InMemoryGuardrailHandler()
         handler.initialize_guardrail(
-            {"guardrail_id": "stored-reco-id", "guardrail_name": "stored-reco", "litellm_params": stored_params},
+            {
+                "guardrail_id": "stored-reco-id",
+                "guardrail_name": "stored-reco",
+                "litellm_params": LitellmParams(**stored_params) if as_request_model else stored_params,
+            },
             source="db",
         )
         callback: Final = handler.guardrail_id_to_custom_guardrail["stored-reco-id"]
