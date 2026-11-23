@@ -1211,6 +1211,98 @@ def test_remove_unregistered_routes_keeps_routes_still_backed_by_the_registry() 
         _registered_pass_through_routes.update(saved_registry)
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("path", "include_subpath", "request_path"),
+    [
+        ("/v1/chat/completions", False, "/v1/chat/completions"),
+        ("/v1/chat/completions", True, "/v1/chat/completions"),
+        ("/v1/containers", True, "/v1/containers/example/files"),
+    ],
+)
+async def test_removing_pass_through_preserves_builtin_inference_access(
+    path: str,
+    include_subpath: bool,
+    request_path: str,
+) -> None:
+    from litellm.proxy._types import LiteLLMRoutes
+    from litellm.proxy.auth.route_checks import RouteChecks
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import _register_pass_through_endpoint
+
+    saved_registry: Final = dict(_registered_pass_through_routes)
+    saved_openai_routes: Final = tuple(LiteLLMRoutes.openai_routes.value)
+    try:
+        _registered_pass_through_routes.clear()
+        await _register_pass_through_endpoint(
+            endpoint={
+                "id": "builtin-collision",
+                "path": path,
+                "target": "https://example.com",
+                "auth": True,
+                "include_subpath": include_subpath,
+                "methods": ["POST"],
+            },
+            app=FastAPI(),
+            premium_user=False,
+            visited_endpoints=set(),
+        )
+
+        InitPassThroughEndpointHelpers.remove_endpoint_routes("builtin-collision")
+
+        assert not InitPassThroughEndpointHelpers.is_registered_pass_through_route(path)
+        assert RouteChecks.is_llm_api_route(request_path)
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=None,
+            _user_role=None,
+            route=request_path,
+            request=Request({"type": "http", "method": "POST", "path": request_path, "headers": []}),
+            valid_token=UserAPIKeyAuth(allowed_routes=["llm_api_routes"]),
+            request_data={},
+        )
+    finally:
+        _registered_pass_through_routes.clear()
+        _registered_pass_through_routes.update(saved_registry)
+        LiteLLMRoutes.openai_routes.value[:] = saved_openai_routes
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("include_subpath", [False, True])
+async def test_removing_pass_through_revokes_custom_inference_access(include_subpath: bool) -> None:
+    from litellm.proxy._types import LiteLLMRoutes
+    from litellm.proxy.auth.route_checks import RouteChecks
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import _register_pass_through_endpoint
+
+    saved_registry: Final = dict(_registered_pass_through_routes)
+    saved_openai_routes: Final = tuple(LiteLLMRoutes.openai_routes.value)
+    path: Final = "/custom-cleanup-regression"
+    try:
+        _registered_pass_through_routes.clear()
+        await _register_pass_through_endpoint(
+            endpoint={
+                "id": "custom-cleanup",
+                "path": path,
+                "target": "https://example.com",
+                "auth": True,
+                "include_subpath": include_subpath,
+                "methods": ["POST"],
+            },
+            app=FastAPI(),
+            premium_user=False,
+            visited_endpoints=set(),
+        )
+        assert RouteChecks.is_llm_api_route(path)
+
+        InitPassThroughEndpointHelpers.remove_endpoint_routes("custom-cleanup")
+
+        assert not InitPassThroughEndpointHelpers.is_registered_pass_through_route(path)
+        assert not RouteChecks.is_llm_api_route(path)
+        assert not RouteChecks.is_llm_api_route(path + "/child")
+    finally:
+        _registered_pass_through_routes.clear()
+        _registered_pass_through_routes.update(saved_registry)
+        LiteLLMRoutes.openai_routes.value[:] = saved_openai_routes
+
+
 def test_remove_unregistered_routes_drops_unregistered_methods() -> None:
     from fastapi import FastAPI
     from starlette.routing import Match, Route

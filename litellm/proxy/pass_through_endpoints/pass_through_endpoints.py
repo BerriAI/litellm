@@ -257,6 +257,7 @@ class _RegisteredPassThroughRoute(TypedDict):
 
 
 # Global registry to track registered pass-through routes and prevent memory leaks
+_BUILTIN_OPENAI_ROUTES: Final = frozenset(LiteLLMRoutes.openai_routes.value)
 _registered_pass_through_routes: Final[dict[str, _RegisteredPassThroughRoute]] = {}
 
 
@@ -4470,11 +4471,11 @@ class InitPassThroughEndpointHelpers:
             path = route_info.get("path")
             if isinstance(path, str):
                 openai_routes = LiteLLMRoutes.openai_routes.value
-                if path in openai_routes:
+                if path in openai_routes and path not in _BUILTIN_OPENAI_ROUTES:
                     openai_routes.remove(path)
                 if route_info.get("type") == "subpath":
                     wildcard_path = path.rstrip("/") + "/*"
-                    if wildcard_path in openai_routes:
+                    if wildcard_path in openai_routes and wildcard_path not in _BUILTIN_OPENAI_ROUTES:
                         openai_routes.remove(wildcard_path)
             del _registered_pass_through_routes[key]
             verbose_proxy_logger.debug("Removed pass-through route from registry: %s", key)
