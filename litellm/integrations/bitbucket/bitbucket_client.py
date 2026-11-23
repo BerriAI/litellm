@@ -64,7 +64,6 @@ _NO_STATUS_CODE: Final = object()
 
 
 def _error_status_code(error: Exception) -> object:
-    """The ``response.status_code`` an HTTP error carries, or ``_NO_STATUS_CODE`` when it has none."""
     return getattr(getattr(error, "response", _NO_STATUS_CODE), "status_code", _NO_STATUS_CODE)
 
 

@@ -19,17 +19,14 @@ from litellm.litellm_core_utils.prompt_templates.factory import get_attribute_or
 
 
 def _as_dict(value: object) -> Mapping[object, object] | None:
-    """``value`` viewed as a read-only mapping when it is a dict, else None."""
     return value if isinstance(value, dict) else None
 
 
 def _as_list(value: object) -> Sequence[object] | None:
-    """``value`` viewed as a read-only sequence when it is a list, else None."""
     return value if isinstance(value, list) else None
 
 
 def _field(source: object, name: str) -> object:
-    """Attribute or key ``name`` of ``source``, None when absent."""
     return get_attribute_or_key(source, name, None)
 
 

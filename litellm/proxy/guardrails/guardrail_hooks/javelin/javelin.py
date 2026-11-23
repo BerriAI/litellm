@@ -34,8 +34,6 @@ class _JavelinVerdict(TypedDict):
 
 
 class _CustomGuardrailOptions(TypedDict, total=False, extra_items=object):
-    """Base-class constructor options this guardrail forwards to CustomGuardrail."""
-
     supported_event_hooks: ReadOnly[list[GuardrailEventHooks] | None]
 
 

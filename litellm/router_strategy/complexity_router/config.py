@@ -275,12 +275,10 @@ class ComplexityTierModel(LiteLLMBaseModel):
 
 
 def _as_dict(value: object) -> Mapping[object, object] | None:
-    """``value`` viewed as a read-only mapping when it is a dict, else None."""
     return value if isinstance(value, dict) else None
 
 
 def _as_list_or_tuple(value: object) -> Sequence[object] | None:
-    """``value`` viewed as a read-only sequence when it is a list or tuple, else None."""
     return value if isinstance(value, (list, tuple)) else None
 
 

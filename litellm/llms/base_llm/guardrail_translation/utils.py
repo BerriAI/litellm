@@ -17,17 +17,14 @@ _DECODED_JSON: Final = TypeAdapter(object)
 
 
 def _dict_or_none(value: object) -> Mapping[object, object] | None:
-    """The value itself when it is a dict, typed as a read-only mapping of unknown contents."""
     return value if isinstance(value, dict) else None
 
 
 def _list_or_none(value: object) -> Sequence[object] | None:
-    """The value itself when it is a list, typed as a read-only sequence of unknown contents."""
     return value if isinstance(value, list) else None
 
 
 def _mapping_or_none(value: object) -> Mapping[object, object] | None:
-    """The value itself when it is any Mapping, typed as a read-only mapping of unknown contents."""
     return value if isinstance(value, Mapping) else None
 
 

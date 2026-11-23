@@ -132,7 +132,6 @@ class _GalileoLoggingKwargs(TypedDict, total=False, extra_items=object):
 
 
 def _as_dict(value: object) -> Mapping[object, object] | None:
-    """The value itself when it is a dict, typed without asserting what it holds."""
     return value if isinstance(value, dict) else None
 
 
@@ -142,13 +141,11 @@ def _record_messages(messages: object) -> object:
 
 
 def _block_text(block: object) -> object:
-    """The text of one content block: its ``text`` field for a dict, its string form otherwise."""
     fields: Final = _as_dict(block)
     return fields.get("text", "") if fields is not None else str(block)
 
 
 def _content_text(content: object) -> object:
-    """A message's content, with a list of blocks joined into one space-separated string."""
     blocks: Final = as_object_list(content)
     return content if blocks is None else joined(" ", (_block_text(block) for block in blocks))
 

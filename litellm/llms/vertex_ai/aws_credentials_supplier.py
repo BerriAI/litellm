@@ -15,8 +15,6 @@ from google.auth import aws
 
 
 class _AwsCredentials(Protocol):
-    """The botocore credential attributes forwarded to google-auth."""
-
     @property
     def access_key(self) -> str: ...
 

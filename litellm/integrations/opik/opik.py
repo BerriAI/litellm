@@ -27,8 +27,6 @@ except Exception:
 
 
 class _OpikClient(Protocol):
-    """The Opik SDK client surface this logger drives: the trace and span writers it calls."""
-
     def trace(
         self,
         *,

@@ -222,7 +222,6 @@ def _turn_time_utc(start_time_iso: str) -> datetime | None:
 
 
 def _mapping_or_none(value: object) -> Mapping[object, object] | None:
-    """The value itself when it is a mapping, else None."""
     if isinstance(value, Mapping):
         return value
     return None

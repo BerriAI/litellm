@@ -29,14 +29,10 @@ from rich.console import Console
 
 
 class _ConsolePrinter(Protocol):
-    """The part of rich's Console this module calls."""
-
     def print(self, *objects: object) -> None: ...
 
 
 class _CBFFrame(Protocol):
-    """The part of a polars DataFrame of CBF rows the batch senders call."""
-
     def is_empty(self) -> bool: ...
 
     def __len__(self) -> int: ...
