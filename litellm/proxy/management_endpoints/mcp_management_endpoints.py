@@ -184,6 +184,7 @@ if MCP_AVAILABLE:
         UserMCPManagementMode,
         is_per_server_oauth_discovery_eligible,
     )
+    from litellm.proxy.auth.auth_checks import get_access_group_tables
     from litellm.proxy.auth.user_api_key_auth import (  # noqa: F401  # legacy module exports
         _user_api_key_auth_builder,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
         user_api_key_auth,
@@ -1333,7 +1334,22 @@ if MCP_AVAILABLE:
         by_id: Final = {server.server_id: server for server in chain.from_iterable([*existing_teams, own_grants])}
         return list(by_id.values())
 
-    def _admin_can_list_full_mcp_catalog(auth: UserAPIKeyAuth) -> bool:
+    async def _rule_groups_allow_full_mcp_catalog(auth: UserAPIKeyAuth) -> bool:
+        if not auth.access_group_ids:
+            return True
+        if auth.has_attached_access_groups:
+            return False
+        try:
+            groups: Final = await get_access_group_tables(
+                auth.access_group_ids, check_db_only=auth.requires_fresh_policy, missing="raise"
+            )
+        except HTTPException:
+            return False
+        return {group.access_group_id for group in groups} == set(auth.access_group_ids) and not any(
+            group.access_mcp_server_ids or group.mcp_tool_permissions for group in groups
+        )
+
+    async def _admin_can_list_full_mcp_catalog(auth: UserAPIKeyAuth) -> bool:
         permission: Final = auth.object_permission
         unscoped_permission: Final = (
             auth.object_permission_id is None
@@ -1345,13 +1361,13 @@ if MCP_AVAILABLE:
             and (auth.team_id is None or is_ui_session_credential(auth))
             and unscoped_permission
             and auth.org_id is None
-            and not auth.access_group_ids
             and auth.end_user_id is None
             and auth.agent_id is None
             and auth.agent_caller is None
             and not auth.mcp_admitted_user_subject
             and not auth.mcp_explicit_grants_only
             and auth.mcp_toolset_id is None
+            and await _rule_groups_allow_full_mcp_catalog(auth)
         )
 
     @catalog_operation(lambda: global_mcp_server_manager)
@@ -1368,7 +1384,7 @@ if MCP_AVAILABLE:
         every server even when their key carries no per-server MCP grant.
         """
         if not _is_restricted_virtual_key_request(user_api_key_dict) and (
-            _get_user_mcp_management_mode() == "view_all" or _admin_can_list_full_mcp_catalog(user_api_key_dict)
+            _get_user_mcp_management_mode() == "view_all" or await _admin_can_list_full_mcp_catalog(user_api_key_dict)
         ):
             return await global_mcp_server_manager.get_all_mcp_servers_unfiltered()
 

@@ -9866,6 +9866,67 @@ class TestMCPServerResolutionCharacterization:
                 assert {server.server_id for server in servers} == expected
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "attached,additional_rule,full_catalog",
+        [
+            (True, None, False),
+            (False, None, True),
+            (False, "servers", False),
+            (False, "tools", False),
+            (False, "missing", False),
+            (False, "unreadable", False),
+            (False, "updated", False),
+        ],
+    )
+    async def test_admin_catalog_with_rule_granted_groups(
+        self, rust_auth_stores: RustAuthStores, attached: bool, additional_rule: str | None, full_catalog: bool
+    ) -> None:
+        personal: Final = "personal-server"
+        other: Final = "other-server"
+        prisma, manager, member = await self._detail_grant_case(
+            rust_auth_stores, "config", "direct user object_permission", personal
+        )
+        manager.config_mcp_servers = {
+            **manager.config_mcp_servers,
+            other: generate_mock_mcp_server_config_record(server_id=other),
+        }
+        models: Final = LiteLLM_AccessGroupTable(
+            access_group_id="models", access_group_name="models", access_model_names=["test-model"]
+        )
+        for group in (
+            models,
+            models.model_copy(update={"access_group_id": "servers", "access_mcp_server_ids": [personal]}),
+            models.model_copy(update={"access_group_id": "tools", "mcp_tool_permissions": {personal: ["add"]}}),
+        ):
+            rust_auth_stores.access_group.seed(group.access_group_id, group)
+        updated: Final = models.model_copy(update={"access_group_id": "updated"})
+        rust_auth_stores.access_group.seed("updated", updated)
+        rust_auth_stores.access_group.writer["updated"] = updated.model_copy(update={"access_mcp_server_ids": [personal]})
+        rust_auth_stores.access_group.seed("unreadable", RuntimeError("access group unavailable"))
+        with (
+            patch.object(mgmt_endpoints, "global_mcp_server_manager", manager),
+            patch("litellm.proxy.proxy_server.prisma_client", prisma),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", _mock_mcp_resolution_cache()),
+            patch("litellm.proxy.proxy_server.general_settings", {}),
+        ):
+            for team_id in (None, UI_SESSION_TOKEN_TEAM_ID):
+                caller: Final = member.model_copy(
+                    update={
+                        "user_role": LitellmUserRoles.PROXY_ADMIN,
+                        "team_id": team_id,
+                        "access_group_ids": [models.access_group_id] if attached else None,
+                        "requires_fresh_policy": additional_rule == "updated",
+                    }
+                )
+                caller.apply_access_group_rule_grants((models.access_group_id,))
+                grants: Final = (
+                    (models.access_group_id, additional_rule) if additional_rule else (models.access_group_id,)
+                )
+                caller.apply_access_group_rule_grants(grants)
+                listed: Final = await mgmt_endpoints.fetch_all_mcp_servers(caller, team_id=None)
+                assert (other in {server.server_id for server in listed}) is full_catalog
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize("caller", ["denied", "admin"])
     @pytest.mark.parametrize(
         "approval_status,registered",
