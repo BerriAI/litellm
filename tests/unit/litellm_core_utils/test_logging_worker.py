@@ -38,7 +38,7 @@ async def test_optional_work_budget_preserves_callback_context_and_reserves_logg
             await worker.flush()
         else:
             assert worker._queue is not None
-            await worker._process_single_task(worker._queue.get_nowait())
+            await worker._aggressively_clear_queue_async()
         restored_identity, budget = await asyncio.wait_for(results.get(), timeout=2)
         assert restored_identity == "request"
         assert 0 < budget <= worker.timeout / 4
@@ -130,6 +130,102 @@ async def test_stop_does_not_replay_a_callback_dequeued_before_its_processor_sta
     assert not executed.is_set()
     assert worker._queue is not None
     await asyncio.wait_for(worker._queue.join(), timeout=1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("concurrency", (1, 100))
+@pytest.mark.parametrize("fill_queue", (False, True))
+async def test_restart_delivers_callbacks_cancelled_before_execution_once(concurrency: int, fill_queue: bool) -> None:
+    worker: Final = LoggingWorker(concurrency=concurrency, max_queue_size=1)
+    completed: Final[asyncio.Queue[int]] = asyncio.Queue()
+
+    async def callback(identity: int) -> None:
+        completed.put_nowait(identity)
+
+    try:
+        for cycle in range(3):
+            worker.ensure_initialized_and_enqueue(callback(cycle * 2))
+            await asyncio.sleep(0)
+            await worker.stop()
+            if fill_queue:
+                worker.enqueue(callback(cycle * 2 + 1))
+            await asyncio.wait_for(worker.flush(), timeout=2)
+            expected: Final = (cycle * 2, cycle * 2 + 1) if fill_queue else (cycle * 2,)
+            assert sorted(completed.get_nowait() for _ in range(completed.qsize())) == list(expected)
+            assert worker.pending_count == 0
+    finally:
+        await worker.stop(discard_pending=True, timeout=1)
+
+
+@pytest.mark.asyncio
+async def test_idle_stop_preserves_capacity_for_later_callbacks() -> None:
+    worker: Final = LoggingWorker(concurrency=1)
+    completed: Final[asyncio.Queue[int]] = asyncio.Queue()
+
+    async def callback(identity: int) -> None:
+        completed.put_nowait(identity)
+
+    try:
+        for cycle in range(3):
+            worker.start()
+            await asyncio.sleep(0)
+            await worker.stop()
+            worker.ensure_initialized_and_enqueue(callback(cycle))
+            await asyncio.wait_for(worker.flush(), timeout=2)
+            assert completed.get_nowait() == cycle
+    finally:
+        await worker.stop(discard_pending=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("discard", (False, True))
+async def test_overflow_stop_before_processors_start_preserves_delivery_policy(discard: bool) -> None:
+    worker: Final = LoggingWorker(max_queue_size=2, concurrency=1)
+    completed: Final[asyncio.Queue[int]] = asyncio.Queue()
+
+    async def callback(identity: int) -> None:
+        completed.put_nowait(identity)
+
+    try:
+        worker.start()
+        for identity in range(3):
+            worker.enqueue(callback(identity))
+        await asyncio.sleep(0)
+        await worker.stop(discard_pending=discard)
+        await asyncio.wait_for(worker.flush(), timeout=2)
+        assert sorted(completed.get_nowait() for _ in range(completed.qsize())) == ([] if discard else [0, 1, 2])
+        worker.ensure_initialized_and_enqueue(callback(3))
+        await asyncio.wait_for(worker.flush(), timeout=2)
+        assert completed.get_nowait() == 3
+        assert worker.pending_count == 0
+    finally:
+        await worker.stop(discard_pending=True)
+
+
+@pytest.mark.asyncio
+async def test_restart_does_not_replay_a_callback_cancelled_after_it_started() -> None:
+    worker: Final = LoggingWorker(concurrency=1)
+    started: Final = asyncio.Event()
+    completed: Final[asyncio.Queue[str]] = asyncio.Queue()
+
+    async def callback() -> None:
+        completed.put_nowait("started")
+        started.set()
+        await asyncio.Event().wait()
+
+    async def next_callback() -> None:
+        completed.put_nowait("next")
+
+    try:
+        worker.ensure_initialized_and_enqueue(callback())
+        await started.wait()
+        await worker.stop()
+        worker.ensure_initialized_and_enqueue(next_callback())
+        await asyncio.wait_for(worker.flush(), timeout=2)
+        assert tuple(completed.get_nowait() for _ in range(completed.qsize())) == ("started", "next")
+        assert worker.pending_count == 0
+    finally:
+        await worker.stop(discard_pending=True)
 
 
 @pytest.mark.asyncio
@@ -428,7 +524,7 @@ class TestLoggingWorker:
         asyncio.run(short_lived_script())
 
         assert worker._queue is not None
-        assert worker._queue.qsize() == 0, "precondition: the worker loop dequeued the task before loop close"
+        assert worker.pending_count == 1
         assert fired == [], "precondition: the callback never ran before loop close"
 
         worker._flush_on_exit()
@@ -537,8 +633,7 @@ class TestLoggingWorker:
 
         asyncio.run(enqueue_on_first_loop())
         assert worker._queue is not None
-        expected_shape = (1, 0) if stranded == "still_queued" else (0, 1)
-        assert (worker._queue.qsize(), len(worker._unstarted_dequeued_tasks())) == expected_shape
+        assert worker.pending_count == 1
         assert callback.await_count == 0, "precondition: the callback never ran before the first loop closed"
 
         async def flush_twice_on_second_loop():
