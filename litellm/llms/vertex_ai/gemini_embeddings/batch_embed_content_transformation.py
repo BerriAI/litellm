@@ -6,7 +6,7 @@ Why separate file? Make it easy to see how transformation works
 
 from collections.abc import Iterator, Mapping, Sequence
 from types import MappingProxyType
-from typing import Annotated, Final, Literal, cast
+from typing import Annotated, Final, Literal, TypeAlias, cast
 
 from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
 
@@ -605,7 +605,7 @@ def transform_openai_input_gemini_embed_content(
 
 
 _IMAGE_MIME_TYPES: Final = frozenset({"image/png", "image/jpeg"})
-_Modality = Literal["text", "image", "audio", "video", "other"]
+_Modality: TypeAlias = Literal["text", "image", "audio", "video", "other"]
 _SOUND_MODALITIES: Final[frozenset[_Modality]] = frozenset(("audio", "video"))
 _usage_metadata_adapter: Final = TypeAdapter(UsageMetadata)
 _detail_entries_adapter: Final = TypeAdapter(tuple[object, ...])
