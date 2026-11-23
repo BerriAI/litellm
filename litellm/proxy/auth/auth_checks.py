@@ -524,6 +524,20 @@ def _log_budget_lookup_failure(entity: str, error: Exception) -> None:
     )
 
 
+def _is_pass_through_all_models_enabled(llm_router: Any) -> bool:
+    """Return True if the router has pass_through_all_models enabled."""
+    try:
+        settings_fn = getattr(llm_router, "settings", None)
+        if callable(settings_fn):
+            settings = settings_fn()
+            general = getattr(settings, "router_general_settings", None)
+            return bool(getattr(general, "pass_through_all_models", False))
+        general = getattr(llm_router, "router_general_settings", None)
+        return bool(getattr(general, "pass_through_all_models", False))
+    except Exception:
+        return False
+
+
 def _get_router_zero_cost_cache(llm_router: RegistryReader) -> dict[str, bool] | None:
     """
     Return the router's per-instance zero-cost cache, or ``None`` for objects
@@ -572,6 +586,15 @@ def is_model_cost_zero(model: str | Sequence[str] | None, llm_router: RegistryRe
             model_group_info = llm_router.registry().group(model_name, include_hidden=True)
 
             if model_group_info is None:
+                if _is_pass_through_all_models_enabled(llm_router):
+                    verbose_proxy_logger.debug(
+                        "Router has pass_through_all_models enabled; backend model %s takes direct provider dispatch, retaining budget enforcement",
+                        model_name,
+                    )
+                    if zero_cost_cache is not None:
+                        zero_cost_cache[model_name] = False
+                    return False
+
                 served_candidates = _deployments_served_for(model_name, llm_router)
                 if not served_candidates:
                     verbose_proxy_logger.debug("No model group info found for %s, assuming it has cost", model_name)
@@ -728,6 +751,8 @@ def _deployments_served_for(model: str, llm_router: RegistryReader) -> Sequence[
     )
     if pattern_deployments:
         return pattern_deployments
+    if _is_pass_through_all_models_enabled(llm_router):
+        return ()
     backend_matches = tuple(d for d in registry.deployments() if d.get("litellm_params", {}).get("model") == model)
     if backend_matches:
         return backend_matches

@@ -1030,3 +1030,33 @@ def test_unmapped_deployment_without_pricing_not_explicitly_configured() -> None
     deployments = _deployments_served_for("gpt-4o", router)
     assert _is_cost_explicitly_configured(deployments) is False
     assert is_model_cost_zero("gpt-4o", router) is False
+
+
+def test_backend_model_waiver_rejected_when_pass_through_all_models_enabled() -> None:
+    """When pass_through_all_models is enabled, unmapped backend names take direct dispatch and retain budget enforcement."""
+    from litellm.types.router import RouterGeneralSettings
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "free-group",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "sk-test",
+                    "input_cost_per_token": 0.0,
+                    "output_cost_per_token": 0.0,
+                },
+                "model_info": {
+                    "id": "free-group-id",
+                    "input_cost_per_token": 0.0,
+                    "output_cost_per_token": 0.0,
+                },
+            }
+        ],
+        router_general_settings=RouterGeneralSettings(pass_through_all_models=True),
+    )
+
+    # Configured group still gets zero-cost waiver
+    assert is_model_cost_zero("free-group", router) is True
+    # Unmapped backend name routes directly to provider with pass_through_all_models, so waiver is rejected
+    assert is_model_cost_zero("openai/gpt-4o-mini", router) is False
