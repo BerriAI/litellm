@@ -3521,6 +3521,7 @@ dependencies = [
  "litellm-error",
  "litellm-http",
  "litellm-python-compat",
+ "litellm-redaction",
  "litellm-secret-value",
  "litellm-tracing",
  "moka",
@@ -3881,7 +3882,7 @@ dependencies = [
  "base64 0.22.1",
  "fancy-regex 0.19.2",
  "litellm-python-compat",
- "litellm-tracing",
+ "litellm-redaction",
  "num-traits",
  "regex",
  "rstest",
@@ -3904,10 +3905,10 @@ dependencies = [
  "litellm-coroutine",
  "litellm-db",
  "litellm-python-compat",
+ "litellm-redaction",
  "litellm-redis-store",
  "litellm-repositories",
  "litellm-spend-log-writer",
- "litellm-tracing",
  "rstest",
  "serde",
  "serde_json",
@@ -3976,7 +3977,7 @@ dependencies = [
  "fancy-regex 0.19.2",
  "litellm-error",
  "litellm-llms-types",
- "litellm-tracing",
+ "litellm-redaction",
  "rstest",
  "serde",
  "serde_json",
@@ -4446,6 +4447,7 @@ dependencies = [
  "litellm-llms",
  "litellm-llms-types",
  "litellm-python-compat",
+ "litellm-redaction",
  "litellm-router-types",
  "litellm-secret-value",
  "litellm-secrets",
@@ -4745,6 +4747,7 @@ dependencies = [
  "litellm-model-catalog",
  "litellm-model-catalog-refresh",
  "litellm-python-compat",
+ "litellm-redaction",
  "litellm-redis-client",
  "litellm-redis-connect",
  "litellm-redis-resolve",
@@ -4800,6 +4803,16 @@ dependencies = [
  "serde_with",
  "thiserror 2.0.21",
  "unicode-general-category",
+]
+
+[[package]]
+name = "litellm-redaction"
+version = "0.1.0"
+dependencies = [
+ "aho-corasick",
+ "fancy-regex 0.19.2",
+ "regex",
+ "rstest",
 ]
 
 [[package]]
@@ -5346,11 +5359,10 @@ dependencies = [
 name = "litellm-tracing"
 version = "0.1.0"
 dependencies = [
- "aho-corasick",
  "base64 0.22.1",
  "fancy-regex 0.19.2",
+ "litellm-redaction",
  "percent-encoding",
- "regex",
  "rstest",
  "serde_json",
  "tokio",
