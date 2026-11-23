@@ -362,3 +362,23 @@ def test_a_session_turn_blocked_in_during_call_is_scanned_and_blocked_again_on_r
     assert blocked.status == 400, blocked
     assert retried.status == 400, retried
     assert retried.scanned.get(_SESSION_DURING) == (poisoned.results[-1],), retried.scanned
+
+
+@pytest.mark.parametrize("endpoint", _ENDPOINTS)
+def test_a_session_turn_with_nothing_new_skips_bedrock_and_logs_a_passing_during_call_entry(
+    rig: _Rig, endpoint: str
+) -> None:
+    conversation: Final = _conversation(endpoint, rounds=1)
+    session: Final = f"agent-session-{uuid.uuid4().hex}"
+
+    first: Final = _send(rig, endpoint, "session-during", conversation, session=session)
+    again: Final = _send(rig, endpoint, "session-during", conversation, session=session)
+
+    assert (first.status, again.status) == (200, 200), (first, again)
+    assert again.scanned == {}, again.scanned
+    entry: Final = _during_call_entry(rig, again.call_id)
+    assert (entry["guardrail_mode"], entry["guardrail_status"], entry["guardrail_response"]) == (
+        "during_call",
+        "success",
+        "allow",
+    ), entry

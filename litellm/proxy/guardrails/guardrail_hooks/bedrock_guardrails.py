@@ -2904,7 +2904,10 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             return
 
         session_scan: Final = await self._scanned_only_new_texts(
-            texts=self._message_texts(filtered_messages), request_data=data, logging_event_type=event_type
+            texts=self._message_texts(filtered_messages),
+            request_data=data,
+            logging_event_type=event_type,
+            log_when_nothing_new=True,
         )
         if session_scan is True:
             add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
@@ -3431,6 +3434,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         texts: Sequence[str],
         request_data: dict[str, object],  # mutable-ok: proxy request body dict, mutated by the logging helper
         logging_event_type: GuardrailEventHooks,
+        log_when_nothing_new: bool = False,
     ) -> BedrockGuardrailResponse | bool:
         """Scan only the text segments not already seen earlier in this session.
 
@@ -3442,7 +3446,12 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         Bedrock masked text while segments were skipped, since masking cannot apply
         to skipped context. A masked scan that skipped nothing is returned itself,
         as it already is the full scan. Only a passing scan records its segments.
+
+        ``log_when_nothing_new`` records a passing guardrail entry when nothing was
+        sent, for callers that no logging wrapper records for: ``apply_guardrail``
+        is recorded by its wrapper, ``async_moderation_hook`` is not.
         """
+        start_time: Final = datetime.now(timezone.utc)
         cache: Final = self._incremental_scan_cache()
 
         new_texts: Final = await self.filter_new_texts_for_session(
@@ -3455,6 +3464,17 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
         if not new_texts:
             verbose_proxy_logger.debug("Bedrock Guardrail: no new messages to scan for this session, skipping API call")
+            if log_when_nothing_new:
+                self.add_standard_logging_guardrail_information_to_request_data(
+                    guardrail_provider=self.guardrail_provider,
+                    guardrail_json_response="allow",
+                    request_data=request_data,
+                    guardrail_status="success",
+                    start_time=start_time.timestamp(),
+                    end_time=datetime.now(timezone.utc).timestamp(),
+                    duration=(datetime.now(timezone.utc) - start_time).total_seconds(),
+                    event_type=logging_event_type,
+                )
             return True
 
         bedrock_response: Final = await self.make_bedrock_api_request(

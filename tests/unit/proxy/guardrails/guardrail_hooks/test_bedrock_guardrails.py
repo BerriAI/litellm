@@ -8507,6 +8507,54 @@ async def test_during_call_session_scan_is_recorded_under_the_during_call_mode()
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("call_type", "build"), _SCAN_REQUESTS)
+async def test_a_during_call_session_turn_with_nothing_new_is_recorded_as_a_pass_without_a_bedrock_call(
+    call_type: str, build: Callable[[tuple[str, ...]], Mapping[str, object]]
+) -> None:
+    recorder: Final = _ApplyGuardrailRecorder()
+    guardrail: Final = _during_call_guardrail(recorder)
+    session: Final = f"session-{uuid.uuid4().hex}"
+    await _moderate(guardrail, call_type, {**build(_SCAN_RESULTS[:1]), "litellm_session_id": session})
+    data: Final = {**build(_SCAN_RESULTS[:1]), "litellm_session_id": session}
+
+    await _moderate(guardrail, call_type, data)
+
+    assert len(recorder.scans) == 1
+    recorded: Final = data["metadata"]["standard_logging_guardrail_information"]
+    assert [
+        (record["guardrail_mode"], record["guardrail_status"], record["guardrail_response"]) for record in recorded
+    ] == [(GuardrailEventHooks.during_call, "success", "allow")]
+
+
+@pytest.mark.asyncio
+async def test_a_pre_call_session_request_with_nothing_new_is_recorded_once() -> None:
+    recorder: Final = _ApplyGuardrailRecorder()
+    guardrail: Final = BedrockGuardrail(
+        guardrail_name=f"bedrock-pre-{uuid.uuid4().hex}",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.pre_call,
+        default_on=True,
+        aws_region_name="us-east-1",
+        aws_access_key_id="test-access-key",
+        aws_secret_access_key="test-secret-key",
+        async_handler=recorder.handler,
+        only_scan_new_messages=True,
+    )
+    session: Final = f"session-{uuid.uuid4().hex}"
+    await guardrail.apply_guardrail(
+        inputs={"texts": [_SCAN_ASK]}, request_data={"litellm_session_id": session}, input_type="request"
+    )
+    data: Final[dict[str, object]] = {"litellm_session_id": session}
+
+    await guardrail.apply_guardrail(inputs={"texts": [_SCAN_ASK]}, request_data=data, input_type="request")
+
+    assert len(recorder.scans) == 1
+    recorded: Final = data["metadata"]["standard_logging_guardrail_information"]
+    assert [(record["guardrail_status"], record["guardrail_response"]) for record in recorded] == [("success", "allow")]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("call_type", "build"), _SCAN_REQUESTS)
 async def test_a_session_turn_blocked_in_during_call_is_scanned_again_on_retry(
     call_type: str, build: Callable[[tuple[str, ...]], Mapping[str, object]]
 ) -> None:
