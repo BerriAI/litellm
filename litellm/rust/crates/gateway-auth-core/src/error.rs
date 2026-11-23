@@ -27,7 +27,6 @@ pub enum Error {
     /// A host step raised. The host keeps that failure and surfaces it, so the core never renders this.
     #[error("the auth host failed a step")]
     HostFailed,
-    /// OpenSSL could not compute the credential's SHA-256, which the proxy reports as a failed authentication.
     #[error("OpenSSL could not hash the credential")]
     Hash(#[source] Source),
 }

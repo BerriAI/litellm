@@ -47,7 +47,6 @@ impl Token {
         )))
     }
 
-    /// The SHA-256 from OpenSSL, which fails when no loaded provider serves it.
     #[cfg(feature = "fips")]
     pub fn hash(&self) -> Result<KeyHash, Error> {
         let digest = openssl::hash::hash(

@@ -942,7 +942,6 @@ mod tests {
         assert_eq!(refused.key.as_deref(), key);
     }
 
-    /// Set in the copy of the test binary that runs with only OpenSSL's null provider, which serves no digest.
     #[cfg(feature = "fips")]
     const NULL_PROVIDER_CHILD: &str = "LITELLM_AUTH_CORE_NULL_PROVIDER_CHILD";
 
