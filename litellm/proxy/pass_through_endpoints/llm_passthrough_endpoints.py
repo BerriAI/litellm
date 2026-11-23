@@ -34,9 +34,9 @@ from typing_extensions import ReadOnly, TypedDict
 import litellm
 from litellm import get_llm_provider
 from litellm._logging import (
+    CALLER_ERROR_LOG_EXTRA,
     redact_internal_details_from_client_message,
     verbose_proxy_logger,
-    verbose_proxy_stdout_logger,
 )
 from litellm._uuid import uuid
 from litellm.constants import (
@@ -1839,10 +1839,11 @@ async def _bedrock_count_tokens(
         is_caller_error: Final = is_caller_refusal(
             e.status_code, e.message, isinstance(e, BedrockCountTokensRequestError)
         )
-        (verbose_proxy_stdout_logger if is_caller_error else verbose_proxy_logger).log(
+        verbose_proxy_logger.log(
             logging.WARNING if is_caller_error else logging.ERROR,
             "BedrockError in handle_bedrock_count_tokens: %s",
             e,
+            extra=CALLER_ERROR_LOG_EXTRA if is_caller_error else None,
         )
         from litellm.litellm_core_utils.llm_response_utils.get_headers import get_response_headers
 

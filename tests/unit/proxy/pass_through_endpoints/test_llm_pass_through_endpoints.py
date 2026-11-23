@@ -8991,19 +8991,27 @@ async def test_bedrock_native_count_tokens_logs_caller_errors_as_stdout_warnings
         await _bedrock_native_count(monkeypatch, respx_mock, aws_reply, Response())
 
     assert exc_info.value.status_code == aws_status
-    alerts: Final = [
+    alerts: Final = _proxy_alerts(caplog)
+    assert [(record.name, record.levelno) for record in alerts] == [("LiteLLM Proxy", log_level)]
+    assert _default_handler_stream(alerts[0], capsys) == stream
+
+
+def _proxy_alerts(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
+    return [
         record
         for record in caplog.records
         if record.name.startswith("LiteLLM Proxy") and record.levelno >= logging.WARNING
     ]
-    assert [record.levelno for record in alerts] == [log_level]
 
+
+def _default_handler_stream(record: logging.LogRecord, capsys: pytest.CaptureFixture[str]) -> str:
     _ = capsys.readouterr()
     routing: Final = LevelRoutingStreamHandler()
     routing.setFormatter(logging.Formatter("%(message)s"))
-    routing.emit(alerts[0])
-    out, err = capsys.readouterr()
-    assert {"stdout": (out, err), "stderr": (err, out)}[stream] == (f"{alerts[0].getMessage()}\n", "")
+    routing.emit(record)
+    written: Final = capsys.readouterr()
+    line: Final = f"{record.getMessage()}\n"
+    return {(line, ""): "stdout", ("", line): "stderr"}.get((written.out, written.err), "both or neither")
 
 
 @pytest.mark.parametrize(
@@ -9021,6 +9029,7 @@ async def test_bedrock_native_count_tokens_answers_400_for_a_malformed_body_with
     httpx_transport: None,
     respx_mock: respx.MockRouter,
     caplog: pytest.LogCaptureFixture,
+    capsys: pytest.CaptureFixture[str],
     request_body: Mapping[str, object],
     problem: str,
 ) -> None:
@@ -9031,11 +9040,9 @@ async def test_bedrock_native_count_tokens_answers_400_for_a_malformed_body_with
 
     assert (exc_info.value.status_code, exc_info.value.detail) == (400, {"error": problem})
     assert len(respx_mock.calls) == 0
-    assert [
-        (record.name, record.levelno)
-        for record in caplog.records
-        if record.name.startswith("LiteLLM Proxy") and record.levelno >= logging.WARNING
-    ] == [("LiteLLM Proxy.stdout", logging.WARNING)]
+    alerts: Final = _proxy_alerts(caplog)
+    assert [(record.name, record.levelno) for record in alerts] == [("LiteLLM Proxy", logging.WARNING)]
+    assert _default_handler_stream(alerts[0], capsys) == "stdout"
 
 
 @pytest.mark.parametrize(

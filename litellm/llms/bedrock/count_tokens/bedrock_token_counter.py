@@ -11,7 +11,7 @@ from pydantic import JsonValue, TypeAdapter
 from typing_extensions import assert_never
 
 import litellm
-from litellm._logging import verbose_logger, verbose_proxy_stdout_logger
+from litellm._logging import CALLER_ERROR_LOG_EXTRA, verbose_logger
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.common_utils import context_management_betas, context_management_with_edits
@@ -378,11 +378,12 @@ class BedrockTokenCounter(BaseTokenCounter):
                 refused_for_caller: Final = is_caller_refusal(
                     outcome.status_code, outcome.message, outcome.rejected_before_provider_call
                 )
-                (verbose_proxy_stdout_logger if refused_for_caller else verbose_logger).warning(
+                verbose_logger.warning(
                     "%s CountTokens API error: status=%s, message=%s",
                     outcome.tokenizer_type,
                     outcome.status_code,
                     outcome.message,
+                    extra=CALLER_ERROR_LOG_EXTRA if refused_for_caller else None,
                 )
                 return TokenCountResponse(
                     total_tokens=0,

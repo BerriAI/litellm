@@ -215,7 +215,7 @@ async def test_bedrock_count_failure_warning_goes_to_stdout_only_when_the_caller
 
     assert result is not None and result.error is True
     warnings: Final = [record for record in caplog.records if "CountTokens API error" in record.getMessage()]
-    assert [record.levelno for record in warnings] == [logging.WARNING]
+    assert [(record.name, record.levelno) for record in warnings] == [("LiteLLM", logging.WARNING)]
 
     _ = capsys.readouterr()
     routing: Final = LevelRoutingStreamHandler()

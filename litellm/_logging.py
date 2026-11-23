@@ -10,7 +10,7 @@ import sys
 from collections.abc import Iterator, Mapping
 from datetime import datetime
 from logging import Formatter
-from types import FrameType
+from types import FrameType, MappingProxyType
 from typing import Final, Protocol, TextIO
 from urllib.parse import unquote
 
@@ -91,6 +91,8 @@ _redact_string = redact_string
 
 _REDACTED_RECORD_ATTR: Final = "litellm_redacted"
 _REDACTED_STAMP: Final = object()
+_CALLER_ERROR_RECORD_ATTR: Final = "litellm_caller_error"
+CALLER_ERROR_LOG_EXTRA: Final = MappingProxyType({_CALLER_ERROR_RECORD_ATTR: True})
 _DECODED_LOG_PAYLOAD: Final = TypeAdapter(object)
 _UNREDACTED_SCALAR_TYPES: Final = (bool, int, float, type(None))
 
@@ -677,7 +679,11 @@ class LevelRoutingStreamHandler(logging.StreamHandler):
 
     def emit(self, record: logging.LogRecord) -> None:
         is_stdout_record: Final = record.levelno < logging.WARNING or (
-            record.levelno == logging.WARNING and record.name == verbose_proxy_stdout_logger.name
+            record.levelno == logging.WARNING
+            and (
+                record.name == verbose_proxy_stdout_logger.name
+                or getattr(record, _CALLER_ERROR_RECORD_ATTR, False) is True
+            )
         )
         preferred: Final = sys.stdout if is_stdout_record else sys.stderr
         if preferred is None or getattr(preferred, "closed", False):
@@ -781,7 +787,7 @@ def _get_standard_record_attrs() -> frozenset:
 
 
 _STANDARD_RECORD_ATTRS: Final = _get_standard_record_attrs()
-_NON_EXTRA_RECORD_ATTRS: Final = _STANDARD_RECORD_ATTRS | {_REDACTED_RECORD_ATTR}
+_NON_EXTRA_RECORD_ATTRS: Final = _STANDARD_RECORD_ATTRS | {_REDACTED_RECORD_ATTR, _CALLER_ERROR_RECORD_ATTR}
 
 # CorrelationContextFilter is the only legitimate source for these two JSON fields;
 # see JsonFormatter.format() for why they're excluded from the generic message-content
