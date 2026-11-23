@@ -976,12 +976,17 @@ def _assembly_reads_the_field_the_delta_type_names(event: Mapping[str, object]) 
     return delta.keys().isdisjoint(_DELTA_FIELDS_ASSEMBLY_READS_FIRST.get(delta_type, frozenset()))
 
 
+def _carries_json(client_frame: tuple[str, str]) -> bool:
+    _, data = client_frame
+    return loads_json_object(data) is not None or is_undecodable_json_object(data)
+
+
 def _the_widest_reader_dispatches_no_other_json(sse_stream: str, client_frames: tuple[tuple[str, str], ...]) -> bool:
-    dispatched: Final = frozenset(client_frames)
-    other_frames: Final = (
-        frame for frame in _client_frames(_frames_of_the_widest_reader(sse_stream)) if frame not in dispatched
+    dispatched_in_order: Final = iter(client_frames)
+    json_frames: Final = (
+        frame for frame in _client_frames(_frames_of_the_widest_reader(sse_stream)) if _carries_json(frame)
     )
-    return all(loads_json_object(data) is None and not is_undecodable_json_object(data) for _, data in other_frames)
+    return all(frame in dispatched_in_order for frame in json_frames)
 
 
 def anthropic_sse_reads_alike(all_chunks: Sequence[object]) -> bool:
@@ -996,7 +1001,7 @@ def anthropic_sse_reads_alike(all_chunks: Sequence[object]) -> bool:
     so these rules refuse it wherever it changes what that SDK reads. No client dispatches a frame the stream
     never ended, so a stream with one reads differently too. A client reading lines with httpx also breaks
     them at a form feed or U+2028, so a stream reads differently when that reveals a JSON frame the others
-    skip, as data behind a comment. The SDKs read a block delta's field by its delta type, so a delta also
+    skip, as data behind a comment, a copy of a frame they read included. The SDKs read a block delta's field by its delta type, so a delta also
     carrying a field assembly reads first, as text on an ``input_json_delta``, reads differently. So does an
     object Python cannot decode, nested too deep or holding too long a number, which a JavaScript client reads.
     """

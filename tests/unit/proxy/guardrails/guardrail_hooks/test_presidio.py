@@ -2901,6 +2901,14 @@ _STREAMS_A_CLIENT_READS_ANOTHER_WAY: Final = {
         _block_stop_sse(0),
         *_MESSAGE_END_SSE,
     ),
+    "copy-of-a-delta-behind-a-form-feed-in-a-comment": (
+        _message_start_sse(),
+        *_text_block_sse(0, "Call ", "212-", "x"),
+        b": keepalive\x0c" + _text_block_sse(0, "212-")[1].replace(b"\n", b"\x0c", 1),
+        _text_block_sse(0, "555-0147")[1],
+        _block_stop_sse(0),
+        *_MESSAGE_END_SSE,
+    ),
     "tool-input-delta-also-carrying-text": (
         *_PHONE_IN_A_TOOL_INPUT[:2],
         _anthropic_sse(

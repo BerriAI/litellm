@@ -718,3 +718,16 @@ def test_an_object_python_cannot_decode_that_only_httpx_dispatches_does_not_read
     frame: Final = hidden_by + _OBJECTS_PYTHON_CANNOT_DECODE["number-too-long"]
 
     assert not anthropic_sse_reads_alike(_message(_block_start(0, _TEXT_BLOCK), _text(0, "Hello"), _stop(0), frame))
+
+
+@pytest.mark.parametrize("line_break", [b"\x0c", " ".encode()], ids=["form-feed", "line-separator"])
+def test_copies_of_a_delta_only_httpx_dispatches_do_not_read_alike(line_break: bytes):
+    repeated: Final = _text(0, "1111 ")
+    hidden: Final = b": note" + line_break + repeated.replace(b"\n", line_break, 1)
+
+    assert anthropic_sse_reads_alike(
+        _message(_block_start(0, _TEXT_BLOCK), _text(0, "4111 "), repeated, repeated, repeated, _stop(0))
+    )
+    assert not anthropic_sse_reads_alike(
+        _message(_block_start(0, _TEXT_BLOCK), _text(0, "4111 "), repeated, hidden, hidden, _stop(0))
+    )
