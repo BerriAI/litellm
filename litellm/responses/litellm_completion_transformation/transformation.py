@@ -298,11 +298,11 @@ def _attribute_fields(value: object) -> dict[str, object]:
     return dict(cast("Iterable[tuple[str, object]]", value))  # cast-ok: dict() raises on non-pair values, as before
 
 
-def _previous_response_not_found(previous_response_id: str, model: str, provider: str | None) -> BadRequestError:
+def previous_response_not_found(previous_response_id: str, model: str, provider: str | None) -> BadRequestError:
     message: Final = (
         f"Previous response with id '{previous_response_id}' not found. LiteLLM rebuilds this model's conversation "
-        "from the LiteLLM proxy's spend logs, which needs a database, `disable_spend_logs` left off, "
-        "and `store_prompts_in_spend_logs: true`."
+        "from the LiteLLM proxy's spend logs, so the id must be a response this proxy served and already logged, "
+        "with a database, `disable_spend_logs` left off, and `store_prompts_in_spend_logs: true`."
     )
     return BadRequestError(
         message=message,
@@ -1069,7 +1069,7 @@ class LiteLLMCompletionResponsesConfig:
         _messages: Final = litellm_completion_request.get("messages") or []
         stored_messages: Final = chat_completion_session.get("messages") or []
         if previous_response_id and not stored_messages:
-            raise _previous_response_not_found(client_previous_response_id or previous_response_id, model, provider)
+            raise previous_response_not_found(client_previous_response_id or previous_response_id, model, provider)
         replayed_messages: Final = (
             LiteLLMCompletionResponsesConfig._without_tool_search_uses_off_anthropic(
                 stored_messages, CompletionRoute.model_validate(litellm_completion_request)
