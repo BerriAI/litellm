@@ -32,6 +32,7 @@ from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
+from litellm.litellm_core_utils.core_helpers import attribute_or_none
 from litellm.models.budget import CUSTOMER_ONLY_BUDGET_FIELDS
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import (
@@ -41,7 +42,7 @@ from litellm.proxy.auth.auth_checks import (
     get_user_object,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
+from litellm.proxy.common_utils.cache_invalidation_pubsub import evict_and_broadcast
 from litellm.proxy.common_utils.openai_error_payload import proxy_exception_for
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -411,6 +412,7 @@ async def new_organization(
     - budget_id: *Optional[str]* - The id for a budget (tpm/rpm/max budget) for the organization.
     ### IF NO BUDGET ID - CREATE ONE WITH THESE PARAMS ###
     - max_budget: *Optional[float]* - Max budget for org
+    - rollover_max_budget: *Optional[float]* - Does not enable rollover for organization spend. Leave unset for organization budgets.
     - tpm_limit: *Optional[int]* - Max tpm limit for org
     - rpm_limit: *Optional[int]* - Max rpm limit for org
     - tpd_limit: *Optional[int]* - Max tokens per day stored on the org budget. Batch submissions enforce tpd_limit at the key, team and end user scopes only.
@@ -573,7 +575,7 @@ async def new_organization(
             set_object_metadata_field(
                 object_data=organization_row,
                 field_name=field,
-                value=getattr(data, field),
+                value=attribute_or_none(data, field),
             )
 
     new_organization_row: Final = _STR_OBJECT_DICT_ADAPTER.validate_python(

@@ -9,9 +9,9 @@ Provides:
 import base64
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, Protocol
 from urllib.parse import urlsplit
 
 import orjson
@@ -27,6 +27,7 @@ from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH, LITELLM_PROXY_ADMIN_NAM
 from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
     LiteLLM_ManagedVectorStore,
 )
+from litellm.litellm_core_utils.core_helpers import require_attributes, require_get
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_utils import get_request_route, is_request_body_safe
@@ -300,6 +301,10 @@ async def _admin_set_store_target(
     return creator_row is not None and creator_row.user_role == LitellmUserRoles.PROXY_ADMIN
 
 
+class _VectorStoreOptions(Protocol):
+    def items(self) -> Iterable[tuple[str, object]]: ...
+
+
 _MANAGED_STORE_CALLER_OPTIONS: Final = frozenset(
     {
         "vector_store_id",
@@ -314,7 +319,7 @@ _MANAGED_STORE_CALLER_OPTIONS: Final = frozenset(
 
 
 def _caller_vector_store_options(
-    request_vector_store_config: Mapping[str, object],
+    request_vector_store_config: _VectorStoreOptions,
     managed_store: LiteLLM_ManagedVectorStore | None,
 ) -> Mapping[str, object]:
     if managed_store is None:
@@ -328,7 +333,7 @@ def _is_blank(value: object) -> bool:
     return value is None or (isinstance(value, str) and not value.strip())
 
 
-def _without_blank_credentials(config: Mapping[str, object]) -> Mapping[str, object]:
+def _without_blank_credentials(config: _VectorStoreOptions) -> Mapping[str, object]:
     return MappingProxyType(
         {key: value for key, value in config.items() if key not in EXPLICIT_CREDENTIAL_KEYS or not _is_blank(value)}
     )
@@ -895,9 +900,15 @@ async def rag_ingest(
         except ValueError as e:
             raise HTTPException(status_code=400, detail={"error": str(e)})
 
-        managed_store: Final = resolved_stores.get(request_vector_store_config.get("vector_store_id"))
+        request_vector_store_mapping: Final = require_get(request_vector_store_config)
+        requested_vector_store_id: Final = request_vector_store_mapping.get("vector_store_id")
+        managed_store: Final = (
+            resolved_stores.get(requested_vector_store_id) if isinstance(requested_vector_store_id, str) else None
+        )
         requested_base: Final = {
-            **_caller_vector_store_options(request_vector_store_config, managed_store),
+            **_caller_vector_store_options(
+                require_attributes(request_vector_store_mapping, _VectorStoreOptions, "items"), managed_store
+            ),
             **_managed_store_overrides(managed_store),
         }
         vertex_target_checked: Final = _vertex_target_is_checked(

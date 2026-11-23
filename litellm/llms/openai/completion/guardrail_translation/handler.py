@@ -245,6 +245,10 @@ class OpenAITextCompletionHandler(BaseTranslation):
         assembled: Final = self._assemble_ended_stream(chunks)
         return StreamingScanKey(texts=tuple(text for _, text in _choice_texts(assembled)), stream_ended=True)
 
+    def starts_client_tool_call(self, item: object) -> bool:
+        """Text completions carry no tool calls."""
+        return False
+
     def released_stream_as_ended(self, responses_so_far: Sequence[object]) -> tuple[object, ...]:
         chunks: Final = _text_completion_chunks(responses_so_far)
         streamed_choices: Final = tuple(chain.from_iterable(chunk.choices for chunk in chunks))

@@ -236,6 +236,7 @@ class TeamMemberInfoResponse(LiteLLM_TeamMembership):
     role: str | None = None
     user_email: str | None = None
     team_alias: str | None = None
+    effective_max_budget: float | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 class TeamMetadataFieldSchema(LiteLLMBaseModel):

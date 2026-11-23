@@ -546,7 +546,7 @@ def long_sessions(
 
 @asynccontextmanager
 async def ingestion_client(client: httpx.AsyncClient, timeout_seconds: float) -> AsyncIterator[httpx.AsyncClient]:
-    response: Final = await client.post("/lens/tracing/keys", json={"name": "Local fixture seed"})
+    response: Final = await client.post("/lens/admin/tracing/keys", json={"name": "Local fixture seed"})
     response.raise_for_status()
     created: Final = IngestionKeyCreated.model_validate_json(response.content)
     try:
@@ -559,7 +559,7 @@ async def ingestion_client(client: httpx.AsyncClient, timeout_seconds: float) ->
         ) as uploader:
             yield uploader
     finally:
-        (await client.delete(f"/lens/tracing/keys/{created.record.id}")).raise_for_status()
+        (await client.delete(f"/lens/admin/tracing/keys/{created.record.id}")).raise_for_status()
 
 
 async def seed(profile: str = "default", copies: int | None = None, timeout_seconds: float = 120) -> int:

@@ -116,6 +116,11 @@ def _anthropic_error_chunk(status_code: int, message: str) -> dict[str, object]:
     )
 
 
+@runtime_checkable
+class _RecordsRelayedToolArguments(Protocol):
+    def record_relayed_tool_arguments(self, arguments: str) -> None: ...
+
+
 class AnthropicResponsesStreamWrapper:
     """
     Wraps a Responses API streaming iterator and re-emits events in Anthropic SSE format.
@@ -128,6 +133,7 @@ class AnthropicResponsesStreamWrapper:
       response.reasoning_summary_text.delta -> content_block_delta (thinking_delta)
       response.reasoning_text.delta      -> content_block_delta (thinking_delta)
       response.function_call_arguments.delta -> content_block_delta (input_json_delta)
+      response.function_call_arguments.done  -> content_block_delta (input_json_delta) if no delta came
       response.output_item.done          -> content_block_delta (signature_delta) + content_block_stop
       response.completed                 -> message_delta + message_stop
       response.failed                    -> error (the stream ends without message_stop)
@@ -157,6 +163,7 @@ class AnthropicResponsesStreamWrapper:
         self._item_id_to_block_index: dict[str, int] = {}
         # Track open function_call items by item_id so we can emit tool_use start
         self._pending_tool_ids: dict[str, str] = {}  # item_id -> call_id / name accumulator
+        self._tool_input_settled_blocks: frozenset[int] = frozenset()
         self._sent_message_start = False
         self._sent_message_stop = False
         self._stream_failed = False
@@ -257,12 +264,26 @@ class AnthropicResponsesStreamWrapper:
         )
         self._chunk_queue.append({"type": "content_block_stop", "index": block_idx})
 
+    def _stream_unstreamed_tool_input(self, item_id: object, arguments: object) -> None:
+        if not isinstance(item_id, str) or item_id not in self._pending_tool_ids:
+            return
+        block_idx: Final = self._item_id_to_block_index[item_id]
+        if block_idx in self._tool_input_settled_blocks or not isinstance(arguments, str) or not arguments:
+            return
+        self._tool_input_settled_blocks = self._tool_input_settled_blocks | {block_idx}
+        self._chunk_queue.append(
+            {
+                "type": "content_block_delta",
+                "index": block_idx,
+                "delta": {"type": "input_json_delta", "partial_json": arguments},
+            }
+        )
+        if isinstance(self.responses_stream, _RecordsRelayedToolArguments):
+            self.responses_stream.record_relayed_tool_arguments(arguments)
+
     def _process_event(self, event: object) -> None:
         """Convert one Responses API event into zero or more Anthropic chunks queued for emission."""
-        event_type = getattr(event, "type", None)
-        if event_type is None and isinstance(event, dict):
-            event_type = event.get("type")
-
+        event_type: Final = self._field(event, "type")
         if event_type is None:
             return
 
@@ -387,6 +408,8 @@ class AnthropicResponsesStreamWrapper:
                 if item_id
                 else self._current_block_index
             )
+            if delta:
+                self._tool_input_settled_blocks = self._tool_input_settled_blocks | {block_idx}
             self._chunk_queue.append(
                 {
                     "type": "content_block_delta",
@@ -396,18 +419,24 @@ class AnthropicResponsesStreamWrapper:
             )
             return
 
+        if event_type == "response.function_call_arguments.done":
+            self._stream_unstreamed_tool_input(self._field(event, "item_id"), self._field(event, "arguments"))
+            return
+
         # ---- output item done -> content_block_stop ----
         if event_type == "response.output_item.done":
-            item = getattr(event, "item", None) or (event.get("item") if isinstance(event, dict) else None)
-            item_id = (
-                getattr(item, "id", None) or (item.get("id") if isinstance(item, dict) else None) if item else None
-            )
+            item = self._field(event, "item")
+            done_item_id: Final = self._field(item, "id")
+            item_id = done_item_id if isinstance(done_item_id, str) and done_item_id else None
             if self._field(item, "type") == "reasoning":
                 self._close_reasoning_item(item, item_id)
                 return
             block_idx = self._item_id_to_block_index.get(item_id, -1) if item_id else self._current_block_index
             if block_idx < 0:
                 return
+            if self._field(item, "type") == "function_call":
+                self._stream_unstreamed_tool_input(item_id, self._field(item, "arguments"))
+            self._tool_input_settled_blocks = self._tool_input_settled_blocks | {block_idx}
             self._chunk_queue.append(
                 {
                     "type": "content_block_stop",

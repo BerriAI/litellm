@@ -5,6 +5,7 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException
 
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.constants import CLI_JWT_EXPIRATION_HOURS
 from litellm.models.user import LiteLLM_UserTable
 from litellm.proxy._types import LitellmUserRoles
@@ -145,7 +146,7 @@ async def test_mint_reads_the_users_teams_from_the_database_not_a_stale_cached_r
 
     cache = UserApiKeyCache()
     await cache.async_set_cache(
-        key="stale-cache-user", value=_user(user_id="stale-cache-user", teams=[]), model_type=LiteLLM_UserTable
+        AuthObject.user("stale-cache-user"), _user(user_id="stale-cache-user", teams=[]), model_type=LiteLLM_UserTable
     )
     prisma = MagicMock()
     rust_auth_stores.user.writer = {"stale-cache-user": _user(user_id="stale-cache-user", teams=["team-a"]).model_dump(mode="json")}
@@ -170,7 +171,9 @@ async def test_mint_refuses_a_user_scim_deactivated_after_the_cache_last_saw_the
 
     cache = UserApiKeyCache()
     await cache.async_set_cache(
-        key="deactivated-user", value=_user(user_id="deactivated-user", teams=["team-a"]), model_type=LiteLLM_UserTable
+        AuthObject.user("deactivated-user"),
+        _user(user_id="deactivated-user", teams=["team-a"]),
+        model_type=LiteLLM_UserTable,
     )
     prisma = MagicMock()
     rust_auth_stores.user.writer = {"deactivated-user": _user(user_id="deactivated-user", teams=["team-a"], metadata={"scim_active": False}).model_dump(mode="json")}

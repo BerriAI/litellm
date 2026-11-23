@@ -49,11 +49,11 @@ class LowestCostLoggingHandler(CustomLogger):
     logged_success: int = 0
     logged_failure: int = 0
 
-    def __init__(self, router_cache: DualCache, routing_args: dict = {}):
+    def __init__(self, router_cache: DualCache, routing_args: Mapping[str, object] = {}):
         self.router_cache = router_cache
 
     @with_service_target(ROUTER_USAGE_TARGET)
-    def log_success_event(self, kwargs, response_obj, start_time, end_time):
+    def log_success_event(self, kwargs, response_obj: object, start_time: object, end_time: object):
         if is_batch_retrieve_call_type(kwargs.get("call_type")):
             return
         try:
@@ -129,7 +129,7 @@ class LowestCostLoggingHandler(CustomLogger):
             )
 
     @with_service_target(ROUTER_USAGE_TARGET)
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(self, kwargs, response_obj: object, start_time: object, end_time: object):
         if is_batch_retrieve_call_type(kwargs.get("call_type")):
             return
         try:
@@ -211,7 +211,7 @@ class LowestCostLoggingHandler(CustomLogger):
         healthy_deployments: list,
         messages: list[dict[str, str]] | None = None,
         input: str | list | None = None,
-        request_kwargs: dict | None = None,
+        request_kwargs: Mapping[str, object] | None = None,
     ):
         """
         Returns a deployment with the lowest cost

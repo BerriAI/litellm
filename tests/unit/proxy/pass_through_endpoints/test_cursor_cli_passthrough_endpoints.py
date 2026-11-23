@@ -39,16 +39,12 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.agent_endpoints import agent_registry
 from litellm.proxy.common_utils.http_parsing_utils import safe_set_request_parsed_body
-from litellm.proxy.common_utils.user_api_key_cache import (
-    UserApiKeyCache,
-    project_cache_key,
-    tag_cache_key,
-    team_membership_reservation_cache_key,
-)
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.pass_through_endpoints.cursor_cli_passthrough_endpoints import cursor_cli_passthrough
 from litellm.proxy.policy_engine.attachment_registry import get_attachment_registry
 from litellm.proxy.policy_engine.policy_registry import get_policy_registry
 from litellm.proxy.utils import hash_token
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.types.agents import AgentResponse
 from tests._master_key import MASTER_KEY
 from tests.unit.proxy._prisma import prisma_with_empty_config
@@ -161,7 +157,7 @@ def test_normalized_gateway_bearers_never_reach_cursor(
 ) -> None:
     monkeypatch.setattr(proxy_server, "prisma_client", prisma_with_empty_config())
     proxy_server.user_api_key_cache.set_cache(
-        key=hash_token(credential), value=UserAPIKeyAuth(token=hash_token(credential))
+        key=AuthObject.virtual_key(hash_token(credential)), value=UserAPIKeyAuth(token=hash_token(credential))
     )
     upstream: Final = respx_mock.post(f"{_BASE}/{_RUN}").respond(content=b"\x08\x01")
     response: Final = client.post(
@@ -179,7 +175,7 @@ def test_normalized_copied_gateway_secret_is_removed_without_changing_cursor_cre
 ) -> None:
     monkeypatch.setattr(proxy_server, "prisma_client", prisma_with_empty_config())
     proxy_server.user_api_key_cache.set_cache(
-        key=hash_token(credential), value=UserAPIKeyAuth(token=hash_token(credential))
+        key=AuthObject.virtual_key(hash_token(credential)), value=UserAPIKeyAuth(token=hash_token(credential))
     )
     upstream: Final = respx_mock.post(f"{_BASE}/{_RUN}").respond(content=b"\x08\x01")
     bearer: Final = f"bEaReR  {_TOKEN}  "
@@ -206,22 +202,22 @@ def test_effective_tag_token_caps_cannot_be_bypassed_by_opaque_requests(
     key: Final = MASTER_KEY if source == "master-header" else "sk-cursor-tagged-key"
     tag: Final = "cursor-budget-tag"
     proxy_server.user_api_key_cache.set_cache(
-        key=tag_cache_key(tag),
+        key=AuthObject.tag(tag),
         value=LiteLLM_TagTable(
             tag_name=tag,
             litellm_budget_table=LiteLLM_BudgetTable(budget_id="tag-budget", tpm_limit=tpm_limit, rpm_limit=100),
         ),
     )
     proxy_server.user_api_key_cache.set_cache(
-        key="team_id:tag-team",
+        key=AuthObject.team("tag-team"),
         value=LiteLLM_TeamTableCachedObj(team_id="tag-team", metadata={"tags": [tag]}),
     )
     proxy_server.user_api_key_cache.set_cache(
-        key=project_cache_key("tag-project"),
+        key=AuthObject.project("tag-project"),
         value=LiteLLM_ProjectTableCachedObj(project_id="tag-project", metadata={"tags": [tag]}),
     )
     proxy_server.user_api_key_cache.set_cache(
-        key=hash_token(key),
+        key=AuthObject.virtual_key(hash_token(key)),
         value=UserAPIKeyAuth(
             token=hash_token(key),
             metadata={"tags": [tag]} if source == "key" else {},
@@ -304,7 +300,7 @@ def test_signed_jwt_with_model_permissions_cannot_enter_an_opaque_relay(
         else {"enable_jwt_auth": True},
     )
     proxy_server.user_api_key_cache.set_cache(
-        key="team_id:cursor-jwt-team", value=LiteLLM_TeamTableCachedObj(team_id="cursor-jwt-team", models=[])
+        key=AuthObject.team("cursor-jwt-team"), value=LiteLLM_TeamTableCachedObj(team_id="cursor-jwt-team", models=[])
     )
     token: Final = jwt.encode(
         {
@@ -356,7 +352,8 @@ def test_unenforceable_or_disallowed_key_policies_fail_closed(
     key: Final = "sk-cursor-restricted-test"
     monkeypatch.setattr(proxy_server, "prisma_client", prisma_with_empty_config())
     proxy_server.user_api_key_cache.set_cache(
-        key=hash_token(key), value=UserAPIKeyAuth.model_validate({"token": hash_token(key), **controls})
+        key=AuthObject.virtual_key(hash_token(key)),
+        value=UserAPIKeyAuth.model_validate({"token": hash_token(key), **controls}),
     )
     response: Final = client.post(
         f"/cursor-cli/{_APPEND}", headers={**_HEADERS, "x-litellm-api-key": key}, content=b"\xff"
@@ -381,7 +378,7 @@ def test_spend_capped_keys_cannot_use_an_unmetered_cursor_relay(
     key: Final = "sk-cursor-spend-capped"
     monkeypatch.setattr(proxy_server, "prisma_client", prisma_with_empty_config())
     proxy_server.user_api_key_cache.set_cache(
-        key=hash_token(key),
+        key=AuthObject.virtual_key(hash_token(key)),
         value=UserAPIKeyAuth.model_validate({"token": hash_token(key), budget_field: limit, "spend": spend}),
     )
     upstream: Final = respx_mock.post(f"{_BASE}/{_RUN}").respond(content=b"\x08\x01")
@@ -402,21 +399,21 @@ def member_gateway(
     monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
     key: Final = "sk-cursor-default-member"
     cache.set_cache(
-        key=hash_token(key),
+        key=AuthObject.virtual_key(hash_token(key)),
         value=UserAPIKeyAuth(token=hash_token(key), user_id="default-member", team_id="default-team"),
     )
     cache.set_cache(
-        key="default-member",
+        key=AuthObject.user("default-member"),
         value=LiteLLM_UserTable(user_id="default-member", user_role=LitellmUserRoles.INTERNAL_USER),
     )
     cache.set_cache(
-        key="team_id:default-team",
+        key=AuthObject.team("default-team"),
         value=LiteLLM_TeamTableCachedObj(
             team_id="default-team", metadata={"team_member_budget_id": "default-member-budget"}
         ),
     )
     cache.set_cache(
-        key=team_membership_reservation_cache_key(user_id="default-member", team_id="default-team"),
+        key=AuthObject.team_membership_reservation(user_id="default-member", team_id="default-team"),
         value=LiteLLM_TeamMembership(user_id="default-member", team_id="default-team"),
     )
     return key, database
@@ -435,7 +432,7 @@ def test_effective_default_member_limits_control_opaque_admission(
 ) -> None:
     key, _ = member_gateway
     proxy_server.user_api_key_cache.set_cache(
-        key=team_membership_reservation_cache_key(user_id="default-member", team_id="default-team"),
+        key=AuthObject.team_membership_reservation(user_id="default-member", team_id="default-team"),
         value=LiteLLM_TeamMembership(
             user_id="default-member",
             team_id="default-team",
@@ -444,7 +441,7 @@ def test_effective_default_member_limits_control_opaque_admission(
         ),
     )
     proxy_server.user_api_key_cache.set_cache(
-        key="team_member_default_budget:default-member-budget",
+        key=AuthObject.team_member_default_budget("default-member-budget"),
         value=LiteLLM_BudgetTable(
             budget_id="default-member-budget",
             max_budget=default_limit,
@@ -485,10 +482,10 @@ def test_default_member_limits_do_not_apply_without_a_member_identity(
 ) -> None:
     key, _ = member_gateway
     proxy_server.user_api_key_cache.set_cache(
-        key=hash_token(key), value=UserAPIKeyAuth(token=hash_token(key), team_id="default-team")
+        key=AuthObject.virtual_key(hash_token(key)), value=UserAPIKeyAuth(token=hash_token(key), team_id="default-team")
     )
     proxy_server.user_api_key_cache.set_cache(
-        key="team_member_default_budget:default-member-budget",
+        key=AuthObject.team_member_default_budget("default-member-budget"),
         value=LiteLLM_BudgetTable(budget_id="default-member-budget", max_budget=10),
     )
     upstream: Final = respx_mock.post(f"{_BASE}/{_RUN}").respond(content=b"\x08\x01")
@@ -521,7 +518,8 @@ def test_agent_bound_keys_cannot_bypass_opaque_model_scopes(
     database.writer_db.litellm_agentstable.find_unique = AsyncMock(return_value=agent)
     monkeypatch.setattr(proxy_server, "prisma_client", database)
     proxy_server.user_api_key_cache.set_cache(
-        key=hash_token(key), value=UserAPIKeyAuth.model_validate({"token": hash_token(key), "agent_id": agent_id})
+        key=AuthObject.virtual_key(hash_token(key)),
+        value=UserAPIKeyAuth.model_validate({"token": hash_token(key), "agent_id": agent_id}),
     )
     upstream: Final = respx_mock.post(f"{_BASE}/{_APPEND}").respond(content=b"\x08\x01")
     response: Final = client.post(
@@ -708,7 +706,7 @@ async def test_parallel_request_limit_counts_overlapping_agent_rpcs(
     monkeypatch.setattr(litellm, "_async_failure_callback", [limiter])
     monkeypatch.setattr(proxy_server, "prisma_client", prisma_with_empty_config())
     proxy_server.user_api_key_cache.set_cache(
-        key=hash_token(key),
+        key=AuthObject.virtual_key(hash_token(key)),
         value=UserAPIKeyAuth.model_validate({"token": hash_token(key), "max_parallel_requests": limit}),
     )
     stream: Final = StagedStream()
@@ -851,7 +849,7 @@ async def test_cancelled_session_releases_parallel_request_slot(
     monkeypatch.setattr(litellm, "_async_failure_callback", [limiter, recorder])
     monkeypatch.setattr(proxy_server, "prisma_client", prisma_with_empty_config())
     proxy_server.user_api_key_cache.set_cache(
-        key=hash_token(key),
+        key=AuthObject.virtual_key(hash_token(key)),
         value=UserAPIKeyAuth.model_validate({"token": hash_token(key), "max_parallel_requests": 1}),
     )
     stream: Final = StagedStream()

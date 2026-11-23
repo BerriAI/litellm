@@ -1,8 +1,10 @@
 import { parseAsString, useQueryState } from "nuqs";
 import React, { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { ChevronDown, Code, Plus } from "lucide-react";
+import { TabsContent } from "@/components/ui/tabs";
+import { PageContent, PageTabs, PageTabsList, PageTabsTrigger } from "@/components/shared/Page";
+import { PageHeader, PageHeaderControls, PageHeaderDescription, PageHeaderTitle } from "@/components/shared/PageHeader";
+import { ChevronDown, Code, Plus, Shield } from "lucide-react";
 import { getGuardrailsList } from "@/components/networking";
 import { buttonVariants } from "@/components/ui/button";
 import {
@@ -34,6 +36,7 @@ interface GuardrailsResponse {
 
 const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole }) => {
   const { t } = useTranslation();
+  const [activeTab, setActiveTab] = useState("guardrails");
   const [guardrailsList, setGuardrailsList] = useState<Guardrail[]>([]);
   const [isAddModalVisible, setIsAddModalVisible] = useState(false);
   const [isCustomCodeModalVisible, setIsCustomCodeModalVisible] = useState(false);
@@ -100,26 +103,48 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
   };
 
   return (
-    <div className="w-full mx-auto flex-auto overflow-y-auto m-8 p-2">
-      <Tabs defaultValue="guardrails">
-        <TabsList variant="line">
-          {isAdmin && (
-            <>
-              <TabsTrigger value="garden" className="flex-none">
-                {t("guardrails.panel.tabs.garden")}
-              </TabsTrigger>
-              <TabsTrigger value="guardrails" className="flex-none">
-                {t("guardrails.panel.tabs.guardrails")}
-              </TabsTrigger>
-              <TabsTrigger value="playground" className="flex-none" disabled={!accessToken}>
-                {t("guardrails.panel.tabs.playground")}
-              </TabsTrigger>
-            </>
-          )}
-          <TabsTrigger value="submitted" className="flex-none">
-            {t("guardrails.panel.tabs.submitted")}
-          </TabsTrigger>
-        </TabsList>
+    <PageContent>
+      <PageTabs value={activeTab} onValueChange={setActiveTab}>
+        <PageHeader>
+          <PageHeaderTitle>
+            <Shield />
+            {t("shell.nav.items.guardrails")}
+          </PageHeaderTitle>
+          <PageHeaderDescription>{t("shell.pageDescriptions.guardrails")}</PageHeaderDescription>
+          <PageHeaderControls className="flex-wrap">
+            {isAdmin && activeTab === "guardrails" && (
+              <DropdownMenu>
+                <DropdownMenuTrigger disabled={!accessToken} className={cn(buttonVariants({ variant: "default" }))}>
+                  <Plus />
+                  {t("guardrails.panel.addMenu.trigger")}
+                  <ChevronDown />
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" className="w-56">
+                  <DropdownMenuItem onClick={handleAddGuardrail}>
+                    <Plus />
+                    {t("guardrails.panel.addMenu.provider")}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={handleAddCustomCodeGuardrail}>
+                    <Code />
+                    {t("guardrails.panel.addMenu.customCode")}
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
+            <PageTabsList className="w-full flex-none sm:w-auto sm:flex-1">
+              {isAdmin && (
+                <>
+                  <PageTabsTrigger value="garden">{t("guardrails.panel.tabs.garden")}</PageTabsTrigger>
+                  <PageTabsTrigger value="guardrails">{t("guardrails.panel.tabs.guardrails")}</PageTabsTrigger>
+                  <PageTabsTrigger value="playground" disabled={!accessToken}>
+                    {t("guardrails.panel.tabs.playground")}
+                  </PageTabsTrigger>
+                </>
+              )}
+              <PageTabsTrigger value="submitted">{t("guardrails.panel.tabs.submitted")}</PageTabsTrigger>
+            </PageTabsList>
+          </PageHeaderControls>
+        </PageHeader>
 
         {isAdmin && (
           <>
@@ -128,26 +153,6 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
             </TabsContent>
 
             <TabsContent value="guardrails" keepMounted>
-              <div className="flex justify-between items-center mb-4">
-                <DropdownMenu>
-                  <DropdownMenuTrigger disabled={!accessToken} className={cn(buttonVariants({ variant: "default" }))}>
-                    <Plus />
-                    {t("guardrails.panel.addMenu.trigger")}
-                    <ChevronDown />
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="start" className="w-56">
-                    <DropdownMenuItem onClick={handleAddGuardrail}>
-                      <Plus />
-                      {t("guardrails.panel.addMenu.provider")}
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={handleAddCustomCodeGuardrail}>
-                      <Code />
-                      {t("guardrails.panel.addMenu.customCode")}
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              </div>
-
               {selectedGuardrailId ? (
                 <GuardrailInfoView
                   guardrailId={selectedGuardrailId}
@@ -204,8 +209,8 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
         <TabsContent value="submitted" keepMounted>
           <TeamGuardrailsTab accessToken={accessToken} />
         </TabsContent>
-      </Tabs>
-    </div>
+      </PageTabs>
+    </PageContent>
   );
 };
 

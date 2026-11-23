@@ -27,6 +27,10 @@ pub struct User {
     pub(super) teams: Vec<String>,
     pub(super) user_role: Option<String>,
     pub(super) max_budget: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) rollover_max_budget: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) rollover_credit: Option<f64>,
     pub(super) budget_limits: Option<RawJson>,
     pub(super) spend: f64,
     pub(super) user_email: Option<String>,

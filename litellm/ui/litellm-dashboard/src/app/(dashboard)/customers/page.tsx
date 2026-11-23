@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Plus } from "lucide-react";
+import { Building2, Plus } from "lucide-react";
 import { parseAsString, useQueryState } from "nuqs";
 import { queryOptions, skipToken, useQuery } from "@tanstack/react-query";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
@@ -12,6 +12,8 @@ import { Input } from "@/components/ui/input";
 import { CustomerUsageDatePicker, CustomerUsageStats } from "./_components/CustomerUsageSummary";
 import { DataTablePagination, useUrlTableState } from "@/components/shared/DataTable";
 import { ErrorState } from "@/components/shared/ErrorState";
+import { PageContent } from "@/components/shared/Page";
+import { PageHeader, PageHeaderTitle, PageHeaderDescription, PageHeaderControls } from "@/components/shared/PageHeader";
 import { isProxyAdminRole } from "@/utils/roles";
 import CreateCustomerDialog from "./_components/CreateCustomerDialog";
 import CustomerDetail from "./_components/CustomerDetail";
@@ -92,66 +94,77 @@ function CustomerOrganizations() {
   };
 
   return (
-    <div className="mx-auto w-full max-w-[1920px] space-y-6 px-4 py-6 sm:px-6">
-      <section className="space-y-3" aria-label={t("customerPortal.list.overallUsage")}>
-        <div className="flex flex-wrap items-end justify-between gap-3">
-          <h2 className="pb-2.5 text-sm font-semibold">{t("customerPortal.list.overallUsage")}</h2>
+    <>
+      <PageHeader>
+        <PageHeaderTitle>
+          <Building2 />
+          {t("customerPortal.list.title")}
+        </PageHeaderTitle>
+        <PageHeaderDescription>{t("customerPortal.list.description")}</PageHeaderDescription>
+        <PageHeaderControls className="flex-wrap">
           <CustomerUsageDatePicker value={dateValue} onValueChange={onDateChange} presetShortLabel={preset} />
+        </PageHeaderControls>
+      </PageHeader>
+      <PageContent>
+        <section className="space-y-3" aria-label={t("customerPortal.list.overallUsage")}>
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <h2 className="pb-2.5 text-sm font-semibold">{t("customerPortal.list.overallUsage")}</h2>
+          </div>
+          {organizations.isError || usage.isError ? (
+            <ErrorState
+              message={t("customerPortal.list.error")}
+              onRetry={() => void (organizations.isError ? organizations.refetch() : usage.refetch())}
+            />
+          ) : (
+            <CustomerUsageStats
+              results={activity.results}
+              totals={totals}
+              loading={organizations.isPending || usage.isPending}
+            />
+          )}
+        </section>
+        <div className="rounded-lg border bg-card">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b p-3">
+            <Input
+              className="max-w-xs"
+              aria-label={t("customerPortal.list.searchPlaceholder")}
+              placeholder={t("customerPortal.list.searchPlaceholder")}
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+            />
+            <Button className="ml-auto" onClick={() => setCreateOpen(true)}>
+              <Plus className="size-4" /> {t("customerPortal.list.create")}
+            </Button>
+          </div>
+          {organizations.isError || monthlyUsage.isError ? (
+            <ErrorState
+              message={t("customerPortal.list.error")}
+              onRetry={() => void (organizations.isError ? organizations.refetch() : monthlyUsage.refetch())}
+            />
+          ) : (
+            <CustomerOrganizationsTable
+              rows={sorted.slice(start, start + pagination.pageSize)}
+              sorting={sorting}
+              onSort={onSortingChange}
+              loading={loading}
+              searching={Boolean(search)}
+              startDate={startDate}
+              endDate={endDate}
+              usageTotals={usageTotals}
+              canManage={canManage}
+              onEdit={setEditingOrganizationId}
+            />
+          )}
+          <DataTablePagination
+            page={page}
+            pageSize={pagination.pageSize}
+            rowCount={sorted.length}
+            onPageChange={(pageIndex) => onPaginationChange({ ...pagination, pageIndex })}
+            onPageSizeChange={(pageSize) => onPaginationChange({ pageSize, pageIndex: 0 })}
+            isLoading={organizations.isFetching || monthlyUsage.isFetching}
+          />
         </div>
-        {organizations.isError || usage.isError ? (
-          <ErrorState
-            message={t("customerPortal.list.error")}
-            onRetry={() => void (organizations.isError ? organizations.refetch() : usage.refetch())}
-          />
-        ) : (
-          <CustomerUsageStats
-            results={activity.results}
-            totals={totals}
-            loading={organizations.isPending || usage.isPending}
-          />
-        )}
-      </section>
-      <div className="rounded-lg border bg-card">
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b p-3">
-          <Input
-            className="max-w-xs"
-            aria-label={t("customerPortal.list.searchPlaceholder")}
-            placeholder={t("customerPortal.list.searchPlaceholder")}
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-          />
-          <Button className="ml-auto" onClick={() => setCreateOpen(true)}>
-            <Plus className="size-4" /> {t("customerPortal.list.create")}
-          </Button>
-        </div>
-        {organizations.isError || monthlyUsage.isError ? (
-          <ErrorState
-            message={t("customerPortal.list.error")}
-            onRetry={() => void (organizations.isError ? organizations.refetch() : monthlyUsage.refetch())}
-          />
-        ) : (
-          <CustomerOrganizationsTable
-            rows={sorted.slice(start, start + pagination.pageSize)}
-            sorting={sorting}
-            onSort={onSortingChange}
-            loading={loading}
-            searching={Boolean(search)}
-            startDate={startDate}
-            endDate={endDate}
-            usageTotals={usageTotals}
-            canManage={canManage}
-            onEdit={setEditingOrganizationId}
-          />
-        )}
-        <DataTablePagination
-          page={page}
-          pageSize={pagination.pageSize}
-          rowCount={sorted.length}
-          onPageChange={(pageIndex) => onPaginationChange({ ...pagination, pageIndex })}
-          onPageSizeChange={(pageSize) => onPaginationChange({ pageSize, pageIndex: 0 })}
-          isLoading={organizations.isFetching || monthlyUsage.isFetching}
-        />
-      </div>
+      </PageContent>
       <CreateCustomerDialog open={createOpen} onOpenChange={setCreateOpen} onCreated={onCreated} />
       {canManage && editingOrganizationId && (
         <CustomerEntityBudgetDialog
@@ -160,6 +173,6 @@ function CustomerOrganizations() {
           onClose={() => setEditingOrganizationId(null)}
         />
       )}
-    </div>
+    </>
   );
 }
