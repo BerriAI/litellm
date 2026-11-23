@@ -916,7 +916,7 @@ def _thread_message(args: threading.ExceptHookArgs) -> str:
 # Function to set up exception handlers for JSON logging
 def _setup_json_exception_handlers(formatter):
     # Create a handler with JSON formatting for exceptions
-    error_handler: Final = logging.StreamHandler()
+    error_handler: Final = LevelRoutingStreamHandler()
     error_handler.setFormatter(formatter)
     error_handler.addFilter(_diagnostic_filter)
     error_handler.addFilter(_secret_filter)

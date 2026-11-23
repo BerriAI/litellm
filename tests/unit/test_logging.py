@@ -1,6 +1,7 @@
 import ast
 import asyncio
 import base64
+import contextlib
 import dataclasses
 import json
 import logging
@@ -2221,6 +2222,25 @@ def test_json_logs_report_an_exception_raised_in_a_thread_as_one_error_record(
     assert records[0]["message"] == "Exception in thread background-job"
     assert records[0]["level"] == "ERROR"
     assert str(records[0]["stacktrace"]).endswith("ValueError: background job failed")
+
+
+def test_json_logs_write_tracebacks_and_unhandled_warnings_to_the_current_stderr() -> None:
+    """Python's default hooks and lastResort write to whatever sys.stderr is when the record arrives, so a
+    caller that redirects stderr after litellm turned JSON logs on still captures them, now as JSON records."""
+    turn_on_json()
+    redirected: Final = StringIO()
+
+    with contextlib.redirect_stderr(redirected):
+        logging.Logger("unconfigured_library").warning("Unclosed client session")
+        worker: Final = threading.Thread(target=_fails_in_background, name="background-job")
+        worker.start()
+        worker.join()
+
+    records: Final = [json.loads(line) for line in redirected.getvalue().splitlines()]
+    assert [(record["message"], record["level"]) for record in records] == [
+        ("Unclosed client session", "WARNING"),
+        ("Exception in thread background-job", "ERROR"),
+    ]
 
 
 def test_json_logs_name_a_thread_python_no_longer_tracks_by_its_id(capfd: pytest.CaptureFixture[str]) -> None:
