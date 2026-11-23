@@ -1,15 +1,34 @@
-use crate::{KeyManagementSettings, KeyManagementSystem, SecretManager};
+use crate::{Error, KeyManagementSettings, KeyManagementSystem, OidcReference, SecretManager};
 
-pub(crate) enum LookupTarget<'a> {
-    Environment,
+const ENVIRONMENT_PREFIX: &str = "os.environ/";
+const OIDC_PREFIX: &str = "oidc/";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SecretReference<'a> {
+    Oidc(OidcReference<'a>),
+    Named(&'a str),
+}
+
+impl<'a> TryFrom<&'a str> for SecretReference<'a> {
+    type Error = Error;
+
+    fn try_from(text: &'a str) -> Result<Self, Error> {
+        let name = text.strip_prefix(ENVIRONMENT_PREFIX).unwrap_or(text);
+        if name.starts_with(OIDC_PREFIX) {
+            return name.try_into().map(Self::Oidc);
+        }
+        Ok(Self::Named(name))
+    }
+}
+
+pub(crate) enum Route<'a> {
+    Oidc(OidcReference<'a>),
     Manager {
         backend: &'a SecretManager,
         settings: &'a KeyManagementSettings,
+        name: &'a str,
     },
-}
-
-pub(crate) fn normalize_secret_name(name: &str) -> &str {
-    name.strip_prefix("os.environ/").unwrap_or(name)
+    Environment(&'a str),
 }
 
 #[derive(Clone, Default)]
@@ -36,7 +55,11 @@ impl SecretManagerState {
         self.manager.as_ref().map(|(backend, _)| backend)
     }
 
-    pub(crate) fn lookup_target(&self, name: &str) -> LookupTarget<'_> {
+    pub(crate) fn route<'a>(&'a self, reference: SecretReference<'a>) -> Route<'a> {
+        let name = match reference {
+            SecretReference::Oidc(reference) => return Route::Oidc(reference),
+            SecretReference::Named(name) => name,
+        };
         match &self.manager {
             Some((backend, settings))
                 if backend.system() != KeyManagementSystem::Local
@@ -46,14 +69,18 @@ impl SecretManagerState {
                         .as_ref()
                         .is_none_or(|keys| keys.iter().any(|key| key == name)) =>
             {
-                LookupTarget::Manager { backend, settings }
+                Route::Manager {
+                    backend,
+                    settings,
+                    name,
+                }
             }
-            _ => LookupTarget::Environment,
+            _ => Route::Environment(name),
         }
     }
 }
 
 pub fn secret_manager_would_be_consulted(state: &SecretManagerState, name: &str) -> bool {
-    let name = normalize_secret_name(name);
-    !name.starts_with("oidc/") && matches!(state.lookup_target(name), LookupTarget::Manager { .. })
+    SecretReference::try_from(name)
+        .is_ok_and(|reference| matches!(state.route(reference), Route::Manager { .. }))
 }

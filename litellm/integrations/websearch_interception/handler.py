@@ -12,7 +12,7 @@ import uuid
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict, TypeVar, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, TypedDict, TypeVar, cast
 
 from pydantic import TypeAdapter
 from typing_extensions import Never, ReadOnly
@@ -54,6 +54,7 @@ from litellm.types.integrations.custom_logger import (
     AgenticLoopPlan,
     AgenticLoopRequestPatch,
     as_converted_stream,
+    bridged_from_chat_completion,
 )
 from litellm.types.integrations.websearch_interception import (
     AnthropicSearchQuery,
@@ -109,7 +110,7 @@ _OPTIONAL_PARAMS: Final = TypeAdapter(Mapping[str, object])
 
 _CLAUDE_CODE_WEB_SEARCH_PROMPT_PREFIX: Final = "Perform a web search for the query:"
 
-_ResponseT: Final = TypeVar("_ResponseT")
+_ResponseT = TypeVar("_ResponseT")
 
 
 class _PlanMetadataView(TypedDict):
@@ -286,6 +287,19 @@ def _kept_allowed_tools_tool_choice(optional_params: Mapping[str, object]) -> Ma
     return allowed_tools_tool_choice_kept_on_follow_up(optional_params.get("tool_choice"))
 
 
+def _is_litellm_web_search_function_responses(tool: Mapping[str, object]) -> bool:
+    return tool.get("type") == "function" and tool.get("name") == LITELLM_WEB_SEARCH_TOOL_NAME
+
+
+def _kept_on_the_responses_agentic_loop(
+    kwargs: Mapping[str, object], tools: Sequence[Mapping[str, object]]
+) -> Mapping[str, object]:
+    chat_side_runs_the_search_loop: Final = any(_is_litellm_web_search_function_responses(tool) for tool in tools)
+    if not bridged_from_chat_completion(kwargs) or chat_side_runs_the_search_loop:
+        return kwargs
+    return {key: value for key, value in kwargs.items() if key != "_agentic_loop_api_surface"}
+
+
 class WebSearchInterceptionLogger(CustomLogger):
     """
     CustomLogger that intercepts WebSearch tool calls for models that don't
@@ -297,6 +311,8 @@ class WebSearchInterceptionLogger(CustomLogger):
     3. Makes follow-up request with search results
     4. Returns final response
     """
+
+    wants_chat_completion_hooks_on_bridged_chat: ClassVar[bool] = True
 
     def __init__(
         self,
@@ -563,7 +579,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         ]
 
         converted_kwargs: Final = {
-            **kwargs,
+            **_kept_on_the_responses_agentic_loop(kwargs, tools),
             "tools": converted_tools,
             **_tool_choice_naming_litellm_web_search(kwargs, is_web_search_tool_responses),
         }

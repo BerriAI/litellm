@@ -36,6 +36,7 @@ class AWSPollyTextToSpeechConfig(BaseTextToSpeechConfig, BaseAWSLLM):
     Reference: https://docs.aws.amazon.com/polly/latest/dg/API_SynthesizeSpeech.html
     """
 
+    supports_streaming = True
     _web_identity_session_policy: ClassVar[WebIdentitySessionPolicy] = POLLY_SESSION_POLICY
 
     def __init__(self):
@@ -85,6 +86,7 @@ class AWSPollyTextToSpeechConfig(BaseTextToSpeechConfig, BaseAWSLLM):
         aspeech: bool,
         api_base: str | None,
         api_key: str | None,
+        stream: bool = False,
         **kwargs: object,
     ) -> Union[
         "HttpxBinaryResponseContent",
@@ -131,6 +133,7 @@ class AWSPollyTextToSpeechConfig(BaseTextToSpeechConfig, BaseAWSLLM):
             extra_headers=extra_headers,
             client=None,
             _is_async=aspeech,
+            stream=stream,
         )
 
         return response

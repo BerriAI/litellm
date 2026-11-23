@@ -51,4 +51,10 @@ def test_rust_child_serves_public_port_and_forwards_to_private_listener() -> Non
         "LITELLM_FORWARD_PORT": "4000",
         "LITELLM_FORWARD_UPSTREAM_KEEPALIVE": "2",
         "LITELLM_FORWARD_SHUTDOWN_DRAIN": str(2.5 + GRACEFUL_SHUTDOWN_TEARDOWN_HEADROOM_SECONDS),
+        "LITELLM_FORWARD_CONFIG": "",
     }
+
+
+def test_rust_child_is_told_the_config_file_python_loads() -> None:
+    spec: Final = rust_spec(POSIX, "gateway", 45555, python_server(config_path="/etc/litellm/config.yaml"))
+    assert spec.env_overrides["LITELLM_FORWARD_CONFIG"] == "/etc/litellm/config.yaml"

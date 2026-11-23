@@ -16,7 +16,8 @@ from prisma.errors import PrismaError
 
 from litellm._service_logger import ServiceTypes
 from litellm.litellm_core_utils import litellm_logging
-from litellm.proxy._types import AlertType, CallInfo
+from litellm.proxy._types import AlertType, CallInfo, Litellm_EntityType
+from litellm.proxy.utils import ProxyLogging
 
 
 # ---------------------------------------------------------------------------
@@ -359,3 +360,20 @@ async def test_failure_handler_propagates_service_logging_error_raises(proxy_log
         await proxy_logging.failure_handler(
             original_exception=Exception("x"), duration=0.0, call_type="db_read"
         )
+
+
+@pytest.mark.asyncio
+async def test_team_percentage_event_does_not_duplicate_legacy_hard_budget_dispatch(proxy_logging: ProxyLogging) -> None:
+    proxy_logging.alerting = ["webhook", "email"]
+    webhook: Final = AsyncMock()
+    email: Final = AsyncMock()
+    proxy_logging.slack_alerting_instance = MagicMock(budget_alerts=webhook)
+    proxy_logging.email_logging_instance = MagicMock(budget_alerts=email)
+    team: Final = CallInfo(team_id="shared-team", spend=110.0, max_budget=100.0, event_group=Litellm_EntityType.TEAM)
+
+    await proxy_logging.budget_alerts(type="max_budget_alert", user_info=team)
+    await proxy_logging.budget_alerts(type="team_budget", user_info=team)
+
+    dispatched: Final = [(call.kwargs["type"], call.kwargs["user_info"].team_id) for call in webhook.await_args_list]
+    assert dispatched == [("team_budget", "shared-team")]
+    assert [call.kwargs["type"] for call in email.await_args_list] == ["max_budget_alert", "team_budget"]

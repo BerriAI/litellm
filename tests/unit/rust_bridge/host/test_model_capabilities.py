@@ -1,9 +1,12 @@
+import datetime
 from typing import Final
 
 import pytest
 
 import litellm
-from litellm.rust_bridge.host.model_capabilities import anthropic_model_capabilities
+from litellm.litellm_core_utils.fallback_generalizations import get_fallback_generalization_rules
+from litellm.litellm_core_utils.model_cost_table import changed_in_place
+from litellm.rust_bridge.host.model_capabilities import anthropic_model_capabilities, model_cost_document
 
 pytestmark = pytest.mark.usefixtures("local_model_cost_map")
 
@@ -155,3 +158,47 @@ def test_the_cache_key_holds_the_entries_it_names(monkeypatch: pytest.MonkeyPatc
 
     assert any(h.value is entry for h in held[5])
     assert held != same_content
+
+
+def test_model_cost_document_carries_the_live_rows_and_the_active_rules(monkeypatch: pytest.MonkeyPatch) -> None:
+    _flag_model(monkeypatch, "claude-test-document", supports_tool_search=True)
+    changed_in_place()
+
+    version, document = model_cost_document(None)
+
+    assert document is not None
+    assert document["claude-test-document"]["supports_tool_search"] is True
+    assert document["fallback_generalizations"] == {"rules": list(get_fallback_generalization_rules())}
+    assert model_cost_document(version) == (version, None)
+
+
+def test_model_cost_document_carries_registered_rows_with_non_json_values(monkeypatch: pytest.MonkeyPatch) -> None:
+    registered_at: Final = datetime.datetime(2026, 11, 15, tzinfo=datetime.timezone.utc)
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "bedrock/invoke/claude-test-registered",
+        {"litellm_provider": "bedrock", "mode": "chat", "supports_tool_search": True, "created_at": registered_at},
+    )
+    changed_in_place()
+
+    _, document = model_cost_document(None)
+
+    assert document is not None
+    assert document["bedrock/invoke/claude-test-registered"] == {
+        "litellm_provider": "bedrock",
+        "mode": "chat",
+        "supports_tool_search": True,
+        "created_at": str(registered_at),
+    }
+
+
+def test_model_cost_document_moves_with_a_write(monkeypatch: pytest.MonkeyPatch) -> None:
+    version, _ = model_cost_document(None)
+
+    _flag_model(monkeypatch, "claude-test-document-write", supports_tool_search=True)
+    changed_in_place()
+    moved, document = model_cost_document(version)
+
+    assert moved != version
+    assert document is not None
+    assert "claude-test-document-write" in document

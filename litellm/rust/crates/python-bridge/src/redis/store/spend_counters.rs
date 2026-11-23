@@ -2,7 +2,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use litellm_redis_store::{
     Number,
-    spend_counters::{LostSeed, PostCallSettlement, Reading, SpendCounter, SpendCounters},
+    spend_counters::{LostSeed, Reading, SpendCounter, SpendCounters},
 };
 use pyo3::prelude::*;
 
@@ -29,18 +29,6 @@ impl PySpendRead {
     }
 }
 
-/// Whether every increment one `increment_many_post_call` declared has its reply.
-#[pyclass(frozen, name = "PostCallSettlement")]
-pub(crate) struct PyPostCallSettlement(PostCallSettlement);
-
-#[pymethods]
-impl PyPostCallSettlement {
-    #[getter]
-    fn settled(&self) -> bool {
-        self.0.is_settled()
-    }
-}
-
 fn increments(increments: Vec<(PyData<SpendCounter>, PyNumber)>) -> Vec<(SpendCounter, Number)> {
     increments
         .into_iter()
@@ -59,7 +47,13 @@ fn numbers(values: Option<Vec<Option<Number>>>) -> Option<Vec<Option<PyNumber>>>
 
 /// The proxy's spend counters, Redis first with this worker's memory copy behind it.
 #[pyclass(frozen, name = "NativeSpendCounters")]
-pub(crate) struct NativeSpendCounters(Arc<SpendCounters>);
+pub(crate) struct NativeSpendCounters(pub(super) Arc<SpendCounters>);
+
+impl NativeSpendCounters {
+    pub(crate) fn store(&self) -> Arc<SpendCounters> {
+        Arc::clone(&self.0)
+    }
+}
 
 #[pymethods]
 impl NativeSpendCounters {
@@ -143,15 +137,15 @@ impl NativeSpendCounters {
         })
     }
 
-    /// Declares the increments on the request's post-call batch; `None` when there is no Redis.
+    /// Declares the increments on the request's post-call batch; `false` when there is no Redis.
+    /// The request tracks a committed counter's increment until it lands.
     fn increment_many_post_call(
         &self,
         request: &NativeRequestRedis,
         increments: Vec<(PyData<SpendCounter>, PyNumber)>,
-    ) -> Option<PyPostCallSettlement> {
+    ) -> bool {
         self.0
             .increment_many_post_call(&request.0, &self::increments(increments))
-            .map(PyPostCallSettlement)
     }
 
     fn set_max<'py>(

@@ -27,6 +27,7 @@ from typing_extensions import ReadOnly, TypedDict
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
+from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.litellm_core_utils.optional_imports import ensure_optional_import
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.web_identity_session_policy import SECRETS_MANAGER_SESSION_POLICY, WebIdentitySessionPolicy
@@ -51,6 +52,7 @@ class _SecretStringResponse(TypedDict):
 
 _SECRET_STRING_RESPONSE: Final = TypeAdapter(_SecretStringResponse)
 _AWS_SECRET_MANAGER_RESPONSE: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
+_PRIMARY_SECRET_JSON: Final = TypeAdapter(object)
 
 
 class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
@@ -67,7 +69,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         aws_sts_endpoint: str | None = None,
         replica_regions: list[str] | None = None,
         kms_key_id: str | None = None,
-        **kwargs,
+        **kwargs: object,
     ):
         BaseSecretManager.__init__(self, **kwargs)
         BaseAWSLLM.__init__(self, **kwargs)
@@ -246,7 +248,8 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         Returns:
             Dictionary of key-value pairs from the primary secret
         """
-        return json.loads(primary_secret_json_str or "{}")
+        decoded: Final = _PRIMARY_SECRET_JSON.validate_python(json.loads(primary_secret_json_str or "{}"))
+        return require_attributes(decoded, dict[str, object], "get")
 
     def sync_read_secret_from_primary_secret(self, secret_name: str, primary_secret_name: str) -> str | None:
         """
@@ -272,7 +275,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         optional_params: dict | None = None,
         timeout: float | httpx.Timeout | None = None,
         tags: dict | list | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Async function to write a secret to AWS Secrets Manager
 
@@ -344,7 +347,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         self,
         secret_name: str,
         request_data: Mapping[str, object],
-        optional_params: dict | None,
+        optional_params: dict[str, object] | None,
         timeout: float | httpx.Timeout | None,
     ) -> dict[str, object]:
         try:
@@ -402,7 +405,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
     async def _async_is_scheduled_for_deletion(
         self,
         secret_name: str,
-        optional_params: dict | None,
+        optional_params: dict[str, object] | None,
         timeout: float | httpx.Timeout | None,
     ) -> bool:
         try:
@@ -422,7 +425,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         action: str,
         secret_name: str,
         request_data: Mapping[str, object] | None,
-        optional_params: dict | None,
+        optional_params: dict[str, object] | None,
         timeout: float | httpx.Timeout | None,
     ) -> dict[str, object]:
         endpoint_url, headers, body = self._prepare_request(
@@ -507,7 +510,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         secret_value: str,
         optional_params: dict | None = None,
         timeout: float | httpx.Timeout | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Async function to update an existing secret's value in AWS Secrets Manager.
 
@@ -560,7 +563,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         new_secret_value: str,
         optional_params: dict | None = None,
         timeout: float | httpx.Timeout | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Rotate a secret. When current_secret_name == new_secret_name (in-place
         update), uses PutSecretValue instead of create+delete to avoid
@@ -593,7 +596,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         recovery_window_in_days: int | None = 7,
         optional_params: dict | None = None,
         timeout: float | httpx.Timeout | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Async function to delete a secret from AWS Secrets Manager
 
@@ -638,8 +641,8 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         action: str,  # "GetSecretValue" or "PutSecretValue"
         secret_name: str,
         secret_value: str | None = None,
-        optional_params: dict | None = None,
-        request_data: dict | None = None,
+        optional_params: dict[str, object] | None = None,
+        request_data: Mapping[str, object] | None = None,
     ) -> tuple[str, "HTTPHeaders", bytes]:
         """Prepare the AWS Secrets Manager request"""
         ensure_optional_import("botocore")

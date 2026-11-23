@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS (\n    SELECT 1\n    FROM \"LiteLLM_UserTable\"\n    WHERE lower(user_email) = lower($1)\n      AND user_id <> $2\n) AS \"taken!\"\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "taken!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "5692266af762e65f03a8067f3bbc29eaea63f6b1e8643a5a3f781f21e38486eb"
+}

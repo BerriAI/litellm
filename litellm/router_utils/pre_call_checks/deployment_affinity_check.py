@@ -26,7 +26,11 @@ from litellm.caching.affinity_cache import (
     claim_affinity_pin,
     set_local_affinity_pin,
 )
-from litellm.constants import SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY, SESSION_ID_GENERATED_METADATA_KEY
+from litellm.constants import (
+    SESSION_DEPLOYMENT_AFFINITY_CONVERSATION_METADATA_KEY,
+    SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
+    SESSION_ID_GENERATED_METADATA_KEY,
+)
 from litellm.integrations.custom_logger import CustomLogger, Span
 from litellm.litellm_core_utils.routing_common_utils import deployment_ids_failed_in_request
 from litellm.redis.stores.router_session_pins import (
@@ -324,7 +328,19 @@ class DeploymentAffinityCheck(CustomLogger):
 
     @staticmethod
     def _get_session_id_from_request_kwargs(request_kwargs: Mapping[str, object]) -> str | None:
-        for metadata in DeploymentAffinityCheck._iter_metadata_dicts(request_kwargs):
+        metadata_dicts: Final = DeploymentAffinityCheck._iter_metadata_dicts(request_kwargs)
+        conversation_id: Final = next(
+            (
+                value
+                for metadata in metadata_dicts
+                if isinstance(value := metadata.get(SESSION_DEPLOYMENT_AFFINITY_CONVERSATION_METADATA_KEY), str)
+                and value
+            ),
+            None,
+        )
+        if conversation_id is not None:
+            return conversation_id
+        for metadata in metadata_dicts:
             session_id = DeploymentAffinityCheck._get_session_id_from_metadata_dict(metadata=metadata)
             if session_id is not None:
                 return session_id

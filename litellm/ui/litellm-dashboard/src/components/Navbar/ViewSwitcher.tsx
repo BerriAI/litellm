@@ -1,4 +1,5 @@
 import { useTerminology } from "@/contexts/TerminologyContext";
+import { useGrantedApps } from "@/app/(dashboard)/apps/_components/useGrantedApps";
 import React from "react";
 import { useTranslation } from "react-i18next";
 import { usePathname, useRouter } from "next/navigation";
@@ -10,11 +11,10 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Check, ChevronDown, ChevronsUpDown } from "lucide-react";
-import { useSidebar } from "@/components/shared/Sidebar";
 import BetaBadge from "@/components/BetaBadge";
-import { usePluginMode } from "@/contexts/PluginModeContext";
+import { BUILT_IN_MODES, usePluginMode } from "@/contexts/PluginModeContext";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
-import { uiHref } from "@/utils/uiHref";
+import { routeSegmentForPathname, uiHref } from "@/utils/uiHref";
 import { cn } from "@/lib/cva.config";
 import i18n from "@/i18n/i18n";
 import { productNames } from "@/i18n/untranslated/productNames";
@@ -23,22 +23,17 @@ const GATEWAY = "ai-gateway";
 const CUSTOMER_PORTAL = "customer-portal";
 const CHAT = "chat";
 const MOYAI = "moyai";
+const LENS = "lens";
 
 function isWorkspaceRoute(pathname: string, workspace: string): boolean {
-  const routes = [uiHref(workspace)];
-  if (process.env.NODE_ENV === "development") routes.push(`/ui/${workspace}`);
-  return routes.some((route) => pathname === route || pathname.startsWith(`${route}/`));
+  return routeSegmentForPathname(pathname) === workspace;
 }
 
-function activeWorkspaceLabel(
-  isChatRoute: boolean,
-  isMoyaiRoute: boolean,
-  pluginLabel: string | undefined,
-  gatewayLabel: string,
-): string {
-  if (isChatRoute) return i18n.t("shell.viewSwitcher.chat");
-  if (isMoyaiRoute) return "Moyai";
-  return pluginLabel ?? gatewayLabel;
+function routeWorkspaceLabel(pathname: string): string | undefined {
+  if (isWorkspaceRoute(pathname, CHAT)) return i18n.t("shell.viewSwitcher.chat");
+  if (isWorkspaceRoute(pathname, MOYAI)) return productNames.moyai;
+  if (isWorkspaceRoute(pathname, LENS)) return i18n.t("shell.nav.items.lens");
+  return undefined;
 }
 
 interface ViewSwitcherItem {
@@ -51,35 +46,35 @@ interface ViewSwitcherItem {
 interface ViewSwitcherProps {
   className?: string;
   contentClassName?: string;
+  collapsed?: boolean;
 }
 
 const pluginLabel = (mode: string, plugins: readonly { name: string; display_name: string }[], portalLabel: string) =>
   mode === CUSTOMER_PORTAL ? portalLabel : plugins.find((p) => p.name === mode)?.display_name;
 
-export default function ViewSwitcher({ className, contentClassName }: ViewSwitcherProps) {
+export default function ViewSwitcher({ className, contentClassName, collapsed = false }: ViewSwitcherProps) {
   const { t } = useTranslation();
   const term = useTerminology();
-  const { collapsed } = useSidebar();
   const { mode, setMode, plugins } = usePluginMode();
   const { data: uiSettings } = useUISettings();
   const pathname = usePathname();
   const router = useRouter();
 
   const chatEnabled = Boolean(uiSettings?.values?.enable_chat_ui);
-  const moyaiUrl = (uiSettings?.values?.moyai_url as string | undefined) ?? null;
+  const { isProxyAdmin, opensCustomerManagement } = useGrantedApps();
 
   const normalizedPathname = (pathname ?? "").replace(/\/+$/, "");
   const isChatRoute = isWorkspaceRoute(normalizedPathname, CHAT);
   const isMoyaiRoute = isWorkspaceRoute(normalizedPathname, MOYAI);
+  const isLensRoute = isWorkspaceRoute(normalizedPathname, LENS);
   const isStandaloneRoute = isChatRoute || isMoyaiRoute;
+  const isGatewayModeActive = !isStandaloneRoute && !isLensRoute;
 
   const gatewayLabel = term(t("shell.viewSwitcher.aiGateway"));
-  const activeLabel = activeWorkspaceLabel(
-    isChatRoute,
-    isMoyaiRoute,
-    pluginLabel(mode, plugins, t("customerPortal.switcher.label")),
-    gatewayLabel,
-  );
+  const activeLabel =
+    routeWorkspaceLabel(normalizedPathname) ??
+    pluginLabel(mode, plugins, t("customerPortal.switcher.label")) ??
+    gatewayLabel;
 
   const modeEntries = [
     { key: GATEWAY, label: gatewayLabel },
@@ -88,7 +83,7 @@ export default function ViewSwitcher({ className, contentClassName }: ViewSwitch
 
   const selectMode = (key: string) => {
     if (key === CUSTOMER_PORTAL) {
-      router.push(uiHref("customers"));
+      router.push(uiHref(isProxyAdmin ? "customers" : "apps"));
       return;
     }
     if (mode === CUSTOMER_PORTAL && key === GATEWAY) {
@@ -98,7 +93,18 @@ export default function ViewSwitcher({ className, contentClassName }: ViewSwitch
     setMode(key);
     if (isStandaloneRoute) {
       window.location.assign(uiHref(""));
+      return;
     }
+    if (isLensRoute) router.push(uiHref(""));
+  };
+
+  const openLens = () => {
+    if (!BUILT_IN_MODES.has(mode)) setMode(GATEWAY);
+    if (isStandaloneRoute) {
+      window.location.assign(uiHref(LENS));
+      return;
+    }
+    router.push(uiHref(LENS));
   };
 
   const chatItem: ViewSwitcherItem = {
@@ -131,7 +137,7 @@ export default function ViewSwitcher({ className, contentClassName }: ViewSwitch
           </span>{" "}
           <span className="text-xs leading-snug text-muted-foreground">{t("customerPortal.switcher.description")}</span>
         </span>
-        {!isStandaloneRoute && mode === CUSTOMER_PORTAL && <Check className="size-4 text-info" />}
+        {isGatewayModeActive && mode === CUSTOMER_PORTAL && <Check className="size-4 text-info" />}
       </div>
     ),
     onClick: () => selectMode(CUSTOMER_PORTAL),
@@ -142,27 +148,29 @@ export default function ViewSwitcher({ className, contentClassName }: ViewSwitch
       label: (
         <div className="flex w-full items-center justify-between gap-6 py-0.5">
           <span className="font-medium">{e.label}</span>
-          {!isStandaloneRoute && e.key === mode && <Check className="size-4 text-info" />}
+          {isGatewayModeActive && e.key === mode && <Check className="size-4 text-info" />}
         </div>
       ),
       onClick: () => selectMode(e.key),
     })),
-    customerPortalItem,
+    ...[customerPortalItem].filter(() => opensCustomerManagement),
     chatItem,
     {
-      key: MOYAI,
+      key: LENS,
       label: (
         <div className="flex w-full items-center justify-between gap-6 py-0.5">
           <span className="flex flex-col">
-            <span className="font-medium">{productNames.moyai}</span>{" "}
+            <span className="font-medium">
+              {t("shell.nav.items.lens")} <BetaBadge />
+            </span>{" "}
             <span className="text-xs leading-snug text-muted-foreground">
-              {t("shell.viewSwitcher.moyaiDescription")}
+              {t("shell.viewSwitcher.lensDescription")}
             </span>
           </span>
-          {isMoyaiRoute && <Check className="size-4 text-info" />}
+          {isLensRoute && <Check className="size-4 text-info" />}
         </div>
       ),
-      onClick: () => window.location.assign(moyaiUrl ?? uiHref(MOYAI)),
+      onClick: openLens,
     },
   ];
 
@@ -191,7 +199,7 @@ export default function ViewSwitcher({ className, contentClassName }: ViewSwitch
           <>
             <span data-slot="workspace-label" className="truncate">
               {activeLabel}
-              {!isStandaloneRoute && mode === CUSTOMER_PORTAL && (
+              {isGatewayModeActive && mode === CUSTOMER_PORTAL && (
                 <>
                   {" "}
                   <BetaBadge />

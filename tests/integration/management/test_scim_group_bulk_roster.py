@@ -24,6 +24,7 @@ from typing import Final, LiteralString
 import httpx
 import psycopg
 import pytest
+import yaml
 from integration._support.budget import case_timeout_seconds
 from integration._support.client import (
     Gateway,
@@ -35,7 +36,7 @@ from integration._support.client import (
 )
 from integration._support.database import read_rows, write_rows
 from integration._support.database_relay import StatementCountingRelay, statement_counting_relay
-from integration._support.process import graceful_stop_seconds, owned_proxy_process
+from integration._support.process import graceful_stop_seconds, owned_proxy_process, pool_limit_for_prisma
 from integration._support.scim import (
     GROUP_SCHEMA,
     PATCH_OP_SCHEMA,
@@ -263,15 +264,30 @@ def _roster_ids(team: str) -> tuple[str, ...]:
 
 def test_a_group_deleted_while_its_push_waits_on_a_member_row_waits_for_the_push_then_removes_every_trace(
     gateway: Gateway,
+    tmp_path: Path,
 ) -> None:
-    with gateway.scenario() as scenario, ThreadPoolExecutor(max_workers=2) as pool:
+    config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+    config["general_settings"]["database_connection_pool_limit"] = pool_limit_for_prisma(2)
+    config_path: Final = tmp_path / "concurrent-roster.yaml"
+    config_path.write_text(yaml.safe_dump(config))
+    with (
+        owned_proxy_process(
+            gateway,
+            tmp_path,
+            {"DATABASE_URL": os.environ["DATABASE_URL"]},
+            config=config_path,
+            remove_environment=("DATABASE_URL_READ_REPLICA",),
+        ) as owned,
+        owned.gateway.scenario() as scenario,
+        ThreadPoolExecutor(max_workers=2) as pool,
+    ):
         users: Final = seed_users(scenario, SMALL_PUSH)
-        team: Final = created_team(scenario, create_group(gateway, ()))
+        team: Final = created_team(scenario, create_group(owned.gateway, ()))
         with _holding_row_lock(LOCK_USER_ROW_SQL, min(users)) as holder_pid:
-            push: Final = pool.submit(replace_group, gateway, team, users)
+            push: Final = pool.submit(replace_group, owned.gateway, team, users)
             _ = eventually(lambda: _sessions_blocked_by(holder_pid), lambda waiting: waiting >= 1, seconds=30)
             push_pid: Final = _backend_blocked_by(holder_pid)
-            deleted: Final = pool.submit(delete_group, gateway, team)
+            deleted: Final = pool.submit(delete_group, owned.gateway, team)
             _ = eventually(lambda: _sessions_blocked_by(push_pid), lambda waiting: waiting >= 1, seconds=30)
             assert not push.done(), push.result().text
             assert not deleted.done(), deleted.result().text

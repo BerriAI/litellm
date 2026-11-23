@@ -5,7 +5,7 @@ from .constants import CLEARED_TOOL_RESULT_PLACEHOLDER
 
 def build_cleared_tool_result_content(
     original_content: object,
-) -> str | list[dict]:
+) -> str | list[dict[str, str]]:
     """Return a string or single text block list, matching ``original_content`` shape."""
     if isinstance(original_content, list):
         return [{"type": "text", "text": CLEARED_TOOL_RESULT_PLACEHOLDER}]
