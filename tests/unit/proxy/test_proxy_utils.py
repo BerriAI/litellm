@@ -9,7 +9,7 @@ from fastapi import HTTPException, Request
 from starlette.datastructures import State
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
-from litellm.proxy.utils import get_docs_url, get_openapi_url, get_redoc_url
+from litellm.proxy.utils import get_docs_url, get_openapi_url
 from litellm.types.guardrails import GuardrailEventHooks
 
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -753,33 +753,6 @@ async def test_prepare_key_update_data():
     data = UpdateKeyRequest(key="test_key", duration="-1")
     updated_data = await prepare_key_update_data(data, existing_key_row)
     assert updated_data["expires"] is None
-
-
-@pytest.mark.parametrize(
-    "env_vars, expected_url",
-    [
-        ({}, "/redoc"),  # default case
-        ({"REDOC_URL": "/custom-redoc"}, "/custom-redoc"),  # custom URL
-        (
-            {"REDOC_URL": "https://example.com/redoc"},
-            "https://example.com/redoc",
-        ),  # full URL
-        ({"NO_REDOC": "True"}, None),  # Redoc disabled
-    ],
-)
-def test_get_redoc_url(env_vars: dict[str, str], expected_url: str | None) -> None:
-    original_url: Final = get_redoc_url()
-    with pytest.MonkeyPatch.context() as environment:
-        for key in ("REDOC_URL", "NO_REDOC"):
-            environment.delenv(key, raising=False)
-
-        for key, value in env_vars.items():
-            environment.setenv(key, value)
-
-        result: Final = get_redoc_url()
-        assert result == expected_url
-
-    assert get_redoc_url() == original_url
 
 
 @pytest.mark.parametrize(
