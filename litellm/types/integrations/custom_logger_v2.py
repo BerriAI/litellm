@@ -18,8 +18,8 @@ from pydantic import Field as Member
 
 _LOGGER: Final = logging.getLogger("LiteLLM")
 
-RecordT: Final = TypeVar("RecordT", bound=BaseModel)
-ValueT: Final = TypeVar("ValueT")
+RecordT = TypeVar("RecordT", bound=BaseModel)
+ValueT = TypeVar("ValueT")
 
 
 I64: TypeAlias = Annotated[int, Member(ge=-(2**63), le=2**63 - 1)]
