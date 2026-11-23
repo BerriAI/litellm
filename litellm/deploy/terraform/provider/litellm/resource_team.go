@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"maps"
 	"net/http"
 	"reflect"
 
@@ -23,10 +24,11 @@ const (
 
 func ResourceLiteLLMTeam() *schema.Resource {
 	return &schema.Resource{
-		Create: resourceLiteLLMTeamCreate,
-		Read:   resourceLiteLLMTeamRead,
-		Update: resourceLiteLLMTeamUpdate,
-		Delete: resourceLiteLLMTeamDelete,
+		Create:        resourceLiteLLMTeamCreate,
+		Read:          resourceLiteLLMTeamRead,
+		Update:        resourceLiteLLMTeamUpdate,
+		Delete:        resourceLiteLLMTeamDelete,
+		CustomizeDiff: validateLoggingCallbackDiff,
 		Importer: &schema.ResourceImporter{
 			StateContext: schema.ImportStatePassthroughContext,
 		},
@@ -52,6 +54,7 @@ func ResourceLiteLLMTeam() *schema.Resource {
 				Optional: true,
 				Elem:     &schema.Schema{Type: schema.TypeString},
 			},
+			loggingCallbackAttr: loggingCallbackSchema(),
 			"tpm_limit": {
 				Type:     schema.TypeInt,
 				Optional: true,
@@ -187,7 +190,16 @@ func resourceLiteLLMTeamCreate(d *schema.ResourceData, m interface{}) error {
 		}
 	}
 
-	log.Printf("[DEBUG] Create team request payload: %+v", teamData)
+	if len(d.Get(loggingCallbackAttr).([]interface{})) != 0 {
+		metadata := buildTeamMetadata(d)
+		if metadata == nil {
+			metadata = map[string]interface{}{}
+		}
+		if err := writeLoggingCallbackMetadata(d, metadata); err != nil {
+			return err
+		}
+		teamData["metadata"] = metadata
+	}
 
 	resp, err := MakeRequest(client, "POST", endpointTeamNew, teamData)
 	if err != nil {
@@ -226,7 +238,13 @@ func resourceLiteLLMTeamRead(d *schema.ResourceData, m interface{}) error {
 	d.Set("organization_id", GetStringValue(teamResp.OrganizationID, d.Get("organization_id").(string)))
 
 	metadata, tags, alertEmails := splitTeamMetadata(teamResp.Metadata)
+	if _, declared := d.Get("metadata").(map[string]interface{})["logging"]; !declared {
+		delete(metadata, "logging")
+	}
 	d.Set("metadata", metadata)
+	if err := readLoggingCallbacks(d, teamResp.Metadata); err != nil {
+		return err
+	}
 	d.Set("tags", tags)
 	d.Set("soft_budget_alerting_emails", alertEmails)
 
@@ -310,8 +328,9 @@ func resourceLiteLLMTeamUpdate(d *schema.ResourceData, m interface{}) error {
 	client := m.(*Client)
 
 	teamData := buildTeamData(d, d.Id())
-	log.Printf("[DEBUG] Update team request payload: %+v", teamData)
-	if declared, ok := teamData["metadata"].(map[string]interface{}); ok {
+	declared, hasMetadata := teamData["metadata"].(map[string]interface{})
+	callbacksChanged := d.HasChange(loggingCallbackAttr)
+	if hasMetadata || callbacksChanged {
 		current, err := getTeamInfo(client, d.Id())
 		if err != nil {
 			return err
@@ -319,8 +338,28 @@ func resourceLiteLLMTeamUpdate(d *schema.ResourceData, m interface{}) error {
 		if current == nil {
 			return fmt.Errorf("team %s not found", d.Id())
 		}
-		oldDeclared, _ := d.GetChange("metadata")
-		teamData["metadata"] = mergeTeamMetadata(current.Metadata, oldDeclared.(map[string]interface{}), declared)
+		var metadata map[string]interface{}
+		if callbacksChanged && !d.HasChange("metadata") && !d.HasChange("soft_budget_alerting_emails") {
+			metadata = make(map[string]interface{}, len(current.Metadata))
+			maps.Copy(metadata, current.Metadata)
+		} else {
+			oldDeclared, _ := d.GetChange("metadata")
+			metadata = mergeTeamMetadata(current.Metadata, oldDeclared.(map[string]interface{}), declared)
+		}
+		if callbacksChanged {
+			for _, field := range []string{
+				"guardrails", "tags", "prompts", "team_member_key_duration", "allowed_passthrough_routes",
+				"model_rpm_limit", "model_tpm_limit",
+			} {
+				if d.HasChange(field) {
+					delete(metadata, field)
+				}
+			}
+			if err := writeLoggingCallbackMetadata(d, metadata); err != nil {
+				return err
+			}
+		}
+		teamData["metadata"] = metadata
 	}
 
 	resp, err := MakeRequest(client, "POST", endpointTeamUpdate, teamData)
@@ -599,7 +638,7 @@ func toStringSlice(v interface{}) []string {
 func handleResponse(resp *http.Response, action string) error {
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("error %s: %s - %s", action, resp.Status, string(body))
+		return fmt.Errorf("error %s: %s - %s", action, resp.Status, redactResponseBody(body))
 	}
 	return nil
 }
