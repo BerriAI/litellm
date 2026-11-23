@@ -39,7 +39,7 @@ from typing import Final
 import httpx
 from pydantic import TypeAdapter
 
-from litellm.litellm_core_utils.core_helpers import SupportsGet, as_str_mapping, require_get
+from litellm.litellm_core_utils.core_helpers import SupportsGet, require_get
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.search.transformation import (
     BaseSearchConfig,
@@ -117,11 +117,10 @@ def _to_search_result(item: Mapping[str, object]) -> SearchResult:
 
 
 def _result_items(parsed: object) -> tuple[Mapping[str, object], ...]:
-    parsed_mapping: Final = as_str_mapping(parsed)
-    items: Final = parsed_mapping.get("results", ()) if parsed_mapping is not None else parsed
+    items: Final = parsed.get("results", ()) if isinstance(parsed, Mapping) else parsed
     if not isinstance(items, Sequence) or isinstance(items, (str, bytes)):
         return ()
-    return tuple(mapping for item in items if (mapping := as_str_mapping(item)) is not None)
+    return tuple(item for item in items if isinstance(item, Mapping))
 
 
 def _parse_result_items(raw_text: object) -> tuple[Mapping[str, object], ...]:
@@ -173,11 +172,11 @@ class AgentCoreSearchConfig(BaseSearchConfig, BaseAWSLLM):
 
     def validate_environment(
         self,
-        headers: dict[str, str],  # mutable-ok: BaseSearchConfig hands providers the mutable request header dict
+        headers: dict,  # mutable-ok: BaseSearchConfig hands providers the mutable request header dict
         api_key: str | None = None,
         api_base: str | None = None,
         **kwargs: object,  # kwargs-ok: BaseSearchConfig.validate_environment forwards provider-specific extras
-    ) -> dict[str, str]:  # mutable-ok: the handler passes these headers straight to httpx, which wants a dict
+    ) -> dict:  # mutable-ok: the handler passes these headers straight to httpx, which wants a dict
         """
         Set MCP transport headers. Per the MCP Streamable HTTP transport spec,
         the client MUST accept both application/json and text/event-stream, and
@@ -197,7 +196,7 @@ class AgentCoreSearchConfig(BaseSearchConfig, BaseAWSLLM):
     def get_complete_url(
         self,
         api_base: str | None,
-        optional_params: dict[str, object],  # mutable-ok: BaseSearchConfig passes optional params as a dict
+        optional_params: dict,  # mutable-ok: BaseSearchConfig passes optional params as a dict
         data: dict | list[dict] | None = None,  # mutable-ok: BaseSearchConfig request bodies are JSON dicts
         **kwargs: object,  # kwargs-ok: BaseSearchConfig.get_complete_url forwards provider-specific extras
     ) -> str:
@@ -215,7 +214,7 @@ class AgentCoreSearchConfig(BaseSearchConfig, BaseAWSLLM):
         query: str | list[str],  # mutable-ok: BaseSearchConfig accepts a list of queries
         optional_params: dict,  # mutable-ok: BaseSearchConfig passes optional params as a dict
         **kwargs: object,  # kwargs-ok: BaseSearchConfig.transform_search_request forwards provider-specific extras
-    ) -> dict[str, object]:  # mutable-ok: the JSON-RPC body is serialized as a JSON object
+    ) -> dict:  # mutable-ok: the JSON-RPC body is serialized as a JSON object
         """
         Transform Search request to an MCP tools/call request.
 
@@ -403,8 +402,7 @@ class AgentCoreSearchConfig(BaseSearchConfig, BaseAWSLLM):
         text_items: Final = tuple(
             item for block in self._text_blocks(response_json) for item in _parse_result_items(block.get("text"))
         )
-        result_mapping: Final = as_str_mapping(result)
-        structured: Final = result_mapping.get("structuredContent") if result_mapping is not None else None
+        structured: Final = result.get("structuredContent") if isinstance(result, Mapping) else None
         items: Final = text_items or _result_items(structured)
 
         results: Final = [_to_search_result(item) for item in items]
@@ -457,7 +455,7 @@ class AgentCoreSearchConfig(BaseSearchConfig, BaseAWSLLM):
         self,
         error_message: str,
         status_code: int,
-        headers: dict[str, object],  # mutable-ok: BaseSearchConfig.get_error_class takes the response headers as a dict
+        headers: dict,  # mutable-ok: BaseSearchConfig.get_error_class takes the response headers as a dict
     ) -> Exception:
         return BedrockError(
             status_code=status_code,
