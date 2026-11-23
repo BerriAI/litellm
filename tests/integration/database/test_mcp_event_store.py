@@ -316,7 +316,7 @@ async def test_only_the_current_claim_can_finish_or_reschedule_a_delivery() -> N
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("outcome", ["delivered", "terminated", "timeout"])
+@pytest.mark.parametrize("outcome", ["delivered", "terminated", "timeout", "discarded"])
 async def test_losing_the_claim_or_subscription_generation_blocks_all_settlement_effects(
     outcome: SettlementOutcome,
 ) -> None:
@@ -367,6 +367,8 @@ async def test_losing_the_claim_or_subscription_generation_blocks_all_settlement
                 for d in await first_worker.claim(later, later + timedelta(minutes=1), 100)
                 if d.subscription_id == row.id
             ]
-            assert [d.body for d in due] == (['{"type":"gap","cursor":"c1"}'] if outcome == "timeout" else [])
+            assert [d.body for d in due] == (
+                ['{"type":"gap","cursor":"c1"}'] if outcome in ("timeout", "discarded") else []
+            )
         finally:
             await first_worker.delete(row.id)
