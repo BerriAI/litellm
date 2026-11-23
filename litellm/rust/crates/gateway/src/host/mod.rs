@@ -11,7 +11,7 @@ mod router;
 pub use auth::NativeRows;
 pub use boot::NativeBootHost;
 pub use capacity::NativeCapacityHost;
-pub use router::{NativeRouterHost, answers};
+pub use router::NativeRouterHost;
 
 use std::sync::Arc;
 
@@ -36,7 +36,7 @@ pub(crate) fn layers(identity: &Authenticated<NativeRows>) -> impl Iterator<Item
 }
 
 /// The host the gateway's routes are served through.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct NativeHost {
     callbacks: Arc<Callbacks>,
 }

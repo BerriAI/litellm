@@ -5,22 +5,27 @@ use litellm_gateway_inference::{
     Error, RoutingCache,
     routing::{self, RouteAttempt},
 };
-use litellm_router_core::HostStep;
 use litellm_router_core::{
-    Attempt, AttemptError, AttemptFailure, ConfigError, Deployment, RouterEvent, RouterHost,
-    RoutingContext, SelectStage, Served,
+    Attempt, AttemptError, AttemptFailure, ConfigError, Deployment, HostStep, Reached, RouterEvent,
+    RouterHost, RoutingContext, SelectStage, Served,
 };
 
-use crate::{Gateway, host::NativeRows};
+use crate::{
+    Gateway,
+    host::{NativeHost, NativeRows},
+};
 
-/// Whether [`NativeRouterHost`] answers `step` as the proxy does. `admit` leaves to Python every
-/// call that would make a step it does not.
-pub fn answers(step: &HostStep) -> bool {
-    match step {
-        HostStep::Pick(..)
-        | HostStep::PreCallFacts
-        | HostStep::HealthStates
-        | HostStep::FallbackParams(_) => false,
+impl NativeHost {
+    /// What a call served by `reached` is over: the first of its steps [`NativeRouterHost`] does
+    /// not answer as the proxy does, and `None` when it answers them all. `admit` leaves every
+    /// such call to Python.
+    pub(crate) fn unanswered(&self, reached: &Reached) -> Option<Box<str>> {
+        reached.steps.first().map(|step| match step {
+            HostStep::Pick(..)
+            | HostStep::PreCallFacts
+            | HostStep::HealthStates
+            | HostStep::FallbackParams(_) => format!("router_settings.{}", step.setting()).into(),
+        })
     }
 }
 

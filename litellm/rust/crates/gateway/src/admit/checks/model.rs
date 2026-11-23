@@ -53,13 +53,7 @@ pub(super) fn model(admit: &Admit, fields: &Map<String, Value>) -> Option<Reason
 fn unserved(admit: &Admit, reached: &Reached) -> Option<Box<str>> {
     let group = reached.group.as_str();
     super::router::group(&admit.config.router_settings, group)
-        .or_else(|| {
-            reached
-                .steps
-                .iter()
-                .find(|step| !crate::host::answers(step))
-                .map(|step| format!("router_settings.{}", step.setting()).into())
-        })
+        .or_else(|| admit.host.unanswered(reached))
         .or_else(|| {
             admit
                 .config
