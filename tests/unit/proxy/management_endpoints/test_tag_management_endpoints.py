@@ -1,7 +1,7 @@
 import inspect
 import json
-from collections.abc import Mapping, Sequence
-from contextlib import contextmanager
+from collections.abc import AsyncIterator, Mapping, Sequence
+from contextlib import asynccontextmanager, contextmanager
 from datetime import datetime
 from types import MappingProxyType, SimpleNamespace
 from typing import Final, cast
@@ -554,6 +554,7 @@ async def test_update_tag_clears_or_sets_only_provided_budget_fields(
 @pytest.mark.asyncio
 async def test_update_tag_explicit_null_clears_budget_duration():
     from datetime import datetime
+    from prisma.models import LiteLLM_BudgetTable
 
     from litellm.proxy.management_endpoints.tag_management_endpoints import update_tag
     from litellm.types.tag_management import TagUpdateRequest
@@ -572,14 +573,23 @@ async def test_update_tag_explicit_null_clears_budget_duration():
     mock_db.litellm_customermembertable.find_many = AsyncMock(return_value=[])
     mock_db.litellm_customerteamtable.find_many = AsyncMock(return_value=[])
     mock_db.litellm_customerorganizationtable.find_many = AsyncMock(return_value=[])
-    mock_prisma = SimpleNamespace(db=mock_db)
+    mock_db.query_raw = AsyncMock(return_value=[{"budget_limits": None}])
+
+    @asynccontextmanager
+    async def transaction() -> AsyncIterator[Mock]:
+        yield mock_db
+
+    mock_prisma = SimpleNamespace(db=mock_db, tx=transaction)
     mock_db.litellm_tagtable.find_unique = AsyncMock(return_value=existing_tag)
     mock_db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
     mock_db.litellm_tagtable.update = AsyncMock(return_value=updated_tag)
+    mock_db.litellm_budgettable.find_unique = AsyncMock(
+        return_value=LiteLLM_BudgetTable.model_construct(budget_id="budget-1", budget_duration="30d")
+    )
 
     async def update_budget(where, data, **_):
         budget_state.store(data)
-        return budget_state.row()
+        return LiteLLM_BudgetTable.model_construct(**vars(budget_state.row()))
 
     mock_db.litellm_budgettable.update = update_budget
     with (
@@ -674,7 +684,7 @@ def _tag_cache_doubles():
     with (
         patch("litellm.proxy.proxy_server.user_api_key_cache", recording_cache),
         patch(
-            "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.publish_auth_cache_invalidation",
+            "litellm.proxy.common_utils.cache_invalidation_pubsub.publish_cache_invalidation",
             mock_publish,
         ),
     ):

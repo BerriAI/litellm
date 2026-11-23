@@ -10,7 +10,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import chain, groupby
 from types import MappingProxyType
-from typing import Any, Final, TypeAlias, cast
+from typing import Final, TypeAlias, cast
 
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
@@ -888,7 +888,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         *,
         drop_params: bool = True,
         preserve_system_instructions: bool = False,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """
         Translate a full Anthropic /v1/messages request dict to
         litellm.responses() / litellm.aresponses() kwargs.

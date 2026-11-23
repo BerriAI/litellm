@@ -1,3 +1,4 @@
+use crate::error::InvalidCredentials;
 use crate::{
     BudgetExceeded, Error, JwtDenial, KeyDenial, KeyFailure, KeyHash, ModelAccessDenied,
     PremiumRequired, RbacDenial, TeamDenial, VerifyDenial,
@@ -100,7 +101,7 @@ impl Error {
             Self::Key(denial) => denial.public(),
             Self::Jwt(denial) => denial.public(),
             Self::BudgetExceeded(exceeded) => PublicDenial::BudgetExceeded(exceeded.clone()),
-            Self::HostFailed => return None,
+            Self::HostFailed | Self::HostDeclined => return None,
         })
     }
 }
@@ -198,7 +199,7 @@ impl RbacDenial {
 impl TeamDenial {
     pub(crate) fn public(&self) -> PublicDenial {
         match self {
-            Self::TeamNotFound { .. } | Self::TeamAliasNotFound { .. } => http(404, self),
+            Self::TeamNotFound { .. } | Self::TeamAliasNotFound { .. } => auth(&InvalidCredentials),
             Self::TeamAliasAmbiguous { .. } => http(400, self),
             Self::NoDb | Self::NoTeamInToken { .. } => plain(self),
             Self::NoTeamsInToken
@@ -391,11 +392,11 @@ mod tests {
     )]
     #[case::team_not_found(
         TeamDenial::TeamNotFound { team_id: "t".to_owned() },
-        http(404, "Team doesn't exist in db. Team=t. Create team via `/team/new` call.")
+        auth(&"Authentication Error, invalid credentials")
     )]
     #[case::alias_not_found(
         TeamDenial::TeamAliasNotFound { alias: "eng".to_owned() },
-        http(404, "Team with alias 'eng' doesn't exist in db. Create team via `/team/new` call.")
+        auth(&"Authentication Error, invalid credentials")
     )]
     #[case::alias_ambiguous(
         TeamDenial::TeamAliasAmbiguous { alias: "eng".to_owned() },
