@@ -1414,3 +1414,17 @@ def test_region_pinned_bedrock_converse_rows_carry_their_base_rows_capabilities(
     assert {base for _, base in rows} >= set(BEDROCK_CONVERSE_MISTRAL_TOOL_CHOICE_MODELS)
 
     assert list(chain.from_iterable(_capabilities_missing_from_one_side(prices, key, base) for key, base in rows)) == []
+
+
+@pytest.mark.parametrize("model", ("MAI-Image-2.7", "MAI-Image-2.7-Flash"))
+def test_foundry_mai_image_models_resolve_with_token_rates(
+    local_model_cost_map: None, prices: CostMap, model: str
+) -> None:
+    key: Final = f"azure_ai/{model}"
+    info: Final = litellm.get_model_info(key)
+    assert (info["litellm_provider"], info["mode"]) == ("azure_ai", "image_generation")
+    rates: Final = tuple(
+        prices[key].get(name)
+        for name in ("input_cost_per_token", "input_cost_per_image_token", "output_cost_per_image_token")
+    )
+    assert all(isinstance(value, (int, float)) and value > 0 for value in rates)

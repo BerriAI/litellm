@@ -55643,6 +55643,7 @@
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
         "supports_function_calling": true,
+        "supports_native_structured_output": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
@@ -55816,6 +55817,7 @@
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
         "supports_function_calling": true,
+        "supports_native_structured_output": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
@@ -82972,6 +82974,7 @@
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
         "supports_function_calling": true,
+        "supports_native_structured_output": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
@@ -83014,6 +83017,7 @@
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
         "supports_function_calling": true,
+        "supports_native_structured_output": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
@@ -84543,6 +84547,7 @@
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
         "supports_function_calling": true,
+        "supports_native_structured_output": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
@@ -84591,6 +84596,7 @@
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
         "supports_function_calling": true,
+        "supports_native_structured_output": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
@@ -86701,7 +86707,7 @@
         "cache_creation_input_token_cost_batches": 1.875e-06,
         "cache_read_input_token_cost_batches": 1.5e-07,
         "deprecation_date": "2026-11-30",
-        "deprecation_source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html",
+        "deprecation_source": "https://platform.claude.com/docs/en/about-claude/model-deprecations",
         "successor_model": "bedrock/claude_platform/claude-sonnet-5-5",
         "input_cost_per_token_batches": 1.5e-06,
         "litellm_provider": "bedrock",
@@ -109616,6 +109622,46 @@
         "mode": "decisions",
         "output_cost_per_token": 0.0,
         "source": "https://prices.azure.com/api/retail/prices?$filter=contains(productName,'Decision')"
+    },
+    "azure_ai/eu/Microsoft-Decision-1.1": {
+        "input_cost_per_token": 5e-08,
+        "litellm_provider": "azure_ai",
+        "max_input_tokens": 32768,
+        "mode": "decisions",
+        "output_cost_per_token": 0.0,
+        "source": "https://commandline.microsoft.com/microsoft-decision-model-ga/#pricing"
+    },
+    "azure_ai/us/Microsoft-Decision-1.1": {
+        "input_cost_per_token": 4.6e-08,
+        "litellm_provider": "azure_ai",
+        "max_input_tokens": 32768,
+        "mode": "decisions",
+        "output_cost_per_token": 0.0,
+        "source": "https://commandline.microsoft.com/microsoft-decision-model-ga/#pricing"
+    },
+    "azure_ai/MAI-Image-2.7": {
+        "input_cost_per_image_token": 8e-06,
+        "input_cost_per_token": 5e-06,
+        "litellm_provider": "azure_ai",
+        "mode": "image_generation",
+        "output_cost_per_image_token": 3.4e-05,
+        "source": "https://prices.azure.com/api/retail/prices?$filter=productName%20eq%20'MAI%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
+        "supported_endpoints": [
+            "/v1/images/generations",
+            "/v1/images/edits"
+        ]
+    },
+    "azure_ai/MAI-Image-2.7-Flash": {
+        "input_cost_per_image_token": 2.5e-06,
+        "input_cost_per_token": 1.75e-06,
+        "litellm_provider": "azure_ai",
+        "mode": "image_generation",
+        "output_cost_per_image_token": 1e-05,
+        "source": "https://prices.azure.com/api/retail/prices?$filter=productName%20eq%20'MAI%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
+        "supported_endpoints": [
+            "/v1/images/generations",
+            "/v1/images/edits"
+        ]
     },
     "fal_ai/kling/v4/text-to-image": {
         "litellm_provider": "fal_ai",

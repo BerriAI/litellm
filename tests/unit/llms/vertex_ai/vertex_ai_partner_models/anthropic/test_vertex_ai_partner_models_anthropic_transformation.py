@@ -987,21 +987,38 @@ def test_vertex_chat_request_rejects_a_malformed_output_format_without_drop_para
     assert "litellm_settings:\n drop_params: true" in str(error.value)
 
 
-def test_vertex_ai_native_response_format_reaches_vertex_as_output_config_format(local_model_cost_map):
+@pytest.mark.parametrize(
+    "model",
+    (
+        "claude-fable-5-1",
+        "claude-fable-5",
+        "claude-fable-5@default",
+        "claude-haiku-5-5",
+        "claude-haiku-5-5@default",
+        "claude-sonnet-5-5",
+        "claude-sonnet-5-5@default",
+    ),
+)
+def test_vertex_ai_native_response_format_reaches_vertex_as_output_config_format(
+    local_model_cost_map: None, model: str
+) -> None:
     config = VertexAIAnthropicConfig()
     schema: Final = {"type": "object", "properties": {"result": {"type": "string"}}, "required": ["result"]}
     optional_params: Final = config.map_openai_params(
         non_default_params={
-            "response_format": {"type": "json_schema", "json_schema": {"name": "result", "schema": schema}},
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": "result", "strict": True, "schema": schema},
+            },
             "reasoning_effort": "high",
         },
         optional_params={},
-        model="claude-fable-5-1",
+        model=model,
         drop_params=False,
     )
 
     request: Final = config.transform_request(
-        model="claude-fable-5-1",
+        model=model,
         messages=[{"role": "user", "content": "Return the result"}],
         optional_params=optional_params,
         litellm_params={},
@@ -1013,6 +1030,7 @@ def test_vertex_ai_native_response_format_reaches_vertex_as_output_config_format
     assert request["output_config"]["format"]["schema"]["properties"] == schema["properties"]
     assert request["output_config"]["effort"] == optional_params["output_config"]["effort"]
     assert "tool_choice" not in request
+    assert not request.get("tools")
 
 
 def test_vertex_ai_fable_5_1_response_format_uses_native_output_format(local_model_cost_map):
