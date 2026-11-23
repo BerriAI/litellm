@@ -5,8 +5,8 @@ use std::sync::{
 
 use litellm_callbacks::Abort;
 use litellm_callbacks_parallel_request_limiter::{
-    Code, Descriptor, Engine, LimiterState, ParallelRequestLimiter, PostCallFailureFacts,
-    PreCallFacts, PriorResponse, Settings, SuccessFacts, TargetFacts,
+    Code, Ctx, Descriptor, Engine, LimiterState, ParallelRequestLimiter, Policy,
+    PostCallFailureFacts, PreCallFacts, PriorResponse, Settings, SuccessFacts, TargetFacts,
 };
 use litellm_redis_store::{
     Number,
@@ -205,6 +205,95 @@ async fn a_reservation_is_settled_to_actual_usage_and_refunded_on_failure() {
     assert_eq!(
         count(&store, "api_key", "k", Kind::Tokens),
         Some(Local::Number(Number::Int(120)))
+    );
+}
+
+#[rstest]
+#[case::no_window_open(None, 1092)]
+#[case::window_open(Some(600), 500)]
+#[tokio::test]
+async fn an_unreserved_charge_counts_toward_the_next_reservation(
+    #[case] admitted_first: Option<i64>,
+    #[case] charged: i64,
+) {
+    let (limiter, _, _) = limiter(true);
+    let tpm = descriptors(
+        json!([{"key": "api_key", "value": "k", "rate_limit": {"tokens_per_unit": 1000}}]),
+    );
+    if let Some(reserved) = admitted_first {
+        assert_eq!(
+            limiter
+                .pre_call(
+                    &LimiterState::default(),
+                    facts(tpm.clone(), Some(reserved)),
+                    None
+                )
+                .await,
+            None
+        );
+    }
+    limiter
+        .settle_turn(
+            &LimiterState::default(),
+            SuccessFacts {
+                total_tokens: charged,
+                targets: TargetFacts {
+                    user_api_key_hash: Some("k".into()),
+                    ..TargetFacts::default()
+                },
+                ..SuccessFacts::default()
+            },
+            None,
+        )
+        .await;
+
+    let refused = limiter
+        .pre_call(&LimiterState::default(), facts(tpm, Some(10)), None)
+        .await
+        .expect("admitted past tpm_limit");
+    assert_eq!(refused.status, 429);
+    assert_eq!(refused.headers["rate_limit_type"], "tokens");
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_refund_into_no_window_cannot_offset_a_later_charge() {
+    let (limiter, _, _) = limiter(true);
+    limiter
+        .engine()
+        .refund_reserved(
+            &[("api_key".into(), "k".into())],
+            50,
+            &[],
+            Ctx {
+                policy: Policy::default(),
+                request: None,
+            },
+        )
+        .await;
+    limiter
+        .settle_turn(
+            &LimiterState::default(),
+            SuccessFacts {
+                total_tokens: 1092,
+                targets: TargetFacts {
+                    user_api_key_hash: Some("k".into()),
+                    ..TargetFacts::default()
+                },
+                ..SuccessFacts::default()
+            },
+            None,
+        )
+        .await;
+
+    let tpm = descriptors(
+        json!([{"key": "api_key", "value": "k", "rate_limit": {"tokens_per_unit": 1080}}]),
+    );
+    assert!(
+        limiter
+            .pre_call(&LimiterState::default(), facts(tpm, Some(10)), None)
+            .await
+            .is_some()
     );
 }
 

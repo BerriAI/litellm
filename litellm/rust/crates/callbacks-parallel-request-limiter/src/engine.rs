@@ -1580,11 +1580,7 @@ impl Engine {
             return;
         }
         if !self.store.has_redis() {
-            self.labelled(
-                "async_increment_pipeline",
-                self.store.increment_many(operations),
-            )
-            .await;
+            self.increment_in_memory_opening_windows(operations);
             return;
         }
         let scopes: Vec<Scope> = operations
@@ -1622,6 +1618,44 @@ impl Engine {
                 .await;
                 return;
             }
+        }
+    }
+
+    fn increment_in_memory_opening_windows(&self, operations: &[Increment]) {
+        let window_start = Local::Text((self.now().trunc() as i64).to_string());
+        let _guard = self.store.memory_guard();
+        for operation in operations {
+            let scope = &operation.counter.scope;
+            let opens_window = operation.ttl.is_some_and(|ttl| !ttl.is_zero())
+                && self.local(Entry::Window(scope.clone())).is_none();
+            if opens_window && operation.amount.as_f64() <= 0.0 {
+                continue;
+            }
+            if opens_window {
+                for kind in [Kind::Requests, Kind::Tokens] {
+                    self.set_local(
+                        Entry::Counter(counter_of(scope, kind)),
+                        Local::Number(Number::Int(0)),
+                        operation.ttl,
+                    );
+                }
+                self.set_local(
+                    Entry::Window(scope.clone()),
+                    window_start.clone(),
+                    operation.ttl,
+                );
+            }
+            let counter = Entry::Counter(operation.counter.clone());
+            let current = match self.local(counter.clone()) {
+                None => Number::Int(0),
+                Some(Local::Number(number)) => number,
+                Some(_) => continue,
+            };
+            self.set_local(
+                counter,
+                Local::Number(current + operation.amount),
+                operation.ttl,
+            );
         }
     }
 
