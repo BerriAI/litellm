@@ -87,6 +87,22 @@ def test_handler_charges_nothing_and_names_the_model_for_queue_status_and_result
         assert logging_obj.model_call_details["response_cost"] is None
 
 
+def test_handler_charges_flat_video_queue_submit(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "fal_ai/fal-ai/test-flat-video",
+        {"litellm_provider": "fal_ai", "mode": "video_generation", "output_cost_per_video": 0.37},
+    )
+    result: Final = FalAIPassthroughLoggingHandler().fal_ai_passthrough_handler(
+        response_body={"request_id": "req-1", "status": "IN_QUEUE"},
+        request_body={},
+        logging_obj=_logging_obj(),
+        url_route="https://queue.fal.run/fal-ai/test-flat-video",
+        kwargs={},
+    )
+    assert result["kwargs"]["response_cost"] == pytest.approx(0.37)
+
+
 def test_handler_charges_for_queue_submit():
     handler_result = FalAIPassthroughLoggingHandler().fal_ai_passthrough_handler(
         response_body={"request_id": "req-1", "status": "IN_QUEUE"},

@@ -41,7 +41,6 @@ CLI_STATE_PREFIX: Final = "litellm-session-token"
 DEVICE_CODE_GRANT: Final = "urn:ietf:params:oauth:grant-type:device_code"
 POLL_SECRET_HEADER: Final = "x-litellm-cli-poll-secret"
 DISABLED_PAGE_TITLE: Final = "<title>Admin UI Disabled</title>"
-LOGIN_FORM_TITLE: Final = "<title>LiteLLM Login</title>"
 CLI_LOGIN_PAGE_TITLE: Final = "<title>LiteLLM CLI Login</title>"
 CLI_SUCCESS_PAGE_TITLE: Final = "<title>CLI Authentication Successful - LiteLLM</title>"
 SESSION_GONE: Final = "CLI login session not found or expired"
@@ -426,8 +425,9 @@ def test_malformed_cli_keys_answer_400_when_the_ui_is_disabled(
 
 
 def test_login_form_and_cli_validation_when_the_flag_is_unset(gateway: Gateway) -> None:
-    form: Final = gateway.client.get("/sso/key/generate")
-    assert form.status_code == 200 and LOGIN_FORM_TITLE in form.text, f"{form.status_code} {form.text}"
+    login: Final = gateway.client.get("/sso/key/generate", follow_redirects=False)
+    assert login.status_code == 303, f"{login.status_code} {login.text}"
+    assert login.headers["location"] == str(gateway.client.base_url.join("/ui/login"))
     unknown: Final = gateway.client.get(
         "/sso/key/generate", params={"source": CLI_SOURCE, "key": f"cli-{secrets.token_urlsafe(24)}"}
     )
@@ -695,9 +695,11 @@ def test_cli_session_token_is_denied_once_its_team_budget_is_exhausted(
             key=key,
         )
         assert refused.status_code == 422, f"{refused.status_code} {refused.text}"
-        error: Final = object_value(JSON_OBJECT.validate_json(refused.content)["error"])
-        assert error["type"] == "budget_exceeded", refused.text
-        assert error["code"] == "422", refused.text
+        body: Final = JSON_OBJECT.validate_json(refused.content)
+        assert body["type"] == "error", refused.text
+        error: Final = object_value(body["error"])
+        assert error["type"] == "invalid_request_error", refused.text
+        assert "param" not in error and "code" not in error, refused.text
         message: Final = string_value(error["message"])
         assert "Budget has been exceeded!" in message, refused.text
         assert f"Team={team}" in message, refused.text

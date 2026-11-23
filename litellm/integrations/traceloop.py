@@ -1,7 +1,27 @@
 import traceback
-from typing import Final
+from typing import Final, Protocol
 
 from litellm._logging import verbose_logger
+
+
+class _TraceloopSpan(Protocol):
+    def is_recording(self) -> bool: ...
+
+    def set_attribute(self, key: str, value: object) -> object: ...
+
+    def record_exception(self, exception: BaseException) -> object: ...
+
+    def set_status(self, status: object) -> object: ...
+
+    def end(self, end_time: int) -> object: ...
+
+
+class _TraceloopTracer(Protocol):
+    def start_span(self, name: str, *, kind: object, start_time: int) -> _TraceloopSpan: ...
+
+
+class _TraceloopTracerWrapper(Protocol):
+    def get_tracer(self) -> _TraceloopTracer: ...
 
 
 class TraceloopLogger:
@@ -10,7 +30,7 @@ class TraceloopLogger:
     Use the OpenTelemetry standard integration instead
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         try:
             from traceloop.sdk import Traceloop
             from traceloop.sdk.tracing.tracing import TracerWrapper
@@ -26,7 +46,7 @@ class TraceloopLogger:
             app_name="Litellm-Server",
             disable_batch=True,
         )
-        self.tracer_wrapper = TracerWrapper()
+        self.tracer_wrapper: _TraceloopTracerWrapper = TracerWrapper()
 
     def log_event(
         self,
@@ -34,11 +54,11 @@ class TraceloopLogger:
         response_obj,
         start_time,
         end_time,
-        user_id,
+        user_id: object,
         print_verbose,
-        level="DEFAULT",
-        status_message=None,
-    ):
+        level: str = "DEFAULT",
+        status_message: object = None,
+    ) -> None:
         from opentelemetry.semconv.ai import SpanAttributes
         from opentelemetry.trace import SpanKind, Status, StatusCode
 

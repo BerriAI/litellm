@@ -1,11 +1,14 @@
 import json
+import sqlite3
 from collections.abc import Mapping, Sequence
+from contextlib import nullcontext
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Final, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 
 import litellm
 from litellm._uuid import uuid
@@ -14,11 +17,60 @@ from litellm.proxy._types import (
     LiteLLM_TeamMembership,
     LiteLLM_TeamTable,
     LiteLLM_UserTable,
+    LitellmUserRoles,
     Member,
     UserAPIKeyAuth,
 )
-from litellm.proxy.management_helpers.utils import add_new_member
+from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+from litellm.proxy.management_helpers.utils import add_new_member, reject_budget_windows, validate_budget_windows_update
 from litellm.proxy.utils import PrismaClient
+
+
+class BudgetReferenceDatabase:
+    def __init__(self, connection: sqlite3.Connection) -> None:
+        self.connection = connection
+
+    async def query_raw(self, query: str, *args: object) -> object:
+        row: Final = self.connection.execute(query, args).fetchone()
+        return [{"referenced": bool(row[0])}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("consumer", (
+    "LiteLLM_VerificationToken", "LiteLLM_EndUserTable", "LiteLLM_OrganizationTable",
+    "LiteLLM_ProjectTable", "LiteLLM_TagTable", "LiteLLM_ModelAccessGroupBudgetTable",
+    "LiteLLM_TeamMembership", "LiteLLM_OrganizationMembership", "team-default", "end-user-default",
+))
+async def test_adding_windows_rejects_existing_scalar_consumers(consumer: str) -> None:
+    with sqlite3.connect(":memory:") as connection:
+        for table in (
+            "LiteLLM_VerificationToken", "LiteLLM_EndUserTable", "LiteLLM_OrganizationTable",
+            "LiteLLM_ProjectTable", "LiteLLM_TagTable", "LiteLLM_ModelAccessGroupBudgetTable",
+            "LiteLLM_TeamMembership", "LiteLLM_OrganizationMembership", "LiteLLM_TeamTable",
+        ):
+            connection.execute(f'CREATE TABLE "{table}" (budget_id TEXT, metadata TEXT)')
+        db: Final = BudgetReferenceDatabase(connection)
+        await validate_budget_windows_update(db, "combined")
+        if consumer == "team-default":
+            connection.execute('INSERT INTO "LiteLLM_TeamTable" (metadata) VALUES (?)',
+                               (json.dumps({"team_member_budget_id": "combined"}),))
+        elif consumer == "end-user-default":
+            connection.execute('INSERT INTO "LiteLLM_VerificationToken" (metadata) VALUES (?)',
+                               (json.dumps({"end_user_budget_id": "combined"}),))
+        else:
+            connection.execute(f'INSERT INTO "{consumer}" (budget_id) VALUES (?)', ("combined",))
+        with pytest.raises(HTTPException) as error:
+            await validate_budget_windows_update(db, "combined")
+        assert error.value.status_code == 400
+        await validate_budget_windows_update(db, "unrelated")
+
+
+def test_scalar_attachment_guard_preserves_empty_windows_and_rejects_zero_cap() -> None:
+    reject_budget_windows({"budget_limits": None, "max_budget": 10})
+    reject_budget_windows({"budget_limits": [], "max_budget": 10})
+    with pytest.raises(HTTPException) as error:
+        reject_budget_windows({"budget_limits": [{"budget_duration": "1mo", "max_budget": 0}]})
+    assert error.value.status_code == 400
 
 
 @pytest.mark.asyncio
@@ -201,6 +253,7 @@ async def test_add_new_member_links_default_team_budget_id():
 
     mock_default_budget_row = MagicMock()
     mock_default_budget_row.budget_id = test_default_budget_id
+    mock_default_budget_row.model_dump.return_value = {"budget_id": test_default_budget_id}
     mock_prisma_client.db.litellm_budgettable.find_unique = AsyncMock(
         return_value=mock_default_budget_row
     )
@@ -249,6 +302,40 @@ async def test_add_new_member_links_default_team_budget_id():
     assert create_data["budget_id"] == test_default_budget_id
 
 
+@pytest.mark.asyncio
+async def test_handle_budget_for_entity_updates_with_existing_budget_id_in_request() -> None:
+    from litellm.proxy.management_helpers.utils import handle_budget_for_entity
+    from litellm.types.tag_management import TagUpdateRequest
+
+    budget_update: Final = AsyncMock()
+    db: Final = SimpleNamespace(
+        tx=lambda: nullcontext(db),
+        query_raw=AsyncMock(return_value=[]),
+        litellm_budgettable=SimpleNamespace(update=budget_update, find_unique=AsyncMock(return_value=None)),
+        litellm_customermembertable=SimpleNamespace(find_many=AsyncMock(return_value=[])),
+        litellm_customerteamtable=SimpleNamespace(find_many=AsyncMock(return_value=[])),
+        litellm_customerorganizationtable=SimpleNamespace(find_many=AsyncMock(return_value=[])),
+    )
+    prisma_client: Final = cast(PrismaClient, SimpleNamespace(db=db, writer_db=db))
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
+        patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
+    ):
+        budget_id: Final = await handle_budget_for_entity(
+            data=TagUpdateRequest(name="budget-tag", budget_id="budget-1", max_budget=20),
+            existing_budget_id="budget-1",
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin"),
+            prisma_client=prisma_client,
+            litellm_proxy_admin_name="admin",
+        )
+
+    assert budget_id == "budget-1"
+    budget_update.assert_awaited_once_with(
+        where={"budget_id": "budget-1", "rollover_max_budget": None},
+        data={"budget_id": "budget-1", "max_budget": 20.0, "updated_by": "admin"},
+    )
+
+
 @pytest.mark.parametrize(
     ("request_fields", "cleared_budget_fields", "should_update", "expected_max_budget"),
     cast(
@@ -273,10 +360,15 @@ async def test_handle_budget_for_entity_updates_only_cleared_or_supplied_fields(
     request_data: Final = {"name": "budget-tag", **request_fields}
     tag: Final = TagUpdateRequest.model_validate(request_data)
     budget_update: Final = AsyncMock()
-    prisma_client: Final = cast(
-        PrismaClient,
-        SimpleNamespace(db=SimpleNamespace(litellm_budgettable=SimpleNamespace(update=budget_update))),
+    db: Final = SimpleNamespace(
+        tx=lambda: nullcontext(db),
+        query_raw=AsyncMock(return_value=[]),
+        litellm_budgettable=SimpleNamespace(update=budget_update, find_unique=AsyncMock(return_value=None)),
+        litellm_customermembertable=SimpleNamespace(find_many=AsyncMock(return_value=[])),
+        litellm_customerteamtable=SimpleNamespace(find_many=AsyncMock(return_value=[])),
+        litellm_customerorganizationtable=SimpleNamespace(find_many=AsyncMock(return_value=[])),
     )
+    prisma_client: Final = cast(PrismaClient, SimpleNamespace(db=db, writer_db=db))
 
     with (
         patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
@@ -432,6 +524,79 @@ async def test_add_new_member_budget_duration_only_clones_default_max_budget():
     assert cloned_create_data["max_budget"] == 100.0  # kept from the team default
     assert cloned_create_data["budget_duration"] == "7d"  # overridden by the caller
     assert cloned_create_data["budget_reset_at"] > datetime.now(timezone.utc)
+
+
+@pytest.mark.parametrize(
+    ("default_budget_exists", "expected_budget"),
+    [
+        pytest.param(
+            True,
+            {"budget_duration": "1d", "allowed_models": ["gpt-4o-mini"]},
+            id="team-default-budget-supplies-the-reset-and-keeps-the-cap-to-itself",
+        ),
+        pytest.param(False, {"allowed_models": ["gpt-4o-mini"]}, id="missing-team-default-budget-keeps-the-models"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_add_new_member_with_only_allowed_models_resets_on_the_team_default_window(
+    default_budget_exists: bool, expected_budget: dict[str, object]
+) -> None:
+    """A team's default_team_member_models reach here as allowed_models with no max_budget_in_team. The
+    cap is read from the team default at auth time, so it is not copied and later /team/update changes
+    still apply, but spend is only reset for a row with a reset date of its own."""
+    prisma_client: Final = AsyncMock()
+    user_row: Final = MagicMock()
+    user_row.model_dump.return_value = {
+        "user_id": "models-only-user",
+        "user_email": None,
+        "teams": ["team-mo"],
+        "user_role": "internal_user",
+    }
+    prisma_client.db.litellm_usertable.upsert = AsyncMock(return_value=user_row)
+    prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=user_row)
+    default_budget_row: Final = MagicMock()
+    default_budget_row.model_dump.return_value = {
+        "budget_id": "default-mo",
+        "max_budget": 100.0,
+        "soft_budget": None,
+        "max_parallel_requests": None,
+        "tpm_limit": 1000,
+        "rpm_limit": None,
+        "model_max_budget": None,
+        "budget_duration": "1d",
+        "allowed_models": [],
+    }
+    prisma_client.db.litellm_budgettable.find_unique = AsyncMock(
+        return_value=default_budget_row if default_budget_exists else None
+    )
+    created_budget_row: Final = MagicMock()
+    created_budget_row.budget_id = "member-mo"
+    prisma_client.db.litellm_budgettable.create = AsyncMock(return_value=created_budget_row)
+    membership_row: Final = MagicMock()
+    membership_row.model_dump.return_value = {
+        "team_id": "team-mo",
+        "user_id": "models-only-user",
+        "budget_id": "member-mo",
+        "litellm_budget_table": None,
+    }
+    prisma_client.db.litellm_teammembership.upsert = AsyncMock(return_value=membership_row)
+
+    await add_new_member(
+        new_member=Member(user_id="models-only-user", role="user"),
+        max_budget_in_team=None,
+        prisma_client=prisma_client,
+        team_id="team-mo",
+        user_api_key_dict=UserAPIKeyAuth(user_id="admin_user", user_role=LitellmUserRoles.PROXY_ADMIN),
+        litellm_proxy_admin_name="test_admin",
+        default_team_budget_id="default-mo",
+        allowed_models=["gpt-4o-mini"],
+    )
+
+    prisma_client.db.litellm_budgettable.create.assert_called_once()
+    created: Final = dict(prisma_client.db.litellm_budgettable.create.call_args.kwargs["data"])
+    reset_at: Final = created.pop("budget_reset_at", None)
+    assert created == {"created_by": "admin_user", "updated_by": "admin_user", **expected_budget}
+    assert (reset_at is not None) is default_budget_exists
 
 
 @pytest.mark.asyncio
@@ -768,6 +933,7 @@ async def test_add_new_member_with_user_email_links_default_budget():
 
     mock_default_budget_row = MagicMock()
     mock_default_budget_row.budget_id = test_default_budget_id
+    mock_default_budget_row.model_dump.return_value = {"budget_id": test_default_budget_id}
     mock_prisma_client.db.litellm_budgettable.find_unique = AsyncMock(
         return_value=mock_default_budget_row
     )
@@ -898,6 +1064,9 @@ class _FakeDb:
         self.litellm_budgettable: Final = _FakeBudgetTable()
         self.litellm_teammembership: Final = _FakeMembershipTable(self.litellm_budgettable)
         self.litellm_usertable: Final = _FakeUserTable()
+        self.litellm_customermembertable: Final = SimpleNamespace(find_many=AsyncMock(return_value=[]))
+        self.litellm_customerteamtable: Final = SimpleNamespace(find_many=AsyncMock(return_value=[]))
+        self.litellm_customerorganizationtable: Final = SimpleNamespace(find_many=AsyncMock(return_value=[]))
 
 
 @pytest.mark.asyncio
@@ -911,6 +1080,9 @@ async def test_team_update_reaches_inherited_members_but_not_overridden_ones():
     db: Final = _FakeDb()
     prisma_client: Final = MagicMock()
     prisma_client.db = db
+    prisma_client.writer_db.tx.return_value.__aenter__.return_value = SimpleNamespace(
+        litellm_budgettable=db.litellm_budgettable, query_raw=AsyncMock(return_value=[])
+    )
     admin: Final = UserAPIKeyAuth(user_id="admin_user", user_role=LitellmUserRoles.PROXY_ADMIN)
     team_id: Final = "team-shared-default"
     default_budget: Final = await db.litellm_budgettable.create(data={"budget_id": "team-default", "max_budget": 100.0})
@@ -1451,3 +1623,53 @@ async def test_add_new_member_runs_every_write_on_the_caller_transaction(new_mem
     prisma_client.db.assert_not_called()
     prisma_client.get_data.assert_not_awaited()
     prisma_client.insert_data.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "new_member",
+    (Member(user_id="windows-user", role="user"), Member(user_email="windows@example.com", role="user")),
+    ids=("by_user_id", "by_email"),
+)
+async def test_add_new_member_gives_a_new_user_the_default_budget_windows(new_member: Member, monkeypatch):
+    from litellm.proxy._types import LitellmUserRoles
+
+    monkeypatch.setattr(
+        litellm,
+        "default_internal_user_params",
+        {"budget_limits": [{"budget_duration": "1h", "max_budget": 5.0}, {"budget_duration": "30d", "max_budget": 100.0}]},
+    )
+    created_row: Final = MagicMock()
+    created_row.model_dump.return_value = {"user_id": "windows-user", "user_role": "internal_user"}
+    membership_row: Final = MagicMock()
+    membership_row.model_dump.return_value = {"team_id": "team-w", "user_id": "windows-user", "budget_id": None}
+    prisma_client: Final = AsyncMock()
+    prisma_client.db.litellm_usertable.upsert = AsyncMock(return_value=created_row)
+    prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=created_row)
+    prisma_client.db.litellm_teammembership.upsert = AsyncMock(return_value=membership_row)
+    prisma_client.get_data = AsyncMock(return_value=[])
+    prisma_client.insert_data = AsyncMock(return_value=created_row)
+    resets_before_call: Final = {duration: get_budget_reset_time(duration) for duration in ("1h", "30d")}
+
+    await add_new_member(
+        new_member=new_member,
+        max_budget_in_team=None,
+        prisma_client=prisma_client,
+        team_id="team-w",
+        user_api_key_dict=UserAPIKeyAuth(user_id="admin_user", user_role=LitellmUserRoles.PROXY_ADMIN),
+        litellm_proxy_admin_name="test_admin",
+    )
+
+    written_rows: Final = (
+        *(call.kwargs["data"]["create"] for call in prisma_client.db.litellm_usertable.upsert.call_args_list),
+        *(call.kwargs["data"] for call in prisma_client.insert_data.call_args_list),
+    )
+    resets_after_call: Final = {duration: get_budget_reset_time(duration) for duration in ("1h", "30d")}
+    assert len(written_rows) == 1
+    windows: Final = json.loads(written_rows[0]["budget_limits"])
+    assert [(window["budget_duration"], window["max_budget"]) for window in windows] == [("1h", 5.0), ("30d", 100.0)]
+    assert all(
+        datetime.fromisoformat(window["reset_at"])
+        in (resets_before_call[window["budget_duration"]], resets_after_call[window["budget_duration"]])
+        for window in windows
+    )

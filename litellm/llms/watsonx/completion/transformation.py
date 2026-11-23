@@ -1,13 +1,17 @@
 import time
 from collections.abc import AsyncIterator, Iterator, Mapping
 from datetime import datetime
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import TypeAdapter
+from typing_extensions import TypedDict
 
+from litellm.litellm_core_utils.core_helpers import decoded_json_object, subscript, sum_of
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionUsageBlock
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionUsageBlock, OpenAIChatCompletionFinishReason
 from litellm.types.llms.watsonx import WatsonXAIEndpoint
 from litellm.types.utils import GenericStreamingChunk, ModelResponse, Usage
 from litellm.utils import map_finish_reason
@@ -28,6 +32,20 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+_DECODED_JSON: Final = TypeAdapter(object)
+_NON_STRING_FINISH_REASONS: Final[Mapping[object, OpenAIChatCompletionFinishReason]] = MappingProxyType({})
+
+
+def _json_finish_reason(value: object) -> OpenAIChatCompletionFinishReason:
+    if isinstance(value, str):
+        return map_finish_reason(value)
+    return _NON_STRING_FINISH_REASONS.get(value) or map_finish_reason(str(value))
+
+
+class _KeywordFields(TypedDict, total=False, extra_items=object):
+    pass
 
 
 class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
@@ -292,6 +310,7 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
         )
 
         json_resp: Final = raw_response.json()
+        decoded_resp: Final = _DECODED_JSON.validate_python(json_resp)
 
         if "results" not in json_resp:
             raise WatsonXAIError(
@@ -301,23 +320,29 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
         if model_response is None:
             model_response = ModelResponse(model=json_resp.get("model_id", None))
         generated_text: Final = json_resp["results"][0]["generated_text"]
-        prompt_tokens: Final = json_resp["results"][0]["input_token_count"]
-        completion_tokens: Final = json_resp["results"][0]["generated_token_count"]
+        first_result: Final = subscript(subscript(decoded_resp, "results"), 0)
+        prompt_tokens: Final = subscript(first_result, "input_token_count")
+        completion_tokens: Final = subscript(first_result, "generated_token_count")
         model_response.choices[0].message.content = generated_text
-        model_response.choices[0].finish_reason = map_finish_reason(json_resp["results"][0]["stop_reason"])
-        if json_resp.get("created_at"):
+        model_response.choices[0].finish_reason = _json_finish_reason(subscript(first_result, "stop_reason"))
+        created_at: Final = decoded_json_object(decoded_resp).get("created_at")
+        if created_at:
+            if not isinstance(created_at, str):
+                raise TypeError("fromisoformat: argument must be str")
             try:
-                created_datetime = datetime.fromisoformat(json_resp["created_at"])
+                created_datetime = datetime.fromisoformat(created_at)
             except ValueError:
                 # datetime.fromisoformat cannot handle 'Z' in Python 3.10
-                created_datetime = datetime.fromisoformat(f"{json_resp['created_at'].rstrip('Z')}+00:00")
+                created_datetime = datetime.fromisoformat(f"{created_at.rstrip('Z')}+00:00")
             model_response.created = int(created_datetime.timestamp())
         else:
             model_response.created = int(time.time())
         usage: Final = Usage(
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            total_tokens=prompt_tokens + completion_tokens,
+            **_KeywordFields(
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=sum_of(prompt_tokens, completion_tokens),
+            )
         )
         setattr(model_response, "usage", usage)
         return model_response

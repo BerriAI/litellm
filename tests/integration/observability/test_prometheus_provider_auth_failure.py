@@ -624,6 +624,7 @@ def test_a_provider_401_on_a_stored_credential_the_caller_names_leaves_a_healthy
     rig.upstream.drain()
     assert send(rig.gateway, cell).status_code == 200
     assert_reached_with_the_deployment_credential(rig, cell)
+    until(rig.gateway, TOTALS, model_id=identity(cell))
     response: Final = rig.gateway.request(
         "POST",
         "/v1/chat/completions",
@@ -995,7 +996,7 @@ def _gated(gateway: Gateway, cell: str, key: str | None) -> httpx.Response:
 
 
 def recorded_before(cell: str) -> list[tuple[str, str, str, float]]:
-    if cell in ("invalid-key", "expired-key"):
+    if cell in ("invalid-key", "missing-key", "expired-key", "blocked-key"):
         return []
     return sorted([(FAILURES, "", "", 1.0), (TOTALS, "", "", 1.0), (LLM_FAILED, identity(cell), "", 1.0)])
 
@@ -1020,7 +1021,9 @@ def test_a_request_the_proxy_rejects_itself_never_marks_the_deployment_down_and_
         assert response.status_code == (403 if cell == "no-model-access" else 401), response.text
         assert rig.upstream.drain() == ()
         samples: Final = until(rig.gateway, PROXY_FAILED, requested_model=name(cell))
+        assert values(samples, PROXY_FAILED, requested_model=name(cell)) == [1.0], recorded(samples)
         assert deployment_rows(samples, cell) == recorded_before(cell), recorded(samples, requested_model=name(cell))
+        assert values(samples, STATE, model_id=identity(cell)) == [], recorded(samples)
 
 
 def test_a_key_rate_limit_rejected_at_the_proxy_is_still_counted_as_before(rig: Rig) -> None:
