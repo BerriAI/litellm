@@ -101853,11 +101853,13 @@
     },
     "fal_ai/blackforestlabs/flux-3-max/image-to-video": {
         "litellm_provider": "fal_ai",
-        "metadata": {"comment":"per second of generated video by resolution; output_cost_per_second is the default resolution 720p rate; promotional 50% off rate through 2026-11-22 23:59 UTC per the page; regular rates $0.17 (720p) and $0.29 (1080p) per second resume 2026-11-23 00:00 UTC (ruling fal-ai-promotional-rates-apply-until-promotion-ends, 2026-11-10)"},
+        "metadata": {"comment":"per second of generated video by resolution; output_cost_per_second is the default resolution 720p rate"},
         "mode": "video_generation",
-        "output_cost_per_second": 0.085,
-        "output_cost_per_second_1080p": 0.145,
-        "output_cost_per_second_720p": 0.085,
+        "output_cost_per_second": 0.17,
+        "output_cost_per_second_1080p": 0.29,
+        "output_cost_per_second_2k": 0.4,
+        "output_cost_per_second_4k": 0.8,
+        "output_cost_per_second_720p": 0.17,
         "source": "https://fal.ai/models/blackforestlabs/flux-3-max/image-to-video",
         "supported_endpoints": [
             "/v1/videos"
@@ -101872,11 +101874,13 @@
     },
     "fal_ai/blackforestlabs/flux-3-max/text-to-video": {
         "litellm_provider": "fal_ai",
-        "metadata": {"comment":"per second of generated video by resolution; output_cost_per_second is the default resolution 720p rate; promotional 50% off rate through 2026-11-22 23:59 UTC per the page; regular rates $0.17 (720p) and $0.29 (1080p) per second resume 2026-11-23 00:00 UTC (ruling fal-ai-promotional-rates-apply-until-promotion-ends, 2026-11-10)"},
+        "metadata": {"comment":"per second of generated video by resolution; output_cost_per_second is the default resolution 720p rate"},
         "mode": "video_generation",
-        "output_cost_per_second": 0.085,
-        "output_cost_per_second_1080p": 0.145,
-        "output_cost_per_second_720p": 0.085,
+        "output_cost_per_second": 0.17,
+        "output_cost_per_second_1080p": 0.29,
+        "output_cost_per_second_2k": 0.4,
+        "output_cost_per_second_4k": 0.8,
+        "output_cost_per_second_720p": 0.17,
         "source": "https://fal.ai/models/blackforestlabs/flux-3-max/text-to-video",
         "supported_endpoints": [
             "/v1/videos"
@@ -101890,13 +101894,13 @@
     },
     "fal_ai/blackforestlabs/flux-3-max/keyframes-to-video": {
         "litellm_provider": "fal_ai",
-        "metadata": {
-            "comment": "per second of generated video by resolution; output_cost_per_second is the default resolution 720p rate; promotional 50% off rate through 2026-11-22 23:59 UTC per the page; regular rates $0.17 (720p) and $0.29 (1080p) per second resume 2026-11-23 00:00 UTC (ruling fal-ai-promotional-rates-apply-until-promotion-ends, 2026-11-10)"
-        },
+        "metadata": {"comment":"per second of generated video by resolution; output_cost_per_second is the default resolution 720p rate"},
         "mode": "video_generation",
-        "output_cost_per_second": 0.085,
-        "output_cost_per_second_1080p": 0.145,
-        "output_cost_per_second_720p": 0.085,
+        "output_cost_per_second": 0.17,
+        "output_cost_per_second_1080p": 0.29,
+        "output_cost_per_second_2k": 0.4,
+        "output_cost_per_second_4k": 0.8,
+        "output_cost_per_second_720p": 0.17,
         "source": "https://fal.ai/models/blackforestlabs/flux-3-max/keyframes-to-video",
         "supported_endpoints": [
             "/v1/videos"
