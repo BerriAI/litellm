@@ -1101,8 +1101,6 @@ _INPUT_ESTIMABLE_CALL_TYPES: Final = frozenset(
         CallTypes.aembedding,
         CallTypes.moderation,
         CallTypes.amoderation,
-        CallTypes.image_generation,
-        CallTypes.aimage_generation,
         CallTypes.speech,
         CallTypes.aspeech,
         CallTypes.rerank,
@@ -1632,6 +1630,12 @@ def _failure_fields_to_lift(request_data: Mapping[str, object], provider_billed:
         ("response_cost", None if _usage_to_lift is None else (_usage_to_lift[1] or 0.0)),
         ("standard_logging_object", _model_call_details.get("standard_logging_object")),
         ("billed_failed_attempts", _earlier_attempts or None),
+        (
+            "standard_callback_dynamic_params",
+            {"turn_off_message_logging": True}
+            if isinstance(_logging_obj, Logging) and _logging_obj.attempt_turned_off_message_logging
+            else None,
+        ),
     )
     return MappingProxyType({key: value for key, value in _entries if value is not None})
 

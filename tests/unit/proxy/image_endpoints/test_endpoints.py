@@ -28,6 +28,7 @@ from litellm.proxy.image_endpoints import endpoints
 from litellm.proxy.proxy_server import ProxyConfig
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.proxy.utils import ProxyLogging
+from litellm.router_utils.cooldown_handlers import get_cooldown_deployments
 from litellm.types.router import RetryPolicy
 from litellm.types.utils import ImageObject, ImageResponse
 from litellm.utils import custom_llm_setup
@@ -1022,3 +1023,139 @@ def test_a_failure_spend_row_keeps_every_refused_retry(monkeypatch: pytest.Monke
     )
     assert db_call["response_cost"] == pytest.approx(0.25 * attempts)
     assert (payload["prompt_tokens"], payload["completion_tokens"]) == (16 * attempts, 2240 * attempts)
+
+
+def test_every_failed_image_retry_reaches_the_failure_callbacks(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+
+    capture: Final = _LoggedPromptCapture()
+    monkeypatch.setattr(litellm, "callbacks", [capture])
+    app: Final = _image_regression_app(
+        monkeypatch, UserAPIKeyAuth(api_key="sk-test"), {"A": _UnbilledFailingImageHandler()}
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", _router_with_deployment_settings("A", {}, num_retries=1))
+
+    try:
+        with TestClient(app, raise_server_exceptions=False) as client:
+            response: Final = _send_generation(client)
+    finally:
+        ProxyLogging._callback_capabilities_cache.clear()
+
+    assert response.status_code == 503, response.text
+    assert len(capture.logged_payloads) == 2
+
+
+def test_a_failed_image_fallback_counts_toward_its_cooldown(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(litellm, "callbacks", [])
+    app: Final = _image_regression_app(
+        monkeypatch,
+        UserAPIKeyAuth(api_key="sk-test"),
+        {"A": _UnbilledFailingImageHandler(), "B": _UnbilledFailingImageHandler()},
+    )
+    router: Final = litellm.Router(
+        model_list=[
+            {"model_name": "A", "litellm_params": {"model": "image-regression-A/image-model"}},
+            *(
+                {
+                    "model_name": "B",
+                    "litellm_params": {"model": "image-regression-B/image-model"},
+                    "model_info": {"id": deployment_id},
+                }
+                for deployment_id in ("b1", "b2")
+            ),
+        ],
+        fallbacks=[{"A": ["B"]}],
+        num_retries=0,
+        allowed_fails=0,
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+
+    try:
+        with TestClient(app, raise_server_exceptions=False) as client:
+            response: Final = _send_generation(client)
+    finally:
+        ProxyLogging._callback_capabilities_cache.clear()
+
+    assert response.status_code == 503, response.text
+    assert len(set(get_cooldown_deployments(router, None)) & {"b1", "b2"}) == 1
+
+
+@pytest.mark.parametrize(
+    ("deployment_settings", "prompt_stored"),
+    (
+        pytest.param({"turn_off_message_logging": True}, False, id="private"),
+        pytest.param({}, True, id="open"),
+    ),
+)
+def test_a_failed_image_spend_row_follows_the_deployments_message_logging_setting(
+    monkeypatch: pytest.MonkeyPatch, deployment_settings: Mapping[str, object], prompt_stored: bool
+) -> None:
+    from litellm.proxy import proxy_server
+
+    spend_writer: Final = MagicMock(update_database=AsyncMock())
+    monkeypatch.setattr(litellm, "callbacks", [ProxyDBLogger(spend_writer=lambda: spend_writer)])
+    app: Final = _image_regression_app(
+        monkeypatch, UserAPIKeyAuth(api_key="sk-test"), {"A": _UnbilledFailingImageHandler()}
+    )
+    monkeypatch.setattr(proxy_server, "general_settings", {"store_prompts_in_spend_logs": True})
+    monkeypatch.setattr(proxy_server, "llm_router", _router_with_deployment_settings("A", deployment_settings))
+
+    try:
+        with TestClient(app, raise_server_exceptions=False) as client:
+            response: Final = _send_generation(client)
+    finally:
+        ProxyLogging._callback_capabilities_cache.clear()
+
+    assert response.status_code == 503, response.text
+    db_call: Final = spend_writer.update_database.call_args.kwargs
+    payload: Final = get_logging_payload(
+        kwargs=db_call["kwargs"],
+        response_obj=db_call["completion_response"],
+        start_time=db_call["start_time"],
+        end_time=db_call["end_time"],
+    )
+    assert ("draw a tree" in str(payload["proxy_server_request"])) is prompt_stored
+
+
+class _TimedOutImageHandler(litellm.CustomLLM):
+    async def aimage_generation(
+        self,
+        model: str,
+        prompt: str,
+        model_response: ImageResponse,
+        api_key: str | None,
+        api_base: str | None,
+        optional_params: Mapping[str, object],
+        logging_obj: object,
+        timeout: object | None = None,
+        client: object | None = None,
+    ) -> ImageResponse:
+        assert isinstance(logging_obj, LiteLLMLoggingObj)
+        logging_obj.pre_call(input=prompt, api_key=api_key or "", additional_args={})
+        raise litellm.Timeout(
+            message="read timed out", model=model, llm_provider="image-regression"
+        ) from httpx.ReadTimeout("read timed out")
+
+
+def test_an_image_timeout_writes_no_estimated_usage_to_its_spend_row(monkeypatch: pytest.MonkeyPatch) -> None:
+    spend_writer: Final = MagicMock(update_database=AsyncMock())
+    monkeypatch.setattr(litellm, "callbacks", [ProxyDBLogger(spend_writer=lambda: spend_writer)])
+    app: Final = _image_regression_app(monkeypatch, UserAPIKeyAuth(api_key="sk-test"), {"A": _TimedOutImageHandler()})
+
+    try:
+        with TestClient(app, raise_server_exceptions=False) as client:
+            response: Final = _send_generation(client)
+    finally:
+        ProxyLogging._callback_capabilities_cache.clear()
+
+    assert response.status_code == 408, response.text
+    db_call: Final = spend_writer.update_database.call_args.kwargs
+    payload: Final = get_logging_payload(
+        kwargs=db_call["kwargs"],
+        response_obj=db_call["completion_response"],
+        start_time=db_call["start_time"],
+        end_time=db_call["end_time"],
+    )
+    assert (db_call["response_cost"], payload["prompt_tokens"]) == (0, 0)

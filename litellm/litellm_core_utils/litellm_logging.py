@@ -749,6 +749,8 @@ class Logging(LiteLLMLoggingBaseClass):
         self.process_dynamic_callbacks()
         self._request_set_success_callbacks: Final = dynamic_success_callbacks is not None
         self._request_set_failure_callbacks: Final = dynamic_failure_callbacks is not None
+        self._request_bound_callbacks: tuple[CustomLogger, ...] = ()
+        self.logs_each_attempt: bool = False
         self.standard_built_in_tools_params: StandardBuiltInToolsParams = (
             self.initialize_standard_built_in_tools_params(kwargs)
         )
@@ -839,6 +841,10 @@ class Logging(LiteLLMLoggingBaseClass):
         self.response_timing_metrics = dict(timing_metrics)
 
     def add_dynamic_callback(self, callback: CustomLogger) -> None:
+        self._request_bound_callbacks = (
+            *self._request_bound_callbacks,
+            *(() if callback in self._request_bound_callbacks else (callback,)),
+        )
         self.dynamic_input_callbacks = self._with_dynamic_callback(self.dynamic_input_callbacks, callback)
         self.dynamic_success_callbacks = self._with_dynamic_callback(self.dynamic_success_callbacks, callback)
         self.dynamic_async_success_callbacks = self._with_dynamic_callback(
@@ -887,8 +893,15 @@ class Logging(LiteLLMLoggingBaseClass):
             self.dynamic_async_success_callbacks, dynamic_callbacks_type="async_success"
         )
 
+    @property
+    def attempt_turned_off_message_logging(self) -> bool:
+        return self.logs_each_attempt and self.standard_callback_dynamic_params.get("turn_off_message_logging") is True
+
     def follow_attempt_callback_settings(self, attempt_fields: Mapping[str, object]) -> None:
         """A Logging object shared across router attempts logs each one by its own deployment's settings."""
+        self.logs_each_attempt = True
+        self.model_call_details.pop("has_logged_async_failure", None)
+        self.model_call_details.pop("has_logged_sync_failure", None)
         self.standard_callback_dynamic_params = _initialize_standard_callback_dynamic_params(dict(attempt_fields))
         self.model_call_details["standard_callback_dynamic_params"] = self.standard_callback_dynamic_params
         if not self._request_set_success_callbacks:
@@ -910,6 +923,8 @@ class Logging(LiteLLMLoggingBaseClass):
             self.dynamic_failure_callbacks = self._process_dynamic_callback_list(
                 None if failure_callbacks is None else [*failure_callbacks], "failure"
             )
+        for callback in self._request_bound_callbacks:
+            self.add_dynamic_callback(callback)
 
     def _process_dynamic_callback_list(
         self,

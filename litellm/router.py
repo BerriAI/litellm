@@ -242,9 +242,7 @@ from litellm.router_utils.fallback_event_handlers import (
     check_non_standard_fallback_format,
     clear_pre_routing_selection,
     committed_retry_budget_for_request,
-    cool_down_attempt_the_failure_log_skipped,
     deployment_fields_for_shared_logging,
-    failure_log_already_ran,
     fallback_lookup_groups,
     fallbacks_disabled_for_request,
     get_fallback_model_group_for_lookup_groups,
@@ -5154,25 +5152,19 @@ class Router:
             )
 
             self.total_calls[model_name] += 1
-            failure_log_ran_before_this_attempt: Final = failure_log_already_ran(kwargs)
             deployment_fields: Final = deployment_fields_for_shared_logging(
                 ATTEMPT_FIELDS.validate_python(data), ATTEMPT_FIELDS.validate_python(kwargs)
             )
             async with self._deployment_slot(deployment=deployment, kwargs=kwargs, parent_otel_span=parent_otel_span):
-                try:
-                    response = await litellm.aimage_generation(
-                        **{
-                            **deployment_fields,
-                            "prompt": prompt,
-                            "caching": self.cache_responses,
-                            "client": model_client,
-                            **kwargs,
-                        }
-                    )
-                except Exception as attempt_error:
-                    if failure_log_ran_before_this_attempt:
-                        cool_down_attempt_the_failure_log_skipped(self, kwargs, attempt_error)
-                    raise
+                response = await litellm.aimage_generation(
+                    **{
+                        **deployment_fields,
+                        "prompt": prompt,
+                        "caching": self.cache_responses,
+                        "client": model_client,
+                        **kwargs,
+                    }
+                )
 
             self.success_calls[model_name] += 1
             verbose_router_logger.info("litellm.aimage_generation(model=%s)\x1b[32m 200 OK\x1b[0m", model_name)

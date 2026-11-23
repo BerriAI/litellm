@@ -134,38 +134,11 @@ def deployment_fields_for_shared_logging(
     return {key: value for key, value in deployment_fields.items() if key not in _CALLBACK_SETUP_FIELDS}
 
 
-def failure_log_already_ran(kwargs: Mapping[str, object]) -> bool:
-    logging_obj: Final = kwargs.get("litellm_logging_obj")
-    return isinstance(logging_obj, Logging) and logging_obj.model_call_details.get("has_logged_async_failure") is True
-
-
-def cool_down_attempt_the_failure_log_skipped(
-    litellm_router: LitellmRouter,
-    kwargs: Mapping[str, object],
-    exception: Exception,
-) -> None:
-    logging_obj: Final = kwargs.get("litellm_logging_obj")
-    if not isinstance(logging_obj, Logging):
-        return
-    match kwargs.get("model_info"):
-        case {"id": str() as deployment_id}:
-            _trigger_cooldown_for_failed_deployment(
-                litellm_router=litellm_router,
-                kwargs=kwargs,
-                exception=exception,
-                model_call_details=logging_obj.model_call_details,
-                attempted_deployment_id=deployment_id,
-            )
-        case _:
-            return
-
-
 def _trigger_cooldown_for_failed_deployment(
     litellm_router: LitellmRouter,
     kwargs: Mapping[str, object],
     exception: Exception,
     model_call_details: Mapping[str, object] = _NO_MODEL_CALL_DETAILS,
-    attempted_deployment_id: str | None = None,
 ) -> None:
     """
     Trigger cooldown for a failed fallback deployment.
@@ -220,7 +193,7 @@ def _trigger_cooldown_for_failed_deployment(
         # can't reliably tell a caller-supplied bucket from a router-authored one
         # without knowing this call's function_name, so a client with permission to
         # set metadata could otherwise get an arbitrary deployment cooled down.
-        deployment_id: Final[str | None] = attempted_deployment_id or getattr(exception, "failed_deployment_id", None)
+        deployment_id: Final[str | None] = getattr(exception, "failed_deployment_id", None)
 
         if deployment_id is None:
             verbose_router_logger.debug("Cannot trigger cooldown for fallback: no failed_deployment_id on exception")

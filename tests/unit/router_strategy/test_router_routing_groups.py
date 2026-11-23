@@ -20,8 +20,10 @@ import litellm
 from litellm import Router
 from litellm.caching.redis_cache import RedisPipelineIncrementOperation
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.types.router import DeploymentTypedDict, FallbackAccessCheck, RoutingGroup, RoutingStrategy
-from litellm.utils import Rules, function_setup
+from litellm.types.utils import ImageObject, ImageResponse
+from litellm.utils import Rules, custom_llm_setup, function_setup
 
 
 def _model_list():
@@ -1290,6 +1292,79 @@ def test_override_selector_is_bound_only_to_the_request_that_asked_for_it():
     unbound = plain["litellm_logging_obj"]
     assert unbound.dynamic_input_callbacks is None and unbound.dynamic_success_callbacks is None
     assert unbound.dynamic_failure_callbacks is None and unbound.dynamic_async_failure_callbacks is None
+
+
+class _InFlightRecordingImageHandler(litellm.CustomLLM):
+    def __init__(self, fails: bool, in_flight: Callable[[], object]) -> None:
+        super().__init__()
+        self.fails: Final = fails
+        self.in_flight: Final = in_flight
+        self.in_flight_during_call: object = None
+
+    async def aimage_generation(
+        self,
+        model: str,
+        prompt: str,
+        model_response: ImageResponse,
+        api_key: str | None,
+        api_base: str | None,
+        optional_params: Mapping[str, object],
+        logging_obj: object,
+        timeout: object | None = None,
+        client: object | None = None,
+    ) -> ImageResponse:
+        assert isinstance(logging_obj, Logging)
+        logging_obj.pre_call(input=prompt, api_key=api_key or "", additional_args={})
+        self.in_flight_during_call = self.in_flight()
+        if self.fails:
+            raise litellm.ServiceUnavailableError(message="down", llm_provider="override-image", model=model)
+        return ImageResponse(created=1, data=[ImageObject(b64_json="eA==")])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fails", (False, True), ids=("served", "failed"))
+async def test_least_busy_override_releases_an_image_request_when_it_finishes(
+    monkeypatch: pytest.MonkeyPatch, fails: bool
+) -> None:
+    def in_flight() -> object:
+        return router._override_selectors["least-busy"].router_cache.get_cache(
+            "grp_request_count:d1", local_only=True
+        )
+
+    handler: Final = _InFlightRecordingImageHandler(fails, in_flight)
+    monkeypatch.setattr(litellm, "provider_list", [*litellm.provider_list])
+    monkeypatch.setattr(litellm, "_custom_providers", [*litellm._custom_providers])
+    monkeypatch.setattr(litellm, "custom_provider_map", [{"provider": "override-image", "custom_handler": handler}])
+    custom_llm_setup()
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "grp",
+                "litellm_params": {"model": "override-image/image-model"},
+                "model_info": {"id": "d1"},
+            }
+        ],
+        routing_strategy="simple-shuffle",
+        num_retries=0,
+    )
+    logging_obj, kwargs = function_setup(
+        "aimage_generation",
+        Rules(),
+        datetime.datetime.now(),
+        litellm_call_id=str(uuid.uuid4()),
+        prompt="draw a tree",
+        model="grp",
+        routing_strategy="least-busy",
+    )
+
+    if fails:
+        with pytest.raises(litellm.ServiceUnavailableError):
+            await router.aimage_generation(**{**kwargs, "litellm_logging_obj": logging_obj})
+    else:
+        await router.aimage_generation(**{**kwargs, "litellm_logging_obj": logging_obj})
+
+    assert handler.in_flight_during_call == 1
+    await _async_wait_until(lambda: in_flight() == 0)
 
 
 def test_override_matching_the_router_strategy_is_not_bound_twice():
