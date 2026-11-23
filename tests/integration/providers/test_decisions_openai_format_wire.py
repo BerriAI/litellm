@@ -259,6 +259,23 @@ _OPENAI_IMAGE_MESSAGES: Final[list[JsonValue]] = [
         ],
     }
 ]
+_ORDER_EVIDENCE: Final[dict[str, JsonValue]] = {
+    "ticket": {"body": "Please refund the duplicate charge.", "attachment": None},
+    "order": {"charges": [49, 49]},
+}
+_JSON_INPUT: Final[list[JsonValue]] = [
+    {
+        "role": "user",
+        "content": [{"type": "input_text", "text": _INPUT}, {"type": "input_json", "data": _ORDER_EVIDENCE}],
+    }
+]
+_OPENAI_JSON_MESSAGES: Final[list[JsonValue]] = [
+    {
+        "role": "user",
+        "type": "message",
+        "content": [{"type": "input_text", "text": _INPUT}, {"type": "input_json", "data": _ORDER_EVIDENCE}],
+    }
+]
 _MESSAGE_LIST_INPUT: Final[list[JsonValue]] = [
     {"role": "user", "content": _INPUT},
     {"role": "user", "content": [{"type": "input_text", "text": _FOLLOW_UP}]},
@@ -518,6 +535,30 @@ def test_openai_forwards_image_input_in_its_own_message_shape(gateway: Gateway) 
         assert response.status_code == 200, response.text
         (call,) = _upstream_calls(gateway, handle)
         assert call["body"] == {"model": _OPENAI.body_model, "input": _OPENAI_IMAGE_MESSAGES, "questions": _QUESTIONS}
+
+
+def test_openai_forwards_input_json_in_its_own_message_shape(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        handle: Final = _register(scenario, _OPENAI.upstream_reply())
+        model: Final = _deployment(scenario, handle, _OPENAI)
+        response: Final = _decide(gateway, model, input=_JSON_INPUT)
+        assert response.status_code == 200, response.text
+        (call,) = _upstream_calls(gateway, handle)
+        assert call["body"] == {"model": _OPENAI.body_model, "input": _OPENAI_JSON_MESSAGES, "questions": _QUESTIONS}
+
+
+def test_a_system_one_provider_refuses_input_json_unless_the_deployment_drops_params(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        handle: Final = _register(scenario, _PERPLEXITY.upstream_reply())
+        refused: Final = _decide(gateway, _deployment(scenario, handle, _PERPLEXITY), input=_JSON_INPUT)
+        assert refused.status_code == 400, refused.text
+        assert "['input_json']" in refused.text and "drop_params" in refused.text, refused.text
+        assert _upstream_calls(gateway, handle) == []
+
+        dropping: Final = _deployment(scenario, handle, _PERPLEXITY, drop_params=True)
+        accepted: Final = _decide(gateway, dropping, input=_JSON_INPUT)
+        assert accepted.status_code == 200, accepted.text
+        assert [call["body"] for call in _upstream_calls(gateway, handle)] == [_PERPLEXITY.upstream_body()]
 
 
 def test_openai_box_answers_reach_the_caller_as_boxes_not_refusals(gateway: Gateway) -> None:

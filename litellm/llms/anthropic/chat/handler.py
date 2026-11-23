@@ -22,6 +22,7 @@ from litellm.anthropic_beta_headers_manager import (
 )
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
+from litellm.litellm_core_utils.hidden_params import set_hidden_params
 from litellm.litellm_core_utils.json_fragment_accumulator import JSONFragmentAccumulator
 from litellm.llms.base_llm.base_utils import (
     RESPONSE_FORMAT_ENVELOPE_NAME_KEYS,
@@ -68,7 +69,12 @@ from litellm.types.utils import (
 
 from ...base import BaseLLM
 from ..common_utils import AnthropicError, process_anthropic_headers, refusal_provider_specific_fields
-from .transformation import ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY, AnthropicConfig, JsonModeRequest
+from .transformation import (
+    ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY,
+    AnthropicConfig,
+    JsonModeRequest,
+    with_extra_body_fields,
+)
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -76,6 +82,7 @@ if TYPE_CHECKING:
     from litellm.llms.base_llm.chat.transformation import BaseConfig
 
 _THINKING_BLOCK_TYPES: Final = frozenset({"thinking", "redacted_thinking"})
+_OPTIONAL_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 
 def _loads_stream_chunk(payload: str) -> dict[str, object]:
@@ -484,7 +491,10 @@ class AnthropicChatCompletion(BaseLLM):
             headers=headers,
             model=model,
             messages=messages,
-            optional_params={**optional_params, "is_vertex_request": is_vertex_request},
+            optional_params={
+                **with_extra_body_fields(_OPTIONAL_PARAMS_ADAPTER.validate_python(optional_params)),
+                "is_vertex_request": is_vertex_request,
+            },
             litellm_params=litellm_params,
             api_base=api_base,
         )
@@ -1187,6 +1197,8 @@ class ModelResponseIterator:
                 id=self.response_id,
                 model=self.served_model,
             )
+            if type_chunk == "message_start":
+                set_hidden_params(returned_chunk, {"anthropic_message_start": True})
 
             return returned_chunk
 
