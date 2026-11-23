@@ -7461,6 +7461,7 @@ def embedding(
             )
         elif (
             custom_llm_provider == "openai"
+            or custom_llm_provider == "custom_openai"
             or custom_llm_provider == "together_ai"
             or custom_llm_provider == "nvidia_nim"
             or custom_llm_provider == "litellm_proxy"
@@ -8307,6 +8308,24 @@ def embedding(
                 client=client,
                 aembedding=aembedding,
                 litellm_params={},
+            )
+        elif custom_llm_provider in litellm.openai_compatible_providers:
+            if headers:
+                optional_params["extra_headers"] = headers
+            response = openai_chat_completions.embedding(
+                model=model,
+                input=input,
+                api_base=api_base,
+                api_key=api_key,
+                logging_obj=logging,
+                timeout=timeout,
+                model_response=EmbeddingResponse(),
+                optional_params=optional_params,
+                client=client,
+                aembedding=aembedding,
+                max_retries=max_retries,
+                shared_session=shared_session,
+                litellm_params=litellm_params_dict,
             )
         else:
             raise LiteLLMUnknownProvider(model=model, custom_llm_provider=custom_llm_provider)
