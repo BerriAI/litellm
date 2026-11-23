@@ -2,15 +2,21 @@
 //! runs them. The [`Host`](crate::Host) the gateway was built with answers them, so a route
 //! tells what happened to its call and never learns which callbacks hear it.
 
-use std::{future::Future, sync::Arc};
+use std::{
+    future::Future,
+    sync::{Arc, OnceLock},
+    time::SystemTime,
+};
 
 use axum::{
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
 use futures_util::{StreamExt, stream};
+use litellm_framer::sse::SseBlock;
 use litellm_gateway_auth::Authenticated;
 use litellm_llms_types::formats::chat_completions::ChatCompletionsUsage;
+use litellm_router_core::Deployment;
 use serde_json::{Map, Value};
 
 use crate::{
@@ -66,8 +72,15 @@ pub enum HookError {
 pub struct ServedCall {
     /// The model group that served it, an alias resolved, as the proxy logs it.
     pub model_group: String,
+    /// The deployment that answered, `None` when the router no longer holds it.
+    pub deployment: Option<Arc<Deployment>>,
+    /// The provider's id for the answer, as the response or a stream's first event names it.
+    pub response_id: Option<String>,
     /// As Python's litellm `Usage` counts it, `None` for an answer that carries no usage.
     pub usage: Option<ChatCompletionsUsage>,
+    /// When a stream's first event arrived, `None` for a complete answer, which Python logs as
+    /// starting its completion when it ended.
+    pub first_event: Option<SystemTime>,
 }
 
 /// The hooks of one call, told in the order the proxy runs them:
@@ -161,21 +174,56 @@ where
     }
 }
 
-/// Tells the hooks about the `outcome` that served a call of route `E`, which `model_group`
-/// served. A complete answer tells what it counted, and a stream tells how it went once it ends,
-/// through the same `stream_outcome::watched` the router hears it from.
+/// What served a call: the model group, an alias resolved, and the deployment that answered.
+pub(crate) struct ServedBy {
+    pub(crate) model_group: String,
+    pub(crate) deployment: Option<Arc<Deployment>>,
+}
+
+/// What a stream's events told of its answer before it ended: when the first one arrived and the
+/// id the provider gave the answer.
+#[derive(Default)]
+struct StreamSeen {
+    first_event: OnceLock<SystemTime>,
+    response_id: OnceLock<String>,
+}
+
+impl StreamSeen {
+    fn see(&self, block: &SseBlock, response_id: fn(&str) -> Option<String>) {
+        let _ = self.first_event.get_or_init(SystemTime::now);
+        if self.response_id.get().is_none()
+            && let Some(id) = block
+                .event
+                .as_ref()
+                .and_then(|event| response_id(&event.data))
+        {
+            let _ = self.response_id.set(id);
+        }
+    }
+}
+
+/// Tells the hooks about the `outcome` that served a call of route `E`, which `served` says
+/// served it. A complete answer tells what it counted, and a stream tells how it went once it
+/// ends, through the same `stream_outcome::watched` the router hears it from.
 pub(crate) async fn answered<E: Endpoint, K: CallHooks>(
     hooks: &Arc<K>,
     outcome: &mut E::Outcome,
-    model_group: String,
+    served: ServedBy,
 ) -> Result<Told, Ended> {
+    let ServedBy {
+        model_group,
+        deployment,
+    } = served;
     let Some((chunks, read)) = E::held(outcome) else {
         hooks.post_call_success().await?;
         return Ok(Told {
             added: hooks.response_headers().await,
             complete: Some(ServedCall {
                 model_group,
+                deployment,
+                response_id: E::response_id(outcome),
                 usage: E::counts(outcome).and_then(E::usage),
+                first_event: None,
             }),
         });
     };
@@ -185,18 +233,38 @@ pub(crate) async fn answered<E: Endpoint, K: CallHooks>(
     };
     let hooks = hooks.clone();
     let usage: fn(Counts) -> Option<ChatCompletionsUsage> = E::usage;
-    let unwatched = std::mem::replace(chunks, stream::empty().boxed());
+    let response_id: fn(&str) -> Option<String> = E::stream_response_id;
+    let seen = Arc::new(StreamSeen::default());
+    let seeing = seen.clone();
+    let unwatched = std::mem::replace(chunks, stream::empty().boxed())
+        .inspect(move |block| {
+            if let Ok(block) = block {
+                seeing.see(block, response_id);
+            }
+        })
+        .boxed();
     *chunks = stream_outcome::watched(
         unwatched,
         read,
         stream_outcome::broke,
         move |outcome: Outcome| {
-            let (hooks, model_group) = (hooks.clone(), model_group.clone());
+            let (hooks, model_group, deployment, seen) = (
+                hooks.clone(),
+                model_group.clone(),
+                deployment.clone(),
+                seen.clone(),
+            );
             async move {
                 match outcome {
                     Ok(counts) => {
-                        let usage = usage(counts);
-                        hooks.succeeded(ServedCall { model_group, usage }).await;
+                        let served = ServedCall {
+                            model_group,
+                            deployment,
+                            response_id: seen.response_id.get().cloned(),
+                            usage: usage(counts),
+                            first_event: seen.first_event.get().copied(),
+                        };
+                        hooks.succeeded(served).await;
                     }
                     Err(_) => hooks.failed().await,
                 }

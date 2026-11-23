@@ -110,6 +110,28 @@ fn utc_fields_match_datetime() {
 }
 
 #[test]
+fn a_clock_reading_has_the_fields_of_its_timestamp() {
+    for row in fixtures().utc {
+        let offset = std::time::Duration::from_secs(row.seconds.unsigned_abs());
+        let whole = if row.seconds < 0 {
+            std::time::UNIX_EPOCH - offset
+        } else {
+            std::time::UNIX_EPOCH + offset
+        };
+        let at = whole
+            + std::time::Duration::from_micros(u64::from(row.micros))
+            + std::time::Duration::from_nanos(999);
+        assert_eq!(
+            UtcDateTime::from_system_time(at),
+            UtcDateTime::from_timestamp(row.seconds, row.micros),
+            "{} {}",
+            row.seconds,
+            row.micros
+        );
+    }
+}
+
+#[test]
 fn fromisoformat_matches_datetime() {
     for row in fixtures().fromisoformat {
         let expected = match (row.naive, row.aware) {

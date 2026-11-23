@@ -20,7 +20,7 @@ use crate::{
     Ended, Error, Gateway, RequestId,
     error::ErrorFormat,
     headers::Routing,
-    hooks::{self, CallType},
+    hooks::{self, CallType, ServedBy},
     model_restamp::ReportedModel,
     record, request,
     routing::{self, Host, RouteAttempt},
@@ -33,6 +33,9 @@ pub struct Call<H: Host> {
     pub(crate) identity: Authenticated<H::Rows>,
     pub(crate) headers: HeaderMap,
     pub(crate) request_id: Option<String>,
+    /// The `x-litellm-call-id` the gateway's call id layer resolved, `None` on a router that does
+    /// not wear it.
+    pub(crate) call_id: Option<String>,
 }
 
 impl<H: Host> FromRequestParts<Arc<Gateway<H>>> for Call<H> {
@@ -44,11 +47,17 @@ impl<H: Host> FromRequestParts<Arc<Gateway<H>>> for Call<H> {
     ) -> Result<Self, Self::Rejection> {
         let identity = Authenticated::from_request_parts(parts, gateway).await?;
         let Ok(RequestId(request_id)) = RequestId::from_request_parts(parts, gateway).await;
+        let call_id = parts
+            .extensions
+            .get::<tower_http::request_id::RequestId>()
+            .and_then(|id| id.header_value().to_str().ok())
+            .map(str::to_owned);
         Ok(Self {
             gateway: gateway.clone(),
             identity,
             headers: parts.headers.clone(),
             request_id,
+            call_id,
         })
     }
 }
@@ -62,10 +71,13 @@ pub(crate) trait Endpoint: RouteAttempt {
     const ERRORS: ErrorFormat;
 
     /// Those counts as Python's litellm `Usage`, `None` for a route that counts no tokens.
-    fn usage(counts: Counts) -> Option<ChatCompletionsUsage> {
-        let _ = counts;
-        None
-    }
+    fn usage(counts: Counts) -> Option<ChatCompletionsUsage>;
+
+    /// The provider's id for a complete outcome's answer.
+    fn response_id(outcome: &Self::Outcome) -> Option<String>;
+
+    /// The provider's id for a stream's answer, when the event whose `data` this is names it.
+    fn stream_response_id(data: &str) -> Option<String>;
 
     /// The outcome that served the call as the response the client reads.
     fn render(outcome: Self::Outcome, reported: ReportedModel<'_>) -> Result<Response, Error>;
@@ -90,12 +102,20 @@ where
         let routed = routing::call(gateway, identity, E::OP, E::PATH, &model, &endpoint).await?;
         let routing = Routing::served(&routed);
         let reported = ReportedModel::of(&model, &routed);
-        let model_group = routed.model_group;
+        let served = ServedBy {
+            deployment: gateway.router.registry().deployment(&routed.deployment_id),
+            model_group: routed.model_group,
+        };
         let mut outcome = routed.output.response;
-        let told = hooks::answered::<E, _>(&hooks, &mut outcome, model_group).await?;
+        let told = hooks::answered::<E, _>(&hooks, &mut outcome, served).await?;
         Ok(told.answer((Extension(routing), E::render(outcome, reported)?)))
     };
-    record::write(|entries| entries.serve_as(E::CALL_TYPE));
+    record::write(|entries| {
+        entries.serve_as(E::CALL_TYPE);
+        if let Some(call_id) = &call.call_id {
+            entries.name_call(call_id.clone());
+        }
+    });
     let served = match body {
         Ok(body) => hooks::around(gateway, identity, body, serve).await,
         Err(error) => Err(Ended::from(error)),
