@@ -73,6 +73,12 @@ pub(crate) trait Endpoint: RouteAttempt {
         None
     }
 
+    /// What the route settled a complete answer cost.
+    fn cost(outcome: &Self::Outcome) -> Option<f64> {
+        let _ = outcome;
+        None
+    }
+
     /// The outcome that served the call as the response the client reads.
     fn render(outcome: Self::Outcome, reported: ReportedModel<'_>) -> Result<Response, Error>;
 

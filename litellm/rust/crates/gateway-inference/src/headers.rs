@@ -102,6 +102,7 @@ pub(crate) struct Failed {
 /// The provider's headers Python reads a request id from, first found first.
 const REQUEST_IDS: [&str; 2] = ["request-id", "x-request-id"];
 const PROVIDER_PREFIX: &str = "llm_provider-";
+const RESPONSE_COST: &str = "x-litellm-response-cost";
 
 fn milliseconds(duration: Duration) -> f64 {
     duration.as_secs_f64() * 1000.0
@@ -112,11 +113,81 @@ fn rounded(value: f64) -> f64 {
     (value * 10_000.0).round() / 10_000.0
 }
 
-/// `x-litellm-response-cost` of a served attempt. A cost the route has yet to settle names none.
-fn cost(attempted: &Attempted) -> Option<f64> {
+/// `CostBreakdownHeaderValues`: the parts of a call's cost Python names beside its total, each
+/// as its own `x-litellm-response-cost-*` header. A part that is `None` names no header. A priced
+/// call names its cache read, cache creation and reasoning parts only when they are above zero.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct CostParts {
+    /// The cost before discount and margin.
+    pub(crate) original: Option<f64>,
+    pub(crate) discount_amount: Option<f64>,
+    pub(crate) margin_amount: Option<f64>,
+    pub(crate) margin_percent: Option<f64>,
+    /// The prompt's cost without its cache reads and writes, which have their own parts.
+    pub(crate) input: Option<f64>,
+    pub(crate) output: Option<f64>,
+    pub(crate) cache_read: Option<f64>,
+    pub(crate) cache_creation: Option<f64>,
+    pub(crate) reasoning: Option<f64>,
+    pub(crate) tool_usage: Option<f64>,
+}
+
+impl CostParts {
+    /// `_ZERO_COST_BREAKDOWN`: the parts of a call that cost nothing, which a cache hit names.
+    const ZERO: Self = Self {
+        original: Some(0.0),
+        discount_amount: Some(0.0),
+        margin_amount: Some(0.0),
+        margin_percent: Some(0.0),
+        input: Some(0.0),
+        output: Some(0.0),
+        cache_read: None,
+        cache_creation: None,
+        reasoning: None,
+        tool_usage: Some(0.0),
+    };
+
+    /// Each part under its header, in Python's order. `_header_value` names a finite part only.
+    fn headers(self) -> impl Iterator<Item = (String, String)> {
+        [
+            ("original", self.original),
+            ("discount-amount", self.discount_amount),
+            ("margin-amount", self.margin_amount),
+            ("margin-percent", self.margin_percent),
+            ("input", self.input),
+            ("output", self.output),
+            ("cache-read", self.cache_read),
+            ("cache-creation", self.cache_creation),
+            ("reasoning", self.reasoning),
+            ("tool-usage", self.tool_usage),
+        ]
+        .into_iter()
+        .filter_map(|(part, cost)| {
+            let cost = cost.filter(|cost| cost.is_finite())?;
+            Some((format!("{RESPONSE_COST}-{part}"), float_repr(cost)))
+        })
+    }
+}
+
+/// What a served call cost, as Python's cost headers name it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Charged {
+    pub(crate) total: f64,
+    pub(crate) parts: CostParts,
+}
+
+/// The cost the route settled for an attempt. A provider's own figure comes without parts, and a
+/// cost the route has yet to settle names nothing.
+pub(crate) fn charged(attempted: &Attempted) -> Option<Charged> {
     match attempted.cost()? {
-        Cost::Reported { amount } => amount.as_f64(),
-        Cost::CacheHit => Some(0.0),
+        Cost::Reported { amount } => Some(Charged {
+            total: amount.as_f64()?,
+            parts: CostParts::default(),
+        }),
+        Cost::CacheHit => Some(Charged {
+            total: 0.0,
+            parts: CostParts::ZERO,
+        }),
         Cost::Deferred => None,
     }
 }
@@ -124,7 +195,7 @@ fn cost(attempted: &Attempted) -> Option<f64> {
 /// What a served call cost, for the mounting server's `x-litellm-key-spend`. `None` for an answer
 /// that names no cost.
 pub fn response_cost(response: &Response) -> Option<f64> {
-    cost(response.extensions().get::<Attempted>()?)
+    Some(charged(response.extensions().get::<Attempted>()?)?.total)
 }
 
 /// `process_response_headers`: every header of the provider's answer under `llm_provider-`, then
@@ -183,10 +254,14 @@ fn named(response: &Response, version: Option<&str>, took: Duration) -> Vec<(Str
         .and_then(Attempted::api_base)
         .filter(|_| streamed)
         .and_then(|api_base| api_base.split('?').next());
+    let charged = attempted.and_then(charged).filter(|_| failed.is_none());
     let cost = match failed {
         Some(_) => Some("0".to_owned()),
-        None => attempted.and_then(cost).map(float_repr),
+        None => charged.map(|charged| float_repr(charged.total)),
     };
+    let cost_parts = charged
+        .into_iter()
+        .flat_map(|charged| charged.parts.headers());
     let overhead = attempted
         .and_then(Attempted::provider)
         .map(|provider| rounded(milliseconds(took.saturating_sub(provider))));
@@ -206,24 +281,31 @@ fn named(response: &Response, version: Option<&str>, took: Duration) -> Vec<(Str
         ),
         header("x-litellm-model-api-base", api_base.map(str::to_owned)),
         header("x-litellm-version", version.map(str::to_owned)),
-        header("x-litellm-response-cost", cost),
-        header(
-            "x-litellm-response-duration-ms",
-            attempted.map(|_| float_repr(milliseconds(took))),
-        ),
-        header("x-litellm-overhead-duration-ms", overhead.map(float_repr)),
-        // No logging callback has run when a stream's head goes out.
-        header(
-            "x-litellm-callback-duration-ms",
-            streamed.then(|| float_repr(0.0)),
-        ),
-        header(
-            "x-litellm-timeout",
-            timeout.map(|timeout| float_repr(timeout.as_secs_f64())),
-        ),
+        header(RESPONSE_COST, cost),
     ]
     .into_iter()
     .flatten()
+    .chain(cost_parts)
+    .chain(
+        [
+            header(
+                "x-litellm-response-duration-ms",
+                attempted.map(|_| float_repr(milliseconds(took))),
+            ),
+            header("x-litellm-overhead-duration-ms", overhead.map(float_repr)),
+            // No logging callback has run when a stream's head goes out.
+            header(
+                "x-litellm-callback-duration-ms",
+                streamed.then(|| float_repr(0.0)),
+            ),
+            header(
+                "x-litellm-timeout",
+                timeout.map(|timeout| float_repr(timeout.as_secs_f64())),
+            ),
+        ]
+        .into_iter()
+        .flatten(),
+    )
     .chain(provider_headers(stream_head.unwrap_or_default()))
     .chain(
         routing
@@ -452,6 +534,66 @@ mod tests {
         assert_eq!(
             response_cost(&response).map(float_repr).as_deref(),
             expected
+        );
+    }
+
+    #[rstest]
+    #[case::a_cache_hit_names_the_parts_of_a_call_that_cost_nothing(
+        Cost::CacheHit,
+        &[
+            ("x-litellm-response-cost", "0.0"),
+            ("x-litellm-response-cost-original", "0.0"),
+            ("x-litellm-response-cost-discount-amount", "0.0"),
+            ("x-litellm-response-cost-margin-amount", "0.0"),
+            ("x-litellm-response-cost-margin-percent", "0.0"),
+            ("x-litellm-response-cost-input", "0.0"),
+            ("x-litellm-response-cost-output", "0.0"),
+            ("x-litellm-response-cost-tool-usage", "0.0"),
+        ]
+    )]
+    #[case::a_providers_own_figure_comes_without_parts(
+        reported(0.25),
+        &[("x-litellm-response-cost", "0.25")]
+    )]
+    #[tokio::test]
+    async fn a_served_answer_names_the_parts_of_its_cost_after_the_total(
+        #[case] cost: Cost,
+        #[case] expected: &[(&str, &str)],
+    ) {
+        let response = answer(attempted(None, false, &[], cost).await);
+
+        let named = named(&response, None, TOOK);
+
+        let costs: Vec<_> = named
+            .iter()
+            .filter(|(name, _)| name.starts_with(RESPONSE_COST))
+            .map(|(name, value)| (name.as_str(), value.as_str()))
+            .collect();
+        assert_eq!(costs, expected);
+    }
+
+    #[test]
+    fn a_part_is_named_only_when_it_is_a_finite_number() {
+        let parts = CostParts {
+            input: Some(1.2e-6),
+            output: Some(f64::NAN),
+            cache_read: Some(f64::INFINITY),
+            reasoning: Some(7e-6),
+            ..CostParts::default()
+        };
+
+        assert_eq!(
+            parts.headers().collect::<Vec<_>>(),
+            [
+                (
+                    "x-litellm-response-cost-input".to_owned(),
+                    "1.2e-06".to_owned()
+                ),
+                (
+                    "x-litellm-response-cost-reasoning".to_owned(),
+                    "7e-06".to_owned()
+                ),
+            ]
         );
     }
 

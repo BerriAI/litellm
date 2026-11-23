@@ -127,6 +127,10 @@ impl<H: Host> Endpoint for MessagesAttempt<'_, H> {
         Some(counts.messages_usage())
     }
 
+    fn cost((_, attempted): &Self::Outcome) -> Option<f64> {
+        Some(crate::headers::charged(attempted)?.total)
+    }
+
     fn render(
         (ran, attempted): Self::Outcome,
         reported: ReportedModel<'_>,

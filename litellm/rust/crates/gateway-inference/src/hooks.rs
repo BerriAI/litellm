@@ -68,6 +68,9 @@ pub struct ServedCall {
     pub model_group: String,
     /// As Python's litellm `Usage` counts it, `None` for an answer that carries no usage.
     pub usage: Option<ChatCompletionsUsage>,
+    /// What the route settled the call cost, `None` when it settled nothing. A stream's cost is
+    /// not settled yet.
+    pub cost: Option<f64>,
 }
 
 /// The hooks of one call, told in the order the proxy runs them:
@@ -177,6 +180,7 @@ pub(crate) async fn answered<E: Endpoint, K: CallHooks>(
             complete: Some(ServedCall {
                 model_group,
                 usage: E::counts(outcome).and_then(E::usage),
+                cost: E::cost(outcome),
             }),
         });
     };
@@ -197,7 +201,12 @@ pub(crate) async fn answered<E: Endpoint, K: CallHooks>(
                 match outcome {
                     Ok(counts) => {
                         let usage = usage(counts);
-                        hooks.succeeded(ServedCall { model_group, usage }).await;
+                        let served = ServedCall {
+                            model_group,
+                            usage,
+                            cost: None,
+                        };
+                        hooks.succeeded(served).await;
                     }
                     Err(_) => hooks.failed().await,
                 }
