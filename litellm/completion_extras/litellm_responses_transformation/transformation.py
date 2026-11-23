@@ -937,7 +937,6 @@ _CALL_ID_LIMITED_ITEM_TYPES: Final = frozenset(
     ("function_call", "function_call_output", "custom_tool_call", "custom_tool_call_output")
 )
 _MAX_CALL_ID_LENGTH: Final = 64
-_CALL_ID_LIMITED_AZURE_HOST_SUFFIXES: Final = (".openai.azure.com", ".services.ai.azure.com")
 
 
 def _url_hostname(url: str) -> str:
@@ -948,14 +947,12 @@ def _url_hostname(url: str) -> str:
 
 
 def _limits_call_id_length(url: str) -> bool:
+    from litellm.llms.azure_ai.common_utils import is_azure_openai_v1_host
     from litellm.llms.bedrock_mantle.common_utils import MANTLE_HOST_RE
     from litellm.llms.openai.common_utils import is_openai_backed_api_base
 
-    hostname: Final = _url_hostname(url)
-    return bool(hostname) and (
-        is_openai_backed_api_base(url)
-        or MANTLE_HOST_RE.match(url) is not None
-        or hostname.endswith(_CALL_ID_LIMITED_AZURE_HOST_SUFFIXES)
+    return bool(_url_hostname(url)) and (
+        is_openai_backed_api_base(url) or MANTLE_HOST_RE.match(url) is not None or is_azure_openai_v1_host(url)
     )
 
 

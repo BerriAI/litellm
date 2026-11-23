@@ -7839,6 +7839,33 @@ def test_bounded_call_id_fields_leaves_a_request_to_an_unclassifiable_url_alone(
     assert bounded_call_id_fields(request_body, url) == {}
 
 
+@pytest.mark.parametrize(
+    ("url", "bounded"),
+    [
+        pytest.param("https://Example.OpenAI.Azure.com:443/openai/v1/responses", True, id="mixed-case-host-with-port"),
+        pytest.param(
+            "https://example.services.ai.azure.com/openai/deployments/d/responses?api-version=2025-04-01-preview",
+            True,
+            id="deployment-path-with-query",
+        ),
+        pytest.param("https://openai.azure.com/openai/v1/responses", False, id="bare-azure-apex"),
+        pytest.param(
+            "https://example.openai.azure.com.example.test/openai/v1/responses", False, id="look-alike-suffix"
+        ),
+    ],
+)
+def test_bounded_call_id_fields_classifies_azure_hosts_by_hostname_alone(url: str, bounded: bool) -> None:
+    from litellm.completion_extras.litellm_responses_transformation.transformation import bounded_call_id_fields
+
+    long_id: Final = "call_" + "z" * 80
+    items: Final = list(_function_pair(long_id))
+    sent: Final = bounded_call_id_fields({"input": items}, url).get("input", items)
+
+    assert isinstance(sent, list), sent
+    assert sent[0]["call_id"] == sent[1]["call_id"], sent
+    assert (sent[0]["call_id"] != long_id) is bounded, sent
+
+
 def _function_pair(call_id: str) -> tuple[dict[str, object], dict[str, object]]:
     return (
         {"type": "function_call", "call_id": call_id, "name": "f", "arguments": "{}"},
