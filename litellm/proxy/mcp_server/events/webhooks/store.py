@@ -270,7 +270,8 @@ class PrismaEventStore:
         from_statuses: tuple[SubscriptionStatus, ...] = LIVE_STATUSES,
     ) -> bool:
         eligible: Final = [state for state in LIVE_STATUSES if state in from_statuses]
-        where: LiteLLM_MCPEventSubscriptionWhereInput = {"id": subscription_id, "status": {"in": eligible}}
+        # bounded-ok: eligible contains at most the three live statuses
+        where: Final[LiteLLM_MCPEventSubscriptionWhereInput] = {"id": subscription_id, "status": {"in": eligible}}
         if activation.expected_generation is not None:
             where["generation"] = activation.expected_generation
         async with self._client.tx() as tx:
@@ -329,7 +330,7 @@ class PrismaEventStore:
     async def end_if_current(
         self, subscription_id: str, upstream_subscription_id: str | None, generation: str | None = None
     ) -> bool:
-        where: LiteLLM_MCPEventSubscriptionWhereInput = {
+        where: Final[LiteLLM_MCPEventSubscriptionWhereInput] = {
             "id": subscription_id,
             "upstream_subscription_id": upstream_subscription_id,
             "status": {"not": "terminated"},
@@ -348,7 +349,7 @@ class PrismaEventStore:
     async def hold_for_unsubscribe(
         self, subscription_id: str, upstream_subscription_id: str | None, generation: str | None = None
     ) -> bool:
-        where: LiteLLM_MCPEventSubscriptionWhereInput = {
+        where: Final[LiteLLM_MCPEventSubscriptionWhereInput] = {
             "id": subscription_id,
             "upstream_subscription_id": upstream_subscription_id,
             "status": {"in": ["active", "suspended"]},
