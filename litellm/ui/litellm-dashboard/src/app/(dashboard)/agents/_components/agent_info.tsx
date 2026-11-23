@@ -252,8 +252,13 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
           .flatMap((section) => section.fields)
           .some((field) => form.getFieldState(field.name).isDirty);
 
+      const payload = withAgentIdentity(updateData, values, agent, cardEdited);
+      if (typeof payload === "string") {
+        toast.error(t(payload));
+        return;
+      }
       await patchAgentCall(accessToken, agentId, {
-        ...withAgentIdentity(updateData, values, agent, cardEdited),
+        ...payload,
         object_permission: buildMcpObjectPermission(values),
         access_group_ids: values.access_group_ids ?? [],
       });

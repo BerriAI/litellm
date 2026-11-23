@@ -55,13 +55,12 @@ describe("agent identity configuration", () => {
       enabled: false,
     };
     const payload = withAgentIdentity({ litellm_params: { model: "runtime" } }, formValues);
-    expect(payload.litellm_params).toEqual({ model: "runtime" });
-    expect(payload.identity).toMatchObject({
-      client_id: identity.client_id,
-      service_principal_id: identity.service_principal_id,
+    expect(payload).toMatchObject({
+      litellm_params: { model: "runtime" },
+      identity: { client_id: identity.client_id, service_principal_id: identity.service_principal_id },
+      execution_mode: "both",
+      enabled: false,
     });
-    expect(payload.execution_mode).toBe("both");
-    expect(payload.enabled).toBe(false);
   });
   it("requires a service principal for autonomous execution", () => {
     const values = {
@@ -126,18 +125,18 @@ describe("agent identity configuration", () => {
         identity_okta_issuer: "https://example.okta.com",
         identity_okta_client_id: okta.client_id,
       };
-      expect(buildIdentityParams(values).identity).toMatchObject({ issuer: "https://example.okta.com" });
+      expect(buildIdentityParams(values)).toMatchObject({ identity: { issuer: "https://example.okta.com" } });
     });
     it.each(["https://example.okta.com/other", "http://example.okta.com/oauth2/aus1agents", ""])(
       "rejects an issuer that is not an Okta authorization server: %j",
       (issuer) => {
         const values = { identity_provider: "okta", identity_okta_issuer: issuer, identity_okta_client_id: "0oa1" };
-        expect(() => buildIdentityParams(values)).toThrow("Select a trusted Okta issuer");
+        expect(withAgentIdentity({}, values)).toBe("agents.identityFields.errors.invalidOktaBinding");
       },
     );
     it("rejects a missing client ID", () => {
       const values = { identity_provider: "okta", identity_okta_issuer: okta.issuer, identity_okta_client_id: " " };
-      expect(() => buildIdentityParams(values)).toThrow("Select a trusted Okta issuer");
+      expect(withAgentIdentity({}, values)).toBe("agents.identityFields.errors.invalidOktaBinding");
     });
     it.each(["autonomous", "delegated", "both"])("submits the %s mode the admin picked for an Okta agent", (mode) => {
       const values = {
@@ -148,9 +147,12 @@ describe("agent identity configuration", () => {
         enabled: true,
       };
       const payload = withAgentIdentity({ agent_name: "okta-agent" }, values);
-      expect(payload.identity).toEqual({ ...okta, required_scopes: [] });
-      expect(payload.execution_mode).toBe(mode);
-      expect(payload.enabled).toBe(true);
+      expect(payload).toEqual({
+        agent_name: "okta-agent",
+        identity: { ...okta, required_scopes: [] },
+        execution_mode: mode,
+        enabled: true,
+      });
     });
     it("clears an Okta binding when the admin picks no provider", () => {
       expect(buildIdentityParams({ identity_provider: "none" }, stored)).toEqual({ identity: null });
