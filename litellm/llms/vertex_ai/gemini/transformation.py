@@ -1531,6 +1531,8 @@ def sync_transform_request_body(
     vertex_auth_header: str | None,
     context_caching: bool = True,
 ) -> RequestBody:
+    from litellm.utils import is_explicitly_disabled_factory
+
     from ..context_caching.vertex_ai_context_caching import ContextCachingEndpoints
 
     context_caching_endpoints: Final = ContextCachingEndpoints()
@@ -1538,7 +1540,11 @@ def sync_transform_request_body(
 
     if context_caching:
         model_info = litellm_params.get("model_info") or {}
-        if model_info.get("supports_explicit_prompt_caching") is False:
+        base_model = model_info.get("base_model")
+        if model_info.get("supports_explicit_prompt_caching") is False or (
+            isinstance(base_model, str)
+            and is_explicitly_disabled_factory(base_model, custom_llm_provider, "supports_explicit_prompt_caching")
+        ):
             context_caching = False
 
     (
@@ -1674,6 +1680,8 @@ async def async_transform_request_body(
     vertex_auth_header: str | None,
     context_caching: bool = True,
 ) -> RequestBody:
+    from litellm.utils import is_explicitly_disabled_factory
+
     from ..context_caching.vertex_ai_context_caching import ContextCachingEndpoints
 
     context_caching_endpoints: Final = ContextCachingEndpoints()
@@ -1681,7 +1689,11 @@ async def async_transform_request_body(
 
     if context_caching:
         model_info = litellm_params.get("model_info") or {}
-        if model_info.get("supports_explicit_prompt_caching") is False:
+        base_model = model_info.get("base_model")
+        if model_info.get("supports_explicit_prompt_caching") is False or (
+            isinstance(base_model, str)
+            and is_explicitly_disabled_factory(base_model, custom_llm_provider, "supports_explicit_prompt_caching")
+        ):
             context_caching = False
 
     (

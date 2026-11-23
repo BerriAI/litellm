@@ -25,6 +25,8 @@ def test_target_consumes_cache_control_skips_when_model_disables_explicit_cachin
     assert LiteLLMAnthropicMessagesAdapter.target_consumes_cache_control("gemini/gemini-4-carbon") is False
     assert LiteLLMAnthropicMessagesAdapter.target_consumes_cache_control("vertex_ai/gemini-4-carbon") is False
     assert LiteLLMAnthropicMessagesAdapter.target_consumes_cache_control("vertex_ai/gemini-4-carbon-cyber-permissive") is False
+    assert LiteLLMAnthropicMessagesAdapter.target_consumes_cache_control("gemini/gemini-4-hydrogen") is False
+    assert LiteLLMAnthropicMessagesAdapter.target_consumes_cache_control("vertex_ai/gemini-4-hydrogen") is False
     # Bare model name without provider prefix should also be recognized
     assert LiteLLMAnthropicMessagesAdapter.target_consumes_cache_control("gemini-4-argon") is False
     assert LiteLLMAnthropicMessagesAdapter.target_consumes_cache_control("gemini-4-carbon") is False
@@ -217,6 +219,8 @@ def test_gemini_4_rows_keep_implicit_prompt_caching(local_model_cost_map):
         "gemini/gemini-4-carbon",
         "vertex_ai/gemini-4-carbon",
         "vertex_ai/gemini-4-carbon-cyber-permissive",
+        "gemini/gemini-4-hydrogen",
+        "vertex_ai/gemini-4-hydrogen",
     ):
         info = litellm.get_model_info(model)
         assert info.get("supports_prompt_caching") is True, model
