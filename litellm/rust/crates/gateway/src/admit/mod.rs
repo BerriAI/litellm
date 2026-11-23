@@ -14,13 +14,16 @@ use axum::{body::Body, extract::Request, http::request::Parts};
 use litellm_config::{Config, Environment};
 use litellm_core_utils::get_llm_provider_logic::LlmProviders;
 use litellm_env::Lookup;
-use litellm_gateway_auth::{Auth, BearerOrXApiKey};
+use litellm_gateway_auth::Auth;
 use litellm_gateway_inference::JsonObject;
 use litellm_model_catalog::CostMap;
 use litellm_router_core::{Router, registry::DeploymentFilter};
 use serde_json::{Map, Value};
 
-use crate::AppState;
+use crate::{
+    AppState,
+    host::{self, NativeRows},
+};
 pub use checks::Reason;
 
 /// Why the gateway does not serve a request the way the Python proxy would.
@@ -77,7 +80,7 @@ pub struct Admit {
     /// The router the native app serves through, which says where a request for a name can be
     /// served and what a call served there asks of its host.
     router: Router,
-    auth: Auth,
+    auth: Auth<NativeRows>,
 }
 
 /// The variables the proxy builds a database from when `database_url` names none.
@@ -163,7 +166,7 @@ impl Admit {
     fn built(config: &Config, router: Router, deployed: Vec<Deployed>) -> Self {
         Self {
             router,
-            auth: Auth::from_config(config).with_extractor(Arc::new(BearerOrXApiKey)),
+            auth: host::auth::auth(config),
             config: config.clone(),
             environment: Environment::default(),
             database: None,

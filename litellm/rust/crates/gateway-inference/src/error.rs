@@ -16,8 +16,6 @@ use crate::{
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error(transparent)]
-    Auth(#[from] litellm_gateway_auth::Error),
     #[error("invalid request body")]
     InvalidBody(#[from] BodyError),
     #[error(
@@ -175,7 +173,6 @@ impl From<litellm_host_http::Error<InferenceError>> for Error {
 impl Error {
     pub fn status(&self) -> StatusCode {
         match self {
-            Self::Auth(error) => error.status(),
             Self::BodyTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             Self::InvalidBody(_) | Self::UnknownModel { .. } => StatusCode::BAD_REQUEST,
             Self::NoDeployments(_) => StatusCode::TOO_MANY_REQUESTS,
@@ -228,7 +225,6 @@ impl Error {
 
     fn message(&self) -> String {
         match self {
-            Self::Auth(error) => error.to_string(),
             Self::Refused(refusal) => refusal.message.clone(),
             Self::InvalidBody(_)
             | Self::UnknownModel { .. }
@@ -524,22 +520,5 @@ mod tests {
         assert_eq!(message.matches(&cause).count(), 1, "{message}");
         assert_eq!(body["error"]["type"], "invalid_request_error");
         assert_eq!(body["error"]["code"], 400);
-    }
-
-    fn auth_outage() -> Error {
-        Error::Auth(litellm_gateway_auth::Error::Unavailable(
-            litellm_error::Source::new(std::io::Error::other("private-backend-detail")),
-        ))
-    }
-
-    #[rstest]
-    #[case::openai(auth_outage().openai_body()["error"]["message"].clone())]
-    #[case::anthropic(auth_outage().body(None)["error"]["message"].clone())]
-    #[case::anthropic_sse(Value::from(auth_outage().sse_frame()))]
-    fn an_auth_failure_hides_its_backend_cause(#[case] rendered: Value) {
-        let top = auth_outage().to_string();
-        let rendered = rendered.to_string();
-        assert!(rendered.contains(&top), "{rendered}");
-        assert!(!rendered.contains("private-backend-detail"), "{rendered}");
     }
 }

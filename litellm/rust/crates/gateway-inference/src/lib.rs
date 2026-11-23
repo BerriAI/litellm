@@ -18,6 +18,8 @@ mod serve;
 mod stream_event;
 mod stream_hold;
 mod stream_outcome;
+#[cfg(test)]
+mod test_support;
 
 use std::{collections::HashMap, sync::Arc};
 

@@ -1,6 +1,5 @@
 use std::{sync::Arc, time::Duration};
 
-use litellm_gateway_auth::AuthenticatedRequest;
 use litellm_gateway_inference::{
     Error, RoutingCache,
     routing::{self, RouteAttempt},
@@ -28,7 +27,6 @@ pub fn answers(step: &HostStep) -> bool {
 /// rest is answered from the gateway's own state.
 pub struct NativeRouterHost<'a, A> {
     pub(super) gateway: &'a Gateway,
-    pub(super) identity: &'a AuthenticatedRequest,
     pub(super) route: &'a A,
 }
 
@@ -56,8 +54,9 @@ impl<A: RouteAttempt> RouterHost for NativeRouterHost<'_, A> {
         .into())
     }
 
-    async fn allow_fallback(&self, target: &str) -> Result<bool, AttemptError> {
-        Ok(routing::allows(self.gateway, self.identity, target).await)
+    /// The master key is the only caller, and it may be served every model.
+    async fn allow_fallback(&self, _target: &str) -> Result<bool, AttemptError> {
+        Ok(true)
     }
 
     fn cache(&self) -> &RoutingCache {
