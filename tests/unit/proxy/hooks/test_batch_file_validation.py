@@ -1320,7 +1320,8 @@ async def test_should_not_skip_and_reuses_descriptors_when_limits_present():
     assert returned is descriptors
 
 
-def test_resolve_fetch_params_uses_request_model_credentials():
+@pytest.mark.asyncio
+async def test_resolve_fetch_params_uses_request_model_credentials():
     rate_limiter = _make_rate_limiter()
     with (
         patch("litellm.proxy.proxy_server.llm_router", MagicMock()),
@@ -1334,7 +1335,7 @@ def test_resolve_fetch_params_uses_request_model_credentials():
         ),
     ):
         provider_file_id, fetch_kwargs = (
-            rate_limiter._resolve_batch_input_file_fetch_params(
+            await rate_limiter._resolve_batch_input_file_fetch_params(
                 file_id="file-plain-openai",
                 custom_llm_provider="openai",
                 data={"model": "my-vllm-batch"},
@@ -1346,7 +1347,8 @@ def test_resolve_fetch_params_uses_request_model_credentials():
     assert fetch_kwargs["api_base"] == "http://vllm:8000/v1"
 
 
-def test_resolve_fetch_params_fails_open_on_credential_lookup_error():
+@pytest.mark.asyncio
+async def test_resolve_fetch_params_fails_open_on_credential_lookup_error():
     rate_limiter = _make_rate_limiter()
     with (
         patch("litellm.proxy.proxy_server.llm_router", MagicMock()),
@@ -1356,7 +1358,7 @@ def test_resolve_fetch_params_fails_open_on_credential_lookup_error():
         ),
     ):
         provider_file_id, fetch_kwargs = (
-            rate_limiter._resolve_batch_input_file_fetch_params(
+            await rate_limiter._resolve_batch_input_file_fetch_params(
                 file_id="file-plain-openai",
                 custom_llm_provider="openai",
                 data={"model": "my-vllm-batch"},
@@ -1366,7 +1368,8 @@ def test_resolve_fetch_params_fails_open_on_credential_lookup_error():
     assert fetch_kwargs == {"custom_llm_provider": "openai"}
 
 
-def test_resolve_fetch_params_model_embedded_fails_open_on_credential_error():
+@pytest.mark.asyncio
+async def test_resolve_fetch_params_model_embedded_fails_open_on_credential_error():
     import base64
 
     rate_limiter = _make_rate_limiter()
@@ -1388,7 +1391,7 @@ def test_resolve_fetch_params_model_embedded_fails_open_on_credential_error():
         ),
     ):
         provider_file_id, fetch_kwargs = (
-            rate_limiter._resolve_batch_input_file_fetch_params(
+            await rate_limiter._resolve_batch_input_file_fetch_params(
                 file_id=encoded_file_id,
                 custom_llm_provider="openai",
                 data={},
@@ -1398,6 +1401,51 @@ def test_resolve_fetch_params_model_embedded_fails_open_on_credential_error():
     assert provider_file_id == "file-orig"
     assert fetch_kwargs == {"custom_llm_provider": "openai"}
 
+
+
+def _a_team_wildcard_caller(team_models: list[str]) -> UserAPIKeyAuth:
+    import litellm
+
+    family: Final = min(
+        model for model in litellm.open_ai_chat_completion_models if "-" in model and "/" not in model
+    ).partition("-")[0]
+    return UserAPIKeyAuth(
+        api_key="sk", user_id="u", team_id="team-a", team_models=team_models, models=[f"{family}-*"]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "team_models, reads_with_the_team_key", [(["openai/*"], True), (["claude-opus-4-6"], False)]
+)
+async def test_the_input_file_is_read_with_the_provider_key_its_upload_used(
+    team_models: list[str], reads_with_the_team_key: bool
+):
+    from litellm import Router
+    from litellm.proxy.openai_files_endpoints.common_utils import apply_team_provider_credentials
+
+    llm_router: Final = Router(
+        model_list=[
+            {
+                "model_name": "openai/*",
+                "litellm_params": {"model": "openai/*", "api_key": "team-openai-key"},
+                "model_info": {"id": "team-a-openai", "team_id": "team-a"},
+            }
+        ]
+    )
+    caller: Final = _a_team_wildcard_caller(team_models)
+    upload: Final[dict[str, object]] = {}
+    await apply_team_provider_credentials(
+        data=upload, llm_router=llm_router, user_api_key_dict=caller, custom_llm_provider="openai"
+    )
+
+    with patch("litellm.proxy.proxy_server.llm_router", llm_router):
+        _, fetch_kwargs = await _make_rate_limiter()._resolve_batch_input_file_fetch_params(
+            file_id="file-plain-openai", custom_llm_provider="openai", data={}, user_api_key_dict=caller
+        )
+
+    assert fetch_kwargs.get("api_key") == upload.get("api_key")
+    assert (upload.get("api_key") == "team-openai-key") is reads_with_the_team_key
 
 @pytest.mark.asyncio
 async def test_check_and_increment_computes_descriptors_when_not_passed():
@@ -1924,7 +1972,7 @@ async def test_count_input_file_usage_enforces_models_when_token_counting_fails(
 
     with (
         patch("litellm.afile_content", new=AsyncMock(return_value=fake_content)),
-        patch("litellm.proxy.hooks.batch_rate_limiter.count_entry_tokens", new=_boom),
+        patch("litellm.proxy.hooks.batch_rate_limiter.batch_row_counter", return_value=_boom),
         patch("litellm.proxy.auth.auth_checks.can_key_call_model", new=deny),
         patch("litellm.proxy.proxy_server.llm_router", MagicMock(model_list=[])),
     ):
@@ -1969,7 +2017,7 @@ async def test_count_input_file_usage_estimates_tokens_when_counting_fails_for_a
 
     with (
         patch("litellm.afile_content", new=AsyncMock(return_value=fake_content)),
-        patch("litellm.proxy.hooks.batch_rate_limiter.count_entry_tokens", new=_boom),
+        patch("litellm.proxy.hooks.batch_rate_limiter.batch_row_counter", return_value=_boom),
         patch("litellm.proxy.auth.auth_checks.can_key_call_model", new=allow),
         patch("litellm.proxy.proxy_server.llm_router", MagicMock(model_list=[])),
     ):

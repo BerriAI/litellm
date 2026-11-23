@@ -1,6 +1,6 @@
 # Gateway auth core
 
-Every proxy auth decision for the planner, the master key, virtual keys and JWTs, behind one `AuthHost` trait. The Python proxy is the only host, and runs it through `python-bridge/src/auth/`. `common_checks`, the authorization stage that runs after either path, is still Python. Design and scope live in the Notion page "Auth" under "Rust Migration Depth First Plan"
+Every proxy auth decision for the planner, the master key, virtual keys and JWTs, behind one `AuthHost` trait. The Python proxy runs it through `python-bridge/src/auth/`, and the gateway's native host through `gateway/src/host/auth`. `common_checks`, the authorization stage that runs after either path, is still Python. Design and scope live in the Notion page "Auth" under "Rust Migration Depth First Plan"
 
 These are target invariants. Where the code still lags them, the Notion page lists the gap, and new code follows the invariant, not the gap
 
@@ -22,6 +22,19 @@ These are target invariants. Where the code still lags them, the Notion page lis
 - Pure logic is never a host call. The test is a second host. If it could only answer a method by re-implementing a rule, that rule belongs in the core
 - No generic methods such as `cached_json(key)` or `run_step()`. One method per question, typed in and out
 - The order of host calls is behavior, since it decides which reads and writes happen before a denial. Tests share the scripted host in `testing.rs` and assert the result and the calls in order
+- Where one path hands off to another, such as a mapped JWT continuing on the key path, a test at the entry point in `lib.rs` covers it, with inputs built by the stage that produces them. A test that seeds a record by hand proves only its own stage
+
+## The caller
+
+- Every answer about who the caller is and what it may reach is decided here, with no IO. A host asks, it never works one out from a row
+- `Caller` in `caller.rs` is the only thing a host carries past authentication. An identity that is not a caller a host serves, as no master key, the user auth route, a cached admin key and a JWT are, is `NotACaller` and never becomes one, so a host cannot serve it by accident
+- The role is derived here, by `Caller::role`. Admin is a role and never a kind of credential, so a host never reads it off how the caller authenticated or off a permission it holds
+- A key's id is the hash its row is stored under, `Caller::hash`, read from the `KeyRecord` the host's key row keeps through `StoredKey`. The key path refuses a key whose record has none, so a caller that is a key always has one and only the master key has none. It is never the hash of the token the request presented, which a key a JWT maps to does not have
+- For access, the host supplies the layers it read (the key's, the team's and so on) and the core decides. A host that did not read a layer a key has must have declined that key at authentication, so no decision is ever made on a layer that is missing
+  - `authz::authorize` in `authz/models.rs` is the one model rule. It takes each list as a `Layer` with the `ModelAsk` the host's router resolved the name to (the name asked for, its model group and that group's access groups), and a request has to be reached by every layer. No layer, as the master key has, reaches every model
+  - A list reaches a model when it is empty, holds `*` or `all-proxy-models`, or names the model, its group or one of its access groups
+  - An entry the rule does not read, a provider pattern such as `anthropic/*`, `all-team-models` or `no-default-models`, is the host's to decline at authentication. Reading one means porting it here, never matching it in a host
+  - A team's or a user's list is a new `Layer` variant with its own `Denied`, fed by the host method that yields the layers. A route never names a row type and never compares a list itself
 
 ## No Python semantics
 
@@ -34,14 +47,16 @@ These are target invariants. Where the code still lags them, the Notion page lis
 ## Typed rows in, one context out
 
 - Methods return the row they read (key, user, team, membership, end user, org, project), next to the facts the core decides on. No method returns `()` to leave data behind in the host, and no host keeps per-request state between calls. The request is the one exception. It is an argument the whole call takes in and hands back, so a host step that still resolves the model (`normalize_model`, the budget fallback) rewrites it in place, where the budget steps, the handlers after auth and the Python-only path read it. Returning the model for the core to pass along would only echo what is already on the request. Once the core resolves the model itself, the rewrite comes back in the outcome and the host applies it once
+- A record such as `KeyRecord` holds only what the stored row says. A value one stage derives from the request or a claim reaches the next stage as an argument, never through a field a host fills from a row. A JWT's end-user claim reaches the key path as `Credential::Resolved::end_user_id`
 - One reader per row, with one set of facts beside it. The read policy (cache only, cache then database, database only, upsert) is a typed argument, never a second method
 - Pass-through grants are decided in `routes/passthrough.rs` from the team's facts and the request's forwarded routes. `RouteChecks` calls the same functions through `_native`
 - Success is one `AuthContext` holding those rows. The host only converts it, to `UserAPIKeyAuth` in `litellm/proxy/auth/host/identity.py`
 
 ## Failures are values
 
-- Every failure is one `crate::Error` in `src/error.rs`, with key and JWT denials in `src/error/key.rs` and `src/error/jwt.rs` and every message in `#[error(...)]`. A host method returns the same `Error`: `HostFailed` means the host keeps its own failure, an unreachable database included, and a host-owned step's verdict is its typed denial. `is_host_failure()` separates the two at every boundary
+- Every failure is one `crate::Error` in `src/error.rs`, with key and JWT denials in `src/error/key.rs` and `src/error/jwt.rs` and every message in `#[error(...)]`. A host method returns the same `Error`: `HostFailed` means the host keeps its own failure, an unreachable database included, and a host-owned step's verdict is its typed denial. `is_host_failure()` separates the two at every boundary. `HostDeclined` is a host that holds what a step asked for and does not serve it, as a native host does for a row whose columns it cannot honor yet. A read that treats a failure as nothing found goes through `Error::absent_unless_declined`, so a declined read never authenticates the request
 - `public.rs` is the one mapping from `Error` to `PublicDenial`. It picks the status, type and param, and takes the message from `Display`
+- The exception class is part of a denial, since the failure spend row records its name and the auth failure log reads its fields. A denial the proxy raised as its own class is its own `PublicDenial` variant, and `tests/unit/proxy/auth/test_denial.py` fails when a variant has no class
 - The core renders every denial to `PublicDenial`. Python only constructs the exception, in `core.raise_denial`. A host failure is the one Python exception that passes through, so `allow_requests_on_db_unavailable` stays in Python's `handle_authentication_error` and the core never reads it
 
 ## Host-owned steps

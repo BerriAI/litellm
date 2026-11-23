@@ -29,6 +29,9 @@ pub(crate) struct MappedClaimsView {
     org_id: Option<String>,
     org_alias: Option<String>,
     end_user_id: Option<String>,
+    customer_org_alias: Option<String>,
+    customer_member_id: Option<String>,
+    customer_team_id: Option<String>,
     object_id: Option<String>,
     agent_claim: Option<String>,
     litellm_role: Option<String>,
@@ -81,6 +84,9 @@ pub(crate) fn jwt_claims(
         org_id: mapped.org_id,
         org_alias: mapped.org_alias,
         end_user_id: mapped.end_user_id,
+        customer_org_alias: mapped.customer_org_alias,
+        customer_member_id: mapped.customer_member_id,
+        customer_team_id: mapped.customer_team_id,
         object_id: mapped.object_id,
         agent_claim: mapped.agent_claim,
         litellm_role: jwt::litellm_role(&claims, &settings)
@@ -97,14 +103,4 @@ pub(crate) fn jwt_is_allowed_domain(
         user_email,
         &settings(litellm_jwtauth)?,
     ))
-}
-
-#[pyfunction]
-#[pyo3(signature = (claim_field, claim_value, issuer=None))]
-pub(crate) fn jwt_key_mapping_cache_key(
-    claim_field: &str,
-    claim_value: &str,
-    issuer: Option<&str>,
-) -> String {
-    authn_jwt::mapping_cache_key(claim_field, claim_value, issuer)
 }

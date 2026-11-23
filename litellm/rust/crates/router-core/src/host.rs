@@ -1,20 +1,22 @@
-//! [`Host`]: the router core's only boundary. Everything the core needs from the embedding
-//! process goes through it, and every attempt runs through [`Host::invoke`]: the core never runs
-//! an operation itself. `PythonHost` serves it in a Python process (attempts call `litellm.<op>`,
-//! and the deployment build asks it for secrets, validation, providers and side effects).
+//! The router core's boundary, split by whether a request is behind the question.
+//! [`RouterHost`] serves one routing call: every attempt runs through [`RouterHost::attempt`], so
+//! the core never runs an operation itself, and a host handed to each call may hold what one
+//! request owns (the caller, the typed request). [`RegistryHost`] answers what the process knows
+//! about deployments with no request behind it: secrets, validation, providers and side effects
+//! for the deployment build, and the cost-map lookups of the model-info queries.
 
-use std::{collections::BTreeMap, sync::Arc, time::Duration};
+use std::{collections::BTreeMap, future::Future, sync::Arc, time::Duration};
 
-use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{Map, Value};
 
+use litellm_router_types::RoutingStrategy;
+
 use crate::{
     cache::RouterCache,
-    config::{Op, RetryPolicy, RoutingStrategy},
-    error::{AttemptError, Error, FailureKind, Payload},
+    config::{Op, RetryPolicy},
+    error::{AttemptError, Error, FailureKind},
     fallback::Fallbacks,
-    health::Health,
     mock::MockFailure,
     outcome::OutcomeCallbacks,
     precall::PreCallFacts,
@@ -34,9 +36,9 @@ pub struct RouterRequest {
     /// `user_api_key_team_id`, from the first metadata bucket that holds one
     /// (`get_request_team_id`).
     pub team_id: Option<String>,
-    /// The `metadata` bucket's `user_api_key_team_id` alone: the team a failed level lists the
-    /// group's deployments for (`async_function_with_fallbacks_common_utils`,
-    /// `_stream_order_levels`). `None` lists every team's.
+    /// The team a failed level lists the group's deployments for
+    /// (`async_function_with_fallbacks_common_utils`, `_stream_order_levels`): `team_id`, else the
+    /// `metadata` bucket's own string team id. `None` lists every team's.
     pub listing_team_id: Option<String>,
     /// The caller's `user_role` is `proxy_admin`.
     pub proxy_admin: bool,
@@ -91,11 +93,16 @@ pub struct RouterRequest {
     /// cool down, are paused, or fail their health check, so the file never lands on a deployment
     /// that cannot run its batch.
     pub batch_upload: bool,
+    /// A batch, file, fine-tuning, vector store, or container call, which Azure scopes to the
+    /// resource rather than the deployment: the Azure deployments declared `model_info.mode: batch`
+    /// stay candidates. Every other call skips them while its group has any other deployment, since
+    /// they serve only batches, unless it is pinned to one ([`Self::pinned_deployment_id`]).
+    pub batch_api: bool,
     /// An embedding pick: the host keeps the candidates whose `max_embedding_batch_size` admits
     /// the input (`deployments_admitting_embedding_batch`).
     pub embedding_batch: bool,
     /// `f"{provider}/{model}"` for a lookup that cannot ask the host
-    /// (`_core_get_routable_deployments`); a pick asks [`Host::provider_request`].
+    /// (`_core_get_routable_deployments`); a pick asks [`RouterHost::provider_request`].
     pub wildcard_request: Option<String>,
     /// The request carries an image (`_request_carries_image`), so deployments that declare no
     /// vision are skipped while any other remains.
@@ -141,8 +148,6 @@ pub struct RouterRequest {
     /// `health_check_probe`: a health check's own pick, which sees no deployment when every
     /// one is marked unhealthy (the safety net keeps them all for any other request).
     pub health_check_probe: bool,
-    /// What the host needs to run the call itself, such as the Python kwargs.
-    pub payload: Option<Payload>,
 }
 
 /// A per-request `num_retries` that is no count of retries. `async_function_with_retries` only
@@ -325,10 +330,11 @@ pub struct Attempt {
     pub model_group_size: usize,
 }
 
-/// What a successful attempt returns.
+/// What a successful attempt returns: the host's own response, which the core hands back
+/// unread, and the facts the core records the outcome by.
 #[derive(Clone, Debug)]
-pub struct Output {
-    pub value: Payload,
+pub struct Served<R> {
+    pub response: R,
     /// Prompt plus completion tokens, counted against the deployment's per-minute usage.
     pub total_tokens: u64,
     /// A response the provider blocked, which the router may raise to fall back.
@@ -343,6 +349,56 @@ pub struct Output {
     /// model catalog sets (`_deployment_tracks_usage`), or a realtime session, whose `None`
     /// response counts nothing (`increment_deployment_usage_for_response`).
     pub tracks_usage: Option<bool>,
+}
+
+impl<R> Served<R> {
+    pub fn new(response: R, total_tokens: u64) -> Self {
+        Self {
+            response,
+            total_tokens,
+            blocked: None,
+            deferred: false,
+            tracks_usage: None,
+        }
+    }
+}
+
+/// A failed attempt, carrying the host's own error, which the core hands back unread when the call
+/// ends on it.
+#[derive(Debug)]
+pub enum AttemptFailure<F> {
+    /// The deployment failed: `facts` are what the retry, fallback and cooldown rules decide by.
+    Failed { facts: AttemptError, raised: F },
+    /// The host ended the call from inside the attempt: no retry, no fallback, and no outcome is
+    /// recorded against the deployment.
+    Refused(F),
+}
+
+/// How a call ended without a response.
+#[derive(Debug)]
+pub struct CallError<F> {
+    /// The error the core decided the call ends on.
+    pub error: Error,
+    /// The host's own error behind it, when an attempt raised it. `None` for an error the core
+    /// made itself (no deployment to pick, a mock failure, a blocked response raised to fall back).
+    pub raised: Option<Raised<F>>,
+}
+
+/// A host's own error, with the deployment the attempt that raised it ran on.
+#[derive(Debug, PartialEq)]
+pub struct Raised<F> {
+    pub failure: F,
+    /// `None` for an attempt on a name passed through unrouted, which runs on no deployment.
+    pub deployment_id: Option<String>,
+}
+
+impl<F> From<Error> for Box<CallError<F>> {
+    fn from(error: Error) -> Self {
+        Self::new(CallError {
+            error,
+            raised: None,
+        })
+    }
 }
 
 /// How a provider blocked a response the call otherwise served.
@@ -362,7 +418,6 @@ pub enum Blocked {
 pub struct RoutingContext<'a> {
     pub registry: &'a Registry,
     pub settings: &'a Settings,
-    pub health: &'a Health,
     pub request: &'a RouterRequest,
     pub op: &'a Op,
     pub model_group: &'a str,
@@ -415,7 +470,7 @@ pub struct CallbackFiltered {
     pub preferred: Option<String>,
 }
 
-/// Routing events, delivered through [`Host::observe`]. They serialize as JSON objects tagged by
+/// Routing events, delivered through [`RouterHost::observe`]. They serialize as JSON objects tagged by
 /// `event` (the variant name), durations in seconds.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 #[serde(tag = "event")]
@@ -634,93 +689,84 @@ impl RetryCause {
     /// The cause that names `error`.
     pub fn of(error: &Error) -> Self {
         match error {
-            Error::Attempt(_) => Self::Attempt,
+            Error::Attempt { .. } => Self::Attempt,
             _ => PickError::of(error).map_or(Self::Other, Self::Pick),
         }
     }
 }
 
-#[async_trait]
-pub trait Host: Send + Sync {
+pub trait RouterHost: Send + Sync {
+    /// The host's own response: the core hands it back in [`crate::RouterResponse`], unread.
+    type Response: Send;
+    /// The host's own error behind a failed attempt, handed back in [`CallError::raised`].
+    type Failure: Send;
+    /// The shared store routing state lives in.
+    type Cache: RouterCache;
+
+    // Attempt
+
     /// Run one attempt against the picked deployment. The core records its outcome (cooldowns,
     /// allowed-fails counters, usage) itself; the host only runs it.
-    async fn invoke(&self, attempt: &Attempt) -> Result<Output, AttemptError>;
+    fn attempt(
+        &self,
+        attempt: &Attempt,
+    ) -> impl Future<Output = Result<Served<Self::Response>, AttemptFailure<Self::Failure>>> + Send;
 
+    // Selection
+
+    // TODO: one named method per stage, each answering facts the core filters on, once the bridge
+    // asks through `litellm-coroutine`
     /// Run a selection stage the core does not implement.
-    async fn select(
+    fn select(
         &self,
         stage: &SelectStage,
         ctx: &RoutingContext<'_>,
         candidates: Vec<Arc<Deployment>>,
-    ) -> Result<Vec<Arc<Deployment>>, Error>;
+    ) -> impl Future<Output = Result<Vec<Arc<Deployment>>, Error>> + Send;
 
     /// Pre-routing before a pick resolves `ask.name`: the model group to resolve instead, a
     /// custom strategy's deployment to serve, or `None` to resolve the name itself. Asked only
     /// for picks that pre-route (`pre_routes`).
-    async fn pre_route(&self, ask: &PreRoute<'_>) -> Result<Option<PreRouted>, Error> {
-        let _ = ask;
-        Ok(None)
-    }
-
-    /// Access and budget checks before a cross-group fallback target.
-    /// `Err` when a check raised: the chain ends there, outside any target's `try`.
-    async fn allow_fallback(
+    fn pre_route(
         &self,
-        request: &RouterRequest,
-        target: &str,
-    ) -> Result<bool, AttemptError>;
-
-    /// Whether `run_async_fallback` refuses a chain for one of its dict `targets`, a server-owned
-    /// federation field or an `oidc/` api key. The chain is walked by `level`.
-    async fn refuses_fallbacks(&self, _level: u32, _targets: &[Map<String, Value>]) -> bool {
-        false
-    }
-
-    async fn sleep(&self, duration: Duration);
-
-    fn observe(&self, event: &RouterEvent);
-
-    /// The shared store routing state lives in.
-    fn cache(&self) -> Arc<dyn RouterCache>;
-
-    /// Whether [`Self::invoke`] can run `op` on `provider`. Checked for every served op and
-    /// deployment when the router is built or changed, so an unsupported pair fails the config,
-    /// never a request. `PythonHost` runs every op.
-    fn supports(&self, _op: &Op, _provider: &str) -> bool {
-        true
-    }
-
-    /// Whether [`Self::select`] can run strategies and plugins.
-    fn can_select(&self) -> bool {
-        true
+        ask: &PreRoute<'_>,
+    ) -> impl Future<Output = Result<Option<PreRouted>, Error>> + Send {
+        let _ = ask;
+        async { Ok(None) }
     }
 
     /// Run the routing plugins for `ctx.name` when `run` (the async pick's pre-routing hook), and
     /// report the candidate models they left on the request, if any.
-    async fn routing_plugin_models(
+    fn routing_plugin_models(
         &self,
-        _ctx: &RoutingContext<'_>,
-        _run: bool,
-    ) -> Result<Option<Vec<String>>, Error> {
-        Ok(None)
+        ctx: &RoutingContext<'_>,
+        run: bool,
+    ) -> impl Future<Output = Result<Option<Vec<String>>, Error>> + Send {
+        let _ = (ctx, run);
+        async { Ok(None) }
     }
 
     /// The facts the `enable_pre_call_checks` filter decides by (token count, context windows,
     /// param support), for `candidates` and the deployments in `ctx.pool`. A host without them
     /// reports no input, so nothing is checked.
-    async fn pre_call_facts(
+    fn pre_call_facts(
         &self,
-        _ctx: &RoutingContext<'_>,
-        _candidates: &[Arc<Deployment>],
-    ) -> Result<PreCallFacts, Error> {
-        Ok(PreCallFacts::default())
+        ctx: &RoutingContext<'_>,
+        candidates: &[Arc<Deployment>],
+    ) -> impl Future<Output = Result<PreCallFacts, Error>> + Send {
+        let _ = (ctx, candidates);
+        async { Ok(PreCallFacts::default()) }
     }
 
     /// `f"{provider}/{model}"` for `ctx.name`, which `PatternMatchRouter.get_pattern` tries when
     /// no pattern matches the name itself: only the host can infer a provider. `None` from a
     /// host that infers none.
-    async fn provider_request(&self, _ctx: &RoutingContext<'_>) -> Result<Option<String>, Error> {
-        Ok(None)
+    fn provider_request(
+        &self,
+        ctx: &RoutingContext<'_>,
+    ) -> impl Future<Output = Result<Option<String>, Error>> + Send {
+        let _ = ctx;
+        async { Ok(None) }
     }
 
     /// `async_callback_filter_deployments`: the host's routing callbacks narrow `candidates` in
@@ -728,52 +774,106 @@ pub trait Host: Send + Sync {
     /// after the callbacks keep it. A filter that raises fails the try with [`Error::Attempt`],
     /// which the call retries and falls back from like any attempt failure. A host without
     /// filters keeps every candidate and prefers none.
-    async fn callback_filters(
+    fn callback_filters(
         &self,
-        _ctx: &RoutingContext<'_>,
+        ctx: &RoutingContext<'_>,
         candidates: Vec<Arc<Deployment>>,
-    ) -> Result<CallbackFiltered, Error> {
-        Ok(CallbackFiltered {
-            kept: candidates,
-            preferred: None,
-        })
+    ) -> impl Future<Output = Result<CallbackFiltered, Error>> + Send {
+        let _ = ctx;
+        async {
+            Ok(CallbackFiltered {
+                kept: candidates,
+                preferred: None,
+            })
+        }
     }
+
+    // Fallback
+
+    // TODO: decided by the host until the caller's grants, budgets and rate limits are facts the
+    // core reads
+    /// Access and budget checks before a cross-group fallback target.
+    /// `Err` when a check raised: the chain ends there, outside any target's `try`.
+    fn allow_fallback(
+        &self,
+        target: &str,
+    ) -> impl Future<Output = Result<bool, AttemptError>> + Send;
+
+    // TODO: a pure check of each dict target's keys, which moves into the core
+    /// Whether `run_async_fallback` refuses a chain for one of its dict `targets`, a server-owned
+    /// federation field or an `oidc/` api key. The chain is walked by `level`.
+    fn refuses_fallbacks(
+        &self,
+        level: u32,
+        targets: &[Map<String, Value>],
+    ) -> impl Future<Output = bool> + Send {
+        let _ = (level, targets);
+        async { false }
+    }
+
+    // Stores and runtime
+
+    fn cache(&self) -> &Self::Cache;
+
+    fn sleep(&self, duration: Duration) -> impl Future<Output = ()> + Send;
+
+    fn observe(&self, event: &RouterEvent);
+}
+
+/// What the embedding process knows about deployments, with no request behind the question: the
+/// deployment build ([`crate::build`]) and the model-info queries ([`crate::model_info`],
+/// [`crate::group_info`]).
+pub trait RegistryHost: Send + Sync {
     /// The values of `refs`, one per ref, in order: what the deployment build substitutes for
-    /// each `os.environ/` reference it found in entry `index` ([`crate::build`]). Asked once per
-    /// deployment, as the build reaches it. A host without secrets leaves every reference as
-    /// written.
-    async fn secrets(&self, index: usize, refs: &[SecretRef]) -> Result<Vec<Value>, Error> {
+    /// each `os.environ/` reference it found in entry `index`. Asked once per deployment, as the
+    /// build reaches it. A host without secrets leaves every reference as written.
+    fn secrets(
+        &self,
+        index: usize,
+        refs: &[SecretRef],
+    ) -> impl Future<Output = Result<Vec<Value>, Error>> + Send {
         let _ = index;
-        Ok(refs.iter().map(|r| Value::String(r.name.clone())).collect())
+        let values = refs.iter().map(|r| Value::String(r.name.clone())).collect();
+        async { Ok(values) }
     }
 
     /// Check one deployment before it is added, and answer the entry as the host normalized it,
     /// a skip (the deployment is left out), or [`Built::Invalid`] (it failed and the router
     /// ignores invalid deployments). A host without checks accepts the entry as given.
-    async fn validate(&self, ask: &BuildAsk<'_>) -> Result<Built, Error> {
-        Ok(Built::Entry(ask.entry.clone()))
+    fn validate(&self, ask: &BuildAsk<'_>) -> impl Future<Output = Result<Built, Error>> + Send {
+        let built = Built::Entry(ask.entry.clone());
+        async { Ok(built) }
     }
 
     /// The provider that serves one validated deployment (`get_llm_provider`), `None` for one
     /// served without a provider (a prompt-management model), or [`Provided::Invalid`]. A host
     /// without provider resolution answers `None`, so [`Deployment::provider`] reads the model.
-    async fn provider(&self, ask: &BuildAsk<'_>) -> Result<Provided, Error> {
+    fn provider(&self, ask: &BuildAsk<'_>) -> impl Future<Output = Result<Provided, Error>> + Send {
         let _ = ask;
-        Ok(Provided::Provider(None))
+        async { Ok(Provided::Provider(None)) }
     }
 
     /// Run the host's side effects for an accepted deployment and answer the entry as the
     /// registry stores it. A host without side effects stores the entry it validated.
-    async fn added(&self, ask: &BuildAsk<'_>, provider: Option<&str>) -> Result<Built, Error> {
+    fn added(
+        &self,
+        ask: &BuildAsk<'_>,
+        provider: Option<&str>,
+    ) -> impl Future<Output = Result<Built, Error>> + Send {
         let _ = provider;
-        Ok(Built::Entry(ask.entry.clone()))
+        let built = Built::Entry(ask.entry.clone());
+        async { Ok(built) }
     }
 
+    // TODO: one named method per lookup
     /// Answer one model-info lookup ([`ModelInfoLookup`]). A host without a cost map answers
     /// `None` to everything, so no deployment has model info.
-    async fn model_info(&self, lookup: &ModelInfoLookup) -> Result<Value, Error> {
+    fn model_info(
+        &self,
+        lookup: &ModelInfoLookup,
+    ) -> impl Future<Output = Result<Value, Error>> + Send {
         let _ = lookup;
-        Ok(Value::Null)
+        async { Ok(Value::Null) }
     }
 }
 

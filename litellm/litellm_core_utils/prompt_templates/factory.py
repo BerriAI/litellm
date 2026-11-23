@@ -11,7 +11,7 @@ from dataclasses import dataclass, replace
 from enum import Enum
 from pathlib import PurePosixPath
 from types import MappingProxyType
-from typing import Annotated, Any, Final, NamedTuple, Protocol, TypeAlias, TypedDict, TypeVar, cast, overload
+from typing import Annotated, Final, NamedTuple, Protocol, TypeAlias, TypedDict, TypeVar, cast, overload
 
 from jinja2.sandbox import ImmutableSandboxedEnvironment
 from pydantic import BaseModel, BeforeValidator, ConfigDict, TypeAdapter, ValidationError, model_validator
@@ -22,7 +22,7 @@ import litellm.types
 import litellm.types.llms
 from litellm import verbose_logger
 from litellm._uuid import uuid
-from litellm.constants import REDACTED_BY_LITELLM
+from litellm.constants import MAX_IMAGE_URL_DOWNLOAD_SIZE_MB, REDACTED_BY_LITELLM
 from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.cloud_storage_security import is_s3_uri
 from litellm.litellm_core_utils.core_helpers import (
@@ -883,7 +883,9 @@ def convert_generic_image_chunk_to_openai_image_obj(
     return "data:{};{},{}".format(media_type, image_chunk["type"], image_chunk["data"])
 
 
-def convert_to_anthropic_image_obj(openai_image_url: str, format: str | None) -> GenericImageParsingChunk:
+def convert_to_anthropic_image_obj(
+    openai_image_url: str, format: str | None, *, max_bytes: int | None = None
+) -> GenericImageParsingChunk:
     """
     Input:
     "image_url": "data:image/jpeg;base64,{base64_image}",
@@ -897,7 +899,7 @@ def convert_to_anthropic_image_obj(openai_image_url: str, format: str | None) ->
     """
     try:
         if openai_image_url.startswith("http"):
-            openai_image_url = convert_url_to_base64(url=openai_image_url)
+            openai_image_url = convert_url_to_base64(url=openai_image_url, max_bytes=max_bytes)
         # Extract the media type and base64 data
         media_type, base64_data = openai_image_url.split("data:")[1].split(";base64,")
 
@@ -1546,15 +1548,42 @@ class GeminiMediaSource:
     detail: str | None = None
     video_metadata: Mapping[str, object] | None = None
     inline_in_tool_result: bool = False
+    max_download_bytes: int | None = None
 
 
 def gemini_tool_media_needs_download(source: GeminiMediaSource) -> bool:
-    from litellm.llms.vertex_ai.common_utils import GEMINI_FILES_API_URI_PREFIX
+    from litellm.llms.vertex_ai.common_utils import gemini_fetches_url_itself
 
     return (
         source.inline_in_tool_result
         and source.url.startswith(("http://", "https://"))
-        and not source.url.startswith(GEMINI_FILES_API_URI_PREFIX)
+        and not gemini_fetches_url_itself(source.url)
+    )
+
+
+def checked_gemini_video_part(
+    content: Mapping[str, object],
+    part: VertexPartType,
+    *,
+    model: str | None,
+    custom_llm_provider: str,
+    drop_params: bool,
+) -> VertexPartType | None:
+    if content.get("type") != "video_url":
+        return part
+    media: Final = part.get("inline_data") or part.get("file_data")
+    mime_type: Final = media.get("mime_type") if media is not None else None
+    if not mime_type or mime_type.startswith("video/"):
+        return part
+    if drop_params:
+        return None
+    raise litellm.BadRequestError(
+        message=(
+            f"Invalid message content: video_url must link a video file or a YouTube video, but it holds {mime_type}. "
+            "Link the video itself or set drop_params=True."
+        ),
+        model=model or "",
+        llm_provider=custom_llm_provider,
     )
 
 
@@ -1571,6 +1600,30 @@ def _gemini_inline_url(source: str, format: str | None) -> str:
     )
 
 
+def _gemini_url_media_source(url: str, fields: Mapping[str, object]) -> GeminiMediaSource:
+    detail: Final = fields.get("detail")
+    media_format: Final = _gemini_media_format(fields)
+    return GeminiMediaSource(
+        url=_gemini_inline_url(url, media_format),
+        format=media_format,
+        detail=detail if isinstance(detail, str) else None,
+        video_metadata=as_str_mapping(fields.get("video_metadata")),
+        inline_in_tool_result=True,
+    )
+
+
+_MAX_VIDEO_DOWNLOAD_BYTES: Final = int(MAX_IMAGE_URL_DOWNLOAD_SIZE_MB * 1024 * 1024)
+
+
+def _gemini_video_url_source(content: Mapping[str, object]) -> GeminiMediaSource | None:
+    video_url: Final = content.get("video_url")
+    video_fields: Final = {**content, **(as_str_mapping(video_url) or {})}
+    url: Final = video_url if isinstance(video_url, str) else video_fields.get("url")
+    if not isinstance(url, str) or not url:
+        return None
+    return replace(_gemini_url_media_source(url, video_fields), max_download_bytes=_MAX_VIDEO_DOWNLOAD_BYTES)
+
+
 def gemini_media_source(content: Mapping[str, object], *, prefer_file_id: bool = False) -> GeminiMediaSource | None:
     content_type: Final = content.get("type")
     if content_type in ("image", "input_image", "image_url"):
@@ -1578,16 +1631,12 @@ def gemini_media_source(content: Mapping[str, object], *, prefer_file_id: bool =
         if image is None:
             return None
         image_url: Final = image["image_url"]
-        image_fields: Final = {**content, **(as_str_mapping(content.get("image_url")) or {})}
-        detail: Final = image_fields.get("detail")
-        image_format: Final = _gemini_media_format(image_fields)
-        return GeminiMediaSource(
-            url=_gemini_inline_url(image_url if isinstance(image_url, str) else image_url["url"], image_format),
-            format=image_format,
-            detail=detail if isinstance(detail, str) else None,
-            video_metadata=as_str_mapping(image_fields.get("video_metadata")),
-            inline_in_tool_result=True,
+        return _gemini_url_media_source(
+            image_url if isinstance(image_url, str) else image_url["url"],
+            {**content, **(as_str_mapping(content.get("image_url")) or {})},
         )
+    if content_type == "video_url":
+        return _gemini_video_url_source(content)
     if content_type == "input_audio":
         audio: Final = as_str_mapping(content.get("input_audio"))
         if audio is None:
@@ -1634,50 +1683,131 @@ def _gemini_tool_media_part(
     nested: bool,
     vertex_project: str | None,
     vertex_credentials: VERTEX_CREDENTIALS_TYPES | None,
+    drop_params: bool = False,
 ) -> VertexPartType | None:
-    from litellm.llms.vertex_ai.common_utils import GEMINI_FILES_API_URI_PREFIX
-    from litellm.llms.vertex_ai.gemini.transformation import encode_gemini_media_source
+    from litellm.llms.vertex_ai.common_utils import gemini_fetches_url_itself
+    from litellm.llms.vertex_ai.gemini.transformation import changes_gemini_media_settings, encode_gemini_media_source
 
     source: Final = gemini_media_source(content)
     if source is None:
+        if content.get("type") == "video_url" and not drop_params:
+            raise litellm.BadRequestError(
+                message="Invalid message content: element type is 'video_url' but it has no 'url'",
+                model=model or "",
+                llm_provider=custom_llm_provider or "gemini",
+            )
         return None
-    inline_only: Final = nested and custom_llm_provider not in ("vertex_ai", "vertex_ai_beta")
-    if inline_only and source.url.startswith(("gs://", GEMINI_FILES_API_URI_PREFIX)):
+    vertex_nested: Final = nested and custom_llm_provider in ("vertex_ai", "vertex_ai_beta")
+    drops_video_settings: Final = (
+        vertex_nested
+        and content.get("type") == "video_url"
+        and changes_gemini_media_settings(source.detail, source.video_metadata)
+    )
+    if drops_video_settings and not drop_params:
         raise litellm.BadRequestError(
-            message="Gemini tool results require inline media data. Use a data URL or input_audio for this file reference.",
+            message=(
+                "Vertex ignores detail and video_metadata on a video inside a tool result. "
+                "Move the video to a user message, remove them, or set drop_params=True."
+            ),
+            model=model or "",
+            llm_provider=custom_llm_provider or "vertex_ai",
+        )
+    inline_only: Final = nested and not vertex_nested
+    if inline_only and (source.url.startswith("gs://") or gemini_fetches_url_itself(source.url)):
+        if drop_params:
+            verbose_logger.warning("Dropped a media link from a Gemini tool result, which takes inline data only")
+            return None
+        raise litellm.BadRequestError(
+            message=(
+                "Gemini tool results require inline media data. "
+                "Use a data URL, move the link to a user message, or set drop_params=True."
+            ),
             model=model or "",
             llm_provider=custom_llm_provider or "gemini",
         )
+    kept_source: Final = replace(source, detail=None, video_metadata=None) if vertex_nested else source
     try:
-        if not inline_only:
-            encoded_source: Final = (
-                replace(
-                    source,
-                    url=convert_generic_image_chunk_to_openai_image_obj(
-                        convert_to_anthropic_image_obj(source.url, format=source.format)
-                    ),
-                )
-                if gemini_tool_media_needs_download(source)
-                else source
+        encoded_source: Final = (
+            replace(
+                kept_source,
+                url=convert_generic_image_chunk_to_openai_image_obj(
+                    convert_to_anthropic_image_obj(
+                        kept_source.url, format=kept_source.format, max_bytes=kept_source.max_download_bytes
+                    )
+                ),
             )
-            part: Final = encode_gemini_media_source(encoded_source, model, vertex_project, vertex_credentials)
-            if nested and "file_data" in part and not part["file_data"].get("mime_type"):
-                raise litellm.BadRequestError(
-                    message="Vertex tool result file references require an explicit MIME type in format.",
-                    model=model or "",
-                    llm_provider=custom_llm_provider or "vertex_ai",
-                )
-            return part
-        inline: Final = convert_to_anthropic_image_obj(source.url, format=source.format)
-        return {"inline_data": {"data": inline["data"], "mime_type": inline["media_type"]}}
-    except litellm.ImageFetchError as exc:
-        verbose_logger.warning("Failed to process media in tool response: %s", exc)
+            if gemini_tool_media_needs_download(kept_source)
+            or (inline_only and kept_source.url.startswith(("http://", "https://")))
+            else kept_source
+        )
+        part: Final = encode_gemini_media_source(encoded_source, model, vertex_project, vertex_credentials)
+        if nested and "file_data" in part and not part["file_data"].get("mime_type"):
+            raise litellm.BadRequestError(
+                message="Vertex tool result file references require an explicit MIME type in format.",
+                model=model or "",
+                llm_provider=custom_llm_provider or "vertex_ai",
+            )
+        return checked_gemini_video_part(
+            content,
+            part,
+            model=model,
+            custom_llm_provider=custom_llm_provider or "gemini",
+            drop_params=drop_params,
+        )
+    except litellm.ImageFetchError:
+        skip_unfetched_media(
+            content,
+            location="a tool result",
+            model=model,
+            custom_llm_provider=custom_llm_provider or "gemini",
+            drop_params=drop_params,
+        )
         return None
     except litellm.BadRequestError:
         raise
-    except Exception as exc:
-        verbose_logger.warning("Failed to process media in tool response: %s", exc)
+    except Exception:
+        skip_unfetched_media(
+            content,
+            location="a tool result",
+            model=model,
+            custom_llm_provider=custom_llm_provider or "gemini",
+            drop_params=drop_params,
+        )
         return None
+
+
+def skip_unfetched_media(
+    content: Mapping[str, object], *, location: str, model: str | None, custom_llm_provider: str, drop_params: bool
+) -> None:
+    if content.get("type") == "video_url" and not drop_params:
+        raise litellm.BadRequestError(
+            message=f"Could not download the video in {location}. Fix the link or set drop_params=True.",
+            model=model or "",
+            llm_provider=custom_llm_provider,
+        ) from None
+    verbose_logger.warning("Dropped media from %s because it could not be downloaded", location)
+
+
+def _function_response_part(part: VertexPartType) -> FunctionResponsePartType:
+    inline: Final = (
+        FunctionResponsePartType(inline_data=part["inline_data"])
+        if "inline_data" in part
+        else FunctionResponsePartType()
+    )
+    file: Final = (
+        FunctionResponsePartType(file_data=part["file_data"]) if "file_data" in part else FunctionResponsePartType()
+    )
+    resolution: Final = (
+        FunctionResponsePartType(media_resolution=part["media_resolution"])
+        if "media_resolution" in part
+        else FunctionResponsePartType()
+    )
+    clip: Final = (
+        FunctionResponsePartType(video_metadata=part["video_metadata"])
+        if "video_metadata" in part
+        else FunctionResponsePartType()
+    )
+    return inline | file | resolution | clip
 
 
 def convert_to_gemini_tool_call_result(
@@ -1690,6 +1820,7 @@ def convert_to_gemini_tool_call_result(
     model: str | None = None,
     vertex_project: str | None = None,
     vertex_credentials: VERTEX_CREDENTIALS_TYPES | None = None,
+    drop_params: bool = False,
 ) -> VertexPartType | list[VertexPartType]:
     """
     OpenAI message with a tool result looks like:
@@ -1752,6 +1883,7 @@ def convert_to_gemini_tool_call_result(
                         nested=supports_multimodal_function_responses,
                         vertex_project=vertex_project,
                         vertex_credentials=vertex_credentials,
+                        drop_params=drop_params,
                     )
                 ) is not None:
                     media_parts.append(media_part)
@@ -1810,11 +1942,7 @@ def convert_to_gemini_tool_call_result(
         if not supports_multimodal_function_responses:
             return [_part, *media_parts]
         _function_response["parts"] = [
-            FunctionResponsePartType(inline_data=part["inline_data"])
-            if "inline_data" in part
-            else FunctionResponsePartType(file_data=part["file_data"])
-            for part in media_parts
-            if "inline_data" in part or "file_data" in part
+            _function_response_part(part) for part in media_parts if "inline_data" in part or "file_data" in part
         ]
         return [_part]
 
@@ -2145,7 +2273,11 @@ def _placed_and_paired(
     return _pair_tool_calls_with_results(placed) if litellm.modify_params else placed
 
 
-_AnthropicToolInvokeItem: TypeAlias = AnthropicMessagesToolUseParam | dict[str, Any]
+_AnthropicToolInvokeItem: TypeAlias = AnthropicMessagesToolUseParam | dict[str, object]
+
+
+class _SuffixMatcher(Protocol):
+    def endswith(self, suffix: str, /) -> bool: ...
 
 
 def _is_server_tool_result(block: Mapping[str, object]) -> bool:
@@ -2296,7 +2428,7 @@ def _anthropic_argument_object_count(arguments: object) -> int:
 
 def _anthropic_tool_inputs(
     arguments: str | None, tool_name: str, tool_id: str, split_tool_use_ids: Mapping[str, tuple[str, ...]]
-) -> tuple[tuple[str, dict[str, object]], ...]:  # mutable-ok: the tool_use block's input field is typed dict
+) -> tuple[tuple[str, object], ...]:
     try:
         return ((tool_id, parse_tool_call_arguments(arguments, tool_name=tool_name, context="Anthropic tool invoke")),)
     except ValueError:
@@ -2328,8 +2460,8 @@ def _anthropic_tool_results_for_split_ids(
 
 def convert_to_anthropic_tool_invoke(
     tool_calls: Sequence[ChatCompletionAssistantToolCall],
-    web_search_results: Sequence[object] | None = None,
-    tool_results: Sequence[object] | None = None,
+    web_search_results: object = None,
+    tool_results: object = None,
     answered_tool_ids: Container[str] = frozenset(),
     server_tool_call_ids: Container[str] = frozenset(),
     split_tool_use_ids: Mapping[str, tuple[str, ...]] = _NO_SPLIT_TOOL_USE_IDS,
@@ -2593,7 +2725,7 @@ _S3_MIME_SUBTYPE_FORMATS: Final = MappingProxyType(
     {"jpg": "jpeg", "quicktime": "mov", "x-matroska": "mkv", "x-flv": "flv", "x-ms-wmv": "wmv", "3gpp": "3gp"}
 )
 _CONVERSE_VIDEO_FORMAT_NAMES: Final = MappingProxyType({"3gp": "three_gp"})
-_EMPTY_TEXT_PLACEHOLDER: Final = "[System: Empty message content sanitised to satisfy protocol]"
+EMPTY_TEXT_PLACEHOLDER: Final = "[System: Empty message content sanitised to satisfy protocol]"
 
 
 def _dict_block(block: object) -> Mapping[str, object] | None:
@@ -2612,11 +2744,150 @@ def _is_empty_text_block(block: object) -> bool:
             return False
 
 
+def carries_empty_text(message: object) -> bool:
+    if message_field(message, "role") not in ("user", "assistant"):
+        return False
+    content: Final = message_field(message, "content")
+    if isinstance(content, str):
+        return not content.strip()
+    blocks: Final = parts_of(content)
+    return isinstance(content, list) and any(map(_is_empty_text_block, blocks))
+
+
+_CONVERSE_ASSISTANT_NON_TEXT_FIELDS: Final = ("tool_calls", "thinking_blocks")
+
+
+def _is_typed_block(block: object) -> bool:
+    match _dict_block(block):
+        case {"type": "text", "text": str()}:
+            return True
+        case {"type": "text"}:
+            return False
+        case {"type": _}:
+            return True
+        case _:
+            return False
+
+
+def _converse_reads_content(message: Mapping[str, object]) -> bool:
+    return bool(message.get("content")) or any(message.get(field) for field in _CONVERSE_ASSISTANT_NON_TEXT_FIELDS)
+
+
+def _assistant_turn_as_converse_sends_it(message: Mapping[str, object]) -> Mapping[str, object] | None:
+    if message.get("role") != "assistant" or (message.get("content") and not carries_empty_text(message)):
+        return message
+    if litellm.modify_params is not False and all(map(_is_typed_block, parts_of(message.get("content")))):
+        continued: Final = get_assistant_message_block_or_continue_message(
+            cast(ChatCompletionAssistantMessage, message)  # cast-ok: role checked above, the helper reads only content
+        )
+        return continued if _converse_reads_content(continued) else None
+    kept: Final = tuple(block for block in parts_of(message.get("content")) if not _is_empty_text_block(block))
+    trimmed: Final = {**message, "content": list(kept) or None}
+    return trimmed if _converse_reads_content(trimmed) else None
+
+
+_CONVERSE_USER_BLOCK_ROLES: Final = frozenset({"user", "tool"})
+
+
+def _role_runs_as_converse_sends_them(
+    messages: Sequence[Mapping[str, object]],
+) -> tuple[tuple[object, tuple[Mapping[str, object], ...]], ...]:
+    runs: Final = itertools.groupby(messages, key=lambda message: message.get("role"))
+    sent_runs: Final = (
+        (role, tuple(turn for turn in map(_assistant_turn_as_converse_sends_it, run) if turn is not None))
+        for role, run in runs
+    )
+    return tuple((role, turns) for role, turns in sent_runs if turns)
+
+
+def _continue_turn_between(previous_role: object, role: object) -> tuple[Mapping[str, object], ...]:
+    if litellm.modify_params is True and {previous_role, role} <= _CONVERSE_USER_BLOCK_ROLES:
+        return (DEFAULT_ASSISTANT_CONTINUE_MESSAGE,)
+    return ()
+
+
+def _needs_user_continue_turn(message: Mapping[str, object]) -> bool:
+    return message.get("role") == "assistant" and not message.get("prefix")
+
+
+def _with_user_continue_turns(
+    messages: Sequence[Mapping[str, object]], user_continue_message: ChatCompletionUserMessage | None
+) -> tuple[Mapping[str, object], ...]:
+    first: Final = next((index for index, message in enumerate(messages) if not _is_system_message(message)), None)
+    if not continues_empty_user_turns(user_continue_message) or first is None:
+        return tuple(messages)
+    continue_message: Final = user_continue_message or DEFAULT_USER_CONTINUE_MESSAGE
+    leading: Final = (continue_message,) if _needs_user_continue_turn(messages[first]) else ()
+    trailing: Final = (continue_message,) if _needs_user_continue_turn(messages[-1]) else ()
+    return (*messages[:first], *leading, *messages[first:], *trailing)
+
+
+def assistant_turns_as_converse_sends_them(
+    messages: Sequence[Mapping[str, object]], user_continue_message: ChatCompletionUserMessage | None
+) -> tuple[Mapping[str, object], ...]:
+    runs: Final = _role_runs_as_converse_sends_them(_with_user_continue_turns(messages, user_continue_message))
+    return tuple(
+        itertools.chain.from_iterable(
+            (*_continue_turn_between(previous_role, role), *turns)
+            for (previous_role, _), (role, turns) in itertools.pairwise(((None, ()), *runs))
+        )
+    )
+
+
+def _is_user_turn(message: Mapping[str, object]) -> bool:
+    return message.get("role") == "user"
+
+
+def _user_turn_as_converse_sends_it(
+    message: Mapping[str, object], user_continue_message: ChatCompletionUserMessage | None
+) -> Mapping[str, object] | None:
+    if not _is_user_turn(message) or not (is_empty_user_message(message) or carries_empty_text(message)):
+        return message
+    sent: Final = get_user_message_block_or_continue_message(
+        cast(ChatCompletionUserMessage, copy.deepcopy(dict(message))),  # cast-ok: a user turn, checked above
+        user_continue_message,
+    )
+    return sent if sent.get("content") else None
+
+
+def user_turns_as_converse_sends_them(
+    messages: Sequence[Mapping[str, object]],
+    user_continue_message: ChatCompletionUserMessage | None,
+    rejects_assistant_prefill: bool,
+) -> tuple[Mapping[str, object], ...]:
+    tail_start: Final = len(messages) - sum(1 for _ in itertools.takewhile(_is_user_turn, reversed(messages)))
+    sends_placeholder_turn: Final = (
+        rejects_assistant_prefill
+        and not continues_empty_user_turns(user_continue_message)
+        and 0 < tail_start < len(messages)
+        and messages[tail_start - 1].get("role") == "assistant"
+        and all(map(is_empty_user_message, messages[tail_start:]))
+    )
+    leading_turns: Final = messages[:tail_start] if sends_placeholder_turn else messages
+    sent_turns: Final = (_user_turn_as_converse_sends_it(message, user_continue_message) for message in leading_turns)
+    kept_turns: Final = tuple(turn for turn in sent_turns if turn is not None)
+    if not sends_placeholder_turn:
+        return kept_turns
+    return (*kept_turns, _placeholder_user_turn(messages[tail_start:]))
+
+
+def _placeholder_user_turn(trailing_messages: Sequence[Mapping[str, object]]) -> Mapping[str, object]:
+    marked: Final = _first_cache_marked(trailing_messages)
+    if marked is None:
+        return {"role": "user", "content": EMPTY_TEXT_PLACEHOLDER}
+    placeholder_block: Final = {
+        "type": "text",
+        "text": EMPTY_TEXT_PLACEHOLDER,
+        "cache_control": message_field(marked, "cache_control"),
+    }
+    return {"role": "user", "content": [placeholder_block]}
+
+
 def _with_placeholder_text(block: object) -> object:
     fields: Final = _dict_block(block)
     if fields is None or not _is_empty_text_block(fields):
         return block
-    return {**fields, "text": _EMPTY_TEXT_PLACEHOLDER}
+    return {**fields, "text": EMPTY_TEXT_PLACEHOLDER}
 
 
 def _survives_assistant_conversion(block: object) -> bool:
@@ -2691,23 +2962,18 @@ def _sanitize_empty_text_content(
     Returns:
         The message with sanitized content if needed, otherwise the original message
     """
-    if message.get("role") not in ["user", "assistant"]:
+    if not carries_empty_text(message):
         return message
 
     content: Final = message_field(message, "content")
     drop_empty_text: Final = message_field(message, "role") == "assistant" and _carries_non_text_content(message)
 
     if isinstance(content, str):
-        if content.strip():
-            return message
         if drop_empty_text:
             return _with_content(message, None, "Dropped empty text content")
-        return _with_content(message, _EMPTY_TEXT_PLACEHOLDER, "Replaced empty text content")
+        return _with_content(message, EMPTY_TEXT_PLACEHOLDER, "Replaced empty text content")
 
     blocks: Final = parts_of(content)
-    if not isinstance(content, list) or not any(_is_empty_text_block(block) for block in blocks):
-        return message
-
     if drop_empty_text:
         kept: Final = [block for block in blocks if not _is_empty_text_block(block)]
         return _with_content(message, kept, "Dropped empty text block(s)")
@@ -3052,7 +3318,7 @@ def _unsigned_thinking_identity(kind: str, thinking: object, signature: object) 
             return None
 
 
-_Replayed: Final = TypeVar("_Replayed")
+_Replayed = TypeVar("_Replayed")
 
 
 def _with_missing_thinking_blocks(
@@ -3168,7 +3434,7 @@ def _tool_result_later_in_turn(
 
 
 def _empty_text_placeholder(message: AllMessageValues) -> AnthropicMessagesTextParam:
-    placeholder: Final = AnthropicMessagesTextParam(type="text", text=_EMPTY_TEXT_PLACEHOLDER)
+    placeholder: Final = AnthropicMessagesTextParam(type="text", text=EMPTY_TEXT_PLACEHOLDER)
     add_cache_control_to_content(anthropic_content_element=placeholder, original_content_element=message)
     return placeholder
 
@@ -3373,7 +3639,7 @@ def anthropic_messages_pt(
             new_messages.append({"role": "user", "content": [placeholder]})
 
         # Track unique tool IDs in this merge block to avoid duplication
-        unique_tool_ids: set[str] = set()
+        unique_tool_ids: set[object] = set()
 
         assistant_content: list[AnthropicMessagesAssistantMessageValues] = []
         ## MERGE CONSECUTIVE ASSISTANT CONTENT ##
@@ -3412,11 +3678,11 @@ def anthropic_messages_pt(
             # for server_tool_use reconstruction.
             # Fixes: https://github.com/BerriAI/litellm/issues/17737
             _provider_specific_fields_raw = assistant_content_block.get("provider_specific_fields")
-            _provider_specific_fields: dict[str, Any] = (
-                cast(dict[str, Any], _provider_specific_fields_raw)
+            _provider_specific_fields: Mapping[str, object] = (
+                as_str_mapping(_DECODED_JSON.validate_python(_provider_specific_fields_raw))
                 if isinstance(_provider_specific_fields_raw, dict)
-                else {}
-            )
+                else None
+            ) or {}
             tool_invoke_results = (
                 convert_to_anthropic_tool_invoke(
                     assistant_tool_calls,
@@ -3457,7 +3723,7 @@ def anthropic_messages_pt(
                         if _current_group:
                             server_tool_groups.append(_current_group)
                         _current_group = [item]
-                    elif item_type.endswith("_tool_result"):
+                    elif require_attributes(item_type, _SuffixMatcher, "endswith").endswith("_tool_result"):
                         _current_group.append(item)
                     elif item_type == "tool_use":
                         regular_tool_uses.append(item)
@@ -3739,6 +4005,15 @@ from litellm.types.llms.cohere import (
 )
 
 
+def _cohere_tool_output(content_str: str) -> object:
+    if not content_str:
+        return {}
+    try:
+        return _DECODED_JSON.validate_python(json.loads(content_str))
+    except json.JSONDecodeError:
+        return {"result": content_str}
+
+
 def convert_openai_message_to_cohere_tool_result(
     message: ChatCompletionToolMessage | ChatCompletionFunctionMessage,
     tool_calls: list,
@@ -3786,15 +4061,9 @@ def convert_openai_message_to_cohere_tool_result(
         for content in content_list:
             if content["type"] == "text":
                 content_str += content["text"]
-    if len(content_str) > 0:
-        try:
-            content = json.loads(content_str)
-        except json.JSONDecodeError:
-            content = {"result": content_str}
-    else:
-        content = {}
+    tool_output: Final = _cohere_tool_output(content_str)
     name = ""
-    arguments = {}
+    arguments: object = {}
     # Recover name from last message with tool calls
     if len(tool_calls) > 0:
         tools: Final = tool_calls
@@ -3805,14 +4074,14 @@ def convert_openai_message_to_cohere_tool_result(
                 name = tool.get("function", {}).get("name", "")
                 arguments_str = tool.get("function", {}).get("arguments", "")
                 if arguments_str is not None and len(arguments_str) > 0:
-                    arguments = json.loads(arguments_str)
+                    arguments = _DECODED_JSON.validate_python(json.loads(arguments_str))
 
     if message["role"] == "function":
         function_message: Final[ChatCompletionFunctionMessage] = message
         name = function_message["name"]
         cohere_tool_result: ToolResultObject = {
             "call": CallObject(name=name, parameters=arguments),
-            "outputs": [content],
+            "outputs": [tool_output],
         }
         return cohere_tool_result
     else:
@@ -3821,7 +4090,7 @@ def convert_openai_message_to_cohere_tool_result(
 
         cohere_tool_result = {
             "call": CallObject(name=name, parameters=arguments),
-            "outputs": [content],
+            "outputs": [tool_output],
         }
         return cohere_tool_result
 
@@ -4710,6 +4979,8 @@ def _append_bedrock_tool_result_media_block(
     processed_block: BedrockContentBlock,
     content: Mapping[str, object],
     content_type: str,
+    *,
+    drop_params: bool,
 ) -> None:
     if "image" in processed_block:
         tool_result_content_blocks.append(BedrockToolResultContentBlock(image=processed_block["image"]))
@@ -4717,6 +4988,15 @@ def _append_bedrock_tool_result_media_block(
         tool_result_content_blocks.append(BedrockToolResultContentBlock(document=processed_block["document"]))
     elif "video" in processed_block and "s3Location" in processed_block["video"]["source"]:
         tool_result_content_blocks.append(BedrockToolResultContentBlock(video=processed_block["video"]))
+    elif "video" in processed_block and not drop_params:
+        raise litellm.BadRequestError(
+            message=(
+                "Bedrock tool results take a video only from S3. "
+                "Use an s3:// URL, move the video to a user message, or set drop_params=True."
+            ),
+            model="",
+            llm_provider="bedrock",
+        )
     else:
         verbose_logger.warning(
             "Bedrock Converse: unrecognized BedrockContentBlock keys %s for %s tool-result block %s; dropping.",
@@ -4743,6 +5023,8 @@ def _s3_bucket_owner(media: object, url: str) -> str | None:
 def _append_bedrock_tool_result_image_url_block(
     tool_result_content_blocks: list[BedrockToolResultContentBlock],
     content: ChatCompletionImageObject,
+    *,
+    drop_params: bool,
 ) -> None:
     format: str | None = None
     if isinstance(content["image_url"], dict):
@@ -4755,12 +5037,16 @@ def _append_bedrock_tool_result_image_url_block(
         format=format,
         bucket_owner=_s3_bucket_owner(content["image_url"], image_url),
     )
-    _append_bedrock_tool_result_media_block(tool_result_content_blocks, processed_block, content, "image_url")
+    _append_bedrock_tool_result_media_block(
+        tool_result_content_blocks, processed_block, content, "image_url", drop_params=drop_params
+    )
 
 
 def _append_bedrock_tool_result_file_block(
     tool_result_content_blocks: list[BedrockToolResultContentBlock],
     content: ChatCompletionFileObject,
+    *,
+    drop_params: bool,
 ) -> None:
     # Match the user-message path (_process_file_message): accept either
     # file_data (base64 data URI) or file_id (server-side reference / URL).
@@ -4779,20 +5065,24 @@ def _append_bedrock_tool_result_file_block(
         format=file_obj.get("format"),
         bucket_owner=_s3_bucket_owner(file_obj, url),
     )
-    _append_bedrock_tool_result_media_block(tool_result_content_blocks, processed_block, content, "file")
+    _append_bedrock_tool_result_media_block(
+        tool_result_content_blocks, processed_block, content, "file", drop_params=drop_params
+    )
 
 
 def _parse_bedrock_tool_result_content_list(
     content_list: list,
+    *,
+    drop_params: bool,
 ) -> list[BedrockToolResultContentBlock]:
     tool_result_content_blocks: Final[list[BedrockToolResultContentBlock]] = []
     for content in content_list:
         if content["type"] == "text":
             tool_result_content_blocks.append(BedrockToolResultContentBlock(text=content["text"]))
         elif content["type"] == "image_url":
-            _append_bedrock_tool_result_image_url_block(tool_result_content_blocks, content)
+            _append_bedrock_tool_result_image_url_block(tool_result_content_blocks, content, drop_params=drop_params)
         elif content["type"] == "file":
-            _append_bedrock_tool_result_file_block(tool_result_content_blocks, content)
+            _append_bedrock_tool_result_file_block(tool_result_content_blocks, content, drop_params=drop_params)
         elif content["type"] == "tool_reference":
             content_map = cast(dict[str, object], content)  # cast-ok: untyped anthropic json
             tool_name = content_map.get("tool_name")
@@ -4803,6 +5093,8 @@ def _parse_bedrock_tool_result_content_list(
 
 def _build_bedrock_tool_result_content_blocks(
     message: ChatCompletionToolMessage | ChatCompletionFunctionMessage,
+    *,
+    drop_params: bool,
 ) -> tuple[list[BedrockToolResultContentBlock], bool]:
     # Optional OpenAI tool-message extension:
     # allow structured Bedrock search results on tool messages and map them
@@ -4826,12 +5118,13 @@ def _build_bedrock_tool_result_content_blocks(
     if isinstance(message_content, str):
         return [BedrockToolResultContentBlock(text=message_content)], False
     if isinstance(message_content, list):
-        return _parse_bedrock_tool_result_content_list(message_content), False
+        return _parse_bedrock_tool_result_content_list(message_content, drop_params=drop_params), False
     return [], False
 
 
 def _convert_to_bedrock_tool_call_result(
     message: ChatCompletionToolMessage | ChatCompletionFunctionMessage,
+    drop_params: bool = False,
 ) -> BedrockContentBlock:
     """
     OpenAI message with a tool result looks like:
@@ -4873,7 +5166,9 @@ def _convert_to_bedrock_tool_call_result(
     """
     - 
     """
-    tool_result_content_blocks, used_search_results = _build_bedrock_tool_result_content_blocks(message)
+    tool_result_content_blocks, used_search_results = _build_bedrock_tool_result_content_blocks(
+        message, drop_params=drop_params
+    )
 
     message.get("name", "")
     id: Final = _sanitize_bedrock_tool_use_id(str(message.get("tool_call_id", str(uuid.uuid4()))))
@@ -5081,6 +5376,79 @@ def _sort_bedrock_assistant_content_blocks(
         return 1
 
     return sorted(blocks, key=_sort_key)
+
+
+def _is_blank_text_block(block: object) -> bool:
+    text: Final = message_field(block, "text")
+    return message_field(block, "type") in ("text", "guarded_text") and not (isinstance(text, str) and text.strip())
+
+
+def _has_no_content(message: object) -> bool:
+    content: Final = message_field(message, "content")
+    blocks: Final = as_object_list(content)
+    if blocks is not None:
+        return all(map(_is_blank_text_block, blocks))
+    return not content or (isinstance(content, str) and not content.strip())
+
+
+def is_empty_user_message(message: object) -> bool:
+    return message_field(message, "role") == "user" and _has_no_content(message)
+
+
+def continues_empty_user_turns(user_continue_message: object) -> bool:
+    return user_continue_message is not None or bool(litellm.modify_params)
+
+
+def _ends_on_empty_user_turn(
+    messages: Sequence[object],
+    start: int,
+    contents: Sequence[BedrockMessageBlock],
+    user_continue_message: ChatCompletionUserMessage | None,
+) -> bool:
+    if continues_empty_user_turns(user_continue_message):
+        return False
+    if not contents or contents[-1]["role"] != "assistant":
+        return False
+    return all(is_empty_user_message(messages[index]) for index in range(start, len(messages)))
+
+
+def _has_cache_mark(holder: object) -> bool:
+    return message_field(holder, "cache_control") is not None
+
+
+def _cache_mark_holders(message: object) -> Sequence[object]:
+    return (message, *(as_object_list(message_field(message, "content")) or ()))
+
+
+def _first_cache_marked(trailing_messages: Sequence[object]) -> object | None:
+    holders: Final = itertools.chain.from_iterable(map(_cache_mark_holders, trailing_messages))
+    return next(filter(_has_cache_mark, holders), None)
+
+
+def _bedrock_placeholder_turn(
+    trailing_messages: Sequence[object],
+    model: str,
+    deployment_model: str | None,
+    model_info: Mapping[str, object] | None,
+) -> BedrockMessageBlock:
+    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+
+    marked: Final = _first_cache_marked(trailing_messages)
+    cache_point: Final = (
+        None
+        if marked is None
+        else AmazonConverseConfig().get_cache_point_block(
+            cast(ChatCompletionUserMessage, marked),  # cast-ok: get_cache_point_block only reads cache_control
+            block_type="content_block",
+            model=model,
+            deployment_model=deployment_model,
+            model_info=model_info,
+        )
+    )
+    return BedrockMessageBlock(
+        role="user",
+        content=[BedrockContentBlock(text=EMPTY_TEXT_PLACEHOLDER), *([] if cache_point is None else [cache_point])],
+    )
 
 
 def _insert_assistant_continue_message(
@@ -5419,6 +5787,7 @@ class BedrockConverseMessagesProcessor:
     ) -> list[BedrockMessageBlock]:
         from litellm.llms.bedrock.common_utils import (
             bedrock_converse_accepts_redacted_thinking,
+            bedrock_converse_rejects_assistant_prefill,
             bedrock_converse_rejects_signed_thinking,
         )
 
@@ -5430,12 +5799,18 @@ class BedrockConverseMessagesProcessor:
         messages = BedrockConverseMessagesProcessor._initial_message_setup(
             messages, model, llm_provider, user_continue_message
         )
+        message_objects: Final = cast(Sequence[object], messages)  # cast-ok: the builders take an untyped list
         split_tool_use_ids_by_message: Final = _split_tool_use_ids_by_message(
             messages, _bedrock_argument_object_count, _sanitize_bedrock_tool_use_id, "_"
         )
         message_count: Final = len(messages)
 
         while msg_i < message_count:
+            if _ends_on_empty_user_turn(
+                message_objects, msg_i, contents, user_continue_message
+            ) and bedrock_converse_rejects_assistant_prefill(model, base_model):
+                contents.append(_bedrock_placeholder_turn(message_objects[msg_i:], model, deployment_model, model_info))
+                break
             user_content: list[BedrockContentBlock] = []
             init_msg_i = msg_i
             ## MERGE CONSECUTIVE USER CONTENT ##
@@ -5526,7 +5901,7 @@ class BedrockConverseMessagesProcessor:
             tool_content: list[BedrockContentBlock] = []
             while msg_i < message_count and messages[msg_i]["role"] == "tool":
                 current_message = messages[msg_i]
-                tool_call_result = _convert_to_bedrock_tool_call_result(current_message)
+                tool_call_result = _convert_to_bedrock_tool_call_result(current_message, drop_params=drop_params)
                 tool_content.append(tool_call_result)
                 tool_content.extend(
                     _bedrock_tool_results_for_split_ids(
@@ -5898,6 +6273,7 @@ def _bedrock_converse_messages_pt(
     """
     from litellm.llms.bedrock.common_utils import (
         bedrock_converse_accepts_redacted_thinking,
+        bedrock_converse_rejects_assistant_prefill,
         bedrock_converse_rejects_signed_thinking,
     )
 
@@ -5909,12 +6285,18 @@ def _bedrock_converse_messages_pt(
     messages = BedrockConverseMessagesProcessor._initial_message_setup(
         messages, model, llm_provider, user_continue_message
     )
+    message_objects: Final = cast(Sequence[object], messages)  # cast-ok: the builders take an untyped list
     split_tool_use_ids_by_message: Final = _split_tool_use_ids_by_message(
         messages, _bedrock_argument_object_count, _sanitize_bedrock_tool_use_id, "_"
     )
     message_count: Final = len(messages)
 
     while msg_i < message_count:
+        if _ends_on_empty_user_turn(
+            message_objects, msg_i, contents, user_continue_message
+        ) and bedrock_converse_rejects_assistant_prefill(model, base_model):
+            contents.append(_bedrock_placeholder_turn(message_objects[msg_i:], model, deployment_model, model_info))
+            break
         user_content: list[BedrockContentBlock] = []
         init_msg_i = msg_i
         ## MERGE CONSECUTIVE USER CONTENT ##
@@ -6002,7 +6384,7 @@ def _bedrock_converse_messages_pt(
         ## MERGE CONSECUTIVE TOOL CALL MESSAGES ##
         tool_content: list[BedrockContentBlock] = []
         while msg_i < message_count and messages[msg_i]["role"] == "tool":
-            tool_call_result = _convert_to_bedrock_tool_call_result(messages[msg_i])
+            tool_call_result = _convert_to_bedrock_tool_call_result(messages[msg_i], drop_params=drop_params)
             current_message = messages[msg_i]
 
             # Add the tool result first
@@ -6987,6 +7369,10 @@ class _SupportsModelDump(Protocol):
     def model_dump(self) -> dict[str, object]: ...
 
 
+class _SupportsKeyedGet(Protocol):
+    def get(self, key: str, /) -> object: ...
+
+
 class _StructuredMessagesSource(Protocol):
     def get_structured_messages(self, data: dict[str, object], /) -> Sequence[object] | None: ...
 
@@ -6999,7 +7385,7 @@ def _instantiate_structured_message_sources(
 
 def resolve_structured_messages(
     messages: list[dict[str, object]] | None,
-    request_kwargs: dict[str, Any],
+    request_kwargs: dict[str, object],
 ) -> list[dict[str, object]] | None:
     """
     Normalize a request's messages to OpenAI-spec chat-completions shape,
@@ -7024,8 +7410,10 @@ def resolve_structured_messages(
     call_type: CallTypes | None = None
 
     # 1. Try route-based inference from proxy metadata
-    route: Final = request_kwargs.get("litellm_metadata", {}).get("user_api_key_request_route")
-    if route:
+    route: Final = require_attributes(request_kwargs.get("litellm_metadata", {}), _SupportsKeyedGet, "get").get(
+        "user_api_key_request_route"
+    )
+    if isinstance(route, str) and route:
         call_types_list: Final = get_call_types_for_route(route)
         if call_types_list:
             for ct in call_types_list:

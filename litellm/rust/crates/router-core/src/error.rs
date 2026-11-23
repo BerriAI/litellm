@@ -1,28 +1,22 @@
 //! The router's errors: [`ConfigError`] when a router is built or changed, [`Error`] when a call
 //! or a selection fails, and [`AttemptError`], the typed facts of one failed attempt.
 
-use std::{any::Any, fmt, sync::Arc, time::Duration};
-
-use crate::config::{Op, RoutingStrategy};
-
-/// What a host cannot serve, found when the router is built rather than partway through a call.
-#[derive(Clone, Debug, PartialEq, thiserror::Error)]
-pub enum Unsupported {
-    #[error("routing strategy `{0}` needs a host that can select")]
-    Strategy(RoutingStrategy),
-    #[error("routing plugin `{0}` needs a host that can select")]
-    Plugin(String),
-    #[error("the host cannot run operation `{op}` on provider `{provider}`")]
-    Op { op: Op, provider: String },
-}
+use std::{sync::Arc, time::Duration};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
-    #[error("the router config asks for something this host cannot serve")]
-    Unsupported(#[from] Unsupported),
+    /// The config reached a host step its host does not answer.
+    #[error("the host does not answer {step}")]
+    Unanswered { step: &'static str },
     #[error("deployment `{model_name}` has invalid litellm_params")]
     InvalidDeployment {
         model_name: String,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("router_settings.{setting} is invalid")]
+    Setting {
+        setting: &'static str,
         #[source]
         source: serde_json::Error,
     },
@@ -47,8 +41,17 @@ pub enum Error {
         /// strategy refused every candidate.
         request_ids: Option<Vec<String>>,
     },
+    /// `raised_at` names the slot the call keeps the host's own error in. It is `None` for a
+    /// failure the router made itself and for one handed in from outside the call.
     #[error("the attempt failed")]
-    Attempt(#[from] AttemptError),
+    Attempt {
+        #[source]
+        failure: AttemptError,
+        raised_at: Option<RaisedAt>,
+    },
+    /// The host ended the call from inside an attempt ([`crate::AttemptFailure::Refused`]).
+    #[error("the host refused the call")]
+    Refused(RaisedAt),
     #[error("the routing cache failed")]
     Cache(#[from] litellm_cache::Error),
     #[error("the router was retired")]
@@ -75,6 +78,8 @@ pub enum Error {
     /// A proxy admin without a team named a public model name several teams use.
     #[error("model name `{model}` matches deployments from multiple teams")]
     MultipleTeams { model: String },
+    #[error("model `{model}` matches deployments from multiple model groups")]
+    MultipleModelGroups { model: String },
     /// Every deployment `model` resolved to is reserved for other teams by an active access
     /// window, the first of which ends at `until` (`HH:MM`) in `timezone`.
     #[error("deployment `{model}` is reserved for another team until {until} {timezone}")]
@@ -125,12 +130,22 @@ pub enum Error {
     },
 }
 
+impl From<AttemptError> for Error {
+    fn from(failure: AttemptError) -> Self {
+        Self::Attempt {
+            failure,
+            raised_at: None,
+        }
+    }
+}
+
 impl Error {
     /// The failed attempt behind this error, when a deployment was called.
     pub fn attempt(&self) -> Option<&AttemptError> {
         match self {
-            Self::Attempt(attempt) => Some(attempt),
+            Self::Attempt { failure, .. } => Some(failure),
             Self::Config(_)
+            | Self::Refused(_)
             | Self::UnknownModel { .. }
             | Self::NoHealthyDeployments { .. }
             | Self::Cache(_)
@@ -142,6 +157,7 @@ impl Error {
             | Self::EndpointNotSupported { .. }
             | Self::PtuReserved { .. }
             | Self::MultipleTeams { .. }
+            | Self::MultipleModelGroups { .. }
             | Self::Reserved { .. }
             | Self::ContextWindowExceeded { .. }
             | Self::UnsupportedParams { .. }
@@ -168,6 +184,7 @@ impl Error {
             | Self::NotPassThrough { .. }
             | Self::NoPassThroughDeployments { .. }
             | Self::MultipleTeams { .. }
+            | Self::MultipleModelGroups { .. }
             | Self::Reserved { .. } => (BAD_REQUEST, Some(400)),
             Self::EndpointNotSupported { .. } => (
                 &["EndpointNotSupportedByModelError", "BadRequestError"],
@@ -190,7 +207,8 @@ impl Error {
             Self::MissingRoutingGroup { .. } => (&["KeyError", "LookupError"], None),
             Self::IndexOutOfRange { .. } => (&["IndexError", "LookupError"], None),
             Self::DefaultDeploymentRaises { .. } => (&["Exception"], None),
-            Self::Attempt(_)
+            Self::Attempt { .. }
+            | Self::Refused(_)
             | Self::Config(_)
             | Self::Cache(_)
             | Self::Retired
@@ -231,6 +249,9 @@ impl Error {
             Self::MultipleTeams { model } => Self::MultipleTeams {
                 model: model.clone(),
             },
+            Self::MultipleModelGroups { model } => Self::MultipleModelGroups {
+                model: model.clone(),
+            },
             Self::Reserved {
                 model,
                 until,
@@ -263,7 +284,8 @@ impl Error {
             Self::IndexOutOfRange { model } => Self::IndexOutOfRange {
                 model: model.clone(),
             },
-            Self::Attempt(_)
+            Self::Attempt { .. }
+            | Self::Refused(_)
             | Self::Config(_)
             | Self::Cache(_)
             | Self::Retired
@@ -326,20 +348,38 @@ pub enum FailureKind {
     /// cools the deployment down.
     #[strum(serialize = "CallerCredentialRateLimitError")]
     CallerCredentialRateLimit,
+    /// The dynamic queue refused the attempt before the provider call (full, its wait ran out, or
+    /// its coordination is unavailable): it ends the request with no retry, fallback or cooldown.
+    #[strum(serialize = "QueueRejected")]
+    QueueRejected,
     #[strum(serialize = "APIError")]
     Other,
 }
 
-/// An opaque value the host hands through the router unchanged, such as the original Python
-/// exception or response object.
-#[derive(Clone)]
-pub struct Payload(pub Arc<dyn Any + Send + Sync>);
-
-impl fmt::Debug for Payload {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("Payload(..)")
+impl FailureKind {
+    /// The exception class litellm maps a provider's HTTP status to (`exception_type`). An
+    /// overloaded provider's 529 is an `InternalServerError` there, not the
+    /// `ServiceUnavailableError` a 503 is, and a retry policy names these classes.
+    pub fn from_status(status: u16) -> Self {
+        match status {
+            400 | 422 => Self::BadRequest,
+            401 => Self::Authentication,
+            403 => Self::PermissionDenied,
+            404 => Self::NotFound,
+            408 | 504 => Self::Timeout,
+            429 => Self::RateLimit,
+            502 => Self::BadGateway,
+            503 => Self::ServiceUnavailable,
+            500..=599 => Self::InternalServer,
+            _ => Self::Other,
+        }
     }
 }
+
+/// Which of the call's host failures an error stands for: the slot the call keeps the host's own
+/// error in, handed back in [`crate::CallError::raised`] when the call ends on it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RaisedAt(pub(crate) usize);
 
 /// One failed attempt, as typed facts the retry, fallback and cooldown rules decide by.
 #[derive(Clone, Debug, thiserror::Error)]
@@ -387,7 +427,6 @@ pub struct AttemptError {
     /// The failure counts against no per-minute requests: `async_deployment_callback_on_failure`
     /// does not run for a sync call, and returns at once for a batch retrieve.
     pub uncounted_request: bool,
-    pub payload: Option<Payload>,
 }
 
 impl AttemptError {
@@ -407,7 +446,16 @@ impl AttemptError {
             caller_scoped: false,
             status_absent: false,
             uncounted_request: false,
-            payload: None,
+        }
+    }
+
+    /// A provider's own error answer, which says something about the deployment that gave it.
+    pub fn from_provider(status: u16, detail: &str, retry_after: Option<Duration>) -> Self {
+        Self {
+            retry_after,
+            detail: Some(detail.into()),
+            names_provider: true,
+            ..Self::new(FailureKind::from_status(status), Some(status))
         }
     }
 
@@ -424,11 +472,17 @@ impl AttemptError {
         self.class_names().contains(&name)
     }
 
-    /// No retry can clear the failure: a failed agentic follow-up reruns every paid round, and a
+    /// No retry can clear the failure: a failed agentic follow-up reruns every paid round, a
     /// request alone over every deployment's tpm limit (`RequestOverDeploymentTpmError`) stays
-    /// over it. Its fallbacks still run.
+    /// over it, and a queue rejection ends the request. Its fallbacks still run, except a queue
+    /// rejection's.
     pub fn ends_retries(&self) -> bool {
-        self.agentic_followup || self.is_a("RequestOverDeploymentTpmError")
+        self.agentic_followup || self.is_a("RequestOverDeploymentTpmError") || self.queue_rejected()
+    }
+
+    /// The dynamic queue refused the attempt: the request ends with this error and runs no fallback.
+    pub fn queue_rejected(&self) -> bool {
+        self.kind == FailureKind::QueueRejected
     }
 
     #[must_use]
@@ -461,6 +515,18 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+
+    #[rstest]
+    #[case::a_server_error(500, FailureKind::InternalServer)]
+    #[case::a_bad_gateway(502, FailureKind::BadGateway)]
+    #[case::an_unavailable_provider(503, FailureKind::ServiceUnavailable)]
+    #[case::an_overloaded_provider(529, FailureKind::InternalServer)]
+    fn a_5xx_status_is_the_class_litellm_raises_for_it(
+        #[case] status: u16,
+        #[case] class: FailureKind,
+    ) {
+        assert_eq!(FailureKind::from_status(status), class);
+    }
 
     #[rstest]
     #[case::rate_limit("RateLimitError", FailureKind::RateLimit)]

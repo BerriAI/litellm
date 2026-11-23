@@ -290,6 +290,18 @@ fn apply_issuer_claim_mappings(
         (&issuer.team_ids_jwt_field, InternalClaim::TeamIds),
         (&issuer.org_id_jwt_field, InternalClaim::OrgId),
         (&issuer.end_user_id_jwt_field, InternalClaim::EndUserId),
+        (
+            &issuer.customer_org_alias_jwt_field,
+            InternalClaim::CustomerOrgAlias,
+        ),
+        (
+            &issuer.customer_member_id_jwt_field,
+            InternalClaim::CustomerMemberId,
+        ),
+        (
+            &issuer.customer_team_id_jwt_field,
+            InternalClaim::CustomerTeamId,
+        ),
     ];
     let mapped = mappings.into_iter().filter_map(|(field, claim)| {
         let value = nested_value(payload, field.as_ref()?)?;
@@ -316,7 +328,8 @@ async fn issuer_key(
     key_from_jwks_url(host, &jwks_url_for_issuer(issuer), kid, settings, now).await
 }
 
-/// `get_public_key`: the first of the `JWT_PUBLIC_KEY_URL` endpoints that holds the kid.
+/// `get_public_key`: the first of the global JWKS endpoints (`litellm_jwtauth.public_key_url`, else
+/// `JWT_PUBLIC_KEY_URL`) that holds the kid.
 async fn global_key(
     host: &impl AuthHost,
     kid: Option<&str>,
@@ -415,7 +428,7 @@ async fn cached_with_stale_fallback(
     settings: &JwtSettings,
     now: Timestamp,
 ) -> Lookup<Value> {
-    if let Some(cached) = host.cached_json(cache_key).await? {
+    if let Some(cached) = host.cached_document(cache_key).await? {
         return Ok(Ok(cached));
     }
     let (ttl, stale_ttl) = (
@@ -432,10 +445,10 @@ async fn cached_with_stale_fallback(
         return Ok(Err(unreachable));
     }
     let stale = host
-        .cached_json(&format!("{STALE_CACHE_KEY_PREFIX}{cache_key}"))
+        .cached_document(&format!("{STALE_CACHE_KEY_PREFIX}{cache_key}"))
         .await?;
     let written_at = host
-        .cached_json(&format!("{STALE_WRITTEN_AT_CACHE_KEY_PREFIX}{cache_key}"))
+        .cached_document(&format!("{STALE_WRITTEN_AT_CACHE_KEY_PREFIX}{cache_key}"))
         .await?;
     let age = written_at
         .as_ref()
@@ -457,7 +470,7 @@ async fn refresh_or_record_outage(
     now: Timestamp,
 ) -> Lookup<Value> {
     let unreachable_key = format!("{UNREACHABLE_CACHE_KEY_PREFIX}{cache_key}");
-    if let Some(recent_failure) = host.cached_json(&unreachable_key).await? {
+    if let Some(recent_failure) = host.cached_document(&unreachable_key).await? {
         return Ok(Err(KeyFailure::Unreachable {
             error: value::display(&recent_failure),
         }));
@@ -465,7 +478,7 @@ async fn refresh_or_record_outage(
     let refreshed = match refresh(host, source).await? {
         Ok(refreshed) => refreshed,
         Err(KeyFailure::Unreachable { error }) => {
-            host.cache_json(
+            host.cache_document(
                 &unreachable_key,
                 &Value::String(error.clone()),
                 JWKS_UNREACHABLE_BACKOFF,
@@ -475,17 +488,17 @@ async fn refresh_or_record_outage(
         }
         Err(failure) => return Ok(Err(failure)),
     };
-    host.cache_json(cache_key, &refreshed, self::ttl(ttl))
+    host.cache_document(cache_key, &refreshed, self::ttl(ttl))
         .await?;
     if stale_ttl > 0.0 {
         let lifetime = self::ttl(ttl + stale_ttl);
-        host.cache_json(
+        host.cache_document(
             &format!("{STALE_CACHE_KEY_PREFIX}{cache_key}"),
             &refreshed,
             lifetime,
         )
         .await?;
-        host.cache_json(
+        host.cache_document(
             &format!("{STALE_WRITTEN_AT_CACHE_KEY_PREFIX}{cache_key}"),
             &json!(epoch_seconds(now)),
             lifetime,
@@ -1286,7 +1299,7 @@ MC4CAQAwBQYDK2VwBCIEIEjkuYWkj6THWjxVRFL36QT1XS2a1KjdV89JMvLev7r2
 
         assert_eq!(
             denial.public(),
-            Some(PublicDenial::Plain {
+            Some(PublicDenial::NoMatchingJwtPublicKey {
                 message: format!(
                     "No matching public key found. keys=[\"{JWKS}\",\"{OTHER_JWKS}\"], kid=c"
                 )
@@ -1536,13 +1549,25 @@ MC4CAQAwBQYDK2VwBCIEIEjkuYWkj6THWjxVRFL36QT1XS2a1KjdV89JMvLev7r2
     #[rstest]
     #[tokio::test]
     async fn a_configured_issuer_maps_its_claims(settings: JwtSettings) {
-        let settings = with_issuer(settings, issuer_config());
+        let settings = with_issuer(
+            settings,
+            JwtIssuerConfig {
+                customer_org_alias_jwt_field: Some("customer.org".into()),
+                customer_member_id_jwt_field: Some("customer.member".into()),
+                customer_team_id_jwt_field: Some("customer.team".into()),
+                ..issuer_config()
+            },
+        );
         let host = host(&[(ISSUER_JWKS, jwks(&[rsa_jwk("k", RSA_A_N)]))]);
         let token = rs256(
             Some("k"),
             json!({
                 "iss": ISSUER, "aud": "proxy", "profile": {"id": "u1"}, "groups": ["t1"], "org": "",
                 "_litellm_team_id": "forged",
+                "_litellm_customer_org_alias": "forged-org",
+                "_litellm_customer_member_id": "forged-member",
+                "_litellm_customer_team_id": "forged-team",
+                "customer": {"org": "customer-org", "member": "customer-member", "team": "customer-team"},
             }),
         );
 
@@ -1551,6 +1576,10 @@ MC4CAQAwBQYDK2VwBCIEIEjkuYWkj6THWjxVRFL36QT1XS2a1KjdV89JMvLev7r2
         let expected = json!({
             "iss": ISSUER, "aud": "proxy", "profile": {"id": "u1"}, "groups": ["t1"], "org": "",
             "_litellm_jwt_issuer": ISSUER, "_litellm_user_id": "u1", "_litellm_team_ids": ["t1"],
+            "_litellm_customer_org_alias": "customer-org",
+            "_litellm_customer_member_id": "customer-member",
+            "_litellm_customer_team_id": "customer-team",
+            "customer": {"org": "customer-org", "member": "customer-member", "team": "customer-team"},
         });
         assert_eq!(verified, Ok(Claims(object(expected))));
         assert_eq!(fetches(&host), [format!("fetch {ISSUER_JWKS}")]);

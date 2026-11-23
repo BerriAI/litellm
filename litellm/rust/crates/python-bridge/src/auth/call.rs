@@ -113,8 +113,6 @@ pub(crate) struct KeyFacts {
     team_object_permission_id: Option<String>,
     #[pyo3(attribute)]
     project_id: Option<String>,
-    #[pyo3(attribute)]
-    end_user_id: Option<String>,
     #[pyo3(attribute, from_py_with = py_optional_timestamp)]
     last_refreshed_at: Option<Timestamp>,
 }
@@ -130,7 +128,6 @@ impl From<KeyFacts> for KeyRecord {
             team_id: facts.team_id,
             team_object_permission_id: facts.team_object_permission_id,
             project_id: facts.project_id,
-            end_user_id: facts.end_user_id,
             last_refreshed_at: facts.last_refreshed_at,
         }
     }
@@ -339,16 +336,30 @@ pub(crate) enum AuthStep {
         endpoint: String,
         token: String,
     },
-    CachedJson {
+    CachedDocument {
         key: String,
     },
-    CacheJson {
+    CacheDocument {
         key: String,
         value: Py<PyAny>,
         ttl_seconds: f64,
     },
-    ForgetJson {
-        key: String,
+    CachedKeyMapping {
+        claim_field: String,
+        claim_value: String,
+        issuer: Option<String>,
+    },
+    CacheKeyMapping {
+        claim_field: String,
+        claim_value: String,
+        issuer: Option<String>,
+        value: Py<PyAny>,
+        ttl_seconds: f64,
+    },
+    ForgetKeyMapping {
+        claim_field: String,
+        claim_value: String,
+        issuer: Option<String>,
     },
     Team {
         team_id: String,
@@ -805,6 +816,15 @@ pub(crate) enum DenialView {
     TeamNotFound {
         team_id: String,
     },
+    KeyNotFound {
+        hash: String,
+    },
+    NoMatchingJwtPublicKey {
+        message: String,
+    },
+    IdJagNotBearer {
+        message: String,
+    },
 }
 
 impl From<PublicDenial> for DenialView {
@@ -850,6 +870,13 @@ impl From<PublicDenial> for DenialView {
                 entity_id: budget.entity_id,
             },
             PublicDenial::TeamNotFound { team_id } => Self::TeamNotFound { team_id },
+            PublicDenial::KeyNotFound { hash } => Self::KeyNotFound {
+                hash: hash.as_str().to_owned(),
+            },
+            PublicDenial::NoMatchingJwtPublicKey { message } => {
+                Self::NoMatchingJwtPublicKey { message }
+            }
+            PublicDenial::IdJagNotBearer { message } => Self::IdJagNotBearer { message },
         }
     }
 }
@@ -1031,15 +1058,33 @@ impl AuthStep {
                 endpoint: endpoint.clone(),
                 token: token.expose().to_owned(),
             },
-            Ask::CachedJson { key, .. } => Self::CachedJson { key: key.clone() },
-            Ask::CacheJson {
+            Ask::CachedDocument { key, .. } => Self::CachedDocument { key: key.clone() },
+            Ask::CacheDocument {
                 key, value, ttl, ..
-            } => Self::CacheJson {
+            } => Self::CacheDocument {
                 key: key.clone(),
                 value: to_py(py, &**value)?,
                 ttl_seconds: ttl.as_secs_f64(),
             },
-            Ask::ForgetJson { key, .. } => Self::ForgetJson { key: key.clone() },
+            Ask::CachedKeyMapping { claim, .. } => Self::CachedKeyMapping {
+                claim_field: claim.field.clone(),
+                claim_value: claim.value.clone(),
+                issuer: claim.issuer.clone(),
+            },
+            Ask::CacheKeyMapping {
+                claim, value, ttl, ..
+            } => Self::CacheKeyMapping {
+                claim_field: claim.field.clone(),
+                claim_value: claim.value.clone(),
+                issuer: claim.issuer.clone(),
+                value: to_py(py, &**value)?,
+                ttl_seconds: ttl.as_secs_f64(),
+            },
+            Ask::ForgetKeyMapping { claim, .. } => Self::ForgetKeyMapping {
+                claim_field: claim.field.clone(),
+                claim_value: claim.value.clone(),
+                issuer: claim.issuer.clone(),
+            },
             Ask::Team {
                 team_id, upsert, ..
             } => Self::Team {
@@ -1407,8 +1452,9 @@ impl AuthCall {
         self.stepper.answer("a completed step", |ask| match ask {
             Ask::EvictKey { reply, .. }
             | Ask::ProxyBudgetAlert { reply, .. }
-            | Ask::CacheJson { reply, .. }
-            | Ask::ForgetJson { reply, .. }
+            | Ask::CacheDocument { reply, .. }
+            | Ask::CacheKeyMapping { reply, .. }
+            | Ask::ForgetKeyMapping { reply, .. }
             | Ask::NormalizeModel { reply, .. }
             | Ask::PrefetchIdentity { reply, .. }
             | Ask::PrefetchAuthObjects { reply, .. }
@@ -1554,7 +1600,8 @@ impl AuthCall {
         self.stepper.answer("a JSON document", |ask| match ask {
             Ask::FetchJson { reply, .. }
             | Ask::FetchUserinfo { reply, .. }
-            | Ask::CachedJson { reply, .. } => {
+            | Ask::CachedDocument { reply, .. }
+            | Ask::CachedKeyMapping { reply, .. } => {
                 reply.send(value);
                 Ok(())
             }

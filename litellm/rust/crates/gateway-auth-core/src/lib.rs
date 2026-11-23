@@ -1,6 +1,7 @@
 mod admission;
 pub mod authn;
 pub mod authz;
+mod caller;
 mod commit;
 mod error;
 mod host;
@@ -19,6 +20,7 @@ mod testing;
 mod token;
 mod value;
 
+pub use caller::{Caller, NotACaller, StoredKey};
 pub use error::{
     AgentIdentityFailure, AssertionRejection, BudgetExceeded, ClaimDenial, Error, JwtDenial,
     KeyDenial, KeyError, KeyFailure, ModelAccessDenied, PremiumRequired, RbacDenial, Searched,
@@ -95,7 +97,10 @@ pub async fn authenticate_jwt<H: AuthHost>(
         )))),
         JwtOutcome::Finished(token) => Ok(Outcome::Authenticated(Identity::FinishedJwt(token))),
         JwtOutcome::MappedKey(key, jwt) => {
-            let credential = Credential::Resolved(key);
+            let credential = Credential::Resolved {
+                key,
+                end_user_id: jwt.end_user_id.as_deref(),
+            };
             let outcome = pipeline::key::authenticate(
                 host,
                 &request.key(),
@@ -184,23 +189,70 @@ pub async fn resolve_jwt_mapping<H: AuthHost>(
 mod tests {
     use std::collections::HashMap;
 
-    use litellm_config::GeneralSettings;
+    use http::Method;
+    use litellm_config::{GeneralSettings, JwtAuthSettings};
+    use rstest::rstest;
+    use serde_json::{Value, json};
 
     use super::*;
-    use crate::testing::ScriptedHost;
+    use crate::{
+        authn::{
+            jwt::{JwtSettings, MappedKey},
+            key::{KeyRecord, Keyed},
+        },
+        testing::ScriptedHost,
+    };
 
     fn settings() -> Settings {
-        let general = GeneralSettings::default();
+        settings_from(&GeneralSettings::default())
+    }
+
+    fn settings_from(general: &GeneralSettings) -> Settings {
         let facts = HostFacts {
             master_key: Some(MasterKey::new("sk-master")),
             premium: false,
             has_db: true,
+            db_configured: true,
             ui_login: false,
             proxy_budget: false,
             metrics_require_auth: false,
             route_groups: crate::test_support::route_groups(),
         };
-        Settings::new(&general, facts, &|_| None)
+        Settings::new(general, facts, &|_| None)
+    }
+
+    #[rstest]
+    #[case::a_route_the_public_group_lists("/health/liveliness", true)]
+    #[case::any_other_route("/chat/completions", false)]
+    fn a_route_is_public_when_the_public_group_lists_it(
+        #[case] route: &str,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(is_public_route(route, &settings()), expected);
+    }
+
+    #[rstest]
+    #[case::on_an_llm_route(true, true)]
+    #[case::on_a_route_introspection_does_not_cover(false, false)]
+    fn an_opaque_token_is_introspected_once_oauth2_auth_is_on(
+        #[case] is_llm_api_route: bool,
+        #[case] expected: bool,
+    ) {
+        let general = GeneralSettings {
+            enable_oauth2_auth: true,
+            ..GeneralSettings::default()
+        };
+        let token = Token::new("opaque");
+        let request = Request {
+            route: "/chat/completions",
+            token: Some(&token),
+            is_llm_api_route,
+            ..Request::default()
+        };
+        assert_eq!(
+            oauth2_introspection_applies(&request, &settings_from(&general)),
+            expected
+        );
     }
 
     #[tokio::test]
@@ -218,6 +270,104 @@ mod tests {
         assert_eq!(
             authenticate_key(&host, &request, request.token, &settings()).await,
             Err(Error::HostFailed)
+        );
+    }
+
+    fn host_mapping_the_client(claims: Value, record: KeyRecord) -> ScriptedHost {
+        let key = Keyed {
+            record: KeyRecord {
+                token: Some(KeyHash::new("h1")),
+                ..record
+            },
+            row: "h1 row".to_owned(),
+        };
+        let mapped = MappedKey {
+            key,
+            user_email: None,
+        };
+        ScriptedHost {
+            userinfo: Some(claims),
+            mappings: HashMap::from([("client_id=app -".to_owned(), "h1".to_owned())]),
+            keys: HashMap::from([("h1", mapped)]),
+            ..ScriptedHost::default()
+        }
+    }
+
+    async fn chat(host: &ScriptedHost) -> Authenticated<ScriptedHost> {
+        let base = settings();
+        let settings = Settings {
+            jwt: JwtSettings {
+                config: JwtAuthSettings {
+                    oidc_userinfo_enabled: true,
+                    oidc_userinfo_endpoint: Some("https://idp/userinfo".to_owned()),
+                    virtual_key_claim_field: Some("client_id".into()),
+                    end_user_id_jwt_field: Some("end".into()),
+                    ..JwtAuthSettings::default()
+                },
+                ..base.jwt.clone()
+            },
+            ..base
+        };
+        let token = Token::new("opaque");
+        let request = Request {
+            route: "/chat/completions",
+            method: Some(&Method::POST),
+            token: Some(&token),
+            end_user_id: Some("from-body"),
+            runs_inference_checks: true,
+            ..Request::default()
+        };
+        authenticate_jwt(host, &request, &settings).await
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn a_mapped_jwt_has_its_key_checked_for_the_end_user_its_claim_names() {
+        let host = host_mapping_the_client(
+            json!({"client_id": "app", "end": "from-claim"}),
+            KeyRecord::default(),
+        );
+
+        let outcome = chat(&host).await;
+
+        assert!(
+            matches!(
+                outcome,
+                Ok(Outcome::Authenticated(Identity::MappedJwtKey(..)))
+            ),
+            "{outcome:?}"
+        );
+        let end_user_reads: Vec<String> = host
+            .calls()
+            .into_iter()
+            .filter(|call| {
+                call.starts_with("validated_end_user_id") || call.starts_with("prefetch_identity")
+            })
+            .collect();
+        assert_eq!(
+            end_user_reads,
+            [
+                "validated_end_user_id from-claim",
+                "prefetch_identity from-claim resolved"
+            ]
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn a_mapped_jwt_whose_key_is_blocked_is_refused_with_that_key() {
+        let blocked = KeyRecord {
+            blocked: true,
+            ..KeyRecord::default()
+        };
+        let host = host_mapping_the_client(json!({"client_id": "app"}), blocked);
+
+        assert_eq!(
+            chat(&host).await,
+            Ok(Outcome::Denied(
+                KeyDenial::Blocked.into(),
+                Some("h1 row".to_owned())
+            ))
         );
     }
 }
