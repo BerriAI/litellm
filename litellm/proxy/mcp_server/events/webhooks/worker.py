@@ -140,8 +140,11 @@ class DeliveryWorker:
 
     async def process(self, delivery: QueuedDelivery) -> None:
         row: Final = await self._store.get(delivery.subscription_id)
-        if row is None or not self._deliverable(row, delivery):
+        if row is None:
             await self._store.finish(delivery, self._clock())
+            return
+        if not self._deliverable(row, delivery):
+            await self._store.settle(delivery, row.generation, self._clock(), "discarded")
             return
         authorization: Final = await authorize_row(row, self._runtime, self._load_caller)
         if isinstance(authorization, Revoked):
@@ -166,7 +169,7 @@ class DeliveryWorker:
         )
         outgoing: Final = await self._outgoing(context)
         if outgoing is None:
-            await self._store.finish(delivery, self._clock())
+            await self._store.settle(delivery, row.generation, self._clock(), "discarded")
             return
         await self._send(context, outgoing)
 
