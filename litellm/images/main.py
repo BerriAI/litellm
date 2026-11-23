@@ -20,6 +20,7 @@ import litellm
 from litellm import client
 from litellm.constants import request_timeout as DEFAULT_REQUEST_TIMEOUT
 from litellm.exceptions import LiteLLMUnknownProvider
+from litellm.images.streaming import AsyncImageStream, ImageStream
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.get_llm_provider_logic import (
     invalid_provider_routing_hints_message,
@@ -142,7 +143,7 @@ def _chatgpt_image_headers(model: str, params: GenericLiteLLMParams, headers: Ma
 
 ##### Image Generation #######################
 @client
-async def aimage_generation(*args, **kwargs) -> ImageResponse:
+async def aimage_generation(*args, **kwargs) -> ImageResponse | AsyncImageStream:
     """
     Asynchronously calls the `image_generation` function with the given arguments and keyword arguments.
 
@@ -187,7 +188,7 @@ async def aimage_generation(*args, **kwargs) -> ImageResponse:
         # Await normally
         init_response: Final = await loop.run_in_executor(None, func_with_context)
 
-        response: ImageResponse | None = None
+        response: ImageResponse | AsyncImageStream | None = None
         if isinstance(init_response, dict):
             response = ImageResponse(**init_response)
         elif isinstance(init_response, ImageResponse):  ## CACHING SCENARIO
@@ -231,7 +232,7 @@ def image_generation(
     *,
     aimg_generation: Literal[True],
     **kwargs,
-) -> Coroutine[object, object, ImageResponse]:
+) -> Coroutine[object, object, ImageResponse | AsyncImageStream]:
     ...
 
 
@@ -277,7 +278,7 @@ def image_generation(
     api_version: str | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
-) -> ImageResponse | Coroutine[object, object, ImageResponse]:
+) -> ImageResponse | ImageStream | Coroutine[object, object, ImageResponse | AsyncImageStream]:
     """
     Maps the https://api.openai.com/v1/images/generations endpoint.
 
@@ -593,7 +594,7 @@ def image_generation(
             # Forward OpenAI organization if present (set by proxy pre-call utils)
             organization: Final[str | None] = kwargs.get("organization", None)
             sdk_max_retries: Final = 0 if is_router_call else max_retries
-            model_response = openai_chat_completions.image_generation(
+            return openai_chat_completions.image_generation(
                 model=model,
                 prompt=prompt,
                 timeout=timeout,
@@ -906,7 +907,7 @@ def image_edit(
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
     **kwargs,
-) -> ImageResponse | Coroutine[object, object, ImageResponse]:
+) -> ImageResponse | ImageStream | Coroutine[object, object, ImageResponse | AsyncImageStream]:
     """
     Maps the image edit functionality, similar to OpenAI's images/edits endpoint.
     """
@@ -1225,7 +1226,7 @@ async def aimage_edit(
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
     **kwargs,
-) -> ImageResponse:
+) -> ImageResponse | AsyncImageStream | ImageStream:
     """
     Asynchronously calls the `image_edit` function with the given arguments and keyword arguments.
 
