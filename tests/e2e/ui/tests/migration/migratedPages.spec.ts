@@ -20,7 +20,7 @@ async function expectContent(page: Page, destination: MigratedPage): Promise<voi
     "role" in content
       ? main.getByRole(content.role, { name: content.name, exact: true })
       : main.getByText(content.text, { exact: true });
-  await expect(landmark).toBeVisible();
+  await expect(landmark.and(page.locator(":not([data-slot='sidebar-inset'] > header *)"))).toBeVisible();
 }
 
 async function navigateToDestination(page: Page, destination: MigratedPage): Promise<void> {

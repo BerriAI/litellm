@@ -37,7 +37,7 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging
 
 
-_ParsedT: Final = TypeVar("_ParsedT")
+_ParsedT = TypeVar("_ParsedT")
 
 
 class VolcEngineVideoError(BaseLLMException):

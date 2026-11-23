@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT DISTINCT request_id FROM \"LiteLLM_SpendLogs\" WHERE request_id = ANY($1::text[])\nAND status = 'success' AND spend > 0\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "request_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_SpendLogs\"",
+            "name": "request_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "54444ebf57aa9e1590d2d0447847052959b265e2b07ce8797f4af502407c0024"
+}

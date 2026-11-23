@@ -58,6 +58,12 @@ describe("UIThemeSettings", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("should title the page with its sidebar label", () => {
+    render(<UIThemeSettings userID="user-1" userRole="Admin" accessToken="sk-test" />);
+
+    expect(screen.getByRole("heading", { level: 1, name: "UI Theme" })).toBeInTheDocument();
+  });
+
   it("should load the saved logo and favicon urls into the inputs", async () => {
     fetchMock.mockImplementation(() =>
       okResponse({ logo_url: "https://cdn.example.com/logo.svg", favicon_url: "https://cdn.example.com/fav.ico" }),

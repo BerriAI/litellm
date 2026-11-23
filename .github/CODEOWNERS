@@ -4,3 +4,5 @@
 /litellm/deploy/helm/ @yassin-berriai
 /litellm/deploy/terraform/ @yassin-berriai
 /.github/workflows/zizmor.yml @yuneng-berri
+/litellm/proxy/spend_tracking/legacy_spend_counters.py @narmstrong-berri
+/litellm/proxy/spend_tracking/legacy_spend_log_rows.py @narmstrong-berri

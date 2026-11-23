@@ -40,9 +40,10 @@ from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._lazy_features import LazyFeature, attach_lazy_features
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+from litellm.proxy.common_utils.http_parsing_utils import safe_set_request_parsed_body
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.hooks.parallel_request_limiter import PROXY_MaxParallelRequestsHandler
-from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.types.proxy.auth.user_api_key_auth import COMMITTED_BUDGET_SPEND_PARAM
 from litellm.types.proxy.carried_budget_state import CommittedBudgetSpend, EntitySpendCounterKeys
@@ -86,6 +87,7 @@ from litellm.proxy.pass_through_endpoints.success_handler import (
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_spend_logs_id
 from litellm.proxy.utils import InternalUsageCache, ProxyLogging, hash_token
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.types import utils as types_utils
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import CallTypes
@@ -97,7 +99,9 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     WebSocketSessionUsage,
 )
 from tests._master_key import MASTER_KEY
+from tests._support.rust_parallel_request_limiter import RustParallelRequestLimiter
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
+from tests.unit.proxy.spend_tracking.native_budgets_replica import native_reservation
 
 MESSAGE_START_SSE_FRAME = b'event: message_start\ndata: {"type": "message_start"}\n\n'
 PROTOCOL_CONSTRAINED_PASS_THROUGH_ROUTES: Final = MappingProxyType(
@@ -1983,6 +1987,58 @@ async def test_pass_through_request_strips_client_guardrail_information(allow_cl
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("currency", ["EUR", "USD"])
+async def test_pass_through_request_rejects_pricing_currency_before_any_hook_or_upstream(currency: str) -> None:
+    mock_request: Final = MagicMock(spec=Request)
+    mock_request.method = "POST"
+    mock_request.headers = Headers({})
+    mock_request.query_params = QueryParams({})
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
+        mock_proxy_logging.pre_call_hook = AsyncMock(side_effect=RuntimeError("must not be reached"))
+        mock_proxy_logging.post_call_failure_hook = AsyncMock()
+        with pytest.raises(ProxyException) as rejected:
+            await pass_through_request(
+                request=mock_request,
+                target="http://test.com",
+                custom_headers={},
+                user_api_key_dict=UserAPIKeyAuth(metadata={"allow_client_pricing_override": True}),
+                custom_body={"model": "gpt-5.4-mini", "pricing_currency": currency, "input_cost_per_token": 0.5},
+            )
+
+    assert rejected.value.code == "400"
+    assert rejected.value.param == "pricing_currency"
+    mock_proxy_logging.pre_call_hook.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("body", [{}, {"pricing_currency": None}], ids=["omitted", "null"])
+async def test_pass_through_request_keeps_usd_prices_without_an_explicit_pricing_currency(
+    body: dict[str, object],
+) -> None:
+    mock_request: Final = MagicMock(spec=Request)
+    mock_request.method = "POST"
+    mock_request.headers = Headers({})
+    mock_request.query_params = QueryParams({})
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
+        mock_proxy_logging.pre_call_hook = AsyncMock(side_effect=RuntimeError("stop before upstream"))
+        mock_proxy_logging.post_call_failure_hook = AsyncMock()
+        with pytest.raises(ProxyException):
+            await pass_through_request(
+                request=mock_request,
+                target="http://test.com",
+                custom_headers={},
+                user_api_key_dict=UserAPIKeyAuth(metadata={"allow_client_pricing_override": True}),
+                custom_body={"model": "gpt-5.4-mini", "input_cost_per_token": 0.5, **body},
+            )
+
+    hooked_body: Final = mock_proxy_logging.pre_call_hook.call_args.kwargs["data"]
+    assert hooked_body["input_cost_per_token"] == 0.5
+    assert "pricing_currency" not in hooked_body
+
+
+@pytest.mark.asyncio
 async def test_create_pass_through_route_forwards_timeout():
     unique_path = "/test/path/unique/timeout"
     endpoint_func = create_pass_through_route(
@@ -3765,8 +3821,8 @@ async def test_pass_through_rpm_limit_is_sequential_and_scoped_per_key(tmp_path,
     keys = tuple(f"sk-test-{uuid.uuid4().hex}" for _ in range(2))
     for key in keys:
         user_api_key_cache.set_cache(
-            key=hash_token(key),
-            value=UserAPIKeyAuth(
+            AuthObject.virtual_key(hash_token(key)),
+            UserAPIKeyAuth(
                 token=hash_token(key),
                 rpm_limit=1,
                 metadata={"allowed_passthrough_routes": ["/rpm-rerank"]},
@@ -4339,13 +4395,16 @@ async def test_create_pass_through_route_custom_body_url_target():
 
 
 @pytest.mark.asyncio
-async def test_pass_through_request_non_streaming_uses_content_for_state_raw_body():
+@pytest.mark.parametrize("body_type", [bytes, bytearray])
+async def test_pass_through_request_non_streaming_uses_content_for_state_raw_body(
+    body_type: type[bytes] | type[bytearray],
+) -> None:
     """
     Bedrock SigV4 path: exact signed bytes live on request.state; upstream must receive
     content=... even if pre_call_hook mutates the parsed dict (would change json=).
     """
     # Bytes that were signed (simulated); parsed body + hook will diverge on purpose.
-    raw_signed = b'{"retrievalQuery":{"text":"signed"},"sig":"intact"}'
+    raw_signed: Final = body_type(b'{"retrievalQuery":{"text":"signed"},"sig":"intact"}')
     parsed_from_wire = {"retrievalQuery": {"text": "signed"}, "sig": "intact"}
 
     mock_request = MagicMock(spec=Request)
@@ -6087,6 +6146,85 @@ async def test_pass_through_request_non_streaming_success_unchanged():
 
 
 @pytest.mark.asyncio
+async def test_failed_byte_stream_releases_reserved_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.spend_tracking.budget_reservation import (
+        get_reserved_counter_keys,
+        reconcile_budget_reservation,
+        release_unbound_budget_reservation,
+        reserve_budget_for_request,
+    )
+    from litellm.redis.stores.connection import connect
+    from litellm.redis.stores.spend_counters import SpendCounterStore
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import _relay_passthrough_response_bytes
+
+    store: Final = SpendCounterStore(connect(None).spend_counters())
+    monkeypatch.setattr(proxy_server, "spend_counter_store", store)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "reserved-byte-stream",
+                "litellm_params": {
+                    "model": "openai/gpt-6.1-sol",
+                    "api_key": "test-key",
+                    "input_cost_per_token": 0.01,
+                    "output_cost_per_token": 0.01,
+                },
+            }
+        ]
+    )
+    reservation: Final = await reserve_budget_for_request(
+        request_body={
+            "model": "reserved-byte-stream",
+            "messages": [{"role": "user", "content": "hello"}],
+            "max_tokens": 1,
+        },
+        route="/v1/chat/completions",
+        llm_router=router,
+        valid_token=UserAPIKeyAuth(token="reserved-byte-stream-key", max_budget=100.0, spend=0.0),
+        team_object=None,
+        user_object=None,
+        prisma_client=None,
+        user_api_key_cache=proxy_server.user_api_key_cache,
+        proxy_logging_obj=proxy_server.proxy_logging_obj,
+    )
+    assert reservation is not None
+    counter: Final = next(iter(get_reserved_counter_keys(budget_reservation=reservation)))
+    assert store.get_local(counter) == pytest.approx(reservation["reserved_cost"])
+    started: Final = datetime(2026, 1, 1)
+    logging_obj: Final = LiteLLMLoggingObj(
+        model="reserved-byte-stream",
+        messages=[],
+        stream=True,
+        call_type="passthrough",
+        start_time=started,
+        litellm_call_id="reserved-byte-stream",
+        function_id="reserved-byte-stream",
+    )
+    logging_obj.update_environment_variables(
+        litellm_params={"metadata": {"user_api_key_budget_reservation": reservation}}, optional_params={}
+    )
+    upstream: Final = httpx.Response(
+        429, content=b"quota", request=httpx.Request("GET", "https://files.invalid/stream")
+    )
+    try:
+        async for _chunk in _relay_passthrough_response_bytes(
+            response=upstream,
+            request_body={},
+            url_route=str(upstream.url),
+            start_time=started,
+            logging_obj=logging_obj,
+            custom_llm_provider=None,
+            success_handler_kwargs={},
+        ):
+            pass
+        await release_unbound_budget_reservation(reservation)
+        assert store.get_local(counter) == pytest.approx(0.0)
+    finally:
+        await reconcile_budget_reservation(reservation, actual_cost=0.0)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "upstream_status_code, claimed_by_the_success_handler",
     [(200, True), (500, False)],
@@ -6709,7 +6847,9 @@ async def _relay_through_pass_through(
         with ExitStack() as stack:
             _enter_relay_logging_mocks(stack, {})
             stack.enter_context(
-                patch("litellm.proxy.proxy_server.proxy_logging_obj", ProxyLogging(user_api_key_cache=DualCache()))
+                patch(
+                    "litellm.proxy.proxy_server.proxy_logging_obj", ProxyLogging(user_api_key_cache=UserApiKeyCache())
+                )
             )
             response: Final = await pass_through_request(
                 request=request,
@@ -8607,7 +8747,7 @@ async def test_websocket_passthrough_holds_the_keys_parallel_slot_until_the_sess
     not free it, or a second session gets in while the first is still running.
     """
     limiter_cache: Final = DualCache()
-    limiter: Final = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(limiter_cache))
+    limiter: Final = RustParallelRequestLimiter(internal_usage_cache=InternalUsageCache(limiter_cache))
     key: Final = UserAPIKeyAuth(api_key=hash_token("sk-one-socket"), max_parallel_requests=1)
     logged_rows: Final[list[asyncio.Task[None]]] = []
 
@@ -8699,7 +8839,7 @@ async def test_websocket_passthrough_frees_one_legacy_parallel_slot_only_when_th
     limiter: Final = PROXY_MaxParallelRequestsHandler(
         internal_usage_cache=InternalUsageCache(DualCache()), clock=lambda: datetime(2026, 1, 31, 23, 59, 30)
     )
-    proxy_logging_obj: Final = ProxyLogging(user_api_key_cache=DualCache())
+    proxy_logging_obj: Final = ProxyLogging(user_api_key_cache=UserApiKeyCache())
     proxy_logging_obj.proxy_hook_mapping["parallel_request_limiter"] = limiter
     key: Final = UserAPIKeyAuth(api_key=hash_token("sk-legacy-socket"), max_parallel_requests=2)
     logged_rows: Final[list[asyncio.Task[None]]] = []
@@ -9836,7 +9976,7 @@ async def test_passthrough_charge_moves_the_committed_spend_of_the_entities_auth
 
 
 @pytest.mark.asyncio
-async def test_passthrough_success_reconciles_budget_reservation():
+async def test_passthrough_success_reconciles_budget_reservation(native_budgets_on):
     """
     A successful pass-through request must hand its pre-call budget reservation
     to the spend-counter update so the reserved amount is reconciled down to the
@@ -9844,14 +9984,17 @@ async def test_passthrough_success_reconciles_budget_reservation():
     the actual cost is added on top, so the counter drifts above real spend until
     the key falsely trips BudgetExceededError.
     """
-    budget_reservation = {
-        "reserved_cost": 0.5,
-        "entries": [{"counter_key": "spend:key:hashed-token", "reserved_cost": 0.5}],
-    }
     user_api_key_dict = UserAPIKeyAuth(
         api_key="hashed-token",
         user_id="u1",
-        budget_reservation=budget_reservation,
+    )
+    from litellm.proxy import proxy_server
+
+    budget_reservation = await native_reservation(
+        proxy_server.spend_counter_store,
+        user_api_key_dict,
+        [{"counter_key": "spend:key:hashed-token", "entity_type": "Key", "entity_id": "hashed-token"}],
+        0.5,
     )
 
     reservation = user_api_key_dict.budget_reservation
@@ -10771,7 +10914,7 @@ async def _run_passthrough(
     with (
         pytest.MonkeyPatch.context() as litellm_patch,
         patch(  # test-quality-ok: proxy_logging_obj is a proxy_server module global read inside pass_through_request; there is no injection seam
-            "litellm.proxy.proxy_server.proxy_logging_obj", ProxyLogging(user_api_key_cache=DualCache())
+            "litellm.proxy.proxy_server.proxy_logging_obj", ProxyLogging(user_api_key_cache=UserApiKeyCache())
         ),
         respx.mock(assert_all_called=False) as upstream_mock,
     ):
@@ -11044,7 +11187,7 @@ async def _run_websocket_connect_failure(
     with (
         pytest.MonkeyPatch.context() as litellm_patch,
         patch(  # test-quality-ok: proxy_logging_obj is a proxy_server module global read inside websocket_passthrough_request; there is no injection seam
-            "litellm.proxy.proxy_server.proxy_logging_obj", ProxyLogging(user_api_key_cache=DualCache())
+            "litellm.proxy.proxy_server.proxy_logging_obj", ProxyLogging(user_api_key_cache=UserApiKeyCache())
         ),
         patch(
             "litellm.proxy.pass_through_endpoints.pass_through_endpoints.connect",
@@ -11706,8 +11849,8 @@ class _StoredConfigRow:
 class _InMemoryConfigTable:
     def __init__(self, rows: Mapping[str, Mapping[str, object]]) -> None:
         self.rows: dict[str, Mapping[str, object]] = dict(rows)
-        self.db: Final = SimpleNamespace(litellm_config=self)
-        self.writer_db: Final = SimpleNamespace(litellm_config=self)
+        self.db: Final = MagicMock(litellm_config=self)
+        self.writer_db: Final = MagicMock(litellm_config=self)
 
     def _row(self, param_name: str) -> _StoredConfigRow | None:
         value: Final = self.rows.get(param_name)
@@ -11766,6 +11909,7 @@ async def _boot_db_backed_proxy(
     monkeypatch.setattr(proxy_server, "config_passthrough_endpoints", None)
     monkeypatch.setattr(proxy_server, "master_key", None)
     monkeypatch.setattr(proxy_server, "premium_user", False)
+    monkeypatch.setattr(proxy_server, "litellm_jwtauth", proxy_server.litellm_jwtauth)
     monkeypatch.setattr(proxy_utils, "litellm_config_cache", DualCache())
     monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
     monkeypatch.delitem(proxy_server.app.dependency_overrides, user_api_key_auth, raising=False)
@@ -11774,6 +11918,11 @@ async def _boot_db_backed_proxy(
     await proxy_config.load_config(router=None, config_file_path=str(config_path))
     monkeypatch.setattr(proxy_server, "prisma_client", config_table)
     monkeypatch.setattr(proxy_server, "store_model_in_db", store_model_in_db)
+    proxy_server.ProxyStartupEvent.initialize_jwt_auth(
+        general_settings=proxy_server.general_settings,
+        prisma_client=config_table,
+        user_api_key_cache=proxy_server.user_api_key_cache,
+    )
     return _DbBackedProxy(proxy_config, str(config_path), config_table)
 
 
@@ -13240,6 +13389,191 @@ async def test_direct_passthrough_keeps_mapped_baggage_tags_outside_upstream_bod
     assert await read_request_body(request) == {"model": "qa-model"}
 
 
+def _client_request(method: str, headers: Mapping[str, str], body: bytes) -> Request:
+    async def receive() -> dict[str, object]:
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    return Request(
+        {
+            "type": "http",
+            "method": method,
+            "path": "/azure/openai/v1/responses/resp_1",
+            "query_string": b"",
+            "headers": [(name.encode(), value.encode()) for name, value in headers.items()],
+        },
+        receive,
+    )
+
+
+async def _forward_through_pass_through(
+    method: str,
+    client_headers: Mapping[str, str],
+    client_body: bytes,
+    stream: bool,
+    callbacks: list[CustomLogger],
+    body_parsed_by_auth: bool = False,
+) -> httpx.Request:
+    received: Final[list[httpx.Request]] = []
+    client_request: Final = _client_request(method, client_headers, client_body)
+    if body_parsed_by_auth:
+        safe_set_request_parsed_body(request=client_request, parsed_body={})
+
+    def transport_handler(upstream_request: httpx.Request) -> httpx.Response:
+        received.append(upstream_request)
+        return httpx.Response(200, json={"ok": True}, request=upstream_request)
+
+    fake_client, cleanup = _inject_fake_passthrough_client(httpx.MockTransport(transport_handler), timeout=None)
+    try:
+        with (
+            pytest.MonkeyPatch.context() as litellm_patch,
+            patch(  # test-quality-ok: proxy_logging_obj is a proxy_server module global read inside pass_through_request; there is no injection seam
+                "litellm.proxy.proxy_server.proxy_logging_obj", ProxyLogging(user_api_key_cache=DualCache())
+            ),
+        ):
+            litellm_patch.setattr(litellm, "callbacks", callbacks)
+            response = await pass_through_request(
+                request=client_request,
+                target="https://upstream.test/openai/v1/responses/resp_1",
+                custom_headers={},
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+                stream=stream,
+            )
+            if isinstance(response, StreamingResponse):
+                _ = [chunk async for chunk in response.body_iterator]
+    finally:
+        cleanup()
+        await fake_client.aclose()
+
+    assert response.status_code == 200
+    assert len(received) == 1
+    return received[0]
+
+
+def _upstream_json(upstream_request: httpx.Request) -> object:
+    return json.loads(upstream_request.content) if upstream_request.content else None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True], ids=["non-streaming", "streaming"])
+@pytest.mark.parametrize(
+    ("method", "client_headers", "client_body", "expected_upstream_json"),
+    [
+        pytest.param("DELETE", {}, b"", None, id="delete-without-body"),
+        pytest.param(
+            "DELETE", {"content-type": "application/json", "content-length": "0"}, b"", None, id="delete-length-zero"
+        ),
+        pytest.param(
+            "DELETE",
+            {"content-type": "application/json", "transfer-encoding": "chunked"},
+            b"",
+            None,
+            id="delete-chunked-without-body",
+        ),
+        pytest.param(
+            "DELETE",
+            {"content-type": "application/x-www-form-urlencoded", "transfer-encoding": "chunked"},
+            b"",
+            None,
+            id="delete-chunked-empty-form",
+        ),
+        pytest.param(
+            "DELETE",
+            {"content-type": "application/json", "content-length": "2"},
+            b"{}",
+            {},
+            id="delete-explicit-empty-object",
+        ),
+        pytest.param(
+            "DELETE", {"content-type": "application/json"}, b"{}", {}, id="delete-empty-object-without-length-headers"
+        ),
+        pytest.param("GET", {}, b"", None, id="get-without-body"),
+        pytest.param(
+            "GET", {"content-type": "application/json", "content-length": "0"}, b"", None, id="get-length-zero"
+        ),
+        pytest.param(
+            "POST", {"content-type": "application/json", "content-length": "0"}, b"", {}, id="sdk-post-without-body"
+        ),
+        pytest.param(
+            "POST",
+            {"content-type": "application/x-www-form-urlencoded", "content-length": "0"},
+            b"",
+            {},
+            id="curl-empty-form",
+        ),
+        pytest.param(
+            "POST", {"content-type": "application/json", "content-length": "2"}, b"{}", {}, id="explicit-empty-object"
+        ),
+        pytest.param(
+            "POST", {"content-type": "application/json", "content-length": "8"}, b'{"a": 1}', {"a": 1}, id="json-object"
+        ),
+        pytest.param(
+            "POST",
+            {"content-type": "application/json", "transfer-encoding": "chunked"},
+            b"{}",
+            {},
+            id="chunked-empty-object",
+        ),
+    ],
+)
+async def test_pass_through_request_sends_no_body_on_a_get_or_delete_sent_without_one(
+    stream: bool,
+    method: str,
+    client_headers: Mapping[str, str],
+    client_body: bytes,
+    expected_upstream_json: object,
+):
+    upstream_request: Final = await _forward_through_pass_through(
+        method, client_headers, client_body, stream, callbacks=[]
+    )
+
+    assert _upstream_json(upstream_request) == expected_upstream_json
+    assert upstream_request.headers.get("content-type") == (
+        None if expected_upstream_json is None else "application/json"
+    )
+
+
+class _FillsBodyOnPreCall(CustomLogger):
+    async def async_pre_call_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        cache: DualCache,
+        data: dict[str, object],
+        call_type: str,
+    ) -> dict[str, object]:
+        return {**data, "reason": "filled by hook"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True], ids=["non-streaming", "streaming"])
+async def test_pass_through_request_forwards_a_body_a_pre_call_hook_adds_to_a_delete_sent_without_one(stream: bool):
+    upstream_request: Final = await _forward_through_pass_through(
+        "DELETE", {}, b"", stream, callbacks=[_FillsBodyOnPreCall()]
+    )
+
+    assert _upstream_json(upstream_request) == {"reason": "filled by hook"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True], ids=["non-streaming", "streaming"])
+@pytest.mark.parametrize(
+    ("client_headers", "client_body", "expected_upstream_json"),
+    [
+        pytest.param({}, b"", None, id="no-length-headers"),
+        pytest.param({"content-type": "application/json", "content-length": "0"}, b"", None, id="length-zero"),
+        pytest.param({"content-type": "application/json", "content-length": "2"}, b"{}", {}, id="length-two"),
+        pytest.param({"content-type": "application/json", "transfer-encoding": "chunked"}, b"{}", {}, id="chunked"),
+    ],
+)
+async def test_pass_through_request_goes_by_the_declared_body_on_a_delete_whose_body_auth_parsed_without_reading(
+    stream: bool, client_headers: Mapping[str, str], client_body: bytes, expected_upstream_json: object
+):
+    upstream_request: Final = await _forward_through_pass_through(
+        "DELETE", client_headers, client_body, stream, callbacks=[], body_parsed_by_auth=True
+    )
+
+    assert _upstream_json(upstream_request) == expected_upstream_json
+
+
 @pytest.mark.parametrize(
     ("update", "expected"),
     [
@@ -13377,8 +13711,9 @@ async def test_update_pass_through_endpoint_keeps_llm_api_route_checks_on_a_path
     ("flat_cost", "upstream_cost", "expected"),
     [(0.5, None, 0.5), (0.0, None, 0.0), (0.5, "0.75", 0.75), (0.5, "0", 0.0)],
 )
+@pytest.mark.parametrize("delivery", ["json", "bytes", "interrupted-bytes"])
 async def test_passthrough_header_and_callback_share_finalized_cost(
-    monkeypatch: pytest.MonkeyPatch, flat_cost: float, upstream_cost: str | None, expected: float
+    monkeypatch: pytest.MonkeyPatch, flat_cost: float, upstream_cost: str | None, expected: float, delivery: str
 ) -> None:
     from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 
@@ -13394,8 +13729,19 @@ async def test_passthrough_header_and_callback_share_finalized_cost(
         {} if upstream_cost is None else {"x-litellm-response-cost": upstream_cost, "x-litellm-total-tokens": "12"}
     )
 
+    class FileStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield b"partial-file"
+            if delivery == "interrupted-bytes":
+                raise httpx.ReadError("upstream stopped after a partial delivery")
+
     def upstream(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"ok": True}, headers=upstream_headers, request=request)
+        if delivery == "json":
+            return httpx.Response(200, json={"ok": True}, headers=upstream_headers, request=request)
+        return httpx.Response(
+            200, stream=FileStream(), headers={**upstream_headers, "content-type": "application/octet-stream"},
+            request=request,
+        )
 
     client, cleanup = _inject_fake_passthrough_client(httpx.MockTransport(upstream), timeout=None)
     try:
@@ -13407,12 +13753,23 @@ async def test_passthrough_header_and_callback_share_finalized_cost(
             request=request, target="http://cost-upstream.invalid/results", custom_headers={},
             user_api_key_dict=UserAPIKeyAuth(api_key="hashed"), cost_per_request=flat_cost,
         )
-        payload: Final = await asyncio.wait_for(observed, timeout=10)
+        if delivery != "json":
+            assert isinstance(result, StreamingResponse)
+            assert await anext(result.body_iterator) == b"partial-file"
+            if delivery == "interrupted-bytes":
+                with pytest.raises(httpx.ReadError, match="partial delivery"):
+                    await anext(result.body_iterator)
+            else:
+                with pytest.raises(StopAsyncIteration):
+                    await anext(result.body_iterator)
         await GLOBAL_LOGGING_WORKER.flush()
+        assert observed.done(), "Delivered bytes must retain their known cost in the spend log"
+        payload: Final = observed.result()
         assert result.status_code == 200
-        assert float(result.headers["x-litellm-response-cost"]) == pytest.approx(expected)
         assert payload["response_cost"] == pytest.approx(expected)
-        assert payload["cost_finalized"] is True
+        if delivery == "json":
+            assert float(result.headers["x-litellm-response-cost"]) == pytest.approx(expected)
+            assert payload["cost_finalized"] is True
         if upstream_cost is not None:
             assert payload["total_tokens"] == 12
     finally:

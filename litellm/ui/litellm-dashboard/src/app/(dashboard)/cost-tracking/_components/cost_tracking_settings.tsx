@@ -1,7 +1,9 @@
 import React, { useState, useEffect } from "react";
 import type { ParseKeys } from "i18next";
 import { useTranslation } from "react-i18next";
-import { ChevronDown } from "lucide-react";
+import { BarChart3, ChevronDown, Lock } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   AlertDialog,
   AlertDialogCancel,
@@ -22,6 +24,8 @@ import ProviderMarginTable from "./provider_margin_table";
 import AddMarginForm from "./add_margin_form";
 import PricingCalculator from "./pricing_calculator/index";
 import { DocsMenu } from "@/components/DocsMenu";
+import { PageContent } from "@/components/shared/Page";
+import { PageHeader, PageHeaderTitle, PageHeaderDescription } from "@/components/shared/PageHeader";
 import HowItWorks from "./how_it_works";
 import { useDiscountConfig } from "./use_discount_config";
 import { useMarginConfig } from "./use_margin_config";
@@ -56,7 +60,7 @@ interface PendingRemoval {
 
 const SECTION_HEADER_CLASS = "group/section flex w-full items-center justify-between px-6 py-4 text-left";
 
-const SectionHeader: React.FC<{ title: string; description: string }> = ({ title, description }) => (
+const SectionHeader: React.FC<{ title: React.ReactNode; description: string }> = ({ title, description }) => (
   <CollapsibleTrigger className={SECTION_HEADER_CLASS}>
     <div className="flex flex-col items-start w-full">
       <span className="block text-lg font-semibold text-foreground">{title}</span>
@@ -95,6 +99,7 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
 
   const {
     marginConfig,
+    isConfigOwned,
     fetchMarginConfig,
     handleAddMargin: addMargin,
     handleRemoveMargin: removeMargin,
@@ -196,20 +201,23 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
   }
 
   return (
-    <div className="w-full p-8">
-      {/* Header Section - Outside the card */}
-      <div className="flex flex-col md:flex-row items-start md:items-center justify-between mb-6">
-        <div>
-          <div className="flex items-center gap-2">
-            <p className="text-xl font-medium text-foreground">{t("costTracking.settings.title")}</p>
-            <DocsMenu items={DOCS_LINKS.map(({ labelKey, href }) => ({ label: t(labelKey), href }))} />
-          </div>
-          <p className="text-muted-foreground mt-1">{t("costTracking.settings.description")}</p>
+    <>
+      <PageHeader>
+        <div className="flex flex-wrap items-center gap-2">
+          <PageHeaderTitle>
+            <BarChart3 />
+            {t("costTracking.settings.title")}
+          </PageHeaderTitle>
+          <DocsMenu
+            className="ml-auto sm:ml-0"
+            items={DOCS_LINKS.map(({ labelKey, href }) => ({ label: t(labelKey), href }))}
+          />
         </div>
-      </div>
+        <PageHeaderDescription>{t("costTracking.settings.description")}</PageHeaderDescription>
+      </PageHeader>
 
       {/* Main Content Card with Accordions */}
-      <div className="bg-card rounded-lg shadow-sm w-full max-w-full space-y-4">
+      <PageContent className="gap-4 rounded-lg bg-card shadow-sm">
         {/* Accordion 1: Provider Discounts - Only for proxy admins */}
         {isProxyAdmin && (
           <Collapsible className="rounded-lg border">
@@ -283,13 +291,26 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
         {isProxyAdmin && (
           <Collapsible className="rounded-lg border">
             <SectionHeader
-              title={t("costTracking.settings.margins.title")}
+              title={
+                <>
+                  {t("costTracking.settings.margins.title")}
+                  {isConfigOwned && (
+                    <Tooltip>
+                      <TooltipTrigger render={<Badge variant="outline" className="ml-2 align-middle" />}>
+                        <Lock aria-hidden />
+                        config.yaml
+                      </TooltipTrigger>
+                      <TooltipContent>{t("costTracking.settings.margins.configOwnedHint")}</TooltipContent>
+                    </Tooltip>
+                  )}
+                </>
+              }
               description={t("costTracking.settings.margins.description")}
             />
             <CollapsibleContent className="px-0">
               <div className="p-6">
                 <div className="flex justify-end mb-4">
-                  <Button onClick={() => setIsMarginModalVisible(true)}>
+                  <Button disabled={isConfigOwned} onClick={() => setIsMarginModalVisible(true)}>
                     {t("costTracking.settings.margins.addButton")}
                   </Button>
                 </div>
@@ -299,6 +320,7 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
                   </div>
                 ) : Object.keys(marginConfig).length > 0 ? (
                   <ProviderMarginTable
+                    disabled={isConfigOwned}
                     marginConfig={marginConfig}
                     onMarginChange={handleMarginChange}
                     onRemoveProvider={handleRemoveMargin}
@@ -368,7 +390,7 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
             </div>
           </CollapsibleContent>
         </Collapsible>
-      </div>
+      </PageContent>
 
       {pendingRemoval && (
         <AlertDialog open onOpenChange={(open) => !open && !isRemoving && setPendingRemoval(null)}>
@@ -448,7 +470,7 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
           </div>
         </DialogContent>
       </Dialog>
-    </div>
+    </>
   );
 };
 

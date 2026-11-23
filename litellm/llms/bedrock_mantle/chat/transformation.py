@@ -24,6 +24,7 @@ from litellm.llms.bedrock_mantle.common_utils import (
     BEDROCK_MANTLE_DEFAULT_REGION,
     BedrockMantleAuthMixin,
 )
+from litellm.llms.mistral.common_utils import with_mistral_tool_call_ids
 from litellm.llms.openai.chat.gpt_reasoning_transformation import get_effort_level, is_gpt_reasoning_series_name
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
@@ -214,7 +215,12 @@ class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
         headers: dict[str, str],  # mutable-ok: OpenAIGPTConfig.transform_request signature
     ) -> dict[str, object]:  # mutable-ok: OpenAIGPTConfig.transform_request signature
         request_params: Final = dict(_chat_request_params(optional_params, _drops_params(litellm_params)))
-        return super().transform_request(model, messages, request_params, litellm_params, headers)
+        sent_messages: Final = (
+            [with_mistral_tool_call_ids(message) for message in messages]
+            if BaseAWSLLM.get_bedrock_invoke_provider(model) == "mistral"
+            else messages
+        )
+        return super().transform_request(model, sent_messages, request_params, litellm_params, headers)
 
     def transform_extra_body(
         self,
