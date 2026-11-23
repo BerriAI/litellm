@@ -4101,6 +4101,7 @@ dependencies = [
 name = "litellm-gateway"
 version = "0.1.0"
 dependencies = [
+ "arc-swap",
  "axum",
  "envy",
  "flate2",
@@ -4121,6 +4122,7 @@ dependencies = [
  "litellm-db-testing",
  "litellm-env",
  "litellm-error",
+ "litellm-fnmatch",
  "litellm-gateway",
  "litellm-gateway-auth",
  "litellm-gateway-auth-core",

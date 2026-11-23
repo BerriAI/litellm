@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT DISTINCT policy_name\nFROM \"LiteLLM_PolicyAttachmentTable\"\nORDER BY policy_name\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "policy_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_PolicyAttachmentTable\"",
+            "name": "policy_name"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "073beee624d3c24042f910544dc7a4ac7754f009398f222d7f40a41dd378715c"
+}

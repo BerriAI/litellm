@@ -1,0 +1,42 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT param_name AS \"param_name!\",\n       ARRAY(SELECT jsonb_object_keys(param_value) ORDER BY 1) AS \"keys!\",\n       COALESCE(lower(param_value ->> 'store_model_in_db') = 'true', FALSE) AS \"store_model_in_db!\"\nFROM \"LiteLLM_Config\"\nWHERE param_name = ANY($1)\n  AND jsonb_typeof(param_value) = 'object'\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "param_name!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_Config\"",
+            "name": "param_name"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "keys!",
+        "type_info": "TextArray",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 2,
+        "name": "store_model_in_db!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      false,
+      null,
+      null
+    ]
+  },
+  "hash": "861f5cc9526a60475fc1a3557fde89a0381d921361b13621a54503df83c7eaa5"
+}

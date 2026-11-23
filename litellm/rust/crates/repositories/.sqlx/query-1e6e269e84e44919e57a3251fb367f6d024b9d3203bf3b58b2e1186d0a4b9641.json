@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT DISTINCT model_name\nFROM \"LiteLLM_ProxyModelTable\"\nORDER BY model_name\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "model_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_ProxyModelTable\"",
+            "name": "model_name"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "1e6e269e84e44919e57a3251fb367f6d024b9d3203bf3b58b2e1186d0a4b9641"
+}

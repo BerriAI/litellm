@@ -9,8 +9,10 @@ repository.workspace = true
 test-support = []
 
 [dependencies]
+arc-swap.workspace = true
 litellm-python-compat.workspace = true
 litellm-env.workspace = true
+litellm-fnmatch.workspace = true
 litellm-secret-value.workspace = true
 axum.workspace = true
 envy = "0.4.2"

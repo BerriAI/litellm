@@ -32,9 +32,9 @@ const LAYERED: [&str; 12] = [
 
 pub(super) fn settings(admit: &Admit, _: &Parts) -> Option<Reason> {
     admit
-        .stored_models
-        .iter()
-        .cloned()
+        .stored
+        .settings()
+        .into_iter()
         .chain(unhonored(&admit.config, &admit.environment))
         .next()
         .map(|over| Reason::new(Refused::Settings, over))
@@ -132,9 +132,9 @@ fn variables(environment: &Environment) -> impl Iterator<Item = Box<str>> + use<
     .map(|field| field.to_uppercase().into())
 }
 
-/// The database settings are read as the proxy reads them, and what the proxy holds in its
-/// database beyond keys is not checked. `STORE_MODEL_IN_DB` is `Admit::stored_models`. The JWT settings shape only a caller whose token is a JWT, and the public routes
-/// only one who sends no key.
+/// The database settings are read as the proxy reads them. `store_model_in_db` is judged with what
+/// the database holds, in `admit::stored`. The JWT settings shape only a caller whose token is a
+/// JWT, and the public routes only one who sends no key.
 fn general(config: &Config) -> impl Iterator<Item = Box<str>> + '_ {
     let GeneralSettings {
         master_key: _,
@@ -170,7 +170,7 @@ fn general(config: &Config) -> impl Iterator<Item = Box<str>> + '_ {
         global_max_parallel_requests,
         max_response_size_mb,
         background_health_checks,
-        store_model_in_db,
+        store_model_in_db: _,
         forward_client_headers_to_llm_api,
         cancel_on_disconnect,
         infer_model_from_keys,
@@ -223,7 +223,6 @@ fn general(config: &Config) -> impl Iterator<Item = Box<str>> + '_ {
         ],
         on: [
             background_health_checks,
-            store_model_in_db,
             forward_client_headers_to_llm_api,
             cancel_on_disconnect,
             infer_model_from_keys,

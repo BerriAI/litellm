@@ -53,6 +53,7 @@ pub(super) fn model(admit: &Admit, fields: &Map<String, Value>) -> Option<Reason
 fn unserved(admit: &Admit, reached: &Reached) -> Option<Box<str>> {
     let group = reached.group.as_str();
     super::router::group(&admit.config.router_settings, group)
+        .or_else(|| admit.stored.model(group))
         .or_else(|| {
             reached
                 .steps

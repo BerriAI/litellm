@@ -99,6 +99,7 @@ async fn gateway(python: SocketAddr, admits: bool, root_path: &str) -> SocketAdd
                 redis: litellm_gateway::RedisClients::default(),
                 database: None,
                 keys: None,
+                stored_config: None,
                 entitlements: Arc::new(Entitlements::Community),
                 environment: Arc::new(litellm_env::ProcessEnvironment),
             },
@@ -247,11 +248,8 @@ async fn holding_keys(python: SocketAddr, config: &str, keys: Option<AuthStore>)
         keys: keys.map(Arc::new).or(state.keys.clone()),
         ..state
     };
-    let admit = Arc::new(litellm_gateway::Admit::new(
-        &config,
-        &Environment::default(),
-        &state,
-    ));
+    let admit =
+        Arc::new(litellm_gateway::Admit::new(&config, &Environment::default(), &state).await);
     let native = middleware::global(
         litellm_gateway::router(state, &config),
         &middleware::Settings::default(),

@@ -1,0 +1,69 @@
+# The database's own general_settings row turns store_model_in_db on, as the proxy reads it, so the
+# proxy serves the database's models on top of the config. A group a database model joins goes to
+# Python, by its name or by a wildcard that matches it, and so does a group that falls back to one.
+# Every other group stays native.
+config:
+  model_list:
+    - model_name: claude
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+    - model_name: claude-shared
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+    - model_name: claude-wild
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+    - model_name: claude-backed
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+  router_settings:
+    fallbacks:
+      - claude-backed: [claude-shared]
+  general_settings:
+    master_key: gateway-key
+
+database: |
+  INSERT INTO "LiteLLM_Config" (param_name, param_value) VALUES
+    ('general_settings', '{"store_model_in_db": "True", "maximum_spend_logs_retention_period": "7d"}');
+  INSERT INTO "LiteLLM_ProxyModelTable" (model_id, model_name, litellm_params, created_by, updated_by) VALUES
+    ('shared', 'claude-shared', '{"model": "bedrock/anthropic.claude-haiku-5-5"}', 'admin', 'admin'),
+    ('wild', 'claude-w*', '{"model": "anthropic/*"}', 'admin', 'admin'),
+    ('stored', 'gpt-stored', '{"model": "openai/gpt-5.5"}', 'admin', 'admin');
+
+requests:
+  - name: a group of the config alone
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: rust
+
+  - name: a group a database model joins
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude-shared, max_tokens: 16, messages: []}
+    expect: python
+    reason: model
+    over: database model_list claude-shared
+
+  - name: a group a database wildcard matches
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude-wild, max_tokens: 16, messages: []}
+    expect: python
+    reason: model
+    over: database model_list claude-w*
+
+  - name: a group that falls back to one a database model joins
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude-backed, max_tokens: 16, messages: []}
+    expect: python
+    reason: model
+    over: 'router_settings fallback to claude-shared: database model_list claude-shared'
+
+  - name: a group only the database holds
+    headers: {authorization: Bearer gateway-key}
+    body: {model: gpt-stored, max_tokens: 16, messages: []}
+    expect: python
+    reason: model
+    over: unknown_model

@@ -16,7 +16,9 @@ use litellm_redis_store::{
     spend_counters::SpendCounters,
     system_clock,
 };
-use litellm_repositories::{Database, KeyRepository, ObjectPermissionRepository};
+use litellm_repositories::{
+    Database, KeyRepository, ObjectPermissionRepository, StoredConfigRepository,
+};
 use tokio::runtime::Handle;
 
 use crate::{
@@ -36,6 +38,8 @@ pub struct AppState {
     /// Where a virtual key is read from: the auth cache in front of the proxy's database. `None`
     /// without a database.
     pub keys: Option<Arc<AuthStore>>,
+    /// What the proxy serves from its database on top of its config. `None` without a database.
+    pub stored_config: Option<Arc<StoredConfigRepository>>,
     pub entitlements: Arc<Entitlements>,
     /// The proxy's `parallel_request_limiter_v3`, which the inference routes' callback stage runs
     /// and the limit check before the body asks.
@@ -61,16 +65,19 @@ impl AppState {
             gateway: inference,
             key_limiter,
         } = crate::build_inference(config, environment, resources, routing, &redis).await?;
-        let (database, keys) = db::connect(config, &resources.secrets)
-            .await?
-            .map(|(pools, repositories)| (pools, Arc::new(keys(config, &redis, repositories))))
-            .unzip();
+        let (database, repositories) = db::connect(config, &resources.secrets).await?.unzip();
+        let keys = repositories
+            .clone()
+            .map(|repositories| Arc::new(keys(config, &redis, repositories)));
+        let stored_config =
+            repositories.map(|repositories| Arc::new(StoredConfigRepository::new(repositories)));
         let entitlements = Arc::new(build_license(config, environment, resources).await);
         Ok(Self {
             inference,
             redis,
             database,
             keys,
+            stored_config,
             entitlements,
             key_limiter,
             environment: resources.environment.clone(),

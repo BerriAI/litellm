@@ -1,0 +1,23 @@
+# With store_model_in_db on, a setting the database stores reaches every request, and the native
+# app reads only the config, so every request goes to Python over it.
+config:
+  model_list:
+    - model_name: claude
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+  general_settings:
+    master_key: gateway-key
+    store_model_in_db: true
+
+database: |
+  INSERT INTO "LiteLLM_Config" (param_name, param_value) VALUES
+    ('router_settings', '{"fallbacks": [{"claude": ["claude-backup"]}]}');
+
+requests:
+  - name: plain
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: settings
+    over: database router_settings.fallbacks

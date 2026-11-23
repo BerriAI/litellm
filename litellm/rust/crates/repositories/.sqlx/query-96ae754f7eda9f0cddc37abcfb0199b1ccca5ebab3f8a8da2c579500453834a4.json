@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT guardrail_name\nFROM \"LiteLLM_GuardrailsTable\"\nWHERE status = 'active'\n  AND COALESCE(lower(litellm_params ->> 'default_on'), 'false') NOT IN ('false', '0', 'no', 'off', 'f', 'n', '')\nORDER BY guardrail_name\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "guardrail_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_GuardrailsTable\"",
+            "name": "guardrail_name"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "96ae754f7eda9f0cddc37abcfb0199b1ccca5ebab3f8a8da2c579500453834a4"
+}

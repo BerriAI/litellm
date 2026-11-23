@@ -3,10 +3,12 @@
 //!
 //! [`Admit`] holds what the native app was built from, and each request is put to the three stages
 //! of checks in `checks`. This is the only part that does IO: it authenticates the caller before
-//! the `CALLER` stage and reads the body with `body` before the `BODY` stage.
+//! the `CALLER` stage and reads the body with `body` before the `BODY` stage, and `stored` reads
+//! what the proxy serves from its database off the request path.
 
 mod body;
 mod checks;
+mod stored;
 
 use std::sync::Arc;
 
@@ -27,6 +29,7 @@ use crate::{
 };
 use checks::Fields;
 pub use checks::Reason;
+use stored::Stored;
 
 /// Why the gateway does not serve a request the way the Python proxy would.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error, strum::IntoStaticStr)]
@@ -67,9 +70,8 @@ pub struct Admit {
     config: Config,
     /// The variables only the environment holds, as `main` read them.
     environment: Environment,
-    /// The variable that has the proxy serve models and settings from its database on top of the
-    /// config. `general_settings.store_model_in_db` is a setting of the config itself.
-    stored_models: Option<Box<str>>,
+    /// What the proxy serves from its database on top of the config, as of its last read.
+    stored: Stored,
     /// Each deployment the router built from `config`, since only the router knows which provider
     /// serves each one.
     deployed: Vec<Deployed>,
@@ -84,8 +86,6 @@ pub struct Admit {
     /// `None` leaves every caller with a model list to Python.
     inference: Option<Arc<Gateway>>,
 }
-
-const STORE_MODEL_IN_DB: &str = "STORE_MODEL_IN_DB";
 
 fn refused(request: Parts, body: Body, reason: Reason) -> (Box<Request>, Reason) {
     tracing::debug!(why = %reason.why, over = %reason.over, "admit refused a request over this");
@@ -108,8 +108,9 @@ fn token_estimate(
 
 impl Admit {
     /// By the `config` the native app `state` is built from, with its environment under it as
-    /// `load_config` leaves it, and the `environment` `main` read.
-    pub fn new(config: &Config, environment: &Environment, state: &AppState) -> Self {
+    /// `load_config` leaves it, and the `environment` `main` read. It reads what the proxy serves
+    /// from its database before it admits anything, and keeps reading it while it lives.
+    pub async fn new(config: &Config, environment: &Environment, state: &AppState) -> Self {
         let deployments = state
             .inference
             .router
@@ -141,10 +142,7 @@ impl Admit {
             .collect();
         Self {
             environment: environment.clone(),
-            stored_models: state
-                .environment
-                .get(STORE_MODEL_IN_DB)
-                .map(|_| STORE_MODEL_IN_DB.into()),
+            stored: Stored::read(config, &*state.environment, state.stored_config.clone()).await,
             auth: state.auth(config),
             aliased,
             inference: Some(state.inference.clone()),
@@ -163,7 +161,7 @@ impl Admit {
             auth: host::auth::auth(config, None),
             config: config.clone(),
             environment: Environment::default(),
-            stored_models: None,
+            stored: Stored::none(),
             deployed,
             aliased: Vec::new(),
             inference: None,

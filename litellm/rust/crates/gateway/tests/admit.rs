@@ -9,6 +9,7 @@ use std::{collections::BTreeMap, path::Path, sync::Arc};
 use axum::{body::Body, extract::Request, http::Method};
 use litellm_config::{Config, Environment};
 use litellm_gateway::host::auth::AuthStore;
+use litellm_repositories::StoredConfigRepository;
 use rstest::rstest;
 use serde::Deserialize;
 
@@ -21,6 +22,8 @@ struct Scenario {
     /// The `tpm_limit` of each key that holds one.
     #[serde(default)]
     tpm_limits: BTreeMap<String, i64>,
+    /// The statements that store what the proxy serves from its database on top of the config.
+    database: Option<String>,
     requests: Vec<Sent>,
 }
 
@@ -100,6 +103,8 @@ impl Sent {
 #[case::drop_params_set("drop_params_set")]
 #[case::database("database")]
 #[case::store_model_in_db("store_model_in_db")]
+#[case::stored_models("stored_models")]
+#[case::stored_settings("stored_settings")]
 #[case::router_settings_by_group("router_settings_by_group")]
 #[case::groups_and_fallbacks("groups_and_fallbacks")]
 #[case::model_aliases("model_aliases")]
@@ -123,9 +128,15 @@ async fn admit_answers_each_request_as_its_scenario_says(#[case] name: &str) {
     let state = litellm_gateway::AppState::over(&config, &Environment::default(), &resources)
         .await
         .unwrap();
-    let held = match scenario.keys.is_empty() {
-        true => None,
-        false => Some(listed(&scenario.keys, &scenario.tpm_limits).await),
+    let held = match (scenario.keys.is_empty(), &scenario.database) {
+        (true, None) => None,
+        (_, stored) => {
+            let held = listed(&scenario.keys, &scenario.tpm_limits).await;
+            if let Some(stored) = stored {
+                held.execute(stored.clone().leak()).await;
+            }
+            Some(held)
+        }
     };
     let state = match &held {
         None => state,
@@ -134,14 +145,12 @@ async fn admit_answers_each_request_as_its_scenario_says(#[case] name: &str) {
                 keys::memory_cache(),
                 held.database(),
             ))),
+            stored_config: Some(Arc::new(StoredConfigRepository::new(held.repositories()))),
             ..state
         },
     };
-    let admit = Arc::new(litellm_gateway::Admit::new(
-        &config,
-        &Environment::default(),
-        &state,
-    ));
+    let admit =
+        Arc::new(litellm_gateway::Admit::new(&config, &Environment::default(), &state).await);
 
     let answered = futures_util::future::join_all(scenario.requests.iter().map(|sent| {
         let admit = admit.clone();

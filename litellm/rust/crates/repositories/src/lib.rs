@@ -27,6 +27,7 @@ mod organization;
 mod project;
 mod raw_json;
 mod spend_log;
+mod stored_config;
 mod tag;
 mod team;
 mod team_membership;
@@ -52,6 +53,7 @@ pub use raw_json::RawJson;
 pub use spend_log::{
     JsonText, SpendLogDelivery, SpendLogOwner, SpendLogRecord, SpendLogRepository, SpendLogWrite,
 };
+pub use stored_config::{StoredConfig, StoredConfigRepository, StoredSection};
 pub use tag::{Tag, TagRepository};
 pub use team::{Team, TeamRepository};
 pub use team_membership::{
