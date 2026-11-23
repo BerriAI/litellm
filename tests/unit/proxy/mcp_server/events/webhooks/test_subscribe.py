@@ -5,6 +5,7 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Final
 
+import anyio
 import pytest
 from mcp.shared.exceptions import MCPError
 
@@ -13,7 +14,7 @@ from litellm.proxy.mcp_server.events.access import principal_of
 from litellm.proxy.mcp_server.events.config import EventsSettings
 from litellm.proxy.mcp_server.events.runtime import DescriptorCache
 from litellm.proxy.mcp_server.events.webhooks.delivery import CallbackResponse
-from litellm.proxy.mcp_server.events.webhooks.policy import subscription_id
+from litellm.proxy.mcp_server.events.webhooks.policy import callback_url, subscription_id
 from litellm.proxy.mcp_server.events.webhooks.signing import parse_secret
 from litellm.proxy.mcp_server.events.webhooks.store import ActivatedCursor, Activation, QueuedDelivery
 from litellm.proxy.mcp_server.events.webhooks.subscribe import (
@@ -489,3 +490,60 @@ async def test_refresh_preserves_the_downstream_watermark_while_an_earlier_event
     refresh: Final = await _subscribe(store, ahead, client)
     assert isinstance(refresh, Ok) and refresh.ok.cursor == first.ok.cursor
     assert store.rows[SID].cursor == first.ok.cursor
+
+
+@pytest.mark.parametrize("state", ("pending", "committed", "replaced"))
+@pytest.mark.asyncio
+async def test_cancellation_after_upstream_acceptance_reconciles_only_the_original_callback(state: str) -> None:
+    entered: Final = anyio.Event()
+    scope: Final = anyio.CancelScope()
+    upstream: Final = FakeUpstream(responses={"events/subscribe": UPSTREAM_OK, "events/unsubscribe": {}})
+
+    class InterruptedActivation(MemoryStore):
+        async def activate(
+            self, subscription_id: str, activation: Activation, from_statuses: tuple[str, ...] = ()
+        ) -> ActivatedCursor | None:
+            if entered.is_set():
+                return await super().activate(subscription_id, activation, from_statuses)
+            if state == "committed":
+                await super().activate(subscription_id, activation, from_statuses)
+            entered.set()
+            await anyio.sleep_forever()
+
+        async def discard_pending(self, subscription_id: str, generation: str | None = None) -> None:
+            await anyio.sleep(0)
+            await super().discard_pending(subscription_id, generation)
+
+    store: Final = InterruptedActivation()
+
+    async def create() -> None:
+        with scope:
+            await _subscribe(store, upstream, _Client())
+
+    async with anyio.create_task_group() as group:
+        group.start_soon(create)
+        await entered.wait()
+        if state == "replaced":
+            await store.terminate(SID)
+            assert isinstance(await _subscribe(store, upstream, _Client()), Ok)
+        scope.cancel()
+    assert scope.cancelled_caught
+    current: Final = await store.get(SID)
+    subscriptions: Final = [p["delivery"] for m, p, _ in upstream.calls if m == "events/subscribe"]
+    cancellations: Final = [p["delivery"] for m, p, _ in upstream.calls if m == "events/unsubscribe"]
+    original: Final = subscriptions[0]
+    assert isinstance(original, Mapping)
+    assert cancellations == ([] if state == "committed" else [{"url": original["url"]}])
+    if state == "replaced":
+        replacement: Final = subscriptions[1]
+        assert isinstance(replacement, Mapping)
+        assert replacement["url"] != original["url"]
+    if state == "pending":
+        assert current is None
+    else:
+        assert current is not None and (current.status, current.upstream_subscription_id) == (
+            "active",
+            UPSTREAM_OK["id"],
+        )
+        live: Final = subscriptions[-1]
+        assert isinstance(live, Mapping) and live["url"] == callback_url(SETTINGS, SID, current.upstream_secret)

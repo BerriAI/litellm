@@ -2,6 +2,7 @@ import time
 from collections.abc import Callable
 from typing import Final
 
+import anyio
 from mcp.shared.exceptions import MCPError
 
 from litellm.proxy.mcp_server.contracts import OperationContext
@@ -9,12 +10,12 @@ from litellm.proxy.mcp_server.events.config import EventsSettings
 from litellm.proxy.mcp_server.events.errors import EventsFailure
 from litellm.proxy.mcp_server.events.runtime import EventsRuntime
 from litellm.proxy.mcp_server.events.upstream import routing_headers
-from litellm.proxy.mcp_server.events.webhooks.delivery import post_callback
+from litellm.proxy.mcp_server.events.webhooks.delivery import CALLBACK_DEADLINE_SECONDS, post_callback
 from litellm.proxy.mcp_server.events.webhooks.policy import callback_url, credential_outlives_request
 from litellm.proxy.mcp_server.events.webhooks.signing import new_webhook_id, parse_secret, signed_headers
 from litellm.proxy.mcp_server.events.webhooks.store import EventStore, SubscriptionRow
 from litellm.proxy.mcp_server.events.webhooks.verification import Poster
-from litellm.types.mcp_server.events import EventsError, TerminatedEnvelope
+from litellm.types.mcp_server.events import EventsError, EventsErrorCode, TerminatedEnvelope
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 
@@ -29,17 +30,17 @@ async def end_upstream(
     settings: EventsSettings,
     runtime: EventsRuntime,
     lookup: Callable[[str], MCPServer | None] = registered_server,
-) -> None:
+) -> bool:
     server: Final = lookup(row.server_id)
     if server is None or row.upstream_subscription_id is None or not credential_outlives_request(server):
-        return
+        return False
     try:
         target: Final = await runtime.prepare_target(OperationContext(_caller=None), server, (server,))
         descriptor: Final = next(
             (item for item in await runtime.descriptors(target) if item.name == row.event_name), None
         )
         if descriptor is None:
-            return
+            return False
         await runtime.call(
             target,
             "events/unsubscribe",
@@ -50,8 +51,11 @@ async def end_upstream(
             },
             routing_headers(row.event_name, row.arguments, descriptor),
         )
-    except (MCPError, OSError, TimeoutError):
-        return
+        return True
+    except MCPError as error:
+        return error.error.code == EventsErrorCode.NOT_FOUND and error.error.data == {"kind": "subscription"}  # pyright: ignore[reportAny]  # SDK error data is arbitrary JSON
+    except (OSError, TimeoutError):
+        return False
 
 
 def terminated_body(failure: EventsFailure) -> bytes:
@@ -69,15 +73,39 @@ async def terminate(
     lookup: Callable[[str], MCPServer | None] = registered_server,
     *,
     notify: bool = True,
+) -> bool:
+    if row.status != "terminated" and await store.end_if_current(row.id, row.upstream_subscription_id, row.generation):
+        await notify_termination(row, failure, store, settings, runtime, post, lookup, notify=notify)
+        return True
+    current: Final = await store.get(row.id)
+    if current is None or current.status != "terminated" or current.generation != row.generation:
+        return False
+    if current.upstream_subscription_id is not None:
+        await notify_termination(current, failure, store, settings, runtime, post, lookup, notify=False)
+    return True
+
+
+async def notify_termination(
+    row: SubscriptionRow,
+    failure: EventsFailure,
+    store: EventStore,
+    settings: EventsSettings,
+    runtime: EventsRuntime,
+    post: Poster,
+    lookup: Callable[[str], MCPServer | None],
+    *,
+    notify: bool = True,
 ) -> None:
-    if row.status == "terminated" or not await store.end_if_current(
-        row.id, row.upstream_subscription_id, row.generation
-    ):
-        return
-    secret: Final = parse_secret(row.client_secret)
-    if notify and secret is not None and row.status != "pending":
-        body: Final = terminated_body(failure)
-        await post(
-            row.client_url, body, signed_headers(secret, new_webhook_id("terminated"), int(time.time()), body, row.id)
-        )
-    await end_upstream(row, settings, runtime, lookup)
+    try:
+        secret: Final = parse_secret(row.client_secret)
+        if notify and secret is not None and row.status != "pending":
+            body: Final = terminated_body(failure)
+            await post(
+                row.client_url,
+                body,
+                signed_headers(secret, new_webhook_id("terminated"), int(time.time()), body, row.id),
+            )
+    finally:
+        with anyio.move_on_after(CALLBACK_DEADLINE_SECONDS, shield=True):
+            if await end_upstream(row, settings, runtime, lookup):
+                await store.acknowledge_teardown(row)
