@@ -5,7 +5,7 @@ import subprocess
 import sys
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date
 from itertools import product
 from pathlib import Path
 from types import MappingProxyType
@@ -90,6 +90,8 @@ POPULATED_PARTITIONS: Final = MappingProxyType(
     }
 )
 DEFAULT_PARTITION: Final = "LiteLLM_SpendLogs_pdefault"
+RUNBOOK_DAY: Final = date(2026, 1, 15)
+RUNBOOK_TODAY: Final = "today CONSTANT date := (now() AT TIME ZONE 'UTC')::date;"
 ROWS_PER_PARTITION: Final = 500
 PARTITIONED_PARENT_ERROR: Final = 'cannot create index on partitioned table "LiteLLM_SpendLogs" concurrently'
 
@@ -187,7 +189,9 @@ def fail_the_call_id_index_migration_like_the_shipped_release(database_url: str,
 
 def partition_spend_logs(database_url: str) -> None:
     with psycopg.connect(database_url, autocommit=True) as connection:
-        connection.execute(PARTITION_SCRIPT.read_bytes())
+        script = PARTITION_SCRIPT.read_text()
+        assert RUNBOOK_TODAY in script, "the runbook no longer sets today"
+        connection.execute(script.replace(RUNBOOK_TODAY, f"today CONSTANT date := '{RUNBOOK_DAY}';").encode())
         for partition, (start, stop) in POPULATED_PARTITIONS.items():
             add_partition(connection, partition, start, stop)
             connection.execute(
@@ -296,9 +300,8 @@ def assert_ready(booted_gateway: Gateway) -> None:
 def assert_all_indexes_cover_every_partition(database_url: str) -> None:
     """Every populated partition's managed index is attached and valid, every parent is valid,
     and a partition created afterwards inherits every index."""
-    today: Final = datetime.now(timezone.utc).date()
     runbook_partitions: Final = (
-        name for name, _, _ in upcoming_partitions(today, "day", SPEND_LOG_PARTITION_PRECREATE_AHEAD)
+        name for name, _, _ in upcoming_partitions(RUNBOOK_DAY, "day", SPEND_LOG_PARTITION_PRECREATE_AHEAD)
     )
     populated: Final = (*POPULATED_PARTITIONS, DEFAULT_PARTITION, *runbook_partitions)
     assert ledger(database_url) == {name: True for name in SHIPPED_MIGRATIONS}

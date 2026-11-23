@@ -10,7 +10,7 @@ import time
 import uuid
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date
 from itertools import product
 from pathlib import Path
 from types import MappingProxyType
@@ -107,6 +107,9 @@ PARTITIONS: Final = MappingProxyType(
     }
 )
 DEFAULT_PARTITION: Final = "LiteLLM_SpendLogs_pdefault"
+RUNBOOK_DAY: Final = date(2026, 1, 15)
+RUNBOOK_TODAY: Final = "today CONSTANT date := (now() AT TIME ZONE 'UTC')::date;"
+RUNBOOK_INTERVAL: Final = "partition_interval CONSTANT text := 'day';"
 ROWS_PER_PARTITION: Final = 200
 RESOLVERS: Final = pytest.mark.parametrize("use_v2_resolver", (True, False), ids=("v2", "v1"))
 
@@ -154,9 +157,19 @@ def _insert_spend_log(
     )
 
 
+def _runbook_on(day: date, interval: str = "day") -> bytes:
+    script: Final = PARTITION_SCRIPT.read_text()
+    assert RUNBOOK_TODAY in script and RUNBOOK_INTERVAL in script, "the runbook no longer sets today and the interval"
+    return (
+        script.replace(RUNBOOK_TODAY, f"today CONSTANT date := '{day}';")
+        .replace(RUNBOOK_INTERVAL, f"partition_interval CONSTANT text := '{interval}';")
+        .encode()
+    )
+
+
 def _partition_spend_logs(database_url: str) -> None:
     with psycopg.connect(database_url, autocommit=True) as conn:
-        conn.execute(PARTITION_SCRIPT.read_bytes())
+        conn.execute(_runbook_on(RUNBOOK_DAY))
         for partition, (start, stop) in PARTITIONS.items():
             conn.execute(
                 sql.SQL('CREATE TABLE {} PARTITION OF "LiteLLM_SpendLogs" FOR VALUES FROM ({}) TO ({})').format(
@@ -341,8 +354,7 @@ def _expected_children(partitions: tuple[str, ...], suffix: str) -> frozenset[tu
 
 
 def _runbook_partitions() -> tuple[str, ...]:
-    today: Final = datetime.now(timezone.utc).date()
-    return tuple(name for name, _, _ in upcoming_partitions(today, "day", SPEND_LOG_PARTITION_PRECREATE_AHEAD))
+    return tuple(name for name, _, _ in upcoming_partitions(RUNBOOK_DAY, "day", SPEND_LOG_PARTITION_PRECREATE_AHEAD))
 
 
 def _assert_index_covers_every_partition(database_url: str, parent_index: str, suffix: str) -> None:
@@ -1627,19 +1639,16 @@ def _partition_bounds(database_url: str) -> dict[str, str]:
 def test_the_partition_runbook_creates_the_partitions_the_cleanup_job_would_so_a_new_row_skips_default(
     scratch_database: str, interval: str
 ) -> None:
-    setting: Final = "partition_interval CONSTANT text := 'day';"
-    script: Final = PARTITION_SCRIPT.read_text().replace(setting, f"partition_interval CONSTANT text := '{interval}';")
-    today: Final = datetime.now(timezone.utc).date()
     with psycopg.connect(scratch_database, autocommit=True) as conn:
-        conn.execute(script.encode())
-        _insert_spend_log(conn, "after-swap", datetime.now(timezone.utc).replace(tzinfo=None).isoformat())
+        conn.execute(_runbook_on(RUNBOOK_DAY, interval))
+        _insert_spend_log(conn, "after-swap", f"{RUNBOOK_DAY} 12:00:00")
         landed: Final = conn.execute(
             'SELECT tableoid::regclass::text FROM "LiteLLM_SpendLogs" WHERE request_id = %s', ("after-swap",)
         ).fetchone()
 
     expected: Final = {
         name: f"FOR VALUES FROM ('{lower} 00:00:00') TO ('{upper} 00:00:00')"
-        for name, lower, upper in upcoming_partitions(today, interval, SPEND_LOG_PARTITION_PRECREATE_AHEAD)
+        for name, lower, upper in upcoming_partitions(RUNBOOK_DAY, interval, SPEND_LOG_PARTITION_PRECREATE_AHEAD)
     }
     assert _partition_bounds(scratch_database) == expected | {DEFAULT_PARTITION: "DEFAULT"}
-    assert landed == (f'"{upcoming_partitions(today, interval, 0)[0][0]}"',)
+    assert landed == (f'"{upcoming_partitions(RUNBOOK_DAY, interval, 0)[0][0]}"',)
