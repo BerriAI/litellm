@@ -990,11 +990,12 @@ _NON_TOKEN_RATE_FIELDS: Final = frozenset(
 )
 
 
+def _is_rate_field(field: str) -> bool:
+    return field in _NON_TOKEN_RATE_FIELDS or ("cost_per" in field and "token" in field)
+
+
 def _cost_map_entry_prices_anything(entry: Mapping[str, object]) -> bool:
-    return any(
-        value is not None and (field in _NON_TOKEN_RATE_FIELDS or ("cost_per" in field and "token" in field))
-        for field, value in entry.items()
-    )
+    return any(value is not None and _is_rate_field(field) for field, value in entry.items())
 
 
 def _bedrock_registration_has_prices(entry: Mapping[str, object]) -> bool:
@@ -2079,6 +2080,7 @@ def completion_cost(
         )
         for idx, (candidate_model, candidate_pricing_provider) in enumerate(cost_candidates):
             model = candidate_model
+            candidate_request_provider: Final = request_pricing_provider if idx < len(potential_model_names) else None
             try:
                 if verbose_logger.isEnabledFor(logging.DEBUG):
                     verbose_logger.debug("selected model name for cost calculation: %s", model)
@@ -2396,7 +2398,7 @@ def completion_cost(
                         custom_llm_provider=custom_llm_provider,
                         pricing_provider=_pricing_provider_for_cost_candidate(
                             candidate_provider=candidate_pricing_provider,
-                            request_provider=request_pricing_provider,
+                            request_provider=candidate_request_provider,
                             current_provider=custom_llm_provider,
                         ),
                         model=model_for_discount,
@@ -2448,7 +2450,7 @@ def completion_cost(
                     completion_tokens=completion_tokens or 0,
                     custom_llm_provider=_pricing_provider_for_cost_candidate(
                         candidate_provider=candidate_pricing_provider,
-                        request_provider=request_pricing_provider,
+                        request_provider=candidate_request_provider,
                         current_provider=custom_llm_provider,
                     ),
                     response_time_ms=response_time_ms,
@@ -2553,7 +2555,7 @@ def completion_cost(
                             model=model,
                             custom_llm_provider=_pricing_provider_for_cost_candidate(
                                 candidate_provider=candidate_pricing_provider,
-                                request_provider=request_pricing_provider,
+                                request_provider=candidate_request_provider,
                                 current_provider=custom_llm_provider,
                             ),
                             usage=cost_per_token_usage_object,
@@ -2897,9 +2899,29 @@ def _ai21_catalog_candidates(
     discounts, margins and the cost breakdown keep the ``ai21_chat`` request provider."""
     hidden_params: Final[object] = getattr(completion_response, "_hidden_params", None)
     hidden_provider: Final = _get_hidden_str_for_cost_calc(hidden_params, "custom_llm_provider")
-    if "ai21_chat" not in (request_provider, hidden_provider):
+    possible_providers: Final = (
+        (request_provider, hidden_provider)
+        if request_provider is not None or hidden_provider is not None
+        else tuple(_get_provider_for_cost_calc(model) for model, _ in candidates)
+    )
+    if "ai21_chat" not in possible_providers:
         return ()
-    return tuple((model, "ai21") for model, _ in candidates if model is not None and _resolves_to_rates(model, "ai21"))
+    return tuple(
+        (model, "ai21") for model, _ in candidates if model is not None and _resolves_to_numeric_rates(model, "ai21")
+    )
+
+
+def _resolves_to_numeric_rates(model: str, custom_llm_provider: str) -> bool:
+    key: Final = cached_cost_map_key(model, custom_llm_provider)
+    if key is None:
+        return False
+    entry: Final = declared_cost_map_pricing(key, model, custom_llm_provider)
+    scalar_rates: Final = tuple(
+        value for field, value in entry.items() if field != "tiered_pricing" and _is_rate_field(field)
+    )
+    return _cost_map_entry_prices_anything(entry) and all(
+        value is None or (isinstance(value, (int, float)) and not isinstance(value, bool)) for value in scalar_rates
+    )
 
 
 def _priced_candidates_before_unpriced_rules(candidates: tuple[_CostCandidate, ...]) -> tuple[_CostCandidate, ...]:

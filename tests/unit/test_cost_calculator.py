@@ -37,7 +37,7 @@ from litellm.types.llms.base import CachedTokensDetails
 from litellm.types.llms.openai import HttpxBinaryResponseContent, OpenAIRealtimeStreamList, ResponseAPIUsage, ResponsesAPIResponse
 from litellm.types.llms.xai import RealtimeMeteredUsage
 from litellm.types.rerank import RerankResponse
-from litellm.types.utils import CacheCreationTokenDetails, CallTypes, Choices, CompletionTokensDetailsWrapper, EmbeddingResponse, ImageObject, ImageResponse, ImageUsage, ImageUsageInputTokensDetails, LiteLLMRealtimeStreamLoggingObject, Message, ModelInfo, ModelResponse, PromptTokensDetails, PromptTokensDetailsWrapper, Usage
+from litellm.types.utils import CacheCreationTokenDetails, CallTypes, Choices, CompletionTokensDetailsWrapper, CostPerToken, EmbeddingResponse, ImageObject, ImageResponse, ImageUsage, ImageUsageInputTokensDetails, LiteLLMRealtimeStreamLoggingObject, Message, ModelInfo, ModelResponse, PromptTokensDetails, PromptTokensDetailsWrapper, Usage
 from litellm.types.videos.main import VideoObject
 from litellm.utils import cached_get_model_info_helper, supports_prompt_caching
 from litellm.litellm_core_utils.model_cost_table import publish
@@ -12566,6 +12566,16 @@ def test_another_providers_jamba_call_never_bills_the_ai21_row(_local_model_cost
         pytest.param(
             "ai21_chat/jamba-rate-free", {"litellm_provider": "ai21", "mode": "chat"}, id="ai21-row-without-rates"
         ),
+        pytest.param(
+            "ai21_chat/jamba-string-rates",
+            {
+                "input_cost_per_token": "2e-06",
+                "output_cost_per_token": "8e-06",
+                "litellm_provider": "ai21",
+                "mode": "chat",
+            },
+            id="ai21-row-with-non-numeric-rates",
+        ),
     ],
 )
 def test_ai21_chat_calls_without_an_ai21_price_keep_the_original_error(
@@ -12580,6 +12590,69 @@ def test_ai21_chat_calls_without_an_ai21_price_keep_the_original_error(
     assert response._hidden_params["response_cost"] is None
     with pytest.raises(litellm.ModelNotMappedError, match="custom_llm_provider=ai21_chat"):
         completion_cost(completion_response=response)
+
+
+def test_an_ai21_row_with_zero_rates_bills_zero(_local_model_cost_map: None) -> None:
+    litellm.register_model(
+        {
+            "jamba-zero-rate": {
+                "input_cost_per_token": 0,
+                "output_cost_per_token": 0,
+                "litellm_provider": "ai21",
+                "mode": "chat",
+            }
+        },
+        persist_across_reloads=False,
+        add_to_provider_model_sets=False,
+    )
+    response: Final = _jamba_call("ai21_chat/jamba-zero-rate")
+
+    assert response._hidden_params["response_cost"] == 0
+    assert completion_cost(completion_response=response) == 0
+
+
+@pytest.mark.parametrize("model", ["ai21/jamba-1.5-large", "jamba-1.5-large", "ai21_chat/jamba-1.5-large"])
+def test_text_only_ai21_jamba_cost_is_billed_at_the_catalog_rates(_local_model_cost_map: None, model: str) -> None:
+    row: Final = litellm.model_cost[_JAMBA_ROW]
+    catalog_rates: Final = CostPerToken(
+        input_cost_per_token=row["input_cost_per_token"], output_cost_per_token=row["output_cost_per_token"]
+    )
+
+    cost: Final = completion_cost(model=model, prompt="hi there", completion="hello there")
+
+    assert cost > 0
+    assert cost == pytest.approx(
+        completion_cost(model=model, prompt="hi there", completion="hello there", custom_cost_per_token=catalog_rates)
+    )
+
+
+@pytest.mark.parametrize("model", ["ai21/jamba-1.5-large", "jamba-1.5-large"])
+def test_dict_ai21_jamba_response_without_a_provider_is_billed_at_the_catalog_rates(
+    _local_model_cost_map: None, model: str
+) -> None:
+    row: Final = litellm.model_cost[_JAMBA_ROW]
+    response: Final = {
+        "id": "jamba-dict",
+        "model": model,
+        "object": "chat.completion",
+        "choices": [],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+    }
+
+    assert completion_cost(completion_response=response) == pytest.approx(
+        10 * row["input_cost_per_token"] + 20 * row["output_cost_per_token"]
+    )
+
+
+def test_an_explicit_ai21_provider_on_an_ai21_chat_response_is_billed_at_the_catalog_rates(
+    _local_model_cost_map: None,
+) -> None:
+    row: Final = litellm.model_cost[_JAMBA_ROW]
+    response: Final = _jamba_call("ai21/jamba-1.5-large")
+
+    assert completion_cost(completion_response=response, custom_llm_provider="ai21") == pytest.approx(
+        _billed_at(response, row["input_cost_per_token"], row["output_cost_per_token"])
+    )
 
 
 @pytest.mark.parametrize(
