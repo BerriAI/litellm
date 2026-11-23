@@ -28,7 +28,7 @@ pub(crate) fn cached_object_permission(
     } = row;
     Ok(CachedObjectPermission {
         object_permission_id,
-        mcp_servers: Some(mcp_servers),
+        mcp_servers,
         mcp_access_groups: Some(mcp_access_groups),
         mcp_tool_permissions: nullable("mcp_tool_permissions", mcp_tool_permissions.as_ref())?,
         mcp_event_permissions: nullable("mcp_event_permissions", mcp_event_permissions.as_ref())?,
