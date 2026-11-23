@@ -34,8 +34,8 @@ class OVHCloudEmbeddingConfig(BaseEmbeddingConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         base_url: Final = "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1" if api_base is None else api_base
@@ -46,8 +46,8 @@ class OVHCloudEmbeddingConfig(BaseEmbeddingConfig):
         headers: dict,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
@@ -65,12 +65,12 @@ class OVHCloudEmbeddingConfig(BaseEmbeddingConfig):
 
         return {**default_headers, **headers}
 
-    def get_supported_openai_params(self, model: str):
+    def get_supported_openai_params(self, model: str) -> list[str]:
         return []
 
     def map_openai_params(
         self,
-        non_default_params: dict,
+        non_default_params: Mapping[str, object],
         optional_params: dict,
         model: str,
         drop_params: bool,
@@ -85,9 +85,9 @@ class OVHCloudEmbeddingConfig(BaseEmbeddingConfig):
         self,
         model: str,
         input: AllEmbeddingInputValues,
-        optional_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: Mapping[str, object],
+        headers: Mapping[str, object],
+    ) -> dict[str, object]:
         return {"input": input, "model": model, **optional_params}
 
     def transform_embedding_response(
@@ -97,9 +97,9 @@ class OVHCloudEmbeddingConfig(BaseEmbeddingConfig):
         model_response: EmbeddingResponse,
         logging_obj: LiteLLMLoggingObj,
         api_key: str | None,
-        request_data: dict,
-        optional_params: dict,
-        litellm_params: dict,
+        request_data: Mapping[str, object],
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
     ) -> EmbeddingResponse:
         try:
             raw_response_json: Final = raw_response.json()
