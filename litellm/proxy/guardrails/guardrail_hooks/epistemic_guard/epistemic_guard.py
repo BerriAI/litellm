@@ -6,9 +6,9 @@ receipts in the conversation history (no LLM-as-a-judge required). Requires the 
 `epistemic-guard` package (`pip install epistemic-guard>=0.6.5`).
 """
 
+import json
 from collections.abc import Mapping
 from datetime import datetime
-import json
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, cast
 
 from fastapi import HTTPException
@@ -73,12 +73,15 @@ def _normalize_tool_error_messages(
     """Mark explicit structured JSON tool failures with `is_error=True` before receipt extraction."""
     normalized: list[Mapping[str, Any]] = []
     for msg in messages:
-        if str(msg.get("role", "")).lower() == "tool" and not msg.get("is_error"):
-            if _tool_payload_indicates_failure(msg.get("content")):
-                mut = dict(msg)
-                mut["is_error"] = True
-                normalized.append(mut)
-                continue
+        if (
+            str(msg.get("role", "")).lower() == "tool"
+            and not msg.get("is_error")
+            and _tool_payload_indicates_failure(msg.get("content"))
+        ):
+            mut = dict(msg)
+            mut["is_error"] = True
+            normalized.append(mut)
+            continue
         normalized.append(msg)
     return normalized
 
