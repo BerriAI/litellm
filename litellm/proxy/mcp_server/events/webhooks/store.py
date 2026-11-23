@@ -114,7 +114,7 @@ class EventStore(Protocol):
     async def terminate(self, subscription_id: str) -> None: ...
 
     async def end_if_current(self, subscription_id: str, upstream_subscription_id: str | None) -> bool:
-        """Terminate the row only while it is still this upstream subscription; None when it changed or ended."""
+        """Terminate the row only while it is still this upstream subscription; False when it changed or ended."""
         ...
 
     async def hold_for_unsubscribe(self, subscription_id: str, upstream_subscription_id: str | None) -> bool:

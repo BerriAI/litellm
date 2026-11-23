@@ -132,10 +132,10 @@ async def test_a_gap_insert_failure_rolls_back_the_activation() -> None:
     from prisma.errors import RawQueryError
 
     async with _connected() as store:
-        row = await _active(store)
+        row: Final = await _active(store)
         try:
-            gap = _delivery(row.id)
-            activation = Activation(
+            gap: Final = _delivery(row.id)
+            activation: Final = Activation(
                 client_secret=ROTATED,
                 upstream_subscription_id="up_1",
                 upstream_refresh_before=None,
@@ -146,7 +146,7 @@ async def test_a_gap_insert_failure_rolls_back_the_activation() -> None:
             assert await store.enqueue(gap)
             with pytest.raises(RawQueryError):
                 await store.activate(row.id, activation)
-            unchanged = await store.get(row.id)
+            unchanged: Final = await store.get(row.id)
             assert unchanged is not None and (unchanged.cursor, unchanged.client_secret) == ("c1", SECRET)
         finally:
             await store.delete(row.id)
@@ -169,6 +169,18 @@ async def test_a_refresh_rotates_the_secret_encrypted_at_rest() -> None:
         raw: Final = await store._subscriptions.find_unique(where={"id": row.id})  # pyright: ignore[reportPrivateUsage]  # the stored ciphertext is the unit under test
         assert raw is not None and raw.client_secret != ROTATED
         await store.delete(row.id)
+
+
+@pytest.mark.asyncio
+async def test_an_unreadable_signing_key_never_becomes_a_plaintext_secret(monkeypatch: pytest.MonkeyPatch) -> None:
+    async with _connected() as store:
+        row: Final = await _active(store)
+        try:
+            monkeypatch.setenv("LITELLM_SALT_KEY", "synthetic-different-store-key")
+            loaded: Final = await store.get(row.id)
+            assert loaded is not None and (loaded.client_secret, loaded.upstream_secret) == ("", "")
+        finally:
+            await store.delete(row.id)
 
 
 @pytest.mark.asyncio
@@ -309,19 +321,19 @@ async def test_losing_the_claim_or_subscription_generation_blocks_all_settlement
     outcome: SettlementOutcome,
 ) -> None:
     async with _connected() as first_worker, _connected() as second_worker:
-        row = await _active(first_worker)
-        active = await first_worker.get(row.id)
+        row: Final = await _active(first_worker)
+        active: Final = await first_worker.get(row.id)
         assert active is not None
-        delivery = _delivery(row.id)
+        delivery: Final = _delivery(row.id)
         try:
             assert await first_worker.enqueue(delivery)
-            stale = next(
+            stale: Final = next(
                 d
                 for d in await first_worker.claim(NOW, NOW + timedelta(seconds=1), 100)
                 if d.delivery_id == delivery.delivery_id
             )
-            later = NOW + timedelta(seconds=2)
-            winner = next(
+            later: Final = NOW + timedelta(seconds=2)
+            winner: Final = next(
                 d
                 for d in await second_worker.claim(later, later + timedelta(minutes=5), 100)
                 if d.delivery_id == delivery.delivery_id
@@ -338,19 +350,19 @@ async def test_losing_the_claim_or_subscription_generation_blocks_all_settlement
                 ),
             )
             assert not await second_worker.settle(winner, active.generation, later, outcome, gap=True)
-            refreshed = await first_worker.get(row.id)
+            refreshed: Final = await first_worker.get(row.id)
             assert refreshed is not None and refreshed.generation != active.generation
             assert (refreshed.status, refreshed.last_delivery_at, refreshed.consecutive_failures) == ("active", None, 0)
             assert await second_worker.settle(winner, refreshed.generation, later, outcome, gap=True)
             assert not await first_worker.settle(stale, refreshed.generation, later, outcome, gap=True)
-            after = await first_worker.get(row.id)
+            after: Final = await first_worker.get(row.id)
             assert after is not None
             assert (after.status, after.last_delivery_at, after.consecutive_failures) == (
                 "terminated" if outcome == "terminated" else "active",
                 later if outcome == "delivered" else None,
                 1 if outcome == "timeout" else 0,
             )
-            due = [
+            due: Final = [
                 d
                 for d in await first_worker.claim(later, later + timedelta(minutes=1), 100)
                 if d.subscription_id == row.id
