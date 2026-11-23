@@ -40,6 +40,7 @@ from litellm.proxy.common_utils.callback_utils import (
     add_guardrail_to_applied_guardrails_header,
 )
 from litellm.proxy.guardrails.anthropic_sse import (
+    anthropic_sse_chunks_as_scanned,
     anthropic_sse_chunks_from_response,
     anthropic_sse_error_events,
     assemble_anthropic_sse_stream,
@@ -520,7 +521,7 @@ def _is_tool_use_block(block: object) -> bool:
 class ToolPermissionGuardrail(CustomGuardrail):
     def __init__(
         self,
-        rules: list[dict] | None = None,
+        rules: Sequence[object] | None = None,
         default_action: Literal["deny", "allow"] = "deny",
         on_disallowed_action: Literal["block", "rewrite"] = "block",
         **kwargs,
@@ -563,13 +564,13 @@ class ToolPermissionGuardrail(CustomGuardrail):
         sync) reflects rule changes instead of keeping the construction-time maps.
         """
         parsed_rules: Final[list[ToolPermissionRule]] = []
-        compiled_targets: Final[dict[str, dict[str, re.Pattern | None]]] = {}
-        compiled_patterns: Final[dict[str, dict[str, re.Pattern]]] = {}
+        compiled_targets: Final[dict[str, dict[str, re.Pattern[str] | None]]] = {}
+        compiled_patterns: Final[dict[str, dict[str, re.Pattern[str]]]] = {}
 
         for rule_item in rules or []:
             rule = rule_item if isinstance(rule_item, ToolPermissionRule) else _rule_from_fields(rule_item)
 
-            target_patterns: dict[str, re.Pattern | None] = {
+            target_patterns: dict[str, re.Pattern[str] | None] = {
                 "tool_name": None,
                 "tool_type": None,
             }
@@ -584,7 +585,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
                 except re.error as exc:
                     raise ValueError(f"Invalid regex for tool_type in rule '{rule.id}': {exc}") from exc
 
-            rule_patterns: dict[str, re.Pattern] = {}
+            rule_patterns: dict[str, re.Pattern[str]] = {}
             for path, pattern in (rule.allowed_param_patterns or {}).items():
                 try:
                     rule_patterns[path] = re.compile(pattern)
@@ -665,7 +666,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
             GuardrailEventHooks.post_call,
         ]
 
-    def _matches_regex(self, pattern: re.Pattern | None, value: str | None) -> bool:
+    def _matches_regex(self, pattern: re.Pattern[str] | None, value: str | None) -> bool:
         if pattern is None:
             return True
         if value is None:
@@ -1408,7 +1409,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
 
     def _modify_request_with_permission_errors(
         self,
-        data: dict,
+        data: dict[str, object],
         denied_targets: frozenset[_ToolTarget],
     ):
         """
@@ -1674,7 +1675,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
         self,
         user_api_key_dict: UserAPIKeyAuth,
         response: AsyncIterable[ModelResponseStream],
-        request_data: dict,
+        request_data: Mapping[str, object],
     ) -> AsyncGenerator[ModelResponseStream, None]:
         """
         Check tool usage permissions after the LLM stream call
@@ -1719,8 +1720,9 @@ class ToolPermissionGuardrail(CustomGuardrail):
     ) -> Sequence[object]:
         if is_raw_sse_stream(source_chunks) and _is_generate_content_stream_route(route):
             return self._generate_content_stream_to_deliver(source_chunks, self._returned_call_names(request_data))
+        upstream_errors: Final = anthropic_sse_error_events(source_chunks)
         anthropic_response: Final = assemble_anthropic_sse_stream(
-            source_chunks, restore_identity=bool(anthropic_sse_error_events(source_chunks)), through_upstream_error=True
+            source_chunks, restore_identity=bool(upstream_errors), through_upstream_error=True
         )
         if anthropic_response is None:
             if is_raw_sse_stream(source_chunks) and not is_sse_error_stream(source_chunks):
@@ -1774,16 +1776,10 @@ class ToolPermissionGuardrail(CustomGuardrail):
         source_chunks: Sequence[object],
         judged_names: _JudgedCalls,
     ) -> Sequence[object]:
-        """The frames the client gets: on a failed upstream only what the check read, never the upstream's own.
-
-        Assembly reads past an upstream error, and a client can read a frame of a broken stream that assembly
-        does not, so forwarding those frames would pass a tool call nobody checked.
-        """
         denials: Final = self._check_assembled_stream(anthropic_response, judged_names)
-        if denials:
-            self._modify_response_with_permission_errors(anthropic_response, denials)
-        elif not anthropic_sse_error_events(source_chunks):
-            return source_chunks
+        if not denials:
+            return anthropic_sse_chunks_as_scanned(anthropic_response, source_chunks)
+        self._modify_response_with_permission_errors(anthropic_response, denials)
         return anthropic_sse_chunks_from_response(anthropic_response, source_chunks, keep_explanations=True)
 
     def _check_assembled_stream(
