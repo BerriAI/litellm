@@ -157,7 +157,7 @@ async def _admit_new(
 async def _discard_pending(subscription: _Subscription) -> None:
     if subscription.reserved:
         with anyio.CancelScope(shield=True):
-            await subscription.request.store.discard_pending(subscription.base.id)
+            await subscription.request.store.discard_pending(subscription.base.id, subscription.base.generation)
 
 
 async def _reactivation_gap(row: SubscriptionRow, cursor: str | None, store: EventStore) -> None:
@@ -178,6 +178,9 @@ async def _roll_back(
     subscription: _Subscription, upstream: SubscribeEventsResult, settings: EventsSettings, runtime: EventsRuntime
 ) -> None:
     """Undo an upstream subscription this request created but could not record."""
+    current: Final = await subscription.request.store.get(subscription.base.id)
+    if current is not None and current.generation != subscription.base.generation and current.status != "terminated":
+        return
     orphan: Final = subscription.base.model_copy(update={"upstream_subscription_id": upstream.id})
     await _unsubscribe_upstream(orphan, subscription.prepared, settings, runtime)
     await _discard_pending(subscription)
@@ -205,6 +208,7 @@ async def activate_subscription(
     pending: Final = await subscription.request.store.has_pending(base.id)
     watermark: Final = base.cursor if pending else sealed.ok
     activation: Final = Activation(
+        expected_generation=base.generation,
         client_secret=base.client_secret,
         upstream_subscription_id=upstream.id,
         upstream_refresh_before=upstream_refresh,
@@ -315,7 +319,7 @@ async def reserve_subscription(
         refreshed: Final = winner.model_copy(update={"client_secret": subscription.params.delivery.secret})
         return Ok(replace(subscription, base=refreshed, existing=winner))
     if await store.count_live(subscription.request.principal) > settings.max_subscriptions_per_key:
-        await store.discard_pending(subscription.base.id)
+        await store.discard_pending(subscription.base.id, subscription.base.generation)
         return Error(exhausted("subscriptions", settings.max_subscriptions_per_key))
     return Ok(replace(subscription, reserved=True))
 
