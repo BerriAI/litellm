@@ -2248,6 +2248,7 @@ def ensure_unique_openapi_operation_ids(
 
 docs_url: Final = get_docs_url()
 app = FastAPI(
+    # LiteLLM mounts its own Scalar and Swagger routes below.
     docs_url=None,
     redoc_url=None,
     openapi_url=get_openapi_url(),
