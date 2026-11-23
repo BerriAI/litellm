@@ -836,6 +836,60 @@ def test_build_vertex_schema_array_branch_missing_items_in_anyof():
         assert branch.get("items") == {"type": "object"}, f"array branch must have items synthesized; got {branch}"
 
 
+def test_build_vertex_schema_tuple_form_items_become_anyof():
+    from litellm.llms.vertex_ai.common_utils import _build_vertex_schema
+
+    parameters = {
+        "type": "object",
+        "properties": {
+            "pair": {
+                "type": "array",
+                "items": [{"type": "integer"}, {"type": "string"}],
+            }
+        },
+    }
+
+    result = _build_vertex_schema(parameters)
+
+    assert result["properties"]["pair"]["items"] == {
+        "anyOf": [{"type": "integer"}, {"type": "string"}]
+    }
+
+
+def test_build_vertex_schema_tuple_form_items_nested_in_anyof_branch():
+    from litellm.llms.vertex_ai.common_utils import _build_vertex_schema
+
+    parameters = {
+        "type": "object",
+        "properties": {
+            "pair": {
+                "anyOf": [
+                    {"type": "array", "items": [{"type": "integer"}]},
+                    {"type": "null"},
+                ]
+            }
+        },
+    }
+
+    result = _build_vertex_schema(parameters)
+
+    array_branch = result["properties"]["pair"]["anyOf"][0]
+    assert array_branch["items"] == {"anyOf": [{"type": "integer"}]}
+
+
+def test_build_vertex_schema_empty_tuple_form_items():
+    from litellm.llms.vertex_ai.common_utils import _build_vertex_schema
+
+    parameters = {
+        "type": "object",
+        "properties": {"pair": {"type": "array", "items": []}},
+    }
+
+    result = _build_vertex_schema(parameters)
+
+    assert result["properties"]["pair"]["items"] == {"type": "object"}
+
+
 def test_vertex_ai_complex_response_schema():
     from copy import deepcopy
 

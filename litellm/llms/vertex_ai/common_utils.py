@@ -1076,6 +1076,7 @@ def build_vertex_schema(
             pins_empty_string=False,
         )
 
+    _normalize_tuple_items(cast(JsonValue, parameters))  # cast-ok: tool parameters are JSON schema data
     _convert_schema_types(parameters)
 
     # 5. Nullable fields:
@@ -1393,6 +1394,16 @@ def filter_schema_fields(schema_dict: dict[str, object], valid_fields: set[str],
             result[key] = value
 
     return result
+
+
+def _normalize_tuple_items(schema: JsonValue) -> None:
+    levels: Final = takewhile(bool, accumulate(repeat(None), _next_json_level, initial=(schema,)))
+    tuple_items_nodes: Final = tuple(
+        node for node in chain.from_iterable(levels) if isinstance(node, dict) and isinstance(node.get("items"), list)
+    )
+    for node in tuple_items_nodes:
+        if items := node.pop("items"):
+            node["items"] = {"anyOf": items}
 
 
 def convert_anyof_null_to_nullable(schema, depth=0):
