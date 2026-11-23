@@ -934,3 +934,99 @@ async def test_waiver_skips_a_stale_team_alias_exactly_when_dispatch_does(
         )
         is expected_skip
     )
+
+
+def test_backend_model_shared_between_free_and_paid_groups_rejects_waiver() -> None:
+    """When a backend model is shared across free and paid groups, zero-cost waiver is rejected."""
+    router = Router(
+        model_list=[
+            {
+                "model_name": "free-group",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "sk-free",
+                    "input_cost_per_token": 0.0,
+                    "output_cost_per_token": 0.0,
+                },
+                "model_info": {
+                    "id": "free-group-id",
+                    "input_cost_per_token": 0.0,
+                    "output_cost_per_token": 0.0,
+                },
+            },
+            {
+                "model_name": "paid-group",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "sk-paid",
+                },
+            },
+        ]
+    )
+
+    # Calling free group directly succeeds
+    assert is_model_cost_zero("free-group", router) is True
+    # Calling backend model name rejects ambiguous / paid candidate match
+    assert is_model_cost_zero("openai/gpt-4o-mini", router) is False
+
+
+def test_backend_model_shared_between_multiple_free_groups_rejects_ambiguous_waiver() -> None:
+    """When a backend model matches multiple groups, ambiguous match is rejected."""
+    router = Router(
+        model_list=[
+            {
+                "model_name": "free-group-1",
+                "litellm_params": {
+                    "model": "ollama/llama2",
+                    "api_base": "http://localhost:11434",
+                    "input_cost_per_token": 0.0,
+                    "output_cost_per_token": 0.0,
+                },
+                "model_info": {
+                    "id": "free-group-1-id",
+                    "input_cost_per_token": 0.0,
+                    "output_cost_per_token": 0.0,
+                },
+            },
+            {
+                "model_name": "free-group-2",
+                "litellm_params": {
+                    "model": "ollama/llama2",
+                    "api_base": "http://localhost:11435",
+                    "input_cost_per_token": 0.0,
+                    "output_cost_per_token": 0.0,
+                },
+                "model_info": {
+                    "id": "free-group-2-id",
+                    "input_cost_per_token": 0.0,
+                    "output_cost_per_token": 0.0,
+                },
+            },
+        ]
+    )
+
+    assert is_model_cost_zero("free-group-1", router) is True
+    assert is_model_cost_zero("free-group-2", router) is True
+    # Calling backend model matching multiple groups is rejected
+    assert is_model_cost_zero("ollama/llama2", router) is False
+
+
+def test_unmapped_deployment_without_pricing_not_explicitly_configured() -> None:
+    """A group backed by unmapped deployment without pricing must not be counted as explicitly configured."""
+    from litellm.proxy.auth.auth_checks import _deployments_served_for, _is_cost_explicitly_configured
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o",
+                "litellm_params": {
+                    "model": "azure/my-prod-deployment",
+                    "api_key": "sk-test",
+                },
+            }
+        ]
+    )
+
+    deployments = _deployments_served_for("gpt-4o", router)
+    assert _is_cost_explicitly_configured(deployments) is False
+    assert is_model_cost_zero("gpt-4o", router) is False

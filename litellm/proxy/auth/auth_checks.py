@@ -573,10 +573,41 @@ def is_model_cost_zero(model: str | Sequence[str] | None, llm_router: RegistryRe
 
             if model_group_info is None:
                 served_candidates = _deployments_served_for(model_name, llm_router)
-                if served_candidates:
-                    first_group = served_candidates[0].get("model_name")
-                    if first_group:
-                        model_group_info = llm_router.registry().group(first_group, include_hidden=True)
+                if not served_candidates:
+                    verbose_proxy_logger.debug("No model group info found for %s, assuming it has cost", model_name)
+                    if zero_cost_cache is not None:
+                        zero_cost_cache[model_name] = False
+                    return False
+
+                candidate_groups = tuple(
+                    dict.fromkeys(d.get("model_name") for d in served_candidates if d.get("model_name"))
+                )
+                if not candidate_groups or len(candidate_groups) > 1:
+                    verbose_proxy_logger.debug(
+                        "Backend model %s has %s matching groups, rejecting ambiguous zero-cost waiver",
+                        model_name,
+                        len(candidate_groups),
+                    )
+                    if zero_cost_cache is not None:
+                        zero_cost_cache[model_name] = False
+                    return False
+
+                for d in served_candidates:
+                    grp_name = d.get("model_name")
+                    if grp_name:
+                        grp_info = llm_router.registry().group(grp_name, include_hidden=True)
+                        if (
+                            grp_info is None
+                            or grp_info.input_cost_per_token is None
+                            or grp_info.output_cost_per_token is None
+                            or grp_info.input_cost_per_token > 0
+                            or grp_info.output_cost_per_token > 0
+                        ):
+                            if zero_cost_cache is not None:
+                                zero_cost_cache[model_name] = False
+                            return False
+
+                model_group_info = llm_router.registry().group(candidate_groups[0], include_hidden=True)
 
             if model_group_info is None:
                 # Model not found or no pricing info available
@@ -739,11 +770,6 @@ def _is_cost_explicitly_configured(deployments: Sequence[DeploymentTypedDict]) -
         model_id = model_info.get("id")
         if model_id is not None:
             raw_entry = litellm.model_cost.get(model_id, _EMPTY_COST_ENTRY)
-            if "input_cost_per_token" in raw_entry or "output_cost_per_token" in raw_entry:
-                return True
-        model_name = deployment.get("model_name")
-        if model_name is not None and model_name in litellm.model_cost:
-            raw_entry = litellm.model_cost.get(model_name, _EMPTY_COST_ENTRY)
             if "input_cost_per_token" in raw_entry or "output_cost_per_token" in raw_entry:
                 return True
     return False
