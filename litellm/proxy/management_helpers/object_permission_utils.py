@@ -76,7 +76,7 @@ async def attach_object_permission_to_dict(
             except Exception:
                 object_permission = object_permission.dict()  # pyright: ignore[reportDeprecated]  # pydantic v1 fallback
             data_dict["object_permission"] = object_permission
-    return with_stored_key_scope(data_dict)
+    return {**data_dict, **stored_key_scope_fields(data_dict)}
 
 
 _INHERITED_SCOPE: Final = "mcp_event_scope_inherited"
@@ -85,17 +85,17 @@ _MCP_TOOL_SCOPE: Final = frozenset(
 )
 
 
-def with_stored_key_scope(row: dict[str, object]) -> dict[str, object]:
+def stored_key_scope_fields(row: Mapping[str, object]) -> Mapping[str, object]:
     permission: Final = as_str_mapping(row.get("object_permission"))
     if permission is not None and _INHERITED_SCOPE in permission:
         fields: Final = dict(permission)
         if fields.pop(_INHERITED_SCOPE) and fields.get("mcp_servers") == []:
             fields["mcp_servers"] = None
-        row["object_permission"] = fields
-    return row
+        return {"object_permission": fields}
+    return {}
 
 
-def _key_scope_fields(fields: Mapping[str, object], *, first_write: bool) -> dict[str, bool]:
+def _key_scope_fields(fields: Mapping[str, object], *, first_write: bool) -> Mapping[str, bool]:
     if _MCP_TOOL_SCOPE.intersection(fields):
         return {_INHERITED_SCOPE: False}
     if first_write and set(fields) == {"mcp_event_permissions"} and fields["mcp_event_permissions"] is not None:
