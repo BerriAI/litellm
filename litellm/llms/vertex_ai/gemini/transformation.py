@@ -7,6 +7,7 @@ Why separate file? Make it easy to see how transformation works
 import os
 import re
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from functools import partial
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast
 from urllib.parse import quote
@@ -1128,6 +1129,54 @@ def _caller_tool_config(extra_body: object) -> JsonValue | None:
     return caller.get("toolConfig", caller.get("tool_config"))
 
 
+_TOOL_FIELD_KEYS: Final = frozenset(
+    ("tools", "tool_choice", "include_server_side_tool_invocations", "includeServerSideToolInvocations")
+)
+
+
+@dataclass(frozen=True, slots=True)
+class _ToolFields:
+    tools: Tools | None
+    tool_config: ToolConfig | None
+
+
+def _settled_tool_fields(optional_params: Mapping[str, object]) -> _ToolFields:
+    from .vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+
+    drops_search_next_to_functions: Final = optional_params.get(
+        "includeServerSideToolInvocations"
+    ) is False or VertexGeminiConfig.caller_tool_config_keeps_the_old_search_drop(
+        _caller_tool_config(optional_params.get("extra_body"))
+    )
+    tools: Final = cast(Tools | None, optional_params.get("tools"))  # cast-ok: map_openai_params built these tools
+    tool_choice: Final = cast(ToolConfig | None, optional_params.get("tool_choice"))  # cast-ok: mapped params
+    flags_server_side_tools: Final = (
+        optional_params.get("include_server_side_tool_invocations") is True and not drops_search_next_to_functions
+    )
+    return _ToolFields(
+        tools=(
+            _without_search_tools_next_to_functions(tools)
+            if drops_search_next_to_functions and tools is not None
+            else tools
+        ),
+        tool_config=(
+            ToolConfig({**(tool_choice or ToolConfig()), "includeServerSideToolInvocations": True})
+            if flags_server_side_tools
+            else tool_choice
+        ),
+    )
+
+
+def _with_settled_tool_fields(optional_params: Mapping[str, object]) -> Mapping[str, object]:
+    fields: Final = _settled_tool_fields(optional_params)
+    rest: Final = {k: v for k, v in optional_params.items() if k not in _TOOL_FIELD_KEYS}
+    return {
+        **rest,
+        **({} if fields.tools is None else {"tools": fields.tools}),
+        **({} if fields.tool_config is None else {"tool_choice": fields.tool_config}),
+    }
+
+
 def _tools_fit_for_caller_tool_config(tools: Tools, tool_config: JsonValue | None, model: str) -> Tools:
     if tool_config is None:
         return tools
@@ -1230,7 +1279,9 @@ def transform_request_body(
             litellm_params.update({k: v})
             remove_keys.append(k)
 
-    optional_params = {k: v for k, v in optional_params.items() if k not in remove_keys}
+    tool_settings: Final = cast(Mapping[str, object], optional_params)  # cast-ok: untyped shared signature
+    tool_fields: Final = _settled_tool_fields(tool_settings)
+    optional_params = {k: v for k, v in optional_params.items() if k not in remove_keys and k not in _TOOL_FIELD_KEYS}
 
     try:
         if custom_llm_provider == "gemini":
@@ -1241,12 +1292,6 @@ def transform_request_body(
             content = litellm.VertexGeminiConfig().transform_messages(
                 messages=messages, model=model, litellm_params=litellm_params
             )
-        tools: Final[Tools | None] = optional_params.pop("tools", None)
-        tool_choice: Final[ToolConfig | None] = optional_params.pop("tool_choice", None)
-        include_server_side_tool_invocations: bool = optional_params.pop("include_server_side_tool_invocations", False)
-        caller_turns_server_side_tools_off: Final = (
-            optional_params.pop("includeServerSideToolInvocations", None) is False
-        )
         safety_settings: list[SafetSettingsConfig] | None = optional_params.pop("safety_settings", None)
         # Drop output_config as it's not supported by Vertex AI
         optional_params.pop("output_config", None)
@@ -1267,10 +1312,6 @@ def transform_request_body(
             )
         caller_tool_config: Final = _caller_tool_config(
             cast(Mapping[str, object], optional_params).get("extra_body")  # cast-ok: untyped shared signature
-        )
-        drops_search_next_to_functions: Final = (
-            caller_turns_server_side_tools_off
-            or VertexGeminiConfig.caller_tool_config_keeps_the_old_search_drop(caller_tool_config)
         )
         config_keys: Final = set(config_fields) - {"top_k"} if drops_top_k else set(config_fields)
         filtered_params = {k: v for k, v in optional_params.items() if _get_equivalent_key(k, config_keys)}
@@ -1294,19 +1335,10 @@ def transform_request_body(
         if can_send_cache_incompatible_fields:
             if system_instructions is not None:
                 data["system_instruction"] = system_instructions
-            if tools is not None:
-                built_tools: Final = (
-                    _without_search_tools_next_to_functions(tools)
-                    if drops_search_next_to_functions
-                    else cast(Tools, tools)  # cast-ok: popped from the untyped optional_params
-                )
-                data["tools"] = _tools_fit_for_caller_tool_config(built_tools, caller_tool_config, model)
-            if tool_choice is not None:
-                data["toolConfig"] = tool_choice
-            if include_server_side_tool_invocations and not drops_search_next_to_functions:
-                if "toolConfig" not in data:
-                    data["toolConfig"] = {}
-                data["toolConfig"]["includeServerSideToolInvocations"] = True
+            if tool_fields.tools is not None:
+                data["tools"] = _tools_fit_for_caller_tool_config(tool_fields.tools, caller_tool_config, model)
+            if tool_fields.tool_config is not None:
+                data["toolConfig"] = tool_fields.tool_config
         if safety_settings is not None:
             data["safetySettings"] = safety_settings
         if generation_config is not None and len(generation_config) > 0:
@@ -1366,20 +1398,22 @@ def sync_transform_request_body(
     context_caching_endpoints: Final = ContextCachingEndpoints()
     request_settings: Final = cast(Mapping[str, object], litellm_params)  # cast-ok: untyped shared signature
 
+    caller_cache_name: Final = cast(str | None, optional_params.pop("cached_content", None))  # cast-ok: a cache name
+    tool_settings: Final = cast(Mapping[str, object], optional_params)  # cast-ok: untyped shared signature
     (
         messages,
         optional_params,
         cached_content,
     ) = context_caching_endpoints.check_and_create_cache(
         messages=messages,
-        optional_params=optional_params,
+        optional_params=dict(_with_settled_tool_fields(tool_settings)),
         api_key=gemini_api_key or "dummy",
         api_base=api_base,
         model=model,
         client=client,
         timeout=timeout,
         extra_headers=extra_headers,
-        cached_content=optional_params.pop("cached_content", None),
+        cached_content=caller_cache_name,
         context_caching=context_caching,
         logging_obj=logging_obj,
         custom_llm_provider=custom_llm_provider,
@@ -1504,20 +1538,22 @@ async def async_transform_request_body(
     context_caching_endpoints: Final = ContextCachingEndpoints()
     request_settings: Final = cast(Mapping[str, object], litellm_params)  # cast-ok: untyped shared signature
 
+    caller_cache_name: Final = cast(str | None, optional_params.pop("cached_content", None))  # cast-ok: a cache name
+    tool_settings: Final = cast(Mapping[str, object], optional_params)  # cast-ok: untyped shared signature
     (
         messages,
         optional_params,
         cached_content,
     ) = await context_caching_endpoints.async_check_and_create_cache(
         messages=messages,
-        optional_params=optional_params,
+        optional_params=dict(_with_settled_tool_fields(tool_settings)),
         api_key=gemini_api_key or "dummy",
         api_base=api_base,
         model=model,
         client=client,
         timeout=timeout,
         extra_headers=extra_headers,
-        cached_content=optional_params.pop("cached_content", None),
+        cached_content=caller_cache_name,
         context_caching=context_caching,
         logging_obj=logging_obj,
         custom_llm_provider=custom_llm_provider,
