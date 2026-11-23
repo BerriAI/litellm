@@ -6817,6 +6817,7 @@ class PrismaClient:
         table_name: Literal["user", "key", "config", "spend", "team", "user_notification"],
         *,
         allow_existing_user: bool = True,
+        key_writer: Callable[[Mapping[str, object]], Awaitable[object]] | None = None,
     ):
         """
         Add a key to the database. If it already exists, do nothing.
@@ -6838,6 +6839,8 @@ class PrismaClient:
                 # Strip them so the DB stores NULL via the column's nullable constraint.
                 if db_data.get("budget_limits") is None:
                     db_data.pop("budget_limits", None)
+                if key_writer is not None:
+                    return await key_writer(db_data)
                 print_verbose("PrismaClient: Before upsert into litellm_verificationtoken")
                 new_verification_token: Final = await VerificationTokenRepository(self).table.upsert(
                     where={

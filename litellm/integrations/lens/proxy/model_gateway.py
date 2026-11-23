@@ -1,7 +1,7 @@
 import hashlib
 import hmac
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import timedelta
 from enum import Enum
 from typing import Final, cast  # noqa: TID251  # generated Prisma cursor type needs the typed repository interface
@@ -125,7 +125,7 @@ async def setup(
     connection: Connection, identity: Identity, gateway_url: str, auth: UserAPIKeyAuth
 ) -> GatewayStatus | SetupFailure:
     from litellm.proxy import proxy_server
-    from litellm.proxy.management_endpoints.key_management_endpoints import generate_key_fn
+    from litellm.proxy.management_endpoints.key_management_endpoints import KeyPersistenceError, generate_key_fn
 
     if auth.user_role != LitellmUserRoles.PROXY_ADMIN:
         return SetupFailure.FORBIDDEN
@@ -137,31 +137,50 @@ async def setup(
     if database is None:
         return SetupFailure.DATABASE
 
-    async def generate(request: GenerateKeyRequest) -> None:
-        await generate_key_fn(data=request, user_api_key_dict=auth, litellm_changed_by=None)
+    async def active(hashed: str) -> bool:
+        async with database.tx() as transaction:
+            return await transaction.litellm_verificationtoken.find_unique(where={"token": hashed}) is not None
 
-    async def ensure_key(key: str) -> bool:
-        async with database.tx(timeout=timedelta(seconds=60)) as transaction:
-            await transaction.query_raw(
-                "SELECT 1 AS locked FROM pg_advisory_xact_lock(hashtext($1))",
-                f"lens-model-key:{hashlib.sha256(key.encode()).hexdigest()}",
+    async def retired(hashed: str, alias: str) -> bool:
+        async with database.tx() as transaction:
+            deleted_table: Final = (
+                cast(  # cast-ok: generated Prisma cursor type is absent; use the repository interface
+                    TableActions[object], transaction.litellm_deletedverificationtoken
+                )
+            )
+            deleted: Final = await deleted_table.find_many(where={"token": hashed}, take=1)
+            return bool(deleted) or bool(
+                await transaction.litellm_verificationtoken.find_many(where={"key_alias": alias}, take=1)
             )
 
-            async def active(hashed: str) -> bool:
-                return await transaction.litellm_verificationtoken.find_unique(where={"token": hashed}) is not None
-
-            async def retired(hashed: str, alias: str) -> bool:
+    async def generate(request: GenerateKeyRequest) -> None:
+        async def write_key(data: Mapping[str, object]) -> object:
+            async with database.tx(timeout=timedelta(seconds=10)) as transaction:
+                await transaction.query_raw(
+                    "SELECT 1 AS locked FROM pg_advisory_xact_lock(hashtext($1))",
+                    f"lens-model-key:{data['token']}",
+                )
+                keys: Final = cast(  # cast-ok: normalized insert fields use the repository's mapping interface
+                    TableActions[object], transaction.litellm_verificationtoken
+                )
+                existing: Final = await keys.find_unique(where={"token": data["token"]})
+                if existing is not None:
+                    raise KeyPersistenceError(status_code=409, detail="The Lens key already exists")
                 deleted_table: Final = (
                     cast(  # cast-ok: generated Prisma cursor type is absent; use the repository interface
                         TableActions[object], transaction.litellm_deletedverificationtoken
                     )
                 )
-                deleted: Final = await deleted_table.find_many(where={"token": hashed}, take=1)
-                return bool(deleted) or bool(
-                    await transaction.litellm_verificationtoken.find_many(where={"key_alias": alias}, take=1)
-                )
+                deleted: Final = await deleted_table.find_many(where={"token": data["token"]}, take=1)
+                rotated: Final = await keys.find_many(where={"key_alias": data["key_alias"]}, take=1)
+                if deleted or rotated:
+                    raise KeyPersistenceError(status_code=409, detail=SetupFailure.KEY_POLICY.value)
+                return await keys.create(data=data, include={"litellm_budget_table": True})
 
-            return await ensure_model_key(key, active, retired, generate)
+        await generate_key_fn(data=request, user_api_key_dict=auth, litellm_changed_by=None, key_writer=write_key)
+
+    async def ensure_key(key: str) -> bool:
+        return await ensure_model_key(key, active, retired, generate)
 
     return await connect_models(
         connection, identity, gateway_url, connection.remote.control_client(), ensure_key, int(time.time())
