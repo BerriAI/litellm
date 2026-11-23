@@ -5,8 +5,7 @@ When a user exceeds their budget, the system should still allow requests
 to models with zero cost (e.g., on-premises models).
 """
 
-import asyncio
-from typing import Final, Optional
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -15,7 +14,6 @@ from starlette.routing import Route
 
 import litellm
 from litellm.constants import MODEL_GROUP_ALIAS_RESOLVED_SCOPE_KEY
-from litellm.caching.caching import DualCache
 from litellm.proxy._types import (
     LiteLLM_BudgetTable,
     LiteLLM_EndUserTable,
@@ -25,14 +23,11 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.auth_checks import (
-    _check_team_member_budget,
-    is_model_cost_zero,
-    team_max_budget_check,
     common_checks,
+    is_model_cost_zero,
 )
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
-from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 
 
 @pytest.mark.parametrize(
@@ -129,9 +124,7 @@ class TestIsModelCostZero:
 
     def test_zero_cost_model_in_router(self, mock_router_with_zero_cost_model):
         """Test that a zero-cost model in router is correctly identified."""
-        result = is_model_cost_zero(
-            model="on-prem-model", llm_router=mock_router_with_zero_cost_model
-        )
+        result = is_model_cost_zero(model="on-prem-model", llm_router=mock_router_with_zero_cost_model)
         assert result is True
 
     def test_paid_model_in_router(self, mock_router_with_zero_cost_model):
@@ -142,16 +135,12 @@ class TestIsModelCostZero:
                 "input_cost_per_token": 0.0000015,
                 "output_cost_per_token": 0.000002,
             }
-            result = is_model_cost_zero(
-                model="cloud-model", llm_router=mock_router_with_zero_cost_model
-            )
+            result = is_model_cost_zero(model="cloud-model", llm_router=mock_router_with_zero_cost_model)
             assert result is False
 
     def test_none_model(self, mock_router_with_zero_cost_model):
         """Test that None model returns False."""
-        result = is_model_cost_zero(
-            model=None, llm_router=mock_router_with_zero_cost_model
-        )
+        result = is_model_cost_zero(model=None, llm_router=mock_router_with_zero_cost_model)
         assert result is False
 
     def test_none_router(self):
@@ -161,9 +150,7 @@ class TestIsModelCostZero:
 
     def test_list_of_zero_cost_models(self, mock_router_with_zero_cost_model):
         """Test that a list of zero-cost models returns True."""
-        result = is_model_cost_zero(
-            model=["on-prem-model"], llm_router=mock_router_with_zero_cost_model
-        )
+        result = is_model_cost_zero(model=["on-prem-model"], llm_router=mock_router_with_zero_cost_model)
         assert result is True
 
     def test_mixed_cost_models(self, mock_router_with_zero_cost_model):
@@ -217,9 +204,7 @@ class TestUserBudgetBypass:
         assert result is True
 
     @pytest.mark.asyncio
-    async def test_user_over_budget_with_paid_model_blocked(
-        self, mock_router_with_zero_cost_model, mock_proxy_logging
-    ):
+    async def test_user_over_budget_with_paid_model_blocked(self, mock_router_with_zero_cost_model, mock_proxy_logging):
         """Test that user over budget cannot use paid models."""
         user_object = LiteLLM_UserTable(
             user_id="test-user",
@@ -255,6 +240,107 @@ class TestUserBudgetBypass:
             assert exc_info.value.current_cost == 100.0
             assert exc_info.value.max_budget == 50.0
             assert "test-user" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_user_zero_budget_with_zero_cost_model_allowed(
+        self, mock_router_with_zero_cost_model, mock_proxy_logging
+    ):
+        """Test that user with budget=0.0 and spend=0.0 can use zero-cost models (issue #53812)."""
+        user_object = LiteLLM_UserTable(
+            user_id="zero-budget-user",
+            spend=0.0,
+            max_budget=0.0,
+        )
+
+        request_body = {"model": "on-prem-model"}
+
+        result = await common_checks(
+            request_body=request_body,
+            team_object=None,
+            user_object=user_object,
+            end_user_object=None,
+            global_proxy_spend=None,
+            general_settings={},
+            route="/v1/chat/completions",
+            llm_router=mock_router_with_zero_cost_model,
+            proxy_logging_obj=mock_proxy_logging,
+            valid_token=UserAPIKeyAuth(
+                token="test-token",
+                user_id="zero-budget-user",
+            ),
+            request=MagicMock(),
+        )
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_user_zero_budget_calling_backend_model_name_allowed(
+        self, mock_router_with_zero_cost_model, mock_proxy_logging
+    ):
+        """Test that user with budget=0.0 calling backend model name directly succeeds (issue #53812)."""
+        user_object = LiteLLM_UserTable(
+            user_id="zero-budget-user",
+            spend=0.0,
+            max_budget=0.0,
+        )
+
+        # "ollama/llama2" is the litellm_params.model of on-prem-model
+        request_body = {"model": "ollama/llama2"}
+
+        result = await common_checks(
+            request_body=request_body,
+            team_object=None,
+            user_object=user_object,
+            end_user_object=None,
+            global_proxy_spend=None,
+            general_settings={},
+            route="/v1/chat/completions",
+            llm_router=mock_router_with_zero_cost_model,
+            proxy_logging_obj=mock_proxy_logging,
+            valid_token=UserAPIKeyAuth(
+                token="test-token",
+                user_id="zero-budget-user",
+            ),
+            request=MagicMock(),
+        )
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_user_zero_budget_with_paid_model_blocked(self, mock_router_with_zero_cost_model, mock_proxy_logging):
+        """Test that user with budget=0.0 cannot use paid models."""
+        user_object = LiteLLM_UserTable(
+            user_id="zero-budget-user",
+            spend=0.0,
+            max_budget=0.0,
+        )
+
+        request_body = {"model": "cloud-model"}
+
+        with patch("litellm.get_model_info") as mock_get_model_info:
+            mock_get_model_info.return_value = {
+                "input_cost_per_token": 0.0000015,
+                "output_cost_per_token": 0.000002,
+            }
+            with pytest.raises(litellm.BudgetExceededError) as exc_info:
+                await common_checks(
+                    request_body=request_body,
+                    team_object=None,
+                    user_object=user_object,
+                    end_user_object=None,
+                    global_proxy_spend=None,
+                    general_settings={},
+                    route="/v1/chat/completions",
+                    llm_router=mock_router_with_zero_cost_model,
+                    proxy_logging_obj=mock_proxy_logging,
+                    valid_token=UserAPIKeyAuth(
+                        token="test-token",
+                        user_id="zero-budget-user",
+                    ),
+                    request=MagicMock(),
+                )
+
+            assert exc_info.value.current_cost == 0.0
+            assert exc_info.value.max_budget == 0.0
+            assert "zero-budget-user" in str(exc_info.value)
 
 
 class TestEndUserBudgetBypass:
@@ -375,9 +461,7 @@ class TestTeamBudgetBypass:
         assert result is True
 
     @pytest.mark.asyncio
-    async def test_team_over_budget_with_paid_model_blocked(
-        self, mock_router_with_zero_cost_model, mock_proxy_logging
-    ):
+    async def test_team_over_budget_with_paid_model_blocked(self, mock_router_with_zero_cost_model, mock_proxy_logging):
         """Test that team over budget cannot use paid models."""
         team_object = LiteLLM_TeamTable(
             team_id="test-team",
@@ -450,9 +534,7 @@ class TestTeamMemberBudgetBypass:
         request_body = {"model": "on-prem-model"}
 
         # Mock get_team_membership
-        with patch(
-            "litellm.proxy.auth.auth_checks.get_team_membership"
-        ) as mock_get_membership:
+        with patch("litellm.proxy.auth.auth_checks.get_team_membership") as mock_get_membership:
             mock_get_membership.return_value = team_membership
 
             # In the real flow, skip_budget_checks would be set to True for zero-cost models
@@ -501,9 +583,7 @@ class TestTeamMemberBudgetBypass:
 
         request_body = {"model": "cloud-model"}
 
-        with patch(
-            "litellm.proxy.auth.auth_checks.get_team_membership"
-        ) as mock_get_membership:
+        with patch("litellm.proxy.auth.auth_checks.get_team_membership") as mock_get_membership:
             mock_get_membership.return_value = team_membership
 
             with patch("litellm.get_model_info") as mock_get_model_info:
@@ -540,9 +620,7 @@ class TestEdgeCases:
         with patch("litellm.get_model_info") as mock_get_model_info:
             # Simulate model not found
             mock_get_model_info.side_effect = Exception("Model not found")
-            result = is_model_cost_zero(
-                model="nonexistent-model", llm_router=mock_router_with_zero_cost_model
-            )
+            result = is_model_cost_zero(model="nonexistent-model", llm_router=mock_router_with_zero_cost_model)
             # Should return False (conservative approach)
             assert result is False
 

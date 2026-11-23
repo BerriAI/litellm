@@ -572,6 +572,13 @@ def is_model_cost_zero(model: str | Sequence[str] | None, llm_router: RegistryRe
             model_group_info = llm_router.registry().group(model_name, include_hidden=True)
 
             if model_group_info is None:
+                served_candidates = _deployments_served_for(model_name, llm_router)
+                if served_candidates:
+                    first_group = served_candidates[0].get("model_name")
+                    if first_group:
+                        model_group_info = llm_router.registry().group(first_group, include_hidden=True)
+
+            if model_group_info is None:
                 # Model not found or no pricing info available
                 # Conservative approach: assume it has cost
                 verbose_proxy_logger.debug("No model group info found for %s, assuming it has cost", model_name)
@@ -678,14 +685,22 @@ def _deployments_served_for(model: str, llm_router: RegistryReader) -> Sequence[
     registry: Final = llm_router.registry()
     routed_group: Final = registry.resolve(model)
     if registry.resolve(routed_group) == routed_group:
-        return registry.deployments(routed_group) or ()
+        deployments = registry.deployments(routed_group)
+        if deployments:
+            return deployments
     named: Final = registry.deployments(model, source="alias")
     if named:
         return named
-    return tuple(
+    pattern_deployments = tuple(
         DeploymentTypedDict(**deployment)
         for deployment in registry.patterns().get_deployments_by_pattern(model=routed_group)
     )
+    if pattern_deployments:
+        return pattern_deployments
+    backend_matches = tuple(d for d in registry.deployments() if d.get("litellm_params", {}).get("model") == model)
+    if backend_matches:
+        return backend_matches
+    return ()
 
 
 def _has_ptu_flat_cost(deployments: Sequence[DeploymentTypedDict]) -> bool:
@@ -704,7 +719,7 @@ def _has_ptu_flat_cost(deployments: Sequence[DeploymentTypedDict]) -> bool:
 def _is_cost_explicitly_configured(deployments: Sequence[DeploymentTypedDict]) -> bool:
     """
     Check if any of the deployments has cost fields explicitly set in its
-    litellm.model_cost entry.
+    litellm.model_cost entry or deployment configuration.
 
     When Router._create_deployment() registers a model not in the global
     cost map, it creates a sparse entry like {"id": "<hash>"} with no cost
@@ -715,12 +730,22 @@ def _is_cost_explicitly_configured(deployments: Sequence[DeploymentTypedDict]) -
     lands in the cost map under the deployment id.
     """
     for deployment in deployments:
-        model_id = (deployment.get("model_info") or _EMPTY_COST_ENTRY).get("id")
-        if model_id is None:
-            continue
-        raw_entry = litellm.model_cost.get(model_id, _EMPTY_COST_ENTRY)
-        if "input_cost_per_token" in raw_entry or "output_cost_per_token" in raw_entry:
+        model_info = deployment.get("model_info") or _EMPTY_COST_ENTRY
+        if "input_cost_per_token" in model_info or "output_cost_per_token" in model_info:
             return True
+        litellm_params = deployment.get("litellm_params") or _EMPTY_COST_ENTRY
+        if "input_cost_per_token" in litellm_params or "output_cost_per_token" in litellm_params:
+            return True
+        model_id = model_info.get("id")
+        if model_id is not None:
+            raw_entry = litellm.model_cost.get(model_id, _EMPTY_COST_ENTRY)
+            if "input_cost_per_token" in raw_entry or "output_cost_per_token" in raw_entry:
+                return True
+        model_name = deployment.get("model_name")
+        if model_name is not None and model_name in litellm.model_cost:
+            raw_entry = litellm.model_cost.get(model_name, _EMPTY_COST_ENTRY)
+            if "input_cost_per_token" in raw_entry or "output_cost_per_token" in raw_entry:
+                return True
     return False
 
 
