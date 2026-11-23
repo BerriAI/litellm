@@ -3,7 +3,11 @@
 //! key the config types do not name is always named.
 
 use axum::http::request::Parts;
-use litellm_config::{Config, Environment, GeneralSettings, LiteLlmSettings, RouterSettings};
+use litellm_callbacks_model_capacity::NAME as MODEL_CAPACITY;
+use litellm_config::{
+    Config, Environment, GeneralSettings, LiteLlmSettings, PriorityReservationSettings,
+    RouterSettings, Value,
+};
 
 use super::{
     Admit, Reason, Refused,
@@ -282,9 +286,29 @@ fn router(settings: &RouterSettings) -> impl Iterator<Item = Box<str>> + '_ {
     .chain(other("router_settings.", additional_fields.keys(), &[]))
 }
 
+/// A callback other than `dynamic_rate_limiter_v3`, the one the native app runs.
+fn other_callbacks(callbacks: &Option<Vec<Value>>) -> bool {
+    callbacks
+        .iter()
+        .flatten()
+        .any(|callback| callback.as_str() != Some(MODEL_CAPACITY))
+}
+
+/// A per-model limit that borrows a model's idle capacity, which the dynamic rate limiter holds
+/// tokens for before the call. The native app serves no caller that holds one.
+fn borrows(settings: &Option<PriorityReservationSettings>) -> bool {
+    settings.as_ref().is_some_and(|settings| {
+        !settings
+            .model_limit_borrowing_config
+            .borrow_idle_capacity
+            .is_empty()
+    })
+}
+
 /// `drop_params` is honored whichever of the config and its variable set it, and
-/// `use_chat_completions_url_for_anthropic_messages` is [`messages_only`]. The others the native
-/// app does not read only shape another route or the UI.
+/// `use_chat_completions_url_for_anthropic_messages` is [`messages_only`]. `callbacks` is honored
+/// when it names only the dynamic rate limiter, which reads `priority_reservation` and its
+/// settings. The others the native app does not read only shape another route or the UI.
 fn litellm(config: &Config) -> impl Iterator<Item = Box<str>> + '_ {
     let LiteLlmSettings {
         ssl_verify: _,
@@ -305,6 +329,8 @@ fn litellm(config: &Config) -> impl Iterator<Item = Box<str>> + '_ {
         gemini_live_defer_setup: _,
         blog_posts_url: _,
         autorouter_presets_url: _,
+        priority_reservation: _,
+        priority_reservation_settings,
         modify_params,
         enable_anthropic_prompt_caching,
         reasoning_auto_summary,
@@ -326,7 +352,6 @@ fn litellm(config: &Config) -> impl Iterator<Item = Box<str>> + '_ {
             request_timeout,
             num_retries,
             cache_params,
-            callbacks,
             success_callback,
             failure_callback,
             anthropic_prompt_caching_ttl,
@@ -338,7 +363,8 @@ fn litellm(config: &Config) -> impl Iterator<Item = Box<str>> + '_ {
             modify_params,
             enable_anthropic_prompt_caching,
             reasoning_auto_summary,
-        ]
+        ],
+        by: [callbacks => other_callbacks, priority_reservation_settings => borrows]
     )
     .chain(unknown("litellm_settings.", additional_fields))
     .map(|key| spelled(config, key))
@@ -437,6 +463,10 @@ mod tests {
         "router_settings.provider_budget_config"
     )]
     #[case::a_section_the_config_types_do_not_name("future_section: {}\n", "future_section")]
+    #[case::a_callback_beside_the_dynamic_rate_limiter(
+        "litellm_settings:\n  callbacks: [dynamic_rate_limiter_v3, prometheus]\n",
+        "litellm_settings.callbacks"
+    )]
     fn a_setting_the_native_app_does_not_honor_is_named(#[case] yaml: &str, #[case] setting: &str) {
         assert_eq!(written(yaml), [setting]);
     }
