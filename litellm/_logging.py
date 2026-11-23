@@ -10,7 +10,7 @@ import sys
 from collections.abc import Iterator, Mapping
 from datetime import datetime
 from logging import Formatter
-from types import FrameType
+from types import FrameType, TracebackType
 from typing import Final, Protocol, TextIO
 from urllib.parse import unquote
 
@@ -774,7 +774,7 @@ def _try_parse_embedded_python_dict(message: str) -> dict[str, object] | None:
 
 # Standard LogRecord attribute names - used to identify 'extra' fields.
 # Derived at runtime so we automatically include version-specific attrs (e.g. taskName).
-def _get_standard_record_attrs() -> frozenset:
+def _get_standard_record_attrs() -> frozenset[str]:
     """Standard LogRecord attribute names - excludes extra keys from logger.debug(..., extra={...})."""
     return frozenset(logging.LogRecord("", 0, "", 0, "", (), None).__dict__.keys())
 
@@ -792,12 +792,12 @@ class JsonFormatter(Formatter):
     def __init__(self):
         super().__init__()
 
-    def formatTime(self, record, datefmt=None):
+    def formatTime(self, record: logging.LogRecord, datefmt: str | None = None):
         # Use datetime to format the timestamp in ISO 8601 format
         dt: Final = datetime.fromtimestamp(record.created)
         return dt.isoformat()
 
-    def format(self, record):
+    def format(self, record: logging.LogRecord):
         message_str: Final = _ANSI_ESCAPE.sub("", record.getMessage())
         json_record: Final[dict[str, object]] = {
             "message": message_str,
@@ -875,7 +875,7 @@ class CorrelationPlainFormatter(logging.Formatter):
 
 
 # Function to set up exception handlers for JSON logging
-def _setup_json_exception_handlers(formatter):
+def _setup_json_exception_handlers(formatter: Formatter):
     # Create a handler with JSON formatting for exceptions
     error_handler: Final = logging.StreamHandler()
     error_handler.setFormatter(formatter)
@@ -884,7 +884,7 @@ def _setup_json_exception_handlers(formatter):
     error_handler.addFilter(_correlation_filter)
 
     # Setup excepthook for uncaught exceptions
-    def json_excepthook(exc_type, exc_value, exc_traceback):
+    def json_excepthook(exc_type: type[BaseException], exc_value: BaseException, exc_traceback: TracebackType | None):
         record: Final = logging.LogRecord(
             name="LiteLLM",
             level=logging.ERROR,
@@ -902,7 +902,7 @@ def _setup_json_exception_handlers(formatter):
     try:
         import asyncio
 
-        def async_json_exception_handler(loop, context):
+        def async_json_exception_handler(loop: asyncio.AbstractEventLoop, context):
             exception: Final = context.get("exception")
             if exception:
                 exc_type: Final = type(exception)

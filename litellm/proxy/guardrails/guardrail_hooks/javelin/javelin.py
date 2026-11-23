@@ -24,7 +24,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.javelin import (
 from litellm.types.utils import CallTypesLiteral, GuardrailStatus
 
 if TYPE_CHECKING:
-    from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
+    from litellm.types.proxy.guardrails.guardrail_hooks.javelin import JavelinGuardrailConfigModel
 
 _DECODED_JSON: Final = TypeAdapter(object)
 
@@ -56,8 +56,8 @@ class JavelinGuardrail(CustomGuardrail):
         guardrail_name: str = "trustsafety",
         javelin_guard_name: str | None = None,
         api_version: str = "v1",
-        metadata: dict | None = None,
-        config: dict | None = None,
+        metadata: dict[str, object] | None = None,
+        config: dict[str, object] | None = None,
         application: str | None = None,
         **kwargs,
     ):
@@ -151,7 +151,7 @@ class JavelinGuardrail(CustomGuardrail):
             ####################################################
             # Create Guardrail Trace for logging on Langfuse, Datadog, etc.
             ####################################################
-            guardrail_json_response: Exception | str | dict | list[dict] = {}
+            guardrail_json_response: str | dict[str, object] = {}
             if status == "success" and javelin_response is not None:
                 guardrail_json_response = dict(javelin_response)
             else:
@@ -292,7 +292,7 @@ class JavelinGuardrail(CustomGuardrail):
         return data
 
     @staticmethod
-    def get_config_model() -> type["GuardrailConfigModel"] | None:
+    def get_config_model() -> type["JavelinGuardrailConfigModel"] | None:
         """
         Get the config model for the Javelin guardrail.
         """
