@@ -57,9 +57,7 @@ _RESERVED_KEY_HEADERS: Final = (
     | frozenset(name.decode("ascii") for name in _REQUEST_HEADERS - {b"authorization"})
 )
 _SETTINGS: Final = TypeAdapter(Mapping[str, object])
-_IDENTITY_MAPPINGS: Final[TypeAdapter[tuple[dict[str, object], ...] | dict[str, object] | None]] = TypeAdapter(
-    tuple[dict[str, object], ...] | dict[str, object] | None
-)
+_IDENTITY_MAPPINGS: Final = TypeAdapter(tuple[dict[str, object], ...] | dict[str, object] | None)
 _OAUTH_MAPPINGS: Final = TypeAdapter(dict[str, str])
 _ROUTE_GRANTS: Final = TypeAdapter(tuple[str, ...])
 
@@ -254,7 +252,7 @@ async def admin_mcp_lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     async def management_api(scope: Scope, receive: Receive, send: Send) -> None:
         request: Final = caller.get()
         configured_header: Final = _configured_key_header()
-        excluded: Final[frozenset[bytes]] = (
+        excluded: Final = (
             _REQUEST_HEADERS
             | _CREDENTIAL_HEADERS
             | (frozenset({configured_header}) if configured_header is not None else frozenset())
