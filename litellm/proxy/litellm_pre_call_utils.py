@@ -4755,10 +4755,18 @@ def _apply_resolved_guardrails_to_metadata(
     if metadata_variable_name not in data:
         data[metadata_variable_name] = {}
 
+    metadata_bucket: Final = _REQUEST_FIELDS.validate_python(data[metadata_variable_name])
+
     # Record the pipelines and the guardrails they step; the hook loops skip those per pipeline mode
     if pipelines:
-        pipeline_managed_guardrails: Final = PolicyResolver.get_pipeline_managed_guardrails(pipelines)
-        data[metadata_variable_name]["_guardrail_pipelines"] = pipelines
+        from litellm.types.proxy.policy_engine.pipeline_types import GuardrailPipeline
+
+        prior_pipelines: Final = TypeAdapter(list[tuple[str, GuardrailPipeline]]).validate_python(
+            metadata_bucket.get("_guardrail_pipelines") or []
+        )
+        combined_pipelines: Final = [*prior_pipelines, *(entry for entry in pipelines if entry not in prior_pipelines)]
+        pipeline_managed_guardrails: Final = PolicyResolver.get_pipeline_managed_guardrails(combined_pipelines)
+        data[metadata_variable_name]["_guardrail_pipelines"] = combined_pipelines
         data[metadata_variable_name]["_pipeline_managed_guardrails"] = pipeline_managed_guardrails
         verbose_proxy_logger.debug(
             "Policy engine: resolved %s pipeline(s), managed guardrails: %s",
@@ -4769,7 +4777,7 @@ def _apply_resolved_guardrails_to_metadata(
     if not resolved_guardrails and not pipelines:
         return
 
-    existing_guardrails: Final = data[metadata_variable_name].get("guardrails", [])
+    existing_guardrails: Final = metadata_bucket.get("guardrails", [])
     existing_guardrails_list: Final = (
         _REQUEST_ENTRIES.validate_python(existing_guardrails) if isinstance(existing_guardrails, list) else ()
     )
@@ -4881,22 +4889,37 @@ async def add_guardrails_from_policy_engine(
     # Build request body list: names + policy names from fetched versions
     request_body_policies: Final = request_body_names + fetched_policy_names
 
-    # Match and track policies (with merged_policies when we have version overrides)
-    applied_policy_names, _ = _match_and_track_policies(
-        data,
-        context,
-        request_body_policies,
-        policies_override=merged_policies if request_body_version_ids else None,
-    )
+    for match_context in (context, *_policy_contexts_of_litellm_model_namesakes(context, user_api_key_dict.team_id)):
+        # Match and track policies (with merged_policies when we have version overrides)
+        applied_policy_names, _ = _match_and_track_policies(
+            data,
+            match_context,
+            request_body_policies,
+            policies_override=merged_policies if request_body_version_ids else None,
+        )
 
-    # Resolve and apply guardrails. Use applied_policy_names so request-body policies
-    # (names + version IDs) are included. Use merged_policies when we have version overrides.
-    _apply_resolved_guardrails_to_metadata(
-        data,
-        metadata_variable_name,
-        context,
-        policy_names=applied_policy_names if applied_policy_names else None,
-        policies=merged_policies if request_body_version_ids else None,
+        # Resolve and apply guardrails. Use applied_policy_names so request-body policies
+        # (names + version IDs) are included. Use merged_policies when we have version overrides.
+        _apply_resolved_guardrails_to_metadata(
+            data,
+            metadata_variable_name,
+            match_context,
+            policy_names=applied_policy_names if applied_policy_names else None,
+            policies=merged_policies if request_body_version_ids else None,
+        )
+
+
+def _policy_contexts_of_litellm_model_namesakes(
+    context: "PolicyMatchContext", team_id: str | None
+) -> tuple["PolicyMatchContext", ...]:
+    from litellm.proxy.auth.auth_checks import public_model_names_of_deployments_routed_by_litellm_model
+    from litellm.proxy.proxy_server import llm_router
+
+    if llm_router is None or context.model is None:
+        return ()
+    return tuple(
+        context.model_copy(update={"model": public_name})
+        for public_name in public_model_names_of_deployments_routed_by_litellm_model(context.model, llm_router, team_id)
     )
 
 

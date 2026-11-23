@@ -5635,6 +5635,101 @@ async def test_baggage_mapped_tags_match_tag_policies_only_when_the_caller_or_ke
     assert data["metadata"].get("guardrails", []) == expected_guardrails
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "requested,team_id,expected_guardrails",
+    [
+        ("chat-public", None, ["chat_guard"]),
+        ("openai/chat-raw", None, ["chat_guard"]),
+        ("openai/chat-raw", "team-1", ["chat_guard"]),
+        ("openai/team-2-raw", None, []),
+        ("openai/unrelated-raw", None, []),
+    ],
+)
+async def test_model_scoped_policies_apply_to_a_request_by_the_deployments_litellm_model(
+    monkeypatch: pytest.MonkeyPatch, requested: str, team_id: str | None, expected_guardrails: list[str]
+):
+    from litellm.proxy import proxy_server
+    from litellm.proxy.policy_engine.attachment_registry import get_attachment_registry
+    from litellm.proxy.policy_engine.policy_registry import get_policy_registry
+    from litellm.types.proxy.policy_engine import Policy, PolicyAttachment, PolicyGuardrails
+
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "chat-public", "litellm_params": {"model": "openai/chat-raw", "api_key": "fake"}},
+            {"model_name": "unrelated-public", "litellm_params": {"model": "openai/unrelated-raw", "api_key": "fake"}},
+            {
+                "model_name": "model_name_team-2_own",
+                "litellm_params": {"model": "openai/team-2-raw", "api_key": "fake"},
+                "model_info": {"team_id": "team-2", "team_public_model_name": "chat-public"},
+            },
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    data = {"model": requested, "metadata": {}}
+    policy_registry = get_policy_registry()
+    attachment_registry = get_attachment_registry()
+    policy_registry._policies = {"chat": Policy(guardrails=PolicyGuardrails(add=["chat_guard"]))}
+    policy_registry._initialized = True
+    attachment_registry._attachments = [PolicyAttachment(policy="chat", models=["chat-public"])]
+    attachment_registry._initialized = True
+    try:
+        await add_guardrails_from_policy_engine(
+            data=data,
+            metadata_variable_name="metadata",
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key", team_id=team_id),
+        )
+    finally:
+        policy_registry._policies = {}
+        policy_registry._initialized = False
+        attachment_registry._attachments = []
+        attachment_registry._initialized = False
+    assert data["metadata"].get("guardrails", []) == expected_guardrails
+
+
+@pytest.mark.asyncio
+async def test_pipelines_from_every_matched_model_name_of_a_litellm_model_request_are_kept(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from litellm.proxy import proxy_server
+    from litellm.proxy.policy_engine.attachment_registry import get_attachment_registry
+    from litellm.proxy.policy_engine.policy_registry import get_policy_registry
+    from litellm.types.proxy.policy_engine import Policy, PolicyAttachment, PolicyGuardrails
+    from litellm.types.proxy.policy_engine.pipeline_types import GuardrailPipeline, PipelineStep
+
+    router = litellm.Router(
+        model_list=[{"model_name": "chat-public", "litellm_params": {"model": "openai/chat-raw", "api_key": "fake"}}]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    data = {"model": "openai/chat-raw", "metadata": {}}
+
+    def piped(guardrail: str) -> Policy:
+        return Policy(
+            guardrails=PolicyGuardrails(add=[guardrail]),
+            pipeline=GuardrailPipeline(mode="pre_call", steps=[PipelineStep(guardrail=guardrail, on_pass="next")]),
+        )
+
+    policy_registry = get_policy_registry()
+    attachment_registry = get_attachment_registry()
+    policy_registry._policies = {"raw": piped("raw_guard"), "chat": piped("chat_guard")}
+    policy_registry._initialized = True
+    attachment_registry._attachments = [
+        PolicyAttachment(policy="raw", models=["openai/chat-raw"]),
+        PolicyAttachment(policy="chat", models=["chat-public"]),
+    ]
+    attachment_registry._initialized = True
+    try:
+        await add_guardrails_from_policy_engine(
+            data=data, metadata_variable_name="metadata", user_api_key_dict=UserAPIKeyAuth(api_key="test-key")
+        )
+    finally:
+        policy_registry._policies = {}
+        policy_registry._initialized = False
+        attachment_registry._attachments = []
+        attachment_registry._initialized = False
+    assert data["metadata"]["_pipeline_managed_guardrails"] == {"raw_guard", "chat_guard"}
+
+
 def test_match_and_track_policies_preserves_attachment_and_request_body_order():
     from litellm.proxy.policy_engine.attachment_registry import AttachmentRegistry
     from litellm.types.proxy.policy_engine import Policy, PolicyMatchContext
