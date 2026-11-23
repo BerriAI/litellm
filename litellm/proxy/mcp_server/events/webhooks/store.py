@@ -86,7 +86,6 @@ class SubscriptionQuery(BaseModel):
     server_id: str | None = None
     status: SubscriptionStatus | None = None
     live_only: bool = False
-    after_id: str | None = None
     limit: int = Field(default=100, ge=1, le=1001)
     offset: int = Field(default=0, ge=0)
 
@@ -425,7 +424,7 @@ class PrismaEventStore:
         }
         live: Final = {"status": {"in": list(LIVE_STATUSES)}} if query.live_only and query.status is None else {}
         records: Final = await self._subscriptions.find_many(
-            where={**where, **live, **({"id": {"gt": query.after_id}} if query.after_id is not None else {})},
+            where={**where, **live},
             take=query.limit,
             skip=query.offset,
             order={"id": "asc"} if query.live_only else [{"created_at": "desc"}, {"id": "asc"}],
