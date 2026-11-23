@@ -69,6 +69,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
     DEFAULT_TRIM_RATIO,
     FUNCTION_DEFINITION_TOKEN_COUNT,
+    GNANI_REJECTED_OPENAI_TRANSCRIPTION_PARAMS,
     HF_CONFIG_FETCH_TIMEOUT_SECONDS,
     INITIAL_RETRY_DELAY,
     JITTER,
@@ -3864,6 +3865,16 @@ def _get_non_default_params(passed_params: dict, default_params: dict, additiona
     return non_default_params
 
 
+_TRANSCRIPTION_STREAM_FLAG: Final = TypeAdapter(bool)
+
+
+def _transcription_stream_flag(value: object) -> bool | None:
+    try:
+        return _TRANSCRIPTION_STREAM_FLAG.validate_python(value)
+    except ValidationError:
+        return None
+
+
 def get_optional_params_transcription(
     model: str,
     custom_llm_provider: str,
@@ -3888,15 +3899,26 @@ def get_optional_params_transcription(
     for k, v in special_params.items():
         passed_params[k] = v
 
+    gnani_rejected_params: Final = (
+        ("stream", *GNANI_REJECTED_OPENAI_TRANSCRIPTION_PARAMS) if custom_llm_provider == "gnani" else ()
+    )
     default_params: Final = {
         "language": None,
         "prompt": None,
         "response_format": None,
         "temperature": None,  # openai defaults this to 0
         "timestamp_granularities": None,
+        **{param: None for param in gnani_rejected_params},
     }
 
-    non_default_params = {k: v for k, v in passed_params.items() if (k in default_params and v != default_params[k])}
+    gnani_stream_off: Final = (
+        custom_llm_provider == "gnani" and _transcription_stream_flag(passed_params.get("stream")) is False
+    )
+    non_default_params = {
+        k: v
+        for k, v in passed_params.items()
+        if k in default_params and v != default_params[k] and not (k == "stream" and (v == "" or gnani_stream_off))
+    }
     optional_params = {}
 
     ## raise exception if non-default value passed for non-openai/azure embedding calls
@@ -3911,7 +3933,7 @@ def get_optional_params_transcription(
                 elif k not in supported_params:
                     raise UnsupportedParamsError(
                         status_code=500,
-                        message=f"Setting user/encoding format is not supported by {custom_llm_provider}. To drop it from the call, set `litellm.drop_params = True`.",
+                        message=f"Setting `{k}` is not supported by {custom_llm_provider}. To drop it from the call, set `litellm.drop_params = True`.",
                     )
             return non_default_params
 
@@ -3940,7 +3962,7 @@ def get_optional_params_transcription(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
-            drop_params=drop_params if drop_params is not None else False,
+            drop_params=drop_params is True or litellm.drop_params is True,
         )
 
     optional_params = add_provider_specific_params_to_optional_params(
@@ -7367,6 +7389,8 @@ def validate_environment(
             else:
                 missing_keys.append("GOOGLE_API_KEY")
                 missing_keys.append("GEMINI_API_KEY")
+        elif custom_llm_provider == "gnani" and not os.environ.get("GNANI_API_KEY"):
+            missing_keys.append("GNANI_API_KEY")
         elif custom_llm_provider == "groq":
             if "GROQ_API_KEY" in os.environ:
                 keys_in_environment = True
@@ -9613,6 +9637,10 @@ class ProviderConfigManager:
             return AzureSpeechAudioTranscriptionConfig()
         elif litellm.LlmProviders.DEEPGRAM == provider:
             return litellm.DeepgramAudioTranscriptionConfig()
+        elif litellm.LlmProviders.GNANI == provider:
+            from litellm.llms.gnani.audio_transcription.transformation import GnaniAudioTranscriptionConfig
+
+            return GnaniAudioTranscriptionConfig()
         elif litellm.LlmProviders.ELEVENLABS == provider:
             from litellm.llms.elevenlabs.audio_transcription.transformation import (
                 ElevenLabsAudioTranscriptionConfig,
