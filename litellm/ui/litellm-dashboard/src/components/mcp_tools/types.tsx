@@ -427,6 +427,12 @@ export interface MCPToolsViewerProps {
 
 export const MCP_REACHABLE_DESCRIPTION: ParseKeys = "mcpTools.reachableDescription";
 
+export const EVENTS_PROTOCOL_VERSION = "2026-07-28";
+
+export const supportsEvents = (transport: string | null | undefined, revision?: string) =>
+  (transport === TRANSPORT.HTTP || transport === TRANSPORT.STDIO) &&
+  (revision === undefined || revision === "auto" || revision === EVENTS_PROTOCOL_VERSION);
+
 export interface MCPServerEventsConfig {
   enabled: boolean;
   allowed_events?: string[] | null;

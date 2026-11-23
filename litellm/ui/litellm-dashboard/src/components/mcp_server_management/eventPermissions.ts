@@ -13,8 +13,9 @@ export function withServerEvents(
   return selected.length === 0 ? others : { ...others, [serverId]: [...selected] };
 }
 
-export function withServerBlocked(current: EventPermissions, serverId: string): Record<string, string[]> {
-  return { ...withServerEvents(current, serverId, []), [serverId]: [] };
+export function toggleServerBlocked(current: EventPermissions, serverId: string): Record<string, string[]> {
+  const others = withServerEvents(current, serverId, []);
+  return current[serverId]?.length === 0 ? others : { ...others, [serverId]: [] };
 }
 
 export function sameEventPermissions(left: EventPermissions, right: EventPermissions): boolean {

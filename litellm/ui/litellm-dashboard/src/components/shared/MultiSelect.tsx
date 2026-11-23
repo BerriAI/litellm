@@ -35,7 +35,7 @@ interface MultiSelectProps {
   emptyText?: string;
   disabled?: boolean;
   loading?: boolean;
-  allowCustomValues?: boolean;
+  allowCustomValues?: boolean | "literal";
   className?: string;
   contentClassName?: string;
 }
@@ -85,7 +85,12 @@ export function MultiSelect({
         },
     );
   const customOption = query.trim();
-  const customOptionExists = safeOptions.some((option) => option.value.toLowerCase() === customOption.toLowerCase());
+  const splitCustomValues = allowCustomValues === true;
+  const customOptionExists = safeOptions.some((option) =>
+    allowCustomValues === "literal"
+      ? option.value === customOption
+      : option.value.toLowerCase() === customOption.toLowerCase(),
+  );
   const items =
     allowCustomValues && customOption && !customOptionExists
       ? [...safeOptions, { label: t("shared.multiSelect.createOption", { value: customOption }), value: customOption }]
@@ -95,7 +100,7 @@ export function MultiSelect({
   const inputPlaceholder = selectedOptions.length ? undefined : placeholder;
 
   const handleValueChange = (selected: MultiSelectOption[]) => {
-    const next = allowCustomValues
+    const next = splitCustomValues
       ? selected.flatMap((option) => (value.includes(option.value) ? [option.value] : splitOnCommas(option.value)))
       : selected.map((option) => option.value);
     onValueChange(Array.from(new Set(next)));
