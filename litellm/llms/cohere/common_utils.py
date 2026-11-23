@@ -1,4 +1,5 @@
 import json
+from collections.abc import Mapping
 from typing import Final, Literal
 
 from pydantic import TypeAdapter
@@ -18,7 +19,7 @@ _DECODED_JSON: Final = TypeAdapter(object)
 
 
 class CohereError(BaseLLMException):
-    def __init__(self, status_code, message):
+    def __init__(self, status_code: int, message: str) -> None:
         super().__init__(status_code=status_code, message=message)
 
 
@@ -50,14 +51,14 @@ class CohereModelInfo(BaseLLMModelInfo):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: Mapping[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         return {}
 
     @staticmethod
@@ -123,7 +124,7 @@ class ModelResponseIterator:
     def __init__(self, streaming_response, sync_stream: bool, json_mode: bool | None = False):
         self.streaming_response = streaming_response
         self.response_iterator = self.streaming_response
-        self.content_blocks: list = []
+        self.content_blocks: list[object] = []
         self.tool_index = -1
         self.json_mode = json_mode
 
@@ -163,10 +164,10 @@ class ModelResponseIterator:
             raise ValueError(f"Failed to decode JSON from chunk: {chunk}")
 
     # Sync iterator
-    def __iter__(self):
+    def __iter__(self) -> "ModelResponseIterator":
         return self
 
-    def __next__(self):
+    def __next__(self) -> GenericStreamingChunk:
         try:
             chunk: Final = self.response_iterator.__next__()
         except StopIteration:
@@ -200,11 +201,11 @@ class ModelResponseIterator:
         raise AttributeError(f"{type(data_json).__name__!r} object has no attribute 'get'", name="get", obj=data_json)
 
     # Async iterator
-    def __aiter__(self):
+    def __aiter__(self) -> "ModelResponseIterator":
         self.async_response_iterator = self.streaming_response.__aiter__()
         return self
 
-    async def __anext__(self):
+    async def __anext__(self) -> GenericStreamingChunk:
         try:
             chunk: Final = await self.async_response_iterator.__anext__()
         except StopAsyncIteration:
@@ -226,7 +227,7 @@ class CohereV2ModelResponseIterator:
     def __init__(self, streaming_response, sync_stream: bool, json_mode: bool | None = False):
         self.streaming_response = streaming_response
         self.response_iterator = self.streaming_response
-        self.content_blocks: list = []
+        self.content_blocks: list[object] = []
         self.tool_index = -1
         self.json_mode = json_mode
         self.tool_call_indexes_with_arguments: frozenset[int] = frozenset()
@@ -366,10 +367,10 @@ class CohereV2ModelResponseIterator:
             raise ValueError(f"Failed to parse v2 chunk: {e}, chunk: {chunk}")
 
     # Sync iterator
-    def __iter__(self):
+    def __iter__(self) -> "CohereV2ModelResponseIterator":
         return self
 
-    def __next__(self):
+    def __next__(self) -> GenericStreamingChunk:
         try:
             chunk: Final = self.response_iterator.__next__()
         except StopIteration:
@@ -397,15 +398,19 @@ class CohereV2ModelResponseIterator:
             if index != -1:
                 str_line = str_line[index:]
 
-        data_json: Final = json.loads(str_line)
-        return self.chunk_parser(chunk=data_json)
+        data_json: Final = _DECODED_JSON.validate_python(json.loads(str_line))
+        if isinstance(data_json, dict):
+            return self.chunk_parser(chunk=data_json)
+        raise ValueError(
+            f"Failed to parse v2 chunk: {type(data_json).__name__!r} object has no attribute 'get', chunk: {data_json}"
+        )
 
     # Async iterator
-    def __aiter__(self):
+    def __aiter__(self) -> "CohereV2ModelResponseIterator":
         self.async_response_iterator = self.streaming_response.__aiter__()
         return self
 
-    async def __anext__(self):
+    async def __anext__(self) -> GenericStreamingChunk:
         try:
             chunk: Final = await self.async_response_iterator.__anext__()
         except StopAsyncIteration:

@@ -44,6 +44,19 @@ def test_nebius_api_base_override(monkeypatch):
     assert api_base == "https://custom.example/v1"
 
 
+def test_nebius_legacy_endpoint_resolves_provider_without_overriding_base() -> None:
+    model, provider, api_key, api_base = litellm.get_llm_provider(
+        model="compatibility-check-model",
+        api_base="https://api.studio.nebius.ai/v1",
+        api_key="test-key",
+    )
+
+    assert model == "compatibility-check-model"
+    assert provider == "nebius"
+    assert api_key == "test-key"
+    assert api_base == "https://api.studio.nebius.ai/v1"
+
+
 def test_nebius_maps_max_completion_tokens():
     optional_params = NebiusConfig().map_openai_params(
         non_default_params={"max_completion_tokens": 256},

@@ -207,9 +207,15 @@ class DroppedConnectionRelay:
         self._server: Final = LoopbackServer(self.port, self._serve)
         self._loop: Final = self._server.loop
         self._armed: Final = threading.Event()
+        self._once: Final = threading.Event()
         self.dropped: Final = threading.Event()
 
     def arm(self) -> None:
+        self._once.clear()
+        self._armed.set()
+
+    def arm_once(self) -> None:
+        self._once.set()
         self._armed.set()
 
     def disarm(self) -> None:
@@ -230,6 +236,8 @@ class DroppedConnectionRelay:
                 while chunk := await reader.read(65536):
                     matched: Final = scanner.feed(chunk)
                     if inspect and self._armed.is_set() and matched:
+                        if self._once.is_set():
+                            self._armed.clear()
                         self.dropped.set()
                         client_writer.close()
                         return

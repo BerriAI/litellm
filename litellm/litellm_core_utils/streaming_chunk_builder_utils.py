@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Final, Optional, Protocol, TypeAlias, TypedDic
 
 from pydantic import BaseModel, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, Required
+from typing_extensions import TypedDict as ExtraItemsTypedDict
 
 import litellm
 from litellm._logging import verbose_logger
@@ -19,6 +20,7 @@ from litellm.litellm_core_utils.core_helpers import (
     chunk_usage,
     finite_cost,
     provider_reported_usage_cost,
+    require_attributes,
     stamp_litellm_bill_on_usage,
 )
 from litellm.litellm_core_utils.hidden_params import (
@@ -80,6 +82,18 @@ if TYPE_CHECKING:
         ChatCompletionRedactedThinkingBlock,
         ChatCompletionThinkingBlock,
     )
+
+
+class _UsageFields(ExtraItemsTypedDict, total=False, extra_items=object):
+    pass
+
+
+def _usage_fields(fields: Mapping[str, object]) -> _UsageFields:
+    return _UsageFields(**fields)
+
+
+class _SupportsModelDump(Protocol):
+    def model_dump(self) -> Mapping[str, object]: ...
 
 
 class _ThinkingBlockFragment(TypedDict, total=False):
@@ -430,14 +444,16 @@ class ChunkProcessor:
 
     @staticmethod
     def build_base_choice(index: int, chunks: Sequence["_BaseChunk"]) -> Choices:
+        choices: Final = tuple(chain.from_iterable(chunk.get("choices") or () for chunk in chunks))
+        provider_specific_fields: Final = _last_provider_specific_fields(choices)
         return Choices(
             index=index,
             finish_reason=ChunkProcessor._finish_reason_of_chunks(
                 chunks, unreported="tool_calls" if _carries_tool_calls(chunks) else "stop"
             ),
             message={"role": ChunkProcessor._get_role_from_chunks(chunks), "content": ""},
-            provider_specific_fields=None,
-            **_streamed_vllm_choice_fields(chain.from_iterable(chunk.get("choices") or () for chunk in chunks)),
+            provider_specific_fields=dict(provider_specific_fields) if provider_specific_fields is not None else None,
+            **_streamed_vllm_choice_fields(choices),
         )
 
     @staticmethod
@@ -481,6 +497,7 @@ class ChunkProcessor:
 
         role: Final = ChunkProcessor._get_role_from_chunks(chunks)
         finish_reason: Final = ChunkProcessor._finish_reason_of_chunks(chunks)
+        single_choice_fields: Final = _last_provider_specific_fields(_first_choices(chunks))
 
         # Initialize the response dictionary
         response = ModelResponse(
@@ -508,6 +525,9 @@ class ChunkProcessor:
                             "index": 0,
                             "message": {"role": role, "content": ""},
                             "finish_reason": finish_reason,
+                            "provider_specific_fields": (
+                                dict(single_choice_fields) if single_choice_fields is not None else None
+                            ),
                             **_streamed_vllm_choice_fields(_first_choices(chunks)),
                         }
                     ]
@@ -946,12 +966,12 @@ class ChunkProcessor:
             usage_chunk = chunk.hidden_params.get("usage", None)
 
         if isinstance(usage_chunk, dict):
-            return Usage(**usage_chunk)
+            return Usage(**_usage_fields(usage_chunk))
         if isinstance(usage_chunk, UnreportedUsage):
             return None
         if usage_chunk is None or isinstance(usage_chunk, Usage):
             return usage_chunk
-        return Usage(**usage_chunk.model_dump())
+        return Usage(**_usage_fields(require_attributes(usage_chunk, _SupportsModelDump, "model_dump").model_dump()))
 
     def _calculate_usage_per_chunk(
         self,
@@ -994,9 +1014,8 @@ class ChunkProcessor:
         cache_creation_token_details: CacheCreationTokenDetails | None = None
         cost: float | None = None
 
-        for chunk in chunks:
-            usage_chunk = self.extract_usage_chunk(chunk)
-
+        usage_chunks: Final = tuple(self.extract_usage_chunk(chunk) for chunk in chunks)
+        for usage_chunk in usage_chunks:
             if usage_chunk is not None:
                 usage_chunk_dict = self._usage_chunk_calculation_helper(usage_chunk)
                 if usage_chunk_dict["prompt_tokens"] is not None and (
@@ -1077,15 +1096,12 @@ class ChunkProcessor:
             completion_tokens_details=None if cursor_was_reset else completion_tokens_details,
             prompt_tokens_details=prompt_tokens_details,
             cost=cost,
-            inference_geo=self._last_provider_pricing_field(chunks, "inference_geo"),
-            speed=self._last_provider_pricing_field(chunks, "speed"),
+            inference_geo=self._last_provider_pricing_field(usage_chunks, "inference_geo"),
+            speed=self._last_provider_pricing_field(usage_chunks, "speed"),
         )
 
-    def _last_provider_pricing_field(
-        self,
-        chunks: Sequence["_UsageBearingChunk | ModelResponse"],
-        field: str,
-    ) -> str | None:
+    @staticmethod
+    def _last_provider_pricing_field(usage_chunks: Sequence[Usage | None], field: str) -> str | None:
         """
         Last value of a provider-specific usage field that changes pricing but is not a
         declared ``Usage`` field, e.g. Anthropic's ``speed`` (fast mode multiplies
@@ -1093,9 +1109,8 @@ class ChunkProcessor:
         """
         values: Final = [
             value
-            for chunk in chunks
-            if (usage_chunk := self.extract_usage_chunk(chunk)) is not None
-            and isinstance(value := getattr(usage_chunk, field, None), str)
+            for usage_chunk in usage_chunks
+            if usage_chunk is not None and isinstance(value := getattr(usage_chunk, field, None), str)
         ]
         return values[-1] if values else None
 
@@ -1114,6 +1129,18 @@ class ChunkProcessor:
         if isinstance(chunk, dict):
             return chunk.get("choices", ())
         return getattr(chunk, "choices", ())
+
+    @staticmethod
+    def choice_indices_with_observed_finish_reason(chunks: Iterable[object]) -> frozenset[int]:
+        choices: Final = tuple(chain.from_iterable(object_items(_field_of(chunk, "choices")) for chunk in chunks))
+        finished: Final = frozenset(
+            _stream_choice_index(choice)
+            for choice in choices
+            if ChunkProcessor._finish_reason_of_choice(choice) is not None
+        )
+        if len(frozenset(map(_stream_choice_index, choices))) > 1:
+            return finished
+        return frozenset({0}) if finished else frozenset()
 
     @staticmethod
     def _saw_finish_reason(chunks: Sequence["_UsageBearingChunk | ModelResponse"]) -> bool:
@@ -1139,28 +1166,29 @@ class ChunkProcessor:
         Anthropic ``message_start`` cursor, a small placeholder whose magnitude
         varies per request (1 and 8 both observed live), so reset to None and let
         ``calculate_usage()``'s ``token_counter(...)`` fallback estimate from
-        the actually-received text and reasoning instead. Gated on
-        ``custom_llm_provider == "anthropic"`` so the heuristic (which encodes
-        Anthropic's specific message_start SSE shape) does not silently affect
-        other providers that legitimately report usage from a single event.
+        the actually-received text and reasoning instead. Gated on streams
+        parsed from Anthropic's message_start SSE shape (``anthropic``, or a
+        chunk Anthropic's parser marked as its message_start on any provider
+        that reuses it) so the heuristic does not silently affect other
+        providers that legitimately report usage from a single event.
         """
         saw_non_cursor_completion: Final = completion_usage_updates >= 2 or ChunkProcessor._saw_finish_reason(chunks)
         if saw_non_cursor_completion:
             return completion_tokens
 
-        custom_llm_provider: str | None = None
-        if chunks:
-            first_chunk: Final = chunks[0]
-            if isinstance(first_chunk, dict):
-                hp = first_chunk.get("_hidden_params")
-            else:
-                hp = getattr(first_chunk, "_hidden_params", None)
-            if isinstance(hp, dict):
-                custom_llm_provider = hp.get("custom_llm_provider")
-
-        if custom_llm_provider == "anthropic":
+        if any(ChunkProcessor._streamed_anthropic_message_start(chunk) for chunk in chunks):
             return None
         return completion_tokens
+
+    @staticmethod
+    def _streamed_anthropic_message_start(chunk: "_UsageBearingChunk | ModelResponse") -> bool:
+        hidden_params: Final = object_mapping(
+            chunk.get("_hidden_params") if isinstance(chunk, dict) else getattr(chunk, "_hidden_params", None)
+        )
+        return hidden_params is not None and (
+            hidden_params.get("custom_llm_provider") == "anthropic"
+            or hidden_params.get("anthropic_message_start") is True
+        )
 
     def calculate_usage(
         self,
@@ -1275,7 +1303,7 @@ class ChunkProcessor:
             if value is not None
         }
 
-        returned_usage = Usage(**returned_usage.model_dump(), **provider_pricing_fields)
+        returned_usage = Usage(**_usage_fields(returned_usage.model_dump()), **provider_pricing_fields)
 
         return returned_usage
 
@@ -1327,7 +1355,7 @@ def _as_text_completion_chunk(
     return _text_completion_chunk_from_mapping(chunk)
 
 
-_LogprobsValue: Final = TypeVar("_LogprobsValue")
+_LogprobsValue = TypeVar("_LogprobsValue")
 
 
 def _joined_or_none(fields: Iterable[Sequence[_LogprobsValue] | None]) -> list[_LogprobsValue] | None:
@@ -1500,7 +1528,11 @@ def _stamp_streaming_usage_cost(usage: Usage, response: ModelResponse, logging_o
     computed_cost: Final = logging_obj.response_cost_calculator(result=response)
     if isinstance(computed_cost, bool) or not isinstance(computed_cost, (int, float)) or computed_cost < 0:
         return
-    if computed_cost > 0 or isinstance(getattr(usage, "cost", None), (int, float)):
+    if (
+        computed_cost > 0
+        or isinstance(getattr(usage, "cost", None), (int, float))
+        or logging_obj.is_usage_explicitly_free(response)
+    ):
         stamp_litellm_bill_on_usage(response, usage, float(computed_cost))
 
 
@@ -1533,6 +1565,15 @@ def _streamed_vllm_choice_fields(choices: Iterable[object]) -> Mapping[str, obje
     )
     present_fields: Final = frozenset(chain.from_iterable(fields.keys() for fields in extras))
     return MappingProxyType({field: streamed_values[field] for field in VLLM_CHOICE_FIELDS if field in present_fields})
+
+
+def _last_provider_specific_fields(choices: Iterable[object]) -> Mapping[str, object] | None:
+    carried: Final = tuple(
+        fields
+        for choice in choices
+        if (fields := object_mapping(_choice_extras(choice).get("provider_specific_fields")))
+    )
+    return carried[-1] if carried else None
 
 
 def _delta_reasoning_items(delta: object) -> Sequence[object]:
