@@ -1629,6 +1629,7 @@ def responses(
                 kwargs, responses_api_provider_config, allowed_openai_params, model, custom_llm_provider
             )
             return litellm_completion_transformation_handler.response_api_handler(
+                (previous_response_id,) if previous_response_id else (),
                 model=model,
                 input=input,
                 responses_api_request=response_api_optional_params,
