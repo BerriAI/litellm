@@ -57,6 +57,17 @@ describe("MCPEventSubscriptionsTab", () => {
     expect(networking.fetchMCPEventSubscriptions).toHaveBeenCalledWith("sk-admin", 0, 1);
   });
 
+  it("loads the next offset returned by the gateway", async () => {
+    networking.fetchMCPEventSubscriptions.mockResolvedValueOnce({ subscriptions: [SUBSCRIPTION], next_offset: 7 });
+    networking.fetchMCPEventSubscriptions.mockResolvedValue({
+      subscriptions: [{ ...SUBSCRIPTION, event_name: "deploy.done" }],
+    });
+    renderTab();
+    await userEvent.click(await screen.findByRole("button", { name: "Next page" }));
+    expect(await screen.findByText("deploy.done")).toBeInTheDocument();
+    expect(networking.fetchMCPEventSubscriptions).toHaveBeenCalledWith("sk-admin", 7, 1);
+  });
+
   it("lists webhook subscriptions with their arguments, callback host and last error", async () => {
     renderTab(false);
     const row = await screen.findByRole("row", { name: /build.failed/ });
