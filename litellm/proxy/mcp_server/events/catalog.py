@@ -56,12 +56,21 @@ def gateway_name(server: MCPServer, upstream_name: str) -> str:
 
 
 def resolve(name: str, servers: tuple[EventServer, ...]) -> ResolvedEvent | None:
-    matches: Final = tuple(
-        (len(match[0]), ResolvedEvent(target=server, upstream_name=match[1], gateway_name=name))
-        for server in servers
-        if (match := match_known_server_prefix(name, iter_known_server_prefixes(server.server))) is not None
-    )
-    return max(matches, key=lambda item: item[0])[1] if matches else None
+    for current_only in (True, False):
+        matches: Final = tuple(
+            (len(match[0]), ResolvedEvent(target=server, upstream_name=match[1], gateway_name=name))
+            for server in servers
+            if (
+                match := match_known_server_prefix(
+                    name,
+                    (get_server_prefix(server.server),) if current_only else iter_known_server_prefixes(server.server),
+                )
+            )
+            is not None
+        )
+        if matches:
+            return max(matches, key=lambda item: item[0])[1]
+    return None
 
 
 def offered_modes(
@@ -106,7 +115,12 @@ async def server_catalog(
         for descriptor in await runtime.descriptors(target)
         if publishable(descriptor, server.config, grant)
     )
-    return tuple(item for item in listed if item is not None)
+    targets: Final = event_servers(allowed)
+    return tuple(
+        item
+        for item in listed
+        if item is not None and (owner := resolve(item.name, targets)) is not None and owner.target == server
+    )
 
 
 async def list_events(
@@ -117,7 +131,6 @@ async def list_events(
     *,
     store_available: bool = False,
 ) -> tuple[EventType, ...]:
-    """Every reachable server's catalog, fetched concurrently; a server that fails or misses the deadline is skipped."""
     allowed: Final = await runtime.allowed_servers(context)
 
     webhooks_enabled: Final = store_available and settings.public_base_url is not None

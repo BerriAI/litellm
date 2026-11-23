@@ -23246,19 +23246,21 @@ async def test_pre_call_guardrail_bearer_never_carries_the_admission_key(
         (object(), None),
     ),
 )
-def test_stored_events_config_accepts_json_or_mappings_and_ignores_anything_else(stored, enabled):
+def test_stored_events_config_accepts_json_or_mappings_and_ignores_anything_else(
+    stored: object, enabled: bool | None
+) -> None:
     from litellm.proxy.mcp_server.mcp_server_manager import _stored_events_config
 
-    config = _stored_events_config(stored)
+    config: Final = _stored_events_config(stored)
     assert (config.enabled if config is not None else None) is enabled
 
 
 @pytest.mark.parametrize(
     "events",
-    (None, MCPServerEventsConfig(enabled=True, allowed_events=["build.*"]), MCPServerEventsConfig(enabled=False)),
+    (None, MCPServerEventsConfig(enabled=True, allowed_events=("build.*",)), MCPServerEventsConfig(enabled=False)),
 )
-def test_the_server_listing_row_carries_the_events_config(events):
-    server = MCPServer(
+def test_the_server_listing_row_carries_the_events_config(events: MCPServerEventsConfig | None) -> None:
+    server: Final = MCPServer(
         server_id="events-server",
         name="ci",
         url="https://example.com/mcp",
@@ -23269,7 +23271,7 @@ def test_the_server_listing_row_carries_the_events_config(events):
     assert MCPServerManager().build_mcp_server_table(server).events == events
 
 
-def test_a_yaml_server_with_an_unreadable_events_block_loads_with_events_off():
+def test_a_yaml_server_with_an_unreadable_events_block_loads_with_events_off() -> None:
     from litellm.proxy.mcp_server.mcp_server_manager import _stored_events_config
 
     assert _stored_events_config({"enabled": True, "allowed_events": []}) is None
