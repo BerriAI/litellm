@@ -14,13 +14,14 @@ from litellm.litellm_core_utils.exception_mapping_utils import ExceptionCheckers
 from litellm.proxy.mcp_server.catalog import catalog_operation, global_manager
 from litellm.proxy.mcp_server.faults import iter_exception_tree
 from litellm.proxy.mcp_server.utils import MCP_TOOL_PREFIX_SEPARATOR
+from litellm.router_api import RoutingContext
 
 if TYPE_CHECKING:
     from semantic_router.routers import SemanticRouter
 
     from litellm.router import Router
 
-_Tool: Final = TypeVar("_Tool")
+_Tool = TypeVar("_Tool")
 
 
 class SemanticToolFilterContextWindowError(Exception):
@@ -172,7 +173,7 @@ class SemanticMCPToolFilter:
             self.tool_router = SemanticRouter(
                 routes=routes,
                 encoder=LiteLLMRouterEncoder(
-                    litellm_router_instance=self.router_instance,
+                    ctx=RoutingContext(self.router_instance),
                     model_name=self.embedding_model,
                     score_threshold=self.similarity_threshold,
                 ),
@@ -247,7 +248,7 @@ class SemanticMCPToolFilter:
                 router: Final = SemanticRouter(
                     routes=[],
                     encoder=LiteLLMRouterEncoder(
-                        litellm_router_instance=self.router_instance,
+                        ctx=RoutingContext(self.router_instance),
                         model_name=self.embedding_model,
                         score_threshold=self.similarity_threshold,
                     ),

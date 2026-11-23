@@ -35,10 +35,15 @@ class PatchModelRequest(updateDeployment):
 
 
 class ModelGroupInfoProxy(ModelGroupInfo):
+    supports_background_chat: bool = Field(
+        default=False, description="Whether cache-backed background Responses runs are enabled for this model group"
+    )
     is_public_model_group: bool = Field(default=False)
     health_status: str | None = Field(default=None)
     health_response_time: float | None = Field(default=None)
     health_checked_at: str | None = Field(default=None)
+    pass_through_path: str | None = Field(default=None)
+    pass_through_methods: tuple[str, ...] | None = Field(default=None)
     custom_tags: tuple[str, ...] | None = None
     custom_metadata: Mapping[str, str | int | float | bool] | None = None
 

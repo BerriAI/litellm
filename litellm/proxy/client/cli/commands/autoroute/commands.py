@@ -111,7 +111,7 @@ def start(port: int) -> None:
             "lite autoroute start launches a local litellm proxy, which needs the proxy runtime that the "
             f"thin `litellm[cli]` install does not include (missing: {', '.join(missing)}). Install the "
             "proxy runtime with `uv tool install --force 'litellm[proxy]'`, or to QA a branch, "
-            "`curl -fsSL https://raw.githubusercontent.com/BerriAI/litellm/<branch>/scripts/install.sh | "
+            "`curl -fsSL https://raw.githubusercontent.com/BerriAI/litellm/<branch>/litellm/scripts/install.sh | "
             "LITELLM_CLI_REF=<branch> sh`."
         )
 

@@ -19,6 +19,7 @@ from litellm.llms.chatgpt.authenticator import Authenticator
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.llms.chatgpt.responses.transformation import ChatGPTResponsesAPIConfig
 from litellm.llms.openai.common_utils import OpenAIError
+from litellm.llms.openai.responses.transformation import OPENAI_RESPONSES_API_MIN_MAX_OUTPUT_TOKENS
 from litellm.main import responses_api_bridge_check
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
@@ -59,7 +60,7 @@ class TestChatGPTResponsesAPITransformation:
         assert request["reasoning"] == {"effort": effort}
         assert request["stream"] is True
         assert request["store"] is False
-        assert "max_output_tokens" not in request
+        assert request["max_output_tokens"] == 16
         assert "prompt_cache_options" not in request
 
     @pytest.mark.parametrize("requested_tier", [None, "auto", "flex", "unknown"])
@@ -236,9 +237,9 @@ class TestChatGPTResponsesAPITransformation:
                 "top_p": 0.9,
                 "context_management": [{"type": "compaction", "compact_threshold": 200000}],
                 "metadata": {"foo": "bar"},
-                "max_output_tokens": 123,
                 "stream_options": {"include_usage": True},
                 # supported and should be preserved
+                "max_output_tokens": 123,
                 "truncation": "auto",
                 "previous_response_id": "resp_123",
                 "reasoning": {"effort": "medium"},
@@ -254,9 +255,9 @@ class TestChatGPTResponsesAPITransformation:
         assert "top_p" not in request
         assert "context_management" not in request
         assert "metadata" not in request
-        assert "max_output_tokens" not in request
         assert "stream_options" not in request
 
+        assert request["max_output_tokens"] == 123
         assert request["truncation"] == "auto"
         assert request["previous_response_id"] == "resp_123"
         assert request["reasoning"] == {"effort": "medium"}
@@ -265,6 +266,106 @@ class TestChatGPTResponsesAPITransformation:
             "type": "function",
             "function": {"name": "hello"},
         }
+
+    @pytest.mark.parametrize("parallel_tool_calls", [True, False])
+    def test_chatgpt_preserves_parallel_tool_calls(self, parallel_tool_calls: bool) -> None:
+        """parallel_tool_calls is validated by the Codex backend and must not
+        be dropped by the allowed-keys filter."""
+        config: Final = ChatGPTResponsesAPIConfig()
+        request: Final = config.transform_responses_api_request(
+            model="chatgpt/gpt-5.3-codex",
+            input="hi",
+            response_api_optional_request_params={
+                "parallel_tool_calls": parallel_tool_calls,
+            },
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert request["parallel_tool_calls"] is parallel_tool_calls
+
+    def test_chatgpt_responses_lite_restores_stripped_false(self) -> None:
+        """Regression: a Responses-Lite request (codex >= 0.144, gpt-5.6-*)
+        carries parallel_tool_calls=false; dropping it made the backend
+        reject every request with
+        "X-OpenAI-Internal-Codex-Responses-Lite requires `parallel_tool_calls`
+        to be false."."""
+        config: Final = ChatGPTResponsesAPIConfig()
+        request: Final = config.transform_responses_api_request(
+            model="chatgpt/gpt-5.6-sol",
+            input="hi",
+            response_api_optional_request_params={
+                "parallel_tool_calls": False,
+                "reasoning": {"context": "all_turns"},
+            },
+            litellm_params=GenericLiteLLMParams(),
+            headers={"X-OpenAI-Internal-Codex-Responses-Lite": "true"},
+        )
+
+        assert request["parallel_tool_calls"] is False
+        assert request["reasoning"]["context"] == "all_turns"
+
+    def test_chatgpt_responses_lite_forces_lite_contract(self) -> None:
+        """Under the Lite header the backend hard-rejects any other value,
+        so true is normalized to false and reasoning.context is pinned."""
+        config: Final = ChatGPTResponsesAPIConfig()
+        request: Final = config.transform_responses_api_request(
+            model="chatgpt/gpt-5.6-sol",
+            input="hi",
+            response_api_optional_request_params={
+                "parallel_tool_calls": True,
+                "reasoning": {"effort": "high"},
+            },
+            litellm_params=GenericLiteLLMParams(),
+            headers={"x-openai-internal-codex-responses-lite": "true"},
+        )
+
+        assert request["parallel_tool_calls"] is False
+        assert request["reasoning"] == {"effort": "high", "context": "all_turns"}
+
+    def test_chatgpt_responses_lite_normalizes_omitted_fields(self) -> None:
+        """codex 0.144.x can omit the reasoning object entirely; the Lite
+        validator rejects the omission the same way."""
+        config: Final = ChatGPTResponsesAPIConfig()
+        request: Final = config.transform_responses_api_request(
+            model="chatgpt/gpt-5.6-sol",
+            input="hi",
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={"x-openai-internal-codex-responses-lite": "true"},
+        )
+
+        assert request["parallel_tool_calls"] is False
+        assert request["reasoning"] == {"context": "all_turns"}
+
+    def test_chatgpt_unrelated_headers_do_not_trigger_lite_normalization(self) -> None:
+        """Ordinary outbound headers (auth etc.) without the Lite marker must
+        leave the request untouched."""
+        config: Final = ChatGPTResponsesAPIConfig()
+        request: Final = config.transform_responses_api_request(
+            model="chatgpt/gpt-5.6-sol",
+            input="hi",
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={"Authorization": "Bearer token", "originator": "codex_cli_rs"},
+        )
+
+        assert "parallel_tool_calls" not in request
+        assert "reasoning" not in request
+
+    @pytest.mark.parametrize("header_value", ["false", "0", "no", ""])
+    def test_chatgpt_responses_lite_falsy_header_is_ignored(self, header_value: str) -> None:
+        config: Final = ChatGPTResponsesAPIConfig()
+        request: Final = config.transform_responses_api_request(
+            model="chatgpt/gpt-5.6-sol",
+            input="hi",
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={"x-openai-internal-codex-responses-lite": header_value},
+        )
+
+        assert "parallel_tool_calls" not in request
+        assert "reasoning" not in request
 
     @pytest.mark.parametrize(
         ("model_name", "response_model"),
@@ -618,22 +719,25 @@ def test_chatgpt_non_stream_sse_keeps_an_output_item_whose_text_holds_unicode_li
     assert parsed.output_text == text
 
 
-@pytest.mark.parametrize("call", ["responses", "completion"])
-def test_prompt_cache_key_keeps_one_session_header_across_requests(
-    call: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+@pytest.fixture
+def chatgpt_token_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / "auth.json").write_text(
         json.dumps({"access_token": "token", "account_id": "acct", "expires_at": 4102444800})
     )
     monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path))
     monkeypatch.delenv("CHATGPT_AUTH_FILE", raising=False)
+
+
+def _completed_codex_upstream(output_text: str, incomplete_reason: str | None = None) -> MagicMock:
+    status: Final = "completed" if incomplete_reason is None else "incomplete"
     completed: Final = {
-        "type": "response.completed",
+        "type": f"response.{status}",
         "response": {
             "id": "resp_1",
             "object": "response",
             "created_at": 1,
-            "status": "completed",
+            "status": status,
+            "incomplete_details": None if incomplete_reason is None else {"reason": incomplete_reason},
             "model": "gpt-5.5",
             "output": [
                 {
@@ -641,19 +745,25 @@ def test_prompt_cache_key_keeps_one_session_header_across_requests(
                     "id": "msg_1",
                     "status": "completed",
                     "role": "assistant",
-                    "content": [{"type": "output_text", "text": "OK", "annotations": []}],
+                    "content": [{"type": "output_text", "text": output_text, "annotations": []}],
                 }
             ],
             "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
         },
     }
-    upstream: Final = MagicMock(
+    return MagicMock(
         side_effect=lambda _request: httpx.Response(
             200,
             headers={"content-type": "text/event-stream"},
-            content=f"event: response.completed\ndata: {json.dumps(completed)}\n\n".encode(),
+            content=f"event: response.{status}\ndata: {json.dumps(completed)}\n\n".encode(),
         )
     )
+
+
+@pytest.mark.usefixtures("chatgpt_token_dir")
+@pytest.mark.parametrize("call", ["responses", "completion"])
+def test_prompt_cache_key_keeps_one_session_header_across_requests(call: str) -> None:
+    upstream: Final = _completed_codex_upstream("OK")
     client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(upstream)))
     for _ in range(2):
         if call == "responses":
@@ -667,3 +777,89 @@ def test_prompt_cache_key_keeps_one_session_header_across_requests(
             )
 
     assert [call.args[0].headers["session_id"] for call in upstream.call_args_list] == ["conv-123", "conv-123"]
+
+
+_CITY_SCHEMA: Final = {
+    "type": "object",
+    "properties": {"city": {"type": "string"}, "country": {"type": "string"}},
+    "required": ["city", "country"],
+    "additionalProperties": False,
+}
+
+
+@pytest.mark.usefixtures("chatgpt_token_dir")
+def test_responses_text_reaches_the_codex_backend_whole() -> None:
+    text: Final = {
+        "format": {"type": "json_schema", "name": "city", "schema": _CITY_SCHEMA, "strict": True},
+        "verbosity": "low",
+    }
+    upstream: Final = _completed_codex_upstream('{"city": "Paris", "country": "France"}')
+    client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(upstream)))
+
+    litellm.responses(model="chatgpt/gpt-5.5", input="Where is the Eiffel Tower?", text=text, client=client)
+
+    assert json.loads(upstream.call_args.args[0].content)["text"] == text
+
+
+@pytest.mark.usefixtures("chatgpt_token_dir")
+@pytest.mark.parametrize(
+    ("response_format", "expected_format"),
+    [
+        (
+            {"type": "json_schema", "json_schema": {"name": "city", "schema": _CITY_SCHEMA, "strict": True}},
+            {"type": "json_schema", "name": "city", "schema": _CITY_SCHEMA, "strict": True},
+        ),
+        ({"type": "json_object"}, {"type": "json_object"}),
+    ],
+)
+def test_chat_response_format_reaches_the_codex_backend_as_text_format(
+    response_format: dict[str, object], expected_format: dict[str, object]
+) -> None:
+    upstream: Final = _completed_codex_upstream('{"city": "Paris", "country": "France"}')
+    client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(upstream)))
+
+    litellm.completion(
+        model="chatgpt/gpt-5.5",
+        messages=[{"role": "user", "content": "Where is the Eiffel Tower? Answer in JSON."}],
+        response_format=response_format,
+        client=client,
+    )
+
+    assert json.loads(upstream.call_args.args[0].content)["text"]["format"] == expected_format
+
+
+@pytest.mark.usefixtures("chatgpt_token_dir")
+@pytest.mark.parametrize(
+    ("max_tokens", "expected_max_output_tokens"),
+    [(300, 300), (OPENAI_RESPONSES_API_MIN_MAX_OUTPUT_TOKENS - 1, OPENAI_RESPONSES_API_MIN_MAX_OUTPUT_TOKENS)],
+)
+def test_chat_max_tokens_reaches_the_codex_backend_no_lower_than_its_minimum(
+    max_tokens: int, expected_max_output_tokens: int
+) -> None:
+    upstream: Final = _completed_codex_upstream("OK")
+    client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(upstream)))
+
+    litellm.completion(
+        model="chatgpt/gpt-5.5",
+        messages=[{"role": "user", "content": "hi"}],
+        max_tokens=max_tokens,
+        client=client,
+    )
+
+    assert json.loads(upstream.call_args.args[0].content)["max_output_tokens"] == expected_max_output_tokens
+
+
+@pytest.mark.usefixtures("chatgpt_token_dir")
+def test_non_stream_chat_cut_off_by_max_tokens_returns_the_partial_answer() -> None:
+    upstream: Final = _completed_codex_upstream('{"capitals": ["Paris", "Ber', incomplete_reason="max_output_tokens")
+    client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(upstream)))
+
+    response: Final = litellm.completion(
+        model="chatgpt/gpt-5.5",
+        messages=[{"role": "user", "content": "List capitals as JSON."}],
+        max_tokens=16,
+        client=client,
+    )
+
+    assert response.choices[0].finish_reason == "length"
+    assert response.choices[0].message.content == '{"capitals": ["Paris", "Ber'

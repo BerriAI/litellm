@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final
 
 from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
@@ -22,8 +23,8 @@ class WatsonxPassthroughConfig(IBMWatsonXMixin, BasePassthroughConfig):
         api_key: str | None,
         model: str,
         endpoint: str,
-        request_query_params: dict | None,
-        litellm_params: dict,
+        request_query_params: Mapping[str, object] | None,
+        litellm_params: Mapping[str, object],
     ) -> tuple["URL", str]:
         """
         Construct complete Watsonx URL with version parameter.

@@ -1,10 +1,12 @@
+from collections.abc import Iterator
 from typing import Final
 
 import anthropic
 import pytest
 from anthropic.types import Message
 from integration._support import claude_code as cc
-from integration._support.client import Gateway
+from integration._support.client import Gateway, gateway_from_environment
+from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue, TypeAdapter
 
@@ -144,8 +146,23 @@ def test_azure_ai_claude_messages_preserves_target_auth_beta_and_typed_response(
         assert _JSON_OBJECT.validate_json(provider_request.body) == expected_provider_body, provider_request.body
 
 
+@pytest.fixture(scope="module")
+def local_beta_map_gateway(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Gateway]:
+    with (
+        gateway_from_environment() as shared,
+        owned_proxy(
+            shared,
+            tmp_path_factory.mktemp("azure-ai-local-beta-map"),
+            {"LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS": "true"},
+        ) as owned,
+    ):
+        yield owned
+
+
 @pytest.mark.parametrize("stream", [False, True], ids=["non_stream", "stream"])
-def test_azure_ai_claude_messages_filters_auto_injected_betas_by_azure_support(gateway: Gateway, stream: bool) -> None:
+def test_azure_ai_claude_messages_forwards_the_auto_injected_betas_azure_accepts(
+    local_beta_map_gateway: Gateway, stream: bool
+) -> None:
     identity: Final = f"msg_azure_claude_beta_filter_{stream}"
     api_path: Final = "/anthropic/v1/messages"
     reply_body: Final = cc.message_reply(identity, _BACKEND, _CONTENT, _USAGE)
@@ -172,7 +189,7 @@ def test_azure_ai_claude_messages_filters_auto_injected_betas_by_azure_support(g
         "context_management": context_management,
     }
     expected_provider_body: Final = {**request_body_template, "model": _BACKEND}
-    expected_beta: Final = "structured-outputs-2025-11-13"
+    expected_beta: Final = "compact-2026-01-12,structured-outputs-2025-11-13"
 
     def respond(request: Request) -> Reply:
         assert request.method == "POST" and request.target == api_path, request.target
@@ -185,7 +202,7 @@ def test_azure_ai_claude_messages_filters_auto_injected_betas_by_azure_support(g
             return Reply(content_type="text/event-stream", chunks=stream_reply)
         return Reply(body=reply_body)
 
-    with wire_server(respond) as wire, gateway.scenario() as scenario:
+    with wire_server(respond) as wire, local_beta_map_gateway.scenario() as scenario:
         model: Final = scenario.model(
             model=f"azure_ai/{_BACKEND}",
             api_base=wire.url,
@@ -193,8 +210,8 @@ def test_azure_ai_claude_messages_filters_auto_injected_betas_by_azure_support(g
             num_retries=0,
         )
         with anthropic.Anthropic(
-            api_key=gateway.key,
-            base_url=str(gateway.client.base_url),
+            api_key=local_beta_map_gateway.key,
+            base_url=str(local_beta_map_gateway.client.base_url),
             max_retries=0,
         ) as client:
             if stream:

@@ -2,10 +2,15 @@
 Utility functions for Interactions API.
 """
 
+from collections.abc import Mapping
 from typing import Any, Final, cast
+
+from pydantic import TypeAdapter
 
 from litellm.llms.base_llm.interactions.transformation import BaseInteractionsAPIConfig
 from litellm.types.interactions import InteractionsAPIOptionalRequestParams
+
+_OPAQUE_VALUE: Final = TypeAdapter(object)
 
 # Valid optional parameter keys per OpenAPI spec
 INTERACTIONS_API_OPTIONAL_PARAMS: Final = {
@@ -20,6 +25,7 @@ INTERACTIONS_API_OPTIONAL_PARAMS: Final = {
     "response_format",
     "response_mime_type",
     "previous_interaction_id",
+    "continuation_token",
     "agent_config",
 }
 
@@ -75,9 +81,9 @@ class InteractionsAPIRequestUtils:
         """
         from litellm.utils import PreProcessNonDefaultParams
 
-        custom_llm_provider: Final = params.pop("custom_llm_provider", None)
-        special_params: Final = params.pop("kwargs", {})
-        additional_drop_params: Final = params.pop("additional_drop_params", None)
+        custom_llm_provider: Final = _OPAQUE_VALUE.validate_python(params.pop("custom_llm_provider", None))
+        special_params: Final[Mapping[str, object]] = params.pop("kwargs", {})
+        additional_drop_params: Final = _OPAQUE_VALUE.validate_python(params.pop("additional_drop_params", None))
 
         non_default_params: Final = PreProcessNonDefaultParams.base_pre_process_non_default_params(
             passed_params=params,

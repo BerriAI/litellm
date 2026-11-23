@@ -48,8 +48,10 @@ from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrai
 from litellm.proxy.mcp_server.guardrail_translation.handler import (
     MCPGuardrailTranslationHandler,
 )
+from litellm.router_strategy.tag_based_routing import get_tags_from_request_kwargs
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.types.responses.main import build_web_search_call
 from litellm.types.utils import (
     CallTypes,
     CallTypesLiteral,
@@ -1289,6 +1291,38 @@ class TestStreamingTransform:
         assert guardrail.received_tool_calls
 
     @pytest.mark.asyncio
+    async def test_claude_server_tool_call_chunks_keep_their_provider_fields(self):
+        server_fields: Final = {
+            "server_tool_calls": [
+                {
+                    "id": "srvtoolu_01",
+                    "type": "function",
+                    "function": {"name": "web_fetch", "arguments": '{"url": "https://example.com/"}'},
+                }
+            ],
+            "web_search_calls": {
+                "srvtoolu_01": build_web_search_call(
+                    "srvtoolu_01", {"url": "https://example.com/"}, None, tool_name="web_fetch"
+                ).model_dump()
+            },
+        }
+        server_chunk: Final = ModelResponseStream(
+            choices=[StreamingChoices(index=0, delta=Delta(content=None, provider_specific_fields=server_fields))],
+        )
+
+        out: Final = await _drive_stream(
+            UnifiedLLMGuardrails(),
+            _StreamingTextGuardrail(),
+            [server_chunk, _stream_chunk("done", finish_reason="stop")],
+        )
+
+        delivered: Final = [
+            getattr(item.choices[0].delta, "provider_specific_fields", None) for item in out if item.choices
+        ]
+        assert server_fields in delivered
+        assert "".join(_delta_text(item) for item in out) == "DONE"
+
+    @pytest.mark.asyncio
     async def test_per_choice_finish_reason_when_choices_finish_in_different_chunks(self):
         """n>1: a choice finishing before the stream's last chunk keeps its own
         finish_reason (it must not be lost because it is not on last_chunk)."""
@@ -2024,6 +2058,28 @@ class TestStreamingHttpErrorFrames:
     @pytest.fixture(autouse=True)
     def _use_real_mappings(self, monkeypatch):
         _patch_translation_mappings(monkeypatch, load_guardrail_translation_mappings())
+
+    @pytest.mark.asyncio
+    async def test_v1_a2a_stream_route_scans_response_chunks(self):
+        guardrail: Final = RecordingGuardrail()
+        guardrail.streaming_sampling_rate = 1
+        chunk: Final = {
+            "jsonrpc": "2.0",
+            "id": "stream-1",
+            "result": {
+                "kind": "task",
+                "artifacts": [{"parts": [{"kind": "text", "text": "streamed text"}]}],
+            },
+        }
+
+        await _drive_stream(
+            UnifiedLLMGuardrails(),
+            guardrail,
+            [chunk],
+            request_route="/v1/a2a/my-agent/message/stream",
+        )
+
+        assert guardrail.apply_calls[0]["inputs"]["texts"] == ["streamed text"]
 
     @pytest.mark.asyncio
     async def test_chat_eos_block_emits_data_error_frame(self):
@@ -3199,6 +3255,39 @@ class TestTranslationMappingsAreReadLive:
         ]
 
 
+@pytest.mark.parametrize("hook", ["async_pre_call_hook", "async_moderation_hook"])
+@pytest.mark.parametrize("metadata_key", ["metadata", "litellm_metadata"])
+@pytest.mark.asyncio
+async def test_input_guardrails_preserve_routing_tags_and_existing_metadata(
+    monkeypatch: pytest.MonkeyPatch, hook: str, metadata_key: str
+) -> None:
+    _patch_translation_mappings(monkeypatch, {CallTypes.acompletion: OpenAIChatCompletionsHandler})
+    guardrail: Final = RecordingGuardrail()
+    metadata: Final = {"tags": ["region-b"], "inherited_tags": [], "user_api_key_user_id": "request-user"}
+    data: Final = {
+        "guardrail_to_apply": guardrail,
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "hello"}],
+        metadata_key: metadata,
+    }
+    user_api_key_dict: Final = UserAPIKeyAuth(user_id="auth-user", user_email="auth@example.com")
+
+    if hook == "async_pre_call_hook":
+        await UnifiedLLMGuardrails().async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict, cache=DualCache(), data=data, call_type=CallTypes.acompletion.value
+        )
+    else:
+        await UnifiedLLMGuardrails().async_moderation_hook(
+            data=data, user_api_key_dict=user_api_key_dict, call_type=CallTypes.acompletion.value
+        )
+
+    assert len(guardrail.apply_calls) == 1
+    assert guardrail.apply_calls[0]["inputs"]["texts"] == ["hello"]
+    assert get_tags_from_request_kwargs(data) == ["region-b"]
+    assert data[metadata_key] is metadata
+    assert metadata["user_api_key_user_id"] == "request-user"
+
+
 class AttachmentScanningGuardrail(RecordingGuardrail):
     """Records the raw request it is handed for an attachment scan."""
 
@@ -3269,3 +3358,21 @@ async def test_pass_through_guardrail_text_is_the_client_body_without_the_inject
     texts: Final = [call["inputs"]["texts"] for call in guardrail.apply_calls]
     assert [[json.loads(text) for text in call_texts] for call_texts in texts] == [[body]], texts
     assert data["litellm_metadata"]["user_api_key_user_email"] == "someone@example.com", data["litellm_metadata"]
+
+
+@pytest.mark.asyncio
+async def test_moderation_hook_lets_responses_compact_through_without_a_translation() -> None:
+    handler: Final = UnifiedLLMGuardrails()
+    guardrail: Final = RecordingGuardrail()
+    data: Final = {
+        "guardrail_to_apply": guardrail,
+        "model": "gpt-5.4-mini",
+        "input": [{"role": "user", "content": "Remember the number 42."}],
+    }
+
+    result: Final = await handler.async_moderation_hook(
+        data=data, user_api_key_dict=UserAPIKeyAuth(api_key="test-key"), call_type="acompact_responses"
+    )
+
+    assert result is data
+    assert guardrail.apply_calls == []

@@ -8,10 +8,11 @@ budget-window value types and the team-model alias table). Re-exported from
 
 import json
 from datetime import datetime
-from typing import Final, Literal, Optional
+from typing import Final, Literal, Optional, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from litellm.models.budget import BudgetLimit
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
 
@@ -42,12 +43,7 @@ class Member(MemberBase):
     )
 
 
-class BudgetLimitEntry(LiteLLMPydanticObjectBase):
-    """A single budget window with its own limit and independent reset schedule."""
-
-    budget_duration: str
-    max_budget: float
-    reset_at: datetime | None = None
+BudgetLimitEntry: TypeAlias = BudgetLimit
 
 
 class LiteLLM_ModelTable(LiteLLMPydanticObjectBase):
@@ -135,6 +131,10 @@ class LiteLLM_TeamTable(TeamBase):
 
 class LiteLLM_TeamTableCachedObj(LiteLLM_TeamTable):
     last_refreshed_at: float | None = None
+
+
+class LiteLLM_TeamRebuiltFromToken(LiteLLM_TeamTableCachedObj):  # frozen-ok: same mutability as its cached base
+    """Auth's stand-in, built from the key's fields when the team row was unreadable. It has no access groups."""
 
 
 class LiteLLM_DeletedTeamTable(LiteLLM_TeamTable):

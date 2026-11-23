@@ -7,19 +7,52 @@ here and update the Notion plan.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import os
 import sys
+from collections.abc import Awaitable
+from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Dict, Final, Iterator, List, Optional
+from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Dict, Final, Iterator, List, Optional, ParamSpec, TypeVar
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+import litellm.proxy.utils as proxy_utils
+
 if TYPE_CHECKING:
+    import respx
+
     from litellm import Router
 
 from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
+
+_OffloadParams = ParamSpec("_OffloadParams")
+_OffloadResult = TypeVar("_OffloadResult")
+
+
+@pytest.fixture
+def failure_fields_executor(monkeypatch: pytest.MonkeyPatch) -> Iterator[ThreadPoolExecutor]:
+    original_offload: Final = proxy_utils.offload_token_count
+    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="failure-fields-test") as executor:
+        def offload(
+            function: Callable[_OffloadParams, _OffloadResult],
+        ) -> Callable[_OffloadParams, Awaitable[_OffloadResult]]:
+            if function is not proxy_utils._failure_fields_to_lift:
+                return original_offload(function)
+
+            async def run(
+                *args: _OffloadParams.args,
+                **kwargs: _OffloadParams.kwargs,  # kwargs-ok: ParamSpec preserves the real offload's arguments
+            ) -> _OffloadResult:
+                return await asyncio.get_running_loop().run_in_executor(executor, partial(function, *args, **kwargs))
+
+            return run
+
+        monkeypatch.setattr(proxy_utils, "offload_token_count", offload)
+        yield executor
 
 # Repo root, anchored to this file (not CWD) so the path is correct no
 # matter where pytest is invoked from. With the project installed via
@@ -563,3 +596,139 @@ def openai_only_router(monkeypatch: pytest.MonkeyPatch) -> Router:
     monkeypatch.setattr(proxy_server, "general_settings", {})
     monkeypatch.setattr(proxy_server, "user_model", None)
     return router
+
+
+@pytest.fixture
+def failed_spend_row(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> Iterator[Callable[[], tuple[str, str]]]:
+    """Route tts-1, whisper-1 and omni-moderation to an OpenAI deployment whose provider answers 400,
+    and return a reader for the (status, call_type) of the spend row the failure wrote."""
+    import litellm
+    from litellm import Router
+    from litellm.proxy import proxy_server
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
+    from litellm.proxy.proxy_server import ProxyConfig
+    from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+    from litellm.proxy.utils import ProxyLogging
+
+    api_base: Final = "https://failing-provider.example/v1"
+    respx_mock.post(url__startswith=api_base).respond(
+        400, json={"error": {"message": "rejected by the provider", "type": "invalid_request_error"}}
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": model_name,
+                "litellm_params": {
+                    "model": f"openai/{provider_model}",
+                    "api_base": api_base,
+                    "api_key": "provider-key",
+                    "max_retries": 0,
+                },
+            }
+            for model_name, provider_model in (
+                ("tts-1", "tts-1"),
+                ("whisper-1", "whisper-1"),
+                ("omni-moderation", "omni-moderation-latest"),
+            )
+        ],
+        num_retries=0,
+    )
+    cache: Final = UserApiKeyCache()
+    spend_writer: Final = MagicMock(update_database=AsyncMock())
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "callbacks", [ProxyDBLogger(spend_writer=lambda: spend_writer)])
+    for name, value in (
+        ("llm_router", router),
+        ("llm_model_list", router.model_list),
+        ("prisma_client", None),
+        ("general_settings", {}),
+        ("user_model", None),
+        ("proxy_config", ProxyConfig()),
+        ("proxy_logging_obj", ProxyLogging(user_api_key_cache=cache)),
+        ("user_api_key_cache", cache),
+        ("version", "test-version"),
+    ):
+        monkeypatch.setattr(proxy_server, name, value)
+
+    def last_row() -> tuple[str, str]:
+        db_call: Final = spend_writer.update_database.call_args.kwargs
+        payload: Final = get_logging_payload(
+            kwargs=db_call["kwargs"],
+            response_obj=db_call["completion_response"],
+            start_time=db_call["start_time"],
+            end_time=db_call["end_time"],
+        )
+        return payload["status"], payload["call_type"]
+
+    yield last_row
+    ProxyLogging._callback_capabilities_cache.clear()
+
+
+AZURE_STREAM_CUT_ERROR: Final = "Response payload is not completed"
+
+
+@pytest.fixture
+def azure_stream_cut(monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter) -> None:
+    import httpx
+
+    import litellm
+    from litellm import Router
+    from litellm.proxy import proxy_server
+
+    class _CutAfterFirstChunk(httpx.AsyncByteStream):
+        def __init__(self, first_chunk: str) -> None:
+            self._first_chunk: Final = first_chunk
+
+        async def __aiter__(self) -> AsyncIterator[bytes]:
+            yield f"data: {self._first_chunk}\n\n".encode()
+            raise httpx.ReadError(AZURE_STREAM_CUT_ERROR)
+
+    def _streams(first_chunk: str) -> Callable[[httpx.Request], httpx.Response]:
+        return lambda request: httpx.Response(
+            200, headers={"content-type": "text/event-stream"}, stream=_CutAfterFirstChunk(first_chunk)
+        )
+
+    api_base: Final = "https://stream-cut.openai.azure.example"
+    respx_mock.post(url__regex=rf"^{api_base}/openai/deployments/[^/]+/chat/completions").mock(
+        side_effect=_streams(
+            '{"id":"chatcmpl-1","object":"chat.completion.chunk","created":0,"model":"gpt-5.4-mini",'
+            '"choices":[{"index":0,"delta":{"role":"assistant","content":"Hel"},"finish_reason":null}]}'
+        )
+    )
+    respx_mock.post(url__regex=rf"^{api_base}/openai/deployments/[^/]+/completions").mock(
+        side_effect=_streams(
+            '{"id":"cmpl-1","object":"text_completion","created":0,"model":"gpt-3.5-turbo-instruct",'
+            '"choices":[{"index":0,"text":"Hel","finish_reason":null,"logprobs":null}]}'
+        )
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": model_name,
+                "litellm_params": {
+                    "model": model,
+                    "api_base": api_base,
+                    "api_key": "azure-key",
+                    "api_version": "2024-10-21",
+                    "max_retries": 0,
+                },
+            }
+            for model_name, model in (
+                ("gpt-5.4-mini", "azure/gpt-5.4-mini"),
+                ("gpt-3.5-turbo-instruct", "azure_text/gpt-3.5-turbo-instruct"),
+            )
+        ],
+        num_retries=0,
+    )
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    for name, value in (
+        ("llm_router", router),
+        ("llm_model_list", router.registry().all()),
+        ("prisma_client", None),
+        ("general_settings", {}),
+        ("user_model", None),
+    ):
+        monkeypatch.setattr(proxy_server, name, value)

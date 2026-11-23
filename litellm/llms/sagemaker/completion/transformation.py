@@ -11,9 +11,11 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 from httpx._models import Headers, Response
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.litellm_core_utils.asyncify import asyncify
+from litellm.litellm_core_utils.core_helpers import as_object_list, json_contains, subscript
 from litellm.litellm_core_utils.prompt_templates.factory import (
     prompt_factory,
     render_custom_prompt_template,
@@ -23,7 +25,7 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse, Usage
 from litellm.utils import token_counter
 
-from ..common_utils import SagemakerError
+from ..common_utils import STR_KEYED_MAPPING, SagemakerError
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -32,6 +34,14 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
+def _concatenated(prefix: str, value: object) -> str:
+    if isinstance(value, str):
+        return prefix + value
+    raise TypeError(f'can only concatenate str (not "{type(value).__name__}") to str')
 
 
 class SagemakerConfig(BaseConfig):
@@ -153,7 +163,9 @@ class SagemakerConfig(BaseConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        inference_params: Final = optional_params.copy()
+        inference_params: Final = {
+            key: value for key, value in STR_KEYED_MAPPING.validate_python(optional_params).items() if key != "model_id"
+        }
         stream: Final = inference_params.pop("stream", False)
         data: Final[dict] = {"parameters": inference_params}
         if stream is True:
@@ -197,7 +209,7 @@ class SagemakerConfig(BaseConfig):
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
-        completion_response: Final = raw_response.json()
+        completion_response: Final = _DECODED_JSON.validate_python(raw_response.json())
         ## LOGGING
         logging_obj.post_call(
             input=messages,
@@ -210,15 +222,19 @@ class SagemakerConfig(BaseConfig):
 
         ## RESPONSE OBJECT
         try:
-            if isinstance(completion_response, list):
-                completion_response_choices = completion_response[0]
-            else:
-                completion_response_choices = completion_response
+            completion_response_list: Final = as_object_list(completion_response)
+            completion_response_choices: Final = (
+                completion_response if completion_response_list is None else completion_response_list[0]
+            )
             completion_output = ""
-            if "generation" in completion_response_choices:
-                completion_output += completion_response_choices["generation"]
-            elif "generated_text" in completion_response_choices:
-                completion_output += completion_response_choices["generated_text"]
+            if json_contains(completion_response_choices, "generation"):
+                completion_output = _concatenated(
+                    completion_output, subscript(completion_response_choices, "generation")
+                )
+            elif json_contains(completion_response_choices, "generated_text"):
+                completion_output = _concatenated(
+                    completion_output, subscript(completion_response_choices, "generated_text")
+                )
 
             # check if the prompt template is part of output, if so - filter it out
             if completion_output.startswith(prompt) and "<s>" in prompt:

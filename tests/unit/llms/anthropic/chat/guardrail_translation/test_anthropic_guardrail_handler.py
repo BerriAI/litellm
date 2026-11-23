@@ -6,13 +6,17 @@ with guardrail transformations, specifically testing edge cases with empty choic
 """
 
 import json
+import logging
 import re
-from typing import Any, Literal, Optional, Final
+from collections.abc import Callable, Mapping, Sequence
+from typing import Any, Literal, Optional, Final, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 
+import litellm
+from litellm.exceptions import GuardrailRaisedException
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.guardrail_translation.base_translation import StreamingScanKey
@@ -20,6 +24,9 @@ from litellm.llms.anthropic.chat.guardrail_translation.handler import (
     AnthropicMessagesHandler,
 )
 from litellm.llms.anthropic.messages.adapters.transformation import truncate_tool_name
+from litellm.llms.base_llm.guardrail_translation.utils import UnappliableRequestRewrite
+from litellm.types.llms.anthropic import AnthropicResponseContentBlockText, AnthropicResponseContentBlockToolUse
+from litellm.types.llms.openai import ChatCompletionToolParam
 from litellm.types.utils import ChatCompletionMessageToolCall, GenericGuardrailAPIInputs
 
 
@@ -284,6 +291,14 @@ class TestAnthropicMessagesHandlerStreamingOutputProcessing:
         return [f"event: {name}\ndata: {json.dumps(payload)}\n\n".encode() for name, payload in events]
 
     @staticmethod
+    def _guardrail_that_must_not_run() -> CustomGuardrail:
+        class MustNotRun(CustomGuardrail):
+            async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+                raise AssertionError("the guardrail ran on a stream it could not read")
+
+        return MustNotRun(guardrail_name="test")
+
+    @staticmethod
     def _masking_guardrail() -> CustomGuardrail:
         class MaskWorld(CustomGuardrail):
             async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
@@ -371,6 +386,82 @@ class TestAnthropicMessagesHandlerStreamingOutputProcessing:
         raw = b"".join(chunks).decode()
         assert "event: message_start" in raw and "event: message_stop" in raw
         assert '"stop_reason": "end_turn"' in raw
+
+    @pytest.mark.asyncio
+    async def test_deliver_ended_stream_rewrites_skip_a_data_line_it_cannot_decode(self):
+        undecodable_chunk = b"event: ping\ndata: " + b"[" * 100_000 + b"]" * 100_000 + b"\n\n"
+        ended_chunks = self._ended_sse_chunks()
+        chunks = [*ended_chunks[:2], undecodable_chunk, *ended_chunks[2:]]
+
+        result = await AnthropicMessagesHandler().process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=self._masking_guardrail(),
+            litellm_logging_obj=MagicMock(),
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert result is chunks
+        assert chunks[2] == undecodable_chunk
+        assert self._delta_texts([*chunks[:2], *chunks[3:]]) == ["hello [MASKED]", ""]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("read_size", [None, 500], ids=["one-read", "500-byte-reads"])
+    @pytest.mark.parametrize("stream_ended", [True, False], ids=["ended", "mid-stream"])
+    @pytest.mark.parametrize("padding", [b"[" * 100_000 + b"]" * 100_000, b"9" * 5000], ids=["deep", "huge-number"])
+    async def test_a_text_event_the_guardrail_cannot_decode_is_refused_before_the_guardrail_runs(
+        self, padding, stream_ended, read_size
+    ):
+        hidden_text_chunk = (
+            b'event: content_block_delta\ndata: {"type": "content_block_delta", "index": 0, '
+            b'"delta": {"type": "text_delta", "text": "world"}, "padding": ' + padding + b"}\n\n"
+        )
+        step = read_size or len(hidden_text_chunk)
+        hidden_text_reads = [hidden_text_chunk[start : start + step] for start in range(0, len(hidden_text_chunk), step)]
+        ended_chunks = self._ended_sse_chunks()
+        chunks = [*ended_chunks[:3], *hidden_text_reads, *(ended_chunks[4:] if stream_ended else ())]
+
+        with pytest.raises(GuardrailRaisedException) as refusal:
+            await AnthropicMessagesHandler().process_output_streaming_response(
+                responses_so_far=chunks,
+                guardrail_to_apply=self._guardrail_that_must_not_run(),
+                litellm_logging_obj=MagicMock(),
+                deliver_ended_stream_rewrites=True,
+            )
+
+        assert refusal.value.guardrail_name == "test"
+        assert refusal.value.blocked_content is False
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("stream_ended", [True, False], ids=["ended", "mid-stream"])
+    async def test_a_text_event_split_across_data_lines_is_refused_before_the_guardrail_runs(self, stream_ended: bool):
+        split_text_chunk = (
+            b'event: content_block_delta\ndata: {"type": "content_block_delta", "index": 0,\n'
+            b'data: "delta": {"type": "text_delta", "text": "world"}}\n\n'
+        )
+        ended_chunks = self._ended_sse_chunks()
+        chunks: Final[list[bytes]] = [*ended_chunks[:3], split_text_chunk, *(ended_chunks[4:] if stream_ended else ())]
+
+        assert AnthropicMessagesHandler().get_streaming_scan_key(chunks) is None
+        with pytest.raises(GuardrailRaisedException):
+            await AnthropicMessagesHandler().process_output_streaming_response(
+                responses_so_far=chunks,
+                guardrail_to_apply=self._guardrail_that_must_not_run(),
+                litellm_logging_obj=MagicMock(),
+                deliver_ended_stream_rewrites=True,
+            )
+
+    def test_a_text_event_the_guardrail_cannot_decode_keeps_its_text_out_of_the_warning_log(self, caplog):
+        hidden_text_chunk = (
+            b'event: content_block_delta\ndata: {"type": "content_block_delta", "index": 0, '
+            b'"delta": {"type": "text_delta", "text": "4111 1111 1111 1111"}, "padding": ' + b"9" * 5000 + b"}\n\n"
+        )
+        ended_chunks = self._ended_sse_chunks()
+        chunks: Final[list[bytes]] = [*ended_chunks[:3], hidden_text_chunk, *ended_chunks[4:]]
+
+        with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+            AnthropicMessagesHandler().get_streaming_string_so_far(chunks)
+
+        assert "4111" not in caplog.text
 
     @staticmethod
     def _ended_tool_use_sse_chunks() -> list:
@@ -592,6 +683,57 @@ class TestAnthropicMessagesHandlerStreamingOutputProcessing:
         raw = b"".join(chunks).decode()
         assert '"id": "srvtoolu_1"' in raw and '"id": "toolu_1"' in raw
         assert "persim" not in raw and '"query"' not in raw
+
+    @pytest.mark.asyncio
+    async def test_deliver_ended_stream_tool_use_rewrite_lands_on_its_own_block_when_server_tool_use_follows(self):
+        class MaskFruitLookup(CustomGuardrail):
+            async def apply_guardrail(
+                self,
+                inputs: GenericGuardrailAPIInputs,
+                request_data: dict[str, object],
+                input_type: Literal["request", "response"],
+                logging_obj: LiteLLMLoggingObj | None = None,
+            ) -> GenericGuardrailAPIInputs:
+                for tool_call in inputs.get("tool_calls", []):
+                    if tool_call.function.name == "lookup_fruit":
+                        tool_call.function.arguments = '{"fruit": "[MASKED]"}'
+                return inputs
+
+        handler: Final = AnthropicMessagesHandler()
+        tool_use: Final = self._ended_tool_use_sse_chunks()
+        server_tool_use: Final = [
+            (
+                "content_block_start",
+                {
+                    "type": "content_block_start",
+                    "index": 1,
+                    "content_block": {"type": "server_tool_use", "id": "srvtoolu_1", "name": "web_search", "input": {}},
+                },
+            ),
+            (
+                "content_block_delta",
+                {
+                    "type": "content_block_delta",
+                    "index": 1,
+                    "delta": {"type": "input_json_delta", "partial_json": '{"query": "fruit"}'},
+                },
+            ),
+            ("content_block_stop", {"type": "content_block_stop", "index": 1}),
+        ]
+        chunks: Final = (
+            tool_use[:-2]
+            + [f"event: {name}\ndata: {json.dumps(payload)}\n\n".encode() for name, payload in server_tool_use]
+            + tool_use[-2:]
+        )
+
+        await handler.process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=MaskFruitLookup(guardrail_name="test"),
+            litellm_logging_obj=MagicMock(),
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert self._partial_jsons(chunks) == ['{"fruit": "[MASKED]"}', "", "", '{"query": "fruit"}']
 
     @pytest.mark.asyncio
     async def test_deliver_ended_stream_tool_use_rewrite_on_an_unindexed_tool_block_fails_closed(self):
@@ -3041,6 +3183,47 @@ class TestStructuredWriteBackKeepsToolResults:
             {"type": "text", "text": "log for <EMAIL>"},
         ]
 
+    async def test_rewrite_keeps_tool_result_is_error_and_system_row_fields(self):
+        data: Final = {
+            "model": "claude-fable-5",
+            "messages": [
+                {"role": "user", "content": "run the checks"},
+                {"role": "system", "content": "Stay terse.", "output_config": {"effort": "low"}},
+                {
+                    "role": "assistant",
+                    "content": [{"type": "tool_use", "id": "toolu_01", "name": "Bash", "input": {"cmd": "make"}}],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "tool_result", "tool_use_id": "toolu_01", "content": "boom", "is_error": True}
+                    ],
+                },
+                {
+                    "role": "assistant",
+                    "content": [{"type": "tool_use", "id": "toolu_02", "name": "Bash", "input": {"cmd": "ls"}}],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "tool_result", "tool_use_id": "toolu_02", "content": "Makefile"},
+                        {"type": "text", "text": "what failed?"},
+                    ],
+                },
+            ],
+        }
+
+        await AnthropicMessagesHandler().process_input_messages(
+            data=data, guardrail_to_apply=MockStructuredMaskingGuardrail()
+        )
+
+        messages: Final = data["messages"]
+        assert messages[1] == {"role": "system", "content": "Stay terse.", "output_config": {"effort": "low"}}
+        assert messages[3]["content"] == [
+            {"type": "tool_result", "tool_use_id": "toolu_01", "content": "boom", "is_error": True}
+        ]
+        assert messages[5]["content"][0] == {"type": "tool_result", "tool_use_id": "toolu_02", "content": "Makefile"}
+
 
 class NamelessComputerToolGuardrail(CustomGuardrail):
     """Guardrail that appends an OpenAI-format computer tool without a function name."""
@@ -3257,6 +3440,106 @@ class TestAnthropicMessagesHandlerStreamingScanKey:
         assert ended == released and all(a is b for a, b in zip(ended, released, strict=True))
 
 
+class ToolsSeenGuardrail(CustomGuardrail):
+    def __init__(self, keep: Callable[[Mapping[str, object]], bool] = lambda _tool: True) -> None:
+        super().__init__(guardrail_name="test")
+        self._keep: Final = keep
+        self.seen_tools: list[Mapping[str, object]] | None = None
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: Optional["LiteLLMLoggingObj"] = None,
+    ) -> GenericGuardrailAPIInputs:
+        shown: Final = [cast(Mapping[str, object], tool) for tool in inputs.get("tools") or []]
+        self.seen_tools = json.loads(json.dumps(shown))
+        return {**inputs, "tools": [cast(ChatCompletionToolParam, tool) for tool in shown if self._keep(tool)]}
+
+
+def _is_web_search(tool: Mapping[str, object]) -> bool:
+    return tool.get("name") == "web_search"
+
+
+class TestWebSearchToolIsShownToTheGuardrail:
+    _WEB_SEARCH: Final[dict[str, object]] = {"type": "web_search_20250305", "name": "web_search", "max_uses": 5}
+    _READ: Final[dict[str, object]] = {
+        "name": "Read",
+        "description": "Reads a file",
+        "input_schema": {"type": "object", "properties": {"path": {"type": "string"}}},
+    }
+
+    async def _run(self, guardrail: ToolsSeenGuardrail, tools: list[dict[str, object]]) -> list[dict[str, object]]:
+        data: Final[dict[str, object]] = {
+            "model": "claude-haiku-4-5",
+            "max_tokens": 16,
+            "messages": [{"role": "user", "content": "hello"}],
+            "tools": json.loads(json.dumps(tools)),
+        }
+        await AnthropicMessagesHandler().process_input_messages(data, guardrail)
+        return cast(list[dict[str, object]], data["tools"])
+
+    async def test_the_guardrail_sees_web_search_as_sent_at_its_position_in_the_request(self):
+        guardrail: Final = ToolsSeenGuardrail()
+
+        await self._run(guardrail, [self._READ, self._WEB_SEARCH, {**self._READ, "name": "Write"}])
+
+        assert guardrail.seen_tools is not None
+        assert [tool["type"] for tool in guardrail.seen_tools] == ["function", "web_search_20250305", "function"]
+        assert guardrail.seen_tools[1] == self._WEB_SEARCH
+
+    async def test_the_guardrail_sees_web_search_when_it_is_the_only_tool(self):
+        guardrail: Final = ToolsSeenGuardrail()
+
+        tools: Final = await self._run(guardrail, [self._WEB_SEARCH])
+
+        assert guardrail.seen_tools == [self._WEB_SEARCH]
+        assert tools == [self._WEB_SEARCH]
+
+    async def test_web_search_the_guardrail_returned_reaches_the_provider_as_sent(self):
+        tools: Final = await self._run(ToolsSeenGuardrail(), [self._READ, self._WEB_SEARCH])
+
+        assert tools[1] == self._WEB_SEARCH
+        assert [tool["name"] for tool in tools] == ["Read", "web_search"]
+
+    async def test_web_search_declared_by_name_alone_reaches_the_provider_as_sent(self):
+        by_name_alone: Final[dict[str, object]] = {"name": "web_search"}
+        guardrail: Final = ToolsSeenGuardrail()
+
+        tools: Final = await self._run(guardrail, [self._READ, by_name_alone])
+
+        assert guardrail.seen_tools is not None
+        assert guardrail.seen_tools[1] == by_name_alone
+        assert tools[1] == by_name_alone
+
+    async def test_web_search_the_guardrail_removed_does_not_reach_the_provider(self):
+        tools: Final = await self._run(
+            ToolsSeenGuardrail(keep=lambda tool: not _is_web_search(tool)), [self._READ, self._WEB_SEARCH]
+        )
+
+        assert [tool["name"] for tool in tools] == ["Read"]
+
+    async def test_web_search_stays_when_the_guardrail_removed_every_other_tool(self):
+        tools: Final = await self._run(ToolsSeenGuardrail(keep=_is_web_search), [self._READ, self._WEB_SEARCH])
+
+        assert tools == [self._WEB_SEARCH]
+
+    async def test_a_guardrail_returning_no_tools_removes_web_search(self):
+        tools: Final = await self._run(ToolsSeenGuardrail(keep=lambda _tool: False), [self._READ, self._WEB_SEARCH])
+
+        assert tools == []
+
+    async def test_a_tool_results_only_guardrail_is_not_shown_web_search(self):
+        guardrail: Final = ToolsSeenGuardrail()
+        guardrail.scan_only_tool_results = True
+
+        tools: Final = await self._run(guardrail, [self._READ, self._WEB_SEARCH])
+
+        assert not guardrail.seen_tools
+        assert tools == [self._READ, self._WEB_SEARCH]
+
+
 class PerRowTextGuardrail(CustomGuardrail):
     """Answers one redacted text per chat row it was shown, the way a guardrail
     that scans per message does, and hands back only texts."""
@@ -3391,3 +3674,312 @@ class TestAnthropicMessagesHandlerPostCallHookResponse:
         native = {"type": "message", "role": "assistant", "content": [{"type": "text", "text": "hi"}]}
 
         assert AnthropicMessagesHandler().post_call_hook_response(native) is native
+
+
+def test_reading_a_dropped_budget_for_a_guardrail_logs_no_drop_warning(caplog: pytest.LogCaptureFixture) -> None:
+    data: Final = {
+        "model": "gemini-2.5-flash",
+        "max_tokens": 64,
+        "thinking": {"type": "enabled", "budget_tokens": "high"},
+        "messages": [{"role": "user", "content": "hi"}],
+    }
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        messages: Final = AnthropicMessagesHandler().get_structured_messages(data)
+
+    assert messages == [{"role": "user", "content": "hi"}]
+    assert not [record for record in caplog.records if "Dropping" in record.getMessage()]
+
+
+def _tool_call_returning_guardrail(returned: Callable[[Sequence[object]], object]) -> CustomGuardrail:
+    class ReturnToolCalls(CustomGuardrail):
+        async def apply_guardrail(
+            self,
+            inputs: GenericGuardrailAPIInputs,
+            request_data: dict[str, object],
+            input_type: Literal["request", "response"],
+            logging_obj: LiteLLMLoggingObj | None = None,
+        ) -> GenericGuardrailAPIInputs:
+            return cast(
+                GenericGuardrailAPIInputs,
+                {
+                    **inputs,
+                    "texts": [f"[SCANNED] {text}" for text in inputs["texts"]],
+                    "tool_calls": returned(inputs["tool_calls"]),
+                },
+            )
+
+    return ReturnToolCalls(guardrail_name="tool-call-rewriter")
+
+
+def _with_arguments(tool_call: object, arguments: str) -> dict[str, object]:
+    fields: Final = cast(dict[str, object], tool_call)
+    function: Final = cast(dict[str, object], fields["function"])
+    return {**fields, "function": {**function, "arguments": arguments}}
+
+
+def _redacting(tool_calls: Sequence[object]) -> list[dict[str, object]]:
+    return [_with_arguments(tool_call, '{"cmd": "echo [REDACTED]"}') for tool_call in tool_calls]
+
+
+def _dict_tool_use_response() -> dict[str, object]:
+    return {
+        "id": "msg_1",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-5-5",
+        "content": [
+            {"type": "text", "text": "Running it"},
+            {"type": "tool_use", "id": "toolu_1", "name": "run_shell", "input": {"cmd": "echo SECRET-123"}},
+        ],
+        "stop_reason": "tool_use",
+    }
+
+
+def _object_tool_use_response() -> dict[str, object]:
+    return {
+        **_dict_tool_use_response(),
+        "content": [
+            AnthropicResponseContentBlockText(type="text", text="Running it"),
+            AnthropicResponseContentBlockToolUse(
+                type="tool_use", id="toolu_1", name="run_shell", input={"cmd": "echo SECRET-123"}
+            ),
+        ],
+    }
+
+
+def _tool_use_block(response: dict[str, object], index: int = 1) -> dict[str, object]:
+    block: Final = cast(list[object], response["content"])[index]
+    return cast(
+        dict[str, object], block.model_dump() if isinstance(block, AnthropicResponseContentBlockToolUse) else block
+    )
+
+
+class TestOutputToolCallRewrites:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "response", [_dict_tool_use_response(), _object_tool_use_response()], ids=["dict_blocks", "object_blocks"]
+    )
+    async def test_rewritten_arguments_land_in_the_tool_use_input(self, response: dict[str, object]) -> None:
+        await AnthropicMessagesHandler().process_output_response(
+            response=cast(Any, response),
+            guardrail_to_apply=_tool_call_returning_guardrail(_redacting),
+            litellm_logging_obj=MagicMock(),
+        )
+
+        block: Final = _tool_use_block(response)
+        assert (block["id"], block["name"], block["input"]) == ("toolu_1", "run_shell", {"cmd": "echo [REDACTED]"})
+        assert "SECRET-123" not in json.dumps(response, default=lambda block: block.model_dump())
+
+    @pytest.mark.asyncio
+    async def test_a_rewritten_name_lands_on_the_tool_use_block(self) -> None:
+        response: Final = _dict_tool_use_response()
+
+        def rename(tool_calls: Sequence[object]) -> list[dict[str, object]]:
+            fields: Final = cast(dict[str, object], tool_calls[0])
+            function: Final = cast(dict[str, object], fields["function"])
+            return [{**fields, "function": {**function, "name": "run_safely"}}]
+
+        await AnthropicMessagesHandler().process_output_response(
+            response=cast(Any, response),
+            guardrail_to_apply=_tool_call_returning_guardrail(rename),
+            litellm_logging_obj=MagicMock(),
+        )
+
+        assert _tool_use_block(response)["name"] == "run_safely"
+        assert _tool_use_block(response)["input"] == {"cmd": "echo SECRET-123"}
+
+    @pytest.mark.asyncio
+    async def test_each_returned_call_lands_on_the_tool_use_block_in_the_same_position(self) -> None:
+        response: Final = _dict_tool_use_response()
+        content: Final = cast(list[object], response["content"])
+        content.append({"type": "text", "text": "and then"})
+        content.append({"type": "tool_use", "id": "toolu_2", "name": "lookup", "input": {"query": "SECRET-123"}})
+
+        def redact_second_only(tool_calls: Sequence[object]) -> list[object]:
+            return [tool_calls[0], _with_arguments(tool_calls[1], '{"query": "[REDACTED]"}')]
+
+        await AnthropicMessagesHandler().process_output_response(
+            response=cast(Any, response),
+            guardrail_to_apply=_tool_call_returning_guardrail(redact_second_only),
+            litellm_logging_obj=MagicMock(),
+        )
+
+        assert _tool_use_block(response, 1)["input"] == {"cmd": "echo SECRET-123"}
+        assert _tool_use_block(response, 3)["input"] == {"query": "[REDACTED]"}
+        assert [block["text"] for block in content if cast(dict[str, object], block)["type"] == "text"] == [
+            "[SCANNED] Running it",
+            "[SCANNED] and then",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_a_rewritten_call_drops_its_safeguard_verdict_and_every_explanation(self) -> None:
+        response: Final = _dict_tool_use_response()
+        content: Final = cast(list[object], response["content"])
+        content.append({"type": "tool_use", "id": "toolu_2", "name": "lookup", "input": {"query": "weather"}})
+        response["safeguard_results"] = [
+            {
+                "type": "dangerous_tool_use",
+                "status": {
+                    "type": "available",
+                    "explanation": "runs echo SECRET-123",
+                    "tool_uses": {
+                        "toolu_1": {"type": "evaluated", "outcome": "flagged", "explanation": "echoes SECRET-123"},
+                        "toolu_2": {"type": "evaluated", "outcome": "not_flagged", "explanation": "looks up weather"},
+                    },
+                },
+            }
+        ]
+
+        def redact_first_only(tool_calls: Sequence[object]) -> list[object]:
+            return [*_redacting(tool_calls[:1]), tool_calls[1]]
+
+        await AnthropicMessagesHandler().process_output_response(
+            response=cast(Any, response),
+            guardrail_to_apply=_tool_call_returning_guardrail(redact_first_only),
+            litellm_logging_obj=MagicMock(),
+        )
+
+        assert _tool_use_block(response)["input"] == {"cmd": "echo [REDACTED]"}
+        assert response["safeguard_results"] == (
+            {
+                "type": "dangerous_tool_use",
+                "status": {
+                    "type": "available",
+                    "tool_uses": {"toolu_2": {"type": "evaluated", "outcome": "not_flagged"}},
+                },
+            },
+        )
+        assert "SECRET-123" not in json.dumps(response)
+
+    @pytest.mark.asyncio
+    async def test_tool_calls_handed_back_as_a_mapping_leave_the_response_as_scanned(self) -> None:
+        response: Final = _dict_tool_use_response()
+
+        await AnthropicMessagesHandler().process_output_response(
+            response=cast(Any, response),
+            guardrail_to_apply=_tool_call_returning_guardrail(lambda tool_calls: {"verdict": "ok"}),
+            litellm_logging_obj=MagicMock(),
+        )
+
+        assert _tool_use_block(response)["input"] == {"cmd": "echo SECRET-123"}
+
+    @pytest.mark.asyncio
+    async def test_rewritten_arguments_that_are_not_a_json_object_fail_the_response(self) -> None:
+        response: Final = _dict_tool_use_response()
+
+        def break_arguments(tool_calls: Sequence[object]) -> list[dict[str, object]]:
+            return [_with_arguments(tool_calls[0], "echo [REDACTED]")]
+
+        with pytest.raises(UnappliableRequestRewrite, match="tool-call-rewriter"):
+            await AnthropicMessagesHandler().process_output_response(
+                response=cast(Any, response),
+                guardrail_to_apply=_tool_call_returning_guardrail(break_arguments),
+                litellm_logging_obj=MagicMock(),
+            )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "returned",
+        [lambda tool_calls: [], lambda tool_calls: list(_redacting(tool_calls)) * 2, lambda tool_calls: None],
+        ids=["empty", "doubled", "none"],
+    )
+    async def test_a_returned_list_that_cannot_be_placed_leaves_the_tool_use_input_as_scanned(
+        self, returned: Callable[[Sequence[object]], object]
+    ) -> None:
+        response: Final = _dict_tool_use_response()
+
+        await AnthropicMessagesHandler().process_output_response(
+            response=cast(Any, response),
+            guardrail_to_apply=_tool_call_returning_guardrail(returned),
+            litellm_logging_obj=MagicMock(),
+        )
+
+        assert _tool_use_block(response)["input"] == {"cmd": "echo SECRET-123"}
+        assert _tool_use_block(response, 0) == {"type": "text", "text": "[SCANNED] Running it"}
+
+    @pytest.mark.asyncio
+    async def test_echoed_tool_calls_leave_the_tool_use_block_untouched(self) -> None:
+        response: Final = _dict_tool_use_response()
+        original_input: Final = _tool_use_block(response)["input"]
+
+        await AnthropicMessagesHandler().process_output_response(
+            response=cast(Any, response),
+            guardrail_to_apply=_tool_call_returning_guardrail(list),
+            litellm_logging_obj=MagicMock(),
+        )
+
+        assert _tool_use_block(response)["input"] is original_input
+
+
+FAILED_TOOL_RESULT_REQUEST: Final = {
+    "model": "claude-sonnet",
+    "max_tokens": 16,
+    "messages": [
+        {"role": "user", "content": "Rename the helper"},
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "edit0", "name": "Edit", "input": {"file_path": "a.py"}}],
+        },
+        {
+            "role": "user",
+            "content": [
+                {"type": "tool_result", "tool_use_id": "edit0", "content": "String not found", "is_error": True}
+            ],
+        },
+    ],
+}
+
+
+@pytest.mark.parametrize("keep_tool_errors", [True, False])
+def test_structured_messages_carry_tool_failures_only_when_asked(keep_tool_errors: bool) -> None:
+    messages: Final = AnthropicMessagesHandler().get_structured_messages(
+        FAILED_TOOL_RESULT_REQUEST, keep_tool_errors=keep_tool_errors
+    )
+    assert messages is not None
+    (tool_message,) = [message for message in messages if message["role"] == "tool"]
+    assert tool_message.get("is_error") is (True if keep_tool_errors else None)
+
+
+def test_request_sent_to_a_model_never_carries_tool_failure_marker() -> None:
+    from litellm.llms.anthropic.messages.adapters.transformation import LiteLLMAnthropicMessagesAdapter
+
+    request, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+        anthropic_message_request=FAILED_TOOL_RESULT_REQUEST  # pyright: ignore[reportArgumentType]  # a JSON request in the Anthropic shape
+    )
+    assert "is_error" not in json.dumps(request["messages"], default=str)
+
+
+@pytest.mark.asyncio
+async def test_structured_rewrite_keeps_client_cache_control_on_a_claude_alias() -> None:
+    ephemeral: Final = {"type": "ephemeral"}
+    data: Final = {
+        "model": "best-sonnet",
+        "system": [{"type": "text", "text": "Triage POISON tickets.", "cache_control": dict(ephemeral)}],
+        "tools": [
+            {
+                "name": "search_tickets",
+                "description": "Search the ticket tracker",
+                "input_schema": {"type": "object", "properties": {"query": {"type": "string"}}},
+                "cache_control": dict(ephemeral),
+            }
+        ],
+        "messages": [
+            {"role": "user", "content": [{"type": "text", "text": "Find POISON tickets"}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "Found 3."}]},
+            {"role": "user", "content": [{"type": "text", "text": "Which are P1?", "cache_control": dict(ephemeral)}]},
+        ],
+    }
+
+    claude_alias: Final = litellm.Router(
+        model_list=[{"model_name": "best-sonnet", "litellm_params": {"model": "bedrock/us.anthropic.claude-sonnet-5-5"}}]
+    )
+
+    await AnthropicMessagesHandler(deployment_lookup=claude_alias.registry).process_input_messages(
+        data=data, guardrail_to_apply=StructuredMessagesRewritingGuardrail()
+    )
+
+    assert data["messages"][0]["content"] == [{"type": "text", "text": "Find [BLOCKED] tickets"}]
+    assert data["system"] == [{"type": "text", "text": "Triage [BLOCKED] tickets.", "cache_control": ephemeral}]
+    assert data["tools"][0]["cache_control"] == ephemeral
+    assert data["messages"][-1]["content"] == [{"type": "text", "text": "Which are P1?", "cache_control": ephemeral}]

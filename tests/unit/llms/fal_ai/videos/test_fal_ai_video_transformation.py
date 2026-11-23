@@ -1,13 +1,17 @@
+import json
 import sys
 from typing import Final
 from unittest.mock import AsyncMock, Mock
 
 import httpx
 import pytest
+import respx
+from litellm.exceptions import UnsupportedParamsError
 
 import litellm
 import litellm.llms.fal_ai.videos.transformation as fal_video_module
 from litellm.cost_calculator import default_video_cost_calculator
+from litellm.llms.fal_ai.cost_calculator import fal_ai_passthrough_cost
 from litellm.llms.fal_ai.videos.transformation import (
     FalAIVideoConfig,
     FalAIVideoError,
@@ -22,6 +26,144 @@ from litellm.utils import ProviderConfigManager
 MODEL = "bytedance/seedance-2.5/text-to-video"
 H3_TEXT_MODEL = "minimax/h3/text-to-video"
 H3_REFERENCE_MODEL = "minimax/h3/reference-to-video"
+H3_MAX_TEXT_MODEL = "minimax/h3-max/text-to-video"
+H3_MAX_TURBO_IMAGE_MODEL = "minimax/h3-max-turbo/image-to-video"
+H3_MAX_RECAST_MODEL = "minimax/h3-max/recast"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("pricing_source", ["litellm_params", "model_info"])
+@pytest.mark.parametrize(
+    ("pricing", "expected_cost"),
+    [
+        ({"output_cost_per_second": 0.017}, 0.085),
+        ({"output_cost_per_video_clip": {"5s": {"480p": 0.19}}}, 0.19),
+    ],
+)
+async def test_router_video_uses_configured_deployment_price(
+    monkeypatch: pytest.MonkeyPatch, pricing_source: str, pricing: dict[str, object], expected_cost: float
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "model_cost", {**litellm.model_cost})
+    router: Final = litellm.Router(
+        num_retries=0,
+        model_list=[
+            {
+                "model_name": "configured-video",
+                "litellm_params": {
+                    "model": "fal_ai/fal-ai/longcat-video/distilled/text-to-video/480p",
+                    "api_key": "synthetic-fal-key",
+                    **(pricing if pricing_source == "litellm_params" else {}),
+                },
+                "model_info": pricing if pricing_source == "model_info" else {},
+            }
+        ],
+    )
+    with respx.mock:
+        upstream: Final = respx.post("https://queue.fal.run/fal-ai/longcat-video/distilled/text-to-video/480p").mock(
+            return_value=httpx.Response(200, json={"request_id": "configured-priced-clip"})
+        )
+        video: Final = await router.avideo_generation(model="configured-video", prompt="clip", seconds="5", size="480p")
+    assert video._hidden_params["response_cost"] == pytest.approx(expected_cost)
+    assert upstream.call_count == 1
+
+
+@pytest.mark.parametrize("drop_params", [False, True])
+@pytest.mark.parametrize(
+    "model",
+    [
+        "fal-ai/pixverse/v5/text-to-video",
+        "pixverse/v6/text-to-video",
+        "fal_ai/pixverse/v6/text-to-video",
+        "fal_ai/fal-ai/pixverse/v5/text-to-video",
+    ],
+)
+@pytest.mark.parametrize(
+    ("size", "resolution"),
+    [
+        ("360p", "360p"),
+        ("540p", "540p"),
+        ("720p", "720p"),
+        ("1080p", "1080p"),
+        ("640x360", "360p"),
+        ("960x540", "540p"),
+        ("720x1280", "720p"),
+    ],
+)
+def test_pixverse_resolution_maps_to_request_and_billing(
+    size: str, resolution: str, drop_params: bool, model: str
+) -> None:
+    config: Final = FalAIVideoConfig()
+    params: Final = config.map_openai_params({"seconds": "5", "size": size}, model, drop_params)
+    assert params["resolution"] == resolution
+    response: Final = config.transform_video_create_response(
+        model=model,
+        raw_response=httpx.Response(
+            200, json={"request_id": "pixverse-clip"}, request=httpx.Request("POST", "https://queue.fal.run")
+        ),
+        logging_obj=Mock(),
+        request_data=params,
+    )
+    assert response.usage is not None
+    assert response.usage["video_resolution"] == resolution
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", ["fal-ai/pixverse/v5/text-to-video", "pixverse/v6/text-to-video"])
+@pytest.mark.parametrize(
+    ("seconds", "native_duration", "expected_duration", "expected_cost"),
+    [(None, None, "5", 0.19), ("8", None, "8", 0.31), (None, "8", "8", 0.31)],
+)
+async def test_pixverse_duration_reaches_request_usage_and_clip_billing(
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    seconds: str | None,
+    native_duration: str | None,
+    expected_duration: str,
+    expected_cost: float,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "model_cost", {**litellm.model_cost})
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "pixverse-clip",
+                "litellm_params": {"model": f"fal_ai/{model}", "api_key": "synthetic-fal-key"},
+                "model_info": {
+                    "output_cost_per_video_clip": {
+                        "4s": {"540p": 0.04},
+                        "5s": {"540p": 0.19, "720p": 0.61},
+                        "8s": {"540p": 0.31},
+                    }
+                },
+            }
+        ]
+    )
+    with respx.mock:
+        upstream: Final = respx.post(f"https://queue.fal.run/{model}").respond(
+            200, json={"request_id": "pixverse-duration"}
+        )
+        video: Final = await router.avideo_generation(
+            model="pixverse-clip",
+            prompt="clip",
+            size="540p",
+            seconds=seconds,
+            extra_body={"duration": native_duration} if native_duration is not None else None,
+        )
+    assert upstream.call_count == 1
+    assert json.loads(upstream.calls.last.request.content)["duration"] == expected_duration
+    assert video.seconds == expected_duration
+    assert video.usage == {"duration_seconds": float(expected_duration), "video_resolution": "540p"}
+    assert video._hidden_params["response_cost"] == pytest.approx(expected_cost)
+
+
+@pytest.mark.parametrize("drop_params", [False, True])
+def test_native_video_parameters_keep_precedence(drop_params: bool) -> None:
+    params: Final = {"aspect_ratio": "1:1", "seed": 0, "duration": 6}
+    assert FalAIVideoConfig().map_openai_params({"seconds": "5", "size": "1280x720", **params}, MODEL, drop_params) == {
+        "resolution": "720p",
+        **params,
+    }
 
 
 class TestFalAIVideoTransformation:
@@ -86,6 +228,37 @@ class TestFalAIVideoTransformation:
         assert isinstance(mapped["duration"], int)
         assert mapped["reference_image_urls"] == [url]
         assert "image_url" not in mapped
+
+    def test_map_openai_params_supports_h3_max_profile(self) -> None:
+        url: Final = "https://example.com/image.png"
+
+        assert self.config.map_openai_params({"size": "768p"}, H3_MAX_TEXT_MODEL, False) == {"resolution": "768P"}
+        assert self.config.map_openai_params({"size": "1920x1080"}, H3_MAX_TEXT_MODEL, False) == {
+            "resolution": "1080P",
+            "aspect_ratio": "16:9",
+        }
+        mapped: Final = self.config.map_openai_params(
+            {"seconds": 5.5, "input_reference": url, "size": "1280x768"},
+            H3_MAX_TURBO_IMAGE_MODEL,
+            False,
+        )
+        assert mapped["resolution"] == "768P"
+        assert mapped["image_url"] == url
+        assert "reference_image_urls" not in mapped
+        assert mapped["duration"] == "5"
+
+    @pytest.mark.parametrize(
+        ("model", "expected"),
+        [
+            ("bytedance/seedance-2.5/reference-to-video", {"image_urls": ["https://example.com/image.png"]}),
+            ("bytedance/seedance-2.0/fast/reference-to-video", {"image_urls": ["https://example.com/image.png"]}),
+            ("bytedance/seedance-2.5/image-to-video", {"image_url": "https://example.com/image.png"}),
+        ],
+    )
+    def test_map_openai_params_seedance_input_reference_follows_task(self, model: str, expected: dict[str, object]):
+        mapped = self.config.map_openai_params({"input_reference": "https://example.com/image.png"}, model, False)
+
+        assert mapped == expected
 
     def test_map_openai_params_h3_omits_auto_duration(self):
         assert self.config.map_openai_params({"seconds": "auto"}, H3_TEXT_MODEL, False) == {}
@@ -171,7 +344,7 @@ class TestFalAIVideoTransformation:
             custom_llm_provider="fal_ai",
             request_data={"duration": "auto"},
         )
-        assert auto_video.usage == {"video_resolution": "720p"}
+        assert auto_video.usage == {}
         assert auto_video.seconds is None
         assert auto_video.size is None
 
@@ -188,6 +361,86 @@ class TestFalAIVideoTransformation:
         )
 
         assert video.usage == {"duration_seconds": 5.0, "video_resolution": "2K"}
+
+    def test_transform_video_create_response_luma_ray_defaults_to_540p(self):
+        response = Mock(spec=httpx.Response)
+        response.json.return_value = {"request_id": "abc"}
+
+        for model in (
+            "luma/agent/ray/v3.2/text-to-video",
+            "luma/agent/ray/v3.2/image-to-video",
+            "luma/agent/ray/v3.2/reframe",
+            "luma/agent/ray/v3.2/video-to-video",
+        ):
+            video = self.config.transform_video_create_response(
+                model=model,
+                raw_response=response,
+                logging_obj=self.logging_obj,
+                custom_llm_provider="fal_ai",
+                request_data={"duration": "5"},
+            )
+            assert video.usage == {"duration_seconds": 5.0, "video_resolution": "540p"}, model
+            row = litellm.model_cost[f"fal_ai/{model}"]
+            assert default_video_cost_calculator(model, 5, "fal_ai", video_resolution="540p") == (
+                5 * row["output_cost_per_second"]
+            ), model
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "google/gemini-omni-flash/v1.2/upscale",
+            "wan/v2.6/text-to-video",
+            "xai/grok-imagine-video/reference-to-video",
+            MODEL,
+        ],
+    )
+    def test_request_without_resolution_bills_the_rows_default_rate(
+        self, model: str, local_model_cost_map: None
+    ) -> None:
+        response: Final = Mock(spec=httpx.Response)
+        response.json.return_value = {"request_id": "abc"}
+
+        video: Final = self.config.transform_video_create_response(
+            model=model,
+            raw_response=response,
+            logging_obj=self.logging_obj,
+            custom_llm_provider="fal_ai",
+            request_data={"duration": "10"},
+        )
+
+        assert video.usage is not None
+        row: Final = litellm.model_cost[f"fal_ai/{model}"]
+        assert default_video_cost_calculator(
+            model=model,
+            duration_seconds=video.usage["duration_seconds"],
+            custom_llm_provider="fal_ai",
+            model_info=None,
+            video_resolution=video.usage.get("video_resolution"),
+        ) == pytest.approx(row["output_cost_per_second"] * 10.0)
+
+    def test_transform_video_create_response_h3_max_leaves_default_resolution_to_cost_map(
+        self, local_model_cost_map: None
+    ) -> None:
+        response: Final = Mock(spec=httpx.Response)
+        response.json.return_value = {"request_id": "abc"}
+
+        video: Final = self.config.transform_video_create_response(
+            model=H3_MAX_RECAST_MODEL,
+            raw_response=response,
+            logging_obj=self.logging_obj,
+            custom_llm_provider="fal_ai",
+            request_data={"duration": 5},
+        )
+
+        assert video.usage == {"duration_seconds": 5.0}
+        row: Final = litellm.model_cost[f"fal_ai/{H3_MAX_RECAST_MODEL}"]
+        assert default_video_cost_calculator(
+            model=H3_MAX_RECAST_MODEL,
+            duration_seconds=5.0,
+            custom_llm_provider="fal_ai",
+            model_info=None,
+            video_resolution=None,
+        ) == pytest.approx(row["output_cost_per_second"] * 5.0)
 
     def test_status_request_uses_queue_base_path(self):
         response = Mock(spec=httpx.Response)
@@ -655,14 +908,22 @@ class TestFalAIVideoTransformation:
         assert isinstance(provider_config, FalAIVideoConfig)
         assert isinstance(self.config.get_error_class("bad key", 401, {}), FalAIVideoError)
 
-    def test_video_cost_uses_tiered_rows(self):
+    @pytest.mark.parametrize(("duration", "resolution"), [(0, None), (5, "720p"), (17, "9999p")])
+    def test_video_cost_uses_tiered_rows(self, duration: float, resolution: str | None) -> None:
         rows = {
             model: row
             for model, row in litellm.model_cost.items()
-            if row.get("litellm_provider") == "fal_ai" and row.get("mode") == "video_generation"
+            if row.get("litellm_provider") == "fal_ai"
+            and row.get("mode") == "video_generation"
+            and not row.get("output_cost_per_video_clip")
         }
         assert rows
         for model, row in rows.items():
+            if (flat_cost := row.get("output_cost_per_video")) is not None:
+                assert (
+                    default_video_cost_calculator(model, duration, "fal_ai", video_resolution=resolution) == flat_cost
+                )
+                continue
             for key, value in row.items():
                 if key.startswith("output_cost_per_second_") and value is not None:
                     tier = key.removeprefix("output_cost_per_second_")
@@ -670,6 +931,68 @@ class TestFalAIVideoTransformation:
             assert default_video_cost_calculator(model, 5, "fal_ai", video_resolution="9999p") == (
                 5 * row["output_cost_per_second"]
             )
+
+    def test_video_cost_uses_catalog_clip_cells(self) -> None:
+        models: Final = tuple(
+            model
+            for model, row in litellm.model_cost.items()
+            if row.get("litellm_provider") == "fal_ai"
+            and row.get("mode") == "video_generation"
+            and row.get("output_cost_per_video_clip")
+        )
+        pixverse_model: Final = "fal_ai/fal-ai/pixverse/v5/text-to-video"
+        assert pixverse_model in models
+        pixverse_prices: Final = litellm.get_model_info(model=pixverse_model, custom_llm_provider="fal_ai").get(
+            "output_cost_per_video_clip"
+        )
+        assert pixverse_prices
+        pixverse_tiers: Final = next(iter(pixverse_prices.values()))
+        assert next(iter(pixverse_tiers.values())) > 0
+        for model in models:
+            info: Final = litellm.get_model_info(model=model, custom_llm_provider="fal_ai")
+            prices: Final = info.get("output_cost_per_video_clip")
+            assert prices is not None
+            for duration, tiers in prices.items():
+                seconds: Final = float(duration.removesuffix("s"))
+                for resolution, price in tiers.items():
+                    assert default_video_cost_calculator(model, seconds, "fal_ai", video_resolution=resolution) == price
+                    assert (
+                        video_generation_cost(model, seconds, "fal_ai", model_info=info, video_resolution=resolution)
+                        == price
+                    )
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "fal-ai/pixverse/v3.5/effects",
+            "fal-ai/pixverse/v3.5/transition",
+            "fal-ai/pixverse/v4/effects",
+            "fal-ai/pixverse/v4.5/effects",
+            "fal-ai/pixverse/v4.5/transition",
+            "fal-ai/pixverse/v5/effects",
+            "fal-ai/pixverse/v5/transition",
+            "fal-ai/pixverse/extend",
+        ],
+    )
+    def test_pixverse_five_and_eight_second_clip_prices(self, model: str) -> None:
+        info: Final = litellm.get_model_info(model=model, custom_llm_provider="fal_ai")
+        prices: Final = info.get("output_cost_per_video_clip")
+        assert prices is not None
+        assert prices["8s"].keys() == prices["5s"].keys() - {"1080p"}
+        for resolution, price in prices["8s"].items():
+            assert price > 0
+            assert price == pytest.approx(2 * prices["5s"][resolution])
+        for duration in (5, 8):
+            for resolution, price in prices[f"{duration}s"].items():
+                assert default_video_cost_calculator(
+                    model, duration, "fal_ai", video_resolution=resolution
+                ) == pytest.approx(price)
+                assert video_generation_cost(
+                    model, duration, "fal_ai", model_info=info, video_resolution=resolution
+                ) == pytest.approx(price)
+                assert fal_ai_passthrough_cost(
+                    model, {"duration": str(duration), "resolution": resolution}
+                ) == pytest.approx(price)
 
     def test_h3_video_cost_uses_model_info_tiers(self, local_model_cost_map):
         row = litellm.model_cost[f"fal_ai/{H3_TEXT_MODEL}"]
@@ -695,3 +1018,13 @@ class TestFalAIVideoTransformation:
             )
             == 5 * row["output_cost_per_second_768p"]
         )
+
+
+@pytest.mark.parametrize("field", ["frame_images", "input_references"])
+def test_first_class_video_fields_are_rejected_or_dropped(field: str) -> None:
+    config: Final = FalAIVideoConfig()
+    with pytest.raises(UnsupportedParamsError, match=field):
+        config.map_openai_params({field: 1}, "video-model", False)
+    assert config.map_openai_params({field: 1}, "video-model", True) == config.map_openai_params(
+        {}, "video-model", True
+    )

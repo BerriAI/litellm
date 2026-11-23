@@ -13,11 +13,13 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Any, Final, NoReturn
+from typing import Any, Final, NoReturn, SupportsFloat, SupportsIndex
 
 from httpx import Headers, Response
 from pydantic import TypeAdapter, ValidationError
+from typing_extensions import Buffer
 
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object, iter_items, joined, require_get
 from litellm.llms.base_llm.audio_transcription.transformation import (
     AudioTranscriptionRequestData,
     BaseAudioTranscriptionConfig,
@@ -71,6 +73,7 @@ _JSON_OBJECT: Final = TypeAdapter(dict[str, object])
 _STRUCTURED_CONTEXT: Final = TypeAdapter(SonioxContext)
 _FORM_BOOL: Final = TypeAdapter(bool)
 _ITEMS: Final = TypeAdapter(tuple[object, ...])
+_DECODED_JSON: Final = TypeAdapter(object)
 _BRACKETED_FORM_FIELD: Final = re.compile(
     r"(?P<param>context|translation)\[(?P<field>\w+)\](?:\[\]\[(?P<entry_field>\w+)\])?"
 )
@@ -170,6 +173,12 @@ def _nested_form_param(param: str, fields: tuple[_BracketedField, ...]) -> Mappi
             for name in listed
         },
     }
+
+
+def _as_float(value: object) -> float:
+    if isinstance(value, (str, Buffer, SupportsFloat, SupportsIndex)):
+        return float(value)
+    raise TypeError(f"float() argument must be a string or a real number, not {type(value).__name__!r}")
 
 
 def _is_soniox_context(value: object) -> bool:
@@ -328,7 +337,7 @@ class SonioxAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             produced by the handler so transcription metadata is also available.
         """
         try:
-            payload: Final = raw_response.json()
+            payload: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception as exc:
             raise SonioxException(
                 message=f"Failed to parse Soniox response: {exc}",
@@ -336,16 +345,19 @@ class SonioxAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
                 headers=getattr(raw_response, "headers", None),
             )
 
-        return self._build_response_from_payload(payload, model_response=model_response)
+        payload_fields: Final = as_str_mapping(payload)
+        return self._build_response_from_payload(
+            {} if payload_fields is None else payload_fields, model_response=model_response
+        )
 
     def _build_response_from_payload(
         self,
-        payload: dict[str, Any],
+        payload: Mapping[str, Any],
         model_response: TranscriptionResponse | None = None,
         response_format: str | None = None,
     ) -> TranscriptionResponse:
         """Shared response-building logic (also used by the handler)."""
-        transcription_meta: dict[str, Any] = {}
+        transcription_meta: object = {}
         transcript: dict[str, Any]
 
         if isinstance(payload, dict) and "transcript" in payload:
@@ -354,7 +366,9 @@ class SonioxAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         else:
             transcript = payload if isinstance(payload, dict) else {}
 
-        tokens: Final[list[dict[str, Any]]] = transcript.get("tokens") or []
+        tokens: Final = tuple(
+            require_get(token) for token in iter_items(_DECODED_JSON.validate_python(transcript.get("tokens")) or ())
+        )
 
         # Decide what to put in `text` based on response_format:
         #   - "srt": render tokens as SRT subtitles (synthesized from timestamps)
@@ -362,9 +376,9 @@ class SonioxAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         #   - "verbose_json": return JSON with word-level timing (handled below)
         #   - "text" / "json" / None: default plain text rendering
         if response_format == "srt" and tokens:
-            text = render_soniox_tokens_as_srt(tokens)
+            text = render_soniox_tokens_as_srt(tokens)  # pyright: ignore[reportArgumentType]  # renderers only call .get on each token
         elif response_format == "vtt" and tokens:
-            text = render_soniox_tokens_as_vtt(tokens)
+            text = render_soniox_tokens_as_vtt(tokens)  # pyright: ignore[reportArgumentType]  # renderers only call .get on each token
         else:
             # Default text rendering (also used for "json", "text",
             # "verbose_json")
@@ -372,11 +386,11 @@ class SonioxAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             has_language = any(t.get("language") is not None for t in tokens)
 
             if (has_speaker or has_language) and tokens:
-                text = render_soniox_tokens(tokens)
+                text = render_soniox_tokens(tokens)  # pyright: ignore[reportArgumentType]  # renderers only call .get on each token
             elif transcript.get("text"):
                 text = transcript["text"]
             elif tokens:
-                text = "".join(t.get("text", "") for t in tokens)
+                text = joined("", (t.get("text", "") for t in tokens))
             else:
                 text = ""
 
@@ -385,9 +399,10 @@ class SonioxAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         response["task"] = "transcribe"
 
         # Best-effort metadata fields matching OpenAI's verbose_json shape.
-        if transcription_meta.get("audio_duration_ms") is not None:
+        audio_duration_ms: Final = decoded_json_object(transcription_meta).get("audio_duration_ms")
+        if audio_duration_ms is not None:
             try:
-                response["duration"] = float(transcription_meta["audio_duration_ms"]) / 1000.0
+                response["duration"] = _as_float(audio_duration_ms) / 1000.0
             except (TypeError, ValueError):
                 pass
 
@@ -403,10 +418,12 @@ class SonioxAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             words: Final[list[dict[str, object]]] = []
             for token in tokens:
                 word_entry: dict[str, object] = {"word": token.get("text", "")}
-                if token.get("start_ms") is not None:
-                    word_entry["start"] = float(token["start_ms"]) / 1000.0
-                if token.get("end_ms") is not None:
-                    word_entry["end"] = float(token["end_ms"]) / 1000.0
+                start_ms: object = token.get("start_ms")
+                if start_ms is not None:
+                    word_entry["start"] = _as_float(start_ms) / 1000.0
+                end_ms: object = token.get("end_ms")
+                if end_ms is not None:
+                    word_entry["end"] = _as_float(end_ms) / 1000.0
                 words.append(word_entry)
             if words:
                 response["words"] = words

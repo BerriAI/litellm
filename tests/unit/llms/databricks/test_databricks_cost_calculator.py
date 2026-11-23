@@ -6,6 +6,7 @@ from typing import Final
 import pytest
 
 import litellm
+from litellm.litellm_core_utils.get_model_cost_map import AliasedCostEntry
 from litellm.llms.databricks.cost_calculator import cost_per_token
 from litellm.types.utils import ModelInfo, Usage
 
@@ -33,6 +34,8 @@ PRICE_FIELDS: Final = (
     "cache_read_input_token_cost",
 )
 PUBLISHED_DBU_PER_MILLION: Final = {
+    "databricks/system.ai.gpt-6-2-astra": ("114.286", "571.429", "142.857", "5.714"),
+    "databricks/system.ai.gpt-6-2-sol": ("28.571", "142.857", "35.714", "1.429"),
     "databricks/databricks-claude-haiku-5-5": ("1.429", "7.143", "1.786", "0.143"),
     "databricks/databricks-claude-sonnet-5-5": ("28.571", "142.857", "35.714", "1.429"),
     "databricks/databricks-gpt-6-1-sol": ("28.571", "142.857", "35.714", "1.429"),
@@ -43,6 +46,8 @@ PUBLISHED_DBU_PER_MILLION: Final = {
     "databricks/databricks-claude-opus-5-5": ("57.143", "285.714", "71.429", "2.857"),
     "databricks/databricks-claude-fable-5-1": ("142.858", "714.286", "178.572", "3.572"),
     "databricks/databricks-claude-fable-5": ("142.858", "714.286", "178.572", "14.286"),
+    "databricks/databricks-claude-fable-5-2": ("114.286", "571.429", "142.857", "2.857"),
+    "databricks/system.ai.claude-fable-5-2": ("114.286", "571.429", "142.857", "2.857"),
     "databricks/databricks-claude-opus-5": ("71.429", "357.143", "89.286", "7.143"),
     "databricks/databricks-claude-opus-4-8": ("71.429", "357.143", "89.286", "7.143"),
     "databricks/databricks-claude-opus-4-7": ("71.429", "357.143", "89.286", "7.143"),
@@ -83,6 +88,7 @@ PUBLISHED_DBU_PER_MILLION: Final = {
     "databricks/databricks-gemini-3-1-flash-lite": ("4.464", "26.786", "4.464", "0.446"),
     "databricks/databricks-gemini-2-5-pro": ("22.321", "178.571", "22.321", "2.232"),
     "databricks/databricks-gemini-2-5-flash": ("5.357", "44.643", "5.357", "0.536"),
+    "databricks/system.ai.gemini-4-hydrogen": ("26.786", "133.929", "33.482", "1.339"),
     "databricks/databricks-kimi-k3": ("42.857", "214.286", "42.857", "4.286"),
     "databricks/databricks-deepseek-v4-flash-0731": ("2.000", "4.000", "2.000", "0.400"),
     "databricks/databricks-deepseek-v4-pro-0813": ("18.857", "56.571", "18.857", "1.886"),
@@ -213,11 +219,38 @@ def test_every_model_without_published_cache_dbu_bills_cache_writes_at_its_own_i
         if model.startswith("databricks/")
         and info.get("input_cost_per_token")
         and model not in PUBLISHED_DBU_PER_MILLION
+        and not (isinstance(info, AliasedCostEntry) and info.names[0] != model)
     ]
 
     for model in without_published_rates:
         info = _model_info(model)
         assert info["cache_creation_input_token_cost"] == pytest.approx(info["input_cost_per_token"]), model
+
+
+@pytest.mark.parametrize("model", ("databricks/system.ai.gpt-6-2-astra", "databricks/system.ai.gpt-6-2-sol"))
+def test_unity_gateway_cache_billing_uses_published_dbu_rates(local_model_cost_map: None, model: str) -> None:
+    """Standard short-context DBUs from
+    https://www.databricks.com/product/pricing/proprietary-foundation-model-serving,
+    read 2026-11-19; cache writes have a published rate, not an input-rate fallback."""
+    input_rate, output_rate, write_rate, read_rate = tuple(
+        _dollars_per_token(rate) for rate in PUBLISHED_DBU_PER_MILLION[model]
+    )
+    info: Final = _model_info(model)
+    assert tuple(info[field] for field in PRICE_FIELDS) == pytest.approx(
+        (input_rate, output_rate, write_rate, read_rate)
+    )
+    usage: Final = Usage(
+        prompt_tokens=11000,
+        completion_tokens=500,
+        total_tokens=11500,
+        cache_creation_input_tokens=2000,
+        cache_read_input_tokens=8000,
+    )
+
+    prompt_cost, completion_cost = cost_per_token(model=model, usage=usage)
+
+    assert prompt_cost == pytest.approx(1000 * input_rate + 2000 * write_rate + 8000 * read_rate)
+    assert completion_cost == pytest.approx(500 * output_rate)
 
 
 @pytest.mark.parametrize("model", NEW_MODELS)

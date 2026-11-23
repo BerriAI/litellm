@@ -117,9 +117,9 @@ test.describe("Add Model", () => {
     const createdModelId = (await createResponse.json()).model_info?.id;
     expect(createdModelId, "model id from /model/new").toBeTruthy();
 
-    // Navigate to Models + Endpoints
+    // Navigate to Model Management
     await page.goto("/ui");
-    await page.getByText("Models + Endpoints").click();
+    await page.getByText("Model Management").click();
 
     // The Model ID cell is the drill-in control; the row itself is not clickable.
     const modelIdCell = page.getByTestId(`model-id-${createdModelId}`);
@@ -391,7 +391,7 @@ test.describe("Add Model", () => {
 
     // Navigate to Deployed Models tab
     await page.getByRole("tab", { name: "Deployed Models" }).click();
-    await page.waitForLoadState("networkidle");
+    await expect(page.getByPlaceholder("Search model names")).toBeVisible();
 
     // Search for the model we just added
     await page.getByPlaceholder("Search model names").fill("claude-haiku-4-5");
@@ -470,7 +470,7 @@ test.describe("Add Model", () => {
 
       // The Models table renders team-scoped models with the team id in the row.
       await page.getByRole("tab", { name: "Deployed Models" }).click();
-      await page.waitForLoadState("networkidle");
+      await expect(page.getByPlaceholder("Search model names")).toBeVisible();
 
       await page.getByPlaceholder("Search model names").fill("cohere");
 
@@ -515,7 +515,7 @@ test.describe("Add Model", () => {
 
     // Navigate to Deployed Models tab
     await page.getByRole("tab", { name: "Deployed Models" }).click();
-    await page.waitForLoadState("networkidle");
+    await expect(page.getByPlaceholder("Search model names")).toBeVisible();
 
     // Search for the wildcard model
     await page.getByPlaceholder("Search model names").fill("cohere");

@@ -11,6 +11,7 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
+from litellm.litellm_core_utils.allowed_tools_tool_choice import HostedMcpToolHandling
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_str_from_messages,
 )
@@ -23,6 +24,7 @@ from litellm.litellm_core_utils.prompt_templates.image_handling import (
     async_inline_remote_media,
     inline_remote_image_urls,
 )
+from litellm.litellm_core_utils.reasoning_effort_utils import OPAQUE_VALUE
 from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
@@ -43,7 +45,7 @@ from litellm.types.utils import (
     generate_id,
 )
 
-from ..common_utils import OllamaError, OllamaModelInfo, convert_image
+from ..common_utils import OllamaError, OllamaModelInfo, convert_image, ollama_think
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -74,7 +76,7 @@ class _OllamaGenerateReasoning(LiteLLMBaseModel):
     def split(self) -> tuple[str | None, str | None]:
         """Reasoning reaches `/api/generate` either in the top-level `thinking` field or
         inline in `<think>` tags, never both. The field wins, matching `ollama_chat`."""
-        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
             parse_content_for_reasoning,
         )
 
@@ -226,6 +228,9 @@ class OllamaConfig(BaseConfig):
             "reasoning_effort",
         ]
 
+    def hosted_mcp_tool_handling(self, model: str) -> HostedMcpToolHandling:
+        return "drops"
+
     def map_openai_params(
         self,
         non_default_params: dict,
@@ -249,10 +254,7 @@ class OllamaConfig(BaseConfig):
             elif param == "stop":
                 optional_params["stop"] = value
             elif param == "reasoning_effort" and value is not None:
-                if model.startswith("gpt-oss"):
-                    optional_params["think"] = value
-                else:
-                    optional_params["think"] = value in {"low", "medium", "high"}
+                optional_params["think"] = ollama_think(model, OPAQUE_VALUE.validate_python(value))
             elif param == "response_format" and isinstance(value, dict):
                 if value["type"] == "json_object":
                     optional_params["format"] = "json"

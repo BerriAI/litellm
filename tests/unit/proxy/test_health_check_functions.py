@@ -1,13 +1,29 @@
 import asyncio
 import time
+from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
+import respx
+from pydantic import TypeAdapter
+from starlette.requests import Request
 
-from litellm.proxy._types import UserAPIKeyAuth
+import litellm
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.llms.chatgpt import authenticator as chatgpt_authenticator
+from litellm.proxy import proxy_server
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.db.health_check_latest import LatestHealthCheckRow
+from litellm.proxy.health_check import (
+    _same_health_check_model,
+    perform_health_check,
+    public_wildcard_children,
+    resolve_health_check_mode,
+    update_litellm_params_for_health_check,
+)
 from litellm.proxy.health_endpoints._health_endpoints import (
     _aggregate_health_check_results,
     _build_model_param_to_info_mapping,
@@ -16,8 +32,10 @@ from litellm.proxy.health_endpoints._health_endpoints import (
     _save_health_check_results_if_changed,
     _save_health_check_to_db,
     latest_health_checks_endpoint,
+    test_model_connection as probe_model_connection,
 )
 from litellm.proxy.utils import PrismaClient
+from litellm.types.utils import StandardLoggingPayload
 
 
 @pytest.fixture
@@ -276,7 +294,7 @@ async def test_save_health_check_results_if_changed_status_changed():
 
     # Latest check shows unhealthy, new result is healthy (status changed)
     latest_checks_map = {
-        "model-123": MagicMock(
+        ("model-123", "gpt-3.5-turbo"): MagicMock(
             status="unhealthy",
             checked_at=datetime.now(timezone.utc) - timedelta(minutes=5),
         ),
@@ -318,7 +336,7 @@ async def test_save_health_check_results_if_changed_status_unchanged_recent():
     # Latest check shows healthy, new result is healthy (status unchanged)
     # And checked recently (within 1 hour)
     latest_checks_map = {
-        "model-123": MagicMock(
+        ("model-123", "gpt-3.5-turbo"): MagicMock(
             status="healthy",
             checked_at=datetime.now(timezone.utc) - timedelta(minutes=30),
         ),
@@ -356,7 +374,7 @@ async def test_save_health_check_results_if_changed_status_unchanged_old():
     # Latest check shows healthy, new result is healthy (status unchanged)
     # But checked >1 hour ago
     latest_checks_map = {
-        "model-123": MagicMock(
+        ("model-123", "gpt-3.5-turbo"): MagicMock(
             status="healthy",
             checked_at=datetime.now(timezone.utc) - timedelta(hours=2),
         ),
@@ -507,7 +525,7 @@ async def test_save_health_check_results_if_changed_reports_success_when_nothing
         },
     }
     latest_checks_map = {
-        "model-1": MagicMock(status="healthy", checked_at=datetime.now(timezone.utc) - timedelta(minutes=5)),
+        ("model-1", "gpt-4"): MagicMock(status="healthy", checked_at=datetime.now(timezone.utc) - timedelta(minutes=5)),
     }
 
     persisted = await _save_health_check_results_if_changed(
@@ -741,6 +759,7 @@ async def test_perform_health_check_and_save_passes_model_id_to_perform_health_c
         result = await _perform_health_check_and_save(
             model_list=model_list,
             target_model=None,
+            recorded_model_name=None,
             cli_model=None,
             details=True,
             prisma_client=None,
@@ -777,6 +796,7 @@ async def test_perform_health_check_and_save_forwards_skip_disabled_background_f
         await _perform_health_check_and_save(
             model_list=model_list,
             target_model=None,
+            recorded_model_name=None,
             cli_model=None,
             details=True,
             prisma_client=None,
@@ -942,6 +962,499 @@ def test_filter_deployments_to_model_groups():
     assert filter_deployments_to_model_groups(model_list, None) == tuple(model_list)
     assert filter_deployments_to_model_groups(model_list, frozenset({"prod-openai"})) == (model_list[0], model_list[2])
     assert filter_deployments_to_model_groups(model_list, frozenset()) == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "pricing", [{"base_model": "gpt-5.4"}, {"input_cost_per_token": 0.02, "output_cost_per_token": 0.03}]
+)
+@pytest.mark.parametrize("deployment_id", [None, "alternate-probe-deployment"])
+@pytest.mark.parametrize("override", ["health_check_model", "health_check_params", "same_model"])
+async def test_alternate_health_check_model_uses_its_own_price(
+    pricing: dict[str, object], deployment_id: str | None, override: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    events: Final[asyncio.Queue[StandardLoggingPayload]] = asyncio.Queue()
+
+    class SpendCapture(CustomLogger):
+        async def async_log_success_event(
+            self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
+        ) -> None:
+            events.put_nowait(TypeAdapter(StandardLoggingPayload).validate_python(kwargs["standard_logging_object"]))
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "_async_success_callback", [SpendCapture()])
+    monkeypatch.setattr(proxy_server, "llm_router", None)
+    monkeypatch.setattr(
+        proxy_server,
+        "prisma_client",
+        PrismaClient(
+            database_url="postgresql://test:test@localhost/test", proxy_logging_obj=proxy_server.proxy_logging_obj
+        ),
+    )
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "health-probe",
+        {
+            "input_cost_per_token": 0.00001,
+            "output_cost_per_token": 0.00002,
+            "litellm_provider": "openai",
+            "mode": "chat",
+        },
+    )
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "gpt-5.4",
+        {"input_cost_per_token": 0.001, "output_cost_per_token": 0.002, "litellm_provider": "openai", "mode": "chat"},
+    )
+    if deployment_id is not None:
+        monkeypatch.setitem(
+            litellm.model_cost, deployment_id, {**pricing, "litellm_provider": "openai", "mode": "chat"}
+        )
+    params: Final = {"api_base": "https://health-test.example/v1", "api_key": "test-key"}
+    model_info: Final = {
+        **pricing,
+        **(
+            {"health_check_params": {"model": "openai/health-probe"}}
+            if override == "health_check_params"
+            else {"health_check_model": "openai/health-probe"}
+        ),
+        **({"id": deployment_id} if deployment_id is not None else {}),
+    }
+    payload: Final = {
+        "id": "chatcmpl-health-probe",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "health-probe",
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+    }
+    with respx.mock:
+        respx.post("https://health-test.example/v1/chat/completions").mock(
+            return_value=httpx.Response(200, json=payload)
+        )
+        await litellm.acompletion(
+            model="openai/health-probe",
+            messages=[{"role": "user", "content": "test"}],
+            litellm_metadata={"model_info": model_info} if override == "same_model" else {},
+            **params,
+        )
+        normal: Final = await asyncio.wait_for(events.get(), timeout=10)
+        result: Final = await probe_model_connection(
+            request=Request({"type": "http", "headers": []}),
+            mode="chat",
+            litellm_params={"model": "openai/health-probe" if override == "same_model" else "openai/gpt-5.4", **params},
+            model_info=model_info,
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+        assert result["status"] == "success", result
+        health: Final = await asyncio.wait_for(events.get(), timeout=10)
+
+    assert health["call_type"] == normal["call_type"]
+    assert health["model"] == normal["model"]
+    assert health["response_cost"] == normal["response_cost"]
+    assert health["response_cost"] > 0
+    assert health["model_id"] == (deployment_id or "")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("stored_model", "requested_model"),
+    [("openai/health-probe", "health-probe"), ("health-probe", "openai/health-probe")],
+)
+async def test_equivalent_health_check_model_names_keep_deployment_prices(
+    stored_model: str, requested_model: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    events: Final[asyncio.Queue[StandardLoggingPayload]] = asyncio.Queue()
+
+    class SpendCapture(CustomLogger):
+        async def async_log_success_event(
+            self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
+        ) -> None:
+            events.put_nowait(TypeAdapter(StandardLoggingPayload).validate_python(kwargs["standard_logging_object"]))
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "_async_success_callback", [SpendCapture()])
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "health-probe",
+        {
+            "input_cost_per_token": 0.00001,
+            "output_cost_per_token": 0.00002,
+            "litellm_provider": "openai",
+            "mode": "chat",
+        },
+    )
+    params: Final = {
+        "api_base": "https://equivalent-health.example/v1",
+        "api_key": "test-key",
+        "custom_llm_provider": "openai",
+    }
+    deployment_id: Final = "priced-health-deployment"
+    model_info: Final = {
+        "id": deployment_id,
+        "mode": "chat",
+        "input_cost_per_token": 0.02,
+        "output_cost_per_token": 0.03,
+    }
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "priced-health",
+                "litellm_params": {"model": stored_model, **params},
+                "model_info": model_info,
+            }
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(
+        proxy_server,
+        "prisma_client",
+        PrismaClient(
+            database_url="postgresql://test:test@localhost/test", proxy_logging_obj=proxy_server.proxy_logging_obj
+        ),
+    )
+    payload: Final = {
+        "id": "chatcmpl-equivalent-health",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "health-probe",
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+    }
+    with respx.mock:
+        respx.post("https://equivalent-health.example/v1/chat/completions").mock(
+            return_value=httpx.Response(200, json=payload)
+        )
+        result: Final = await probe_model_connection(
+            request=Request({"type": "http", "headers": []}),
+            mode="chat",
+            litellm_params={"model": requested_model, "custom_llm_provider": "openai"},
+            model_info={"id": deployment_id},
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+        assert result["status"] == "success", result
+        health: Final = await asyncio.wait_for(events.get(), timeout=10)
+
+    assert health["response_cost"] == 10 * model_info["input_cost_per_token"] + 5 * model_info["output_cost_per_token"]
+    assert health["model"] == "health-probe"
+    assert health["model_id"] == deployment_id
+
+
+def test_health_check_without_deployment_model_keeps_probe_but_drops_deployment_prices() -> None:
+    deployment_info: Final = {
+        "id": "probe-deployment",
+        "base_model": "openai/deployment-model",
+        "input_cost_per_token": 0.02,
+        "output_cost_per_token": 0.03,
+    }
+    probe_model: Final = "openai/health-probe"
+
+    probe_params: Final = update_litellm_params_for_health_check(
+        model_info={"mode": "chat", "health_check_model": probe_model},
+        litellm_params={"model_info": deployment_info},
+    )
+
+    assert probe_params["model"] == probe_model
+    assert probe_params["model_info"] == {"id": deployment_info["id"]}
+
+
+@pytest.mark.parametrize(("model", "expected"), [("health-probe", True), ("other-health-probe", False)])
+def test_chatgpt_health_check_model_comparison_does_not_access_credentials(
+    model: str, expected: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def forbidden_auth_file_access(*args: object, **kwargs: object) -> None:
+        pytest.fail("Health-check model comparison accessed the ChatGPT auth file")
+
+    monkeypatch.setattr(chatgpt_authenticator, "open", forbidden_auth_file_access, raising=False)
+
+    assert (
+        _same_health_check_model("chatgpt/health-probe", {"model": model, "custom_llm_provider": "chatgpt"}) is expected
+    )
+
+
+_MAPPING_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_CHECK_RESULT_ADAPTER: Final = TypeAdapter(
+    tuple[tuple[Mapping[str, object], ...], tuple[Mapping[str, object], ...], object]
+)
+_AGGREGATE_ADAPTER: Final = TypeAdapter(Mapping[tuple[str | None, str], Mapping[str, object]])
+_WILDCARD_SERVED: Final = "bedrock/us.anthropic.claude-opus-4-8"
+_EXACT: Final = "bedrock/us.anthropic.claude-sonnet-4-6"
+_ALIAS: Final = "bedrock/fast"
+
+
+def _wildcard_router(wildcard_info: dict[str, object]) -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "bedrock/*",
+                "litellm_params": {"model": "bedrock/*", "aws_region_name": "us-east-1"},
+                "model_info": {"id": "wildcard", **wildcard_info},
+            },
+            {"model_name": _EXACT, "litellm_params": {"model": _EXACT}, "model_info": {"id": "exact"}},
+        ],
+        model_group_alias={_ALIAS: _EXACT},
+    )
+
+
+def _field(child: Mapping[str, object], section: str) -> Mapping[str, object]:
+    return _MAPPING_ADAPTER.validate_python(child[section])
+
+
+def _probe_request(child: Mapping[str, object]) -> Mapping[str, object]:
+    return _MAPPING_ADAPTER.validate_python(
+        update_litellm_params_for_health_check(
+            dict(_MAPPING_ADAPTER.validate_python(child["model_info"])),
+            dict(_MAPPING_ADAPTER.validate_python(child["litellm_params"])),
+        )
+    )
+
+
+def test_public_wildcard_children_checks_only_names_a_wildcard_alone_serves():
+    router: Final = _wildcard_router(
+        {"health_check_model": "bedrock/us.anthropic.claude-haiku-4-5", "health_check_timeout": 120}
+    )
+
+    children: Final = public_wildcard_children(
+        [_WILDCARD_SERVED, _WILDCARD_SERVED, _EXACT, _ALIAS, "openai/unserved"], router, None
+    )
+
+    assert [(c["model_name"], _field(c, "litellm_params")["model"]) for c in children] == [
+        (_WILDCARD_SERVED, _WILDCARD_SERVED)
+    ]
+    assert _field(children[0], "litellm_params")["aws_region_name"] == "us-east-1"
+    assert _field(children[0], "model_info")["health_check_timeout"] == 120
+    assert _probe_request(children[0])["model"] == _WILDCARD_SERVED.removeprefix("bedrock/")
+
+
+def _two_region_bedrock_router() -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "bedrock/*",
+                "litellm_params": {"model": "bedrock/*", "aws_region_name": region},
+                "model_info": {"id": f"wildcard-{region}"},
+            }
+            for region in ("us-east-1", "us-west-2")
+        ]
+    )
+
+
+def _child_ids(children: tuple[Mapping[str, object], ...]) -> list[object]:
+    return [_MAPPING_ADAPTER.validate_python(c["model_info"])["id"] for c in children]
+
+
+def test_public_wildcard_children_get_an_id_that_is_stable_and_differs_per_wildcard():
+    first: Final = _child_ids(public_wildcard_children([_WILDCARD_SERVED], _two_region_bedrock_router(), None))
+    again: Final = _child_ids(public_wildcard_children([_WILDCARD_SERVED], _two_region_bedrock_router(), None))
+
+    assert first == again
+    assert len(set(first)) == 2
+    assert not {"wildcard-us-east-1", "wildcard-us-west-2"} & set(first)
+
+
+def test_public_wildcard_children_resolve_each_probe_mode_from_its_own_model():
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "openai/*",
+                "litellm_params": {"model": "openai/*"},
+                "model_info": {"id": "wildcard", "mode": "chat", "health_check_max_tokens": 5},
+            }
+        ]
+    )
+
+    children: Final = public_wildcard_children(["openai/text-embedding-3-large"], router, None)
+
+    assert [
+        resolve_health_check_mode(
+            _MAPPING_ADAPTER.validate_python(c["model_info"]), _MAPPING_ADAPTER.validate_python(c["litellm_params"])
+        )
+        for c in children
+    ] == ["embedding"]
+    assert "max_tokens" not in _probe_request(children[0])
+
+
+def test_public_wildcard_children_do_not_carry_the_wildcard_base_model():
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "openai/*",
+                "litellm_params": {"model": "openai/*"},
+                "model_info": {"id": "wildcard", "base_model": "gpt-audio-1.5"},
+            }
+        ]
+    )
+
+    children: Final = public_wildcard_children(["openai/gpt-5.5"], router, None)
+
+    assert "modalities" not in _probe_request(children[0])
+
+
+def test_public_wildcard_children_check_an_alias_target_only_a_wildcard_serves_under_the_alias():
+    target: Final = "bedrock/us.anthropic.claude-haiku-4-5"
+    router: Final = litellm.Router(
+        model_list=[
+            {"model_name": "bedrock/*", "litellm_params": {"model": "bedrock/*"}, "model_info": {"id": "wildcard"}},
+            {"model_name": _EXACT, "litellm_params": {"model": _EXACT}, "model_info": {"id": "exact"}},
+        ],
+        model_group_alias={"bedrock/fast": target, "bedrock/steady": _EXACT},
+    )
+
+    children: Final = public_wildcard_children(["bedrock/fast", "bedrock/steady"], router, None)
+
+    assert [(c["model_name"], _field(c, "litellm_params")["model"]) for c in children] == [("bedrock/fast", target)]
+
+
+class _LatestRows:
+    def __init__(self, rows: list[object]) -> None:
+        self.rows = rows
+
+    async def query_raw(self, *_args: object) -> list[object]:
+        return self.rows
+
+
+class _RecordingPrisma:
+    def __init__(self, latest_rows: list[object] | None = None) -> None:
+        self.db = _LatestRows(latest_rows or [])
+        self.saved: list[Mapping[str, object]] = []
+
+    async def save_health_check_result(self, **row: object) -> Mapping[str, object]:
+        self.saved.append(row)
+        return row
+
+
+@pytest.mark.asyncio
+async def test_alias_and_target_published_together_are_probed_once_and_saved_under_both_names():
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "openai/*",
+                "litellm_params": {"model": "openai/*", "mock_response": "ok"},
+                "model_info": {"id": "wildcard"},
+            }
+        ],
+        model_group_alias={"openai/fast": "openai/gpt-5.5"},
+    )
+    children: Final = list(public_wildcard_children(["openai/fast", "openai/gpt-5.5"], router, None))
+    prisma_client: Final = _RecordingPrisma()
+
+    healthy, unhealthy, _ = _CHECK_RESULT_ADAPTER.validate_python(await perform_health_check(children))
+    await save_background_health_checks_to_db(
+        prisma_client, children, list(healthy), list(unhealthy), time.time(), "pod-1"
+    )
+
+    assert len(healthy) + len(unhealthy) == 1
+    assert sorted((row["model_name"], row["status"]) for row in prisma_client.saved) == [
+        ("openai/fast", "healthy"),
+        ("openai/gpt-5.5", "healthy"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_wildcard_child_probe_sends_the_secret_behind_the_wildcard_api_key_reference(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("WILDCARD_HEALTH_KEY", "resolved-wildcard-key")
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "openai/*",
+                "litellm_params": {
+                    "model": "openai/*",
+                    "api_key": "oidc/env/WILDCARD_HEALTH_KEY",
+                    "api_base": "https://wildcard-health.example/v1",
+                },
+                "model_info": {"id": "wildcard"},
+            }
+        ]
+    )
+    children: Final = list(public_wildcard_children(["openai/gpt-5.5"], router, None))
+    payload: Final = {
+        "id": "chatcmpl-wildcard-health",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "gpt-5.5",
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    }
+
+    with respx.mock:
+        route: Final = respx.post("https://wildcard-health.example/v1/chat/completions").mock(
+            return_value=httpx.Response(200, json=payload)
+        )
+        healthy, unhealthy, _ = _CHECK_RESULT_ADAPTER.validate_python(await perform_health_check(children))
+
+    assert (len(healthy), len(unhealthy)) == (1, 0)
+    assert [call.request.headers["authorization"] for call in route.calls] == ["Bearer resolved-wildcard-key"]
+
+
+@pytest.mark.asyncio
+async def test_a_newly_published_alias_is_saved_although_its_target_has_a_fresh_row_under_the_same_id():
+    router: Final = litellm.Router(
+        model_list=[{"model_name": "openai/*", "litellm_params": {"model": "openai/*"}, "model_info": {"id": "wc"}}],
+        model_group_alias={"openai/fast": "openai/gpt-5.5"},
+    )
+    children: Final = list(public_wildcard_children(["openai/gpt-5.5", "openai/fast"], router, None))
+    shared_id: Final = str(_field(children[0], "model_info")["id"])
+    prisma_client: Final = _RecordingPrisma(
+        [_raw_latest_row("openai/gpt-5.5", shared_id, datetime.now(timezone.utc) - timedelta(minutes=1))]
+    )
+
+    await save_background_health_checks_to_db(
+        prisma_client, children, [{"model": "openai/gpt-5.5", "model_id": shared_id}], [], time.time(), "pod-1"
+    )
+
+    assert [row["model_name"] for row in prisma_client.saved] == ["openai/fast"]
+
+
+def test_aggregate_health_check_results_matches_by_model_id_when_the_check_rewrote_the_model_string():
+    model_list: Final = [
+        {"model_name": "claude", "litellm_params": {"model": _WILDCARD_SERVED}, "model_info": {"id": "bedrock-claude"}},
+        {"model_name": "gpt", "litellm_params": {"model": "openai/gpt-5.5"}, "model_info": {"id": "openai-gpt"}},
+    ]
+
+    result: Final = _AGGREGATE_ADAPTER.validate_python(
+        _aggregate_health_check_results(
+            _build_model_param_to_info_mapping(model_list),
+            [{"model": _WILDCARD_SERVED.removeprefix("bedrock/"), "model_id": "bedrock-claude"}],
+            [{"model": "openai/gpt-5.5", "model_id": "openai-gpt", "error": "throttled"}],
+        )
+    )
+
+    assert {key: (value["healthy_count"], value["unhealthy_count"]) for key, value in result.items()} == {
+        ("bedrock-claude", "claude"): (1, 0),
+        ("openai-gpt", "gpt"): (0, 1),
+    }
+
+
+def test_public_wildcard_children_skip_a_wildcard_with_background_checks_disabled():
+    router: Final = _wildcard_router({"disable_background_health_check": True})
+
+    assert public_wildcard_children([_WILDCARD_SERVED], router, None) == ()
+
+
+@pytest.mark.parametrize(
+    "model_groups,checked",
+    [({_WILDCARD_SERVED}, True), ({"bedrock/*"}, True), ({_EXACT}, False)],
+)
+def test_public_wildcard_children_honor_background_model_groups(model_groups: set[str], checked: bool):
+    children: Final = public_wildcard_children([_WILDCARD_SERVED], _wildcard_router({}), frozenset(model_groups))
+
+    assert [c["model_name"] for c in children] == ([_WILDCARD_SERVED] if checked else [])
+
+
+def test_split_by_model_ids_passes_anything_without_a_listed_model_id_to_the_routing_part_untouched():
+    from litellm.proxy.health_check import split_by_model_ids
+
+    deployment: Final = {"model": "openai/explicit", "model_id": "explicit"}
+    child: Final = {"model": "openai/gpt-5.5", "model_id": "child"}
+
+    routing, children = split_by_model_ids(["healthy", deployment, child], frozenset({"child"}))
+
+    assert routing == ("healthy", deployment)
+    assert routing[1] is deployment
+    assert children == (child,)
 
 
 if __name__ == "__main__":

@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import io
 import json
 import logging
 from typing import Final
@@ -19,6 +20,7 @@ from litellm.proxy.health_check import (
     resolve_health_check_mode,
     update_litellm_params_for_health_check,
 )
+from tests.test_litellm_rust.support.recording_server import ResponseSpec, recording_service
 
 
 @pytest.mark.asyncio
@@ -563,32 +565,27 @@ def test_native_messages_default_is_scoped_to_mantle_claude(deployment_model):
 
 
 @pytest.mark.asyncio
-async def test_run_model_health_check_probes_mantle_claude_over_messages(monkeypatch):
+async def test_run_model_health_check_probes_mantle_claude_over_messages():
     """The deployment the ticket describes, probed end to end through the proxy's health runner.
 
     Before the fix the probe went to /v1/chat/completions, which Mantle answers with a
     validation_error for Claude ids, so every such deployment showed unhealthy.
     """
-    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    litellm.in_memory_llm_clients_cache.flush_cache()
-
-    with respx.mock(assert_all_called=False) as respx_mock:
-        messages_route = respx_mock.post("https://bedrock-mantle.us-east-2.api.aws/anthropic/v1/messages").respond(
-            json=_mantle_anthropic_response()
-        )
-        chat_route = respx_mock.post("https://bedrock-mantle.us-east-2.api.aws/v1/chat/completions").respond(
-            status_code=400, json={"type": "error", "error": {"type": "validation_error"}}
-        )
+    with recording_service() as server:
+        server.default_response = ResponseSpec(body=_mantle_anthropic_response())
         result = await hc_module._run_model_health_check(
-            {"litellm_params": dict(_MANTLE_CLAUDE_DEPLOYMENT_PARAMS), "model_info": {}}
+            {
+                "litellm_params": {**_MANTLE_CLAUDE_DEPLOYMENT_PARAMS, "api_base": server.base_url},
+                "model_info": {},
+            }
         )
 
     assert "error" not in result, result
-    assert chat_route.call_count == 0
-    assert messages_route.call_count == 1
-    sent = messages_route.calls.last.request
+    assert [request.path for request in server.requests] == ["/anthropic/v1/messages"]
+    sent = server.requests[0]
     assert sent.headers["authorization"] == "Bearer test-bearer"
-    body = json.loads(sent.content)
+    body = sent.body
+    assert isinstance(body, dict)
     assert body["model"] == "anthropic.claude-haiku-4-5"
     assert body["max_tokens"] == 16
     assert [message["role"] for message in body["messages"]] == ["user"]
@@ -1564,3 +1561,84 @@ async def test_a_failing_health_probe_leaves_the_deployment_serving_requests(mon
 
     assert "error" in probe
     assert reply.choices[0].message.content == "ok"
+
+
+@pytest.mark.parametrize(
+    ("component_params", "probed_component"),
+    [
+        ({"extra_headers": {"X-Amzn-SageMaker-Inference-Component": "header-component"}}, "header-component"),
+        (
+            {"model_id": "own-component", "extra_headers": {"X-Amzn-SageMaker-Inference-Component": "header-component"}},
+            "own-component",
+        ),
+        (
+            {"model_id": "own-component", "extra_headers": {1: "other", "X-Amzn-SageMaker-Inference-Component": "x"}},
+            "own-component",
+        ),
+        (
+            {"extra_headers": {1: "other", "X-Amzn-SageMaker-Inference-Component": "header-component"}},
+            "header-component",
+        ),
+        (
+            {
+                "configurable_clientside_auth_params": ["model_id"],
+                "extra_headers": {"X-Amzn-SageMaker-Inference-Component": "header-component"},
+            },
+            None,
+        ),
+    ],
+    ids=[
+        "header_pinned",
+        "own_model_id_beats_the_header",
+        "own_model_id_beside_a_non_string_header_key",
+        "header_pinned_beside_a_non_string_header_key",
+        "client_configurable_model_id_takes_no_header_pin",
+    ],
+)
+@pytest.mark.asyncio
+async def test_run_model_health_check_probes_a_legacy_sagemaker_embedding_at_the_deployments_component(
+    component_params: dict[str, object], probed_component: str | None
+) -> None:
+    embedding_reply: Final = {"object": "list", "data": [{"object": "embedding", "index": 0, "embedding": [0.1]}]}
+    invoke_endpoint: Final = MagicMock(return_value={"Body": io.BytesIO(json.dumps(embedding_reply).encode())})
+    client: Final = MagicMock(invoke_endpoint=invoke_endpoint)
+    deployment: Final = {
+        "litellm_params": {
+            "model": "sagemaker/openai/embed-endpoint",
+            "aws_region_name": "us-east-1",
+            "aws_access_key_id": "test-key",
+            "aws_secret_access_key": "test-secret",
+            **component_params,
+        },
+        "model_info": {"mode": "embedding"},
+    }
+
+    with patch("boto3.Session", return_value=MagicMock(client=MagicMock(return_value=client))):
+        result: Final = await hc_module._run_model_health_check(deployment)
+
+    assert "error" not in result, result
+    assert invoke_endpoint.call_count == 1
+    assert invoke_endpoint.call_args.kwargs.get("InferenceComponentName") == probed_component
+
+
+@pytest.mark.asyncio
+async def test_run_model_health_check_reports_why_a_string_configurable_clientside_auth_params_fails() -> None:
+    invoke_endpoint: Final = MagicMock()
+    deployment: Final = {
+        "litellm_params": {
+            "model": "sagemaker/openai/embed-endpoint",
+            "model_id": "own-component",
+            "aws_region_name": "us-east-1",
+            "aws_access_key_id": "test-key",
+            "aws_secret_access_key": "test-secret",
+        },
+        "model_info": {"mode": "embedding", "health_check_params": {"configurable_clientside_auth_params": "model_id"}},
+    }
+
+    client: Final = MagicMock(invoke_endpoint=invoke_endpoint)
+
+    with patch("boto3.Session", return_value=MagicMock(client=MagicMock(return_value=client))):
+        result: Final = await hc_module._run_model_health_check(deployment)
+
+    assert "configurable_clientside_auth_params" in result["error"]
+    invoke_endpoint.assert_not_called()

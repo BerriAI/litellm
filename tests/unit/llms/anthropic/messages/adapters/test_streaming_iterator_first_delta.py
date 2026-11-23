@@ -241,6 +241,57 @@ async def test_streaming_chat_length_takes_precedence_over_refusal(async_mode: b
     assert "stop_details" not in message_delta["delta"]
 
 
+CLAUDE_REFUSAL_STOP_DETAILS: Final = MappingProxyType(
+    {"type": "refusal", "category": "cyber", "explanation": "I can't help with that."}
+)
+
+
+def _claude_chat_stream(
+    stop_fields: Mapping[str, object], finish_reason: str, refusal: str | None = None
+) -> list[MagicMock]:
+    """The chunks the chat stream hands the adapter for a Claude turn: the stop fields
+    ride an empty delta ahead of the chunk that carries the finish_reason."""
+    return [
+        _make_chunk(Delta(content="Partial answer")),
+        _make_chunk(Delta(content="", refusal=refusal, provider_specific_fields=dict(stop_fields))),
+        _make_chunk(Delta(content=None), finish_reason=finish_reason),
+    ]
+
+
+@pytest.mark.parametrize("async_mode", [False, True])
+@pytest.mark.asyncio
+async def test_streaming_claude_refusal_keeps_the_explanation_in_stop_details_only(async_mode: bool):
+    """Claude's refusal explanation is API metadata, so streaming it as text puts words in Claude's mouth."""
+    chunks: Final = _claude_chat_stream(
+        {"stop_reason": "refusal", "stop_details": dict(CLAUDE_REFUSAL_STOP_DETAILS)},
+        "content_filter",
+        refusal=CLAUDE_REFUSAL_STOP_DETAILS["explanation"],
+    )
+    stream: Final = _AsyncStream(chunks) if async_mode else iter(chunks)
+    wrapper: Final = AnthropicStreamWrapper(completion_stream=stream, model="claude-model")
+
+    events: Final = await _drain_async(wrapper) if async_mode else _drain_sync(wrapper)
+
+    assert _text_deltas(events) == ["Partial answer"]
+    message_delta: Final = next(event for event in events if event["type"] == "message_delta")
+    assert message_delta["delta"] == {"stop_reason": "refusal", "stop_details": dict(CLAUDE_REFUSAL_STOP_DETAILS)}
+
+
+@pytest.mark.parametrize("async_mode", [False, True])
+@pytest.mark.asyncio
+async def test_streaming_paused_claude_turn_ends_on_pause_turn(async_mode: bool):
+    """A paused Claude turn reaches chat as ``length``, which a /v1/messages client would read as a cut-off reply."""
+    chunks: Final = _claude_chat_stream({"stop_reason": "pause_turn"}, "length")
+    stream: Final = _AsyncStream(chunks) if async_mode else iter(chunks)
+    wrapper: Final = AnthropicStreamWrapper(completion_stream=stream, model="claude-model")
+
+    events: Final = await _drain_async(wrapper) if async_mode else _drain_sync(wrapper)
+
+    assert _text_deltas(events) == ["Partial answer"]
+    message_delta: Final = next(event for event in events if event["type"] == "message_delta")
+    assert message_delta["delta"] == {"stop_reason": "pause_turn"}
+
+
 def _input_json_deltas(events: List[dict]) -> List[str]:
     return [
         e["delta"]["partial_json"]
@@ -1482,4 +1533,57 @@ async def test_signed_thinking_blocks_keep_their_own_text_and_signature(is_async
     )
     assert _last_delta_types_per_thinking_block(events) == ("signature_delta", "signature_delta")
     assert _text_deltas(events) == ["Done"]
+    _assert_deltas_match_their_block_type(events)
+
+
+_UNSIGNED_REASONING_STREAMS: Final[Mapping[str, Tuple[MagicMock, ...]]] = MappingProxyType(
+    {
+        "then-text": (
+            _reasoning_content_chunk("The user "),
+            _reasoning_content_chunk("wants 2+2."),
+            _make_chunk(Delta(content="4")),
+            _make_chunk(Delta(content=None), finish_reason="stop"),
+        ),
+        "then-tool-call": (
+            _reasoning_content_chunk("The user wants 2+2."),
+            _tool_chunk("call_add", "add", '{"a": 2, "b": 2}'),
+            _make_chunk(Delta(content=None), finish_reason="tool_calls"),
+        ),
+        "thought-ends-with-finish": (
+            _reasoning_content_chunk("The user "),
+            _make_chunk(Delta(content=None, reasoning_content="wants 2+2."), finish_reason="stop"),
+        ),
+        "unsigned-thinking-blocks": (
+            _thinking_chunk("The user "),
+            _thinking_chunk("wants 2+2."),
+            _make_chunk(Delta(content="4")),
+            _make_chunk(Delta(content=None), finish_reason="stop"),
+        ),
+    }
+)
+
+
+def _event_before_stop(events: Sequence[Mapping[str, object]], index: int) -> Mapping[str, object]:
+    stop_position: Final = next(
+        position
+        for position, event in enumerate(events)
+        if event.get("type") == "content_block_stop" and event["index"] == index
+    )
+    return events[stop_position - 1]
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.parametrize("stream", list(_UNSIGNED_REASONING_STREAMS), ids=list(_UNSIGNED_REASONING_STREAMS))
+@pytest.mark.asyncio
+async def test_unsigned_thinking_block_closes_with_an_empty_signature_delta(is_async: bool, stream: str):
+    events: Final = await _events_for(_UNSIGNED_REASONING_STREAMS[stream], is_async)
+
+    assert _thinking_blocks_as_accumulated(events) == (
+        _AccumulatedThinking(thinking="The user wants 2+2.", signature=""),
+    )
+    assert [_event_before_stop(events, index) for index in _thinking_starts(events)] == [
+        {"type": "content_block_delta", "index": index, "delta": {"type": "signature_delta", "signature": ""}}
+        for index in _thinking_starts(events)
+    ]
+    assert _signature_deltas(events) == [""]
     _assert_deltas_match_their_block_type(events)

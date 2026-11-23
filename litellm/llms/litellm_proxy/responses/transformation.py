@@ -12,6 +12,7 @@ from pydantic import TypeAdapter, ValidationError
 
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.base_llm.responses.transformation import ANY_REASONING_FIELD_VALUES, ReasoningFieldValues
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.utils import LlmProviders
@@ -42,10 +43,13 @@ class LiteLLMProxyResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def custom_llm_provider(self) -> LlmProviders:
         return LlmProviders.LITELLM_PROXY
 
+    def reasoning_field_values(self) -> ReasoningFieldValues:
+        return ANY_REASONING_FIELD_VALUES
+
     def get_complete_url(
         self,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
     ) -> str:
         """
         Get the endpoint for LiteLLM Proxy responses API.

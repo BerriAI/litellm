@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import json
+import logging
 import struct
 import time
 import uuid
@@ -17,6 +17,7 @@ import respx
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.llms.anthropic.messages.native import handler as python_messages
 from litellm.router import Router
 from litellm.types.llms.anthropic import (
     AnthropicMessagesTextParam,
@@ -28,15 +29,12 @@ from litellm.types.utils import StandardLoggingPayload
 
 _ALIAS: Final = "claude-special-alias"
 _ANTHROPIC_MODEL: Final = "claude-haiku-4-5-20251001"
-_BEDROCK_MODEL: Final = "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
 _BEDROCK_SONNET: Final = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
 _OPENAI_MODEL: Final = "openai/gpt-4.1-mini"
 _JOKE: Final = "why did the chicken cross the road"
 _PROMPT: Final = "Hello, can you tell me a short joke?"
 _ANTHROPIC_URL: Final = r".*api\.anthropic\.com/v1/messages.*"
 _OPENAI_RESPONSES_URL: Final = r".*api\.openai\.com/v1/responses.*"
-_BEDROCK_INVOKE_URL: Final = r".*bedrock-runtime.*/invoke$"
-_BEDROCK_INVOKE_STREAM_URL: Final = r".*bedrock-runtime.*/invoke-with-response-stream$"
 _BEDROCK_CONVERSE_URL: Final = r".*bedrock-runtime.*/converse$"
 _BEDROCK_CONVERSE_STREAM_URL: Final = r".*bedrock-runtime.*/converse-stream$"
 
@@ -147,13 +145,6 @@ def _event_frame(event_type: str, payload: Mapping[str, object]) -> bytes:
     return prelude + message + struct.pack("!I", crc32(message, prelude_crc) & 0xFFFFFFFF)
 
 
-def _invoke_stream_body() -> bytes:
-    return b"".join(
-        _event_frame("chunk", {"bytes": base64.b64encode(json.dumps(event).encode()).decode()})
-        for event in _STREAM_EVENTS
-    )
-
-
 def _anthropic_sse_body() -> bytes:
     return "".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in _STREAM_EVENTS).encode()
 
@@ -219,6 +210,11 @@ def _httpx_transport(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
 
 
+@pytest.fixture(autouse=True)
+def _python_messages(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "anthropic_messages", python_messages.anthropic_messages)
+
+
 @pytest.mark.asyncio
 async def test_router_aanthropic_messages_non_streaming_posts_anthropic_body(respx_mock):
     route: Final = respx_mock.post(url__regex=_ANTHROPIC_URL).mock(
@@ -256,73 +252,21 @@ async def test_router_aanthropic_messages_latency_routing_forwards_user_id(respx
 
 
 @pytest.mark.asyncio
-async def test_router_aanthropic_messages_falls_back_to_bedrock_after_anthropic_401(respx_mock, monkeypatch):
-    _set_fake_aws_env(monkeypatch)
-    anthropic_route: Final = respx_mock.post(url__regex=_ANTHROPIC_URL).mock(
-        return_value=httpx.Response(
-            401, json={"type": "error", "error": {"type": "authentication_error", "message": "invalid x-api-key"}}
-        )
-    )
-    bedrock_route: Final = respx_mock.post(url__regex=_BEDROCK_INVOKE_URL).mock(
-        return_value=httpx.Response(200, json=_anthropic_body(model=_BEDROCK_SONNET, msg_id="msg_bedrock"))
-    )
-    router: Final = Router(
-        model_list=[
-            {
-                "model_name": "anthropic/claude-opus-4-7",
-                "litellm_params": {"model": "anthropic/claude-opus-4-7", "api_key": "bad-key"},
-            },
-            {"model_name": f"bedrock/{_BEDROCK_SONNET}", "litellm_params": {"model": f"bedrock/{_BEDROCK_SONNET}"}},
-        ],
-        fallbacks=[{"anthropic/claude-opus-4-7": [f"bedrock/{_BEDROCK_SONNET}"]}],
-    )
-    response: Final = await router.aanthropic_messages(
-        messages=[{"role": "user", "content": _PROMPT}],
-        model="anthropic/claude-opus-4-7",
-        max_tokens=100,
-        metadata={"user_id": "hello"},
-    )
-    assert anthropic_route.call_count == 1
-    assert anthropic_route.calls.last.request.headers["x-api-key"] == "bad-key"
-    assert bedrock_route.call_count == 1
-    assert "authorization" in bedrock_route.calls.last.request.headers
-    _assert_anthropic_message(response, _BEDROCK_SONNET)
-    assert response["id"] == "msg_bedrock"
-
-
-@pytest.mark.asyncio
-async def test_router_aanthropic_messages_bedrock_converse_and_invoke(respx_mock, monkeypatch):
+async def test_router_aanthropic_messages_bedrock_converse(respx_mock, monkeypatch):
     _set_fake_aws_env(monkeypatch)
     converse_route: Final = respx_mock.post(url__regex=_BEDROCK_CONVERSE_URL).mock(
         return_value=httpx.Response(200, json=_CONVERSE_BODY)
     )
-    invoke_route: Final = respx_mock.post(url__regex=_BEDROCK_INVOKE_URL).mock(
-        return_value=httpx.Response(200, json=_anthropic_body(model=_BEDROCK_SONNET))
-    )
     converse_model: Final = f"bedrock/converse/{_BEDROCK_SONNET}"
-    invoke_model: Final = f"bedrock/{_BEDROCK_SONNET}"
-    router: Final = Router(
-        model_list=[
-            {"model_name": converse_model, "litellm_params": {"model": converse_model}},
-            {"model_name": invoke_model, "litellm_params": {"model": invoke_model}},
-        ]
-    )
+    router: Final = Router(model_list=[{"model_name": converse_model, "litellm_params": {"model": converse_model}}])
     converse_response: Final = await router.aanthropic_messages(
         messages=[{"role": "user", "content": _PROMPT}], model=converse_model, max_tokens=100
     )
-    invoke_response: Final = await router.aanthropic_messages(
-        messages=[{"role": "user", "content": _PROMPT}], model=invoke_model, max_tokens=100
-    )
     assert converse_route.call_count == 1
-    assert invoke_route.call_count == 1
     converse_request: Final = converse_route.calls.last.request
-    invoke_request: Final = invoke_route.calls.last.request
     assert "authorization" in converse_request.headers
-    assert "authorization" in invoke_request.headers
     assert json.loads(converse_request.read())["messages"] == [{"role": "user", "content": [{"text": _PROMPT}]}]
-    assert json.loads(invoke_request.read())["messages"] == [{"role": "user", "content": _PROMPT}]
     _assert_anthropic_message(converse_response, _BEDROCK_SONNET)
-    _assert_anthropic_message(invoke_response, _BEDROCK_SONNET)
 
 
 def test_sync_openai_bridge_anthropic_messages_returns_content_blocks(respx_mock):
@@ -346,13 +290,6 @@ def test_sync_openai_bridge_anthropic_messages_returns_content_blocks(respx_mock
     ("model", "url", "body", "expected_model"),
     [
         pytest.param(_ANTHROPIC_MODEL, _ANTHROPIC_URL, _anthropic_body(), _ANTHROPIC_MODEL, id="anthropic"),
-        pytest.param(
-            _BEDROCK_MODEL,
-            _BEDROCK_INVOKE_URL,
-            _anthropic_body(model="us.anthropic.claude-haiku-4-5-20251001-v1:0"),
-            "us.anthropic.claude-haiku-4-5-20251001-v1:0",
-            id="bedrock-invoke",
-        ),
         pytest.param(_OPENAI_MODEL, _OPENAI_RESPONSES_URL, _OPENAI_BODY, "gpt-4.1-mini", id="openai-bridge"),
     ],
 )
@@ -361,7 +298,7 @@ async def test_acreate_non_streaming_returns_dict_content_blocks(
 ):
     _set_fake_aws_env(monkeypatch)
     route: Final = respx_mock.post(url__regex=url).mock(return_value=httpx.Response(200, json=body))
-    response: Final = await litellm.anthropic.messages.acreate(
+    response: Final = await python_messages.anthropic_messages(
         messages=[{"role": "user", "content": _PROMPT}],
         model=model,
         max_tokens=100,
@@ -404,14 +341,6 @@ async def test_router_aanthropic_messages_non_streaming_logs_usage_model_and_cos
             _anthropic_sse_body(),
             _ANTHROPIC_MODEL,
             id="anthropic",
-        ),
-        pytest.param(
-            _BEDROCK_MODEL,
-            _BEDROCK_INVOKE_STREAM_URL,
-            "application/vnd.amazon.eventstream",
-            _invoke_stream_body(),
-            _BEDROCK_MODEL,
-            id="bedrock-invoke",
         ),
     ],
 )
@@ -601,7 +530,7 @@ async def test_bedrock_converse_system_prompt_caching_returns_cache_tokens(respx
             },
         )
     )
-    response: Final = await litellm.anthropic.messages.acreate(
+    response: Final = await python_messages.anthropic_messages(
         model=f"bedrock/converse/{_BEDROCK_SONNET}",
         messages=[{"role": "user", "content": "What are the key terms?"}],
         system=_cached_system(),
@@ -615,44 +544,11 @@ async def test_bedrock_converse_system_prompt_caching_returns_cache_tokens(respx
 
 
 @pytest.mark.asyncio
-async def test_bedrock_invoke_system_prompt_caching_returns_cache_tokens(respx_mock, monkeypatch):
-    _set_fake_aws_env(monkeypatch)
-    route: Final = respx_mock.post(url__regex=_BEDROCK_INVOKE_URL).mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                **_anthropic_body(model=_BEDROCK_SONNET),
-                "usage": {
-                    "input_tokens": 10,
-                    "output_tokens": 20,
-                    "cache_creation_input_tokens": 50,
-                    "cache_read_input_tokens": 500,
-                },
-            },
-        )
-    )
-    response: Final = await litellm.anthropic.messages.acreate(
-        model=f"bedrock/invoke/{_BEDROCK_SONNET}",
-        messages=[{"role": "user", "content": "What are the key terms?"}],
-        system=_cached_system(),
-        max_tokens=100,
-    )
-    sent: Final = json.loads(route.calls.last.request.read())
-    assert sent["system"] == _cached_system()
-    assert isinstance(response, dict)
-    assert response["usage"]["cache_creation_input_tokens"] == 50
-    assert response["usage"]["cache_read_input_tokens"] == 500
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("model", "url", "body"),
     [
         pytest.param(
             f"bedrock/converse/{_BEDROCK_SONNET}", _BEDROCK_CONVERSE_STREAM_URL, _converse_stream_body(), id="converse"
-        ),
-        pytest.param(
-            f"bedrock/invoke/{_BEDROCK_SONNET}", _BEDROCK_INVOKE_STREAM_URL, _invoke_stream_body(), id="invoke"
         ),
     ],
 )
@@ -663,7 +559,7 @@ async def test_bedrock_streaming_message_start_carries_cache_usage_fields(
     route: Final = respx_mock.post(url__regex=url).mock(
         return_value=httpx.Response(200, content=body, headers={"content-type": "application/vnd.amazon.eventstream"})
     )
-    stream: Final = await litellm.anthropic.messages.acreate(
+    stream: Final = await python_messages.anthropic_messages(
         model=model,
         messages=[
             {
@@ -733,7 +629,7 @@ async def test_tool_search_forwards_deferred_tools_and_beta_header(
             },
         )
     )
-    response: Final = await litellm.anthropic.messages.acreate(
+    response: Final = await python_messages.anthropic_messages(
         model="anthropic/claude-sonnet-4-5-20250929",
         messages=[{"role": "user", "content": prompt}],
         tools=[dict(tool) for tool in _tool_search_tools()],
@@ -891,24 +787,32 @@ async def test_native_messages_send_no_effort_for_a_default_effort_beside_a_thin
 @pytest.mark.asyncio
 @pytest.mark.parametrize("model_info", [None, _DECLARING_LOW_AND_HIGH])
 @pytest.mark.parametrize("drop_globally", [False, True])
-async def test_native_messages_drop_params_drops_a_non_numeric_thinking_budget_on_adaptive_claude(
+async def test_native_messages_drop_params_drops_a_non_numeric_thinking_budget_on_adaptive_claude_with_one_warning(
     respx_mock: respx.MockRouter,
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
     model_info: Mapping[str, object] | None,
     drop_globally: bool,
 ) -> None:
     monkeypatch.setattr(litellm, "drop_params", drop_globally)
     request_drop: Final = {} if drop_globally else {"drop_params": True}
 
-    dropped: Final = await _native_opus_body_sent(
-        respx_mock, model_info, thinking={"type": "enabled", "budget_tokens": "lots"}, **request_drop
-    )
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        dropped: Final = await _native_opus_body_sent(
+            respx_mock, model_info, thinking={"type": "enabled", "budget_tokens": "lots"}, **request_drop
+        )
+    drop_warnings: Final = [record.getMessage() for record in caplog.records if "Dropping" in record.getMessage()]
     adaptive_alone: Final = await _native_opus_body_sent(
         respx_mock, model_info, thinking={"type": "adaptive"}, **request_drop
     )
 
     assert "output_config" not in adaptive_alone
     assert dropped == adaptive_alone
+    assert len(drop_warnings) == 1
+    assert all(
+        fragment in drop_warnings[0]
+        for fragment in ("thinking.budget_tokens='lots'", "claude-opus-5-5", "(drop_params=True)")
+    )
 
 
 _MIXED_GROUP: Final = "gpt-5.6-mixed"

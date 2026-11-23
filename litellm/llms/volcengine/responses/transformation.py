@@ -8,12 +8,12 @@ from pydantic import fields as pyd_fields
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.core_helpers import process_response_headers
+from litellm.litellm_core_utils.core_helpers import process_response_headers, require_attributes
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     safe_convert_created_field,
 )
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
-from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig, list_input_items_query_params
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
     ResponseInputParam,
@@ -46,6 +46,11 @@ class _EventModelClass(Protocol):
     def model_fields(self) -> Mapping[str, pyd_fields.FieldInfo]: ...
 
     def model_validate(self, obj: Mapping[str, object]) -> ResponsesAPIStreamingResponse: ...
+
+
+class _ModelFieldsCarrier(Protocol):
+    @property
+    def model_fields(self) -> Mapping[str, pyd_fields.FieldInfo]: ...
 
 
 class _FieldDefaultCarrier(Protocol):
@@ -354,18 +359,7 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
     ) -> tuple[str, dict]:
         encoded_response_id: Final = encode_url_path_segment(response_id, field_name="response_id")
         url: Final = join_api_base(api_base, f"{encoded_response_id}/input_items")
-        params: Final[dict[str, str | int]] = {}
-        if after is not None:
-            params["after"] = after
-        if before is not None:
-            params["before"] = before
-        if include:
-            params["include"] = ",".join(include)
-        if limit is not None:
-            params["limit"] = limit
-        if order is not None:
-            params["order"] = order
-        return url, params
+        return url, list_input_items_query_params(after=after, before=before, include=include, limit=limit, order=order)
 
     def transform_list_input_items_response(
         self,
@@ -539,7 +533,7 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
             v_type: Final = value_items.get("type")
             for candidate in candidates:
                 try:
-                    candidate_fields: Mapping[str, pyd_fields.FieldInfo] = getattr(candidate, "model_fields")
+                    candidate_fields = require_attributes(candidate, _ModelFieldsCarrier, "model_fields").model_fields
                     type_field = candidate_fields.get("type")
                     if type_field is None:
                         continue

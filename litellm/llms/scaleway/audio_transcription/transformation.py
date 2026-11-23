@@ -7,8 +7,10 @@ API reference: https://www.scaleway.com/en/developers/api/generative-apis/#path-
 from typing import Final
 
 import httpx
+from pydantic import TypeAdapter
 
 from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
+from litellm.litellm_core_utils.core_helpers import json_contains, require_get, subscript
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.audio_transcription.transformation import (
     AudioTranscriptionRequestData,
@@ -21,6 +23,8 @@ from litellm.types.llms.openai import (
     OpenAIAudioTranscriptionOptionalParams,
 )
 from litellm.types.utils import FileTypes, TranscriptionResponse
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class ScalewayAudioTranscriptionException(BaseLLMException):
@@ -131,21 +135,25 @@ class ScalewayAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             return TranscriptionResponse(text=raw_response.text)
 
         try:
-            response_json: Final = raw_response.json()
+            response_json: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception:
             raise ScalewayAudioTranscriptionException(
-                message=raw_response.text,
+                message="Received non-JSON response from Scaleway audio transcription",
                 status_code=raw_response.status_code,
                 headers=raw_response.headers,
             )
 
-        text: Final = response_json.get("text") or ""
-        response: Final = TranscriptionResponse(text=text)
+        text: Final = require_get(response_json).get("text") or ""
+        response: Final = (
+            TranscriptionResponse(text=text)
+            if isinstance(text, str)
+            else TranscriptionResponse.model_validate({"text": text})
+        )
 
-        if "segments" in response_json:
-            response["segments"] = response_json["segments"]
-        if "language" in response_json:
-            response["language"] = response_json["language"]
+        if json_contains(response_json, "segments"):
+            response["segments"] = subscript(response_json, "segments")
+        if json_contains(response_json, "language"):
+            response["language"] = subscript(response_json, "language")
 
-        response.hidden_params = response_json
+        response.hidden_params = response_json  # pyright: ignore[reportAttributeAccessIssue]  # main stores the raw body
         return response
