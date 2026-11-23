@@ -300,6 +300,7 @@ if TYPE_CHECKING:
 ########### Initialize Classes used for Responses API  ###########
 TOOL_CALLS_CACHE: Final = InMemoryCache()
 
+_REPLAYABLE_MISSING_WEB_SEARCH_FIELDS: Final = frozenset((("action",), ("id",)))
 _ANY_KEY_DICT_ADAPTER: Final = TypeAdapter(dict[object, object])
 _STR_KEY_DICT_ADAPTER: Final = TypeAdapter(dict[str, object])
 _OBJECT_LIST_ADAPTER: Final = TypeAdapter(list[object])
@@ -2605,7 +2606,10 @@ class LiteLLMCompletionResponsesConfig:
                 search: Final = ResponseFunctionWebSearch.model_validate(input_item)
             except ValidationError as exc:
                 errors: Final = exc.errors(include_url=False, include_input=False)
-                if len(errors) != 1 or errors[0]["type"] != "missing" or errors[0]["loc"] != ("action",):
+                if any(
+                    error["type"] != "missing" or error["loc"] not in _REPLAYABLE_MISSING_WEB_SEARCH_FIELDS
+                    for error in errors
+                ):
                     raise
                 replay: Final = ResponseFunctionWebSearch.model_construct(None, **input_item)
                 return [
