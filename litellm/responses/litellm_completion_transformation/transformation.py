@@ -3175,6 +3175,9 @@ class LiteLLMCompletionResponsesConfig:
             LiteLLMCompletionResponsesConfig._extract_reasoning_output_items(chat_completion_response, choices)
         )
         responses_output.extend(
+            LiteLLMCompletionResponsesConfig._unclaimed_web_search_calls(chat_completion_response, choices)
+        )
+        responses_output.extend(
             LiteLLMCompletionResponsesConfig._extract_message_output_items(chat_completion_response, choices)
         )
         responses_output.extend(
@@ -3204,6 +3207,18 @@ class LiteLLMCompletionResponsesConfig:
             ]
 
         return responses_output
+
+    @staticmethod
+    def _unclaimed_web_search_calls(
+        chat_completion_response: ModelResponse, choices: Sequence[Choices]
+    ) -> tuple[ResponseFunctionWebSearch, ...]:
+        claimed_call_ids: Final = frozenset(
+            tool_call.id for tool_call in chain.from_iterable(choice.message.tool_calls or () for choice in choices)
+        )
+        web_search_calls: Final = LiteLLMCompletionResponsesConfig._web_search_calls_by_call_id(
+            chat_completion_response
+        )
+        return tuple(call for call_id, call in web_search_calls.items() if call_id not in claimed_call_ids)
 
     @staticmethod
     def _extract_tool_result_output_items(
