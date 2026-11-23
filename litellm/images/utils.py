@@ -10,11 +10,11 @@ from typing import Any, Final, Protocol, cast, get_type_hints, runtime_checkable
 from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 import litellm
-from litellm.litellm_core_utils.core_helpers import drops_unsupported_params, has_attributes
+from litellm.litellm_core_utils.core_helpers import camel_case_keys, drops_unsupported_params, has_attributes
 from litellm.litellm_core_utils.token_counter import get_image_type
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.types.files import FILE_MIME_TYPES, FileType
-from litellm.types.images.main import ImageEditOptionalRequestParams, UnfoldableFormField
+from litellm.types.images.main import ImageEditOptionalRequestParams, UnsupportedImageParam
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 _MAX_BRACKET_DEPTH: Final = 4
@@ -61,9 +61,9 @@ def _json_object_or_none(value: object) -> Mapping[str, object] | None:
 
 
 def _fold_bracket_form_field(
-    params: Mapping[str, object] | UnfoldableFormField, field: str, drop_params: bool
-) -> Mapping[str, object] | UnfoldableFormField:
-    if isinstance(params, UnfoldableFormField):
+    params: Mapping[str, object] | UnsupportedImageParam, field: str, drop_params: bool
+) -> Mapping[str, object] | UnsupportedImageParam:
+    if isinstance(params, UnsupportedImageParam):
         return params
     prefix: Final = f"{field}["
     bracket_keys: Final = tuple(key for key in params if key.startswith(prefix))
@@ -71,21 +71,23 @@ def _fold_bracket_form_field(
         return params
     rest: Final = {key: value for key, value in params.items() if not key.startswith(prefix)}
     if len(bracket_keys) > _MAX_BRACKET_FIELDS:
-        return rest if drop_params else UnfoldableFormField(field, f"takes at most {_MAX_BRACKET_FIELDS} form fields")
+        return rest if drop_params else UnsupportedImageParam(field, f"takes at most {_MAX_BRACKET_FIELDS} form fields")
     paths: Final = tuple((_bracket_path(key, prefix), key) for key in bracket_keys)
     malformed: Final = next((key for path, key in paths if not path), None)
     if malformed is not None and not drop_params:
-        return UnfoldableFormField(malformed, f"must be `{field}[key]` nested at most {_MAX_BRACKET_DEPTH} levels")
+        return UnsupportedImageParam(malformed, f"must be `{field}[key]` nested at most {_MAX_BRACKET_DEPTH} levels")
     entries: Final = tuple((path, params[key]) for path, key in paths if path)
     nested_paths: Final = frozenset(chain.from_iterable(_strict_prefixes(path) for path, _ in entries))
     clash: Final = next((key for path, key in paths if path in nested_paths), None)
     if clash is not None and not drop_params:
-        return UnfoldableFormField(clash, "sets a value where other form fields nest an object")
+        return UnsupportedImageParam(clash, "sets a value where other form fields nest an object")
     sent: Final = params.get(field)
     base: Final[Mapping[str, object] | None] = {} if sent is None else _json_object_or_none(sent)
     if base is None and not drop_params:
         return rest
-    return {**rest, field: _deep_merge(base or {}, _nest_bracket_entries(entries))} if entries else rest
+    if not entries:
+        return rest
+    return {**rest, field: _deep_merge(camel_case_keys(base or {}), camel_case_keys(_nest_bracket_entries(entries)))}
 
 
 class _ReadsBytes(Protocol):
@@ -154,8 +156,8 @@ class ImageEditRequestUtils:
     @staticmethod
     def fold_bracket_form_fields(
         params: Mapping[str, object], fields: Collection[str], drop_params: bool
-    ) -> Mapping[str, object] | UnfoldableFormField:
-        initial: Final[Mapping[str, object] | UnfoldableFormField] = params
+    ) -> Mapping[str, object] | UnsupportedImageParam:
+        initial: Final[Mapping[str, object] | UnsupportedImageParam] = params
         return reduce(partial(_fold_bracket_form_field, drop_params=drop_params), fields, initial)
 
     @staticmethod

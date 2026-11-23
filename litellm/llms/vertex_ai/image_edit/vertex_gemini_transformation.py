@@ -20,15 +20,17 @@ from litellm.llms.vertex_ai.common_utils import (
 )
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
 from litellm.llms.vertex_ai.gemini_image_params import (
-    IMAGE_CONFIG_ALIASES,
-    UnsupportedImageParam,
     map_vertex_gemini_image_params,
     raise_unsupported_image_param,
     vertex_gemini_image_config,
 )
 from litellm.llms.vertex_ai.request_labels import caller_labels_header_names, vertex_request_label_fields
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.images.main import ImageEditOptionalRequestParams
+from litellm.types.images.main import (
+    IMAGE_CONFIG_FIELDS,
+    ImageEditOptionalRequestParams,
+    UnsupportedImageParam,
+)
 from litellm.types.llms.vertex_ai import (
     GenerateContentResponseBody,
     HttpxContentType,
@@ -67,7 +69,7 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
     SUPPORTED_PARAMS: list[str] = [
         "n",
         "size",
-        *IMAGE_CONFIG_ALIASES,
+        *IMAGE_CONFIG_FIELDS,
         "aspectRatio",
         "aspect_ratio",
         "imageSize",
