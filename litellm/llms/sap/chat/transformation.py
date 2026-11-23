@@ -13,6 +13,7 @@ from pydantic import BaseModel
 import litellm
 from litellm.litellm_core_utils.prompt_templates.common_utils import message_with_file_parts_as_image_urls
 from litellm.litellm_core_utils.url_utils import join_api_base
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
 
@@ -183,25 +184,39 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             self.run_env_setup()
         return self._resource_group
 
+    def _invalidate_rejected_token(self) -> None:
+        if self.token_creator is not None:
+            self.token_creator.invalidate()
+
+    def _get_from_ai_core(self, path: str) -> httpx.Response:
+        response: Final = litellm.module_level_client.get(join_api_base(self.base_url, path), headers=self.headers)
+        if response.status_code == 401:
+            self._invalidate_rejected_token()
+            raise GenAIHubOrchestrationError(status_code=401, message=response.text)
+        return response
+
+    def _is_orchestration_configuration(self, configuration_id: str) -> bool:
+        configuration: Final[AICoreConfiguration] = self._get_from_ai_core(
+            f"lm/configurations/{configuration_id}"
+        ).json()
+        return configuration.get("executableId") == "orchestration"
+
     @cached_property
     def deployment_url(self) -> str:
-        # Keep a short, tight client lifecycle here to avoid fd leaks
-        client: Final = litellm.module_level_client
-        # with httpx.Client(timeout=30) as client:
-        deployments: Final[AICoreDeploymentList] = client.get(
-            join_api_base(self.base_url, "lm/deployments"), headers=self.headers
-        ).json()
-        valid: Final[list[tuple[str, str]]] = []
-        for dep in deployments.get("resources", []):
-            if dep.get("scenarioId") == "orchestration":
-                cfg: AICoreConfiguration = client.get(
-                    join_api_base(self.base_url, f"lm/configurations/{dep['configurationId']}"),
-                    headers=self.headers,
-                ).json()
-                if cfg.get("executableId") == "orchestration":
-                    valid.append((dep["deploymentUrl"], dep["createdAt"]))
-            # newest first
-        return sorted(valid, key=lambda x: x[1], reverse=True)[0][0]
+        deployments: Final[AICoreDeploymentList] = self._get_from_ai_core("lm/deployments").json()
+        orchestration_deployments: Final = tuple(
+            (dep["deploymentUrl"], dep["createdAt"])
+            for dep in deployments.get("resources", [])
+            if dep.get("scenarioId") == "orchestration" and self._is_orchestration_configuration(dep["configurationId"])
+        )
+        return sorted(orchestration_deployments, key=lambda x: x[1], reverse=True)[0][0]
+
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, str] | httpx.Headers
+    ) -> BaseLLMException:
+        if status_code == 401:
+            self._invalidate_rejected_token()
+        return super().get_error_class(error_message, status_code, headers)
 
     @classmethod
     def get_config(cls):

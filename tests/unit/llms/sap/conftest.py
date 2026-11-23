@@ -2,6 +2,7 @@ import json
 import uuid
 from dataclasses import dataclass
 
+import httpx
 import pytest
 import respx
 
@@ -12,6 +13,13 @@ import litellm
 class MockAICore:
     deployment_url: str
     token: respx.Route
+    deployments: respx.Route
+
+    def reject_token(self, route: respx.Route, authorization: str) -> None:
+        accepted = route.return_value
+        route.side_effect = lambda request: (
+            httpx.Response(401, text="Unauthorized") if request.headers["Authorization"] == authorization else accepted
+        )
 
 
 @pytest.fixture
@@ -41,7 +49,7 @@ def aicore(respx_mock, monkeypatch) -> MockAICore:
 
     base_url = f"{host}/api/v2"
     deployment_url = f"{base_url}/inference/deployments/orchestration"
-    respx_mock.get(f"{base_url}/lm/deployments").respond(
+    deployments = respx_mock.get(f"{base_url}/lm/deployments").respond(
         json={
             "resources": [
                 {
@@ -54,4 +62,8 @@ def aicore(respx_mock, monkeypatch) -> MockAICore:
         }
     )
     respx_mock.get(f"{base_url}/lm/configurations/orchestration-config").respond(json={"executableId": "orchestration"})
-    return MockAICore(deployment_url=deployment_url, token=respx_mock.post(f"{host}/auth/oauth/token"))
+    return MockAICore(
+        deployment_url=deployment_url,
+        token=respx_mock.post(f"{host}/auth/oauth/token"),
+        deployments=deployments,
+    )

@@ -431,6 +431,38 @@ def _request_token(
         raise RuntimeError(f"Token request failed: {msg}") from e
 
 
+class OAuthTokenCache:
+    """One OAuth token shared by every request made with the same credentials, refetched near expiry or after SAP rejects it."""
+
+    def __init__(
+        self,
+        fetch_token: Callable[[], tuple[str, timedelta]],
+        expiry_buffer: timedelta,
+        clock: Callable[[], datetime],
+    ) -> None:
+        self._fetch_token: Final = fetch_token
+        self._expiry_buffer: Final = expiry_buffer
+        self._clock: Final = clock
+        self._lock: Final = Lock()
+        self._token: str | None = None
+        self._refresh_at: datetime | None = None
+
+    def __call__(self) -> str:
+        with self._lock:
+            now: Final = self._clock()
+            if self._token is not None and self._refresh_at is not None and now <= self._refresh_at:
+                return self._token
+            token, lifetime = self._fetch_token()
+            self._token = token
+            self._refresh_at = now + lifetime - min(self._expiry_buffer, lifetime / 2)
+            return token
+
+    def invalidate(self) -> None:
+        with self._lock:
+            self._token = None
+            self._refresh_at = None
+
+
 def get_token_creator(
     service_key: str | dict | None = None,
     profile: str | None = None,
@@ -439,7 +471,7 @@ def get_token_creator(
     expiry_buffer_minutes: int = 60,
     clock: Callable[[], datetime] = _utc_now,
     **overrides,
-) -> tuple[Callable[[], str], str, str]:
+) -> tuple[OAuthTokenCache, str, str]:
     """
     Creates a callable that fetches and caches an OAuth2 bearer token
     using credentials from `fetch_credentials()`.
@@ -452,11 +484,11 @@ def get_token_creator(
     Args:
         profile: Optional AICore profile name
         timeout: Timeout for HTTP requests
-        expiry_buffer_minutes: Refresh the token this many minutes before expiry
+        expiry_buffer_minutes: Refresh the token this many minutes before expiry, or halfway through a shorter-lived token
         overrides: Any explicit credential overrides (client_id, client_secret, etc.)
 
     Returns:
-        Callable[[], str]: function returning a valid "Bearer <token>" string.
+        OAuthTokenCache: callable returning a valid "Bearer <token>" string.
     """
 
     # Resolve credentials using your helper
@@ -510,11 +542,7 @@ def _cached_token_getter(
     timeout: float,
     expiry_buffer_minutes: int,
     clock: Callable[[], datetime],
-) -> Callable[[], str]:
-    lock: Final = Lock()
-    token: str | None = None
-    token_expiry: datetime | None = None
-
+) -> OAuthTokenCache:
     def _fetch_token() -> tuple[str, timedelta]:
         # Case 1: secret-based auth
         if client_secret:
@@ -552,13 +580,4 @@ def _cached_token_getter(
         # Defensive guard: should never reach here due to validate_credentials()
         raise ValueError("Invalid authentication configuration: no valid credentials found. ")
 
-    def get_token() -> str:
-        nonlocal token, token_expiry
-        with lock:
-            now: Final = clock()
-            if token is None or token_expiry is None or token_expiry - now < timedelta(minutes=expiry_buffer_minutes):
-                token, lifetime = _fetch_token()
-                token_expiry = now + lifetime
-            return token
-
-    return get_token
+    return OAuthTokenCache(_fetch_token, timedelta(minutes=expiry_buffer_minutes), clock)

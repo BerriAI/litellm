@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 import httpx
 import pytest
 
+import litellm
 import litellm.llms.sap.credentials as sap_credentials
 
 _T0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
@@ -180,12 +181,8 @@ def test_vcap_services_that_is_not_an_object_is_rejected(monkeypatch, vcap_servi
         sap_credentials.fetch_credentials()
 
 
-@pytest.mark.parametrize(
-    "expires_in, expected_token_requests",
-    [(43200, 1), (3000, 3)],
-    ids=["reused-while-valid", "refreshed-inside-60-minute-buffer"],
-)
-def test_token_is_shared_across_token_creators_until_refresh_buffer(aicore, expires_in, expected_token_requests):
+@pytest.mark.parametrize("expires_in", [43200, 3000], ids=["12-hour-token", "50-minute-token"])
+def test_token_is_shared_across_token_creators_while_fresh(aicore, expires_in):
     aicore.token.respond(json={"access_token": "mock-token", "expires_in": expires_in})
 
     def clock():
@@ -194,7 +191,7 @@ def test_token_is_shared_across_token_creators_until_refresh_buffer(aicore, expi
     tokens = tuple(sap_credentials.get_token_creator(clock=clock)[0]() for _ in range(3))
 
     assert tokens == ("Bearer mock-token",) * 3
-    assert aicore.token.call_count == expected_token_requests
+    assert aicore.token.call_count == 1
 
 
 def test_reused_token_is_replaced_once_time_moves_into_refresh_buffer(aicore):
@@ -202,7 +199,38 @@ def test_reused_token_is_replaced_once_time_moves_into_refresh_buffer(aicore):
         httpx.Response(200, json={"access_token": "first", "expires_in": 43200}),
         httpx.Response(200, json={"access_token": "second", "expires_in": 43200}),
     ]
-    call_times = iter((_T0, _T0 + timedelta(hours=1), _T0 + timedelta(hours=11, minutes=30)))
+    call_times = iter((_T0, _T0 + timedelta(hours=10), _T0 + timedelta(hours=11, minutes=30)))
+
+    def clock():
+        return next(call_times)
+
+    tokens = tuple(sap_credentials.get_token_creator(clock=clock)[0]() for _ in range(3))
+
+    assert tokens == ("Bearer first", "Bearer first", "Bearer second")
+    assert aicore.token.call_count == 2
+
+
+def test_each_service_key_keeps_its_own_token(aicore):
+    aicore.token.side_effect = [
+        httpx.Response(200, json={"access_token": "first", "expires_in": 43200}),
+        httpx.Response(200, json={"access_token": "second", "expires_in": 43200}),
+    ]
+    service_key = json.loads(litellm.sap_service_key)
+    first_creator = sap_credentials.get_token_creator(service_key)[0]
+    second_creator = sap_credentials.get_token_creator({**service_key, "clientid": "other-client"})[0]
+
+    tokens = (first_creator(), second_creator(), first_creator(), second_creator())
+
+    assert tokens == ("Bearer first", "Bearer second", "Bearer first", "Bearer second")
+    assert aicore.token.call_count == 2
+
+
+def test_short_lived_token_is_replaced_halfway_through_its_lifetime(aicore):
+    aicore.token.side_effect = [
+        httpx.Response(200, json={"access_token": "first", "expires_in": 3000}),
+        httpx.Response(200, json={"access_token": "second", "expires_in": 3000}),
+    ]
+    call_times = iter((_T0, _T0 + timedelta(minutes=25), _T0 + timedelta(minutes=26)))
 
     def clock():
         return next(call_times)

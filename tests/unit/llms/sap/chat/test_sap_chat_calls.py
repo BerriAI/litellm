@@ -222,3 +222,26 @@ async def test_sap_chat_reuses_oauth_token_across_calls(respx_mock, aicore, sap_
             await litellm.acompletion(model="sap/gpt-4o", messages=messages)
 
     assert (aicore.token.call_count, completion.call_count) == (1, 3)
+
+
+@pytest.mark.parametrize("rejecting_route", ["deployments", "completion"])
+def test_sap_chat_fetches_a_new_token_after_sap_rejects_the_cached_one(
+    respx_mock, aicore, sap_api_response, rejecting_route
+):
+    import litellm
+
+    aicore.token.side_effect = [
+        httpx.Response(200, json={"access_token": "revoked", "expires_in": 43200}),
+        httpx.Response(200, json={"access_token": "fresh", "expires_in": 43200}),
+    ]
+    completion = respx_mock.post(f"{aicore.deployment_url}/v2/completion").respond(json=sap_api_response)
+    routes = {"deployments": aicore.deployments, "completion": completion}
+    aicore.reject_token(routes[rejecting_route], "Bearer revoked")
+    messages = [{"role": "user", "content": "Hello"}]
+
+    with pytest.raises(litellm.AuthenticationError):
+        litellm.completion(model="sap/gpt-4o", messages=messages)
+    response = litellm.completion(model="sap/gpt-4o", messages=messages)
+
+    assert response.choices[0].message.content == "Hello from SAP!"
+    assert aicore.token.call_count == 2

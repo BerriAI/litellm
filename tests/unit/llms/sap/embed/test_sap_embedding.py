@@ -1684,3 +1684,25 @@ async def test_sap_embedding_reuses_oauth_token_across_calls(respx_mock, aicore,
             await litellm.aembedding(model="sap/text-embedding-3-small", input="Hi")
 
     assert (aicore.token.call_count, embeddings.call_count) == (1, 3)
+
+
+@pytest.mark.parametrize("rejecting_route", ["deployments", "embeddings"])
+def test_sap_embedding_fetches_a_new_token_after_sap_rejects_the_cached_one(
+    respx_mock, aicore, sap_api_response, rejecting_route
+):
+    import litellm
+
+    aicore.token.side_effect = [
+        httpx.Response(200, json={"access_token": "revoked", "expires_in": 43200}),
+        httpx.Response(200, json={"access_token": "fresh", "expires_in": 43200}),
+    ]
+    embeddings = respx_mock.post(f"{aicore.deployment_url}/v2/embeddings").respond(json=sap_api_response)
+    routes = {"deployments": aicore.deployments, "embeddings": embeddings}
+    aicore.reject_token(routes[rejecting_route], "Bearer revoked")
+
+    with pytest.raises(litellm.AuthenticationError):
+        litellm.embedding(model="sap/text-embedding-3-small", input="Hi")
+    response = litellm.embedding(model="sap/text-embedding-3-small", input="Hi")
+
+    assert len(response.data) == 1
+    assert aicore.token.call_count == 2

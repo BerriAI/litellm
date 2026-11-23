@@ -98,24 +98,30 @@ class GenAIHubEmbeddingConfig(BaseEmbeddingConfig):
         }
         return headers
 
+    def _get_from_ai_core(self, client: httpx.Client, path: str) -> httpx.Response:
+        response: Final = client.get(join_api_base(self.base_url, path), headers=self.headers)
+        if response.status_code == 401:
+            self.token_creator.invalidate()
+            raise GenAIHubOrchestrationError(status_code=401, message=response.text)
+        return response
+
     @cached_property
     def deployment_url(self) -> str:
         with httpx.Client(timeout=30) as client:
             valid_deployments: Final = []
-            deployments: Final[AICoreDeploymentList] = client.get(
-                join_api_base(self.base_url, "lm/deployments"), headers=self.headers
-            ).json()
+            deployments: Final[AICoreDeploymentList] = self._get_from_ai_core(client, "lm/deployments").json()
             for deployment in deployments.get("resources", []):
                 if deployment["scenarioId"] == "orchestration":
-                    config_details: AICoreConfiguration = client.get(
-                        join_api_base(self.base_url, f"lm/configurations/{deployment['configurationId']}"),
-                        headers=self.headers,
+                    config_details: AICoreConfiguration = self._get_from_ai_core(
+                        client, f"lm/configurations/{deployment['configurationId']}"
                     ).json()
                     if config_details["executableId"] == "orchestration":
                         valid_deployments.append((deployment["deploymentUrl"], deployment["createdAt"]))
             return sorted(valid_deployments, key=lambda x: x[1], reverse=True)[0][0]
 
     def get_error_class(self, error_message, status_code, headers):
+        if status_code == 401:
+            self.token_creator.invalidate()
         return GenAIHubOrchestrationError(status_code, error_message)
 
     def get_supported_openai_params(self, model: str) -> list:
