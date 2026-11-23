@@ -384,6 +384,26 @@
         "note": "Users must first sign in through this gateway's Microsoft SSO. Subsequent delegated calls must satisfy both user and agent permissions."
       },
       "executionLabel": "Execution",
+      "okta": {
+        "issuer": {
+          "label": "Trusted Okta Authorization Server",
+          "required": "Select a trusted authorization server",
+          "autonomousRequiresCustom": "Choose a custom authorization server for autonomous execution.",
+          "placeholder": "Select the gateway's trusted authorization server",
+          "noneAvailable": "Add a trusted Okta issuer with an audience, agent_identity_provider: okta and okta_org to the gateway JWT settings.",
+          "description": "Choose a custom authorization server for agent access tokens. An org authorization server is for delegated ID-JAG redemption."
+        },
+        "clientId": {
+          "label": "Client ID",
+          "required": "Enter the Okta application client ID",
+          "description": "Enter the client ID of the Okta application you want to bind to this agent. Leave its client secret in Okta."
+        },
+        "requiredScopes": {
+          "label": "Required Scopes",
+          "description": "Scopes every agent token must carry, separated by commas or spaces. Leave empty to accept any scope."
+        },
+        "verificationNote": "LiteLLM verifies the agent's Okta token before matching this identity. On behalf of a user, the token must name a LiteLLM user who has access to this agent."
+      },
       "verificationNote": "LiteLLM verifies the agent's Entra token before matching this identity. Saving these fields configures the binding; an authenticated request provides verification. Runtime authentication headers are configured separately."
     },
     "formKit": {
@@ -855,6 +875,7 @@
           "hint": "Optionally select a team for the Virtual Key. The agent identity and its permissions are managed separately."
         },
         "entraNotice": "This agent will authenticate with Microsoft Entra ID. You can skip Virtual Key creation.",
+        "oktaNotice": "This agent will authenticate with Okta. You can skip Virtual Key creation.",
         "createNew": {
           "title": "Create a new key for this agent",
           "description": "A dedicated key scoped to this agent.",
@@ -872,6 +893,7 @@
         },
         "skip": {
           "entra": "Use Entra JWT authentication",
+          "okta": "Use Okta JWT authentication",
           "later": "Skip for now, I’ll assign a key later"
         }
       },
@@ -879,6 +901,7 @@
         "title": "Agent Created!",
         "keyAssigned": "Key <alias/> has been assigned to this agent.",
         "entraConfigured": "Microsoft Entra ID is configured. Send an authenticated agent request to verify the connection.",
+        "oktaConfigured": "Okta is configured. Send an authenticated agent request to verify the connection.",
         "noKey": "No key assigned. You can create one from the Virtual Keys page."
       },
       "dialog": {
