@@ -136,7 +136,14 @@ from litellm.proxy.auth.customer_hierarchy_auth import (
     resolve_customer_hierarchy,
 )
 from litellm.proxy.auth.customer_provisioning import registration_refusal, resolve_registered_customer
-from litellm.proxy.auth.grants import organization_grants, owner_grants, project_grants, stamp
+from litellm.proxy.auth.grants import (
+    default_end_user_limits,
+    end_user_grants,
+    organization_grants,
+    owner_grants,
+    project_grants,
+    stamp,
+)
 from litellm.proxy.auth.host import identity as auth_identity
 from litellm.proxy.auth.impersonation import (
     IMPERSONATE_USER_HEADER,
@@ -1305,43 +1312,6 @@ def get_bearer_token(
 
 
 _get_bearer_token: Final = get_bearer_token
-
-
-def _apply_budget_limits_to_end_user_params(
-    end_user_params: dict,
-    budget_info: LiteLLM_BudgetTable,
-    end_user_id: str | None,
-) -> None:
-    """
-    Helper function to apply budget limits to end user parameters.
-
-    Args:
-        end_user_params: Dictionary to update with budget parameters
-        budget_info: Budget table object containing limits
-        end_user_id: ID of the end user for logging
-    """
-    if budget_info.tpm_limit is not None:
-        end_user_params["end_user_tpm_limit"] = budget_info.tpm_limit
-
-    if budget_info.rpm_limit is not None:
-        end_user_params["end_user_rpm_limit"] = budget_info.rpm_limit
-
-    if budget_info.tpd_limit is not None:
-        end_user_params["end_user_tpd_limit"] = budget_info.tpd_limit
-
-    if budget_info.max_budget is not None:
-        end_user_params["end_user_max_budget"] = budget_info.max_budget
-
-    if budget_info.model_max_budget is not None:
-        end_user_params["end_user_model_max_budget"] = budget_info.model_max_budget
-
-    if budget_info.model_tpm_limit is not None:
-        end_user_params["end_user_model_tpm_limit"] = budget_info.model_tpm_limit  # rebind-ok: in-place like siblings
-
-    if budget_info.model_rpm_limit is not None:
-        end_user_params["end_user_model_rpm_limit"] = budget_info.model_rpm_limit  # rebind-ok: in-place like siblings
-
-    verbose_proxy_logger.debug("Applied budget limits to end user %s", end_user_id)
 
 
 async def user_api_key_auth_websocket(websocket: WebSocket) -> UserAPIKeyAuth:
@@ -3013,21 +2983,7 @@ async def _apply_key_end_user_default_budget_to_token(
     )
     if default_budget is None:
         return
-
-    if not keep_token_limits or valid_token.end_user_max_budget is None:
-        valid_token.end_user_max_budget = default_budget.max_budget
-    if not keep_token_limits or valid_token.end_user_tpm_limit is None:
-        valid_token.end_user_tpm_limit = default_budget.tpm_limit
-    if not keep_token_limits or valid_token.end_user_rpm_limit is None:
-        valid_token.end_user_rpm_limit = default_budget.rpm_limit
-    if not keep_token_limits or valid_token.end_user_tpd_limit is None:
-        valid_token.end_user_tpd_limit = default_budget.tpd_limit
-    if not keep_token_limits or valid_token.end_user_model_max_budget is None:
-        valid_token.end_user_model_max_budget = default_budget.model_max_budget
-    if not keep_token_limits or valid_token.end_user_model_tpm_limit is None:
-        valid_token.end_user_model_tpm_limit = default_budget.model_tpm_limit  # rebind-ok: in-place like siblings
-    if not keep_token_limits or valid_token.end_user_model_rpm_limit is None:
-        valid_token.end_user_model_rpm_limit = default_budget.model_rpm_limit  # rebind-ok: in-place like siblings
+    stamp(valid_token, default_end_user_limits(valid_token, default_budget, keep_token_limits=keep_token_limits))
 
 
 async def _reserve_budget_after_common_checks(
@@ -3684,10 +3640,13 @@ async def _lookup_end_user_and_apply_budget(
 ):
     """Look up end_user from DB and apply budget limits to valid_token."""
     end_user_object = None
+    end_user_id: Final = valid_token.end_user_id
+    if end_user_id is None:
+        return valid_token, end_user_object
     key_end_user_budget_id: Final = get_key_end_user_budget_id(valid_token.metadata)
     try:
         end_user_object = await get_end_user_object(
-            end_user_id=valid_token.end_user_id,
+            end_user_id=end_user_id,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
             parent_otel_span=parent_otel_span,
@@ -3697,18 +3656,11 @@ async def _lookup_end_user_and_apply_budget(
             key_end_user_budget_id=key_end_user_budget_id,
         )
         if end_user_object is not None:
-            end_user_params = {
-                "end_user_id": valid_token.end_user_id,
-                "allowed_model_region": end_user_object.allowed_model_region,
-            }
-            if end_user_object.litellm_budget_table is not None:
-                _apply_budget_limits_to_end_user_params(
-                    end_user_params=end_user_params,
-                    budget_info=end_user_object.litellm_budget_table,
-                    end_user_id=valid_token.end_user_id or "",
-                )
             valid_token = update_valid_token_with_end_user_params(
-                valid_token=valid_token, end_user_params=end_user_params
+                valid_token=valid_token,
+                end_user_params=dict(
+                    end_user_grants(end_user_id, end_user_object, end_user_object.litellm_budget_table)
+                ),
             )
         elif key_end_user_budget_id is not None or litellm.max_end_user_budget_id is not None:
             default_budget: Final = await resolve_default_end_user_budget(
@@ -3718,14 +3670,8 @@ async def _lookup_end_user_and_apply_budget(
                 parent_otel_span=parent_otel_span,
             )
             if default_budget is not None:
-                end_user_params = {"end_user_id": valid_token.end_user_id}
-                _apply_budget_limits_to_end_user_params(
-                    end_user_params=end_user_params,
-                    budget_info=default_budget,
-                    end_user_id=valid_token.end_user_id or "",
-                )
                 valid_token = update_valid_token_with_end_user_params(
-                    valid_token=valid_token, end_user_params=end_user_params
+                    valid_token=valid_token, end_user_params=dict(end_user_grants(end_user_id, None, default_budget))
                 )
                 if valid_token.end_user_max_budget is None:
                     valid_token.end_user_max_budget = default_budget.max_budget

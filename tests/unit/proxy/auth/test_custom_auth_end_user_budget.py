@@ -267,6 +267,30 @@ async def test_custom_auth_key_default_end_user_budget_reaches_the_token_for_a_n
 
 
 @pytest.mark.asyncio
+async def test_custom_auth_key_default_end_user_budget_gives_a_new_end_user_its_rate_limits(
+    monkeypatch, rust_auth_stores: RustAuthStores
+):
+    from litellm.proxy.auth.user_api_key_auth import _lookup_end_user_and_apply_budget
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    monkeypatch.setattr(litellm, "max_end_user_budget_id", None)
+    rust_auth_stores.budget.rows["svc-a-budget"] = {"budget_id": "svc-a-budget", "rpm_limit": 10, "tpd_limit": 1000}
+
+    valid_token, _ = await _lookup_end_user_and_apply_budget(
+        valid_token=UserAPIKeyAuth(
+            token="test_token", end_user_id="customer-new", metadata={"end_user_budget_id": "svc-a-budget"}
+        ),
+        route="/v1/chat/completions",
+        parent_otel_span=None,
+        prisma_client=MagicMock(),
+        user_api_key_cache=UserApiKeyCache(),
+        proxy_logging_obj=MagicMock(),
+    )
+
+    assert (valid_token.end_user_rpm_limit, valid_token.end_user_tpd_limit) == (10, 1000)
+
+
+@pytest.mark.asyncio
 async def test_custom_auth_cap_stays_below_the_key_default_end_user_budget(
     monkeypatch, rust_auth_stores: RustAuthStores
 ):
@@ -328,6 +352,58 @@ async def test_custom_auth_proxy_wide_default_end_user_budget_reaches_an_uncappe
     assert valid_token.end_user_max_budget == 100.0
 
 
+@pytest.mark.asyncio
+async def test_custom_auth_takes_a_known_end_users_region_and_every_limit_of_its_budget(
+    rust_auth_stores: RustAuthStores,
+):
+    from litellm.proxy.auth.user_api_key_auth import _lookup_end_user_and_apply_budget
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    rust_auth_stores.end_user.rows["customer-1"] = {
+        "user_id": "customer-1",
+        "blocked": False,
+        "spend": 0.0,
+        "allowed_model_region": "eu",
+        "litellm_budget_table": {
+            "budget_id": "customer-budget",
+            "max_budget": 5.0,
+            "tpm_limit": 100,
+            "rpm_limit": 10,
+            "tpd_limit": 1000,
+            "model_max_budget": {"gpt-4": {"max_budget": 0.2, "budget_duration": "1d"}},
+            "model_tpm_limit": {"gpt-4": 50},
+            "model_rpm_limit": {"gpt-4": 5},
+        },
+    }
+
+    valid_token, _ = await _lookup_end_user_and_apply_budget(
+        valid_token=UserAPIKeyAuth(token="test_token", end_user_id="customer-1"),
+        route="/v1/chat/completions",
+        parent_otel_span=None,
+        prisma_client=MagicMock(),
+        user_api_key_cache=UserApiKeyCache(),
+        proxy_logging_obj=MagicMock(),
+    )
+
+    assert (
+        valid_token.allowed_model_region,
+        valid_token.end_user_tpm_limit,
+        valid_token.end_user_rpm_limit,
+        valid_token.end_user_tpd_limit,
+        valid_token.end_user_model_max_budget,
+        valid_token.end_user_model_tpm_limit,
+        valid_token.end_user_model_rpm_limit,
+    ) == (
+        "eu",
+        100,
+        10,
+        1000,
+        {"gpt-4": {"max_budget": 0.2, "budget_duration": "1d"}},
+        {"gpt-4": 50},
+        {"gpt-4": 5},
+    )
+
+
 def test_update_valid_token_does_not_override_custom_auth_values_with_none():
     """
     Greptile feedback: if custom auth sets end_user_model_max_budget on the token,
@@ -386,14 +462,9 @@ def test_update_valid_token_db_values_override_custom_auth_when_set():
 
 
 def test_end_user_budget_tpd_limit_reaches_the_token():
-    from litellm.proxy.auth.user_api_key_auth import _apply_budget_limits_to_end_user_params
+    from litellm.proxy.auth.grants import end_user_grants
 
-    end_user_params = {"end_user_id": "user_1"}
-    _apply_budget_limits_to_end_user_params(
-        end_user_params=end_user_params,
-        budget_info=LiteLLM_BudgetTable(rpm_limit=5, tpd_limit=750000),
-        end_user_id="user_1",
-    )
+    end_user_params = dict(end_user_grants("user_1", None, LiteLLM_BudgetTable(rpm_limit=5, tpd_limit=750000)))
     result = update_valid_token_with_end_user_params(UserAPIKeyAuth(token="test_token"), end_user_params)
 
     assert result.end_user_rpm_limit == 5
@@ -426,20 +497,6 @@ def test_update_valid_token_keeps_custom_auth_per_model_limits_when_the_budget_h
 
     assert result.end_user_model_tpm_limit == {"gpt-4o": 1000}
     assert result.end_user_model_rpm_limit == {"gpt-4o": 10}
-
-
-def test_apply_budget_limits_copies_per_model_limits_onto_end_user_params():
-    from litellm.proxy.auth.user_api_key_auth import _apply_budget_limits_to_end_user_params
-
-    end_user_params: Final[dict[str, object]] = {}
-    budget: Final = LiteLLM_BudgetTable(model_tpm_limit={"gpt-4o": 400000}, model_rpm_limit={"gpt-4o": 200})
-
-    _apply_budget_limits_to_end_user_params(end_user_params, budget, "acme")
-
-    assert end_user_params == {
-        "end_user_model_tpm_limit": {"gpt-4o": 400000},
-        "end_user_model_rpm_limit": {"gpt-4o": 200},
-    }
 
 
 @pytest.mark.asyncio

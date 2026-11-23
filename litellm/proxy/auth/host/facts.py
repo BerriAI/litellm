@@ -4,21 +4,18 @@ python-bridge reads the records by attribute, so a field rename here is a change
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Final
 
-from typing_extensions import ReadOnly, TypedDict
-
-from litellm.models.budget import LiteLLM_BudgetTable
 from litellm.models.end_user import LiteLLM_EndUserTable
 from litellm.models.team import LiteLLM_TeamTable
 from litellm.models.user import LiteLLM_UserTable
+from litellm.proxy.auth.grants import EndUserGrants
 from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.types.proxy.auth.user_roles import LitellmUserRoles
-from litellm.types.router import AllowedModelRegion
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,54 +31,13 @@ class KeyFacts:
     last_refreshed_at: float | None
 
 
-class EndUserParams(TypedDict, total=False):
-    """The `UserAPIKeyAuth` fields one end user sets. A key that is absent leaves the token's own value."""
-
-    end_user_id: ReadOnly[str]
-    allowed_model_region: ReadOnly[AllowedModelRegion | None]
-    end_user_tpm_limit: ReadOnly[int]
-    end_user_rpm_limit: ReadOnly[int]
-    end_user_tpd_limit: ReadOnly[int]
-    end_user_max_budget: ReadOnly[float]
-    end_user_model_max_budget: ReadOnly[Mapping[str, object]]
-    end_user_model_tpm_limit: ReadOnly[Mapping[str, int]]
-    end_user_model_rpm_limit: ReadOnly[Mapping[str, int]]
-
-
 @dataclass(frozen=True, slots=True)
 class EndUserRow:
     """The request's end user and the limits the key path stamps onto the token from it."""
 
     end_user_id: str | None
     end_user: LiteLLM_EndUserTable | None
-    params: EndUserParams
-
-
-def budget_params(budget: LiteLLM_BudgetTable) -> EndUserParams:
-    """The limits a budget sets."""
-    tpm: Final[EndUserParams] = {} if budget.tpm_limit is None else {"end_user_tpm_limit": budget.tpm_limit}
-    rpm: Final[EndUserParams] = {} if budget.rpm_limit is None else {"end_user_rpm_limit": budget.rpm_limit}
-    tpd: Final[EndUserParams] = {} if budget.tpd_limit is None else {"end_user_tpd_limit": budget.tpd_limit}
-    spend: Final[EndUserParams] = {} if budget.max_budget is None else {"end_user_max_budget": budget.max_budget}
-    model_spend: Final[EndUserParams] = (
-        {} if budget.model_max_budget is None else {"end_user_model_max_budget": budget.model_max_budget}
-    )
-    model_tpm: Final[EndUserParams] = (
-        {} if budget.model_tpm_limit is None else {"end_user_model_tpm_limit": budget.model_tpm_limit}
-    )
-    model_rpm: Final[EndUserParams] = (
-        {} if budget.model_rpm_limit is None else {"end_user_model_rpm_limit": budget.model_rpm_limit}
-    )
-    return {**tpm, **rpm, **tpd, **spend, **model_spend, **model_tpm, **model_rpm}
-
-
-def end_user_params(
-    end_user_id: str, end_user: LiteLLM_EndUserTable | None, budget: LiteLLM_BudgetTable | None
-) -> EndUserParams:
-    """What a loaded end user sets: its region when the row exists, and its budget's limits."""
-    region: Final[EndUserParams] = {} if end_user is None else {"allowed_model_region": end_user.allowed_model_region}
-    limits: Final[EndUserParams] = {} if budget is None else budget_params(budget)
-    return {"end_user_id": end_user_id, **region, **limits}
+    params: EndUserGrants
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,16 +113,6 @@ def user_facts(user: LiteLLM_UserTable) -> UserFacts:
         user_role=user.user_role,
         teams=tuple(user.teams or ()),
         deactivated=deactivated(user),
-    )
-
-
-def with_end_user(token: UserAPIKeyAuth, params: EndUserParams) -> UserAPIKeyAuth:
-    """The key with an end user's limits, except its max budget. A limit that is unset keeps the key's own."""
-    return token.model_copy(
-        update={
-            **{name: value for name, value in params.items() if value is not None and name != "end_user_max_budget"},
-            "end_user_id": params.get("end_user_id"),
-        }
     )
 
 

@@ -12,11 +12,9 @@ import litellm
 from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
 from litellm.models.user import LiteLLM_UserTable
 from litellm.proxy.auth.auth_checks import cache_key_object
-from litellm.proxy.auth.grants import owner_grants, with_project
+from litellm.proxy.auth.grants import EndUserGrants, owner_grants, with_end_user, with_project
 from litellm.proxy.auth.host.facts import (
-    EndUserParams,
     EndUserRow,
-    with_end_user,
 )
 from litellm.proxy.auth.jwt import auth_from_result, jwt_result
 from litellm.proxy.auth.team_grants import newer_team_row_update
@@ -174,7 +172,7 @@ async def _virtual_key(host: PythonAuthHost, token: UserAPIKeyAuth, context: Rus
     dumped: Final[Mapping[str, object]] = token.model_dump(
         exclude_none=True, exclude={"token"} if token.team_id is not None else {"token", "team_object_permission"}
     )
-    end_user_params: Final[EndUserParams] = (
+    end_user_params: Final[EndUserGrants] = (
         context.end_user.params if end_user is not None or litellm.max_end_user_budget_id is not None else {}
     )
     valid_token_dict: Final = {
