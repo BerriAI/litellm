@@ -6,6 +6,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Final, Literal, NamedTuple, TypeAlias
 
 import anyio
+import httpcore
 import httpx
 from pydantic import ConfigDict, Field, SecretStr, StrictFloat, TypeAdapter, ValidationError, model_validator
 
@@ -346,6 +347,7 @@ def _projected_turns(
 
 
 _SEND_HEADERS_STARTED: Final = ".send_request_headers.started"
+_PROXY_CONNECT_METHOD: Final = b"CONNECT"
 # Strong references to exchanges left closing past the cleanup grace, dropped as each one finishes.
 _DETACHED_EXCHANGES: Final[set["asyncio.Task[_RouteResponse]"]] = set()  # mutable-ok: see above
 
@@ -354,18 +356,29 @@ class _RetryRefusedError(Exception):
     """httpcore was about to send the route request a second time."""
 
 
+def _header_send_is_proxy_connect(info: Mapping[str, object]) -> bool:
+    """True when this header send is the proxy CONNECT that opens the tunnel.
+
+    httpcore copies the caller's trace extension onto that CONNECT and reports it as
+    `http11.send_request_headers.started`, the same event an origin HTTP/1.1 POST uses.
+    The event prefix cannot tell them apart. The request method on the trace info can."""
+    request: Final = info.get("request")
+    return isinstance(request, httpcore.Request) and request.method == _PROXY_CONNECT_METHOD
+
+
 class _SingleAttempt:
     """Per-request trace hook that keeps the exchange to one wire attempt. httpcore's pool
     resends a request on a new connection when an HTTP/2 peer's GOAWAY says it did not
-    process the stream; httpcore reports each send of request headers through the
-    per-request trace extension, and raising there aborts the second send before it starts."""
+    process the stream. httpcore reports each send of request headers through the
+    per-request trace extension, and raising there aborts the second send before it starts.
+    A proxy CONNECT reuses that event for tunnel setup and does not consume the one send."""
 
     def __init__(self) -> None:
         self.sends: int = 0
 
-    async def trace(self, event: str, _info: Mapping[str, object]) -> None:
-        """Count request-header sends; httpcore calls this for every traced step."""
-        if not event.endswith(_SEND_HEADERS_STARTED):
+    async def trace(self, event: str, info: Mapping[str, object]) -> None:
+        """Count origin request-header sends. httpcore calls this for every traced step."""
+        if not event.endswith(_SEND_HEADERS_STARTED) or _header_send_is_proxy_connect(info):
             return
         if self.sends:
             raise _RetryRefusedError

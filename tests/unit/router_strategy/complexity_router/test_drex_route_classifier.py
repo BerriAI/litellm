@@ -2026,6 +2026,65 @@ async def test_a_request_the_http2_peer_left_unprocessed_is_not_sent_again() -> 
         await handler.close()
 
 
+class _RecordingProxyStream(httpcore.AsyncMockStream):
+    """An HTTP/1.1 connection that records every byte written to it."""
+
+    def __init__(self, buffer: list[bytes], sent: list[bytes]) -> None:
+        super().__init__(buffer)
+        self.sent: Final = sent
+
+    async def write(self, buffer: bytes, timeout: float | None = None) -> None:
+        del timeout
+        self.sent.append(buffer)
+
+
+class _ProxyTunnelBackend(httpcore.AsyncMockBackend):
+    """One TCP connection to an HTTP proxy. The proxy accepts CONNECT, then the origin answers."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            [
+                b"HTTP/1.1 200 Connection Established\r\n\r\n",
+                _KEEP_ALIVE_RESPONSE,
+            ]
+        )
+        self.writes: Final[list[bytes]] = []
+        self.dials: Final[list[tuple[object, object]]] = []
+
+    async def connect_tcp(self, *args: object, **kwargs: object) -> httpcore.AsyncNetworkStream:
+        del args
+        self.dials.append((kwargs.get("host"), kwargs.get("port")))
+        return _RecordingProxyStream(list(self._buffer), self.writes)
+
+
+def _proxy_handler(backend: httpcore.AsyncNetworkBackend) -> AsyncHTTPHandler:
+    """HTTPX's native transport for an HTTP proxy, over a scripted network backend."""
+    transport: Final = httpx.AsyncHTTPTransport(proxy="http://proxy.test:8080")
+    pool: Final = transport._pool  # pyright: ignore[reportPrivateUsage]  # no public network-backend hook
+    pool._network_backend = backend  # pyright: ignore[reportPrivateUsage]  # no public network-backend hook
+    return AsyncHTTPHandler(transport=transport)
+
+
+@pytest.mark.asyncio
+async def test_an_https_route_through_an_http_proxy_sends_connect_and_then_the_post() -> None:
+    """HTTPX's proxy transport forwards the trace extension to the CONNECT that opens the
+    tunnel. That header send is tunnel setup, so the origin POST still goes out and the
+    call classifies."""
+    backend: Final = _ProxyTunnelBackend()
+    handler: Final = _proxy_handler(backend)
+    classifier: Final = DrexRouteClassifier(_config_dict(), http_client=handler)
+    try:
+        assert await classifier.classify(_context()) == "fast"
+
+        sent: Final = b"".join(backend.writes)
+        connect_end: Final = sent.find(b"\r\n\r\n")
+        assert backend.dials == [("proxy.test", 8080)]
+        assert sent.startswith(b"CONNECT drex.test:443 HTTP/1.1\r\n"), sent
+        assert sent.find(b"POST /v1/route HTTP/1.1\r\n") > connect_end
+    finally:
+        await handler.close()
+
+
 class _AlwaysRetryingTransport(httpx.AsyncBaseTransport):
     """Reports a request-header send through the trace extension twice, as httpcore's pool
     does when it retries, and records each send it was allowed to make."""
