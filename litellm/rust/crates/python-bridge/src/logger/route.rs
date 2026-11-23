@@ -2,9 +2,9 @@
 //! `LiteLLM`, so a Rust port keeps its lines on the logger its Python version used. This table is the only copy of
 //! that rule: Python is told the logger's name and never sees a Rust target.
 
-use strum::{EnumCount, IntoStaticStr};
+use strum::{EnumCount, IntoStaticStr, VariantArray};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, EnumCount, IntoStaticStr)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, EnumCount, IntoStaticStr, VariantArray)]
 pub(super) enum PythonLogger {
     #[strum(serialize = "LiteLLM")]
     Sdk,

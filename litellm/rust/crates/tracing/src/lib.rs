@@ -8,7 +8,7 @@ use std::{
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde_json::{Map, Value};
 use tracing::{
-    Dispatch,
+    Dispatch, Span,
     field::{Field, Visit},
 };
 
@@ -58,21 +58,47 @@ pub struct Record {
     pub fields: Map<String, Value>,
 }
 
-#[derive(Clone, Default)]
+/// Where a piece of work logs: a subscriber, and optionally a span the work runs inside.
+#[derive(Clone)]
 pub struct Logger {
     dispatch: Dispatch,
+    span: Span,
+}
+
+impl Default for Logger {
+    fn default() -> Self {
+        Self {
+            dispatch: Dispatch::default(),
+            span: Span::none(),
+        }
+    }
 }
 
 impl Logger {
     pub fn new(sink: impl Sink) -> Self {
         Self {
             dispatch: layer::dispatch(sink),
+            span: Span::none(),
         }
     }
 
     pub fn current() -> Self {
         Self {
             dispatch: tracing::dispatcher::get_default(Clone::clone),
+            span: Span::none(),
+        }
+    }
+
+    /// This logger with the span `open` creates under it. Work scoped to the result runs inside that span, so its
+    /// events inherit the span's fields. Called while a sink is emitting, it opens no span, as `scope` logs nothing
+    /// there.
+    pub fn within(&self, open: impl FnOnce() -> Span) -> Self {
+        if EMITTING.get() {
+            return self.clone();
+        }
+        Self {
+            dispatch: self.dispatch.clone(),
+            span: tracing::dispatcher::with_default(&self.dispatch, open),
         }
     }
 
@@ -84,7 +110,7 @@ impl Logger {
         if EMITTING.get() {
             return operation();
         }
-        tracing::dispatcher::with_default(&self.dispatch, operation)
+        tracing::dispatcher::with_default(&self.dispatch, || self.span.in_scope(operation))
     }
 
     pub fn instrument<F: Future>(&self, future: F) -> impl Future<Output = F::Output> + use<F> {

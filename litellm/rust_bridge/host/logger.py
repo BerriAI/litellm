@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Final
 
 from pydantic import JsonValue
@@ -20,12 +20,17 @@ _REDACTION: Final = DiagnosticProcessingFilter()
 _CORRELATION: Final = CorrelationContextFilter()
 
 
-def context() -> tuple[str, str]:
-    return session_id_var.get(), trace_id_var.get()
+_LEVELS: Final = (logging.DEBUG, logging.INFO, logging.WARNING, logging.ERROR)
+_NOTHING: Final = logging.CRITICAL + 1
 
 
-def enabled(logger: str, level: int) -> bool:
-    return logging.getLogger(logger).isEnabledFor(level)
+def _floor(logger: logging.Logger) -> int:
+    return next((level for level in _LEVELS if logger.isEnabledFor(level)), _NOTHING)
+
+
+def context(loggers: Sequence[str]) -> tuple[tuple[str, str], tuple[int, ...]]:
+    """The request ids of the calling thread, and the lowest level each named logger takes."""
+    return (session_id_var.get(), trace_id_var.get()), tuple(_floor(logging.getLogger(name)) for name in loggers)
 
 
 def _redis_timeout_line(level: int, message: str) -> tuple[int, str]:

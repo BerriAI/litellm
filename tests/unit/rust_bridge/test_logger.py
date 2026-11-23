@@ -53,7 +53,7 @@ def test_native_context_is_scoped_and_respects_correlation_setting(
     caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
-    context_before: Final = logger.context()
+    context_before: Final = logger.context(("LiteLLM",))[0]
     with caplog.at_level(logging.WARNING, logger="LiteLLM"):
         logger.emit("LiteLLM", logging.WARNING, "native", "native.rs", 1, "litellm_http", {}, ("session", "trace"))
         monkeypatch.setattr(litellm, "request_correlation_in_logs", False)
@@ -67,20 +67,25 @@ def test_native_context_is_scoped_and_respects_correlation_setting(
 
 
 def test_native_logging_observes_level_changes(caplog: pytest.LogCaptureFixture) -> None:
-    with caplog.at_level(logging.ERROR, logger="LiteLLM"):
-        assert not logger.enabled("LiteLLM", logging.WARNING)
+    loggers: Final = ("LiteLLM", "LiteLLM Proxy")
+    with caplog.at_level(logging.ERROR, logger="LiteLLM"), caplog.at_level(logging.DEBUG, logger="LiteLLM Proxy"):
+        assert logger.context(loggers)[1] == (logging.ERROR, logging.DEBUG)
         logger.emit("LiteLLM", logging.WARNING, "filtered", "native.rs", 1, "litellm_http", {}, ("", ""))
     with caplog.at_level(logging.WARNING, logger="LiteLLM"):
-        assert logger.enabled("LiteLLM", logging.WARNING)
+        assert logger.context(loggers)[1][0] == logging.WARNING
         logger.emit("LiteLLM", logging.WARNING, "visible", "native.rs", 1, "litellm_http", {}, ("", ""))
 
     assert [record.getMessage() for record in caplog.records] == ["visible"]
 
 
+def test_a_disabled_logger_takes_no_native_level(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(verbose_logger, "disabled", True)
+
+    assert logger.context(("LiteLLM",))[1] == (logging.CRITICAL + 1,)
+
+
 def test_native_records_reach_the_logger_rust_names(caplog: pytest.LogCaptureFixture) -> None:
     with caplog.at_level(logging.WARNING, logger="LiteLLM"), caplog.at_level(logging.DEBUG, logger="LiteLLM Proxy"):
-        assert logger.enabled("LiteLLM Proxy", logging.DEBUG)
-        assert not logger.enabled("LiteLLM", logging.DEBUG)
         logger.emit("LiteLLM Proxy", logging.DEBUG, "limiter", "hosted.rs", 1, "litellm_limiter", {}, ("", ""))
         logger.emit("LiteLLM", logging.DEBUG, "http", "http.rs", 1, "litellm_http", {}, ("", ""))
 

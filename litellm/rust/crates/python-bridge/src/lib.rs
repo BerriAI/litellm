@@ -159,7 +159,7 @@ mod _native {
     #[pymodule_init]
     fn init(module: &Bound<'_, PyModule>) -> PyResult<()> {
         let _ = rustls::crypto::ring::default_provider().install_default();
-        let _ = crate::logger::unscoped().install_global();
+        let _ = crate::logger::process().install_global();
         module.add(
             "JWT_ID_JAG_TYP",
             litellm_gateway_auth_core::authn::jwt::ID_JAG_TYP,

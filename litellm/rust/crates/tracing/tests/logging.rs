@@ -417,3 +417,41 @@ fn a_scrubbed_sink_takes_a_key_length_set_after_it_is_installed() {
     let messages: Vec<String> = receiver.try_iter().map(|record| record.0).collect();
     assert_eq!(messages, ["key sk-abcde rejected", "key REDACTED rejected"]);
 }
+
+#[rstest]
+#[tokio::test]
+async fn work_scoped_to_a_logger_within_a_span_inherits_the_spans_fields() {
+    let (sender, receiver) = mpsc::channel();
+    let logger = Logger::new(Output {
+        enabled: Arc::new(AtomicBool::new(true)),
+        sender,
+    });
+    let call = logger.within(|| tracing::info_span!("call", request = "first"));
+
+    logger.scope(|| warn!("outside the call"));
+    call.scope(|| warn!("sync inside the call"));
+    call.instrument(async {
+        tokio::task::yield_now().await;
+        warn!(attempt = 2_u64, "async inside the call");
+    })
+    .await;
+
+    let records: Vec<(String, Value)> = receiver
+        .try_iter()
+        .map(|(message, fields, ..)| (message, fields))
+        .collect();
+    assert_eq!(
+        records,
+        [
+            ("outside the call".to_owned(), json!({})),
+            (
+                "sync inside the call".to_owned(),
+                json!({"request": "first"})
+            ),
+            (
+                "async inside the call".to_owned(),
+                json!({"request": "first", "attempt": 2})
+            ),
+        ]
+    );
+}

@@ -28,9 +28,7 @@ impl<M: Machine> Machine for LoggedMachine<M> {
     type Complete = M::Complete;
 
     fn resume(&mut self) -> Step<'_, Self> {
-        let logger = self
-            .logger
-            .get_or_init(|| Python::attach(super::capture_call));
+        let logger = self.logger.get_or_init(|| Python::attach(super::capture));
         Box::pin(logger.instrument(logger.scope(|| self.machine.resume())))
     }
 
@@ -38,9 +36,7 @@ impl<M: Machine> Machine for LoggedMachine<M> {
         &mut self,
         failure: HostFailure<<Self::Protocol as Protocol>::Error>,
     ) -> Interrupted<'_, Self> {
-        let logger = self
-            .logger
-            .get_or_init(|| Python::attach(super::capture_call));
+        let logger = self.logger.get_or_init(|| Python::attach(super::capture));
         Box::pin(logger.instrument(logger.scope(|| self.machine.interrupt(failure))))
     }
 }

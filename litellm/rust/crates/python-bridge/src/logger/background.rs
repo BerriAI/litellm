@@ -4,11 +4,12 @@ use std::{
     iter,
     sync::{
         Arc, OnceLock,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicU64, AtomicUsize, Ordering},
     },
 };
 
 use litellm_tracing::Record;
+use serde_json::Value;
 use tokio::{runtime::Handle, sync::mpsc};
 
 const BATCH: usize = 64;
@@ -19,21 +20,43 @@ pub(super) trait Delivery: Send + Sync + 'static {
     fn lost(&self, count: u64);
 }
 
-/// Records from runtime threads, handed to one task that delivers them in order off the async workers. A full queue
-/// drops the record and counts it, so a slow log handler costs lines, never a worker or unbounded memory.
+/// A record with the text bytes it holds, counted once so they can be given back when it is delivered.
+struct Held {
+    record: Record,
+    bytes: usize,
+}
+
+/// The bytes of text a record holds: its message and its fields' names and strings. A debug record can carry a whole
+/// request body, so the queue is bounded by this as well as by a count.
+fn text_bytes(record: &Record) -> usize {
+    record.message.len()
+        + record
+            .fields
+            .iter()
+            .map(|(name, value)| name.len() + value.as_str().map_or(size_of::<Value>(), str::len))
+            .sum::<usize>()
+}
+
+/// Records from runtime threads, handed to one task that delivers them in order off the async workers. The queue
+/// holds at most `capacity` records and `byte_budget` bytes of their text. A record past either is dropped and
+/// counted, so a slow log handler costs lines, never a worker or unbounded memory.
 pub(super) struct Background<D> {
     delivery: Arc<D>,
     capacity: usize,
-    sender: OnceLock<mpsc::Sender<Record>>,
+    byte_budget: usize,
+    sender: OnceLock<mpsc::Sender<Held>>,
+    held_bytes: Arc<AtomicUsize>,
     lost: Arc<AtomicU64>,
 }
 
 impl<D: Delivery> Background<D> {
-    pub(super) fn new(delivery: D, capacity: usize) -> Self {
+    pub(super) fn new(delivery: D, capacity: usize, byte_budget: usize) -> Self {
         Self {
             delivery: Arc::new(delivery),
             capacity,
+            byte_budget,
             sender: OnceLock::new(),
+            held_bytes: Arc::new(AtomicUsize::new(0)),
             lost: Arc::new(AtomicU64::new(0)),
         }
     }
@@ -43,32 +66,43 @@ impl<D: Delivery> Background<D> {
             let (sender, records) = mpsc::channel(self.capacity);
             drop(runtime.spawn(drain(
                 records,
+                Arc::clone(&self.held_bytes),
                 Arc::clone(&self.lost),
                 Arc::clone(&self.delivery),
             )));
             sender
         });
-        if sender.try_send(record).is_err() {
+        let bytes = text_bytes(&record);
+        let held = self.held_bytes.fetch_add(bytes, Ordering::Relaxed);
+        if held.saturating_add(bytes) > self.byte_budget
+            || sender.try_send(Held { record, bytes }).is_err()
+        {
+            self.held_bytes.fetch_sub(bytes, Ordering::Relaxed);
             self.lost.fetch_add(1, Ordering::Relaxed);
         }
     }
 }
 
 async fn drain<D: Delivery>(
-    mut records: mpsc::Receiver<Record>,
+    mut records: mpsc::Receiver<Held>,
+    held_bytes: Arc<AtomicUsize>,
     lost: Arc<AtomicU64>,
     delivery: Arc<D>,
 ) {
     while let Some(first) = records.recv().await {
-        let batch: Vec<Record> = iter::once(first)
+        let batch: Vec<Held> = iter::once(first)
             .chain(iter::from_fn(|| records.try_recv().ok()))
             .take(BATCH)
             .collect();
         let lost = lost.swap(0, Ordering::Relaxed);
         let delivery = Arc::clone(&delivery);
+        let held_bytes = Arc::clone(&held_bytes);
         drop(
             tokio::task::spawn_blocking(move || {
-                batch.iter().for_each(|record| delivery.record(record));
+                batch.into_iter().for_each(|held| {
+                    delivery.record(&held.record);
+                    held_bytes.fetch_sub(held.bytes, Ordering::Relaxed);
+                });
                 if lost > 0 {
                     delivery.lost(lost);
                 }
@@ -168,7 +202,7 @@ mod tests {
         let runtime = single_worker();
         let (probe, probed) = probe();
         let logger = Logger::new(Queued(
-            Arc::new(Background::new(probe, 8)),
+            Arc::new(Background::new(probe, 8, usize::MAX)),
             runtime.handle().clone(),
         ));
         drop(runtime.spawn(async move { logger.scope(|| litellm_tracing::warn!("first")) }));
@@ -186,7 +220,7 @@ mod tests {
         let runtime = single_worker();
         let (probe, probed) = probe();
         let logger = Logger::new(Queued(
-            Arc::new(Background::new(probe, 1)),
+            Arc::new(Background::new(probe, 1, usize::MAX)),
             runtime.handle().clone(),
         ));
         let wait = Duration::from_secs(5);
@@ -209,5 +243,36 @@ mod tests {
                 .recv_timeout(Duration::from_millis(200))
                 .is_err()
         );
+    }
+
+    #[rstest::rstest]
+    fn records_past_the_byte_budget_are_dropped_and_reported_while_room_for_more_records_remains() {
+        let runtime = single_worker();
+        let (probe, probed) = probe();
+        let logger = Logger::new(Queued(
+            Arc::new(Background::new(
+                probe,
+                8,
+                "delivering".len() + "queued".len(),
+            )),
+            runtime.handle().clone(),
+        ));
+        let wait = Duration::from_secs(5);
+        logger.scope(|| litellm_tracing::warn!("delivering"));
+        probed.started.recv_timeout(wait).unwrap();
+        logger.scope(|| {
+            litellm_tracing::warn!("queued");
+            litellm_tracing::warn!("x");
+        });
+        probed.release.send(()).unwrap();
+        probed.release.send(()).unwrap();
+
+        assert_eq!(probed.records.recv_timeout(wait).unwrap(), "delivering");
+        assert_eq!(probed.records.recv_timeout(wait).unwrap(), "queued");
+        assert_eq!(probed.lost.recv_timeout(wait).unwrap(), 1);
+
+        logger.scope(|| litellm_tracing::warn!("next"));
+        probed.release.send(()).unwrap();
+        assert_eq!(probed.records.recv_timeout(wait).unwrap(), "next");
     }
 }
