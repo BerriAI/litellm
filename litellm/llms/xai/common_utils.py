@@ -105,9 +105,4 @@ class XAIModelInfo(BaseLLMModelInfo):
 
         models: Final = _JSON_VALUES.validate_python(_JSON_OBJECT.validate_python(response.json())["data"])
 
-        litellm_model_names: Final = []
-        for model in models:
-            stripped_model_name = _MODEL_ID.validate_python(_JSON_OBJECT.validate_python(model)["id"])
-            litellm_model_name = "xai/" + stripped_model_name
-            litellm_model_names.append(litellm_model_name)
-        return litellm_model_names
+        return ["xai/" + _MODEL_ID.validate_python(_JSON_OBJECT.validate_python(model)["id"]) for model in models]
