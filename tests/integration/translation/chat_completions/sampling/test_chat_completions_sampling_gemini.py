@@ -142,6 +142,7 @@ VERTEX_AI_GEMINI_3_8_FLASH_TEMPERATURE_TEST_CASE: Final = replace(
     },
     expected_litellm_response={
         **CHAT_COMPLETIONS_RESPONSE,
+        "service_tier": "default",
         "model": "vertex_ai/gemini-3.8-flash",
         "choices": [
             {
