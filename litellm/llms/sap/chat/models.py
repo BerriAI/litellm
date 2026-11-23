@@ -1,5 +1,5 @@
 import warnings
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from enum import Enum
 from typing import Final, Literal
 
@@ -15,6 +15,8 @@ from pydantic import (
 
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.types.llms.base import LiteLLMBaseModel
+
+from .reasoning import _SAPThoughtBlock
 
 _SERIALIZED: Final = TypeAdapter(object)
 
@@ -138,6 +140,25 @@ class SAPAssistantMessage(LiteLLMBaseModel):
     content: str | TextContent | list[TextContent] = ""
     refusal: str = ""
     tool_calls: list[MessageToolCall] = Field(default=[])
+    reasoning_content: list[_SAPThoughtBlock] | None = None  # mutable-ok: list of reasoning blocks from SAP wire format
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_reasoning(cls, data: object) -> object:
+        if not isinstance(data, Mapping):
+            return data
+        thinking_blocks: Final = data.get("thinking_blocks")
+        if isinstance(thinking_blocks, Sequence) and not isinstance(thinking_blocks, str):
+            return {k: v for k, v in data.items() if k not in ("thinking_blocks", "reasoning_content")} | {
+                "reasoning_content": [
+                    {"content": b.get("thinking"), "signature": b.get("signature")}
+                    for b in thinking_blocks
+                    if isinstance(b, Mapping)
+                ],
+            }
+        if isinstance(data.get("reasoning_content"), str):
+            return {k: v for k, v in data.items() if k != "reasoning_content"}
+        return data
 
 
 class SAPToolChatMessage(LiteLLMBaseModel):

@@ -256,7 +256,9 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             "functions",
             "extra_headers",
             "parallel_tool_calls",
+            "reasoning_effort",
             "response_format",
+            "thinking",
             "timeout",
         ]
         # Remove response_format for providers that don't support it on SAP GenAI Hub
