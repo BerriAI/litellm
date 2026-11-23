@@ -3942,6 +3942,19 @@ async def vertex_proxy_route(
 _OPENAI_WS_TOKEN_EXCHANGE_FAILED_REASON: Final = "OpenAI workload identity token exchange failed"
 
 
+def openai_passthrough_base_url() -> str:
+    return os.getenv("OPENAI_API_BASE") or "https://api.openai.com/"
+
+
+def openai_api_key_headers(api_key: str | None) -> Mapping[str, str]:
+    return {} if api_key is None else {"authorization": f"Bearer {api_key}", "api-key": api_key}
+
+
+async def openai_passthrough_poll_headers(base_target_url: str) -> Mapping[str, str] | None:
+    api_key: Final = await _openai_passthrough_credential(base_target_url)
+    return None if api_key is None else openai_api_key_headers(api_key)
+
+
 async def _openai_passthrough_credential(base_target_url: str) -> str | None:
     static_api_key: Final = normalize_nonempty_secret_str(
         passthrough_endpoint_router.get_credentials(
@@ -3988,7 +4001,7 @@ async def openai_proxy_route(
 
     [Docs](https://docs.litellm.ai/docs/pass_through/openai_passthrough)
     """
-    base_target_url: Final = os.getenv("OPENAI_API_BASE") or "https://api.openai.com/"
+    base_target_url: Final = openai_passthrough_base_url()
     openai_api_key: Final = await _openai_passthrough_credential(base_target_url)
     if openai_api_key is None:
         raise Exception("Required 'OPENAI_API_KEY' in environment to make pass-through calls to OpenAI.")
@@ -4223,7 +4236,7 @@ async def openai_websocket_proxy_route(
         await websocket.close(code=1008, reason=refusal.close_reason)
         return
 
-    base_target_url: Final = os.getenv("OPENAI_API_BASE") or "https://api.openai.com/"
+    base_target_url: Final = openai_passthrough_base_url()
     try:
         openai_api_key: Final = await _openai_passthrough_credential(base_target_url)
     except (openai.OpenAIError, httpx.HTTPError, LiteLLMOpenAIError):
@@ -4477,11 +4490,8 @@ class BaseOpenAIPassThroughHandler:
         custom_llm_provider: litellm.LlmProviders,
         extra_headers: Mapping[str, str] | None = None,
     ) -> dict[str, str]:
-        api_key_headers: Final[Mapping[str, str]] = (
-            {} if api_key is None else {"authorization": f"Bearer {api_key}", "api-key": api_key}
-        )
         return BaseOpenAIPassThroughHandler._append_openai_beta_header(
-            headers={**api_key_headers, **(extra_headers or {})},
+            headers={**openai_api_key_headers(api_key), **(extra_headers or {})},
             endpoint=endpoint,
             request=request,
             custom_llm_provider=custom_llm_provider,
