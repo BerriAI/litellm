@@ -3465,7 +3465,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         if not new_texts:
             verbose_proxy_logger.debug("Bedrock Guardrail: no new messages to scan for this session, skipping API call")
             if log_when_nothing_new:
-                self.add_standard_logging_guardrail_information_to_request_data(
+                self.add_standard_logging_guardrail_information_to_request_data(  # pyright: ignore[reportUnknownMemberType]  # the base helper takes an untyped request dict
                     guardrail_provider=self.guardrail_provider,
                     guardrail_json_response="allow",
                     request_data=request_data,
