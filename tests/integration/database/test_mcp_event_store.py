@@ -105,3 +105,15 @@ async def test_a_refresh_rotates_the_secret_encrypted_at_rest() -> None:
         raw: Final = await store._subscriptions.find_unique(where={"id": row.id})  # pyright: ignore[reportPrivateUsage]  # the stored ciphertext is the unit under test
         assert raw is not None and raw.client_secret != ROTATED
         await store.delete(row.id)
+
+
+@pytest.mark.asyncio
+async def test_an_unreadable_signing_key_never_becomes_a_plaintext_secret(monkeypatch: pytest.MonkeyPatch) -> None:
+    async with _connected() as store:
+        row: Final = await _active(store)
+        try:
+            monkeypatch.setenv("LITELLM_SALT_KEY", "synthetic-different-store-key")
+            loaded: Final = await store.get(row.id)
+            assert loaded is not None and (loaded.client_secret, loaded.upstream_secret) == ("", "")
+        finally:
+            await store.delete(row.id)
