@@ -375,6 +375,22 @@ def _current_format_embedding_entry(entry: object) -> CachedEmbedding | None:
     return cached
 
 
+def _single_input_embedding_response(stored: object, call_type: str, embedding_input: object) -> object:
+    """Expand the per-input entry aembedding stores under the key a single-string embedding request also uses."""
+    entry: Final = _current_format_embedding_entry(stored) if call_type == CallTypes.embedding.value else None
+    if entry is None:
+        return stored
+    prompt_tokens: Final = entry["prompt_tokens"]
+    if prompt_tokens is None or not isinstance(embedding_input, str):
+        return None
+    return {
+        "object": "list",
+        "model": entry["model"],
+        "data": [{"embedding": entry["embedding"], "index": 0, "object": "embedding"}],
+        "usage": {"prompt_tokens": prompt_tokens, "total_tokens": prompt_tokens},
+    }
+
+
 class LLMCachingHandler:
     def __init__(
         self,
@@ -604,8 +620,12 @@ class LLMCachingHandler:
             print_verbose("Checking Sync Cache")
             logging_obj.reset_caching_details()
             with response_cache_phase("get"):
-                cached_result = litellm.cache.get_cache(
-                    **_CacheCallKwargs(**new_kwargs, **self._known_cache_key_kwargs(new_kwargs))
+                cached_result = _single_input_embedding_response(
+                    litellm.cache.get_cache(
+                        **_CacheCallKwargs(**new_kwargs, **self._known_cache_key_kwargs(new_kwargs))
+                    ),
+                    original_function.__name__,
+                    new_kwargs.get("input"),
                 )
             if is_response_without_output(cached_result):
                 verbose_logger.debug("LiteLLM Cache: cached response has no output, treating it as a miss")

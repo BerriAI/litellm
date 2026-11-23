@@ -2708,6 +2708,49 @@ async def test_partial_embedding_cache_hit_sends_only_misses_and_keeps_input_ord
 
 
 @pytest.mark.asyncio
+async def test_sync_single_input_embedding_reads_the_entry_aembedding_stored(monkeypatch):
+    import litellm
+    from litellm import CustomLLM
+    from litellm.caching.caching import Cache
+    from litellm.types.utils import Embedding, EmbeddingResponse
+
+    class RecordingEmbedder(CustomLLM):
+        provider_inputs: tuple[tuple[str, ...], ...] = ()
+
+        def _respond(self, model: str, input: list[str]) -> EmbeddingResponse:
+            self.provider_inputs = (*self.provider_inputs, tuple(input))
+            return EmbeddingResponse(
+                model=model,
+                data=[
+                    Embedding(embedding=[float(len(text))], index=idx, object="embedding")
+                    for idx, text in enumerate(input)
+                ],
+            )
+
+        def embedding(self, model, input, model_response, **kwargs) -> EmbeddingResponse:
+            return self._respond(model, input)
+
+        async def aembedding(self, model, input, model_response, **kwargs) -> EmbeddingResponse:
+            return self._respond(model, input)
+
+    embedder = RecordingEmbedder()
+    monkeypatch.setattr(
+        litellm, "custom_provider_map", [{"provider": "recording-embedder", "custom_handler": embedder}]
+    )
+    monkeypatch.setattr(litellm, "provider_list", [*litellm.provider_list, "recording-embedder"])
+    monkeypatch.setattr(litellm, "_custom_providers", [*litellm._custom_providers, "recording-embedder"])
+    monkeypatch.setattr(litellm, "cache", Cache(type="local"))
+
+    await litellm.aembedding(model="recording-embedder/m", input=["aa", "bbbb"])
+    await asyncio.gather(*_PENDING_CACHE_WRITES)
+    response = litellm.embedding(model="recording-embedder/m", input="bbbb")
+
+    assert embedder.provider_inputs == (("aa", "bbbb"),), embedder.provider_inputs
+    assert [item["embedding"] for item in response.data] == [[4.0]]
+    assert response._hidden_params["cache_hit"] is True
+
+
+@pytest.mark.asyncio
 async def test_response_cache_lookup_and_write_declare_the_llm_response_target(monkeypatch):
     """Both the lookup and the write run under ``service_target("llm_response")`` so the
     datastore spans they issue read ``redis.get llm_response`` / ``redis.set llm_response``
