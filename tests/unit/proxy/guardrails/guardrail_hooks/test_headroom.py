@@ -1028,6 +1028,8 @@ def model_groups() -> litellm.Router:
         model_list=[
             {"model_name": "best-sonnet", "litellm_params": {"model": "bedrock/us.anthropic.claude-sonnet-5-5"}},
             {"model_name": "best-gpt", "litellm_params": {"model": "openai/gpt-5.6"}},
+            {"model_name": "best-mixed", "litellm_params": {"model": "openai/gpt-5.6"}},
+            {"model_name": "best-mixed", "litellm_params": {"model": "bedrock/us.anthropic.claude-sonnet-5-5"}},
             {
                 "model_name": "model_name_team-1_sonnet",
                 "litellm_params": {"model": "bedrock/us.anthropic.claude-sonnet-5-5"},
@@ -1072,7 +1074,12 @@ def _claude_code_request(model: str, team_id: str | None = None) -> dict[str, ob
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("model", "team_id"), [pytest.param("best-sonnet", None, id="alias"), pytest.param("team-sonnet", "team-1", id="team")]
+    ("model", "team_id"),
+    [
+        pytest.param("best-sonnet", None, id="alias"),
+        pytest.param("best-mixed", None, id="group_with_one_claude_deployment"),
+        pytest.param("team-sonnet", "team-1", id="team"),
+    ],
 )
 async def test_claude_code_cached_prefix_is_never_compressed_on_a_claude_alias(
     guardrail: HeadroomGuardrail, model_groups: litellm.Router, model: str, team_id: str | None
