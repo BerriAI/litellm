@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final
 
 if TYPE_CHECKING:
@@ -11,10 +12,10 @@ from litellm.types.prompts.init_prompts import SupportedPromptIntegrations
 from .bitbucket_prompt_manager import BitBucketPromptManager
 
 # Global instances
-global_bitbucket_config: Final[dict | None] = None
+global_bitbucket_config: Final[Mapping[str, object] | None] = None
 
 
-def set_global_bitbucket_config(config: dict) -> None:
+def set_global_bitbucket_config(config: Mapping[str, object]) -> None:
     """
     Set the global BitBucket configuration for prompt management.
 
