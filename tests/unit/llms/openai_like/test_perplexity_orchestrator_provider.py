@@ -208,7 +208,13 @@ def test_chat_forwards_user_to_the_orchestrator():
 
 @pytest.mark.parametrize(
     ("param", "rejected", "accepted"),
-    [("n", 2, 1), ("frequency_penalty", 0.5, 0), ("presence_penalty", 0.5, 0), ("logprobs", True, False)],
+    [
+        ("n", 2, 1),
+        ("frequency_penalty", 0.5, 0),
+        ("presence_penalty", 0.5, 0),
+        ("logprobs", True, False),
+        ("store", True, False),
+    ],
 )
 def test_a_value_the_orchestrator_rejects_answers_400_or_drops_under_drop_params_while_its_default_passes(
     param: str, rejected: object, accepted: object
@@ -272,6 +278,120 @@ def test_auto_routing_keeps_the_callers_cache_marker_on_chat_and_responses():
     responses_body: Final = json.loads(responses_route.calls.last.request.content)
     assert chat_body["messages"][0]["content"][0]["prompt_cache_breakpoint"] == breakpoint
     assert responses_body["input"][0]["content"][0]["prompt_cache_breakpoint"] == breakpoint
+
+
+def test_a_claude_model_the_cost_map_does_not_list_yet_keeps_the_callers_cache_marker():
+    marked_text: Final = {"type": "text", "text": "rules", "cache_control": {"type": "ephemeral"}}
+    with respx.mock() as upstream:
+        chat_route: Final = upstream.post(f"{ORCHESTRATOR_BASE}/chat/completions").respond(
+            200, json=_chat_response("anthropic/claude-sonnet-9", {"prompt_tokens": 4, "completion_tokens": 1})
+        )
+        responses_route: Final = upstream.post(f"{ORCHESTRATOR_BASE}/responses").respond(200, json=_RESPONSES_RESPONSE)
+        litellm.completion(
+            model="perplexity_orchestrator/anthropic/claude-sonnet-9",
+            messages=[{"role": "system", "content": [marked_text]}, {"role": "user", "content": "hi"}],
+            api_key="pplx-test-key",
+        )
+        litellm.responses(
+            model="perplexity_orchestrator/anthropic/claude-sonnet-9",
+            input=[
+                {
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "rules", "cache_control": {"type": "ephemeral"}}],
+                }
+            ],
+            api_key="pplx-test-key",
+        )
+
+    breakpoint: Final = {"mode": "explicit"}
+    chat_body: Final = json.loads(chat_route.calls.last.request.content)
+    responses_body: Final = json.loads(responses_route.calls.last.request.content)
+    assert chat_body["messages"][0]["content"][0]["prompt_cache_breakpoint"] == breakpoint
+    assert responses_body["input"][0]["content"][0]["prompt_cache_breakpoint"] == breakpoint
+
+
+@pytest.mark.parametrize("model", [HAIKU, "perplexity_orchestrator/anthropic/claude-sonnet-9"])
+def test_json_object_on_a_claude_model_drops_under_drop_params_and_otherwise_reaches_the_orchestrator(model: str):
+    json_object: Final = {"type": "json_object"}
+    with respx.mock() as upstream:
+        chat_route: Final = upstream.post(f"{ORCHESTRATOR_BASE}/chat/completions").respond(
+            200, json=_chat_response("anthropic/claude-haiku-5-5", {"prompt_tokens": 4, "completion_tokens": 1})
+        )
+        responses_route: Final = upstream.post(f"{ORCHESTRATOR_BASE}/responses").respond(200, json=_RESPONSES_RESPONSE)
+        litellm.completion(
+            model=model,
+            messages=[{"role": "user", "content": "hi"}],
+            response_format=json_object,
+            drop_params=True,
+            api_key="pplx-test-key",
+        )
+        dropped_chat: Final = json.loads(chat_route.calls.last.request.content)
+        litellm.responses(
+            model=model,
+            input="hi",
+            text={"format": json_object, "verbosity": "low"},
+            drop_params=True,
+            api_key="pplx-test-key",
+        )
+        dropped_responses: Final = json.loads(responses_route.calls.last.request.content)
+        litellm.completion(
+            model=model,
+            messages=[{"role": "user", "content": "hi"}],
+            response_format=json_object,
+            api_key="pplx-test-key",
+        )
+        forwarded_chat: Final = json.loads(chat_route.calls.last.request.content)
+
+    assert "response_format" not in dropped_chat
+    assert dropped_responses["text"] == {"verbosity": "low"}
+    assert forwarded_chat["response_format"] == json_object
+
+
+def test_json_object_on_a_model_that_accepts_it_stays_under_drop_params():
+    with respx.mock() as upstream:
+        route: Final = upstream.post(f"{ORCHESTRATOR_BASE}/chat/completions").respond(
+            200, json=_chat_response("openai/gpt-6-luna", {"prompt_tokens": 4, "completion_tokens": 1})
+        )
+        litellm.completion(
+            model=GPT_LUNA,
+            messages=[{"role": "user", "content": "hi"}],
+            response_format={"type": "json_object"},
+            drop_params=True,
+            api_key="pplx-test-key",
+        )
+
+    assert json.loads(route.calls.last.request.content)["response_format"] == {"type": "json_object"}
+
+
+@pytest.mark.parametrize(
+    ("param", "rejected", "accepted"),
+    [("store", True, False), ("background", True, False), ("previous_response_id", "resp_1", None)],
+)
+def test_a_responses_field_the_orchestrator_rejects_answers_400_or_drops_under_drop_params(
+    param: str, rejected: object, accepted: object
+):
+    with respx.mock() as upstream:
+        route: Final = upstream.post(f"{ORCHESTRATOR_BASE}/responses").respond(200, json=_RESPONSES_RESPONSE)
+        with pytest.raises(litellm.UnsupportedParamsError) as rejection:
+            litellm.responses(model=GPT_LUNA, input="hi", api_key="pplx-test-key", **{param: rejected})
+        assert route.call_count == 0
+
+        litellm.responses(
+            model=GPT_LUNA, input="hi", temperature=0.2, drop_params=True, api_key="pplx-test-key", **{param: rejected}
+        )
+        dropped: Final = json.loads(route.calls.last.request.content)
+
+        litellm.responses(
+            model=GPT_LUNA,
+            input="hi",
+            api_key="pplx-test-key",
+            **({} if accepted is None else {param: accepted}),
+        )
+        kept: Final = json.loads(route.calls.last.request.content)
+
+    assert rejection.value.status_code == 400
+    assert param not in dropped
+    assert kept.get(param) == accepted
 
 
 def test_responses_request_goes_to_the_orchestrator_responses_route():

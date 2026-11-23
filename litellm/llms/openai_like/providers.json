@@ -259,16 +259,23 @@
       "prompt_cache_retention"
     ],
     "extra_supported_params": ["user"],
+    "responses_unsupported_params": ["previous_response_id"],
     "model_special_handling": {
       "perplexity/auto": {
         "reads_prompt_cache_breakpoint": true
+      },
+      "anthropic/*": {
+        "reads_prompt_cache_breakpoint": true,
+        "rejects_json_object_response_format": true
       }
     },
     "fixed_value_params": {
       "n": 1,
       "frequency_penalty": 0,
       "presence_penalty": 0,
-      "logprobs": false
+      "logprobs": false,
+      "store": false,
+      "background": false
     },
     "provider_info": {
       "supports_function_calling": true,

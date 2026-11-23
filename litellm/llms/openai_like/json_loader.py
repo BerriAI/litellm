@@ -47,6 +47,11 @@ class SimpleProviderConfig:
             if "extra_supported_params" in data
             else ()
         )
+        self.responses_unsupported_params: Final[frozenset[str]] = frozenset(
+            _STR_TUPLE_ADAPTER.validate_python(data["responses_unsupported_params"])
+            if "responses_unsupported_params" in data
+            else ()
+        )
         self.fixed_value_params: Final[Mapping[str, bool | int | float]] = (
             _FIXED_VALUE_PARAMS_ADAPTER.validate_python(data["fixed_value_params"])
             if "fixed_value_params" in data
@@ -66,7 +71,15 @@ class SimpleProviderConfig:
         return next(filter(None, map(lookup, self.api_key_envs)), None)
 
     def special_handling_for(self, model: str) -> Mapping[str, bool]:
-        model_overrides: Final = self.model_special_handling.get(model.removeprefix(f"{self.slug}/"))
+        name: Final = model.removeprefix(f"{self.slug}/")
+        model_overrides: Final = self.model_special_handling.get(name) or next(
+            (
+                overrides
+                for pattern, overrides in self.model_special_handling.items()
+                if pattern.endswith("/*") and name.startswith(pattern.removesuffix("*"))
+            ),
+            None,
+        )
         if model_overrides is None:
             return self.special_handling
         return MappingProxyType({**self.special_handling, **model_overrides})

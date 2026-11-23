@@ -119,6 +119,21 @@ The provider inherits all request/response handling from OpenAI's Responses API 
 
 If `supported_endpoints` is omitted, it defaults to `[]` (only chat completions, which is always enabled for JSON providers).
 
+When only some models need a `special_handling` flag, set it under `model_special_handling`. A model's flags override the provider's:
+
+```json
+{
+  "your_provider": {
+    "model_special_handling": {
+      "legacy-model": {"convert_content_list_to_string": true},
+      "vendor/*": {"reads_prompt_cache_breakpoint": true}
+    }
+  }
+}
+```
+
+A key ending in `/*` covers every model whose name starts with that prefix, including models added after the JSON was written. An exact model key wins over a prefix key
+
 ### How It Works
 
 1. `json_loader.py` checks `supported_endpoints` for `/v1/responses`
