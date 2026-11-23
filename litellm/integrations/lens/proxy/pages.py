@@ -166,11 +166,12 @@ async def _key_auth(request: Request, key: str) -> UserAPIKeyAuth:
     return await user_api_key_auth(
         request=request,
         api_key=key,
-        azure_api_key_header=request.headers.get(SpecialHeaders.azure_authorization.value),
-        anthropic_api_key_header=request.headers.get(SpecialHeaders.anthropic_authorization.value),
-        google_ai_studio_api_key_header=request.headers.get(SpecialHeaders.google_ai_studio_authorization.value),
-        azure_apim_header=request.headers.get(SpecialHeaders.azure_apim_authorization.value),
-        custom_litellm_key_header=request.headers.get(SpecialHeaders.custom_litellm_api_key.value),
+        azure_api_key_header=request.headers.get(SpecialHeaders.azure_authorization.value) or None,
+        anthropic_api_key_header=request.headers.get(SpecialHeaders.anthropic_authorization.value) or None,
+        google_ai_studio_api_key_header=request.headers.get(SpecialHeaders.google_ai_studio_authorization.value)
+        or None,
+        azure_apim_header=request.headers.get(SpecialHeaders.azure_apim_authorization.value) or None,
+        custom_litellm_key_header=request.headers.get(SpecialHeaders.custom_litellm_api_key.value) or None,
     )
 
 
@@ -206,7 +207,7 @@ async def page_auth(
     key: Callable[[Request, str], Awaitable[UserAPIKeyAuth]] = _key_auth,
 ) -> UserAPIKeyAuth:
     """A key when the caller sends one (the CLI, MCP clients), otherwise the dashboard login the browser holds."""
-    if any(name in request.headers for name in (*_KEY_HEADERS, *_configured_key_header())):
+    if any(request.headers.get(name) for name in (*_KEY_HEADERS, *_configured_key_header())):
         return await key(request, request.headers.get(SpecialHeaders.openai_authorization.value, ""))
     auth: Final = await session(request)
     if auth is None:

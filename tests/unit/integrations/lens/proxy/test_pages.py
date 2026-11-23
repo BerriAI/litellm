@@ -280,6 +280,48 @@ async def test_a_key_in_any_header_the_gateway_reads_keys_from_signs_the_caller_
     assert auth.user_role == LitellmUserRoles.PROXY_ADMIN
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "empty_header",
+    (
+        "authorization",
+        "x-litellm-api-key",
+        "x-gateway-key",
+        "api-key",
+        "x-api-key",
+        "x-goog-api-key",
+        "ocp-apim-subscription-key",
+    ),
+)
+async def test_an_empty_key_header_does_not_replace_the_dashboard_login(
+    monkeypatch: pytest.MonkeyPatch, empty_header: str
+) -> None:
+    monkeypatch.setattr(proxy_server, "general_settings", {"litellm_key_header_name": "X-Gateway-Key"})
+
+    auth: Final = await page_auth(
+        _request("GET", {empty_header: "", "sec-fetch-site": "same-origin"}), session=_signed_in
+    )
+
+    assert auth.user_id == "alice"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "empty_header", ("api-key", "x-goog-api-key", "ocp-apim-subscription-key", "x-litellm-api-key")
+)
+async def test_an_empty_key_header_does_not_hide_a_key_sent_in_another_header(
+    monkeypatch: pytest.MonkeyPatch, empty_header: str
+) -> None:
+    monkeypatch.setattr(proxy_server, "master_key", "sk-gateway-master")
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+
+    auth: Final = await page_auth(
+        _request("GET", {empty_header: "", "x-api-key": "sk-gateway-master"}), session=_signed_out
+    )
+
+    assert auth.user_role == LitellmUserRoles.PROXY_ADMIN
+
+
 def _cookie(user_id: str | None, session_key: str | None):
     def read(_: Request) -> tuple[str | None, str | None]:
         return user_id, session_key
