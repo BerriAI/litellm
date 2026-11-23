@@ -1902,7 +1902,15 @@ def _gemini_chat_config(custom_llm_provider: Literal["vertex_ai", "gemini"]) -> 
 
 
 @pytest.mark.parametrize("custom_llm_provider", ["vertex_ai", "gemini"])
-@pytest.mark.parametrize("non_default_params", N_AND_IMAGE_MODALITIES_IN_EITHER_ORDER)
+@pytest.mark.parametrize(
+    "non_default_params",
+    [
+        *N_AND_IMAGE_MODALITIES_IN_EITHER_ORDER,
+        pytest.param({"modalities": ["image"], "n": 2}, id="image_only"),
+        pytest.param({"modalities": ["text", "image"], "n": 2}, id="image_after_text"),
+        pytest.param({"modalities": ["image", "x" * 50_000], "n": 2}, id="long_modalities"),
+    ],
+)
 def test_n_above_one_with_image_modalities_answers_a_400_naming_n(
     custom_llm_provider: Literal["vertex_ai", "gemini"],
     non_default_params: dict[str, object],
@@ -1919,6 +1927,7 @@ def test_n_above_one_with_image_modalities_answers_a_400_naming_n(
     assert excinfo.value.llm_provider == custom_llm_provider
     assert "n=2" in excinfo.value.message
     assert "drop_params" in excinfo.value.message
+    assert len(excinfo.value.message) < 1_000
 
 
 @pytest.mark.parametrize("custom_llm_provider", ["vertex_ai", "gemini"])
