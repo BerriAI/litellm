@@ -258,6 +258,6 @@ def image_part_url(part: Mapping[str, object]) -> str | None:
         url: Final = image_fields.get("url") if image_fields is not None else None
         return url if isinstance(url, str) else None
     if part_type == "image":
-        source: Final = part.get("source")
-        return anthropic_image_source_to_openai_url(source) if isinstance(source, Mapping) else None
+        source: Final = as_str_mapping(part.get("source"))
+        return anthropic_image_source_to_openai_url(source) if source is not None else None
     return None
