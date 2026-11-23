@@ -39,6 +39,7 @@ vi.mock("next/navigation", () => ({
 
 vi.mock("@/components/networking", () => ({
   serverRootPath: "",
+  fetchMCPEventTypes: vi.fn().mockResolvedValue([]),
   teamInfoCall: vi.fn(),
   teamMemberDeleteCall: vi.fn(),
   teamMemberAddCall: vi.fn(),
@@ -378,6 +379,26 @@ describe("TeamInfoView", () => {
     editTeam: false,
     premiumUser: false,
   };
+
+  it("saves a team's event restrictions and reloads its grants", async () => {
+    vi.mocked(networking.teamInfoCall)
+      .mockResolvedValueOnce(
+        createMockTeamData({ object_permission: { mcp_event_permissions: { "ci-server": ["build.failed"] } } }),
+      )
+      .mockResolvedValue(createMockTeamData({ object_permission: { mcp_event_permissions: { "ci-server": [] } } }));
+    mockUseMCPServers.mockReturnValue({
+      data: [{ server_id: "ci-server", server_name: "CI", events: { enabled: true } }],
+    } as unknown as ReturnType<typeof useMCPServers>);
+    renderWithProviders(<TeamInfoView {...defaultProps} />);
+    await userEvent.click(await screen.findByRole("button", { name: "Block all" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save event permissions" }));
+    expect(networking.teamUpdateCall).toHaveBeenCalledWith("test-token", {
+      team_id: "123",
+      object_permission: { mcp_event_permissions: { "ci-server": [] } },
+    });
+    expect(await screen.findByRole("button", { name: "Save event permissions" })).toBeDisabled();
+    expect(networking.teamInfoCall).toHaveBeenCalledTimes(2);
+  });
 
   beforeEach(seedDefaultMocks);
 

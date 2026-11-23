@@ -60,6 +60,7 @@ import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers"
 import { useMCPToolsets } from "@/app/(dashboard)/hooks/mcpServers/useMCPToolsets";
 import { useTeamMemberBudgets } from "@/app/(dashboard)/hooks/teams/useTeamMemberBudgets";
 import { extractMcpEntitlement } from "../mcp_server_management/mcpEntitlement";
+import MCPEventPermissionsEditor from "../mcp_server_management/MCPEventPermissionsEditor";
 import ObjectPermissionsView from "../object_permissions_view";
 import { RegenerateKeyModal } from "../organisms/RegenerateKeyModal";
 import { parseErrorMessage } from "../shared/errorUtils";
@@ -124,6 +125,21 @@ export default function KeyInfoView({
   );
   const queryClient = useQueryClient();
   const canEditGuardrails = premiumUser || (userRole != null && rolesWithWriteAccess.includes(userRole));
+  const saveEventPermissions = async (next: Record<string, string[]>) => {
+    if (!accessToken || !currentKeyData) return;
+    try {
+      const updated = await keyUpdateCall(accessToken, {
+        key: currentKeyData.token,
+        object_permission: { mcp_event_permissions: next },
+      });
+      setCurrentKeyData((prevData) => (prevData ? { ...prevData, ...updated } : undefined));
+      void queryClient.invalidateQueries({ queryKey: keyKeys.all });
+      toast.success(t("keyDetail.keyInfoView.toasts.updated"));
+    } catch (error) {
+      toast.fromError(parseErrorMessage(error));
+    }
+  };
+
   const { teams: teamsData } = useTeams();
   const { data: organizations } = useOrganizations();
   const { data: projects } = useProjects();
@@ -1186,6 +1202,16 @@ export default function KeyInfoView({
                       className="pt-4 border-t border-border"
                       accessToken={accessToken}
                     />
+                    {userRole != null && rolesWithWriteAccess.includes(userRole) ? (
+                      <div className="mt-4">
+                        <MCPEventPermissionsEditor
+                          key={currentKeyData.token}
+                          accessToken={accessToken}
+                          value={currentKeyData.object_permission?.mcp_event_permissions ?? {}}
+                          onSave={saveEventPermissions}
+                        />
+                      </div>
+                    ) : null}
 
                     <LoggingSettingsView
                       loggingConfigs={extractLoggingSettings(currentKeyData.metadata)}
