@@ -32,7 +32,7 @@ class LowestTPMLoggingHandler(CustomLogger):
         self.routing_args = RoutingArgs(**routing_args)
 
     @with_service_target(ROUTER_USAGE_TARGET)
-    def log_success_event(self, kwargs, response_obj, start_time, end_time):
+    def log_success_event(self, kwargs, response_obj, start_time: object, end_time: object) -> None:
         if is_batch_retrieve_call_type(kwargs.get("call_type")):
             return
         try:
@@ -87,7 +87,7 @@ class LowestTPMLoggingHandler(CustomLogger):
             verbose_router_logger.debug(traceback.format_exc())
 
     @with_service_target(ROUTER_USAGE_TARGET)
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(self, kwargs, response_obj, start_time: object, end_time: object) -> None:
         if is_batch_retrieve_call_type(kwargs.get("call_type")):
             return
         try:
@@ -157,7 +157,7 @@ class LowestTPMLoggingHandler(CustomLogger):
         model_group: str,
         healthy_deployments: list,
         messages: list[dict[str, str]] | None = None,
-        input: str | list | None = None,
+        input: str | list[str] | None = None,
     ):
         """
         Returns a deployment with the lowest TPM/RPM usage.
