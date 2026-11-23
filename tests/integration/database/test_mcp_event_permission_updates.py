@@ -1,4 +1,5 @@
 import os
+from hashlib import sha256
 from typing import Final
 from uuid import uuid4
 
@@ -10,7 +11,7 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     _write_prepared_key_update_object_permission,
 )
 from litellm.proxy.management_helpers.object_permission_utils import handle_update_object_permission_common
-from tests.integration._support.client import Gateway
+from tests.integration._support.client import Gateway, object_value
 from tests.integration._support.database import write_rows
 from tests.integration._support.prisma_clients import connected_proxy_prisma
 
@@ -58,6 +59,35 @@ async def test_prepared_unrelated_edit_keeps_the_last_saved_event_grant() -> Non
             assert row is not None and (row.vector_stores, row.mcp_event_permissions) == (["docs"], {"ci": ["new"]})
         finally:
             await table.delete(where=where)
+
+
+def test_first_event_save_keeps_key_server_scope_until_an_explicit_edit(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        key = scenario.key()
+        key_hash = sha256(key.encode()).hexdigest()
+        events = {"ci": ["build.*"]}
+
+        def save(**fields):
+            updated = gateway.post("/key/update", {"key": key_hash, "object_permission": fields})
+            info = object_value(gateway.get("/key/info", {"key": key_hash})["info"])
+            assert updated["object_permission"] == info["object_permission"]
+            return object_value(info["object_permission"])
+
+        first = save(mcp_event_permissions=events)
+        assert (first["mcp_servers"], first["mcp_event_permissions"]) == (None, events)
+        assert save(vector_stores=[])["mcp_servers"] is None
+        assert save(mcp_servers=[])["mcp_servers"] == []
+        cleared = save(mcp_event_permissions={})
+        assert (cleared["mcp_servers"], cleared["mcp_event_permissions"]) == ([], {})
+
+
+def test_event_only_key_generation_preserves_absent_server_scope(gateway: Gateway) -> None:
+    events = {"ci": ["build.*"]}
+    with gateway.scenario() as scenario:
+        key = scenario.key(object_permission={"mcp_event_permissions": events})
+        info = object_value(gateway.get("/key/info", {"key": sha256(key.encode()).hexdigest()})["info"])
+        permission = object_value(info["object_permission"])
+        assert (permission["mcp_servers"], permission["mcp_event_permissions"]) == (None, events)
 
 
 def test_rejected_team_event_alias_preserves_the_member_budget(gateway: Gateway) -> None:
