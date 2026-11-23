@@ -230,11 +230,11 @@ jobs:
       - name: Check tests/e2e basedpyright (zero errors)
         if: steps.changes.outputs.decision != 'skip'
         run: |
-          if git diff --name-only --diff-filter=ACMRD "$GATE_BASE_SHA" HEAD -- ':(glob)tests/e2e/**/*.py' ':(glob)tests/e2e_harness/**/*.py' pyproject.toml | grep -q .; then
+          if git diff --name-only --diff-filter=ACMRD "$GATE_BASE_SHA" HEAD -- ':(glob)tests/e2e/**/*.py' ':(glob)tests/e2e_harness/**/*.py' ':(glob)litellm/**/*.py' pyproject.toml uv.lock | grep -q .; then
             uv sync --frozen --no-install-project --group proxy-dev --group e2e-dev --extra proxy
             uv run --no-sync basedpyright tests/e2e tests/e2e_harness
           else
-            echo "No changed tests/e2e Python files; skipping."
+            echo "No changed tests/e2e or litellm Python, or dependency files; skipping."
           fi
 
   e2e-harness:
@@ -623,6 +623,7 @@ jobs:
           python ./tests/code_coverage_tests/check_fastuuid_usage.py
           python ./tests/code_coverage_tests/check_py310_typing_imports.py
           python ./tests/code_coverage_tests/check_e2e_no_raw_requests.py
+          python ./tests/code_coverage_tests/check_router_constructor_stub.py
           python ./tests/code_coverage_tests/check_no_none_string_error_fields.py
           pytest -q --noconftest -p no:cacheprovider -c /dev/null tests/code_coverage_tests/test_check_no_none_string_error_fields.py
           python ./tests/code_coverage_tests/check_no_publicly_known_master_key.py
