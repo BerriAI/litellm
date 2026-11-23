@@ -26,6 +26,13 @@ from litellm.proxy.db.autorouter_session_rollup import (
 )
 from tests.unit.proxy.db.fake_prisma_engine import engine_call
 
+
+def _client_not_connected() -> Exception:
+    from prisma.errors import ClientNotConnectedError
+
+    return ClientNotConnectedError()
+
+
 ROUTING_DECISION = {"router_model_name": "live-auto", "router_type": "complexity", "routed_model": "haiku"}
 
 
@@ -272,7 +279,7 @@ class TestBuildTransaction:
 class _FakeDB:
     def __init__(
         self,
-        failures: "list[Exception] | None" = None,
+        failures: "list[Exception | None] | None" = None,
         poison_session: str | None = None,
         poison_user: str | None = None,
         commit_then_error_users: frozenset[str] = frozenset(),
@@ -290,8 +297,8 @@ class _FakeDB:
             raise RuntimeError("index row size exceeds btree maximum")
         if self._poison_user is not None and params[19] == self._poison_user:
             raise RuntimeError("index row size exceeds btree maximum")
-        if self._failures:
-            raise self._failures.pop(0)
+        if self._failures and (failure := self._failures.pop(0)) is not None:
+            raise failure
         self.calls.append((sql, params))
         if params[19] in self._commit_then_error_users:
             raise RuntimeError("commit succeeded but acknowledgement was lost")
@@ -301,7 +308,7 @@ class _FakeDB:
 class _FakeClient:
     def __init__(
         self,
-        failures: "list[Exception] | None" = None,
+        failures: "list[Exception | None] | None" = None,
         poison_session: str | None = None,
         poison_user: str | None = None,
         commit_then_error_users: frozenset[str] = frozenset(),
@@ -411,7 +418,7 @@ class TestFlush:
                 ("z-other", 10, "k2"),
             )
         )
-        asyncio.run(flush_autorouter_turn_transactions(client, tuple(reversed(turns))))
+        assert asyncio.run(flush_autorouter_turn_transactions(client, tuple(reversed(turns)))) is None
 
         assert client.db.attempts == client.db.calls
         assert [
@@ -444,8 +451,37 @@ class TestFlush:
             _transaction(session_id="s1", at=datetime(2026, 8, 1, 12, 0, 10)),
             _transaction(session_id="s2", at=datetime(2026, 8, 1, 12, 0, 5)),
         ]
-        asyncio.run(flush_autorouter_turn_transactions(client, transactions))
+        assert asyncio.run(flush_autorouter_turn_transactions(client, transactions)) is None
         assert [params[1] for _, params in client.db.calls] == ["s2"]
+
+    @pytest.mark.parametrize(
+        "error",
+        [_client_not_connected(), httpx.ConnectError("connection refused")],
+        ids=["client-not-connected", "connect-error-retries-exhausted"],
+    )
+    def test_an_unsent_turn_is_returned_with_every_turn_after_it_and_never_double_counts(
+        self, error: Exception
+    ) -> None:
+        client: Final = _FakeClient(failures=[None, error])
+        written: Final = _transaction(user_id="a-user", at=datetime(2026, 8, 1, 12, 0, 0))
+        unsent: Final = _transaction(user_id="b-user", at=datetime(2026, 8, 1, 12, 0, 1))
+        same_key_other_user: Final = _transaction(user_id="a-user", at=datetime(2026, 8, 1, 12, 0, 2))
+        other_key: Final = _transaction(api_key="k2", user_id="c-user", at=datetime(2026, 8, 1, 12, 0, 3))
+
+        unwritten: Final = asyncio.run(
+            flush_autorouter_turn_transactions(
+                client, [other_key, same_key_other_user, unsent, written], n_retry_times=0
+            )
+        )
+
+        assert unwritten is not None
+        assert (unwritten.turns, unwritten.error) == ((unsent, same_key_other_user, other_key), error)
+        assert [params[5] for _, params in client.db.calls] == ["2026-08-01T12:00:00"]
+
+        assert asyncio.run(flush_autorouter_turn_transactions(client, unwritten.turns)) is None
+        assert [(sql, params[0], params[5]) for sql, params in client.db.calls] == [
+            (UPSERT_AUTOROUTER_SESSION_SQL, "k1", f"2026-08-01T12:00:0{second}") for second in range(3)
+        ] + [(UPSERT_AUTOROUTER_SESSION_SQL, "k2", "2026-08-01T12:00:03")]
 
     def test_an_empty_batch_writes_nothing(self):
         client = _FakeClient()

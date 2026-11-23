@@ -2,6 +2,8 @@ import base64
 import json
 import uuid
 from types import SimpleNamespace
+from typing import Final
+from unittest.mock import MagicMock
 
 import httpx
 import pytest
@@ -243,3 +245,110 @@ async def test_mantle_claude_async_completion_streams_a_wrapped_json_schema_answ
     chunks = tuple([chunk async for chunk in stream])
 
     assert _streamed_answer(chunks) == BARE_STREAMED_ANSWER
+
+
+def _json_tool_message(request: httpx.Request) -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "anthropic.claude-opus-5-5",
+            "content": [{"type": "tool_use", "id": "toolu_1", "name": "json_tool_call", "input": RISK_ANSWER}],
+            "stop_reason": "tool_use",
+            "stop_sequence": None,
+            "usage": {"input_tokens": 1, "output_tokens": 9},
+        },
+    )
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize("model", ("bedrock_mantle/anthropic.claude-opus-5-5", "bedrock/mantle/anthropic.claude-opus-5-5"))
+def test_mantle_claude_that_cannot_force_a_tool_keeps_json_schema_on_the_json_tool(model: str) -> None:
+    respond: Final = MagicMock(wraps=_json_tool_message)
+
+    response: Final = litellm.completion(
+        **{**_json_schema_stream_kwargs(model), "stream": False},
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond))),
+    )
+
+    sent: Final = tuple(json.loads(call.args[0].content) for call in respond.call_args_list)
+    assert json.loads(response.choices[0].message.content) == RISK_ANSWER
+    assert [(body.get("output_config", {}).get("format"), [tool["name"] for tool in body["tools"]]) for body in sent] == [
+        (None, ["json_tool_call"])
+    ]
+
+
+def test_mantle_claude_default_max_tokens_comes_from_the_mantle_row(local_model_cost_map):
+    from litellm.constants import DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS
+    from litellm.llms.bedrock.chat.mantle.transformation import AmazonMantleConfig
+
+    mapped_cap: Final = litellm.get_max_tokens("bedrock_mantle/anthropic.claude-haiku-4-5")
+    assert mapped_cap != DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS, "the model's mapped cap must differ from the fallback"
+
+    body: Final = AmazonMantleConfig().transform_request(
+        model="mantle/anthropic.claude-haiku-4-5",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert body["max_tokens"] == mapped_cap, f"Mantle should send its mapped cap, got {body['max_tokens']}"
+
+
+def _text_message(request: httpx.Request) -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "anthropic.claude-opus-5-5",
+            "content": [{"type": "text", "text": "ok"}],
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        },
+    )
+
+
+def _mantle_extra_body_kwargs(model: str, extra_body: dict[str, object], respond: MagicMock) -> dict[str, object]:
+    return {
+        "model": model,
+        "messages": [{"role": "user", "content": "hi"}],
+        "max_tokens": 2048,
+        "extra_body": extra_body,
+        "aws_access_key_id": "AKIAEXAMPLE",
+        "aws_secret_access_key": "fake-secret",
+        "aws_region_name": "us-east-1",
+        "client": HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond))),
+    }
+
+
+@pytest.mark.parametrize("model", MANTLE_CLAUDE_ROUTES)
+def test_mantle_claude_answers_400_for_extra_body_messages_without_calling_mantle(model: str) -> None:
+    respond: Final = MagicMock(wraps=_text_message)
+
+    with pytest.raises(litellm.BadRequestError, match="extra_body can't set messages"):
+        litellm.completion(**_mantle_extra_body_kwargs(model, {"messages": [{"role": "user", "content": "x"}]}, respond))
+
+    assert respond.call_count == 0
+
+
+@pytest.mark.parametrize("model", MANTLE_CLAUDE_ROUTES)
+def test_mantle_claude_drop_params_drops_extra_body_messages_and_keeps_its_thinking_display(model: str) -> None:
+    respond: Final = MagicMock(wraps=_text_message)
+    thinking: Final = {"type": "enabled", "budget_tokens": 1024, "display": "updates"}
+
+    litellm.completion(
+        **_mantle_extra_body_kwargs(
+            model, {"thinking": thinking, "messages": [{"role": "user", "content": "from extra_body"}]}, respond
+        ),
+        drop_params=True,
+    )
+
+    sent: Final = json.loads(respond.call_args.args[0].content)
+    assert sent["thinking"] == thinking
+    assert "from extra_body" not in json.dumps(sent["messages"])

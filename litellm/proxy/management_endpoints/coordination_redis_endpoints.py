@@ -36,6 +36,7 @@ from litellm.proxy._types import (
     user_api_key_has_admin_view,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.management_helpers.audit_logs import with_audit_actor
 from litellm.proxy.utils import invalidate_config_param
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.secret_managers.main import get_secret_str
@@ -255,16 +256,19 @@ async def _emit_coordination_redis_audit_log(
 
     task: Final = asyncio.create_task(
         create_audit_log_for_update(
-            request_data=LiteLLM_AuditLogs(
-                id=str(uuid.uuid4()),
-                updated_at=datetime.now(timezone.utc),
-                changed_by=litellm_changed_by or user_api_key_dict.user_id or litellm_proxy_admin_name,
-                changed_by_api_key=user_api_key_dict.api_key,
-                table_name=LitellmTableNames.CONFIG_TABLE_NAME,
-                object_id=_COORDINATION_REDIS_KEY,
-                action=action,
-                updated_values=json.dumps({"settings": _redact_all_values(after_settings)}, default=str),
-                before_value=json.dumps({"settings": _redact_all_values(before_settings)}, default=str),
+            request_data=with_audit_actor(
+                LiteLLM_AuditLogs(
+                    id=str(uuid.uuid4()),
+                    updated_at=datetime.now(timezone.utc),
+                    changed_by=litellm_changed_by or user_api_key_dict.user_id or litellm_proxy_admin_name,
+                    changed_by_api_key=user_api_key_dict.api_key,
+                    table_name=LitellmTableNames.CONFIG_TABLE_NAME,
+                    object_id=_COORDINATION_REDIS_KEY,
+                    action=action,
+                    updated_values=json.dumps({"settings": _redact_all_values(after_settings)}, default=str),
+                    before_value=json.dumps({"settings": _redact_all_values(before_settings)}, default=str),
+                ),
+                user_api_key_dict,
             )
         )
     )

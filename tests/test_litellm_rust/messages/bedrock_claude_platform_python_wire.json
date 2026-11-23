@@ -1,0 +1,548 @@
+{
+ "_source": "What Python's Claude Platform Messages config sent, captured once at 8b4480d8 before it was removed",
+ "auth_api_key": {
+  "body": {
+   "max_tokens": 64,
+   "messages": [
+    {
+     "content": "Hello",
+     "role": "user"
+    }
+   ],
+   "model": "claude-sonnet-4-5",
+   "stream": false
+  },
+  "headers": {
+   "anthropic-beta": null,
+   "anthropic-version": "2023-06-01",
+   "anthropic-workspace-id": "ws-1",
+   "authorization": null,
+   "x-api-key": "k-explicit"
+  },
+  "path": "/v1/messages"
+ },
+ "auth_bearer_env": {
+  "body": {
+   "max_tokens": 64,
+   "messages": [
+    {
+     "content": "Hello",
+     "role": "user"
+    }
+   ],
+   "model": "claude-sonnet-4-5",
+   "stream": false
+  },
+  "headers": {
+   "anthropic-beta": null,
+   "anthropic-version": "2023-06-01",
+   "anthropic-workspace-id": "ws-1",
+   "authorization": "Bearer bedrock-bearer",
+   "x-api-key": null
+  },
+  "path": "/v1/messages"
+ },
+ "auth_env_key": {
+  "body": {
+   "max_tokens": 64,
+   "messages": [
+    {
+     "content": "Hello",
+     "role": "user"
+    }
+   ],
+   "model": "claude-sonnet-4-5",
+   "stream": false
+  },
+  "headers": {
+   "anthropic-beta": null,
+   "anthropic-version": "2023-06-01",
+   "anthropic-workspace-id": "ws-1",
+   "authorization": null,
+   "x-api-key": "k-env"
+  },
+  "path": "/v1/messages"
+ },
+ "auth_fwd_authorization_key": {
+  "body": {
+   "max_tokens": 64,
+   "messages": [
+    {
+     "content": "Hello",
+     "role": "user"
+    }
+   ],
+   "model": "claude-sonnet-4-5",
+   "stream": false
+  },
+  "headers": {
+   "anthropic-beta": null,
+   "anthropic-version": "2023-06-01",
+   "anthropic-workspace-id": "ws-1",
+   "authorization": "Bearer caller",
+   "x-api-key": "k1"
+  },
+  "path": "/v1/messages"
+ },
+ "auth_fwd_xapikey_and_key": {
+  "body": {
+   "max_tokens": 64,
+   "messages": [
+    {
+     "content": "Hello",
+     "role": "user"
+    }
+   ],
+   "model": "claude-sonnet-4-5",
+   "stream": false
+  },
+  "headers": {
+   "anthropic-beta": null,
+   "anthropic-version": "2023-06-01",
+   "anthropic-workspace-id": "ws-1",
+   "authorization": null,
+   "x-api-key": "caller-key"
+  },
+  "path": "/v1/messages"
+ },
+ "auth_fwd_xapikey_sigv4": {
+  "body": {
+   "max_tokens": 64,
+   "messages": [
+    {
+     "content": "Hello",
+     "role": "user"
+    }
+   ],
+   "model": "claude-sonnet-4-5",
+   "stream": false
+  },
+  "headers": {
+   "anthropic-beta": null,
+   "anthropic-version": "2023-06-01",
+   "anthropic-workspace-id": "ws-1",
+   "authorization": "SigV4 us-east-1/aws-external-anthropic/aws4_request",
+   "x-api-key": "caller-key"
+  },
+  "path": "/v1/messages"
+ },
+ "auth_sigv4_params": {
+  "body": {
+   "max_tokens": 64,
+   "messages": [
+    {
+     "content": "Hello",
+     "role": "user"
+    }
+   ],
+   "model": "claude-sonnet-4-5",
+   "stream": false
+  },
+  "headers": {
+   "anthropic-beta": null,
+   "anthropic-version": "2023-06-01",
+   "anthropic-workspace-id": "ws-1",
+   "authorization": "SigV4 us-east-1/aws-external-anthropic/aws4_request",
+   "x-api-key": null
+  },
+  "path": "/v1/messages"
+ },
+ "shape_betas": {
+  "body": {
+   "max_tokens": 64,
+   "messages": [
+    {
+     "content": "Hello",
+     "role": "user"
+    }
+   ],
+   "model": "claude-sonnet-4-5",
+   "stream": false
+  },
+  "headers": {
+   "anthropic-beta": "code-execution-2025-08-25,context-1m-2025-08-07",
+   "anthropic-version": "2023-06-01",
+   "anthropic-workspace-id": "ws-1",
+   "authorization": null,
+   "x-api-key": "k"
+  },
+  "path": "/v1/messages"
+ },
+ "shape_context_management": {
+  "body": {
+   "max_tokens": 64,
+   "messages": [
+    {
+     "content": "Hello",
+     "role": "user"
+    }
+   ],
+   "model": "claude-sonnet-4-5",
+   "stream": false
+  },
+  "headers": {
+   "anthropic-beta": null,
+   "anthropic-version": "2023-06-01",
+   "anthropic-workspace-id": "ws-1",
+   "authorization": null,
+   "x-api-key": "k"
+  },
+  "path": "/v1/messages"
+ },
+ "shape_override_keeps_cm": {
+  "body": {
+   "context_management": {
+    "edits": [
+     {
+      "type": "clear_tool_uses_20250919"
+     }
+    ]
+   },
+   "max_tokens": 64,
+   "messages": [
+    {
+     "content": "Hello",
+     "role": "user"
+    }
+   ],
+   "model": "claude-sonnet-4-5",
+   "stream": false
+  },
+  "headers": {
+   "anthropic-beta": "context-management-2025-06-27",
+   "anthropic-version": "2023-06-01",
+   "anthropic-workspace-id": "ws-1",
+   "authorization": null,
+   "x-api-key": "k"
+  },
+  "path": "/v1/messages"
+ },
+ "shape_override_unsupported": {
+  "body": {
+   "context_management": {
+    "edits": [
+     {
+      "type": "clear_tool_uses_20250919"
+     }
+    ]
+   },
+   "max_tokens": 64,
+   "messages": [
+    {
+     "content": "Hello",
+     "role": "user"
+    }
+   ],
+   "model": "claude-sonnet-4-5",
+   "stream": false
+  },
+  "headers": {
+   "anthropic-beta": "context-management-2025-06-27",
+   "anthropic-version": "2023-06-01",
+   "anthropic-workspace-id": "ws-1",
+   "authorization": null,
+   "x-api-key": "k"
+  },
+  "path": "/v1/messages"
+ },
+ "shape_safeguards": {
+  "body": {
+   "max_tokens": 64,
+   "messages": [
+    {
+     "content": "Hello",
+     "role": "user"
+    }
+   ],
+   "model": "claude-sonnet-4-5",
+   "safeguards": [
+    {
+     "type": "dangerous_tool_use"
+    }
+   ],
+   "stream": false
+  },
+  "headers": {
+   "anthropic-beta": "dangerous-tool-use-2026-09-03",
+   "anthropic-version": "2023-06-01",
+   "anthropic-workspace-id": "ws-1",
+   "authorization": null,
+   "x-api-key": "k"
+  },
+  "path": "/v1/messages"
+ },
+ "shape_thinking": {
+  "body": {
+   "max_tokens": 2048,
+   "messages": [
+    {
+     "content": "Hello",
+     "role": "user"
+    }
+   ],
+   "model": "claude-sonnet-4-5",
+   "stream": false,
+   "thinking": {
+    "budget_tokens": 1024,
+    "type": "enabled"
+   }
+  },
+  "headers": {
+   "anthropic-beta": null,
+   "anthropic-version": "2023-06-01",
+   "anthropic-workspace-id": "ws-1",
+   "authorization": null,
+   "x-api-key": "k"
+  },
+  "path": "/v1/messages"
+ },
+ "shape_tools_cache_ttl": {
+  "body": {
+   "max_tokens": 64,
+   "messages": [
+    {
+     "content": "Hello",
+     "role": "user"
+    }
+   ],
+   "model": "claude-sonnet-4-5",
+   "stream": false,
+   "tools": [
+    {
+     "cache_control": {
+      "ttl": "1h",
+      "type": "ephemeral"
+     },
+     "description": "w",
+     "input_schema": {
+      "properties": {
+       "c": {
+        "type": "string"
+       }
+      },
+      "type": "object"
+     },
+     "name": "get_weather"
+    }
+   ]
+  },
+  "headers": {
+   "anthropic-beta": null,
+   "anthropic-version": "2023-06-01",
+   "anthropic-workspace-id": "ws-1",
+   "authorization": null,
+   "x-api-key": "k"
+  },
+  "path": "/v1/messages"
+ },
+ "stream_sse": {
+  "body": {
+   "max_tokens": 64,
+   "messages": [
+    {
+     "content": "Hello",
+     "role": "user"
+    }
+   ],
+   "model": "claude-sonnet-4-5",
+   "stream": true
+  },
+  "headers": {
+   "anthropic-beta": null,
+   "anthropic-version": "2023-06-01",
+   "anthropic-workspace-id": "ws-1",
+   "authorization": null,
+   "x-api-key": "k"
+  },
+  "path": "/v1/messages"
+ },
+ "url_env_base": {
+  "body": {
+   "max_tokens": 64,
+   "messages": [
+    {
+     "content": "Hello",
+     "role": "user"
+    }
+   ],
+   "model": "claude-sonnet-4-5",
+   "stream": false
+  },
+  "headers": {
+   "anthropic-beta": null,
+   "anthropic-version": "2023-06-01",
+   "anthropic-workspace-id": "ws-1",
+   "authorization": null,
+   "x-api-key": "k"
+  },
+  "path": "/v1/messages"
+ },
+ "url_module_global": {
+  "body": {
+   "max_tokens": 64,
+   "messages": [
+    {
+     "content": "Hello",
+     "role": "user"
+    }
+   ],
+   "model": "claude-sonnet-4-5",
+   "stream": false
+  },
+  "headers": {
+   "anthropic-beta": null,
+   "anthropic-version": "2023-06-01",
+   "anthropic-workspace-id": "ws-1",
+   "authorization": null,
+   "x-api-key": "k"
+  },
+  "path": "/v1/messages"
+ },
+ "url_v1": {
+  "body": {
+   "max_tokens": 64,
+   "messages": [
+    {
+     "content": "Hello",
+     "role": "user"
+    }
+   ],
+   "model": "claude-sonnet-4-5",
+   "stream": false
+  },
+  "headers": {
+   "anthropic-beta": null,
+   "anthropic-version": "2023-06-01",
+   "anthropic-workspace-id": "ws-1",
+   "authorization": null,
+   "x-api-key": "k"
+  },
+  "path": "/v1/v1/messages"
+ },
+ "url_v1_messages": {
+  "body": {
+   "max_tokens": 64,
+   "messages": [
+    {
+     "content": "Hello",
+     "role": "user"
+    }
+   ],
+   "model": "claude-sonnet-4-5",
+   "stream": false
+  },
+  "headers": {
+   "anthropic-beta": null,
+   "anthropic-version": "2023-06-01",
+   "anthropic-workspace-id": "ws-1",
+   "authorization": null,
+   "x-api-key": "k"
+  },
+  "path": "/v1/messages"
+ },
+ "ws_anthropic_workspace_id": {
+  "body": {
+   "max_tokens": 64,
+   "messages": [
+    {
+     "content": "Hello",
+     "role": "user"
+    }
+   ],
+   "model": "claude-sonnet-4-5",
+   "stream": false
+  },
+  "headers": {
+   "anthropic-beta": null,
+   "anthropic-version": "2023-06-01",
+   "anthropic-workspace-id": "ws-ant",
+   "authorization": null,
+   "x-api-key": "k"
+  },
+  "path": "/v1/messages"
+ },
+ "ws_aws_workspace_id": {
+  "body": {
+   "max_tokens": 64,
+   "messages": [
+    {
+     "content": "Hello",
+     "role": "user"
+    }
+   ],
+   "model": "claude-sonnet-4-5",
+   "stream": false
+  },
+  "headers": {
+   "anthropic-beta": null,
+   "anthropic-version": "2023-06-01",
+   "anthropic-workspace-id": "ws-aws",
+   "authorization": null,
+   "x-api-key": "k"
+  },
+  "path": "/v1/messages"
+ },
+ "ws_env": {
+  "body": {
+   "max_tokens": 64,
+   "messages": [
+    {
+     "content": "Hello",
+     "role": "user"
+    }
+   ],
+   "model": "claude-sonnet-4-5",
+   "stream": false
+  },
+  "headers": {
+   "anthropic-beta": null,
+   "anthropic-version": "2023-06-01",
+   "anthropic-workspace-id": "ws-env",
+   "authorization": null,
+   "x-api-key": "k"
+  },
+  "path": "/v1/messages"
+ },
+ "ws_header_and_param": {
+  "body": {
+   "max_tokens": 64,
+   "messages": [
+    {
+     "content": "Hello",
+     "role": "user"
+    }
+   ],
+   "model": "claude-sonnet-4-5",
+   "stream": false
+  },
+  "headers": {
+   "anthropic-beta": null,
+   "anthropic-version": "2023-06-01",
+   "anthropic-workspace-id": "ws-1",
+   "authorization": null,
+   "x-api-key": "k"
+  },
+  "path": "/v1/messages"
+ },
+ "ws_int": {
+  "body": {
+   "max_tokens": 64,
+   "messages": [
+    {
+     "content": "Hello",
+     "role": "user"
+    }
+   ],
+   "model": "claude-sonnet-4-5",
+   "stream": false
+  },
+  "headers": {
+   "anthropic-beta": null,
+   "anthropic-version": "2023-06-01",
+   "anthropic-workspace-id": "123",
+   "authorization": null,
+   "x-api-key": "k"
+  },
+  "path": "/v1/messages"
+ }
+}

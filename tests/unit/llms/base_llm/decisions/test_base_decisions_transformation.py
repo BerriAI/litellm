@@ -12,6 +12,7 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.decisions.transformation import (
     BaseDecisionsConfig,
     DecisionsInputLimits,
+    DecisionsResponseValidationError,
     ir_to_systemone_request,
     ir_to_systemone_response,
     parse_systemone_response,
@@ -21,12 +22,12 @@ from litellm.llms.openai.decisions.transformation import openai_request_to_ir
 from litellm.llms.typesafe.decisions.transformation import TypeSafeDecisionsConfig
 from litellm.types.decisions import (
     MAX_DECISION_QUESTIONS,
+    DecisionsIRChoiceAnswer,
     DecisionsIRRefusal,
     DecisionsIRRequest,
     DecisionsIRScoreAnswer,
     DecisionsRequestBody,
     OpenAIDecisionRequestBody,
-    UnsupportedDecisionsRequest,
 )
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
@@ -279,7 +280,7 @@ def test_a_malformed_systemone_response_names_the_field_at_fault(
     assert [item["loc"] for item in error.value.errors()] == [field]
 
 
-def test_each_media_kind_is_gated_by_its_own_support_flag() -> None:
+def test_each_media_kind_is_sent_in_its_own_field() -> None:
     audio: Final = ["data:audio/wav;base64,YQ=="]
     videos: Final = ["data:video/mp4;base64,YQ=="]
     audio_only: Final = systemone_request_to_ir(_SYSTEMONE_BODY.validate_python({**_SYSTEMONE_REQUEST, "audio": audio}))
@@ -287,22 +288,16 @@ def test_each_media_kind_is_gated_by_its_own_support_flag() -> None:
         _SYSTEMONE_BODY.validate_python({**_SYSTEMONE_REQUEST, "videos": videos})
     )
 
-    assert ir_to_systemone_request("clef-omni", audio_only, supports_audio=True) == {
+    assert ir_to_systemone_request("clef-omni", audio_only) == {
         "model": "clef-omni",
         **_SYSTEMONE_REQUEST,
         "audio": audio,
     }
-    assert ir_to_systemone_request("clef-omni", video_only, supports_video=True) == {
+    assert ir_to_systemone_request("clef-omni", video_only) == {
         "model": "clef-omni",
         **_SYSTEMONE_REQUEST,
         "videos": videos,
     }
-    assert isinstance(
-        ir_to_systemone_request("clef-omni", audio_only, supports_video=True), UnsupportedDecisionsRequest
-    )
-    assert isinstance(
-        ir_to_systemone_request("clef-omni", video_only, supports_audio=True), UnsupportedDecisionsRequest
-    )
 
 
 _ASSET_REQUEST: Final[Mapping[str, object]] = {
@@ -352,6 +347,49 @@ def test_a_box_answer_without_confidence_reaches_the_caller_unchanged() -> None:
     response: Final = ir_to_systemone_response(parse_systemone_response(payload, ir), ir)
 
     assert response.model_dump(mode="json") == payload
+
+
+@pytest.mark.parametrize(
+    ("question", "answer"),
+    [
+        (
+            {"type": "choice", "criteria": {"yes": "Yes", "no": "No"}},
+            {"type": "choice", "choice": "yes", "probabilities": {"yes": 0.9, "no": 0.1}},
+        ),
+        (
+            {"type": "score", "criteria": ["low", "high"]},
+            {"type": "score", "score": 0.5, "legend": {"0": "low", "1": "high"}, "probabilities": {"0": 0.5, "1": 0.5}},
+        ),
+    ],
+)
+@pytest.mark.parametrize("confidence", ({}, {"confidence": None}))
+@pytest.mark.parametrize(
+    ("provider", "optional"), (("nace", False), ("fireworks_ai", False), ("parallel_ai", True))
+)
+def test_only_a_provider_without_confidence_may_omit_it(
+    question: Mapping[str, object],
+    answer: Mapping[str, object],
+    confidence: Mapping[str, object],
+    provider: str,
+    optional: bool,
+) -> None:
+    config: Final = ProviderConfigManager.get_provider_decisions_config("decision", LlmProviders(provider))
+    assert config is not None
+    request: Final = systemone_request_to_ir(
+        DecisionsRequestBody.model_validate({"state": {"text": "Example"}, "questions": {"asked": question}})
+    )
+    upstream: Final = httpx.Response(
+        200, json={"mode": "fast", "model": "decision", "answers": {"asked": {**answer, **confidence}}}
+    )
+
+    if optional:
+        parsed: Final = config.transform_decisions_response("decision", provider, upstream, request)
+        assert isinstance(parsed.answers[0], (DecisionsIRChoiceAnswer, DecisionsIRScoreAnswer))
+        assert parsed.answers[0].confidence is None
+        return
+    with pytest.raises(DecisionsResponseValidationError) as raised:
+        config.transform_decisions_response("decision", provider, upstream, request)
+    assert raised.value.status_code == 500
 
 
 @pytest.mark.parametrize("provider", ("nace", "openrouter", "fireworks_ai", "typesafe"))

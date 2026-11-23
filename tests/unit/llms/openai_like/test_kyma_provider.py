@@ -410,8 +410,12 @@ def test_cost_headers_show_the_discount_and_margin_taken_from_the_cost_kyma_repo
     assert float(headers["x-litellm-response-cost-discount-amount"] or "nan") == pytest.approx(0.004)
     assert float(headers["x-litellm-response-cost-margin-amount"] or "nan") == pytest.approx(0.0004)
     assert float(headers["x-litellm-response-cost"] or "nan") == pytest.approx(0.0044)
-    assert float(headers["x-litellm-response-cost-input"] or "nan") == 0.0
-    assert float(headers["x-litellm-response-cost-output"] or "nan") == pytest.approx(0.0044)
+    row: Final = litellm.get_model_info("sonar", custom_llm_provider="kyma")
+    priced_input: Final = 4 * row["input_cost_per_token"]
+    priced_output: Final = 3 * row["output_cost_per_token"]
+    input_share: Final = priced_input / (priced_input + priced_output)
+    assert float(headers["x-litellm-response-cost-input"] or "nan") == pytest.approx(0.0044 * input_share)
+    assert float(headers["x-litellm-response-cost-output"] or "nan") == pytest.approx(0.0044 * (1 - input_share))
 
 
 @pytest.mark.parametrize("thinking", ({"type": "enabled", "budget_tokens": 1024}, {"type": "adaptive"}))
