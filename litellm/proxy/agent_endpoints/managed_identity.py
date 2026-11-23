@@ -16,7 +16,7 @@ from litellm.types.proxy.agent_identity import (
     EntraIdentityConfig,
 )
 
-_MODE: Final = TypeAdapter(AgentExecutionMode)
+_MODE: Final[TypeAdapter[AgentExecutionMode]] = TypeAdapter(AgentExecutionMode)
 
 
 class IdentityFields(TypedDict, total=False):
