@@ -95,7 +95,9 @@ class LensTraceStorage:
 
     async def query(self, query: ReadQuery[ParamsT, RowT], parameters: ParamsT) -> tuple[RowT, ...]:
         validated: Final = query.parameters.model_validate(parameters)
-        result: Final = await self._remote.query(query.name, QUERY_PARAMETERS.validate_python(validated.model_dump()))
+        result: Final = await self._remote.query(
+            query.name, QUERY_PARAMETERS.validate_python(validated.model_dump(exclude_unset=True))
+        )
         return _decode_query_response(query.response, result).data
 
     async def query_sql(self, sql: str, scope: QueryScope, secret: str) -> TraceSQLResponse:

@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Final
 
@@ -15,6 +16,14 @@ from litellm.integrations.lens.storage import LensTraceStorage
 from litellm.integrations.lens.types import TraceAgent, TraceAgentList
 
 
+def _agent_filters(scope: TraceScope) -> Mapping[str, str]:
+    filters: Final = {
+        "filter_team_id": scope.get("filter_team_id", ""),
+        "filter_api_key_hash": scope.get("filter_api_key_hash", ""),
+    }
+    return {name: value for name, value in filters.items() if value}
+
+
 class TraceReceiver:
     def __init__(self, storage: LensTraceStorage) -> None:
         self.storage: Final = storage
@@ -28,11 +37,10 @@ class TraceReceiver:
                 all_teams=scope["all_teams"],
                 user_id=scope["user_id"],
                 team_ids=tuple(scope["team_ids"]),
-                filter_team_id=scope.get("filter_team_id", ""),
-                filter_api_key_hash=scope.get("filter_api_key_hash", ""),
                 start_ms=start_ms,
                 end_ms=end_ms,
                 limit=AGENT_TRACING_AGENT_LIST_LIMIT,
+                **_agent_filters(scope),
             )
         )
         return TraceAgentList(
