@@ -1,5 +1,5 @@
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Final, Protocol, TypeAlias, runtime_checkable
 
 import litellm
@@ -51,11 +51,18 @@ def response_done_usage(event: Mapping[str, object]) -> Usage | None:
     return converted if converted.total_tokens or converted.prompt_tokens or converted.completion_tokens else None
 
 
-@dataclass(frozen=True, slots=True)
+def _response_id(event: Mapping[str, object]) -> str | None:
+    response: Final = as_str_mapping(event.get("response"))
+    response_id: Final = None if response is None else response.get("id")
+    return response_id if isinstance(response_id, str) and response_id else None
+
+
+@dataclass(slots=True)
 class RealtimeTurnLimits:
     limiters: tuple[RealtimeTurnLimiter, ...]
     user_api_key_dict: UserAPIKeyAuth
     requested_model: str
+    _charged_response_ids: frozenset[str] = field(default=frozenset(), init=False)
 
     async def refusal(self) -> str | None:
         try:
@@ -74,6 +81,11 @@ class RealtimeTurnLimits:
         usage: Final = response_done_usage(event)
         if usage is None:
             return
+        response_id: Final = _response_id(event)
+        if response_id in self._charged_response_ids:
+            return
+        if response_id is not None:
+            self._charged_response_ids = self._charged_response_ids | {response_id}
         try:
             for limiter in self.limiters:
                 await limiter.charge_realtime_turn_usage(self.user_api_key_dict, self.requested_model, usage)

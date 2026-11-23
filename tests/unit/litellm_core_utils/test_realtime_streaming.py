@@ -6683,6 +6683,28 @@ async def test_a_backend_started_response_over_the_tpm_limit_is_cancelled_upstre
 
 
 @pytest.mark.asyncio
+async def test_a_response_the_provider_reports_done_twice_counts_once_toward_the_tpm_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LITELLM_TPM_TOKEN_RESERVATION_ENABLED", "false")
+    session: Final = await _turn_limited_session(
+        backend_frames=(
+            _response_done(300, "resp_1"),
+            _response_done(300, "resp_1"),
+            _response_done(200, "resp_2"),
+        ),
+        auth_limits={"tpm_limit": _TURN_TPM_LIMIT},
+    )
+    key: Final = session.auth.api_key or ""
+    counted_at_open: Final = session.tokens_counted("api_key", key)
+
+    await session.streaming.backend_to_client_send_messages()
+
+    assert session.tokens_counted("api_key", key) - counted_at_open == 500
+    assert [event["type"] for event in session.sent_to_client()].count("response.done") == 3
+
+
+@pytest.mark.asyncio
 async def test_a_session_that_only_listens_to_a_call_counts_its_turns_and_sends_no_cancel_into_it_over_the_limit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
