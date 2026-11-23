@@ -616,6 +616,7 @@ if MCP_AVAILABLE:
         disabled_capabilities,
         disabled_operations,
     )
+    from litellm.proxy.mcp_server.events.handlers import events_gate, gated_events_method, register_event_handlers
     from litellm.proxy.mcp_server.mcp_server_manager import (
         MCPServerManager,
         global_mcp_server_manager,
@@ -678,7 +679,9 @@ if MCP_AVAILABLE:
     def _sdk_rejection_code(ctx: ServerRequestContext, error: MCPError | ValidationError) -> int | None:
         if ctx.request_id is None:
             return None
-        entry: Final = server.get_request_handler(ctx.method)
+        entry: Final = (
+            None if gated_events_method(ctx, _mcp_proxy_mode.get()) else server.get_request_handler(ctx.method)
+        )
         if entry is None:
             if ctx.method == "initialize":
                 return None
@@ -723,7 +726,9 @@ if MCP_AVAILABLE:
                 verbose_logger.warning("Failed to log MCP SDK rejection")
             raise
 
-    server.middleware.extend((finish_scope_response, GatewayVersionPolicy(), _log_sdk_rejection))
+    server.middleware.extend(
+        (finish_scope_response, GatewayVersionPolicy(), _log_sdk_rejection, events_gate(_mcp_proxy_mode.get))
+    )
     server.create_initialization_options = types.MethodType(_gateway_create_initialization_options, server)
     sse: Final[SseServerTransport] = SseServerTransport("/sse/messages")
 
@@ -1198,6 +1203,9 @@ if MCP_AVAILABLE:
     server.add_request_handler("resources/list", PaginatedRequestParams, list_resources)
     server.add_request_handler("resources/templates/list", PaginatedRequestParams, list_resource_templates)
     server.add_request_handler("resources/read", ReadResourceRequestParams, read_resource)
+    register_event_handlers(
+        server, lambda ctx: _legacy_operation_context(ctx, trace=False), _subscription_authorization
+    )
 
     ########################################################
     ############ End of MCP Server Routes ##################
