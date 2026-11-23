@@ -1040,6 +1040,42 @@ def test_vertex_ai_fable_5_1_response_format_uses_native_output_format(local_mod
     assert "tools" not in result_params
 
 
+@pytest.mark.parametrize(
+    "model",
+    (
+        "claude-sonnet-5-5",
+        "claude-sonnet-5-5@default",
+        "claude-fable-5",
+        "claude-fable-5@default",
+    ),
+)
+def test_vertex_ai_sonnet_fable_5_response_format_uses_native_output_format(
+    local_model_cost_map: None, model: str
+) -> None:
+    """Regression (#53521): Sonnet 5.5 / Fable 5 advertise native structured
+    output in the model cost map, so ``response_format`` must map to
+    ``output_format`` instead of the tool-based path's forced tool_choice."""
+    config = VertexAIAnthropicConfig()
+    response_format = {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "test_schema",
+            "schema": {"type": "object", "properties": {"result": {"type": "string"}}},
+        },
+    }
+
+    result_params = config.map_openai_params(
+        non_default_params={"response_format": response_format},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    assert "output_format" in result_params
+    assert "tool_choice" not in result_params
+    assert "tools" not in result_params
+
+
 def _is_tool_based_vertex_claude_rejecting_forced_tools(info: Mapping[str, object]) -> bool:
     return (
         info.get("litellm_provider") == "vertex_ai-anthropic_models"
