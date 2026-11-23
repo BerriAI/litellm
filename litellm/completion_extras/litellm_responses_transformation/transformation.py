@@ -1431,12 +1431,12 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         self,
         model: str,
         messages: list["AllMessageValues"],
-        optional_params: dict[str, object],
+        optional_params: dict,
         litellm_params: dict[str, object],
-        headers: dict[str, object],
+        headers: dict,
         litellm_logging_obj: "LiteLLMLoggingObj",
         client: object | None = None,
-    ) -> dict[str, object]:
+    ) -> dict:
         request_params: Final = cast("Mapping[str, object]", optional_params)  # cast-ok: untyped dict
         sent_params: Final = (
             request_params,
@@ -1816,10 +1816,10 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         raw_response: "BaseModel",
         model_response: "ModelResponse",
         logging_obj: object,
-        request_data: dict[str, object],
+        request_data: dict,
         messages: list["AllMessageValues"],
-        optional_params: dict[str, object],
-        litellm_params: dict[str, object],
+        optional_params: dict,
+        litellm_params: dict,
         encoding: object,
         api_key: str | None = None,
         json_mode: bool | None = None,

@@ -30,10 +30,10 @@ class FalAIFluxProV11Config(FalAIFluxProV11UltraConfig):
     def map_openai_params(
         self,
         non_default_params: Mapping[str, object],
-        optional_params: dict[str, object],
+        optional_params: dict,
         model: str,
         drop_params: bool,
-    ) -> dict[str, object]:
+    ) -> dict:
         """
         Override size handling to map to Flux Pro v1.1 image_size enums/object.
         """
