@@ -22,16 +22,7 @@ def _key_was_scim_blocked(metadata: object) -> bool:
 
 
 async def set_user_keys_blocked(user_id: str, blocked: bool) -> int:
-    """
-    Block or unblock virtual keys owned by a user and invalidate them in the
-    in-memory/redis caches so the change takes effect immediately.
-
-    Each key this blocks is tagged with ``metadata.scim_blocked = True``. On
-    reactivation only keys carrying that marker are unblocked, so a key an admin
-    blocked manually for unrelated reasons is left alone.
-
-    Returns the number of keys whose state was flipped.
-    """
+    """Unblocks only keys carrying the scim_blocked marker, so keys an admin blocked by hand stay blocked."""
     from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
 
     if prisma_client is None:
