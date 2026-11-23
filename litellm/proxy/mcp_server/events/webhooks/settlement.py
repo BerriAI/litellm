@@ -28,7 +28,7 @@ async def settle_delivery(
             WHERE id = $1 AND generation = $2 AND ($3::boolean OR status IN ('active', 'suspended')) FOR UPDATE""",
             delivery.subscription_id,
             generation,
-            outcome == "discarded",
+            outcome == "discarded" and not gap,
             model=GapEnvelope,
         )
         if not locked:
@@ -66,15 +66,15 @@ async def settle_delivery(
                 at.isoformat(),
                 SUSPEND_AFTER_FAILURES,
             )
-            if gap:
-                gap_id: Final = f"msg_gap_{delivery.delivery_id}"
-                await tx.execute_raw(
-                    """INSERT INTO "LiteLLM_MCPEventDelivery"
-                    (delivery_id, subscription_id, webhook_id, body, next_attempt_at, prepared)
-                    VALUES ($1, $2, $1, $3, $4::timestamp, true)""",
-                    gap_id,
-                    delivery.subscription_id,
-                    locked[0].model_dump_json(),
-                    at.isoformat(),
-                )
+        if gap and outcome not in ("delivered", "terminated"):
+            gap_id: Final = f"msg_gap_{delivery.delivery_id}"
+            await tx.execute_raw(
+                """INSERT INTO "LiteLLM_MCPEventDelivery"
+                (delivery_id, subscription_id, webhook_id, body, next_attempt_at, prepared)
+                VALUES ($1, $2, $1, $3, $4::timestamp, true)""",
+                gap_id,
+                delivery.subscription_id,
+                locked[0].model_dump_json(),
+                at.isoformat(),
+            )
     return True
