@@ -536,6 +536,17 @@ def test_usage_helpers() -> None:
     assert tracker.cost == pytest.approx(0.3)
 
 
+def test_sse_usage_parser_counts_usage_past_a_data_line_nested_too_deep_to_decode() -> None:
+    deep_line: Final = b"event: ping\ndata: " + b"[" * 100_000 + b"]" * 100_000 + b"\n\n"
+    message_start_end: Final = ANTHROPIC_SSE.index(b"event: content_block_delta")
+    parser: Final = SSEUsageParser()
+
+    parser.feed(ANTHROPIC_SSE[:message_start_end] + deep_line + ANTHROPIC_SSE[message_start_end:])
+    parser.close()
+
+    assert (parser.input_tokens, parser.output_tokens) == (11, 7)
+
+
 def test_compute_cost_keeps_failed_price_lookups_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(**kwargs: Any) -> Any:
         raise ValueError("unknown model")

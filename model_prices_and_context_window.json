@@ -14368,6 +14368,7 @@
         "input_cost_per_token": 1.25e-06,
         "input_cost_per_token_above_200k_tokens": 2.5e-06,
         "litellm_provider": "azure_ai",
+        "token_count_tool_framing": 27,
         "max_input_tokens": 200000,
         "max_output_tokens": 8192,
         "mode": "chat",
@@ -14454,6 +14455,10 @@
         "input_cost_per_token": 2e-07,
         "output_cost_per_token": 5e-07,
         "litellm_provider": "azure_ai",
+        "token_count_framing": 161,
+        "token_count_tool_framing": 314,
+        "token_count_responses_framing": 167,
+        "token_count_responses_tool_framing": 183,
         "max_input_tokens": 128000,
         "max_output_tokens": 128000,
         "mode": "chat",
@@ -44370,6 +44375,7 @@
         "supports_system_messages": true,
         "supports_native_structured_output": true,
         "supports_response_schema": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "mistral.ministral-3-3b-instruct": {
@@ -44391,6 +44397,7 @@
         "supports_system_messages": true,
         "supports_native_structured_output": true,
         "supports_response_schema": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "mistral.ministral-3-8b-instruct": {
@@ -44412,6 +44419,7 @@
         "supports_system_messages": true,
         "supports_native_structured_output": true,
         "supports_response_schema": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "mistral.mistral-7b-instruct-v0:2": {
@@ -44467,6 +44475,7 @@
         "supports_system_messages": true,
         "supports_native_structured_output": true,
         "supports_response_schema": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "mistral.mistral-small-2402-v1:0": {
@@ -57617,6 +57626,8 @@
         "input_cost_per_token": 1.25e-06,
         "input_cost_per_token_above_200k_tokens": 2.5e-06,
         "litellm_provider": "vertex_ai",
+        "token_count_framing": 328,
+        "token_count_tool_framing": 372,
         "max_input_tokens": 200000,
         "max_output_tokens": 200000,
         "mode": "chat",
@@ -58564,6 +58575,8 @@
         "input_cost_per_token_above_200k_tokens_batches": 2e-06,
         "input_cost_per_token_batches": 1e-06,
         "litellm_provider": "xai",
+        "token_count_framing": 185,
+        "token_count_tool_framing": 214,
         "max_input_tokens": 1000000,
         "max_output_tokens": 1000000,
         "mode": "chat",
@@ -65451,6 +65464,8 @@
         "input_cost_per_token_flex": 6.25e-07,
         "input_cost_per_token_priority": 2.1875e-06,
         "litellm_provider": "bedrock_mantle",
+        "token_count_framing": 23,
+        "token_count_tool_framing": 216,
         "max_input_tokens": 1048576,
         "max_output_tokens": 16384,
         "mode": "chat",
@@ -74033,6 +74048,8 @@
     "bedrock_mantle/us-gov-west-1/xai.grok-4.3": {
         "use_openai_responses_path": true,
         "litellm_provider": "bedrock_mantle",
+        "token_count_framing": 23,
+        "token_count_tool_framing": 216,
         "max_input_tokens": 1048576,
         "max_output_tokens": 16384,
         "mode": "chat",
@@ -75953,6 +75970,8 @@
     },
     "perplexity/xai/grok-4.3": {
         "litellm_provider": "perplexity",
+        "token_count_framing": 204,
+        "token_count_tool_framing": 340,
         "mode": "responses",
         "supports_web_search": true,
         "supports_function_calling": true,
@@ -86841,6 +86860,8 @@
         "input_cost_per_token_above_200k_tokens": 3.375e-06,
         "output_cost_per_token_above_200k_tokens": 6.75e-06,
         "litellm_provider": "kyma",
+        "token_count_framing": 185,
+        "token_count_tool_framing": 214,
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
@@ -101827,11 +101848,13 @@
     },
     "fal_ai/blackforestlabs/flux-3-max/image-to-video": {
         "litellm_provider": "fal_ai",
-        "metadata": {"comment":"per second of generated video by resolution; output_cost_per_second is the default resolution 720p rate; promotional 50% off rate through 2026-11-22 23:59 UTC per the page; regular rates $0.17 (720p) and $0.29 (1080p) per second resume 2026-11-23 00:00 UTC (ruling fal-ai-promotional-rates-apply-until-promotion-ends, 2026-11-10)"},
+        "metadata": {"comment":"per second of generated video by resolution; output_cost_per_second is the default resolution 720p rate"},
         "mode": "video_generation",
-        "output_cost_per_second": 0.085,
-        "output_cost_per_second_1080p": 0.145,
-        "output_cost_per_second_720p": 0.085,
+        "output_cost_per_second": 0.17,
+        "output_cost_per_second_1080p": 0.29,
+        "output_cost_per_second_2k": 0.4,
+        "output_cost_per_second_4k": 0.8,
+        "output_cost_per_second_720p": 0.17,
         "source": "https://fal.ai/models/blackforestlabs/flux-3-max/image-to-video",
         "supported_endpoints": [
             "/v1/videos"
@@ -101846,11 +101869,13 @@
     },
     "fal_ai/blackforestlabs/flux-3-max/text-to-video": {
         "litellm_provider": "fal_ai",
-        "metadata": {"comment":"per second of generated video by resolution; output_cost_per_second is the default resolution 720p rate; promotional 50% off rate through 2026-11-22 23:59 UTC per the page; regular rates $0.17 (720p) and $0.29 (1080p) per second resume 2026-11-23 00:00 UTC (ruling fal-ai-promotional-rates-apply-until-promotion-ends, 2026-11-10)"},
+        "metadata": {"comment":"per second of generated video by resolution; output_cost_per_second is the default resolution 720p rate"},
         "mode": "video_generation",
-        "output_cost_per_second": 0.085,
-        "output_cost_per_second_1080p": 0.145,
-        "output_cost_per_second_720p": 0.085,
+        "output_cost_per_second": 0.17,
+        "output_cost_per_second_1080p": 0.29,
+        "output_cost_per_second_2k": 0.4,
+        "output_cost_per_second_4k": 0.8,
+        "output_cost_per_second_720p": 0.17,
         "source": "https://fal.ai/models/blackforestlabs/flux-3-max/text-to-video",
         "supported_endpoints": [
             "/v1/videos"
@@ -101864,13 +101889,13 @@
     },
     "fal_ai/blackforestlabs/flux-3-max/keyframes-to-video": {
         "litellm_provider": "fal_ai",
-        "metadata": {
-            "comment": "per second of generated video by resolution; output_cost_per_second is the default resolution 720p rate; promotional 50% off rate through 2026-11-22 23:59 UTC per the page; regular rates $0.17 (720p) and $0.29 (1080p) per second resume 2026-11-23 00:00 UTC (ruling fal-ai-promotional-rates-apply-until-promotion-ends, 2026-11-10)"
-        },
+        "metadata": {"comment":"per second of generated video by resolution; output_cost_per_second is the default resolution 720p rate"},
         "mode": "video_generation",
-        "output_cost_per_second": 0.085,
-        "output_cost_per_second_1080p": 0.145,
-        "output_cost_per_second_720p": 0.085,
+        "output_cost_per_second": 0.17,
+        "output_cost_per_second_1080p": 0.29,
+        "output_cost_per_second_2k": 0.4,
+        "output_cost_per_second_4k": 0.8,
+        "output_cost_per_second_720p": 0.17,
         "source": "https://fal.ai/models/blackforestlabs/flux-3-max/keyframes-to-video",
         "supported_endpoints": [
             "/v1/videos"
@@ -109285,6 +109310,7 @@
         "supports_native_structured_output": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "bedrock/ap-northeast-1/mistral.ministral-3-3b-instruct": {
@@ -109304,6 +109330,7 @@
         "supports_native_structured_output": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "bedrock/ap-northeast-1/mistral.ministral-3-8b-instruct": {
@@ -109323,6 +109350,7 @@
         "supports_native_structured_output": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "bedrock/ap-northeast-1/mistral.mistral-large-3-675b-instruct": {
@@ -109342,6 +109370,7 @@
         "supports_native_structured_output": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "bedrock/ap-northeast-1/moonshot.kimi-k2-thinking": {
@@ -110045,6 +110074,7 @@
         "supports_native_structured_output": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "bedrock/ap-south-1/mistral.ministral-3-3b-instruct": {
@@ -110064,6 +110094,7 @@
         "supports_native_structured_output": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "bedrock/ap-south-1/mistral.ministral-3-8b-instruct": {
@@ -110083,6 +110114,7 @@
         "supports_native_structured_output": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "bedrock/ap-south-1/mistral.mistral-7b-instruct-v0:2": {
@@ -110125,6 +110157,7 @@
         "supports_native_structured_output": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "bedrock/ap-south-1/mistral.mixtral-8x7b-instruct-v0:1": {
@@ -112494,6 +112527,7 @@
         "supports_native_structured_output": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "bedrock/eu-south-1/mistral.ministral-3-3b-instruct": {
@@ -112513,6 +112547,7 @@
         "supports_native_structured_output": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "bedrock/eu-south-1/mistral.ministral-3-8b-instruct": {
@@ -112532,6 +112567,7 @@
         "supports_native_structured_output": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "bedrock/eu-south-1/mistral.voxtral-mini-3b-2507": {
@@ -113426,6 +113462,7 @@
         "supports_native_structured_output": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "bedrock/eu-west-1/mistral.ministral-3-3b-instruct": {
@@ -113445,6 +113482,7 @@
         "supports_native_structured_output": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "bedrock/eu-west-1/mistral.ministral-3-8b-instruct": {
@@ -113464,6 +113502,7 @@
         "supports_native_structured_output": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "bedrock/eu-west-1/mistral.mistral-7b-instruct-v0:2": {
@@ -114083,6 +114122,7 @@
         "supports_native_structured_output": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "bedrock/eu-west-2/mistral.ministral-3-3b-instruct": {
@@ -114102,6 +114142,7 @@
         "supports_native_structured_output": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "bedrock/eu-west-2/mistral.ministral-3-8b-instruct": {
@@ -114121,6 +114162,7 @@
         "supports_native_structured_output": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "bedrock/eu-west-2/mistral.mistral-7b-instruct-v0:2": {
@@ -115001,6 +115043,7 @@
         "supports_native_structured_output": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "bedrock/sa-east-1/mistral.ministral-3-3b-instruct": {
@@ -115020,6 +115063,7 @@
         "supports_native_structured_output": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "bedrock/sa-east-1/mistral.ministral-3-8b-instruct": {
@@ -115039,6 +115083,7 @@
         "supports_native_structured_output": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "bedrock/sa-east-1/mistral.mistral-7b-instruct-v0:2": {
@@ -115081,6 +115126,7 @@
         "supports_native_structured_output": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "bedrock/sa-east-1/mistral.mixtral-8x7b-instruct-v0:1": {
