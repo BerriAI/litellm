@@ -64,7 +64,7 @@ def _is_v25(model: str) -> bool:
     if litellm.utils.get_model_cost_key(f"gnani/{name}") is None:
         return name == _V25_MODEL
     flags: Final = litellm.get_model_info(model=name, custom_llm_provider="gnani").get("provider_specific_entry")
-    return flags is not None and flags.get(_V25_FIELDS_FLAG) == 1
+    return name == _V25_MODEL if flags is None else flags.get(_V25_FIELDS_FLAG) == 1
 
 
 def _normalized_hint(hint: str) -> str:
