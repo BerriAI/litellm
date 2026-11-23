@@ -142,7 +142,15 @@ class InMemoryCache(BaseCache):
                 break
 
         if len(self.expiration_heap) > 2 * self.max_size_in_memory:
-            self.expiration_heap = [entry for entry in self.expiration_heap if self.ttl_dict.get(entry[1]) == entry[0]]
+            # Keep only one current expiry entry per key. Distinct writes can
+            # produce identical timestamps (for example, very large TTLs),
+            # so comparing only the timestamp would preserve duplicate entries.
+            valid_entries = {
+                key: (expiration_time, key)
+                for expiration_time, key in self.expiration_heap
+                if self.ttl_dict.get(key) == expiration_time
+            }
+            self.expiration_heap = list(valid_entries.values())
             heapq.heapify(self.expiration_heap)
 
         # Step 2: Evict if cache is still full
