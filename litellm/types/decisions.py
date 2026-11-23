@@ -6,7 +6,7 @@ from typing import Annotated, Final, Literal, TypeAlias
 from pydantic import AfterValidator, ConfigDict, Field, PrivateAttr, field_validator, model_validator, with_config
 from typing_extensions import ReadOnly, Required, TypedDict
 
-from litellm.types.llms.base import LiteLLMPydanticObjectBase
+from litellm.types.llms.base import LiteLLMPydanticObjectBase, StrAsGiven
 
 DecisionsJSON: TypeAlias = str | Mapping[str, object] | Sequence[object]
 NoulCriteria: TypeAlias = Mapping[Literal["true", "false"], DecisionsJSON | None]
@@ -193,7 +193,7 @@ class DecisionsCallParams(TypedDict, total=False):
     assets: ReadOnly[DecisionsAssets | None]
     audio: ReadOnly[Sequence[DecisionsAudio]]
     videos: ReadOnly[Sequence[DecisionsVideo]]
-    api_key: ReadOnly[str | None]
+    api_key: ReadOnly[StrAsGiven | None]
     api_base: ReadOnly[str | None]
     timeout: ReadOnly[float | None]
     custom_llm_provider: ReadOnly[str | None]
@@ -636,6 +636,7 @@ class DecisionsIRRequest:
     assets: Mapping[str, DecisionsAsset] = field(default_factory=lambda: _NO_ASSETS)
     audio: tuple[DecisionsAudio, ...] = ()
     videos: tuple[DecisionsVideo, ...] = ()
+    drop_params: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -711,6 +712,7 @@ class DecisionsIRResponse:
     answers: tuple[DecisionsIRAnswer, ...]
     usage: DecisionsIRUsage | None
     extra: Mapping[str, object] = field(default_factory=lambda: _NO_EXTRA)
+    reported_cost: float | None = None
 
 
 @dataclass(frozen=True, slots=True)

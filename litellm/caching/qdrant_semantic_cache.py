@@ -11,6 +11,7 @@ Has 4 methods:
 import ast
 import asyncio
 import os
+from collections.abc import Iterable, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Protocol
 
@@ -196,7 +197,7 @@ class QdrantSemanticCache(BaseCache):
                 ast.literal_eval(cached_response)  # pyright: ignore[reportArgumentType]  # raises its own ValueError
             )
 
-    def _get_qdrant_cache_key_filter(self, key: str) -> dict:
+    def _get_qdrant_cache_key_filter(self, key: str) -> dict[str, object]:
         return {
             "must": [
                 {
@@ -206,7 +207,7 @@ class QdrantSemanticCache(BaseCache):
             ]
         }
 
-    def _add_cache_key_filter_to_search_data(self, data: dict, key: str) -> None:
+    def _add_cache_key_filter_to_search_data(self, data: dict[str, object], key: str) -> None:
         data["filter"] = self._get_qdrant_cache_key_filter(key)
 
     def _ensure_cache_key_payload_index(self) -> None:
@@ -295,7 +296,7 @@ class QdrantSemanticCache(BaseCache):
         )
         return await asyncio.wait_for(embedding_call, self.embedding_timeout)
 
-    def set_cache(self, key, value, **kwargs):
+    def set_cache(self, key: object, value: object, **kwargs):
         print_verbose(f"qdrant semantic-cache set_cache, kwargs: {kwargs}")
         from litellm._uuid import uuid
 
@@ -332,7 +333,7 @@ class QdrantSemanticCache(BaseCache):
             json=data,
         )
 
-    def get_cache(self, key, **kwargs):
+    def get_cache(self, key: str, **kwargs):
         print_verbose(f"sync qdrant semantic-cache get_cache, kwargs: {kwargs}")
 
         # get the messages
@@ -402,7 +403,7 @@ class QdrantSemanticCache(BaseCache):
             # cache miss !
             return None
 
-    async def async_set_cache(self, key, value, **kwargs):
+    async def async_set_cache(self, key: object, value: object, **kwargs):
         from litellm._uuid import uuid
 
         print_verbose(f"async qdrant semantic-cache set_cache, kwargs: {kwargs}")
@@ -439,7 +440,7 @@ class QdrantSemanticCache(BaseCache):
             json=data,
         )
 
-    async def async_get_cache(self, key, **kwargs):
+    async def async_get_cache(self, key: str, **kwargs):
         print_verbose(f"async qdrant semantic-cache get_cache, kwargs: {kwargs}")
 
         # get the messages
@@ -512,7 +513,7 @@ class QdrantSemanticCache(BaseCache):
     async def _collection_info(self):
         return self.collection_info
 
-    async def async_set_cache_pipeline(self, cache_list, **kwargs):
+    async def async_set_cache_pipeline(self, cache_list: Iterable[Sequence[object]], **kwargs):
         tasks: Final = []
         for val in cache_list:
             tasks.append(self.async_set_cache(val[0], val[1], **kwargs))

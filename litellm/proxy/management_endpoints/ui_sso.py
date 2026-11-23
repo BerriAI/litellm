@@ -154,6 +154,7 @@ from litellm.proxy.utils import (
     get_custom_url,
     get_server_root_path,
 )
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import SSOConfigRepository
@@ -454,7 +455,7 @@ def _get_cli_sso_flow_or_raise(login_id: str | None, cache: DualCache) -> dict:
 
 
 @with_service_target(CLI_SSO_SESSIONS_TARGET)
-def _set_cli_sso_flow(login_id: str, cache: DualCache, flow: dict) -> None:
+def _set_cli_sso_flow(login_id: str, cache: DualCache, flow: Mapping[str, object]) -> None:
     cache_key: Final = _get_cli_sso_flow_cache_key(login_id)
     redis_cache: Final = cache.redis_cache
     if redis_cache is not None:
@@ -463,7 +464,7 @@ def _set_cli_sso_flow(login_id: str, cache: DualCache, flow: dict) -> None:
         cache.set_cache(key=cache_key, value=flow, ttl=CLI_SSO_SESSION_TTL_SECONDS)
 
 
-def _verify_cli_sso_poll_secret(flow: dict, poll_secret: str | None) -> bool:
+def _verify_cli_sso_poll_secret(flow: Mapping[str, object], poll_secret: str | None) -> bool:
     expected_poll_secret_hash: Final = flow.get("poll_secret_hash")
     if not isinstance(expected_poll_secret_hash, str) or not isinstance(poll_secret, str):
         return False
@@ -1269,14 +1270,17 @@ async def google_login(
     # No SSO: sign in on the dashboard login page. return_to is kept in the same one-shot cookie the
     # SSO branch uses and honoured by /login/resume, which a browser that is already signed in goes
     # to directly, since the login page would send it to the dashboard and drop the return_to.
-    from litellm.proxy.mcp_server.byok_oauth_endpoints import session_identity_from_cookie
+    from litellm.proxy.mcp_server.byok_oauth_endpoints import get_authenticated_browser_user_id
 
     base_url: Final = get_custom_url(str(request.base_url)).rstrip("/")
-    signed_in: Final = session_identity_from_cookie(request)[0] is not None
+    signed_in: Final = await get_authenticated_browser_user_id(request) is not None
     login_response: Final = RedirectResponse(
         url=f"{base_url}/login/resume" if signed_in and return_to is not None else f"{base_url}/ui/login",
         status_code=303,
     )
+    if return_to is not None and not signed_in:
+        login_response.delete_cookie("token")
+        login_response.delete_cookie("token", path=f"{get_server_root_path().rstrip('/')}/ui")
     _persist_return_to_cookie(login_response, return_to, request)
     return login_response
 
@@ -1587,7 +1591,7 @@ def _handle_generic_sso_error(
     e: Exception,
     generic_authorization_endpoint: str | None,
     generic_token_endpoint: str | None,
-    additional_headers: dict,
+    additional_headers: object,
 ) -> NoReturn:
     """Handle errors from generic SSO verify_and_process. Always re-raises."""
     error_message: Final = str(e)
@@ -2240,11 +2244,12 @@ async def _sync_user_role_from_jwt_role_map(
             data={"user_role": mapped_role.value},
         )
         user_info.user_role = mapped_role.value
-        await user_api_key_cache.async_set_cache(
-            key=user_info.user_id,
-            value=user_info,
-            model_type=LiteLLM_UserTable,
-        )
+        if user_info.user_id is not None:
+            await user_api_key_cache.async_set_cache(
+                key=AuthObject.user(user_info.user_id),
+                value=user_info,
+                model_type=LiteLLM_UserTable,
+            )
 
 
 def apply_user_info_values_to_sso_user_defined_values(
@@ -3335,7 +3340,7 @@ class SSOAuthenticationHandler:
         if control_plane_url is None:
             return False
 
-        def _origin(url: str) -> tuple:
+        def _origin(url: str) -> tuple[str, str, int]:
             parsed: Final = urlparse(url)
             scheme: Final = (parsed.scheme or "").lower()
             hostname: Final = (parsed.hostname or "").lower()

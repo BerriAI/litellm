@@ -196,17 +196,18 @@ class AttachmentRegistry:
         if attachment.is_global():
             return "scope:*"
 
-        reasons: Final = []
-        if attachment.tags and context.tags:
-            matching_tags: Final = [t for t in context.tags if PolicyMatcher.matches_pattern(t, attachment.tags)]
-            if matching_tags:
-                reasons.append(f"tag:{matching_tags[0]}")
-        if attachment.teams and context.team_alias:
-            reasons.append(f"team:{context.team_alias}")
-        if attachment.keys and context.key_alias:
-            reasons.append(f"key:{context.key_alias}")
-        if attachment.models and context.model:
-            reasons.append(f"model:{context.model}")
+        matching_tags: Final = (
+            [t for t in context.tags if PolicyMatcher.matches_pattern(t, attachment.tags)]
+            if attachment.tags and context.tags
+            else []
+        )
+        candidates: Final = (
+            f"tag:{matching_tags[0]}" if matching_tags else None,
+            f"team:{context.team_alias}" if attachment.teams and context.team_alias else None,
+            f"key:{context.key_alias}" if attachment.keys and context.key_alias else None,
+            f"model:{context.model}" if attachment.models and context.model else None,
+        )
+        reasons: Final = [reason for reason in candidates if reason is not None]
 
         return "+".join(reasons) if reasons else "scope:default"
 

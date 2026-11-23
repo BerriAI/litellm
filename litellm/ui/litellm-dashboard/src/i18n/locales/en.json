@@ -1,4 +1,24 @@
 {
+  "lensControls": {
+    "title": "Lens",
+    "tracing": "Tracing",
+    "new": "New",
+    "description": "Tracing · Alerting · Evals",
+    "on": "On",
+    "off": "Off",
+    "open": "Open Lens",
+    "teamDefault": "Default for team keys",
+    "keyInherited": "Uses team setting",
+    "keyCustom": "Custom setting",
+    "useTeam": "Use team setting",
+    "saveFailed": "Lens logging setting could not be saved",
+    "loading": "Loading…",
+    "unknown": "Unknown",
+    "teamUnavailable": "Team Lens setting is unavailable",
+    "statusUnavailable": "Lens connection status is unavailable",
+    "notConfigured": "Configure the gateway’s Lens connection to record traces"
+  },
+
   "apps": {
     "editSettings": "Edit {{alias}}",
     "title": "Applications",
@@ -180,6 +200,43 @@
       "discovered": "{{count}} existing resources found in {{type}}",
       "more": "and {{count}} more",
       "lockHint": "This choice is fixed after a resource has been configured with app budget settings."
+    },
+    "groups": {
+      "title": "App groups",
+      "count_one": "{{count}} app group",
+      "count_other": "{{count}} app groups",
+      "manageBudgetGroups": "Manage app group budget groups",
+      "selectApps": "Select apps",
+      "selectionHint": "Select the apps in this group. Each app belongs to one group. Selecting an app moves it from its previous group and keeps its own budget.",
+      "search": "Search app groups",
+      "noMatches": "No app groups match your search.",
+      "hint": "Share a budget across related apps while keeping each app’s own limits.",
+      "create": "Create app group",
+      "edit": "Edit app group",
+      "empty": "Create an app group and select the apps that belong to it.",
+      "choose": "Select app group",
+      "notFound": "App group not found.",
+      "name": "Group name",
+      "description": "Description",
+      "nameRequired": "Enter a group name.",
+      "customerRequired": "Select a customer organization.",
+      "sharedBudget": "Shared budget",
+      "capHint": "Every request must fit both the group budget and the app’s own limits.",
+      "customerBudget": "Customer budget for app group",
+      "budgetSettings": "App group budget settings",
+      "customer": "Customer organization",
+      "apps": "Apps in this group",
+      "appLimitsHint": "App limits do not reserve funds. All apps share the group’s remaining budget.",
+      "usageHint": "Usage charts show requests attributed to customer organizations. The shared budget covers all requests.",
+      "noApps": "No apps selected. Edit this app group to add apps.",
+      "editApp": "Edit app settings",
+      "customers": "Customer organization budgets",
+      "setCustomerBudget": "Set customer budget",
+      "noCustomers": "No customer usage or budgets yet.",
+      "editBudget": "Edit budget",
+      "parent": "App group",
+      "noGroup": "No app group",
+      "membershipHint": "New requests count toward the selected group. Past usage stays with the group that served it."
     }
   },
   "format": {
@@ -849,7 +906,7 @@
   },
   "vectorStores": {
     "page": {
-      "title": "Vector Store Management",
+      "title": "Vector Stores",
       "lastRefreshed": "Last Refreshed: {{time}}",
       "refresh": "Refresh",
       "description": "You can use vector stores to store and retrieve LLM embeddings.",
@@ -2238,6 +2295,9 @@
         "unavailable": "Not recorded",
         "loading": "Loading download history…",
         "loadFailed": "Could not load download history. Try refreshing.",
+        "downloadCsv": "Download CSV",
+        "exporting": "Exporting...",
+        "exportFailed": "Could not export download history. Try again.",
         "empty": "No authenticated download history yet.",
         "refresh": "Refresh",
         "refreshing": "Refreshing download history…",
@@ -2349,7 +2409,6 @@
       },
       "header": {
         "defaultKeyName": "Virtual Key",
-        "never": "Never",
         "enterpriseOnly": "This is a LiteLLM Enterprise feature, and requires a valid key to use."
       },
       "deleteModal": {
@@ -2386,31 +2445,13 @@
         "overview": "Overview",
         "savings": "Savings",
         "autoRouterUsage": "Auto-router usage",
-        "settings": "Settings"
+        "settings": "Settings",
+        "label": "Key sections",
+        "autoRouterShort": "Router"
       },
       "overview": {
-        "spend": "Spend",
-        "teamMemberSpend": "Team member spend ${{spend}} of ${{maxBudget}} (team member budget)",
-        "ofBudget": "of {{budget}}",
-        "resets": "Resets ",
-        "lifetimeSpend": "Lifetime spend: $",
         "lifetimeSpendHintLabel": "Why lifetime spend is below current spend",
-        "lifetimeSpendHint": "Lifetime tracking started with LiteLLM v1.103.0 on September 19, 2026 and was not backfilled, so this key's lifetime spend only counts usage since that upgrade.",
-        "rateLimits": "Rate Limits",
-        "tpm": "TPM: ",
-        "rpm": "RPM: ",
-        "tpd": "TPD (batch): ",
-        "unlimited": "Unlimited",
-        "throttleOnBudgetExceeded": "Throttle on budget exceeded: Yes",
-        "models": "Models",
-        "noModels": "No models specified",
-        "guardrails": "Guardrails",
-        "noGuardrails": "No guardrails configured",
-        "globalGuardrailsDisabled": "Global Guardrails Disabled",
-        "policies": "Policies",
-        "loadingGuardrails": "Loading guardrails...",
-        "resolvedGuardrails": "Resolved Guardrails:",
-        "noPolicies": "No policies configured"
+        "lifetimeSpendHint": "Lifetime tracking started with LiteLLM v1.103.0 on September 19, 2026 and was not backfilled, so this key's lifetime spend only counts usage since that upgrade."
       },
       "settings": {
         "title": "Key Settings",
@@ -2463,7 +2504,8 @@
         "unlimited": "Unlimited",
         "default": "Default",
         "metadata": "Metadata"
-      }
+      },
+      "keyNotFoundDescription": "No key has the ID in this link. It may have been deleted or regenerated."
     },
     "keyInfoHeader": {
       "backToKeys": "Back to Keys",
@@ -2474,27 +2516,30 @@
         "id": "User ID",
         "copyField": "Copy {{label}}"
       },
-      "regenerateKey": "Regenerate Key",
+      "regenerateKey": "Regenerate key",
       "createNewKey": "Create New Key",
       "copyKeyAlias": "Copy Key Alias",
-      "blocked": "Blocked",
       "keyIdLabel": "Key ID: ",
       "copyKeyId": "Copy Key ID",
       "moreActions": "More key actions",
       "actions": {
-        "unblock": "Unblock Key",
-        "block": "Block Key",
-        "resetSpend": "Reset Spend",
-        "delete": "Delete Key"
+        "unblock": "Unblock key",
+        "block": "Block key",
+        "resetSpend": "Reset spend",
+        "delete": "Delete key"
       },
       "fields": {
-        "expires": "Expires",
-        "createdAt": "Created At",
-        "createdBy": "Created By",
-        "lastUpdated": "Last Updated",
-        "lastActive": "Last Active",
         "team": "Team",
-        "organization": "Organization"
+        "organization": "Organization",
+        "project": "Project"
+      },
+      "noOwner": "Service account, no owner",
+      "secretKey": "Secret key",
+      "status": {
+        "active": "Active",
+        "blocked": "Blocked",
+        "overBudget": "Over budget",
+        "expired": "Expired"
       }
     },
     "keyEditView": {
@@ -2633,6 +2678,195 @@
     },
     "keySavingsTab": {
       "scopeNote": "Showing your own requests on this key. A key shared across a team will have spend from other members that is not counted here."
+    },
+    "overview": {
+      "spend": {
+        "title": "Spend",
+        "openActivity": "Open activity",
+        "thisPeriod": "This period",
+        "spend": "Spend",
+        "periodRange": "{{start}} to {{end}}, resets {{reset}}",
+        "resetsAt": "Resets {{time}}",
+        "neverResets": "Never resets.",
+        "neverResetsNoBudget": "Never resets. No budget on this key.",
+        "lifetime": "Lifetime",
+        "since": "Since {{date}}",
+        "alertsTitle": "Alerts on the key budget",
+        "alertAt": "At ",
+        "alertEmails": ", emails ",
+        "fallbacksTitle": "When a model's own budget runs out",
+        "fallsBackTo": "falls back to"
+      },
+      "canStillSpend": {
+        "title": "Can still spend",
+        "noBudget": "No budget limits this key, so nothing stops its spend.",
+        "unmeasured": "The budgets on this key don't report their spend, so what is left isn't known.",
+        "beforeBlocks": "before {{owner}} blocks this key",
+        "beforeThrottles": "before {{owner}} throttles this key",
+        "usedUp": "{{owner}} is used up",
+        "figures": "{{spend}} of {{limit}}",
+        "usedFigures": ", {{figures}} used",
+        "usedUpFigures": ", {{figures}}",
+        "resetsAt": "Resets {{time}}.",
+        "resetsEvery": "Resets every {{duration}}.",
+        "noReset": "Does not reset.",
+        "owner": {
+          "key": "the key budget",
+          "team": "the {{name}} team budget",
+          "teamMember": "the team member budget for {{name}}",
+          "organization": "the {{name}} organization budget",
+          "user": "the user budget for {{name}}"
+        },
+        "ownerTitle": {
+          "key": "The key budget",
+          "team": "The {{name}} team budget",
+          "teamMember": "The team member budget for {{name}}",
+          "organization": "The {{name}} organization budget",
+          "user": "The user budget for {{name}}"
+        }
+      },
+      "budgets": {
+        "scopes": {
+          "key": "Key budget",
+          "team": "Team budget",
+          "teamMember": "Team member budget",
+          "organization": "Organization budget",
+          "user": "User budget"
+        },
+        "throttlesInstead": "{{scope}}, throttles instead of blocking",
+        "throttled": "Throttled",
+        "blocking": "Blocking requests",
+        "spendNotReported": "Spend is not reported for this budget",
+        "limitOnly": "{{limit}} limit",
+        "ofLimit": " of {{limit}}",
+        "percent": "{{percent}}%",
+        "resetsAt": "Resets {{time}}"
+      },
+      "alerts": {
+        "blockedTitle": "This key is blocked",
+        "blockedDescription": "Requests with this key fail until someone unblocks it.",
+        "unblock": "Unblock",
+        "usedUpTitle": "{{owner}} is used up",
+        "usedUpDescription": "Requests with this key fail until it resets. {{spend}} of {{limit}} spent. {{reset}}",
+        "open": {
+          "team": "Open team",
+          "teamMember": "Open team",
+          "organization": "Open organization",
+          "user": "Open user",
+          "key": "Open key"
+        }
+      },
+      "lifecycle": {
+        "title": "Lifecycle",
+        "created": "Created",
+        "by": "by ",
+        "lastRotated": "Last rotated",
+        "lastUpdated": "Last updated",
+        "lastUsed": "Last used",
+        "never": "Never",
+        "expires": "Expires",
+        "expired": "Expired",
+        "nextRotation": "Next rotation",
+        "notScheduled": "Not scheduled yet",
+        "afterExpiry": "after the key expires",
+        "every": "every {{interval}}",
+        "autoRotation": "Auto-rotation",
+        "off": "Off"
+      },
+      "rateLimits": {
+        "title": "Rate limits",
+        "rpm": "Requests per minute",
+        "tpm": "Tokens per minute",
+        "tpd": "Tokens per day",
+        "parallel": "Parallel requests",
+        "noLimit": "No limit",
+        "perModel": "Per model",
+        "perTag": "Per tag",
+        "model": "Model",
+        "tag": "Tag",
+        "searchModels": "Search models",
+        "searchTags": "Search tags"
+      },
+      "limitTable": {
+        "showAll": "Show all {{count}}",
+        "showFewer": "Show fewer",
+        "noMatch": "Nothing matches “{{query}}”"
+      },
+      "access": {
+        "title": "Access",
+        "models": "Models",
+        "everyTeamModelPrefix": "Every model the ",
+        "everyTeamModelSuffix": " team can use",
+        "everyProxyModel": "Every model the proxy serves",
+        "noModelList": ". No model list on this key.",
+        "moreModels": "+{{count}} more",
+        "searchModels": "Search models",
+        "mcpServers": "MCP servers",
+        "mcpBlocked": "No MCP servers allowed",
+        "mcpAllProxy": "Every MCP server on the proxy",
+        "allowedTools": "Tools allowed on {{name}}",
+        "toolsets": "Toolsets {{toolsets}}",
+        "accessGroups": "Access groups {{groups}}",
+        "vectorStores": "Vector stores",
+        "agents": "Agents",
+        "searchTools": "Search tools",
+        "allAllowed": "All allowed",
+        "skills": "Skills",
+        "skillsNote": "Granted on this key. Grants from access groups are not listed here.",
+        "serverTools_one": "{{name}}, {{count}} tool",
+        "serverTools_other": "{{name}}, {{count}} tools"
+      },
+      "guardrails": {
+        "title": "Guardrails",
+        "onThisKey": "On this key",
+        "fromPolicies": "From policies",
+        "adds": "adds",
+        "addsNone": "adds no guardrails",
+        "globalOff": "Global guardrails off",
+        "globalOffNote": "Proxy-wide guardrails skip this key.",
+        "globalOn": "Global guardrails also run on this key."
+      },
+      "logging": {
+        "title": "Logging",
+        "integrations": "Integrations",
+        "integrationDetail_one": "{{events}}, {{count}} parameter set",
+        "integrationDetail_other": "{{events}}, {{count}} parameters set",
+        "turnedOff": "Turned off for this key: ",
+        "noneTurnedOff": "No callbacks are turned off for this key."
+      },
+      "notSet": {
+        "title": "Not set on this key",
+        "sections": {
+          "rateLimits": "Rate limits",
+          "mcpServers": "MCP servers",
+          "vectorStores": "Vector stores",
+          "agents": "Agents",
+          "skills": "Skills",
+          "guardrails": "Guardrails",
+          "policies": "Policies",
+          "logging": "Logging"
+        }
+      },
+      "other": {
+        "title": "Other settings",
+        "subtitle": "Only what is set on this key",
+        "tags": "Tags",
+        "allowedRoutes": "Allowed routes",
+        "passThroughRoutes": "Pass-through routes",
+        "prompts": "Prompts",
+        "promptCaching": "Prompt caching",
+        "on": "On",
+        "estimatedOutputTokens": "Estimated output tokens",
+        "byDefault": "{{tokens}} by default",
+        "estimatedPerModel": "Estimated output tokens per model",
+        "tokens": "Tokens",
+        "routerSettings": "Router settings",
+        "metadata": "Metadata",
+        "fields_one": "{{count}} field",
+        "fields_other": "{{count}} fields",
+        "view": "View",
+        "viewJson": "View JSON"
+      }
     }
   },
   "apiKeys": {
@@ -2696,7 +2930,6 @@
         "revoked": "Revoked (blocked)",
         "deleted": "Deleted"
       },
-      "loadingKey": "Loading key...",
       "title": "Virtual Keys",
       "description": "Every key that authenticates requests to the gateway.",
       "loading": "Loading keys...",
@@ -3740,7 +3973,7 @@
         "removing": "Removing…",
         "remove": "Remove"
       },
-      "title": "Cost Tracking Settings",
+      "title": "Cost Tracking",
       "description": "Configure cost discounts and margins for different LLM providers. Changes are saved automatically.",
       "loading": "Loading configuration...",
       "discounts": {
@@ -3758,6 +3991,7 @@
       },
       "margins": {
         "title": "Fee/Price Margin",
+        "configOwnedHint": "Controlled by config.yaml. Edit litellm_settings.cost_margin_config there.",
         "description": "Add fees or margins to LLM costs for internal billing and cost recovery",
         "addButton": "+ Add Provider Margin",
         "emptyTitle": "No provider margins configured",
@@ -4074,7 +4308,7 @@
   "costOptimization": {
     "view": {
       "title": "Cost Optimization",
-      "description": "Track and configure the mechanisms that save you money: prompt compression and prompt caching. Auto routers live under Models + Endpoints, on the Auto-Routers tab",
+      "description": "Track and configure the mechanisms that save you money: prompt compression and prompt caching. Auto routers live under Model Management, on the Auto-Routers tab",
       "tabs": {
         "overall": "Overall",
         "compression": "Prompt Compression",
@@ -6104,6 +6338,7 @@
   "alerts": {
     "unified": {
       "title": "Alerts",
+      "inboxDescription": "Review gateway alerts and manage monitoring settings.",
       "saveError": "Could not save status. Please try again.",
       "resourceHeading": "This alert is tied to the following resource",
       "migrationDetails": "View migration details",
@@ -8511,7 +8746,7 @@
         "home": "Home",
         "virtualKeys": "Virtual Keys",
         "playground": "Playground",
-        "modelsAndEndpoints": "Models + Endpoints",
+        "modelsAndEndpoints": "Model Management",
         "agentic": "Agentic",
         "agents": "Agents",
         "workflowRuns": "Workflow Runs",
@@ -9053,7 +9288,7 @@
         "reset": "Theme settings reset to default!",
         "resetFailed": "Failed to reset theme settings"
       },
-      "title": "UI Theme Customization",
+      "title": "UI Theme",
       "description": "Customize your LiteLLM admin dashboard with a custom logo and favicon.",
       "logoUrl": {
         "label": "Custom Logo URL",
@@ -9297,6 +9532,7 @@
     },
     "inheritedBudgetHint": {
       "scopes": {
+        "key": "Key",
         "team": "Team",
         "teamMember": "Team member",
         "organization": "Organization",
@@ -9304,6 +9540,14 @@
       },
       "memberAlias": "{{member}} in {{team}}",
       "intro": "This key has no budget of its own, but its spend still counts toward:"
+    },
+    "appliedBudgets": {
+      "title": "Budgets that apply",
+      "empty": "No budget limits this key. Spend is tracked but never blocked.",
+      "thisKey": "This key",
+      "percentUsed": "{{percent}}% used",
+      "resetsEvery": "Resets every {{duration}}",
+      "noReset": "Does not reset"
     },
     "multiSelect": {
       "placeholder": "Select options",
@@ -11687,6 +11931,9 @@
         },
         "airia": {
           "description": "Airia AI security and governance platform. Runtime guardrails for prompt injection, data leakage prevention, and responsible AI, enforced on every prompt and response."
+        },
+        "reco": {
+          "description": "Reco AI agent security. Checks every prompt against your Reco policies before the model call, blocking prompt injection and sensitive data leaks."
         }
       },
       "subcategories": {
@@ -14789,7 +15036,6 @@
         "success": "Success"
       },
       "header": {
-        "backTo": "Back to {{label}}",
         "requestId": "Request ID",
         "provider": "Provider",
         "copied": "Copied!",
@@ -15280,6 +15526,7 @@
     },
     "page": {
       "loading": "Loading",
+      "description": "Review requests, audit activity, and deleted resources.",
       "tabs": {
         "requestLogs": "Request Logs",
         "auditLogs": "Audit Logs",
@@ -15296,6 +15543,9 @@
         "resetFilters": "Reset Filters"
       },
       "toolbar": {
+        "export": "Export",
+        "exportCapped": "Export limited to the first {{count}} logs.",
+        "exportEmpty": "No matching logs to export.",
         "customRange": "Custom Range",
         "rangeSeparator": "to"
       },
@@ -16835,6 +17085,7 @@
         "myUser": "My User",
         "virtualKeys": "Virtual Keys",
         "members": "Members",
+        "memberDefaults": "Member Defaults",
         "memberPermissions": "Member Permissions",
         "settings": "Settings"
       },
@@ -16933,14 +17184,17 @@
           "bothConfigured": "Both percentage alerts and the legacy Soft Budget alerts are configured. Each sends its own emails, so recipients can be notified twice."
         },
         "teamMemberSettings": {
-          "title": "Team Member Settings",
+          "edit": "Edit Defaults",
           "description": "Optional defaults applied when members join this team. All fields can be overridden per member.",
+          "allTeamModels": "All team models",
           "defaultModelAccess": "Default Model Access",
-          "defaultModelAccessHint": "Optional. If set, new members can only access these models by default. Must be a subset of the team's models above. Leave empty to give all members access to all team models.",
+          "defaultModelAccessHint": "Optional. If set, new members can only access these models by default. Leave empty to give all members access to all team models.",
           "defaultModelAccessPlaceholder": "Leave empty — all team models accessible to every member",
           "defaultBudget": "Default Budget (USD)",
           "defaultBudgetHint": "Default spend budget for each member in this team.",
           "defaultBudgetDuration": "Default Budget Duration",
+          "rolloverCap": "Member Rollover Cap (USD)",
+          "rolloverCapHint": "Maximum total allowance including carryover per member. Set a reset period and enter a cap above the default member budget. The team budget still applies.",
           "inheritResetPeriod": "Inherit team reset period",
           "defaultPerModelBudget": "Default Per-Model Budget",
           "defaultPerModelBudgetHint": "Set a default per-model spend cap for each team member, with an independent reset window.",
@@ -17024,6 +17278,7 @@
         "teamName": "Team Name",
         "teamId": "Team ID",
         "createdAt": "Created At",
+        "noMetadata": "No custom metadata",
         "models": "Models",
         "defaultMemberModels": "Default Member Models",
         "modelAliases": "Model Aliases",
@@ -17095,7 +17350,9 @@
         "rpmLimitTooltip": "Maximum requests per minute this member can make within this team. This is separate from any global user RPM limit",
         "rpmLimitPlaceholder": "Requests per minute limit for this member in this team",
         "allowedModels": "Allowed Models",
-        "allowedModelsTooltip": "Models this member can access within this team. Leave empty to inherit all team models.",
+        "allowedModelsTooltip": "Selecting models limits this member to your selection. Leave empty to inherit all team models.",
+        "addModelsOnKey": "To add a model without changing inherited access, attach an access group to an inheriting virtual key.",
+        "viewMemberKeys": "View member’s keys",
         "allowedModelsPlaceholder": "Leave empty to inherit all team models"
       },
       "deleteMember": {
@@ -17235,6 +17492,7 @@
       "empty": "No permissions available"
     },
     "memberTab": {
+      "rolledOver": "${{amount}} carried over",
       "budgetSource": {
         "teamDefault": "Team default",
         "custom": "Custom"
@@ -20851,6 +21109,7 @@
       "overview": {
         "spend": "Spend",
         "budgetOf": "of {{budget}}",
+        "rolledOver": "${{amount}} carried over",
         "teams": "Teams",
         "addTeam": "Add Team",
         "teamName": "Team Name",
@@ -20925,6 +21184,8 @@
         "unlimitedBudget": "Unlimited Budget",
         "maxBudgetPlaceholder": "Enter a numerical value",
         "resetBudget": "Reset Budget",
+        "rolloverCap": "Rollover Cap (USD)",
+        "rolloverCapHint": "Maximum total allowance including carryover. Set a reset period and enter a cap above the base budget. Leave blank to disable rollover.",
         "noChange": "No change",
         "tpmLimit": "TPM Limit",
         "rpmLimit": "RPM Limit",
@@ -21024,6 +21285,10 @@
     "loadFailed": "Could not load this model group's deployments. Saved weights are kept."
   },
   "customerPortal": {
+    "appGroupBudgetGroups": {
+      "title": "App group budget groups",
+      "help": "Reusable budgets for an entire app group. Select a budget group when creating or editing an app group. Changes apply to every app group using that budget."
+    },
     "overallAppGroups": {
       "title": "Overall app budget groups",
       "help": "Presets for an app's total usage across all customer organizations and members. Blank means no limit."
@@ -21059,13 +21324,18 @@
     "budgetGroups": {
       "organizationDefault": "Use organization default",
       "organizationDefaultHelp": "Apply the configured default when this organization is created.",
-      "settingsHint": "Manage separate presets for overall app limits, organization-wide limits, and each customer's usage within an app.",
+      "settingsHint": "Manage separate presets for app groups, apps, organizations, and each customer's usage within an app.",
       "overallAppTab": "Overall App Budget Groups",
+      "appGroupTab": "App Group Budget Groups",
       "overallTab": "Overall Organization Budget Groups",
       "appTab": "Per-App Organization Budget Groups",
       "appMemberTab": "App × member",
       "newOrganizationsJoin": "New organizations join",
       "newOrganizationsHelp": "Use this budget group for new organizations unless you choose another. No limit adds no organization-level cap.",
+      "newAppsUse": "New apps use",
+      "newAppsHelp": "Use this budget group for new apps unless you choose another. No limit adds no overall app cap.",
+      "newAppGroupsUse": "New app groups use",
+      "newAppGroupsHelp": "Use this budget group for new app groups unless you choose another. No limit adds no shared app group cap.",
       "atCap": "At the cap",
       "atCapLabel": "Group {{index}} at the cap",
       "pauseUntilReset": "Pause until reset",
@@ -21224,6 +21494,7 @@
     },
     "list": {
       "title": "$t(customerPortal.entities.organizations)",
+      "description": "Manage customer organizations and review their usage.",
       "create": "Create organization",
       "searchPlaceholder": "Search by name or ID",
       "overallUsage": "Overall customer usage",
@@ -21454,6 +21725,10 @@
       "withinMonthlyBudget": "Within monthly limit",
       "monthlyLimitAmount": "Monthly limit: {{amount}}",
       "yearlyLimitAmount": "Yearly limit: {{amount}}",
+      "totalLimitAmount": "{{amount}} total",
+      "noAutomaticReset": "No automatic reset",
+      "noMonthlyLimit": "No monthly limit",
+      "noYearlyLimit": "No yearly limit",
       "limitAmount": "{{amount}} limit",
       "budgetRemaining": "{{amount}} left",
       "budgetOver": "{{amount}} over",
@@ -21472,6 +21747,53 @@
       "teams": "Customer teams",
       "member": "Customer member",
       "members": "Customer members"
+    }
+  },
+  "lensWorkspace": {
+    "opening": "Opening Lens…",
+    "frameTitle": "Lens",
+    "unsupported": {
+      "title": "Update Lens to use it here",
+      "body": "Lens is connected, but this version does not support opening inside the gateway. Update your Lens deployment to use the workspace here.",
+      "open": "Open Lens",
+      "noBrowserUrl": "To open Lens separately, ask your administrator to configure a Lens address that is accessible from your browser."
+    },
+    "unavailable": {
+      "title": "Could not connect to Lens",
+      "body": "We could not verify the Lens connection. If Lens is already configured, check that the service is running and that the gateway has its connection credentials, then try again."
+    },
+    "retry": "Check connection",
+    "docs": "Lens documentation",
+    "introduction": {
+      "title": "The gateway that helps your agents improve",
+      "description": "Turn recorded agent runs into findings linked to the exact steps, so you know what happened and what to change.",
+      "setup": "Set up Lens",
+      "tracing": "Tracing",
+      "sampleTrace": "Sample trace · 14.2s",
+      "timeline": "Sample trace timeline",
+      "failed": "Failed",
+      "benchmarkError": "Error: benchmark runner unavailable (503)",
+      "sampleAnswer": "“The column store is 40% faster than the row store for your workload.”",
+      "findings": "Lens findings",
+      "sampleRuns": "500 sample runs reviewed",
+      "claimTitle": "Claims numbers it never measured",
+      "claimBody": "Reports a speedup even though the benchmark failed.",
+      "claimQuote": "“…40% faster than the row store for your workload.”",
+      "claimAction": "Report the failed benchmark instead of estimating.",
+      "claimPriority": "38 linked runs · High priority",
+      "followupTitle": "Promises to follow up, then stops",
+      "followupBody": "After an order lookup times out, the agent promises to check and ends the run.",
+      "followupPriority": "12 linked runs · Medium priority",
+      "nextStep": "Next step",
+      "highlight": "{{name}}, {{duration}} seconds. Highlight related finding",
+      "output": "{{name}} · output",
+      "duration": "{{duration}}s",
+      "gateway": "LiteLLM gateway",
+      "agents": "Agent swarms",
+      "agentSteps": "Every run, every recorded step",
+      "infrastructure": "One place, your infrastructure",
+      "findProblems": "Find what needs fixing",
+      "nextRun": "Insights for the next run"
     }
   }
 }

@@ -27,7 +27,9 @@ use url::Url;
 
 use crate::{
     Error, ErrorDetail, MantleRegionCheck,
-    anthropic::messages::transformation::ANTHROPIC_MESSAGES_CONFIG,
+    anthropic::messages::transformation::{
+        ANTHROPIC_MESSAGES_CONFIG, drop_sampling_params_removed_by_requested_version,
+    },
     base_llm::{
         auth::AuthScheme,
         messages::{
@@ -821,6 +823,16 @@ impl MessagesDialect for BedrockMantleMessagesConfig {
         context: &MessagesTransformContext,
     ) -> Option<MessagesTransformContext> {
         native_output_fallback_litellm_params(request, context)
+    }
+
+    fn request_body(
+        &self,
+        request: MessagesRequest,
+        headers: &Headers,
+        _url: &str,
+        drop_params: bool,
+    ) -> Result<MessagesRequest, Error> {
+        drop_sampling_params_removed_by_requested_version(request, headers, drop_params)
     }
 
     fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
@@ -1989,6 +2001,44 @@ mod tests {
         assert_eq!(
             beta.as_ref().map(Option::as_deref).map_err(|_| ()),
             expected
+        );
+    }
+
+    #[rstest]
+    #[case::bedrock_mantle_under_sdk_2(&BEDROCK_MANTLE_MESSAGES_CONFIG, "2026-10-21", None)]
+    #[case::bedrock_mantle_under_sdk_1(&BEDROCK_MANTLE_MESSAGES_CONFIG, "2023-06-01", Some(1.0))]
+    #[case::bedrock_mantle_route_under_sdk_2(&BEDROCK_MANTLE_ROUTE_MESSAGES_CONFIG, "2026-10-21", None)]
+    #[case::bedrock_mantle_route_under_sdk_1(
+        &BEDROCK_MANTLE_ROUTE_MESSAGES_CONFIG,
+        "2023-06-01",
+        Some(1.0)
+    )]
+    fn temperature_follows_the_forwarded_api_version(
+        #[case] config: &BedrockMantleMessagesConfig,
+        #[case] version: &str,
+        #[case] temperature: Option<f64>,
+    ) {
+        let body = config
+            .request_body(
+                serde_json::from_value(json!({
+                    "model": "anthropic.claude-test",
+                    "max_tokens": 16,
+                    "temperature": 1.0,
+                    "messages": [{"role": "user", "content": "hi"}]
+                }))
+                .unwrap(),
+                &vec![("anthropic-version".to_string(), version.to_string())],
+                "https://bedrock-mantle.us-west-2.api.aws/anthropic/v1/messages",
+                true,
+            )
+            .unwrap();
+        assert_eq!(
+            body.params
+                .temperature
+                .as_ref()
+                .and_then(Recognized::known)
+                .copied(),
+            temperature
         );
     }
 }

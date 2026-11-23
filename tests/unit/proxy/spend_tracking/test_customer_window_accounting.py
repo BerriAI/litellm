@@ -15,8 +15,6 @@ from litellm.models.budget import BudgetLimit
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.customer_hierarchy_auth import (
     check_customer_hierarchy_windows,
-    customer_member_cache_key,
-    customer_org_alias_cache_key,
     get_customer_scopes_for_accounting,
     resolve_customer_hierarchy,
 )
@@ -38,6 +36,7 @@ from litellm.proxy.spend_tracking.budget_reservation import (
     reserve_budget_for_request,
 )
 from litellm.proxy.utils import ProxyLogging
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.redis.stores.spend_counters.types import parse_customer_window_counter
 from litellm.responses.streaming_iterator import drain_logging_tasks
 from litellm.types.proxy.auth.customer_hierarchy import (
@@ -280,7 +279,7 @@ async def test_outer_callback_resolves_cached_hierarchy_into_accounting(
             CustomerScopeAuth(key="customer_member", entity_id="member", budget_limits=LIMITS),
         ),
     )
-    await cache.async_set_cache(key=customer_member_cache_key("member"), value=hierarchy)
+    await cache.async_set_cache(key=AuthObject.customer_member("member"), value=hierarchy)
     monkeypatch.setattr(ps, "user_api_key_cache", cache)
     monkeypatch.setattr(ps, "general_settings", {"use_spend_logs_ledger": True})
     monkeypatch.setattr(ps, "disable_spend_logs", True)
@@ -327,7 +326,7 @@ async def test_accounting_retains_stamped_parent_ids(accounting_state, moved_mem
     cache: Final = UserApiKeyCache()
     if moved_member:
         await cache.async_set_cache(
-            key=customer_member_cache_key("member"),
+            key=AuthObject.customer_member("member"),
             value=CustomerHierarchyAuth(
                 customer_org_id="new-org",
                 customer_team_id="new-team",
@@ -399,7 +398,7 @@ async def test_admitted_windows_are_charged_during_policy_outage(
     )
     cache: Final = UserApiKeyCache()
     await cache.async_set_cache(
-        key=customer_member_cache_key("member") if member else customer_org_alias_cache_key("org-alias"),
+        key=AuthObject.customer_member("member") if member else AuthObject.customer_org_alias("org-alias"),
         value=CustomerHierarchyAuth(
             customer_org_id="org",
             customer_team_id="team" if member else None,

@@ -95,10 +95,12 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.auth_utils import get_request_route, get_request_route_template
 from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.proxy.common_utils.callback_config_validation import has_invalid_logging_callback_vars
 from litellm.proxy.common_utils.callback_utils import (
     decrypted_callback_metadata,
     get_metadata_variable_name_from_kwargs,
     key_logging_entries,
+    stored_logging_entries,
     strip_callback_config,
 )
 from litellm.proxy.common_utils.customer_usage import (
@@ -653,6 +655,8 @@ _CLIENT_PRICING_METADATA_FIELDS: Final = frozenset({"model_info"})
 ROUTER_RESERVED_METADATA_FIELDS: Final = frozenset(
     {
         "attempted_fallbacks",
+        "client_seen_attempt",
+        "failed_fallback_attempts",
         "original_model_group",
         "previous_models",
         "rate_limit_fallback",
@@ -1400,7 +1404,13 @@ class _CallbackModelFields(TypedDict, total=False, extra_items=object):
 
 def get_validated_callback_metadata(item: object, *, source: str) -> AddTeamCallback | None:
     if not isinstance(item, Mapping):
-        raise TypeError(f"{source} metadata.logging must be a list of objects, got an item of {type(item).__name__}")
+        verbose_proxy_logger.warning("Ignoring invalid %s callback metadata, expected an object", source)
+        return None
+    if has_invalid_logging_callback_vars(item):
+        verbose_proxy_logger.warning(
+            "Ignoring invalid %s callback metadata, expected callback_vars to be an object", source
+        )
+        return None
     try:
         return AddTeamCallback.model_validate(item)
     except (PydanticValidationError, ValueError) as e:
@@ -1429,7 +1439,8 @@ class KeyAndTeamLoggingSettings:
     @staticmethod
     def get_team_dynamic_logging_settings(user_api_key_dict: UserAPIKeyAuth) -> object:
         if user_api_key_dict.team_metadata is not None and "logging" in user_api_key_dict.team_metadata:
-            return decoded_json_object(decrypted_callback_metadata(user_api_key_dict.team_metadata)).get("logging")
+            entries: Final = stored_logging_entries(user_api_key_dict.team_metadata)
+            return list(entries) if entries is not None else None
         return None
 
 
@@ -2315,6 +2326,11 @@ class LiteLLMProxyRequestSetup:
             **(
                 {
                     "user_api_key_app_id": customer.app_id,
+                    **(
+                        {"user_api_key_app_group_id": customer.app_group_id}
+                        if customer.app_group_id is not None
+                        else {}
+                    ),
                     "user_api_key_app_alias": customer.app_alias,
                 }
                 if customer is not None and customer.app_id is not None and customer.app_alias is not None
@@ -2383,12 +2399,15 @@ class LiteLLMProxyRequestSetup:
         user_api_key_logged_metadata: Final = LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(
             user_api_key_dict=user_api_key_dict
         )
-        if any(key in data[_metadata_variable_name] for key in ("user_api_key_app_id", "user_api_key_app_alias")):
+        if any(
+            key in data[_metadata_variable_name]
+            for key in ("user_api_key_app_id", "user_api_key_app_alias", "user_api_key_app_group_id")
+        ):
             incoming_metadata: Final = TypeAdapter(Mapping[str, object]).validate_python(data[_metadata_variable_name])
             data[_metadata_variable_name] = {  # rebind-ok: sanitize the legacy request metadata before trusted stamping
                 key: value
                 for key, value in incoming_metadata.items()
-                if key not in ("user_api_key_app_id", "user_api_key_app_alias")
+                if key not in ("user_api_key_app_id", "user_api_key_app_alias", "user_api_key_app_group_id")
             }
         data[_metadata_variable_name].update(user_api_key_logged_metadata)
         data[_metadata_variable_name]["user_api_key"] = LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict)
@@ -3786,6 +3805,7 @@ async def _team_router_settings(user_api_key_dict_team_id: str | None) -> Mappin
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
+            for_auth=True,
         )
         settings: Final = getattr(team_obj, "router_settings", None)
         return (
@@ -4065,6 +4085,34 @@ def pre_call_served_model(model: str, user_api_key_dict: UserAPIKeyAuth, model_g
     """The model group `common_processing_pre_call_logic` sends `model` to."""
     prepared: Final = global_then_key_alias_target(model, user_api_key_dict)
     return resolve_model_group_alias(model_group_alias, prepared) or prepared
+
+
+def _request_session_id(request: Request, body: Mapping[str, object]) -> str | None:
+    return (
+        get_chain_id_from_headers(dict(request.headers))
+        or _get_anthropic_session_id_from_metadata(body.get("metadata"))
+        or _caller_body_session_id(body, "litellm_metadata")
+        or _session_id_from_baggage(request.headers.get("baggage", ""))
+    )
+
+
+def request_routing_metadata(
+    request: Request, body: Mapping[str, object], caller: UserAPIKeyAuth
+) -> Mapping[str, object]:
+    session_id: Final = _request_session_id(request, body)
+    metadata_buckets: Final = tuple(
+        bucket
+        for bucket in (as_str_mapping(body.get("metadata")), as_str_mapping(body.get("litellm_metadata")))
+        if bucket is not None
+    )
+    tags: Final = LiteLLMProxyRequestSetup.merged_request_tags(
+        request=request, metadata_buckets=metadata_buckets, body_tags=body.get("tags"), user_api_key_dict=caller
+    )
+    return {
+        "user_agent": request.headers.get("user-agent", ""),
+        **({"session_id": session_id} if session_id else {}),
+        **({"tags": list(tags)} if tags else {}),
+    }
 
 
 def request_served_model(

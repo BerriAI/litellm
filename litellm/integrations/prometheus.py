@@ -127,8 +127,8 @@ class _DeploymentFailureLabelValues(TypedDict):
     user_agent: ReadOnly[object]
 
 
-_BudgetRowT: Final = TypeVar("_BudgetRowT")
-_TableRowT: Final = TypeVar("_TableRowT", bound=BaseModel)
+_BudgetRowT = TypeVar("_BudgetRowT")
+_TableRowT = TypeVar("_TableRowT", bound=BaseModel)
 
 _DEFAULT_BUDGET_METRICS_PER_REQUEST_TIMEOUT: Final = 5.0
 
@@ -209,7 +209,7 @@ def _customer_budget_metrics_enabled() -> bool:
     return litellm.enable_end_user_cost_tracking_prometheus_only is True and not litellm.disable_end_user_cost_tracking
 
 
-_MetricT: Final = TypeVar("_MetricT", bound="MetricWrapperBase")
+_MetricT = TypeVar("_MetricT", bound="MetricWrapperBase")
 
 
 class _LabeledMetric(Generic[_MetricT]):
@@ -294,7 +294,7 @@ class _LabeledMetric(Generic[_MetricT]):
 
 _MetricLike: TypeAlias = "NoOpMetric | _LabeledMetric[_MetricT] | _MetricT"
 
-_SeriesLimitT: Final = TypeVar("_SeriesLimitT", int, float)
+_SeriesLimitT = TypeVar("_SeriesLimitT", int, float)
 _REQUEST_METADATA_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 _POSITIVE_SERIES_CAP: Final[TypeAdapter[int]] = TypeAdapter(Annotated[int, Field(gt=0)])
 _POSITIVE_SERIES_TTL: Final[TypeAdapter[float]] = TypeAdapter(Annotated[float, Field(gt=0)])
@@ -4901,12 +4901,12 @@ class PrometheusLogger(CustomLogger):
         if not end_user_id:
             return
 
-        from litellm.proxy.common_utils.user_api_key_cache import end_user_cache_key
         from litellm.proxy.proxy_server import user_api_key_cache
+        from litellm.redis.stores.auth_cache import AuthObject
 
         try:
             cached_customer: Final = await user_api_key_cache.async_get_cache(
-                key=end_user_cache_key(end_user_id),
+                key=AuthObject.end_user(end_user_id),
                 model_type=LiteLLM_EndUserTable,
             )
         except Exception as e:

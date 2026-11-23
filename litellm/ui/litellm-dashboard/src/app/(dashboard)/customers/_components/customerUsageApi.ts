@@ -52,6 +52,11 @@ export interface CustomerHierarchyUsage extends ReturnType<typeof mergeCustomerA
   yearlyMembers: UsageRow[];
 }
 
+export type CustomerUsageAnalysisData = Pick<
+  CustomerHierarchyUsage,
+  "results" | "metadata" | "teams" | "api_keys" | "teamResults"
+>;
+
 interface CustomerUsageRequest {
   scope: CustomerUsageScope;
   accessToken: string;
@@ -63,6 +68,7 @@ interface CustomerUsageRequest {
   yearEndDate: string;
   signal?: AbortSignal;
   appId?: string | null;
+  appGroupId?: string | null;
 }
 
 const PREFIX = "/management/v1";
@@ -134,7 +140,7 @@ const descendants = async (scope: ResolvedScope, request: CustomerUsageRequest) 
 const activityPages = async (
   resource: Collection,
   ids: readonly string[],
-  request: Pick<CustomerUsageRequest, "accessToken" | "startDate" | "endDate" | "signal" | "appId">,
+  request: Pick<CustomerUsageRequest, "accessToken" | "startDate" | "endDate" | "signal" | "appId" | "appGroupId">,
 ) => {
   assertIdentifiers(ids);
   const pages: DailyActivityAggregatedResponse[] = [];
@@ -147,6 +153,7 @@ const activityPages = async (
         end_date: request.endDate,
         [ID_FILTER[resource]]: ids.join(","),
         ...(request.appId ? { app_id: request.appId } : {}),
+        ...(request.appGroupId ? { app_group_id: request.appGroupId } : {}),
         page,
         page_size: PAGE_SIZE,
       },
@@ -160,7 +167,7 @@ const activityPages = async (
 
 export const organizationActivityTotals = async (
   organizationId: string,
-  request: Pick<CustomerUsageRequest, "accessToken" | "startDate" | "endDate" | "signal" | "appId">,
+  request: Pick<CustomerUsageRequest, "accessToken" | "startDate" | "endDate" | "signal" | "appId" | "appGroupId">,
 ) => {
   const result = await apiClient.get<DailyActivityAggregatedResponse>(
     `${PREFIX}/customer_organizations/daily/activity/aggregated`,
@@ -172,6 +179,7 @@ export const organizationActivityTotals = async (
         end_date: request.endDate,
         customer_org_id: organizationId,
         ...(request.appId ? { app_id: request.appId } : {}),
+        ...(request.appGroupId ? { app_group_id: request.appGroupId } : {}),
       },
     },
   );
@@ -207,14 +215,15 @@ export const customerAppSpendCall = async (request: CustomerUsageRequest & { app
 };
 
 export const customerAppsUsageCall = async (
-  appIds: readonly string[],
+  ids: readonly string[],
   includeOverall: boolean,
-  request: Pick<CustomerUsageRequest, "accessToken" | "startDate" | "endDate" | "signal">,
+  request: Pick<CustomerUsageRequest, "accessToken" | "startDate" | "endDate" | "signal" | "appGroupId">,
+  dimension: "appId" | "appGroupId" = "appId",
 ) => {
-  const scopes = includeOverall ? [null, ...appIds] : appIds;
-  const totals = await batches(scopes, async (appId) => {
+  const scopes = includeOverall ? [null, ...ids] : ids;
+  const totals = await batches(scopes, async (id) => {
     const { metadata } = mergeCustomerActivityPages(
-      await activityPages("customer_organizations", [], { ...request, appId }),
+      await activityPages("customer_organizations", [], { ...request, [dimension]: id }),
     );
     const usage: CustomerUsageTotal = {
       spend: metadata.total_spend,
@@ -227,7 +236,7 @@ export const customerAppsUsageCall = async (
       cacheCost: metadata.total_cache_cost ?? 0,
       pricedCacheTokens: metadata.total_priced_cache_tokens ?? 0,
     };
-    return [appId, usage] as const;
+    return [id, usage] as const;
   });
   return new Map(totals);
 };
@@ -250,6 +259,35 @@ export const customerAppUsageCall = async (
         ),
       },
     })),
+  };
+};
+
+export const customerAppGroupUsageCall = async (
+  request: Pick<CustomerUsageRequest, "accessToken" | "startDate" | "endDate" | "signal" | "appId"> & {
+    appGroupId: string;
+  },
+): Promise<CustomerUsageAnalysisData> => {
+  const [organizationPages, teamPages] = await Promise.all([
+    activityPages("customer_organizations", [], request),
+    activityPages("customer_teams", [], request),
+  ]);
+  const usage = mergeCustomerActivityPages(organizationPages);
+  const teamUsage = mergeCustomerActivityPages(teamPages);
+  const labels = new Map(
+    teamUsage.results.flatMap((day) =>
+      Object.entries(day.breakdown.entities).map(
+        ([id, { metadata }]) =>
+          [id, "alias" in metadata && typeof metadata.alias === "string" ? metadata.alias : id] as const,
+      ),
+    ),
+  );
+  return {
+    ...usage,
+    teams: customerEntityRankings(teamUsage.results, labels, usage.metadata, {
+      unassignedLabel: i18n.t("customerPortal.analytics.unassignedTeam"),
+    }),
+    api_keys: customerKeyRankings(usage.results, i18n.t("customerPortal.analytics.unnamedKey")),
+    teamResults: customerEntityDailyData(usage.results, teamUsage.results, labels),
   };
 };
 

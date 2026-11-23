@@ -282,7 +282,7 @@ class UISettings(LiteLLMBaseModel):
     model_config = ConfigDict(extra="allow")
 
     usage_default_time_range: Literal["today", "last_7_days", "last_30_days", "month_to_date", "year_to_date"] = Field(
-        default="last_7_days",
+        default="month_to_date",
         description="Default date range when opening Usage without an explicit URL range. Calendar ranges use the browser timezone.",
     )
 

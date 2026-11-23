@@ -4,7 +4,8 @@ import pytest
 
 import litellm.proxy.proxy_server as ps
 from litellm.proxy._types import LiteLLM_BudgetTable, LiteLLM_EndUserTable, LiteLLM_OrganizationTable, LiteLLM_TagTable
-from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, model_access_group_cache_key
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.redis.stores.spend_counters import SpendCounterStore, model_access_group_counter
 from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
 from tests.unit.proxy import test_budget_reservation as scenarios
@@ -36,16 +37,16 @@ async def test_should_seed_and_update_end_user_and_tag_counters_without_reservat
 ) -> None:
     counter_cache, key_cache = spend_counter_state
     await key_cache.async_set_cache(
-        key="end_user_id:customer-1",
+        key=AuthObject.end_user("customer-1"),
         value=LiteLLM_EndUserTable(
             user_id="customer-1", blocked=False, spend=4.0, litellm_budget_table=LiteLLM_BudgetTable(max_budget=10.0)
         ).model_dump(),
     )
     await key_cache.async_set_cache(
-        key="tag:paid-tag", value=LiteLLM_TagTable(tag_name="paid-tag", spend=7.0).model_dump()
+        key=AuthObject.tag("paid-tag"), value=LiteLLM_TagTable(tag_name="paid-tag", spend=7.0).model_dump()
     )
     await key_cache.async_set_cache(
-        key="tag:other-tag", value=LiteLLM_TagTable(tag_name="other-tag", spend=2.0).model_dump()
+        key=AuthObject.tag("other-tag"), value=LiteLLM_TagTable(tag_name="other-tag", spend=2.0).model_dump()
     )
 
     await ps.increment_spend_counters(
@@ -81,7 +82,7 @@ async def test_should_seed_org_counter_from_with_budget_cache(
 ) -> None:
     counter_cache, key_cache = spend_counter_state
     await key_cache.async_set_cache(
-        key="org_id:org-counter-with-budget:with_budget",
+        key=AuthObject.org_with_budget("org-counter-with-budget"),
         value=_org("org-counter-with-budget", LiteLLM_BudgetTable(max_budget=10.0)).model_dump(),
     )
 
@@ -97,7 +98,9 @@ async def test_should_seed_org_counter_from_plain_org_cache(
     spend_counter_state: tuple[SpendCounterStore, UserApiKeyCache],
 ) -> None:
     counter_cache, key_cache = spend_counter_state
-    await key_cache.async_set_cache(key="org_id:org-counter-plain", value=_org("org-counter-plain", None).model_dump())
+    await key_cache.async_set_cache(
+        key=AuthObject.org("org-counter-plain"), value=_org("org-counter-plain", None).model_dump()
+    )
 
     await ps.increment_spend_counters(
         token=None, team_id=None, user_id=None, org_id="org-counter-plain", response_cost=0.25
@@ -112,7 +115,7 @@ async def test_model_access_group_counter_accumulates_across_calls_without_a_res
 ) -> None:
     counter_cache, key_cache = spend_counter_state
     await key_cache.async_set_cache(
-        key=model_access_group_cache_key("premium"),
+        key=AuthObject.model_access_group("premium"),
         value=ModelAccessGroupBudget(access_group_name="premium", spend=1.0, max_budget=25.0),
         model_type=ModelAccessGroupBudget,
     )

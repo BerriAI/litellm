@@ -127,6 +127,10 @@ def _uses_inclusive_token_thresholds(custom_llm_provider: str | None) -> bool:
     return custom_llm_provider in _INCLUSIVE_THRESHOLD_PROVIDERS
 
 
+def uses_inclusive_token_thresholds(custom_llm_provider: str | None) -> bool:
+    return _uses_inclusive_token_thresholds(custom_llm_provider)
+
+
 def apply_provider_cache_read_default(model_info: ModelInfo, custom_llm_provider: str | None) -> ModelInfo:
     if custom_llm_provider == "fireworks_ai":
         return with_default_cache_read_rate(model_info)
@@ -1213,7 +1217,7 @@ def parse_completion_tokens_details(usage: Usage) -> CompletionTokensDetailsResu
 
 
 def get_modality_token_cost_key(
-    model_info: ModelInfo,
+    model_info: Mapping[str, object],
     cost_key: str,
     prompt_tokens: int,
     *,

@@ -32,6 +32,12 @@ MANTLE_AUTH_FAILED: Final = (
     "(IAM role / access key / profile / web identity) for SigV4."
 )
 
+
+class BedrockMantleAuthError(ValueError):
+    def __init__(self) -> None:
+        super().__init__(MANTLE_AUTH_FAILED)
+
+
 # Standard Mantle host: https://bedrock-mantle.<region>.api.aws (group 1 = region).
 MANTLE_HOST_RE: Final = re.compile(r"^https?://bedrock-mantle\.([^/.]+)\.api\.aws(?=/|$)", re.IGNORECASE)
 
@@ -122,12 +128,9 @@ class BedrockMantleAuthMixin(SignsRequestsWithAWS):
         headers = {k: v for k, v in headers.items() if k.lower() != "authorization"}
         try:
             return sign(headers=headers, optional_params=optional_params)
-        except (
-            NoCredentialsError,
-            PartialCredentialsError,
-            ProfileNotFound,
-            CredentialRetrievalError,
-        ) as e:
+        except (NoCredentialsError, PartialCredentialsError, ProfileNotFound) as e:
+            raise BedrockMantleAuthError() from e
+        except CredentialRetrievalError as e:
             raise ValueError(MANTLE_AUTH_FAILED) from e
 
 
@@ -157,7 +160,7 @@ def mantle_supports_responses(model: str | None, model_cost: dict) -> bool:
     return entry.get("mode") == "responses"
 
 
-def mantle_base_segment(model: str | None, model_cost: dict) -> str:
+def mantle_base_segment(model: str | None, model_cost: Mapping[str, Mapping[str, object]]) -> str:
     """Return the base path segment for a Bedrock Mantle model's OpenAI surface.
 
     Data-driven from the model's price-map use_openai_responses_path flag
@@ -168,5 +171,7 @@ def mantle_base_segment(model: str | None, model_cost: dict) -> str:
     the base for the model's whole OpenAI-compatible surface, so both the chat and
     responses configs derive from it -- there is no separate model-name rule.
     """
-    entry: Final = model_cost.get(f"bedrock_mantle/{split_mantle_region_prefix(model)[1]}", {}) if model else {}
+    entry: Final[Mapping[str, object]] = (
+        model_cost.get(f"bedrock_mantle/{split_mantle_region_prefix(model)[1]}", {}) if model else {}
+    )
     return "openai/v1" if entry.get("use_openai_responses_path") is True else "v1"

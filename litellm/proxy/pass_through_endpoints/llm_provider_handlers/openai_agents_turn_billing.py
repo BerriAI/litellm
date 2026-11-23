@@ -525,14 +525,12 @@ def agents_turn_start_from_stream(
 
 async def live_agents_api_get(base_url: str, path: str, scope_headers: Mapping[str, str]) -> httpx.Response:
     from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        openai_api_key_headers,
         openai_passthrough_base_url,
         openai_passthrough_credential,
     )
 
-    api_key: Final = await openai_passthrough_credential(openai_passthrough_base_url())
-    auth_headers: Final[Mapping[str, str]] = (
-        {} if api_key is None else {"authorization": f"Bearer {api_key}", "api-key": api_key}
-    )
+    auth_headers: Final = openai_api_key_headers(await openai_passthrough_credential(openai_passthrough_base_url()))
     return await get_async_httpx_client(llm_provider=httpxSpecialProvider.PassThroughEndpoint).client.get(
         f"{base_url}/{path}",
         headers={**scope_headers, **auth_headers, "openai-beta": "agents=v1"},
