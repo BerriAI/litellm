@@ -238,6 +238,7 @@ from .llms.anthropic.chat import AnthropicChatCompletion
 from .llms.azure.audio_transcriptions import AzureAudioTranscription
 from .llms.azure.azure import AzureChatCompletion, check_dynamic_azure_params
 from .llms.azure.chat.o_series_handler import AzureOpenAIO1ChatCompletion
+from .llms.azure.common_utils import default_azure_api_version
 from .llms.azure.completion.handler import AzureTextCompletion
 from .llms.azure_ai.anthropic.handler import AzureAnthropicChatCompletion
 from .llms.azure_ai.embed import AzureAIEmbedding
@@ -1364,7 +1365,11 @@ def _complete_azure(ctx: CompletionDispatchContext) -> _CompletionDispatchResult
     api_base = api_base or litellm.api_base or get_secret("AZURE_API_BASE")
 
     api_version = (
-        api_version or litellm.api_version or get_secret_str("AZURE_API_VERSION") or litellm.AZURE_DEFAULT_API_VERSION
+        api_version
+        or litellm.api_version
+        or default_azure_api_version(
+            api_base if isinstance(api_base, str) else None, get_secret_str("AZURE_API_VERSION")
+        )
     )
 
     api_key = (
@@ -6797,8 +6802,7 @@ def embedding(
             api_version = (
                 api_version
                 or litellm.api_version
-                or get_secret_str("AZURE_API_VERSION")
-                or litellm.AZURE_DEFAULT_API_VERSION
+                or default_azure_api_version(api_base, get_secret_str("AZURE_API_VERSION"))
             )
 
             azure_ad_token: Final = optional_params.pop("azure_ad_token", None) or get_secret_str("AZURE_AD_TOKEN")
@@ -8902,6 +8906,26 @@ def speech(
             timeout=http_timeout,
             extra_headers=extra_headers,
             client=client,
+            _is_async=aspeech or False,
+        )
+    elif custom_llm_provider == "gradium" and text_to_speech_provider_config is not None:
+        if api_base is not None:
+            litellm_params_dict["api_base"] = api_base
+        if api_key is not None:
+            litellm_params_dict["api_key"] = api_key
+
+        response = base_llm_http_handler.text_to_speech_handler(  # rebind-ok: set per provider branch  # pyright: ignore[reportUnknownMemberType]  # untyped shared TTS handler, as for every provider branch
+            model=model,
+            input=input,
+            voice=voice if isinstance(voice, str) else None,
+            text_to_speech_provider_config=text_to_speech_provider_config,
+            text_to_speech_optional_params=optional_params,
+            custom_llm_provider=custom_llm_provider,
+            litellm_params=litellm_params_dict,
+            logging_obj=logging_obj,
+            timeout=http_timeout,
+            extra_headers=extra_headers,  # pyright: ignore[reportUnknownArgumentType]  # speech() takes these untyped
+            client=client,  # pyright: ignore[reportUnknownArgumentType]  # speech() takes these untyped
             _is_async=aspeech or False,
         )
     elif custom_llm_provider == "vertex_ai" or custom_llm_provider == "vertex_ai_beta":
