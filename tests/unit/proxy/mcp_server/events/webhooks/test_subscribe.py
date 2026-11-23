@@ -15,7 +15,7 @@ from litellm.proxy.mcp_server.events.runtime import DescriptorCache
 from litellm.proxy.mcp_server.events.webhooks.delivery import CallbackResponse
 from litellm.proxy.mcp_server.events.webhooks.policy import subscription_id
 from litellm.proxy.mcp_server.events.webhooks.signing import parse_secret
-from litellm.proxy.mcp_server.events.webhooks.store import Activation, QueuedDelivery
+from litellm.proxy.mcp_server.events.webhooks.store import ActivatedCursor, Activation, QueuedDelivery
 from litellm.proxy.mcp_server.events.webhooks.subscribe import (
     _Request,  # pyright: ignore[reportPrivateUsage]  # see above
     prepare_subscription,
@@ -363,7 +363,7 @@ async def test_a_subscription_terminated_while_upstream_answers_is_ended_upstrea
     class _TerminatingStore(MemoryStore):
         async def activate(
             self, subscription_id: str, activation: Activation, from_statuses: tuple[str, ...] = ()
-        ) -> bool:
+        ) -> ActivatedCursor | None:
             await self.terminate(subscription_id)
             return await super().activate(subscription_id, activation, from_statuses)
 
@@ -445,7 +445,7 @@ async def test_a_failed_activation_write_undoes_the_upstream_subscription() -> N
     class _WriteFails(MemoryStore):
         async def activate(
             self, subscription_id: str, activation: Activation, from_statuses: tuple[str, ...] = ()
-        ) -> bool:
+        ) -> ActivatedCursor | None:
             raise ConnectionError("database went away")
 
     upstream: Final = FakeUpstream(responses={"events/subscribe": UPSTREAM_OK, "events/unsubscribe": {}})
