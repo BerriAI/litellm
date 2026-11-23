@@ -1051,13 +1051,11 @@ async def test_claude_code_cached_prefix_is_never_compressed_on_a_model_alias(gu
         ],
     }
     client_request: Final = json.loads(json.dumps(data))
+    reached_compression_service: Final = AssertionError("the cached prefix was sent to the compression service")
 
-    def _compress(**kwargs):
-        return _make_compress_response(
-            [{**row, "content": "[compressed]"} if row["role"] == "tool" else row for row in kwargs["json"]["messages"]]
-        )
-
-    with patch.object(guardrail.async_handler, "post", new_callable=AsyncMock, side_effect=_compress) as mock_post:
+    with patch.object(
+        guardrail.async_handler, "post", new_callable=AsyncMock, side_effect=reached_compression_service
+    ) as mock_post:
         result = await AnthropicMessagesHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
 
     mock_post.assert_not_awaited()
