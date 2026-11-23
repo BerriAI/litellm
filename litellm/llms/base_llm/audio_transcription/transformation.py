@@ -248,16 +248,16 @@ class BaseAudioTranscriptionConfig(BaseConfig, ABC):
     def get_provider_specific_params(
         self,
         model: str,
-        optional_params: dict,
+        optional_params: Mapping[str, object],
         openai_params: list[OpenAIAudioTranscriptionOptionalParams],
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Get provider specific parameters that are not OpenAI compatible
 
         eg. if user passes `diarize=True`, we need to pass `diarize` to the provider
         but `diarize` is not an OpenAI parameter, so we need to handle it here
         """
-        provider_specific_params: Final = {}
+        provider_specific_params: Final[dict[str, object]] = {}
         for key, value in optional_params.items():
             # Skip None values
             if value is None:
