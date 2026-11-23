@@ -6,7 +6,7 @@ import asyncio
 import functools
 import json
 import selectors
-from typing import Any, Callable, Coroutine, Dict, Final, List, Optional, ParamSpec, Tuple, TypeVar
+from typing import Any, AsyncGenerator, Callable, Coroutine, Dict, Final, List, Optional, ParamSpec, Tuple, TypeVar
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -433,7 +433,7 @@ class GatedStream:
         self.closed = False
         self._chunks = self._run(before, after)
 
-    async def _run(self, before: List[bytes], after: List[bytes]):
+    async def _run(self, before: List[bytes], after: List[bytes]) -> AsyncGenerator[bytes, None]:
         try:
             for chunk in before:
                 yield chunk
@@ -443,7 +443,7 @@ class GatedStream:
         finally:
             self.closed = True
 
-    def __aiter__(self):
+    def __aiter__(self) -> "GatedStream":
         return self
 
     async def __anext__(self) -> bytes:
@@ -459,7 +459,7 @@ def _hooks_returning(result: object) -> MagicMock:
     return handler
 
 
-def _hooks_running(hooks) -> MagicMock:
+def _hooks_running(hooks: Callable[..., Coroutine[object, object, object]]) -> MagicMock:
     handler = MagicMock()
     handler._call_agentic_completion_hooks = AsyncMock(side_effect=hooks)
     return handler
