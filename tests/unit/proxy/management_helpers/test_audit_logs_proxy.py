@@ -986,3 +986,59 @@ async def test_a_duplicate_id_on_a_retry_counts_as_stored_by_the_earlier_attempt
     assert audit_log_store.attempts == 2
     assert audit_failure_metric.callback_names == []
     logged_error.assert_not_called()
+
+
+@dataclass
+class _RetryOverlap:
+    first_attempts: int
+    hold_seconds: float = 0.01
+    seen: int = 0
+    running: int = 0
+    most_running: int = 0
+
+    async def during_attempt(self) -> None:
+        self.seen += 1
+        if self.seen <= self.first_attempts:
+            return
+        self.running += 1
+        self.most_running = max(self.most_running, self.running)
+        await asyncio.sleep(self.hold_seconds)
+        self.running -= 1
+
+
+@pytest.mark.asyncio
+async def test_retries_of_concurrent_audit_writes_use_one_database_connection_at_a_time(
+    audit_log_store: FakeAuditLogStore,
+    audit_failure_metric: _RecordedFailureMetric,
+) -> None:
+    overlap: Final = _RetryOverlap(first_attempts=3)
+    audit_log_store.during_attempt = overlap.during_attempt
+    audit_log_store.error = _database_failure(unavailable=True)
+
+    await asyncio.gather(
+        *(create_audit_log_for_update(_audit_log(datetime.now(timezone.utc), {"n": n})) for n in range(3))
+    )
+    await drain_audit_tasks()
+
+    assert overlap.most_running == 1
+    assert audit_log_store.attempts == 9
+    assert audit_failure_metric.callback_names == ["audit_log_database"] * 3
+
+
+@pytest.mark.asyncio
+async def test_a_retry_still_queued_when_its_time_budget_ends_is_counted_without_another_attempt(
+    audit_log_store: FakeAuditLogStore,
+    audit_failure_metric: _RecordedFailureMetric,
+) -> None:
+    overlap: Final = _RetryOverlap(first_attempts=2, hold_seconds=0.6)
+    audit_log_store.during_attempt = overlap.during_attempt
+    audit_log_store.error = _database_failure(unavailable=True)
+
+    with patch("litellm.proxy.management_helpers.audit_logs._AUDIT_WRITE_RETRY_BUDGET_SECONDS", 0.3):
+        await asyncio.gather(
+            *(create_audit_log_for_update(_audit_log(datetime.now(timezone.utc), {"n": n})) for n in range(2))
+        )
+        await drain_audit_tasks()
+
+    assert audit_log_store.attempts == 3
+    assert audit_failure_metric.callback_names == ["audit_log_database"] * 2

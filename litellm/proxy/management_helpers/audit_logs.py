@@ -8,6 +8,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Final, TypeVar
+from weakref import WeakKeyDictionary
 
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
@@ -32,6 +33,7 @@ _audit_log_callback_cache: Final[dict[str, "CustomLogger | S3Logger"]] = {}
 ALLOW_LITELLM_CHANGED_BY_HEADER_METADATA_KEY: Final = "allow_litellm_changed_by_header"
 _AUDIT_JSON: Final = TypeAdapter(JsonValue)
 _AUDIT_WRITE_RETRY_DELAYS_SECONDS: Final = (0.5, 1.0, 2.0, 4.0)
+_AUDIT_WRITE_RETRY_BUDGET_SECONDS: Final = 30.0
 _AUDIT_DATABASE_CALLBACK_NAME: Final = "audit_log_database"
 _AUDIT_LOG_PRIMARY_KEY: Final = "LiteLLM_AuditLog_pkey"
 
@@ -176,10 +178,14 @@ _T = TypeVar("_T")
 
 
 class AuditTaskRegistry:
-    __slots__ = ("_pending_tasks",)
+    __slots__ = ("_pending_tasks", "_retry_locks")
 
     def __init__(self) -> None:
         self._pending_tasks: Final[set[asyncio.Task[object]]] = set()  # mutable-ok: background task tracking
+        self._retry_locks: Final[WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock]] = WeakKeyDictionary()
+
+    def retry_lock(self) -> asyncio.Lock:
+        return self._retry_locks.setdefault(asyncio.get_running_loop(), asyncio.Lock())
 
     def track(self, task: asyncio.Task[_T]) -> asyncio.Task[_T]:
         if task.done() or task in self._pending_tasks:
@@ -336,15 +342,24 @@ def _report_failed_audit_write(write: _AuditWrite, failure: Exception) -> None:
         reporter.handle_callback_failure(callback_name=_AUDIT_DATABASE_CALLBACK_NAME)
 
 
-async def _retry_audit_write(write: _AuditWrite, failure: Exception, delays: tuple[float, ...]) -> None:
+async def _attempt_audit_retry(write: _AuditWrite, failure: Exception, deadline: float) -> Exception | None:
+    async with _audit_task_registry.retry_lock():
+        if asyncio.get_running_loop().time() >= deadline:
+            return failure
+        return await _attempt_audit_write(write)
+
+
+async def _retry_audit_write(
+    write: _AuditWrite, failure: Exception, delays: tuple[float, ...], deadline: float
+) -> None:
     if not delays or not _is_retryable_audit_failure(failure):
         _report_failed_audit_write(write, failure)
         return
     await asyncio.sleep(delays[0])
-    next_failure: Final = await _attempt_audit_write(write)
+    next_failure: Final = await _attempt_audit_retry(write, failure, deadline)
     if next_failure is None or _is_stored_by_an_earlier_attempt(next_failure):
         return
-    await _retry_audit_write(write, next_failure, delays[1:])
+    await _retry_audit_write(write, next_failure, delays[1:], deadline)
 
 
 async def _insert_audit_logs(write: _AuditWrite) -> None:
@@ -354,9 +369,10 @@ async def _insert_audit_logs(write: _AuditWrite) -> None:
     if not _is_retryable_audit_failure(failure):
         _report_failed_audit_write(write, failure)
         return
+    deadline: Final = asyncio.get_running_loop().time() + _AUDIT_WRITE_RETRY_BUDGET_SECONDS
     track_audit_task(
         asyncio.create_task(
-            _retry_audit_write(write, failure, _AUDIT_WRITE_RETRY_DELAYS_SECONDS),
+            _retry_audit_write(write, failure, _AUDIT_WRITE_RETRY_DELAYS_SECONDS, deadline),
             name=f"retry of {_audit_write_label(write)} to the database",
         )
     )

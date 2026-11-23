@@ -7,7 +7,7 @@ another field of ``RustAuthStores``.
 """
 
 import json
-from collections.abc import Callable, Iterable, Mapping, MutableMapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Final, Literal
@@ -157,6 +157,7 @@ class FakeAuditLogStore:
     error: Exception | None = None
     next_errors: list[Exception] = field(default_factory=list)
     attempts: int = 0
+    during_attempt: Callable[[], Awaitable[None]] | None = None
 
     @staticmethod
     def _prisma_table() -> object | None:
@@ -165,15 +166,17 @@ class FakeAuditLogStore:
         client: Final = proxy_server.prisma_client
         return None if client is None else client.db.litellm_auditlog
 
-    def _fail_if_scripted(self) -> None:
+    async def _fail_if_scripted(self) -> None:
         self.attempts += 1
+        if self.during_attempt is not None:
+            await self.during_attempt()
         if self.next_errors:
             raise self.next_errors.pop(0)
         if self.error is not None:
             raise self.error
 
     async def insert(self, row: AuditLogRow) -> None:
-        self._fail_if_scripted()
+        await self._fail_if_scripted()
         data: Final = audit_log_data(row)
         self.rows.append(data)
         table: Final = self._prisma_table()
@@ -181,7 +184,7 @@ class FakeAuditLogStore:
             await table.create(data=data)
 
     async def insert_many(self, rows: Sequence[AuditLogRow]) -> None:
-        self._fail_if_scripted()
+        await self._fail_if_scripted()
         data: Final = tuple(audit_log_data(row) for row in rows)
         self.rows.extend(data)
         table: Final = self._prisma_table()
