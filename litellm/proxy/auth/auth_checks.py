@@ -1049,6 +1049,7 @@ MODEL_DISCOVERY_ROUTES: Final = frozenset(
         "/v1/model/info",
         "/v2/model/info",
         "/model_group/info",
+        "/model/recommend",
         "/utils/model_info",
     }
 )

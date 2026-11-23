@@ -924,6 +924,9 @@ from litellm.proxy.middleware.budget_reservation_release_middleware import (
 )
 from litellm.proxy.middleware.litellm_response_headers_middleware import LiteLLMResponseHeadersMiddleware
 from litellm.proxy.middleware.redis_request_batch_middleware import RedisRequestBatchMiddleware
+from litellm.proxy.model_recommender.endpoint import recommend_models
+from litellm.proxy.model_recommender.models import RecommendationRequest, RecommendationResponse
+from litellm.proxy.model_recommender.speed import GatewaySpeedClient
 from litellm.proxy.plugin_routes import (
     register_plugins_from_config,
 )
@@ -19542,11 +19545,15 @@ async def model_group_info(
             }
     ```
     """
-    global llm_model_list, general_settings, user_config_file_path, proxy_config, llm_router
+    listing, _ = await _model_group_listing(user_api_key_dict, model_group)
+    return listing
 
-    # Return empty data array when no models are configured (graceful handling for fresh installs)
+
+async def _model_group_listing(
+    user_api_key_dict: UserAPIKeyAuth, model_group: str | None = None
+) -> tuple[Mapping[str, Sequence[ModelGroupInfoProxy]], Mapping[str, str]]:
     if llm_model_list is None or llm_router is None or not llm_model_list:
-        return {"data": []}
+        return {"data": []}, {}
 
     from litellm.proxy.utils import get_available_models_for_user
 
@@ -19662,7 +19669,33 @@ async def model_group_info(
             ),
             *(group for group in agent_groups if group.model_group not in verdict.hidden),
         ]
-    }
+    }, MappingProxyType(dict((*requested_entries, *((group.model_group, group.model_group) for group in agent_groups))))
+
+
+@router.post(
+    "/model/recommend",
+    tags=["model management"],
+    response_model=RecommendationResponse,
+    description="Rank the caller's accessible chat model groups by intelligence, observed speed and configured cost.",
+)
+async def model_recommend(
+    request: RecommendationRequest,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+) -> RecommendationResponse:
+    listing, lookup = await _model_group_listing(user_api_key_dict)
+    return await recommend_models(
+        request,
+        user_api_key_dict,
+        listing,
+        llm_router,
+        lookup,
+        GatewaySpeedClient(prisma_client.db) if prisma_client else None,
+        catalog=TypeAdapter(Mapping[str, object]).validate_python(
+            litellm.model_cost  # pyright: ignore[reportUnknownMemberType]  # Legacy catalog is validated at this boundary.
+        )
+        if request.include_external
+        else None,
+    )
 
 
 def _names_a_model_group_row_reads(model_group: str, aliases: CallerAliases, router_aliases: object) -> frozenset[str]:

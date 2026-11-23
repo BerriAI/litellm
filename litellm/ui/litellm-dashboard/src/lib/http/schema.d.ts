@@ -11440,6 +11440,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/model/recommend": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Model Recommend
+         * @description Rank the caller's accessible chat model groups by intelligence, observed speed and configured cost.
+         */
+        post: operations["model_recommend_model_recommend_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/model/settings": {
         parameters: {
             query?: never;
@@ -34955,6 +34975,19 @@ export interface components {
              */
             total_tokens: number;
         };
+        /** DataSource */
+        DataSource: {
+            /** As Of */
+            as_of?: string | null;
+            /** Available */
+            available: boolean;
+            /** Description */
+            description: string;
+            /** Name */
+            name: string;
+            /** Url */
+            url?: string | null;
+        };
         /**
          * DecisionModelCheck
          * @description One predicate the decision model scores the request or response against.
@@ -45953,6 +45986,24 @@ export interface components {
                 number
             ];
         };
+        /** Priorities */
+        Priorities: {
+            /**
+             * Cost
+             * @default 2
+             */
+            cost: number;
+            /**
+             * Intelligence
+             * @default 2
+             */
+            intelligence: number;
+            /**
+             * Speed
+             * @default 2
+             */
+            speed: number;
+        };
         /** Prompt */
         Prompt: {
             litellm_params: components["schemas"]["PromptLiteLLMParams"];
@@ -46496,6 +46547,77 @@ export interface components {
             generate_summary?: ("auto" | "concise" | "detailed") | null;
             /** Summary */
             summary?: ("auto" | "concise" | "detailed") | null;
+        };
+        /** Recommendation */
+        Recommendation: {
+            capabilities: components["schemas"]["Requirements"];
+            /** Context Window */
+            context_window: number | null;
+            /** Input Cost Per Token */
+            input_cost_per_token?: number | null;
+            /** Latency Seconds */
+            latency_seconds: number | null;
+            /** Model Group */
+            model_group: string;
+            /**
+             * On Gateway
+             * @default true
+             */
+            on_gateway: boolean;
+            /** Output Cost Per Token */
+            output_cost_per_token?: number | null;
+            /** Output Tokens Per Second */
+            output_tokens_per_second: number | null;
+            /** Providers */
+            providers: string[];
+            /** Reasons */
+            reasons: string[];
+            /** Score */
+            score: number;
+            signals: components["schemas"]["Signals"];
+        };
+        /** RecommendationRequest */
+        RecommendationRequest: {
+            /**
+             * Focus
+             * @default [
+             *       "general"
+             *     ]
+             */
+            focus: ("general" | "math" | "coding" | "agentic")[];
+            /**
+             * Include External
+             * @default false
+             */
+            include_external: boolean;
+            /**
+             * Limit
+             * @default 3
+             */
+            limit: number;
+            priorities?: components["schemas"]["Priorities"];
+            /**
+             * Providers
+             * @default []
+             */
+            providers: string[];
+            requirements?: components["schemas"]["Requirements"];
+        };
+        /** RecommendationResponse */
+        RecommendationResponse: {
+            /**
+             * Available Providers
+             * @default []
+             */
+            available_providers: string[];
+            /** Candidates Considered */
+            candidates_considered: number;
+            /** Candidates Filtered */
+            candidates_filtered: number;
+            /** Data Sources */
+            data_sources: components["schemas"]["DataSource"][];
+            /** Recommendations */
+            recommendations: components["schemas"]["Recommendation"][];
         };
         /** ReferenceExchangeRates */
         ReferenceExchangeRates: {
@@ -47359,6 +47481,26 @@ export interface components {
          * @enum {string}
          */
         RequestType: "code_generation" | "code_understanding" | "technical_design" | "analytical_reasoning" | "writing" | "factual_lookup" | "general";
+        /** Requirements */
+        Requirements: {
+            /**
+             * Function Calling
+             * @default false
+             */
+            function_calling: boolean;
+            /** Min Context Tokens */
+            min_context_tokens?: number | null;
+            /**
+             * Reasoning
+             * @default false
+             */
+            reasoning: boolean;
+            /**
+             * Vision
+             * @default false
+             */
+            vision: boolean;
+        };
         /** ResetSpendRequest */
         ResetSpendRequest: {
             /** Reset To */
@@ -50221,6 +50363,21 @@ export interface components {
             };
             /** Type */
             type: "shell" | string;
+        };
+        /** Signal */
+        Signal: {
+            /** Normalized */
+            normalized: number;
+            /** Raw */
+            raw: number | null;
+            /** Unknown */
+            unknown: boolean;
+        };
+        /** Signals */
+        Signals: {
+            cost: components["schemas"]["Signal"];
+            intelligence: components["schemas"]["Signal"];
+            speed: components["schemas"]["Signal"];
         };
         /**
          * Skill
@@ -74254,6 +74411,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    model_recommend_model_recommend_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecommendationRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecommendationResponse"];
                 };
             };
             /** @description Validation Error */

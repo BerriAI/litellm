@@ -15,6 +15,8 @@ import UsageStatStrip from "@/app/(dashboard)/usage/_components/components/overv
 import { useBlogPosts } from "@/app/(dashboard)/hooks/blogPosts/useBlogPosts";
 import { cardProvider, cardSummary, cardTitle, formatPublishedOn, latestLaunches } from "./homeContent";
 import { Logo } from "@/components/molecules/logo/Logo";
+import { FOCUS } from "@/components/model-recommender/api";
+import { recommenderHref } from "@/components/model-recommender/flow";
 import UpdatesFeed from "./UpdatesFeed";
 import { HOME_USAGE_DAYS, useHomeUsage } from "./useHomeUsage";
 
@@ -97,6 +99,33 @@ export default function HomePage() {
               </div>
             </section>
           )}
+
+          <Panel
+            title={t("modelRecommender.findModel")}
+            subtitle={t("modelRecommender.homeIntro")}
+            bodyClassName="gap-4"
+          >
+            <div className="flex flex-wrap gap-2">
+              {FOCUS.map((focus) => (
+                <Button
+                  key={focus}
+                  variant="outline"
+                  size="sm"
+                  nativeButton={false}
+                  role="link"
+                  render={<a href={uiHref(recommenderHref(focus))} />}
+                >
+                  {t(`modelRecommender.building.${focus}`)}
+                </Button>
+              ))}
+            </div>
+            <div>
+              <Button nativeButton={false} role="link" render={<a href={uiHref(recommenderHref())} />}>
+                {t("modelRecommender.getRecommendation")}
+                <ArrowRight />
+              </Button>
+            </div>
+          </Panel>
 
           <Panel
             title={t("home.page.leaderboard.title")}

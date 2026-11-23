@@ -223,6 +223,15 @@ describe("ModelsAndEndpointsPage ?team drill-in", () => {
     vi.clearAllMocks();
   });
 
+  it("offers model recommendations in the header for an internal user", () => {
+    authState.userRole = "Internal User";
+    renderWithProviders(<ModelsAndEndpointsPage />);
+    expect(screen.getByRole("link", { name: "Recommend a model" })).toHaveAttribute(
+      "href",
+      expect.stringMatching(/model-recommender$/),
+    );
+  });
+
   it("shows the Disable all global guardrails switch to a proxy admin session", async () => {
     const user = userEvent.setup({ delay: null });
     renderWithProviders(<ModelsAndEndpointsPage />, { searchParams: { team: "team-a1b2" } });

@@ -5,6 +5,10 @@
 
 import type { ParseKeys } from "i18next";
 
+export const searchOnlyPages = [
+  { page: "model-recommender", label: "modelRecommender.title", description: "modelRecommender.intro" },
+] as const;
+
 // Page descriptions for UI Settings configuration
 export const pageDescriptions: Record<string, ParseKeys> = {
   home: "shell.pageDescriptions.home",

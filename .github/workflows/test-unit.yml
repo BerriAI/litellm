@@ -571,6 +571,7 @@ jobs:
           - shard: proxy-feature-endpoints
             runner: ubuntu-latest-16-cores
             test-path: |-
+              tests/unit/proxy/model_recommender
               tests/unit/proxy/guardrails
               --ignore=tests/unit/proxy/google_endpoints/test_gemini_agents_endpoints.py
               --ignore=tests/unit/proxy/google_endpoints/test_google_endpoint_routing.py

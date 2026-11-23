@@ -113,6 +113,18 @@ const renderHome = () =>
   );
 
 describe("HomePage", () => {
+  it("links model questions to the first step with focus prefilled and offers a fresh recommendation", () => {
+    renderHome();
+    expect(screen.getByRole("heading", { name: "Find the right model" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Coding", exact: true })).toHaveAttribute(
+      "href",
+      expect.stringMatching(/model-recommender\?focus=coding$/),
+    );
+    expect(screen.getByRole("link", { name: "Get a recommendation" })).toHaveAttribute(
+      "href",
+      expect.stringMatching(/model-recommender$/),
+    );
+  });
   beforeEach(() => {
     auth.isViewOnly = false;
     auth.userRole = all_admin_roles[0]!;

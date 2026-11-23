@@ -32,6 +32,8 @@ import AccessGroupBudgetsPanel from "@/app/(dashboard)/models-and-endpoints/pane
 import PriceDataPanel from "@/app/(dashboard)/models-and-endpoints/panels/PriceDataPanel";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { recommenderHref } from "@/components/model-recommender/flow";
+import { uiHref } from "@/utils/uiHref";
 
 const MODEL_TAB_SLUGS = [
   "add",
@@ -202,23 +204,28 @@ export default function ModelsAndEndpointsPage() {
           <PageHeaderDescription>
             {t(isAdmin ? "modelsAndEndpoints.page.adminDescription" : "modelsAndEndpoints.page.userDescription")}
           </PageHeaderDescription>
-          {!modelId && (
-            <PageHeaderControls className="flex-wrap">
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                onClick={handleRefreshClick}
-                aria-label={t("modelsAndEndpoints.page.refreshModels")}
-              >
-                <RefreshCw />
-              </Button>
-              {lastRefreshed && (
-                <span className="text-xs text-muted-foreground">
-                  {t("modelsAndEndpoints.page.lastRefreshed", { time: lastRefreshed })}
-                </span>
-              )}
-            </PageHeaderControls>
-          )}
+          <PageHeaderControls className="flex-wrap">
+            <Button variant="outline" nativeButton={false} role="link" render={<a href={uiHref(recommenderHref())} />}>
+              {t("modelRecommender.recommendModel")}
+            </Button>
+            {!modelId && (
+              <>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  onClick={handleRefreshClick}
+                  aria-label={t("modelsAndEndpoints.page.refreshModels")}
+                >
+                  <RefreshCw />
+                </Button>
+                {lastRefreshed && (
+                  <span className="text-xs text-muted-foreground">
+                    {t("modelsAndEndpoints.page.lastRefreshed", { time: lastRefreshed })}
+                  </span>
+                )}
+              </>
+            )}
+          </PageHeaderControls>
         </PageHeader>
 
         {modelId ? (
