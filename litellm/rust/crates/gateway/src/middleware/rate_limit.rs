@@ -7,6 +7,8 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use litellm_gateway_auth::Authenticated;
+use litellm_gateway_auth_core as auth_core;
+use litellm_python_compat::repr::float_repr;
 
 use crate::{
     callbacks::parallel_request_limiter::{Caller, KeyLimiter, rate_limited},
@@ -15,10 +17,23 @@ use crate::{
 
 const KEY_RPM_LIMIT: HeaderName = HeaderName::from_static("x-litellm-key-rpm-limit");
 const KEY_TPM_LIMIT: HeaderName = HeaderName::from_static("x-litellm-key-tpm-limit");
+const KEY_SPEND: HeaderName = HeaderName::from_static("x-litellm-key-spend");
 
-/// `x-litellm-key-rpm-limit` and `x-litellm-key-tpm-limit`, which the proxy's custom headers
-/// carry on every answer of a route's handler, a failed one included.
-fn with_key_limits(mut response: Response, caller: &Caller) -> Response {
+/// What the caller had spent when it was authenticated. The master key spends nothing.
+fn spent(identity: &Authenticated<NativeRows>) -> f64 {
+    match &**identity {
+        auth_core::Caller::MasterKey => 0.0,
+        auth_core::Caller::Key(key) => key.key.spend(),
+    }
+}
+
+/// `x-litellm-key-rpm-limit`, `x-litellm-key-tpm-limit` and `x-litellm-key-spend`, which the
+/// proxy's custom headers carry on every answer of a route's handler, a failed one included. The
+/// spend is what the key had spent plus what the answer says the call cost.
+///
+/// Accepted difference: the native app writes no spend yet, so the spend is as old as the key's
+/// row.
+fn with_key_headers(mut response: Response, caller: &Caller, spent: f64) -> Response {
     for (name, limit) in [
         (KEY_RPM_LIMIT, caller.limits.rpm),
         (KEY_TPM_LIMIT, caller.limits.tpm),
@@ -28,6 +43,11 @@ fn with_key_limits(mut response: Response, caller: &Caller) -> Response {
                 .headers_mut()
                 .insert(name, HeaderValue::from(limit));
         }
+    }
+    let cost = litellm_gateway_inference::response_cost(&response).filter(|cost| *cost > 0.0);
+    let spend = float_repr(spent + cost.unwrap_or(0.0));
+    if let Ok(spend) = HeaderValue::try_from(spend) {
+        response.headers_mut().insert(KEY_SPEND, spend);
     }
     response
 }
@@ -50,8 +70,9 @@ pub(super) async fn before_body(
     next: Next,
 ) -> Response {
     let caller = Caller::of(&identity);
+    let spent = spent(&identity);
     let Some(abort) = limiter.before_body(&caller).await else {
-        return with_key_limits(next.run(request).await, &caller);
+        return with_key_headers(next.run(request).await, &caller, spent);
     };
     match rate_limited(&abort) {
         Some(limited) => limited.response(path.as_str()),

@@ -3,6 +3,10 @@
 /// timeout from the caller still overrides this on the request builder.
 pub(crate) const MESSAGES_TIMEOUT_SECS: u64 = 600;
 
+/// The timeout of a call that names none, for a host that tells a caller the timeout it ran with.
+pub const DEFAULT_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_secs(MESSAGES_TIMEOUT_SECS);
+
 /// httpx's connect limit on Python's default client, for a call without a timeout.
 pub(crate) const MESSAGES_CONNECT_TIMEOUT_SECS: u64 = 5;
 

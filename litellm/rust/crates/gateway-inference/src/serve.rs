@@ -3,7 +3,7 @@
 //! model its body names goes through router-core, the hooks hear the outcome that served it, the
 //! route renders it, and a call that ends on an error is answered in the route's error format.
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use axum::{
     Extension,
@@ -19,7 +19,7 @@ use serde_json::{Map, Value};
 use crate::{
     Ended, Error, Gateway, RequestId,
     error::ErrorFormat,
-    headers::Routing,
+    headers::{Failed, Routing},
     hooks::{self, CallType},
     model_restamp::ReportedModel,
     request,
@@ -75,6 +75,12 @@ pub(crate) trait Endpoint: RouteAttempt {
 
     /// The outcome that served the call as the response the client reads.
     fn render(outcome: Self::Outcome, reported: ReportedModel<'_>) -> Result<Response, Error>;
+
+    /// The timeout of the attempt the call last ran, `None` when none ran or the route names
+    /// none.
+    fn timeout(&self) -> Option<Duration> {
+        None
+    }
 }
 
 /// Serves `body` as one call of the route `build` makes of it. A body that could not be read is
@@ -93,7 +99,12 @@ where
     let serve = |hooks: Arc<H::Hooks>, body: Map<String, Value>| async move {
         let model = request::model(&body)?.to_owned();
         let endpoint = build(body)?;
-        let routed = routing::call(gateway, identity, E::OP, E::PATH, &model, &endpoint).await?;
+        let routed = routing::call(gateway, identity, E::OP, E::PATH, &model, &endpoint)
+            .await
+            .map_err(|ended| Ended {
+                timeout: endpoint.timeout(),
+                ..ended
+            })?;
         let routing = Routing::served(&routed);
         let reported = ReportedModel::of(&model, &routed);
         let model_group = routed.model_group;
@@ -105,5 +116,12 @@ where
         Ok(body) => hooks::around(gateway, identity, E::CALL_TYPE, body, serve).await,
         Err(error) => Err(Ended::from(error)),
     };
-    served.unwrap_or_else(|ended| ended.response(E::ERRORS, call.request_id.as_deref()))
+    served.unwrap_or_else(|ended| {
+        let failed = Failed {
+            timeout: ended.timeout,
+        };
+        let mut response = ended.response(E::ERRORS, call.request_id.as_deref());
+        response.extensions_mut().insert(failed);
+        response
+    })
 }

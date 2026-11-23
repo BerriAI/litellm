@@ -291,14 +291,18 @@ fn deployment(name: &str, id: &str, upstream: &MockServer) -> String {
 }
 
 async fn routed(config: &str, model: &str) -> axum::response::Response {
+    let body =
+        json!({"model": model, "max_tokens": 8, "messages": [{"role": "user", "content": "hi"}]});
+    asked(config, body).await
+}
+
+/// The answer the gateway built from `config` gives the master key for `body`.
+async fn asked(config: &str, body: Value) -> axum::response::Response {
     let config = Config::from_yaml(config).unwrap();
     let request = Request::post("/v1/messages")
         .header("authorization", "Bearer gateway-key")
         .header("content-type", "application/json")
-        .body(Body::from(
-            json!({"model": model, "max_tokens": 8, "messages": [{"role": "user", "content": "hi"}]})
-                .to_string(),
-        ))
+        .body(Body::from(body.to_string()))
         .unwrap();
     global(litellm_gateway::router(
         without_stores(inference_for(&config).await),
@@ -309,13 +313,29 @@ async fn routed(config: &str, model: &str) -> axum::response::Response {
     .unwrap()
 }
 
+/// The headers that say what the router did for a call.
+const ROUTING: [&str; 5] = [
+    "x-litellm-model-id",
+    "x-litellm-model-group",
+    "x-litellm-attempted-retries",
+    "x-litellm-attempted-fallbacks",
+    "x-litellm-max-retries",
+];
+
 fn routing_headers(response: &axum::response::Response) -> Vec<(&str, &str)> {
     response
         .headers()
         .iter()
-        .filter(|(name, _)| name.as_str().starts_with("x-litellm-") && *name != "x-litellm-call-id")
+        .filter(|(name, _)| ROUTING.contains(&name.as_str()))
         .map(|(name, value)| (name.as_str(), value.to_str().unwrap()))
         .collect()
+}
+
+fn header<'a>(response: &'a axum::response::Response, name: &str) -> Option<&'a str> {
+    response
+        .headers()
+        .get(name)
+        .map(|value| value.to_str().unwrap())
 }
 
 #[rstest]
@@ -607,6 +627,187 @@ async fn a_call_whose_fallback_also_fails_names_the_deployment_whose_error_it_an
         (500, vec![("x-litellm-model-id", "first-1")])
     );
     assert_eq!(second.received_requests().await.unwrap().len(), 1);
+}
+
+/// How long the provider of the timing test takes to answer.
+const PROVIDER_TOOK: std::time::Duration = std::time::Duration::from_millis(50);
+
+fn milliseconds(response: &axum::response::Response, name: &str) -> f64 {
+    header(response, name).unwrap().parse().unwrap()
+}
+
+#[tokio::test]
+async fn a_complete_answer_names_its_model_the_version_and_how_long_the_call_took() {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(
+            served_message()
+                .insert_header("request-id", "req_1")
+                .set_delay(PROVIDER_TOOK),
+        )
+        .mount(&upstream)
+        .await;
+    let config = format!(
+        "model_list:\n{}general_settings:\n  master_key: gateway-key\n",
+        deployment("primary", "primary-1", &upstream),
+    );
+
+    let response = routed(&config, "primary").await;
+
+    let told = |name| header(&response, name);
+    assert_eq!(
+        [
+            told("x-litellm-model-name"),
+            told("x-litellm-version"),
+            told("x-litellm-key-spend"),
+            told("x-litellm-model-api-base"),
+            told("x-litellm-callback-duration-ms"),
+            told("llm_provider-request-id"),
+            told("request-id"),
+            told("x-litellm-response-cost"),
+        ],
+        [
+            Some("anthropic/claude-unlisted-9"),
+            Some(litellm_gateway::VERSION.unwrap()),
+            Some("0.0"),
+            None,
+            None,
+            None,
+            None,
+            None,
+        ]
+    );
+    let took = milliseconds(&response, "x-litellm-response-duration-ms");
+    let overhead = milliseconds(&response, "x-litellm-overhead-duration-ms");
+    let provider = PROVIDER_TOOK.as_secs_f64() * 1000.0;
+    assert!(
+        0.0 <= overhead && overhead <= took - provider,
+        "an overhead of {overhead} in {took}"
+    );
+}
+
+#[tokio::test]
+async fn a_stream_names_its_api_base_and_the_headers_its_provider_answered_with() {
+    let upstream = MockServer::start().await;
+    let events = [MESSAGE_START, TEXT, MESSAGE_END].concat();
+    Mock::given(method("POST"))
+        .respond_with(streamed(&events).insert_header("request-id", "req_1"))
+        .mount(&upstream)
+        .await;
+    let config = format!(
+        "model_list:\n{}general_settings:\n  master_key: gateway-key\n",
+        deployment("primary", "primary-1", &upstream),
+    );
+    let body = json!({"model": "primary", "max_tokens": 8, "stream": true, "messages": [{"role": "user", "content": "hi"}]});
+
+    let response = asked(&config, body).await;
+
+    let told = |name| header(&response, name);
+    assert_eq!(
+        [
+            told("x-litellm-model-api-base"),
+            told("x-litellm-callback-duration-ms"),
+            told("llm_provider-request-id"),
+            told("llm_provider-content-type"),
+            told("request-id"),
+            told("x-litellm-key-spend"),
+        ],
+        [
+            Some(upstream.uri().as_str()),
+            Some("0.0"),
+            Some("req_1"),
+            Some("text/event-stream"),
+            Some("req_1"),
+            Some("0.0"),
+        ]
+    );
+}
+
+#[rstest]
+#[case::the_routes_default("", Some("600.0"))]
+#[case::the_deployments_own("      timeout: 5\n", Some("5.0"))]
+#[tokio::test]
+async fn a_failed_call_costs_nothing_and_names_the_timeout_its_attempt_ran_with(
+    #[case] timeout: &str,
+    #[case] expected: Option<&str>,
+) {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(
+            ResponseTemplate::new(400).set_body_json(json!({"error": {"message": "refused"}})),
+        )
+        .mount(&upstream)
+        .await;
+    let config = format!(
+        "model_list:\n  - model_name: primary\n    litellm_params:\n      model: anthropic/claude-unlisted-9\n      api_base: {}\n      api_key: test-key\n{timeout}general_settings:\n  master_key: gateway-key\n",
+        upstream.uri()
+    );
+
+    let response = routed(&config, "primary").await;
+
+    let told = |name| header(&response, name);
+    assert_eq!(
+        [
+            told("x-litellm-response-cost"),
+            told("x-litellm-timeout"),
+            told("x-litellm-version"),
+            told("x-litellm-key-spend"),
+            told("x-litellm-model-name"),
+            told("x-litellm-response-duration-ms"),
+        ],
+        [
+            Some("0"),
+            expected,
+            Some(litellm_gateway::VERSION.unwrap()),
+            Some("0.0"),
+            None,
+            None,
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_call_no_attempt_ran_for_names_no_timeout() {
+    let config = "model_list: []\ngeneral_settings:\n  master_key: gateway-key\n";
+
+    let response = routed(config, "unknown").await;
+
+    assert_eq!(
+        (
+            response.status().as_u16(),
+            header(&response, "x-litellm-response-cost"),
+            header(&response, "x-litellm-timeout"),
+        ),
+        (400, Some("0"), None)
+    );
+}
+
+#[tokio::test]
+async fn a_cost_the_provider_reports_is_named_and_added_to_what_the_key_spent() {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": "msg_test", "type": "message", "role": "assistant", "model": "claude-unlisted-9",
+            "content": [{"type": "text", "text": "hi"}], "stop_reason": "end_turn",
+            "usage": {"input_tokens": 1, "output_tokens": 1}, "cost": 0.25
+        })))
+        .mount(&upstream)
+        .await;
+    let config = format!(
+        "model_list:\n  - model_name: primary\n    litellm_params:\n      model: edenai/claude-unlisted-9\n      api_base: {}\n      api_key: test-key\ngeneral_settings:\n  master_key: gateway-key\n",
+        upstream.uri()
+    );
+
+    let response = routed(&config, "primary").await;
+
+    assert_eq!(
+        (
+            response.status().as_u16(),
+            header(&response, "x-litellm-response-cost"),
+            header(&response, "x-litellm-key-spend"),
+        ),
+        (200, Some("0.25"), Some("0.25"))
+    );
 }
 
 /// A port nothing listens on, so a call to it never gets an answer.

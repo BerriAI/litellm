@@ -4158,6 +4158,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
+ "toml",
  "tower",
  "tower-http",
  "tracing",
@@ -4275,7 +4276,6 @@ dependencies = [
  "tokio",
  "tokio-tungstenite",
  "tower",
- "tower-http",
  "tracing",
  "wiremock",
 ]

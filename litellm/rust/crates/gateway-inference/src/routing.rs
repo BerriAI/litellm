@@ -281,6 +281,7 @@ async fn answered<H: Host, O>(
         } => Ended {
             error: Box::new(raised.failure),
             routing: raised.deployment_id.as_deref().map(Routing::failed_on),
+            timeout: None,
         },
         CallError {
             error: litellm_router_core::Error::UnknownModel { model },
@@ -352,6 +353,7 @@ where
                 return Err(Ended {
                     error: Box::new(raised.unwrap_or(own)),
                     routing,
+                    timeout: None,
                 });
             }
         }
