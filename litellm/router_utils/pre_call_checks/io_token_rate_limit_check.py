@@ -515,17 +515,8 @@ def _reservation_value(value: int, limit: int | None) -> int:
     return 1
 
 
-class TurnLargerThanItpmError(litellm.RateLimitError):
-    pass
-
-
-def _rate_limit_error(
-    limit_label: str,
-    limit: int,
-    current: float,
-    error_type: type[litellm.RateLimitError] = litellm.RateLimitError,
-) -> litellm.RateLimitError:
-    return error_type(
+def _rate_limit_error(limit_label: str, limit: int, current: float) -> litellm.RateLimitError:
+    return litellm.RateLimitError(
         message=f"Model rate limit exceeded. {limit_label} limit={limit}, current usage={current}",
         llm_provider="",
         model="",
@@ -758,6 +749,21 @@ async def _raise_if_at_limit(usage: RouterUsage, counter: UsageCounter, limit: i
         raise _rate_limit_error(limit_label, limit, count)
 
 
+async def _turn_itpm_tokens(
+    deployment: Mapping[str, object],
+    limit: int,
+    turn_params: Mapping[str, object] | None,
+) -> int:
+    tokenizer_model, _ = _tokenizer_and_served_models(deployment)
+    turn_input: Final = (
+        MappingProxyType({"input": turn_params.get("input")})
+        if turn_params and turn_params.get("generate") is not False
+        else None
+    )
+    estimated_input: Final = await offload_token_count(_estimate_input_tokens)(turn_input, model=tokenizer_model)
+    return _reservation_value(estimated_input, limit)
+
+
 async def _raise_if_turn_input_passes_itpm(
     usage: RouterUsage,
     counter: UsageCounter,
@@ -765,16 +771,30 @@ async def _raise_if_turn_input_passes_itpm(
     deployment: Mapping[str, object],
     turn_params: Mapping[str, object] | None,
 ) -> None:
-    tokenizer_model, _ = _tokenizer_and_served_models(deployment)
-    turn_input: Final = MappingProxyType({"input": turn_params.get("input")}) if turn_params else None
-    estimated_input: Final = await offload_token_count(_estimate_input_tokens)(turn_input, model=tokenizer_model)
+    turn_tokens: Final = await _turn_itpm_tokens(deployment, limit, turn_params)
     count: Final = await usage.shared_or_local(counter) or 0
-    turn_tokens: Final = _reservation_value(estimated_input, limit)
     with_turn: Final = count + turn_tokens
-    if with_turn > limit:
-        raise _rate_limit_error(
-            "ITPM", limit, with_turn, TurnLargerThanItpmError if turn_tokens > limit > count else litellm.RateLimitError
-        )
+    if with_turn <= limit:
+        return
+    refusal: Final = _rate_limit_error("ITPM", limit, with_turn)
+    refusal.deployment_has_itpm_room = count < limit  # pyright: ignore[reportAttributeAccessIssue]  # read by the router's refusal handling
+    raise refusal
+
+
+@with_service_target(ROUTER_USAGE_TARGET)
+async def async_socket_turn_misses_itpm_room(
+    usage: RouterUsage,
+    deployment: Mapping[str, object],
+    now: datetime,
+    turn_params: Mapping[str, object],
+) -> bool:
+    configured: Final = dict(deployment)
+    itpm_limit, _ = get_deployment_io_token_limits(configured)
+    counters: Final = _get_counters(configured, now.strftime("%H-%M"))
+    if itpm_limit is None or counters is None:
+        return False
+    count: Final = await usage.shared_or_local(counters[0]) or 0
+    return count < itpm_limit and count + await _turn_itpm_tokens(configured, itpm_limit, turn_params) > itpm_limit
 
 
 @with_service_target(ROUTER_USAGE_TARGET)

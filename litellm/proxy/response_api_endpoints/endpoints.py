@@ -125,6 +125,7 @@ from litellm.responses.streaming_iterator import (
     GuardedResponsesWsFrame,
     ResponsesWsFrameGuard,
     ResponsesWsFrameRejection,
+    is_warmup_response_create,
     responses_ws_error_frame,
     responses_ws_error_type,
     spawn_logging_task,
@@ -2157,6 +2158,7 @@ def _routing_hints_from_first_ws_frame(first_message: str) -> Mapping[str, objec
         return EMPTY_MAPPING
     nested: Final = frame.response or frame
     hints: Final = {
+        "generate": False if is_warmup_response_create(first_message) else None,
         "input": frame.input if nested.input is None else nested.input,
         "previous_response_id": (
             frame.previous_response_id if nested.previous_response_id is None else nested.previous_response_id

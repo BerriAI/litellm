@@ -6922,3 +6922,22 @@ def test_a_malformed_routing_hint_keeps_the_first_frame_s_other_hints(
     frame: Final = json.dumps({"type": "response.create", **fields})
 
     assert _routing_hints_from_first_ws_frame(frame) == hints
+
+
+@pytest.mark.parametrize(
+    ("fields", "hints"),
+    [
+        ({"input": "hi", "generate": False}, {"input": "hi", "generate": False}),
+        ({"response": {"input": "hi", "generate": False}}, {"input": "hi", "generate": False}),
+        ({"input": "hi", "generate": True}, {"input": "hi"}),
+        ({"generate": False, "response": {"input": "hi"}}, {"input": "hi"}),
+    ],
+)
+def test_only_a_warmup_first_frame_carries_the_generate_hint(
+    fields: Mapping[str, object], hints: Mapping[str, object]
+) -> None:
+    from litellm.proxy.response_api_endpoints.endpoints import _routing_hints_from_first_ws_frame
+
+    frame: Final = json.dumps({"type": "response.create", **fields})
+
+    assert _routing_hints_from_first_ws_frame(frame) == hints

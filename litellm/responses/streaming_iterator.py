@@ -2147,6 +2147,11 @@ _FRAME_NO_MAX_OUTPUT_TOKENS_FLOOR: Final = 1024
 _FRAME_CHARS_PER_TOKEN_ESTIMATE: Final = 4
 
 
+def is_warmup_response_create(raw_message: str) -> bool:
+    frame: Final = _json_object_or_none(raw_message)
+    return frame is not None and _response_create_params(frame).get("generate") is False
+
+
 def _response_create_params(msg_obj: Mapping[str, object]) -> Mapping[str, object]:
     """The request params of a ``response.create`` frame, in either wire shape:
     flat:   {"type": "response.create", "input": ..., "max_output_tokens": ...}

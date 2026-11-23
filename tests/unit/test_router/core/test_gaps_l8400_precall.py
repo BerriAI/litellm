@@ -6,6 +6,7 @@ takes part in those checks through ``pre_call_check`` / ``async_pre_call_check``
 """
 
 from collections.abc import Callable, Mapping
+from datetime import datetime, timezone
 from typing import Final
 
 import pytest
@@ -13,7 +14,9 @@ import pytest
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.router_core import RouterCore
-from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import TurnLargerThanItpmError
+from litellm.redis.stores.connection import connect
+from litellm.redis.stores.router_usage import CounterIncrement, RouterUsageStore, UsageCounter
+from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import async_admit_io_token_turn
 from tests.unit.test_router.core.endpoints_helpers import EndpointHost
 from tests.unit.test_router.core.retries_health_helpers import attempt, attempt_sync, cooled_down
 from tests.unit.test_router.core.scripted_host import ScriptedHost, deployment, rate_limit
@@ -85,25 +88,37 @@ class RefusesOneDeployment(PreCallGate):
         return None
 
 
+async def _itpm_turn_refusal(used: int) -> litellm.RateLimitError:
+    usage: Final = RouterUsageStore(connect(None).router_usage())
+    usage.increment_local(
+        CounterIncrement(UsageCounter("global_router", "t", "openai/gpt-5-mini", "12-34", "itpm"), used, 60)
+    )
+    limited: Final = {"litellm_params": {"model": "openai/gpt-5-mini", "itpm": 100}, "model_info": {"id": "t"}}
+    with pytest.raises(litellm.RateLimitError) as refusal:
+        await async_admit_io_token_turn(
+            usage, limited, datetime(2026, 1, 1, 12, 34, tzinfo=timezone.utc), {"input": "ocean tides " * 100}
+        )
+    return refusal.value
+
+
 @pytest.mark.asyncio
-async def test_a_turn_larger_than_one_deployment_s_itpm_moves_to_the_next_without_a_cooldown(
-    make_core: MakeCore, host: ScriptedHost
+@pytest.mark.parametrize(("used", "cooled"), [(99, []), (100, ["a"])])
+async def test_only_a_deployment_at_its_itpm_limit_cools_down_when_it_refuses_a_turn(
+    make_core: MakeCore, host: ScriptedHost, used: int, cooled: list[str]
 ) -> None:
     core: Final = make_core(
         model_list=[deployment("g", "a", order=1), deployment("g", "b", order=2)],
         num_retries=2,
         cooldown_time=33,
     )
-    gate: Final = RefusesOneDeployment(
-        "a", TurnLargerThanItpmError(message="turn too big", llm_provider="", model="", num_retries=0)
-    )
+    gate: Final = RefusesOneDeployment("a", await _itpm_turn_refusal(used))
     host.lists["callbacks"].append(gate)
 
     await attempt(core)
 
     assert gate.seen == [("async", "a"), ("async", "b")]
     assert host.deployments_called("acompletion") == ["b"]
-    assert cooled_down(core, ["a", "b"]) == {}
+    assert list(cooled_down(core, ["a", "b"])) == cooled
 
 
 @pytest.mark.asyncio

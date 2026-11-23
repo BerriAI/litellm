@@ -28,7 +28,6 @@ from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
     ITPM_RESERVED_KEY,
     OTPM_COUNTER_KEY,
     OTPM_RESERVED_KEY,
-    TurnLargerThanItpmError,
     _explicit_max_tokens,
     _reservation_value,
     async_admit_io_token_turn,
@@ -1872,25 +1871,51 @@ _INPUT_PAST_40_TOKENS: Final = "Write one plain sentence about how the ocean tid
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("used", "turn_input", "cools_down"),
-    [
-        (99, _INPUT_PAST_40_TOKENS, True),
-        (100, _INPUT_PAST_40_TOKENS * 4, True),
-        (0, _INPUT_PAST_40_TOKENS * 4, False),
-        (99, _INPUT_PAST_40_TOKENS * 4, False),
-    ],
-)
-async def test_only_a_turn_larger_than_itpm_is_refused_without_cooling_the_deployment_down(
-    used: int, turn_input: str, cools_down: bool
-) -> None:
+@pytest.mark.parametrize(("used", "admitted"), [(99, True), (100, False)])
+async def test_a_warmup_turn_is_not_refused_for_its_own_input(used: int, admitted: bool) -> None:
     usage: Final = _memory_usage()
     usage.increment_local(CounterIncrement(_turn_key("itpm"), used, 60))
+    warmup: Final = {"input": _INPUT_PAST_40_TOKENS * 4, "generate": False}
 
-    with pytest.raises(litellm.RateLimitError) as refusal:
-        await async_admit_io_token_turn(usage, _turn_deployment("itpm"), _TURN_AT, {"input": turn_input})
+    if admitted:
+        await async_admit_io_token_turn(usage, _turn_deployment("itpm"), _TURN_AT, warmup)
+        return
+    with pytest.raises(litellm.RateLimitError):
+        await async_admit_io_token_turn(usage, _turn_deployment("itpm"), _TURN_AT, warmup)
 
-    assert isinstance(refusal.value, TurnLargerThanItpmError) is not cools_down
+
+def _socket_deployment(deployment_id: str) -> dict[str, object]:
+    return {"litellm_params": {"model": "openai/gpt-5-mini", "itpm": 100}, "model_info": {"id": deployment_id}}
+
+
+_SOCKET_TURN: Final = {"first_message": "{}", "input": _INPUT_PAST_40_TOKENS}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("used_a", "used_b", "request_kwargs", "kept"),
+    [
+        (90, 0, _SOCKET_TURN, ["b"]),
+        (90, 90, _SOCKET_TURN, ["a", "b"]),
+        (100, 90, _SOCKET_TURN, ["a"]),
+        (90, 0, {"input": _INPUT_PAST_40_TOKENS}, ["a", "b"]),
+        (90, 0, {**_SOCKET_TURN, "previous_response_id": "resp_1"}, ["a", "b"]),
+        (90, 0, {**_SOCKET_TURN, "generate": False}, ["a", "b"]),
+    ],
+)
+async def test_a_socket_turn_is_routed_to_a_deployment_with_room_for_it(
+    used_a: int, used_b: int, request_kwargs: Mapping[str, object], kept: list[str]
+) -> None:
+    usage: Final = _memory_usage()
+    usage.increment_local(CounterIncrement(_io("a", "openai/gpt-5-mini", "itpm", "12-34"), used_a, 60))
+    usage.increment_local(CounterIncrement(_io("b", "openai/gpt-5-mini", "itpm", "12-34"), used_b, 60))
+    check: Final = ModelRateLimitingCheck(usage=usage, clock=lambda: _TURN_AT)
+
+    remaining: Final = await check.async_filter_deployments(
+        "g", [_socket_deployment("a"), _socket_deployment("b")], None, dict(request_kwargs)
+    )
+
+    assert [deployment["model_info"]["id"] for deployment in remaining] == kept
 
 
 async def _itpm_350_refusal(
