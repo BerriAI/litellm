@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, cast
 
@@ -20,7 +20,6 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.responses.mcp.chat_stream_round_billing import ChatStreamRoundBilling, engaged_round_billing
 from litellm.responses.mcp.litellm_proxy_mcp_handler import (
     LiteLLM_Proxy_MCP_Handler,
-    MCPToolResult,
 )
 from litellm.responses.mcp.request_context import MCPRequestContext
 from litellm.responses.mcp.round_billing import (
@@ -43,9 +42,9 @@ class _MCPCompletionKwargs(TypedDict, total=False, extra_items=object):
 
 def _add_mcp_metadata_to_response(
     response: ModelResponse | CustomStreamWrapper,
-    openai_tools: Sequence[object] | None,
+    openai_tools: list | None,
     tool_calls: Sequence[object] | None = None,
-    tool_results: Sequence[object] | None = None,
+    tool_results: list | None = None,
 ) -> None:
     """
     Add MCP metadata to response's provider_specific_fields.
@@ -107,8 +106,8 @@ def _add_mcp_metadata_to_response(
 
 async def acompletion_with_mcp(
     model: str,
-    messages: list[object],
-    tools: list[Mapping[str, object]] | None = None,
+    messages: list,
+    tools: list | None = None,
     **kwargs: Unpack[_MCPCompletionKwargs],  # kwargs-ok: forwarded verbatim to litellm.acompletion, which owns them
 ) -> ModelResponse | CustomStreamWrapper:
     """
@@ -236,8 +235,8 @@ async def acompletion_with_mcp(
             def __init__(
                 self,
                 stream_wrapper: CustomStreamWrapper,
-                messages: list[object],
-                tool_server_map: dict[str, str],
+                messages,
+                tool_server_map,
                 user_api_key_auth: "UserAPIKeyAuth | None",
                 mcp_auth_header: str | None,
                 mcp_server_auth_headers: dict[str, dict[str, str]] | None,
@@ -245,8 +244,8 @@ async def acompletion_with_mcp(
                 raw_headers: dict[str, str] | None,
                 litellm_call_id: str | None,
                 litellm_trace_id: str | None,
-                openai_tools: Sequence[object],
-                base_call_args: Mapping[str, object],
+                openai_tools,
+                base_call_args,
                 request_tags: list[str] | None,
             ):
                 self.stream_wrapper = stream_wrapper
@@ -264,7 +263,7 @@ async def acompletion_with_mcp(
                 self.request_tags = request_tags
                 self.collected_chunks: list[ModelResponseStream] = []
                 self.tool_calls: Sequence[object] | None = None
-                self.tool_results: list[MCPToolResult] | None = None
+                self.tool_results: list | None = None
                 self.complete_response: ModelResponse | None = None
                 self.stream_exhausted = False
                 self.tool_execution_done = False
@@ -644,7 +643,7 @@ async def acompletion_with_mcp(
 
         # Helper class to wrap async iterator for sync iteration
         class _SyncIteratorWrapper:
-            def __init__(self, async_iterator, loop: asyncio.AbstractEventLoop):
+            def __init__(self, async_iterator, loop):
                 self._async_iterator = async_iterator
                 self._loop = loop
                 self._iterator = None

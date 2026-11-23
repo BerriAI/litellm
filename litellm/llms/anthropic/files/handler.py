@@ -189,7 +189,7 @@ class AnthropicFilesHandler:
         """
         try:
             anthropic_config: Final = AnthropicConfig()
-            transformed_lines: Final[list[str]] = []
+            transformed_lines: Final = []
 
             # Parse JSONL content
             content_str: Final = anthropic_content.decode("utf-8")

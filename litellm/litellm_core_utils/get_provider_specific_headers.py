@@ -52,7 +52,7 @@ class ProviderSpecificHeaderUtils:
             (provider_specific_header,) if isinstance(provider_specific_header, dict) else provider_specific_header
         )
 
-        matched_headers: Final[dict[str, str]] = {}
+        matched_headers: Final = {}
         for scoped_header in scoped_headers:
             if (
                 "native_anthropic_messages_only" in scoped_header
