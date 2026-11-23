@@ -348,6 +348,7 @@
         "disabled": "Disabled"
       },
       "errors": {
+        "invalidOktaBinding": "Select a trusted Okta issuer and enter the application client ID",
         "providersLoadFailed": "Could not load the gateway's trusted identity providers"
       },
       "regionLabel": "Agent Identity",

@@ -96,14 +96,16 @@ const buildOktaIdentity = (values: AgentFormValues): OktaAgentIdentity | null =>
   return identity?.provider === "okta" ? identity : null;
 };
 
+type OktaBindingError = "agents.identityFields.errors.invalidOktaBinding";
+
 export const buildIdentityParams = (
   values: AgentFormValues,
   existingIdentity?: unknown,
-): { identity?: AgentIdentity | null } => {
+): { identity?: AgentIdentity | null } | OktaBindingError => {
   if (values.identity_provider === undefined) return {};
   if (values.identity_provider === "okta") {
     const identity = buildOktaIdentity(values);
-    if (!identity) throw new Error("Select a trusted Okta issuer and enter the application client ID");
+    if (!identity) return "agents.identityFields.errors.invalidOktaBinding";
     return { identity };
   }
   if (values.identity_provider !== "microsoft_entra")
@@ -137,10 +139,11 @@ export const withAgentIdentity = (
   values: AgentFormValues,
   existing?: Partial<AgentIdentityState>,
   cardEdited = false,
-): AgentRequestPayload => {
+): AgentRequestPayload | OktaBindingError => {
   const { agent_card_params, ...settings } = payload;
   const hasCard = !existing || cardEdited || Object.keys(existing.agent_card_params ?? {}).length > 0;
   const identityFields = buildIdentityParams(values, existing?.identity);
+  if (typeof identityFields === "string") return identityFields;
   const managed = isBoundIdentityProvider(values.identity_provider) || Boolean(readAgentIdentity(existing?.identity));
   return {
     ...settings,
