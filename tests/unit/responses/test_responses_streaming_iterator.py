@@ -740,17 +740,13 @@ async def test_proxy_disconnect_spend_row_keeps_known_cost(
     expected_spend: Final = 0.125 if tokenizer_fails else 0.0
     logging_obj.model_call_details["additional_response_cost"] = expected_spend
 
-    def fail_to_count_tokens(
-        *args: object, **kwargs: object
-    ) -> int:  # kwargs-ok: token_counter accepts keyword arguments
-        raise ValueError("Tokenizer failed")
-
-    if tokenizer_fails:
-        monkeypatch.setattr(litellm, "token_counter", fail_to_count_tokens)
-
     recorder: Final = SpendRecorder()
     logging_obj.dynamic_async_success_callbacks = [recorder]
     iterator: Final = _live_iterator(logging_obj)
+    if tokenizer_fails:
+        iterator.request_data["input"] = [
+            {"role": "user", "content": [{"type": "input_image", "image_url": "", "detail": "high"}]}
+        ]
     for event in (_CREATED_WITH_PRIORITY_TIER, _text_delta("A partial answer.", 1)):
         iterator._process_chunk(json.dumps(event))
 
