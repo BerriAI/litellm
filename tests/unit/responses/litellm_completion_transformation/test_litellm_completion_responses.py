@@ -8981,3 +8981,165 @@ def test_a_malformed_item_after_a_codex_additional_tools_item_is_named_by_its_in
         )
 
     assert f"'{field_path}'" in raised.value.message
+
+
+_HELLO: Final = {"role": "assistant", "content": "Hello!"}
+_EMPTY_USER_TURN: Final = {"role": "user", "content": ""}
+
+
+@pytest.mark.parametrize(
+    ("model", "custom_llm_provider", "last_item", "extra_kwargs", "expected_tail"),
+    [
+        pytest.param("gemini/gemini-3.8-flash", None, {"role": "user"}, {}, [_HELLO, _EMPTY_USER_TURN], id="gemini"),
+        pytest.param(
+            "gemini-3.8-flash",
+            "vertex_ai",
+            {"role": "user", "content": None},
+            {},
+            [_HELLO, _EMPTY_USER_TURN],
+            id="vertex_ai_gemini",
+        ),
+        pytest.param(
+            "1234567890123",
+            "vertex_ai",
+            {"role": "user"},
+            {"base_model": "vertex_ai/gemini-3.8-flash"},
+            [_HELLO, _EMPTY_USER_TURN],
+            id="vertex_ai_endpoint_with_a_gemini_base_model",
+        ),
+        pytest.param(
+            "1234567890123",
+            "vertex_ai",
+            {"role": "user"},
+            {"model_info": {"base_model": "vertex_ai/gemini-3.8-flash"}},
+            [_HELLO, _EMPTY_USER_TURN],
+            id="vertex_ai_endpoint_with_a_gemini_base_model_in_model_info",
+        ),
+        pytest.param(
+            "1234567890123",
+            "vertex_ai",
+            {"role": "user"},
+            {"base_model": "vertex_ai/claude-sonnet-4-5", "model_info": {"base_model": "vertex_ai/gemini-3.8-flash"}},
+            [_HELLO],
+            id="vertex_ai_endpoint_base_model_param_wins_over_model_info",
+        ),
+        pytest.param(
+            "1234567890",
+            "vertex_ai",
+            {"role": "user"},
+            {"api_base": "http://10.96.32.8"},
+            [_HELLO, _EMPTY_USER_TURN],
+            id="vertex_ai_private_service_connect_endpoint",
+        ),
+        pytest.param(
+            "claude-sonnet-4-5", "vertex_ai", {"role": "user"}, {}, [_HELLO], id="vertex_ai_claude_accepts_it_as_before"
+        ),
+        pytest.param(
+            "command-a-03-2025", "cohere", {"role": "user"}, {}, [_HELLO], id="cohere_accepts_a_model_turn_end"
+        ),
+        pytest.param(
+            "gemini/gemini-3.8-flash",
+            None,
+            {"role": "user"},
+            {"ensure_alternating_roles": True},
+            [_HELLO, _EMPTY_USER_TURN],
+            id="gemini_with_ensure_alternating_roles",
+        ),
+        pytest.param(
+            "gemini/gemini-3.8-flash",
+            None,
+            {"role": "user", "content": "Go on"},
+            {},
+            [_HELLO, {"role": "user", "content": "Go on"}],
+            id="gemini_with_user_text",
+        ),
+        pytest.param(
+            "gemini/gemini-3.8-flash",
+            None,
+            {"role": "assistant", "content": "Sure,"},
+            {},
+            [_HELLO, {"role": "assistant", "content": "Sure,"}],
+            id="gemini_with_assistant_prefill",
+        ),
+        pytest.param("an-unmapped-model", None, {"role": "user"}, {}, [_HELLO], id="unresolvable_provider"),
+    ],
+)
+def test_a_dropped_trailing_user_item_becomes_an_empty_user_turn_only_for_a_gemini_target(
+    model: str,
+    custom_llm_provider: str | None,
+    last_item: dict[str, object],
+    extra_kwargs: dict[str, object],
+    expected_tail: list[dict[str, object]],
+) -> None:
+    result: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        model=model,
+        input=[{"role": "user", "content": "Hi"}, _HELLO, last_item],
+        responses_api_request={},
+        custom_llm_provider=custom_llm_provider,
+        **extra_kwargs,
+    )
+
+    assert [
+        {key: message_field(message, key) for key in ("role", "content")} for message in result["messages"][1:]
+    ] == expected_tail
+
+
+@pytest.mark.parametrize(
+    ("input_items", "expected_roles"),
+    [
+        pytest.param(
+            [
+                {"role": "user", "content": "Hi"},
+                {"type": "function_call", "call_id": "call_1", "name": "lookup", "arguments": "{}"},
+                {"type": "function_call_output", "call_id": "call_1", "output": "42"},
+                {"role": "user"},
+            ],
+            ["user", "assistant", "tool"],
+            id="after_a_tool_result",
+        ),
+        pytest.param([{"role": "user", "content": "Hi"}, {"role": "user"}], ["user"], id="after_a_user_message"),
+    ],
+)
+def test_a_dropped_empty_user_item_gets_no_empty_user_turn_for_gemini_when_a_user_side_turn_ends_the_request(
+    input_items: list[dict[str, object]], expected_roles: list[str]
+) -> None:
+    result: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        model="gemini/gemini-3.8-flash",
+        input=input_items,
+        responses_api_request={},
+        custom_llm_provider=None,
+    )
+
+    assert [message_field(message, "role") for message in result["messages"]] == expected_roles
+
+
+@pytest.mark.parametrize("empty_item", [{"role": "user", "content": None}, {"role": "user"}], ids=["null", "missing"])
+def test_an_empty_user_item_after_a_previous_response_reaches_gemini_as_an_empty_user_turn(
+    empty_item: dict[str, object],
+) -> None:
+    async def session_lookup(previous_response_id: str) -> ChatCompletionSession:
+        return ChatCompletionSession(
+            messages=[{"role": "user", "content": "Hi"}, Message(role="assistant", content="Hello!")],
+            litellm_session_id=None,
+        )
+
+    bridged: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        model="gemini/gemini-3.8-flash",
+        input=[empty_item],
+        responses_api_request={"previous_response_id": "resp_earlier"},
+        custom_llm_provider=None,
+    )
+    request: Final = asyncio.run(
+        LiteLLMCompletionResponsesConfig.async_responses_api_session_handler(
+            previous_response_id="resp_earlier",
+            litellm_completion_request=bridged,
+            instructions=None,
+            session_lookup=session_lookup,
+        )
+    )
+
+    assert [(message_field(message, "role"), message_field(message, "content")) for message in request["messages"]] == [
+        ("user", "Hi"),
+        ("assistant", "Hello!"),
+        ("user", ""),
+    ]
