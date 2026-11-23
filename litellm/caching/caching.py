@@ -973,7 +973,10 @@ class Cache:
                 return
             with response_cache_phase("set"):
                 cache_key, cached_data, kwargs = self._add_cache_logic(result=result, **kwargs)
-                self.cache.set_cache(cache_key, cached_data, reset_ttl=True, **kwargs)
+                if isinstance(self.cache, InMemoryCache):
+                    self.cache.set_cache(cache_key, cached_data, reset_ttl=True, **kwargs)
+                else:
+                    self.cache.set_cache(cache_key, cached_data, **kwargs)
         except Exception as e:
             self._log_add_cache_failure(e)
 
@@ -997,10 +1000,11 @@ class Cache:
                     await self.batch_cache_write(result, **kwargs)
                 else:
                     cache_key, cached_data, kwargs = self._add_cache_logic(result=result, **kwargs)
-                    if dynamic_cache_object is not None:
-                        await dynamic_cache_object.async_set_cache(cache_key, cached_data, reset_ttl=True, **kwargs)
+                    target_cache = dynamic_cache_object or self.cache
+                    if isinstance(target_cache, InMemoryCache):
+                        await target_cache.async_set_cache(cache_key, cached_data, reset_ttl=True, **kwargs)
                     else:
-                        await self.cache.async_set_cache(cache_key, cached_data, reset_ttl=True, **kwargs)
+                        await target_cache.async_set_cache(cache_key, cached_data, **kwargs)
         except Exception as e:
             self._log_add_cache_failure(e)
 
