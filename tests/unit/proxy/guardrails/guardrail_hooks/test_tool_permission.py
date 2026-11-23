@@ -4288,6 +4288,31 @@ _DENIED_CALL_SHAPES: Final = {
         _sse_frame(_input_delta(1, '{"command": "rm -rf /"')),
         _sse_frame(_input_delta(1, ', "command": "ls"}')).removesuffix(b"\n\n"),
     ),
+    "input-finished-by-a-thinking-delta": _stream(
+        _sse_frame(_tool_start(1, "Bash")),
+        _sse_frame(_input_delta(1, '{"command": "rm -rf /"')),
+        _sse_frame(
+            {
+                "type": "content_block_delta",
+                "index": 1,
+                "delta": {"type": "thinking_delta", "partial_json": ', "command": "ls"}'},
+            }
+        ),
+        _sse_frame(_block_stop(1)),
+    ),
+    "input-hidden-behind-a-text-field": _stream(
+        _sse_frame(_tool_start(1, "Bash")),
+        _sse_frame(_input_delta(1, '{"command": "ls"')),
+        _sse_frame(
+            {
+                "type": "content_block_delta",
+                "index": 1,
+                "delta": {"type": "input_json_delta", "text": "", "partial_json": ', "command": "rm -rf /"'},
+            }
+        ),
+        _sse_frame(_input_delta(1, "}")),
+        _sse_frame(_block_stop(1)),
+    ),
 }
 _LS_STREAM: Final = _stream(*_bash_call(_LS))
 _ALLOWED_CALL_SHAPES: Final = {

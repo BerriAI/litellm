@@ -826,6 +826,28 @@ def _is_block_index(value: object, expected: int) -> bool:
     return type(value) is int and value == expected
 
 
+_DELTA_FIELD_BY_TYPE: Final = MappingProxyType(
+    {
+        "text_delta": "text",
+        "citations_delta": "citation",
+        "input_json_delta": "partial_json",
+        "thinking_delta": "thinking",
+        "signature_delta": "signature",
+    }
+)
+
+_DELTA_FIELDS: Final = frozenset(_DELTA_FIELD_BY_TYPE.values())
+
+
+def _carries_only_its_own_field(event: Mapping[str, object]) -> bool:
+    delta: Final = as_str_mapping(event.get("delta"))
+    delta_type: Final = delta.get("type") if delta is not None else None
+    if delta is None or not isinstance(delta_type, str):
+        return False
+    own_field: Final = _DELTA_FIELD_BY_TYPE.get(delta_type)
+    return _DELTA_FIELDS.intersection(delta) == (frozenset((own_field,)) if own_field else frozenset())
+
+
 def _after_block_event(blocks: tuple[int, bool] | None, event: Mapping[str, object]) -> tuple[int, bool] | None:
     if blocks is None:
         return None
@@ -835,7 +857,8 @@ def _after_block_event(blocks: tuple[int, bool] | None, event: Mapping[str, obje
         case "content_block_start":
             return (started + 1, True) if not is_open and _is_block_index(index, started) else None
         case "content_block_delta":
-            return blocks if is_open and _is_block_index(index, started - 1) else None
+            reads_alike: Final = is_open and _is_block_index(index, started - 1) and _carries_only_its_own_field(event)
+            return blocks if reads_alike else None
         case "content_block_stop":
             return (started, False) if is_open and _is_block_index(index, started - 1) else None
         case _:
@@ -856,11 +879,12 @@ def anthropic_sse_reads_alike(all_chunks: Sequence[object]) -> bool:
     The Anthropic SDKs apply a frame by its SSE ``event:`` name, other clients by its data ``type``, and a
     client puts a block delta on the block at that list position or index. Assembly reads every one of
     these the same way only when the names and types agree, ``message_start`` comes first with no content,
-    and each block starts at the next index and takes its deltas before it stops. A frame named ``error``
-    may carry any data, since the SDKs raise on it and other clients read its type. A leading byte order
-    mark stays part of the first field name, as the Python SDK reads it, so these rules refuse it wherever
-    it changes what that SDK reads. No client dispatches a frame the stream never ended, so a stream with
-    one reads differently too.
+    and each block starts at the next index and takes its deltas before it stops. The SDKs apply a delta by
+    its ``type`` and assembly by the field it carries, so each delta carries only its type's field. A frame
+    named ``error`` may carry any data, since the SDKs raise on it and other clients read its type. A leading
+    byte order mark stays part of the first field name, as the Python SDK reads it, so these rules refuse it
+    wherever it changes what that SDK reads. No client dispatches a frame the stream never ended, so a stream
+    with one reads differently too.
     """
     sse_stream: Final = _joined_sse_stream(all_chunks) or ""
     client_frames: Final = _client_frames(_frames_a_client_dispatches(sse_stream))
