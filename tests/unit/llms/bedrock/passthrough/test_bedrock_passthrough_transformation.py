@@ -1102,6 +1102,60 @@ async def test_openai_shaped_invoke_stream_passthrough_bills_a_stream_that_ends_
     assert callback.kwargs["response_cost"] > 0
 
 
+UNMAPPED_INVOKE_MODEL: Final = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/a1b2c3d4e5f6"
+LLAMA_SHAPED_TEXTS: Final = ("Hello", " there", "!")
+UNMAPPED_INVOKE_STREAMS: Final = (
+    pytest.param(
+        _invoke_chunk(
+            {
+                "type": "message_start",
+                "message": {"id": "msg-1", "role": "assistant", "content": [], "usage": {"input_tokens": 3}},
+            }
+        )
+        + _invoke_chunk({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Hi"}})
+        + _invoke_chunk({"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 1}})
+        + _invoke_chunk({"type": "message_stop", **INVOCATION_METRICS}),
+        "",
+        id="anthropic-shaped",
+    ),
+    pytest.param(
+        b"".join(
+            _invoke_chunk({"generation": text, "generation_token_count": 1, "stop_reason": None})
+            for text in LLAMA_SHAPED_TEXTS
+        )
+        + _invoke_chunk({"generation": "", "stop_reason": "stop", **INVOCATION_METRICS}),
+        "".join(LLAMA_SHAPED_TEXTS),
+        id="llama-shaped",
+    ),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("stream", "logged_text"), UNMAPPED_INVOKE_STREAMS)
+async def test_unmapped_invoke_stream_passthrough_bills_the_tokens_bedrock_reports(
+    stream: bytes, logged_text: str
+) -> None:
+    endpoint: Final = f"/model/{UNMAPPED_INVOKE_MODEL}/invoke-with-response-stream"
+    callback: Final = _CaptureAsyncSuccessCallback()
+    logging_obj: Final = _stream_logging_obj(endpoint, [callback], model=UNMAPPED_INVOKE_MODEL)
+    collector: Final = BedrockPassthroughConfig().create_stream_collector(
+        model=UNMAPPED_INVOKE_MODEL, custom_llm_provider="bedrock", endpoint=endpoint
+    )
+    _feed(collector, stream, chunk_size=7)
+
+    response: Final = collector.build_logged_response(logging_obj)
+    await logging_obj.async_flush_passthrough_collected_chunks(collector=collector)
+
+    assert isinstance(response, ModelResponse)
+    assert response.choices[0].message.content == logged_text
+    assert callback.kwargs is not None
+    standard_logging_object: Final = _STANDARD_LOGGING_OBJECT.validate_python(callback.kwargs["standard_logging_object"])
+    assert (standard_logging_object["prompt_tokens"], standard_logging_object["completion_tokens"]) == (
+        OPENAI_SHAPED_PROMPT_TOKENS,
+        OPENAI_SHAPED_COMPLETION_TOKENS,
+    )
+
+
 def test_stream_collector_logs_nothing_for_an_unrecognized_endpoint():
     collector = BedrockPassthroughConfig().create_stream_collector(
         model=CONVERSE_MODEL, custom_llm_provider="bedrock", endpoint=f"/model/{CONVERSE_MODEL}/rerank"

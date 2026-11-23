@@ -306,11 +306,14 @@ def _with_invoke_trace(chunk: ModelResponseStream, trace: Mapping[str, object] |
     )
 
 
-def _translate_message(decoder: "AWSEventStreamDecoder", message: str) -> ModelResponseStream | None:
+def _translate_message(
+    decoder: "AWSEventStreamDecoder", message: str, bills_invocation_metrics: bool
+) -> ModelResponseStream | None:
     from litellm.litellm_core_utils.streaming_handler import (
         convert_generic_chunk_to_model_response_stream,
         generic_chunk_has_all_required_fields,
     )
+    from litellm.llms.bedrock.chat.invoke_handler import invocation_metrics_usage
     from litellm.llms.openai.common_utils import OpenAIError
     from litellm.types.utils import GenericStreamingChunk
 
@@ -322,11 +325,16 @@ def _translate_message(decoder: "AWSEventStreamDecoder", message: str) -> ModelR
         return None
     if isinstance(translated_chunk, ModelResponseStream):
         return _with_invoke_trace(translated_chunk, trace)
-    if generic_chunk_has_all_required_fields(cast(dict, translated_chunk)):
-        return _with_invoke_trace(
-            convert_generic_chunk_to_model_response_stream(cast(GenericStreamingChunk, translated_chunk)), trace
-        )
-    return None
+    if not generic_chunk_has_all_required_fields(cast(dict, translated_chunk)):
+        return None
+    generic_chunk: Final = cast(GenericStreamingChunk, translated_chunk)
+    response_chunk: Final = convert_generic_chunk_to_model_response_stream(generic_chunk)
+    bedrock_usage: Final = (
+        invocation_metrics_usage(event) if bills_invocation_metrics and generic_chunk.get("usage") is None else None
+    )
+    return _with_invoke_trace(
+        response_chunk if bedrock_usage is None else response_chunk.model_copy(update={"usage": bedrock_usage}), trace
+    )
 
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object])
@@ -525,11 +533,13 @@ class BedrockEventStreamCollector:
         parse_event: Callable[["EventStreamMessage"], str | None],
         decoder: Optional["AWSEventStreamDecoder"],
         service_tier: str | None = None,
+        bills_invocation_metrics: bool = False,
     ) -> None:
         from botocore.eventstream import EventStreamBuffer
 
         self._parse_event = parse_event
         self._decoder = decoder
+        self._bills_invocation_metrics: Final = bills_invocation_metrics
         self._service_tier: Final = service_tier
         self._event_stream_buffer: Final[EventStreamBuffer] = EventStreamBuffer()
         self._chunks: Final = _CoalescedChunks()
@@ -543,7 +553,9 @@ class BedrockEventStreamCollector:
 
     def _add_event(self, decoder: "AWSEventStreamDecoder", event: "EventStreamMessage") -> None:
         message: Final = self._parse_event(event)
-        translated: Final = _translate_message(decoder, message) if message is not None else None
+        translated: Final = (
+            _translate_message(decoder, message, self._bills_invocation_metrics) if message is not None else None
+        )
         if translated is not None:
             self._chunks.add(translated)
 
@@ -740,21 +752,26 @@ class BedrockPassthroughConfig(BaseAWSLLM, BedrockModelInfo, BedrockEventStreamD
         *,
         response_headers: Mapping[str, str] = _NO_RESPONSE_HEADERS,
     ) -> PassthroughStreamCollector:
-        return BedrockEventStreamCollector(
-            parse_event=self._parse_message_from_event,
-            decoder=self._get_event_stream_decoder(model=model, endpoint=endpoint),
-            service_tier=served_service_tier(response_headers),
-        )
-
-    def _get_event_stream_decoder(self, model: str, endpoint: str) -> Optional["AWSEventStreamDecoder"]:
-        from litellm.llms.bedrock.chat import get_bedrock_event_stream_decoder
         from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
             AmazonInvokeConfig,
         )
 
+        invoke_provider: Final = AmazonInvokeConfig.get_bedrock_invoke_provider(model) if "invoke" in endpoint else None
+        return BedrockEventStreamCollector(
+            parse_event=self._parse_message_from_event,
+            decoder=self._get_event_stream_decoder(model=model, endpoint=endpoint, invoke_provider=invoke_provider),
+            service_tier=served_service_tier(response_headers),
+            bills_invocation_metrics="invoke" in endpoint and invoke_provider is None,
+        )
+
+    def _get_event_stream_decoder(
+        self, model: str, endpoint: str, invoke_provider: str | None
+    ) -> Optional["AWSEventStreamDecoder"]:
+        from litellm.llms.bedrock.chat import get_bedrock_event_stream_decoder
+
         if "invoke" in endpoint:
             return get_bedrock_event_stream_decoder(
-                invoke_provider=AmazonInvokeConfig.get_bedrock_invoke_provider(model),
+                invoke_provider=invoke_provider,
                 model=model,
                 sync_stream=True,
                 json_mode=False,

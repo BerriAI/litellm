@@ -203,20 +203,22 @@ def _invocation_token_counts(metrics: object) -> _InvocationTokenCounts | None:
         return None
 
 
+def invocation_metrics_usage(event: Mapping[str, object]) -> Usage | None:
+    counts: Final = _invocation_token_counts(event.get(_INVOCATION_METRICS_FIELD))
+    if counts is None:
+        return None
+    return Usage(
+        prompt_tokens=counts.input_tokens,
+        completion_tokens=counts.output_tokens,
+        total_tokens=counts.input_tokens + counts.output_tokens,
+    )
+
+
 def _with_invocation_metrics_usage(chunk_data: Mapping[str, object]) -> Mapping[str, object]:
     if chunk_data.get("usage") is not None:
         return chunk_data
-    counts: Final = _invocation_token_counts(chunk_data.get(_INVOCATION_METRICS_FIELD))
-    if counts is None:
-        return chunk_data
-    return {
-        **chunk_data,
-        "usage": Usage(
-            prompt_tokens=counts.input_tokens,
-            completion_tokens=counts.output_tokens,
-            total_tokens=counts.input_tokens + counts.output_tokens,
-        ),
-    }
+    usage: Final = invocation_metrics_usage(chunk_data)
+    return chunk_data if usage is None else {**chunk_data, "usage": usage}
 
 
 def response_format_schema_from_request(data: str, json_mode: bool | None) -> ResponseFormatSchema | None:
