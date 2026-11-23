@@ -446,19 +446,21 @@ class OAuthTokenCache:
         fetch_token: Callable[[], tuple[str, timedelta]],
         expiry_buffer: timedelta,
         clock: Callable[[], datetime],
-        lock: AbstractContextManager[object],
+        fetch_lock: AbstractContextManager[object],
+        state_lock: AbstractContextManager[object],
     ) -> None:
         self._fetch_token: Final = fetch_token
         self._expiry_buffer: Final = expiry_buffer
         self._clock: Final = clock
-        self._lock: Final = lock
+        self._fetch_lock: Final = fetch_lock
+        self._state_lock: Final = state_lock
         self._cached: _CachedToken | None = None
         self._failed_fetches = 0
         self._last_fetch_error: Exception | None = None
 
     def __call__(self) -> str:
         failed_fetches_before_waiting: Final = self._failed_fetches
-        with self._lock:
+        with self._fetch_lock:
             now: Final = self._clock()
             cached: Final = self._cached
             if cached is not None and now <= cached.refresh_at:
@@ -470,25 +472,34 @@ class OAuthTokenCache:
             except Exception as err:
                 self._failed_fetches += 1
                 self._last_fetch_error = err
-                checked_at: Final = self._clock()
-                still_cached: Final = self._cached
-                if still_cached is None or checked_at >= still_cached.expires_at:
+                still_valid_token: Final = self._back_off_refresh()
+                if still_valid_token is None:
                     raise
                 verbose_logger.warning("SAP token refresh failed, reusing the cached token until it expires: %s", err)
-                self._cached = replace(still_cached, refresh_at=checked_at + (still_cached.expires_at - checked_at) / 2)
-                return still_cached.value
+                return still_valid_token
             self._last_fetch_error = None
-            self._cached = _CachedToken(
-                value=token,
-                refresh_at=now + lifetime - min(self._expiry_buffer, lifetime / 2),
-                expires_at=now + lifetime,
-            )
+            with self._state_lock:
+                self._cached = _CachedToken(
+                    value=token,
+                    refresh_at=now + lifetime - min(self._expiry_buffer, lifetime / 2),
+                    expires_at=now + lifetime,
+                )
             return token
 
+    def _back_off_refresh(self) -> str | None:
+        with self._state_lock:
+            cached: Final = self._cached
+            now: Final = self._clock()
+            if cached is None or now >= cached.expires_at:
+                return None
+            self._cached = replace(cached, refresh_at=now + (cached.expires_at - now) / 2)
+            return cached.value
+
     def invalidate(self, rejected_token: str) -> None:
-        cached: Final = self._cached
-        if cached is not None and cached.value == rejected_token:
-            self._cached = None
+        with self._state_lock:
+            cached: Final = self._cached
+            if cached is not None and cached.value == rejected_token:
+                self._cached = None
 
 
 def get_token_creator(
@@ -608,4 +619,4 @@ def _cached_token_getter(
         # Defensive guard: should never reach here due to validate_credentials()
         raise ValueError("Invalid authentication configuration: no valid credentials found. ")
 
-    return OAuthTokenCache(_fetch_token, timedelta(minutes=expiry_buffer_minutes), clock, Lock())
+    return OAuthTokenCache(_fetch_token, timedelta(minutes=expiry_buffer_minutes), clock, Lock(), Lock())

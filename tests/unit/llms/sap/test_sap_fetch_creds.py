@@ -302,7 +302,7 @@ def test_a_failed_refresh_never_returns_a_token_that_stopped_working_while_it_ra
         raise RuntimeError("Token request failed: Service Unavailable")
 
     token_cache: Final = sap_credentials.OAuthTokenCache(
-        refresh_that_fails, timedelta(minutes=60), clock, threading.Lock()
+        refresh_that_fails, timedelta(minutes=60), clock, threading.Lock(), threading.Lock()
     )
     assert token_cache() == "Bearer first"
     clock.move_to(_T0 + timedelta(hours=11, minutes=30))
@@ -325,6 +325,7 @@ def test_a_rejected_token_is_dropped_without_waiting_for_a_token_fetch_in_progre
         timedelta(minutes=60),
         lambda: _T0,
         threading.Lock(),
+        threading.Lock(),
     )
 
     with ThreadPoolExecutor(max_workers=1) as pool:
@@ -336,6 +337,60 @@ def test_a_rejected_token_is_dropped_without_waiting_for_a_token_fetch_in_progre
 
     assert fresh_token == "Bearer fresh"
     assert token_cache() == "Bearer fresh"
+
+
+class _LockThatFlagsContention:
+    def __init__(self, contended: threading.Event) -> None:
+        self._contended: Final = contended
+        self._lock: Final = threading.Lock()
+
+    def __enter__(self) -> bool:
+        if self._lock.acquire(blocking=False):
+            return True
+        self._contended.set()
+        return self._lock.acquire()
+
+    def __exit__(self, *_: object) -> None:
+        self._lock.release()
+
+
+def test_a_rejection_that_arrives_while_a_failed_refresh_falls_back_is_never_undone() -> None:
+    contended: Final = threading.Event()
+    refresh_failed: Final = threading.Event()
+    rejection_sent: Final = threading.Event()
+    rejections: Final = queue.SimpleQueue[threading.Thread]()
+    first_fetch: Final = iter((("Bearer first", timedelta(hours=12)),))
+    call_times: Final = iter((_T0,))
+
+    def refresh_that_fails() -> tuple[str, timedelta]:
+        token: Final = next(first_fetch, None)
+        if token is not None:
+            return token
+        refresh_failed.set()
+        raise RuntimeError("Token request failed: Service Unavailable")
+
+    def clock_that_lets_a_401_arrive_once_the_refresh_failed() -> datetime:
+        if refresh_failed.is_set() and not rejection_sent.is_set():
+            rejection_sent.set()
+            another_request_gets_401: Final = threading.Thread(target=token_cache.invalidate, args=("Bearer first",))
+            rejections.put(another_request_gets_401)
+            another_request_gets_401.start()
+            contended.wait(timeout=5)
+        return next(call_times, _T0 + timedelta(hours=11, minutes=30))
+
+    token_cache: Final = sap_credentials.OAuthTokenCache(
+        refresh_that_fails,
+        timedelta(minutes=60),
+        clock_that_lets_a_401_arrive_once_the_refresh_failed,
+        threading.Lock(),
+        _LockThatFlagsContention(contended),
+    )
+    assert token_cache() == "Bearer first"
+    token_cache()
+    rejections.get().join(timeout=5)
+
+    with pytest.raises(RuntimeError, match="Service Unavailable"):
+        token_cache()
 
 
 @pytest.mark.parametrize(
@@ -399,6 +454,7 @@ def test_requests_waiting_on_a_failing_token_fetch_share_its_error() -> None:
         timedelta(minutes=60),
         lambda: _T0,
         _LockThatCountsArrivals(arrived),
+        threading.Lock(),
     )
 
     results: Final = _results_of_concurrent_requests(token_cache, concurrent_requests)
@@ -428,6 +484,7 @@ def test_requests_waiting_on_a_failing_refresh_reuse_the_unexpired_cached_token(
         timedelta(minutes=60),
         lambda: next(call_times, _T0 + timedelta(hours=11, minutes=30)),
         _LockThatCountsArrivals(arrived),
+        threading.Lock(),
     )
     assert token_cache() == "Bearer first"
     assert arrived.acquire(timeout=5)
