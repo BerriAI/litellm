@@ -44,9 +44,9 @@ class TogetherAITextCompletionConfig(OpenAITextCompletionConfig):
         self,
         model: str,
         messages: list[AllMessageValues] | list[OpenAITextCompletionUserMessage],
-        optional_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: dict[str, object],
+        headers: dict[str, object],
+    ) -> dict[str, object]:
         prompt: Final = self._transform_prompt(messages)
         return {
             "model": model,
