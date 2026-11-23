@@ -389,3 +389,32 @@ async def test_inbound_insert_acknowledges_duplicates_and_rejects_a_replaced_sub
             assert not await receiver.enqueue_current(active, _delivery(row.id))
         finally:
             await admin.delete(row.id)
+
+
+@pytest.mark.asyncio
+async def test_delayed_teardown_ack_is_scoped_to_the_terminated_generation() -> None:
+    async with _connected() as old, _connected() as new:
+        row: Final = await _active(old)
+        try:
+            original: Final = await old.get(row.id)
+            assert original is not None and await old.end_if_current(row.id, "up_1", original.generation)
+            assert await new.reserve(row.model_copy(update={"upstream_secret": ROTATED}))
+            activate: Final = Activation(
+                client_secret=SECRET,
+                upstream_subscription_id="up_1",
+                upstream_refresh_before=None,
+                refresh_before=None,
+                cursor=None,
+            )
+            assert await new.activate(row.id, activate)
+            replacement: Final = await new.get(row.id)
+            assert replacement is not None and replacement.generation != original.generation
+            assert await new.end_if_current(row.id, "up_1", replacement.generation)
+            await old.acknowledge_teardown(original)
+            pending_ack: Final = await new.get(row.id)
+            assert pending_ack is not None and pending_ack.upstream_subscription_id == "up_1"
+            await new.acknowledge_teardown(replacement)
+            acknowledged: Final = await new.get(row.id)
+            assert acknowledged is not None and acknowledged.upstream_subscription_id is None
+        finally:
+            await new.delete(row.id)

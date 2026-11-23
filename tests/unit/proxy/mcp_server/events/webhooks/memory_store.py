@@ -39,9 +39,9 @@ class MemoryStore:
         self.rows[row.id] = pending_row(row)
         return True
 
-    async def discard_pending(self, subscription_id: str) -> None:
+    async def discard_pending(self, subscription_id: str, generation: str | None = None) -> None:
         current: Final = self.rows.get(subscription_id)
-        if current is not None and current.status == "pending":
+        if current is not None and current.status == "pending" and generation in (None, current.generation):
             self.rows.pop(subscription_id)
 
     def _update_live(self, subscription_id: str, **fields: object) -> bool:  # noqa: ANN003  # test double mirrors a guarded UPDATE
@@ -55,7 +55,11 @@ class MemoryStore:
         self, subscription_id: str, activation: Activation, from_statuses: tuple[str, ...] = LIVE_STATUSES
     ) -> ActivatedCursor | None:
         current: Final = self.rows.get(subscription_id)
-        if current is None or current.status not in from_statuses:
+        if (
+            current is None
+            or current.status not in from_statuses
+            or activation.expected_generation not in (None, current.generation)
+        ):
             return None
         pending: Final = any(item.subscription_id == subscription_id for item in self.queue.values())
         watermark: Final = ActivatedCursor(cursor=current.cursor if pending else activation.cursor)
@@ -73,9 +77,10 @@ class MemoryStore:
         self._update_live(
             subscription_id,
             status="active",
+            generation=uuid.uuid4().hex,
             consecutive_failures=0,
             cursor=watermark.cursor,
-            **activation.model_dump(exclude={"reactivation_gap_id", "cursor"}),
+            **activation.model_dump(exclude={"expected_generation", "reactivation_gap_id", "cursor"}),
         )
         return watermark
 
@@ -99,16 +104,29 @@ class MemoryStore:
             status="suspended" if current.status == "active" and failures >= suspend_after else current.status,
         )
 
-    async def end_if_current(self, subscription_id: str, upstream_subscription_id: str | None) -> bool:
+    async def end_if_current(
+        self, subscription_id: str, upstream_subscription_id: str | None, generation: str | None = None
+    ) -> bool:
         current: Final = self.rows.get(subscription_id)
         if (
             current is None
             or current.status == "terminated"
+            or generation not in (None, current.generation)
             or current.upstream_subscription_id != upstream_subscription_id
         ):
             return False
         self.rows[subscription_id] = current.model_copy(update={"status": "terminated"})
+        await self.drop_deliveries(subscription_id)
         return True
+
+    async def acknowledge_teardown(self, row: SubscriptionRow) -> None:
+        current: Final = self.rows.get(row.id)
+        if current is not None and (current.status, current.generation, current.upstream_subscription_id) == (
+            "terminated",
+            row.generation,
+            row.upstream_subscription_id,
+        ):
+            self.rows[row.id] = current.model_copy(update={"upstream_subscription_id": None})
 
     async def hold_for_unsubscribe(self, subscription_id: str, upstream_subscription_id: str | None) -> bool:
         current: Final = self.rows.get(subscription_id)
