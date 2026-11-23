@@ -33,9 +33,15 @@ from litellm.router_strategy.lowest_tpm_rpm_v2 import (
 )
 from litellm.types.router import DeploymentTypedDict, RouterRateLimitError
 from litellm.types.utils import StandardLoggingPayload
-from litellm.utils import get_utc_datetime
 
 ### UNIT TESTS FOR TPM/RPM ROUTING ###
+
+FIXED_NOW = datetime(2026, 1, 1, 12, 0, 30, tzinfo=timezone.utc)
+
+
+@pytest.fixture(autouse=True)
+def fixed_router_clock(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("litellm.router_strategy.lowest_tpm_rpm_v2.get_utc_datetime", lambda: FIXED_NOW)
 
 
 def _memory_usage() -> RouterUsageStore:
@@ -97,7 +103,7 @@ def test_tpm_rpm_updated():
         start_time=start_time,
         end_time=end_time,
     )
-    dt = get_utc_datetime()
+    dt = FIXED_NOW
     current_minute = dt.strftime("%H-%M")
     tpm_counter = UsageCounter.for_deployment(deployment_id, deployment, "tpm", current_minute)
     rpm_counter = UsageCounter.for_deployment(deployment_id, deployment, "rpm", current_minute)
@@ -547,7 +553,7 @@ async def test_router_completion_streaming():
     if response is not None:
         ## CALL 3
         await asyncio.sleep(1)  # let the token update happen
-        dt = get_utc_datetime()
+        dt = FIXED_NOW
         current_minute = dt.strftime("%H-%M")
         picked_deployment = router.lowesttpm_logger_v2.get_available_deployments(
             model_group=model,

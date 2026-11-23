@@ -4,9 +4,10 @@ Tests for separate ITPM/OTPM deployment rate limits (enforce_model_rate_limits).
 
 import asyncio
 import contextvars
+import sys
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Final, Literal
 
 import httpx
@@ -54,6 +55,15 @@ UNMAPPED_MODEL = "openai/litellm-io-unmapped-model"
 UNMAPPED_MODEL_DEFAULT_MAX_OUTPUT = 4096
 AZURE_BASE_MODEL = "azure/gpt-5"
 AZURE_BASE_MODEL_MAX_OUTPUT = litellm.get_model_info(model=AZURE_BASE_MODEL)["max_output_tokens"]
+FIXED_NOW = datetime(2026, 1, 1, 12, 0, 30, tzinfo=timezone.utc)
+
+
+@pytest.fixture(autouse=True)
+def fixed_router_clock(monkeypatch: pytest.MonkeyPatch) -> None:
+    fixed_clock = lambda: FIXED_NOW
+    monkeypatch.setattr(sys.modules[__name__], "get_utc_datetime", fixed_clock)
+    monkeypatch.setattr("litellm.router_utils.pre_call_checks.io_token_rate_limit_check.get_utc_datetime", fixed_clock)
+    monkeypatch.setattr("litellm.router_utils.pre_call_checks.model_rate_limit_check.get_utc_datetime", fixed_clock)
 
 
 def _memory_usage() -> RouterUsageStore:
@@ -132,8 +142,6 @@ class TestIOTokenRateLimitHelpers:
 class TestModelRateLimitingCheckIOTokens:
     @pytest.mark.asyncio
     async def test_itpm_reservation_and_reconcile(self):
-        from litellm.utils import get_utc_datetime
-
         usage = _memory_usage()
         check = ModelRateLimitingCheck(usage=usage)
         deployment = {
@@ -220,8 +228,6 @@ class TestModelRateLimitingCheckIOTokens:
 
     @pytest.mark.asyncio
     async def test_otpm_atomic_reservation_no_overshoot_under_concurrency(self):
-        from litellm.utils import get_utc_datetime
-
         usage = _memory_usage()
         check = ModelRateLimitingCheck(usage=usage)
         otpm_limit = 10
@@ -274,8 +280,6 @@ class TestModelRateLimitingCheckIOTokens:
         concurrent request is rejected until it completes - effectively
         serializing traffic to the deployment.
         """
-        from litellm.utils import get_utc_datetime
-
         usage = _memory_usage()
         check = ModelRateLimitingCheck(usage=usage)
         itpm_limit = 5
@@ -319,8 +323,6 @@ class TestModelRateLimitingCheckIOTokens:
 
     @pytest.mark.asyncio
     async def test_reservation_read_prefers_top_level_metadata_over_litellm_params(self):
-        from litellm.utils import get_utc_datetime
-
         usage = _memory_usage()
         check = ModelRateLimitingCheck(usage=usage)
         minute = get_utc_datetime().strftime("%H-%M")
@@ -345,8 +347,6 @@ class TestModelRateLimitingCheckIOTokens:
 
     @pytest.mark.asyncio
     async def test_reconcile_tracks_actual_usage_when_estimate_zero(self):
-        from litellm.utils import get_utc_datetime
-
         usage = _memory_usage()
         check = ModelRateLimitingCheck(usage=usage)
         deployment = {
@@ -720,8 +720,6 @@ class TestModelRateLimitingCheckIOTokens:
         assert await reserved({"max_tokens": otpm_limit * 2}) == default
 
     def test_sync_io_pre_call_reserves_and_reconciles(self):
-        from litellm.utils import get_utc_datetime
-
         usage = _memory_usage()
         check = ModelRateLimitingCheck(usage=usage)
         deployment = {
@@ -787,8 +785,6 @@ class TestModelRateLimitingCheckIOTokens:
 
     @pytest.mark.asyncio
     async def test_failure_clears_reservation_so_retry_is_not_poisoned(self):
-        from litellm.utils import get_utc_datetime
-
         usage = _memory_usage()
         check = ModelRateLimitingCheck(usage=usage)
         minute = get_utc_datetime().strftime("%H-%M")
@@ -845,8 +841,6 @@ class TestModelRateLimitingCheckIOTokens:
         elevated by the reservation until its TTL expires, and the
         now-orphaned sentinels must not leak into B's accounting either.
         """
-        from litellm.utils import get_utc_datetime
-
         usage = _memory_usage()
         minute = get_utc_datetime().strftime("%H-%M")
         itpm_key_a = _io("io-retry-a", "bedrock_mantle/test-a", "itpm", minute)
@@ -1029,6 +1023,28 @@ class TestModelRateLimitingCheckIOTokens:
         assert usage.get_local(itpm_key) == 4
 
     @pytest.mark.asyncio
+    async def test_reconcile_charges_positive_delta_to_the_new_minute_after_rollover(self, monkeypatch):
+        usage = _memory_usage()
+        reserved_minute_key = _io("io-rollover-id", "bedrock_mantle/test", "otpm", "12-00")
+        usage.increment_local(CounterIncrement(reserved_minute_key, 10, 60))
+        kwargs = {
+            "metadata": {ITPM_RESERVED_KEY: 0, OTPM_RESERVED_KEY: 10, OTPM_COUNTER_KEY: asdict(reserved_minute_key)}
+        }
+        response = ModelResponse(
+            choices=[{"message": {"role": "assistant", "content": "hi"}, "index": 0, "finish_reason": "stop"}],
+            usage=Usage(prompt_tokens=4, completion_tokens=25, total_tokens=29),
+        )
+        monkeypatch.setattr(
+            "litellm.router_utils.pre_call_checks.io_token_rate_limit_check.get_utc_datetime",
+            lambda: FIXED_NOW + timedelta(minutes=1),
+        )
+
+        await async_io_token_reconcile_success(usage, kwargs, response)
+
+        assert usage.get_local(reserved_minute_key) == 10
+        assert usage.get_local(_io("io-rollover-id", "bedrock_mantle/test", "otpm", "12-01")) == 15
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize("use_sync_reconcile", [False, True])
     async def test_reconcile_charges_usage_above_the_reservation_to_the_minute_it_finished_in(
         self, use_sync_reconcile: bool
@@ -1181,8 +1197,6 @@ class TestModelRateLimitingCheckIOTokens:
     async def test_io_and_tpm_rpm_limits_both_enforced_with_warning(self, caplog):
         import logging
 
-        from litellm.utils import get_utc_datetime
-
         usage = _memory_usage()
         check = ModelRateLimitingCheck(usage=usage)
         model_id = "io-mixed-id"
@@ -1225,8 +1239,6 @@ class TestModelRateLimitingCheckIOTokens:
         success, otherwise the tpm_key the pre-call check reads is never written
         and the tpm_limit can never be enforced.
         """
-        from litellm.utils import get_utc_datetime
-
         usage = _memory_usage()
         check = ModelRateLimitingCheck(usage=usage)
         model_id = "io-tpm-mixed-id"
@@ -1257,8 +1269,6 @@ class TestModelRateLimitingCheckIOTokens:
         assert usage.get_local(tpm) == 7
 
     def test_io_success_still_tracks_tpm_for_mixed_deployment_sync(self):
-        from litellm.utils import get_utc_datetime
-
         usage = _memory_usage()
         check = ModelRateLimitingCheck(usage=usage)
         model_id = "io-tpm-mixed-sync-id"
@@ -1288,8 +1298,6 @@ class TestModelRateLimitingCheckIOTokens:
 
     @pytest.mark.asyncio
     async def test_failure_refunds_itpm_reservation(self):
-        from litellm.utils import get_utc_datetime
-
         usage = _memory_usage()
         check = ModelRateLimitingCheck(usage=usage)
         minute = get_utc_datetime().strftime("%H-%M")

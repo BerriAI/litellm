@@ -5,6 +5,7 @@ counters (`LowestTPMLoggingHandler_v2`) are one read of the native usage store.
 
 import time
 from collections.abc import Sequence
+from datetime import datetime, timezone
 from typing import Final
 from unittest.mock import AsyncMock
 
@@ -18,7 +19,6 @@ from litellm.router import router_arguments
 from litellm.router_config import build_router_config
 from litellm.router_strategy.lowest_tpm_rpm_v2 import LowestTPMLoggingHandler_v2
 from litellm.router_utils import routing_prefetch
-from litellm.utils import get_utc_datetime
 from tests.unit.caching.redis_batch_double import FakeNativePending, FakeNatives, ReadyPending, fake_pending, fake_send
 from tests.unit.conftest import redis_cache_double
 from tests.unit.redis.stores.router_usage_double import FakeUsageHandle, UsageHost
@@ -26,6 +26,12 @@ from tests.unit.redis.stores.test_router_cooldowns import FakeCooldowns
 
 _MODEL_GROUP = "claude"
 _MESSAGES = [{"role": "user", "content": "ping"}]
+FIXED_NOW = datetime(2026, 1, 1, 12, 0, 30, tzinfo=timezone.utc)
+
+
+@pytest.fixture(autouse=True)
+def fixed_router_clock(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("litellm.router_strategy.lowest_tpm_rpm_v2.get_utc_datetime", lambda: FIXED_NOW)
 
 
 def _deployment(deployment_id: str) -> dict:
@@ -48,7 +54,7 @@ def _counter(deployment_id: str, kind: str) -> UsageCounter:
         deployment_id,
         "anthropic/claude-x",
         kind,  # pyright: ignore[reportArgumentType]  # tpm or rpm
-        get_utc_datetime().strftime("%H-%M"),
+        FIXED_NOW.strftime("%H-%M"),
     )
 
 

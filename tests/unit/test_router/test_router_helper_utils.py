@@ -1082,7 +1082,6 @@ def _pin_router_clock(monkeypatch: pytest.MonkeyPatch, pinned: datetime) -> None
 
 @pytest.fixture
 def router_minute_pinned(monkeypatch: pytest.MonkeyPatch) -> datetime:
-    # The router's own usage counters read the real clock: start well inside a minute so a test never spans two
     seconds_left: Final = 60 - datetime.now(timezone.utc).second
     if seconds_left < 10:
         time.sleep(seconds_left + 0.1)
@@ -1193,14 +1192,14 @@ async def test_headers_reflect_usage_counted_by_earlier_requests():
 
 
 @pytest.mark.asyncio
-async def test_get_model_group_io_token_usage_sums_across_deployments():
+async def test_get_model_group_io_token_usage_sums_across_deployments(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """
     get_model_group_io_token_usage must sum ITPM/OTPM across every deployment
     in the model group (not just the first), reading the same per-deployment
     cache keys the pre-call reservation writes to.
     """
-    from litellm.utils import get_utc_datetime
-
     router = Router(
         model_list=[
             {
@@ -1223,8 +1222,10 @@ async def test_get_model_group_io_token_usage_sums_across_deployments():
             },
         ]
     )
+    pinned = datetime(2026, 1, 1, 12, 0, 30, tzinfo=timezone.utc)
+    monkeypatch.setattr("litellm.router_rust.surface.model_info.get_utc_datetime", lambda: pinned)
 
-    minute = get_utc_datetime().strftime("%H-%M")
+    minute = pinned.strftime("%H-%M")
     usage = router._core._usage  # pyright: ignore[reportPrivateUsage, reportAttributeAccessIssue]  # the store the router counts io tokens in
     for deployment_id, model, kind, value in (
         ("io-usage-dep-1", "openai/gpt-4o-mini", "itpm", 30),
