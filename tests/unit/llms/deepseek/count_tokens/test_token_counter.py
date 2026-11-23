@@ -201,6 +201,30 @@ async def test_messages_count_sends_the_thinking_messages_inference_sends() -> N
 
 
 @pytest.mark.asyncio
+async def test_count_sends_a_history_that_echoes_a_fallback_block_as_the_history_without_it() -> None:
+    fallback: Final[dict[str, JsonValue]] = {
+        "type": "fallback",
+        "from": {"model": "claude-opus-5-5"},
+        "to": {"model": "claude-haiku-5-5"},
+    }
+    hello: Final[dict[str, JsonValue]] = {"type": "text", "text": "Hello"}
+    there: Final[dict[str, JsonValue]] = {"type": "text", "text": "there"}
+
+    _, plain_route = await _count(
+        httpx.Response(200, json={"input_tokens": 39}),
+        messages=[*_WEATHER_IN_SF, {"role": "assistant", "content": [hello, there]}],
+    )
+    _, echoed_route = await _count(
+        httpx.Response(200, json={"input_tokens": 39}),
+        messages=[*_WEATHER_IN_SF, {"role": "assistant", "content": [hello, fallback, there]}],
+    )
+
+    assert json.loads(echoed_route.calls.last.request.content)["messages"] == json.loads(
+        plain_route.calls.last.request.content
+    )["messages"]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("status_code", (404, 405))
 async def test_a_missing_count_route_leaves_the_count_to_the_estimate(status_code: int) -> None:
     result, route = await _count(httpx.Response(status_code, text="no such route"))

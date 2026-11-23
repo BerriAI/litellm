@@ -65,6 +65,7 @@ from litellm.types.llms.anthropic import (
     ANTHROPIC_THINKING_BINDING_CONTROLS_BETA_HEADER,
     ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER,
     ANTHROPIC_TOOL_SEARCH_TOOL_TYPES,
+    ANTHROPIC_UNRENDERED_BLOCK_TYPES,
     LEGACY_THINKING_DISPLAY_UPDATES_PROVIDERS,
     AllAnthropicPassThroughMessageValues,
     AllAnthropicToolsValues,
@@ -273,6 +274,22 @@ def _is_fallback_block(block: object) -> bool:
 
 def carries_fallback_block(messages: Sequence[object]) -> bool:
     return any(map(_is_fallback_block, chain.from_iterable(map(_message_blocks, messages))))
+
+
+def _is_unrendered_block(block: JsonValue) -> bool:
+    fields: Final = as_str_mapping(block)
+    return fields is not None and fields.get("type") in ANTHROPIC_UNRENDERED_BLOCK_TYPES
+
+
+def _without_unrendered_content(message: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
+    content: Final = message.get("content")
+    if not isinstance(content, list):
+        return message
+    return {**message, "content": [block for block in content if not _is_unrendered_block(block)]}
+
+
+def without_unrendered_blocks(messages: Sequence[Mapping[str, JsonValue]]) -> tuple[Mapping[str, JsonValue], ...]:
+    return tuple(map(_without_unrendered_content, messages))
 
 
 def requires_native_compaction_beta(
