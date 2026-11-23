@@ -6273,6 +6273,7 @@ _REDACTED_THINKING: Final = {"type": "redacted_thinking", "data": "EmwKAhgB"}
         ("openai", "claude-behind-an-alias", False),
         ("gemini", "gemini-3.8-flash", False),
         (None, "house-model", False),
+        ("house-handler", "house-model", False),
     ],
 )
 @pytest.mark.parametrize(
