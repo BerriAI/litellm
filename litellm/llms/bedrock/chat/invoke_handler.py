@@ -196,11 +196,19 @@ class _InvocationTokenCounts(BaseModel):
     output_tokens: int = Field(alias="outputTokenCount")
 
 
+def _invocation_token_counts(metrics: object) -> _InvocationTokenCounts | None:
+    try:
+        return _InvocationTokenCounts.model_validate(metrics)
+    except ValidationError:
+        return None
+
+
 def _with_invocation_metrics_usage(chunk_data: Mapping[str, object]) -> Mapping[str, object]:
-    metrics: Final = chunk_data.get(_INVOCATION_METRICS_FIELD)
-    if chunk_data.get("usage") is not None or metrics is None:
+    if chunk_data.get("usage") is not None:
         return chunk_data
-    counts: Final = _InvocationTokenCounts.model_validate(metrics)
+    counts: Final = _invocation_token_counts(chunk_data.get(_INVOCATION_METRICS_FIELD))
+    if counts is None:
+        return chunk_data
     return {
         **chunk_data,
         "usage": Usage(

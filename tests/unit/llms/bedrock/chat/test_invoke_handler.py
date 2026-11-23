@@ -986,21 +986,48 @@ def test_moonshot_invoke_stream_reports_the_token_counts_bedrock_returns(_aws_te
             },
         )
     )
-    response: Final = MagicMock(status_code=200, headers={})
-    response.iter_bytes = lambda chunk_size=None: iter([raw_stream])
-    client: Final = HTTPHandler()
-    client.post = MagicMock(return_value=response)
+
+    def handle_request(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/invoke-with-response-stream")
+        return httpx.Response(200, content=raw_stream, headers=_event_stream_headers())
 
     stream: Final = litellm.completion(
         model="bedrock/invoke/moonshot.kimi-k2-thinking",
         messages=[{"role": "user", "content": "count to 3"}],
         stream=True,
         stream_options={"include_usage": True},
-        client=client,
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(handle_request))),
     )
 
     usages: Final = [chunk.usage for chunk in stream if getattr(chunk, "usage", None) is not None]
     assert [(usage.prompt_tokens, usage.completion_tokens) for usage in usages] == [(31, 47)]
+
+
+def test_moonshot_invoke_stream_finishes_when_the_trailer_has_no_token_counts(_aws_test_credentials: None) -> None:
+    raw_stream: Final = b"".join(
+        _bedrock_event_stream_frame(chunk)
+        for chunk in (
+            _openai_stream_chunk({"role": "assistant", "content": "1, 2, 3"}),
+            {**_openai_stream_chunk({}, "stop"), "amazon-bedrock-invocationMetrics": {"invocationLatency": 207}},
+        )
+    )
+
+    def handle_request(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/invoke-with-response-stream")
+        return httpx.Response(200, content=raw_stream, headers=_event_stream_headers())
+
+    chunks: Final = tuple(
+        litellm.completion(
+            model="bedrock/invoke/moonshot.kimi-k2-thinking",
+            messages=[{"role": "user", "content": "count to 3"}],
+            stream=True,
+            client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(handle_request))),
+        )
+    )
+
+    choices: Final = tuple(chunk.choices[0] for chunk in chunks if chunk.choices)
+    assert "".join(choice.delta.content or "" for choice in choices) == "1, 2, 3"
+    assert [choice.finish_reason for choice in choices if choice.finish_reason] == ["stop"]
 
 
 def _truncated_frame() -> bytes:
