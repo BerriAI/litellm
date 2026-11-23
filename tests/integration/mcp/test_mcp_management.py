@@ -43,6 +43,29 @@ def _servers(gateway: Gateway, key: str | None = None) -> dict[str, dict[str, ob
     return {server["server_id"]: server for server in response.json()}
 
 
+def test_admin_can_grant_a_server_outside_their_personal_mcp_list(gateway: Gateway) -> None:
+    with mcp_peer() as peer, gateway.scenario() as scenario:
+        first: Final = register_mcp(scenario, peer, "first" + uuid.uuid4().hex)
+        second: Final = register_mcp(scenario, peer, "second" + uuid.uuid4().hex)
+        admin: Final = scenario.user(user_role="proxy_admin", object_permission={"mcp_servers": [first]})
+        session: Final = ExperimentalUIJWTToken.get_experimental_ui_login_jwt_auth_token(
+            LiteLLM_UserTable(user_id=admin, user_role="proxy_admin", models=[])
+        )
+        plain_key: Final = scenario.key(user_id=admin)
+        scoped_key: Final = scenario.key(user_id=admin, object_permission={"mcp_servers": [first]})
+        for credential in (session, plain_key):
+            assert {first, second} <= _servers(gateway, credential).keys()
+        assert second not in _servers(gateway, scoped_key)
+        assert call_tool(gateway, session, second, "add", ADD).status_code == 403
+
+        recipient: Final = scenario.user(user_role="internal_user")
+        granted: Final = gateway.request(
+            "POST", "/user/update", {"user_id": recipient, "object_permission": {"mcp_servers": [second]}}, key=session
+        )
+        assert granted.status_code == 200, granted.text
+        assert second in _servers(gateway, _dashboard_ui_session_token(recipient))
+
+
 def test_non_admin_key_cannot_create_edit_or_delete_servers(gateway: Gateway) -> None:
     with mcp_peer() as peer, gateway.scenario() as scenario:
         alias: Final = "mgmt" + uuid.uuid4().hex[:8]

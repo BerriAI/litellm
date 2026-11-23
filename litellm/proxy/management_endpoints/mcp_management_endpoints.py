@@ -264,6 +264,7 @@ if MCP_AVAILABLE:
         admitted_user_context,
         build_effective_auth_contexts,
         granted_toolset_ids,
+        has_mcp_grants,
         is_ui_session_credential,
     )
     from litellm.types.mcp import (
@@ -1332,6 +1333,27 @@ if MCP_AVAILABLE:
         by_id: Final = {server.server_id: server for server in chain.from_iterable([*existing_teams, own_grants])}
         return list(by_id.values())
 
+    def _admin_can_list_full_mcp_catalog(auth: UserAPIKeyAuth) -> bool:
+        permission: Final = auth.object_permission
+        unscoped_permission: Final = (
+            auth.object_permission_id is None
+            if permission is None
+            else permission.mcp_servers is None and not has_mcp_grants(permission)
+        )
+        return (
+            _user_is_full_admin(auth)
+            and (auth.team_id is None or is_ui_session_credential(auth))
+            and unscoped_permission
+            and auth.org_id is None
+            and not auth.access_group_ids
+            and auth.end_user_id is None
+            and auth.agent_id is None
+            and auth.agent_caller is None
+            and not auth.mcp_admitted_user_subject
+            and not auth.mcp_explicit_grants_only
+            and auth.mcp_toolset_id is None
+        )
+
     @catalog_operation(lambda: global_mcp_server_manager)
     async def _resolve_accessible_mcp_servers(
         user_api_key_dict: UserAPIKeyAuth,
@@ -1345,7 +1367,9 @@ if MCP_AVAILABLE:
         aligned with the cards actually rendered: an admin in view_all mode sees
         every server even when their key carries no per-server MCP grant.
         """
-        if _get_user_mcp_management_mode() == "view_all" and not _is_restricted_virtual_key_request(user_api_key_dict):
+        if not _is_restricted_virtual_key_request(user_api_key_dict) and (
+            _get_user_mcp_management_mode() == "view_all" or _admin_can_list_full_mcp_catalog(user_api_key_dict)
+        ):
             return await global_mcp_server_manager.get_all_mcp_servers_unfiltered()
 
         aggregated: Final[dict[str, LiteLLM_MCPServerTable]] = {}
