@@ -763,7 +763,7 @@ def test_spend_row_of_a_bridged_turn_keeps_the_thinking_signature_whole(
     if stream:
         tuple(response)
     assert spend_callback.logged.wait(timeout=10)
-    now: Final = datetime.now()
+    now: Final = datetime(2026, 1, 1)
     row: Final = get_logging_payload(spend_callback.kwargs, spend_callback.response, now, now)
 
     assert signature in row["response"]
