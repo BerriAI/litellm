@@ -96,6 +96,8 @@ def _list_credentials():
 def _prisma_without_credential_rows() -> MagicMock:
     prisma_client = MagicMock()
     prisma_client.db.litellm_credentialstable.find_unique = AsyncMock(return_value=None)
+    prisma_client.db.litellm_teamtable = _RowsById("team_id", "team-a", "team-b")
+    prisma_client.db.litellm_verificationtoken = _RowsById("token", "hash-k")
     return prisma_client
 
 
@@ -2098,15 +2100,24 @@ _CHATGPT_OWNER_INFOS: Final = {
     },
     "team-owner": {"custom_llm_provider": "chatgpt", "chatgpt_owner_team_id": "team-a"},
     "key-owner": {"custom_llm_provider": "chatgpt", "chatgpt_owner_key_hash": "hash-k"},
+    "missing-team-owner": {"custom_llm_provider": "chatgpt", "chatgpt_owner_team_id": "team-deleted"},
+    "missing-key-owner": {"custom_llm_provider": "chatgpt", "chatgpt_owner_key_hash": "hash-of-a-deleted-key"},
 }
 
 
 @pytest.mark.parametrize(
-    ("owners", "status_code"),
-    [("no-owner", 400), ("two-owners", 400), ("team-owner", 200), ("key-owner", 200)],
+    ("owners", "status_code", "error"),
+    [
+        ("no-owner", 400, "exactly one owner"),
+        ("two-owners", 400, "exactly one owner"),
+        ("missing-team-owner", 400, "Team 'team-deleted' not found"),
+        ("missing-key-owner", 400, "Virtual key not found"),
+        ("team-owner", 200, None),
+        ("key-owner", 200, None),
+    ],
 )
-def test_create_credential_accepts_a_chatgpt_login_only_with_exactly_one_owner(
-    credential_store, owners, status_code
+def test_create_credential_accepts_a_chatgpt_login_only_with_exactly_one_owner_that_exists(
+    credential_store, owners, status_code, error
 ):
     create: Final = AsyncMock(return_value=None)
     credential_store(create=create)
@@ -2121,8 +2132,8 @@ def test_create_credential_accepts_a_chatgpt_login_only_with_exactly_one_owner(
 
     assert response.status_code == status_code, response.text
     assert create.await_count == (1 if status_code == 200 else 0)
-    if status_code == 400:
-        assert "exactly one owner" in response.json()["error"]["message"]
+    if error is not None:
+        assert error in response.json()["error"]["message"]
 
 
 def test_create_credential_still_accepts_a_chatgpt_credential_without_login_values_or_an_owner(credential_store):
@@ -2147,9 +2158,20 @@ def test_create_credential_still_accepts_a_chatgpt_credential_without_login_valu
         ({"chatgpt_owner_team_id": None}, 400),
         ({"chatgpt_owner_key_hash": "hash-k"}, 400),
         ({"chatgpt_owner_team_id": None, "chatgpt_owner_key_hash": "hash-k"}, 200),
+        ({"chatgpt_owner_team_id": "team-b"}, 200),
+        ({"chatgpt_owner_team_id": "team-deleted"}, 400),
+        ({"chatgpt_owner_team_id": "", "chatgpt_owner_key_hash": "hash-of-a-deleted-key"}, 400),
         ({"note": "billing seat 3"}, 200),
     ],
-    ids=["clears-the-owner", "adds-a-second-owner", "moves-to-a-key", "keeps-its-owner"],
+    ids=[
+        "clears-the-owner",
+        "adds-a-second-owner",
+        "moves-to-a-key",
+        "moves-to-another-team",
+        "moves-to-a-missing-team",
+        "moves-to-a-missing-key",
+        "keeps-its-owner",
+    ],
 )
 def test_update_credential_keeps_exactly_one_owner_on_a_chatgpt_login(credential_store, info_patch, status_code):
     stored: Final = CredentialItem(
@@ -2166,6 +2188,31 @@ def test_update_credential_keeps_exactly_one_owner_on_a_chatgpt_login(credential
 
     assert response.status_code == status_code, response.text
     assert update_by_name.await_count == (1 if status_code == 200 else 0)
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"credential_info": {"note": "billing seat 3"}},
+        {"credential_info": {}, "credential_values": {"chatgpt_expires_at": "1"}},
+    ],
+    ids=["info", "values"],
+)
+def test_update_credential_edits_a_chatgpt_login_whose_owner_was_deleted(credential_store, change):
+    stored: Final = CredentialItem(
+        credential_name="chatgpt-login",
+        credential_values={key: encrypt_value_helper(value) for key, value in _CHATGPT_LOGIN_VALUES.items()},
+        credential_info=_CHATGPT_OWNER_INFOS["missing-team-owner"],
+    )
+    update_by_name: Final = AsyncMock(return_value=None)
+    credential_store(find_by_name=AsyncMock(return_value=stored), update_by_name=update_by_name)
+
+    response: Final = _patch_credential("chatgpt-login", {"credential_name": "chatgpt-login", **change})
+
+    assert response.status_code == 200, response.text
+    assert json.loads(update_by_name.await_args.kwargs["data"]["credential_info"])["chatgpt_owner_team_id"] == (
+        "team-deleted"
+    )
 
 
 from contextlib import contextmanager as _ctx

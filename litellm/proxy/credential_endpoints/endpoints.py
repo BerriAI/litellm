@@ -405,6 +405,7 @@ async def create_credential(
             credential_info=credential_info,
         )
         _reject_unowned_chatgpt_login(processed_credential)
+        await _require_new_chatgpt_login_owner_exists(prisma_client, processed_credential, (None, None))
         encrypted_credential: Final = CredentialHelperUtils.encrypt_credential_values(processed_credential)
         credentials_dict: Final = encrypted_credential.model_dump(exclude_none=True)
         credentials_dict_jsonified: Final = cast(  # cast-ok: deep-copies a model_dump, so keys are str
@@ -899,6 +900,15 @@ async def _require_chatgpt_login_owner_exists(
         raise HTTPException(status_code=400, detail="Virtual key not found. Send the key's hashed token (Key ID)")
 
 
+async def _require_new_chatgpt_login_owner_exists(
+    prisma_client: object, credential: CredentialItem, previous_owner: tuple[str | None, str | None]
+) -> None:
+    owner: Final = chatgpt_login_owner(credential)
+    if not is_chatgpt_subscription_login(credential) or owner == previous_owner:
+        return
+    await _require_chatgpt_login_owner_exists(prisma_client, *owner)
+
+
 def _reject_unowned_chatgpt_login(credential: CredentialItem) -> None:
     if not is_chatgpt_subscription_login(credential) or chatgpt_login_owner(credential) != (None, None):
         return
@@ -1249,6 +1259,7 @@ async def update_credential(
             db_credential: Final = await credentials_repository.find_by_name(credential_name)
             if db_credential is None:
                 raise _not_found_unless_config_defined(credential_name, "Credential not found in DB.")
+            stored_owner: Final = chatgpt_login_owner(db_credential)
             _reject_non_admin_wif_fields(_stored_wif_fields(db_credential), user_api_key_dict)
             decrypted_stored_credential: Final = decrypted_credential(db_credential)
             decrypted_values: Final = _CREDENTIAL_DICT_ADAPTER.validate_python(
@@ -1284,6 +1295,7 @@ async def update_credential(
             )
             merged_credential: Final = update_db_credential(db_credential, normalized_patch)
             _reject_unowned_chatgpt_login(merged_credential)
+            await _require_new_chatgpt_login_owner_exists(prisma_client, merged_credential, stored_owner)
             _validate_github_app_values(
                 _CREDENTIAL_DICT_ADAPTER.validate_python(decrypted_credential(merged_credential).credential_values)
             )
