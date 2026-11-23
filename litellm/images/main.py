@@ -915,7 +915,7 @@ def image_edit(
         kept_params: Final = {
             key: value
             for key, value in non_default_params.items()
-            if key.split("[", 1)[0] not in additional_drop_params
+            if key not in additional_drop_params and key.split("[", 1)[0] not in additional_drop_params
         }
         requested_params: Final = _get_ImageEditRequestUtils().fold_bracket_form_fields(
             kept_params,
