@@ -75,7 +75,7 @@ from litellm.constants import (
     TEAM_DELETE_TRANSACTION_TIMEOUT_SECONDS,
     VLLM_CHOICE_FIELDS,
 )
-from litellm.cost_calculator import BaseTokenUsageProcessor
+from litellm.cost_calculator import BaseTokenUsageProcessor, base_model_for_pricing
 from litellm.integrations.otel.runtime import seed_request_identity
 from litellm.litellm_core_utils.bug_report import (
     bug_report_notice,
@@ -395,7 +395,7 @@ if TYPE_CHECKING:
 else:
     Span = Any
 
-_T: Final = TypeVar("_T")
+_T = TypeVar("_T")
 
 
 class _RelTuplesRow(TypedDict):
@@ -1636,13 +1636,14 @@ def _estimated_input_cost(
 ) -> float:
     """A rerank model the provider prices per query bills the one query sent, the way the success path
     bills one search unit per query; every other estimate is priced per token."""
+    priced_base_model: Final = base_model_for_pricing(base_model)
     if str(model_call_details.get("call_type")) not in _RERANK_CALL_TYPES:
-        return _estimated_token_input_cost(model_call_details, prompt_tokens, deployment_id, base_model)
+        return _estimated_token_input_cost(model_call_details, prompt_tokens, deployment_id, priced_base_model)
     pricing_details: Final = _routed_deployment_pricing_details(model_call_details, deployment_id)
-    query_rate: Final = _input_cost_per_query(pricing_details, deployment_id, base_model)
+    query_rate: Final = _input_cost_per_query(pricing_details, deployment_id, priced_base_model)
     if query_rate is not None:
         return query_rate
-    return _estimated_token_input_cost(pricing_details, prompt_tokens, deployment_id, base_model)
+    return _estimated_token_input_cost(pricing_details, prompt_tokens, deployment_id, priced_base_model)
 
 
 def _routed_deployment_pricing_details(

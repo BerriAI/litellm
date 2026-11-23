@@ -94,7 +94,7 @@ class Turn:
     user_content: str | None = None
     assistant_content: str | None = None
     tool_calls: Sequence[Mapping[str, object]] = field(default_factory=list[Mapping[str, object]])
-    tool_results: Sequence[Mapping[str, object]] = field(default_factory=list)
+    tool_results: Sequence[Mapping[str, object]] = field(default_factory=list[Mapping[str, object]])
     response_status: int | None = None
 
 

@@ -5,8 +5,11 @@ import pytest
 
 from litellm.responses.litellm_completion_transformation.compaction_items import (
     compaction_output_item,
+    compaction_summary,
     holds_compaction_summary,
     response_holds_compaction_block,
+    summary_only_compaction_block,
+    summary_only_compaction_content,
     with_compaction_summary,
 )
 from litellm.responses.utils import ResponsesAPIRequestUtils
@@ -85,3 +88,15 @@ def test_with_compaction_summary_rewrites_the_summary_and_keeps_the_affinity_wra
 
 def test_with_compaction_summary_leaves_a_token_it_cannot_read_unchanged() -> None:
     assert with_compaction_summary("gAAAAABopaque", "[REDACTED]") == "gAAAAABopaque"
+
+
+def test_summary_only_compaction_content_is_the_compact_dump_of_its_block() -> None:
+    summary: Final = "Turn one planned Tokyo."
+
+    assert summary_only_compaction_content(summary) == '{"type":"compaction","content":"Turn one planned Tokyo."}'
+    assert summary_only_compaction_content(summary) == json.dumps(
+        dict(summary_only_compaction_block(summary)), separators=(",", ":")
+    )
+    assert compaction_summary({"type": "compaction", "encrypted_content": summary_only_compaction_content(summary)}) == (
+        summary
+    )

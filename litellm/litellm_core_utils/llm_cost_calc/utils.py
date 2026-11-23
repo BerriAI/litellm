@@ -1213,7 +1213,7 @@ def parse_completion_tokens_details(usage: Usage) -> CompletionTokensDetailsResu
 
 
 def get_modality_token_cost_key(
-    model_info: ModelInfo,
+    model_info: Mapping[str, object],
     cost_key: str,
     prompt_tokens: int,
     *,

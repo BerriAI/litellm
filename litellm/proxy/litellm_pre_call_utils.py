@@ -2317,6 +2317,11 @@ class LiteLLMProxyRequestSetup:
             **(
                 {
                     "user_api_key_app_id": customer.app_id,
+                    **(
+                        {"user_api_key_app_group_id": customer.app_group_id}
+                        if customer.app_group_id is not None
+                        else {}
+                    ),
                     "user_api_key_app_alias": customer.app_alias,
                 }
                 if customer is not None and customer.app_id is not None and customer.app_alias is not None
@@ -2385,12 +2390,15 @@ class LiteLLMProxyRequestSetup:
         user_api_key_logged_metadata: Final = LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(
             user_api_key_dict=user_api_key_dict
         )
-        if any(key in data[_metadata_variable_name] for key in ("user_api_key_app_id", "user_api_key_app_alias")):
+        if any(
+            key in data[_metadata_variable_name]
+            for key in ("user_api_key_app_id", "user_api_key_app_alias", "user_api_key_app_group_id")
+        ):
             incoming_metadata: Final = TypeAdapter(Mapping[str, object]).validate_python(data[_metadata_variable_name])
             data[_metadata_variable_name] = {  # rebind-ok: sanitize the legacy request metadata before trusted stamping
                 key: value
                 for key, value in incoming_metadata.items()
-                if key not in ("user_api_key_app_id", "user_api_key_app_alias")
+                if key not in ("user_api_key_app_id", "user_api_key_app_alias", "user_api_key_app_group_id")
             }
         data[_metadata_variable_name].update(user_api_key_logged_metadata)
         data[_metadata_variable_name]["user_api_key"] = LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict)
@@ -4067,6 +4075,34 @@ def pre_call_served_model(model: str, user_api_key_dict: UserAPIKeyAuth, model_g
     """The model group `common_processing_pre_call_logic` sends `model` to."""
     prepared: Final = global_then_key_alias_target(model, user_api_key_dict)
     return resolve_model_group_alias(model_group_alias, prepared) or prepared
+
+
+def _request_session_id(request: Request, body: Mapping[str, object]) -> str | None:
+    return (
+        get_chain_id_from_headers(dict(request.headers))
+        or _get_anthropic_session_id_from_metadata(body.get("metadata"))
+        or _caller_body_session_id(body, "litellm_metadata")
+        or _session_id_from_baggage(request.headers.get("baggage", ""))
+    )
+
+
+def request_routing_metadata(
+    request: Request, body: Mapping[str, object], caller: UserAPIKeyAuth
+) -> Mapping[str, object]:
+    session_id: Final = _request_session_id(request, body)
+    metadata_buckets: Final = tuple(
+        bucket
+        for bucket in (as_str_mapping(body.get("metadata")), as_str_mapping(body.get("litellm_metadata")))
+        if bucket is not None
+    )
+    tags: Final = LiteLLMProxyRequestSetup.merged_request_tags(
+        request=request, metadata_buckets=metadata_buckets, body_tags=body.get("tags"), user_api_key_dict=caller
+    )
+    return {
+        "user_agent": request.headers.get("user-agent", ""),
+        **({"session_id": session_id} if session_id else {}),
+        **({"tags": list(tags)} if tags else {}),
+    }
 
 
 def request_served_model(

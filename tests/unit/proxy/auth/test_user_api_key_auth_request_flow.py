@@ -1509,6 +1509,76 @@ async def test_cached_virtual_key_applies_proxy_default_budget_to_new_end_user(
         assert result.end_user_id == end_user_id
 
 
+GOOGLE_MODEL_ROUTES: Final = tuple(route for route in LiteLLMRoutes.google_routes.value if "{model_name:path}" in route)
+
+
+@pytest.mark.parametrize(
+    "model_in_url",
+    ["", "gemini-text", "gemini-text:v1"],
+    ids=["model-only-in-body", "model-in-url", "model-with-a-colon-in-url"],
+)
+@pytest.mark.parametrize("template", GOOGLE_MODEL_ROUTES)
+@pytest.mark.asyncio
+async def test_zero_budget_key_is_refused_on_google_model_routes(
+    monkeypatch: pytest.MonkeyPatch, template: str, model_in_url: str
+) -> None:
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    from litellm.proxy.proxy_server import hash_token
+
+    api_key: Final = "sk-zero-budget-google-route-test"
+    cached_token: Final = UserAPIKeyAuth(
+        api_key=api_key,
+        token=hash_token(api_key),
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        models=["gemini-text", "gemini-text:v1"],
+        allowed_routes=["/v1beta/*", "/models/*"],
+        max_budget=0.0,
+        spend=0.0,
+    )
+
+    mock_proxy_logging_obj: Final = MagicMock()
+    mock_proxy_logging_obj.internal_usage_cache = MagicMock()
+    mock_proxy_logging_obj.internal_usage_cache.dual_cache = AsyncMock()
+    mock_proxy_logging_obj.budget_alerts = AsyncMock()
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+
+    import litellm.proxy.proxy_server as _proxy_server_mod
+
+    monkeypatch.setattr(_proxy_server_mod, "prisma_client", MagicMock())
+    key_cache: Final = UserApiKeyCache()
+    await key_cache.async_set_cache(
+        key=AuthObject.virtual_key(hash_token(api_key)), value=cached_token, model_type=UserAPIKeyAuth
+    )
+    monkeypatch.setattr(_proxy_server_mod, "user_api_key_cache", key_cache)
+    monkeypatch.setattr(_proxy_server_mod, "proxy_logging_obj", mock_proxy_logging_obj)
+    monkeypatch.setattr(_proxy_server_mod, "master_key", "sk-master-key")
+    monkeypatch.setattr(_proxy_server_mod, "general_settings", {})
+    monkeypatch.setattr(_proxy_server_mod, "llm_model_list", [])
+    monkeypatch.setattr(_proxy_server_mod, "llm_router", None)
+    monkeypatch.setattr(_proxy_server_mod, "open_telemetry_logger", None)
+    monkeypatch.setattr(_proxy_server_mod, "model_max_budget_limiter", MagicMock())
+    monkeypatch.setattr(_proxy_server_mod, "user_custom_auth", None)
+    monkeypatch.setattr(_proxy_server_mod, "litellm_proxy_admin_name", "admin")
+
+    request: Final = Request(scope={"type": "http", "method": "POST", "headers": []})
+    request._url = URL(url=template.replace("{model_name:path}", model_in_url))
+
+    with pytest.raises(ProxyException) as refused:
+        await user_api_key_auth_builder(
+            request=request,
+            api_key=f"Bearer {api_key}",
+            azure_api_key_header="",
+            anthropic_api_key_header=None,
+            google_ai_studio_api_key_header=None,
+            azure_apim_header=None,
+            request_data={"model": "gemini-text", "contents": [{"role": "user", "parts": [{"text": "hi"}]}]},
+        )
+
+    assert refused.value.type == "budget_exceeded"
+
+
 @pytest.mark.asyncio
 async def test_master_key_auth_sets_via_virtual_key_marker():
     """Master-key requests must also be stamped by overwrite_user_with_key_hash;
@@ -1755,27 +1825,26 @@ async def test_auth_prefetches_referenced_objects_before_central_model_authoriza
 
 
 @pytest.mark.asyncio
-async def test_return_user_api_key_auth_obj_user_spend_and_budget():
-    """
-    Test that return_user_api_key_auth_obj correctly sets user_spend and user_max_budget
-    from user_obj attributes.
-    """
+@pytest.mark.parametrize(("cap", "credit", "expected_budget"), [(None, None, 1000.0), (1300.0, 200.0, 1200.0)])
+async def test_return_user_api_key_auth_obj_user_spend_and_budget(
+    cap: float | None, credit: float | None, expected_budget: float
+) -> None:
     from datetime import datetime
 
-    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy._types import LiteLLM_UserTable, UserAPIKeyAuth
     from litellm.proxy.auth.user_api_key_auth import return_user_api_key_auth_obj
 
-    user_obj = type(
-        "LiteLLM_UserTable",
-        (),
-        {
-            "tpm_limit": 1000,
-            "rpm_limit": 100,
-            "user_email": "test@example.com",
-            "spend": 250.0,
-            "max_budget": 1000.0,
-            "user_role": "internal_user",
-        },
+    user_obj = LiteLLM_UserTable(
+        user_id="test-user",
+        tpm_limit=1000,
+        rpm_limit=100,
+        user_email="test@example.com",
+        spend=250.0,
+        max_budget=1000.0,
+        budget_duration="monthly",
+        rollover_max_budget=cap,
+        rollover_credit=credit,
+        user_role="internal_user",
     )
 
     api_key = "sk-test-key"
@@ -1805,7 +1874,7 @@ async def test_return_user_api_key_auth_obj_user_spend_and_budget():
 
     assert isinstance(result, UserAPIKeyAuth)
     assert result.user_spend == 250.0
-    assert result.user_max_budget == 1000.0
+    assert result.user_max_budget == expected_budget
     assert result.user_tpm_limit == 1000
     assert result.user_rpm_limit == 100
     assert result.user_email == "test@example.com"
@@ -3523,6 +3592,61 @@ async def test_deferred_body_check_uses_only_the_authenticated_teams_deployments
         await user_api_key_auth(request=request, api_key="Bearer external-token")
     assert int(rejection.value.code) == 401
     assert "vertex_location" in str(rejection.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "path,dispatched_to_pass_through,is_allowed",
+    [("/MS_Office/upstream/authorize", True, True), ("/v1/chat/completions", False, False)],
+)
+async def test_deferred_body_check_admits_query_credentials_only_on_a_user_defined_pass_through(
+    monkeypatch: pytest.MonkeyPatch, path: str, dispatched_to_pass_through: bool, is_allowed: bool
+) -> None:
+    from litellm.proxy.utils import ProxyLogging
+
+    async def authenticate(request: Request, api_key: str) -> UserAPIKeyAuth:
+        return UserAPIKeyAuth(api_key=api_key, user_role=LitellmUserRoles.INTERNAL_USER)
+
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "private-chat",
+                "model_info": {"team_id": "pinned-team", "team_public_model_name": "chat"},
+                "litellm_params": {"model": "vertex_ai/test-model"},
+            },
+        ]
+    )
+    key_cache: Final = UserApiKeyCache()
+    attributes: Final = {
+        **_proxy_attrs_for_centralized_checks(user_custom_auth=authenticate),
+        "general_settings": {"allow_client_side_credentials": False},
+        "llm_router": router,
+        "llm_model_list": None,
+        "user_api_key_cache": key_cache,
+        "proxy_logging_obj": ProxyLogging(user_api_key_cache=key_cache),
+    }
+    for name, value in attributes.items():
+        monkeypatch.setattr(litellm.proxy.proxy_server, name, value)
+    scope: Final = {
+        "type": "http",
+        "method": "GET",
+        "path": path,
+        "headers": [],
+        "query_string": b"response_type=code&client_id=test-client",
+        "route": SimpleNamespace(path=path),
+    }
+    request: Final = Request(
+        {**scope, "endpoint": _user_defined_pass_through_endpoint()} if dispatched_to_pass_through else scope,
+        receive=AsyncMock(return_value={"type": "http.request", "more_body": False, "body": b""}),
+    )
+    if is_allowed:
+        identity: Final = await user_api_key_auth(request=request, api_key="Bearer external-token")
+        assert identity.user_role == LitellmUserRoles.INTERNAL_USER
+        return
+    with pytest.raises(ProxyException) as rejection:
+        await user_api_key_auth(request=request, api_key="Bearer external-token")
+    assert int(rejection.value.code) == 401
+    assert "client_id is not allowed" in str(rejection.value)
 
 
 @pytest.mark.asyncio

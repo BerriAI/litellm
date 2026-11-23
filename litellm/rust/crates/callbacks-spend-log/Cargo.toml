@@ -7,7 +7,7 @@ repository.workspace = true
 
 [dependencies]
 litellm-python-compat.workspace = true
-litellm-tracing.workspace = true
+litellm-redaction.workspace = true
 
 base64.workspace = true
 fancy-regex.workspace = true

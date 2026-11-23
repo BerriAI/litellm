@@ -102,6 +102,7 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     prepare_metadata_fields,
     raise_on_invalid_key_expiry_alert_days,
     raise_on_invalid_key_logging_config,
+    raise_on_invalid_key_metadata,
     raise_on_logging_credential_change,
     reset_key_spend_fn,
     update_key_fn,
@@ -112,6 +113,53 @@ from litellm.proxy.proxy_server import app, budget_windows_absent_cache_key
 from litellm.redis.stores.auth_cache import AuthObject
 from litellm.redis.stores.cache_invalidation import PythonCaches
 from litellm.rust_bridge._native import NativeRedisStoreError
+
+
+@pytest.mark.parametrize("value", ("false", 0, 1, [], {}))
+def test_key_lens_policy_rejects_non_boolean_values(value: object) -> None:
+    with pytest.raises(HTTPException) as error:
+        raise_on_invalid_key_metadata({"lens_enabled": value})
+    assert error.value.status_code == 400
+    assert error.value.detail == {"error": "metadata.lens_enabled must be a boolean or null"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enabled", (True, False, None))
+async def test_lens_only_key_update_preserves_stored_integration_credentials_and_metadata(enabled: bool | None) -> None:
+    stored_metadata: Final = {
+        "cost_center": "engineering",
+        "logging": [{"callback_name": "langfuse", "callback_vars": {"langfuse_secret_key": "litellm_enc::stored-value"}}],
+        "lens_enabled": True,
+    }
+    prepared: Final = await prepare_key_update_data(
+        UpdateKeyRequest(key="key-hash", lens_enabled=enabled),
+        LiteLLM_VerificationToken(token="key-hash", metadata=stored_metadata),
+    )
+    assert prepared == {"metadata": {**stored_metadata, "lens_enabled": enabled}}
+
+
+@pytest.mark.asyncio
+async def test_typed_lens_update_wins_over_metadata_while_preserving_metadata_replacement_semantics() -> None:
+    prepared: Final = await prepare_key_update_data(
+        UpdateKeyRequest(key="key-hash", lens_enabled=False, metadata={"lens_enabled": True, "cost_center": "new"}),
+        LiteLLM_VerificationToken(token="key-hash", metadata={"unrelated": "stored"}),
+    )
+    assert prepared == {"metadata": {"lens_enabled": False, "cost_center": "new"}}
+
+
+@pytest.mark.asyncio
+async def test_omitting_typed_lens_update_preserves_existing_metadata_replacement_contract() -> None:
+    prepared: Final = await prepare_key_update_data(
+        UpdateKeyRequest(key="key-hash", metadata={"cost_center": "new"}),
+        LiteLLM_VerificationToken(token="key-hash", metadata={"lens_enabled": False, "unrelated": "stored"}),
+    )
+    assert prepared == {"metadata": {"cost_center": "new"}}
+
+
+@pytest.mark.parametrize("value", ("false", 0, 1))
+def test_typed_lens_key_update_rejects_coerced_values(value: object) -> None:
+    with pytest.raises(ValidationError):
+        UpdateKeyRequest.model_validate({"key": "key-hash", "lens_enabled": value})
 from litellm.types.proxy.management_endpoints.key_management_endpoints import (
     BulkUpdateKeyRequest,
     BulkUpdateKeyResponse,
@@ -4434,6 +4482,39 @@ def test_check_team_key_model_specific_limits_no_limits():
         keys=keys,
         team_table=team_table,
         data=data,
+    )
+
+
+@pytest.mark.parametrize(
+    ("limit_field", "limit_name"), [("model_rpm_limit", "RPM"), ("model_tpm_limit", "TPM")], ids=["rpm", "tpm"]
+)
+def test_check_org_key_model_specific_limits_reads_limits_already_moved_into_metadata(
+    limit_field: str, limit_name: str
+) -> None:
+    """Key generation moves the per-model limits into metadata and deletes the request
+    attributes before the organization check runs, so the check must still see them."""
+    existing_key = LiteLLM_VerificationToken(
+        token="test-token-1", organization_id="test-org", metadata={limit_field: {"gpt-4": 80}}
+    )
+    org_table = LiteLLM_OrganizationTable(
+        organization_id="test-org",
+        budget_id="test-budget",
+        models=[],
+        created_by="test",
+        updated_by="test",
+        metadata={limit_field: {"gpt-4": 100}},
+    )
+    data = GenerateKeyRequest(metadata={limit_field: {"gpt-4": 30}})
+    delattr(data, "model_rpm_limit")
+    delattr(data, "model_tpm_limit")
+
+    with pytest.raises(HTTPException) as exc_info:
+        check_org_key_model_specific_limits(keys=[existing_key], org_table=org_table, data=data)
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == (
+        f"Allocated {limit_name} limit=80 + Key {limit_name} limit=30 is greater than "
+        f"organization {limit_name} limit=100"
     )
 
 
@@ -12898,6 +12979,48 @@ class TestLIT1884KeyGenerateValidation:
                 route="key_generate",
             )
             assert result is True
+
+    @pytest.mark.parametrize("spend", [-9999.0, 5.0])
+    def test_key_generation_check_non_admin_cannot_set_spend(self, spend: float) -> None:
+        data: Final = GenerateKeyRequest(spend=spend)
+        user_api_key_dict: Final = UserAPIKeyAuth(
+            user_id="internal-user",
+            user_role=LitellmUserRoles.INTERNAL_USER,
+        )
+
+        with patch.object(litellm, "key_generation_settings", None):
+            with pytest.raises(HTTPException) as exc_info:
+                key_generation_check(
+                    team_table=None,
+                    user_api_key_dict=user_api_key_dict,
+                    data=data,
+                    route="key_generate",
+                )
+        assert exc_info.value.status_code == 403
+        assert "Only proxy admins can set spend" in str(exc_info.value.detail)
+
+    @pytest.mark.parametrize(
+        "user_role, spend",
+        [
+            (LitellmUserRoles.INTERNAL_USER, 0.0),
+            (LitellmUserRoles.INTERNAL_USER, None),
+            (LitellmUserRoles.PROXY_ADMIN, -5.0),
+        ],
+    )
+    def test_key_generation_check_spend_allowed(self, user_role: LitellmUserRoles, spend: float | None) -> None:
+        data: Final = GenerateKeyRequest(spend=spend)
+        user_api_key_dict: Final = UserAPIKeyAuth(user_id="some-user", user_role=user_role)
+
+        with patch.object(litellm, "key_generation_settings", None):
+            assert (
+                key_generation_check(
+                    team_table=None,
+                    user_api_key_dict=user_api_key_dict,
+                    data=data,
+                    route="key_generate",
+                )
+                is True
+            )
 
 
 class TestLIT1884KeyUpdateValidation:

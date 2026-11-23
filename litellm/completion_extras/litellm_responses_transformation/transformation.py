@@ -66,11 +66,13 @@ from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
     responses_reasoning_items_from_thinking_blocks,
     thinking_blocks_from_reasoning_items,
 )
+from litellm.litellm_core_utils.tool_fields import qualified_member_name
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.bridges.completion_transformation import (
     CompletionTransformationBridge,
 )
 from litellm.llms.custom_httpx.sse_lines import split_sse_lines
+from litellm.llms.vertex_ai.responses.transformation import is_vertex_muse_model
 from litellm.responses.additional_tools import additional_tools_in_input
 from litellm.responses.instructions_length import with_long_instructions_in_input
 from litellm.responses.litellm_completion_transformation.tool_search import is_anthropic_tool_search_chat_tool
@@ -238,6 +240,30 @@ def _effort_with_requested_summary(nested_effort: object, top_level_effort: obje
             return {**reasoning, "summary": summary}
         case _:
             return nested_effort
+
+
+_VERTEX_CREDENTIAL_PARAMS: Final = MappingProxyType(
+    {
+        "vertex_project": ("vertex_project", "vertex_ai_project"),
+        "vertex_location": ("vertex_location", "vertex_ai_location"),
+        "vertex_credentials": ("vertex_credentials", "vertex_ai_credentials"),
+    }
+)
+
+
+def _first_non_empty(params: Mapping[str, object], names: tuple[str, ...]) -> object:
+    return next((params[name] for name in names if params.get(name)), None)
+
+
+def _vertex_credential_params(
+    model: str, custom_llm_provider: str | None, optional_params: Mapping[str, object]
+) -> Mapping[str, object]:
+    if custom_llm_provider != LlmProviders.VERTEX_AI.value or not is_vertex_muse_model(model):
+        return {}
+    found: Final = {
+        name: _first_non_empty(optional_params, aliases) for name, aliases in _VERTEX_CREDENTIAL_PARAMS.items()
+    }
+    return {name: value for name, value in found.items() if value is not None}
 
 
 def _served_provider(litellm_params: Mapping[str, object]) -> str | None:
@@ -508,10 +534,18 @@ def _top_level_namespaces(request: object) -> Iterator[object]:
     return (tool for tool in tools if _json_field(tool, "type") == "namespace")
 
 
+def _member_and_qualified_names(tool: object) -> tuple[str, ...]:
+    names: Final = tuple(chain.from_iterable(_tool_definition_name(member) for member in _namespace_members(tool)))
+    namespace: Final = _json_field(tool, "name") if _json_field(tool, "type") == "namespace" else None
+    qualified: Final = (
+        tuple(qualified_member_name(namespace, name) for name in names) if isinstance(namespace, str) else ()
+    )
+    return (*names, *qualified)
+
+
 def nested_tool_member_names(request: object) -> tuple[str, ...]:
     tools: Final = (*_top_level_namespaces(request), *additional_tools_in_input(_json_field(request, "input")))
-    members: Final = chain.from_iterable(_namespace_members(tool) for tool in tools)
-    return tuple(chain.from_iterable(_tool_definition_name(member) for member in members))
+    return tuple(chain.from_iterable(_member_and_qualified_names(tool) for tool in tools))
 
 
 def _loads_any_tool(message: object, names: frozenset[str]) -> bool:
@@ -1442,7 +1476,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             {**existing, **update},
         )
 
-    def _build_sanitized_litellm_params(self, litellm_params: dict) -> dict[str, object]:
+    def _build_sanitized_litellm_params(self, litellm_params: Mapping[str, object]) -> dict[str, object]:
         """Build sanitized litellm_params with merged metadata."""
         responses_optional_param_keys: Final = set(ResponsesAPIOptionalRequestParams.__annotations__.keys())
         sanitized: Final[dict[str, object]] = {
@@ -1596,6 +1630,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             "input": input_items,
             "litellm_logging_obj": litellm_logging_obj,
             **sanitized_litellm_params,
+            **_vertex_credential_params(model, _served_provider(litellm_params), typed_optional_params),
             "client": client,
         }
 

@@ -1,6 +1,8 @@
 import { useTerminology } from "@/contexts/TerminologyContext";
+import { PageContent } from "@/components/shared/Page";
+import { PageHeader, PageHeaderTitle, PageHeaderDescription, PageHeaderControls } from "@/components/shared/PageHeader";
 import React, { useState, useEffect } from "react";
-import { Info, Plus } from "lucide-react";
+import { Bot, Info, Plus } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { getAgentsList, deleteAgentCall } from "@/components/networking";
 import AddAgentForm from "./add_agent_form";
@@ -140,24 +142,28 @@ const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole, teams 
   };
 
   return (
-    <div className="w-full mx-auto flex-auto overflow-y-auto m-8 p-2">
-      <div className="flex flex-col gap-2 mb-4">
-        <h1 className="text-2xl font-bold">{t("agents.panel.title")}</h1>
-        <p className="text-sm text-muted-foreground">{term(t("agents.panel.description"))}</p>
-        <Alert className="mb-3">
-          <Info />
-          <AlertTitle>{t("agents.panel.authAlert.title")}</AlertTitle>
-          <AlertDescription>{t("agents.panel.authAlert.description")}</AlertDescription>
-        </Alert>
+    <PageContent>
+      <PageHeader>
+        <PageHeaderTitle>
+          <Bot />
+          {t("agents.panel.title")}
+        </PageHeaderTitle>
+        <PageHeaderDescription>{term(t("agents.panel.description"))}</PageHeaderDescription>
         {isAdmin && (
-          <div className="mt-2 flex items-center gap-4">
+          <PageHeaderControls>
             <Button onClick={handleAddAgent} disabled={!accessToken}>
               <Plus />
               {t("agents.panel.addAgent")}
             </Button>
-          </div>
+          </PageHeaderControls>
         )}
-      </div>
+      </PageHeader>
+
+      <Alert>
+        <Info />
+        <AlertTitle>{t("agents.panel.authAlert.title")}</AlertTitle>
+        <AlertDescription>{t("agents.panel.authAlert.description")}</AlertDescription>
+      </Alert>
 
       {selectedAgentId ? (
         <AgentInfoView
@@ -210,7 +216,7 @@ const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole, teams 
           </AlertDialogContent>
         </AlertDialog>
       )}
-    </div>
+    </PageContent>
   );
 };
 

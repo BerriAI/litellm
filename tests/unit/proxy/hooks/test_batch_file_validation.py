@@ -1972,7 +1972,7 @@ async def test_count_input_file_usage_enforces_models_when_token_counting_fails(
 
     with (
         patch("litellm.afile_content", new=AsyncMock(return_value=fake_content)),
-        patch("litellm.proxy.hooks.batch_rate_limiter.count_entry_tokens", new=_boom),
+        patch("litellm.proxy.hooks.batch_rate_limiter.batch_row_counter", return_value=_boom),
         patch("litellm.proxy.auth.auth_checks.can_key_call_model", new=deny),
         patch("litellm.proxy.proxy_server.llm_router", MagicMock(model_list=[])),
     ):
@@ -2017,7 +2017,7 @@ async def test_count_input_file_usage_estimates_tokens_when_counting_fails_for_a
 
     with (
         patch("litellm.afile_content", new=AsyncMock(return_value=fake_content)),
-        patch("litellm.proxy.hooks.batch_rate_limiter.count_entry_tokens", new=_boom),
+        patch("litellm.proxy.hooks.batch_rate_limiter.batch_row_counter", return_value=_boom),
         patch("litellm.proxy.auth.auth_checks.can_key_call_model", new=allow),
         patch("litellm.proxy.proxy_server.llm_router", MagicMock(model_list=[])),
     ):

@@ -332,7 +332,7 @@ def _raw_cache(cache: _RawCacheRead) -> _RawCacheRead:
     return cache
 
 
-def _typed_request_body(request_body: dict) -> Mapping[str, object]:
+def _typed_request_body(request_body: Mapping[str, object]) -> Mapping[str, object]:
     return request_body
 
 
@@ -377,6 +377,15 @@ def _scope_required_customer_headers(scope: object) -> tuple[str, ...]:
 
 def _metadata_is_mapping(metadata: object) -> bool:
     return isinstance(metadata, Mapping)
+
+
+class _MetadataScope(Protocol):
+    @property
+    def metadata(self) -> object: ...
+
+
+def _scope_metadata(scope: _MetadataScope | None) -> object:
+    return scope.metadata if scope is not None else None
 
 
 def _required_customer_headers(scopes: tuple[object, object, object]) -> tuple[str, ...]:
@@ -425,8 +434,8 @@ async def missing_required_customer_header(
         _required_customer_headers(
             (
                 getattr(proxy_server, "general_settings", None),
-                getattr(team, "metadata", None),
-                getattr(authenticated, "metadata", None),
+                _scope_metadata(team),
+                _scope_metadata(authenticated),
             )
         ),
     )
@@ -866,7 +875,9 @@ async def _run_project_checks(
         )
 
 
-def _enforce_user_param_check(general_settings: dict, request: Request, request_body: dict, route: str) -> None:
+def _enforce_user_param_check(
+    general_settings: Mapping[str, object], request: Request, request_body: Mapping[str, object], route: str
+) -> None:
     if not general_settings.get("enforce_user_param", False):
         return
 
@@ -882,7 +893,10 @@ def _enforce_user_param_check(general_settings: dict, request: Request, request_
 
 
 def _reject_clientside_metadata_tags_check(
-    general_settings: dict, request_body: dict, route: str, request: Request | None = None
+    general_settings: Mapping[str, object],
+    request_body: Mapping[str, object],
+    route: str,
+    request: Request | None = None,
 ) -> None:
     if not general_settings.get("reject_clientside_metadata_tags", False):
         return
@@ -923,7 +937,7 @@ def _global_proxy_budget_check(global_proxy_spend: float | None, skip_budget_che
             raise native.error()
 
 
-_GUARDRAIL_MODIFICATION_KEYS: Final[tuple] = (
+_GUARDRAIL_MODIFICATION_KEYS: Final[tuple[str, ...]] = (
     "guardrails",
     "disable_global_guardrails",
     "disable_global_guardrail",
@@ -1302,7 +1316,7 @@ async def common_checks(
     user_object: LiteLLM_UserTable | None,
     end_user_object: LiteLLM_EndUserTable | None,
     global_proxy_spend: float | None,
-    general_settings: dict,
+    general_settings: Mapping[str, object],
     route: str,
     llm_router: Router | None,
     proxy_logging_obj: ProxyLogging,
@@ -1567,8 +1581,8 @@ async def common_checks(
         _required_customer_headers(
             (
                 general_settings,  # pyright: ignore[reportUnknownArgumentType]  # validated to Mapping[str, object] inside
-                getattr(team_object, "metadata", None),
-                getattr(valid_token, "metadata", None),
+                _scope_metadata(team_object),
+                _scope_metadata(valid_token),
             )
         )
         if _route_requires_customer_headers(route, request)
@@ -1696,12 +1710,12 @@ async def common_checks(
                 return
 
             await _user_multi_budget_check(user_object)
-            if user_object.max_budget is None:
+            user_budget: Final = user_object.effective_max_budget()
+            if user_budget is None:
                 return
 
             from litellm.proxy.proxy_server import get_current_spend
 
-            user_budget: Final = user_object.max_budget
             user_spend: Final = await get_current_spend(
                 counter_key=user_counter(user_object.user_id),
                 fallback_spend=user_object.spend or 0.0,
@@ -2097,8 +2111,11 @@ def resolve_effective_team_member_budget(
     member_budget: LiteLLM_BudgetTable | None,
     team_default_budget: LiteLLM_BudgetTable | None,
     now: datetime,
+    membership: LiteLLM_TeamMembership | None = None,
 ) -> float | None:
     if member_budget is not None and member_budget.max_budget is not None:
+        if membership is not None:
+            return membership.effective_budget_with_rollover(now)
         return member_budget.effective_max_budget(now)
     if team_default_budget is None or team_default_budget.max_budget is None or team_default_budget.max_budget <= 0:
         return None
@@ -7500,6 +7517,7 @@ async def _check_team_member_budget(
             member_budget=member_budget_row,
             team_default_budget=team_default_budget,
             now=now,
+            membership=loaded_membership,
         )
 
         if team_member_budget is not None:
@@ -8087,7 +8105,7 @@ _organization_max_budget_check: Final = organization_max_budget_check
 
 
 async def _tag_max_budget_check(
-    request_body: dict,
+    request_body: Mapping[str, object],
     prisma_client: PrismaClient | None,
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
@@ -8634,7 +8652,7 @@ async def _cached_object_permission(
 
 
 async def vector_store_access_check(
-    request_body: dict,
+    request_body: Mapping[str, object],
     team_object: LiteLLM_TeamTable | None,
     valid_token: UserAPIKeyAuth | None,
     *,

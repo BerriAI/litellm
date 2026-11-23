@@ -111,6 +111,7 @@ from litellm.proxy.auth.auth_object_prefetch import (
 )
 from litellm.proxy.auth.auth_utils import (
     abbreviate_api_key,
+    bearer_credential,
     checks_team_s3_buckets_in_handler,
     fallback_target_model_name,
     get_end_user_id_from_request_body,
@@ -125,6 +126,7 @@ from litellm.proxy.auth.auth_utils import (
     pre_db_read_auth_checks,
     request_dispatched_to_pass_through_endpoint,
     request_dispatched_to_provider_pass_through,
+    request_fields_for_body_check,
     route_in_additonal_public_routes,
 )
 from litellm.proxy.auth.customer_hierarchy_auth import (
@@ -1191,6 +1193,12 @@ async def check_key_model_budget_with_fallback(
             request.scope["path_params"]["model"] = fallback_model  # rebind-ok: route handlers use the fallback model
 
 
+def _is_master_key(api_key: str) -> bool:
+    from litellm.proxy.proxy_server import master_key  # noqa: PLC0415  # runtime globals
+
+    return master_key is not None and secrets.compare_digest(api_key.encode(), master_key.encode())
+
+
 def _get_bearer_token_or_received_api_key(api_key: str) -> str:
     if api_key.startswith("Bearer "):  # ensure Bearer token passed in
         api_key = api_key.replace("Bearer ", "")  # extract the token
@@ -1198,6 +1206,8 @@ def _get_bearer_token_or_received_api_key(api_key: str) -> str:
         api_key = api_key.replace("Basic ", "")  # handle langfuse input
     elif api_key.startswith("bearer "):
         api_key = api_key.replace("bearer ", "")
+    elif (credential := bearer_credential(api_key)) is not None and not _is_master_key(api_key):
+        return credential
     elif api_key.startswith("AWS4-HMAC-SHA256"):
         # Handle AWS Signature V4 format from LangChain
         # Format: AWS4-HMAC-SHA256 Credential=Bearer $LITELLM_MASTER_KEY/date/region/service/aws4_request, SignedHeaders=..., Signature=...
@@ -1271,6 +1281,8 @@ def get_bearer_token(
         api_key = api_key.replace("Basic ", "")  # handle langfuse input
     elif api_key.startswith("bearer "):
         api_key = api_key.replace("bearer ", "")
+    elif (credential := bearer_credential(api_key)) is not None:
+        return credential
     elif api_key.startswith("AWS4-HMAC-SHA256"):
         # Handle AWS Signature V4 format from LangChain
         # Format: AWS4-HMAC-SHA256 Credential=Bearer $LITELLM_MASTER_KEY/date/region/service/aws4_request, SignedHeaders=..., Signature=...
@@ -1405,12 +1417,10 @@ async def user_api_key_auth_websocket_for_model(
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
             raise HTTPException(status_code=403, detail="No API key provided")
     else:
-        # Extract the API key from the Bearer token
-        if not authorization.startswith("Bearer "):
+        api_key = bearer_credential(authorization)
+        if api_key is None:
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
             raise HTTPException(status_code=403, detail="Invalid Authorization header format")
-
-        api_key = authorization[len("Bearer ") :].strip()
 
     # Call user_api_key_auth with the extracted API key
     # Note: You'll need to modify this to work with WebSocket context if needed
@@ -1595,7 +1605,7 @@ def get_api_key(
 
 
 def _route_pass_through_endpoints(
-    route: str, pass_through_endpoints: list[dict] | None
+    route: str, pass_through_endpoints: Sequence[object] | None
 ) -> tuple[Mapping[str, object], ...]:
     return tuple(
         endpoint
@@ -1604,7 +1614,7 @@ def _route_pass_through_endpoints(
     )
 
 
-def pass_through_auth_off(route: str, pass_through_endpoints: list[dict] | None) -> bool:
+def pass_through_auth_off(route: str, pass_through_endpoints: Sequence[object] | None) -> bool:
     """A configured pass-through endpoint on ``route`` turns auth off. ``auth`` defaults to on: a raw config
     dict without the key must never become an unauthenticated forwarder."""
     return any(
@@ -1623,7 +1633,7 @@ def _endpoint_key(key: str, endpoint: Mapping[str, object]) -> str:
 def pass_through_key(
     request: Request,
     route: str,
-    pass_through_endpoints: list[dict] | None,
+    pass_through_endpoints: Sequence[object] | None,
     api_key: str,
 ) -> str:
     """The key a pass-through route authenticates: a ``litellm_user_api_key`` header on a mapped provider
@@ -2005,7 +2015,7 @@ async def _core_outcome(
     settings: "RustAuthSettings",
     host: "PythonAuthHost",
     request: Request,
-    pass_through_endpoints: list[dict] | None,
+    pass_through_endpoints: Sequence[object] | None,
 ) -> "RustAuthOutcome":
     match path:
         case RustPlan.Key:
@@ -2553,7 +2563,7 @@ async def run_centralized_common_checks(
     if not sub_call and getattr(request.state, "deferred_model_body_check", False) is True:
         body_model: Final = request_data.get("model")
         is_request_body_safe(
-            request_body=request_data,
+            request_body=request_fields_for_body_check(request, request_data),
             general_settings=_GENERAL_SETTINGS_ADAPTER.validate_python(general_settings),
             llm_router=llm_router,
             model=body_model if isinstance(body_model, str) else "",
@@ -3620,7 +3630,7 @@ async def return_user_api_key_auth_obj(
             user_rpm_limit=user_obj.rpm_limit,
             user_email=user_obj.user_email,
             user_spend=getattr(user_obj, "spend", None),
-            user_max_budget=getattr(user_obj, "max_budget", None),
+            user_max_budget=user_obj.effective_max_budget(),
             user_model_max_budget=getattr(user_obj, "model_max_budget", None),
         )
     if user_obj is not None and is_user_proxy_admin(user_obj=user_obj):
@@ -3694,8 +3704,8 @@ async def _lookup_end_user_and_apply_budget(
     route: str,
     parent_otel_span: Span | None,
     prisma_client,
-    user_api_key_cache,
-    proxy_logging_obj,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging | None,
 ):
     """Look up end_user from DB and apply budget limits to valid_token."""
     end_user_object = None

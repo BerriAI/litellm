@@ -38,6 +38,7 @@ from fastapi import (
     UploadFile,
     WebSocket,
     WebSocketDisconnect,
+    params,
     status,
 )
 from fastapi.responses import StreamingResponse
@@ -72,6 +73,7 @@ from litellm.integrations.custom_guardrail import (
     without_server_streaming_classification,
 )
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.lens.policy import LENS_LOGGING_POLICY_PARAM, LensLoggingPolicy, lens_logging_enabled
 from litellm.integrations.otel.model.semconv import PASSTHROUGH_OPERATION_KEY, GenAIOperation
 from litellm.litellm_core_utils.core_helpers import (
     as_object_list,
@@ -567,7 +569,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         url: str,
         headers: dict,
         requested_query_params: dict | None = None,
-        custom_body: dict | None = None,
+        custom_body: dict[str, object] | None = None,
     ) -> httpx.Response:
         """
         Make a non-streaming HTTP request
@@ -889,6 +891,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
             "litellm_params": {
                 **litellm_params_in_body,
                 "metadata": _metadata,
+                LENS_LOGGING_POLICY_PARAM: LensLoggingPolicy(enabled=lens_logging_enabled(user_api_key_dict)),
                 COMMITTED_BUDGET_SPEND_PARAM: user_api_key_dict.committed_budget_spend or CommittedBudgetSpend(),
                 "proxy_server_request": {
                     "url": str(request.url),
@@ -994,7 +997,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
     _update_stream_param_based_on_request_body = update_stream_param_based_on_request_body
 
 
-def _carry_guardrail_logging_info(request_data: dict, guardrail_data: dict | None) -> None:
+def _carry_guardrail_logging_info(request_data: dict[str, object], guardrail_data: dict | None) -> None:
     """Copy guardrail logging entries from ``guardrail_data`` onto ``request_data``.
 
     Post-call guardrails run against a throwaway ``hook_data`` dict (its
@@ -1048,7 +1051,7 @@ def _passthrough_google_model(url_route: str, google_provider: str | None) -> st
 
 
 def _build_passthrough_failure_request_payload(
-    parsed_body: dict | None,
+    parsed_body: dict[str, object] | None,
     kwargs: dict | None,
     logging_obj: LiteLLMLoggingObj | None,
     custom_llm_provider: str | None,
@@ -1056,7 +1059,7 @@ def _build_passthrough_failure_request_payload(
     url: httpx.URL | None = None,
     upstream_model: str | None = None,
     builtin_provider_route: bool = False,
-) -> dict:
+) -> dict[str, object]:
     """Build the ``request_data`` dict passed to ``post_call_failure_hook``.
 
     Shared by the outer exception handler (LiteLLM-internal failures) and
@@ -1241,7 +1244,7 @@ async def _error_body_preview_and_relay(response: httpx.Response) -> tuple[str, 
 async def _log_passthrough_upstream_failure(
     response: httpx.Response,
     user_api_key_dict: UserAPIKeyAuth,
-    request_payload: dict,
+    request_payload: dict[str, object],
     logging_obj: LiteLLMLoggingObj,
     inspect_body: bool = True,
 ) -> httpx.Response:
@@ -1299,7 +1302,7 @@ async def _relay_reporting_failures(
     stream: AsyncGenerator[bytes, None],
     upstream_status: int,
     user_api_key_dict: UserAPIKeyAuth,
-    request_payload: dict,  # mutable-ok: post_call_failure_hook lifts fields onto request_data in place
+    request_payload: dict[str, object],  # mutable-ok: post_call_failure_hook lifts fields onto request_data in place
     logging_obj: LiteLLMLoggingObj | None = None,
 ) -> AsyncGenerator[bytes, None]:
     from litellm.proxy.proxy_server import proxy_logging_obj
@@ -1619,7 +1622,7 @@ async def pass_through_request(
     target: str,
     custom_headers: dict,
     user_api_key_dict: UserAPIKeyAuth,
-    custom_body: dict | None = None,
+    custom_body: Mapping[str, object] | None = None,
     forward_headers: bool | None = False,
     merge_query_params: bool | None = False,
     query_params: dict | None = None,
@@ -1685,7 +1688,7 @@ async def pass_through_request(
     logging_obj: Logging | None = None
     # the dict post-call guardrails wrote their logging info into; the failure
     # handler reuses it so a guardrail block still surfaces its span/logs
-    post_call_guardrail_data: dict | None = None
+    post_call_guardrail_data: dict[str, object] | None = None
 
     #########################################################
     try:
@@ -2706,12 +2709,12 @@ async def _parse_request_data_by_content_type(
 
 
 def create_pass_through_route(
-    endpoint,
+    endpoint: object,
     target: str,
     custom_headers: Mapping[str, object] | None = None,
     _forward_headers: bool | None = False,
     _merge_query_params: bool | None = False,
-    dependencies: list | None = None,
+    dependencies: Sequence[params.Depends] | None = None,
     include_subpath: bool | None = False,
     cost_per_request: float | None = None,
     custom_llm_provider: str | None = None,
@@ -2900,7 +2903,7 @@ def create_websocket_passthrough_route(
     target: str,
     custom_headers: dict | None = None,
     _forward_headers: bool | None = False,
-    dependencies: list | None = None,
+    dependencies: Sequence[params.Depends] | None = None,
     cost_per_request: float | None = None,
 ):
     """
@@ -3091,7 +3094,7 @@ WebsocketUpstreamFrameClassifier: TypeAlias = Callable[[Mapping[str, object]], W
 _SESSION_FRAMES_EVERY_ROW_CARRIES: Final[frozenset[WebsocketUpstreamFrameKind]] = frozenset(
     {"opens_session", "updates_session"}
 )
-_FrameT: Final = TypeVar("_FrameT", bound=Mapping[str, object])
+_FrameT = TypeVar("_FrameT", bound=Mapping[str, object])
 
 
 @dataclass(frozen=True, slots=True)
@@ -4083,7 +4086,7 @@ def _should_buffer_passthrough_response(response: httpx.Response) -> bool:
 
 async def _relay_passthrough_response_bytes(
     response: httpx.Response,
-    request_body: dict,
+    request_body: dict[str, object],
     url_route: str,
     start_time: datetime,
     logging_obj: LiteLLMLoggingObj,
@@ -4237,7 +4240,7 @@ class SafeRouteAdder:
         path: str,
         endpoint: Callable[..., object],
         methods: list[str],
-        dependencies: list | None = None,
+        dependencies: Sequence[params.Depends] | None = None,
     ) -> bool:
         """
         Add an API route to the app only if it doesn't already exist.
@@ -4297,7 +4300,7 @@ class InitPassThroughEndpointHelpers:
         custom_headers: dict | None,
         forward_headers: bool | None,
         merge_query_params: bool | None,
-        dependencies: list | None,
+        dependencies: Sequence[params.Depends] | None,
         cost_per_request: float | None,
         endpoint_id: str,
         guardrails: dict | None = None,
@@ -4381,7 +4384,7 @@ class InitPassThroughEndpointHelpers:
         custom_headers: dict | None,
         forward_headers: bool | None,
         merge_query_params: bool | None,
-        dependencies: list | None,
+        dependencies: Sequence[params.Depends] | None,
         cost_per_request: float | None,
         endpoint_id: str,
         guardrails: dict | None = None,
@@ -4931,7 +4934,7 @@ async def _get_pass_through_endpoints_from_db(
 async def _filter_endpoints_by_team_allowed_routes(
     team_id: str,
     pass_through_endpoints: list[PassThroughGenericEndpoint],
-    prisma_client,
+    prisma_client: object,
 ) -> list[PassThroughGenericEndpoint]:
     """
     Filter pass-through endpoints based on team's allowed_passthrough_routes and

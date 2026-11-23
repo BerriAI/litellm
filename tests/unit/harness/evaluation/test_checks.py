@@ -10,6 +10,9 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm import (
+    AgentInput,
+    AgentOutput,
+    EvalAgent,
     EvalScorecard,
     EvalStatus,
     EvalTarget,
@@ -38,7 +41,7 @@ def _agent_response() -> ModelResponse:
 
 async def _evaluate(
     task: EvalTask,
-    target: EvalTarget,
+    target: EvalTarget | EvalAgent,
     *,
     single_attempt: bool,
     api_base: str,
@@ -125,8 +128,9 @@ async def test_should_use_gateway_cost_headers_when_reporting_agent_usage(
     ),
 )
 @pytest.mark.parametrize("single_attempt", (False, True))
+@pytest.mark.parametrize("custom_agent", (False, True))
 async def test_should_grade_with_an_explicit_judge_and_preserve_its_separate_usage(
-    monkeypatch: pytest.MonkeyPatch, verdict: str, expected_status: EvalStatus, single_attempt: bool
+    monkeypatch: pytest.MonkeyPatch, verdict: str, expected_status: EvalStatus, single_attempt: bool, custom_agent: bool
 ) -> None:
     requests: Final[asyncio.Queue[httpx.Request]] = asyncio.Queue()
 
@@ -153,14 +157,24 @@ async def test_should_grade_with_an_explicit_judge_and_preserve_its_separate_usa
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
         monkeypatch.setattr(litellm, "aclient_session", client)
-        report: Final = await _evaluate(
-            EvalTask("quality", "Answer", check=JudgeCheck("Follow the rubric", "openai/eval-judge")),
-            EvalTarget(
+
+        class CustomAgent(EvalAgent):
+            async def run(self, task: AgentInput) -> AgentOutput:
+                return AgentOutput("The answer meets the rubric.", cost=0.0, usage=Usage(), events=())
+
+        target: Final = (
+            CustomAgent("candidate")
+            if custom_agent
+            else EvalTarget(
                 Harness.TOOL_LOOP,
                 "openai/eval-agent",
                 label="candidate",
                 options=ToolLoopOptions(completion_kwargs={"mock_response": _agent_response()}),
-            ),
+            )
+        )
+        report: Final = await _evaluate(
+            EvalTask("quality", "Answer", check=JudgeCheck("Follow the rubric", "openai/eval-judge")),
+            target,
             single_attempt=single_attempt,
             metadata={"experiment": "unit-eval", "agent_eval_trial": "cannot-override"},
             api_base="https://judge.example/v1",
@@ -232,7 +246,10 @@ async def test_should_report_unknown_judge_cost_after_provider_errors(
     assert run.check is not None
     assert run.check.error is not None
     assert run.check.judge_cost is None
+    assert run.check.judge_usage is None
     assert not report.summaries[0].metrics_complete
     assert report.summaries[0].errors == 1
     assert report.summaries[0].cost == run.result.cost
-    assert "Known subtotals" in report.to_markdown()
+    assert report.summaries[0].judge_cost is None
+    assert report.summaries[0].judge_usage is None
+    assert "unavailable" in report.to_markdown()
