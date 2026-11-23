@@ -122,7 +122,7 @@ const sameOutcomes = (left: readonly string[], right: readonly string[]): boolea
 
 const buildUpdateParams = (
   formValues: LoggingSettingsFormValues,
-  outcomesChanged: boolean,
+  saveOutcomes: boolean,
 ): StoreRequestInSpendLogsParams => {
   const retentionPeriod = duration(formValues.maximum_spend_logs_retention_period);
   const batchSize = count(formValues.maximum_spend_logs_cleanup_batch_size);
@@ -137,10 +137,7 @@ const buildUpdateParams = (
     ...(maxBatches !== undefined && { maximum_spend_logs_cleanup_max_batches: maxBatches }),
     ...(runBudget !== undefined && { maximum_spend_logs_cleanup_run_budget: runBudget }),
     ...(batchTimeout !== undefined && { maximum_spend_logs_cleanup_batch_timeout: batchTimeout }),
-    ...(outcomesChanged &&
-      formValues.guardrail_log_outcomes.length > 0 && {
-        guardrail_log_outcomes: formValues.guardrail_log_outcomes,
-      }),
+    ...(saveOutcomes && { guardrail_log_outcomes: formValues.guardrail_log_outcomes }),
   };
 };
 
@@ -152,12 +149,11 @@ const buildUpdateParams = (
 const omittedFieldNames = (
   updateParams: StoreRequestInSpendLogsParams,
   isStored: (name: GeneralSettingsFieldName) => boolean,
-  outcomesChanged: boolean,
+  clearOutcomes: boolean,
 ): readonly GeneralSettingsFieldName[] =>
-  [
-    ...OPTIONAL_FIELDS.map((field) => field.name),
-    ...(outcomesChanged ? [GUARDRAIL_LOG_OUTCOMES_FIELD_NAME] : []),
-  ].filter((name) => !(name in updateParams) && isStored(name));
+  [...OPTIONAL_FIELDS.map((field) => field.name), ...(clearOutcomes ? [GUARDRAIL_LOG_OUTCOMES_FIELD_NAME] : [])].filter(
+    (name) => !(name in updateParams) && isStored(name),
+  );
 
 const labelWithHint = (label: string, hint: string): React.ReactNode => (
   <>
@@ -172,6 +168,7 @@ const labelWithHint = (label: string, hint: string): React.ReactNode => (
 interface LoggingSettingsFormProps {
   initialValues: LoggingSettingsFormValues;
   describeField: (name: string, fallback: string) => string;
+  outcomesEditable: boolean;
   isSaving: boolean;
   onSubmit: (formValues: LoggingSettingsFormValues) => void;
 }
@@ -179,6 +176,7 @@ interface LoggingSettingsFormProps {
 const LoggingSettingsForm: React.FC<LoggingSettingsFormProps> = ({
   initialValues,
   describeField,
+  outcomesEditable,
   isSaving,
   onSubmit,
 }) => {
@@ -250,13 +248,18 @@ const LoggingSettingsForm: React.FC<LoggingSettingsFormProps> = ({
                 t("adminPanel.loggingSettings.fields.guardrailLogOutcomes.hint"),
               ),
             )}
-            description={t("adminPanel.loggingSettings.fields.guardrailLogOutcomes.description")}
+            description={t(
+              outcomesEditable
+                ? "adminPanel.loggingSettings.fields.guardrailLogOutcomes.description"
+                : "adminPanel.loggingSettings.fields.guardrailLogOutcomes.configOwned",
+            )}
           >
             {({ value, onChange }) => (
               <div className="flex flex-wrap gap-x-6 gap-y-2">
                 {GUARDRAIL_LOG_OUTCOMES.map((outcome) => (
                   <label key={outcome.value} className="flex items-center gap-2 text-sm">
                     <Checkbox
+                      disabled={!outcomesEditable}
                       checked={value.includes(outcome.value)}
                       onCheckedChange={(checked) =>
                         onChange(
@@ -304,6 +307,9 @@ const LoggingSettings: React.FC = () => {
     (name: string) => proxyConfigData?.find((field) => field.field_name === name)?.field_value,
     [proxyConfigData],
   );
+
+  const outcomesEditable =
+    proxyConfigData?.find((field) => field.field_name === GUARDRAIL_LOG_OUTCOMES_FIELD_NAME)?.editable !== false;
 
   const isStored = (name: GeneralSettingsFieldName) => {
     const value = storedValue(name);
@@ -359,10 +365,13 @@ const LoggingSettings: React.FC = () => {
   };
 
   const handleFormSubmit = (formValues: LoggingSettingsFormValues) => {
-    // Outcomes travel only when the admin changed them, so saving another field never rewrites a stored
-    // empty list or a value the config file owns.
-    const outcomesChanged = !sameOutcomes(formValues.guardrail_log_outcomes, initialValues.guardrail_log_outcomes);
-    const updateParams = buildUpdateParams(formValues, outcomesChanged);
+    // The boxes are what the admin sees, so no box checked always ends as unset, even over a stored empty
+    // list. A value the config file owns is never sent or cleared, and an unchanged selection is not re-sent.
+    const selected = formValues.guardrail_log_outcomes;
+    const clearOutcomes = outcomesEditable && selected.length === 0;
+    const saveOutcomes =
+      outcomesEditable && selected.length > 0 && !sameOutcomes(selected, initialValues.guardrail_log_outcomes);
+    const updateParams = buildUpdateParams(formValues, saveOutcomes);
     const submitUpdate = () =>
       mutate(updateParams, {
         onSuccess: () => toast.success(t("adminPanel.loggingSettings.toasts.updated")),
@@ -370,7 +379,7 @@ const LoggingSettings: React.FC = () => {
           toast.fromError(t("adminPanel.loggingSettings.toasts.saveFailed", { error: parseErrorMessage(error) })),
       });
 
-    const fieldsToClear = omittedFieldNames(updateParams, isStored, outcomesChanged);
+    const fieldsToClear = omittedFieldNames(updateParams, isStored, clearOutcomes);
     if (fieldsToClear.length === 0) {
       submitUpdate();
       return;
@@ -408,6 +417,7 @@ const LoggingSettings: React.FC = () => {
             <LoggingSettingsForm
               initialValues={initialValues}
               describeField={describeField}
+              outcomesEditable={outcomesEditable}
               isSaving={isPending || isDeletingField}
               onSubmit={handleFormSubmit}
             />

@@ -688,18 +688,16 @@ describe("LoggingSettings", () => {
     expect(mockMutate.mock.calls[0][0]).toEqual({ store_prompts_in_spend_logs: false });
   });
 
-  it.each([
-    { stored: ["blocked", "flagged"], case: "a stored list" },
-    { stored: [], case: "a stored empty list" },
-  ])("should leave $case of guardrail outcomes alone when the admin did not change it", async ({ stored }) => {
+  it("should clear a stored empty list of guardrail outcomes, since no box checked means every run keeps a row", async () => {
     const user = userEvent.setup();
+    mockDeleteField.mockImplementation((_request, options) => options?.onSettled?.());
     mockUseProxyConfig.mockReturnValue({
       data: [
         {
           field_name: "guardrail_log_outcomes",
           field_type: "List",
           field_description: "Outcomes kept",
-          field_value: stored,
+          field_value: [],
           stored_in_db: true,
         },
       ],
@@ -708,6 +706,37 @@ describe("LoggingSettings", () => {
     } as unknown as ReturnType<typeof useProxyConfig>);
     renderWithProviders(<LoggingSettings />);
 
+    await user.click(screen.getByRole("button", { name: "Save Settings" }));
+
+    await waitFor(() => expect(mockMutate).toHaveBeenCalledTimes(1));
+    expect(clearedFieldNames()).toEqual(["guardrail_log_outcomes"]);
+    expect(mockMutate.mock.calls[0][0]).toEqual({ store_prompts_in_spend_logs: false });
+  });
+
+  it.each([
+    { editable: true, stored: ["blocked", "flagged"], case: "an unchanged stored list" },
+    { editable: false, stored: ["blocked", "flagged"], case: "a list the config file owns" },
+    { editable: false, stored: [], case: "an empty list the config file owns" },
+  ])("should neither send nor clear $case of guardrail outcomes", async ({ editable, stored }) => {
+    const user = userEvent.setup();
+    mockUseProxyConfig.mockReturnValue({
+      data: [
+        {
+          field_name: "guardrail_log_outcomes",
+          field_type: "List",
+          field_description: "Outcomes kept",
+          field_value: stored,
+          stored_in_db: editable,
+          editable,
+        },
+      ],
+      isLoading: false,
+      refetch: mockRefetch,
+    } as unknown as ReturnType<typeof useProxyConfig>);
+    renderWithProviders(<LoggingSettings />);
+
+    const disabledBoxes = screen.getAllByRole("checkbox").filter((box) => box.matches("[data-disabled]"));
+    expect(disabledBoxes).toHaveLength(editable ? 0 : 5);
     await user.click(screen.getByRole("button", { name: "Save Settings" }));
 
     await waitFor(() => expect(mockMutate).toHaveBeenCalledTimes(1));

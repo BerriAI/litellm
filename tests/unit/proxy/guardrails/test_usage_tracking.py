@@ -689,13 +689,13 @@ async def test_disabled_log_deliveries_do_not_enable_guardrail_analytics():
     prisma.db.litellm_dailyguardrailusageunits.upsert.assert_not_awaited()
 
 
-def _entries_payload(request_id: str, entries: list[dict[str, Any]]) -> dict[str, Any]:
+def _entries_payload(request_id: str, entries: list[dict[str, object]]) -> dict[str, object]:
     payload = _payload(request_id)
     payload["metadata"] = json.dumps({"guardrail_information": entries})
     return payload
 
 
-def _indexed(prisma: MagicMock) -> list[tuple[str, str, Any]]:
+def _indexed(prisma: MagicMock) -> list[tuple[str, str, str | None]]:
     return sorted(
         (row["request_id"], row["guardrail_id"], row["policy_id"])
         for call in prisma.db.litellm_spendlogguardrailindex.create_many.call_args_list

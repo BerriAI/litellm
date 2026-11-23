@@ -48,6 +48,7 @@ export interface ConfigListItem {
   field_default_value: any;
   premium_field?: boolean;
   nested_fields?: FieldDetail[] | null;
+  editable?: boolean;
 }
 
 /**
