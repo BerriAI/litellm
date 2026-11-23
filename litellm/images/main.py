@@ -11,6 +11,7 @@ if TYPE_CHECKING:
     from litellm.images.utils import ImageEditRequestUtils
 
 import httpx
+import openai
 
 import litellm
 
@@ -26,10 +27,11 @@ from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.llm_request_utils import flatten_form_field_values
 from litellm.litellm_core_utils.mock_functions import mock_image_generation
+from litellm.llms.azure.common_utils import AZURE_V1_API_VERSION, is_azure_openai_v1_base
 from litellm.llms.base_llm import BaseImageEditConfig, BaseImageGenerationConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
-from litellm.utils import exception_type, filter_out_litellm_params, get_litellm_params
+from litellm.utils import exception_type, filter_out_litellm_params, get_litellm_params, header_auth_params
 
 #################### Initialize provider clients ####################
 llm_http_handler: BaseLLMHTTPHandler = BaseLLMHTTPHandler()
@@ -39,6 +41,7 @@ from openai.types.audio.transcription_create_params import FileTypes
 from litellm.llms.black_forest_labs.image_edit.handler import bfl_image_edit
 from litellm.llms.black_forest_labs.image_generation.handler import bfl_image_generation
 from litellm.llms.openai.workload_identity import resolve_openai_workload_identity_config
+from litellm.llms.openai_like.common_utils import missing_json_provider_key_error, with_canonical_authorization
 from litellm.main import (
     azure_chat_completions,
     base_llm_aiohttp_handler,
@@ -324,7 +327,11 @@ def image_generation(
 
             api_base = api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")
 
-            api_version = api_version or litellm.api_version or get_secret_str("AZURE_API_VERSION")
+            api_version = (
+                api_version
+                or litellm.api_version
+                or (AZURE_V1_API_VERSION if is_azure_openai_v1_base(api_base) else get_secret_str("AZURE_API_VERSION"))
+            )
 
             api_key = (
                 api_key
@@ -493,8 +500,18 @@ def image_generation(
             or custom_llm_provider == LlmProviders.LITELLM_PROXY.value
             or custom_llm_provider in litellm.openai_compatible_providers
         ):
+            if (
+                missing_key_error := missing_json_provider_key_error(
+                    custom_llm_provider,
+                    model,
+                    api_key or dynamic_api_key,
+                    isinstance(client, openai.OpenAI | openai.AsyncOpenAI),
+                    _OBJECT_DICT_ADAPTER.validate_python(headers),
+                )
+            ) is not None:
+                raise missing_key_error
             if extra_headers is not None:
-                optional_params["extra_headers"] = extra_headers
+                optional_params["extra_headers"] = with_canonical_authorization(custom_llm_provider, extra_headers)
             # Forward OpenAI organization if present (set by proxy pre-call utils)
             organization: Final[str | None] = kwargs.get("organization", None)
             model_response = openai_chat_completions.image_generation(
@@ -509,7 +526,7 @@ def image_generation(
                 organization=organization,
                 aimg_generation=aimg_generation,
                 client=client,
-                headers=headers,
+                headers=with_canonical_authorization(custom_llm_provider, headers),
                 litellm_params=litellm_params_dict,
             )
         elif custom_llm_provider == "bedrock":
@@ -919,15 +936,21 @@ def image_edit(
             or custom_llm_provider == "azure"
             or custom_llm_provider in litellm.openai_compatible_providers
         ):
+            dropped_form_params: Final = header_auth_params(custom_llm_provider)
             dropped_edit_params: Final = (
-                _DROP_PARAM_KWARGS
+                dropped_form_params
+                | _DROP_PARAM_KWARGS
                 | (_IMAGE_EDIT_OPENAI_PARAMS - provider_supported_params)
                 | frozenset(additional_drop_params)
             )
             image_edit_request_params.update(
                 flatten_form_field_values(
                     {key: value for key, value in non_default_params.items() if key not in dropped_edit_params},
-                    extra_body if isinstance(extra_body, dict) else None,
+                    (
+                        {key: value for key, value in extra_body.items() if key not in dropped_form_params}
+                        if isinstance(extra_body, dict)
+                        else None
+                    ),
                 )
             )
 
