@@ -87,15 +87,19 @@ class MemoryStore:
             status="suspended" if current.status == "active" and failures >= suspend_after else current.status,
         )
 
-    async def end_if_current(self, subscription_id: str, upstream_subscription_id: str | None) -> bool:
+    async def end_if_current(
+        self, subscription_id: str, upstream_subscription_id: str | None, generation: str | None = None
+    ) -> bool:
         current: Final = self.rows.get(subscription_id)
         if (
             current is None
             or current.status == "terminated"
+            or generation not in (None, current.generation)
             or current.upstream_subscription_id != upstream_subscription_id
         ):
             return False
         self.rows[subscription_id] = current.model_copy(update={"status": "terminated"})
+        await self.drop_deliveries(subscription_id)
         return True
 
     async def hold_for_unsubscribe(self, subscription_id: str, upstream_subscription_id: str | None) -> bool:
@@ -174,6 +178,13 @@ class MemoryStore:
 
     async def has_pending(self, subscription_id: str) -> bool:
         return any(delivery.subscription_id == subscription_id for delivery in self.queue.values())
+
+    async def enqueue_current(self, row: SubscriptionRow, delivery: QueuedDelivery) -> bool:
+        current: Final = self.rows.get(delivery.subscription_id)
+        if current is None or (current.generation, current.status) != (row.generation, row.status):
+            return False
+        await self.enqueue(delivery)
+        return True
 
     async def enqueue(self, delivery: QueuedDelivery) -> bool:
         if self.fail_enqueue:

@@ -217,7 +217,12 @@ async def _roll_back(
 ) -> None:
     """Undo an upstream subscription this request created but could not record."""
     current: Final = await subscription.request.store.get(subscription.base.id)
-    if current is not None and current.generation != subscription.base.generation and current.status != "terminated":
+    if (
+        current is not None
+        and current.upstream_secret == subscription.base.upstream_secret
+        and current.generation != subscription.base.generation
+        and current.status != "terminated"
+    ):
         return
     orphan: Final = subscription.base.model_copy(update={"upstream_subscription_id": upstream.id})
     await _unsubscribe_upstream(orphan, subscription.prepared, settings, runtime)
@@ -298,9 +303,8 @@ async def _retire_if_moved(
     """A row for a server the name no longer resolves to is ended there, so the new server starts fresh."""
     if row is None or row.status == "terminated" or row.server_id == prepared.resolved.target.server.server_id:
         return row
-    await store.terminate(row.id)
-    await store.drop_deliveries(row.id)
-    await end_upstream(row, settings, runtime)
+    if await store.end_if_current(row.id, row.upstream_subscription_id, row.generation):
+        await end_upstream(row, settings, runtime)
     return row.model_copy(update={"status": "terminated"})
 
 
@@ -464,7 +468,7 @@ async def _unsubscribe_upstream(
             {
                 "name": row.event_name,
                 "arguments": dict(row.arguments),
-                "delivery": {"url": callback_url(settings, row.id)},
+                "delivery": {"url": callback_url(settings, row.id, row.upstream_secret)},
             },
             routing_headers(row.event_name, row.arguments, prepared.descriptor),
         )
