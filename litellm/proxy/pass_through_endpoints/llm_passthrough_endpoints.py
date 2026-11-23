@@ -271,7 +271,9 @@ def create_request_copy(request: Request):
     }
 
 
-def is_passthrough_request_using_router_model(request_body: dict, llm_router: litellm.Router | None) -> bool:
+def is_passthrough_request_using_router_model(
+    request_body: Mapping[str, object], llm_router: litellm.Router | None
+) -> bool:
     """
     Returns True if the model is in the llm_router model names
     """
@@ -1663,13 +1665,13 @@ async def handle_bedrock_passthrough_router_model(
     model: str,
     endpoint: str,
     request: Request,
-    request_body: dict,
+    request_body: Mapping[str, object],
     llm_router: litellm.Router,
     user_api_key_dict: UserAPIKeyAuth,
-    proxy_logging_obj,
+    proxy_logging_obj: ProxyLoggingType,
     general_settings: dict,
-    proxy_config,
-    select_data_generator,
+    proxy_config: ProxyConfig,
+    select_data_generator: Callable[..., object],
     user_model: str | None,
     user_temperature: float | None,
     user_request_timeout: float | None,

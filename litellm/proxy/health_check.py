@@ -7,7 +7,7 @@ import sys
 import threading
 import time
 import uuid
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Awaitable, Iterable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from itertools import chain
 from types import MappingProxyType
@@ -22,6 +22,7 @@ if TYPE_CHECKING:
 
 logger: Final = logging.getLogger(__name__)
 _DeploymentT = TypeVar("_DeploymentT", bound=Mapping[str, object])
+_ResultT = TypeVar("_ResultT")
 from litellm.constants import (
     BACKGROUND_HEALTH_CHECK_MAX_TOKENS,
     BACKGROUND_HEALTH_CHECK_MAX_TOKENS_REASONING,
@@ -228,8 +229,8 @@ _clean_endpoint_data: Final = clean_endpoint_data
 
 
 def health_check_filter_kwargs_from_general_settings(
-    general_settings: dict | None,
-) -> dict:
+    general_settings: Mapping[str, object] | None,
+) -> dict[str, bool]:
     """
     Build kwargs for ``perform_health_check`` from ``general_settings``.
 
@@ -279,9 +280,9 @@ def filter_deployments_to_model_groups(
 
 def filter_deployments_by_id(
     model_list: Sequence[Mapping[str, object]],
-) -> list:
-    seen_ids: Final = set()
-    filtered_deployments: Final = []
+) -> list[Mapping[str, object]]:
+    seen_ids: Final[set[object]] = set()
+    filtered_deployments: Final[list[Mapping[str, object]]] = []
 
     for deployment in model_list:
         _model_info = deployment.get("model_info") or {}
@@ -296,7 +297,9 @@ def filter_deployments_by_id(
     return filtered_deployments
 
 
-async def run_with_timeout(task, timeout):
+async def run_with_timeout(
+    task: Awaitable[_ResultT], timeout: float | None
+) -> _ResultT | dict[str, str | litellm.Timeout]:
     try:
         return await asyncio.wait_for(task, timeout)
     except asyncio.TimeoutError:
@@ -757,7 +760,7 @@ async def _perform_health_check(
     model_list: list,
     details: bool | None = True,
     max_concurrency: int | None = None,
-    instrumentation_context: dict | None = None,
+    instrumentation_context: Mapping[str, object] | None = None,
 ):
     """
     Perform a health check for each model in the list.
@@ -833,8 +836,8 @@ async def _perform_health_check(
 
 
 def build_deployment_health_states(
-    healthy_endpoints: list,
-    unhealthy_endpoints: list,
+    healthy_endpoints: Sequence[Mapping[str, object]],
+    unhealthy_endpoints: Sequence[Mapping[str, object]],
 ) -> dict:
     """
     Build a dict mapping deployment_id -> DeploymentHealthStateValue from
@@ -1089,7 +1092,7 @@ async def perform_health_check(
     details: bool | None = True,
     model_id: str | None = None,
     max_concurrency: int | None = None,
-    instrumentation_context: dict | None = None,
+    instrumentation_context: Mapping[str, object] | None = None,
     health_check_skip_disabled_background_models: bool = False,
     router: "Router | None" = None,
     team_id: str | None = None,

@@ -493,7 +493,7 @@ def cost_per_token(
     completion_tokens: int = 0,
     response_time_ms: float | None = 0.0,
     custom_llm_provider: str | None = None,
-    region_name=None,
+    region_name: object = None,
     ### CHARACTER PRICING ###
     prompt_characters: int | None = None,
     completion_characters: int | None = None,
@@ -1525,7 +1525,7 @@ def _extraction_usage(usage: ExtractionUsage) -> Usage:
     )
 
 
-def _is_known_usage_objects(usage_obj):
+def _is_known_usage_objects(usage_obj: object) -> bool:
     """Returns True if the usage obj is a known Usage type"""
     return (
         isinstance(usage_obj, litellm.Usage)
@@ -1903,9 +1903,9 @@ def _adjusted_provider_billed_cost(
 def completion_cost(
     completion_response: object | None = None,
     model: str | None = None,
-    prompt="",
+    prompt: str = "",
     messages: list = [],
-    completion="",
+    completion: str | list[str] | None = "",
     total_time: float | None = 0.0,  # used for replicate, sagemaker
     call_type: CallTypesLiteral | None = None,
     ### REGION ###
@@ -3184,7 +3184,7 @@ def default_image_cost_calculator(
     quality: str | None = None,
     n: int | None = 1,  # Default to 1 image
     size: str | None = "1024-x-1024",  # OpenAI default
-    optional_params: dict | None = None,
+    optional_params: Mapping[str, object] | None = None,
     model_info: ModelInfo | None = None,
 ) -> float:
     """

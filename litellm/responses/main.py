@@ -2076,7 +2076,7 @@ async def adelete_responses(
     timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> DeleteResponseResult:
     """
     Async version of the DELETE Responses API
@@ -2278,7 +2278,7 @@ async def aget_responses(
     custom_llm_provider: str | None = None,
     stream: bool | None = None,
     starting_after: int | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> ResponsesAPIResponse | BaseResponsesAPIStreamingIterator:
     """
     Async: Fetch a response by its ID.
@@ -2514,7 +2514,7 @@ async def alist_input_items(
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     extra_query: Mapping[str, object] | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> dict[str, object]:
     """Async: List input items for a response"""
     local_vars: Final = locals()
@@ -2659,7 +2659,7 @@ async def acancel_responses(
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
     litellm_metadata: Mapping[str, object] | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> ResponsesAPIResponse:
     """
     Async version of the POST Cancel Responses API
