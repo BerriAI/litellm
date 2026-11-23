@@ -1150,7 +1150,7 @@ class StraikerGuardrail(CustomGuardrail):
         self,
         *,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict[str, object],
+        request_data: dict,
         input_type: Literal["request", "response"],
         logging_obj: LiteLLMLoggingObj | None,
     ) -> StraikerWebhookRequest:

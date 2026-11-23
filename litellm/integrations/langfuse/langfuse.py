@@ -360,9 +360,9 @@ class LangFuseLogger:
     # Class variables or attributes
     def __init__(
         self,
-        langfuse_public_key: str | None = None,
-        langfuse_secret: str | None = None,
-        langfuse_host: str | None = None,
+        langfuse_public_key=None,
+        langfuse_secret=None,
+        langfuse_host=None,
         langfuse_environment: str | None = None,
         flush_interval: int = 1,
         allow_env_credentials: bool = True,
