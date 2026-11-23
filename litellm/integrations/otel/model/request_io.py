@@ -13,7 +13,7 @@ from litellm.types.utils import ModelResponse, ModelResponseStream
 
 _SYSTEM_KEYS: Final = ("system", "instructions")
 _TURNS: Final = TypeAdapter(tuple[object, ...])
-_MESSAGES: Final = TypeAdapter(list[object] | None)
+_MESSAGES: Final[TypeAdapter[list[object] | None]] = TypeAdapter(list[object] | None)
 
 
 class _Turn(TypedDict):
