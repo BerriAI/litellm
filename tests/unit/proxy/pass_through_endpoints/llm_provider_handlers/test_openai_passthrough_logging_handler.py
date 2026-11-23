@@ -25,9 +25,14 @@ from litellm.proxy.pass_through_endpoints.llm_provider_handlers.openai_passthrou
     OpenAIPassthroughLoggingHandler,
     count_relayed_prompt_tokens,
 )
-from litellm.proxy._types import SpendLogsPayload
+from litellm.proxy._types import SpendLogsPayload, UserAPIKeyAuth
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.interactions.background_cost_polling import PollSchedule
-from litellm.proxy.pass_through_endpoints.background_response_creator import PrismaBackgroundResponseCreatorStore
+from litellm.proxy.pass_through_endpoints.background_response_creator import (
+    BackgroundResponseCreateContext,
+    PrismaBackgroundResponseCreatorStore,
+)
 from litellm.proxy.pass_through_endpoints.background_response_polling import (
     BACKGROUND_RESPONSE_POLL_LEASE_SECONDS,
     BACKGROUND_RESPONSE_POLL_SCHEDULE,
@@ -42,8 +47,11 @@ from litellm.proxy.pass_through_endpoints.background_response_settlement import 
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.proxy.pass_through_endpoints.managed_id_codec import new_managed_id
 from litellm.proxy.pass_through_endpoints.streaming_handler import PassThroughStreamContext, PassThroughStreamingHandler
+from litellm.proxy.pass_through_endpoints.pass_through_endpoints import TeamCallbackWiring
 from litellm.proxy.pass_through_endpoints.success_handler import (
+    CreatorLoggingWiring,
     PassThroughEndpointLogging,
+    proxy_creator_logging_wiring,
 )
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
@@ -2591,7 +2599,12 @@ class TestOpenAIPassthroughResponsesSubRouteBilling:
         monkeypatch.setattr(
             proxy_server,
             "prisma_client",
-            SimpleNamespace(db=SimpleNamespace(litellm_backgroundresponsesettlement=settlement_table)),
+            SimpleNamespace(
+                db=SimpleNamespace(
+                    litellm_backgroundresponsesettlement=settlement_table,
+                    litellm_backgroundresponsecreator=_CreatorTable(),
+                )
+            ),
         )
         passthrough_logging: Final = PassThroughEndpointLogging()
         finished: Final = _stored_response("completed", True, RESPONSES_USAGE)
@@ -3074,10 +3087,26 @@ def _lease_open(row: _CreatorRow, where: Mapping[str, object]) -> bool:
     )
 
 
+def _creator_context(metadata: Mapping[str, object]) -> BackgroundResponseCreateContext:
+    return BackgroundResponseCreateContext.model_validate(
+        {
+            "model": "gpt-5.4-mini",
+            "custom_llm_provider": "openai",
+            "litellm_call_id": CREATE_CALL_ID,
+            "litellm_trace_id": CREATE_CALL_ID,
+            "start_time": CREATOR_RECORDED_AT,
+            "metadata": metadata,
+            "key_or_team_logging": True,
+        }
+    )
+
+
 class _CreatorTable:
-    def __init__(self) -> None:
+    def __init__(self, lookup_failures: int = 0) -> None:
         self.rows: Final[dict[str, _CreatorRow]] = {}
         self.forgotten: Final = asyncio.Event()
+        self.lookup_failures: Final = lookup_failures
+        self.failed_lookups: Final[list[str]] = []
 
     async def create(self, *, data: Mapping[str, object]) -> _CreatorRow:
         stored_context: Final = data["create_context"]
@@ -3092,6 +3121,9 @@ class _CreatorTable:
         return row
 
     async def find_unique(self, *, where: Mapping[str, str]) -> _CreatorRow | None:
+        if len(self.failed_lookups) < self.lookup_failures:
+            self.failed_lookups.append(where["response_id"])
+            raise ConnectionResetError("server closed the connection unexpectedly")
         return self.rows.get(where["response_id"])
 
     async def find_many(self, *, where: Mapping[str, Mapping[str, datetime]]) -> list[_CreatorRow]:
@@ -3221,13 +3253,31 @@ class _CreatorDispatchFailsAfterTheCreate:
         self.refusals: Final = refusals
         self.refused: Final[list[str]] = []
 
-    async def __call__(self, *, logging_obj: LiteLLMLoggingObj, **kwargs: Any) -> None:
+    async def __call__(
+        self,
+        *,
+        logging_obj: LiteLLMLoggingObj,
+        standard_logging_response_object: object,
+        result: str,
+        start_time: datetime,
+        end_time: datetime,
+        cache_hit: bool,
+        **kwargs: object,
+    ) -> None:
         creator_team: Final = CREATOR_METADATA["user_api_key_team_id"]
         team_id: Final = logging_obj.model_call_details["litellm_params"]["metadata"].get("user_api_key_team_id")
         if team_id == creator_team and self.rows.logged_for(creator_team) and len(self.refused) < self.refusals:
             self.refused.append(logging_obj.litellm_call_id)
             raise ConnectionResetError("spend log queue closed")
-        await self.rows(logging_obj=logging_obj, **kwargs)
+        await self.rows(
+            logging_obj=logging_obj,
+            standard_logging_response_object=standard_logging_response_object,
+            result=result,
+            start_time=start_time,
+            end_time=end_time,
+            cache_hit=cache_hit,
+            **kwargs,
+        )
 
 
 def _creator_billing_passthrough_logging(
@@ -3238,8 +3288,10 @@ def _creator_billing_passthrough_logging(
     polls: bool,
     now: datetime = CREATOR_RECORDED_AT + timedelta(seconds=1),
     schedule: PollSchedule = FAST_POLLS,
+    creator_logging_wiring: CreatorLoggingWiring = proxy_creator_logging_wiring,
 ) -> PassThroughEndpointLogging:
     return PassThroughEndpointLogging(
+        creator_logging_wiring=creator_logging_wiring,
         log_dispatch=rows,
         background_response_settlement=PrismaBackgroundResponseSettlementStore(
             table=lambda: settlements, timeout_seconds=5
@@ -3818,6 +3870,138 @@ class TestOpenAIPassthroughBackgroundResponseCreatorBilling:
                 create.model_call_details["litellm_params"], create.standard_callback_dynamic_params
             )
         )
+
+    @pytest.mark.asyncio
+    async def test_a_read_that_cannot_look_up_the_creator_bills_nobody_and_a_later_read_bills_the_creator_once(
+        self, local_model_cost_map
+    ):
+        rows: Final = _DispatchedSpendRows()
+        creators: Final = _CreatorTable(lookup_failures=1)
+        passthrough_logging: Final = _creator_billing_passthrough_logging(
+            rows, _SettlementTable(), creators, _ScriptedFetch(), polls=False
+        )
+        await _background_create(passthrough_logging)
+
+        await _finished_read(passthrough_logging)
+
+        assert creators.failed_lookups == [STORED_RESPONSE_ID]
+        assert not rows.billed()
+
+        await _finished_read(passthrough_logging)
+
+        assert len(rows.billed()) == 1
+        _assert_billed_to_the_creator(rows.billed()[0], rows.spend_rows()[0], await _reader_paid_spend())
+
+    @pytest.mark.asyncio
+    async def test_the_bill_of_a_create_with_team_logging_goes_to_the_creator_keys_team_loggers(
+        self, local_model_cost_map
+    ):
+        rows: Final = _DispatchedSpendRows()
+        creators: Final = _CreatorTable()
+        fetch: Final = _ScriptedFetch()
+        creator_team_logger: Final = _SpendRowRecorder()
+
+        async def creator_key_wiring(context: BackgroundResponseCreateContext) -> TeamCallbackWiring | None:
+            if context.metadata.get("user_api_key") != CREATOR_METADATA["user_api_key"]:
+                return None
+            return TeamCallbackWiring(success_callbacks=[creator_team_logger])
+
+        passthrough_logging: Final = _creator_billing_passthrough_logging(
+            rows, _SettlementTable(), creators, fetch, polls=True, creator_logging_wiring=creator_key_wiring
+        )
+        await _background_create(
+            passthrough_logging,
+            logging_obj=_identified_logging_obj(CREATE_CALL_ID, CREATOR_METADATA, callbacks=(CustomLogger(),)),
+        )
+
+        fetch.outcomes.put_nowait(Fetched(body=_stored_response("completed", True, RESPONSES_USAGE)))
+        await _poll_settled(creators)
+        team_logged: Final = await asyncio.wait_for(creator_team_logger.call, timeout=5)
+
+        (bill,) = rows.billed()
+        _assert_billed_to_the_creator(bill, rows.spend_rows()[0], await _reader_paid_spend())
+        assert team_logged.spend_row["team_id"] == CREATOR_METADATA["user_api_key_team_id"]
+        assert team_logged.spend_row["spend"] == pytest.approx(bill.spend_row["spend"])
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("create_has_team_logging", "external_loggers_get_the_bill"),
+        [pytest.param(True, False, id="team_logging"), pytest.param(False, True, id="global_logging_only")],
+    )
+    async def test_the_bill_whose_creator_key_cannot_be_loaded_keeps_team_logs_out_of_global_loggers(
+        self, local_model_cost_map, create_has_team_logging: bool, external_loggers_get_the_bill: bool
+    ):
+        rows: Final = _DispatchedSpendRows()
+        creators: Final = _CreatorTable()
+        fetch: Final = _ScriptedFetch()
+
+        async def creator_key_not_found(context: BackgroundResponseCreateContext) -> TeamCallbackWiring | None:
+            return None
+
+        passthrough_logging: Final = _creator_billing_passthrough_logging(
+            rows, _SettlementTable(), creators, fetch, polls=True, creator_logging_wiring=creator_key_not_found
+        )
+        create_callbacks: Final = (CustomLogger(),) if create_has_team_logging else ()
+        await _background_create(
+            passthrough_logging,
+            logging_obj=_identified_logging_obj(CREATE_CALL_ID, CREATOR_METADATA, callbacks=create_callbacks),
+        )
+
+        fetch.outcomes.put_nowait(Fetched(body=_stored_response("completed", True, RESPONSES_USAGE)))
+        await _poll_settled(creators)
+
+        (bill,) = rows.billed()
+        bill_params: Final = bill.logging_obj.model_call_details["litellm_params"]
+        _assert_billed_to_the_creator(bill, rows.spend_rows()[0], await _reader_paid_spend())
+        assert (
+            bill.logging_obj.should_run_callback(CustomLogger(), bill_params, "async_success_handler")
+            is external_loggers_get_the_bill
+        )
+        assert bill.logging_obj.should_run_callback(_PROXY_SpendLogger(), bill_params, "async_success_handler")
+
+    @pytest.mark.asyncio
+    async def test_the_proxy_wiring_sends_the_bill_to_the_logging_the_creator_key_has_now(self, monkeypatch):
+        key_cache: Final = UserApiKeyCache()
+        key_cache.set_cache(
+            AuthObject.virtual_key(CREATOR_METADATA["user_api_key"]),
+            UserAPIKeyAuth(
+                token=CREATOR_METADATA["user_api_key"],
+                metadata={
+                    "logging": [
+                        {
+                            "callback_name": "langfuse",
+                            "callback_type": "success",
+                            "callback_vars": {"langfuse_public_key": "pk-lf-creator", "langfuse_secret_key": "sk-lf"},
+                        }
+                    ]
+                },
+            ),
+        )
+        monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace())
+        monkeypatch.setattr(proxy_server, "user_api_key_cache", key_cache)
+
+        wiring: Final = await proxy_creator_logging_wiring(_creator_context(CREATOR_METADATA))
+
+        assert wiring is not None
+        assert wiring.success_callbacks == ["langfuse"]
+        assert wiring.logging_kwargs is not None
+        assert wiring.logging_kwargs["langfuse_public_key"] == "pk-lf-creator"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("metadata", "prisma_client"),
+        [
+            pytest.param(CREATOR_METADATA, SimpleNamespace(), id="key_not_loadable"),
+            pytest.param({"user_api_key_team_id": "team-creator"}, SimpleNamespace(), id="no_creator_key"),
+        ],
+    )
+    async def test_the_proxy_wiring_has_no_logging_when_the_creator_key_cannot_be_resolved(
+        self, monkeypatch, metadata: Mapping[str, object], prisma_client: SimpleNamespace | None
+    ):
+        monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
+        monkeypatch.setattr(proxy_server, "user_api_key_cache", UserApiKeyCache())
+
+        assert await proxy_creator_logging_wiring(_creator_context(metadata)) is None
 
     @pytest.mark.asyncio
     async def test_the_creator_bill_ends_when_the_response_completed(self, local_model_cost_map):

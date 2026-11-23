@@ -175,7 +175,6 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     YieldsToConfiguredPassThroughRoute,
     create_pass_through_route,
     create_websocket_passthrough_route,
-    pass_through_endpoint_logging,
     refuse_websocket,
     truncated_close_reason,
     websocket_passthrough_request,
@@ -3981,11 +3980,6 @@ async def openai_proxy_route(
     if openai_api_key is None:
         raise Exception("Required 'OPENAI_API_KEY' in environment to make pass-through calls to OpenAI.")
 
-    if request.method == "DELETE":
-        await pass_through_endpoint_logging.settle_background_response_before_delete(
-            BaseOpenAIPassThroughHandler.target_url(endpoint, base_target_url, litellm.LlmProviders.OPENAI),
-            openai_api_key_headers(openai_api_key),
-        )
     return await BaseOpenAIPassThroughHandler.base_openai_pass_through_handler(
         endpoint=endpoint,
         request=request,

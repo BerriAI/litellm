@@ -4629,87 +4629,82 @@ class _ReadBeforeDelete:
         return self.answer
 
 
-async def _delete_tracked_response(
+def _delete_tracked_response(
+    client: TestClient,
     creators: _TrackedCreators,
     fetch: _ReadBeforeDelete,
     events: list[str],
     endpoint: str = f"v1/responses/{DELETED_RESPONSE_ID}",
 ) -> object:
-    async def record_bill(*, logging_obj: LiteLLMLoggingObj, **kwargs: object) -> None:
-        events.append(f"billed {logging_obj.litellm_call_id}")
+    from litellm.proxy import proxy_server
 
-    async def forward(*args: object, **kwargs: object) -> Mapping[str, object]:
+    async def record_creator_bill(*, logging_obj: LiteLLMLoggingObj, **kwargs: object) -> None:
+        if logging_obj.litellm_call_id == DELETED_RESPONSE_CREATOR_CALL_ID:
+            events.append(f"billed {logging_obj.litellm_call_id}")
+
+    def forward(upstream_request: httpx.Request) -> httpx.Response:
         events.append("forwarded")
-        return {"id": DELETED_RESPONSE_ID, "object": "response", "deleted": True}
+        return httpx.Response(200, json={"id": DELETED_RESPONSE_ID, "object": "response", "deleted": True})
+
+    admit: Final = proxy_server.proxy_logging_obj.pre_call_hook
+
+    async def admitted(*args: object, **kwargs: object) -> object:
+        admitted_body: Final = await admit(*args, **kwargs)
+        events.append("admitted")
+        return admitted_body
 
     claims: Final = _SettlementClaims()
     passthrough_logging: Final = PassThroughEndpointLogging(
-        log_dispatch=record_bill,
+        log_dispatch=record_creator_bill,
         background_response_settlement=PrismaBackgroundResponseSettlementStore(table=lambda: claims, timeout_seconds=5),
         background_response_creators=PrismaBackgroundResponseCreatorStore(table=lambda: creators, timeout_seconds=5),
         background_response_poller=BackgroundResponsePoller(fetch=fetch, database_configured=lambda: True),
     )
-    request: Final = MagicMock(spec=Request)
-    request.method = "DELETE"
-    request.headers = {}
-    request.query_params = {}
     with (
         patch(
-            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router.get_credentials",
-            return_value="sk-test-key",
-        ),
-        patch(
-            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.pass_through_endpoint_logging",
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.pass_through_endpoint_logging",
             passthrough_logging,
         ),
-        patch(
-            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route",
-            return_value=forward,
-        ),
+        patch.object(proxy_server.proxy_logging_obj, "pre_call_hook", admitted),
+        respx.mock(assert_all_called=True) as upstream,
     ):
-        return await openai_proxy_route(
-            endpoint=endpoint,
-            request=request,
-            fastapi_response=MagicMock(spec=Response),
-            user_api_key_dict=MagicMock(),
-        )
+        upstream.delete(f"https://api.openai.com/{endpoint}").mock(side_effect=forward)
+        deleted: Final = client.delete(f"/openai_passthrough/{endpoint}")
+    return deleted.json()
 
 
-@pytest.mark.asyncio
-async def test_deleting_a_finished_background_response_bills_its_creator_once_before_forwarding(
-    local_model_cost_map,
+def test_deleting_a_finished_background_response_bills_its_creator_once_after_admission_and_before_forwarding(
+    openai_passthrough_client: TestClient, local_model_cost_map
 ) -> None:
     creators: Final = _TrackedCreators()
     fetch: Final = _ReadBeforeDelete(Fetched(body=FINISHED_BACKGROUND_RESPONSE))
     events: Final[list[str]] = []
 
-    deleted: Final = await _delete_tracked_response(creators, fetch, events)
+    deleted: Final = _delete_tracked_response(openai_passthrough_client, creators, fetch, events)
 
     assert deleted == {"id": DELETED_RESPONSE_ID, "object": "response", "deleted": True}
-    assert events == [f"billed {DELETED_RESPONSE_CREATOR_CALL_ID}", "forwarded"]
+    assert events == ["admitted", f"billed {DELETED_RESPONSE_CREATOR_CALL_ID}", "forwarded"]
     (read,) = fetch.requests
     assert read.url == httpx.URL(f"https://api.openai.com/v1/responses/{DELETED_RESPONSE_ID}")
-    assert ("authorization", "Bearer sk-test-key") in read.headers
+    assert ("authorization", "Bearer sk-upstream") in read.headers
     assert creators.rows == {}
 
 
-@pytest.mark.asyncio
-async def test_deleting_a_tracked_background_response_still_forwards_when_settling_it_fails(
-    local_model_cost_map,
+def test_deleting_a_tracked_background_response_still_forwards_when_settling_it_fails(
+    openai_passthrough_client: TestClient, local_model_cost_map
 ) -> None:
     creators: Final = _TrackedCreators()
     events: Final[list[str]] = []
 
-    deleted: Final = await _delete_tracked_response(
-        creators, _ReadBeforeDelete(RuntimeError("provider unreachable")), events
+    deleted: Final = _delete_tracked_response(
+        openai_passthrough_client, creators, _ReadBeforeDelete(RuntimeError("provider unreachable")), events
     )
 
     assert deleted == {"id": DELETED_RESPONSE_ID, "object": "response", "deleted": True}
-    assert events == ["forwarded"]
+    assert events == ["admitted", "forwarded"]
     assert set(creators.rows) == {DELETED_RESPONSE_ID}
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("endpoint", "answer", "reads"),
     [
@@ -4723,17 +4718,21 @@ async def test_deleting_a_tracked_background_response_still_forwards_when_settli
         pytest.param(f"v1/responses/{DELETED_RESPONSE_ID}/input_items", FINISHED_BACKGROUND_RESPONSE, 0, id="sub_route"),
     ],
 )
-async def test_a_delete_with_nothing_finished_to_settle_bills_nobody_and_forwards(
-    endpoint: str, answer: Mapping[str, object], reads: int, local_model_cost_map
+def test_a_delete_with_nothing_finished_to_settle_bills_nobody_and_forwards(
+    openai_passthrough_client: TestClient,
+    endpoint: str,
+    answer: Mapping[str, object],
+    reads: int,
+    local_model_cost_map,
 ) -> None:
     creators: Final = _TrackedCreators()
     fetch: Final = _ReadBeforeDelete(Fetched(body=answer))
     events: Final[list[str]] = []
 
-    deleted: Final = await _delete_tracked_response(creators, fetch, events, endpoint)
+    deleted: Final = _delete_tracked_response(openai_passthrough_client, creators, fetch, events, endpoint)
 
     assert deleted == {"id": DELETED_RESPONSE_ID, "object": "response", "deleted": True}
-    assert events == ["forwarded"]
+    assert events == ["admitted", "forwarded"]
     assert len(fetch.requests) == reads
     assert set(creators.rows) == {DELETED_RESPONSE_ID}
 

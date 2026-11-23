@@ -29,6 +29,7 @@ class BackgroundResponseCreateContext(BaseModel):
     metadata: Mapping[str, JsonValue]
     no_log: bool = False
     disabled_callbacks: tuple[str, ...] = ()
+    key_or_team_logging: bool = False
 
 
 class BackgroundResponseCreator(BaseModel):
@@ -56,6 +57,20 @@ def _disabled_callbacks(
     return tuple(requested or ())
 
 
+def _has_key_or_team_logging(logging_obj: LiteLLMLoggingObj) -> bool:
+    dynamic_callbacks: Final = (
+        logging_obj.dynamic_success_callbacks,
+        logging_obj.dynamic_async_success_callbacks,
+        logging_obj.dynamic_failure_callbacks,
+        logging_obj.dynamic_async_failure_callbacks,
+    )
+    return any(dynamic_callbacks) or any(
+        value is not None
+        for name, value in logging_obj.standard_callback_dynamic_params.items()
+        if name != "litellm_disabled_callbacks"
+    )
+
+
 def background_response_creator(
     logging_obj: LiteLLMLoggingObj,
     response_id: str,
@@ -80,6 +95,7 @@ def background_response_creator(
             disabled_callbacks=_disabled_callbacks(
                 litellm_params, logging_obj.standard_callback_dynamic_params.get("litellm_disabled_callbacks")
             ),
+            key_or_team_logging=_has_key_or_team_logging(logging_obj),
         ),
     )
 
@@ -108,6 +124,14 @@ class SettlesForCreator:
 @dataclass(frozen=True, slots=True)
 class CreatorBillDeferred:
     pass
+
+
+@dataclass(frozen=True, slots=True)
+class CreatorLookupFailed:
+    pass
+
+
+CREATOR_LOOKUP_FAILED: Final = CreatorLookupFailed()
 
 
 BackgroundResponseSettlementDecision: TypeAlias = (
@@ -215,7 +239,7 @@ LEASE_UNRECORDED: Final = LeaseUnrecorded()
 class BackgroundResponseCreatorStore(Protocol):
     async def register(self, creator: BackgroundResponseCreator, poll_lease_expires_at: datetime) -> None: ...
 
-    async def creator(self, response_id: str) -> BackgroundResponseCreator | None: ...
+    async def creator(self, response_id: str) -> BackgroundResponseCreator | CreatorLookupFailed | None: ...
 
     async def forget(self, response_id: str) -> None: ...
 
@@ -279,12 +303,17 @@ class PrismaBackgroundResponseCreatorStore:
             f"record the creator of background response {creator.response_id}, so a read bills its reader",
         )
 
-    async def creator(self, response_id: str) -> BackgroundResponseCreator | None:
-        row: Final = await self._query(
-            lambda table: table.find_unique(where=_CreatorKey(response_id=response_id)),
-            None,
-            f"look up the creator of background response {response_id}, so this read bills its reader",
-        )
+    async def creator(self, response_id: str) -> BackgroundResponseCreator | CreatorLookupFailed | None:
+        table: Final = self.table()
+        if table is None:
+            return None
+        try:
+            row: Final = await asyncio.wait_for(
+                table.find_unique(where=_CreatorKey(response_id=response_id)), timeout=self.timeout_seconds
+            )
+        except Exception as e:  # noqa: BLE001  # an unknown creator defers the bill instead of billing the reader
+            verbose_proxy_logger.warning("Could not look up the creator of background response %s: %s", response_id, e)
+            return CREATOR_LOOKUP_FAILED
         return None if row is None else next(iter(_creators(row)), None)
 
     async def forget(self, response_id: str) -> None:

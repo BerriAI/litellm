@@ -68,7 +68,10 @@ from litellm.types.router import CredentialLiteLLMParams
 from litellm.types.utils import CustomPricingLiteLLMParams
 
 if TYPE_CHECKING:
+    from litellm.integrations.custom_logger import CustomLogger
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+    DynamicCallback: TypeAlias = "str | Callable[..., object] | CustomLogger"
 
 _TERMINAL_STATUSES: Final = frozenset(
     {"completed", "failed", "cancelled", "incomplete", "budget_exceeded", "requires_action", "requires_continuation"}
@@ -372,6 +375,9 @@ def rebuild_logging_obj(
     litellm_trace_id: str,
     start_time: datetime,
     litellm_params: Mapping[str, object],
+    dynamic_success_callbacks: "Sequence[DynamicCallback] | None" = None,
+    dynamic_failure_callbacks: "Sequence[DynamicCallback] | None" = None,
+    logging_kwargs: Mapping[str, object] | None = None,
 ) -> "LiteLLMLoggingObj":
     from litellm.litellm_core_utils.litellm_logging import Logging
 
@@ -384,6 +390,9 @@ def rebuild_logging_obj(
         litellm_call_id=litellm_call_id,
         function_id=function_id,
         litellm_trace_id=litellm_trace_id,
+        dynamic_success_callbacks=None if dynamic_success_callbacks is None else [*dynamic_success_callbacks],
+        dynamic_failure_callbacks=None if dynamic_failure_callbacks is None else [*dynamic_failure_callbacks],
+        kwargs=None if logging_kwargs is None else dict(logging_kwargs),
     )
     logging_obj.update_environment_variables(
         litellm_params=dict(litellm_params),

@@ -1,11 +1,11 @@
 import asyncio
 import functools
 import json
-from collections.abc import Callable, Coroutine, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
 from contextlib import suppress
 from datetime import datetime
 from types import MappingProxyType
-from typing import Final, ParamSpec
+from typing import TYPE_CHECKING, Final, ParamSpec
 from urllib.parse import quote, urlparse
 
 import anyio
@@ -22,7 +22,7 @@ from litellm.proxy._types import PassThroughEndpointLoggingResultValues, PassThr
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     PassthroughStandardLoggingPayload,
 )
-from litellm.types.utils import StandardPassThroughResponseObject, Usage
+from litellm.types.utils import LlmProviders, StandardPassThroughResponseObject, Usage
 
 from .background_response_creator import (
     CREATOR_BILL_DEFERRED,
@@ -33,6 +33,7 @@ from .background_response_creator import (
     BackgroundResponseCreator,
     BackgroundResponseCreatorStore,
     BackgroundResponseSettlementDecision,
+    CreatorLookupFailed,
     PrismaBackgroundResponseCreatorStore,
     SettlesForCreator,
     background_response_creator,
@@ -95,6 +96,11 @@ from .llm_provider_handlers.vertex_passthrough_logging_handler import (
 from .managed_id_codec import decode as decode_managed_id
 from .upstream_usage_headers import has_upstream_reported_usage
 
+if TYPE_CHECKING:
+    from .pass_through_endpoints import TeamCallbackWiring
+
+CreatorLoggingWiring = Callable[[BackgroundResponseCreateContext], Awaitable["TeamCallbackWiring | None"]]
+
 cohere_passthrough_logging_handler: Final = CoherePassthroughLoggingHandler()
 _RESPONSE_BODY: Final = TypeAdapter(dict[str, object])
 
@@ -124,9 +130,32 @@ def _completed_at(response_body: Mapping[str, object], start_time: datetime) -> 
     return completed if completed >= start_time else now
 
 
-def _creator_litellm_params(context: BackgroundResponseCreateContext) -> Mapping[str, object]:
+def _creator_litellm_params(context: BackgroundResponseCreateContext, spend_only: bool) -> Mapping[str, object]:
     metadata: Final = dict(context.metadata)
-    return {"metadata": metadata, "no-log": True} if context.no_log else {"metadata": metadata}
+    return {"metadata": metadata, "no-log": True} if spend_only else {"metadata": metadata}
+
+
+def _wires_logging(wiring: "TeamCallbackWiring | None") -> bool:
+    return wiring is not None and bool(wiring.success_callbacks or wiring.failure_callbacks or wiring.logging_kwargs)
+
+
+async def proxy_creator_logging_wiring(context: BackgroundResponseCreateContext) -> "TeamCallbackWiring | None":
+    from litellm.proxy.auth.auth_checks import get_key_object
+    from litellm.proxy.proxy_server import prisma_client, proxy_config, user_api_key_cache
+
+    from .pass_through_endpoints import resolve_team_callback_wiring
+
+    key_hash: Final = context.metadata.get("user_api_key")
+    if not isinstance(key_hash, str):
+        return None
+    try:
+        creator_key: Final = await get_key_object(
+            hashed_token=key_hash, prisma_client=prisma_client, user_api_key_cache=user_api_key_cache
+        )
+    except Exception as e:  # noqa: BLE001  # an unresolved creator key bills spend only instead of failing the bill
+        verbose_proxy_logger.warning("Could not load the key that created a background response: %s", e)
+        return None
+    return resolve_team_callback_wiring(creator_key, proxy_config, "background response creator bill")
 
 
 async def complete_despite_cancellation(work: Coroutine[object, object, None]) -> None:
@@ -199,7 +228,9 @@ class PassThroughEndpointLogging:
         background_response_settlement: BackgroundResponseSettlementStore | None = None,
         background_response_creators: BackgroundResponseCreatorStore | None = None,
         background_response_poller: BackgroundResponsePoller | None = None,
+        creator_logging_wiring: CreatorLoggingWiring = proxy_creator_logging_wiring,
     ):
+        self.creator_logging_wiring: Final = creator_logging_wiring
         self.transcribe_passthrough_logging_handler: Final = (
             transcribe_handler if transcribe_handler is not None else TranscribePassthroughLoggingHandler()
         )
@@ -322,6 +353,8 @@ class PassThroughEndpointLogging:
     ) -> BackgroundResponseSettlementDecision:
         upstream_response_id: Final = _upstream_response_id(settled_response_id)
         creator: Final = await self.background_response_creators.creator(upstream_response_id)
+        if isinstance(creator, CreatorLookupFailed):
+            return CREATOR_BILL_DEFERRED
         match await self.background_response_settlement.claim_outcome(upstream_response_id):
             case ClaimedBefore():
                 return SETTLED_BEFORE
@@ -390,7 +423,11 @@ class PassThroughEndpointLogging:
     ) -> bool:
         context: Final = creator.context
         url_route: Final = f"{creator.upstream_url}/{quote(creator.response_id, safe='')}"
-        litellm_params: Final = _creator_litellm_params(context)
+        wiring: Final = await self.creator_logging_wiring(context) if context.key_or_team_logging else None
+        rewired: Final = _wires_logging(wiring)
+        litellm_params: Final = _creator_litellm_params(
+            context, spend_only=context.no_log or (context.key_or_team_logging and not rewired)
+        )
         logging_obj: Final = rebuild_logging_obj(
             model=context.model,
             custom_llm_provider=context.custom_llm_provider,
@@ -400,6 +437,9 @@ class PassThroughEndpointLogging:
             litellm_trace_id=context.litellm_trace_id,
             start_time=context.start_time,
             litellm_params=litellm_params,
+            dynamic_success_callbacks=None if wiring is None else wiring.success_callbacks,
+            dynamic_failure_callbacks=None if wiring is None else wiring.failure_callbacks,
+            logging_kwargs=None if wiring is None else wiring.logging_kwargs,
         )
         if context.disabled_callbacks:
             logging_obj.standard_callback_dynamic_params["litellm_disabled_callbacks"] = list(
@@ -488,7 +528,11 @@ class PassThroughEndpointLogging:
             BACKGROUND_RESPONSE_SWEEP_INTERVAL_SECONDS,
         )
 
-    async def settle_background_response_before_delete(self, target_url: str, headers: Mapping[str, str]) -> None:
+    async def settle_background_response_before_delete(
+        self, method: str, custom_llm_provider: str | None, target_url: str, headers: Mapping[str, str]
+    ) -> None:
+        if method != "DELETE" or custom_llm_provider != LlmProviders.OPENAI.value:
+            return
         try:
             await self._settle_background_response_before_delete(httpx.URL(target_url), headers)
         except Exception:  # noqa: BLE001  # settling first must never block or fail the delete it runs before
@@ -506,7 +550,7 @@ class PassThroughEndpointLogging:
         if response_id is None:
             return
         creator: Final = await self.background_response_creators.creator(_upstream_response_id(response_id))
-        if creator is None or not pollable_at(creator, target_url):
+        if not isinstance(creator, BackgroundResponseCreator) or not pollable_at(creator, target_url):
             return
         match await self.background_response_poller.fetch(
             BackgroundResponsePollRequest(
