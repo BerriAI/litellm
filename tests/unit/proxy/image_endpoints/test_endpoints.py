@@ -7,8 +7,10 @@ from queue import Queue
 from types import SimpleNamespace
 from typing import Any, Dict, Final, cast
 
+import httpx
 import orjson
 import pytest
+import respx
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from starlette.requests import Request
@@ -795,3 +797,61 @@ def test_failed_image_generation_spend_row_bills_what_the_provider_served(monkey
         2240,
         2256,
     )
+
+
+def test_image_edit_json_body_with_image_references_reaches_openai_as_json(monkeypatch: pytest.MonkeyPatch) -> None:
+    """regression: a JSON edit request with image and mask references reaches OpenAI as the same JSON body."""
+    from litellm.proxy import proxy_server
+
+    images: Final = [
+        {"image_url": "https://images.example/tree.png"},
+        {"image_url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=="},
+    ]
+    mask: Final = {"image_url": "https://images.example/mask.png"}
+    cache: Final = UserApiKeyCache()
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-image-1",
+                "litellm_params": {
+                    "model": "openai/gpt-image-1",
+                    "api_key": "sk-upstream",
+                    "api_base": "https://edit.example/v1",
+                },
+            }
+        ],
+        num_retries=0,
+    )
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "model_alias_map", {})
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "proxy_config", ProxyConfig())
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", ProxyLogging(user_api_key_cache=cache))
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+    monkeypatch.setattr(proxy_server, "user_model", None)
+    monkeypatch.setattr(proxy_server, "version", "test-version")
+    app: Final = FastAPI()
+    app.include_router(endpoints.router)
+    app.add_exception_handler(ProxyException, proxy_server.openai_exception_handler)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth()
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        upstream: Final = respx_mock.post("https://edit.example/v1/images/edits").mock(
+            return_value=httpx.Response(200, json={"created": 1712697600, "data": [{"b64_json": "ZWRpdGVk"}]})
+        )
+        with TestClient(app, raise_server_exceptions=False) as client:
+            response: Final = client.post(
+                "/v1/images/edits",
+                json={"model": "gpt-image-1", "prompt": "add a hat", "images": images, "mask": mask},
+            )
+
+    assert [call.request.headers["content-type"].split(";")[0] for call in upstream.calls] == ["application/json"], (
+        response.status_code,
+        response.text,
+        [call.request.content for call in upstream.calls],
+    )
+    sent: Final = orjson.loads(upstream.calls.last.request.content)
+    assert (sent["images"], sent["mask"], sent["prompt"]) == (images, mask, "add a hat")
+    assert response.status_code == 200, response.text
+    assert [image["b64_json"] for image in response.json()["data"]] == ["ZWRpdGVk"]
