@@ -709,6 +709,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, isViewOnly 
           userModels={userModels}
           editTeam={editTeam}
           premiumUser={premiumUser}
+          framed
         />
       ) : (
         <PageTabs defaultValue={tabItems[0].key}>
