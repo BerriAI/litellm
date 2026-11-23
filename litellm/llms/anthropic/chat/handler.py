@@ -23,7 +23,9 @@ from litellm.anthropic_beta_headers_manager import (
     update_request_with_filtered_beta,
 )
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
+from litellm.exceptions import with_provider_reply
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
+from litellm.litellm_core_utils.hidden_params import set_hidden_params
 from litellm.litellm_core_utils.json_fragment_accumulator import JSONFragmentAccumulator
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import is_str_keyed_dict
 from litellm.llms.base_llm.base_utils import (
@@ -254,10 +256,13 @@ async def make_call(
         error_response: Final[object] = getattr(e, "response", None)
         if error_headers is None and error_response:
             error_headers = getattr(error_response, "headers", None)
-        raise AnthropicError(
-            status_code=e.response.status_code,
-            message=await e.response.aread(),
-            headers=error_headers,
+        raise with_provider_reply(
+            AnthropicError(
+                status_code=e.response.status_code,
+                message=await e.response.aread(),
+                headers=error_headers,
+            ),
+            e.response,
         )
     except Exception as e:
         for exception in litellm.LITELLM_EXCEPTION_TYPES:
@@ -317,10 +322,13 @@ def make_sync_call(
         error_response: Final[object] = getattr(e, "response", None)
         if error_headers is None and error_response:
             error_headers = getattr(error_response, "headers", None)
-        raise AnthropicError(
-            status_code=e.response.status_code,
-            message=e.response.read(),
-            headers=error_headers,
+        raise with_provider_reply(
+            AnthropicError(
+                status_code=e.response.status_code,
+                message=e.response.read(),
+                headers=error_headers,
+            ),
+            e.response,
         )
     except Exception as e:
         for exception in litellm.LITELLM_EXCEPTION_TYPES:
@@ -330,10 +338,13 @@ def make_sync_call(
 
     if response.status_code != 200:
         response_headers: Final = getattr(response, "headers", None)
-        raise AnthropicError(
-            status_code=response.status_code,
-            message=response.read(),
-            headers=response_headers,
+        raise with_provider_reply(
+            AnthropicError(
+                status_code=response.status_code,
+                message=response.read(),
+                headers=response_headers,
+            ),
+            response,
         )
 
     completion_stream: Final = ModelResponseIterator(
@@ -463,10 +474,13 @@ class AnthropicChatCompletion(BaseLLM):
                 error_headers = getattr(error_response, "headers", None)
             if error_response and hasattr(error_response, "text"):
                 error_text = getattr(error_response, "text", error_text)
-            raise AnthropicError(
-                message=error_text,
-                status_code=status_code,
-                headers=error_headers,
+            raise with_provider_reply(
+                AnthropicError(
+                    message=error_text,
+                    status_code=status_code,
+                    headers=error_headers,
+                ),
+                error_response,
             )
 
         return provider_config.transform_response(
@@ -696,10 +710,13 @@ class AnthropicChatCompletion(BaseLLM):
                         error_headers = getattr(error_response, "headers", None)
                     if error_response and hasattr(error_response, "text"):
                         error_text = getattr(error_response, "text", error_text)
-                    raise AnthropicError(
-                        message=error_text,
-                        status_code=status_code,
-                        headers=error_headers,
+                    raise with_provider_reply(
+                        AnthropicError(
+                            message=error_text,
+                            status_code=status_code,
+                            headers=error_headers,
+                        ),
+                        error_response,
                     )
 
         return config.transform_response(
@@ -1298,6 +1315,8 @@ class ModelResponseIterator:
                 id=self.response_id,
                 model=self.served_model,
             )
+            if type_chunk == "message_start":
+                set_hidden_params(returned_chunk, {"anthropic_message_start": True})
 
             return returned_chunk
 

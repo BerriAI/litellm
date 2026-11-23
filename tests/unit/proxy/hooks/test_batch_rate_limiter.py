@@ -22,6 +22,7 @@ from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm import DualCache
+from litellm.batches.batch_utils import estimate_batch_entry_tokens
 from litellm.constants import BATCH_TPD_WINDOW_SECONDS
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.batch_rate_limiter import BatchFileUsage, PROXY_BatchRateLimiter
@@ -394,6 +395,20 @@ async def test_count_input_file_usage_matches_token_counter(openai_files: respx.
     assert content_route.call_count == 1
     assert usage.request_count == 3
     assert usage.total_tokens == _token_counter_total(rows)
+
+
+@pytest.mark.asyncio
+async def test_count_input_file_usage_estimates_whole_unsupported_native_row(openai_files: respx.MockRouter) -> None:
+    _, _, batch_limiter = _make_limiters()
+    row: Final = b'{"request":{"contents":[{"parts":[{"text":"hello"},{"fileData":{}}]}]}}'
+    openai_files.get("https://api.openai.com/v1/files/file-native/content").mock(
+        return_value=httpx.Response(200, content=row)
+    )
+
+    usage: Final = await batch_limiter.count_input_file_usage(file_id="file-native", custom_llm_provider="openai")
+
+    assert usage.request_count == 1
+    assert usage.total_tokens == estimate_batch_entry_tokens(row)
 
 
 @pytest.mark.asyncio

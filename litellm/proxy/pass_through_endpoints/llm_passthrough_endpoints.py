@@ -8,9 +8,11 @@ Use litellm with Anthropic SDK, Vertex AI SDK, Cohere SDK, etc.
 
 from __future__ import annotations
 
+import contextlib
 import hmac
 import inspect
 import json
+import logging
 import os
 import posixpath
 import re
@@ -32,7 +34,11 @@ from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm import get_llm_provider
-from litellm._logging import redact_internal_details_from_client_message, verbose_proxy_logger
+from litellm._logging import (
+    CALLER_ERROR_LOG_EXTRA,
+    redact_internal_details_from_client_message,
+    verbose_proxy_logger,
+)
 from litellm._uuid import uuid
 from litellm.constants import (
     ALLOWED_VERTEX_AI_PASSTHROUGH_HEADERS,
@@ -1766,7 +1772,11 @@ async def _bedrock_count_tokens(
     request: Request, user_api_key_dict: UserAPIKeyAuth, request_body: dict[str, object], litellm_call_id: str
 ) -> Mapping[str, object]:
     from litellm.llms.bedrock.common_utils import BedrockError
-    from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensHandler
+    from litellm.llms.bedrock.count_tokens.handler import (
+        BedrockCountTokensHandler,
+        BedrockCountTokensRequestError,
+        is_caller_refusal,
+    )
     from litellm.proxy.litellm_pre_call_utils import request_routing_metadata
     from litellm.proxy.proxy_server import route_count
 
@@ -1827,7 +1837,15 @@ async def _bedrock_count_tokens(
 
     except BedrockError as e:
         # Convert BedrockError to HTTPException for FastAPI
-        verbose_proxy_logger.error("BedrockError in handle_bedrock_count_tokens: %s", e)
+        is_caller_error: Final = is_caller_refusal(
+            e.status_code, e.message, isinstance(e, BedrockCountTokensRequestError)
+        )
+        verbose_proxy_logger.log(
+            logging.WARNING if is_caller_error else logging.ERROR,
+            "BedrockError in handle_bedrock_count_tokens: %s",
+            e,
+            extra=CALLER_ERROR_LOG_EXTRA if is_caller_error else None,
+        )
         from litellm.litellm_core_utils.llm_response_utils.get_headers import get_response_headers
 
         provider_headers: Final = e.response.headers
@@ -2496,6 +2514,7 @@ async def transcribe_sdk_proxy_route(
 async def _resolve_vertex_model_from_router(
     model_id: str,
     llm_router: litellm.Router | None,
+    call_id: str,
     encoded_endpoint: str,
     endpoint: str,
     vertex_project: str | None,
@@ -2507,6 +2526,7 @@ async def _resolve_vertex_model_from_router(
     Args:
         model_id: The model ID extracted from the URL (e.g., "gcp/google/gemini-2.5-flash")
         llm_router: The LiteLLM router instance
+        call_id: The id the pick's least-busy reservation is held under
         encoded_endpoint: The encoded endpoint path
         endpoint: The original endpoint path
         vertex_project: Current vertex project (may be from URL)
@@ -2521,7 +2541,7 @@ async def _resolve_vertex_model_from_router(
         return encoded_endpoint, endpoint, vertex_project, vertex_location, None
 
     try:
-        deployment: Final = await llm_router.select(model_id, kind="pass_through")
+        deployment: Final = await llm_router.select(model_id, {"litellm_call_id": call_id}, kind="pass_through")
         if not deployment:
             return encoded_endpoint, endpoint, vertex_project, vertex_location, None
 
@@ -3599,6 +3619,34 @@ async def _base_vertex_proxy_route(
     user_api_key_dict: UserAPIKeyAuth,
     router_credentials: LiteLLM_ManagedVectorStore | None = None,
 ):
+    from litellm.proxy.proxy_server import llm_router
+
+    call_id: Final = str(uuid.uuid4())
+    with contextlib.nullcontext() if llm_router is None else llm_router.reserving_picks(call_id):
+        return await _relay_vertex_call(
+            endpoint,
+            request,
+            fastapi_response,
+            get_vertex_pass_through_handler,
+            general_settings,
+            user_api_key_dict,
+            router_credentials,
+            llm_router,
+            call_id,
+        )
+
+
+async def _relay_vertex_call(
+    endpoint: str,
+    request: Request,
+    fastapi_response: Response,
+    get_vertex_pass_through_handler: BaseVertexAIPassThroughHandler,
+    general_settings: Mapping[str, object],
+    user_api_key_dict: UserAPIKeyAuth,
+    router_credentials: LiteLLM_ManagedVectorStore | None,
+    llm_router: litellm.Router | None,
+    call_id: str,
+) -> object:
     """
     Base function for Vertex AI passthrough routes.
     Handles common logic for all Vertex AI services.
@@ -3614,6 +3662,8 @@ async def _base_vertex_proxy_route(
         general_settings: Proxy general settings, read per request for the anthropic-beta values to drop
         user_api_key_dict: The caller the route authenticated
         router_credentials: Optional vector store credentials from registry (LiteLLM_ManagedVectorStore)
+        llm_router: The proxy's router, which picks the deployment for a model in the URL
+        call_id: The id the router's least-busy pick is reserved under
     """
     from litellm.llms.vertex_ai.common_utils import (
         construct_target_url,
@@ -3621,7 +3671,6 @@ async def _base_vertex_proxy_route(
         get_vertex_model_id_from_url,
         get_vertex_project_id_from_url,
     )
-    from litellm.proxy.proxy_server import llm_router
 
     encoded_endpoint = httpx.URL(endpoint).path
     verbose_proxy_logger.debug("requested endpoint %s", endpoint)
@@ -3656,6 +3705,7 @@ async def _base_vertex_proxy_route(
             ) = await _resolve_vertex_model_from_router(
                 model_id=model_id,
                 llm_router=llm_router,
+                call_id=call_id,
                 encoded_endpoint=encoded_endpoint,
                 endpoint=endpoint,
                 vertex_project=vertex_project,

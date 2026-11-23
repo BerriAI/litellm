@@ -27,6 +27,7 @@ MAX_BUFFER_EVENTS: Final = 1000
 MAX_BATCH_BYTES: Final = 4 * 1024 * 1024
 SHUTDOWN_SECONDS: Final = 3.0
 _PAYLOAD: Final = TypeAdapter(SpendLogPayload)
+_EXPORTED_FIELDS: Final = frozenset(SpendLogPayload.__annotations__) - {"messages", "response"}
 
 
 class ExportFailure(Enum):
@@ -105,10 +106,12 @@ def _encoded(raw: object, kwargs: Mapping[str, object]) -> bytes | ExportFailure
     return encode_record(spend_log_row_from_payload(payload, kwargs))
 
 
-def _without_content(raw: object) -> object:
-    """The logging payload without the conversation: Lens reads that from the trace, and a copy here is what
-    outgrows the export budget and costs a request its cost record."""
-    return {**raw, "messages": None, "response": None} if _is_mapping(raw) else raw
+def _exported_fields(raw: object) -> object:
+    """Only what the cost record is built from: Lens reads the conversation from the trace, and nothing else in the
+    logging payload is sent, so none of it may outgrow the export budget and cost a request its cost record."""
+    if not _is_mapping(raw):
+        return raw
+    return {key: raw[key] for key in _EXPORTED_FIELDS if key in raw} | {"messages": None, "response": None}
 
 
 @dataclass(frozen=True, slots=True)
@@ -209,7 +212,7 @@ class LensExporter(CustomLogger):
             self._drop(1)
             return
         try:
-            record: Final = _encoded(_without_content(raw), kwargs)
+            record: Final = _encoded(_exported_fields(raw), kwargs)
             if record is None:
                 return
             if isinstance(record, ExportFailure):
