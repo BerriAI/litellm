@@ -979,7 +979,7 @@ def test_image_tool_falls_back_to_list_pricing_when_deployments_disagree(local_m
 
 
 def test_responses_zero_image_gen_tokens_fall_back_to_per_image_pricing(local_model_cost_map):
-    """Zero image generation tokens fall back to per-image pricing."""
+        """An all-zero image_gen usage block keeps the per-image path for the tool's model/quality/size."""
     tool_model = "gpt-image-1"
     quality = "low"
     size = "1024x1024"
