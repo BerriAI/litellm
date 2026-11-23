@@ -1,4 +1,4 @@
-from collections.abc import Collection, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final, NoReturn
@@ -14,9 +14,6 @@ _FLAT_IMAGE_SETTINGS: Final = MappingProxyType(
     {"aspectRatio": ("aspectRatio", "aspect_ratio"), "imageSize": ("imageSize", "image_size")}
 )
 IMAGE_CONFIG_ALIASES: Final = ("imageConfig", "image_config")
-_OPENAI_NO_OP_VALUES: Final = MappingProxyType(
-    {"background": ("auto", "opaque"), "moderation": ("auto",), "output_compression": (100, "100")}
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,18 +66,8 @@ def _flat_image_settings(params: Mapping[str, object]) -> Mapping[str, object]:
 
 
 def map_vertex_gemini_image_params(
-    params: Mapping[str, object], model: str, drop_params: bool, unsupported_params: Collection[str]
+    params: Mapping[str, object], model: str, drop_params: bool
 ) -> Mapping[str, object] | UnsupportedImageParam:
-    unsupported_param: Final = next(
-        (
-            param
-            for param in unsupported_params
-            if param in params and params[param] not in _OPENAI_NO_OP_VALUES.get(param, ())
-        ),
-        None,
-    )
-    if unsupported_param is not None and not drop_params:
-        return UnsupportedImageParam(unsupported_param, "is not supported")
     image_config_alias: Final = next((alias for alias in IMAGE_CONFIG_ALIASES if alias in params), None)
     image_config: Final = _EMPTY if image_config_alias is None else _image_config_object(params[image_config_alias])
     size_config: Final = _size_image_config(params["size"], model) if "size" in params else _EMPTY

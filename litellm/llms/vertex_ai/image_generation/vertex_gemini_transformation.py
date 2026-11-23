@@ -44,7 +44,6 @@ _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_i
 _JSON_CONTAINER: Final[TypeAdapter[Mapping[str, object] | str | Sequence[object]]] = TypeAdapter(
     Mapping[str, object] | str | Sequence[object], config=ConfigDict(hide_input_in_errors=True)
 )
-_OPENAI_ONLY_PARAMS: Final = ("background", "moderation", "output_compression")
 
 
 class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
@@ -76,7 +75,6 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
             "image_size",
             "tools",
             "web_search_options",
-            *_OPENAI_ONLY_PARAMS,
         ]
 
     def map_openai_params(
@@ -88,7 +86,7 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
     ) -> dict:
         requested: Final = _JSON_OBJECT.validate_python(non_default_params)
         params: Final = {key: value for key, value in requested.items() if key not in optional_params}
-        image_params: Final = map_vertex_gemini_image_params(params, model, drop_params, _OPENAI_ONLY_PARAMS)
+        image_params: Final = map_vertex_gemini_image_params(params, model, drop_params)
         if isinstance(image_params, UnsupportedImageParam):
             raise_unsupported_image_param(image_params, model)
         return map_gemini_image_tools_params(

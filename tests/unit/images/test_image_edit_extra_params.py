@@ -5,6 +5,8 @@ Regression tests for https://github.com/BerriAI/litellm/issues/36493
 (e.g. seed) and the extra_body escape hatch, unlike /v1/images/generations.
 """
 
+from typing import Final
+
 import httpx
 import pytest
 
@@ -120,9 +122,11 @@ def test_image_edit_flattens_nested_provider_params():
     assert "generation_config" not in fields
 
 
-def test_image_edit_forwards_bracketed_image_config_fields_to_a_provider_without_image_config():
-    captured = {}
-    client = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_capture_image_edit_request(captured))))
+def test_image_edit_forwards_bracketed_image_config_fields_to_a_provider_without_image_config() -> None:
+    captured: Final[dict[str, object]] = {}  # mutable-ok: the MockTransport callback records the request
+    client: Final = HTTPHandler(
+        client=httpx.Client(transport=httpx.MockTransport(_capture_image_edit_request(captured)))
+    )
 
     litellm.image_edit(
         model="openai/gpt-image-1",
@@ -134,14 +138,16 @@ def test_image_edit_forwards_bracketed_image_config_fields_to_a_provider_without
         **{"imageConfig[aspectRatio]": "9:16"},
     )
 
-    fields = _multipart_text_fields(captured["content_type"], captured["body"])
+    fields: Final = _multipart_text_fields(captured["content_type"], captured["body"])
     assert fields["imageConfig[aspectRatio]"] == "9:16"
     assert "imageConfig" not in fields
 
 
-def test_image_edit_sends_no_drop_controls_or_dropped_params_to_the_provider():
-    captured = {}
-    client = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_capture_image_edit_request(captured))))
+def test_image_edit_sends_no_drop_controls_or_dropped_params_to_the_provider() -> None:
+    captured: Final[dict[str, object]] = {}  # mutable-ok: the MockTransport callback records the request
+    client: Final = HTTPHandler(
+        client=httpx.Client(transport=httpx.MockTransport(_capture_image_edit_request(captured)))
+    )
 
     litellm.image_edit(
         model="openai/gpt-image-1",
@@ -155,11 +161,18 @@ def test_image_edit_sends_no_drop_controls_or_dropped_params_to_the_provider():
         imageConfig={"aspectRatio": "9:16"},
         seed=42,
         style_preset="noir",
+        **{"imageConfig[imageSize]": "2K"},
     )
 
-    fields = _multipart_text_fields(captured["content_type"], captured["body"])
+    fields: Final = _multipart_text_fields(captured["content_type"], captured["body"])
     assert fields["style_preset"] == "noir"
-    assert not {"drop_params", "additional_drop_params", "imageConfig[aspectRatio]", "seed"} & fields.keys()
+    assert not {
+        "drop_params",
+        "additional_drop_params",
+        "imageConfig[aspectRatio]",
+        "imageConfig[imageSize]",
+        "seed",
+    } & fields.keys()
 
 
 def test_image_edit_forwards_scalar_array_as_repeated_fields():

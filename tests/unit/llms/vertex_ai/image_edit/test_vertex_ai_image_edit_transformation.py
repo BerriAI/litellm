@@ -1,6 +1,7 @@
 import base64
 import json
 import os
+import re
 from collections.abc import Mapping
 from datetime import datetime
 from io import BytesIO
@@ -770,7 +771,14 @@ def _sent_gemini_edit_generation_config(**params: object) -> Mapping[str, object
         ({"size": "3072x2048", "imageConfig": {"aspect_ratio": "9:16"}}, {"aspectRatio": "9:16", "imageSize": "2K"}),
         ({"size": "1536x1024"}, {"aspectRatio": "3:2", "imageSize": "1K"}),
         ({"image_config": {"aspect_ratio": "9:16"}}, {"aspectRatio": "9:16"}),
-        ({"imageConfig[aspectRatio]": "9:16", "imageConfig[imageSize]": "2K"}, {"aspectRatio": "9:16", "imageSize": "2K"}),
+        (
+            {"imageConfig[aspectRatio]": "9:16", "imageConfig[imageSize]": "2K"},
+            {"aspectRatio": "9:16", "imageSize": "2K"},
+        ),
+        (
+            {"image_config[aspect_ratio]": "9:16", "image_config[imageSize]": "2K"},
+            {"aspectRatio": "9:16", "imageSize": "2K"},
+        ),
         (
             {"imageConfig": '{"aspectRatio": "1:1", "imageSize": "2K"}', "imageConfig[aspectRatio]": "9:16"},
             {"aspectRatio": "9:16", "imageSize": "2K"},
@@ -798,7 +806,6 @@ def test_vertex_gemini_edit_forwards_image_controls(
         ("size", "1024x"),
         ("imageConfig", "banana"),
         ("imageConfig", "[1]"),
-        ("output_compression", 50),
     ),
 )
 def test_vertex_gemini_edit_rejects_an_unmappable_control_unless_dropping_params(
@@ -812,8 +819,71 @@ def test_vertex_gemini_edit_rejects_an_unmappable_control_unless_dropping_params
     }
 
 
-@pytest.mark.parametrize("value", (100, "100"))
-def test_vertex_gemini_edit_sends_nothing_for_output_compression_at_its_no_op_default(value: object) -> None:
+def test_vertex_gemini_edit_folds_up_to_64_bracket_fields() -> None:
+    fields: Final = {f"imageConfig[k{index}]": "v" for index in range(64)}
+
+    assert _sent_gemini_edit_generation_config(**fields) == {
+        "responseModalities": ["IMAGE"],
+        "imageConfig": {f"k{index}": "v" for index in range(64)},
+    }
+
+
+@pytest.mark.parametrize(
+    ("fields", "rejected", "generation_config_when_dropping"),
+    (
+        (
+            {f"imageConfig[k{index}]": "v" for index in range(65)},
+            "`imageConfig` takes at most 64 form fields",
+            {"responseModalities": ["IMAGE"]},
+        ),
+        (
+            {"imageConfig[a][b][c][d][e]": "x", "imageConfig[aspectRatio]": "9:16"},
+            "`imageConfig[a][b][c][d][e]` must be",
+            {"responseModalities": ["IMAGE"], "imageConfig": {"aspectRatio": "9:16"}},
+        ),
+        (
+            {"imageConfig[aspectRatio": "9:16", "imageConfig[imageSize]": "2K"},
+            "`imageConfig[aspectRatio` must be",
+            {"responseModalities": ["IMAGE"], "imageConfig": {"imageSize": "2K"}},
+        ),
+        (
+            {"imageConfig[]": "9:16", "imageConfig[imageSize]": "2K"},
+            "`imageConfig[]` must be",
+            {"responseModalities": ["IMAGE"], "imageConfig": {"imageSize": "2K"}},
+        ),
+        (
+            {"imageConfig[a[b]": "9:16", "imageConfig[imageSize]": "2K"},
+            "`imageConfig[a[b]` must be",
+            {"responseModalities": ["IMAGE"], "imageConfig": {"imageSize": "2K"}},
+        ),
+        (
+            {"imageConfig[a]b]": "9:16", "imageConfig[imageSize]": "2K"},
+            "`imageConfig[a]b]` must be",
+            {"responseModalities": ["IMAGE"], "imageConfig": {"imageSize": "2K"}},
+        ),
+        (
+            {"imageConfig[imageOutputOptions]": "x", "imageConfig[imageOutputOptions][mimeType]": "image/jpeg"},
+            "`imageConfig[imageOutputOptions]` sets a value",
+            {"responseModalities": ["IMAGE"], "imageConfig": {"imageOutputOptions": {"mimeType": "image/jpeg"}}},
+        ),
+        (
+            {"imageConfig": "banana", "imageConfig[aspectRatio]": "9:16"},
+            "`imageConfig` must be a JSON object",
+            {"responseModalities": ["IMAGE"], "imageConfig": {"aspectRatio": "9:16"}},
+        ),
+    ),
+)
+def test_vertex_gemini_edit_rejects_unfoldable_bracket_fields_unless_dropping_params(
+    fields: Mapping[str, object], rejected: str, generation_config_when_dropping: Mapping[str, object]
+) -> None:
+    with pytest.raises(litellm.UnsupportedParamsError, match=re.escape(rejected)):
+        _sent_gemini_edit_request(**fields)
+
+    assert _sent_gemini_edit_generation_config(**fields, drop_params=True) == generation_config_when_dropping
+
+
+@pytest.mark.parametrize("value", (100, "100", 50))
+def test_vertex_gemini_edit_leaves_out_output_compression_without_failing_the_call(value: object) -> None:
     assert _sent_gemini_edit_generation_config(output_compression=value) == {"responseModalities": ["IMAGE"]}
 
 

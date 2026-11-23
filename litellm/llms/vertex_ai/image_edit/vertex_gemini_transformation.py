@@ -34,7 +34,6 @@ from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import FileTypes, ImageObject, ImageResponse
 
 _JSON_DICT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
-_OPENAI_ONLY_PARAMS: Final = ("output_compression",)
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -68,7 +67,6 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
         "aspect_ratio",
         "imageSize",
         "image_size",
-        *_OPENAI_ONLY_PARAMS,
     ]
 
     def __init__(self) -> None:
@@ -85,7 +83,7 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
         drop_params: bool,
     ) -> dict[str, object]:
         params: Final[Mapping[str, object]] = image_edit_optional_params
-        image_params: Final = map_vertex_gemini_image_params(params, model, drop_params, _OPENAI_ONLY_PARAMS)
+        image_params: Final = map_vertex_gemini_image_params(params, model, drop_params)
         if isinstance(image_params, UnsupportedImageParam):
             raise_unsupported_image_param(image_params, model)
         return dict(image_params)
