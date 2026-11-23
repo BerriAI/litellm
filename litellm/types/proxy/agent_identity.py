@@ -92,6 +92,13 @@ class AgentIdentityFailure(LiteLLMBaseModel):
     message: str
 
 
+class AgentStamp(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    agent_id: str
+    binding_revision: str
+
+
 NO_PERSON: Final = AgentIdentityFailure(message="The delegated person has no LiteLLM user")
 
 
