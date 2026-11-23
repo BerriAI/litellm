@@ -2575,3 +2575,29 @@ def test_redaction_keeps_the_compression_savings_a_guardrail_reports() -> None:
 
     assert "4111" not in str(redacted["guardrail_information"])
     assert extract_compression_saved_tokens(redacted) == extract_compression_saved_tokens(payload) == 600
+
+
+def test_redaction_removes_extraction_documents_from_every_logged_copy() -> None:
+    document: Final = {"content_type": "application/pdf", "base64": SECRET}
+    details: Final[dict[str, object]] = {
+        "optional_params": {"documents": [document]},
+        "litellm_params": {"proxy_server_request": {"body": {"documents": [document], "state": "kept"}}},
+        "additional_args": {"complete_input_dict": {"documents": [document], "state": "kept"}},
+    }
+
+    perform_redaction(details, result=None)
+
+    assert SECRET not in json.dumps(details, default=str)
+    assert details["additional_args"]["complete_input_dict"]["state"] == "kept"
+
+
+def test_one_callback_opting_out_redacts_extraction_documents_only_for_itself() -> None:
+    details: Final[dict[str, object]] = {
+        "additional_args": {"complete_input_dict": {"documents": [f"data:application/pdf;base64,{SECRET}"]}},
+    }
+
+    redacted: Final = redacted_model_call_details_for_custom_logger(details, TestCustomLogger(message_logging=False))
+
+    assert SECRET not in json.dumps(redacted, default=str)
+    assert SECRET in json.dumps(details, default=str)
+

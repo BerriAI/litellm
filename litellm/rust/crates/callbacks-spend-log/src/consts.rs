@@ -218,10 +218,11 @@ pub(crate) const MESSAGE_REDACTION_ENABLE_HEADERS: [&str; 2] = [
 ];
 
 /// `_REDACTED_REQUEST_FIELDS` from `redact_messages.py`.
-pub(crate) const REDACTED_REQUEST_FIELDS: [&str; 5] = [
+pub(crate) const REDACTED_REQUEST_FIELDS: [&str; 6] = [
     "instructions",
     "query_image",
     "images",
+    "documents",
     "retrievalQuery",
     "retrieval_query",
 ];

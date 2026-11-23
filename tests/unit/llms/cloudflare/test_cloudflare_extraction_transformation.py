@@ -219,3 +219,73 @@ def test_decisions_config_still_resolves_clef_after_the_shared_helpers_moved(mon
         == "https://api.cloudflare.com/client/v4/accounts/acct/ai/run/@cf/cloudflare/clef"
     )
     assert config.unwrap_response({"result": {"answers": {}}}) == {"answers": {}}
+
+
+def test_request_forwards_documents_unchanged() -> None:
+    documents: Final = (
+        "data:application/pdf;base64,JVBERi0=",
+        {"content_type": "application/pdf", "base64": "JVBERi0="},
+    )
+    request: Final = ExtractionRequestBody.model_validate(
+        {
+            "state": "",
+            "fields": INVOICE_FIELDS,
+            "documents": documents,
+        }
+    )
+
+    assert _cloudflare_config().transform_extraction_request("@cf/cloudflare/clairic", request) == {
+        "model": "clairic",
+        "state": "",
+        "fields": INVOICE_FIELDS,
+        "documents": [dict(d) if isinstance(d, dict) else d for d in documents],
+    }
+
+
+@pytest.mark.parametrize(
+    "document",
+    (
+        {"content_type": "application/json", "base64": "e30="},
+        {"content_type": "image/png", "base64": "iVBORw0KGgo="},
+        "data:image/png;base64,iVBORw0KGgo=",
+        "https://example.com/invoice.pdf",
+    ),
+    ids=("wrong_content_type", "image_content_type", "image_data_url", "remote_url"),
+)
+def test_invalid_document_is_rejected(document: object) -> None:
+    with pytest.raises(ValidationError, match=r"documents\."):
+        ExtractionRequestBody.model_validate(
+            {"state": INVOICE_STATE, "fields": INVOICE_FIELDS, "documents": [document]}
+        )
+
+
+def test_more_than_4_documents_is_rejected() -> None:
+    with pytest.raises(ValidationError, match=r"documents\n"):
+        ExtractionRequestBody.model_validate(
+            {
+                "state": INVOICE_STATE,
+                "fields": INVOICE_FIELDS,
+                "documents": ["data:application/pdf;base64,JVBERi0="] * 5,
+            }
+        )
+
+
+def test_usage_parses_image_tokens_from_rendered_pdf_pages() -> None:
+    payload: Final = {
+        "model": "clairic",
+        "answers": CLAIRIC_RESULT["answers"],
+        "truncated": False,
+        "usage": {
+            "state_tokens": 52,
+            "image_tokens": 456,
+            "schema_tokens": 312,
+            "input_tokens": 416,
+            "output_tokens": 0,
+            "passes": 2,
+        },
+    }
+    response: Final = _cloudflare_config().transform_extraction_response(
+        "@cf/cloudflare/clairic", "cloudflare", _response(payload)
+    )
+
+    assert response.usage.image_tokens == 456

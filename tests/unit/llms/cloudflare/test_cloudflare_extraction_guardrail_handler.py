@@ -2,6 +2,7 @@ from typing import Final, Literal
 
 import pytest
 
+import litellm
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms import get_guardrail_translation_mapping
@@ -333,3 +334,24 @@ async def test_a_response_guardrail_sees_the_decimal_text_of_a_fractional_number
         "unit_price": {"type": "number", "value": None},
         "prices": {"type": "list", "value": None},
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "state",
+    ("", "Invoice from Acme Tools"),
+    ids=("document_only", "document_with_state"),
+)
+async def test_a_request_with_documents_is_refused_because_the_guardrail_cannot_inspect_them(state: str) -> None:
+    guardrail: Final = _TaggingGuardrail()
+    data: Final = {
+        "model": "invoice-reader",
+        "state": state,
+        "fields": {"x": {"type": "text"}},
+        "documents": ["data:application/pdf;base64,JVBERi0="],
+    }
+
+    with pytest.raises(litellm.BadRequestError, match="cannot inspect PDF documents"):
+        await ExtractionHandler().process_input_messages(data, guardrail)
+
+    assert guardrail.seen is None

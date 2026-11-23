@@ -511,7 +511,7 @@ def _redact_responses_api_output_dict(output_items: Sequence[object], redacted_s
     return [_redacted_responses_api_output_item(item, redacted_str) for item in output_items]
 
 
-_REDACTED_REQUEST_FIELDS: Final = ("instructions", "query_image", "images", *RETRIEVAL_QUERY_PARAMS)
+_REDACTED_REQUEST_FIELDS: Final = ("instructions", "query_image", "images", "documents", *RETRIEVAL_QUERY_PARAMS)
 _NESTED_REQUEST_FIELDS: Final = ("extra_body", "additional_args", "complete_input_dict")
 
 

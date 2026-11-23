@@ -10,6 +10,7 @@ from pydantic import (
     StrictFloat,
     StrictInt,
     StrictStr,
+    field_validator,
     model_validator,
     with_config,
 )
@@ -75,6 +76,39 @@ class ExtractionBase64Image(_ClairicObject):
 ExtractionImage: TypeAlias = Annotated[str, Field(pattern=r"^[Dd][Aa][Tt][Aa]:")] | ExtractionBase64Image
 
 
+class ExtractionBase64Document(_ClairicObject):
+    content_type: Annotated[Literal["application/pdf"], Field(description="The document media type, application/pdf")]
+    base64: Annotated[str, Field(description="Base64-encoded PDF bytes")]
+
+
+EXTRACTION_DOCUMENT_MAX_BYTES: Final = 4 * 1024 * 1024
+_EXTRACTION_DOCUMENT_MAX_BASE64_CHARS: Final = -(-EXTRACTION_DOCUMENT_MAX_BYTES // 3) * 4
+_BASE64_DATA_URL_MARKER: Final = "base64,"
+
+
+def _base64_payload(document: "str | ExtractionBase64Document") -> str:
+    if isinstance(document, ExtractionBase64Document):
+        return document.base64
+    return document[document.index(_BASE64_DATA_URL_MARKER) + len(_BASE64_DATA_URL_MARKER) :]
+
+
+def _decoded_size(payload: str) -> int:
+    stripped: Final = payload.rstrip("=")
+    return len(stripped) * 3 // 4
+
+
+ExtractionDocument: TypeAlias = (
+    Annotated[
+        str,
+        Field(
+            pattern=r"^[Dd][Aa][Tt][Aa]:[Aa][Pp][Pp][Ll][Ii][Cc][Aa][Tt][Ii][Oo][Nn]/[Pp][Dd][Ff];[Bb][Aa][Ss][Ee]64,",
+            description="PDF as a base64 data URL",
+        ),
+    ]
+    | ExtractionBase64Document
+)
+
+
 class ExtractionOptions(_ClairicObject):
     include_quantiles: Annotated[StrictBool | None, Field(description="Add 99 percentiles to estimates")] = None
     return_state_text: Annotated[StrictBool | None, Field(description="Return the text that spans index into")] = None
@@ -83,7 +117,9 @@ class ExtractionOptions(_ClairicObject):
 class ExtractionRequestBody(_ClairicObject):
     state: Annotated[
         str,
-        Field(description="The text to read. Must be non-empty unless images are sent. Text answers are spans of it"),
+        Field(
+            description="The text to read. Must be non-empty unless images or documents are sent. Text answers are spans of it"
+        ),
     ] = ""
     fields: Annotated[
         Mapping[ExtractionFieldName, ExtractionField],
@@ -93,10 +129,32 @@ class ExtractionRequestBody(_ClairicObject):
         tuple[ExtractionImage, ...] | None,
         Field(max_length=4, description="Up to 4 images as data URLs or content_type plus base64, no remote URLs"),
     ] = None
+    documents: Annotated[
+        tuple[ExtractionDocument, ...] | None,
+        Field(
+            max_length=4,
+            description="Up to 4 embedded PDFs as data URLs or content_type plus base64, max 4 MiB each",
+        ),
+    ] = None
     reference_date: Annotated[str | None, Field(description="ISO date that anchors dates written without a year")] = (
         None
     )
     options: ExtractionOptions | None = None
+
+    @field_validator("documents", mode="after")
+    @classmethod
+    def _documents_fit_the_size_limit(
+        cls, documents: tuple[ExtractionDocument, ...] | None
+    ) -> tuple[ExtractionDocument, ...] | None:
+        for index, document in enumerate(documents or ()):
+            payload = _base64_payload(document)
+            if len(payload) > _EXTRACTION_DOCUMENT_MAX_BASE64_CHARS or _decoded_size(payload) > (
+                EXTRACTION_DOCUMENT_MAX_BYTES
+            ):
+                raise ValueError(
+                    f"documents[{index}] is larger than {EXTRACTION_DOCUMENT_MAX_BYTES // (1024 * 1024)} MiB"
+                )
+        return documents
 
 
 class ExtractionRequest(ExtractionRequestBody):
@@ -155,6 +213,7 @@ class ExtractionCallParams(TypedDict, total=False):
     state: Required[ReadOnly[str]]
     fields: Required[ReadOnly[Mapping[str, Mapping[str, object]]]]
     images: ReadOnly[Sequence[str | Mapping[str, object]] | None]
+    documents: ReadOnly[Sequence[str | Mapping[str, object]] | None]
     reference_date: ReadOnly[str | None]
     api_key: ReadOnly[StrAsGiven | None]
     api_base: ReadOnly[str | None]
