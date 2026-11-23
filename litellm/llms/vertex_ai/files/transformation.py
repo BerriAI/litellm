@@ -1493,6 +1493,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             non_default_params=openai_request_body,
             optional_params={},
             drop_params=drop_params,
+            allow_unsupported_n=True,
         )
         if (
             "service_tier" in vertex_params

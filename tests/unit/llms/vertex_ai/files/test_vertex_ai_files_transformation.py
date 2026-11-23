@@ -2889,3 +2889,44 @@ def test_drop_params_drops_a_system_video_from_a_gemini_batch_row(
     (row,) = TypeAdapter(tuple[dict[str, object]]).validate_python(_uploaded_rows(config, deployment, [entry]))
 
     assert _request_of(row)["system_instruction"] == {"parts": [{"text": "be terse"}]}
+
+
+def _generation_config_of(row: Mapping[str, object]) -> dict[str, object]:
+    return TypeAdapter(dict[str, object]).validate_python(_request_of(row)["generationConfig"])
+
+
+def test_batch_row_asking_for_n_image_candidates_uploads_with_n_beside_a_plain_row(
+    config: VertexAIFilesConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    (image_row, plain_row) = _uploaded_rows(
+        config,
+        _GEMINI_DEPLOYMENT,
+        [
+            dict(_chat_entry("gemini-2.5-flash", {"modalities": ["image", "text"], "n": 2})),
+            dict(_chat_entry("gemini-2.5-flash", {})),
+        ],
+    )
+
+    assert _generation_config_of(image_row)["candidate_count"] == 2
+    assert _generation_config_of(plain_row) == {"max_output_tokens": 5}
+
+
+@pytest.mark.parametrize(
+    ("globally", "deployment_params", "row_params"),
+    [(True, {}, {}), (False, {"drop_params": True}, {}), (False, {}, {"drop_params": True})],
+    ids=["global", "deployment", "row"],
+)
+def test_drop_params_drops_n_from_a_batch_row_asking_for_image_candidates(
+    config: VertexAIFilesConfig,
+    monkeypatch: pytest.MonkeyPatch,
+    globally: bool,
+    deployment_params: Mapping[str, object],
+    row_params: Mapping[str, object],
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", globally)
+    entry: Final = dict(_chat_entry("gemini-2.5-flash", {"modalities": ["image", "text"], "n": 2, **row_params}))
+
+    (row,) = _uploaded_rows(config, {**_GEMINI_DEPLOYMENT, **deployment_params}, [entry])
+
+    assert "candidate_count" not in _generation_config_of(row)
