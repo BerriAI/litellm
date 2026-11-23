@@ -2,6 +2,7 @@ from collections.abc import Mapping
 from typing import Final
 
 import pytest
+from pydantic import ValidationError
 
 from litellm.proxy.mcp_server.events.config import EventsSettings, events_settings, server_allows_event, server_events
 from litellm.types.mcp_server.mcp_server_manager import MCPServerEventsConfig
@@ -13,6 +14,27 @@ def test_settings_default_to_off_with_documented_limits() -> None:
     settings: Final = events_settings(lambda: {})
     assert settings == EventsSettings()
     assert settings.enabled is False
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    (
+        "",
+        "gateway.example",
+        "http://gateway.example",
+        "https://",
+        "https://gw.example?q=1",
+        "https://gw.example/#section",
+    ),
+)
+def test_callback_base_requires_an_absolute_https_url_without_query_or_fragment(base_url: str) -> None:
+    with pytest.raises(ValidationError):
+        events_settings(lambda: {"mcp_events_public_base_url": base_url})
+
+
+def test_proxy_base_preserves_a_deployment_path_and_port() -> None:
+    base: Final = "https://gw.example:1443/proxy"
+    assert events_settings(lambda: {"mcp_events_public_base_url": base}).public_base_url == base
 
 
 def test_settings_read_the_general_settings_keys() -> None:
