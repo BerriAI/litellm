@@ -3,13 +3,14 @@ GitLab prompt manager with configurable prompts folder.
 """
 
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Final, TypeVar
+from typing import TYPE_CHECKING, Any, Final, Protocol, TypeVar
 
 from jinja2 import DictLoader, select_autoescape
 from jinja2.sandbox import ImmutableSandboxedEnvironment
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
+from litellm.litellm_core_utils.core_helpers import require_attributes
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -34,10 +35,22 @@ class GitLabCachedPrompt(TypedDict):
     path: ReadOnly[str]
     content: ReadOnly[str]
     metadata: ReadOnly[Mapping[str, object]]
-    model: ReadOnly[str | None]
-    temperature: ReadOnly[float | None]
-    max_tokens: ReadOnly[int | None]
+    model: ReadOnly[object]
+    temperature: ReadOnly[object]
+    max_tokens: ReadOnly[object]
     optional_params: ReadOnly[Mapping[str, object]]
+
+
+class _SupportsGet(Protocol):
+    def get(self, key: str, default: object = None, /) -> object: ...
+
+
+def _input_schema(metadata: Mapping[str, object]) -> object:
+    return require_attributes(metadata.get("input", {}), _SupportsGet, "get").get("schema", {})
+
+
+def _optional_params(metadata: Mapping[str, object]) -> Mapping[str, object]:
+    return {k: v for k, v in metadata.items() if k not in ["model", "input", "content"]}
 
 
 def encode_prompt_id(raw_id: str) -> str:
@@ -59,7 +72,7 @@ class GitLabPromptTemplate:
         self,
         template_id: str,
         content: str,
-        metadata: dict[str, Any],
+        metadata: Mapping[str, object],
         model: str | None = None,
     ):
         self.template_id = template_id
@@ -68,8 +81,8 @@ class GitLabPromptTemplate:
         self.model = model or metadata.get("model")
         self.temperature = metadata.get("temperature")
         self.max_tokens = metadata.get("max_tokens")
-        self.input_schema = metadata.get("input", {}).get("schema", {})
-        self.optional_params = {k: v for k, v in metadata.items() if k not in ["model", "input", "content"]}
+        self.input_schema = _input_schema(metadata)
+        self.optional_params = _optional_params(metadata)
 
     def __repr__(self):
         return f"GitLabPromptTemplate(id='{self.template_id}', model='{self.model}')"
@@ -84,7 +97,7 @@ class GitLabTemplateManager:
 
     def __init__(
         self,
-        gitlab_config: dict[str, Any],
+        gitlab_config: Mapping[str, Any],
         prompt_id: str | None = None,
         ref: str | None = None,
         gitlab_client: GitLabClient | None = None,
@@ -187,7 +200,7 @@ class GitLabTemplateManager:
             frontmatter_str = ""
             template_content = content
 
-        metadata: dict[str, Any] = {}
+        metadata: Mapping[str, object] = {}
         if frontmatter_str:
             try:
                 import yaml
@@ -297,7 +310,7 @@ class GitLabPromptManager(CustomPromptManagement):
 
     def __init__(
         self,
-        gitlab_config: dict[str, object],
+        gitlab_config: Mapping[str, object],
         prompt_id: str | None = None,
         ref: str | None = None,  # tag/branch/SHA override
         gitlab_client: GitLabClient | None = None,

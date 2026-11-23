@@ -1,3 +1,4 @@
+import copy
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -198,3 +199,23 @@ def test_translate_developer_role_keeps_developer_messages_untouched() -> None:
         )
         == messages
     )
+
+
+def test_o_series_request_turns_system_into_user_without_touching_the_callers_messages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model: Final = "o-series-test-model-without-system-role"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {"litellm_provider": "openai", "mode": "chat", "supports_system_messages": False},
+    )
+    messages: Final = [{"role": "system", "content": "Be terse"}, {"role": "user", "content": "Hi"}]
+    messages_before: Final = copy.deepcopy(messages)
+
+    body: Final = OpenAIOSeriesConfig().transform_request(
+        model=model, messages=messages, optional_params={}, litellm_params={}, headers={}
+    )
+
+    assert [message["role"] for message in body["messages"]] == ["user", "user"]
+    assert messages == messages_before

@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+from collections.abc import Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, cast
 
@@ -10,6 +11,11 @@ from pydantic import TypeAdapter
 from typing_extensions import TypedDict, Unpack
 
 from litellm._internal_context import internal_sub_call
+from litellm.litellm_core_utils.allowed_tools_tool_choice import (
+    allowed_tools_tool_choice_kept_on_follow_up,
+    allowed_tools_tool_choice_with_gateway_tools_as_functions,
+    raise_if_mcp_tool_choice_forces_a_gateway_server,
+)
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, set_hidden_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.responses.mcp.chat_stream_round_billing import ChatStreamRoundBilling, engaged_round_billing
@@ -38,7 +44,7 @@ class _MCPCompletionKwargs(TypedDict, total=False, extra_items=object):
 def _add_mcp_metadata_to_response(
     response: ModelResponse | CustomStreamWrapper,
     openai_tools: list | None,
-    tool_calls: list | None = None,
+    tool_calls: Sequence[object] | None = None,
     tool_results: list | None = None,
 ) -> None:
     """
@@ -135,6 +141,7 @@ async def acompletion_with_mcp(
             _skip_mcp_handler=True,
             **kwargs,
         )
+    raise_if_mcp_tool_choice_forces_a_gateway_server(kwargs.get("tool_choice"), mcp_tools_with_litellm_proxy, model)
 
     context: Final = MCPRequestContext.resolve(kwargs=MappingProxyType({**kwargs, "model": model}), tools=tools)
     user_api_key_auth: Final[UserAPIKeyAuth | None] = context.user_api_key_auth
@@ -162,6 +169,9 @@ async def acompletion_with_mcp(
         deduplicated_mcp_tools,
         target_format="chat",
     )
+    gateway: Final = await LiteLLM_Proxy_MCP_Handler.gateway_tools(
+        kwargs.get("tool_choice"), tool_server_map, mcp_tools_with_litellm_proxy, user_api_key_auth
+    )
 
     # Combine with other tools
     all_tools: Final = openai_tools + other_tools if (openai_tools or other_tools) else None
@@ -181,6 +191,7 @@ async def acompletion_with_mcp(
         "tools": all_tools,
         "_skip_mcp_handler": True,  # Prevent recursion
         **clean_kwargs,
+        "tool_choice": allowed_tools_tool_choice_with_gateway_tools_as_functions(kwargs.get("tool_choice"), gateway),
     }
 
     # If not auto-executing, just make the call with transformed tools
@@ -225,19 +236,19 @@ async def acompletion_with_mcp(
 
             def __init__(
                 self,
-                stream_wrapper,
+                stream_wrapper: CustomStreamWrapper,
                 messages,
                 tool_server_map,
-                user_api_key_auth,
-                mcp_auth_header,
-                mcp_server_auth_headers,
-                oauth2_headers,
-                raw_headers,
-                litellm_call_id,
-                litellm_trace_id,
+                user_api_key_auth: "UserAPIKeyAuth | None",
+                mcp_auth_header: str | None,
+                mcp_server_auth_headers: dict[str, dict[str, str]] | None,
+                oauth2_headers: dict[str, str] | None,
+                raw_headers: dict[str, str] | None,
+                litellm_call_id: str | None,
+                litellm_trace_id: str | None,
                 openai_tools,
                 base_call_args,
-                request_tags,
+                request_tags: list[str] | None,
             ):
                 self.stream_wrapper = stream_wrapper
                 self.messages = messages
@@ -253,7 +264,7 @@ async def acompletion_with_mcp(
                 self.base_call_args = base_call_args
                 self.request_tags = request_tags
                 self.collected_chunks: list[ModelResponseStream] = []
-                self.tool_calls: list | None = None
+                self.tool_calls: Sequence[object] | None = None
                 self.tool_results: list | None = None
                 self.complete_response: ModelResponse | None = None
                 self.stream_exhausted = False
@@ -490,8 +501,10 @@ async def acompletion_with_mcp(
                 if isinstance(complete_response, ModelResponse):
                     self.complete_response = complete_response
                     # Extract tool calls from complete response
-                    self.tool_calls = LiteLLM_Proxy_MCP_Handler.extract_tool_calls_from_chat_response(
-                        response=complete_response
+                    self.tool_calls = LiteLLM_Proxy_MCP_Handler.tool_calls_to_run(
+                        LiteLLM_Proxy_MCP_Handler.extract_tool_calls_from_chat_response(response=complete_response),
+                        kwargs.get("tool_choice"),
+                        gateway,
                     )
 
                     if self.tool_calls:
@@ -527,11 +540,13 @@ async def acompletion_with_mcp(
                 )
 
                 # Make follow-up call with streaming
-                follow_up_call_args: Final = dict(self.base_call_args)
-                follow_up_call_args["messages"] = follow_up_messages
-                follow_up_call_args["stream"] = True
-                # Ensure follow-up call doesn't trigger MCP handler again
-                follow_up_call_args["_skip_mcp_handler"] = True
+                follow_up_call_args: Final[dict[str, object]] = {
+                    **self.base_call_args,
+                    **allowed_tools_tool_choice_kept_on_follow_up(self.base_call_args.get("tool_choice")),
+                    "messages": follow_up_messages,
+                    "stream": True,
+                    "_skip_mcp_handler": True,
+                }
 
                 # Import litellm here to ensure we get the patched version
                 # This ensures the patch works correctly in tests
@@ -663,14 +678,18 @@ async def acompletion_with_mcp(
     logging_obj: Final = kwargs.get("litellm_logging_obj")
     if isinstance(logging_obj, LiteLLMLoggingObj):
         logging_obj.carry_failed_attempt_usage()
-    with internal_sub_call():
+    with internal_sub_call(logging_obj.litellm_call_id if isinstance(logging_obj, LiteLLMLoggingObj) else None):
         initial_response: Final = await litellm_acompletion(**initial_call_args)
     first_round_breakdown: Final = logging_obj.cost_breakdown if isinstance(logging_obj, LiteLLMLoggingObj) else None
 
     if not isinstance(initial_response, ModelResponse):
         return initial_response
 
-    tool_calls: Final = LiteLLM_Proxy_MCP_Handler.extract_tool_calls_from_chat_response(response=initial_response)
+    tool_calls: Final = LiteLLM_Proxy_MCP_Handler.tool_calls_to_run(
+        LiteLLM_Proxy_MCP_Handler.extract_tool_calls_from_chat_response(response=initial_response),
+        kwargs.get("tool_choice"),
+        gateway,
+    )
 
     if not tool_calls:
         _add_mcp_metadata_to_response(
@@ -709,11 +728,14 @@ async def acompletion_with_mcp(
             tool_results=tool_results,
         )
 
-        follow_up_call_args: Final = dict(base_call_args)
-        follow_up_call_args["messages"] = follow_up_messages
-        follow_up_call_args["stream"] = stream
+        follow_up_call_args: Final = {
+            **base_call_args,
+            **allowed_tools_tool_choice_kept_on_follow_up(base_call_args.get("tool_choice")),
+            "messages": follow_up_messages,
+            "stream": stream,
+        }
 
-        with internal_sub_call():
+        with internal_sub_call(logging_obj.litellm_call_id if isinstance(logging_obj, LiteLLMLoggingObj) else None):
             final_response: Final = await litellm_acompletion(**follow_up_call_args)
 
     if not isinstance(final_response, ModelResponse):

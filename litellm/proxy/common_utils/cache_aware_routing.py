@@ -16,6 +16,7 @@ from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_f
 from litellm.llms.anthropic.cache_aware_routing import AnthropicCacheRouting, TokenCounter
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import can_key_call_resolved_model
+from litellm.router_deprecated import renamed_router_param
 from litellm.router_strategy.complexity_router.config import ComplexityRouterConfig
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.router import Deployment, PreRoutingHookResponse
@@ -23,6 +24,7 @@ from litellm.types.utils import StandardLoggingRoutingDecision
 
 if TYPE_CHECKING:
     from litellm.router import Router
+    from litellm.router_api import RoutingContext
 
 _MESSAGES: Final = TypeAdapter(list[Mapping[str, object]])
 _MAPPING: Final = TypeAdapter(Mapping[str, object])
@@ -231,7 +233,7 @@ async def select_cached_model(
 
 async def _choose_cached_model(
     *,
-    router: Router,
+    ctx: RoutingContext,
     config: ComplexityRouterConfig,
     params_for_model: Callable[[str, str], Mapping[str, object]],
     response: PreRoutingHookResponse | None,
@@ -244,13 +246,13 @@ async def _choose_cached_model(
         return None
     from litellm.proxy import proxy_server
     from litellm.proxy.common_utils.prompt_cache_prediction import has_request_transforms
-    from litellm.proxy.hooks.parallel_request_limiter_v3 import (
-        PROXY_MaxParallelRequestsHandler_v3,  # pyright: ignore[reportPrivateUsage]  # use the configured proxy limiter's shared capacity owner
-    )
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import ParallelRequestLimiterHook, request_capacity
     from litellm.router_strategy.complexity_router.context_compaction import compaction_pending
 
+    router: Final = proxy_server.llm_router
     if (
-        proxy_server.llm_router is not router
+        router is None
+        or not ctx.belongs_to(router)
         or router.registry().plugins("routing")
         or has_request_transforms()
         or compaction_pending(request_kwargs)
@@ -291,13 +293,13 @@ async def _choose_cached_model(
     if body is None:
         return None
     limiter: Final = proxy_server.proxy_logging_obj.get_proxy_hook("parallel_request_limiter")
-    if not isinstance(limiter, PROXY_MaxParallelRequestsHandler_v3):
+    if not isinstance(limiter, ParallelRequestLimiterHook):
         return None
 
     def counter_for_model(model_name: str) -> TokenCounter:
         async def count(model: str, api_key: str, body: Mapping[str, JsonValue]) -> int | None:
             try:
-                async with limiter.request_capacity(caller, model_name, request_data=request_kwargs):
+                async with request_capacity(limiter, caller, model_name, request_data=request_kwargs):
                     return await AnthropicCacheRouting.count_tokens(model, api_key, body)
             except Exception:  # noqa: BLE001  # an optional prediction denied capacity is an unavailable estimate
                 return None
@@ -318,9 +320,10 @@ async def _choose_cached_model(
     )
 
 
+@renamed_router_param("router")
 async def choose_cached_model(
     *,
-    router: Router,
+    ctx: RoutingContext,
     config: ComplexityRouterConfig,
     params_for_model: Callable[[str, str], Mapping[str, object]],
     response: PreRoutingHookResponse | None,
@@ -332,7 +335,7 @@ async def choose_cached_model(
     try:
         return await asyncio.wait_for(
             _choose_cached_model(
-                router=router,
+                ctx=ctx,
                 config=config,
                 params_for_model=params_for_model,
                 response=response,

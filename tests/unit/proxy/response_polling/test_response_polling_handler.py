@@ -16,17 +16,103 @@ following the OpenAI Response API format.
 
 import asyncio
 import json
+import logging
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from datetime import datetime, timezone
-from typing import Any, Dict, Final, Optional
+from typing import Dict, Final, NoReturn, Optional
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
-from fastapi import Request
+from fastapi import HTTPException, Request
 from pydantic import ValidationError
+from redis.exceptions import NoPermissionError, ResponseError
 
+from litellm._logging import verbose_proxy_logger
+from litellm.caching.base_cache import BaseCache
 from litellm.proxy.response_polling.polling_handler import ResponsePollingHandler
 
 from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
+
+
+class _RedisStandIn(BaseCache):
+    def __init__(self) -> None:
+        super().__init__()
+        self.stored: Dict[str, str] = {}
+        self.ttls: Dict[str, Optional[int]] = {}
+
+    @classmethod
+    def holding(cls, state: Mapping[str, object], polling_id: str = "litellm_poll_test") -> "_RedisStandIn":
+        cache: Final = cls()
+        cache.stored[ResponsePollingHandler.get_cache_key(polling_id)] = json.dumps(json.dumps(state))
+        return cache
+
+    async def async_get_cache(self, key: str) -> object:
+        raw: Final = self.stored.get(key)
+        return None if raw is None else json.loads(raw)
+
+    async def async_set_cache(self, key: str, value: object, ttl: Optional[int] = None) -> None:
+        self.stored[key] = json.dumps(value)
+        self.ttls[key] = ttl
+
+    async def async_delete_cache(self, key: str) -> None:
+        self.stored.pop(key, None)
+
+    async def async_set_cache_pipeline(self, cache_list: Sequence[tuple[str, object]], **kwargs: object) -> NoReturn:
+        raise NotImplementedError
+
+    async def async_getrange(self, key: str, start: int, end: int) -> str:
+        return self.stored.get(key, "")[start : end + 1]
+
+    async def async_set_existing_returning_previous(self, key: str, value: str, ttl: Optional[int]) -> Optional[str]:
+        previous: Final = self.stored.get(key)
+        if previous is not None:
+            self.stored[key] = value
+            self.ttls[key] = ttl
+        return previous
+
+    def async_register_script(self, script: str) -> Callable[..., Awaitable[int]]:
+        async def write_unless_cancelled(keys: Sequence[str], args: Sequence[object]) -> int:
+            if keys[0] not in self.stored or self.stored[keys[0]].startswith(args[2]):
+                return 0
+            self.stored[keys[0]] = args[0]
+            self.ttls[keys[0]] = int(args[1])
+            return 1
+
+        return write_unless_cancelled
+
+
+class _ScriptRefusingRedisStandIn(_RedisStandIn):
+    def async_register_script(self, script: str) -> Callable[..., Awaitable[int]]:
+        async def refused(keys: Sequence[str], args: Sequence[object]) -> NoReturn:
+            raise NoPermissionError("this user has no permissions to run the 'evalsha' command")
+
+        return refused
+
+
+class _CancelledRightAfterTheStatusCheckRedisStandIn(_ScriptRefusingRedisStandIn):
+    async def async_getrange(self, key: str, start: int, end: int) -> str:
+        prefix: Final = await super().async_getrange(key, start, end)
+        self.stored[key] = json.dumps(json.dumps(_CANCELLED_ELSEWHERE))
+        return prefix
+
+
+_CANCELLED_ELSEWHERE: Final = {"status": "cancelled", "id": "litellm_poll_test", "object": "response", "output": []}
+
+
+class _PipelineRefusingRedisStandIn(_ScriptRefusingRedisStandIn):
+    async def async_set_existing_returning_previous(self, key: str, value: str, ttl: Optional[int]) -> NoReturn:
+        raise NoPermissionError(f"Command # 1 (GETSET {key} {value}) of pipeline caused error: NOPERM")
+
+
+class _UnreachableRedisStandIn(_RedisStandIn):
+    async def async_getrange(self, key: str, start: int, end: int) -> NoReturn:
+        raise ConnectionError("redis is unreachable")
+
+    def async_register_script(self, script: str) -> Callable[..., Awaitable[int]]:
+        async def write_fails(keys: Sequence[str], args: Sequence[object]) -> NoReturn:
+            raise ConnectionError("redis is unreachable")
+
+        return write_fails
 
 
 class TestResponsePollingHandler:
@@ -153,8 +239,7 @@ class TestResponsePollingHandler:
     @pytest.mark.asyncio
     async def test_update_state_changes_status_to_in_progress(self):
         """Test that update_state can change status to in_progress"""
-        mock_redis = AsyncMock()
-        mock_redis.async_get_cache.return_value = json.dumps(
+        mock_redis = _RedisStandIn.holding(
             {
                 "id": "litellm_poll_test",
                 "object": "response",
@@ -171,18 +256,14 @@ class TestResponsePollingHandler:
             status="in_progress",
         )
 
-        # Verify the update was saved
-        mock_redis.async_set_cache.assert_called_once()
-        call_args = mock_redis.async_set_cache.call_args
-        stored = json.loads(call_args.kwargs["value"])
+        stored = await handler.get_state("litellm_poll_test")
 
         assert stored["status"] == "in_progress"
 
     @pytest.mark.asyncio
     async def test_update_state_replaces_full_output_list(self):
         """Test that update_state replaces the full output list"""
-        mock_redis = AsyncMock()
-        mock_redis.async_get_cache.return_value = json.dumps(
+        mock_redis = _RedisStandIn.holding(
             {
                 "id": "litellm_poll_test",
                 "object": "response",
@@ -212,8 +293,7 @@ class TestResponsePollingHandler:
             output=new_output,
         )
 
-        call_args = mock_redis.async_set_cache.call_args
-        stored = json.loads(call_args.kwargs["value"])
+        stored = await handler.get_state("litellm_poll_test")
 
         assert len(stored["output"]) == 2
         assert stored["output"][0]["id"] == "item_1"
@@ -222,8 +302,7 @@ class TestResponsePollingHandler:
     @pytest.mark.asyncio
     async def test_update_state_with_usage(self):
         """Test that update_state correctly stores usage data"""
-        mock_redis = AsyncMock()
-        mock_redis.async_get_cache.return_value = json.dumps(
+        mock_redis = _RedisStandIn.holding(
             {
                 "id": "litellm_poll_test",
                 "object": "response",
@@ -243,8 +322,7 @@ class TestResponsePollingHandler:
             usage=usage_data,
         )
 
-        call_args = mock_redis.async_set_cache.call_args
-        stored = json.loads(call_args.kwargs["value"])
+        stored = await handler.get_state("litellm_poll_test")
 
         assert stored["status"] == "completed"
         assert stored["usage"] == usage_data
@@ -252,8 +330,7 @@ class TestResponsePollingHandler:
     @pytest.mark.asyncio
     async def test_update_state_with_reasoning_tools_tool_choice(self):
         """Test that update_state stores reasoning, tools, and tool_choice from response.completed"""
-        mock_redis = AsyncMock()
-        mock_redis.async_get_cache.return_value = json.dumps(
+        mock_redis = _RedisStandIn.holding(
             {
                 "id": "litellm_poll_test",
                 "object": "response",
@@ -279,8 +356,7 @@ class TestResponsePollingHandler:
             tools=tools_data,
         )
 
-        call_args = mock_redis.async_set_cache.call_args
-        stored = json.loads(call_args.kwargs["value"])
+        stored = await handler.get_state("litellm_poll_test")
 
         assert stored["reasoning"] == reasoning_data
         assert stored["tool_choice"] == tool_choice_data
@@ -289,8 +365,7 @@ class TestResponsePollingHandler:
     @pytest.mark.asyncio
     async def test_update_state_with_all_responses_api_fields(self):
         """Test that update_state stores all ResponsesAPIResponse fields from response.completed"""
-        mock_redis = AsyncMock()
-        mock_redis.async_get_cache.return_value = json.dumps(
+        mock_redis = _RedisStandIn.holding(
             {
                 "id": "litellm_poll_test",
                 "object": "response",
@@ -324,8 +399,7 @@ class TestResponsePollingHandler:
             incomplete_details={"reason": "max_output_tokens"},
         )
 
-        call_args = mock_redis.async_set_cache.call_args
-        stored = json.loads(call_args.kwargs["value"])
+        stored = await handler.get_state("litellm_poll_test")
 
         # Verify all fields are stored correctly
         assert stored["status"] == "completed"
@@ -353,8 +427,7 @@ class TestResponsePollingHandler:
     @pytest.mark.asyncio
     async def test_update_state_preserves_existing_fields(self):
         """Test that update_state preserves fields not being updated"""
-        mock_redis = AsyncMock()
-        mock_redis.async_get_cache.return_value = json.dumps(
+        mock_redis = _RedisStandIn.holding(
             {
                 "id": "litellm_poll_test",
                 "object": "response",
@@ -374,8 +447,7 @@ class TestResponsePollingHandler:
             status="completed",
         )
 
-        call_args = mock_redis.async_set_cache.call_args
-        stored = json.loads(call_args.kwargs["value"])
+        stored = await handler.get_state("litellm_poll_test")
 
         # Verify existing fields are preserved
         assert stored["status"] == "completed"
@@ -386,8 +458,7 @@ class TestResponsePollingHandler:
     @pytest.mark.asyncio
     async def test_update_state_with_error_sets_failed_status(self):
         """Test that providing an error automatically sets status to failed"""
-        mock_redis = AsyncMock()
-        mock_redis.async_get_cache.return_value = json.dumps(
+        mock_redis = _RedisStandIn.holding(
             {
                 "id": "litellm_poll_test",
                 "object": "response",
@@ -410,8 +481,7 @@ class TestResponsePollingHandler:
             error=error_data,
         )
 
-        call_args = mock_redis.async_set_cache.call_args
-        stored = json.loads(call_args.kwargs["value"])
+        stored = await handler.get_state("litellm_poll_test")
 
         assert stored["status"] == "failed"
         assert stored["error"] == error_data
@@ -419,8 +489,7 @@ class TestResponsePollingHandler:
     @pytest.mark.asyncio
     async def test_update_state_with_incomplete_details(self):
         """Test that update_state stores incomplete_details"""
-        mock_redis = AsyncMock()
-        mock_redis.async_get_cache.return_value = json.dumps(
+        mock_redis = _RedisStandIn.holding(
             {
                 "id": "litellm_poll_test",
                 "object": "response",
@@ -440,8 +509,7 @@ class TestResponsePollingHandler:
             incomplete_details=incomplete_details,
         )
 
-        call_args = mock_redis.async_set_cache.call_args
-        stored = json.loads(call_args.kwargs["value"])
+        stored = await handler.get_state("litellm_poll_test")
 
         assert stored["status"] == "incomplete"
         assert stored["incomplete_details"] == incomplete_details
@@ -460,8 +528,7 @@ class TestResponsePollingHandler:
     @pytest.mark.asyncio
     async def test_update_state_handles_missing_cached_state(self):
         """Test that update_state handles case when cached state doesn't exist"""
-        mock_redis = AsyncMock()
-        mock_redis.async_get_cache.return_value = None  # Cache miss
+        mock_redis = _RedisStandIn()
 
         handler = ResponsePollingHandler(redis_cache=mock_redis)
 
@@ -471,8 +538,7 @@ class TestResponsePollingHandler:
             status="in_progress",
         )
 
-        # Should not try to set cache if nothing was found
-        mock_redis.async_set_cache.assert_not_called()
+        assert mock_redis.stored == {}
 
     # ==================== Get State Tests ====================
 
@@ -517,13 +583,18 @@ class TestResponsePollingHandler:
 
         assert result is None
 
+    @pytest.mark.asyncio
+    async def test_a_response_never_reads_as_stopped_without_redis(self) -> None:
+        handler: Final = ResponsePollingHandler(redis_cache=None)
+
+        assert await handler.is_cancelled_or_gone("litellm_poll_test") is False
+
     # ==================== Cancel Polling Tests ====================
 
     @pytest.mark.asyncio
     async def test_cancel_polling_updates_status_to_cancelled(self):
         """Test that cancel_polling sets status to cancelled"""
-        mock_redis = AsyncMock()
-        mock_redis.async_get_cache.return_value = json.dumps(
+        mock_redis = _RedisStandIn.holding(
             {
                 "id": "litellm_poll_test",
                 "object": "response",
@@ -539,9 +610,173 @@ class TestResponsePollingHandler:
 
         assert result is True
 
-        call_args = mock_redis.async_set_cache.call_args
-        stored = json.loads(call_args.kwargs["value"])
+        stored = await handler.get_state("litellm_poll_test")
         assert stored["status"] == "cancelled"
+
+    @pytest.mark.asyncio
+    async def test_an_update_after_a_cancel_leaves_the_response_cancelled(self) -> None:
+        mock_redis: Final = _RedisStandIn.holding(
+            {
+                "id": "litellm_poll_test",
+                "object": "response",
+                "status": "in_progress",
+                "output": [],
+                "created_at": 1234567890,
+            }
+        )
+        handler: Final = ResponsePollingHandler(redis_cache=mock_redis)
+
+        await handler.cancel_polling("litellm_poll_test")
+        await handler.update_state(
+            polling_id="litellm_poll_test",
+            status="completed",
+            output=[{"id": "item_1", "type": "message"}],
+        )
+
+        assert await handler.get_state("litellm_poll_test") == {
+            "id": "litellm_poll_test",
+            "object": "response",
+            "status": "cancelled",
+            "output": [],
+            "created_at": 1234567890,
+        }
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("stop", "expected"),
+        [
+            (None, False),
+            ("cancel", True),
+            ("delete", True),
+        ],
+    )
+    async def test_a_cancelled_or_deleted_response_reads_as_stopped(self, stop: str | None, expected: bool) -> None:
+        handler: Final = ResponsePollingHandler(
+            redis_cache=_RedisStandIn.holding(
+                {"id": "litellm_poll_test", "object": "response", "output": [], "status": "in_progress"}
+            )
+        )
+        await handler.update_state(polling_id="litellm_poll_test", output=[{"id": "item_1"}])
+
+        if stop == "cancel":
+            await handler.cancel_polling("litellm_poll_test")
+        if stop == "delete":
+            await handler.delete_polling("litellm_poll_test")
+
+        assert await handler.is_cancelled_or_gone("litellm_poll_test") is expected
+        assert await handler.is_cancelled_or_gone("litellm_poll_never_created") is True
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("redis_type", (_RedisStandIn, _ScriptRefusingRedisStandIn))
+    async def test_a_cancel_sticks_whether_or_not_redis_runs_scripts(self, redis_type: type[_RedisStandIn]) -> None:
+        redis_cache: Final = redis_type.holding(
+            {"id": "litellm_poll_test", "object": "response", "status": "in_progress", "output": []}
+        )
+        handler: Final = ResponsePollingHandler(redis_cache=redis_cache, ttl=120)
+
+        await handler.update_state(polling_id="litellm_poll_test", output=[{"id": "item_1"}])
+        await handler.cancel_polling("litellm_poll_test")
+        await handler.update_state(polling_id="litellm_poll_test", status="completed", output=[{"id": "item_2"}])
+
+        assert await handler.get_state("litellm_poll_test") == {
+            "id": "litellm_poll_test",
+            "object": "response",
+            "status": "cancelled",
+            "output": [{"id": "item_1"}],
+        }
+        assert await handler.is_cancelled_or_gone("litellm_poll_test") is True
+        assert redis_cache.ttls == {ResponsePollingHandler.get_cache_key("litellm_poll_test"): 120}
+
+    @pytest.mark.asyncio
+    async def test_a_cancel_landing_between_the_status_check_and_the_write_stays_cancelled_without_scripts(
+        self,
+    ) -> None:
+        handler: Final = ResponsePollingHandler(
+            redis_cache=_CancelledRightAfterTheStatusCheckRedisStandIn.holding(
+                {"status": "in_progress", "id": "litellm_poll_test", "object": "response", "output": []}
+            )
+        )
+
+        await handler.update_state(polling_id="litellm_poll_test", status="completed", output=[{"id": "item_1"}])
+
+        assert await handler.get_state("litellm_poll_test") == _CANCELLED_ELSEWHERE
+        assert await handler.is_cancelled_or_gone("litellm_poll_test") is True
+
+    @pytest.mark.asyncio
+    async def test_a_failed_state_write_keeps_the_stored_state_and_does_not_raise(self) -> None:
+        state: Final = {
+            "id": "litellm_poll_test",
+            "object": "response",
+            "status": "in_progress",
+            "output": [],
+            "created_at": 1234567890,
+        }
+        handler: Final = ResponsePollingHandler(redis_cache=_UnreachableRedisStandIn.holding(state))
+
+        await handler.update_state(polling_id="litellm_poll_test", status="completed")
+
+        assert await handler.get_state("litellm_poll_test") == state
+
+    @pytest.mark.asyncio
+    async def test_a_refused_state_write_logs_no_response_content(self, caplog: pytest.LogCaptureFixture) -> None:
+        handler: Final = ResponsePollingHandler(
+            redis_cache=_PipelineRefusingRedisStandIn.holding({"status": "in_progress"})
+        )
+
+        with caplog.at_level(logging.DEBUG, logger=verbose_proxy_logger.name):
+            await handler.update_state(
+                polling_id="litellm_poll_test", instructions="private system prompt", status="in_progress"
+            )
+
+        messages: Final = [record.getMessage() for record in caplog.records]
+        assert "Failed to write the polling state for litellm_poll_test: NoPermissionError" in messages
+        assert not [message for message in messages if "private system prompt" in message]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("redis_cache", "logged"),
+        (
+            (
+                _UnreachableRedisStandIn.holding({"status": "in_progress"}, polling_id="litellm_poll_a\nforged"),
+                "Failed to write the polling state for litellm_poll_aforged: ConnectionError",
+            ),
+            (
+                _RedisStandIn(),
+                "No cached state found for polling_id: litellm_poll_aforged",
+            ),
+            (
+                _RedisStandIn.holding({"status": "cancelled"}, polling_id="litellm_poll_a\nforged"),
+                "Skipped the polling state write for litellm_poll_aforged: "
+                "the response was cancelled or has expired",
+            ),
+        ),
+    )
+    async def test_a_polling_id_with_a_line_break_cannot_forge_a_state_write_log_line(
+        self, redis_cache: _RedisStandIn, logged: str, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        handler: Final = ResponsePollingHandler(redis_cache=redis_cache)
+
+        with caplog.at_level(logging.DEBUG, logger=verbose_proxy_logger.name):
+            await handler.update_state(polling_id="litellm_poll_a\nforged", status="cancelled")
+
+        messages: Final = [record.getMessage() for record in caplog.records]
+        assert logged in messages
+        assert not [message for message in messages if "\n" in message]
+
+    @pytest.mark.asyncio
+    async def test_a_queued_response_reads_back_after_an_update(self) -> None:
+        handler: Final = ResponsePollingHandler(redis_cache=_RedisStandIn())
+
+        queued: Final = await handler.create_initial_state(
+            polling_id="litellm_poll_test", request_data={"model": "gpt-4o", "metadata": {"trace": "t-1"}}
+        )
+        await handler.update_state(polling_id="litellm_poll_test", status="in_progress", model="gpt-4o")
+
+        assert await handler.get_state("litellm_poll_test") == {
+            **queued.model_dump(),
+            "status": "in_progress",
+            "model": "gpt-4o",
+        }
 
     # ==================== Delete Polling Tests ====================
 
@@ -596,8 +831,7 @@ class TestResponsePollingHandler:
     @pytest.mark.asyncio
     async def test_update_state_uses_configured_ttl(self):
         """Test that update_state uses the configured TTL"""
-        mock_redis = AsyncMock()
-        mock_redis.async_get_cache.return_value = json.dumps(
+        mock_redis = _RedisStandIn.holding(
             {
                 "id": "litellm_poll_test",
                 "object": "response",
@@ -614,8 +848,21 @@ class TestResponsePollingHandler:
             status="in_progress",
         )
 
-        call_args = mock_redis.async_set_cache.call_args
-        assert call_args.kwargs["ttl"] == 1800
+        assert mock_redis.ttls == {ResponsePollingHandler.get_cache_key("litellm_poll_test"): 1800}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("configured_ttl", [None, "1h"])
+    async def test_an_unusable_configured_ttl_still_writes_the_state_with_the_cache_default(
+        self, configured_ttl: object
+    ) -> None:
+        cache: Final = _RedisStandIn.holding({"id": "litellm_poll_test", "status": "queued", "output": []})
+        handler: Final = ResponsePollingHandler(redis_cache=cache, ttl=configured_ttl)
+
+        await handler.update_state(polling_id="litellm_poll_test", status="in_progress")
+
+        key: Final = ResponsePollingHandler.get_cache_key("litellm_poll_test")
+        assert json.loads(json.loads(cache.stored[key]))["status"] == "in_progress"
+        assert cache.ttls == {key: cache.default_ttl}
 
 
 class TestStreamingEventProcessing:
@@ -1425,7 +1672,7 @@ def _make_background_streaming_kwargs(
         general_settings={},
         llm_router=None,
         proxy_config=Mock(),
-        proxy_logging_obj=Mock(),
+        proxy_logging_obj=AsyncMock(),
         select_data_generator=Mock(),
         user_model=None,
         user_temperature=None,
@@ -1434,6 +1681,13 @@ def _make_background_streaming_kwargs(
         user_api_base=None,
         version=None,
     )
+
+
+def _streaming_polling_handler(status: str = "in_progress") -> AsyncMock:
+    handler: Final = AsyncMock(spec=ResponsePollingHandler)
+    handler.get_state.return_value = {"status": status}
+    handler.is_cancelled_or_gone.return_value = status == "cancelled"
+    return handler
 
 
 @pytest.mark.xdist_group("heavy_imports")
@@ -1470,7 +1724,7 @@ class TestBackgroundStreamingTerminalEvents:
             },
         ]
         mock_response = _make_sse_stream(events)
-        handler = AsyncMock(spec=ResponsePollingHandler)
+        handler = _streaming_polling_handler()
         kwargs = _make_background_streaming_kwargs("poll_1", handler)
 
         with patch(
@@ -1509,7 +1763,7 @@ class TestBackgroundStreamingTerminalEvents:
 
         mock_response = Mock()
         mock_response.body_iterator = _body_iterator()
-        handler = AsyncMock(spec=ResponsePollingHandler)
+        handler = _streaming_polling_handler()
         kwargs = _make_background_streaming_kwargs("poll_named_event", handler)
 
         with patch(  # test-quality-ok: the processor is built inside the task, same idiom as the sibling tests
@@ -1523,6 +1777,395 @@ class TestBackgroundStreamingTerminalEvents:
         final_call = handler.update_state.call_args_list[-1]
         assert final_call.kwargs["status"] == "failed"
         assert final_call.kwargs["error"] == error_payload
+
+    @pytest.mark.asyncio
+    async def test_a_late_failure_after_keepalive_pings_sets_failed_status_and_error(self):
+        from litellm.proxy.common_request_processing import RESPONSES_LATE_SSE_FRAMING
+        from litellm.proxy.response_polling.background_streaming import (
+            background_streaming_task,
+        )
+
+        late_frames: Final = RESPONSES_LATE_SSE_FRAMING.failure(HTTPException(status_code=429, detail="rate limited"))
+
+        async def _body_iterator():
+            yield b": ping\n\n"
+            for frame in late_frames:
+                yield frame.encode()
+
+        mock_response: Final = Mock()
+        mock_response.body_iterator = _body_iterator()
+        handler: Final = AsyncMock(spec=ResponsePollingHandler)
+        kwargs: Final = _make_background_streaming_kwargs("poll_late_failure", handler)
+
+        with patch(  # test-quality-ok: the processor is built inside the task, same idiom as the sibling tests
+            "litellm.proxy.response_polling.background_streaming.ProxyBaseLLMRequestProcessing"
+        ) as MockProcessor:
+            MockProcessor.return_value.base_process_llm_request = AsyncMock(
+                return_value=mock_response
+            )
+            await background_streaming_task(**kwargs)
+
+        final_call: Final = handler.update_state.call_args_list[-1]
+        assert final_call.kwargs["status"] == "failed"
+        assert final_call.kwargs["error"] == {"code": "rate_limit_exceeded", "message": "rate limited"}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("data_type", "nested_error", "expected_error"),
+        [
+            (
+                {"type": "error"},
+                {"type": "guardrail_error", "code": "400", "message": "output blocked by policy"},
+                {"code": "invalid_request_error", "message": "output blocked by policy"},
+            ),
+            ({"type": "error"}, "output blocked by policy", {"code": "server_error", "message": "output blocked by policy"}),
+            (
+                {},
+                {"code": "400", "message": "output blocked by policy"},
+                {"code": "invalid_request_error", "message": "output blocked by policy"},
+            ),
+            (
+                {"type": "response.output_text.delta"},
+                {"code": "400", "message": "output blocked by policy"},
+                {"code": "invalid_request_error", "message": "output blocked by policy"},
+            ),
+        ],
+        ids=["typed_object", "typed_string", "untyped_object", "delta_typed_object"],
+    )
+    async def test_a_nested_only_error_event_keeps_its_reason(
+        self,
+        data_type: Mapping[str, str],
+        nested_error: Mapping[str, str] | str,
+        expected_error: Mapping[str, str],
+    ):
+        from litellm.proxy.response_polling.background_streaming import (
+            background_streaming_task,
+        )
+
+        error_event: Final = {**data_type, "sequence_number": 9, "error": nested_error}
+
+        async def _body_iterator():
+            yield b'data: {"type": "response.in_progress"}\n\n'
+            yield f"event: error\ndata: {json.dumps(error_event)}\n\n".encode()
+
+        mock_response: Final = Mock()
+        mock_response.body_iterator = _body_iterator()
+        handler: Final = AsyncMock(spec=ResponsePollingHandler)
+        kwargs: Final = _make_background_streaming_kwargs("poll_nested_error", handler)
+
+        with patch(  # test-quality-ok: the processor is built inside the task, same idiom as the sibling tests
+            "litellm.proxy.response_polling.background_streaming.ProxyBaseLLMRequestProcessing"
+        ) as MockProcessor:
+            MockProcessor.return_value.base_process_llm_request = AsyncMock(
+                return_value=mock_response
+            )
+            await background_streaming_task(**kwargs)
+
+        final_call: Final = handler.update_state.call_args_list[-1]
+        assert final_call.kwargs["status"] == "failed"
+        assert final_call.kwargs["error"] == expected_error
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("chunks", "expected_status", "expected_error", "expected_usage"),
+        [
+            (
+                (
+                    'data: {"type": "response.output_text.delta", "delta": "hi"}\n\n'
+                    'event: error\ndata: {"error": {"code": "400", "message": "output blocked by policy"}}\n\n',
+                ),
+                "failed",
+                {"code": "invalid_request_error", "message": "output blocked by policy"},
+                None,
+            ),
+            (
+                (
+                    'event: error\ndata: {"error": {"code": "400", "message": "output blocked by policy"}}\n\n',
+                    'data: {"type": "response.completed", "response": {"status": "completed", "usage": {"input_tokens": 3}}}\n\n',
+                ),
+                "completed",
+                None,
+                {"input_tokens": 3},
+            ),
+            (
+                (
+                    'data:{"type": "response.output_text.delta", "delta": "hi"}\n\n'
+                    'data: {"type": "response.completed", "response": {"status": "completed", "usage": {"input_tokens": 3}}}\n\n',
+                ),
+                "completed",
+                None,
+                {"input_tokens": 3},
+            ),
+            (
+                (
+                    'event: error\ndata: {"error": {"code": "' + "9" * 4400 + '", "message": "huge code"}}\n\n',
+                    'data: {"type": "response.completed", "response": {"status": "completed", "usage": {"input_tokens": 3}}}\n\n',
+                ),
+                "completed",
+                None,
+                {"input_tokens": 3},
+            ),
+            (
+                (
+                    'data: {"type": "response.output_item.done", "output_index": 0, "item": "hook-text"}\n\n',
+                    'data: {"type": "response.completed", "response": {"status": "completed", "usage": {"input_tokens": 3}}}\n\n',
+                ),
+                "completed",
+                None,
+                {"input_tokens": 3},
+            ),
+            (
+                (
+                    'event: error\ndata: {"error": {"code": "400", "message": "output blocked by policy"}}\n\n'
+                    'event: response.completed\ndata: {"type": "response.completed", "response": {"status": "completed"}}\n\n',
+                ),
+                "completed",
+                None,
+                None,
+            ),
+            (
+                (
+                    'data: {"type": "response.output_text.delta", "delta": "hi"}\n\n',
+                    'data: [DONE]\n\nevent: error\ndata: {"error": {"code": "400", "message": "output blocked by policy"}}\n\n',
+                ),
+                "completed",
+                None,
+                None,
+            ),
+            (('data: {"type": "response.failed", "response": "hook-text"}\n\n',), "failed", None, None),
+            (('data: {"type": "response.failed", "response": null}\n\n',), "failed", None, None),
+            (
+                (
+                    'event: error\ndata: {"error": {"code": "400", "message": "output blocked by policy"}}\n\n'
+                    'event: response.incomplete\ndata: {"type": "response.incomplete", '
+                    '"response": {"status": "incomplete", "usage": {"input_tokens": 3}}}\n\n',
+                ),
+                "incomplete",
+                None,
+                {"input_tokens": 3},
+            ),
+            (
+                (
+                    'event: error\ndata: {"error": {"code": "400", "message": "output blocked by policy"}}\n\n',
+                    'data: {"type": "response.output_text.delta", "delta": "hi"}\n\n'
+                    'data: {"type": "response.completed", "response": {"status": "completed", "usage": {"input_tokens": 3}}}\n\n',
+                ),
+                "completed",
+                None,
+                {"input_tokens": 3},
+            ),
+            (
+                (
+                    'data: {"type": "response.output_text.delta", "delta": "hi"}\n\n'
+                    'data: {"type": "hook.huge", "n": ' + "9" * 4400 + "}\n\n",
+                    'data: {"type": "response.completed", "response": {"status": "completed", "usage": {"input_tokens": 3}}}\n\n',
+                ),
+                "completed",
+                None,
+                {"input_tokens": 3},
+            ),
+            (
+                (
+                    'data: {"type": "response.output_text.delta", "delta": "hi"}\n\ndata: [DONE]\n\n',
+                    'data: {"type": "response.completed", "response": {"status": "completed", "usage": {"input_tokens": 3}}}\n\n',
+                ),
+                "completed",
+                None,
+                {"input_tokens": 3},
+            ),
+            (
+                (
+                    'data: {"type": "response.completed", "response": {"status": "completed", "usage": {"input_tokens": 3}}}\n\n'
+                    'data: {"type": "response.failed", "response": {"status": "failed", '
+                    '"error": {"code": "server_error", "message": "late"}}}\n\n',
+                ),
+                "completed",
+                None,
+                {"input_tokens": 3},
+            ),
+            (
+                ('data: event: response.incomplete\ndata: {"type": "response.incomplete", "response": {"status": "incomplete"}}\n\n',),
+                "completed",
+                None,
+                None,
+            ),
+            (
+                (
+                    'data: {"type": "response.completed", "response": {"status": "completed", "usage": {"input_tokens": 3}}}\n\n',
+                    'data: {"type": "response.failed", "response": {"status": "failed", '
+                    '"error": {"code": "server_error", "message": "late"}}}\n\n',
+                ),
+                "completed",
+                None,
+                {"input_tokens": 3},
+            ),
+            (
+                (
+                    'data: {"type": "response.failed", "response": {"status": "failed", '
+                    '"error": {"code": "server_error", "message": "first"}, "usage": {"input_tokens": 3}}}\n\n',
+                    'data: {"type": "response.completed", "response": {"status": "completed", "usage": {"input_tokens": 9}}}\n\n',
+                ),
+                "failed",
+                {"code": "server_error", "message": "first"},
+                {"input_tokens": 3},
+            ),
+        ],
+        ids=[
+            "error_frame_after_a_delta",
+            "error_frame_then_completed",
+            "unspaced_delta_then_completed",
+            "error_code_past_the_int_digit_limit_then_completed",
+            "output_item_done_with_a_string_item_then_completed",
+            "error_frame_then_completed_in_one_chunk",
+            "error_frame_after_done_in_one_chunk",
+            "failed_event_whose_response_is_a_string",
+            "failed_event_whose_response_is_null",
+            "error_frame_and_incomplete_in_one_chunk",
+            "error_frame_then_completed_behind_a_delta_in_one_chunk",
+            "frame_past_the_int_digit_limit_behind_a_delta_then_completed",
+            "done_behind_a_delta_in_one_chunk_then_completed",
+            "completed_then_failed_in_one_chunk",
+            "event_line_sent_as_a_data_line_of_one_event",
+            "completed_then_failed_in_the_next_chunk",
+            "failed_then_completed_in_the_next_chunk",
+        ],
+    )
+    async def test_a_poll_stores_what_its_stream_ended_with(
+        self,
+        chunks: tuple[str, ...],
+        expected_status: str,
+        expected_error: Mapping[str, str] | None,
+        expected_usage: Mapping[str, int] | None,
+    ):
+        from litellm.proxy.response_polling.background_streaming import (
+            background_streaming_task,
+        )
+
+        async def _body_iterator():
+            yield b'data: {"type": "response.in_progress"}\n\n'
+            for chunk in chunks:
+                yield chunk.encode()
+
+        mock_response: Final = Mock()
+        mock_response.body_iterator = _body_iterator()
+        handler: Final = AsyncMock(spec=ResponsePollingHandler)
+        kwargs: Final = _make_background_streaming_kwargs("poll_stream_end", handler)
+
+        with patch(  # test-quality-ok: the processor is built inside the task, same idiom as the sibling tests
+            "litellm.proxy.response_polling.background_streaming.ProxyBaseLLMRequestProcessing"
+        ) as MockProcessor:
+            MockProcessor.return_value.base_process_llm_request = AsyncMock(
+                return_value=mock_response
+            )
+            await background_streaming_task(**kwargs)
+
+        final_call: Final = handler.update_state.call_args_list[-1]
+        assert final_call.kwargs["status"] == expected_status
+        assert final_call.kwargs["error"] == expected_error
+        assert final_call.kwargs["usage"] == expected_usage
+
+    @pytest.mark.asyncio
+    async def test_a_poll_stores_the_final_output_items_beside_one_that_is_not_an_object(self):
+        from litellm.proxy.response_polling.background_streaming import (
+            background_streaming_task,
+        )
+
+        final_item: Final = {"id": "msg_1", "content": [{"type": "output_text", "text": "final"}]}
+        draft_item: Final = {"id": "msg_1", "content": [{"type": "output_text", "text": ""}]}
+        completed: Final = {"type": "response.completed", "response": {"status": "completed", "output": ["hook-text", final_item]}}
+
+        async def _body_iterator():
+            yield f"data: {json.dumps({'type': 'response.output_item.added', 'item': draft_item})}\n\n".encode()
+            yield b'data: {"type": "response.output_text.delta", "item_id": "msg_1", "delta": "draft"}\n\n'
+            yield f"data: {json.dumps(completed)}\n\n".encode()
+
+        mock_response: Final = Mock()
+        mock_response.body_iterator = _body_iterator()
+        handler: Final = AsyncMock(spec=ResponsePollingHandler)
+        kwargs: Final = _make_background_streaming_kwargs("poll_final_output", handler)
+
+        with patch(  # test-quality-ok: the processor is built inside the task, same idiom as the sibling tests
+            "litellm.proxy.response_polling.background_streaming.ProxyBaseLLMRequestProcessing"
+        ) as MockProcessor:
+            MockProcessor.return_value.base_process_llm_request = AsyncMock(
+                return_value=mock_response
+            )
+            await background_streaming_task(**kwargs)
+
+        stored_outputs: Final = [call.kwargs["output"] for call in handler.update_state.call_args_list if "output" in call.kwargs]
+        assert stored_outputs[-1] == [final_item]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("status_code", "body", "expected_error"),
+        [
+            (
+                404,
+                json.dumps(
+                    {"error": {"message": "model not found", "type": "invalid_request_error", "param": None, "code": "404"}}
+                ),
+                {"code": "not_found_error", "message": "model not found"},
+            ),
+            (429, "rate limited", {"code": "rate_limit_exceeded", "message": "Too Many Requests"}),
+            (
+                403,
+                json.dumps({"error": {"type": "guardrail_scan_error", "code": 403}}),
+                {"code": "permission_error", "message": "Forbidden"},
+            ),
+            (
+                404,
+                json.dumps({"error": {"message": "model not found", "type": "invalid_request_error", "param": None}}),
+                {"code": "not_found_error", "message": "model not found"},
+            ),
+        ],
+    )
+    async def test_a_first_chunk_error_polls_failed_like_a_late_one(
+        self, status_code: int, body: str, expected_error: Mapping[str, str]
+    ):
+        from fastapi import Response
+
+        from litellm.proxy.response_polling.background_streaming import (
+            background_streaming_task,
+        )
+
+        first_chunk_error: Final = Response(status_code=status_code, content=body)
+        handler: Final = AsyncMock(spec=ResponsePollingHandler)
+        kwargs: Final = _make_background_streaming_kwargs("poll_first_chunk_error", handler)
+
+        with patch(  # test-quality-ok: the processor is built inside the task, same idiom as the sibling tests
+            "litellm.proxy.response_polling.background_streaming.ProxyBaseLLMRequestProcessing"
+        ) as MockProcessor:
+            MockProcessor.return_value.base_process_llm_request = AsyncMock(
+                return_value=first_chunk_error
+            )
+            await background_streaming_task(**kwargs)
+
+        final_call: Final = handler.update_state.call_args_list[-1]
+        assert final_call.kwargs["status"] == "failed"
+        assert final_call.kwargs["error"] == expected_error
+
+    @pytest.mark.asyncio
+    async def test_a_non_streamed_success_response_still_polls_completed(self):
+        from fastapi.responses import JSONResponse
+
+        from litellm.proxy.response_polling.background_streaming import (
+            background_streaming_task,
+        )
+
+        handler: Final = AsyncMock(spec=ResponsePollingHandler)
+        kwargs: Final = _make_background_streaming_kwargs("poll_non_streamed_success", handler)
+
+        with patch(  # test-quality-ok: the processor is built inside the task, same idiom as the sibling tests
+            "litellm.proxy.response_polling.background_streaming.ProxyBaseLLMRequestProcessing"
+        ) as MockProcessor:
+            MockProcessor.return_value.base_process_llm_request = AsyncMock(
+                return_value=JSONResponse(status_code=200, content={"id": "resp_123", "status": "completed"})
+            )
+            await background_streaming_task(**kwargs)
+
+        final_call: Final = handler.update_state.call_args_list[-1]
+        assert final_call.kwargs["status"] == "completed"
+        assert final_call.kwargs["error"] is None
 
     @pytest.mark.asyncio
     async def test_response_incomplete_sets_incomplete_status_and_details(self):
@@ -1552,7 +2195,7 @@ class TestBackgroundStreamingTerminalEvents:
             },
         ]
         mock_response = _make_sse_stream(events)
-        handler = AsyncMock(spec=ResponsePollingHandler)
+        handler = _streaming_polling_handler()
         kwargs = _make_background_streaming_kwargs("poll_2", handler)
 
         with patch(
@@ -1591,7 +2234,7 @@ class TestBackgroundStreamingTerminalEvents:
             },
         ]
         mock_response = _make_sse_stream(events)
-        handler = AsyncMock(spec=ResponsePollingHandler)
+        handler = _streaming_polling_handler()
         kwargs = _make_background_streaming_kwargs("poll_3", handler)
 
         with patch(
@@ -1626,7 +2269,7 @@ class TestBackgroundStreamingTerminalEvents:
             },
         ]
         mock_response = _make_sse_stream(events)
-        handler = AsyncMock(spec=ResponsePollingHandler)
+        handler = _streaming_polling_handler()
         kwargs = _make_background_streaming_kwargs("poll_4", handler)
 
         with patch(
@@ -1655,7 +2298,7 @@ class TestBackgroundStreamingTerminalEvents:
         events: Final = [
             {"type": "response.completed", "response": {"id": "resp_123", "status": "completed", "output": [item]}}
         ]
-        handler: Final = AsyncMock(spec=ResponsePollingHandler)
+        handler: Final = _streaming_polling_handler()
 
         with patch(
             "litellm.proxy.response_polling.background_streaming.ProxyBaseLLMRequestProcessing"
@@ -1693,7 +2336,7 @@ class TestBackgroundStreamingTerminalEvents:
             },
         ]
         mock_response = _make_sse_stream(events)
-        handler = AsyncMock(spec=ResponsePollingHandler)
+        handler = _streaming_polling_handler()
         kwargs = _make_background_streaming_kwargs("poll_5", handler)
 
         with patch(
@@ -1719,7 +2362,7 @@ class TestBackgroundStreamingTerminalEvents:
             {"type": "response.in_progress"},
         ]
         mock_response = _make_sse_stream(events)
-        handler = AsyncMock(spec=ResponsePollingHandler)
+        handler = _streaming_polling_handler()
         kwargs = _make_background_streaming_kwargs("poll_6", handler)
 
         with patch(
@@ -1767,7 +2410,7 @@ class TestBackgroundStreamingTerminalEvents:
                 slow_upstream_stream(), "text/event-stream", {}, request=kwargs["request"]
             )
 
-        handler = AsyncMock(spec=ResponsePollingHandler)
+        handler = _streaming_polling_handler()
         kwargs = _make_background_streaming_kwargs("poll_7", handler)
         kwargs["request"] = Request(
             {
@@ -1789,6 +2432,369 @@ class TestBackgroundStreamingTerminalEvents:
         final_call = handler.update_state.call_args_list[-1]
         assert final_call.kwargs["status"] == "completed"
         assert final_call.kwargs["usage"] == {"input_tokens": 13, "output_tokens": 10}
+
+
+class _CancelledAfterReads:
+    def __init__(self, reads_before_cancel: int) -> None:
+        self.reads = 0
+        self.reads_before_cancel = reads_before_cancel
+
+    async def is_cancelled_or_gone(self, polling_id: str) -> bool:
+        self.reads += 1
+        return self.reads > self.reads_before_cancel
+
+
+class _UnreadableState:
+    def __init__(self) -> None:
+        self.reads = 0
+
+    async def is_cancelled_or_gone(self, polling_id: str) -> bool:
+        self.reads += 1
+        raise ConnectionError("redis is unreachable")
+
+
+async def _let_the_loop_run() -> None:
+    for _ in range(20):
+        await asyncio.sleep(0)
+
+
+@pytest.mark.xdist_group("heavy_imports")
+class TestStreamUntilCancelled:
+    @pytest.mark.asyncio
+    async def test_a_cancelled_state_stops_the_stream(self) -> None:
+        from litellm.proxy.response_polling.background_streaming import stream_until_cancelled
+
+        state: Final = _CancelledAfterReads(reads_before_cancel=2)
+        stopped: Final = asyncio.Event()
+
+        async def endless_stream() -> None:
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                stopped.set()
+                raise
+
+        await asyncio.wait_for(
+            stream_until_cancelled("litellm_poll_test", endless_stream(), state, poll_seconds=0), timeout=5
+        )
+
+        assert stopped.is_set()
+        assert state.reads == 3
+
+    @pytest.mark.asyncio
+    async def test_failing_state_reads_leave_the_stream_running_to_its_end(self) -> None:
+        from litellm.proxy.response_polling.background_streaming import stream_until_cancelled
+
+        state: Final = _UnreadableState()
+        finished: Final = asyncio.Event()
+
+        async def stream_outliving_three_reads() -> None:
+            while state.reads < 3:
+                await asyncio.sleep(0)
+            finished.set()
+
+        await asyncio.wait_for(
+            stream_until_cancelled("litellm_poll_test", stream_outliving_three_reads(), state, poll_seconds=0),
+            timeout=5,
+        )
+
+        assert finished.is_set()
+
+    @pytest.mark.asyncio
+    async def test_a_stream_that_finishes_first_leaves_no_watcher_reading(self) -> None:
+        from litellm.proxy.response_polling.background_streaming import stream_until_cancelled
+
+        state: Final = _CancelledAfterReads(reads_before_cancel=1_000_000)
+
+        async def short_stream() -> None:
+            await _let_the_loop_run()
+
+        await asyncio.wait_for(
+            stream_until_cancelled("litellm_poll_test", short_stream(), state, poll_seconds=0), timeout=5
+        )
+        reads_when_done: Final = state.reads
+        await _let_the_loop_run()
+
+        assert reads_when_done > 0
+        assert state.reads == reads_when_done
+
+    @pytest.mark.asyncio
+    async def test_a_stream_error_reaches_the_caller(self) -> None:
+        from litellm.proxy.response_polling.background_streaming import stream_until_cancelled
+
+        async def broken_stream() -> None:
+            raise ValueError("upstream broke")
+
+        with pytest.raises(ValueError, match="upstream broke"):
+            await stream_until_cancelled(
+                "litellm_poll_test", broken_stream(), _CancelledAfterReads(1_000_000), poll_seconds=0
+            )
+
+    @pytest.mark.asyncio
+    async def test_cancelling_the_caller_stops_both_the_stream_and_the_watcher(self) -> None:
+        from litellm.proxy.response_polling.background_streaming import stream_until_cancelled
+
+        state: Final = _CancelledAfterReads(reads_before_cancel=1_000_000)
+        started: Final = asyncio.Event()
+        stopped: Final = asyncio.Event()
+
+        async def endless_stream() -> None:
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                stopped.set()
+                raise
+
+        caller: Final = asyncio.create_task(
+            stream_until_cancelled("litellm_poll_test", endless_stream(), state, poll_seconds=0)
+        )
+        await started.wait()
+        caller.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await caller
+        reads_when_cancelled: Final = state.reads
+        await _let_the_loop_run()
+
+        assert stopped.is_set()
+        assert state.reads == reads_when_cancelled
+
+    @pytest.mark.asyncio
+    async def test_a_cancelled_background_stream_writes_no_state_after_it_stops(self) -> None:
+        from litellm.proxy.response_polling.background_streaming import background_streaming_task
+
+        stopped: Final = asyncio.Event()
+
+        async def endless_body() -> AsyncIterator[str]:
+            yield f"data: {json.dumps({'type': 'response.in_progress'})}"
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                stopped.set()
+                raise
+
+        endless_response: Final = Mock()
+        endless_response.body_iterator = endless_body()
+        handler: Final = _streaming_polling_handler(status="cancelled")
+        kwargs: Final = _make_background_streaming_kwargs("poll_cancelled", handler)
+
+        with patch(  # test-quality-ok: the processor is built inside the task, same idiom as the sibling tests
+            "litellm.proxy.response_polling.background_streaming.ProxyBaseLLMRequestProcessing"
+        ) as MockProcessor:
+            MockProcessor.return_value.base_process_llm_request = AsyncMock(return_value=endless_response)
+            await asyncio.wait_for(background_streaming_task(**kwargs), timeout=5)
+
+        assert stopped.is_set()
+        assert {call.kwargs.get("status") for call in handler.update_state.await_args_list} <= {None, "in_progress"}
+        kwargs["proxy_logging_obj"].post_call_failure_hook.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_a_cancel_while_the_stream_waits_for_its_first_event_leaves_the_failure_report_to_the_stream(
+        self,
+    ) -> None:
+        from litellm.proxy.response_polling.background_streaming import background_streaming_task
+
+        stopped: Final = asyncio.Event()
+
+        async def body_before_its_first_event() -> AsyncIterator[str]:
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                stopped.set()
+                raise
+            yield "data: [DONE]"
+
+        silent_response: Final = Mock()
+        silent_response.body_iterator = body_before_its_first_event()
+        handler: Final = _streaming_polling_handler(status="cancelled")
+        kwargs: Final = _make_background_streaming_kwargs("poll_cancelled_before_first_event", handler)
+
+        with patch(  # test-quality-ok: the processor is built inside the task, same idiom as the sibling tests
+            "litellm.proxy.response_polling.background_streaming.ProxyBaseLLMRequestProcessing"
+        ) as MockProcessor:
+            MockProcessor.return_value.base_process_llm_request = AsyncMock(return_value=silent_response)
+            await asyncio.wait_for(background_streaming_task(**kwargs), timeout=5)
+
+        assert stopped.is_set()
+        kwargs["proxy_logging_obj"].post_call_failure_hook.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_a_cancel_before_the_upstream_answers_reports_one_client_disconnect(self) -> None:
+        from fastapi import HTTPException
+
+        from litellm.proxy.response_polling.background_streaming import background_streaming_task
+
+        upstream_cancelled: Final = asyncio.Event()
+
+        async def upstream_that_never_answers(**_: object) -> None:
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                upstream_cancelled.set()
+                raise
+
+        handler: Final = _streaming_polling_handler(status="cancelled")
+        kwargs: Final = _make_background_streaming_kwargs("poll_cancelled_before_upstream", handler)
+
+        with patch(  # test-quality-ok: the processor is built inside the task, same idiom as the sibling tests
+            "litellm.proxy.response_polling.background_streaming.ProxyBaseLLMRequestProcessing"
+        ) as MockProcessor:
+            MockProcessor.return_value.base_process_llm_request = upstream_that_never_answers
+            await asyncio.wait_for(background_streaming_task(**kwargs), timeout=5)
+
+        report: Final = kwargs["proxy_logging_obj"].post_call_failure_hook
+        assert isinstance(report, AsyncMock)
+        report.assert_awaited_once()
+        assert report.await_args is not None
+        reported: Final = report.await_args.kwargs
+        assert upstream_cancelled.is_set()
+        assert isinstance(reported["original_exception"], HTTPException)
+        assert reported["original_exception"].status_code == 499
+        assert reported["request_data"] is kwargs["data"]
+        assert reported["user_api_key_dict"] is kwargs["user_api_key_dict"]
+        assert reported["dispatched_call_type"] == "aresponses"
+
+    @pytest.mark.asyncio
+    async def test_a_cancel_whose_stream_teardown_already_billed_the_call_reports_no_second_disconnect(self) -> None:
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.proxy.response_polling.background_streaming import background_streaming_task
+
+        logging_obj: Final = Logging(
+            model="claude-haiku-5-5",
+            messages=[],
+            stream=True,
+            call_type="aresponses",
+            start_time=datetime.now(timezone.utc),
+            litellm_call_id="bg-cancel-billed",
+            function_id="bg-cancel-billed",
+        )
+
+        upstream_cancelled: Final = asyncio.Event()
+
+        async def upstream_whose_teardown_bills_the_partial(**_: object) -> None:
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                logging_obj.model_call_details["has_dispatched_final_stream_success"] = True
+                upstream_cancelled.set()
+                raise
+
+        handler: Final = _streaming_polling_handler(status="cancelled")
+        kwargs: Final = _make_background_streaming_kwargs("poll_cancelled_after_teardown_billed", handler)
+        kwargs["data"]["litellm_logging_obj"] = logging_obj
+
+        with patch(  # test-quality-ok: the processor is built inside the task, same idiom as the sibling tests
+            "litellm.proxy.response_polling.background_streaming.ProxyBaseLLMRequestProcessing"
+        ) as MockProcessor:
+            MockProcessor.return_value.base_process_llm_request = upstream_whose_teardown_bills_the_partial
+            await asyncio.wait_for(background_streaming_task(**kwargs), timeout=5)
+
+        assert upstream_cancelled.is_set()
+        kwargs["proxy_logging_obj"].post_call_failure_hook.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_a_cancel_during_a_blocked_state_write_closes_the_upstream_stream(self) -> None:
+        from starlette.responses import StreamingResponse
+
+        from litellm.proxy.response_polling.background_streaming import background_streaming_task
+
+        closed: Final = asyncio.Event()
+
+        async def body() -> AsyncIterator[str]:
+            try:
+                yield f"data: {json.dumps({'type': 'response.output_item.added', 'item': {'id': 'item_1'}})}"
+                yield "data: [DONE]"
+                yield f"data: {json.dumps({'type': 'response.in_progress'})}"
+            finally:
+                closed.set()
+
+        async def output_writes_block(**fields: object) -> None:
+            if "output" in fields:
+                await asyncio.Event().wait()
+
+        handler: Final = _streaming_polling_handler(status="cancelled")
+        handler.update_state.side_effect = output_writes_block
+        kwargs: Final = _make_background_streaming_kwargs("poll_cancelled_mid_write", handler)
+
+        with patch(  # test-quality-ok: the processor is built inside the task, same idiom as the sibling tests
+            "litellm.proxy.response_polling.background_streaming.ProxyBaseLLMRequestProcessing"
+        ) as MockProcessor:
+            MockProcessor.return_value.base_process_llm_request = AsyncMock(return_value=StreamingResponse(body()))
+            await asyncio.wait_for(background_streaming_task(**kwargs), timeout=5)
+
+        assert closed.is_set()
+        assert {call.kwargs.get("status") for call in handler.update_state.await_args_list} <= {None, "in_progress"}
+
+
+_MESSAGE_ADDED: Final = {
+    "type": "response.output_item.added",
+    "item": {"id": "msg_1", "type": "message", "role": "assistant", "content": []},
+}
+_PART_ADDED: Final = {
+    "type": "response.content_part.added",
+    "item_id": "msg_1",
+    "content_index": 0,
+    "part": {"type": "output_text", "text": ""},
+}
+_DELTAS: Final = tuple(
+    {"type": "response.output_text.delta", "item_id": "msg_1", "content_index": 0, "delta": delta}
+    for delta in ("Hel", "lo")
+)
+_PART_DONE: Final = {
+    "type": "response.content_part.done",
+    "item_id": "msg_1",
+    "content_index": 0,
+    "part": {"type": "output_text", "text": "Hello!"},
+}
+_MESSAGE_DONE: Final = {
+    "type": "response.output_item.done",
+    "item": {
+        "id": "msg_1",
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "output_text", "text": "Hello, world"}],
+    },
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("events", "expected_content"),
+    [
+        ((_MESSAGE_ADDED, _PART_ADDED, *_DELTAS), [{"type": "output_text", "text": "Hello"}]),
+        ((_MESSAGE_ADDED, _PART_ADDED, *_DELTAS, _PART_DONE), [{"type": "output_text", "text": "Hello!"}]),
+        (
+            (_MESSAGE_ADDED, _PART_ADDED, *_DELTAS, _PART_DONE, _MESSAGE_DONE),
+            [{"type": "output_text", "text": "Hello, world"}],
+        ),
+    ],
+)
+async def test_a_background_stream_writes_the_message_its_events_build(
+    events: tuple[Mapping[str, object], ...], expected_content: list[dict[str, str]]
+) -> None:
+    from litellm.proxy.response_polling.background_streaming import background_streaming_task
+
+    async def body() -> AsyncIterator[str]:
+        yield "data: {not json"
+        for event in events:
+            yield f"data: {json.dumps(event)}"
+        yield "data: [DONE]"
+
+    streamed: Final = Mock()
+    streamed.body_iterator = body()
+    handler: Final = _streaming_polling_handler()
+    kwargs: Final = _make_background_streaming_kwargs("poll_message", handler)
+
+    with patch(  # test-quality-ok: the processor is built inside the task, same idiom as the sibling tests
+        "litellm.proxy.response_polling.background_streaming.ProxyBaseLLMRequestProcessing"
+    ) as MockProcessor:
+        MockProcessor.return_value.base_process_llm_request = AsyncMock(return_value=streamed)
+        await background_streaming_task(**kwargs)
+
+    writes: Final = handler.update_state.await_args_list
+    written_outputs: Final = [call.kwargs["output"] for call in writes if "output" in call.kwargs]
+    assert [list(item["content"]) for item in written_outputs[-1]] == [expected_content]
+    assert handler.update_state.await_args_list[-1].kwargs["status"] == "completed"
 
 
 class TestEdgeCases:
@@ -1851,8 +2857,7 @@ class TestEdgeCases:
     @pytest.mark.asyncio
     async def test_update_state_with_none_output_clears_output(self):
         """Test that output=[] explicitly sets empty output"""
-        mock_redis = AsyncMock()
-        mock_redis.async_get_cache.return_value = json.dumps(
+        mock_redis = _RedisStandIn.holding(
             {
                 "id": "litellm_poll_test",
                 "object": "response",
@@ -1869,8 +2874,7 @@ class TestEdgeCases:
             output=[],  # Explicitly set empty
         )
 
-        call_args = mock_redis.async_set_cache.call_args
-        stored = json.loads(call_args.kwargs["value"])
+        stored = await handler.get_state("litellm_poll_test")
 
         assert stored["output"] == []
 
@@ -1917,3 +2921,62 @@ async def test_create_initial_state_rejects_request_metadata_that_is_not_an_obje
     assert [(error["loc"], error["type"], repr(error["input"])) for error in rejected.value.errors()] == [
         (("metadata",), "dict_type", repr(metadata))
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "delta_type",
+    [
+        "response.output_text.delta",
+        "response.reasoning_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning.delta",
+        None,
+    ],
+)
+async def test_background_timings_survive_retrieval_after_completion(delta_type):
+    from litellm.proxy.response_polling.background_streaming import background_streaming_task
+
+    handler = ResponsePollingHandler(redis_cache=_RedisStandIn())
+    await handler.create_initial_state("litellm_poll_timing", {"model": "gpt-4o"})
+    clock = [100.0]
+
+    async def stream():
+        clock[0] = 101.0
+        yield 'data: {"type":"response.output_text.delta","delta":""}\n\n'
+        yield 'data: {"type":"response.mcp_call.in_progress"}\n\n'
+        if delta_type:
+            clock[0] = 102.0
+            yield f"data: {json.dumps({'type': delta_type, 'delta': 'Hello'})}\n\n"
+            partial = await handler.get_state("litellm_poll_timing")
+            assert partial is not None
+            assert partial["status"] == "in_progress"
+            assert partial["litellm_response_timing"] == {"time_to_first_token_ms": 2000.0}
+        clock[0] = 110.0
+        yield 'data: {"type":"response.completed","response":{"status":"completed","output":[]}}\n\n'
+        clock[0] = 5000.0
+        yield "data: [DONE]\n\n"
+
+    from starlette.responses import StreamingResponse
+
+    with (
+        patch(
+            "litellm.proxy.response_polling.background_streaming.perf_counter",
+            create=True,
+            side_effect=lambda: clock[0],
+        ),
+        patch(
+            # test-quality-ok: processor is constructed inside the task; supply the upstream SSE boundary like sibling tests
+            "litellm.proxy.response_polling.background_streaming.ProxyBaseLLMRequestProcessing"
+        ) as processor,
+    ):
+        processor.return_value.base_process_llm_request = AsyncMock(return_value=StreamingResponse(stream()))
+        await background_streaming_task(**_make_background_streaming_kwargs("litellm_poll_timing", handler))
+        state = await handler.get_state("litellm_poll_timing")
+        assert state is not None
+        expected = {"total_latency_ms": 10000.0}
+        if delta_type:
+            expected["time_to_first_token_ms"] = 2000.0
+        assert state["litellm_response_timing"] == expected
+        clock[0] = 10000.0
+        assert (await handler.get_state("litellm_poll_timing"))["litellm_response_timing"] == expected

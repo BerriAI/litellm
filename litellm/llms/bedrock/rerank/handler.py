@@ -1,10 +1,12 @@
 import json
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
 from pydantic import ConfigDict, TypeAdapter
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.custom_httpx.http_handler import (
@@ -94,6 +96,7 @@ class BedrockRerankHandler(BaseAWSLLM):
             api_base=api_base,
             extra_headers=extra_headers,
             data=cast(dict, data),
+            litellm_params=as_str_mapping(getattr(logging_obj, "litellm_params", None)),
         )
 
         logging_obj.pre_call(
@@ -148,11 +151,14 @@ class BedrockRerankHandler(BaseAWSLLM):
         self,
         model: str,
         api_base: str | None,
-        extra_headers: dict | None,
-        data: dict,
-        optional_params: dict,
+        extra_headers: dict[str, object] | None,
+        data: dict[str, object],
+        optional_params: dict[str, object],
+        litellm_params: Mapping[str, object] | None = None,
     ) -> BedrockPreparedRequest:
-        boto3_credentials_info: Final = self._get_boto_credentials_from_optional_params(optional_params, model)
+        boto3_credentials_info: Final = self._get_boto_credentials_from_optional_params(
+            optional_params, model, litellm_params=litellm_params
+        )
 
         ### SET RUNTIME ENDPOINT ###
         _, proxy_endpoint_url = self.get_runtime_endpoint(

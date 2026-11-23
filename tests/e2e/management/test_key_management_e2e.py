@@ -242,7 +242,7 @@ class TestKeyManagementRoutes:
             client,
             resources,
             KeyGenerateBody(
-                models=["gpt-5.5", "gemini-2.5-flash"],
+                models=["gpt-5.5", "gemini-3.8-flash"],
                 key_alias=alias,
                 tpm_limit=131313,
                 rpm_limit=141414,
@@ -251,8 +251,8 @@ class TestKeyManagementRoutes:
 
         info = client.proxy.key_info(key)
         assert info.key_alias == alias, f"/key/info reports key_alias {info.key_alias!r}, configured {alias!r}"
-        assert info.models == ["gpt-5.5", "gemini-2.5-flash"], (
-            f"/key/info reports models {info.models}, configured ['gpt-5.5', 'gemini-2.5-flash']"
+        assert info.models == ["gpt-5.5", "gemini-3.8-flash"], (
+            f"/key/info reports models {info.models}, configured ['gpt-5.5', 'gemini-3.8-flash']"
         )
         assert info.tpm_limit == 131313, f"/key/info reports tpm_limit {info.tpm_limit}, configured 131313"
         assert info.rpm_limit == 141414, f"/key/info reports rpm_limit {info.rpm_limit}, configured 141414"
@@ -410,7 +410,7 @@ class TestKeyManagementRoutes:
         outcome = client.proxy.transport.send(
             "/key/update",
             headers=client.proxy.transport.bearer(nonadmin),
-            json=KeyUpdateBody(key=target, models=["gemini-2.5-flash"]),
+            json=KeyUpdateBody(key=target, models=["gemini-3.8-flash"]),
         )
         assert outcome.status_code in (401, 403), (
             f"non-admin key POSTing /key/update must be denied 401/403, got {outcome.status_code}: {outcome.body[:300]}"

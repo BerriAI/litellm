@@ -1,14 +1,37 @@
 import asyncio
+from collections.abc import Mapping
 from contextlib import suppress
 from datetime import datetime, timezone
 from typing import Final
+
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.llm_cost_calc.finalization import FinalizedCost, PreparedCost, finalize_cost
 from litellm.proxy.hooks.search_free_tier import SharedCounter, allocate_search_free_tier
+from litellm.proxy.spend_tracking.customer_cost_margin import (
+    apply_customer_cost_margin,
+    request_customer_attribution,
+    request_customer_cost_margin,
+)
 from litellm.types.utils import CostBreakdown, StandardLoggingPayload
+
+_REQUEST_FIELDS: Final = TypeAdapter(Mapping[str, object])
+
+
+def _request_fields(value: object) -> Mapping[str, object]:
+    try:
+        return _REQUEST_FIELDS.validate_python(value)
+    except ValidationError:
+        return {}
+
+
+def _customer_attribution(logging_obj: Logging, payload: StandardLoggingPayload) -> Mapping[str, object]:
+    return request_customer_attribution(
+        logging_obj.model_call_details.get("litellm_params"), _request_fields(payload["metadata"])
+    )
 
 
 def prepare_response_cost(logging_obj: Logging, response: object, now: datetime) -> PreparedCost | None:
@@ -89,10 +112,14 @@ async def _finish_finalization(
             if litellm.apply_search_free_tier
             else None
         )
+        logging_obj.cost_allowance_allocation = allocation  # rebind-ok: retain the allocation for durable capture
         logging_obj.cost_allowance_discount = (  # rebind-ok: retain allocation across snapshot retries
             allocation.discount if allocation is not None else 0.0
         )
-    finalized: Final = finalize_cost(amount, breakdown, logging_obj.cost_allowance_discount)
+    finalized: Final = apply_customer_cost_margin(
+        finalize_cost(amount, breakdown, logging_obj.cost_allowance_discount),
+        request_customer_cost_margin(_customer_attribution(logging_obj, payload)),
+    )
     logging_obj.record_finalized_cost(finalized)
     return finalized
 

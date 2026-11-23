@@ -7,6 +7,8 @@ from typing import TYPE_CHECKING, Final
 
 import packaging
 
+from litellm.llms.anthropic.common_utils import tool_calls_with_server_tool_calls
+
 if TYPE_CHECKING:
     from openai.types.chat.chat_completion_message_custom_tool_call import Custom
 
@@ -67,8 +69,8 @@ def parse_messages(input):
         }
 
         # Only add tool_calls and function_call to res if they are set
-        if message.get("tool_calls"):
-            serialized["tool_calls"] = parse_tool_calls(message.get("tool_calls"))
+        if tool_calls := tool_calls_with_server_tool_calls(message):
+            serialized["tool_calls"] = parse_tool_calls(tool_calls)
 
         return serialized
 
@@ -105,18 +107,18 @@ class LunaryLogger:
     def log_event(
         self,
         kwargs,
-        type,
-        event,
-        run_id,
-        model,
+        type: object,
+        event: object,
+        run_id: object,
+        model: object,
         print_verbose,
         extra={},
         input=None,
-        user_id=None,
+        user_id: object = None,
         response_obj=None,
         start_time=datetime.now(timezone.utc),
         end_time=datetime.now(timezone.utc),
-        error=None,
+        error: object = None,
     ):
         try:
             print_verbose(f"Lunary Logging - Logging request for model {model}")

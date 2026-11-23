@@ -7,7 +7,7 @@ import pytest
 
 import litellm
 from litellm._logging import JsonFormatter, verbose_logger
-from litellm.router_utils.reasoning_effort_capability import (
+from litellm.litellm_core_utils.reasoning_effort_capability import (
     RequestedReasoningEffort,
     deployment_is_catalog_mapped,
     intersect_supported_reasoning_efforts,
@@ -322,7 +322,6 @@ class TestDeclaredEffortList:
 
 
 KIMI_K3_PASSTHROUGH_KEYS = (
-    "azure_ai/FW-Kimi-K3",
     "moonshot/kimi-k3",
     "together_ai/moonshotai/Kimi-K3",
     "fireworks_ai/kimi-k3",
@@ -344,6 +343,21 @@ class TestKimiK3AdvertisesItsDocumentedLevels:
         entry = dict(litellm.model_cost[model_key], key=model_key)
 
         assert resolve_supported_reasoning_efforts(entry, deployment_is_mapped=True) == ("low", "high", "max")
+
+    def test_the_foundry_entry_advertises_every_level_foundry_takes(self, local_model_cost_map):
+        """Foundry's Kimi K3 answered 200 for every level from none to max on a live deployment,
+        checked on 2026-11-14 for PR #51747, so its row declares all seven."""
+        entry = dict(litellm.model_cost["azure_ai/FW-Kimi-K3"], key="azure_ai/FW-Kimi-K3")
+
+        assert resolve_supported_reasoning_efforts(entry, deployment_is_mapped=True) == (
+            "none",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+        )
 
     def test_the_perplexity_entry_advertises_the_wider_set_it_maps_down(self, local_model_cost_map):
         """Perplexity's Agent API takes a six-value enum and maps it down internally, so this

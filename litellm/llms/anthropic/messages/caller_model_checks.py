@@ -7,7 +7,8 @@ caller's model allowlists, per-model budgets, and RPM/TPM limits to that model
 before the sub-call runs.
 """
 
-from collections.abc import Awaitable, Mapping, Sequence
+import functools
+from collections.abc import Awaitable, Mapping
 from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol, TypeAlias
 
 from pydantic import TypeAdapter, ValidationError
@@ -18,17 +19,12 @@ from litellm._logging import verbose_logger
 if TYPE_CHECKING:
     from starlette.requests import Request
 
-    from litellm.proxy.hooks.parallel_request_limiter_v3 import (
-        RateLimitDescriptor,
-        RateLimitDescriptorRateLimitObject,
-        RateLimitResponse,
-    )
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import RateLimitResponse
     from litellm.router import Router
     from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
 CallerModelVerdict: TypeAlias = Literal["allowed", "denied", "denied_for_now"]
 _DEFAULT_SUB_CALL_ROUTE: Final = "/v1/messages"
-_MODEL_SCOPED_DESCRIPTOR_PREFIX: Final = "model_per_"
 _HEADERS: Final = TypeAdapter(Mapping[str, str])
 _LASTING_REFUSAL_STATUSES: Final = frozenset({401, 403})
 _LASTING_REFUSAL_CODES: Final = frozenset(str(status) for status in _LASTING_REFUSAL_STATUSES)
@@ -44,46 +40,12 @@ class _TeamMemberModelBudgetLimiter(Protocol):
     ) -> bool: ...
 
 
-class _CreateRateLimitDescriptors(Protocol):
-    def __call__(
-        self,
-        *,
-        user_api_key_dict: "UserAPIKeyAuth",
-        data: Mapping[str, str],
-        rpm_limit_type: object,
-        tpm_limit_type: object,
-        model_has_failures: bool,
-    ) -> "Sequence[RateLimitDescriptor]": ...
-
-
-class _AddModelRateLimitDescriptor(Protocol):
-    def __call__(
-        self,
-        *,
-        user_api_key_dict: "UserAPIKeyAuth",
-        requested_model: str,
-        descriptors: "Sequence[RateLimitDescriptor]",
-    ) -> None: ...
-
-
-class _CreateOrgRateLimitDescriptors(Protocol):
-    def __call__(
-        self, user_api_key_dict: "UserAPIKeyAuth", requested_model: str | None = None
-    ) -> "Sequence[RateLimitDescriptor]": ...
-
-
 class _GetProxyHook(Protocol):
     def __call__(self, hook: str) -> object: ...
 
 
-class _ShouldRateLimit(Protocol):
-    def __call__(
-        self,
-        *,
-        descriptors: "Sequence[RateLimitDescriptor]",
-        parent_otel_span: object,
-        read_only: bool,
-    ) -> "Awaitable[RateLimitResponse]": ...
+class _CallerModelRateLimitResponse(Protocol):
+    def __call__(self, user_api_key_dict: "UserAPIKeyAuth", model: str) -> "Awaitable[RateLimitResponse]": ...
 
 
 async def caller_model_verdict(
@@ -243,8 +205,7 @@ async def caller_within_model_budget(
         return "allowed"
 
     model_max_budget: Final = getattr(user_api_key_auth, "model_max_budget", None)
-    token: Final = getattr(user_api_key_auth, "token", None)
-    if isinstance(model_max_budget, dict) and model_max_budget and token is not None:
+    if isinstance(model_max_budget, dict) and model_max_budget and user_api_key_auth.token is not None:
         try:
             await model_max_budget_limiter.is_key_within_model_budget(
                 user_api_key_dict=user_api_key_auth,
@@ -300,10 +261,8 @@ async def caller_within_model_budget(
             )
             return "denied_for_now"
 
-    end_user_model_max_budget: Final[dict[str, object] | None] = getattr(
-        user_api_key_auth, "end_user_model_max_budget", None
-    )
-    end_user_id: Final[str | None] = getattr(user_api_key_auth, "end_user_id", None)
+    end_user_model_max_budget: Final[dict[str, object] | None] = user_api_key_auth.end_user_model_max_budget
+    end_user_id: Final[str | None] = user_api_key_auth.end_user_id
     if isinstance(end_user_model_max_budget, dict) and end_user_model_max_budget and end_user_id is not None:
         try:
             await model_max_budget_limiter.is_end_user_within_model_budget(
@@ -363,33 +322,13 @@ async def _caller_within_team_member_model_budget(
     return "allowed"
 
 
-def _sub_call_descriptors(
-    descriptors: "Sequence[RateLimitDescriptor]",
-) -> "tuple[RateLimitDescriptor, ...]":
-    return tuple(_sub_call_descriptor(descriptor) for descriptor in descriptors)
-
-
-def _sub_call_descriptor(descriptor: "RateLimitDescriptor") -> "RateLimitDescriptor":
-    rate_limit: Final = descriptor.get("rate_limit")
-    if rate_limit is None:
-        return descriptor
-    caller_wide: Final = not descriptor["key"].startswith(_MODEL_SCOPED_DESCRIPTOR_PREFIX)
-    windowed_limits: Final[RateLimitDescriptorRateLimitObject] = {
-        "requests_per_unit": None if caller_wide else rate_limit.get("requests_per_unit"),
-        "tokens_per_unit": rate_limit.get("tokens_per_unit"),
-        "window_size": rate_limit.get("window_size"),
-    }
-    return {**descriptor, "rate_limit": windowed_limits}
-
-
 async def caller_within_model_rate_limit(
     user_api_key_auth: Optional["UserAPIKeyAuth"],
     model: str,
 ) -> CallerModelVerdict:
     """Return ``allowed`` when the caller is within their configured RPM/TPM limits for ``model``.
 
-    This mirrors the read side of
-    ``_PROXY_MaxParallelRequestsHandler_v3.async_pre_call_hook`` for ``model``:
+    This mirrors the read side of the parallel request limiter's pre-call for ``model``:
     it builds the same descriptor set and runs the check in ``read_only`` mode
     so no counter is reserved or incremented. The sub-call's tokens are still
     charged once by the limiter's post-call success hook (via the propagated
@@ -411,78 +350,37 @@ async def caller_within_model_rate_limit(
     if user_api_key_auth is None:
         return "allowed"
     try:
-        from litellm.proxy.hooks.parallel_request_limiter_v3 import RateLimitUnverifiableError
+        from litellm.proxy.hooks import parallel_request_limiter_v3 as limiter_module
         from litellm.proxy.proxy_server import proxy_logging_obj
     except Exception:
         return "allowed"
 
     get_proxy_hook: Final[_GetProxyHook | None] = getattr(proxy_logging_obj, "get_proxy_hook", None)
     limiter: Final[object] = get_proxy_hook("parallel_request_limiter") if get_proxy_hook is not None else None
+    check: Final[_CallerModelRateLimitResponse | None] = (
+        functools.partial(limiter_module.caller_model_rate_limit_response, limiter)
+        if isinstance(limiter, limiter_module.ParallelRequestLimiterHook)
+        else None
+    )
     return await rate_limit_verdict(
-        user_api_key_auth=user_api_key_auth, model=model, limiter=limiter, unverifiable=RateLimitUnverifiableError
+        user_api_key_auth=user_api_key_auth,
+        model=model,
+        check=check,
+        unverifiable=limiter_module.RateLimitUnverifiableError,
     )
 
 
 async def rate_limit_verdict(
     user_api_key_auth: "UserAPIKeyAuth",
     model: str,
-    limiter: object,
+    check: _CallerModelRateLimitResponse | None,
     unverifiable: type[Exception],
 ) -> CallerModelVerdict:
-    should_rate_limit_check: Final[_ShouldRateLimit | None] = getattr(limiter, "should_rate_limit", None)
-    create_descriptors: Final[_CreateRateLimitDescriptors | None] = getattr(
-        limiter, "create_rate_limit_descriptors", None
-    )
-    add_team_descriptor: Final[_AddModelRateLimitDescriptor | None] = getattr(
-        limiter, "_add_team_model_rate_limit_descriptor_from_metadata", None
-    )
-    add_project_descriptor: Final[_AddModelRateLimitDescriptor | None] = getattr(
-        limiter, "_add_project_model_rate_limit_descriptor_from_metadata", None
-    )
-    create_org_descriptors: Final[_CreateOrgRateLimitDescriptors | None] = getattr(
-        limiter, "create_organization_rate_limit_descriptor", None
-    )
-    if (
-        limiter is None
-        or should_rate_limit_check is None
-        or create_descriptors is None
-        or add_team_descriptor is None
-        or add_project_descriptor is None
-        or create_org_descriptors is None
-    ):
+    if check is None:
         return "allowed"
 
     try:
-        metadata: Final[Mapping[str, object]] = getattr(user_api_key_auth, "metadata", None) or {}
-        data: Final = {"model": model}
-        base_descriptors: Final = create_descriptors(
-            user_api_key_dict=user_api_key_auth,
-            data=data,
-            rpm_limit_type=metadata.get("rpm_limit_type"),
-            tpm_limit_type=metadata.get("tpm_limit_type"),
-            model_has_failures=False,
-        )
-        add_team_descriptor(
-            user_api_key_dict=user_api_key_auth,
-            requested_model=model,
-            descriptors=base_descriptors,
-        )
-        add_project_descriptor(
-            user_api_key_dict=user_api_key_auth,
-            requested_model=model,
-            descriptors=base_descriptors,
-        )
-        descriptors: Final = _sub_call_descriptors(
-            (*base_descriptors, *create_org_descriptors(user_api_key_auth, model))
-        )
-        if not descriptors:
-            return "allowed"
-        parent_otel_span: Final[object] = getattr(user_api_key_auth, "parent_otel_span", None)
-        response: Final[RateLimitResponse] = await should_rate_limit_check(
-            descriptors=descriptors,
-            parent_otel_span=parent_otel_span,
-            read_only=True,
-        )
+        response: Final[RateLimitResponse] = await check(user_api_key_auth, model)
     except unverifiable as e:
         verbose_logger.warning(
             "proxy sub-call: rate-limit counters for model=%s could not be verified; denying for now: %s",

@@ -1,15 +1,26 @@
+import asyncio
 import json
 import logging
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator, Mapping
 from datetime import datetime
 from typing import Final
 from unittest.mock import MagicMock
 
+import httpx
 import pytest
 
 import litellm
+from litellm.interactions.background_cost_polling import PollSchedule
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.litellm_logging import get_standard_logging_object_payload
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.proxy.pass_through_endpoints.background_response_creator import PrismaBackgroundResponseCreatorStore
+from litellm.proxy.pass_through_endpoints.background_response_polling import (
+    BackgroundResponsePoller,
+    BackgroundResponsePollRequest,
+    FetchOutcome,
+    StopPolling,
+)
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_passthrough_logging_handler import (
     VertexPassthroughLoggingHandler,
 )
@@ -20,7 +31,10 @@ from litellm.proxy.pass_through_endpoints.streaming_handler import (
 from litellm.proxy.pass_through_endpoints.success_handler import (
     PassThroughEndpointLogging,
 )
+from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+from litellm.proxy._types import SpendLogsPayload
 from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
+from litellm.types.utils import ClaudeSubscriptionUsage
 
 MODEL = "gemini-stream-pricing-probe"
 PROMPT_TOKENS = 1000
@@ -60,6 +74,140 @@ def divergent_rate_cards(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     litellm.get_model_info.cache_clear()
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ("/v1/messages", "/anthropic/v1/messages"))
+@pytest.mark.parametrize("overage", (False, True, None))
+async def test_oauth_stream_retains_billing_headers_through_reassembly_and_spend_logging(
+    monkeypatch: pytest.MonkeyPatch, route: str, overage: bool | None
+) -> None:
+    model: Final = "claude-subscription-stream-test"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {"input_cost_per_token": 0.01, "output_cost_per_token": 0.02, "litellm_provider": "anthropic", "mode": "chat"},
+    )
+    now: Final = datetime(2025, 1, 1)
+    logger: Final = LiteLLMLoggingObj(
+        model=model,
+        messages=[],
+        stream=True,
+        call_type="anthropic_messages" if route == "/v1/messages" else "pass_through_endpoint",
+        start_time=now,
+        litellm_call_id="subscription",
+        function_id="subscription",
+    )
+    logger.update_environment_variables(
+        model=model,
+        optional_params={},
+        custom_llm_provider="anthropic",
+        litellm_params={"litellm_metadata": {"used_client_oauth_token": True}},
+    )
+    events: Final = (
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_subscription",
+                "type": "message",
+                "role": "assistant",
+                "model": model,
+                "content": [],
+                "usage": {"input_tokens": 100, "output_tokens": 0},
+            },
+        },
+        {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "hello"}},
+        {"type": "content_block_stop", "index": 0},
+        {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 10}},
+        {"type": "message_stop"},
+    )
+    body: Final = "".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events).encode()
+    headers: Final = (
+        {}
+        if overage is None
+        else {
+            "anthropic-ratelimit-unified-status": "allowed",
+            "anthropic-ratelimit-unified-overage-in-use": "true" if overage else "false",
+        }
+    )
+    observed: Final[asyncio.Future[tuple[float | None, ClaudeSubscriptionUsage | None, SpendLogsPayload]]] = (
+        asyncio.get_running_loop().create_future()
+    )
+
+    async def log_stream(
+        *,
+        litellm_logging_obj: LiteLLMLoggingObj,
+        passthrough_success_handler_obj: PassThroughEndpointLogging,
+        url_route: str,
+        request_body: dict[str, object],
+        endpoint_type: EndpointType,
+        start_time: datetime,
+        raw_bytes: list[bytes],
+        end_time: datetime,
+    ) -> None:
+        rebuilt, _ = PassThroughStreamingHandler._build_passthrough_logging_result(
+            litellm_logging_obj=litellm_logging_obj,
+            passthrough_success_handler_obj=passthrough_success_handler_obj,
+            url_route=url_route,
+            request_body=request_body,
+            endpoint_type=endpoint_type,
+            start_time=now,
+            raw_bytes=raw_bytes,
+            end_time=now,
+            model=model,
+        )
+        cost: Final = litellm_logging_obj.response_cost_calculator(rebuilt)
+        details: Final = {**litellm_logging_obj.model_call_details, "response_cost": cost}
+        standard: Final = get_standard_logging_object_payload(
+            kwargs=details,
+            init_response_obj=rebuilt,
+            start_time=now,
+            end_time=now,
+            logging_obj=litellm_logging_obj,
+            status="success",
+        )
+        assert standard is not None
+        spend: Final = get_logging_payload(
+            kwargs={**details, "standard_logging_object": standard},
+            response_obj=rebuilt,
+            start_time=now,
+            end_time=now,
+        )
+        observed.set_result((cost, standard["metadata"].get("claude_subscription_usage"), spend))
+
+    upstream: Final = httpx.Response(200, headers=headers, stream=httpx.ByteStream(body))
+    forwarded: Final = tuple(
+        [
+            chunk
+            async for chunk in PassThroughStreamingHandler.chunk_processor(
+                response=upstream,
+                request_body={"model": model, "stream": True},
+                litellm_logging_obj=logger,
+                endpoint_type=EndpointType.ANTHROPIC,
+                start_time=now,
+                passthrough_success_handler_obj=PassThroughEndpointLogging(),
+                url_route=route,
+                route_streaming_logging=log_stream,
+            )
+        ]
+    )
+    await GLOBAL_LOGGING_WORKER.flush()
+    cost, usage, spend = observed.result()
+    expected_usage: Final = (
+        None
+        if overage is None
+        else {
+            "is_overage": overage,
+            "status": "allowed",
+            "overage_status": None,
+        }
+    )
+    assert b"".join(forwarded) == body
+    assert cost == pytest.approx(0.0 if overage is False else 100 * 0.01 + 10 * 0.02)
+    assert usage == expected_usage
+    assert json.loads(spend["metadata"])["claude_subscription_usage"] == expected_usage
+    assert spend["spend"] == cost
+
+
 def _chunks() -> list[str]:
     payload = {
         "candidates": [
@@ -83,6 +231,7 @@ def _logging_obj() -> LiteLLMLoggingObj:
     logging_obj = MagicMock(spec=LiteLLMLoggingObj)
     logging_obj.model_call_details = {}
     logging_obj.optional_params = {}
+    logging_obj.litellm_params = {}
     logging_obj.litellm_call_id = "test-call-id"
     return logging_obj
 
@@ -164,10 +313,10 @@ def _interrupted_anthropic_stream(model: str, output_text: str) -> list[bytes]:
 async def test_interrupted_anthropic_stream_recovers_output_tokens_off_the_event_loop(caplog):
     from unittest.mock import AsyncMock
 
-    from tests.large_text import text
     from tests.unit.litellm_core_utils.event_loop_lag import (
         assert_loop_stayed_free,
         timed_with_loop_lags,
+        uncounted_text,
         warm_tokenizer,
     )
 
@@ -189,7 +338,7 @@ async def test_interrupted_anthropic_stream_recovers_output_tokens_off_the_event
             request_body={"model": model, "stream": True},
             endpoint_type=EndpointType.ANTHROPIC,
             start_time=datetime.now(),
-            raw_bytes=_interrupted_anthropic_stream(model, text * 100),
+            raw_bytes=_interrupted_anthropic_stream(model, uncounted_text()),
             end_time=datetime.now(),
             model=model,
         )
@@ -205,10 +354,10 @@ async def test_interrupted_anthropic_stream_recovers_output_tokens_off_the_event
 async def test_failed_anthropic_stream_records_partial_usage_off_the_event_loop(caplog):
     from unittest.mock import AsyncMock
 
-    from tests.large_text import text
     from tests.unit.litellm_core_utils.event_loop_lag import (
         assert_loop_stayed_free,
         timed_with_loop_lags,
+        uncounted_text,
         warm_tokenizer,
     )
 
@@ -231,7 +380,7 @@ async def test_failed_anthropic_stream_records_partial_usage_off_the_event_loop(
             litellm_logging_obj=logging_obj,
             endpoint_type=EndpointType.ANTHROPIC,
             request_body={"model": model, "stream": True},
-            raw_bytes=_interrupted_anthropic_stream(model, text * 100),
+            raw_bytes=_interrupted_anthropic_stream(model, uncounted_text()),
             exception=RuntimeError("upstream closed the stream"),
         )
     )
@@ -278,3 +427,179 @@ async def test_interrupted_vertex_stream_bills_the_deployment_custom_price(monke
     await GLOBAL_LOGGING_WORKER.flush()
 
     assert recorded == pytest.approx(PROMPT_TOKENS * 2e-09 + COMPLETION_TOKENS * 3e-09)
+
+
+RESPONSES_URL: Final = "https://api.openai.com/v1/responses"
+BACKGROUND_RESPONSE_ID: Final = "resp_0b7f3c2a9d1e4f5a8b6c0d2e4f6a8b0c"
+BACKGROUND_STREAM_REQUEST: Final = {
+    "model": "gpt-5.4-mini",
+    "input": "Write a haiku",
+    "background": True,
+    "stream": True,
+}
+
+
+def _background_response(status: str, usage: Mapping[str, int] | None) -> dict[str, object]:
+    return {
+        "id": BACKGROUND_RESPONSE_ID,
+        "object": "response",
+        "created_at": 1792269939,
+        "status": status,
+        "background": True,
+        "model": "gpt-5.4-mini",
+        "output": [],
+        "parallel_tool_calls": True,
+        "tool_choice": "auto",
+        "tools": [],
+        "usage": usage,
+    }
+
+
+def _responses_event(event_type: str, sequence_number: int, response: Mapping[str, object]) -> bytes:
+    event: Final = {"type": event_type, "sequence_number": sequence_number, "response": response}
+    return f"event: {event_type}\ndata: {json.dumps(event)}\n\n".encode()
+
+
+class _UpstreamStream(httpx.AsyncByteStream):
+    def __init__(self, chunks: tuple[bytes, ...]) -> None:
+        self.chunks: Final = chunks
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        for chunk in self.chunks:
+            yield chunk
+
+
+class _CreatorRows:
+    def __init__(self) -> None:
+        self.rows: Final[dict[str, Mapping[str, object]]] = {}
+
+    async def create(self, *, data: Mapping[str, object]) -> Mapping[str, object]:
+        self.rows[str(data["response_id"])] = data
+        return data
+
+    async def update_many(self, *, data: Mapping[str, object], where: Mapping[str, str]) -> int:
+        return int(where["response_id"] in self.rows)
+
+
+class _FirstPoll:
+    def __init__(self) -> None:
+        self.request: Final[asyncio.Future[BackgroundResponsePollRequest]] = (
+            asyncio.get_running_loop().create_future()
+        )
+
+    async def __call__(self, request: BackgroundResponsePollRequest) -> FetchOutcome:
+        if not self.request.done():
+            self.request.set_result(request)
+        return StopPolling(status_code=404)
+
+
+def _background_create_logging_obj(custom_llm_provider: str | None) -> LiteLLMLoggingObj:
+    logging_obj: Final = LiteLLMLoggingObj(
+        model="unknown",
+        messages=[],
+        stream=True,
+        call_type="pass_through_endpoint",
+        start_time=datetime.now(),
+        litellm_call_id="0d4b7e19-6a2c-4f83-9e51-2c8a7f3b6d40",
+        function_id="background-stream",
+    )
+    logging_obj.update_environment_variables(
+        model="unknown",
+        user="unknown",
+        optional_params={},
+        litellm_params={"metadata": {"user_api_key_team_id": "team-creator"}},
+        call_type="pass_through_endpoint",
+    )
+    if custom_llm_provider is not None:
+        logging_obj.model_call_details["custom_llm_provider"] = custom_llm_provider
+    return logging_obj
+
+
+async def _no_stream_end_logging(**kwargs: object) -> None:
+    return None
+
+
+async def _streamed_background_create(
+    chunks: tuple[bytes, ...],
+    creators: _CreatorRows,
+    fetch: _FirstPoll,
+    client_disconnects: bool,
+    custom_llm_provider: str | None = "openai",
+) -> None:
+    passthrough_logging: Final = PassThroughEndpointLogging(
+        background_response_creators=PrismaBackgroundResponseCreatorStore(table=lambda: creators, timeout_seconds=5),
+        background_response_poller=BackgroundResponsePoller(
+            fetch=fetch,
+            schedule=PollSchedule(initial_interval_seconds=0.001, max_interval_seconds=0.001, timeout_seconds=5.0),
+            database_configured=lambda: True,
+        ),
+    )
+    create_request: Final = httpx.Request(
+        "POST", RESPONSES_URL, headers={"authorization": "Bearer upstream-openai-key"}, json=BACKGROUND_STREAM_REQUEST
+    )
+    stream: Final = PassThroughStreamingHandler.chunk_processor(
+        response=httpx.Response(200, request=create_request, stream=_UpstreamStream(chunks)),
+        request_body=dict(BACKGROUND_STREAM_REQUEST),
+        litellm_logging_obj=_background_create_logging_obj(custom_llm_provider),
+        endpoint_type=EndpointType.OPENAI,
+        start_time=datetime.now(),
+        passthrough_success_handler_obj=passthrough_logging,
+        url_route=RESPONSES_URL,
+        route_streaming_logging=_no_stream_end_logging,
+    )
+    relayed: Final = [await stream.__anext__()] if client_disconnects else [chunk async for chunk in stream]
+    if client_disconnects:
+        await stream.aclose()
+    assert relayed == list(chunks[: len(relayed)])
+    await GLOBAL_LOGGING_WORKER.flush()
+
+
+@pytest.mark.asyncio
+async def test_a_streamed_background_create_the_client_leaves_early_records_its_creator_and_polls_it():
+    creators: Final = _CreatorRows()
+    fetch: Final = _FirstPoll()
+    chunks: Final = (
+        _responses_event("response.created", 0, _background_response("queued", None)),
+        _responses_event("response.in_progress", 1, _background_response("in_progress", None)),
+    )
+
+    await _streamed_background_create(chunks, creators, fetch, client_disconnects=True)
+
+    polled: Final = await asyncio.wait_for(fetch.request, timeout=5)
+    assert set(creators.rows) == {BACKGROUND_RESPONSE_ID}
+    assert polled.url == httpx.URL(f"{RESPONSES_URL}/{BACKGROUND_RESPONSE_ID}")
+    assert ("authorization", "Bearer upstream-openai-key") in polled.headers
+
+
+@pytest.mark.asyncio
+async def test_a_streamed_background_create_through_a_configured_route_records_no_creator():
+    creators: Final = _CreatorRows()
+    fetch: Final = _FirstPoll()
+    chunks: Final = (_responses_event("response.created", 0, _background_response("queued", None)),)
+
+    await _streamed_background_create(chunks, creators, fetch, client_disconnects=True, custom_llm_provider=None)
+
+    assert creators.rows == {}
+    assert not fetch.request.done()
+
+
+@pytest.mark.asyncio
+async def test_a_streamed_background_create_that_ran_to_completion_records_no_creator():
+    creators: Final = _CreatorRows()
+    fetch: Final = _FirstPoll()
+    usage: Final = {
+        "input_tokens": 11,
+        "input_tokens_details": {"cached_tokens": 0},
+        "output_tokens": 5,
+        "output_tokens_details": {"reasoning_tokens": 0},
+        "total_tokens": 16,
+    }
+    chunks: Final = (
+        _responses_event("response.created", 0, _background_response("queued", None)),
+        _responses_event("response.completed", 1, _background_response("completed", usage)),
+    )
+
+    await _streamed_background_create(chunks, creators, fetch, client_disconnects=False)
+
+    assert creators.rows == {}
+    assert not fetch.request.done()

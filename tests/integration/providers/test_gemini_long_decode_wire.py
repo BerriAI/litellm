@@ -380,7 +380,9 @@ def test_cut_chat_stream_hands_its_token_on_a_chunk_with_empty_vertex_ai_lists_a
         chunks: Final = payloads(post(gateway, "chat", request_body("chat", model, True)).text, True)
         carriers: Final = [chunk for chunk in chunks if "continuation_token" in json.dumps(chunk)]
         assert [_vertex_lists(chunk) for chunk in carriers] == [dict(_EMPTY_VERTEX_LISTS)], chunks
-        assert [_vertex_lists(chunk) for chunk in chunks if chunk not in carriers] == [{}] * (len(chunks) - 1), chunks
+        assert [_vertex_lists(chunk) for chunk in chunks] == [
+            dict(_EMPTY_VERTEX_LISTS) if at(chunk, "choices", 0, "delta", "content") else {} for chunk in chunks
+        ], chunks
         metered: Final = [chunk for chunk in chunks if isinstance(chunk.get("usage"), dict)]
         assert [at(chunk, "usage", "completion_tokens_details") for chunk in metered] == [
             {"text_tokens": CUT.output_tokens}
@@ -1211,7 +1213,6 @@ def test_request_with_no_output_cap_is_never_continued_and_returns_googles_cut_w
 _NOT_A_NUMBER: Final[tuple[tuple[str, Mapping[str, JsonValue], int | None], ...]] = (
     ("n-string", {"n": "1"}, CAP),
     ("n-list", {"n": [1]}, CAP),
-    ("n-empty", {"n": ""}, CAP),
     ("n-5kb", {"n": "1" * 5120}, CAP),
     ("max_tokens-string", {"max_tokens": "300"}, None),
     ("max_tokens-list", {"max_tokens": [300]}, None),

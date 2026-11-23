@@ -40,6 +40,13 @@ from litellm.integrations.custom_guardrail import (
 )
 from litellm.integrations.custom_guardrail import dc as global_cache
 from litellm.litellm_core_utils.core_helpers import iter_items
+from litellm.llms.anthropic.common_utils import (
+    anthropic_server_tool_call_params,
+    anthropic_server_tool_calls,
+    with_server_tool_call_arguments,
+    write_anthropic_server_tool_calls,
+    write_request_server_tool_calls,
+)
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -50,6 +57,7 @@ from litellm.proxy.guardrails._content_utils import (
     has_non_string_content,
 )
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.llms.openai import ChatCompletionAssistantToolCall
 
 
 class LassoResponse(TypedDict):
@@ -259,7 +267,7 @@ class LassoGuardrail(CustomGuardrail):
                 msg = choice.message
                 if msg.content:
                     response_messages.append({"role": "assistant", "content": msg.content})
-                for call in getattr(msg, "tool_calls", None) or []:
+                for call in (*anthropic_server_tool_calls(msg), *(getattr(msg, "tool_calls", None) or ())):
                     call_id, name, input_data = self._extract_tool_call_fields(call)
                     if not call_id or not name:
                         continue
@@ -277,7 +285,7 @@ class LassoGuardrail(CustomGuardrail):
 
             if response_messages:
                 # Include litellm_call_id from original data for conversation_id consistency
-                response_data: Final = {
+                response_data: Final[dict[str, object]] = {
                     "messages": response_messages,
                     "litellm_call_id": data.get("litellm_call_id"),
                 }
@@ -314,7 +322,7 @@ class LassoGuardrail(CustomGuardrail):
         return response
 
     @with_service_target(GUARDRAIL_SESSIONS_TARGET)
-    def _get_or_generate_conversation_id(self, data: dict, cache: DualCache) -> str:
+    def _get_or_generate_conversation_id(self, data: dict[str, object], cache: DualCache) -> str:
         """
         Get or generate a conversation_id for this request.
 
@@ -421,11 +429,11 @@ class LassoGuardrail(CustomGuardrail):
 
     async def _handle_classification(
         self,
-        data: dict,
+        data: dict[str, object],
         cache: DualCache,
         message_type: Literal["PROMPT", "COMPLETION"],
         messages: Sequence[Mapping[str, object]],
-    ) -> dict:
+    ) -> dict[str, object]:
         """Handle classification without masking."""
         try:
             headers: Final = self._prepare_headers(data, cache)
@@ -563,6 +571,15 @@ class LassoGuardrail(CustomGuardrail):
 
             elif role == "assistant" and not content and orig_msg.get("tool_calls"):
                 msg["tool_calls"] = self._update_tool_calls_from_masked(orig_msg["tool_calls"], masked_tool_use)
+
+            if role == "assistant":
+                write_request_server_tool_calls(
+                    msg,
+                    tuple(
+                        self._masked_server_tool_call(server_tool_call, masked_tool_use)
+                        for server_tool_call in anthropic_server_tool_call_params(orig_msg)
+                    ),
+                )
 
             result.append(msg)
 
@@ -704,7 +721,7 @@ class LassoGuardrail(CustomGuardrail):
                 expanded.append({"role": role, "content": content})
 
             if role == "assistant":
-                for call in iter_items(msg.get("tool_calls") or []):
+                for call in (*anthropic_server_tool_call_params(msg), *iter_items(msg.get("tool_calls") or [])):
                     call_id, name, input_data = self._extract_tool_call_fields(call)
                     if not call_id or not name:
                         verbose_proxy_logger.warning(
@@ -726,7 +743,7 @@ class LassoGuardrail(CustomGuardrail):
 
         return expanded
 
-    def _prepare_headers(self, data: dict, cache: DualCache) -> dict[str, str]:
+    def _prepare_headers(self, data: dict[str, object], cache: DualCache) -> dict[str, str]:
         """Prepare headers for the Lasso API request."""
         if not self.lasso_api_key:
             raise LassoGuardrailMissingSecrets(
@@ -962,6 +979,14 @@ class LassoGuardrail(CustomGuardrail):
                 text_cursor += 1
                 verbose_proxy_logger.debug("Applied masked text content to choice %s", text_cursor)
 
+            write_anthropic_server_tool_calls(
+                msg,
+                tuple(
+                    self._masked_server_tool_call(server_tool_call, masked_tool_use)
+                    for server_tool_call in anthropic_server_tool_call_params(msg)
+                ),
+            )
+
             for call in getattr(msg, "tool_calls", None) or []:
                 call_id = self._get_field(call, "id")
                 if call_id and call_id in masked_tool_use:
@@ -976,6 +1001,16 @@ class LassoGuardrail(CustomGuardrail):
                             if func:
                                 func.arguments = json.dumps(masked_input)
                         verbose_proxy_logger.debug("Applied masked tool_call arguments for call_id=%s", call_id)
+
+    @staticmethod
+    def _masked_server_tool_call(
+        server_tool_call: ChatCompletionAssistantToolCall,
+        masked_tool_use: Mapping[object, Mapping[str, object]],
+    ) -> ChatCompletionAssistantToolCall:
+        masked_input: Final = masked_tool_use.get(server_tool_call["id"], {}).get("input")
+        if masked_input is None:
+            return server_tool_call
+        return with_server_tool_call_arguments(server_tool_call, json.dumps(masked_input))
 
     @staticmethod
     def get_config_model() -> type["GuardrailConfigModel"] | None:

@@ -1,3 +1,4 @@
+import copy
 import logging
 from typing import Final
 from unittest.mock import patch
@@ -206,6 +207,13 @@ class TestGroqWebSearchUsageSignal:
         model_response = litellm.ModelResponse()
         GroqChatConfig()._add_web_search_usage(model_response=model_response)
         assert getattr(model_response, "usage", None) is None
+
+
+def test_reply_without_service_tier_is_reported_as_auto():
+    reply_without_tier: Final = {k: v for k, v in _searched_groq_response(None).items() if k != "service_tier"}
+    response: Final = _groq_completion_with_mocked_response(reply_without_tier)
+    assert response.service_tier == "auto"
+    assert response.choices[0].message.content == "Top headline: example"
 
 
 @pytest.mark.parametrize(
@@ -589,3 +597,19 @@ async def test_streamed_reasoning_reply_can_be_replayed(is_async: bool, with_too
         }
     ]
     assert reply.reasoning_content == "I should check the weather."
+
+
+def test_groq_request_drops_null_assistant_fields_without_touching_the_callers_messages() -> None:
+    messages: Final = [
+        {"role": "user", "content": "Hi"},
+        {"role": "assistant", "content": "Hello", "function_call": None, "tool_calls": None},
+        {"role": "user", "content": "Again"},
+    ]
+    messages_before: Final = copy.deepcopy(messages)
+
+    body: Final = GroqChatConfig().transform_request(
+        model="openai/gpt-oss-120b", messages=messages, optional_params={}, litellm_params={}, headers={}
+    )
+
+    assert body["messages"][1] == {"role": "assistant", "content": "Hello"}
+    assert messages == messages_before

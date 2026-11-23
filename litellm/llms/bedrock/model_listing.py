@@ -1,6 +1,6 @@
 from collections.abc import Iterator, Mapping
 from types import MappingProxyType
-from typing import Final, TypeAlias
+from typing import ClassVar, Final, TypeAlias
 from urllib.parse import quote, urlencode
 
 import httpx
@@ -9,6 +9,10 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, bedrock_bearer_token
 from litellm.llms.bedrock.common_utils import BedrockError
+from litellm.llms.bedrock.web_identity_session_policy import (
+    BEDROCK_MODEL_LISTING_SESSION_POLICY,
+    WebIdentitySessionPolicy,
+)
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.types.llms.bedrock import AwsAuthParams
 
@@ -47,6 +51,8 @@ class ListInferenceProfilesResponse(BaseModel):
 
 
 class BedrockModelLister(BaseAWSLLM):
+    _web_identity_session_policy: ClassVar[WebIdentitySessionPolicy] = BEDROCK_MODEL_LISTING_SESSION_POLICY
+
     def __init__(self, deployment: Mapping[str, object], client: HTTPHandler) -> None:
         super().__init__()
         self._aws_params: Final = dict(deployment)
@@ -113,7 +119,7 @@ class BedrockModelLister(BaseAWSLLM):
         from botocore.awsrequest import AWSRequest
 
         credentials: Final = self.resolve_credentials(
-            AwsAuthParams.model_validate(self._aws_params), self._aws_region_name
+            AwsAuthParams.model_validate(self._aws_params), self._aws_region_name, self._aws_params
         )
         request: Final = AWSRequest(method="GET", url=url, data="")
         SigV4Auth(credentials, "bedrock", self._aws_region_name).add_auth(request)

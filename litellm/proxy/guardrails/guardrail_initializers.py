@@ -18,6 +18,7 @@ def initialize_bedrock(litellm_params: LitellmParams, guardrail: Guardrail):
         event_hook=litellm_params.mode,
         guardrailIdentifier=litellm_params.guardrailIdentifier,
         guardrailVersion=litellm_params.guardrailVersion,
+        outputScope=litellm_params.outputScope,
         checks=litellm_params.checks if isinstance(litellm_params.checks, BedrockChecksConfigModel) else None,
         content_filter_threshold=litellm_params.content_filter_threshold,
         prompt_attack_threshold=litellm_params.prompt_attack_threshold,
@@ -143,6 +144,11 @@ def initialize_presidio(litellm_params: LitellmParams, guardrail: Guardrail) -> 
     filter_scope: Final = explicit_filter_scope or ("input" if _is_mcp_only_mode(litellm_params.mode) else "both")
     run_input: Final = filter_scope in ("input", "both")
     run_output: Final = filter_scope in ("output", "both")
+    asks_to_scan_output: Final = run_output and (
+        explicit_filter_scope is not None
+        or GuardrailEventHooks.post_call.value in configured_event_hooks(litellm_params.mode)
+    )
+    mask_tool_calls: Final = asks_to_scan_output and bool(litellm_params.pii_entities_config)
 
     def _make_presidio_callback(**overrides) -> CustomGuardrail:
         params: Final = dict(
@@ -163,10 +169,11 @@ def initialize_presidio(litellm_params: LitellmParams, guardrail: Guardrail) -> 
             _callback_role="scan",
         )
         params.update(overrides)
-        # Passed outside the heterogeneous params dict so the argument keeps
-        # its precise int | None type.
+        # Passed outside the heterogeneous params dict so each argument keeps
+        # its precise type.
         callback: Final = OPTIONAL_PresidioPIIMasking(
             presidio_analyze_chunk_size_bytes=litellm_params.presidio_analyze_chunk_size_bytes,
+            mask_tool_calls=mask_tool_calls,
             **params,
         )
         litellm.logging_callback_manager.add_litellm_callback(callback)

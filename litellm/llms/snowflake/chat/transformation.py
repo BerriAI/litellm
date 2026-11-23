@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any, Final, Protocol, TypedDict
 import httpx
 from typing_extensions import ReadOnly
 
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, iter_items
 from litellm.litellm_core_utils.prompt_templates.factory import (
     anthropic_process_openai_file_message,
     convert_to_anthropic_tool_result,
@@ -354,13 +354,15 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
                         if isinstance(block, Mapping) and block.get("type") == "text"
                     )
             elif role == "assistant":
-                tool_calls = msg.get("tool_calls") if isinstance(msg, dict) else getattr(msg, "tool_calls", None)
+                tool_calls: object = (
+                    msg.get("tool_calls") if isinstance(msg, dict) else getattr(msg, "tool_calls", None)
+                )
                 thinking_blocks = _signed_thinking_blocks(msg)
                 if tool_calls:
                     content_blocks: list[dict[str, object]] = list(thinking_blocks)  # mutable-ok: JSON wire blocks
                     if content:
                         content_blocks.append({"type": "text", "text": content})
-                    for tc in tool_calls:
+                    for tc in iter_items(tool_calls):
                         func = tc.get("function", {}) if isinstance(tc, dict) else getattr(tc, "function", {})
                         tc_id = tc.get("id", "") if isinstance(tc, dict) else getattr(tc, "id", "")
                         func_name = func.get("name", "") if isinstance(func, dict) else getattr(func, "name", "")
@@ -458,13 +460,13 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         optional_params: dict,
         stream: bool,
         extra_body: dict,
-    ) -> dict:
+    ) -> dict[str, object]:
         """OpenAI format for /chat/completions endpoint."""
         max_tokens: Final = optional_params.pop("max_tokens", None)
         max_completion_tokens: Final = optional_params.pop("max_completion_tokens", None)
         resolved_max: Final = max_completion_tokens or max_tokens
 
-        body: Final[dict] = {
+        body: Final[dict[str, object]] = {
             "model": model.removeprefix("snowflake/"),
             "messages": messages,
             "stream": stream,
@@ -506,7 +508,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         optional_params: dict,
         stream: bool,
         extra_body: dict,
-    ) -> dict:
+    ) -> dict[str, object]:
         """Anthropic Messages format for /messages endpoint."""
         passthrough_system: Final = optional_params.pop("system", None)
         extracted_system, conversation = self._extract_system_and_messages(messages)

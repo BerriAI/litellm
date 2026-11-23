@@ -17,7 +17,7 @@ to reach them fires on most ordinary migrations, and a marker everyone adds by
 reflex stops carrying information. The outage this was written for was a backfill.
 
 One column change banned outright is `ADD COLUMN ... DEFAULT` on a table in
-`REQUEST_LOG_TABLES`, the tables that hold a row per request. Postgres 11 stores such
+`REQUEST_LOG_TABLES`, the tables that hold request-log rows. Postgres 11 stores such
 a default as metadata and touches no rows, but Postgres 10, which is supported,
 rewrites the whole heap and rebuilds every index under an `ACCESS EXCLUSIVE` lock,
 which on a spend-log-sized table is the same outage as a backfill. Every other table
@@ -27,7 +27,7 @@ table without a default is still free on every version.
 An index on a request-log table cannot ship as a migration at all. A plain `CREATE
 INDEX` blocks writes to the table until the build finishes, and `CREATE INDEX
 CONCURRENTLY` is refused by Postgres on a partitioned parent, which LiteLLM_SpendLogs
-is wherever the operator ran db_scripts/partition_spend_logs.sql. The migration job builds
+is wherever the operator ran litellm/scripts/db/partition_spend_logs.sql. The migration job builds
 those indexes after `migrate deploy`, concurrently and per partition, from the list in
 litellm_proxy_extras/request_log_indexes.py, so that list is where a new one goes.
 
@@ -123,13 +123,11 @@ from pathlib import Path
 from typing import Final
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-MIGRATIONS_DIR = REPO_ROOT / "litellm-proxy-extras" / "litellm_proxy_extras" / "migrations"
+MIGRATIONS_DIR = REPO_ROOT / "litellm" / "proxy-extras" / "litellm_proxy_extras" / "migrations"
 
 GRANDFATHERED = frozenset(
     {
         "20250425182129_add_session_id",
-        "20250510142544_add_session_id_index_spend_logs",
-        "20260228100000_add_spend_logs_composite_index",
         "20250326162113_baseline",
         "20260817000000_shadow_eval_multi_key",
         "20260818000000_add_spend_log_timestamps",
@@ -137,7 +135,7 @@ GRANDFATHERED = frozenset(
     }
 )
 
-REQUEST_LOG_TABLES = frozenset({"LiteLLM_SpendLogs", "LiteLLM_ErrorLogs"})
+REQUEST_LOG_TABLES = frozenset({"LiteLLM_SpendLogs", "LiteLLM_ErrorLogs", "LiteLLM_SpendLogToolIndex"})
 
 MARKER = re.compile(r"--[ \t]*data-migration-ok:[ \t]*(\S.*?)[ \t]*$", re.MULTILINE)
 DOLLAR_TAG = re.compile(r"\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$")

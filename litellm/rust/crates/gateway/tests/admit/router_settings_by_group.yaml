@@ -1,0 +1,65 @@
+# A router setting the native router cannot serve that reaches named groups sends only those
+# groups to Python, and each group that can fall back to one of them.
+config:
+  model_list:
+    - model_name: claude
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+    - model_name: affine
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+    - model_name: pooled
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+    - model_name: backed
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+  router_settings:
+    model_group_affinity_config:
+      affine: [deployment_affinity]
+    routing_groups:
+      - group_name: pool
+        models: [pooled]
+        routing_strategy: least-busy
+    fallbacks:
+      - backed: [affine]
+  general_settings:
+    master_key: gateway-key
+
+requests:
+  - name: a group no router setting reaches
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: rust
+
+  - name: a group with affinity
+    headers: {authorization: Bearer gateway-key}
+    body: {model: affine, max_tokens: 16, messages: []}
+    expect: python
+    reason: model
+    over: router_settings.model_group_affinity_config
+
+  - name: a member of a routing group with its own strategy
+    headers: {authorization: Bearer gateway-key}
+    body: {model: pooled, max_tokens: 16, messages: []}
+    expect: python
+    reason: model
+    over: router_settings.routing_groups
+
+  - name: the routing group itself
+    headers: {authorization: Bearer gateway-key}
+    body: {model: pool, max_tokens: 16, messages: []}
+    expect: python
+    reason: model
+    over: unknown_model
+
+  - name: a group that falls back to the affinity one
+    headers: {authorization: Bearer gateway-key}
+    body: {model: backed, max_tokens: 16, messages: []}
+    expect: python
+    reason: model
+    over: 'router_settings fallback to affine: router_settings.model_group_affinity_config'

@@ -68,15 +68,18 @@ from litellm.types.router import CredentialLiteLLMParams
 from litellm.types.utils import CustomPricingLiteLLMParams
 
 if TYPE_CHECKING:
+    from litellm.integrations.custom_logger import CustomLogger
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
+    DynamicCallback: TypeAlias = "str | Callable[..., object] | CustomLogger"
+
 _TERMINAL_STATUSES: Final = frozenset(
-    {"completed", "failed", "cancelled", "incomplete", "budget_exceeded", "requires_action"}
+    {"completed", "failed", "cancelled", "incomplete", "budget_exceeded", "requires_action", "requires_continuation"}
 )
 
 _POLLABLE_STATUSES: Final = frozenset({"in_progress", "queued"})
 
-_STATUSES_THAT_PRODUCED_OUTPUT: Final = frozenset({"completed", "requires_action"})
+_STATUSES_THAT_PRODUCED_OUTPUT: Final = frozenset({"completed", "requires_action", "requires_continuation"})
 
 SettlementOutcome: TypeAlias = Literal["billed", "released", "unsettled"]
 
@@ -236,7 +239,7 @@ def _is_permanent_fetch_error(error: Exception) -> bool:
     return isinstance(error, APIStatusError) and error.status_code in _PERMANENT_FETCH_STATUS_CODES
 
 
-def _poll_intervals(initial: float, maximum: float, timeout: float) -> Iterator[float]:
+def poll_intervals(initial: float, maximum: float, timeout: float) -> Iterator[float]:
     elapsed = 0.0  # rebind-ok: the schedule accumulates the time it has already yielded
     interval = initial  # rebind-ok: the schedule doubles the interval up to the cap
     while interval > 0 and elapsed + interval <= timeout:
@@ -277,7 +280,7 @@ _OBJECT_MAPPING: Final = TypeAdapter(Mapping[str, object])
 _OBJECT_DICT: Final = TypeAdapter(dict[str, object])
 
 
-def _carries(key: str) -> bool:
+def is_carried_metadata_key(key: str) -> bool:
     if key == _UNCARRIED_METADATA_KEY:
         return False
     return key in _CARRIED_METADATA_KEYS or key.startswith(_CARRIED_METADATA_PREFIX)
@@ -291,7 +294,7 @@ def _json_value(value: object) -> tuple[JsonValue, ...]:
         return ()
 
 
-def _json_values(items: Iterable[tuple[str, object]]) -> Mapping[str, JsonValue]:
+def json_values(items: Iterable[tuple[str, object]]) -> Mapping[str, JsonValue]:
     parsed: Final = ((key, _json_value(value)) for key, value in items)
     return MappingProxyType({key: values[0] for key, values in parsed if values})
 
@@ -300,7 +303,7 @@ def _as_datetime(start_time: datetime | float) -> datetime:
     return start_time if isinstance(start_time, datetime) else datetime.fromtimestamp(start_time, tz=timezone.utc)
 
 
-def _spend_metadata(logging_obj: "LiteLLMLoggingObj") -> Mapping[str, object]:
+def spend_metadata(logging_obj: "LiteLLMLoggingObj") -> Mapping[str, object]:
     """
     The metadata the creating worker's own spend row is built from, with the
     request tags computed once, header-derived ones included, because a
@@ -345,7 +348,7 @@ def _request_tags(litellm_params: Mapping[str, object]) -> Mapping[str, object]:
 
 
 def _create_context(logging_obj: "LiteLLMLoggingObj", custom_llm_provider: str) -> BackgroundInteractionCreateContext:
-    metadata: Final = _spend_metadata(logging_obj)
+    metadata: Final = spend_metadata(logging_obj)
     litellm_params: Final = _OBJECT_MAPPING.validate_python(logging_obj.litellm_params)
     model: Final = logging_obj.model_call_details.get("model")
     return BackgroundInteractionCreateContext(
@@ -356,37 +359,61 @@ def _create_context(logging_obj: "LiteLLMLoggingObj", custom_llm_provider: str) 
         litellm_trace_id=logging_obj.litellm_trace_id,
         start_time=_as_datetime(logging_obj.start_time),
         custom_llm_provider=custom_llm_provider,
-        metadata=_json_values((key, value) for key, value in metadata.items() if _carries(key)),
-        custom_pricing=_json_values(
+        metadata=json_values((key, value) for key, value in metadata.items() if is_carried_metadata_key(key)),
+        custom_pricing=json_values(
             (key, value) for key, value in litellm_params.items() if key in _CUSTOM_PRICING_KEYS and value is not None
         ),
     )
 
 
-def _rebuild_logging_obj(create_context: BackgroundInteractionCreateContext) -> "LiteLLMLoggingObj":
+def rebuild_logging_obj(
+    model: str | None,
+    custom_llm_provider: str | None,
+    call_type: str,
+    litellm_call_id: str,
+    function_id: str,
+    litellm_trace_id: str,
+    start_time: datetime,
+    litellm_params: Mapping[str, object],
+    dynamic_success_callbacks: "Sequence[DynamicCallback] | None" = None,
+    dynamic_failure_callbacks: "Sequence[DynamicCallback] | None" = None,
+    logging_kwargs: Mapping[str, object] | None = None,
+) -> "LiteLLMLoggingObj":
     from litellm.litellm_core_utils.litellm_logging import Logging
 
     logging_obj: Final = Logging(
-        model=create_context.model,  # pyright: ignore[reportArgumentType]  # function_setup builds the live object with the same None for an agent-only create
+        model=model,  # pyright: ignore[reportArgumentType]  # function_setup builds the live object with the same None for an agent-only create
         messages=None,
         stream=False,
+        call_type=call_type,
+        start_time=start_time,
+        litellm_call_id=litellm_call_id,
+        function_id=function_id,
+        litellm_trace_id=litellm_trace_id,
+        dynamic_success_callbacks=None if dynamic_success_callbacks is None else [*dynamic_success_callbacks],
+        dynamic_failure_callbacks=None if dynamic_failure_callbacks is None else [*dynamic_failure_callbacks],
+        kwargs=None if logging_kwargs is None else dict(logging_kwargs),
+    )
+    logging_obj.update_environment_variables(
+        litellm_params=dict(litellm_params),
+        optional_params={},
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+    )
+    return logging_obj
+
+
+def _rebuild_logging_obj(create_context: BackgroundInteractionCreateContext) -> "LiteLLMLoggingObj":
+    return rebuild_logging_obj(
+        model=create_context.model,
+        custom_llm_provider=create_context.custom_llm_provider,
         call_type=create_context.call_type,
-        start_time=create_context.start_time,
         litellm_call_id=create_context.litellm_call_id,
         function_id=create_context.function_id,
         litellm_trace_id=create_context.litellm_trace_id,
+        start_time=create_context.start_time,
+        litellm_params={"metadata": dict(create_context.metadata), **create_context.custom_pricing},
     )
-    litellm_params: Final = {
-        "metadata": dict(create_context.metadata),
-        **create_context.custom_pricing,
-    }
-    logging_obj.update_environment_variables(
-        litellm_params=litellm_params,
-        optional_params={},
-        model=create_context.model,
-        custom_llm_provider=create_context.custom_llm_provider,
-    )
-    return logging_obj
 
 
 async def _settled_elsewhere(context: BackgroundInteractionPollContext) -> bool:
@@ -439,7 +466,7 @@ async def _recorded(context: BackgroundInteractionPollContext, outcome: Settleme
     can take the row over, so a database blip does not leave the row to a
     takeover or hold the budget reservation that only a recorded release frees.
     """
-    retries: Final = _poll_intervals(
+    retries: Final = poll_intervals(
         initial=context.initial_interval_seconds,
         maximum=context.max_interval_seconds,
         timeout=context.outcome_write_timeout_seconds,
@@ -512,7 +539,7 @@ async def poll_and_log_background_interaction_cost(
 ) -> SettlementOutcome | None:
     last_response: InteractionsAPIResponse | None = None  # rebind-ok: the give-up path settles from the last poll
     await asyncio.sleep(context.start_delay_seconds)
-    intervals: Final = _poll_intervals(
+    intervals: Final = poll_intervals(
         initial=context.initial_interval_seconds,
         maximum=context.max_interval_seconds,
         timeout=context.timeout_seconds,

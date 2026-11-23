@@ -2,29 +2,33 @@
 Push-based OTLP metering for enterprise litellm deployments.
 
 Owns a dedicated OpenTelemetry meter provider and an OTLP/HTTP exporter
-authenticated to our global collector with a TLS client certificate. The
-collector front end terminates mutual TLS: the client certificate presented
-here is validated against our CA at the edge, and the verified subject is
-what identifies the deployment. It is intentionally isolated from the global
-meter provider so the customer's own OTEL metrics are untouched and ours
-never leak into their backend.
+authenticated to our global collector with a Cognito bearer token. It is
+intentionally isolated from the global meter provider so the customer's own
+OTEL metrics are untouched and ours never leak into their backend.
 
-The deployment's identity rides on the TLS client certificate, not on the
-payload; the secret license key is never sent as an attribute or header.
+The secret license key is never sent as an attribute or header.
 """
 
 import os
-import tempfile
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Final, Optional
+import threading
+import time
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Final, TypedDict
 
+import requests
 from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
 from opentelemetry.metrics import Counter
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 from opentelemetry.sdk.resources import Resource
+from pydantic import BaseModel, ConfigDict
+from requests.auth import AuthBase
+from typing_extensions import ReadOnly, Unpack
 
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.url_utils import is_https_url_with_host
 from litellm.proxy.middleware.billable_request_metrics_middleware import (
     BillableCategory,
 )
@@ -33,22 +37,14 @@ if TYPE_CHECKING:
     from litellm.proxy._types import EnterpriseLicenseData
 
 ENDPOINT_ENV: Final = "LITELLM_BILLING_METRICS_ENDPOINT"
-CLIENT_CERT_ENV: Final = "LITELLM_BILLING_METRICS_CLIENT_CERT"
-CLIENT_KEY_ENV: Final = "LITELLM_BILLING_METRICS_CLIENT_KEY"
-CA_CERT_ENV: Final = "LITELLM_BILLING_METRICS_CA_CERT"
+CLIENT_ID_ENV: Final = "LITELLM_BILLING_METRICS_CLIENT_ID"
+CLIENT_SECRET_ENV: Final = "LITELLM_BILLING_METRICS_CLIENT_SECRET"
+TOKEN_URL_ENV: Final = "LITELLM_BILLING_METRICS_TOKEN_URL"
 EXPORT_INTERVAL_ENV: Final = "LITELLM_BILLING_METRICS_EXPORT_INTERVAL_MS"
 DEFAULT_EXPORT_INTERVAL_MS: Final = 60_000
 SHUTDOWN_FLUSH_TIMEOUT_MS: Final = 5_000
+_TOKEN_REFRESH_SKEW_SECONDS: Final = 60
 _METRICS_PATH: Final = "/v1/metrics"
-
-# The cert env vars take a path or the PEM itself. Secret stores that inject
-# values as env content cannot mount them as files, so inline PEM is written out.
-_PEM_PREFIX: Final = "-----BEGIN"
-_PEM_DIR_PREFIX: Final = "litellm-billing-mtls-"
-_PEM_FILE_MODE: Final = 0o600
-_CLIENT_CERT_FILENAME: Final = "client.crt"
-_CLIENT_KEY_FILENAME: Final = "client.key"
-_CA_CERT_FILENAME: Final = "ca.crt"
 
 METRIC_NAME: Final = "litellm.enterprise.billable_requests"
 METER_NAME: Final = "litellm.enterprise.billing"
@@ -59,12 +55,19 @@ AttributeValue = str | int
 @dataclass(frozen=True, slots=True)
 class BillingMetricsConfig:
     endpoint: str
-    client_cert_path: str
-    client_key_path: str
-    ca_cert_path: str | None
+    token_url: str
+    client_id: str
+    client_secret: str = field(repr=False)
     export_interval_ms: int
     litellm_version: str
     license_id: str | None
+
+
+class _BillingMetricsOAuthToken(BaseModel):
+    model_config = ConfigDict(frozen=True, strict=True)
+
+    access_token: str
+    expires_in: int
 
 
 def _metrics_endpoint(endpoint: str) -> str:
@@ -73,7 +76,7 @@ def _metrics_endpoint(endpoint: str) -> str:
     return trimmed if trimmed.endswith(_METRICS_PATH) else f"{trimmed}{_METRICS_PATH}"
 
 
-def _resource_attributes(config: BillingMetricsConfig) -> dict[str, AttributeValue]:
+def resource_attributes(config: BillingMetricsConfig) -> dict[str, AttributeValue]:
     base: Final[dict[str, AttributeValue]] = {
         "service.name": "litellm-proxy",
         "litellm.version": config.litellm_version,
@@ -82,7 +85,7 @@ def _resource_attributes(config: BillingMetricsConfig) -> dict[str, AttributeVal
     return {**base, **license_attr}
 
 
-def _billable_attributes(
+def billable_attributes(
     category: BillableCategory, route: str, status_code: int, model_id: str | None
 ) -> dict[str, AttributeValue]:
     base: Final[dict[str, AttributeValue]] = {
@@ -94,23 +97,95 @@ def _billable_attributes(
     return {**base, **model_attr}
 
 
-def build_mtls_meter_provider(config: BillingMetricsConfig) -> MeterProvider:
-    """OTLP/HTTP exporter presenting a TLS client certificate.
+class BillingMetricsBearerAuth(AuthBase):
+    def __init__(
+        self,
+        *,
+        client_id: str,
+        client_secret: str,
+        token_url: str,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._client_id: Final = client_id
+        self._client_secret: Final = client_secret
+        self._token_url: Final = token_url
+        self._clock: Final = clock
+        self._lock: Final = threading.Lock()
+        self._cached_token: str | None = None
+        self._refresh_at: float = 0.0
 
-    The collector's load balancer terminates mutual TLS and validates the client
-    certificate against our CA. Server verification uses the system trust store
-    (the collector presents a public web-PKI certificate); ca_cert_path overrides
-    it only for private/test collectors.
-    """
-    exporter: Final = OTLPMetricExporter(
-        endpoint=_metrics_endpoint(config.endpoint),
-        # None -> exporter falls back to the system trust store.
-        certificate_file=config.ca_cert_path,
-        client_certificate_file=config.client_cert_path,
-        client_key_file=config.client_key_path,
+    def __call__(self, request: requests.PreparedRequest) -> requests.PreparedRequest:
+        token: Final = self._get_token()
+        authenticated_request: Final = request.copy()
+        authenticated_request.headers["Authorization"] = f"Bearer {token}"
+        return authenticated_request
+
+    def invalidate(self) -> None:
+        with self._lock:
+            self._cached_token = None
+            self._refresh_at = 0.0
+
+    def _get_token(self) -> str:
+        with self._lock:
+            now: Final = self._clock()
+            if self._cached_token is not None and now < self._refresh_at:
+                return self._cached_token
+            token, cache_seconds = self._fetch_token()
+            self._cached_token = token
+            self._refresh_at = now + cache_seconds
+            return token
+
+    def _fetch_token(self) -> tuple[str, float]:
+        try:
+            # The OTel periodic exporter's background thread makes blocking token I/O safe here.
+            response: Final = requests.post(
+                self._token_url,
+                auth=(self._client_id, self._client_secret),
+                data={"grant_type": "client_credentials", "scope": "telemetry/write"},
+                timeout=10,
+            )
+            response.raise_for_status()
+            token_response: Final = _BillingMetricsOAuthToken.model_validate(response.json())
+            return token_response.access_token, max(0.0, float(token_response.expires_in) - _TOKEN_REFRESH_SKEW_SECONDS)
+        except (requests.RequestException, ValueError):
+            raise requests.RequestException("Billing metrics token request failed") from None
+
+
+class _SessionHookKwargs(TypedDict, total=False):
+    stream: ReadOnly[object]
+    timeout: ReadOnly[object]
+    verify: ReadOnly[object]
+    cert: ReadOnly[object]
+    proxies: ReadOnly[object]
+
+
+class _BillingMetricsBearerSession(requests.Session):
+    def __init__(self, auth: BillingMetricsBearerAuth) -> None:
+        super().__init__()
+        self._bearer_auth: Final = auth
+        self.auth = auth
+        self.hooks = {"response": [self._invalidate_token_on_unauthorized]}
+
+    def _invalidate_token_on_unauthorized(
+        self,
+        response: requests.Response,
+        **kwargs: Unpack[_SessionHookKwargs],  # kwargs-ok: requests hooks forward send options
+    ) -> requests.Response:
+        if response.status_code == 401:
+            self._bearer_auth.invalidate()
+        return response
+
+
+def build_bearer_meter_provider(config: BillingMetricsConfig) -> MeterProvider:
+    auth: Final = BillingMetricsBearerAuth(
+        client_id=config.client_id,
+        client_secret=config.client_secret,
+        token_url=config.token_url,
     )
+    session: Final = _BillingMetricsBearerSession(auth)
+    exporter: Final = OTLPMetricExporter(endpoint=_metrics_endpoint(config.endpoint), session=session)
     reader: Final = PeriodicExportingMetricReader(exporter, export_interval_millis=config.export_interval_ms)
-    return MeterProvider(metric_readers=[reader], resource=Resource.create(_resource_attributes(config)))
+    return MeterProvider(metric_readers=[reader], resource=Resource.create(resource_attributes(config)))
 
 
 class BillingMetricsRecorder:
@@ -125,7 +200,7 @@ class BillingMetricsRecorder:
         )
 
     def record(self, *, category: BillableCategory, route: str, status_code: int, model_id: str | None) -> None:
-        self._counter.add(1, _billable_attributes(category, route, status_code, model_id))
+        self._counter.add(1, billable_attributes(category, route, status_code, model_id))
 
     def shutdown(self) -> None:
         """Final flush + exporter-thread stop. Without this, up to one export
@@ -146,115 +221,34 @@ def _export_interval_ms() -> int:
         return DEFAULT_EXPORT_INTERVAL_MS
 
 
-@dataclass(frozen=True, slots=True)
-class _CredentialPaths:
-    client_cert_path: str
-    client_key_path: str
-    ca_cert_path: str | None
-
-
-def _is_pem_content(value: str) -> bool:
-    return value.lstrip().startswith(_PEM_PREFIX)
-
-
-def _write_pem(directory: str, filename: str, pem: str) -> str:
-    path: Final = os.path.join(directory, filename)
-    with open(path, "w", encoding="utf-8") as handle:
-        handle.write(pem if pem.endswith("\n") else f"{pem}\n")
-    os.chmod(path, _PEM_FILE_MODE)
-    return path
-
-
-def _resolve_credential_paths(*, client_cert: str, client_key: str, ca_cert: str | None) -> _CredentialPaths:
-    """
-    Accept either a filesystem path or inline PEM content for each credential.
-
-    Secret stores that inject values as environment content rather than mounted
-    files (ECS tasks reading AWS Secrets Manager, Cloud Run reading Secret
-    Manager) can only deliver the certificate as a string. The OTLP exporter
-    takes paths, so inline PEM is written to a private directory once, when the
-    recorder is built. Raises OSError if that write fails; the caller disables
-    metering rather than propagating.
-    """
-    inline: Final = tuple(value for value in (client_cert, client_key, ca_cert) if value and _is_pem_content(value))
-    if not inline:
-        return _CredentialPaths(client_cert, client_key, ca_cert)
-
-    # mkdtemp is 0o700, so the 0o600 key file it holds is unreachable by other users.
-    directory: Final = tempfile.mkdtemp(prefix=_PEM_DIR_PREFIX)
-    return _CredentialPaths(
-        client_cert_path=(
-            _write_pem(directory, _CLIENT_CERT_FILENAME, client_cert) if _is_pem_content(client_cert) else client_cert
-        ),
-        client_key_path=(
-            _write_pem(directory, _CLIENT_KEY_FILENAME, client_key) if _is_pem_content(client_key) else client_key
-        ),
-        ca_cert_path=(
-            _write_pem(directory, _CA_CERT_FILENAME, ca_cert) if ca_cert and _is_pem_content(ca_cert) else ca_cert
-        ),
-    )
-
-
 def load_billing_metrics_config(
-    *, license_data: Optional["EnterpriseLicenseData"], litellm_version: str
+    *, license_data: "EnterpriseLicenseData | None", litellm_version: str
 ) -> BillingMetricsConfig | None:
-    endpoint: Final = os.getenv(ENDPOINT_ENV)
-    client_cert: Final = os.getenv(CLIENT_CERT_ENV)
-    client_key: Final = os.getenv(CLIENT_KEY_ENV)
-    # Optional: only for private/test collectors whose server cert is not on the
-    # public web PKI. The production collector needs no CA override.
-    ca_cert: Final = os.getenv(CA_CERT_ENV)
-
-    missing: Final = [
-        name
-        for name, value in (
-            (ENDPOINT_ENV, endpoint),
-            (CLIENT_CERT_ENV, client_cert),
-            (CLIENT_KEY_ENV, client_key),
-        )
-        if not value
-    ]
-    if not endpoint or not client_cert or not client_key:
+    env: Final = MappingProxyType(
+        {name: os.getenv(name) or "" for name in (ENDPOINT_ENV, CLIENT_ID_ENV, CLIENT_SECRET_ENV, TOKEN_URL_ENV)}
+    )
+    missing: Final = tuple(name for name, value in env.items() if not value)
+    if missing:
         verbose_proxy_logger.warning(
             "Enterprise billing metrics disabled: licensed deployment missing config (%s)",
             ", ".join(missing),
         )
         return None
 
-    try:
-        paths: Final = _resolve_credential_paths(client_cert=client_cert, client_key=client_key, ca_cert=ca_cert)
-    except OSError as exc:
-        verbose_proxy_logger.warning(
-            "Enterprise billing metrics disabled: could not write inline certificate content to disk: %s", exc
-        )
-        return None
-
-    # Report the variable names, never their values. A value that is neither a
-    # readable path nor recognizable PEM is still secret material, and this
-    # warning would otherwise copy a client key straight into the proxy logs.
-    unreadable: Final = [
+    insecure_urls: Final = tuple(
         env_name
-        for env_name, path in (
-            (CLIENT_CERT_ENV, paths.client_cert_path),
-            (CLIENT_KEY_ENV, paths.client_key_path),
-            (CA_CERT_ENV, paths.ca_cert_path),
-        )
-        if path and not os.path.isfile(path)
-    ]
-    if unreadable:
-        verbose_proxy_logger.warning(
-            "Enterprise billing metrics disabled: %s did not resolve to a readable certificate file. "
-            "Set each to a file path, or to inline PEM content beginning with '%s'.",
-            ", ".join(unreadable),
-            _PEM_PREFIX,
-        )
+        for env_name, url in ((ENDPOINT_ENV, env[ENDPOINT_ENV]), (TOKEN_URL_ENV, env[TOKEN_URL_ENV]))
+        if not is_https_url_with_host(url)
+    )
+    if insecure_urls:
+        verbose_proxy_logger.warning("Enterprise billing metrics disabled: %s must use HTTPS", insecure_urls[0])
         return None
 
     return BillingMetricsConfig(
-        endpoint=endpoint,
-        client_cert_path=paths.client_cert_path,
-        client_key_path=paths.client_key_path,
-        ca_cert_path=paths.ca_cert_path,
+        endpoint=env[ENDPOINT_ENV],
+        client_id=env[CLIENT_ID_ENV],
+        client_secret=env[CLIENT_SECRET_ENV],
+        token_url=env[TOKEN_URL_ENV],
         export_interval_ms=_export_interval_ms(),
         litellm_version=litellm_version,
         license_id=(license_data or {}).get("user_id"),
@@ -282,7 +276,7 @@ _ACTIVE_RECORDER: Final = _ActiveRecorderRegistry()
 
 
 def build_billing_metrics_recorder(
-    *, premium: bool, license_data: Optional["EnterpriseLicenseData"], litellm_version: str
+    *, premium: bool, license_data: "EnterpriseLicenseData | None", litellm_version: str
 ) -> BillingMetricsRecorder | None:
     """Build the recorder, or None when the deployment is not licensed or metering is unconfigured."""
     if not premium:
@@ -296,14 +290,12 @@ def build_billing_metrics_recorder(
         return None
 
     try:
-        recorder: Final = BillingMetricsRecorder(build_mtls_meter_provider(config))
+        provider: Final = build_bearer_meter_provider(config)
+        recorder: Final = BillingMetricsRecorder(provider)
     except Exception as exc:  # noqa: BLE001 -- metering must never break proxy startup
         verbose_proxy_logger.warning("Enterprise billing metrics disabled: failed to initialize exporter: %s", exc)
         return None
     _ACTIVE_RECORDER.set(recorder)
-    # The only positive signal that this component meters. Without it, a silent
-    # return above is indistinguishable from a working exporter in the logs, and
-    # a component that carries the cert but no license would look healthy.
     verbose_proxy_logger.info(
         "Enterprise billing metrics enabled: exporting to %s every %d ms",
         config.endpoint,
