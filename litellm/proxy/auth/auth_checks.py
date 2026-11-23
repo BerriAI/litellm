@@ -332,7 +332,7 @@ def _raw_cache(cache: _RawCacheRead) -> _RawCacheRead:
     return cache
 
 
-def _typed_request_body(request_body: dict) -> Mapping[str, object]:
+def _typed_request_body(request_body: Mapping[str, object]) -> Mapping[str, object]:
     return request_body
 
 
@@ -875,7 +875,9 @@ async def _run_project_checks(
         )
 
 
-def _enforce_user_param_check(general_settings: dict, request: Request, request_body: dict, route: str) -> None:
+def _enforce_user_param_check(
+    general_settings: Mapping[str, object], request: Request, request_body: Mapping[str, object], route: str
+) -> None:
     if not general_settings.get("enforce_user_param", False):
         return
 
@@ -891,7 +893,10 @@ def _enforce_user_param_check(general_settings: dict, request: Request, request_
 
 
 def _reject_clientside_metadata_tags_check(
-    general_settings: dict, request_body: dict, route: str, request: Request | None = None
+    general_settings: Mapping[str, object],
+    request_body: Mapping[str, object],
+    route: str,
+    request: Request | None = None,
 ) -> None:
     if not general_settings.get("reject_clientside_metadata_tags", False):
         return
@@ -932,7 +937,7 @@ def _global_proxy_budget_check(global_proxy_spend: float | None, skip_budget_che
             raise native.error()
 
 
-_GUARDRAIL_MODIFICATION_KEYS: Final[tuple] = (
+_GUARDRAIL_MODIFICATION_KEYS: Final[tuple[str, ...]] = (
     "guardrails",
     "disable_global_guardrails",
     "disable_global_guardrail",
@@ -1311,7 +1316,7 @@ async def common_checks(
     user_object: LiteLLM_UserTable | None,
     end_user_object: LiteLLM_EndUserTable | None,
     global_proxy_spend: float | None,
-    general_settings: dict,
+    general_settings: Mapping[str, object],
     route: str,
     llm_router: Router | None,
     proxy_logging_obj: ProxyLogging,
@@ -8100,7 +8105,7 @@ _organization_max_budget_check: Final = organization_max_budget_check
 
 
 async def _tag_max_budget_check(
-    request_body: dict,
+    request_body: Mapping[str, object],
     prisma_client: PrismaClient | None,
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
@@ -8647,7 +8652,7 @@ async def _cached_object_permission(
 
 
 async def vector_store_access_check(
-    request_body: dict,
+    request_body: Mapping[str, object],
     team_object: LiteLLM_TeamTable | None,
     valid_token: UserAPIKeyAuth | None,
     *,
