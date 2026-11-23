@@ -314,6 +314,7 @@ MCP_STDIO_ALLOWED_COMMANDS: Final[frozenset] = frozenset(
 # MCP OAuth2 Token Exchange (OBO) Defaults
 MCP_TOKEN_EXCHANGE_CACHE_MAX_SIZE: Final = get_env_int("MCP_TOKEN_EXCHANGE_CACHE_MAX_SIZE", 500)
 
+SEMANTIC_CACHE_SCOPE_HEADER: Final = "x-litellm-cache-scope"
 LITELLM_UI_ALLOW_HEADERS: Final = [
     "x-litellm-semantic-filter",
     "x-litellm-semantic-filter-tools",
@@ -322,6 +323,7 @@ LITELLM_UI_ALLOW_HEADERS: Final = [
     "x-litellm-guardrail-scan-id",
     "x-litellm-guardrail-scan-metadata",
     "x-litellm-cache-key",
+    SEMANTIC_CACHE_SCOPE_HEADER,
 ]
 
 # Gemini model-specific minimal thinking budget constants
@@ -693,6 +695,8 @@ DEFAULT_REQUEST_TIMEOUT_SECONDS: Final[float] = 6000.0
 COMPLETION_HTTP_FALLBACK_SECONDS: Final[float] = 600.0
 HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS: Final[float] = 5.0
 SEMANTIC_CACHE_EMBEDDING_TIMEOUT_SECONDS: Final[float] = get_env_float("SEMANTIC_CACHE_EMBEDDING_TIMEOUT_SECONDS", 5.0)
+SEMANTIC_CACHE_PARAMS_KEY: Final = "cache_params"
+SEMANTIC_CACHE_POLICY_KEY: Final = "_semantic_cache_policy"
 _request_timeout_from_env: Final = get_env_float_or_none("REQUEST_TIMEOUT")
 request_timeout: float = (
     DEFAULT_REQUEST_TIMEOUT_SECONDS if _request_timeout_from_env is None else _request_timeout_from_env

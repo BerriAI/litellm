@@ -40,6 +40,7 @@ from litellm.integrations.otel.runtime import (
     phase_span,
     seed_request_identity,
 )
+from litellm.litellm_core_utils.core_helpers import attribute_or_none
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias
 from litellm.models.end_user import LiteLLM_EndUserTable
@@ -220,6 +221,7 @@ from litellm.router_api import (
 )
 from litellm.rust_bridge._native import RustAuth, RustDenial, RustIdentity, RustPlan
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
+from litellm.types.semantic_cache import semantic_cache_params
 from litellm.types.services import ServiceTypes
 
 if TYPE_CHECKING:
@@ -2761,6 +2763,10 @@ async def run_centralized_common_checks(
         )
 
     user_object: LiteLLM_UserTable | None = user_result if isinstance(user_result, LiteLLM_UserTable) else None
+    if user_object is not None:
+        user_api_key_auth_obj.apply_user_semantic_cache_params(
+            semantic_cache_params(attribute_or_none(user_object, "metadata"))
+        )
     project_object: Final[LiteLLM_ProjectTableCachedObj | None] = (
         None if isinstance(project_result, BaseException) else project_result
     )
@@ -3632,6 +3638,7 @@ async def return_user_api_key_auth_obj(
             user_spend=getattr(user_obj, "spend", None),
             user_max_budget=user_obj.effective_max_budget(),
             user_model_max_budget=getattr(user_obj, "model_max_budget", None),
+            user_semantic_cache_params=semantic_cache_params(attribute_or_none(user_obj, "metadata")),
         )
     if user_obj is not None and is_user_proxy_admin(user_obj=user_obj):
         user_api_key_kwargs.update(

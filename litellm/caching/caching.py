@@ -26,7 +26,7 @@ from typing_extensions import ReadOnly, TypedDict
 import litellm
 from litellm._internal_context import current_service_target, service_target
 from litellm._logging import verbose_logger
-from litellm.constants import CACHED_STREAMING_CHUNK_DELAY
+from litellm.constants import CACHED_STREAMING_CHUNK_DELAY, SEMANTIC_CACHE_POLICY_KEY
 from litellm.integrations.otel.runtime import phase_span
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, has_attributes, require_attributes
 from litellm.litellm_core_utils.model_param_helper import (
@@ -35,6 +35,7 @@ from litellm.litellm_core_utils.model_param_helper import (
     peek_reasoning_summary_aliases,
 )
 from litellm.types.caching import *
+from litellm.types.semantic_cache import semantic_cache_policy
 from litellm.types.utils import EmbeddingResponse, Usage, is_litellm_owned_kwarg
 
 from .azure_blob_cache import AzureBlobCache
@@ -563,6 +564,8 @@ class Cache:
             LiteLLMCacheType.VALKEY_SEMANTIC,
         )
 
+    is_semantic_cache: Final = _is_semantic_cache
+
     def _semantic_cache_scope_fields(self) -> tuple[str, ...]:
         if self.semantic_cache_scope == SemanticCacheScope.END_USER:
             return (*self._SEMANTIC_CACHE_TENANT_SCOPE_FIELDS, self._SEMANTIC_CACHE_END_USER_SCOPE_FIELD)
@@ -847,6 +850,10 @@ class Cache:
         if isinstance(metadata, dict):
             cache_lookup_kwargs["metadata"] = dict(metadata)
 
+        policy: Final = semantic_cache_policy(kwargs)
+        if policy is not None:
+            cache_lookup_kwargs["cache"] = {SEMANTIC_CACHE_POLICY_KEY: policy}
+
         return cache_lookup_kwargs
 
     @staticmethod
@@ -927,7 +934,7 @@ class Cache:
             print_verbose(f"An exception occurred: {traceback.format_exc()}")
             return None
 
-    def _add_cache_logic(self, result: object, **kwargs):
+    def _add_cache_logic(self, result: object, **kwargs: object):
         """
         Common implementation across sync + async add_cache functions
         """
@@ -944,13 +951,16 @@ class Cache:
                 if self.ttl is not None:
                     kwargs["ttl"] = self.ttl
                 ## Get Cache-Controls ##
-                _cache_kwargs: Final = kwargs.get("cache", None)
-                if isinstance(_cache_kwargs, dict):
+                _cache_kwargs: Final = as_str_mapping(kwargs.get("cache"))
+                if _cache_kwargs is not None:
                     for k, v in _cache_kwargs.items():
                         if k == "ttl":
                             kwargs["ttl"] = v
 
                 cached_data: Final = {"timestamp": time.time(), "response": result}
+                policy: Final = semantic_cache_policy(kwargs) if self._is_semantic_cache() else None
+                if policy is not None and policy.params is not None and policy.params.ttl is not None:
+                    return cache_key, cached_data, {**kwargs, "ttl": policy.params.ttl}
                 return cache_key, cached_data, kwargs
             else:
                 raise Exception("cache key is None")
@@ -1138,11 +1148,11 @@ class Cache:
             prompt_tokens_details=prompt_tokens_details,
         )
 
-        cache_key, cached_data, kwargs = self._add_cache_logic(
+        _, cached_data, kwargs = self._add_cache_logic(
             result=embedding_dict,
             **kwargs,
         )
-        return cache_key, cached_data, kwargs
+        return preset_cache_key, cached_data, kwargs
 
     async def async_add_cache_pipeline(self, result, dynamic_cache_object: BaseCache | None = None, **kwargs):
         """
@@ -1200,6 +1210,9 @@ class Cache:
         """
         if self.max_messages is not None and _request_message_count(kwargs) > self.max_messages:
             return False
+        policy: Final = semantic_cache_policy(kwargs) if self._is_semantic_cache() else None
+        if policy is not None and policy.params is not None and policy.params.enabled is False:
+            return False
         if self.mode == CacheMode.default_on:
             return True
 
@@ -1209,7 +1222,7 @@ class Cache:
         if _cache and isinstance(_cache, dict):
             if _cache.get("use-cache", False) is True:
                 return True
-        return False
+        return policy is not None and policy.params is not None and policy.params.enabled is True
 
     async def batch_cache_write(self, result: object, **kwargs: object):
         cache_key, cached_data, kwargs = self._add_cache_logic(result=result, **kwargs)

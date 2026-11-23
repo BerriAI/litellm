@@ -12,6 +12,7 @@ from typing import Final
 
 from typing_extensions import ReadOnly, TypedDict
 
+from litellm.litellm_core_utils.core_helpers import attribute_or_none
 from litellm.models.budget import LiteLLM_BudgetTable
 from litellm.models.end_user import LiteLLM_EndUserTable
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
@@ -21,6 +22,7 @@ from litellm.models.user import LiteLLM_UserTable
 from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.types.proxy.auth.user_roles import LitellmUserRoles
 from litellm.types.router import AllowedModelRegion
+from litellm.types.semantic_cache import semantic_cache_params
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,7 +166,16 @@ def user_facts(user: LiteLLM_UserTable) -> UserFacts:
 
 def with_owner(token: UserAPIKeyAuth, owner: LiteLLM_UserTable | None) -> UserAPIKeyAuth:
     """The key with its owner's per-model budget, which the budget checks and the identity read."""
-    return token if owner is None else token.model_copy(update={"user_model_max_budget": owner.model_max_budget})
+    return (
+        token
+        if owner is None
+        else token.model_copy(
+            update={
+                "user_model_max_budget": owner.model_max_budget,
+                "user_semantic_cache_params": semantic_cache_params(attribute_or_none(owner, "metadata")),
+            }
+        )
+    )
 
 
 def with_end_user(token: UserAPIKeyAuth, params: EndUserParams) -> UserAPIKeyAuth:
