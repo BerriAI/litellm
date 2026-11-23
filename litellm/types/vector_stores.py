@@ -403,7 +403,7 @@ class VectorStoreToolParams:
     ranking_options: dict | None = None
     rewrite_query: bool | None = None
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, object]:
         """Convert to dict, excluding None values"""
         return {
             k: v
