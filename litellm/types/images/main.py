@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from typing import Literal
 
 from typing_extensions import TypedDict
@@ -33,3 +34,9 @@ class ImageEditRequestParams(ImageEditOptionalRequestParams, total=False):
     image: FileTypes
     prompt: str
     model: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class UnfoldableFormField:
+    param: str
+    reason: str

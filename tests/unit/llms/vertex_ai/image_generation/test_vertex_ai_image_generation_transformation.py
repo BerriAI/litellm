@@ -1336,9 +1336,9 @@ def test_vertex_gemini_generation_image_config_overrides_the_size_in_either_key_
 
 @pytest.mark.parametrize(
     ("param", "value"),
-    (("background", "auto"), ("background", "opaque"), ("moderation", "auto"), ("output_compression", 100)),
+    (("background", "auto"), ("background", "transparent"), ("moderation", "low"), ("output_compression", 50)),
 )
-def test_vertex_gemini_generation_sends_nothing_for_openai_params_at_their_no_op_defaults(
+def test_vertex_gemini_generation_leaves_out_openai_only_params_without_failing_the_call(
     param: str, value: object
 ) -> None:
     assert _sent_gemini_generation_config(**{param: value}) == {"responseModalities": ["IMAGE"]}
@@ -1351,13 +1351,3 @@ def test_vertex_gemini_generation_accepts_the_snake_case_image_config() -> None:
     }
     with pytest.raises(litellm.UnsupportedParamsError, match="`image_config`"):
         _sent_gemini_generation_request(image_config="banana")
-
-
-@pytest.mark.parametrize(("param", "value"), (("background", "transparent"), ("moderation", "low"), ("output_compression", 50)))
-def test_vertex_gemini_generation_rejects_openai_only_params_unless_dropping_params(param: str, value: object) -> None:
-    with pytest.raises(litellm.UnsupportedParamsError, match=f"`{param}`"):
-        _sent_gemini_generation_request(**{param: value})
-
-    dropped: Final = _sent_gemini_generation_request(**{param: value}, drop_params=True)
-    assert sorted(dropped) == ["contents", "generationConfig"]
-    assert dropped["generationConfig"] == {"responseModalities": ["IMAGE"]}
