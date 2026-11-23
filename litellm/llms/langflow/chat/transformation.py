@@ -45,7 +45,7 @@ class LangFlowConfig(BaseConfig):
     Each flow has a unique flow_id and is invoked via a simple HTTP endpoint.
     """
 
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs: object):
         super().__init__(**kwargs)
 
     def _get_openai_compatible_provider_info(
@@ -71,14 +71,14 @@ class LangFlowConfig(BaseConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
+        non_default_params: Mapping[str, object],
         optional_params: dict,
         model: str,
         drop_params: bool,
     ) -> dict:
         return optional_params
 
-    def _get_flow_id(self, model: str, optional_params: dict) -> str:
+    def _get_flow_id(self, model: str, optional_params: Mapping[str, object]) -> str:
         """
         Extract flow_id from the authorized model name only.
 
@@ -104,8 +104,8 @@ class LangFlowConfig(BaseConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         if api_base is None:
@@ -138,7 +138,7 @@ class LangFlowConfig(BaseConfig):
 
         return ""
 
-    def _reject_caller_tweaks(self, params: dict) -> None:
+    def _reject_caller_tweaks(self, params: Mapping[str, object]) -> None:
         if params.get("tweaks") is not None:
             raise LangFlowError(
                 status_code=400,
@@ -152,10 +152,10 @@ class LangFlowConfig(BaseConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
+        headers: Mapping[str, object],
+    ) -> dict[str, object]:
         """
         Transform the request to LangFlow format.
 
@@ -232,10 +232,10 @@ class LangFlowConfig(BaseConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
+        request_data: Mapping[str, object],
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
@@ -285,8 +285,8 @@ class LangFlowConfig(BaseConfig):
     def sign_request(
         self,
         headers: dict,
-        optional_params: dict,
-        request_data: dict,
+        optional_params: Mapping[str, object],
+        request_data: Mapping[str, object],
         api_base: str,
         api_key: str | None = None,
         model: str | None = None,
@@ -301,8 +301,8 @@ class LangFlowConfig(BaseConfig):
         headers: dict,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
@@ -313,7 +313,9 @@ class LangFlowConfig(BaseConfig):
 
         return headers
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: Mapping[str, object] | httpx.Headers
+    ) -> BaseLLMException:
         return LangFlowError(status_code=status_code, message=error_message)
 
     @property
