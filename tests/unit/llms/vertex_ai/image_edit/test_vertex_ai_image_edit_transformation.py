@@ -843,3 +843,30 @@ def test_vertex_gemini_edit_drops_a_caller_labels_header_only_while_the_setting_
     assert setting_off["x-vertex-ai-labels"] == _FORGED_LABELS_HEADER
     assert "x-vertex-ai-labels" not in setting_on
     assert setting_on["x-trace-id"] == "t-1"
+
+
+def test_vertex_gemini_image_edit_returns_the_image_without_its_thought_signature() -> None:
+    reply: Final = {
+        "candidates": [
+            {
+                "content": {
+                    "parts": [
+                        {"inlineData": {"mimeType": "image/png", "data": "aW1n"}, "thoughtSignature": "sig-abc123"}
+                    ]
+                }
+            }
+        ]
+    }
+    transport: Final = httpx.MockTransport(lambda request: httpx.Response(200, json=reply))
+    response: Final = litellm.image_edit(
+        model="vertex_ai/gemini-3.1-flash-image",
+        image=BytesIO(b"image-bytes"),
+        prompt="add a hat",
+        api_base="https://vertex.invalid",
+        vertex_project="test-project",
+        vertex_location="us-central1",
+        client=HTTPHandler(client=httpx.Client(transport=transport)),
+    )
+
+    assert [(image.b64_json, image.provider_specific_fields) for image in response.data or []] == [("aW1n", None)]
+    assert "sig-abc123" not in json.dumps(response.model_dump(), default=str)
