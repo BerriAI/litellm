@@ -1854,6 +1854,7 @@ class JWTAuthManager:
         parent_otel_span: Span | None,
         proxy_logging_obj: ProxyLogging,
         request_method: str | None = None,
+        request: Request | None = None,
     ) -> tuple[str | None, LiteLLM_TeamTable | None]:
         """Find first team with access to the requested model"""
         from litellm.proxy.proxy_server import llm_router
@@ -1911,6 +1912,7 @@ class JWTAuthManager:
                             team_id=team_id,
                             team_object=team_object,
                             llm_router=llm_router,
+                            request=request,
                         )
                         if requested_model
                         else None
@@ -2474,6 +2476,7 @@ class JWTAuthManager:
         parent_otel_span: Span | None,
         proxy_logging_obj: ProxyLogging,
         request_method: str | None = None,
+        request: Request | None = None,
     ) -> tuple[str | None, LiteLLM_TeamTable | None, LiteLLM_TeamMembership | None]:
         """
         Resolve a team for a user whose JWT carries no team claims by selecting
@@ -2534,6 +2537,7 @@ class JWTAuthManager:
                     team_id=candidate_team_id,
                     team_object=team_object,
                     llm_router=llm_router,
+                    request=request,
                 )
                 try:
                     await can_team_access_model(
@@ -2989,6 +2993,7 @@ class JWTAuthManager:
                 user_api_key_cache=user_api_key_cache,
                 parent_otel_span=parent_otel_span,
                 proxy_logging_obj=proxy_logging_obj,
+                request=request,
             )
 
         # The RBAC role-claim path (rbac_role == TEAM) sets team_id without
@@ -3116,6 +3121,7 @@ class JWTAuthManager:
                 parent_otel_span=parent_otel_span,
                 proxy_logging_obj=proxy_logging_obj,
                 request_method=request_method,
+                request=request,
             )
             # The earlier passthrough gate ran when team_id was None; re-check
             # against the DB-resolved team so a fallback-selected team must also

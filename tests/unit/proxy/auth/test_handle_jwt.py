@@ -9376,3 +9376,74 @@ async def test_authorize_jwt_admin_team_header_preserves_team_owned_1m_alias(mon
     assert request_data["model"] == "fast[1m]"
     assert await request.json() == {"model": "fast[1m]"}
     assert request.scope.get(CLAUDE_MODEL_NORMALIZED) is not True
+
+
+@pytest.mark.asyncio
+async def test_authorize_jwt_provider_passthrough_on_messages_leaves_picker_body_unchanged(monkeypatch):
+    """When /v1/messages is dispatched as a provider pass-through route (endpoint bound in path_params),
+    picker IDs must not be rewritten and request body must remain untouched."""
+    import orjson
+
+    import litellm
+    from litellm.proxy.common_utils.model_listing_utils import CLAUDE_MODEL_NORMALIZED
+
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "openai-test", "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-fake"}},
+        ]
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+
+    encoded = "claude-router-" + b"openai-test".hex()
+    request_data: dict[str, object] = {"model": encoded, "messages": [{"role": "user", "content": "hi"}]}
+    request = _make_cached_json_request("/v1/messages", request_data)
+    request.scope["path_params"] = {"endpoint": "v1/messages"}
+
+    handler = _db_fallback_handler()
+    user_object = LiteLLM_UserTable(
+        user_id="u_pt_messages",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        teams=["team_pt"],
+    )
+    team = LiteLLM_TeamTable(
+        team_id="team_pt",
+        models=[encoded],
+        metadata={"allowed_passthrough_routes": ["/v1/messages"]},
+    )
+
+    with (
+        patch.object(JWTAuthManager, "authenticate_jwt", new_callable=AsyncMock, return_value={"sub": "u_pt_messages"}),
+        patch.object(
+            JWTAuthManager,
+            "get_user_info",
+            new_callable=AsyncMock,
+            return_value=("u_pt_messages", "pt@example.com", True),
+        ),
+        patch.object(
+            JWTAuthManager,
+            "get_objects",
+            new_callable=AsyncMock,
+            return_value=(user_object, None, None, None, "u_pt_messages"),
+        ),
+        patch("litellm.proxy.auth.handle_jwt.get_team_object", new_callable=AsyncMock, return_value=team),
+        patch("litellm.proxy.auth.handle_jwt.get_team_membership", new_callable=AsyncMock, return_value=None),
+    ):
+        result = await JWTAuthManager.authorize_jwt(
+            api_key="Bearer fake-jwt",
+            jwt_handler=handler,
+            request_data=request_data,
+            general_settings={},
+            route="/v1/messages",
+            prisma_client=None,
+            user_api_key_cache=DualCache(),
+            parent_otel_span=None,
+            proxy_logging_obj=MagicMock(),
+            request=request,
+        )
+
+    assert result["team_id"] == "team_pt"
+    assert request_data["model"] == encoded
+    assert (await request.json())["model"] == encoded
+    assert orjson.loads(await request.body())["model"] == encoded
+    assert request.scope.get(CLAUDE_MODEL_NORMALIZED) is not True
+
