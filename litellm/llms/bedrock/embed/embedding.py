@@ -9,9 +9,11 @@ from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Final, get_args, overload
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.constants import BEDROCK_EMBEDDING_PROVIDERS_LITERAL
+from litellm.llms.base_llm.embedding.transformation import with_base64_embeddings
 from litellm.llms.cohere.embed.handler import embedding as cohere_embedding
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -47,6 +49,9 @@ from .twelvelabs_marengo_transformation import TwelveLabsMarengoEmbeddingConfig,
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+
+_FIELDS: Final = TypeAdapter(dict[str, object])
 
 
 def _sign_get_request(
@@ -183,6 +188,7 @@ class BedrockEmbedding(BaseAWSLLM):
         provider: BEDROCK_EMBEDDING_PROVIDERS_LITERAL,
         is_async_invoke: bool | None = False,
         batch_data: list[dict] | None = None,
+        base64_embeddings: bool = False,
     ) -> EmbeddingResponse | None:
         """
         Transforms the response from the Bedrock embedding provider to the OpenAI format.
@@ -250,7 +256,7 @@ class BedrockEmbedding(BaseAWSLLM):
         ##########################################################
         if returned_response is None:
             raise Exception(f"Unable to map model response to known provider format. model={model}")
-        return returned_response
+        return with_base64_embeddings(returned_response) if base64_embeddings else returned_response
 
     def _single_func_embeddings(
         self,
@@ -266,6 +272,7 @@ class BedrockEmbedding(BaseAWSLLM):
         provider: BEDROCK_EMBEDDING_PROVIDERS_LITERAL,
         api_key: str | None = None,
         is_async_invoke: bool | None = False,
+        base64_embeddings: bool = False,
     ):
         responses: Final[list[dict]] = []
         for data in batch_data:
@@ -318,6 +325,7 @@ class BedrockEmbedding(BaseAWSLLM):
             provider=provider,
             is_async_invoke=is_async_invoke,
             batch_data=batch_data,
+            base64_embeddings=base64_embeddings,
         )
 
     async def _async_single_func_embeddings(
@@ -334,6 +342,7 @@ class BedrockEmbedding(BaseAWSLLM):
         provider: BEDROCK_EMBEDDING_PROVIDERS_LITERAL,
         api_key: str | None = None,
         is_async_invoke: bool | None = False,
+        base64_embeddings: bool = False,
     ):
         responses: Final[list[dict]] = []
         for data in batch_data:
@@ -389,6 +398,7 @@ class BedrockEmbedding(BaseAWSLLM):
             provider=provider,
             is_async_invoke=is_async_invoke,
             batch_data=batch_data,
+            base64_embeddings=base64_embeddings,
         )
 
     def embeddings(
@@ -430,9 +440,12 @@ class BedrockEmbedding(BaseAWSLLM):
                 f"Unable to determine bedrock embedding provider for model: {model}. "
                 f"Supported providers: {list(get_args(BEDROCK_EMBEDDING_PROVIDERS_LITERAL))}"
             )
+        base64_embeddings: Final = _FIELDS.validate_python(optional_params).get("encoding_format") == "base64"
         inference_params = copy.deepcopy(optional_params)
         inference_params = {
-            k: v for k, v in inference_params.items() if k.lower() not in self.aws_authentication_params
+            k: v
+            for k, v in inference_params.items()
+            if k.lower() not in self.aws_authentication_params and k != "encoding_format"
         }
         inference_params.pop("user", None)  # make sure user is not passed in for bedrock call
 
@@ -531,6 +544,7 @@ class BedrockEmbedding(BaseAWSLLM):
                     api_key=api_key,
                     provider=provider,
                     is_async_invoke=has_async_invoke,
+                    base64_embeddings=base64_embeddings,
                 )
             returned_response: Final = self._single_func_embeddings(
                 client=(client if client is not None and isinstance(client, HTTPHandler) else None),
@@ -545,6 +559,7 @@ class BedrockEmbedding(BaseAWSLLM):
                 api_key=api_key,
                 provider=provider,
                 is_async_invoke=has_async_invoke,
+                base64_embeddings=base64_embeddings,
             )
             if returned_response is None:
                 raise Exception("Unable to map Bedrock request to provider")
