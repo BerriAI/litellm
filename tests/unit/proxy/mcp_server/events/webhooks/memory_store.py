@@ -61,12 +61,14 @@ class MemoryStore:
             or activation.expected_generation not in (None, current.generation)
         ):
             return False
+        if activation.reactivation_gap is not None and not await self.enqueue(activation.reactivation_gap):
+            raise ValueError("Duplicate reactivation gap")
         return self._update_live(
             subscription_id,
             status="active",
             generation=uuid.uuid4().hex,
             consecutive_failures=0,
-            **activation.model_dump(exclude={"expected_generation"}),
+            **activation.model_dump(exclude={"expected_generation", "reactivation_gap"}),
         )
 
     async def mark_delivered(self, subscription_id: str, at: datetime) -> None:

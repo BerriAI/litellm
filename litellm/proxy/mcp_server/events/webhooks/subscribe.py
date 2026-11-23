@@ -198,17 +198,15 @@ async def _discard_pending(subscription: _Subscription) -> None:
             await subscription.request.store.discard_pending(subscription.base.id, subscription.base.generation)
 
 
-async def _reactivation_gap(row: SubscriptionRow, cursor: str | None, store: EventStore) -> None:
+def _reactivation_gap(row: SubscriptionRow, cursor: str | None) -> QueuedDelivery:
     gap_id: Final = new_webhook_id("gap")
-    await store.enqueue(
-        QueuedDelivery(
-            delivery_id=gap_id,
-            subscription_id=row.id,
-            body=GapEnvelope(cursor=cursor).model_dump_json(),
-            webhook_id=gap_id,
-            next_attempt_at=datetime.now(timezone.utc),
-            prepared=True,
-        )
+    return QueuedDelivery(
+        delivery_id=gap_id,
+        subscription_id=row.id,
+        body=GapEnvelope(cursor=cursor).model_dump_json(),
+        webhook_id=gap_id,
+        next_attempt_at=datetime.now(timezone.utc),
+        prepared=True,
     )
 
 
@@ -217,13 +215,11 @@ async def _roll_back(
 ) -> None:
     """Undo an upstream subscription this request created but could not record."""
     current: Final = await subscription.request.store.get(subscription.base.id)
-    if (
-        current is not None
-        and current.upstream_secret == subscription.base.upstream_secret
-        and current.generation != subscription.base.generation
-        and current.status != "terminated"
-    ):
-        return
+    if current is not None and current.upstream_secret == subscription.base.upstream_secret:
+        if current.status in ("active", "suspended"):
+            return
+        if current.status == "pending" and current.generation != subscription.base.generation:
+            return
     orphan: Final = subscription.base.model_copy(update={"upstream_subscription_id": upstream.id})
     await _unsubscribe_upstream(orphan, subscription.prepared, settings, runtime)
     await _discard_pending(subscription)
@@ -251,6 +247,9 @@ async def activate_subscription(
     pending: Final = await subscription.request.store.has_pending(base.id)
     watermark: Final = base.cursor if pending else sealed.ok
     activation: Final = Activation(
+        reactivation_gap=_reactivation_gap(base, watermark)
+        if existing is not None and existing.status == "suspended"
+        else None,
         expected_generation=base.generation,
         client_secret=base.client_secret,
         upstream_subscription_id=upstream.id,
@@ -270,8 +269,6 @@ async def activate_subscription(
         await _roll_back(subscription, upstream, settings, runtime)
         return Error(subscription_not_found())
     refreshed: Final = existing if existing is not None and existing.status != "terminated" else None
-    if refreshed is not None and refreshed.status == "suspended":
-        await _reactivation_gap(base, watermark, subscription.request.store)
     await runtime.record(
         EventActivity(
             call_type="mcp_event_subscribe",
