@@ -9,12 +9,16 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import HTTPException
+from openai.types.responses import ResponseOutputText
+from openai.types.responses.response_output_text import Logprob
 
 import litellm
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.utils import ProxyLogging
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.llms.openai import ResponsesAPIResponse
 
 
 @pytest.fixture(autouse=True)
@@ -241,7 +245,10 @@ def _masked(content: str) -> str:
 
 
 class _DictMaskingLogger(CustomLogger):
-    async def async_post_call_success_hook(self, data, user_api_key_dict, response):
+    async def async_post_call_success_hook(
+        self, data: dict[str, object], user_api_key_dict: UserAPIKeyAuth, response: object
+    ) -> dict[str, object]:
+        assert isinstance(response, litellm.ModelResponse)
         dumped = response.model_dump()
         choice = dumped["choices"][0]
         message = {**choice["message"], "content": _masked(choice["message"]["content"])}
@@ -249,7 +256,10 @@ class _DictMaskingLogger(CustomLogger):
 
 
 class _InPlaceDictMaskingLogger(CustomLogger):
-    async def async_post_call_success_hook(self, data, user_api_key_dict, response):
+    async def async_post_call_success_hook(
+        self, data: dict[str, object], user_api_key_dict: UserAPIKeyAuth, response: object
+    ) -> dict[str, Any]:
+        assert isinstance(response, dict)
         message = response["choices"][0]["message"]
         message["content"] = _masked(message["content"])
         return response
@@ -288,7 +298,10 @@ async def test_post_call_success_hook_drops_token_data_from_a_dict_choice_a_call
 
 
 class _InPlaceToolArgumentsMaskingLogger(CustomLogger):
-    async def async_post_call_success_hook(self, data, user_api_key_dict, response):
+    async def async_post_call_success_hook(
+        self, data: dict[str, object], user_api_key_dict: UserAPIKeyAuth, response: object
+    ) -> dict[str, Any]:
+        assert isinstance(response, dict)
         function = response["choices"][0]["message"]["tool_calls"][0]["function"]
         function["arguments"] = _masked(function["arguments"])
         return response
@@ -321,7 +334,10 @@ class _InPlaceMessageFieldMaskingLogger(CustomLogger):
         super().__init__()
         self.field = field
 
-    async def async_post_call_success_hook(self, data, user_api_key_dict, response):
+    async def async_post_call_success_hook(
+        self, data: dict[str, object], user_api_key_dict: UserAPIKeyAuth, response: object
+    ) -> dict[str, Any]:
+        assert isinstance(response, dict)
         message = response["choices"][0]["message"]
         message[self.field] = json.loads(_masked(json.dumps(message[self.field])))
         return response
@@ -363,7 +379,10 @@ class _InPlaceContentEditingLogger(CustomLogger):
         super().__init__()
         self.edit = edit
 
-    async def async_post_call_success_hook(self, data, user_api_key_dict, response):
+    async def async_post_call_success_hook(
+        self, data: dict[str, object], user_api_key_dict: UserAPIKeyAuth, response: object
+    ) -> dict[str, Any]:
+        assert isinstance(response, dict)
         message = response["choices"][0]["message"]
         message["content"] = self.edit(message["content"])
         return response
@@ -397,10 +416,7 @@ async def test_post_call_success_hook_keeps_token_data_only_when_a_callback_appe
     assert (choice["logprobs"] is not None) is keeps_token_data
 
 
-def _responses_output_text(text: str, logprobs_requested: bool):
-    from openai.types.responses import ResponseOutputText
-    from openai.types.responses.response_output_text import Logprob
-
+def _responses_output_text(text: str, logprobs_requested: bool) -> ResponseOutputText:
     return ResponseOutputText(
         type="output_text",
         text=text,
@@ -410,7 +426,10 @@ def _responses_output_text(text: str, logprobs_requested: bool):
 
 
 class _ResponsesPartMaskingLogger(CustomLogger):
-    async def async_post_call_success_hook(self, data, user_api_key_dict, response):
+    async def async_post_call_success_hook(
+        self, data: dict[str, object], user_api_key_dict: UserAPIKeyAuth, response: object
+    ) -> ResponsesAPIResponse:
+        assert isinstance(response, ResponsesAPIResponse)
         message = response.output[0]
         parts = [part.model_copy(update={"text": _masked(part.text)}) for part in message.content]
         return response.model_copy(update={"output": [message.model_copy(update={"content": parts})]})
@@ -427,7 +446,6 @@ async def test_post_call_success_hook_drops_logprobs_only_from_responses_output_
 ):
     from openai.types.responses import ResponseOutputMessage
 
-    from litellm.types.llms.openai import ResponsesAPIResponse
 
     monkeypatch.setattr(litellm, "callbacks", [_ResponsesPartMaskingLogger()])
     response = ResponsesAPIResponse(
