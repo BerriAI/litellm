@@ -2507,7 +2507,7 @@ async def token_endpoint(
     client_secret: str | None = Form(None),
     code_verifier: str = Form(None),
     refresh_token: str | None = Form(None),
-    scope: str | None = Form(None),
+    scope: Annotated[str | None, Form()] = None,
     resource: str | None = Form(None),
     subject_token: str | None = Form(None),
     subject_token_type: str | None = Form(None),

@@ -817,6 +817,102 @@ async def test_token_endpoint_forwards_code_verifier():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("configured", "requested", "upstream_scope", "sent", "returned"),
+    [
+        (("tools.read", "tools.call"), "tools.read", None, "tools.read", "tools.read"),
+        (("tools.read", "tools.call"), None, None, "tools.read tools.call", "tools.read tools.call"),
+        ((), None, None, None, None),
+        (("tools.read", "tools.call"), "tools.read", "tools.call", "tools.read", "tools.call"),
+    ],
+)
+async def test_authorization_code_exchange_forwards_requested_or_configured_scope(
+    configured: tuple[str, ...],
+    requested: str | None,
+    upstream_scope: str | None,
+    sent: str | None,
+    returned: str | None,
+) -> None:
+    from collections.abc import Mapping
+
+    from pydantic import TypeAdapter
+    from starlette.responses import Response
+
+    from litellm.proxy._types import MCPTransport
+    from litellm.proxy.mcp_server.discoverable_endpoints import token_endpoint
+    from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    class _UpstreamTokenResponse:
+        def __init__(self, body: Mapping[str, object]) -> None:
+            self._body: Mapping[str, object] = body
+
+        def json(self) -> Mapping[str, object]:
+            return self._body
+
+        def raise_for_status(self) -> None:
+            return None
+
+    class _UpstreamTokenClient:
+        def __init__(self, body: Mapping[str, object]) -> None:
+            self._body: Mapping[str, object] = body
+            self.sent: Mapping[str, str] | None = None
+
+        async def post(
+            self, url: str, *, headers: Mapping[str, str], data: Mapping[str, str]
+        ) -> _UpstreamTokenResponse:
+            self.sent = data
+            return _UpstreamTokenResponse(self._body)
+
+    global_mcp_server_manager.registry.clear()
+    server: Final = MCPServer(
+        server_id="scope_mcp",
+        name="scope_mcp",
+        server_name="scope_mcp",
+        alias="scope_mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        client_id="scope-client",
+        client_secret="scope-secret",
+        authorization_url="https://idp.example/authorize",
+        token_url="https://idp.example/token",
+        scopes=list(configured),
+    )
+    global_mcp_server_manager.registry[server.server_id] = server
+    mock_request: Final = MagicMock(spec=Request)
+    mock_request.base_url = "https://litellm-proxy.example.com/"
+    mock_request.headers = {}
+    upstream_body: Final = {
+        "access_token": "upstream-token",
+        "token_type": "Bearer",
+        "expires_in": 3600,
+        **({"scope": upstream_scope} if upstream_scope is not None else {}),
+    }
+    client: Final = _UpstreamTokenClient(upstream_body)
+    with patch(
+        "litellm.proxy.mcp_server.discoverable_endpoints.get_async_httpx_client",
+        return_value=client,
+    ):
+        response: Final = await token_endpoint(
+            request=mock_request,
+            grant_type="authorization_code",
+            code="auth-code",
+            redirect_uri="http://localhost/callback",
+            client_id="scope-client",
+            mcp_server_name="scope_mcp",
+            client_secret="scope-secret",
+            code_verifier="verifier",
+            **({"scope": requested} if requested is not None else {}),
+        )
+
+    assert client.sent is not None
+    assert isinstance(response, Response)
+    issued: Final = TypeAdapter(dict[str, object]).validate_json(bytes(response.body))
+    assert client.sent.get("scope") == sent
+    assert issued.get("scope") == returned
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("server_name", [None, "missing"])
 async def test_register_client_without_mcp_server_name_returns_dummy(server_name):
     try:
