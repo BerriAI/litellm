@@ -189,6 +189,15 @@
       "max_completion_tokens": "max_tokens"
     }
   },
+  "blockrun": {
+    "base_url": "https://api.blockrun.ai/v1",
+    "api_key_env": "BLOCKRUN_API_KEY",
+    "api_base_env": "BLOCKRUN_API_BASE",
+    "supported_endpoints": ["/v1/chat/completions"],
+    "provider_info": {
+      "supports_function_calling": true
+    }
+  },
   "empiriolabs": {
     "base_url": "https://api.empiriolabs.ai/v1",
     "api_key_env": "EMPIRIOLABS_API_KEY",
