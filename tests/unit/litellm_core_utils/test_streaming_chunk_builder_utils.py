@@ -3157,8 +3157,8 @@ def _data_line(payload: Mapping[str, object]) -> str:
     return f"data: {json.dumps(payload)}\n\n"
 
 
-@pytest.mark.parametrize("line_break", ["\r", "\r\n", "\x0c", "\u2028"])
-def test_stream_chunk_builder_reads_a_data_line_after_any_line_break_an_sse_reader_honours(line_break: str) -> None:
+@pytest.mark.parametrize("line_break", ["\r", "\r\n"])
+def test_stream_chunk_builder_reads_a_data_line_after_a_cr_or_crlf_line_break(line_break: str) -> None:
     frame: Final = f"event: message{line_break}{_data_line(_SECRET_CHUNK)}".encode()
 
     built: Final = stream_chunk_builder(chunks=[_streamed_text("Hello"), frame, _streamed_text(" world")])
@@ -3233,6 +3233,18 @@ def test_stream_chunk_builder_reads_every_choice_a_raw_frame_carries() -> None:
             )
         ),
         pytest.param(_data_line(_SECRET_CHUNK).replace("LEAKED", "LEAK\u2028ED"), id="line_break_inside_the_json"),
+        pytest.param(_data_line(_SECRET_CHUNK).replace("data:", " data:"), id="data_field_after_a_space"),
+        *(
+            pytest.param(f": note{line_break}{_data_line(_SECRET_CHUNK)}", id=f"data_line_after_{name}_in_a_comment")
+            for name, line_break in (
+                ("vertical_tab", "\x0b"),
+                ("form_feed", "\x0c"),
+                ("separator", "\x1c"),
+                ("next_line", "\x85"),
+                ("line_separator", "\u2028"),
+                ("paragraph_separator", "\u2029"),
+            )
+        ),
         *(
             pytest.param(
                 _data_line({**_SECRET_CHUNK, "choices": [first, {"index": 0, "delta": {"content": "LEAKED-SECRET"}}]}),
@@ -3255,6 +3267,16 @@ def test_stream_chunk_builder_reads_every_choice_a_raw_frame_carries() -> None:
 def test_stream_chunk_builder_still_fails_on_a_raw_frame_it_cannot_account_for(frame: bytes | str) -> None:
     with pytest.raises(litellm.APIError):
         stream_chunk_builder(chunks=[_streamed_text("Hello"), frame])
+
+
+def test_stream_chunk_builder_keeps_a_rejected_payload_out_of_the_error_and_the_log(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM"), pytest.raises(litellm.APIError) as raised:
+        stream_chunk_builder(chunks=[_streamed_text("Hello"), b'data: ["SSN: 123-45-6789"]\n\n'])
+
+    assert "123-45-6789" not in f"{raised.value} {caplog.text}"
+    assert "Exception occurred" in caplog.text
 
 
 def _built_content(chunks: list[object]) -> str | None:

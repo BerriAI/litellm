@@ -1874,7 +1874,9 @@ def _assembled_message_fields(processor: ChunkProcessor, chunks: Sequence) -> It
 
 _RAW_FRAME_TYPES: Final = (str, bytes)
 _FRAME_LINE_STARTS: Final = (":", "data:", "event:", "id:", "retry:")
-_FRAME_PAYLOAD: Final = TypeAdapter(dict[str, object])
+# SSE ends a line at CR or LF only, but str.splitlines() readers also break at these.
+_FRAME_READER_DEPENDENT_BREAKS: Final = frozenset("\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029")
+_FRAME_PAYLOAD: Final = TypeAdapter(dict[str, object], config={"hide_input_in_errors": True})
 
 
 def _is_chat_chunk(payload: Mapping[str, object]) -> bool:
@@ -1894,13 +1896,15 @@ def _is_chat_chunk(payload: Mapping[str, object]) -> bool:
 
 def _frame_chunks(frame: str | bytes) -> tuple[Mapping[str, object], ...]:
     text: Final = frame if isinstance(frame, str) else frame.decode("utf-8")
-    lines: Final = tuple(filter(None, (line.strip() for line in text.splitlines())))
+    if not _FRAME_READER_DEPENDENT_BREAKS.isdisjoint(text):
+        raise ValueError("a raw frame beside parsed chunks carries a line break that SSE readers do not agree on")
+    lines: Final = tuple(filter(None, text.replace("\r\n", "\n").replace("\r", "\n").split("\n")))
     if not all(line.startswith(_FRAME_LINE_STARTS) for line in lines):
         raise ValueError("a raw frame beside parsed chunks carries a line that is not an SSE comment or field")
     payloads: Final = (
         payload
         for line in lines
-        if line.startswith("data:") and (payload := line.removeprefix("data:").strip()) not in ("", "[DONE]")
+        if line.startswith("data:") and (payload := line.removeprefix("data:").strip(" ")) not in ("", "[DONE]")
     )
     chunks: Final = tuple(map(_FRAME_PAYLOAD.validate_json, payloads))
     if not all(map(_is_chat_chunk, chunks)):
