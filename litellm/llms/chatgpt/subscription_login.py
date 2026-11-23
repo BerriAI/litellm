@@ -1,25 +1,102 @@
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Final
+from typing import Final, TypeAlias
 
-from pydantic import TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 from litellm.exceptions import BadRequestError, CallerCredentialAuthenticationError
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.llms.chatgpt.common_utils import CHATGPT_ACCOUNT_ID_HEADER, CHATGPT_API_BASE, chatgpt_client_api_base
+from litellm.types.proxy.litellm_pre_call_utils import RedactedDict
 from litellm.types.utils import CredentialItem, chatgpt_subscription_login_litellm_params
 
 CHATGPT_SUBSCRIPTION_LOGINS_SECRET_FIELD: Final = "chatgpt_subscription_logins"
+CHATGPT_SUBSCRIPTION_OWNER_SECRET_FIELD: Final = "chatgpt_subscription_owner"
 CHATGPT_OWNER_TEAM_ID_KEY: Final = "chatgpt_owner_team_id"
 CHATGPT_OWNER_KEY_HASH_KEY: Final = "chatgpt_owner_key_hash"
 CHATGPT_PROVIDER: Final = "chatgpt"
 _LOGIN_HEADER_NAMES: Final = frozenset({"authorization", CHATGPT_ACCOUNT_ID_HEADER.lower()})
 _STR_KEYED: Final = TypeAdapter(Mapping[str, object])
 _ENTRIES: Final = TypeAdapter(tuple[object, ...])
+_NOTHING: Final[Mapping[str, object]] = MappingProxyType({})
+
+ChatGPTLoginRefresh: TypeAlias = Callable[[str, str | None, str | None], Awaitable[str | None]]
+
+
+class _CredentialInfoView(BaseModel):
+    model_config = ConfigDict(frozen=True, from_attributes=True)
+
+    credential_info: Mapping[str, object]
 
 
 def is_chatgpt_subscription_login(credential: CredentialItem) -> bool:
     return any(key in credential.credential_values for key in chatgpt_subscription_login_litellm_params)
+
+
+def _non_empty_str(value: object) -> str | None:
+    return value if isinstance(value, str) and value else None
+
+
+def chatgpt_credential_info(credential: CredentialItem | None) -> Mapping[str, object]:
+    if credential is None:
+        return _NOTHING
+    try:
+        return _CredentialInfoView.model_validate(credential).credential_info
+    except ValidationError:
+        return _NOTHING
+
+
+def chatgpt_login_owner(credential: CredentialItem) -> tuple[str | None, str | None]:
+    info: Final = chatgpt_credential_info(credential)
+    team_id: Final = _non_empty_str(info.get(CHATGPT_OWNER_TEAM_ID_KEY))
+    key_hash: Final = _non_empty_str(info.get(CHATGPT_OWNER_KEY_HASH_KEY))
+    if (team_id is None) == (key_hash is None):
+        return None, None
+    return team_id, key_hash
+
+
+def owns_chatgpt_login(credential: CredentialItem, team_id: str | None, key_hash: str | None) -> bool:
+    if not is_chatgpt_subscription_login(credential):
+        return False
+    owner_team_id, owner_key_hash = chatgpt_login_owner(credential)
+    return (owner_team_id is not None and owner_team_id == team_id) or (
+        owner_key_hash is not None and owner_key_hash == key_hash
+    )
+
+
+def chatgpt_subscription_owner(team_id: str | None, key_hash: str | None) -> Mapping[str, str]:
+    return MappingProxyType(
+        {
+            **({CHATGPT_OWNER_TEAM_ID_KEY: team_id} if team_id else {}),
+            **({CHATGPT_OWNER_KEY_HASH_KEY: key_hash} if key_hash else {}),
+        }
+    )
+
+
+def chatgpt_login_probe_params(
+    probe_params: Mapping[str, object], probing_owners: tuple[tuple[str | None, str | None], ...] | None = None
+) -> Mapping[str, object]:
+    credential_name: Final = probe_params.get("litellm_credential_name")
+    credential: Final = (
+        CredentialAccessor.find_credential(credential_name) if isinstance(credential_name, str) else None
+    )
+    if credential is None or not is_chatgpt_subscription_login(credential):
+        return probe_params
+    owner: Final = chatgpt_login_owner(credential)
+    if owner == (None, None) or (
+        probing_owners is not None and not any(owns_chatgpt_login(credential, *prober) for prober in probing_owners)
+    ):
+        return probe_params
+    return MappingProxyType(
+        {
+            **probe_params,
+            "secret_fields": {
+                **(_str_keyed(probe_params.get("secret_fields")) or _NOTHING),
+                CHATGPT_SUBSCRIPTION_OWNER_SECRET_FIELD: RedactedDict(chatgpt_subscription_owner(*owner)),
+            },
+        }
+    )
 
 
 def names_chatgpt_subscription_login(credential_name: object) -> bool:
@@ -83,13 +160,20 @@ def _login_unavailable(credential_name: str) -> CallerCredentialAuthenticationEr
     )
 
 
-def _owned_access_token(kwargs: Mapping[str, object], credential_name: str) -> str | None:
+def _secret_field(kwargs: Mapping[str, object], field: str) -> Mapping[str, object]:
     secret_fields: Final = _str_keyed(kwargs.get("secret_fields"))
-    logins: Final = _str_keyed(
-        secret_fields.get(CHATGPT_SUBSCRIPTION_LOGINS_SECRET_FIELD) if secret_fields is not None else None
-    )
-    token: Final = logins.get(credential_name) if logins is not None else None
-    return token if isinstance(token, str) and token else None
+    return (_str_keyed(secret_fields.get(field)) if secret_fields is not None else None) or _NOTHING
+
+
+def _owned_access_token(kwargs: Mapping[str, object], credential_name: str) -> str | None:
+    return _non_empty_str(_secret_field(kwargs, CHATGPT_SUBSCRIPTION_LOGINS_SECRET_FIELD).get(credential_name))
+
+
+def _caller_owner(kwargs: Mapping[str, object]) -> tuple[str | None, str | None] | None:
+    owner: Final = _secret_field(kwargs, CHATGPT_SUBSCRIPTION_OWNER_SECRET_FIELD)
+    team_id: Final = _non_empty_str(owner.get(CHATGPT_OWNER_TEAM_ID_KEY))
+    key_hash: Final = _non_empty_str(owner.get(CHATGPT_OWNER_KEY_HASH_KEY))
+    return None if team_id is None and key_hash is None else (team_id, key_hash)
 
 
 def _without_login_headers(headers: Mapping[str, object]) -> Mapping[str, object]:
@@ -151,22 +235,76 @@ def _request_updates(kwargs: Mapping[str, object], access_token: str) -> Mapping
     )
 
 
-def attach_chatgpt_subscription_login(
-    kwargs: dict[str, object],  # mutable-ok: kwargs is the request mutation channel
-    model: object,
-) -> None:
+@dataclass(frozen=True, slots=True)
+class _NamedLogin:
+    credential_name: str
+    credential: CredentialItem | None
+
+
+def _named_login(kwargs: Mapping[str, object], model: object) -> _NamedLogin | None:
     credential_name: Final = kwargs.get("litellm_credential_name")
     if not isinstance(credential_name, str) or not credential_name:
-        return
+        return None
     credential: Final = CredentialAccessor.find_credential(credential_name)
     if credential is None and not _is_chatgpt_call(kwargs, model):
-        return
+        return None
     if credential is not None and not is_chatgpt_subscription_login(credential):
-        return
-    access_token: Final = _owned_access_token(kwargs, credential_name)
-    if credential is None or access_token is None or not _is_chatgpt_call(kwargs, model):
-        raise _login_unavailable(credential_name)
+        return None
+    return _NamedLogin(credential_name=credential_name, credential=credential)
+
+
+def _bind_login(
+    kwargs: dict[str, object],  # mutable-ok: kwargs is the request mutation channel
+    model: object,
+    login: _NamedLogin,
+    access_token: str | None,
+) -> None:
+    if login.credential is None or access_token is None or not _is_chatgpt_call(kwargs, model):
+        raise _login_unavailable(login.credential_name)
     updates: Final = _request_updates(kwargs, access_token)
     kwargs.pop("chatgpt_auth_file", None)
     kwargs.pop("base_url", None)
     kwargs.update(updates)
+
+
+def attach_chatgpt_subscription_login(
+    kwargs: dict[str, object],  # mutable-ok: kwargs is the request mutation channel
+    model: object,
+) -> None:
+    login: Final = _named_login(kwargs, model)
+    if login is None:
+        return
+    _bind_login(kwargs, model, login, _owned_access_token(kwargs, login.credential_name))
+
+
+async def _refresh_through_proxy(credential_name: str, team_id: str | None, key_hash: str | None) -> str | None:
+    from litellm.proxy.credential_endpoints.chatgpt_subscription_logins import (
+        owned_chatgpt_subscription_access_token,
+    )
+
+    return await owned_chatgpt_subscription_access_token(credential_name, team_id, key_hash)
+
+
+async def _refreshed_access_token(
+    kwargs: Mapping[str, object], model: object, login: _NamedLogin, refresh: ChatGPTLoginRefresh
+) -> str | None:
+    owner: Final = _caller_owner(kwargs)
+    if login.credential is None or owner is None or not _is_chatgpt_call(kwargs, model):
+        return None
+    if not owns_chatgpt_login(login.credential, *owner):
+        return None
+    return await refresh(login.credential_name, *owner)
+
+
+async def aattach_chatgpt_subscription_login(
+    kwargs: dict[str, object],  # mutable-ok: kwargs is the request mutation channel
+    model: object,
+    refresh: ChatGPTLoginRefresh = _refresh_through_proxy,
+) -> None:
+    login: Final = _named_login(kwargs, model)
+    if login is None:
+        return
+    access_token: Final = _owned_access_token(kwargs, login.credential_name) or await _refreshed_access_token(
+        kwargs, model, login, refresh
+    )
+    _bind_login(kwargs, model, login, access_token)

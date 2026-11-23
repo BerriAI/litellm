@@ -2088,6 +2088,86 @@ def test_update_credential_still_accepts_a_body_without_credential_values(creden
     assert set(json.loads(written["credential_values"])) == {"api_key"}, "stored values survive an info-only patch"
 
 
+_CHATGPT_LOGIN_VALUES: Final = {"chatgpt_access_token": "at-login", "chatgpt_refresh_token": "rt-login"}
+_CHATGPT_OWNER_INFOS: Final = {
+    "no-owner": {"custom_llm_provider": "chatgpt"},
+    "two-owners": {
+        "custom_llm_provider": "chatgpt",
+        "chatgpt_owner_team_id": "team-a",
+        "chatgpt_owner_key_hash": "hash-k",
+    },
+    "team-owner": {"custom_llm_provider": "chatgpt", "chatgpt_owner_team_id": "team-a"},
+    "key-owner": {"custom_llm_provider": "chatgpt", "chatgpt_owner_key_hash": "hash-k"},
+}
+
+
+@pytest.mark.parametrize(
+    ("owners", "status_code"),
+    [("no-owner", 400), ("two-owners", 400), ("team-owner", 200), ("key-owner", 200)],
+)
+def test_create_credential_accepts_a_chatgpt_login_only_with_exactly_one_owner(
+    credential_store, owners, status_code
+):
+    create: Final = AsyncMock(return_value=None)
+    credential_store(create=create)
+
+    response: Final = _create_credential(
+        {
+            "credential_name": "chatgpt-login",
+            "credential_values": _CHATGPT_LOGIN_VALUES,
+            "credential_info": _CHATGPT_OWNER_INFOS[owners],
+        }
+    )
+
+    assert response.status_code == status_code, response.text
+    assert create.await_count == (1 if status_code == 200 else 0)
+    if status_code == 400:
+        assert "exactly one owner" in response.json()["error"]["message"]
+
+
+def test_create_credential_still_accepts_a_chatgpt_credential_without_login_values_or_an_owner(credential_store):
+    create: Final = AsyncMock(return_value=None)
+    credential_store(create=create)
+
+    response: Final = _create_credential(
+        {
+            "credential_name": "chatgpt-before-sign-in",
+            "credential_values": {"api_base": "https://chatgpt.com/backend-api/codex"},
+            "credential_info": _CHATGPT_OWNER_INFOS["no-owner"],
+        }
+    )
+
+    assert response.status_code == 200, response.text
+    assert create.await_count == 1
+
+
+@pytest.mark.parametrize(
+    ("info_patch", "status_code"),
+    [
+        ({"chatgpt_owner_team_id": None}, 400),
+        ({"chatgpt_owner_key_hash": "hash-k"}, 400),
+        ({"chatgpt_owner_team_id": None, "chatgpt_owner_key_hash": "hash-k"}, 200),
+        ({"note": "billing seat 3"}, 200),
+    ],
+    ids=["clears-the-owner", "adds-a-second-owner", "moves-to-a-key", "keeps-its-owner"],
+)
+def test_update_credential_keeps_exactly_one_owner_on_a_chatgpt_login(credential_store, info_patch, status_code):
+    stored: Final = CredentialItem(
+        credential_name="chatgpt-login",
+        credential_values={key: encrypt_value_helper(value) for key, value in _CHATGPT_LOGIN_VALUES.items()},
+        credential_info=_CHATGPT_OWNER_INFOS["team-owner"],
+    )
+    update_by_name: Final = AsyncMock(return_value=None)
+    credential_store(find_by_name=AsyncMock(return_value=stored), update_by_name=update_by_name)
+
+    response: Final = _patch_credential(
+        "chatgpt-login", {"credential_name": "chatgpt-login", "credential_info": info_patch}
+    )
+
+    assert response.status_code == status_code, response.text
+    assert update_by_name.await_count == (1 if status_code == 200 else 0)
+
+
 from contextlib import contextmanager as _ctx
 
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
@@ -3619,17 +3699,26 @@ def test_chatgpt_sign_in_start_refuses_a_name_held_by_another_provider(chatgpt_s
     assert chatgpt_sign_in.credentials.rows == {"openai-prod": existing}
 
 
-def test_chatgpt_sign_in_poll_refuses_a_name_another_provider_took_meanwhile(chatgpt_sign_in):
+def test_chatgpt_sign_in_poll_refuses_a_name_another_provider_took_meanwhile(chatgpt_sign_in, monkeypatch):
     flow_handle = _started_chatgpt_login("login-a", {"owner_team_id": "team-a"})
     existing = _another_providers_row("login-a")
     chatgpt_sign_in.credentials.rows["login-a"] = existing
+    served = CredentialItem(
+        credential_name="login-a",
+        credential_values={"api_key": "sk-openai-prod"},
+        credential_info={"custom_llm_provider": "openai"},
+    )
+    monkeypatch.setattr(litellm, "credential_list", [served])
     chatgpt_sign_in.auth_server.approve("first", "acct-a")
 
     response = _poll_chatgpt_login("login-a", flow_handle)
 
     assert response.status_code == 409, response.text
+    assert response.json()["error"]["message"] == "Credential 'login-a' belongs to another provider. Pick another name."
+    assert response.json()["error"]["param"] == "credential_name"
     assert chatgpt_sign_in.credentials.writes == []
     assert chatgpt_sign_in.credentials.rows == {"login-a": existing}
+    assert litellm.credential_list == [served]
 
 
 @pytest.mark.parametrize("failing_url", [CHATGPT_DEVICE_TOKEN_URL, CHATGPT_OAUTH_TOKEN_URL], ids=["poll", "exchange"])
@@ -3864,7 +3953,9 @@ def test_update_github_app_validates_merged_values_before_storage(credential_sto
 
 
 @pytest.mark.parametrize("blank", ["", "   "])
-def test_create_github_app_never_stores_a_blank_app_field(credential_store: _InstallCredentialStore, blank: str) -> None:
+def test_create_github_app_never_stores_a_blank_app_field(
+    credential_store: _InstallCredentialStore, blank: str
+) -> None:
     credential_store(create=AsyncMock())
     response: Final = _create_credential(
         {

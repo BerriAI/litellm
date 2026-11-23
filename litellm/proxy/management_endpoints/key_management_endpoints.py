@@ -118,6 +118,7 @@ from litellm.proxy.common_utils.timezone_utils import (
     keeps_budget_reset,
 )
 from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET, UserApiKeyCache
+from litellm.proxy.credential_endpoints.chatgpt_subscription_logins import repoint_chatgpt_logins_to_key
 from litellm.proxy.db.master_key_migration import reencrypt_stored_values
 from litellm.proxy.guardrails.guardrail_helpers import validate_guardrail_names
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
@@ -6704,6 +6705,9 @@ async def _execute_virtual_key_regeneration(
         existing_key_row=key_in_db,
         previous_key_token=hashed_api_key,
         new_key_token=new_token_hash,
+    )
+    await repoint_chatgpt_logins_to_key(
+        CredentialsRepository(prisma_client), previous_key_hash=hashed_api_key, new_key_hash=new_token_hash
     )
 
     # After credential invalidation, so a failure here can never keep the old key alive.

@@ -13940,6 +13940,85 @@ async def test_execute_virtual_key_regeneration_rejects_when_custom_key_update_h
     assert received_data[0].duration == "3000d"
 
 
+def _chatgpt_login_owned_by_key(credential_name: str, key_hash: str) -> CredentialItem:
+    return CredentialItem(
+        credential_name=credential_name,
+        credential_values={"chatgpt_access_token": f"at-{credential_name}", "chatgpt_refresh_token": "rt"},
+        credential_info={"custom_llm_provider": "chatgpt", "chatgpt_owner_key_hash": key_hash},
+    )
+
+
+class _CredentialInfoRows:
+    def __init__(self, *credentials: CredentialItem) -> None:
+        self.info: dict[str, dict[str, object]] = {
+            credential.credential_name: dict(credential.credential_info) for credential in credentials
+        }
+
+    async def execute_raw(self, query: str, info_key: str, previous_value: str, new_value: str) -> int:
+        assert '"LiteLLM_CredentialsTable"' in query
+        matching: Final = [name for name, info in self.info.items() if info.get(info_key) == previous_value]
+        for name in matching:
+            self.info[name] = {**self.info[name], info_key: new_value}
+        return len(matching)
+
+
+@pytest.mark.asyncio
+async def test_regenerating_a_key_moves_the_chatgpt_logins_it_owns_to_the_new_key(monkeypatch):
+    from litellm.proxy.credential_endpoints.chatgpt_subscription_logins import owned_chatgpt_subscription_logins
+    from litellm.proxy.management_endpoints.key_management_endpoints import _execute_virtual_key_regeneration
+
+    owned_by_old_key: Final = _chatgpt_login_owned_by_key("login-old-key", "abc123")
+    owned_by_other_key: Final = _chatgpt_login_owned_by_key("login-other-key", "other-key-hash")
+    monkeypatch.setattr(litellm, "credential_list", [owned_by_old_key, owned_by_other_key])
+    rows: Final = _CredentialInfoRows(owned_by_old_key, owned_by_other_key)
+    mock_prisma_client = _make_regenerate_mock_prisma()
+    mock_prisma_client.db.execute_raw = rows.execute_raw
+
+    with (
+        patch(  # test-quality-ok: deterministic new key so the new hash is known
+            "litellm.proxy.management_endpoints.key_management_endpoints.get_new_token",
+            new_callable=AsyncMock,
+            return_value="sk-newtoken1234ab12",
+        ),
+        patch(  # test-quality-ok: grace-period path is outside the login repoint
+            "litellm.proxy.management_endpoints.key_management_endpoints._insert_deprecated_key",
+            new_callable=AsyncMock,
+        ),
+        patch(  # test-quality-ok: cache eviction is outside the login repoint
+            "litellm.proxy.management_endpoints.key_management_endpoints.delete_cache_key_object",
+            new_callable=AsyncMock,
+        ),
+        patch(  # test-quality-ok: rotation callback is outside the login repoint
+            "litellm.proxy.management_endpoints.key_management_endpoints.KeyManagementEventHooks.async_key_rotated_hook",
+            new_callable=AsyncMock,
+        ),
+    ):
+        await _execute_virtual_key_regeneration(
+            prisma_client=mock_prisma_client,
+            key_in_db=_make_regenerate_existing_key(),
+            hashed_api_key="abc123",
+            key="abc123",
+            data=RegenerateKeyRequest(),
+            user_api_key_dict=_make_regenerate_user_api_key_dict(),
+            litellm_changed_by=None,
+            user_api_key_cache=MagicMock(),
+            proxy_logging_obj=MagicMock(),
+        )
+
+    new_key_hash: Final = hash_token("sk-newtoken1234ab12")
+    assert rows.info == {
+        "login-old-key": {"custom_llm_provider": "chatgpt", "chatgpt_owner_key_hash": new_key_hash},
+        "login-other-key": dict(owned_by_other_key.credential_info),
+    }
+    assert [login.credential_name for login in owned_chatgpt_subscription_logins(None, new_key_hash)] == [
+        "login-old-key"
+    ]
+    assert owned_chatgpt_subscription_logins(None, "abc123") == ()
+    assert [login.credential_name for login in owned_chatgpt_subscription_logins(None, "other-key-hash")] == [
+        "login-other-key"
+    ]
+
+
 @pytest.mark.asyncio
 async def test_execute_virtual_key_regeneration_allows_when_custom_key_update_hook_approves():
     existing_key = _make_regenerate_existing_key()

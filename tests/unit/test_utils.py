@@ -7866,6 +7866,10 @@ def test_load_credentials_from_list_never_merges_chatgpt_subscription_login_valu
         pytest.param(None, id="no_secret_fields"),
         pytest.param({"chatgpt_subscription_logins": {}}, id="no_owned_logins"),
         pytest.param({"chatgpt_subscription_logins": {"team-b-chatgpt": "access-team-b-example"}}, id="another_login"),
+        pytest.param(
+            {"chatgpt_subscription_logins": {}, "chatgpt_subscription_owner": {"chatgpt_owner_team_id": "team-b"}},
+            id="another_owner",
+        ),
     ],
 )
 async def test_acompletion_on_a_chatgpt_subscription_the_caller_does_not_own_is_a_401(
@@ -7907,6 +7911,28 @@ async def test_acompletion_on_a_chatgpt_subscription_the_caller_owns_returns_the
         router.acompletion(model="team-a-gpt", **request)
         if through_router
         else litellm.acompletion(**deployment, **request)
+    )
+
+    assert response.choices[0].message.content == "owned"
+
+
+@pytest.mark.asyncio
+async def test_acompletion_on_the_callers_chatgpt_subscription_refreshed_since_its_pre_call_returns_the_response(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from litellm.types.proxy.litellm_pre_call_utils import RedactedDict
+
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path))
+    monkeypatch.setattr(litellm, "credential_list", [_chatgpt_subscription_credential()])
+    response: Final = await litellm.acompletion(
+        model="chatgpt/gpt-5.5",
+        messages=[{"role": "user", "content": "hi"}],
+        litellm_credential_name="team-a-chatgpt",
+        mock_response="owned",
+        secret_fields={
+            "chatgpt_subscription_logins": RedactedDict({}),
+            "chatgpt_subscription_owner": RedactedDict({"chatgpt_owner_team_id": "team-a"}),
+        },
     )
 
     assert response.choices[0].message.content == "owned"
@@ -10434,7 +10460,9 @@ def test_validate_environment_takes_any_together_ai_key_name_for_bare_and_prefix
 def test_validate_environment_keeps_the_wandb_key_check_for_bare_ids_wandb_shares_with_together_ai(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    shared_bare_ids: Final = tuple(sorted(model for model in litellm.wandb_models if not _resolves_to_a_provider(model)))
+    shared_bare_ids: Final = tuple(
+        sorted(model for model in litellm.wandb_models if not _resolves_to_a_provider(model))
+    )
     monkeypatch.setattr(
         litellm,
         "together_ai_models",
@@ -11695,7 +11723,8 @@ def test_check_valid_key_never_counts_a_global_fallback_answer_as_a_valid_key(
 
     with respx.mock(assert_all_called=False) as upstream:
         _ = upstream.post("https://api.openai.com/v1/chat/completions").respond(
-            401, json={"error": {"message": "Invalid API key", "type": "invalid_request_error", "code": "invalid_api_key"}}
+            401,
+            json={"error": {"message": "Invalid API key", "type": "invalid_request_error", "code": "invalid_api_key"}},
         )
         fallback_route: Final = upstream.post("https://api.anthropic.com/v1/messages").respond(
             200,

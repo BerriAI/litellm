@@ -2,19 +2,20 @@ import asyncio
 import json
 import math
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass
+from datetime import timedelta
+from enum import Enum
 from functools import partial
 from types import MappingProxyType
-from typing import Final, Protocol
-
-from pydantic import TypeAdapter
+from typing import Final, Protocol, TypeAlias
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.llms.chatgpt.authenticator import (
     TOKEN_EXPIRY_SKEW_SECONDS,
+    TOKEN_REFRESH_TIMEOUT_SECONDS,
     ChatGPTOAuthClient,
     arefresh_chatgpt_tokens,
     chatgpt_login_values,
@@ -25,7 +26,10 @@ from litellm.llms.chatgpt.subscription_login import (
     CHATGPT_OWNER_KEY_HASH_KEY,
     CHATGPT_OWNER_TEAM_ID_KEY,
     CHATGPT_PROVIDER,
+    chatgpt_credential_info,
+    chatgpt_login_owner,
     is_chatgpt_subscription_login,
+    owns_chatgpt_login,
 )
 from litellm.proxy.common_utils.credential_hydration import decrypted_credential, stored_credential_provider
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
@@ -38,52 +42,50 @@ from litellm.types.utils import CredentialItem
 
 _COORDINATOR_NAMESPACE: Final = "chatgpt_subscription"
 _IN_PROCESS_COORDINATOR: Final = InProcessRefreshCoordinator()
-_NO_LOGINS: Final[Mapping[str, str]] = MappingProxyType({})
-_CREDENTIAL_INFO_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 
 _REFRESH_TOKEN_KEY: Final = "chatgpt_refresh_token"
+_SAVE_RETRY_DELAYS_SECONDS: Final = (1.0, 2.0)
+_REFRESH_LOCK_TIMEOUT: Final = timedelta(seconds=TOKEN_REFRESH_TIMEOUT_SECONDS + sum(_SAVE_RETRY_DELAYS_SECONDS) + 15)
+
+_InMemoryLogin: TypeAlias = tuple[Mapping[str, object], Mapping[str, object]]
 
 
 class CredentialRows(Protocol):
     async def find_by_name(self, credential_name: str) -> CredentialItem | None: ...
 
     async def update_if_value_unchanged(
-        self, credential_name: str, value_key: str, stored_value: str, data: Mapping[str, object]
+        self,
+        credential_name: str,
+        value_match: tuple[str, str],
+        info_match: tuple[str, str] | None,
+        data: Mapping[str, object],
     ) -> bool: ...
+
+
+class _Save(Enum):
+    SAVED = "saved"
+    MISSED = "missed"
+    FAILED = "failed"
 
 
 def _non_empty_str(value: object) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
-def _credential_info(credential: CredentialItem | None) -> Mapping[str, object]:
-    return _CREDENTIAL_INFO_ADAPTER.validate_python(
-        (credential.credential_info if credential is not None else None)  # pyright: ignore[reportUnknownMemberType]  # untyped credential field
-        or {}
-    )
-
-
-def chatgpt_login_owner(credential: CredentialItem) -> tuple[str | None, str | None]:
-    info: Final = _credential_info(credential)
-    team_id: Final = _non_empty_str(info.get(CHATGPT_OWNER_TEAM_ID_KEY))
-    key_hash: Final = _non_empty_str(info.get(CHATGPT_OWNER_KEY_HASH_KEY))
-    if (team_id is None) == (key_hash is None):
-        return None, None
-    return team_id, key_hash
-
-
-def _owned_by(credential: CredentialItem, team_id: str | None, key_hash: str | None) -> bool:
-    if not is_chatgpt_subscription_login(credential):
-        return False
-    owner_team_id, owner_key_hash = chatgpt_login_owner(credential)
-    return (owner_team_id is not None and owner_team_id == team_id) or (
-        owner_key_hash is not None and owner_key_hash == key_hash
-    )
+def _owner_condition(owner: tuple[str | None, str | None]) -> tuple[str, str] | None:
+    team_id, key_hash = owner
+    if team_id is not None:
+        return CHATGPT_OWNER_TEAM_ID_KEY, team_id
+    if key_hash is not None:
+        return CHATGPT_OWNER_KEY_HASH_KEY, key_hash
+    return None
 
 
 def owned_chatgpt_subscription_logins(team_id: str | None, key_hash: str | None) -> tuple[CredentialItem, ...]:
-    return tuple(credential for credential in litellm.credential_list if _owned_by(credential, team_id, key_hash))
+    return tuple(
+        credential for credential in litellm.credential_list if owns_chatgpt_login(credential, team_id, key_hash)
+    )
 
 
 def _expires_at(values: Mapping[str, object]) -> float | None:
@@ -105,9 +107,24 @@ def _fresh_access_token(values: Mapping[str, object], now: float) -> str | None:
     return access_token
 
 
-def _in_memory_values(credential_name: str) -> Mapping[str, object] | None:
+def fresh_chatgpt_subscription_logins(
+    owned: Iterable[CredentialItem], clock: Callable[[], float] = time.time
+) -> Mapping[str, str]:
+    now: Final = clock()
+    return MappingProxyType(
+        {
+            credential.credential_name: token
+            for credential in owned
+            if (token := _fresh_access_token(credential.credential_values, now)) is not None
+        }
+    )
+
+
+def _in_memory_login(credential_name: str) -> _InMemoryLogin | None:
     current: Final = CredentialAccessor.find_credential(credential_name)
-    return MappingProxyType(dict(current.credential_values)) if current is not None else None
+    if current is None:
+        return None
+    return MappingProxyType(dict(current.credential_values)), MappingProxyType(dict(chatgpt_credential_info(current)))
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,6 +135,8 @@ class ChatGPTLoginRefresher:
     shared_coordinator: RefreshCoordinator | None = None
     clock: Callable[[], float] = time.time
     encrypt: Callable[[str], str] = encrypt_value_helper
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep
+    save_retry_delays: tuple[float, ...] = _SAVE_RETRY_DELAYS_SECONDS
 
     async def access_token(self, owned: CredentialItem) -> str | None:
         owner: Final = chatgpt_login_owner(owned)
@@ -143,9 +162,12 @@ class ChatGPTLoginRefresher:
             return None
 
     def _remember(
-        self, stored: CredentialItem, values: Mapping[str, object], seen: Mapping[str, object] | None
+        self,
+        stored: CredentialItem,
+        values: Mapping[str, object],
+        seen: _InMemoryLogin | None,
     ) -> None:
-        if seen is None or _in_memory_values(stored.credential_name) != seen:
+        if seen is None or _in_memory_login(stored.credential_name) != seen:
             return
         CredentialAccessor.upsert_credentials(
             [
@@ -153,13 +175,13 @@ class ChatGPTLoginRefresher:
                     credential_name=stored.credential_name,
                     display_name=stored.display_name,
                     credential_values=dict(values),
-                    credential_info=dict(_credential_info(stored)),
+                    credential_info=dict(chatgpt_credential_info(stored)),
                 )
             ]
         )
 
     def _fresh_from(
-        self, stored: CredentialItem, seen: Mapping[str, object] | None
+        self, stored: CredentialItem, seen: _InMemoryLogin | None
     ) -> tuple[OAuthToken | None, Mapping[str, object]]:
         values: Final = decrypted_credential(stored).credential_values
         access_token: Final = _fresh_access_token(values, self.clock())
@@ -169,17 +191,18 @@ class ChatGPTLoginRefresher:
         return OAuthToken(access_token=access_token, expires_at=_expires_at(values)), values
 
     async def _reread(self, credential_name: str, owner: tuple[str | None, str | None]) -> OAuthToken | None:
-        seen: Final = _in_memory_values(credential_name)
+        seen: Final = _in_memory_login(credential_name)
         stored: Final = await self._stored(credential_name)
-        if stored is None or not _owned_by(stored, *owner):
+        if stored is None or not owns_chatgpt_login(stored, *owner):
             return None
         token, _ = self._fresh_from(stored, seen)
         return token
 
     async def _refresh(self, credential_name: str, owner: tuple[str | None, str | None]) -> OAuthToken | None:
-        seen: Final = _in_memory_values(credential_name)
+        seen: Final = _in_memory_login(credential_name)
         stored: Final = await self._stored(credential_name)
-        if stored is None or not _owned_by(stored, *owner):
+        owner_condition: Final = _owner_condition(owner)
+        if stored is None or owner_condition is None or not owns_chatgpt_login(stored, *owner):
             return None
         fresh, values = self._fresh_from(stored, seen)
         if fresh is not None:
@@ -198,32 +221,78 @@ class ChatGPTLoginRefresher:
             )
             return None
         login_values: Final = chatgpt_login_values(tokens)
-        if not await self._save(stored, stored_refresh_token, login_values):
-            return await self._reread(credential_name, owner)
+        encrypted: Final = {key: self.encrypt(value) for key, value in login_values.items()}
+        saved_values: Final = {"credential_values": json.dumps({**stored.credential_values, **encrypted})}
+        redeemed: Final = (_REFRESH_TOKEN_KEY, stored_refresh_token)
         refreshed_values: Final = {**values, **login_values}
-        self._remember(stored, refreshed_values, seen)
+        match await self._save(credential_name, redeemed, owner_condition, saved_values):
+            case _Save.SAVED:
+                self._remember(stored, refreshed_values, seen)
+            case _Save.FAILED:
+                _log_unsaved_refresh(credential_name)
+                self._remember(stored, refreshed_values, seen)
+            case _Save.MISSED:
+                return await self._hand_over_to_new_owner(credential_name, owner, redeemed, saved_values)
         return OAuthToken(access_token=tokens.access_token, expires_at=_expires_at(refreshed_values))
 
-    async def _save(self, stored: CredentialItem, stored_refresh_token: str, login_values: Mapping[str, str]) -> bool:
-        encrypted: Final = {key: self.encrypt(value) for key, value in login_values.items()}
+    async def _hand_over_to_new_owner(
+        self,
+        credential_name: str,
+        owner: tuple[str | None, str | None],
+        redeemed: tuple[str, str],
+        saved_values: Mapping[str, object],
+    ) -> OAuthToken | None:
+        match await self._save(credential_name, redeemed, None, saved_values):
+            case _Save.SAVED:
+                return None
+            case _Save.FAILED:
+                _log_unsaved_refresh(credential_name)
+                return None
+            case _Save.MISSED:
+                return await self._reread(credential_name, owner)
+
+    async def _save(
+        self,
+        credential_name: str,
+        redeemed: tuple[str, str],
+        owner_condition: tuple[str, str] | None,
+        data: Mapping[str, object],
+    ) -> _Save:
+        for delay in self.save_retry_delays:
+            if (outcome := await self._try_save(credential_name, redeemed, owner_condition, data)) is not _Save.FAILED:
+                return outcome
+            await self.sleep(delay)
+        return await self._try_save(credential_name, redeemed, owner_condition, data)
+
+    async def _try_save(
+        self,
+        credential_name: str,
+        redeemed: tuple[str, str],
+        owner_condition: tuple[str, str] | None,
+        data: Mapping[str, object],
+    ) -> _Save:
         try:
-            return await self.rows.update_if_value_unchanged(
-                stored.credential_name,
-                _REFRESH_TOKEN_KEY,
-                stored_refresh_token,
-                {"credential_values": json.dumps({**stored.credential_values, **encrypted})},
-            )
-        except Exception:  # noqa: BLE001  # the rotated tokens still serve this replica until they expire
-            verbose_proxy_logger.warning(
-                "ChatGPT subscription login %s was refreshed but could not be saved to the database. "
-                "Sign in again for it if requests start failing after the new token expires.",
-                stored.credential_name,
-            )
-            return True
+            saved: Final = await self.rows.update_if_value_unchanged(credential_name, redeemed, owner_condition, data)
+        except Exception:  # noqa: BLE001  # a failed save is retried, then the refreshed tokens serve from memory
+            verbose_proxy_logger.warning("Saving refreshed ChatGPT subscription login %s failed", credential_name)
+            return _Save.FAILED
+        return _Save.SAVED if saved else _Save.MISSED
+
+
+def _log_unsaved_refresh(credential_name: str) -> None:
+    verbose_proxy_logger.error(
+        "ChatGPT subscription login %s was refreshed but could not be saved to the database. "
+        "Sign in again for it if requests start failing after the new token expires.",
+        credential_name,
+    )
 
 
 def runtime_chatgpt_login_refresher() -> ChatGPTLoginRefresher | None:
-    from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
+    from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient, writer_wrapper
+    from litellm.proxy.mcp_server.outbound_credentials.postgres_refresh_coordinator import (
+        AdvisoryLockRefreshCoordinator,
+        PrismaAdvisoryLock,
+    )
     from litellm.proxy.mcp_server.outbound_credentials.runtime_refresh_coordinator import (
         runtime_refresh_coordinator,
     )
@@ -236,40 +305,32 @@ def runtime_chatgpt_login_refresher() -> ChatGPTLoginRefresher | None:
         rows=CredentialsRepository(WriterPinnedClient(prisma_client.db)),
         oauth_client=new_chatgpt_oauth_client(),
         coordinator=_IN_PROCESS_COORDINATOR,
-        shared_coordinator=runtime_refresh_coordinator(),
+        shared_coordinator=runtime_refresh_coordinator()
+        or AdvisoryLockRefreshCoordinator(
+            PrismaAdvisoryLock(writer_wrapper(prisma_client.db), timeout=_REFRESH_LOCK_TIMEOUT)
+        ),
     )
 
 
-async def resolve_chatgpt_subscription_logins(
+async def owned_chatgpt_subscription_access_token(
+    credential_name: str,
     team_id: str | None,
     key_hash: str | None,
     refresher_factory: Callable[[], ChatGPTLoginRefresher | None] = runtime_chatgpt_login_refresher,
     clock: Callable[[], float] = time.time,
-) -> Mapping[str, str]:
-    owned: Final = owned_chatgpt_subscription_logins(team_id, key_hash)
-    if not owned:
-        return _NO_LOGINS
-    now: Final = clock()
-    fresh: Final = {
-        credential.credential_name: token
-        for credential in owned
-        if (token := _fresh_access_token(credential.credential_values, now)) is not None
-    }
-    stale: Final = tuple(credential for credential in owned if credential.credential_name not in fresh)
-    refresher: Final = refresher_factory() if stale else None
-    if refresher is None:
-        return MappingProxyType(fresh)
-    refreshed: Final = await asyncio.gather(*(refresher.access_token(credential) for credential in stale))
-    return MappingProxyType(
-        {
-            **fresh,
-            **{
-                credential.credential_name: token
-                for credential, token in zip(stale, refreshed, strict=True)
-                if token is not None
-            },
-        }
-    )
+) -> str | None:
+    credential: Final = CredentialAccessor.find_credential(credential_name)
+    if credential is None or not owns_chatgpt_login(credential, team_id, key_hash):
+        return None
+    fresh: Final = _fresh_access_token(credential.credential_values, clock())
+    if fresh is not None:
+        return fresh
+    try:
+        refresher: Final = refresher_factory()
+        return await refresher.access_token(credential) if refresher is not None else None
+    except Exception:  # noqa: BLE001  # a refresh failure fails only this login closed, never the request
+        verbose_proxy_logger.exception("Failed to refresh ChatGPT subscription login %s", credential_name)
+        return None
 
 
 class CredentialWrites(Protocol):
@@ -286,7 +347,7 @@ _OWNER_KEYS: Final = frozenset({CHATGPT_OWNER_TEAM_ID_KEY, CHATGPT_OWNER_KEY_HAS
 def blocks_chatgpt_login(existing: CredentialItem | None) -> bool:
     if existing is None or not existing.credential_values or is_chatgpt_subscription_login(existing):
         return False
-    return stored_credential_provider(_credential_info(existing).get("custom_llm_provider")) != CHATGPT_PROVIDER
+    return stored_credential_provider(chatgpt_credential_info(existing).get("custom_llm_provider")) != CHATGPT_PROVIDER
 
 
 async def save_chatgpt_login(
@@ -297,10 +358,14 @@ async def save_chatgpt_login(
     owner: tuple[str | None, str | None],
     actor: str,
     encrypt: Callable[[str], str] = encrypt_value_helper,
-) -> CredentialItem:
+) -> CredentialItem | None:
     existing: Final = await rows.find_by_name(credential_name)
+    if blocks_chatgpt_login(existing):
+        return None
     owner_team_id, owner_key_hash = owner
-    kept_info: Final = {key: value for key, value in _credential_info(existing).items() if key not in _OWNER_KEYS}
+    kept_info: Final = {
+        key: value for key, value in chatgpt_credential_info(existing).items() if key not in _OWNER_KEYS
+    }
     credential_info: Final = {
         **kept_info,
         "custom_llm_provider": CHATGPT_PROVIDER,
@@ -326,3 +391,22 @@ async def save_chatgpt_login(
     )
     CredentialAccessor.upsert_credentials([saved])
     return saved
+
+
+class CredentialRepoints(Protocol):
+    async def repoint_info_value(self, info_key: str, previous_value: str, new_value: str) -> int: ...
+
+
+async def repoint_chatgpt_logins_to_key(rows: CredentialRepoints, previous_key_hash: str, new_key_hash: str) -> None:
+    await rows.repoint_info_value(CHATGPT_OWNER_KEY_HASH_KEY, previous_key_hash, new_key_hash)
+    CredentialAccessor.upsert_credentials(
+        [
+            credential.model_copy(
+                update={
+                    "credential_info": {**chatgpt_credential_info(credential), CHATGPT_OWNER_KEY_HASH_KEY: new_key_hash}
+                }
+            )
+            for credential in litellm.credential_list
+            if chatgpt_credential_info(credential).get(CHATGPT_OWNER_KEY_HASH_KEY) == previous_key_hash
+        ]
+    )

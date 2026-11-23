@@ -2737,9 +2737,9 @@ def client(original_function):
             from litellm.llms.github_copilot.per_user_auth import aattach_github_copilot_user_session
 
             await aattach_github_copilot_user_session(kwargs)  # pyright: ignore[reportUnknownArgumentType]  # kwargs is the untyped request dict
-            from litellm.llms.chatgpt.subscription_login import attach_chatgpt_subscription_login
+            from litellm.llms.chatgpt.subscription_login import aattach_chatgpt_subscription_login
 
-            attach_chatgpt_subscription_login(kwargs, model)  # pyright: ignore[reportUnknownArgumentType]  # kwargs is the untyped request dict
+            await aattach_chatgpt_subscription_login(kwargs, model)  # pyright: ignore[reportUnknownArgumentType]  # kwargs is the untyped request dict
             logging_obj.llm_caching_handler = _llm_caching_handler
             # [OPTIONAL] CHECK BUDGET
             if litellm.max_budget:

@@ -42,6 +42,7 @@ from litellm.llms.chatgpt.authenticator import (
     new_chatgpt_oauth_client,
 )
 from litellm.llms.chatgpt.common_utils import CHATGPT_DEVICE_VERIFY_URL, ChatGPTAuthError
+from litellm.llms.chatgpt.subscription_login import chatgpt_login_owner, is_chatgpt_subscription_login
 from litellm.models.credentials import (
     ChatGPTLoginFlowHandle,
     ChatGPTLoginPollResponse,
@@ -403,6 +404,7 @@ async def create_credential(
             credential_values=_without_null_values(normalized_values),
             credential_info=credential_info,
         )
+        _reject_unowned_chatgpt_login(processed_credential)
         encrypted_credential: Final = CredentialHelperUtils.encrypt_credential_values(processed_credential)
         credentials_dict: Final = encrypted_credential.model_dump(exclude_none=True)
         credentials_dict_jsonified: Final = cast(  # cast-ok: deep-copies a model_dump, so keys are str
@@ -897,15 +899,33 @@ async def _require_chatgpt_login_owner_exists(
         raise HTTPException(status_code=400, detail="Virtual key not found. Send the key's hashed token (Key ID)")
 
 
+def _reject_unowned_chatgpt_login(credential: CredentialItem) -> None:
+    if not is_chatgpt_subscription_login(credential) or chatgpt_login_owner(credential) != (None, None):
+        return
+    raise ProxyException(
+        message=(
+            "A ChatGPT subscription login needs exactly one owner in credential_info, "
+            "either a team id (chatgpt_owner_team_id) or a key hash (chatgpt_owner_key_hash)"
+        ),
+        type=ProxyErrorTypes.validation_error.value,
+        code=status.HTTP_400_BAD_REQUEST,
+        param="credential_info",
+    )
+
+
+def _another_providers_credential(credential_name: str) -> ProxyException:
+    return ProxyException(
+        message=f"Credential '{credential_name}' belongs to another provider. Pick another name.",
+        type=ProxyErrorTypes.validation_error.value,
+        code=status.HTTP_409_CONFLICT,
+        param="credential_name",
+    )
+
+
 async def _reject_non_chatgpt_credential(credentials_repository: CredentialsRepository, credential_name: str) -> None:
     _reject_config_defined_name(credential_name)
     if blocks_chatgpt_login(await credentials_repository.find_by_name(credential_name)):
-        raise ProxyException(
-            message=f"Credential '{credential_name}' belongs to another provider. Pick another name.",
-            type=ProxyErrorTypes.validation_error.value,
-            code=status.HTTP_409_CONFLICT,
-            param="credential_name",
-        )
+        raise _another_providers_credential(credential_name)
 
 
 def _decode_chatgpt_flow_handle(flow_handle: str) -> ChatGPTLoginFlowHandle | None:
@@ -1018,17 +1038,18 @@ async def poll_chatgpt_login(
             tokens: Final = await aexchange_chatgpt_authorization_code(oauth_client, code)
         except ChatGPTAuthError as e:
             raise _chatgpt_upstream_error(e) from None
-        credentials_repository: Final = CredentialsRepository(WriterPinnedClient(prisma_client.db))
-        await _reject_non_chatgpt_credential(credentials_repository, credential_name)
+        _reject_config_defined_name(credential_name)
         login_values: Final = chatgpt_login_values(tokens)
-        await save_chatgpt_login(
-            credentials_repository,
+        saved: Final = await save_chatgpt_login(
+            CredentialsRepository(WriterPinnedClient(prisma_client.db)),
             credential_name=credential_name,
             display_name=handle.display_name,
             login_values=login_values,
             owner=(handle.owner_team_id, handle.owner_key_hash),
             actor=user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
         )
+        if saved is None:
+            raise _another_providers_credential(credential_name)
         return ChatGPTLoginPollResponse(status="connected", account_id=login_values.get("chatgpt_account_id"))
     except Exception as e:  # noqa: BLE001  # endpoint boundary: every failure becomes the proxy error contract
         raise handle_exception_on_proxy(e)
@@ -1262,6 +1283,7 @@ async def update_credential(
                 else patch
             )
             merged_credential: Final = update_db_credential(db_credential, normalized_patch)
+            _reject_unowned_chatgpt_login(merged_credential)
             _validate_github_app_values(
                 _CREDENTIAL_DICT_ADAPTER.validate_python(decrypted_credential(merged_credential).credential_values)
             )
