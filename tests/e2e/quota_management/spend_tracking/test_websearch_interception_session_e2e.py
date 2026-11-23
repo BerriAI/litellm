@@ -30,7 +30,7 @@ from models import (
 from proxy_client import ProxyClient
 from pydantic import BaseModel, ValidationError
 
-pytestmark = pytest.mark.e2e
+pytestmark = [pytest.mark.e2e, pytest.mark.provider_live]
 
 BEDROCK_INVOKE_BACKEND: Final = "bedrock/invoke/us.anthropic.claude-haiku-4-5-20251001-v1:0"
 SEARCH_CALL_TYPE: Final = "asearch"

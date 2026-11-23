@@ -72,6 +72,7 @@ def test_audio_speech_enforces_key_model_access(gateway: Gateway, path: str) -> 
             "model": "gpt-4o-mini-tts",
             "input": "hello",
             "voice": "alloy",
+            "stream_format": "sse",
         }
         return Reply(body=_SPEECH_BYTES, content_type="audio/wav")
 

@@ -4,7 +4,7 @@ A2A Protocol Exception Mapping Utils.
 Maps A2A SDK exceptions to LiteLLM A2A exception types.
 """
 
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final
 
 from litellm._logging import verbose_logger
 from litellm.a2a_protocol.card_resolver import (
@@ -21,6 +21,7 @@ from litellm.constants import CONNECTION_ERROR_PATTERNS
 
 if TYPE_CHECKING:
     from a2a.client import Client as A2AClientType
+    from a2a.types import AgentCard
 
 
 _A2A_KIND_DIALECT_HINT: Final = (
@@ -165,7 +166,7 @@ def map_a2a_exception(
 
 async def handle_a2a_localhost_retry(
     error: A2ALocalhostURLError,
-    agent_card: Any,
+    agent_card: "AgentCard | None",
     a2a_client: "A2AClientType",
     is_streaming: bool = False,
 ) -> "A2AClientType":

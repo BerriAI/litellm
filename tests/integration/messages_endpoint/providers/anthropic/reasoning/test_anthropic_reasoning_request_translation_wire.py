@@ -443,15 +443,14 @@ def test_reasoning_effort_becomes_the_thinking_shape_each_model_accepts(
                 "output_config": {"effort": "high"},
             },
             {
-                "temperature": 0,
                 "thinking": {"type": "adaptive", "display": "omitted"},
                 "output_config": {"effort": "high"},
             },
-            id="opus-4.6-adaptive-keeps-temperature",
+            id="opus-4.6-adaptive-drops-temperature-under-drop-params",
         ),
     ),
 )
-def test_temperature_is_dropped_only_when_a_non_adaptive_model_thinks(
+def test_temperature_is_dropped_when_thinking_requires_it_under_drop_params(
     gateway: Gateway, upstream_model: str, sent: dict[str, JsonValue], received: dict[str, JsonValue]
 ) -> None:
     forwarded: Final = _forward(gateway, upstream_model, sent)

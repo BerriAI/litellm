@@ -10,7 +10,7 @@ from litellm.llms.anthropic.messages.native.transformation import (
 from ..authenticator import Authenticator
 from ..common_utils import (
     DEFAULT_GITHUB_COPILOT_API_BASE,
-    GetAPIKeyError,
+    GetAccessTokenError,
     get_copilot_default_headers,
     pin_session_authorization,
 )
@@ -56,7 +56,7 @@ class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
         headers: dict,
         model: str,
         messages: Sequence[object],
-        optional_params: dict,
+        optional_params: dict[str, object],
         litellm_params: dict,
         api_key: str | None = None,
         api_base: str | None = None,
@@ -84,7 +84,7 @@ class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
             dynamic_api_key: Final = (
                 user_session.token if user_session is not None else self.authenticator.get_api_key()
             )
-        except GetAPIKeyError as e:
+        except GetAccessTokenError as e:
             raise AuthenticationError(
                 model=model,
                 llm_provider="github_copilot",
@@ -100,6 +100,7 @@ class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
             pin_session_authorization(
                 cast("dict[str, str]", headers),  # cast-ok: headers is a str-valued request dict at runtime
                 user_session.token,
+                user_session.integration_id,
             )
 
         headers["openai-intent"] = "messages-proxy"
@@ -120,7 +121,7 @@ class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
+        optional_params: dict[str, object],
         litellm_params: dict,
         stream: bool | None = None,
     ) -> str:

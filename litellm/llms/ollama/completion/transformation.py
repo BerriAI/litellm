@@ -11,6 +11,7 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
+from litellm.litellm_core_utils.allowed_tools_tool_choice import HostedMcpToolHandling
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_str_from_messages,
 )
@@ -75,7 +76,7 @@ class _OllamaGenerateReasoning(LiteLLMBaseModel):
     def split(self) -> tuple[str | None, str | None]:
         """Reasoning reaches `/api/generate` either in the top-level `thinking` field or
         inline in `<think>` tags, never both. The field wins, matching `ollama_chat`."""
-        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
             parse_content_for_reasoning,
         )
 
@@ -226,6 +227,9 @@ class OllamaConfig(BaseConfig):
             "max_completion_tokens",
             "reasoning_effort",
         ]
+
+    def hosted_mcp_tool_handling(self, model: str) -> HostedMcpToolHandling:
+        return "drops"
 
     def map_openai_params(
         self,

@@ -1,4 +1,6 @@
 import os
+from collections.abc import Mapping
+from datetime import datetime
 from typing import Final
 
 from litellm._logging import verbose_logger
@@ -15,6 +17,7 @@ from litellm.integrations.deepeval.utils import (
     to_zod_compatible_iso,
     validate_environment,
 )
+from litellm.litellm_core_utils.internal_call_metadata import logged_event_key
 
 
 # This file includes the custom callbacks for LiteLLM Proxy
@@ -31,23 +34,38 @@ class DeepEvalLogger(CustomLogger):
         self.api = Api(api_key=api_key)
         super().__init__(*args, **kwargs)
 
-    def log_success_event(self, kwargs, response_obj, start_time, end_time):
+    def log_success_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
         """Logs a success event to DeepEval's platform."""
         self._sync_event_handler(kwargs, response_obj, start_time, end_time, is_success=True)
 
-    def log_failure_event(self, kwargs, response_obj, start_time, end_time):
+    def log_failure_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
         """Logs a failure event to DeepEval's platform."""
         self._sync_event_handler(kwargs, response_obj, start_time, end_time, is_success=False)
 
-    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_failure_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
         """Logs a failure event to DeepEval's platform."""
         await self._async_event_handler(kwargs, response_obj, start_time, end_time, is_success=False)
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
         """Logs a success event to DeepEval's platform."""
         await self._async_event_handler(kwargs, response_obj, start_time, end_time, is_success=True)
 
-    def _prepare_trace_api(self, kwargs, response_obj, start_time, end_time, is_success):
+    def _prepare_trace_api(
+        self,
+        kwargs: Mapping[str, object],
+        response_obj: object,
+        start_time: datetime,
+        end_time: datetime,
+        is_success: bool,
+    ):
         _start_time: Final = to_zod_compatible_iso(start_time)
         _end_time: Final = to_zod_compatible_iso(end_time)
         _standard_logging_object: Final = kwargs.get("standard_logging_object", {})
@@ -75,7 +93,14 @@ class DeepEvalLogger(CustomLogger):
             body = trace_api.dict(by_alias=True, exclude_none=True)
         return body
 
-    def _sync_event_handler(self, kwargs, response_obj, start_time, end_time, is_success):
+    def _sync_event_handler(
+        self,
+        kwargs: Mapping[str, object],
+        response_obj: object,
+        start_time: datetime,
+        end_time: datetime,
+        is_success: bool,
+    ) -> None:
         body: Final = self._prepare_trace_api(kwargs, response_obj, start_time, end_time, is_success)
         try:
             response: Final = self.api.send_request(
@@ -87,7 +112,14 @@ class DeepEvalLogger(CustomLogger):
             raise e
         verbose_logger.debug("DeepEvalLogger: sync_log_failure_event: Api response %s", response)
 
-    async def _async_event_handler(self, kwargs, response_obj, start_time, end_time, is_success):
+    async def _async_event_handler(
+        self,
+        kwargs: Mapping[str, object],
+        response_obj: object,
+        start_time: datetime,
+        end_time: datetime,
+        is_success: bool,
+    ) -> None:
         body: Final = self._prepare_trace_api(kwargs, response_obj, start_time, end_time, is_success)
         response: Final = await self.api.a_send_request(
             method=HttpMethods.POST,
@@ -97,7 +129,7 @@ class DeepEvalLogger(CustomLogger):
 
         verbose_logger.debug("DeepEvalLogger: async_event_handler: Api response %s", response)
 
-    def _create_base_api_span(self, kwargs, standard_logging_object, start_time, end_time, is_success):
+    def _create_base_api_span(self, kwargs, standard_logging_object, start_time: str, end_time: str, is_success: bool):
         # extract usage
         usage: Final = standard_logging_object.get("response", {}).get("usage", {})
         if is_success:
@@ -109,8 +141,10 @@ class DeepEvalLogger(CustomLogger):
             )
         else:
             output = str(standard_logging_object.get("error_string", ""))
+        logged_id: Final = standard_logging_object.get("id", uuid.uuid4())
+        span_id: Final = logged_event_key(kwargs, logged_id) if isinstance(logged_id, str) else logged_id
         return BaseApiSpan(
-            uuid=standard_logging_object.get("id", uuid.uuid4()),
+            uuid=span_id,
             name=("litellm_success_callback" if is_success else "litellm_failure_callback"),
             status=(TraceSpanApiStatus.SUCCESS if is_success else TraceSpanApiStatus.ERRORED),
             type=SpanApiType.LLM,
@@ -126,11 +160,11 @@ class DeepEvalLogger(CustomLogger):
 
     def _create_trace_api(
         self,
-        base_api_span,
+        base_api_span: BaseApiSpan,
         standard_logging_object,
-        start_time,
-        end_time,
-        litellm_environment,
+        start_time: str,
+        end_time: str,
+        litellm_environment: str,
     ):
         return TraceApi(
             uuid=standard_logging_object.get("trace_id", uuid.uuid4()),

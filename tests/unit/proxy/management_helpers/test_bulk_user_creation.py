@@ -7,6 +7,7 @@ import pytest
 from prisma.errors import UniqueViolationError
 from pydantic import BaseModel, ConfigDict, ValidationError
 
+import litellm
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import LiteLLM_TeamTable, LitellmUserRoles, Member, UserAPIKeyAuth
 from litellm.proxy.list_api.common import ManagementProblem
@@ -15,6 +16,7 @@ from litellm.types.proxy.management_endpoints.internal_user_endpoints import (
     BulkNewUserItem,
     BulkNewUserRequest,
 )
+from litellm.types.utils import CredentialItem
 
 ADMIN: Final = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
 INTERNAL: Final = UserAPIKeyAuth(user_id="someone", user_role=LitellmUserRoles.INTERNAL_USER)
@@ -109,6 +111,22 @@ class _MembershipTable:
         return len(data)
 
 
+class _PermissionRow(BaseModel):
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+    object_permission_id: str
+
+
+class _ObjectPermissionTable:
+    def __init__(self) -> None:
+        self.rows: list[_PermissionRow] = []
+
+    async def create(self, data: dict[str, object]) -> _PermissionRow:
+        row: Final = _PermissionRow.model_validate({**data, "object_permission_id": f"perm-{len(self.rows)}"})
+        self.rows.append(row)
+        return row
+
+
 class _Tx:
     def __init__(self, db: "_Db") -> None:
         self.litellm_teamtable = db.litellm_teamtable
@@ -136,6 +154,7 @@ class _Db:
         self.litellm_usertable = _UserTable(fail_ids, commit_then_drop, raced_ids)
         self.litellm_teamtable = _TeamTable(teams)
         self.litellm_teammembership = _MembershipTable()
+        self.litellm_objectpermissiontable = _ObjectPermissionTable()
 
 
 class _FakePrisma:
@@ -189,6 +208,19 @@ async def _run(prisma, users, caller=ADMIN, license=None, generate_key=_no_keys)
         user_api_key_cache=DualCache(),
         generate_key=generate_key,
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("user_id", [None, "", "  employee-42  ", " \t"])
+async def test_bulk_keeps_existing_user_id_generation_and_whitespace_behavior(user_id: str | None) -> None:
+    prisma: Final = _FakePrisma()
+    response: Final = await _run(prisma, [{"user_id": user_id}])
+    result: Final = response.data[0]
+    assert result.success
+    assert result.user_id
+    assert result.user_id in prisma.db.litellm_usertable.rows
+    if user_id:
+        assert result.user_id == user_id
 
 
 @pytest.mark.asyncio
@@ -391,6 +423,28 @@ async def test_non_admin_cannot_create_admin_users_but_other_rows_proceed():
 
 
 @pytest.mark.asyncio
+async def test_only_proxy_admin_grants_customer_management_apps_to_a_created_user() -> None:
+    rows: Final = [{"user_id": "u1", "object_permission": {"apps": ["chat"]}}, {"user_id": "u2"}]
+
+    denied_prisma: Final = _FakePrisma()
+    denied: Final = await _run(denied_prisma, rows, caller=INTERNAL)
+
+    assert [r.success for r in denied.data] == [False, True]
+    assert set(denied_prisma.db.litellm_usertable.rows) == {"u2"}
+    assert denied_prisma.db.litellm_objectpermissiontable.rows == []
+
+    admin_prisma: Final = _FakePrisma()
+    granted: Final = await _run(admin_prisma, rows, caller=ADMIN)
+
+    assert [r.success for r in granted.data] == [True, True]
+    permission: Final = admin_prisma.db.litellm_objectpermissiontable.rows[0]
+    assert permission.model_dump()["apps"] == ["chat"]
+    assert admin_prisma.db.litellm_usertable.rows["u1"].model_dump()["object_permission_id"] == (
+        permission.object_permission_id
+    )
+
+
+@pytest.mark.asyncio
 async def test_only_proxy_admin_sets_batch_limits_on_a_created_key():
     limits = {"max_file_downloads_per_minute": 1000}
     calls: list[dict[str, object]] = []
@@ -419,6 +473,70 @@ async def test_only_proxy_admin_sets_batch_limits_on_a_created_key():
     assert [r.key for r in admin_response.data] == ["sk-u1"]
     assert calls[-1]["user_id"] == "u1"
     assert calls[-1]["metadata"] == limits
+
+
+@pytest.mark.asyncio
+async def test_only_proxy_admin_sets_semantic_cache_policy_on_bulk_user_creation() -> None:
+    policy: Final = {"cache_params": {"enabled": False}}
+    rows: Final = (
+        {"user_id": "user-without-key", "metadata": policy},
+        {"user_id": "user-with-key", "metadata": policy, "auto_create_key": True},
+        {"user_id": "user-with-unrelated-metadata", "metadata": {"region": "us"}},
+    )
+
+    async def generate_key(**kwargs: object) -> dict[str, object]:
+        return {"token": f"sk-{kwargs['user_id']}"}
+
+    prisma: Final = _FakePrisma()
+    org_admin: Final = UserAPIKeyAuth(user_id="org-admin", user_role=LitellmUserRoles.ORG_ADMIN)
+    denied: Final = await _run(prisma, rows, caller=org_admin, generate_key=generate_key)
+    assert [row.success for row in denied.data] == [False, False, True]
+    assert [row.error for row in denied.data[:2]] == [
+        "Only proxy admins can change metadata.cache_params on a user.",
+        "Only proxy admins can change metadata.cache_params on a user.",
+    ]
+    assert set(prisma.db.litellm_usertable.rows) == {"user-with-unrelated-metadata"}
+
+    admin_prisma: Final = _FakePrisma()
+    created: Final = await _run(admin_prisma, rows, generate_key=generate_key)
+    assert [row.success for row in created.data] == [True, True, True]
+    assert created.data[1].key == "sk-user-with-key"
+    assert json.loads(admin_prisma.db.litellm_usertable.rows["user-with-key"].metadata) == policy
+
+
+@pytest.mark.asyncio
+async def test_only_proxy_admin_creates_a_key_whose_logging_references_a_credential(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [CredentialItem(credential_name="space-a", credential_values={"arize_api_key": "k"}, credential_info={})],
+    )
+    reference: Final = {
+        "logging": [{"callback_name": "arize", "litellm_credential_name": "space-a", "callback_vars": {}}]
+    }
+    calls: list[dict[str, object]] = []
+
+    async def generate_key(**kwargs: object) -> dict[str, object]:
+        calls.append(kwargs)
+        return {"token": f"sk-{kwargs['user_id']}"}
+
+    rows: Final = [
+        {"user_id": "u1", "auto_create_key": True, "metadata": reference},
+        {"user_id": "u2", "auto_create_key": True},
+    ]
+
+    response = await _run(_FakePrisma(), rows, caller=INTERNAL, generate_key=generate_key)
+
+    assert [r.success for r in response.data] == [False, True]
+    assert "litellm_credential_name" in (response.data[0].error or "")
+    assert [call["user_id"] for call in calls] == ["u2"]
+
+    admin_response = await _run(_FakePrisma(), rows[:1], caller=ADMIN, generate_key=generate_key)
+
+    assert [r.key for r in admin_response.data] == ["sk-u1"]
+    assert calls[-1]["metadata"] == reference
 
 
 @pytest.mark.asyncio

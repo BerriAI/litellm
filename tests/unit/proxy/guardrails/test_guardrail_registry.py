@@ -649,6 +649,38 @@ def test_unchanged_db_params_do_not_register_as_changed():
     assert handler._has_guardrail_params_changed(gid, new) is False
 
 
+@pytest.mark.parametrize("field", ("api_key", "api_base"))
+def test_db_poll_does_not_rebuild_a_guardrail_whose_secret_field_is_an_env_reference(monkeypatch, field):
+    from litellm.proxy.guardrails import guardrail_registry as registry_module
+
+    built_with: Final[list[str | None]] = []
+
+    def _initializer(litellm_params, guardrail):
+        built_with.append(getattr(litellm_params, field))
+        return CustomGuardrail(
+            guardrail_name=guardrail["guardrail_name"], event_hook=GuardrailEventHooks.pre_call, default_on=True
+        )
+
+    monkeypatch.setitem(registry_module.guardrail_initializer_registry, "env_ref_test", _initializer)
+    monkeypatch.setenv("ENV_REF_TEST_VALUE", "resolved-value")
+    row: Final = {
+        "guardrail_id": "env-ref",
+        "guardrail_name": "env-ref",
+        "litellm_params": {
+            "guardrail": "env_ref_test",
+            "mode": "pre_call",
+            field: "os.environ/ENV_REF_TEST_VALUE",
+        },
+    }
+    handler: Final = InMemoryGuardrailHandler()
+    handler.initialize_guardrail(guardrail=dict(row), source="db")
+
+    handler.sync_guardrail_from_db(dict(row))
+    handler.sync_guardrail_from_db(dict(row))
+
+    assert built_with == ["resolved-value"]
+
+
 def test_db_poll_does_not_reinitialize_config_guardrail_without_default_on():
     handler = InMemoryGuardrailHandler()
     guardrail_id: Final = "config-default-on-guardrail"
@@ -1151,6 +1183,76 @@ class TestScanOnlyToolResultsInitRefusal:
                 },
             )
 
+    @pytest.mark.parametrize("flag", ["scan_tool_descriptions_as_text", "scan_tool_calls_as_text"])
+    def test_tool_text_scans_are_rejected_on_bedrock_latest_role_only(self, flag):
+        with pytest.raises(ValueError, match=f"{flag} is only supported"):
+            self._initialize(
+                "bedrock-tool-text-latest-role",
+                {
+                    "guardrail": "bedrock",
+                    "mode": "pre_call",
+                    "guardrailIdentifier": "gr-1",
+                    "guardrailVersion": "1",
+                    "experimental_use_latest_role_message_only": True,
+                    flag: True,
+                },
+            )
+
+    @pytest.mark.parametrize("flag", ["scan_tool_descriptions_as_text", "scan_tool_calls_as_text"])
+    @pytest.mark.parametrize("mode", ["during_call", ["pre_call", "during_call"]])
+    def test_tool_text_scans_are_rejected_on_bedrock_during_call(self, flag, mode):
+        with pytest.raises(ValueError, match=f"{flag} is only supported"):
+            self._initialize(
+                "bedrock-tool-text-during-call",
+                {
+                    "guardrail": "bedrock",
+                    "mode": mode,
+                    "guardrailIdentifier": "gr-1",
+                    "guardrailVersion": "1",
+                    flag: True,
+                },
+            )
+
+    @pytest.mark.parametrize("flag", ["scan_tool_descriptions_as_text", "scan_tool_calls_as_text"])
+    def test_tool_text_scans_are_accepted_on_bedrock(self, flag):
+        result = self._initialize(
+            "bedrock-tool-text",
+            {
+                "guardrail": "bedrock",
+                "mode": "pre_call",
+                "guardrailIdentifier": "gr-1",
+                "guardrailVersion": "1",
+                flag: True,
+            },
+        )
+        assert result is not None
+
+    def test_scan_tool_calls_as_text_is_rejected_on_guardrails_other_than_bedrock(self):
+        with pytest.raises(ValueError, match="scan_tool_calls_as_text is only supported"):
+            self._initialize(
+                "panw-tool-calls",
+                {
+                    "guardrail": "panw_prisma_airs",
+                    "mode": "pre_call",
+                    "api_key": "test-key",
+                    "profile_name": "test-profile",
+                    "scan_tool_calls_as_text": True,
+                },
+            )
+
+    def test_scan_tool_descriptions_as_text_is_accepted_on_panw(self):
+        result = self._initialize(
+            "panw-tool-descriptions",
+            {
+                "guardrail": "panw_prisma_airs",
+                "mode": "pre_call",
+                "api_key": "test-key",
+                "profile_name": "test-profile",
+                "scan_tool_descriptions_as_text": True,
+            },
+        )
+        assert result is not None
+
     def test_bedrock_without_latest_role_accepts_scan_only_tool_results(self):
         result = self._initialize(
             "bedrock-scan-only-ok",
@@ -1518,9 +1620,7 @@ class TestLoggingOnlyScopeValidation:
 
     def test_invalid_continue_flag_raises_without_tolerance(self) -> None:
         with pytest.raises(ValidationError):
-            LitellmParams(
-                guardrail="test", mode="logging_only", logging_only_continue_on_input_failure="banana"
-            )
+            LitellmParams(guardrail="test", mode="logging_only", logging_only_continue_on_input_failure="banana")
 
     def test_invalid_scope_literal_does_not_tolerate_other_litellm_params_errors(self) -> None:
         with pytest.raises(ValidationError):
