@@ -155,6 +155,7 @@ from litellm.types.responses.main import (
 )
 from litellm.types.utils import (
     ChatCompletionAnnotation,
+    ChatCompletionMessageCustomToolCall,
     ChatCompletionMessageToolCall,
     Choices,
     Function,
@@ -329,7 +330,7 @@ _InputItemT = TypeVar("_InputItemT")
 _CACHED_CONTENT_ADAPTER: Final = TypeAdapter(ChatCompletionCachedContent)
 _DICT_ITEMS_LIST_ADAPTER: Final = TypeAdapter(list[dict[object, object]])
 _TEXT_ADAPTER: Final = TypeAdapter(str)
-_RESPONSES_API_TOOL_CHOICE_ADAPTER: Final = TypeAdapter(ToolChoice)
+_RESPONSES_API_TOOL_CHOICE_ADAPTER: Final[TypeAdapter[ToolChoice]] = TypeAdapter(ToolChoice)
 
 
 def _tool_mapping(entry: object) -> Mapping[str, object] | None:
@@ -1422,7 +1423,7 @@ class LiteLLMCompletionResponsesConfig:
         caller_input: str | ResponseInputParam | None = None,
         names_non_string_fields: bool = False,
         **kwargs,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Transform a Responses API request into a Chat Completion request
         """
@@ -3516,7 +3517,7 @@ class LiteLLMCompletionResponsesConfig:
         ``OutputToolSearchCall`` with ``type="tool_search_call"``, followed by
         an ``OutputToolSearchOutput`` listing the tools it loaded.
         """
-        all_chat_completion_tools: Final[list[ChatCompletionMessageToolCall]] = []
+        all_chat_completion_tools: Final[list[ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall]] = []
         for choice in chat_completion_response.choices:
             if isinstance(choice, Choices):
                 for tool_call in (*anthropic_server_tool_calls(choice.message), *(choice.message.tool_calls or ())):
