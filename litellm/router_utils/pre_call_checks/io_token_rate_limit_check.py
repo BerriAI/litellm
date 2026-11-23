@@ -515,8 +515,17 @@ def _reservation_value(value: int, limit: int | None) -> int:
     return 1
 
 
-def _rate_limit_error(limit_label: str, limit: int, current: float) -> litellm.RateLimitError:
-    return litellm.RateLimitError(
+class TurnLargerThanItpmError(litellm.RateLimitError):
+    pass
+
+
+def _rate_limit_error(
+    limit_label: str,
+    limit: int,
+    current: float,
+    error_type: type[litellm.RateLimitError] = litellm.RateLimitError,
+) -> litellm.RateLimitError:
+    return error_type(
         message=f"Model rate limit exceeded. {limit_label} limit={limit}, current usage={current}",
         llm_provider="",
         model="",
@@ -759,10 +768,13 @@ async def _raise_if_turn_input_passes_itpm(
     tokenizer_model, _ = _tokenizer_and_served_models(deployment)
     turn_input: Final = MappingProxyType({"input": turn_params.get("input")}) if turn_params else None
     estimated_input: Final = await offload_token_count(_estimate_input_tokens)(turn_input, model=tokenizer_model)
-    count: Final = await usage.shared_or_local(counter)
-    with_turn: Final = (count or 0) + _reservation_value(estimated_input, limit)
+    count: Final = await usage.shared_or_local(counter) or 0
+    turn_tokens: Final = _reservation_value(estimated_input, limit)
+    with_turn: Final = count + turn_tokens
     if with_turn > limit:
-        raise _rate_limit_error("ITPM", limit, with_turn)
+        raise _rate_limit_error(
+            "ITPM", limit, with_turn, TurnLargerThanItpmError if turn_tokens > limit > count else litellm.RateLimitError
+        )
 
 
 @with_service_target(ROUTER_USAGE_TARGET)

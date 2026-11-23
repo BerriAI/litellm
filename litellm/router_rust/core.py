@@ -5256,12 +5256,13 @@ class _Driver:
         error: BaseException,
     ) -> Mapping[str, object]:
         """A routing pre-call check refused the attempt (``async_routing_strategy_pre_call_checks``):
-        a rate limit cools the deployment down (``set_cooldown_deployments``); the attempt's failure
-        is recorded by nothing else."""
+        a rate limit cools the deployment down (``set_cooldown_deployments``) unless the socket turn
+        alone is larger than ITPM; the attempt's failure is recorded by nothing else."""
         import litellm.exceptions as litellm_exceptions
+        from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import TurnLargerThanItpmError
 
         core: Final = self._core
-        if isinstance(error, litellm_exceptions.RateLimitError):
+        if isinstance(error, litellm_exceptions.RateLimitError) and not isinstance(error, TurnLargerThanItpmError):
             deployment_id: Final = (as_str_mapping(deployment.get("model_info")) or {}).get("id")
             if isinstance(deployment_id, str):
                 failure: Final = {**attempt_failure(error), "caller_scoped": core.per_user_deployment(deployment_id)}

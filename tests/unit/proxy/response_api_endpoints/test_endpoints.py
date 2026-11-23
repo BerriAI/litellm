@@ -6904,3 +6904,21 @@ def test_input_token_count_keeps_the_joined_name_of_a_self_named_namespace_membe
 
     assert called_names(namespace_tools) == ["search__search"]
     assert called_names([{"type": "function", "name": "search", "defer_loading": True}]) == ["search"]
+
+
+@pytest.mark.parametrize(
+    ("fields", "hints"),
+    [
+        ({"input": "hi", "previous_response_id": 123}, {"input": "hi"}),
+        ({"input": "hi", "response": "x"}, {"input": "hi"}),
+        ({"input": 5, "previous_response_id": "resp_1"}, {"previous_response_id": "resp_1"}),
+    ],
+)
+def test_a_malformed_routing_hint_keeps_the_first_frame_s_other_hints(
+    fields: Mapping[str, object], hints: Mapping[str, object]
+) -> None:
+    from litellm.proxy.response_api_endpoints.endpoints import _routing_hints_from_first_ws_frame
+
+    frame: Final = json.dumps({"type": "response.create", **fields})
+
+    assert _routing_hints_from_first_ws_frame(frame) == hints

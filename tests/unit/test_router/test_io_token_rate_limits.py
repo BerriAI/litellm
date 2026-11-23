@@ -28,6 +28,7 @@ from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
     ITPM_RESERVED_KEY,
     OTPM_COUNTER_KEY,
     OTPM_RESERVED_KEY,
+    TurnLargerThanItpmError,
     _explicit_max_tokens,
     _reservation_value,
     async_admit_io_token_turn,
@@ -1868,6 +1869,28 @@ _ITPM_350_DEPLOYMENT: Final = {
 }
 _ITPM_350_KEY: Final = _io("ws-itpm-350", "openai/gpt-5-mini", "itpm", "12-34")
 _INPUT_PAST_40_TOKENS: Final = "Write one plain sentence about how the ocean tides follow the moon. " * 4
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("used", "turn_input", "cools_down"),
+    [
+        (99, _INPUT_PAST_40_TOKENS, True),
+        (100, _INPUT_PAST_40_TOKENS * 4, True),
+        (0, _INPUT_PAST_40_TOKENS * 4, False),
+        (99, _INPUT_PAST_40_TOKENS * 4, False),
+    ],
+)
+async def test_only_a_turn_larger_than_itpm_is_refused_without_cooling_the_deployment_down(
+    used: int, turn_input: str, cools_down: bool
+) -> None:
+    usage: Final = _memory_usage()
+    usage.increment_local(CounterIncrement(_turn_key("itpm"), used, 60))
+
+    with pytest.raises(litellm.RateLimitError) as refusal:
+        await async_admit_io_token_turn(usage, _turn_deployment("itpm"), _TURN_AT, {"input": turn_input})
+
+    assert isinstance(refusal.value, TurnLargerThanItpmError) is not cools_down
 
 
 async def _itpm_350_refusal(

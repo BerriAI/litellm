@@ -13,6 +13,7 @@ import pytest
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.router_core import RouterCore
+from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import TurnLargerThanItpmError
 from tests.unit.test_router.core.endpoints_helpers import EndpointHost
 from tests.unit.test_router.core.retries_health_helpers import attempt, attempt_sync, cooled_down
 from tests.unit.test_router.core.scripted_host import ScriptedHost, deployment, rate_limit
@@ -70,6 +71,39 @@ async def test_a_rate_limit_from_a_pre_call_check_cools_the_deployment_down_and_
     cooled: Final = cooled_down(core, ["a", "b"])
     assert list(cooled) == [checked]
     assert cooled[checked]["cooldown_time"] == 33
+
+
+class RefusesOneDeployment(PreCallGate):
+    def __init__(self, refused_id: str, error: Exception) -> None:
+        super().__init__(error)
+        self.refused_id: Final = refused_id
+
+    async def async_pre_call_check(self, deployment: dict, parent_otel_span: object) -> dict | None:  # pyright: ignore[reportIncompatibleMethodOverride]
+        self.seen.append(("async", deployment["model_info"]["id"]))
+        if deployment["model_info"]["id"] == self.refused_id and self.error is not None:
+            raise self.error
+        return None
+
+
+@pytest.mark.asyncio
+async def test_a_turn_larger_than_one_deployment_s_itpm_moves_to_the_next_without_a_cooldown(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    core: Final = make_core(
+        model_list=[deployment("g", "a", order=1), deployment("g", "b", order=2)],
+        num_retries=2,
+        cooldown_time=33,
+    )
+    gate: Final = RefusesOneDeployment(
+        "a", TurnLargerThanItpmError(message="turn too big", llm_provider="", model="", num_retries=0)
+    )
+    host.lists["callbacks"].append(gate)
+
+    await attempt(core)
+
+    assert gate.seen == [("async", "a"), ("async", "b")]
+    assert host.deployments_called("acompletion") == ["b"]
+    assert cooled_down(core, ["a", "b"]) == {}
 
 
 @pytest.mark.asyncio
