@@ -208,7 +208,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         return "databricks"
 
     @classmethod
-    def get_config(cls, *, model: str | None = None):
+    def get_config(cls, *, model: str | None = None, custom_llm_provider: str | None = None):
         return super().get_config()
 
     def get_json_schema_from_pydantic_object(
@@ -283,6 +283,15 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         url_base: Final = api_base.rstrip("/") if use_ai_gateway else api_base
         complete_url: Final = f"{url_base}/chat/completions"
         return complete_url
+
+    def transform_extra_body(
+        self,
+        extra_body: Mapping[str, object],
+        request: Mapping[str, object],
+        model: str,
+        litellm_params: Mapping[str, object],
+    ) -> Mapping[str, object]:
+        return extra_body
 
     def get_supported_openai_params(self, model: str | None = None) -> list[str]:
         return [

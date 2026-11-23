@@ -1,4 +1,5 @@
 import ast, asyncio, importlib, time
+import contextlib
 import copy
 import functools
 import gc
@@ -9,10 +10,10 @@ import os
 import sys
 import threading
 import warnings
-from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Mapping
+from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Iterator, Mapping
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from typing import TYPE_CHECKING, Final, Literal, cast
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
@@ -74,7 +75,16 @@ from litellm.router_utils.fallback_event_handlers import (
 from litellm.router_utils.prompt_caching_cache import PromptCachingCache
 from litellm.router_utils.router_callbacks.track_deployment_metrics import get_deployment_successes_for_current_minute
 from litellm.scheduler import FlowItem
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionRequest
+from litellm.litellm_core_utils.hidden_params import get_hidden_params
+from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
+from litellm.types.decisions import OpenAIDecisionInputMessage
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionRequest,
+    ResponseIncompleteEvent,
+    ResponsesAPIResponse,
+    ResponsesAPIStreamEvents,
+)
 from litellm.types.router import (
     CustomRoutingStrategyBase,
     Deployment,
@@ -105,6 +115,321 @@ if TYPE_CHECKING:
     from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
     from litellm.integrations.otel.logger import OpenTelemetryV2
+
+
+_ROUTER_DECISIONS_RESPONSE: Final[Mapping[str, object]] = {
+    "model": "gpt-6-luna",
+    "answers": [{"type": "predicate", "name": "damaged", "probability": 0.9}],
+    "usage": {
+        "input_tokens": 1,
+        "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0},
+        "output_tokens": 1,
+        "output_tokens_details": {"reasoning_tokens": 0},
+        "total_tokens": 2,
+    },
+}
+
+
+_OPENAI_DECISIONS_PARAMS: Final[Mapping[str, object]] = {
+    "model": "openai/gpt-6-luna",
+    "api_base": "https://api.openai.com/v1",
+    "api_key": "k",
+}
+_BEDROCK_DECISIONS_PARAMS: Final[Mapping[str, object]] = {
+    "model": "bedrock/us.openai.gpt-5.6-terra",
+    "aws_access_key_id": "fake",
+    "aws_secret_access_key": "fake",
+    "aws_region_name": "us-east-1",
+}
+
+
+def _decisions_leg(leg_id: str, params: Mapping[str, object], weight: int | None = None) -> dict[str, object]:
+    return {
+        "model_name": "decision-group",
+        "litellm_params": params if weight is None else {**params, "weight": weight},
+        "model_info": {"id": leg_id},
+    }
+
+
+_OPENAI_DECISIONS_LEG: Final = _decisions_leg("openai-leg", _OPENAI_DECISIONS_PARAMS)
+_BEDROCK_DECISIONS_LEG: Final = _decisions_leg("bedrock-leg", _BEDROCK_DECISIONS_PARAMS)
+
+
+def _mixed_decisions_group_router(*legs: dict[str, object]) -> Router:
+    return Router(model_list=list(legs), routing_strategy="simple-shuffle")
+
+
+@pytest.fixture
+def _router_httpx_transport(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    yield
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+
+@pytest.mark.asyncio
+async def test_decisions_on_a_mixed_group_never_routes_to_a_leg_without_decisions_support(
+    respx_mock: respx.MockRouter,
+    _router_httpx_transport: None,
+) -> None:
+    router: Final = _mixed_decisions_group_router(_OPENAI_DECISIONS_LEG, _BEDROCK_DECISIONS_LEG)
+    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_ROUTER_DECISIONS_RESPONSE)
+
+    for _ in range(20):
+        await router.adecisions(
+            model="decision-group",
+            input=[{"role": "user", "content": "The package arrived with a broken screen."}],
+            questions=[
+                {"type": "predicate", "name": "damaged", "instructions": "Does the customer report a damaged item?"}
+            ],
+        )
+
+    assert route.call_count == 20
+
+
+def test_decisions_on_a_mixed_group_never_routes_to_a_leg_without_decisions_support_sync(
+    respx_mock: respx.MockRouter,
+) -> None:
+    router: Final = _mixed_decisions_group_router(_OPENAI_DECISIONS_LEG, _BEDROCK_DECISIONS_LEG)
+    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_ROUTER_DECISIONS_RESPONSE)
+
+    for _ in range(20):
+        router.decisions(
+            model="decision-group",
+            input=[{"role": "user", "content": "The package arrived with a broken screen."}],
+            questions=[
+                {"type": "predicate", "name": "damaged", "instructions": "Does the customer report a damaged item?"}
+            ],
+        )
+
+    assert route.call_count == 20
+
+
+_TYPESAFE_DECISIONS_RESPONSE: Final[Mapping[str, object]] = {
+    "model": "jev-1.13",
+    "answers": {"damaged": {"type": "noul", "noul": 0.9}},
+    "usage": {"input_tokens": 1, "output_tokens": 0},
+}
+_TICKET_PART: Final = {"type": "input_text", "text": "Refund the duplicate charge."}
+_EVIDENCE_PART: Final = {"type": "input_json", "data": {"order_id": "A1", "charges": [49, 49]}}
+_RECEIPT_PART: Final = {"type": "input_image", "image_url": "https://example.com/receipt.png"}
+_DAMAGED_QUESTIONS: Final = [
+    {"type": "predicate", "name": "damaged", "instructions": "Does the customer report a damaged item?"}
+]
+
+
+def _json_decisions_router(**router_arguments: object) -> Router:
+    """``typesafe-leg`` takes no JSON input and weighs more; ``openai-leg`` takes it."""
+    return Router(
+        model_list=[
+            _decisions_leg("typesafe-leg", {"model": "typesafe/jev-1.13", "api_key": "k"}, weight=1),
+            _decisions_leg("openai-leg", _OPENAI_DECISIONS_PARAMS, weight=0),
+        ],
+        routing_strategy="simple-shuffle",
+        **router_arguments,
+    )
+
+
+_JSON_INPUTS: Final = pytest.mark.parametrize(
+    "decision_input",
+    [
+        [{"role": "user", "content": [_TICKET_PART, _EVIDENCE_PART]}],
+        ({"role": "user", "content": (_TICKET_PART, _EVIDENCE_PART)},),
+        [OpenAIDecisionInputMessage.model_validate({"content": [_TICKET_PART, _EVIDENCE_PART]})],
+    ],
+    ids=["as-sent", "as-sent-tuple", "validated"],
+)
+
+
+@_JSON_INPUTS
+@pytest.mark.asyncio
+async def test_decisions_carrying_json_input_skip_the_leg_refusing_it(
+    decision_input: object, respx_mock: respx.MockRouter, _router_httpx_transport: None
+) -> None:
+    router: Final = _json_decisions_router()
+    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_ROUTER_DECISIONS_RESPONSE)
+
+    for _ in range(5):
+        await router.adecisions(model="decision-group", input=decision_input, questions=_DAMAGED_QUESTIONS)
+
+    assert route.call_count == 5
+
+
+@_JSON_INPUTS
+def test_decisions_carrying_json_input_skip_the_leg_refusing_it_sync(
+    decision_input: object, respx_mock: respx.MockRouter
+) -> None:
+    router: Final = _json_decisions_router()
+    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_ROUTER_DECISIONS_RESPONSE)
+
+    for _ in range(5):
+        router.decisions(model="decision-group", input=decision_input, questions=_DAMAGED_QUESTIONS)
+
+    assert route.call_count == 5
+
+
+@pytest.mark.parametrize(
+    ("router_arguments", "request_extra", "content"),
+    [
+        ({}, {}, [_TICKET_PART]),
+        ({"default_litellm_params": {"drop_params": True}}, {}, [_TICKET_PART, _EVIDENCE_PART]),
+        ({}, {"drop_params": True}, [_TICKET_PART, _EVIDENCE_PART]),
+    ],
+    ids=["text-only", "router-default-drop-params", "request-drop-params"],
+)
+@pytest.mark.asyncio
+async def test_decisions_keep_the_leg_refusing_json_input_when_nothing_needs_it(
+    router_arguments: dict[str, object],
+    request_extra: dict[str, object],
+    content: list[object],
+    respx_mock: respx.MockRouter,
+    _router_httpx_transport: None,
+) -> None:
+    router: Final = _json_decisions_router(**router_arguments)
+    route: Final = respx_mock.post("https://api.typesafe.ai/v1/systemone").respond(json=_TYPESAFE_DECISIONS_RESPONSE)
+
+    await router.adecisions(
+        model="decision-group",
+        input=[{"role": "user", "content": content}],
+        questions=_DAMAGED_QUESTIONS,
+        **request_extra,
+    )
+
+    assert route.call_count == 1
+    assert "input_json" not in route.calls.last.request.content.decode()
+
+
+@pytest.mark.parametrize(
+    ("router_arguments", "request_extra"),
+    [({"default_litellm_params": {"drop_params": True}}, {}), ({}, {"drop_params": True})],
+    ids=["router-default-drop-params", "request-drop-params"],
+)
+@pytest.mark.parametrize(
+    "content",
+    [[_EVIDENCE_PART], [_RECEIPT_PART, _EVIDENCE_PART]],
+    ids=["only-json", "dropped-image-and-json"],
+)
+@pytest.mark.asyncio
+async def test_decisions_with_only_json_input_skip_the_leg_that_would_drop_it_all(
+    content: list[object],
+    router_arguments: dict[str, object],
+    request_extra: dict[str, object],
+    respx_mock: respx.MockRouter,
+    _router_httpx_transport: None,
+) -> None:
+    router: Final = _json_decisions_router(**router_arguments)
+    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_ROUTER_DECISIONS_RESPONSE)
+
+    for _ in range(5):
+        await router.adecisions(
+            model="decision-group",
+            input=[{"role": "user", "content": content}],
+            questions=_DAMAGED_QUESTIONS,
+            **request_extra,
+        )
+
+    assert route.call_count == 5
+
+
+_GIF_RECEIPT: Final = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
+_PNG_RECEIPT: Final = (
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+)
+
+
+@pytest.mark.parametrize(
+    ("image_url", "answering_url"),
+    [
+        (_GIF_RECEIPT, "https://api.openai.com/v1/decisions"),
+        (_PNG_RECEIPT, "https://api.typesafe.ai/v1/systemone"),
+        ("https://example.com/receipt.gif", "https://api.openai.com/v1/decisions"),
+        ("data:image/png;base64,", "https://api.openai.com/v1/decisions"),
+    ],
+    ids=["gif-the-leg-drops", "png-the-leg-keeps", "remote-url-of-unknown-type", "malformed-data-url"],
+)
+@pytest.mark.asyncio
+async def test_decisions_with_json_and_an_image_count_only_the_image_types_a_leg_keeps(
+    image_url: str, answering_url: str, respx_mock: respx.MockRouter, _router_httpx_transport: None
+) -> None:
+    router: Final = _json_decisions_router()
+    openai: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_ROUTER_DECISIONS_RESPONSE)
+    typesafe: Final = respx_mock.post("https://api.typesafe.ai/v1/systemone").respond(
+        json=_TYPESAFE_DECISIONS_RESPONSE
+    )
+
+    for _ in range(5):
+        await router.adecisions(
+            model="decision-group",
+            input=[{"role": "user", "content": [{"type": "input_image", "image_url": image_url}, _EVIDENCE_PART]}],
+            questions=_DAMAGED_QUESTIONS,
+            drop_params=True,
+            extra_headers={"typesafe-danger-zone-images": "true"},
+        )
+
+    assert {str(route.calls.last.request.url) for route in (openai, typesafe) if route.call_count == 5} == {
+        answering_url
+    }
+
+
+@pytest.mark.asyncio
+async def test_decisions_with_json_input_on_a_group_where_every_leg_refuses_it_name_input_json() -> None:
+    router: Final = Router(
+        model_list=[
+            _decisions_leg("typesafe-a", {"model": "typesafe/jev-1.13", "api_key": "k"}),
+            _decisions_leg("typesafe-b", {"model": "typesafe/jev-1.13", "api_key": "k"}),
+        ],
+        routing_strategy="simple-shuffle",
+    )
+
+    with pytest.raises(litellm.UnsupportedParamsError, match="input_json"):
+        await router.adecisions(
+            model="decision-group",
+            input=[{"role": "user", "content": [_TICKET_PART, _EVIDENCE_PART]}],
+            questions=_DAMAGED_QUESTIONS,
+        )
+
+
+@pytest.mark.asyncio
+async def test_decisions_on_a_group_with_no_capable_leg_still_returns_the_provider_error() -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "bedrock-only",
+                "litellm_params": {
+                    "model": "bedrock/us.openai.gpt-5.6-terra",
+                    "aws_access_key_id": "fake",
+                    "aws_secret_access_key": "fake",
+                    "aws_region_name": "us-east-1",
+                },
+                "model_info": {"id": "bedrock-leg"},
+            }
+        ]
+    )
+
+    with pytest.raises(litellm.BadRequestError, match="Unknown Decisions provider 'bedrock'"):
+        await router.adecisions(
+            model="bedrock-only",
+            input=[{"role": "user", "content": "The package arrived with a broken screen."}],
+            questions=[
+                {"type": "predicate", "name": "damaged", "instructions": "Does the customer report a damaged item?"}
+            ],
+        )
+
+
+@pytest.mark.asyncio
+async def test_chat_on_a_mixed_group_still_reaches_the_leg_without_decisions_support() -> None:
+    router: Final = _mixed_decisions_group_router(
+        _decisions_leg("openai-leg", _OPENAI_DECISIONS_PARAMS, weight=0),
+        _decisions_leg("bedrock-leg", _BEDROCK_DECISIONS_PARAMS, weight=1),
+    )
+
+    response: Final = await router.acompletion(
+        model="decision-group",
+        messages=[{"role": "user", "content": "Say hi"}],
+        mock_response="hi",
+    )
+
+    assert response._hidden_params["model_id"] == "bedrock-leg"
 
 
 def test_update_kwargs_does_not_mutate_defaults_and_merges_metadata():
@@ -5076,6 +5401,151 @@ async def test_aresponses_streaming_content_policy_error_event_routes_to_content
     assert collected == fallback_chunks
     fallback_call.assert_awaited_once()
     assert fallback_call.await_args.kwargs["model"] == "gemini/gemini-2.5-flash"
+
+
+@pytest.mark.asyncio
+async def test_aresponses_stream_keeps_numbering_after_a_mid_stream_fallback():
+    from litellm.types.llms.openai import OutputTextDeltaEvent, ResponsesAPIStreamEvents
+
+    def delta(sequence_number: int, text: str) -> OutputTextDeltaEvent:
+        return OutputTextDeltaEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
+            item_id="msg_1",
+            output_index=0,
+            content_index=0,
+            delta=text,
+            sequence_number=sequence_number,
+        )
+
+    from litellm.exceptions import MidStreamFallbackError
+
+    router: Final = _InjectedFallbackRouter(_AsyncList([delta(0, "c"), delta(1, "d")]))
+    primary: Final = _make_responses_iterator(
+        chunks=[delta(0, "a"), delta(1, "b")],
+        error=MidStreamFallbackError(
+            message="primary died",
+            model="primary",
+            llm_provider="anthropic",
+            is_pre_first_chunk=False,
+            generated_content="ab",
+        ),
+        model="primary",
+    )
+
+    wrapped: Final = await router._aresponses_streaming_iterator(
+        response=primary,
+        initial_kwargs={"model": "primary", "stream": True, "input": "Hi", "original_generic_function": litellm.aresponses},
+    )
+    events: Final = [event async for event in wrapped]
+
+    assert [(event.delta, event.sequence_number) for event in events] == [("a", 0), ("b", 1), ("c", 2), ("d", 3)]
+
+
+
+@pytest.mark.asyncio
+async def test_aresponses_stream_fallback_keeps_higher_numbers_and_passes_unnumbered_events():
+    from litellm.exceptions import MidStreamFallbackError
+    from litellm.types.llms.openai import OutputTextDeltaEvent, ResponsesAPIStreamEvents
+
+    def delta(text: str) -> OutputTextDeltaEvent:
+        return OutputTextDeltaEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA, item_id="msg_1", output_index=0, content_index=0, delta=text
+        )
+
+    def numbered(sequence_number: int, text: str) -> OutputTextDeltaEvent:
+        return delta(text).model_copy(update={"sequence_number": sequence_number})
+
+    router: Final = _InjectedFallbackRouter(_AsyncList([numbered(7, "c"), delta("d"), numbered(8, "e")]))
+    primary: Final = _make_responses_iterator(
+        chunks=[numbered(0, "a"), numbered(1, "b")],
+        error=MidStreamFallbackError(
+            message="primary died",
+            model="primary",
+            llm_provider="anthropic",
+            is_pre_first_chunk=False,
+            generated_content="ab",
+        ),
+        model="primary",
+    )
+
+    wrapped: Final = await router._aresponses_streaming_iterator(
+        response=primary,
+        initial_kwargs={"model": "primary", "stream": True, "input": "Hi", "original_generic_function": litellm.aresponses},
+    )
+    events: Final = [event async for event in wrapped]
+
+    assert [(event.delta, event.get("sequence_number")) for event in events] == [
+        ("a", 0),
+        ("b", 1),
+        ("c", 7),
+        ("d", None),
+        ("e", 8),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_aresponses_stream_without_fallback_passes_upstream_numbers_unchanged():
+    from litellm.types.llms.openai import OutputTextDeltaEvent, ResponsesAPIStreamEvents
+
+    def delta(sequence_number: int, text: str) -> OutputTextDeltaEvent:
+        return OutputTextDeltaEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
+            item_id="msg_1",
+            output_index=0,
+            content_index=0,
+            delta=text,
+            sequence_number=sequence_number,
+        )
+
+    router: Final = _InjectedFallbackRouter(_AsyncList([]))
+    primary: Final = _make_responses_iterator(
+        chunks=[delta(0, "a"), delta(1, "b"), delta(1, "c"), delta(0, "d")], model="primary"
+    )
+
+    wrapped: Final = await router._aresponses_streaming_iterator(
+        response=primary,
+        initial_kwargs={"model": "primary", "stream": True, "input": "Hi", "original_generic_function": litellm.aresponses},
+    )
+    events: Final = [event async for event in wrapped]
+
+    assert [(event.delta, event.sequence_number) for event in events] == [("a", 0), ("b", 1), ("c", 1), ("d", 0)]
+
+
+@pytest.mark.asyncio
+async def test_aresponses_stream_fallback_continues_above_the_highest_number_the_primary_sent():
+    from litellm.exceptions import MidStreamFallbackError
+    from litellm.types.llms.openai import OutputTextDeltaEvent, ResponsesAPIStreamEvents
+
+    def delta(sequence_number: int, text: str) -> OutputTextDeltaEvent:
+        return OutputTextDeltaEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
+            item_id="msg_1",
+            output_index=0,
+            content_index=0,
+            delta=text,
+            sequence_number=sequence_number,
+        )
+
+    router: Final = _InjectedFallbackRouter(_AsyncList([delta(0, "d")]))
+    primary: Final = _make_responses_iterator(
+        chunks=[delta(0, "a"), delta(3, "b"), delta(1, "c")],
+        error=MidStreamFallbackError(
+            message="primary died",
+            model="primary",
+            llm_provider="anthropic",
+            is_pre_first_chunk=False,
+            generated_content="abc",
+        ),
+        model="primary",
+    )
+
+    wrapped: Final = await router._aresponses_streaming_iterator(
+        response=primary,
+        initial_kwargs={"model": "primary", "stream": True, "input": "Hi", "original_generic_function": litellm.aresponses},
+    )
+    events: Final = [event async for event in wrapped]
+
+    assert [(event.delta, event.sequence_number) for event in events] == [("a", 0), ("b", 3), ("c", 1), ("d", 4)]
 
 
 @pytest.mark.asyncio
@@ -18372,14 +18842,23 @@ class TestTierParamsTheTargetAccepts:
 
         assert accepted == {"allowed_openai_params": ["seed"]}
 
-    def test_declared_param_allowlist_ignores_malformed_declarations(self):
-        """A str is iterable, so without the type guard a YAML scalar mistake like
-        allowed_openai_params: reasoning_effort would allowlist single characters."""
-        assert litellm.Router._declared_param_allowlist({"allowed_openai_params": ["reasoning_effort", 3]}) == frozenset(
-            {"reasoning_effort"}
-        )
-        assert litellm.Router._declared_param_allowlist({"allowed_openai_params": "reasoning_effort"}) == frozenset()
-        assert litellm.Router._declared_param_allowlist({}) == frozenset()
+    @pytest.mark.parametrize(
+        "allowlist, expected",
+        [
+            (["reasoning_effort", 3], {"reasoning_effort"}),
+            ("reasoning_effort", {"reasoning_effort"}),
+            ("seed, reasoning_effort", {"seed", "reasoning_effort"}),
+            ("seed reasoning_effort", {"seed", "reasoning_effort"}),
+            ('["reasoning_effort"]', {"reasoning_effort"}),
+            ({"reasoning_effort": True}, {"reasoning_effort"}),
+            (None, set()),
+        ],
+        ids=["list", "bare-string", "comma-separated", "space-separated", "json-list-string", "dict", "unset"],
+    )
+    def test_declared_param_allowlist_reads_names_from_any_allowlist_shape(
+        self, allowlist: object, expected: set[str]
+    ) -> None:
+        assert litellm.Router._declared_param_allowlist({"allowed_openai_params": allowlist}) == frozenset(expected)
 
     def test_deployment_accepts_param_honors_deployment_allowlist(self):
         deployment = {
@@ -27428,6 +27907,7 @@ async def test_responses_fallback_wrapper_disconnect_billing_keeps_the_primary_s
         logging_obj: Final = MagicMock(spec=LiteLLMLogging)
         logging_obj.model_call_details = {"litellm_params": {}}
         logging_obj.completion_start_time = None
+        logging_obj.cost_breakdown = None
         iterator: Final = ResponsesAPIStreamingIterator(
             response=httpx.Response(200),
             model="gpt-5.4",
@@ -27479,3 +27959,336 @@ async def test_responses_fallback_wrapper_disconnect_billing_keeps_the_primary_s
     wrapped.adopt_fallback_headers(fallback)
 
     assert wrapped.partial_response_on_disconnect().response.usage.output_tokens == primary_tokens + fallback_tokens
+
+
+def _cut_responses_stream(
+    response_id: str, usage: Mapping[str, object] | None, response_cost: float | None, price_in_usage: bool = False
+) -> MagicMock:
+    response: Final = ResponsesAPIResponse.model_validate(
+        MappingProxyType(
+            {
+                "id": response_id,
+                "object": "response",
+                "created_at": 1,
+                "status": "incomplete",
+                "model": "claude-haiku-5-5",
+                "output": (),
+                "usage": MappingProxyType({**usage, "cost": response_cost})
+                if price_in_usage and usage is not None
+                else usage,
+            }
+        )
+    )
+    if not price_in_usage:
+        response.hidden_params["response_cost"] = response_cost
+    stream: Final = MagicMock(spec=BaseResponsesAPIStreamingIterator)
+    stream.partial_response_on_disconnect = MagicMock(
+        return_value=ResponseIncompleteEvent(type=ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE, response=response)
+    )
+    return stream
+
+
+def _cut_usage(input_tokens: int, cached_tokens: int) -> Mapping[str, object]:
+    return MappingProxyType(
+        {
+            "input_tokens": input_tokens,
+            "input_tokens_details": MappingProxyType({"cached_tokens": cached_tokens}),
+            "output_tokens": 0,
+            "total_tokens": input_tokens,
+        }
+    )
+
+
+async def _billed_after_a_fallback(primary: MagicMock, fallback: MagicMock) -> ResponsesAPIResponse:
+    router: Final = Router(
+        model_list=[{"model_name": "primary", "litellm_params": {"model": "anthropic/claude-haiku-5-5", "api_key": "k"}}]
+    )
+    wrapped: Final = await router._aresponses_streaming_iterator(
+        response=primary,
+        initial_kwargs={"model": "primary", "stream": True, "input": "Hi", "original_generic_function": AsyncMock()},
+    )
+    wrapped.adopt_fallback_headers(fallback)
+    billed: Final = wrapped.partial_response_on_disconnect()
+    assert billed is not None
+    return billed.response
+
+
+@pytest.mark.asyncio
+async def test_a_client_cut_after_a_fallback_bills_the_tokens_cache_reads_and_cost_of_both_deployments():
+    billed: Final = await _billed_after_a_fallback(
+        _cut_responses_stream("resp_primary", _cut_usage(25, 10), 0.0000025),
+        _cut_responses_stream("resp_fallback", _cut_usage(30, 20), 0.000004),
+    )
+
+    assert billed.id == "resp_fallback"
+    assert billed.usage is not None
+    assert billed.usage.input_tokens == 55
+    assert billed.usage.input_tokens_details is not None
+    assert billed.usage.input_tokens_details.cached_tokens == 30
+    assert (get_hidden_params(billed) or {}).get("response_cost") == pytest.approx(0.0000065)
+
+
+_FIXED_MARGIN: Final = 0.001
+
+
+def _priced_cut_responses_stream(
+    response_id: str,
+    response_cost: float,
+    logging_obj: LiteLLMLogging,
+    price_in_usage: bool,
+    fixed_margin: float = _FIXED_MARGIN,
+) -> MagicMock:
+    stream: Final = _cut_responses_stream(response_id, _cut_usage(25, 0), response_cost, price_in_usage)
+    event: Final = stream.partial_response_on_disconnect.return_value
+
+    def priced_partial() -> ResponseIncompleteEvent:
+        logging_obj.set_cost_breakdown(
+            input_cost=response_cost - fixed_margin,
+            output_cost=0.0,
+            total_cost=response_cost,
+            cost_for_built_in_tools_cost_usd_dollar=0.0,
+            margin_fixed_amount=fixed_margin,
+            margin_total_amount=fixed_margin,
+        )
+        return event
+
+    stream.partial_response_on_disconnect = MagicMock(side_effect=priced_partial)
+    stream.logging_obj = logging_obj
+    return stream
+
+
+def _cut_stream_logging(call_id: str) -> LiteLLMLogging:
+    return LiteLLMLogging(
+        model="claude-haiku-5-5",
+        messages=[],
+        stream=True,
+        call_type="aresponses",
+        start_time=datetime.now(),
+        litellm_call_id=call_id,
+        function_id=call_id,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("deployments_share_one_logging_object", [True, False])
+@pytest.mark.parametrize(
+    ("primary_price_in_usage", "fallback_price_in_usage"),
+    [(False, False), (False, True), (True, True)],
+    ids=["both-bridged", "native-fallback", "both-native"],
+)
+async def test_a_client_cut_after_a_fallback_charges_the_fixed_margin_once(
+    deployments_share_one_logging_object: bool, primary_price_in_usage: bool, fallback_price_in_usage: bool
+):
+    primary_logging: Final = _cut_stream_logging("primary")
+    fallback_logging: Final = (
+        primary_logging if deployments_share_one_logging_object else _cut_stream_logging("fallback")
+    )
+    billed: Final = await _billed_after_a_fallback(
+        _priced_cut_responses_stream("resp_primary", 0.00105, primary_logging, primary_price_in_usage),
+        _priced_cut_responses_stream("resp_fallback", 0.0010325, fallback_logging, fallback_price_in_usage),
+    )
+
+    billed_cost: Final = (get_hidden_params(billed) or {}).get("response_cost")
+    assert billed_cost == pytest.approx(0.00105 + 0.0010325 - _FIXED_MARGIN)
+    assert billed.usage is not None
+    assert billed.usage.cost == pytest.approx(billed_cost)
+    assert primary_logging.cost_breakdown is not None
+    assert primary_logging.cost_breakdown.get("total_cost") == pytest.approx(billed_cost)
+    assert primary_logging.cost_breakdown.get("margin_total_amount") == pytest.approx(_FIXED_MARGIN)
+
+
+@pytest.mark.asyncio
+async def test_a_client_cut_after_a_fallback_with_a_different_fixed_fee_charges_the_fallbacks_fee_once():
+    primary_logging: Final = _cut_stream_logging("primary")
+    billed: Final = await _billed_after_a_fallback(
+        _priced_cut_responses_stream("resp_primary", 0.0035, primary_logging, False, fixed_margin=0.003),
+        _priced_cut_responses_stream("resp_fallback", 0.0014, _cut_stream_logging("fallback"), False, fixed_margin=0.001),
+    )
+
+    billed_cost: Final = (get_hidden_params(billed) or {}).get("response_cost")
+    assert billed_cost == pytest.approx(0.0005 + 0.0004 + 0.001)
+    assert primary_logging.cost_breakdown is not None
+    assert primary_logging.cost_breakdown.get("total_cost") == pytest.approx(billed_cost)
+    assert primary_logging.cost_breakdown.get("margin_fixed_amount") == pytest.approx(0.001)
+    assert primary_logging.cost_breakdown.get("margin_total_amount") == pytest.approx(0.001)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("unpriced_side", ["primary", "fallback"])
+async def test_a_client_cut_after_a_fallback_bills_an_unpriced_deployment_nothing_and_keeps_the_priced_breakdown(
+    unpriced_side: str,
+):
+    primary_logging: Final = _cut_stream_logging("primary")
+    fallback_logging: Final = _cut_stream_logging("fallback")
+    unpriced_logging: Final = primary_logging if unpriced_side == "primary" else fallback_logging
+    unpriced_logging.set_cost_breakdown(
+        input_cost=0.5, output_cost=0.0, total_cost=0.5, cost_for_built_in_tools_cost_usd_dollar=0.0
+    )
+    unpriced: Final = _cut_responses_stream(f"resp_{unpriced_side}", _cut_usage(25, 0), None)
+    unpriced.logging_obj = unpriced_logging
+    priced_logging: Final = fallback_logging if unpriced_side == "primary" else primary_logging
+    priced: Final = _priced_cut_responses_stream("resp_priced", 0.00105, priced_logging, price_in_usage=False)
+
+    billed: Final = await _billed_after_a_fallback(
+        unpriced if unpriced_side == "primary" else priced, priced if unpriced_side == "primary" else unpriced
+    )
+
+    assert billed.usage is not None
+    assert billed.usage.input_tokens == 50
+    assert (get_hidden_params(billed) or {}).get("response_cost") == pytest.approx(0.00105)
+    assert primary_logging.cost_breakdown is not None
+    assert primary_logging.cost_breakdown.get("total_cost") == pytest.approx(0.00105)
+
+
+_PRICE_PER_INPUT_TOKEN: Final = MappingProxyType({"primary-deployment": 1e-5, "fallback-deployment": 3e-6})
+
+
+class _PricedOnTheSharedLogging(BaseResponsesAPIStreamingIterator):
+    def __init__(  # pyright: ignore[reportMissingSuperCall]  # the base needs an httpx response
+        self,
+        deltas: tuple[str, ...],
+        error: BaseException | None,
+        logging_obj: LiteLLMLogging,
+        response_id: str,
+        input_tokens: int | None,
+    ) -> None:
+        self._events: Final = iter(SimpleNamespace(type="response.output_text.delta", delta=delta) for delta in deltas)
+        self._error: Final = error
+        self.logging_obj = logging_obj
+        self._response_id: Final = response_id
+        self._input_tokens: Final = input_tokens
+        self.completed_response = None
+
+    def __aiter__(self) -> "_PricedOnTheSharedLogging":
+        return self
+
+    async def __anext__(self) -> object:
+        event: Final = next(self._events, None)
+        if event is not None:
+            return event
+        if self._error is not None:
+            raise self._error
+        raise StopAsyncIteration
+
+    async def aclose(self) -> None:
+        return None
+
+    def partial_response_on_disconnect(self) -> ResponseIncompleteEvent | None:
+        if self._input_tokens is None:
+            return None
+        cost: Final = self._input_tokens * _PRICE_PER_INPUT_TOKEN[self.logging_obj.model]
+        self.logging_obj.set_cost_breakdown(
+            input_cost=cost, output_cost=0.0, total_cost=cost, cost_for_built_in_tools_cost_usd_dollar=0.0
+        )
+        return _cut_responses_stream(
+            self._response_id, _cut_usage(self._input_tokens, 0), cost, price_in_usage=True
+        ).partial_response_on_disconnect()
+
+
+def _shared_cut_logging() -> LiteLLMLogging:
+    logging_obj: Final = _cut_stream_logging("shared")
+    logging_obj.model = "primary-deployment"
+    return logging_obj
+
+
+async def _streamed_after_a_cut(shared_logging: LiteLLMLogging, fallback: object) -> object:
+    router: Final = Router(
+        model_list=[{"model_name": "primary", "litellm_params": {"model": "anthropic/claude-haiku-5-5", "api_key": "k"}}]
+    )
+
+    async def fallback_attempt(**_kwargs: object) -> object:  # kwargs-ok: the fallback chain's arguments
+        shared_logging.model = "fallback-deployment"
+        if isinstance(fallback, BaseException):
+            raise fallback
+        if isinstance(fallback, asyncio.Event):
+            fallback.set()
+            return await asyncio.Event().wait()
+        return fallback
+
+    router.async_function_with_fallbacks_common_utils = fallback_attempt
+    cut: Final = MidStreamFallbackError(
+        message="stream cut",
+        model="claude-haiku-5-5",
+        llm_provider="anthropic",
+        original_exception=litellm.RateLimitError(message="stream cut", llm_provider="anthropic", model="x"),
+        generated_content="hel",
+        is_pre_first_chunk=False,
+    )
+    return await router._aresponses_streaming_iterator(
+        response=_PricedOnTheSharedLogging(("hel",), cut, shared_logging, "resp_primary", 25),
+        initial_kwargs={"model": "primary", "stream": True, "input": "Hi", "original_generic_function": AsyncMock()},
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallback_input_tokens", [30, None])
+async def test_a_client_cut_after_a_fallback_bills_the_first_deployment_at_its_own_price(
+    fallback_input_tokens: int | None,
+):
+    shared_logging: Final = _shared_cut_logging()
+    wrapped: Final = await _streamed_after_a_cut(
+        shared_logging,
+        _PricedOnTheSharedLogging(("lo", " there"), None, shared_logging, "resp_fallback", fallback_input_tokens),
+    )
+    relayed: Final = aiter(wrapped)
+    _ = await anext(relayed)
+    _ = await anext(relayed)
+
+    billed: Final = wrapped.partial_response_on_disconnect()
+
+    expected: Final = 25 * _PRICE_PER_INPUT_TOKEN["primary-deployment"] + (
+        0.0 if fallback_input_tokens is None else fallback_input_tokens * _PRICE_PER_INPUT_TOKEN["fallback-deployment"]
+    )
+    assert billed is not None
+    assert (get_hidden_params(billed.response) or {}).get("response_cost") == pytest.approx(expected)
+    assert shared_logging.cost_breakdown is not None
+    assert shared_logging.cost_breakdown.get("total_cost") == pytest.approx(expected)
+
+
+@pytest.mark.asyncio
+async def test_a_client_cut_while_the_fallback_connects_bills_the_first_deployment_at_its_own_price():
+    shared_logging: Final = _shared_cut_logging()
+    fallback_connecting: Final = asyncio.Event()
+    wrapped: Final = await _streamed_after_a_cut(shared_logging, fallback_connecting)
+    relayed: Final = aiter(wrapped)
+    _ = await anext(relayed)
+    connecting: Final = asyncio.ensure_future(anext(relayed))
+    await fallback_connecting.wait()
+
+    billed: Final = wrapped.partial_response_on_disconnect()
+
+    connecting.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await connecting
+    expected: Final = 25 * _PRICE_PER_INPUT_TOKEN["primary-deployment"]
+    assert billed is not None
+    assert (get_hidden_params(billed.response) or {}).get("response_cost") == pytest.approx(expected)
+    assert shared_logging.cost_breakdown is not None
+    assert shared_logging.cost_breakdown.get("total_cost") == pytest.approx(expected)
+
+
+@pytest.mark.asyncio
+async def test_a_fallback_that_fails_after_a_cut_leaves_no_breakdown_from_the_first_deployments_partial():
+    shared_logging: Final = _shared_cut_logging()
+    wrapped: Final = await _streamed_after_a_cut(
+        shared_logging, litellm.RateLimitError(message="fallback down", llm_provider="openai", model="x")
+    )
+
+    with pytest.raises(litellm.RateLimitError, match="fallback down"):
+        async for _ in wrapped:
+            pass
+
+    assert shared_logging.cost_breakdown is None
+
+
+@pytest.mark.asyncio
+async def test_a_client_cut_after_a_fallback_from_a_deployment_that_reported_no_usage_bills_the_fallbacks_usage():
+    billed: Final = await _billed_after_a_fallback(
+        _cut_responses_stream("resp_primary", None, None),
+        _cut_responses_stream("resp_fallback", _cut_usage(30, 20), 0.000004),
+    )
+
+    assert billed.usage is not None
+    assert billed.usage.input_tokens == 30
+    assert billed.usage.input_tokens_details is not None
+    assert billed.usage.input_tokens_details.cached_tokens == 20

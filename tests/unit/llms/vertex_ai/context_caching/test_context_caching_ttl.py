@@ -1,5 +1,6 @@
 import pytest
 from litellm.llms.vertex_ai.context_caching.transformation import (
+    cached_block_ttl,
     _normalize_ttl_to_seconds,
     extract_ttl_from_cached_messages,
     transform_openai_messages_to_gemini_context_caching,
@@ -235,6 +236,7 @@ class TestTransformationWithTTL:
             model="gemini-2.5-pro",
             messages=messages,
             cache_key="test-cache-key",
+            ttl=cached_block_ttl(messages),
             custom_llm_provider=custom_llm_provider,
             vertex_location="test_location",
             vertex_project="test_project",
@@ -278,6 +280,7 @@ class TestTransformationWithTTL:
             model="gemini-2.5-pro",
             messages=messages,
             cache_key="test-cache-key",
+            ttl=cached_block_ttl(messages),
             custom_llm_provider=custom_llm_provider,
             vertex_location=vertex_location,
             vertex_project=vertex_project,
@@ -319,6 +322,7 @@ class TestTransformationWithTTL:
             model="gemini-2.5-pro",
             messages=messages,
             cache_key="test-cache-key",
+            ttl=cached_block_ttl(messages),
             custom_llm_provider=custom_llm_provider,
             vertex_location=vertex_location,
             vertex_project=vertex_project,
@@ -362,6 +366,7 @@ class TestTransformationWithTTL:
             model="gemini-2.5-pro",
             messages=messages,
             cache_key="test-cache-key",
+            ttl=cached_block_ttl(messages),
             custom_llm_provider=custom_llm_provider,
             vertex_location=vertex_location,
             vertex_project=vertex_project,

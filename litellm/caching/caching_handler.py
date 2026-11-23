@@ -825,11 +825,12 @@ class LLMCachingHandler:
 
         A hit inside ``internal_sub_call`` fires nothing, since the parent call that folds it in logs it.
         """
-        if logged_by_parent():
+        if logged_by_parent() or not logging_obj.claim_async_success_log():
             return
 
         from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 
+        logging_obj.mark_async_success_log_enqueued()
         GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
             async_coroutine=logging_obj.async_success_handler(
                 result=cached_result,

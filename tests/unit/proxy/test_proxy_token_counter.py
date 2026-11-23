@@ -21,6 +21,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import anyio
 import httpx
 import pytest
+import respx
 import tiktoken
 from dotenv import load_dotenv
 from pydantic import BaseModel, ConfigDict, JsonValue
@@ -41,6 +42,10 @@ import litellm
 from litellm import Router
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.anthropic.count_tokens import handler as anthropic_count_tokens_handler
+from litellm.llms.anthropic.pass_through.adapters.transformation import LiteLLMAnthropicMessagesAdapter
+from litellm.llms.anthropic.pass_through.responses_adapters.transformation import (
+    LiteLLMAnthropicToResponsesAPIAdapter,
+)
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.bedrock.count_tokens.bedrock_token_counter import BedrockTokenCounter
@@ -55,6 +60,7 @@ from litellm.llms.bedrock.count_tokens.kimi_k3 import (
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.gemini.count_tokens import handler as gemini_count_tokens_handler
+from litellm.llms.openai.responses.count_tokens import handler as openai_count_tokens_handler
 from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens.handler import VertexAIPartnerModelsTokenCounter
 from litellm.proxy._types import ProxyException, TokenCountRequest
 from litellm.proxy.anthropic_endpoints.endpoints import (
@@ -76,6 +82,7 @@ from litellm.proxy.proxy_server import (
     token_counter,
 )
 from litellm.rust_bridge.fork_guard import ForkedAfterNativeRuntimeStarted
+from litellm.types.llms.anthropic import AnthropicMessagesRequest
 from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagementSystem
 from litellm.types.utils import SelectTokenizerResponse, TokenCountMessagesFormat, TokenCountResponse
 
@@ -2274,6 +2281,117 @@ def _shipped_kimi_k3_framing() -> int:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("as_blocks", [False, True])
+@pytest.mark.parametrize(
+    "model", ["azure/responses/gpt-6.2-sol", "bedrock_mantle/openai.gpt-6.2-sol", "openai/gpt-6.2-sol"]
+)
+async def test_bridged_messages_local_count_ignores_leading_claude_code_billing_header(
+    monkeypatch: pytest.MonkeyPatch, as_blocks: bool, model: str
+) -> None:
+    router: Final = Router(model_list=[{"model_name": "counted", "litellm_params": {"model": model}}])
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+    billing: Final = "x-anthropic-billing-header: cc_version=2.1.263.abc; cc_entrypoint=cli; cch=781fd;"
+    system: Final = [{"type": "text", "text": "Be concise."}] if as_blocks else "Be concise."
+    with_billing: Final = (
+        [{"type": "text", "text": billing}, *system] if isinstance(system, list) else billing + "\n" + system
+    )
+    request: Final = TokenCountRequest(model="counted", messages=[{"role": "user", "content": "Hello"}], system=system)
+
+    baseline: Final = await count_request_tokens(request=request, messages_format="anthropic")
+    counted: Final = await count_request_tokens(
+        request=request.model_copy(update={"system": with_billing}), messages_format="anthropic"
+    )
+
+    assert counted.total_tokens == baseline.total_tokens
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("as_blocks", [False, True])
+async def test_openai_provider_count_and_generation_keep_second_adjacent_billing_block(
+    monkeypatch: pytest.MonkeyPatch, as_blocks: bool
+) -> None:
+    first: Final = "x-anthropic-billing-header: cc_version=2; cc_entrypoint=cli; cch=A;"
+    second: Final = "x-anthropic-billing-header: cc_version=2; cc_entrypoint=cli; cch=B;"
+    system: Final = (
+        [{"type": "text", "text": text} for text in (first, second, "Be concise.")]
+        if as_blocks
+        else first + "\n" + second + "\nBe concise."
+    )
+    request: Final[AnthropicMessagesRequest] = {
+        "model": "gpt-6.2-sol",
+        "max_tokens": 32,
+        "messages": [{"role": "user", "content": "Hello"}],
+        "system": system,
+    }
+    chat, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(request)
+    translated: Final = LiteLLMAnthropicToResponsesAPIAdapter().translate_request(
+        request, preserve_system_instructions=False
+    )
+    assert chat["messages"][0] == {
+        "role": "system",
+        "content": [{"type": "text", "text": second}, {"type": "text", "text": "Be concise."}]
+        if as_blocks
+        else second + "\nBe concise.",
+    }
+    assert translated["input"][0] == {
+        "type": "message",
+        "role": "developer",
+        "content": [{"type": "input_text", "text": second}, {"type": "input_text", "text": "Be concise."}]
+        if as_blocks
+        else [{"type": "input_text", "text": second + "\nBe concise."}],
+    }
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "counted",
+                "litellm_params": {"model": "openai/responses/gpt-6.2-sol", "api_key": "test-key", "store": False},
+            }
+        ]
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+
+    def peer(http_request: httpx.Request) -> httpx.Response:
+        assert json.loads(http_request.content)["input"] == translated["input"]
+        return httpx.Response(200, json={"object": "response.input_tokens", "input_tokens": 47})
+
+    with patch.object(
+        openai_count_tokens_handler,
+        "get_async_httpx_client",
+        return_value=AsyncHTTPHandler(transport=httpx.MockTransport(peer)),
+    ):
+        result: Final = await count_request_tokens(
+            request=TokenCountRequest(model="counted", messages=[{"role": "user", "content": "Hello"}], system=system),
+            messages_format="anthropic",
+            call_endpoint=True,
+        )
+    assert (result.count_source, result.total_tokens) == ("provider", 47)
+
+
+@pytest.mark.asyncio
+async def test_bedrock_kimi_k3_count_drops_only_the_first_of_two_leading_billing_blocks(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    _framed_kimi(monkeypatch)
+    _available_kimi_k3(monkeypatch, tmp_path)
+    first: Final = {"type": "text", "text": "x-anthropic-billing-header: cc_version=2.1; cc_entrypoint=cli; cch=A;"}
+    second: Final = {"type": "text", "text": "x-anthropic-billing-header: cc_version=2.1; cc_entrypoint=cli; cch=B;"}
+    instructions: Final = {"type": "text", "text": "Be terse."}
+
+    async def counted(system: list[dict[str, str]]) -> int:
+        result: Final = await count_request_tokens(
+            request=TokenCountRequest(model="kimi", system=system, messages=[{"role": "user", "content": "Hello"}]),
+            messages_format="anthropic",
+            call_endpoint=True,
+        )
+        return result.total_tokens
+
+    one_header: Final = await counted([first, instructions])
+    assert one_header == await counted([instructions])
+    assert await counted([first, second, instructions]) > one_header
+
+
+@pytest.mark.asyncio
 async def test_bedrock_kimi_k3_is_counted_with_its_tokenizer_plus_the_shipped_framing_in_both_request_formats(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):
@@ -2702,6 +2820,28 @@ async def _count_through_the_messages_endpoint(
     ):
         response: Final = await anthropic_count_tokens(mock_request, MagicMock())
     return response, peer.request_bodies
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("as_blocks", [False, True])
+async def test_gemini_provider_count_removes_only_the_first_billing_block(as_blocks: bool) -> None:
+    first: Final = "x-anthropic-billing-header: cc_version=2; cc_entrypoint=cli; cch=A;"
+    second: Final = "x-anthropic-billing-header: cc_version=2; cc_entrypoint=cli; cch=B;"
+    router: Final = Router(model_list=[_gemini_deployment("gemini-agent", {})])
+    response, bodies = await _count_through_the_messages_endpoint(
+        router,
+        {
+            "model": "gemini-agent",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "system": [{"type": "text", "text": text} for text in (first, second, "Be concise.")]
+            if as_blocks
+            else first + "\n" + second + "\nBe concise.",
+        },
+    )
+    assert response == {"input_tokens": 41, "litellm_count_source": "provider"}
+    assert json.loads(bodies[0])["generateContentRequest"]["systemInstruction"] == {
+        "parts": [{"text": second}, {"text": "Be concise."}] if as_blocks else [{"text": second + "\nBe concise."}]
+    }
 
 
 @pytest.mark.asyncio
@@ -3229,4 +3369,103 @@ async def test_call_endpoint_prompt_keeps_the_local_count_on_a_counter_that_need
         False,
         local.total_tokens,
         local.tokenizer_type,
+    )
+
+
+_MAX_TOKENS_OVER_A_FLAT_HOST_BILL: Final = 4
+
+
+# usage.input_tokens that POST /v1/messages billed for the user turn "What is the weather in Paris?" through xAI
+# grok-4.3-latest, Azure AI Foundry grok-4-1-fast-non-reasoning, Vertex AI xai/grok-4.3 and Bedrock Mantle xai.grok-4.3,
+# and that POST /v1/responses billed for the same input through Perplexity xai/grok-4.3, on 2026-11-17, and that
+# POST /v1/messages billed through Azure AI Foundry grok-4.3 on 2026-11-21
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "billed_prompt_tokens"),
+    [
+        ("xai/grok-4.3-latest", 199),
+        ("azure_ai/grok-4-1-fast-non-reasoning", 175),
+        ("vertex_ai/xai/grok-4.3", 342),
+        ("bedrock_mantle/xai.grok-4.3", 37),
+        ("perplexity/xai/grok-4.3", 218),
+        ("azure_ai/grok-4.3", 11),
+    ],
+)
+async def test_local_estimate_matches_the_billed_prompt_with_the_shipped_framing(
+    monkeypatch: pytest.MonkeyPatch, model: str, billed_prompt_tokens: int
+):
+    counted: Final = await _count_the_paris_weather_turn(monkeypatch, model)
+
+    assert counted.count_source == "local_estimate"
+    assert 0 <= counted.total_tokens - billed_prompt_tokens <= _MAX_TOKENS_OVER_A_FLAT_HOST_BILL
+
+
+@pytest.mark.asyncio
+async def test_the_govcloud_mantle_grok_row_counts_like_the_commercial_row(monkeypatch: pytest.MonkeyPatch):
+    govcloud: Final = await _count_the_paris_weather_turn(monkeypatch, "bedrock_mantle/us-gov-west-1/xai.grok-4.3")
+    commercial: Final = await _count_the_paris_weather_turn(monkeypatch, "bedrock_mantle/xai.grok-4.3")
+
+    assert govcloud.total_tokens == commercial.total_tokens
+
+
+@pytest.mark.asyncio
+async def test_an_openai_deployment_of_azure_grok_answers_the_provider_400_unless_its_row_changes_the_count(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    def foundry_openai(name: str, base_model: str) -> dict[str, object]:
+        return {
+            "model_name": name,
+            "litellm_params": {
+                "model": f"openai/{name}",
+                "api_key": "unused",
+                "api_base": "https://foundry.invalid/openai/v1",
+            },
+            "model_info": {"base_model": base_model},
+        }
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    count_route: Final = respx_mock.post("https://foundry.invalid/openai/v1/responses/input_tokens").mock(
+        return_value=httpx.Response(400, json={"error": {"message": "input_tokens is not supported for this model"}})
+    )
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                foundry_openai("grok-4.3", "azure_ai/grok-4.3"),
+                foundry_openai("grok-4-1-fast-non-reasoning", "azure_ai/grok-4-1-fast-non-reasoning"),
+            ]
+        ),
+    )
+    messages: Final = [{"role": "user", "content": "What is the weather in Paris?"}]
+
+    with pytest.raises(ProxyException) as raised:
+        await token_counter(request=TokenCountRequest(model="grok-4.3", messages=messages), call_endpoint=True)
+    framed: Final = await token_counter(
+        request=TokenCountRequest(model="grok-4-1-fast-non-reasoning", messages=messages), call_endpoint=True
+    )
+
+    assert raised.value.code == "400"
+    assert "input_tokens is not supported for this model" in raised.value.message
+    assert framed.count_source == "local_estimate"
+    assert count_route.call_count == 2
+
+
+async def _count_the_paris_weather_turn(monkeypatch: pytest.MonkeyPatch, model: str) -> TokenCountResponse:
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "billed",
+                    "litellm_params": {"model": model, "api_key": "unused", "api_base": "https://unused.invalid"},
+                }
+            ]
+        ),
+    )
+    return await count_request_tokens(
+        request=TokenCountRequest(
+            model="billed", messages=[{"role": "user", "content": "What is the weather in Paris?"}]
+        )
     )
