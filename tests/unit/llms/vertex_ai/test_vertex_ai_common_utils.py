@@ -3300,3 +3300,30 @@ def test_gemini_tool_mapping_accepts_boolean_subschema():
     )
 
     assert optional_params["tools"]
+
+
+def test_build_vertex_schema_drops_boolean_subschemas_under_unsupported_keywords():
+    schema = build_vertex_schema(
+        {
+            "type": "object",
+            "properties": {
+                "config": {
+                    "type": "object",
+                    "properties": {"name": {"type": "string"}},
+                    "additionalProperties": False,
+                    "not": True,
+                    "if": True,
+                    "then": False,
+                },
+                "tags": {"type": "array", "items": {"type": "string"}, "contains": True},
+            },
+            "additionalProperties": False,
+        }
+    )
+
+    config: Final = schema["properties"]["config"]
+    assert "name" in config["properties"]
+    for keyword in ("additionalProperties", "not", "if", "then"):
+        assert keyword not in config
+    assert "contains" not in schema["properties"]["tags"]
+    assert "additionalProperties" not in schema
