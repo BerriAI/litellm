@@ -1,6 +1,8 @@
+import asyncio
 import json
 from collections.abc import AsyncGenerator, Mapping
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from typing import Final
 
 import httpx2
@@ -21,6 +23,7 @@ from litellm.proxy.mcp_server.events.handlers import (
 from litellm.proxy.mcp_server.events.runtime import EventsRuntime
 from litellm.proxy.mcp_server.events.upstream import StreamFrame
 from litellm.types.mcp_server.events import EventType
+from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 from .fakes import CALLER, SETTINGS, FakeUpstream, context, occurrence, runtime, server
 
@@ -298,3 +301,21 @@ async def test_unsubscribe_returns_an_empty_result_after_teardown(monkeypatch: p
         }
     ]
     assert store.rows == {} and [method for method, *_ in upstream.calls] == ["events/unsubscribe"]
+
+
+@pytest.mark.asyncio
+async def test_discovery_omits_events_when_its_remaining_budget_expires() -> None:
+    cancelled: Final = asyncio.Event()
+
+    async def slow_admission(ctx: OperationContext) -> tuple[MCPServer, ...]:
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+        return ()
+
+    services: Final = replace(runtime(()), allowed_servers=slow_admission)
+    extensions: Final = await asyncio.wait_for(
+        advertised_extensions(context(), META, lambda: SETTINGS, services, timeout=0.01), timeout=5
+    )
+    assert extensions == {} and cancelled.is_set()

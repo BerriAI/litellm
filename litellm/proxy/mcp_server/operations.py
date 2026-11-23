@@ -4095,7 +4095,9 @@ class GatewayOperations:
                     from litellm.proxy.mcp_server.events.handlers import advertised_extensions
 
                     extensions: Final = await advertised_extensions(
-                        context, discover_params.meta if discover_params is not None else None
+                        context,
+                        discover_params.meta if discover_params is not None else None,
+                        timeout=deadline - time.monotonic(),
                     )
                 finally:
                     try:

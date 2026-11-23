@@ -2,6 +2,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from contextlib import AbstractAsyncContextManager
 from typing import TYPE_CHECKING, Final, TypeAlias
 
+import anyio
 from mcp.server.context import CallNext, HandlerResult, ServerRequestContext
 from mcp.shared.exceptions import MCPError
 from mcp.types import METHOD_NOT_FOUND, EmptyResult
@@ -116,16 +117,22 @@ async def advertised_extensions(
     meta: Mapping[str, object] | None,
     settings: Callable[[], EventsSettings] = events_settings,
     runtime: EventsRuntime = DEFAULT_RUNTIME,
+    *,
+    timeout: float | None = None,
 ) -> Mapping[str, JsonObject]:
     if not events_served(settings(), context.protocol_version, context.mcp_proxy_mode) or not client_declares_events(
         meta
     ):
         return {}
     try:
-        servers: Final = event_servers(await runtime.allowed_servers(context))
+        if timeout is not None and timeout <= 0:
+            return {}
+        with anyio.move_on_after(timeout):
+            servers: Final = event_servers(await runtime.allowed_servers(context))
+            return {EVENTS_EXTENSION: {}} if servers else {}
     except Exception:  # noqa: BLE001  # an optional extension probe must not fail server/discover
         return {}
-    return {EVENTS_EXTENSION: {}} if servers else {}
+    return {}
 
 
 def request_headers(ctx: ServerRequestContext[object, object]) -> Mapping[str, str] | None:
