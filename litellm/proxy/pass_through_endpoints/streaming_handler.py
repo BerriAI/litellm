@@ -11,6 +11,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.core_helpers import (
     as_str_mapping,
+    attribute_or_none,
     bind_budget_reservation_to_callbacks,
     proxy_request_headers,
     stream_cost_injection_requested,
@@ -19,7 +20,6 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.anthropic.common_utils import anthropic_error_frame_exception
 from litellm.proxy._types import PassThroughEndpointLoggingResultValues
-from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.sse_keepalive import split_complete_sse_frames
 from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
 from litellm.types.utils import StandardPassThroughResponseObject, Usage
@@ -173,10 +173,12 @@ class PassThroughStreamingHandler:
         passthrough_success_handler_obj: PassThroughEndpointLogging,
         url_route: str,
         route_streaming_logging: RouteStreamingLogging | None = None,
+        on_upstream_error: Callable[[Exception], object] = lambda _: None,
     ):
         resolved_route_streaming_logging: Final[RouteStreamingLogging] = (
             route_streaming_logging or PassThroughStreamingHandler.route_streaming_logging_to_handler
         )
+        PassThroughStreamingHandler._retain_anthropic_response_headers(response, endpoint_type, litellm_logging_obj)
         raw_bytes: Final[list[bytes]] = []
         resolved_request_body: Final[dict[str, object]] = request_body or {}
 
@@ -239,6 +241,8 @@ class PassThroughStreamingHandler:
                 # ``cost_injection_active`` already requires ``model_name`` to
                 # be truthy; pin to a typed local so mypy narrows ``Optional[str]``
                 # -> ``str`` for the per-chunk call site.
+                from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+
                 assert model_name is not None
                 resolved_model_name: Final[str] = model_name
                 pending = b""
@@ -271,6 +275,7 @@ class PassThroughStreamingHandler:
                 litellm_logging_obj._deferred_stream_complete_args = (_build_logging_coroutine(),)
         except Exception as e:
             verbose_proxy_logger.error("Error in chunk_processor: %s", e)
+            on_upstream_error(e)
             if response.status_code < 400:
                 logging_scheduled = True
                 await PassThroughStreamingHandler.schedule_stream_failure_logging(
@@ -314,6 +319,15 @@ class PassThroughStreamingHandler:
                     verbose_proxy_logger.error("Error scheduling chunk_processor logging: %s", e)
                 else:
                     bind_budget_reservation_to_callbacks(litellm_logging_obj.litellm_params)
+
+    @staticmethod
+    def _retain_anthropic_response_headers(
+        response: httpx.Response, endpoint_type: EndpointType, logging_obj: LiteLLMLoggingObj
+    ) -> None:
+        response_headers: Final = as_str_mapping(attribute_or_none(response, "headers"))
+        details: Final = logging_obj.model_call_details
+        if endpoint_type == EndpointType.ANTHROPIC and response_headers is not None:
+            details["response_headers"] = dict(response_headers)
 
     @staticmethod
     def _error_frame_closed_at(endpoint_type: EndpointType, raw_bytes: Sequence[bytes]) -> tuple[str, str, int] | None:

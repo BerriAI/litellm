@@ -1,8 +1,11 @@
 import dataclasses
+import datetime
+import functools
 import json
 import os
 import stat
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Final
 from unittest.mock import Mock, patch
@@ -33,10 +36,15 @@ from litellm.proxy.client.cli.commands.auth import (
     get_stored_api_key,
     login,
     logout,
+    models_summary,
     print_token,
     whoami,
 )
-from litellm.proxy.client.cli.commands.claude_settings import SettingsFileOwner
+from litellm.proxy.client.cli.commands.claude_settings import (
+    SettingsFileOwner,
+    installed_executable,
+    lite_api_key_helper,
+)
 
 
 @pytest.fixture
@@ -577,6 +585,19 @@ class TestLogoutCommand:
         assert vault.blob is None
         assert not (isolated_home / ".litellm" / "token.json").exists()
 
+    def test_logout_removes_the_key_files_lite_claude_launched_with(
+        self, isolated_home, secret_vault_factory, launch_claude
+    ):
+        vault = secret_vault_factory(blob=_secret_blob("https://test.example.com", "sk-stored"))
+        _write_token_file(isolated_home, key=None)
+        launched_with = (launch_claude(False), launch_claude(True))
+        assert all(path.exists() for path in launched_with)
+
+        result = self.runner.invoke(logout, obj={"secret_vault": vault})
+
+        assert result.exit_code == 0, result.output
+        assert not any(path.exists() for path in launched_with)
+
     def test_logout_without_the_keyring_package_does_not_claim_the_keychain_is_clear(
         self, isolated_home, secret_vault_factory
     ):
@@ -1011,6 +1032,20 @@ class TestPrintTokenCommand:
         assert result.output.strip() == "sk-prod-fresh"
         mock_post.assert_not_called()
 
+    def test_otel_headers_prints_the_same_key_as_the_headers_claude_code_sends_telemetry_with(self):
+        with patch(
+            "litellm.proxy.client.cli.commands.auth.load_cli_token",
+            return_value=CliTokenRecord(
+                base_url="https://litellm-proxy.corp.com",
+                key="sk-prod-fresh",
+                timestamp=time.time(),
+            ),
+        ):
+            result = self.runner.invoke(print_token, ["--otel-headers"], obj={})
+
+        assert result.exit_code == 0
+        assert json.loads(result.output) == {"Authorization": "Bearer sk-prod-fresh"}
+
     def test_explicit_base_url_mismatch_fails_cleanly(self):
         """When the caller *does* explicitly pass --base-url, a token issued
         for a different server must never be printed. This is the exact
@@ -1075,8 +1110,8 @@ class TestPrintTokenCommand:
         ("proxy_answer", "expected_exit_code", "expected_stdout", "expected_stderr"),
         [
             (200, 0, "sk-stale-key\n", ""),
-            (401, 1, "", "Token expired. Run 'lite login' again.\n"),
-            (403, 1, "", "Token expired. Run 'lite login' again.\n"),
+            (401, 1, "", "Token expired. Run 'lite login --pkce' again.\n"),
+            (403, 1, "", "Token expired. Run 'lite login --pkce' again.\n"),
             (404, 0, "sk-stale-key\n", ""),
             (500, 0, "sk-stale-key\n", ""),
             (requests.ConnectionError("proxy unreachable"), 0, "sk-stale-key\n", ""),
@@ -1137,7 +1172,7 @@ class TestPrintTokenCommand:
 
         assert result.exit_code == 1
         assert result.stdout == ""
-        assert result.stderr == "Token expired. Run 'lite login' again.\n"
+        assert result.stderr == "Token expired. Run 'lite login --pkce' again.\n"
         assert len(responses.calls) == 0
 
 
@@ -1360,23 +1395,31 @@ class TestKeychainBackedCommands:
 
         assert whoami_result.output == "Not authenticated. Run 'lite login' to authenticate.\n"
         assert print_result.exit_code == 1
-        assert print_result.output == "Not authenticated. Run 'lite login'.\n"
+        assert print_result.output == "Not authenticated. Run 'lite login --pkce'.\n"
 
+    @pytest.mark.parametrize(
+        ("base_url_explicit", "login_command"),
+        [(False, "lite login --pkce"), (True, "lite --base-url https://test.example.com login --pkce")],
+        ids=["bare", "as-claude-codes-helper"],
+    )
     def test_print_token_explains_a_locked_keychain_instead_of_printing_nothing(
-        self, isolated_home, secret_vault_factory
+        self, isolated_home, secret_vault_factory, base_url_explicit, login_command
     ):
         _write_home_json(
             isolated_home,
             "token.json",
             {"base_url": "https://test.example.com", "user_id": "u-1", "timestamp": time.time()},
         )
-        obj = {"base_url": "https://test.example.com", "secret_vault": secret_vault_factory(available=False)}
+        obj = {
+            "base_url": "https://test.example.com",
+            "base_url_explicit": base_url_explicit,
+            "secret_vault": secret_vault_factory(available=False),
+        }
 
         result = self.runner.invoke(print_token, obj=obj)
 
         assert result.exit_code == 1
-        assert "could not be read" in result.output
-        assert "lite login" in result.output
+        assert f"could not be read. Unlock it, or run '{login_command}' to start over." in result.output
 
     def test_whoami_does_not_call_a_credential_it_cannot_read_authenticated(self, isolated_home, secret_vault_factory):
         """A login whose secret is stuck in an unreachable keychain authenticates nothing. Leading
@@ -1519,18 +1562,18 @@ class TestLoginConfigClaude:
         assert "Configured Claude Code" not in result.output
 
     def test_flag_writes_the_settings_file_and_reports_success(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("PATH", str(_fake_lite(tmp_path).parent))
         result, settings_path, _backup_path = self._run_login(tmp_path, monkeypatch, ["--config-claude"])
 
         assert result.exit_code == 0
         written = json.loads(settings_path.read_text())
         assert written["env"]["ANTHROPIC_BASE_URL"] == "https://test.example.com"
         assert written["env"]["ENABLE_TOOL_SEARCH"] == "true"
-        # The minted key goes in as a static token: an apiKeyHelper would make Claude Code spawn `lite` (and
-        # its keychain probe) on every credential refresh, which is what this flag used to write.
         assert written["env"]["ANTHROPIC_AUTH_TOKEN"] == "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.test.jwt"
         assert "apiKeyHelper" not in written
         assert f"Configured Claude Code: {settings_path} now routes through https://test.example.com." in result.output
         assert "run `lite login --config-claude` again after it expires" in result.output
+        assert "`lite login --pkce --config-claude` instead lets Claude Code renew the key" in result.output
         assert "the model Claude Code starts and resumes on" in result.output
 
     def test_flag_preserves_unrelated_settings_on_an_existing_file(self, tmp_path, monkeypatch):
@@ -1631,6 +1674,65 @@ class TestLoginConfigClaude:
         assert "even though the CLI itself could not keep it" in result.output
         assert "You can now use the CLI without specifying --api-key" not in result.output
 
+    def _run_pkce_login(self, tmp_path, monkeypatch, path, stored):
+        settings_path = tmp_path / "claude" / "settings.json"
+        self._isolate_default_settings(tmp_path, monkeypatch)
+        with (
+            patch("litellm.proxy.client.cli.commands.auth.run_pkce_login", return_value=_pkce_credential()),
+            patch("litellm.proxy.client.cli.commands.auth.load_token", return_value=None),
+            patch("litellm.proxy.client.cli.commands.auth.save_token", return_value=stored),
+            patch("litellm.proxy.client.cli.interface.show_commands"),
+            patch(
+                "litellm.proxy.client.cli.commands.auth.lite_api_key_helper",
+                functools.partial(
+                    lite_api_key_helper,
+                    which=lambda name: installed_executable(name, scripts_dir=str(tmp_path / "python-without-lite")),
+                ),
+            ),
+        ):
+            result = self.runner.invoke(
+                login,
+                ["--pkce", "--config-claude"],
+                obj={"base_url": PKCE_BASE_URL},
+                env={"CLAUDE_CONFIG_DIR": str(settings_path.parent), "PATH": path},
+            )
+        return result, settings_path
+
+    def test_a_pkce_login_gets_a_helper_that_renews_the_key_instead_of_a_copy_that_expires(self, tmp_path, monkeypatch):
+        lite = _fake_lite(tmp_path)
+        result, settings_path = self._run_pkce_login(tmp_path, monkeypatch, str(lite.parent), SecretStored())
+
+        assert result.exit_code == 0, result.output
+        written = json.loads(settings_path.read_text())
+        assert written["env"]["ANTHROPIC_BASE_URL"] == PKCE_BASE_URL
+        assert written["env"]["ANTHROPIC_AUTH_TOKEN"] == ""
+        assert str(lite.parent) in written["apiKeyHelper"]
+        assert written["apiKeyHelper"].endswith(f"--base-url {PKCE_BASE_URL} auth print-token")
+        assert "sk-cli-fresh" not in settings_path.read_text()
+        assert "`lite auth print-token`, which renews it before it expires" in result.output
+
+    @pytest.mark.parametrize(
+        ("lite_on_path", "stored", "reason"),
+        [
+            (False, SecretStored(), "Could not find the `lite` command"),
+            (True, CredentialNotSaved("read-only ~/.litellm"), "even though the CLI itself could not keep it"),
+            (True, CredentialNotRecorded(), "even though the CLI itself could not keep it"),
+        ],
+        ids=["lite-not-on-path", "nothing-kept-it", "keychain-took-it-file-refused"],
+    )
+    def test_a_pkce_login_lite_cannot_renew_for_claude_code_gets_the_static_key(
+        self, tmp_path, monkeypatch, lite_on_path, stored, reason
+    ):
+        path = str(_fake_lite(tmp_path).parent) if lite_on_path else str(tmp_path / "empty-path")
+        result, settings_path = self._run_pkce_login(tmp_path, monkeypatch, path, stored)
+
+        assert result.exit_code == 0, result.output
+        written = json.loads(settings_path.read_text())
+        assert written["env"]["ANTHROPIC_AUTH_TOKEN"] == "sk-cli-fresh"
+        assert "apiKeyHelper" not in written
+        assert reason in result.output
+        assert "run `lite login --pkce --config-claude` again after it expires" in result.output
+
     def test_settings_failure_is_reported_without_claiming_login_failed(self, tmp_path, monkeypatch):
         settings_path = tmp_path / "claude" / "settings.json"
         settings_path.parent.mkdir(parents=True)
@@ -1643,6 +1745,14 @@ class TestLoginConfigClaude:
         assert "could not configure Claude Code" in result.output
         assert "invalid JSON" in result.output
         assert "Authentication failed" not in result.output
+
+
+def _fake_lite(tmp_path):
+    lite = tmp_path / "bin" / ("lite.exe" if os.name == "nt" else "lite")
+    lite.parent.mkdir(exist_ok=True)
+    lite.write_text("")
+    lite.chmod(0o700)
+    return lite
 
 
 class _FakeHttpResponse:
@@ -1951,9 +2061,7 @@ class TestPkceLogoutCommand:
         assert "Logged out successfully" not in result.output
         clear.assert_not_called()
 
-    def test_a_logout_that_reaches_the_keychain_late_still_revokes_the_login(
-        self, isolated_home, secret_vault_factory
-    ):
+    def test_a_logout_that_reaches_the_keychain_late_still_revokes_the_login(self, isolated_home, secret_vault_factory):
         unlocked = secret_vault_factory()
         save_cli_token(CliTokenRecord(**_pkce_record()), vault=unlocked)
         locked = secret_vault_factory(blob=unlocked.blob, available=False)
@@ -2008,9 +2116,7 @@ class TestPkceLogoutCommand:
             patch("litellm.proxy.client.cli.interface.show_commands"),
         ):
             self.runner.invoke(logout, obj={"secret_vault": locked})
-            result = self.runner.invoke(
-                login, ["--pkce"], obj={"base_url": PKCE_BASE_URL, "secret_vault": unlocked}
-            )
+            result = self.runner.invoke(login, ["--pkce"], obj={"base_url": PKCE_BASE_URL, "secret_vault": unlocked})
 
         assert result.exit_code == 0, result.output
         assert "Could not revoke" not in result.output
@@ -2209,7 +2315,10 @@ class TestPkceLogoutCommand:
         assert printed.stdout == "sk-cli-rotated\n"
         assert ("Could not revoke" in printed.stderr) is (revocation_status != 200)
         assert [
-            post["token"] for session in _FakeSession.instances for url, post in session.posts if url.endswith("/revoke")
+            post["token"]
+            for session in _FakeSession.instances
+            for url, post in session.posts
+            if url.endswith("/revoke")
         ] == ["llm_srefresh_old", "llm_srefresh_rotated"]
 
     def test_a_logout_after_the_keychain_refused_the_erase_does_not_revoke_the_login_again(
@@ -2339,7 +2448,7 @@ class TestPkcePrintToken:
             "Could not renew the key: token request failed with 400: the refresh token was already used"
             in result.output
         )
-        assert "Key expired. Run 'lite login --pkce' again." in result.output
+        assert "Key expired. Run 'lite --base-url https://llm.example.com login --pkce' again." in result.output
         save.assert_not_called()
 
     def test_print_token_through_the_cli_group_prints_the_key_the_group_renewed(self, monkeypatch):
@@ -2405,7 +2514,7 @@ class TestPkcePrintToken:
 
         assert result.exit_code == 1
         assert result.stdout == ""
-        assert result.stderr == "Token expired. Run 'lite login' again.\n"
+        assert result.stderr == "Token expired. Run 'lite login --pkce' again.\n"
         assert len(responses.calls) == 0
         assert _FakeSession.instances == []
 
@@ -2493,7 +2602,7 @@ def test_login_shows_the_error_detail_only_when_the_proxy_answers_with_a_json_ob
             {"base_url": "https://other.example.com", "base_url_explicit": True},
             1,
             "",
-            "Not authenticated for this server. Run 'lite login'.\n",
+            "Not authenticated for this server. Run 'lite --base-url https://other.example.com login --pkce'.\n",
         ),
         ({"base_url": "https://other.example.com", "base_url_explicit": False}, 0, "sk-stored\n", ""),
         (
@@ -2533,7 +2642,27 @@ def test_print_token_without_a_context_object_reports_no_login_when_nothing_is_s
 
     assert result.exit_code == 1
     assert result.stdout == ""
-    assert result.stderr == "Not authenticated. Run 'lite login'.\n"
+    assert result.stderr == "Not authenticated. Run 'lite login --pkce'.\n"
+
+
+@pytest.mark.parametrize(
+    ("obj", "expected_command"),
+    [
+        (
+            {"base_url": "https://proxy.example.com/", "base_url_explicit": True},
+            "lite --base-url https://proxy.example.com login --pkce",
+        ),
+        ({"base_url": "https://proxy.example.com", "base_url_explicit": False}, "lite login --pkce"),
+    ],
+    ids=["helper-names-its-proxy", "default-proxy"],
+)
+def test_print_token_with_nothing_stored_names_the_login_that_renews_for_the_proxy_it_was_asked_about(
+    isolated_home, obj, expected_command
+):
+    result = CliRunner().invoke(print_token, obj=obj)
+
+    assert result.exit_code == 1
+    assert result.stderr == f"Not authenticated. Run '{expected_command}'.\n"
 
 
 def test_print_token_without_a_context_object_fails_reading_it_once_a_login_is_stored(isolated_home):
@@ -2573,3 +2702,23 @@ def test_login_without_a_context_object_fails_before_any_request():
     assert type(result.exception) is TypeError
     assert result.output == ""
     assert len(responses.calls) == 0
+
+
+@pytest.mark.parametrize(
+    "models, builtin",
+    [
+        (datetime.date(2024, 1, 1), len),
+        (["gpt-a", datetime.date(2024, 1, 1)], ", ".join),
+        ((datetime.date(2024, 1, 1), "gpt-a", "gpt-b", "gpt-c"), ", ".join),
+    ],
+)
+def test_models_summary_raises_the_builtin_error_for_models_it_cannot_list(
+    models: object, builtin: Callable[[object], object]
+) -> None:
+    with pytest.raises(TypeError) as builtin_error:
+        builtin(models)
+
+    with pytest.raises(TypeError) as summary_error:
+        models_summary(models)
+
+    assert str(summary_error.value) == str(builtin_error.value)
