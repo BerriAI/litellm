@@ -1,9 +1,17 @@
+import contextlib
 import json
 import os
+import tempfile
+import threading
 import time
-from collections.abc import Mapping
+from collections.abc import Generator, Mapping
 from functools import lru_cache
 from typing import TYPE_CHECKING, Final
+
+try:
+    import fcntl
+except ImportError:  # Windows: refresh is serialized within the process only.
+    fcntl = None  # rebind-ok: optional POSIX module
 
 import httpx
 from pydantic import JsonValue, TypeAdapter, ValidationError
@@ -38,8 +46,23 @@ TOKEN_REFRESH_TIMEOUT_SECONDS: Final = 30
 DEVICE_CODE_TIMEOUT_SECONDS: Final = 15 * 60
 DEVICE_CODE_COOLDOWN_SECONDS: Final = 5 * 60
 DEVICE_CODE_POLL_SLEEP_SECONDS: Final = 5
+# Longer than one refresh can take, so a waiter only gives up when the holder is stuck.
+REFRESH_LOCK_TIMEOUT_SECONDS: Final = TOKEN_REFRESH_TIMEOUT_SECONDS + HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS + 10
+REFRESH_LOCK_POLL_SECONDS: Final = 0.05
 
 _JSON_OBJECT_ADAPTER: Final = TypeAdapter(JsonObject)
+_REFRESH_THREAD_LOCKS: Final[dict[str, threading.Lock]] = {}  # mutable-ok: process-wide registry, guarded below
+_REFRESH_THREAD_LOCKS_GUARD: Final = threading.Lock()
+
+
+class _HeldRefreshLocks(threading.local):
+    """Auth files whose refresh lock the current thread holds."""
+
+    def __init__(self) -> None:
+        self.paths: set[str] = set()  # mutable-ok: per-thread held set
+
+
+_REFRESH_LOCKS_HELD: Final = _HeldRefreshLocks()
 
 
 def _optional_str(value: JsonValue | None) -> str | None:
@@ -99,13 +122,20 @@ class Authenticator:
             access_token: Final = _optional_str(auth_data.get("access_token"))
             if access_token and not self._is_token_expired(auth_data, access_token):
                 return access_token
-            refresh_token: Final = _optional_str(auth_data.get("refresh_token"))
-            if refresh_token:
-                try:
-                    refreshed: Final = self._refresh_tokens(refresh_token)
-                    return refreshed["access_token"]
-                except RefreshAccessTokenError as exc:
-                    verbose_logger.warning("ChatGPT refresh token failed, re-login required: %s", exc)
+            with self._refresh_lock():
+                # Refresh tokens are single use. Another thread or worker may have
+                # refreshed while this one waited, so decide again from the file.
+                current: Final = self._read_auth_file() or auth_data
+                current_token: Final = _optional_str(current.get("access_token"))
+                if current_token and not self._is_token_expired(current, current_token):
+                    return current_token
+                refresh_token: Final = _optional_str(current.get("refresh_token"))
+                if refresh_token:
+                    try:
+                        refreshed: Final = self._refresh_tokens(refresh_token)
+                        return refreshed["access_token"]
+                    except RefreshAccessTokenError as exc:
+                        verbose_logger.warning("ChatGPT refresh token failed, re-login required: %s", exc)
 
         if not can_block_current_thread():
             raise GetAccessTokenError(
@@ -147,7 +177,15 @@ class Authenticator:
         saved_access_token: Final = auth_data.get("access_token")
         derived: Final = extract_chatgpt_account_id(_optional_str(id_token or saved_access_token))
         if derived and persist_derived:
-            self._write_auth_file({**auth_data, "account_id": derived})
+            try:
+                with self._refresh_lock():
+                    # Write back only onto the record this was derived from, so a
+                    # concurrent refresh's rotated tokens are never overwritten.
+                    current: Final = self._read_auth_file()
+                    if current and current.get("access_token") == saved_access_token and not current.get("account_id"):
+                        self._write_auth_file({**current, "account_id": derived})
+            except GetAccessTokenError:
+                pass  # persisting the derived id is an optimization; the value is still returned
         return derived
 
     def _ensure_token_dir(self) -> None:
@@ -164,11 +202,62 @@ class Authenticator:
             verbose_logger.warning("Invalid ChatGPT auth file: %s", exc)
             return None
 
+    @contextlib.contextmanager
+    def _refresh_lock(self) -> Generator[None]:
+        """Allow one refresh per auth file at a time, across threads and (on POSIX) processes.
+
+        Re-entrant within a thread: a refresh persists the account id through the same lock.
+        """
+        held: Final = _REFRESH_LOCKS_HELD.paths
+        if self.auth_file in held:
+            yield
+            return
+        with _REFRESH_THREAD_LOCKS_GUARD:
+            thread_lock: Final = _REFRESH_THREAD_LOCKS.setdefault(self.auth_file, threading.Lock())
+        deadline: Final = time.monotonic() + REFRESH_LOCK_TIMEOUT_SECONDS
+        if not thread_lock.acquire(timeout=REFRESH_LOCK_TIMEOUT_SECONDS):
+            raise GetAccessTokenError(message="Timed out waiting for a ChatGPT token refresh", status_code=503)
+        descriptor: int | None = None  # rebind-ok: set once the lock file is open
+        try:
+            if fcntl is not None:
+                self._ensure_token_dir()
+                descriptor = os.open(self.auth_file + ".lock", os.O_CREAT | os.O_RDWR, 0o600)  # rebind-ok: see above
+                while True:
+                    try:
+                        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        break
+                    except BlockingIOError:
+                        if time.monotonic() >= deadline:
+                            raise GetAccessTokenError(
+                                message="Timed out waiting for a ChatGPT token refresh", status_code=503
+                            ) from None
+                        time.sleep(REFRESH_LOCK_POLL_SECONDS)
+            held.add(self.auth_file)
+            try:
+                yield
+            finally:
+                held.discard(self.auth_file)
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
+            thread_lock.release()
+
     def _write_auth_file(self, data: JsonObject) -> None:
         try:
             self._ensure_token_dir()
-            with open(self.auth_file, "w") as f:
-                json.dump(data, f)
+            # Write a private temporary file and swap it in, so readers never see a
+            # partial file and a crash cannot leave a truncated one behind.
+            descriptor, temporary = tempfile.mkstemp(dir=self.token_dir, prefix=".auth-", suffix=".tmp")
+            try:
+                with os.fdopen(descriptor, "w") as f:
+                    json.dump(data, f)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(temporary, self.auth_file)
+            except BaseException:
+                with contextlib.suppress(OSError):
+                    os.unlink(temporary)
+                raise
         except OSError as exc:
             verbose_logger.error("Failed to write ChatGPT auth file: %s", exc)
 
