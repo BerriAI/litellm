@@ -4,14 +4,14 @@ from typing import Final
 import pytest
 
 from litellm.proxy.mcp_server.events.access import EventGrant
-from litellm.proxy.mcp_server.events.admission import admit, check_routing_headers, still_authorized
+from litellm.proxy.mcp_server.events.admission import admit, check_routing_headers, screen_all, still_authorized
 from litellm.proxy.mcp_server.events.catalog import prepare_event
 from litellm.proxy.mcp_server.events.config import EventsSettings
 from litellm.proxy.mcp_server.outbound_credentials.result import Error, Ok
 from litellm.types.mcp_server.events import EventsErrorCode, EventType, JsonObject
 from litellm.types.mcp_server.mcp_server_manager import MCPServerEventsConfig
 
-from .fakes import SETTINGS, context, runtime, server
+from .fakes import SETTINGS, context, occurrence, runtime, server
 
 ARGS: Final[JsonObject] = {"repo": "acme/web"}
 
@@ -98,3 +98,14 @@ async def test_a_header_mismatch_names_the_header_that_disagrees() -> None:
     headers: Final = {"mcp-name": "ci-build.failed", "mcp-param-repo": "acme/other"}
     admitted: Final = await admit(context(), "ci-build.failed", ARGS, "poll", headers, SETTINGS, runtime((server(),)))
     assert isinstance(admitted, Error) and admitted.error.data == {"header": "Mcp-Param-Repo"}
+
+
+@pytest.mark.asyncio
+async def test_screening_returns_admitted_occurrences_with_the_gateway_name() -> None:
+    run: Final = runtime((server(),))
+    prepared: Final = await prepare_event(context(), "ci-build.failed", run)
+    assert isinstance(prepared, Ok)
+    event: Final = occurrence()
+    batch: Final = await screen_all((event,), context(), prepared.ok, SETTINGS, None, run)
+    assert batch.events == (event.model_copy(update={"name": "ci-build.failed", "cursor": None}),)
+    assert (batch.throttled, batch.blocked) == (0, 0)
