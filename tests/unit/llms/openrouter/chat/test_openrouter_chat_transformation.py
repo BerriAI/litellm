@@ -1327,3 +1327,87 @@ async def test_openrouter_sdk_retry_bills_the_failed_attempt() -> None:
     assert payload["prompt_tokens"] == 17
     assert payload["completion_tokens"] == 8
     assert payload["response_cost"] == pytest.approx(0.003)
+
+
+@pytest.mark.parametrize(
+    ("choice_fields", "expected_status", "expected_message"),
+    [
+        pytest.param(
+            {"finish_reason": "error"},
+            502,
+            "OpenRouter returned finish_reason 'error'",
+            id="finish-reason-error",
+        ),
+        pytest.param(
+            {"finish_reason": "error", "error": {"code": 503, "message": "Provider overloaded"}},
+            503,
+            "Provider overloaded",
+            id="finish-reason-error-with-choice-error",
+        ),
+        pytest.param(
+            {"finish_reason": None, "error": {"code": 500, "message": "Provider failed"}},
+            500,
+            "Provider failed",
+            id="choice-error-only",
+        ),
+    ],
+)
+def test_openrouter_streaming_chunk_with_failed_choice_raises(
+    choice_fields: dict[str, object], expected_status: int, expected_message: str
+) -> None:
+    chunk: Final = {
+        "id": "gen-stream-failed",
+        "object": "chat.completion.chunk",
+        "created": 1,
+        "model": "deepseek/deepseek-chat",
+        "provider": "serving-site-a",
+        "choices": [{"index": 0, "delta": {}, **choice_fields}],
+    }
+
+    with pytest.raises(OpenRouterException) as exc_info:
+        OpenRouterChatCompletionStreamingHandler(streaming_response=None, sync_stream=True).chunk_parser(chunk)
+
+    assert exc_info.value.status_code == expected_status
+    assert expected_message in str(exc_info.value)
+
+
+@respx.mock
+@pytest.mark.parametrize("async_stream", [False, True])
+async def test_openrouter_streaming_completion_with_finish_reason_error_raises(async_stream: bool) -> None:
+    chunks: Final = (
+        {
+            "id": "gen-stream-failed",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "deepseek/deepseek-chat",
+            "choices": [{"index": 0, "delta": {"role": "assistant", "content": "Partial answer "}, "finish_reason": None}],
+        },
+        {
+            "id": "gen-stream-failed",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "deepseek/deepseek-chat",
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "error"}],
+        },
+    )
+    body: Final = "".join(f"data: {json.dumps(chunk)}\n\n" for chunk in chunks) + "data: [DONE]\n\n"
+    respx.post("https://openrouter.ai/api/v1/chat/completions").mock(
+        return_value=httpx.Response(200, text=body, headers={"content-type": "text/event-stream"})
+    )
+    kwargs: Final = dict(
+        model="openrouter/deepseek/deepseek-chat",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        api_key="test-openrouter-key",
+    )
+    client: Final = AsyncHTTPHandler(transport=httpx.AsyncHTTPTransport())
+    try:
+        with pytest.raises(Exception) as exc_info:
+            stream: Final = (
+                await litellm.acompletion(**kwargs, client=client) if async_stream else litellm.completion(**kwargs)
+            )
+            _ = [chunk async for chunk in stream] if async_stream else list(stream)
+    finally:
+        await client.client.aclose()
+
+    assert "finish_reason 'error'" in str(exc_info.value)
