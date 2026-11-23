@@ -171,7 +171,7 @@ async def test_key_or_team_model_group_alias_for_the_author_is_sent_as_its_provi
         **_request(_svg_top_level, "nano-alias"),
         "router_settings_override": {"model_group_alias": {"nano-alias": "my-nano"}},
     }
-    authorized: Final = await _authorize(request, UserAPIKeyAuth(), router)
+    authorized: Final = await _authorize(request, UserAPIKeyAuth(models=["gpt-image-2.6", "my-nano"]), router)
     assert _author_sent(authorized) == "gpt-5-nano"
     assert authorized["metadata"] == {SVG_AUTHOR_DEPLOYMENT_METADATA_KEY: AUTHOR_STAMP}
 
