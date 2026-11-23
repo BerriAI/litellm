@@ -27,7 +27,7 @@ from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.utils import PrismaClient
 from litellm.redis.stores.auth_cache import AuthObject
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
-from litellm.repositories.table_repositories import MCPServerRepository
+from litellm.repositories.table_repositories import MCPServerRepository, RepositoryTransaction
 
 if TYPE_CHECKING:
     from prisma import models as prisma_models
@@ -108,7 +108,7 @@ class ObjectPermissionUpsert:
     object_permission_id: str
     record: dict[str, object]
 
-    async def write(self, prisma_client: PrismaClient) -> str:
+    async def write(self, prisma_client: PrismaClient | RepositoryTransaction) -> str:
         row: Final = await ObjectPermissionRepository(prisma_client).table.upsert(
             where={"object_permission_id": self.object_permission_id},
             data={"create": self.record, "update": self.record},
