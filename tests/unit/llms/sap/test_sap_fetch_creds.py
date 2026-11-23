@@ -4,7 +4,7 @@ import threading
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
-from typing import Final
+from typing import Final, Literal
 
 import httpx
 import pytest
@@ -249,24 +249,66 @@ def test_short_lived_token_is_replaced_halfway_through_its_lifetime(aicore: Mock
     assert aicore.token.call_count == 2
 
 
+class _Clock:
+    def __init__(self, now: datetime) -> None:
+        self._now = now
+
+    def __call__(self) -> datetime:
+        return self._now
+
+    def move_to(self, now: datetime) -> None:
+        self._now = now
+
+
 def test_a_failed_early_refresh_reuses_the_cached_token_until_it_expires(aicore: MockAICore) -> None:
     aicore.token.side_effect = [
         httpx.Response(200, json={"access_token": "first", "expires_in": 43200}),
         httpx.Response(503, text="Service Unavailable"),
         httpx.Response(503, text="Service Unavailable"),
     ]
-    call_times: Final = iter((_T0, _T0 + timedelta(hours=11, minutes=30), _T0 + timedelta(hours=12, seconds=1)))
-
-    def clock() -> datetime:
-        return next(call_times)
-
+    clock: Final = _Clock(_T0)
     token_creator: Final = sap_credentials.get_token_creator(clock=clock)[0]
-    tokens: Final = (token_creator(), token_creator())
+
+    before_outage: Final = token_creator()
+    clock.move_to(_T0 + timedelta(hours=11, minutes=30))
+    first_read_in_outage: Final = token_creator()
+    clock.move_to(_T0 + timedelta(hours=11, minutes=31))
+    next_read_in_outage: Final = token_creator()
+    clock.move_to(_T0 + timedelta(hours=12, seconds=1))
 
     with pytest.raises(RuntimeError, match="Service Unavailable"):
         token_creator()
-    assert tokens == ("Bearer first", "Bearer first")
+    assert (before_outage, first_read_in_outage, next_read_in_outage) == ("Bearer first",) * 3
     assert aicore.token.call_count == 3
+
+
+@pytest.mark.parametrize("while_refreshing", ["rejected", "expired"])
+def test_a_failed_refresh_never_returns_a_token_that_stopped_working_while_it_ran(
+    while_refreshing: Literal["rejected", "expired"],
+) -> None:
+    clock: Final = _Clock(_T0)
+    first_fetch: Final = iter((("Bearer first", timedelta(hours=12)),))
+
+    def refresh_that_fails() -> tuple[str, timedelta]:
+        token: Final = next(first_fetch, None)
+        if token is not None:
+            return token
+        if while_refreshing == "rejected":
+            another_request_gets_401: Final = threading.Thread(target=token_cache.invalidate, args=("Bearer first",))
+            another_request_gets_401.start()
+            another_request_gets_401.join(timeout=5)
+        else:
+            clock.move_to(_T0 + timedelta(hours=12))
+        raise RuntimeError("Token request failed: Service Unavailable")
+
+    token_cache: Final = sap_credentials.OAuthTokenCache(
+        refresh_that_fails, timedelta(minutes=60), clock, threading.Lock()
+    )
+    assert token_cache() == "Bearer first"
+    clock.move_to(_T0 + timedelta(hours=11, minutes=30))
+
+    with pytest.raises(RuntimeError, match="Service Unavailable"):
+        token_cache()
 
 
 def test_a_rejected_token_is_dropped_without_waiting_for_a_token_fetch_in_progress() -> None:
@@ -329,12 +371,14 @@ class _LockThatCountsArrivals:
         self._lock.release()
 
 
-def _results_of_concurrent_requests(token_cache: sap_credentials.OAuthTokenCache, count: int) -> tuple[str, ...]:
-    def request_token(_: int) -> str:
+def _results_of_concurrent_requests(
+    token_cache: sap_credentials.OAuthTokenCache, count: int
+) -> tuple[str | RuntimeError, ...]:
+    def request_token(_: int) -> str | RuntimeError:
         try:
             return token_cache()
         except RuntimeError as err:
-            return str(err)
+            return err
 
     with ThreadPoolExecutor(max_workers=count) as pool:
         return tuple(pool.map(request_token, range(count)))
@@ -359,7 +403,8 @@ def test_requests_waiting_on_a_failing_token_fetch_share_its_error() -> None:
 
     results: Final = _results_of_concurrent_requests(token_cache, concurrent_requests)
 
-    assert results == ("Token request failed: Service Unavailable",) * concurrent_requests
+    assert tuple(map(str, results)) == ("Token request failed: Service Unavailable",) * concurrent_requests
+    assert len({id(error) for error in results}) == concurrent_requests
     assert fetches.qsize() == 1
 
 

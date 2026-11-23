@@ -5,7 +5,7 @@ import os
 import tempfile
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from contextlib import AbstractContextManager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
@@ -463,20 +463,20 @@ class OAuthTokenCache:
             cached: Final = self._cached
             if cached is not None and now <= cached.refresh_at:
                 return cached.value
-            unexpired: Final = cached if cached is not None and now < cached.expires_at else None
             if self._last_fetch_error is not None and self._failed_fetches != failed_fetches_before_waiting:
-                if unexpired is not None:
-                    return unexpired.value
-                raise self._last_fetch_error
+                raise RuntimeError(str(self._last_fetch_error)) from self._last_fetch_error
             try:
                 token, lifetime = self._fetch_token()
             except Exception as err:
                 self._failed_fetches += 1
                 self._last_fetch_error = err
-                if unexpired is None:
+                checked_at: Final = self._clock()
+                still_cached: Final = self._cached
+                if still_cached is None or checked_at >= still_cached.expires_at:
                     raise
                 verbose_logger.warning("SAP token refresh failed, reusing the cached token until it expires: %s", err)
-                return unexpired.value
+                self._cached = replace(still_cached, refresh_at=checked_at + (still_cached.expires_at - checked_at) / 2)
+                return still_cached.value
             self._last_fetch_error = None
             self._cached = _CachedToken(
                 value=token,
