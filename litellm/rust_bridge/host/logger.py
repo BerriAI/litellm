@@ -7,6 +7,7 @@ from typing import Final
 from pydantic import JsonValue
 
 from litellm._logging import (
+    RUST_FIELDS_RECORD_ATTR,
     CorrelationContextFilter,
     DiagnosticProcessingFilter,
     session_id_var,
@@ -86,7 +87,7 @@ def _emit(
             func=target,
             extra={
                 "rust_target": target,
-                "rust_fields": dict(fields),
+                RUST_FIELDS_RECORD_ATTR: dict(fields),
             },
         )
         _REDACTION.filter(record)

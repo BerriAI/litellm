@@ -23,6 +23,7 @@ from litellm._logging import (
     AccessLogPathFilter,
     AccessLogRedactionFilter,
     CorrelationContextFilter,
+    RUST_FIELDS_RECORD_ATTR,
     CorrelationPlainFormatter,
     DiagnosticProcessingFilter,
     JsonFormatter,
@@ -693,6 +694,57 @@ def test_plain_formatter_appends_only_trace_id_when_session_id_absent(monkeypatc
         assert cap.records[0] == "plaintext message [trace_id=plain-trace-2]"
     finally:
         trace_id_var.set("")
+
+
+def test_plain_formatter_appends_the_fields_of_a_rust_record(monkeypatch):
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
+    lg, cap = _make_plain_capture_logger("test.plain_rust_fields")
+    set_trace_id("plain-trace-3")
+    session_id_var.set("")
+    try:
+        lg.error(
+            "redis call failed", extra={RUST_FIELDS_RECORD_ATTR: {"operation": "Get", "attempt": 3, "retry": True}}
+        )
+        lg.error("no fields", extra={RUST_FIELDS_RECORD_ATTR: {}})
+        lg.error("python line")
+        assert cap.records == [
+            'redis call failed [operation="Get" attempt=3 retry=true] [trace_id=plain-trace-3]',
+            "no fields [trace_id=plain-trace-3]",
+            "python line [trace_id=plain-trace-3]",
+        ]
+    finally:
+        trace_id_var.set("")
+
+
+def test_plain_formatter_scrubs_a_secret_in_a_rust_field(monkeypatch):
+    monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
+    record = _make_record(logging.ERROR, "call failed")
+    setattr(record, RUST_FIELDS_RECORD_ATTR, {"error": "api_key=sk-9876567890abcdefghij"})
+
+    rendered = CorrelationPlainFormatter("%(message)s").format(record)
+
+    assert "sk-9876567890abcdefghij" not in rendered
+    assert rendered.startswith("call failed [error=")
+
+
+def test_plain_formatter_keeps_a_rust_field_on_one_line_within_the_log_limits(monkeypatch):
+    monkeypatch.setenv("MAX_BASE64_LENGTH_STDOUT_LOG", "32")
+    monkeypatch.setenv("MAX_STRING_LENGTH_STDOUT_LOG", "400")
+    image: Final = "QUJD" * 200
+    debug = _make_record(logging.DEBUG, "provider request")
+    setattr(debug, RUST_FIELDS_RECORD_ATTR, {"body": f"first\nsecond \x1b[31mred {image}"})
+    info = _make_record(logging.INFO, "provider request")
+    setattr(info, RUST_FIELDS_RECORD_ATTR, {"body": "word " * 400, "detail": "more " * 400, "attempt": 3})
+
+    formatter = CorrelationPlainFormatter("%(message)s")
+    debug_line = formatter.format(debug)
+    info_line = formatter.format(info)
+
+    assert debug_line.startswith('provider request [body="first\\nsecond ')
+    assert "\n" not in debug_line
+    assert "\x1b" not in debug_line
+    assert image not in debug_line
+    assert len(info_line) < 500
 
 
 def test_plain_formatter_unchanged_when_flag_disabled(monkeypatch):
