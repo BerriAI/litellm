@@ -2,7 +2,7 @@
 
 from typing import Final
 
-from fastapi import APIRouter, Depends, File, Form, Request, Response, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.responses import ORJSONResponse
 from pydantic import TypeAdapter
 from starlette.datastructures import UploadFile as StarletteUploadFile
@@ -902,7 +902,23 @@ async def video_extension(
 
     data: Final = await read_request_body(request=request)
     requested: Final = VideoRequestRoute.model_validate(data)
-    data["video_id"] = video_reference_to_id(data.pop("video", None))
+    bracket_video_id: Final = _OPAQUE_VALUE_ADAPTER.validate_python(data["video[id]"]) if "video[id]" in data else None
+    if "video[id]" in data:
+        del data["video[id]"]
+    video_reference: Final = _OPAQUE_VALUE_ADAPTER.validate_python(data.pop("video", bracket_video_id))
+    if isinstance(video_reference, StarletteUploadFile):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "video extensions need a reference to an existing video, uploading a video file is not supported"
+            },
+        )
+    data["video_id"] = video_reference_to_id(video_reference)
+    if not data["video_id"]:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "video extensions need a video reference with an id, e.g. video={'id': 'video_123'}"},
+        )
 
     decoded: Final = decode_video_id_with_provider(data["video_id"])
     provider_from_id: Final = decoded.get("custom_llm_provider")

@@ -26,6 +26,7 @@ patched with autospec so the real __init__ still stores self.data (captured via 
 mock's call args), and a brand-new kwarg added to this layer surfaces as a failure.
 """
 
+import io
 from contextlib import ExitStack
 from dataclasses import dataclass
 from collections.abc import Awaitable, Callable
@@ -49,7 +50,7 @@ from litellm.types.videos.utils import (
     encode_video_id_with_provider,
 )
 
-from fastapi import Response
+from fastapi import HTTPException, Response
 from starlette.datastructures import UploadFile as StarletteUploadFile
 from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
@@ -901,3 +902,52 @@ async def test_extension__restamps_new_video_id_with_source_model_id(harness: Ha
     resp: Final = await call_extension(harness, body={"prompt": "continue", "video": {"id": AZURE_VIDEO_ID}})
 
     _assert_id_resolves_to_deployment(resp)
+
+
+@pytest.mark.asyncio
+async def test_extension__uploaded_video_file_is_rejected_before_dispatch(harness: Harness) -> None:
+    upload: Final = StarletteUploadFile(file=io.BytesIO(b"rawmp4"), filename="clip.mp4")
+    harness.read_body.return_value = {"prompt": "continue", "seconds": "4", "video": upload}
+
+    with pytest.raises(HTTPException) as exc_info:
+        await endpoints.video_extension(
+            request=FakeRequest(raw_body=b"multipart"),
+            fastapi_response=Response(),
+            user_api_key_dict=_user(),
+        )
+
+    assert exc_info.value.status_code == 400
+    harness.base_process.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"prompt": "continue"},
+        {"prompt": "continue", "video": {}},
+        {"prompt": "continue", "video": {"id": ""}},
+        {"prompt": "continue", "video": ""},
+        {"prompt": "continue", "video[id]": ""},
+    ],
+)
+async def test_extension__missing_video_id_is_rejected_before_dispatch(
+    harness: Harness, body: dict[str, str | dict[str, str]]
+) -> None:
+    with pytest.raises(HTTPException) as exc_info:
+        await call_extension(harness, body=body)
+
+    assert exc_info.value.status_code == 400
+    harness.base_process.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_extension__bracket_encoded_form_video_id_routes_like_nested_id(harness: Harness) -> None:
+    await call_extension(harness, body={"prompt": "continue", "video[id]": AZURE_VIDEO_ID})
+
+    assert harness.processor_data() == {
+        "prompt": "continue",
+        "video_id": AZURE_VIDEO_ID,
+        "custom_llm_provider": "azure",
+        "model": "azure-sora",
+    }
