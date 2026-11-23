@@ -4,6 +4,7 @@ import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
 import { useQuery, type UseQueryOptions } from "@tanstack/react-query";
 import type { ColumnFiltersState, OnChangeFn, PaginationState, SortingState } from "@tanstack/react-table";
 import moment from "moment";
+import { Download, Loader2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -34,6 +35,8 @@ import {
   LogsToolbarSwitch,
 } from "./LogsTableToolbar";
 import { RequestLogsTable } from "./RequestLogsTable";
+import { exportLogsCsv, LOGS_EXPORT_LIMIT } from "./logsCsvExport";
+import { toast } from "@/lib/toast";
 
 const PAGE_SIZE = DEFAULT_PAGE_SIZE_OPTIONS[0];
 const matchesLogId = (log: LogEntry, logId: string) => log.request_id === logId || log.litellm_call_id === logId;
@@ -50,6 +53,7 @@ interface RequestLogsPanelProps {
 
 export default function RequestLogsPanel({ accessToken, token, userRole, userID, isActive }: RequestLogsPanelProps) {
   const { t } = useTranslation();
+  const [isExporting, setIsExporting] = useState(false);
   const resetDetailState = useResetDetailState();
   const [pagination, setPagination] = useState<PaginationState>({ pageIndex: 0, pageSize: PAGE_SIZE });
   const [sorting, setSorting] = useState<SortingState>(DEFAULT_LOGS_SORTING);
@@ -98,7 +102,7 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
     return debouncedSearch === "" ? others : [...others, { id: LOG_FILTER_IDS.SEARCH, value: debouncedSearch }];
   }, [columnFilters, debouncedSearch]);
 
-  const { logsQuery, filteredLogs, allTeams, usesSessionCursor } = useLogFilterLogic({
+  const { logsQuery, filteredLogs, allTeams, usesSessionCursor, getRequestOptions } = useLogFilterLogic({
     accessToken,
     token,
     userRole,
@@ -331,6 +335,26 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
         logsWindow={logsWindow}
         toolbarChildren={
           <LogsToolbar>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={isExporting || filteredLogs.total === 0}
+              onClick={async () => {
+                setIsExporting(true);
+                try {
+                  const result = await exportLogsCsv(getRequestOptions());
+                  if (result.capped) toast.info(t("logs.request.toolbar.exportCapped", { count: LOGS_EXPORT_LIMIT }));
+                  else if (result.count === 0) toast.info(t("logs.request.toolbar.exportEmpty"));
+                } catch (error) {
+                  toast.fromError(error);
+                } finally {
+                  setIsExporting(false);
+                }
+              }}
+            >
+              {isExporting ? <Loader2 className="size-4 animate-spin" /> : <Download className="size-4" />}
+              {t("logs.request.toolbar.export")}
+            </Button>
             <LogsTimeRangePicker value={timeRange} onValueChange={handleTimeRangeChange} />
             <LogsToolbarSwitch
               label={t("logs.request.panel.liveTail")}

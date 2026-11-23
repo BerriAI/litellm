@@ -15,6 +15,7 @@ from litellm.utils import (
     get_requester_metadata,
     validate_openai_optional_params,
 )
+from litellm.exceptions import UnsupportedParamsError
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.prompt_templates.factory import map_system_message_pt
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
@@ -329,6 +330,63 @@ def test_bedrock_optional_params_embeddings_dimension(model, expected_dimensions
         assert dimensions_kwarg in optional_params
 
 
+NOVA_EMBEDDING_MODELS: Final = (
+    "amazon.nova-2-multimodal-embeddings-v1:0",
+    "async_invoke/amazon.nova-2-multimodal-embeddings-v1:0",
+)
+
+
+@pytest.mark.parametrize("model", NOVA_EMBEDDING_MODELS)
+@pytest.mark.parametrize("drop_params", [False, True])
+@pytest.mark.parametrize(
+    ("encoding_format", "expected_params"),
+    [
+        ("float", {"embedding_dimension": 256}),
+        ("base64", {"embedding_dimension": 256, "encoding_format": "base64"}),
+    ],
+)
+def test_bedrock_nova_embeddings_accept_the_encoding_formats_openai_serves(
+    model: str, drop_params: bool, encoding_format: str, expected_params: dict[str, object]
+) -> None:
+    optional_params: Final = get_optional_params_embeddings(
+        model=model,
+        encoding_format=encoding_format,
+        dimensions=256,
+        custom_llm_provider="bedrock",
+        drop_params=drop_params,
+    )
+
+    assert optional_params == expected_params
+
+
+NOVA_UNSERVABLE_ENCODING_FORMATS: Final = ("int8", ["float"])
+
+
+@pytest.mark.parametrize("model", NOVA_EMBEDDING_MODELS)
+@pytest.mark.parametrize("encoding_format", NOVA_UNSERVABLE_ENCODING_FORMATS)
+def test_bedrock_nova_embeddings_reject_an_encoding_format_nova_cannot_produce(
+    model: str, encoding_format: str
+) -> None:
+    with pytest.raises(UnsupportedParamsError, match="encoding_format"):
+        get_optional_params_embeddings(model=model, encoding_format=encoding_format, custom_llm_provider="bedrock")
+
+
+@pytest.mark.parametrize("model", NOVA_EMBEDDING_MODELS)
+@pytest.mark.parametrize("encoding_format", NOVA_UNSERVABLE_ENCODING_FORMATS)
+def test_bedrock_nova_embeddings_drop_an_encoding_format_nova_cannot_produce_under_drop_params(
+    model: str, encoding_format: str
+) -> None:
+    optional_params: Final = get_optional_params_embeddings(
+        model=model,
+        encoding_format=encoding_format,
+        dimensions=256,
+        custom_llm_provider="bedrock",
+        drop_params=True,
+    )
+
+    assert optional_params == {"embedding_dimension": 256}
+
+
 def test_google_ai_studio_optional_params_embeddings():
     optional_params = get_optional_params_embeddings(
         model="",
@@ -546,30 +604,20 @@ def test_azure_tool_choice(api_version):
         )
 
 
-@pytest.mark.parametrize(
-    "model, provider, should_drop",
-    [("command-r", "cohere", True), ("gpt-3.5-turbo", "openai", False)],
-)
-def test_drop_params_parallel_tool_calls(model, provider, should_drop):
+def test_drop_params_keeps_parallel_tool_calls_the_provider_supports():
     """
     https://github.com/BerriAI/litellm/issues/4584
     """
     response = litellm.utils.get_optional_params(
-        model=model,
-        custom_llm_provider=provider,
+        model="gpt-3.5-turbo",
+        custom_llm_provider="openai",
         response_format={"type": "json"},
         parallel_tool_calls=True,
         drop_params=True,
     )
 
-    print(response)
-
-    if should_drop:
-        assert "response_format" not in response
-        assert "parallel_tool_calls" not in response
-    else:
-        assert "response_format" in response
-        assert "parallel_tool_calls" in response
+    assert "response_format" in response
+    assert "parallel_tool_calls" in response
 
 
 def test_dynamic_drop_additional_params_stream_options():
@@ -1978,19 +2026,19 @@ def test_store_param_passed_through_openai_azure():
     assert optional_params_false["store"] is False
 
 
-def test_cohere_drop_params_removes_unsupported_response_format(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_cohere_drop_params_removes_unsupported_param(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
     params: Final = get_optional_params(
         model="command-r-plus-08-2024",
         custom_llm_provider="cohere",
-        response_format={"type": "json_object"},
+        parallel_tool_calls=True,
         drop_params=True,
     )
-    assert "response_format" not in params
+    assert "parallel_tool_calls" not in params
 
 
 @pytest.mark.parametrize("drop_params", [False, None])
-def test_cohere_drop_params_rejects_unsupported_response_format(
+def test_cohere_drop_params_rejects_unsupported_param(
     drop_params: bool | None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
@@ -1998,13 +2046,13 @@ def test_cohere_drop_params_rejects_unsupported_response_format(
         get_optional_params(
             model="command-r-plus-08-2024",
             custom_llm_provider="cohere",
-            response_format={"type": "json_object"},
+            parallel_tool_calls=True,
             drop_params=drop_params,
         )
 
 
 @pytest.mark.respx(assert_all_called=True)
-def test_cohere_completion_drops_response_format_from_request(
+def test_cohere_completion_sends_json_object_response_format(
     respx_mock: respx.MockRouter,
 ) -> None:
     route: Final = respx_mock.post("https://api.cohere.com/v2/chat")
@@ -2014,13 +2062,16 @@ def test_cohere_completion_drops_response_format_from_request(
         model="cohere/command-r-plus-08-2024",
         messages=[{"role": "user", "content": "hello"}],
         response_format={"type": "json_object"},
-        drop_params=True,
         api_key="test-api-key",
         client=HTTPHandler(),
     )
 
     request_body: Final = json.loads(route.calls[0].request.content)
-    assert request_body == {"model": "command-r-plus-08-2024", "messages": [{"role": "user", "content": "hello"}]}
+    assert request_body == {
+        "model": "command-r-plus-08-2024",
+        "messages": [{"role": "user", "content": "hello"}],
+        "response_format": {"type": "json_object"},
+    }
 
 
 @pytest.mark.respx(assert_all_called=True)

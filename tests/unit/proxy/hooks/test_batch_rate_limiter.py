@@ -22,15 +22,20 @@ from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm import DualCache
+from litellm.batches.batch_utils import estimate_batch_entry_tokens
 from litellm.constants import BATCH_TPD_WINDOW_SECONDS
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.hooks.batch_rate_limiter import BatchFileUsage
+from litellm.proxy.hooks.batch_rate_limiter import BatchFileUsage, PROXY_BatchRateLimiter
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+    PROJECT_ITPM_DESCRIPTOR_KEY,
     PROXY_MaxParallelRequestsHandler_v3,
+    get_batch_rate_limiter,
+    run_scoped,
 )
 from litellm.proxy.utils import InternalUsageCache, hash_token
-from litellm.redis.stores.rate_limits import RateLimitScope
+from litellm.redis.stores.rate_limits import RateLimitScope, RateLimitStore
 from litellm.types.llms.openai import ChatCompletionUserMessage, LiteLLMBatchCreateRequest
+from tests._support.rust_parallel_request_limiter import RustParallelRequestLimiter
 
 
 class _Clock:
@@ -41,10 +46,12 @@ class _Clock:
         return self.now
 
 
-def _make_limiters(clock: _Clock | None = None):
+def _make_limiters(clock: _Clock | None = None, rate_limit_store: RateLimitStore | None = None):
     internal_usage_cache = InternalUsageCache(dual_cache=DualCache())
-    rate_limiter = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=internal_usage_cache, time_provider=clock)
-    batch_limiter = rate_limiter._get_batch_rate_limiter()
+    rate_limiter = PROXY_MaxParallelRequestsHandler_v3(
+        internal_usage_cache=internal_usage_cache, time_provider=clock, rate_limit_store=rate_limit_store
+    )
+    batch_limiter = get_batch_rate_limiter(rate_limiter)
     assert batch_limiter is not None
     return internal_usage_cache, rate_limiter, batch_limiter
 
@@ -98,16 +105,37 @@ async def test_cumulative_batch_tokens_over_tpd_returns_429_with_remaining_daily
     assert exc.value.headers["reset_at"] == "2026-09-14 08:00:00 UTC"
 
 
+def _make_native_limiter() -> tuple[InternalUsageCache, RustParallelRequestLimiter]:
+    internal_usage_cache: Final = InternalUsageCache(dual_cache=DualCache())
+    return internal_usage_cache, RustParallelRequestLimiter(internal_usage_cache=internal_usage_cache)
+
+
+async def _submit_counted_batch(
+    monkeypatch: pytest.MonkeyPatch,
+    rate_limiter: RustParallelRequestLimiter,
+    user_api_key_dict: UserAPIKeyAuth,
+    usage: BatchFileUsage,
+) -> None:
+    async def counted(*_: object, **__: object) -> BatchFileUsage:
+        return usage
+
+    monkeypatch.setattr(PROXY_BatchRateLimiter, "count_input_file_usage", counted)
+    await rate_limiter.async_pre_call_hook(
+        user_api_key_dict,
+        DualCache(),
+        {"model": _BATCH_MODEL, "input_file_id": "file-counted", "endpoint": "/v1/chat/completions"},
+        "acreate_batch",
+    )
+
+
 @pytest.mark.asyncio
-async def test_failed_batch_submission_refunds_tpd_tokens():
-    internal_usage_cache, rate_limiter, batch_limiter = _make_limiters()
+async def test_failed_batch_submission_refunds_tpd_tokens(monkeypatch: pytest.MonkeyPatch):
+    internal_usage_cache, rate_limiter = _make_native_limiter()
     api_key = hash_token("tpd-refund-key")
     user_api_key_dict = UserAPIKeyAuth(api_key=api_key, rpm_limit=1, tpd_limit=1000)
 
-    await batch_limiter._check_and_increment_batch_counters(
-        user_api_key_dict=user_api_key_dict,
-        data={},
-        batch_usage=BatchFileUsage(total_tokens=600, request_count=6),
+    await _submit_counted_batch(
+        monkeypatch, rate_limiter, user_api_key_dict, BatchFileUsage(total_tokens=600, request_count=6)
     )
     await rate_limiter.async_post_call_failure_hook(
         request_data={},
@@ -116,17 +144,15 @@ async def test_failed_batch_submission_refunds_tpd_tokens():
     )
 
     assert await _counter(internal_usage_cache, rate_limiter, "api_key_tpd", api_key, "tokens") == 0
-    await batch_limiter._check_and_increment_batch_counters(
-        user_api_key_dict=user_api_key_dict,
-        data={},
-        batch_usage=BatchFileUsage(total_tokens=1000, request_count=10),
+    await _submit_counted_batch(
+        monkeypatch, rate_limiter, user_api_key_dict, BatchFileUsage(total_tokens=1000, request_count=10)
     )
     assert await _counter(internal_usage_cache, rate_limiter, "api_key_tpd", api_key, "tokens") == 1000
 
 
 @pytest.mark.asyncio
-async def test_tpd_refund_applies_once_and_only_to_daily_counters():
-    internal_usage_cache, rate_limiter, batch_limiter = _make_limiters()
+async def test_tpd_refund_applies_once_and_only_to_daily_counters(monkeypatch: pytest.MonkeyPatch):
+    internal_usage_cache, rate_limiter = _make_native_limiter()
     team_key = UserAPIKeyAuth(
         api_key=hash_token("tpd-refund-team-key"),
         rpm_limit=100,
@@ -135,11 +161,7 @@ async def test_tpd_refund_applies_once_and_only_to_daily_counters():
         team_tpd_limit=5000,
     )
 
-    await batch_limiter._check_and_increment_batch_counters(
-        user_api_key_dict=team_key,
-        data={},
-        batch_usage=BatchFileUsage(total_tokens=800, request_count=8),
-    )
+    await _submit_counted_batch(monkeypatch, rate_limiter, team_key, BatchFileUsage(total_tokens=800, request_count=8))
     await rate_limiter.async_post_call_failure_hook(
         request_data={}, original_exception=RuntimeError("boom"), user_api_key_dict=team_key
     )
@@ -248,25 +270,28 @@ async def test_end_user_tpd_is_enforced_per_end_user():
     assert "end_user_tpd: customer-a" in str(exc.value.detail)
 
 
-def test_tpd_only_key_is_not_skipped_as_having_no_limits():
+@pytest.mark.asyncio
+async def test_tpd_only_key_is_not_skipped_as_having_no_limits():
     _internal_usage_cache, _rate_limiter, batch_limiter = _make_limiters()
-    descriptors = batch_limiter._create_batch_rate_limit_descriptors(
+    descriptors = await batch_limiter._create_batch_rate_limit_descriptors(
         user_api_key_dict=UserAPIKeyAuth(api_key=hash_token("tpd-only"), tpd_limit=100),
         data={},
     )
     assert batch_limiter._has_applicable_batch_rate_limits(descriptors) is True
 
 
-def test_online_descriptors_ignore_tpd_limit():
+@pytest.mark.asyncio
+async def test_online_descriptors_ignore_tpd_limit():
     _internal_usage_cache, rate_limiter, _batch_limiter = _make_limiters()
     api_key = hash_token("online-key")
-    descriptors = rate_limiter.create_rate_limit_descriptors(
-        user_api_key_dict=UserAPIKeyAuth(api_key=api_key, rpm_limit=5, tpd_limit=100, team_id="t", team_tpd_limit=9),
-        data={"model": "gpt-4o"},
-        rpm_limit_type=None,
-        tpm_limit_type=None,
-        model_has_failures=False,
+    scoped = await run_scoped(
+        rate_limiter,
+        UserAPIKeyAuth(api_key=api_key, rpm_limit=5, tpd_limit=100, team_id="t", team_tpd_limit=9),
+        {"model": "gpt-4o"},
+        {"kind": "request"},
+        {"kind": "build"},
     )
+    descriptors = scoped.descriptors
     assert [(d["key"], d["rate_limit"]["window_size"]) for d in descriptors] == [("api_key", rate_limiter.window_size)]
 
 
@@ -307,6 +332,7 @@ async def test_batch_rate_limit_error_reports_reset_time_in_utc_on_a_non_utc_pro
 
 
 _BATCH_MODEL: Final = "gpt-3.5-turbo"
+_MANAGED_DEPLOYMENT_ALIAS: Final = "managed-deployment-alias"
 _MANAGED_FILE_ID: Final = (
     "bGl0ZWxsbV9wcm94eTphcHBsaWNhdGlvbi9vY3RldC1zdHJlYW07dW5pZmllZF9pZCxyZWdyZXNzaW9uLXRlc3QtZmlsZQ=="
 )
@@ -369,6 +395,20 @@ async def test_count_input_file_usage_matches_token_counter(openai_files: respx.
     assert content_route.call_count == 1
     assert usage.request_count == 3
     assert usage.total_tokens == _token_counter_total(rows)
+
+
+@pytest.mark.asyncio
+async def test_count_input_file_usage_estimates_whole_unsupported_native_row(openai_files: respx.MockRouter) -> None:
+    _, _, batch_limiter = _make_limiters()
+    row: Final = b'{"request":{"contents":[{"parts":[{"text":"hello"},{"fileData":{}}]}]}}'
+    openai_files.get("https://api.openai.com/v1/files/file-native/content").mock(
+        return_value=httpx.Response(200, content=row)
+    )
+
+    usage: Final = await batch_limiter.count_input_file_usage(file_id="file-native", custom_llm_provider="openai")
+
+    assert usage.request_count == 1
+    assert usage.total_tokens == estimate_batch_entry_tokens(row)
 
 
 @pytest.mark.asyncio
@@ -661,7 +701,9 @@ async def test_model_routed_batch_is_charged_to_the_project_cap_of_the_model_it_
         project_id="project-1",
         project_metadata={"model_batch_enqueued_token_limit": {"routed-batch-model": 1}},
     )
-    data, _ = await _model_routed_batch_data(openai_files, monkeypatch, query_string, routing_headers, user_api_key_dict)
+    data, _ = await _model_routed_batch_data(
+        openai_files, monkeypatch, query_string, routing_headers, user_api_key_dict
+    )
     _, _, batch_limiter = _make_limiters()
 
     with pytest.raises(HTTPException) as exc:
@@ -712,7 +754,12 @@ async def _install_managed_file_hook(
                 "model_name": model_name,
                 "litellm_params": {"model": f"openai/{_BATCH_MODEL}", "api_key": "sk-test"},
                 "model_info": {"id": "deployment-1"},
-            }
+            },
+            {
+                "model_name": _MANAGED_DEPLOYMENT_ALIAS,
+                "litellm_params": {"model": f"openai/{_BATCH_MODEL}", "api_key": "sk-test"},
+                "model_info": {"id": "deployment-1-alias"},
+            },
         ]
     )
     monkeypatch.setattr(proxy_server, "proxy_logging_obj", proxy_logging)
@@ -832,3 +879,333 @@ async def test_managed_file_of_another_tenant_is_denied_before_it_is_read(
     assert denied.value.status_code == 403
     assert not provider_route.called
     assert not unrouted_managed_read.called
+
+
+_BATCH_ALIAS: Final = "nano-batch-alias"
+_DEPLOYMENT_MODEL: Final = "nano-deployment-model"
+
+
+def _row_naming(model: str) -> _BatchLine:
+    return _BatchLine(
+        custom_id=model,
+        method="POST",
+        url="/v1/chat/completions",
+        body=_BatchBody(model=model, messages=(ChatCompletionUserMessage(role="user", content="hi"),)),
+    )
+
+
+def _alias_router(model_group_alias: dict[str, str]) -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": _BATCH_ALIAS,
+                "litellm_params": {
+                    "model": f"openai/{_DEPLOYMENT_MODEL}",
+                    "api_key": "sk-deployment",
+                    "api_base": "https://routed.example/v1",
+                },
+                "model_info": {"id": "alias-deployment"},
+            }
+        ],
+        model_group_alias=model_group_alias,
+    )
+
+
+@pytest.fixture
+def alias_routed_batch(openai_files: respx.MockRouter, monkeypatch: pytest.MonkeyPatch) -> respx.MockRouter:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "llm_router", _alias_router({}))
+    return openai_files
+
+
+def _alias_routing(route: Literal["file id", "body"]) -> dict[str, str]:
+    from litellm.proxy.openai_files_endpoints.common_utils import encode_file_id_with_model
+
+    if route == "file id":
+        return {"input_file_id": encode_file_id_with_model("file-abc123", _BATCH_ALIAS)}
+    return {"input_file_id": "file-abc123", "model": _BATCH_ALIAS}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ["file id", "body"])
+async def test_key_granted_only_the_alias_can_batch_rows_naming_its_deployment_model(
+    alias_routed_batch: respx.MockRouter, route: Literal["file id", "body"]
+):
+    alias_routed_batch.get(_ROUTED_FILE_URL).mock(
+        side_effect=_serve_file_to_the_deployment_key((_row_naming(_DEPLOYMENT_MODEL),))
+    )
+    data: Final = _alias_routing(route)
+    _, _, batch_limiter = _make_limiters()
+
+    usage: Final = await batch_limiter.count_input_file_usage(
+        file_id=data["input_file_id"],
+        user_api_key_dict=UserAPIKeyAuth(api_key=hash_token("sk-batch"), models=[_BATCH_ALIAS]),
+        data=dict(data),
+    )
+
+    assert usage.per_model_usage[(_BATCH_ALIAS, _DEPLOYMENT_MODEL)]["request_count"] == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("limited_model", [_BATCH_ALIAS, _DEPLOYMENT_MODEL], ids=["alias", "deployment model"])
+async def test_alias_routed_rows_naming_the_deployment_model_are_held_to_both_project_quotas(
+    alias_routed_batch: respx.MockRouter, limited_model: str
+):
+    alias_routed_batch.get(_ROUTED_FILE_URL).mock(
+        side_effect=_serve_file_to_the_deployment_key((_row_naming(_DEPLOYMENT_MODEL),))
+    )
+    _, _, batch_limiter = _make_limiters()
+
+    with pytest.raises(HTTPException) as refused:
+        await batch_limiter.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(
+                api_key=hash_token("sk-batch"),
+                models=[_BATCH_ALIAS],
+                project_id="project-1",
+                project_metadata={"model_itpm_limit": {limited_model: 1}},
+            ),
+            cache=DualCache(),
+            data=dict(_alias_routing("body")),
+            call_type="acreate_batch",
+        )
+
+    assert refused.value.status_code == 429
+    assert f"project-1:{limited_model}" in str(refused.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_alias_routed_row_is_charged_once_when_the_alias_and_deployment_model_share_a_quota_group(
+    openai_files: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "llm_router", _alias_router({_DEPLOYMENT_MODEL: _BATCH_ALIAS}))
+    openai_files.get(_ROUTED_FILE_URL).mock(
+        side_effect=_serve_file_to_the_deployment_key((_row_naming(_DEPLOYMENT_MODEL),))
+    )
+    internal_usage_cache, rate_limiter, batch_limiter = _make_limiters()
+    api_key: Final = hash_token("sk-batch")
+
+    await batch_limiter.async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key=api_key,
+            models=[_BATCH_ALIAS],
+            tpd_limit=1_000_000,
+            project_id="project-1",
+            project_metadata={"model_itpm_limit": {_BATCH_ALIAS: 1_000_000}},
+        ),
+        cache=DualCache(),
+        data=dict(_alias_routing("body")),
+        call_type="acreate_batch",
+    )
+
+    key_tokens: Final = await _counter(internal_usage_cache, rate_limiter, "api_key_tpd", api_key, "tokens")
+    project_tokens: Final = await _counter(
+        internal_usage_cache, rate_limiter, PROJECT_ITPM_DESCRIPTOR_KEY, f"project-1:{_BATCH_ALIAS}", "tokens"
+    )
+    assert key_tokens > 0
+    assert project_tokens == key_tokens
+
+
+@pytest.mark.asyncio
+async def test_alias_quota_is_charged_every_row_routed_by_it_whichever_name_the_row_uses(
+    alias_routed_batch: respx.MockRouter,
+):
+    alias_routed_batch.get(_ROUTED_FILE_URL).mock(
+        side_effect=_serve_file_to_the_deployment_key((_row_naming(_BATCH_ALIAS), _row_naming(_DEPLOYMENT_MODEL)))
+    )
+    _, _, batch_limiter = _make_limiters()
+    data: Final = _alias_routing("body")
+    user_api_key_dict: Final = UserAPIKeyAuth(api_key=hash_token("sk-batch"), models=[_BATCH_ALIAS])
+    usage: Final = await batch_limiter.count_input_file_usage(
+        file_id=data["input_file_id"], user_api_key_dict=user_api_key_dict, data=dict(data)
+    )
+    row_tokens: Final = tuple(model_usage["total_tokens"] for model_usage in usage.per_model_usage.values())
+
+    with pytest.raises(HTTPException) as refused:
+        await batch_limiter.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict.model_copy(
+                update={
+                    "project_id": "project-1",
+                    "project_metadata": {"model_itpm_limit": {_BATCH_ALIAS: max(row_tokens) + 1}},
+                }
+            ),
+            cache=DualCache(),
+            data=dict(data),
+            call_type="acreate_batch",
+        )
+
+    assert len(row_tokens) == 2
+    assert refused.value.status_code == 429
+    assert f"project-1:{_BATCH_ALIAS}. Batch contains {sum(row_tokens)} tokens" in str(refused.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_a_counter_shared_by_alias_and_deployment_rows_is_held_to_the_stricter_of_their_limits(
+    openai_files: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "llm_router", _alias_router({_DEPLOYMENT_MODEL: _BATCH_ALIAS}))
+    openai_files.get(_ROUTED_FILE_URL).mock(
+        side_effect=_serve_file_to_the_deployment_key((_row_naming(_BATCH_ALIAS), _row_naming(_DEPLOYMENT_MODEL)))
+    )
+    _, _, batch_limiter = _make_limiters()
+    data: Final = _alias_routing("body")
+    user_api_key_dict: Final = UserAPIKeyAuth(api_key=hash_token("sk-batch"), models=[_BATCH_ALIAS])
+    usage: Final = await batch_limiter.count_input_file_usage(
+        file_id=data["input_file_id"], user_api_key_dict=user_api_key_dict, data=dict(data)
+    )
+    batch_tokens: Final = sum(model_usage["total_tokens"] for model_usage in usage.per_model_usage.values())
+
+    with pytest.raises(HTTPException) as refused:
+        await batch_limiter.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict.model_copy(
+                update={
+                    "project_id": "project-1",
+                    "project_metadata": {
+                        "model_itpm_limit": {_BATCH_ALIAS: batch_tokens * 10, _DEPLOYMENT_MODEL: batch_tokens - 1}
+                    },
+                }
+            ),
+            cache=DualCache(),
+            data=dict(data),
+            call_type="acreate_batch",
+        )
+
+    assert refused.value.status_code == 429
+    assert f"project-1:{_BATCH_ALIAS}. Batch contains {batch_tokens} tokens" in str(refused.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_alias_routed_rows_are_held_to_the_enqueued_token_cap_of_the_model_they_name(
+    alias_routed_batch: respx.MockRouter,
+):
+    alias_routed_batch.get(_ROUTED_FILE_URL).mock(
+        side_effect=_serve_file_to_the_deployment_key((_row_naming(_DEPLOYMENT_MODEL),))
+    )
+    _, _, batch_limiter = _make_limiters()
+
+    with pytest.raises(HTTPException) as exc:
+        await batch_limiter.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(
+                api_key=hash_token("sk-batch"),
+                models=[_BATCH_ALIAS],
+                project_id="project-1",
+                project_metadata={"model_batch_enqueued_token_limit": {_DEPLOYMENT_MODEL: 1}},
+            ),
+            cache=DualCache(),
+            data=dict(_alias_routing("body")),
+            call_type="acreate_batch",
+        )
+
+    assert exc.value.status_code == 429
+    assert f"project_model: project-1:{_DEPLOYMENT_MODEL}" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_alias_routed_row_counts_once_toward_an_enqueued_token_cap_its_alias_shares(
+    openai_files: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "llm_router", _alias_router({_DEPLOYMENT_MODEL: _BATCH_ALIAS}))
+    openai_files.get(_ROUTED_FILE_URL).mock(
+        side_effect=_serve_file_to_the_deployment_key((_row_naming(_DEPLOYMENT_MODEL),))
+    )
+    _, _, batch_limiter = _make_limiters()
+    data: Final = _alias_routing("body")
+    user_api_key_dict: Final = UserAPIKeyAuth(api_key=hash_token("sk-batch"), models=[_BATCH_ALIAS])
+    usage: Final = await batch_limiter.count_input_file_usage(
+        file_id=data["input_file_id"], user_api_key_dict=user_api_key_dict, data=dict(data)
+    )
+
+    result: Final = await batch_limiter.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict.model_copy(
+            update={
+                "project_id": "project-1",
+                "project_metadata": {"model_batch_enqueued_token_limit": {_BATCH_ALIAS: usage.total_tokens * 3 // 2}},
+            }
+        ),
+        cache=DualCache(),
+        data=dict(data),
+        call_type="acreate_batch",
+    )
+
+    assert result["input_file_id"] == data["input_file_id"]
+
+
+@pytest.mark.asyncio
+async def test_key_granted_the_alias_cannot_smuggle_another_model_into_the_rows(
+    alias_routed_batch: respx.MockRouter,
+):
+    alias_routed_batch.get(_ROUTED_FILE_URL).mock(
+        side_effect=_serve_file_to_the_deployment_key((_row_naming(_DEPLOYMENT_MODEL), _row_naming("another-model")))
+    )
+    data: Final = _alias_routing("body")
+    _, _, batch_limiter = _make_limiters()
+
+    with pytest.raises(HTTPException) as denied:
+        await batch_limiter.count_input_file_usage(
+            file_id=data["input_file_id"],
+            user_api_key_dict=UserAPIKeyAuth(api_key=hash_token("sk-batch"), models=[_BATCH_ALIAS]),
+            data=dict(data),
+        )
+
+    assert denied.value.status_code == 403
+    assert "another-model" in str(denied.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_key_without_the_alias_cannot_batch_rows_naming_its_deployment_model(
+    alias_routed_batch: respx.MockRouter,
+):
+    alias_routed_batch.get(_ROUTED_FILE_URL).mock(
+        side_effect=_serve_file_to_the_deployment_key((_row_naming(_DEPLOYMENT_MODEL),))
+    )
+    data: Final = _alias_routing("body")
+    _, _, batch_limiter = _make_limiters()
+
+    with pytest.raises(HTTPException) as denied:
+        await batch_limiter.count_input_file_usage(
+            file_id=data["input_file_id"],
+            user_api_key_dict=UserAPIKeyAuth(api_key=hash_token("sk-batch"), models=["a-different-model"]),
+            data=dict(data),
+        )
+
+    assert denied.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_managed_file_usage_stays_keyed_by_the_row_model(
+    openai_files: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    rows: Final = _batch_rows(("Test message for regression",))
+    await _install_managed_file_hook(openai_files, monkeypatch, rows)
+    _, _, batch_limiter = _make_limiters()
+
+    usage: Final = await batch_limiter.count_input_file_usage(
+        file_id=_MANAGED_FILE_ID,
+        custom_llm_provider="openai",
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key", user_id="test-user-regression", team_id="team-owner"),
+        data={"input_file_id": _MANAGED_FILE_ID, "model": _MANAGED_DEPLOYMENT_ALIAS},
+    )
+
+    assert set(usage.per_model_usage) == {(_BATCH_MODEL,)}
+
+
+@pytest.mark.asyncio
+async def test_batch_routed_by_a_model_missing_from_the_proxy_is_counted_under_the_row_model(
+    alias_routed_batch: respx.MockRouter,
+):
+    _serve_file(alias_routed_batch, "file-abc123", (_row_naming(_DEPLOYMENT_MODEL),))
+    _, _, batch_limiter = _make_limiters()
+
+    usage: Final = await batch_limiter.count_input_file_usage(
+        file_id="file-abc123",
+        user_api_key_dict=UserAPIKeyAuth(api_key=hash_token("sk-batch"), models=[_DEPLOYMENT_MODEL]),
+        data={"input_file_id": "file-abc123", "model": "not-on-this-proxy"},
+    )
+
+    assert set(usage.per_model_usage) == {(_DEPLOYMENT_MODEL,)}

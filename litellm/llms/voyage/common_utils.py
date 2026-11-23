@@ -33,3 +33,7 @@ def get_default_base_url(api_key: str | None = None) -> str:
     if resolved is not None and resolved.startswith(MONGODB_API_KEY_PREFIX):
         return MONGODB_API_BASE
     return VOYAGE_API_BASE
+
+
+def get_voyage_api_base(api_base: str | None = None, api_key: str | None = None) -> str:
+    return api_base or get_secret_str("VOYAGE_API_BASE") or get_default_base_url(api_key)

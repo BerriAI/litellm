@@ -30,7 +30,7 @@ usable without the optional STT extras installed.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from contextlib import closing
 from typing import TYPE_CHECKING, Final
 
@@ -69,7 +69,7 @@ if TYPE_CHECKING:
 _RIVA_INSTALL_HINT = "NVIDIA Riva client is not installed. Install with `pip install 'litellm[stt-nvidia-riva]'`."
 
 
-def _use_ssl(optional_params: dict) -> bool:
+def _use_ssl(optional_params: Mapping[str, object]) -> bool:
     """
     NVCF endpoints are TLS-only, so ``nvcf_function_id`` defaults ``use_ssl``
     to True. Self-hosted Riva defaults to plaintext but honors an explicit

@@ -25,6 +25,9 @@ pub struct KeyIdentity {
     pub invoked_agent_id: Option<Scalar>,
     pub team_priority: Option<Scalar>,
     pub key_priority: Option<Scalar>,
+    pub customer_org_id: Option<String>,
+    pub customer_team_id: Option<String>,
+    pub customer_member_id: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -87,6 +90,22 @@ pub struct AgentPolicy {
     pub session_tpm_limit: Option<Scalar>,
 }
 
+/// One level of the customer hierarchy a request is charged to, with the limits its budget row
+/// grants. `borrows` marks a customer organization whose per-model limits are shares of idle
+/// capacity the dynamic limiter enforces.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct CustomerScope {
+    pub rejected: Option<Vec<String>>,
+    pub key: Option<String>,
+    pub entity_id: Option<String>,
+    pub rpm_limit: Option<i64>,
+    pub tpm_limit: Option<i64>,
+    pub model_rpm_limit: Option<BTreeMap<String, i64>>,
+    pub model_tpm_limit: Option<BTreeMap<String, i64>>,
+    pub borrows: Option<bool>,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct KeyLimits {
@@ -110,6 +129,7 @@ pub struct KeyLimits {
     pub estimated_output_tokens: Option<EstimatedOutputTokens>,
     pub managed_agent_policy: Option<AgentPolicy>,
     pub invoked_agent_policy: Option<AgentPolicy>,
+    pub customer_scopes: Option<Vec<CustomerScope>>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -294,6 +314,32 @@ pub struct Cost {
     pub rejected: Option<Vec<String>>,
     pub response_cost: Option<Scalar>,
     pub zero_cost: Option<ZeroCost>,
+    pub cost_finalized: Option<bool>,
+    pub response_cost_failure_debug_info: Option<String>,
+    #[serde(with = "crate::scalar::float")]
+    pub failure_row_response_cost: Option<f64>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct SpendLogId {
+    pub rejected: Option<Vec<String>>,
+    pub id: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct BilledRetryAttempt {
+    pub rejected: Option<Vec<String>>,
+    pub position: Option<i64>,
+    pub spend_log_id: Option<SpendLogId>,
+    pub litellm_call_id: Option<String>,
+    pub parent_request_id: Option<String>,
+    pub attempted_retries: Option<i64>,
+    pub deployment_id: Option<String>,
+    #[serde(with = "crate::scalar::float")]
+    pub response_cost: Option<f64>,
+    pub usage: Option<UsageRecord>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -427,6 +473,8 @@ mod tests {
             Field::MetadataLabels => round_trip::<typed::MetadataLabels>(sample),
             Field::InputSequenceLength => round_trip::<typed::InputSequenceLength>(sample),
             Field::LimiterRequest => round_trip::<typed::LimiterRequest>(sample),
+            Field::SpendLogId => round_trip::<typed::SpendLogId>(sample),
+            Field::BilledRetryAttempts => round_trip::<typed::BilledRetryAttempts>(sample),
             other => panic!("{other:?} has no typed record sample"),
         }
     }
@@ -440,7 +488,7 @@ mod tests {
             assert_eq!(&decoded(field, sample), sample, "{name}");
         }
         let typed: Vec<&str> = samples.keys().map(String::as_str).collect();
-        assert_eq!(typed.len(), 23);
+        assert_eq!(typed.len(), 25);
     }
 
     #[rstest]

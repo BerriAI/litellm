@@ -255,12 +255,12 @@ export const useModelHub = () => {
   });
 };
 
-export const useAllProxyModels = () => {
+export const useAllProxyModels = ({ enabled = true }: { enabled?: boolean } = {}) => {
   const { accessToken, userId, userRole } = useAuthorized();
   return useQuery<AllProxyModelsResponse>({
     queryKey: allProxyModelsKeys.list({}),
     queryFn: async () => await modelAvailableCall(accessToken!, userId!, userRole!, true, null, true, false, "expand"),
-    enabled: Boolean(accessToken && userId && userRole),
+    enabled: enabled && Boolean(accessToken && userId && userRole),
   });
 };
 

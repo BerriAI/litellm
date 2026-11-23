@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from httpx import URL, Headers, Response
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-    from litellm.types.llms.openai import ResponsesAPIResponse, ResponsesTerminalEvent
+    from litellm.types.llms.openai import AllMessageValues, ResponsesAPIResponse, ResponsesTerminalEvent
     from litellm.types.rerank import RerankResponse
     from litellm.types.utils import CostResponseTypes, StandardPassThroughResponseObject
 
@@ -135,12 +135,22 @@ class RawBytesStreamCollector:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class LoggedPassthroughRequest:
+    messages: tuple[AllMessageValues, ...]
+    model_parameters: Mapping[str, object]
+
+
 class BasePassthroughConfig(BaseLLMModelInfo):
     @abstractmethod
     def is_streaming_request(self, endpoint: str, request_data: dict) -> bool:
         """
         Check if the request is a streaming request
         """
+
+    def logged_request(self, endpoint: str, request_data: Mapping[str, object]) -> LoggedPassthroughRequest | None:
+        """The prompt and settings of a provider-native request body, for providers whose body shape is known."""
+        return None
 
     def format_url(
         self,

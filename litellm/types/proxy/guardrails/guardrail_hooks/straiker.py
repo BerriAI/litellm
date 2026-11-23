@@ -151,7 +151,16 @@ class StraikerGuardrailConfigModelOptionalParams(LiteLLMBaseModel):
             "response never reaches the client. 'streaming' sends chunks as they arrive and checks "
             "the assembled response at the end, holding back only the stream's final frames: a "
             "block then ends the stream with the block message, but the text before it has "
-            "already been delivered."
+            "already been delivered. A tool call is held too, see hold_tool_calls."
+        ),
+    )
+    hold_tool_calls: bool | None = Field(
+        default=True,
+        description=(
+            "Only with stream_mode 'streaming'. True (default) holds a tool call the client would run, "
+            "and everything after it, until Straiker has checked the response, so a blocked tool call "
+            "never reaches the client; the text before it still streams live. False sends tool calls as "
+            "they arrive: a block then ends the stream after the client already has the tool call."
         ),
     )
     api_version: Literal["v1", "v3"] | None = Field(

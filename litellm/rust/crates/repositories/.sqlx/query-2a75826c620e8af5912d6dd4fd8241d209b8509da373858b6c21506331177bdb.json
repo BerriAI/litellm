@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE \"LiteLLM_UserTable\"\nSET sso_user_id = $2,\n    updated_at = CURRENT_TIMESTAMP\nWHERE user_id = $1\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "2a75826c620e8af5912d6dd4fd8241d209b8509da373858b6c21506331177bdb"
+}

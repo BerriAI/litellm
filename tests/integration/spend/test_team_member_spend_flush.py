@@ -1,8 +1,9 @@
 """Team member spend keeps landing after a flush in which every cost was a whole number.
 
-The proxy runs on a one-connection pool so every spend flush reuses the same database
-connection. A batch of $0 requests (a free model here) is the whole-number batch, and the
-fractional batches that follow it must still land on that connection.
+Prisma runs on a one-connection pool (the Rust pool takes the other of the two), so every
+spend flush reuses the same database connection. A batch of $0 requests (a free model here)
+is the whole-number batch, and the fractional batches that follow it must still land on that
+connection.
 
 The $0 batch has to be flushed on its own before the paid request is sent. The spend log
 row cannot prove that, since a separate monitor writes spend logs whenever they queue up,
@@ -29,7 +30,7 @@ general_settings:
   store_model_in_db: true
   proxy_batch_write_at: 1
   proxy_batch_polling_interval: 1
-  database_connection_pool_limit: 1
+  database_connection_pool_limit: 2
 router_settings:
   disable_cooldowns: true
 """

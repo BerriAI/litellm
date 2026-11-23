@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, cast, get_args
 
 import httpx
 
+from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
 from litellm.types.llms.openai import (
     ResponseInputParam,
     ResponsesAPIOptionalRequestParams,
@@ -41,6 +42,18 @@ STANDARD_MODE_REASONING_FIELD_VALUES: Final[ReasoningFieldValues] = types.Mappin
 ANY_REASONING_FIELD_VALUES: Final[ReasoningFieldValues] = types.MappingProxyType(
     {**SUMMARY_ONLY_REASONING_FIELD_VALUES, "mode": None, "context": None}
 )
+
+
+def _without_custom_tool_call_namespace(item: object) -> object:
+    fields: Final = as_str_mapping(item)
+    if not isinstance(fields, dict) or fields.get("type") != "custom_tool_call":
+        return item
+    return {key: value for key, value in fields.items() if key != "namespace"}
+
+
+def _strip_custom_tool_call_namespace(request_input: object) -> object:
+    items: Final = as_object_list(request_input)
+    return request_input if items is None else [_without_custom_tool_call_namespace(item) for item in items]
 
 
 class BaseResponsesAPIConfig(ABC):
@@ -396,13 +409,7 @@ class BaseResponsesAPIConfig(ABC):
         """
         if not isinstance(input, list):
             return input
-        out: Final[list[object]] = []
-        for item in input:
-            if isinstance(item, dict) and item.get("type") == "custom_tool_call":
-                out.append({k: v for k, v in item.items() if k != "namespace"})
-            else:
-                out.append(item)
-        return cast(ResponseInputParam, out)
+        return cast(ResponseInputParam, [_without_custom_tool_call_namespace(item) for item in input])
 
     def transform_extra_body(
         self,
@@ -414,11 +421,8 @@ class BaseResponsesAPIConfig(ABC):
         return extra_body
 
     @staticmethod
-    def normalize_responses_api_request_dict(data: dict[str, Any]) -> dict[str, Any]:
+    def normalize_responses_api_request_dict(data: dict[str, object]) -> dict[str, object]:
         """Apply provider-agnostic fixes to an outbound Responses API request dict."""
         if not isinstance(data, dict) or "input" not in data:
             return data
-        return {
-            **data,
-            "input": BaseResponsesAPIConfig.strip_custom_tool_call_namespace_from_responses_input(data["input"]),
-        }
+        return {**data, "input": _strip_custom_tool_call_namespace(data["input"])}

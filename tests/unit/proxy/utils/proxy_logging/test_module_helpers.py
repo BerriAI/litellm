@@ -2,13 +2,12 @@
 
 Covers ``print_verbose``, ``_get_email_logger_class``,
 ``_accepts_litellm_call_info``, ``enrich_http_exception_with_guardrail_context``,
-``on_backoff``, ``jsonify_object``, ``_lookup_deprecated_key``.
+``on_backoff``, ``jsonify_object``.
 """
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi import HTTPException
@@ -21,12 +20,10 @@ from litellm.proxy.guardrails.exception_utils import (
 from litellm.proxy.utils import (
     _accepts_litellm_call_info,
     _get_email_logger_class,
-    _lookup_deprecated_key,
     jsonify_object,
     on_backoff,
     print_verbose,
 )
-
 
 # ---------------------------------------------------------------------------
 # print_verbose
@@ -282,74 +279,3 @@ def test_jsonify_object_failed_serialization_marks_value(monkeypatch):
 def test_jsonify_object_non_dict_input_raises():
     with pytest.raises(AttributeError):
         jsonify_object("not a dict")  # type: ignore[arg-type]
-
-
-# ---------------------------------------------------------------------------
-# _lookup_deprecated_key
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_lookup_deprecated_key_returns_active_token_id_and_caches(monkeypatch):
-    from litellm.caching.dual_cache import LimitedSizeOrderedDict
-
-    fresh = LimitedSizeOrderedDict(max_size=1000)
-    monkeypatch.setattr(utils_mod, "_deprecated_key_cache", fresh)
-
-    future = datetime.now(timezone.utc) + timedelta(hours=1)
-    deprecated_row = MagicMock()
-    deprecated_row.active_token_id = "active-123"
-    deprecated_row.revoke_at = future
-
-    db = MagicMock()
-    db.litellm_deprecatedverificationtoken.find_first = AsyncMock(return_value=deprecated_row)
-
-    result = await _lookup_deprecated_key(db=db, hashed_token="hash-abc")
-    cached_value = fresh.get("hash-abc")
-    snapshot = {
-        "result": result,
-        "cache_active_token_id": cached_value[0],
-        "cache_has_3_tuple": isinstance(cached_value, tuple) and len(cached_value) == 3,
-    }
-    assert snapshot == {
-        "result": "active-123",
-        "cache_active_token_id": "active-123",
-        "cache_has_3_tuple": True,
-    }
-
-
-@pytest.mark.asyncio
-async def test_lookup_deprecated_key_returns_none_when_not_found(monkeypatch):
-    from litellm.caching.dual_cache import LimitedSizeOrderedDict
-
-    monkeypatch.setattr(utils_mod, "_deprecated_key_cache", LimitedSizeOrderedDict(max_size=10))
-    db = MagicMock()
-    db.litellm_deprecatedverificationtoken.find_first = AsyncMock(return_value=None)
-    assert await _lookup_deprecated_key(db=db, hashed_token="missing") is None
-
-
-@pytest.mark.asyncio
-async def test_lookup_deprecated_key_db_error_returns_none(monkeypatch):
-    from litellm.caching.dual_cache import LimitedSizeOrderedDict
-
-    monkeypatch.setattr(utils_mod, "_deprecated_key_cache", LimitedSizeOrderedDict(max_size=10))
-    db = MagicMock()
-    db.litellm_deprecatedverificationtoken.find_first = AsyncMock(side_effect=RuntimeError("db down"))
-    result = await _lookup_deprecated_key(db=db, hashed_token="x")
-    assert result is None
-
-
-@pytest.mark.asyncio
-async def test_lookup_deprecated_key_uses_cache_within_ttl(monkeypatch):
-    from litellm.caching.dual_cache import LimitedSizeOrderedDict
-
-    cache = LimitedSizeOrderedDict(max_size=10)
-    now_ts = datetime.now(timezone.utc).timestamp()
-    cache["hashY"] = ("active-from-cache", now_ts + 100, now_ts + 1000)
-    monkeypatch.setattr(utils_mod, "_deprecated_key_cache", cache)
-
-    db = MagicMock()
-    db.litellm_deprecatedverificationtoken.find_first = AsyncMock(return_value=None)
-    result = await _lookup_deprecated_key(db=db, hashed_token="hashY")
-    assert result == "active-from-cache"
-    db.litellm_deprecatedverificationtoken.find_first.assert_not_called()

@@ -1,5 +1,11 @@
+use std::{
+    collections::HashMap,
+    sync::{Arc, OnceLock, PoisonError, RwLock},
+};
+
 use litellm_http::request::{with_header, without_headers};
 use litellm_llms_types::providers::anthropic::{AnthropicBeta, BETA_HEADER, BetaProvider, BetaSet};
+use serde::Deserialize;
 
 use crate::{anthropic::common_utils::existing_betas, base_llm::auth::Headers};
 
@@ -31,7 +37,7 @@ impl BetaPolicy {
         let accepted: BetaSet = sent
             .iter()
             .filter(|beta| !keep.contains(beta))
-            .filter_map(|beta| beta.on(provider))
+            .filter_map(|beta| on_loaded_config(beta, provider))
             .collect();
         let kept: Vec<&AnthropicBeta> = sent
             .iter()
@@ -52,20 +58,102 @@ impl BetaPolicy {
 }
 
 pub fn accepted_or_unlisted(betas: BetaSet, provider: BetaProvider) -> BetaSet {
+    if betas.is_empty() {
+        return betas;
+    }
+    let loaded = loaded_config();
     betas
         .into_iter()
-        .filter_map(|beta| match beta {
-            AnthropicBeta::Other(_) => Some(beta),
-            known => known.on(provider),
+        .filter_map(|beta| match (loaded.as_deref(), beta) {
+            (Some(config), beta) => config.cell(&beta, provider).unwrap_or(Some(beta)),
+            (None, AnthropicBeta::Other(raw)) => Some(AnthropicBeta::Other(raw)),
+            (None, known) => known.on(provider),
         })
         .collect()
 }
 
+/// The beta map Python's `anthropic_beta_headers_manager` loaded, remote or bundled. Once the
+/// host installs it, the `anthropic-beta` filters read it in place of the compiled columns.
+#[derive(Debug, Default, Deserialize)]
+pub struct BetaHeadersConfig(HashMap<String, ConfigEntry>);
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum ConfigEntry {
+    Column(HashMap<String, Option<String>>),
+    Other(serde::de::IgnoredAny),
+}
+
+impl BetaHeadersConfig {
+    fn column(&self, name: &str) -> Option<&HashMap<String, Option<String>>> {
+        match self.0.get(name)? {
+            ConfigEntry::Column(column) => Some(column),
+            ConfigEntry::Other(_) => None,
+        }
+    }
+
+    /// `None` when the provider's header columns do not list `beta`, `Some(None)` when they mark
+    /// it unsupported.
+    fn cell(&self, beta: &AnthropicBeta, provider: BetaProvider) -> Option<Option<AnthropicBeta>> {
+        let canonical = self
+            .column("provider_aliases")
+            .and_then(|aliases| aliases.get(provider.as_ref()).cloned().flatten())
+            .unwrap_or_else(|| provider.to_string());
+        [format!("{canonical}_header_only"), canonical]
+            .iter()
+            .find_map(|name| self.column(name)?.get(beta.as_str()))
+            .map(|name| {
+                name.as_deref()
+                    .map(|name| name.parse().unwrap_or_else(|never| match never {}))
+            })
+    }
+}
+
+static LOADED_CONFIG: RwLock<Option<Arc<BetaHeadersConfig>>> = RwLock::new(None);
+static REQUEST_LOAD: OnceLock<fn()> = OnceLock::new();
+
+/// Registers how a filter that runs before the beta map is installed asks the host to load it.
+pub fn on_beta_headers_config_needed(request_load: fn()) {
+    let _ = REQUEST_LOAD.set(request_load);
+}
+
+pub fn install_beta_headers_config(config: BetaHeadersConfig) {
+    *LOADED_CONFIG
+        .write()
+        .unwrap_or_else(PoisonError::into_inner) = Some(Arc::new(config));
+}
+
+fn loaded_config() -> Option<Arc<BetaHeadersConfig>> {
+    let loaded = LOADED_CONFIG
+        .read()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    if loaded.is_none()
+        && let Some(request_load) = REQUEST_LOAD.get()
+    {
+        request_load();
+    }
+    loaded
+}
+
+/// Python's `filter_and_transform_beta_headers` for one beta: the loaded config's cell, or the
+/// compiled column when no config was installed.
+pub(crate) fn on_loaded_config(
+    beta: &AnthropicBeta,
+    provider: BetaProvider,
+) -> Option<AnthropicBeta> {
+    match loaded_config() {
+        Some(config) => config.cell(beta, provider).flatten(),
+        None => beta.on(provider),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::anthropic::beta_headers::BetaPolicy;
-    use litellm_llms_types::providers::anthropic::{BetaProvider, BetaSet};
+    use crate::anthropic::beta_headers::{BetaHeadersConfig, BetaPolicy};
+    use litellm_llms_types::providers::anthropic::{AnthropicBeta, BetaProvider, BetaSet};
     use rstest::rstest;
+    use serde_json::json;
 
     fn headers(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
         pairs
@@ -210,5 +298,43 @@ mod tests {
     fn headers_without_a_beta_are_untouched(#[case] policy: BetaPolicy) {
         let input = headers(&[("x-api-key", "k"), ("anthropic-version", "2023")]);
         assert_eq!(policy.apply(input.clone()), input);
+    }
+
+    #[rstest]
+    #[case::renamed(
+        "advanced-tool-use-2025-11-20",
+        BetaProvider::AzureAi,
+        Some(Some("tool-search-tool-2025-10-19"))
+    )]
+    #[case::marked_unsupported("web-search-2025-03-05", BetaProvider::AzureAi, Some(None))]
+    #[case::unlisted("oauth-2025-04-20", BetaProvider::AzureAi, None)]
+    #[case::header_only_column_wins(
+        "web-search-2025-03-05",
+        BetaProvider::VertexAi,
+        Some(Some("web-search-2025-03-05"))
+    )]
+    #[case::aliased_column("web-search-2025-03-05", BetaProvider::Databricks, Some(None))]
+    fn loaded_config_cell_follows_python_column_lookup(
+        #[case] beta: &str,
+        #[case] provider: BetaProvider,
+        #[case] expected: Option<Option<&str>>,
+    ) {
+        let config: BetaHeadersConfig = serde_json::from_value(json!({
+            "description": "remote",
+            "provider_aliases": {"databricks": "azure_ai"},
+            "azure_ai": {
+                "advanced-tool-use-2025-11-20": "tool-search-tool-2025-10-19",
+                "web-search-2025-03-05": null,
+            },
+            "vertex_ai": {"web-search-2025-03-05": null},
+            "vertex_ai_header_only": {"web-search-2025-03-05": "web-search-2025-03-05"},
+        }))
+        .unwrap();
+        let beta: AnthropicBeta = beta.parse().unwrap_or_else(|never| match never {});
+        assert_eq!(
+            config.cell(&beta, provider),
+            expected
+                .map(|name| name.map(|name| name.parse().unwrap_or_else(|never| match never {})))
+        );
     }
 }

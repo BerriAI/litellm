@@ -53,7 +53,7 @@ from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module expo
     delete_cache_team_object,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
+from litellm.proxy.common_utils.cache_invalidation_pubsub import (
     broadcast_evictions,
     evict_and_broadcast,
     evict_local,
@@ -65,6 +65,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
 )
 from litellm.proxy.litellm_pre_call_utils import sanitize_for_log
 from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
+from litellm.proxy.management_endpoints.scim.scim_errors import ScimRoute, scim_detail_of
 from litellm.proxy.management_endpoints.scim.scim_transformations import (
     ScimTransformations,
 )
@@ -294,7 +295,9 @@ scim_router: Final = APIRouter(
     prefix="/scim/v2",
     tags=["✨ SCIM v2 (Enterprise Only)"],
     dependencies=[Depends(premium_user_check)],
+    route_class=ScimRoute,
 )
+placeholder_router: Final = APIRouter()
 
 SCIM_MAX_PAGE_SIZE: Final = 100
 
@@ -908,10 +911,6 @@ class _UserIdWhere(TypedDict):
     user_id: ReadOnly[str]
 
 
-class _ScimErrorDetail(TypedDict):
-    error: ReadOnly[str]
-
-
 async def _ensure_group_member_user(
     user_id: str,
     created_via: str,
@@ -932,7 +931,7 @@ async def _ensure_group_member_user(
     existing: Final = await _table(UserRepository(prisma_client)).find_unique(where=where)
     if existing is not None:
         return None
-    detail: Final[_ScimErrorDetail] = {
+    detail: Final[ScimErrorDetail] = {
         "error": f"Failed to create user '{user_id}' while provisioning group membership."
     }
     raise HTTPException(status_code=500, detail=detail)
@@ -947,14 +946,14 @@ async def _raise_if_batch_over_license_limit(new_user_count: int, prisma_client:
         return
     billable_users: Final = await UserRepository(prisma_client).count_billable_users()
     if _license_check.is_over_limit(total_users=billable_users + new_user_count):
-        detail: Final[_ScimErrorDetail] = {
+        detail: Final[ScimErrorDetail] = {
             "error": "License is over limit. Please contact support@berri.ai to upgrade your license."
         }
         raise HTTPException(status_code=403, detail=detail)
 
 
 def _member_not_provisioned_error(user_id: str) -> HTTPException:
-    detail: Final[_ScimErrorDetail] = {
+    detail: Final[ScimErrorDetail] = {
         "error": f"User with ID '{user_id}' does not exist. "
         "Please create the user first via POST /Users before adding to group."
     }
@@ -1754,11 +1753,12 @@ async def get_service_provider_config(request: Request):
         request.url,
         safe_get_request_headers(request),
     )
-    meta: Final = {
-        "resourceType": "ServiceProviderConfig",
-        "location": str(request.url),
-    }
-    return SCIMServiceProviderConfig(meta=meta)
+    return SCIMServiceProviderConfig(
+        meta={
+            "resourceType": "ServiceProviderConfig",
+            "location": str(request.url),
+        }
+    )
 
 
 def _parse_scim_eq_filter(scim_filter: str) -> tuple[str, str] | None:
@@ -2096,7 +2096,7 @@ async def delete_user(
         raise handle_exception_on_proxy(e)
 
 
-@scim_router.get(
+@placeholder_router.get(
     "/placeholders",
     response_model=tuple[SCIMPlaceholder, ...],
     dependencies=(Depends(user_api_key_auth),),
@@ -2134,7 +2134,7 @@ def _placeholder_rejection(placeholder: LiteLLM_UserTable, resolved: tuple[str, 
     return None
 
 
-@scim_router.post(
+@placeholder_router.post(
     "/placeholders/{user_id}/merge",
     response_model=SCIMPlaceholderMergeResult,
     dependencies=(Depends(user_api_key_auth),),
@@ -2160,7 +2160,7 @@ async def merge_placeholder(
         keys: Final = await _table(VerificationTokenRepository(prisma_client)).find_many(where=owned_keys)
         rejection: Final = _placeholder_rejection(placeholder, resolved, len(keys))
         if rejection is not None:
-            detail: Final[_ScimErrorDetail] = {"error": rejection}
+            detail: Final[ScimErrorDetail] = {"error": rejection}
             raise HTTPException(status_code=409, detail=detail)
 
         target_user_id: Final = resolved[0]
@@ -2177,6 +2177,9 @@ async def merge_placeholder(
         )
     except Exception as e:
         raise handle_exception_on_proxy(e)
+
+
+scim_router.include_router(placeholder_router)
 
 
 def _parse_member_entry(entry: object) -> SCIMMember | None:
@@ -2710,7 +2713,7 @@ async def _attempt_roster_write(label: str, write: Callable[[], Awaitable[object
         return e.failures
     except Exception as e:  # noqa: BLE001  # this boundary turns any write failure into a value so the batch continues
         verbose_proxy_logger.exception("SCIM roster write failed (%s): %s", label, e)
-        return (RosterWriteFailure(description=f"{label}: {e}", status_code=_roster_write_status(e)),)
+        return (RosterWriteFailure(description=f"{label}: {scim_detail_of(e)}", status_code=_roster_write_status(e)),)
     return ()
 
 
@@ -3182,7 +3185,7 @@ def _pathless_group_resource(op: SCIMPatchOperation) -> Mapping[str, object] | N
     resource: Final = _json_object_fields(op.value)
     if op.op != "remove" and resource is not None:
         return resource
-    detail: Final[_ScimErrorDetail] = {
+    detail: Final[ScimErrorDetail] = {
         "error": (
             "A remove operation requires a 'path' (RFC 7644 Section 3.5.2.2)"
             if op.op == "remove"

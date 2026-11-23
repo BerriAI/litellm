@@ -260,6 +260,29 @@ def test_decoded_sse_data_line_swallows_invalid_json():
     assert is_provider_error_chunk(malformed_frame) is False
 
 
+@pytest.mark.parametrize(
+    "deep_payload",
+    [b"[" * 100_000 + b"]" * 100_000, b'{"a": ' * 100_000 + b"1" + b"}" * 100_000],
+    ids=["array", "object"],
+)
+def test_a_deeply_nested_data_line_does_not_hide_the_error_event_after_it(deep_payload: bytes):
+    deep_array_frame: Final = b"data: " + deep_payload + b"\n\n"
+    error_frame: Final = (
+        b'event: error\ndata: {"type": "error", "error": {"type": "internal_server_error", "message": "boom"}}\n\n'
+    )
+
+    assert parse_anthropic_error_event(deep_array_frame + error_frame) == ("internal_server_error", "boom", 500)
+    assert is_provider_error_chunk(deep_array_frame) is False
+
+
+def test_parse_anthropic_error_event_from_sse_bytearray():
+    sse_chunk: Final = bytearray(
+        b'event: error\ndata: {"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}}\n\n'
+    )
+
+    assert parse_anthropic_error_event(sse_chunk) == ("overloaded_error", "Overloaded", 503)
+
+
 class TestIsAnthropicContentDeltaChunk:
     def test_dict_content_block_delta(self):
         assert is_anthropic_content_delta_chunk({"type": "content_block_delta"}) is True
@@ -1372,15 +1395,25 @@ def test_anthropic_messages_response_as_sse_events_thinking_block_emits_signatur
     ]
 
 
-def test_anthropic_messages_response_as_sse_events_thinking_block_without_signature_omits_delta():
-    response = {
-        "id": "msg_6",
-        "content": [{"type": "thinking", "thinking": "let me think", "signature": None}],
-        "stop_reason": "end_turn",
-    }
+@pytest.mark.parametrize(
+    "thinking_block",
+    [
+        {"type": "thinking", "thinking": "let me think", "signature": None},
+        {"type": "thinking", "thinking": "let me think", "signature": ""},
+        {"type": "thinking", "thinking": "let me think"},
+    ],
+    ids=["null", "empty", "missing"],
+)
+def test_anthropic_messages_response_as_sse_events_unsigned_thinking_block_closes_with_an_empty_signature(
+    thinking_block,
+):
+    response = {"id": "msg_6", "content": [thinking_block], "stop_reason": "end_turn"}
     decoded = _decode_sse_events(anthropic_messages_response_as_sse_events(response))
     deltas = [payload["delta"] for event_type, payload in decoded if event_type == "content_block_delta"]
-    assert deltas == [{"type": "thinking_delta", "thinking": "let me think"}]
+    assert deltas == [
+        {"type": "thinking_delta", "thinking": "let me think"},
+        {"type": "signature_delta", "signature": ""},
+    ]
 
 
 def test_anthropic_messages_response_as_sse_events_multiple_blocks_are_indexed():
@@ -1424,6 +1457,7 @@ def test_anthropic_messages_streaming_response_reports_withheld_output_of_its_st
 def test_anthropic_messages_response_as_sse_events_keeps_message_delta_fields_out_of_message_start():
     safeguard_results = [{"type": "dangerous_tool_use", "status": {"type": "available", "tool_uses": {}}}]
     stop_details = {"type": "refusal", "category": "cyber", "explanation": "declined"}
+    container = {"id": "container_1", "expires_at": "2026-12-01T00:00:00Z"}
     response = {
         "id": "msg_1",
         "model": "claude-haiku",
@@ -1433,6 +1467,7 @@ def test_anthropic_messages_response_as_sse_events_keeps_message_delta_fields_ou
         "stop_sequence": None,
         "stop_details": stop_details,
         "safeguard_results": safeguard_results,
+        "container": container,
         "content": [{"type": "text", "text": "no"}],
         "usage": {"input_tokens": 3, "output_tokens": 1},
     }
@@ -1440,11 +1475,13 @@ def test_anthropic_messages_response_as_sse_events_keeps_message_delta_fields_ou
     message_start = decoded[0][1]["message"]
     assert message_start["stop_details"] is None
     assert "safeguard_results" not in message_start
+    assert "container" not in message_start
     assert decoded[-2][1]["delta"] == {
         "stop_reason": "refusal",
         "stop_sequence": None,
         "stop_details": stop_details,
         "safeguard_results": safeguard_results,
+        "container": container,
     }
 
 

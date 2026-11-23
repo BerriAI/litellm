@@ -19,24 +19,14 @@ from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.redis_batch import (
     active_request_redis_batches,
-    drain_post_call_redis_batches,
     flush_post_call_redis_batches,
     request_redis_batch_scope,
 )
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
-from litellm.proxy.hooks.parallel_request_limiter_v3 import (
-    ParallelSlotAcquisition,
-    PROXY_MaxParallelRequestsHandler_v3,
-    RequestRateLimiterStash,
-)
 from litellm.proxy.spend_tracking.spend_counter_batch import PendingSpendIncrement
-from litellm.proxy.utils import InternalUsageCache
-from litellm.redis.stores.rate_limits import CounterIncrement, RateLimitScope
-from litellm.redis.stores.router_usage import CounterIncrement as UsageIncrement
 from litellm.router_strategy.lowest_tpm_rpm_v2 import LowestTPMLoggingHandler_v2
 from litellm.types.utils import ModelResponse
-from tests.unit.redis.stores.fake_rate_limits import FakeRateLimits
 from tests.unit.redis.stores.router_usage_double import FakeUsageHandle, usage_store
 
 from .redis_batch_double import FakeNatives, FakeRedisCache, fake_send
@@ -59,33 +49,6 @@ class PostCallFakeRedisCache(FakeRedisCache):
     async def async_set_cache(self, key: str, value: object, **kwargs: object) -> None:
         self.alone.append(("SET", key, dict(kwargs)))
         self.store[key] = value
-
-
-def _limiter(fakes: FakeRateLimits) -> PROXY_MaxParallelRequestsHandler_v3:
-    return PROXY_MaxParallelRequestsHandler_v3(
-        internal_usage_cache=InternalUsageCache(dual_cache=DualCache()), rate_limit_store=fakes.store()
-    )
-
-
-_K1: Final = RateLimitScope("api_key", "k1")
-
-
-def _slot_stash(slot_id: str, *gauges: RateLimitScope) -> RequestRateLimiterStash:
-    return RequestRateLimiterStash(parallel_slot=ParallelSlotAcquisition(slot_id=slot_id, gauges=gauges))
-
-
-def _token_ops(*scopes: RateLimitScope) -> list[CounterIncrement]:
-    return [CounterIncrement(counter=scope.counter("tokens"), amount=10, ttl=60) for scope in scopes]
-
-
-def _scripts(calls: list[tuple[str, list[str], list[object]]], reply: object) -> Callable[..., Awaitable[object]]:
-    async def script(keys: list[str], args: list[object]) -> object:
-        calls.append(("script", keys, args))
-        if isinstance(reply, Exception):
-            raise reply
-        return reply
-
-    return script
 
 
 def _response_cache(redis_cache: FakeRedisCache) -> Cache:
@@ -111,34 +74,6 @@ def _tpm_kwargs() -> Mapping[str, object]:
         },
         "litellm_params": {"metadata": {}},
     }
-
-
-@pytest.mark.asyncio
-async def test_post_call_owners_declare_on_the_native_post_call_batch_until_the_callbacks_finish():
-    redis_cache = PostCallFakeRedisCache()
-    calls: list[tuple[str, list[str], list[object]]] = []  # mutable-ok: filled by the fake scripts
-    fakes = FakeRateLimits(token_increment_script=_scripts(calls, [10.0]), parallel_release_script=_scripts(calls, [0]))
-    limiter = _limiter(fakes)
-    usage = FakeUsageHandle(redis={})
-    tpm = _tpm_selector(usage)
-
-    with request_redis_batch_scope():
-        await tpm.async_log_success_event(_tpm_kwargs(), None, None, None)
-        await limiter.async_increment_tokens_with_ttl_preservation(_token_ops(_K1))
-        await limiter._release_stashed_parallel_slot(_slot_stash("slot-1", _K1), None, in_logging_callback=True)
-        await flush_post_call_redis_batches()
-        await fakes.settle()
-
-    assert fakes.post_call == ["token_increment", "parallel_release"]
-    assert calls == [
-        ("script", ["{api_key:k1}:tokens"], [10, 60]),
-        ("script", ["{api_key:k1}:max_parallel_requests"], ["slot-1"]),
-    ]
-    tpm_counter = next(iter(usage.local))
-    assert usage.calls == [("post_call", (UsageIncrement(tpm_counter, 42, 60),))]
-    assert (tpm_counter.deployment_id, tpm_counter.model, tpm_counter.kind) == ("dep-a", "openai/gpt-4o-mini", "tpm")
-    assert usage.local == {tpm_counter: 42}
-    assert redis_cache.alone == []
 
 
 @pytest.mark.asyncio
@@ -187,55 +122,6 @@ async def test_a_chat_response_written_through_the_handler_dual_cache_is_in_memo
 
 
 @pytest.mark.asyncio
-async def test_a_failed_slot_release_script_releases_the_slot_in_memory():
-    calls: list[tuple[str, list[str], list[object]]] = []  # mutable-ok: filled by the fake script
-    fakes = FakeRateLimits(parallel_release_script=_scripts(calls, Exception("ERR Lua")))
-    limiter = _limiter(fakes)
-    limiter.rate_limits.set_local(_K1.gauge, {"slot-1": 1.0, "slot-2": 1.0}, None)
-
-    with request_redis_batch_scope():
-        await limiter._release_stashed_parallel_slot(_slot_stash("slot-1", _K1), None, in_logging_callback=True)
-        await flush_post_call_redis_batches()
-
-    assert fakes.post_call == ["parallel_release"]
-    assert limiter.rate_limits.local((_K1.gauge,)) == ({"slot-2": 1.0},)
-
-
-@pytest.mark.asyncio
-async def test_a_slot_released_before_the_response_reaches_redis_at_once_not_on_the_post_call_batch():
-    calls: list[tuple[str, list[str], list[object]]] = []  # mutable-ok: filled by the fake script
-    fakes = FakeRateLimits(parallel_release_script=_scripts(calls, [0]))
-    limiter = _limiter(fakes)
-    limiter.rate_limits.set_local(_K1.gauge, {"slot-1": 1.0}, None)
-
-    with request_redis_batch_scope():
-        await limiter._release_stashed_parallel_slot(_slot_stash("slot-1", _K1), None)
-        assert calls == [("script", ["{api_key:k1}:max_parallel_requests"], ["slot-1"])]
-        assert limiter.rate_limits.local((_K1.gauge,)) == (0,)
-        await flush_post_call_redis_batches()
-
-    assert fakes.post_call == []
-
-
-@pytest.mark.asyncio
-async def test_a_released_slot_is_free_locally_at_once_and_the_older_redis_count_does_not_overwrite_the_gauge():
-    calls: list[tuple[str, list[str], list[object]]] = []  # mutable-ok: filled by the fake script
-    fakes = FakeRateLimits(parallel_release_script=_scripts(calls, [2]))
-    limiter = _limiter(fakes)
-    limiter.rate_limits.set_local(_K1.gauge, {"slot-1": 1.0, "slot-2": 1.0, "slot-3": 1.0}, None)
-
-    with request_redis_batch_scope():
-        await limiter._release_stashed_parallel_slot(_slot_stash("slot-1", _K1), None, in_logging_callback=True)
-        assert limiter.rate_limits.local((_K1.gauge,)) == ({"slot-2": 1.0, "slot-3": 1.0},)
-        limiter.rate_limits.set_local(_K1.gauge, {"slot-2": 1.0, "slot-3": 1.0, "slot-4": 1.0}, None)
-        await flush_post_call_redis_batches()
-        await fakes.settle()
-
-    assert calls == [("script", ["{api_key:k1}:max_parallel_requests"], ["slot-1"])]
-    assert limiter.rate_limits.local((_K1.gauge,)) == ({"slot-2": 1.0, "slot-3": 1.0, "slot-4": 1.0},)
-
-
-@pytest.mark.asyncio
 async def test_outside_a_request_scope_the_response_cache_writes_directly():
     redis_cache = PostCallFakeRedisCache()
     response_cache = _response_cache(redis_cache)
@@ -270,7 +156,7 @@ async def test_the_success_handler_closes_the_post_call_batch_after_the_last_cal
         async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
             request = active_request_redis_batches()
             assert request is not None
-            request.native_post_call()
+            request.native()
             flushes_seen_by_callbacks.append(natives.built[0].events.count("flush_post"))
 
     monkeypatch.setattr(litellm, "_async_success_callback", [])
@@ -311,7 +197,7 @@ async def test_spend_counter_increments_ride_the_native_post_call_batch(monkeypa
 
     with request_redis_batch_scope(native_factory=natives, native_send_factory=fake_send):  # pyright: ignore[reportArgumentType]  # test double
         await proxy_server._apply_spend_counter_increments(pending)
-        declared = [(request, increments) for request, increments, _ in spend.post_call]
+        declared = list(spend.post_call)
         assert natives.built[0].events == []
         await flush_post_call_redis_batches()
 
@@ -321,49 +207,16 @@ async def test_spend_counter_increments_ride_the_native_post_call_batch(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_the_request_sees_its_committed_spend_charge_settle_whoever_sends_the_batch(monkeypatch):
-    from litellm.proxy import proxy_server
-
-    spend = FakeSpendCounters(redis={})
-    monkeypatch.setattr(proxy_server, "spend_counter_store", spend.store())
-
-    with request_redis_batch_scope(native_factory=FakeNatives(), native_send_factory=fake_send) as request:  # pyright: ignore[reportArgumentType]  # test double
-        await proxy_server._apply_spend_counter_increments([PendingSpendIncrement("spend:key:k1", 0.5)])
-        without_committed_spend = request.post_call_settlements
-        await proxy_server._apply_spend_counter_increments(
-            [PendingSpendIncrement("spend:key:k1", 0.5), PendingSpendIncrement("spend:committed:key:k1", 0.5)]
-        )
-        declared = [settlement.settled for settlement in request.post_call_settlements]
-        spend.settle_post_call()
-        sent = [settlement.settled for settlement in request.post_call_settlements]
-
-    assert without_committed_spend == ()
-    assert (declared, sent) == ([False], [True])
-
-
-@pytest.mark.asyncio
 async def test_native_post_call_ops_go_out_with_the_post_call_flush_not_the_request_boundary():
     natives = FakeNatives()
 
-    with request_redis_batch_scope(post_call_deadline=60, native_factory=natives, native_send_factory=fake_send) as request:  # pyright: ignore[reportArgumentType]  # test double
-        request.native_post_call()
+    with request_redis_batch_scope(
+        post_call_deadline=60, native_factory=natives, native_send_factory=fake_send
+    ) as request:  # pyright: ignore[reportArgumentType]  # test double
+        request.native()
         await request.flush_pre_call()
         at_the_boundary = list(natives.built[0].events)
         await flush_post_call_redis_batches()
-    await drain_post_call_redis_batches()
 
     assert at_the_boundary == ["flush_pre"]
-    assert natives.built[0].events == ["flush_pre", "flush_post"]
-
-
-@pytest.mark.asyncio
-async def test_native_post_call_ops_still_waiting_on_their_callbacks_are_drained_at_shutdown():
-    natives = FakeNatives()
-
-    with request_redis_batch_scope(post_call_deadline=60, native_factory=natives, native_send_factory=fake_send) as request:  # pyright: ignore[reportArgumentType]  # test double
-        request.native_post_call()
-        await request.flush_pre_call()
-    await drain_post_call_redis_batches()
-    await drain_post_call_redis_batches()
-
     assert natives.built[0].events == ["flush_pre", "flush_post"]

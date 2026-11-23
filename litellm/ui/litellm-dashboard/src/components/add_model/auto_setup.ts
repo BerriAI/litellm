@@ -50,7 +50,7 @@ const parseModel = (raw: string): ModelIdentity | null => {
     .toLowerCase()
     .split("/")
     .at(-1)!
-    .replace(/^(?:us|eu|apac|global|au|jp|us-gov)\./, "")
+    .replace(/^(?:us|eu|apac|global|au|jp|ca|in|us-gov)\./, "")
     .replace(/^(?:anthropic|openai|zai|deepseek)\./, "")
     .replace(/^databricks-/, "")
     .replace(/@default$/, "")
