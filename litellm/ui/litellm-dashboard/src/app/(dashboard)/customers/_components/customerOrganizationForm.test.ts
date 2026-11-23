@@ -3,29 +3,87 @@ import {
   buildCustomerOrganizationBody,
   defaultCustomerCapPolicy,
   initialCustomerOrganizationFields,
+  type CustomerOrganizationFields,
 } from "./customerOrganizationForm";
+import { budgetEditorFields } from "./customerBudgetForm";
 
 const fields = () => ({
   ...initialCustomerOrganizationFields(),
+  budgetMode: "custom" as const,
   name: " Example customer ",
   customerOrgId: " customer-001 ",
 });
 
 describe("buildCustomerOrganizationBody", () => {
+  it.each(["5", ""])("keeps custom template windows when creating calendar cap %s", (amount) => {
+    const input = fields();
+    const custom = { budget_duration: "7d", max_budget: 3, reset_at: "2027-01-04T00:00:00Z" };
+    expect(
+      buildCustomerOrganizationBody({
+        ...input,
+        defaultGroupId: "group",
+        groups: [
+          {
+            ...budgetEditorFields({
+              budget_limits: [...(amount ? [{ budget_duration: "1mo", max_budget: Number(amount) }] : []), custom],
+            }),
+            id: "group",
+            name: "Group",
+            capPolicy: defaultCustomerCapPolicy,
+          },
+        ],
+      }),
+    ).toMatchObject({
+      body: {
+        default_budgets: [{ budget_limits: [...(amount ? [{ budget_duration: "1mo", max_budget: 5 }] : []), custom] }],
+      },
+    });
+  });
+
+  it("leaves the server default in control until limits are explicitly selected", () => {
+    const input = {
+      ...fields(),
+      budgetMode: "inherit",
+      budgetId: "stale-profile",
+      budgetAmount: "-1",
+      tpm: "invalid",
+    } satisfies CustomerOrganizationFields;
+    const result = buildCustomerOrganizationBody(input);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.body).not.toHaveProperty("budget_id");
+    expect(result.body).not.toHaveProperty("budget");
+  });
+
+  it("creates model-only member groups with trimmed deduplicated restrictions", () => {
+    const group = {
+      ...fields().groups[1],
+      maxBudget: "",
+      allowedModels: [" model-a ", "model-a", " "],
+    };
+    expect(buildCustomerOrganizationBody({ ...fields(), groups: [group] })).toMatchObject({
+      ok: true,
+      body: {
+        default_budgets: [{ name: group.name, cap_policy: group.capPolicy, allowed_models: ["model-a"] }],
+      },
+    });
+  });
+
   it("creates the organization, overall calendar budget, and independent member caps together", () => {
     const input = {
       ...fields(),
-      monthlyBudget: "1000.25",
+      budgetAmount: "1000.25",
       tpm: "3000",
       rpm: "25",
       groups: [
         {
+          ...budgetEditorFields({
+            max_budget: 200.5,
+            budget_duration: "1mo",
+            budget_limits: [{ budget_duration: "12mo", max_budget: 1500 }],
+          }),
           id: "custom",
           name: " power ",
-          monthlyBudget: "200.50",
-          yearlyBudget: "1500",
-          tpm: "",
-          rpm: "",
           capPolicy: defaultCustomerCapPolicy,
         },
       ],
@@ -42,10 +100,9 @@ describe("buildCustomerOrganizationBody", () => {
           {
             name: "power",
             cap_policy: "pause_until_reset",
-            budget_limits: [
-              { budget_duration: "1mo", max_budget: 200.5 },
-              { budget_duration: "12mo", max_budget: 1500 },
-            ],
+            max_budget: 200.5,
+            budget_duration: "1mo",
+            budget_limits: [{ budget_duration: "12mo", max_budget: 1500 }],
           },
         ],
         default_budget_template: "power",
@@ -53,36 +110,86 @@ describe("buildCustomerOrganizationBody", () => {
     });
   });
 
-  it("allows the server to generate an ID and omits an unlimited organization budget", () => {
-    const result = buildCustomerOrganizationBody({ ...fields(), customerOrgId: "  " });
+  it.each(["", "1mo", "12mo", "7d"])(
+    "opts an unlimited custom budget out of the default despite period %j",
+    (budgetDuration) => {
+      const result = buildCustomerOrganizationBody({ ...fields(), customerOrgId: "  ", budgetDuration });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.body).not.toHaveProperty("customer_org_id");
+      expect(result.body).not.toHaveProperty("budget");
+      expect(result.body.budget_id).toBeNull();
+      expect(result.body.default_budget_template).toBe("default_user");
+    },
+  );
+
+  it("uses the profile without sending or validating inactive custom limits", () => {
+    const input = {
+      ...fields(),
+      budgetMode: "profile",
+      budgetId: "saved-profile",
+      budgetAmount: "-1",
+      tpm: "invalid",
+      rpm: "1.5",
+    } satisfies CustomerOrganizationFields;
+    const result = buildCustomerOrganizationBody(input);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.body).not.toHaveProperty("customer_org_id");
+    expect(result.body.budget_id).toBe("saved-profile");
     expect(result.body).not.toHaveProperty("budget");
-    expect(result.body.default_budget_template).toBe("default_user");
+  });
+
+  it("requires a profile selection only in profile mode", () => {
+    expect(buildCustomerOrganizationBody({ ...fields(), budgetMode: "profile" })).toEqual({
+      ok: false,
+      error: "profileRequired",
+    });
+    expect(buildCustomerOrganizationBody(fields()).ok).toBe(true);
+  });
+
+  describe.each([
+    ["", "0"],
+    ["", "50"],
+    ["0", "0"],
+  ])("spend %j and soft budget %j", (budgetAmount, softBudget) => {
+    const hasHardLimit = budgetAmount !== "";
+    it.each(["", "1mo", "12mo", "7d"])("creates organization and group limits with period %j", (budgetDuration) => {
+      const limits = {
+        budgetDuration,
+        softBudget,
+        ...(hasHardLimit ? { allowedModels: [" model-a ", "model-a"], tpm: "0", rpm: "0" } : {}),
+      };
+      const group = { ...fields().groups[1], ...limits, maxBudget: budgetAmount };
+      const input = { ...fields(), ...limits, budgetAmount, budgetId: "saved-profile", groups: [group] };
+      const result = buildCustomerOrganizationBody(input);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      const expected = {
+        soft_budget: Number(softBudget),
+        ...(hasHardLimit ? { max_budget: 0, allowed_models: ["model-a"], tpm_limit: 0, rpm_limit: 0 } : {}),
+        ...(budgetDuration || hasHardLimit ? { budget_duration: budgetDuration || null } : {}),
+      };
+      expect(result.body.budget).toEqual(expected);
+      expect(result.body.default_budgets).toEqual([{ name: group.name, cap_policy: group.capPolicy, ...expected }]);
+      expect(result.body).not.toHaveProperty("budget_id");
+    });
   });
 
   it("keeps zero caps and permits either calendar limit to be omitted", () => {
     const input = {
       ...fields(),
-      monthlyBudget: "0",
+      budgetAmount: "0",
       groups: [
         {
+          ...budgetEditorFields({ max_budget: 0, budget_duration: "1mo" }),
           id: "monthly",
           name: "monthly",
-          monthlyBudget: "0",
-          yearlyBudget: "",
-          tpm: "",
-          rpm: "",
           capPolicy: defaultCustomerCapPolicy,
         },
         {
+          ...budgetEditorFields({ max_budget: 120, budget_duration: "12mo" }),
           id: "yearly",
           name: "yearly",
-          monthlyBudget: "",
-          yearlyBudget: "120",
-          tpm: "",
-          rpm: "",
           capPolicy: defaultCustomerCapPolicy,
         },
       ],
@@ -92,20 +199,22 @@ describe("buildCustomerOrganizationBody", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.body.budget?.max_budget).toBe(0);
-    expect(result.body.default_budgets.map((group) => group.budget_limits)).toEqual([
-      [{ budget_duration: "1mo", max_budget: 0 }],
-      [{ budget_duration: "12mo", max_budget: 120 }],
+    expect(
+      result.body.default_budgets.map(({ budget_duration, max_budget }) => ({ budget_duration, max_budget })),
+    ).toEqual([
+      { budget_duration: "1mo", max_budget: 0 },
+      { budget_duration: "12mo", max_budget: 120 },
     ]);
     expect(result.body.default_budget_template).toBe("yearly");
   });
 
   it.each(["-1", "Infinity", "NaN", "invalid"])("rejects invalid amounts %s at either level", (value) => {
     const input = fields();
-    expect(buildCustomerOrganizationBody({ ...input, monthlyBudget: value })).toEqual({
+    expect(buildCustomerOrganizationBody({ ...input, budgetAmount: value })).toEqual({
       ok: false,
       error: "invalidBudget",
     });
-    for (const field of ["monthlyBudget", "yearlyBudget"] as const) {
+    for (const field of ["maxBudget", "softBudget"] as const) {
       expect(
         buildCustomerOrganizationBody({
           ...input,
@@ -113,6 +222,13 @@ describe("buildCustomerOrganizationBody", () => {
         }),
       ).toEqual({ ok: false, error: "invalidBudget" });
     }
+  });
+
+  it("rejects malformed custom periods before creating an organization", () => {
+    expect(buildCustomerOrganizationBody({ ...fields(), budgetDuration: "6days" })).toEqual({
+      ok: false,
+      error: "invalidBudget",
+    });
   });
 
   it.each(["-1", "1.5", "Infinity", "invalid", "9007199254740992"])("rejects invalid rate limits %s", (value) => {
@@ -139,7 +255,7 @@ describe("buildCustomerOrganizationBody", () => {
     expect(
       buildCustomerOrganizationBody({
         ...input,
-        groups: input.groups.map((group) => ({ ...group, monthlyBudget: " ", yearlyBudget: "" })),
+        groups: input.groups.map((group) => ({ ...group, maxBudget: " " })),
       }),
     ).toEqual({ ok: false, error: "groupLimitRequired" });
   });
@@ -157,7 +273,7 @@ describe("buildCustomerOrganizationBody", () => {
     const result = buildCustomerOrganizationBody({
       ...input,
       rpm: "120",
-      groups: input.groups.map((group) => ({ ...group, monthlyBudget: "", yearlyBudget: "", tpm: "50000", rpm: "0" })),
+      groups: input.groups.map((group) => ({ ...group, maxBudget: "", tpm: "50000", rpm: "0" })),
     });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -166,7 +282,6 @@ describe("buildCustomerOrganizationBody", () => {
       input.groups.map((group) => ({
         name: group.name,
         cap_policy: group.capPolicy,
-        budget_limits: [],
         tpm_limit: 50000,
         rpm_limit: 0,
       })),

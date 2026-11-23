@@ -142,15 +142,50 @@ pub fn deployment_allowed_fails(
 /// What the cooldown rules need to know about the deployment's group.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct GroupShape {
-    /// The deployment is the only one in its model group.
+    /// The deployment is the only one in its model group that could take the failed call.
     pub single_deployment: bool,
     /// The requested group has a fallback configured.
     pub has_fallback_group: bool,
+    /// The failed batch or file call had other deployments to go to, while the deployment alone
+    /// serves the group's other calls: its cooldown covers only batch and file calls
+    /// ([`batch_cooldown_id`]), so those move on and the other calls keep their only deployment.
+    pub batch_calls_only: bool,
+}
+
+impl GroupShape {
+    /// The shape of a failed call, `batch_call` when it was a batch or file call: `alone` says
+    /// whether the deployment was the only one that could take a call of the kind it is given.
+    pub(crate) fn of_failure(
+        batch_call: bool,
+        has_fallback_group: bool,
+        alone: impl Fn(bool) -> bool,
+    ) -> Self {
+        let alone_outside_batches = alone(false);
+        let single_deployment = if batch_call {
+            alone(true)
+        } else {
+            alone_outside_batches
+        };
+        Self {
+            single_deployment,
+            has_fallback_group,
+            batch_calls_only: alone_outside_batches && !single_deployment,
+        }
+    }
+}
+
+/// The cache key of a cooldown covering only the batch and file calls of deployment `id`.
+pub(crate) fn batch_cooldown_id(id: &str) -> String {
+    format!("{id}:batch-calls")
 }
 
 /// `_core_team_model_has_alternatives`: another routable deployment serves the deployment's team
 /// public name.
-pub(crate) fn team_model_has_alternatives(registry: &Registry, deployment: &Deployment) -> bool {
+pub(crate) fn team_model_has_alternatives(
+    registry: &Registry,
+    deployment: &Deployment,
+    batch_call: bool,
+) -> bool {
     let info = &deployment.model_info;
     let (Some(team_id), Some(public_name)) = (&info.team_id, &info.team_public_model_name) else {
         return false;
@@ -161,23 +196,191 @@ pub(crate) fn team_model_has_alternatives(registry: &Registry, deployment: &Depl
             siblings
                 .iter()
                 .filter(|sibling| !sibling.model_info.blocked)
+                .filter(|sibling| deployment.shares_calls_with(sibling, batch_call))
                 .count()
                 > 1
         })
 }
 
 /// `_core_routing_group_has_alternatives`: `model_group` names a callable routing group whose
-/// members span more than one deployment.
-pub(crate) fn routing_group_has_alternatives(registry: &Registry, model_group: &str) -> bool {
+/// members span more than one deployment that could take `deployment`'s place on the failed call.
+pub(crate) fn routing_group_has_alternatives(
+    registry: &Registry,
+    model_group: &str,
+    deployment: &Deployment,
+    batch_call: bool,
+) -> bool {
     let resolved = registry.alias_of(model_group).unwrap_or(model_group);
     registry.routing_group_named(resolved).is_some_and(|group| {
         group
             .models
             .iter()
-            .map(|member| registry.named(member).map_or(0, |members| members.len()))
+            .map(|member| {
+                registry
+                    .named(member)
+                    .map_or(0, |members| deployment.peers_in(&members, batch_call))
+            })
             .sum::<usize>()
             > 1
     })
+}
+
+/// How a failure cools its deployment down. [`cooldown_rule`] decides it from the settings, the
+/// deployment, its group's shape and the failure alone, and [`Health`] then evaluates it against
+/// the cache.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum CooldownRule {
+    /// The failure never cools the deployment down.
+    Never,
+    /// No `allowed_fails` is written anywhere: the status and this minute's share of failed
+    /// requests decide ([`CooldownRule::ratio_cools`]).
+    Ratio {
+        status: u16,
+        single_deployment: bool,
+    },
+    /// An `allowed_fails` is written: the failure counts under `suffix` for `ttl`, and the
+    /// deployment cools once the count passes `allowed`.
+    Counter {
+        allowed: f64,
+        suffix: Option<String>,
+        ttl: Duration,
+    },
+}
+
+impl CooldownRule {
+    /// `_should_cooldown_deployment` without an `allowed_fails`: a 429 with other deployments
+    /// to serve the group, a status no retry clears, or a minute that mostly failed. A group's
+    /// only deployment needs a busy minute in which every request failed.
+    fn ratio_cools(status: u16, single_deployment: bool, outcomes: Outcomes) -> bool {
+        let Outcomes { successes, fails } = outcomes;
+        let total = successes + fails;
+        let percent_fails = if total > 0 {
+            fails as f64 / total as f64
+        } else {
+            0.0
+        };
+        (status == 429 && !single_deployment)
+            || (percent_fails == 1.0 && total >= SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD)
+            || (percent_fails > FAILURE_THRESHOLD_PERCENT
+                && total >= FAILURE_THRESHOLD_MINIMUM_REQUESTS
+                && !single_deployment)
+            || !should_retry_status(status)
+    }
+}
+
+/// `_should_run_cooldown_logic`: the failure, the deployment or the router rules a cooldown out
+/// before any counting.
+fn skips_cooldown_logic(
+    settings: &Settings,
+    deployment: &Deployment,
+    failure: &AttemptError,
+    cooldown: Duration,
+) -> bool {
+    let caller_owned = matches!(
+        failure.kind,
+        FailureKind::Declined
+            | FailureKind::CallerCredentialAuthentication
+            | FailureKind::CallerCredentialRateLimit
+    ) || failure.caller_scoped;
+    let policy = deployment.model_info.allowed_fails_policy.as_ref();
+    let status_cools =
+        is_cooldown_required(failure) || deployment_allowed_fails(policy, failure).is_some();
+    let provider_default = settings
+        .provider_default_deployment_ids
+        .contains(&deployment.id);
+    caller_owned
+        || cooldown.is_zero()
+        || settings.disable_cooldowns
+        || !status_cools
+        || provider_default
+}
+
+/// `_should_run_cooldown_logic` and the branches of `_should_cooldown_deployment`, as the rule a
+/// failure of `deployment` follows when it would cool it down for `cooldown`.
+pub(crate) fn cooldown_rule(
+    settings: &Settings,
+    deployment: &Deployment,
+    shape: GroupShape,
+    failure: &AttemptError,
+    cooldown: Duration,
+) -> CooldownRule {
+    if skips_cooldown_logic(settings, deployment, failure, cooldown) {
+        return CooldownRule::Never;
+    }
+    let status = failure.cooldown_status();
+    let policy_fails = settings.allowed_fails_for(failure);
+    let lone = shape.single_deployment && !shape.has_fallback_group;
+    let deployment_policy = deployment.model_info.allowed_fails_policy.as_ref();
+    let deployment_fails = deployment_allowed_fails(deployment_policy, failure);
+    if shape.single_deployment
+        && status == 402
+        && deployment_fails.is_none()
+        && policy_fails.is_none()
+    {
+        return CooldownRule::Never;
+    }
+    let deployment_allowed = deployment.model_info.allowed_fails;
+    if deployment_policy.is_some() || deployment_allowed.is_some() {
+        // `_should_cooldown_based_on_deployment_policy`: a deployment-wide `allowed_fails`
+        // keeps the lone-deployment safety net; a policy entry naming the error does not.
+        if deployment_fails.is_none()
+            && lone
+            && (deployment_allowed.is_some() || policy_fails.is_none())
+        {
+            return CooldownRule::Never;
+        }
+        let (allowed, suffix) = match deployment_fails {
+            Some(allowed) => (
+                Some(allowed),
+                failure.class_names().first().map(|name| (*name).to_owned()),
+            ),
+            None => (
+                deployment_allowed.map(f64::from),
+                deployment_allowed.map(|_| "generic".to_owned()),
+            ),
+        };
+        let allowed = allowed
+            .or_else(|| policy_fails.map(f64::from))
+            .unwrap_or_else(|| f64::from(settings.effective_allowed_fails()));
+        let ttl = configured_cooldown(deployment).unwrap_or_else(|| settings.fails_window());
+        return CooldownRule::Counter {
+            allowed,
+            suffix,
+            ttl,
+        };
+    }
+    if settings.allowed_fails_policy.is_none() && !settings.allowed_fails_set() {
+        return CooldownRule::Ratio {
+            status,
+            single_deployment: shape.single_deployment,
+        };
+    }
+    if lone && policy_fails.is_none() {
+        return CooldownRule::Never;
+    }
+    let allowed = policy_fails.unwrap_or_else(|| settings.effective_allowed_fails());
+    CooldownRule::Counter {
+        allowed: f64::from(allowed),
+        suffix: None,
+        ttl: settings.fails_window(),
+    }
+}
+
+/// The deployment's own `cooldown_time`: `model_info` first, then `litellm_params`
+/// (`_first_present(model_info, litellm_params, key="cooldown_time")`). It is both the
+/// cooldown and the TTL of the deployment's `allowed_fails:generic` counter.
+fn configured_cooldown(deployment: &Deployment) -> Option<Duration> {
+    deployment
+        .model_info
+        .cooldown_time
+        .or_else(|| {
+            deployment
+                .raw_params
+                .get("cooldown_time")
+                .and_then(|v| v.as_f64())
+        })
+        .filter(|seconds| *seconds >= 0.0)
+        .and_then(|seconds| Duration::try_from_secs_f64(seconds).ok())
 }
 
 /// An outcome the router did not see itself (`Health.report`).
@@ -227,6 +430,32 @@ impl<C: RouterCache> Health<C> {
             .filter_map(|(id, value)| {
                 let value = value?;
                 (value.timestamp + value.cooldown_time - now > 0.0).then(|| (id.clone(), value))
+            })
+            .collect())
+    }
+
+    /// [`Self::active_cooldowns`] for a call, which on a batch or file call (`batch_call`) also
+    /// finds the cooldowns covering only those calls, each under its deployment's own id.
+    pub async fn cooling(
+        &self,
+        ids: &[String],
+        batch_call: bool,
+    ) -> Result<Vec<(String, CooldownValue)>, Error> {
+        if !batch_call {
+            return self.active_cooldowns(ids).await;
+        }
+        let batch_ids: Vec<String> = ids.iter().map(|id| batch_cooldown_id(id)).collect();
+        let found = self
+            .active_cooldowns(&[ids, batch_ids.as_slice()].concat())
+            .await?;
+        Ok(ids
+            .iter()
+            .zip(&batch_ids)
+            .filter_map(|(id, batch_id)| {
+                found
+                    .iter()
+                    .find(|(cooled, _)| cooled == id || cooled == batch_id)
+                    .map(|(_, value)| (id.clone(), value.clone()))
             })
             .collect())
     }
@@ -298,23 +527,6 @@ impl<C: RouterCache> Health<C> {
             .unwrap_or(settings.cooldown_time)
     }
 
-    /// The deployment's own `cooldown_time`: `model_info` first, then `litellm_params`
-    /// (`_first_present(model_info, litellm_params, key="cooldown_time")`). It is both the
-    /// cooldown and the TTL of the deployment's `allowed_fails:generic` counter.
-    fn configured_cooldown(deployment: &Deployment) -> Option<Duration> {
-        deployment
-            .model_info
-            .cooldown_time
-            .or_else(|| {
-                deployment
-                    .raw_params
-                    .get("cooldown_time")
-                    .and_then(|v| v.as_f64())
-            })
-            .filter(|seconds| *seconds >= 0.0)
-            .and_then(|seconds| Duration::try_from_secs_f64(seconds).ok())
-    }
-
     /// Record a failed attempt and cool the deployment down when the rules say so. Returns the
     /// cooldown applied, if any.
     pub async fn record_failure(
@@ -344,133 +556,39 @@ impl<C: RouterCache> Health<C> {
         failure: &AttemptError,
         cooldown: Duration,
     ) -> Result<Option<Duration>, Error> {
-        if !Self::should_run_cooldown_logic(settings, deployment, failure, cooldown) {
-            return Ok(None);
-        }
-        if !self
-            .should_cooldown(settings, deployment, shape, failure)
-            .await?
-        {
-            return Ok(None);
-        }
-        debug!(deployment_id = %deployment.id, cooldown_seconds = cooldown.as_secs_f64(), "cooling deployment down");
-        self.add_cooldown(&deployment.id, failure, cooldown).await?;
-        Ok(Some(cooldown))
-    }
-
-    /// `_should_run_cooldown_logic`.
-    fn should_run_cooldown_logic(
-        settings: &Settings,
-        deployment: &Deployment,
-        failure: &AttemptError,
-        cooldown: Duration,
-    ) -> bool {
-        !matches!(
-            failure.kind,
-            FailureKind::Declined
-                | FailureKind::CallerCredentialAuthentication
-                | FailureKind::CallerCredentialRateLimit
-        ) && !failure.caller_scoped
-            && !cooldown.is_zero()
-            && !settings.disable_cooldowns
-            && (is_cooldown_required(failure)
-                || deployment_allowed_fails(
-                    deployment.model_info.allowed_fails_policy.as_ref(),
-                    failure,
-                )
-                .is_some())
-            && !settings
-                .provider_default_deployment_ids
-                .contains(&deployment.id)
-    }
-
-    /// `_should_cooldown_deployment`.
-    async fn should_cooldown(
-        &self,
-        settings: &Settings,
-        deployment: &Deployment,
-        shape: GroupShape,
-        failure: &AttemptError,
-    ) -> Result<bool, Error> {
-        let status = failure.cooldown_status();
-        let policy_fails = settings.allowed_fails_for(failure);
-        let lone = shape.single_deployment && !shape.has_fallback_group;
-        let deployment_policy = deployment.model_info.allowed_fails_policy.as_ref();
-        let deployment_fails = deployment_allowed_fails(deployment_policy, failure);
-        if shape.single_deployment
-            && status == 402
-            && deployment_fails.is_none()
-            && policy_fails.is_none()
-        {
-            return Ok(false);
-        }
-        let deployment_allowed = deployment.model_info.allowed_fails;
-        if deployment_policy.is_some() || deployment_allowed.is_some() {
-            // `_should_cooldown_based_on_deployment_policy`: a deployment-wide `allowed_fails`
-            // keeps the lone-deployment safety net; a policy entry naming the error does not.
-            if deployment_fails.is_none()
-                && lone
-                && (deployment_allowed.is_some() || policy_fails.is_none())
-            {
-                return Ok(false);
+        let cools = match cooldown_rule(settings, deployment, shape, failure, cooldown) {
+            CooldownRule::Never => false,
+            CooldownRule::Ratio {
+                status,
+                single_deployment,
+            } => {
+                let outcomes = self.outcomes_this_minute(&deployment.id).await?;
+                CooldownRule::ratio_cools(status, single_deployment, outcomes)
             }
-            let (allowed, suffix) = match deployment_fails {
-                Some(allowed) => (
-                    Some(allowed),
-                    failure.class_names().first().map(|name| (*name).to_owned()),
-                ),
-                None => (
-                    deployment_allowed.map(f64::from),
-                    deployment_allowed.map(|_| "generic".to_owned()),
-                ),
-            };
-            let allowed = allowed
-                .or_else(|| policy_fails.map(f64::from))
-                .unwrap_or_else(|| f64::from(settings.effective_allowed_fails()));
-            let ttl =
-                Self::configured_cooldown(deployment).unwrap_or_else(|| settings.fails_window());
-            return self
-                .exceeds_allowed_fails(&deployment.id, suffix.as_deref(), allowed, ttl)
-                .await;
+            // `should_cooldown_based_on_allowed_fails_policy`: count this failure, then compare.
+            CooldownRule::Counter {
+                allowed,
+                suffix,
+                ttl,
+            } => {
+                let fails = self
+                    .cache
+                    .increment_allowed_fails(&deployment.id, suffix.as_deref(), ttl)
+                    .await?;
+                fails > allowed
+            }
+        };
+        if !cools {
+            return Ok(None);
         }
-        if settings.allowed_fails_policy.is_none() && !settings.allowed_fails_set() {
-            let Outcomes { successes, fails } = self.outcomes_this_minute(&deployment.id).await?;
-            let total = successes + fails;
-            let percent_fails = if total > 0 {
-                fails as f64 / total as f64
-            } else {
-                0.0
-            };
-            return Ok((status == 429 && !shape.single_deployment)
-                || (percent_fails == 1.0 && total >= SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD)
-                || (percent_fails > FAILURE_THRESHOLD_PERCENT
-                    && total >= FAILURE_THRESHOLD_MINIMUM_REQUESTS
-                    && !shape.single_deployment)
-                || !should_retry_status(status));
-        }
-        if lone && policy_fails.is_none() {
-            return Ok(false);
-        }
-        let allowed = policy_fails.unwrap_or_else(|| settings.effective_allowed_fails());
-        self.exceeds_allowed_fails(
-            &deployment.id,
-            None,
-            f64::from(allowed),
-            settings.fails_window(),
-        )
-        .await
-    }
-
-    /// `should_cooldown_based_on_allowed_fails_policy`: count this failure, then compare.
-    async fn exceeds_allowed_fails(
-        &self,
-        id: &str,
-        suffix: Option<&str>,
-        allowed: f64,
-        ttl: Duration,
-    ) -> Result<bool, Error> {
-        let fails = self.cache.increment_allowed_fails(id, suffix, ttl).await?;
-        Ok(fails > allowed)
+        debug!(deployment_id = %deployment.id, cooldown_seconds = cooldown.as_secs_f64(), batch_calls_only = shape.batch_calls_only, "cooling deployment down");
+        let id = if shape.batch_calls_only {
+            batch_cooldown_id(&deployment.id)
+        } else {
+            deployment.id.clone()
+        };
+        self.add_cooldown(&id, failure, cooldown).await?;
+        Ok(Some(cooldown))
     }
 
     /// Count a success, and the tokens and request against the deployment's per-minute usage
@@ -559,8 +677,9 @@ mod tests {
     use crate::{
         cache::{InMemoryRouterCache, UsageCounts},
         config::{RouterConfig, RouterDynamicConfig},
-        registry::{DeploymentSpec, RoutingGroupSpec},
+        registry::DeploymentSpec,
     };
+    use litellm_router_types::RoutingGroupSpec;
 
     #[rstest]
     #[case::rate_limit(FailureKind::RateLimit, Some(429), true)]
@@ -742,6 +861,367 @@ mod tests {
         assert_eq!(cooldown.is_some(), cooled);
     }
 
+    const MINUTE: Duration = Duration::from_secs(60);
+
+    fn failed(kind: FailureKind, status: u16) -> AttemptError {
+        AttemptError::new(kind, Some(status))
+    }
+
+    fn server_error() -> AttemptError {
+        failed(FailureKind::InternalServer, 500)
+    }
+
+    fn caller_scoped() -> AttemptError {
+        let mut failure = server_error();
+        failure.caller_scoped = true;
+        failure
+    }
+
+    fn allowed_fails(allowed: u32) -> RouterDynamicConfig {
+        RouterDynamicConfig {
+            allowed_fails: Some(allowed),
+            ..RouterDynamicConfig::default()
+        }
+    }
+
+    fn router(config: serde_json::Value, dynamic: RouterDynamicConfig) -> Settings {
+        let config: RouterConfig = serde_json::from_value(config).unwrap();
+        Settings::new(&config, Arc::new(dynamic))
+    }
+
+    fn defaults() -> Settings {
+        settings(RouterDynamicConfig::default())
+    }
+
+    fn rate_limits_allowed(allowed: u32) -> Settings {
+        router(
+            serde_json::json!({"allowed_fails_policy": {"RateLimitErrorAllowedFails": allowed}}),
+            RouterDynamicConfig::default(),
+        )
+    }
+
+    const ALONE: GroupShape = GroupShape {
+        single_deployment: true,
+        has_fallback_group: false,
+        batch_calls_only: false,
+    };
+    const ALONE_WITH_A_FALLBACK: GroupShape = GroupShape {
+        single_deployment: true,
+        has_fallback_group: true,
+        batch_calls_only: false,
+    };
+    const AMONG_OTHERS: GroupShape = GroupShape {
+        single_deployment: false,
+        has_fallback_group: false,
+        batch_calls_only: false,
+    };
+
+    fn ratio(status: u16, single_deployment: bool) -> CooldownRule {
+        CooldownRule::Ratio {
+            status,
+            single_deployment,
+        }
+    }
+
+    fn counter(allowed: f64, suffix: Option<&str>, ttl: Duration) -> CooldownRule {
+        CooldownRule::Counter {
+            allowed,
+            suffix: suffix.map(str::to_owned),
+            ttl,
+        }
+    }
+
+    /// The counter of a router with no `cooldown_time` lives for `DEFAULT_COOLDOWN_TIME`.
+    fn default_window() -> Duration {
+        defaults().fails_window()
+    }
+
+    #[rstest]
+    // The failure ratio of the minute decides while no `allowed_fails` is written.
+    #[case::a_lone_deployment_with_a_fallback_and_no_allowed_fails(
+        defaults(), serde_json::json!({}), ALONE_WITH_A_FALLBACK, server_error(), ratio(500, true)
+    )]
+    #[case::one_of_several_with_no_allowed_fails(
+        defaults(), serde_json::json!({}), AMONG_OTHERS, failed(FailureKind::RateLimit, 429), ratio(429, false)
+    )]
+    #[case::an_allowed_fails_that_is_only_the_process_default(
+        settings(RouterDynamicConfig { allowed_fails_is_default: true, ..allowed_fails(3) }),
+        serde_json::json!({}), AMONG_OTHERS, server_error(), ratio(500, false)
+    )]
+    #[case::an_unreadable_status_reads_as_a_500(
+        defaults(), serde_json::json!({}), AMONG_OTHERS, AttemptError::new(FailureKind::Other, None), ratio(500, false)
+    )]
+    // A written `allowed_fails` counts instead.
+    #[case::a_lone_deployment_with_a_fallback_and_allowed_fails_zero(
+        settings(allowed_fails(0)), serde_json::json!({}), ALONE_WITH_A_FALLBACK, server_error(),
+        counter(0.0, None, default_window())
+    )]
+    #[case::one_of_several_with_allowed_fails(
+        settings(allowed_fails(2)), serde_json::json!({}), AMONG_OTHERS, server_error(),
+        counter(2.0, None, default_window())
+    )]
+    #[case::the_counter_lives_for_the_routers_cooldown(
+        router(serde_json::json!({"cooldown_time": 60}), allowed_fails(2)),
+        serde_json::json!({}), AMONG_OTHERS, server_error(), counter(2.0, None, MINUTE)
+    )]
+    #[case::a_lone_deployment_without_a_fallback_is_never_counted_out(
+        settings(allowed_fails(0)), serde_json::json!({}), ALONE, server_error(), CooldownRule::Never
+    )]
+    // A router policy that names the failure counts, lone deployment or not.
+    #[case::a_router_policy_names_the_failure(
+        rate_limits_allowed(4), serde_json::json!({}), ALONE, failed(FailureKind::RateLimit, 429),
+        counter(4.0, None, default_window())
+    )]
+    #[case::a_router_policy_that_does_not_name_it_counts_the_default_three(
+        rate_limits_allowed(4), serde_json::json!({}), AMONG_OTHERS, server_error(),
+        counter(3.0, None, default_window())
+    )]
+    #[case::a_router_policy_that_does_not_name_it_spares_a_lone_deployment(
+        rate_limits_allowed(4), serde_json::json!({}), ALONE, server_error(), CooldownRule::Never
+    )]
+    // The deployment's own `allowed_fails` and policy count under their own key.
+    #[case::the_deployments_allowed_fails(
+        defaults(), serde_json::json!({"allowed_fails": 2}), AMONG_OTHERS, server_error(),
+        counter(2.0, Some("generic"), default_window())
+    )]
+    #[case::its_counter_lives_for_the_deployments_cooldown(
+        defaults(), serde_json::json!({"allowed_fails": 2, "cooldown_time": 60}), AMONG_OTHERS, server_error(),
+        counter(2.0, Some("generic"), MINUTE)
+    )]
+    #[case::the_deployments_allowed_fails_spares_it_when_alone(
+        rate_limits_allowed(4), serde_json::json!({"allowed_fails": 2}), ALONE,
+        failed(FailureKind::RateLimit, 429), CooldownRule::Never
+    )]
+    #[case::the_deployments_policy_names_the_failure_even_when_alone(
+        defaults(), serde_json::json!({"allowed_fails_policy": {"RateLimitErrorAllowedFails": 1}}), ALONE,
+        failed(FailureKind::RateLimit, 429), counter(1.0, Some("RateLimitError"), default_window())
+    )]
+    #[case::the_deployments_policy_cools_a_status_that_otherwise_would_not(
+        defaults(), serde_json::json!({"allowed_fails_policy": {"BadRequestErrorAllowedFails": 0}}), AMONG_OTHERS,
+        failed(FailureKind::BadRequest, 400), counter(0.0, Some("BadRequestError"), default_window())
+    )]
+    #[case::a_deployment_policy_that_does_not_name_it_falls_to_the_routers(
+        rate_limits_allowed(4), serde_json::json!({"allowed_fails_policy": {"BadRequestErrorAllowedFails": 0}}),
+        ALONE, failed(FailureKind::RateLimit, 429), counter(4.0, None, default_window())
+    )]
+    #[case::a_deployment_policy_that_does_not_name_it_spares_a_lone_deployment(
+        defaults(), serde_json::json!({"allowed_fails_policy": {"BadRequestErrorAllowedFails": 0}}),
+        ALONE, failed(FailureKind::RateLimit, 429), CooldownRule::Never
+    )]
+    #[case::a_deployment_policy_that_does_not_name_it_counts_the_default_three(
+        defaults(), serde_json::json!({"allowed_fails_policy": {"BadRequestErrorAllowedFails": 0}}),
+        AMONG_OTHERS, failed(FailureKind::RateLimit, 429), counter(3.0, None, default_window())
+    )]
+    // What rules a cooldown out before any rule is picked.
+    #[case::a_status_that_needs_no_cooldown(
+        defaults(), serde_json::json!({}), AMONG_OTHERS, failed(FailureKind::BadRequest, 400), CooldownRule::Never
+    )]
+    #[case::a_request_the_deployment_declined(
+        defaults(), serde_json::json!({}), AMONG_OTHERS, failed(FailureKind::Declined, 500), CooldownRule::Never
+    )]
+    #[case::a_failure_of_the_callers_own_credential(
+        defaults(), serde_json::json!({}), AMONG_OTHERS, caller_scoped(), CooldownRule::Never
+    )]
+    #[case::cooldowns_are_off(
+        router(serde_json::json!({"disable_cooldowns": true}), RouterDynamicConfig::default()),
+        serde_json::json!({}), AMONG_OTHERS, server_error(), CooldownRule::Never
+    )]
+    #[case::a_provider_default_deployment(
+        router(serde_json::json!({"provider_default_deployment_ids": ["a"]}), RouterDynamicConfig::default()),
+        serde_json::json!({}), AMONG_OTHERS, server_error(), CooldownRule::Never
+    )]
+    #[case::a_lone_deployment_out_of_credit(
+        defaults(), serde_json::json!({}), ALONE_WITH_A_FALLBACK, failed(FailureKind::Other, 402), CooldownRule::Never
+    )]
+    #[case::one_of_several_out_of_credit(
+        defaults(), serde_json::json!({}), AMONG_OTHERS, failed(FailureKind::Other, 402), ratio(402, false)
+    )]
+    fn the_cooldown_rule_follows_where_allowed_fails_is_written(
+        #[case] settings: Settings,
+        #[case] info: serde_json::Value,
+        #[case] shape: GroupShape,
+        #[case] failure: AttemptError,
+        #[case] expected: CooldownRule,
+    ) {
+        let deployment = Deployment::from_spec(deployment("a", info)).unwrap();
+        let rule = cooldown_rule(&settings, &deployment, shape, &failure, MINUTE);
+        assert_eq!(rule, expected);
+    }
+
+    #[rstest]
+    fn a_cooldown_of_no_time_is_never_applied() {
+        let deployment = Deployment::from_spec(deployment("a", serde_json::json!({}))).unwrap();
+        let rule = cooldown_rule(
+            &defaults(),
+            &deployment,
+            AMONG_OTHERS,
+            &server_error(),
+            Duration::ZERO,
+        );
+        assert_eq!(rule, CooldownRule::Never);
+    }
+
+    #[rstest]
+    #[case::a_lone_deployments_500s_below_the_traffic_floor(500, true, 0, 999, false)]
+    #[case::a_lone_deployment_whose_busy_minute_all_failed(500, true, 0, 1000, true)]
+    #[case::a_lone_deployment_with_one_success_in_a_busy_minute(500, true, 1, 1000, false)]
+    #[case::a_lone_deployments_rate_limit(429, true, 1, 0, false)]
+    #[case::a_rate_limit_among_others(429, false, 1, 0, true)]
+    #[case::most_of_the_minute_failed_among_others(500, false, 2, 3, true)]
+    #[case::half_of_the_minute_failed_among_others(500, false, 3, 3, false)]
+    #[case::too_few_requests_to_judge(500, false, 0, 4, false)]
+    #[case::a_status_no_retry_clears(401, true, 5, 1, true)]
+    #[case::a_first_failure_with_nothing_counted(500, false, 0, 0, false)]
+    fn the_failure_ratio_cools_by_status_then_by_the_minutes_traffic(
+        #[case] status: u16,
+        #[case] single_deployment: bool,
+        #[case] successes: u64,
+        #[case] fails: u64,
+        #[case] cools: bool,
+    ) {
+        let outcomes = Outcomes { successes, fails };
+        assert_eq!(
+            CooldownRule::ratio_cools(status, single_deployment, outcomes),
+            cools
+        );
+    }
+
+    /// A counter counts the failure itself before it compares, so `allowed_fails: 0` cools on
+    /// the first failure.
+    #[rstest]
+    #[case::allowed_fails_zero(0, true, true)]
+    #[case::allowed_fails_one(1, false, true)]
+    #[case::allowed_fails_two(2, false, false)]
+    #[tokio::test]
+    async fn a_counter_cools_once_the_failures_pass_what_is_allowed(
+        #[case] allowed: u32,
+        #[case] first_cools: bool,
+        #[case] second_cools: bool,
+    ) {
+        let health = health();
+        let settings = settings(allowed_fails(allowed));
+        let deployment = Deployment::from_spec(deployment("a", serde_json::json!({}))).unwrap();
+        let fail = || async {
+            health
+                .record_failure(
+                    &settings,
+                    &deployment,
+                    ALONE_WITH_A_FALLBACK,
+                    None,
+                    &server_error(),
+                )
+                .await
+                .unwrap()
+                .is_some()
+        };
+        assert_eq!((fail().await, fail().await), (first_cools, second_cools));
+    }
+
+    /// A lone deployment with a fallback group and no `allowed_fails` keeps serving through 500s.
+    #[rstest]
+    #[tokio::test]
+    async fn the_failure_ratio_spares_a_lone_deployment_that_fails_with_500s() {
+        let health = health();
+        let deployment = Deployment::from_spec(deployment("a", serde_json::json!({}))).unwrap();
+        let fail = || async {
+            health
+                .record_failure(
+                    &defaults(),
+                    &deployment,
+                    ALONE_WITH_A_FALLBACK,
+                    None,
+                    &server_error(),
+                )
+                .await
+                .unwrap()
+        };
+        assert_eq!((fail().await, fail().await), (None, None));
+        assert_eq!(health.outcomes_this_minute("a").await.unwrap().fails, 2);
+    }
+
+    /// One of several deployments cools once most of a minute of at least five requests failed,
+    /// read from what this worker counted.
+    #[rstest]
+    #[tokio::test]
+    async fn the_failure_ratio_cools_one_of_several_on_the_fifth_failure_of_a_minute() {
+        let health = health();
+        let deployment = Deployment::from_spec(deployment("a", serde_json::json!({}))).unwrap();
+        let fail = || async {
+            health
+                .record_failure(
+                    &defaults(),
+                    &deployment,
+                    AMONG_OTHERS,
+                    None,
+                    &server_error(),
+                )
+                .await
+                .unwrap()
+                .is_some()
+        };
+        let cooled = (
+            fail().await,
+            fail().await,
+            fail().await,
+            fail().await,
+            fail().await,
+        );
+        assert_eq!(cooled, (false, false, false, false, true));
+    }
+
+    /// What a failure counted, read back as the next count under the router's key, the
+    /// deployment's `generic` key and the key of the failure's class.
+    #[rstest]
+    #[case::the_routers_allowed_fails(
+        settings(allowed_fails(5)), serde_json::json!({}), AMONG_OTHERS, [2.0, 1.0, 1.0]
+    )]
+    #[case::the_deployments_allowed_fails(
+        defaults(), serde_json::json!({"allowed_fails": 5}), AMONG_OTHERS, [1.0, 2.0, 1.0]
+    )]
+    #[case::the_deployments_policy(
+        defaults(), serde_json::json!({"allowed_fails_policy": {"RateLimitErrorAllowedFails": 5}}),
+        AMONG_OTHERS, [1.0, 1.0, 2.0]
+    )]
+    #[case::the_failure_ratio_counts_nothing(defaults(), serde_json::json!({}), AMONG_OTHERS, [1.0, 1.0, 1.0])]
+    #[case::a_failure_that_never_cools_counts_nothing(
+        settings(allowed_fails(5)), serde_json::json!({}), ALONE, [1.0, 1.0, 1.0]
+    )]
+    #[tokio::test]
+    async fn a_failure_counts_under_the_key_of_the_rule_it_follows(
+        #[case] settings: Settings,
+        #[case] info: serde_json::Value,
+        #[case] shape: GroupShape,
+        #[case] next_counts: [f64; 3],
+    ) {
+        let health = health();
+        let deployment = Deployment::from_spec(deployment("a", info)).unwrap();
+        health
+            .record_failure(
+                &settings,
+                &deployment,
+                shape,
+                None,
+                &failed(FailureKind::RateLimit, 429),
+            )
+            .await
+            .unwrap();
+        let cache = health.cache();
+        let next = |suffix| async move {
+            cache
+                .increment_allowed_fails("a", suffix, MINUTE)
+                .await
+                .unwrap()
+        };
+        assert_eq!(
+            [
+                next(None).await,
+                next(Some("generic")).await,
+                next(Some("RateLimitError")).await
+            ],
+            next_counts
+        );
+    }
+
     fn team(id: &str, team_id: &str, blocked: bool) -> DeploymentSpec {
         deployment(
             id,
@@ -765,7 +1245,10 @@ mod tests {
         )
         .unwrap();
         let first = registry.deployment("a").unwrap();
-        assert_eq!(team_model_has_alternatives(&registry, &first), expected);
+        assert_eq!(
+            team_model_has_alternatives(&registry, &first, false),
+            expected
+        );
     }
 
     #[rstest]
@@ -791,8 +1274,9 @@ mod tests {
             vec![group],
         )
         .unwrap();
+        let first = registry.deployment("a").unwrap();
         assert_eq!(
-            routing_group_has_alternatives(&registry, requested),
+            routing_group_has_alternatives(&registry, requested, &first, false),
             expected
         );
     }

@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 from pydantic import TypeAdapter
-from typing_extensions import NotRequired, ReadOnly, TypedDict
+from typing_extensions import NotRequired, ReadOnly, TypedDict, Unpack
 
 import litellm
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
@@ -29,6 +29,7 @@ from litellm.types.containers.main import (
     DeleteContainerFileResponse,
 )
 from litellm.types.router import GenericLiteLLMParams
+from litellm.types.utils import FileTypes
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -69,6 +70,10 @@ class ContainerResponseBody(TypedDict, total=False):
     """The fields this handler reads off a container API JSON body."""
 
     error: ReadOnly[ContainerErrorDetail]
+
+
+class _ContainerRequestKwargs(TypedDict, total=False, extra_items=object):
+    file: ReadOnly[FileTypes]
 
 
 _ContainerResponseModel = ContainerFileListResponse | ContainerFileObject | DeleteContainerFileResponse
@@ -201,7 +206,7 @@ def _transform_response(
 
 
 def _prepare_multipart_file_upload(
-    file: Any,
+    file: FileTypes,
     headers: dict[str, object],
 ) -> tuple[dict[str, tuple[str, bytes, str]], dict[str, object]]:
     """
@@ -294,7 +299,7 @@ class GenericContainerHandler:
         timeout: float | httpx.Timeout = 600,
         _is_async: bool = False,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
-        **kwargs: object,
+        **kwargs: Unpack[_ContainerRequestKwargs],
     ) -> Any | Coroutine[object, object, Any]:
         """
         Generic handler for any container file endpoint.
@@ -346,7 +351,7 @@ class GenericContainerHandler:
         extra_query: dict[str, object] | None = None,
         timeout: float | httpx.Timeout = 600,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
-        **kwargs: object,
+        **kwargs: Unpack[_ContainerRequestKwargs],
     ) -> ContainerEndpointResponse:
         """Synchronous request handler."""
         endpoint_config: Final = _get_endpoint_config(endpoint_name)
@@ -426,7 +431,7 @@ class GenericContainerHandler:
         extra_query: dict[str, object] | None = None,
         timeout: float | httpx.Timeout = 600,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
-        **kwargs: object,
+        **kwargs: Unpack[_ContainerRequestKwargs],
     ) -> ContainerEndpointResponse:
         """Asynchronous request handler."""
         endpoint_config: Final = _get_endpoint_config(endpoint_name)

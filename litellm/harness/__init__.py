@@ -26,9 +26,13 @@ from litellm.harness.errors import (
     StateIncompatible,
 )
 from litellm.harness.evaluation import (
+    AgentInput,
+    AgentOutput,
     CheckResult,
     CommandCheck,
+    EvalAgent,
     EvalCheck,
+    EvalOutput,
     EvalRun,
     EvalScorecard,
     EvalStatus,
@@ -38,6 +42,7 @@ from litellm.harness.evaluation import (
     JudgeCheck,
     PredicateCheck,
     aagent_eval,
+    aagent_eval_attempt,
     agent_eval,
 )
 from litellm.harness.options import (
@@ -75,6 +80,8 @@ from litellm.harness.types import (
 )
 
 __all__ = (
+    "AgentInput",
+    "AgentOutput",
     "Approval",
     "AsyncEventStream",
     "AsyncSession",
@@ -87,7 +94,9 @@ __all__ = (
     "Compaction",
     "DeepAgentsOptions",
     "Done",
+    "EvalAgent",
     "EvalCheck",
+    "EvalOutput",
     "EvalRun",
     "EvalScorecard",
     "EvalStatus",
@@ -120,6 +129,7 @@ __all__ = (
     "Usage",
     "aagent",
     "aagent_eval",
+    "aagent_eval_attempt",
     "aagent_resume",
     "aagent_session",
     "agent",

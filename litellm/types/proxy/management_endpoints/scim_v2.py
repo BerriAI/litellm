@@ -1,4 +1,4 @@
-from typing import Any, Final, Literal, Optional, TypeAlias, Union
+from typing import Final, Literal, Optional, TypeAlias, Union
 
 from fastapi import HTTPException
 from pydantic import (
@@ -20,6 +20,9 @@ SCIM_ENTERPRISE_USER_SCHEMA: Final = "urn:ietf:params:scim:schemas:extension:ent
 SCIM_ENTERPRISE_METADATA_KEY: Final = "scim_enterprise"
 SCIM_ENTITLEMENTS_METADATA_KEY: Final = "scim_entitlements"
 SCIM_ROLES_METADATA_KEY: Final = "scim_roles"
+SCIM_DIRECTORY_METADATA_KEYS: Final[frozenset[str]] = frozenset(
+    {SCIM_ENTERPRISE_METADATA_KEY, SCIM_ENTITLEMENTS_METADATA_KEY, SCIM_ROLES_METADATA_KEY}
+)
 
 SCIM_MANAGED_TEAM_METADATA_KEY: Final = "scim_managed"
 SCIM_TEAM_DATA_METADATA_KEY: Final = "scim_data"
@@ -237,7 +240,7 @@ class SCIMServiceProviderConfig(LiteLLMBaseModel):
     sort: SCIMFeature = SCIMFeature(supported=False)
     etag: SCIMFeature = SCIMFeature(supported=False)
     authenticationSchemes: list[dict[str, object]] | None = None
-    meta: dict[str, Any] | None = None
+    meta: dict[str, object] | None = None
 
 
 # SCIM ResourceType Models (RFC 7643 Section 6)

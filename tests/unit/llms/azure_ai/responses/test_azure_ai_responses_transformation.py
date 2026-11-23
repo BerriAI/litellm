@@ -16,7 +16,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
 from litellm.llms.azure_ai.common_utils import AZURE_AI_AGENTS_SCOPE, AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY
 from litellm.llms.azure_ai.responses.transformation import AzureAIResponsesAPIConfig
-from litellm.responses.main import _will_bridge_to_chat_completions, provider_stores_the_conversation
+from litellm.responses.main import will_bridge_to_chat_completions, provider_stores_the_conversation
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams, ResponsesAPIResponse
 from litellm.types.router import GenericLiteLLMParams
@@ -167,7 +167,7 @@ def test_model_router_calls_responses_natively_on_a_foundry_project_or_resource(
     "api_base,bridged", [(FOUNDRY_PROJECT_BASE, False), (GATEWAY_PROJECT_BASE, False), (SERVERLESS_BASE, True)]
 )
 def test_will_bridge_to_chat_completions_follows_host(api_base, bridged):
-    assert _will_bridge_to_chat_completions("gpt-5.6-luna", "azure_ai", False, None, api_base) is bridged
+    assert will_bridge_to_chat_completions("gpt-5.6-luna", "azure_ai", False, None, api_base) is bridged
 
 
 @pytest.mark.parametrize(
@@ -729,7 +729,10 @@ async def test_a_model_router_keeps_the_namespace_of_custom_tool_history():
 
     await litellm.aresponses(
         model="azure_ai/model_router/model-router",
-        input=[{**item, "namespace": "editor"} if item["type"] == "custom_tool_call" else item for item in CUSTOM_TOOL_HISTORY],
+        input=[
+            {**item, "namespace": "editor"} if item["type"] == "custom_tool_call" else item
+            for item in CUSTOM_TOOL_HISTORY
+        ],
         api_base=FOUNDRY_PROJECT_BASE,
         api_key="fake-key",
     )
@@ -1580,5 +1583,5 @@ async def test_acompletion_reaches_the_agent_through_the_project_responses_api()
     assert body["agent_reference"] == {"type": "agent_reference", "name": "support-agent"}
     assert "model" not in body
     assert "instructions" not in body
-    assert body["input"][0] == SYSTEM_PROMPT
+    assert body["input"][0] == {**SYSTEM_PROMPT, "content": [{"type": "input_text", "text": "Answer in French"}]}
     assert response.choices[0].message.content == "4"

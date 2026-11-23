@@ -33,7 +33,7 @@ import litellm
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.batches.batch_utils import (
-    count_entry_tokens,
+    batch_row_counter,
     estimate_batch_entry_tokens,
     extract_file_access_credentials,
     iter_batch_input_lines,
@@ -79,6 +79,7 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
 from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit
 from litellm.redis.stores.rate_limits import RATE_LIMITS_TARGET, CounterIncrement, RateLimitScope
 from litellm.types.llms.base import LiteLLMBaseModel
+from litellm.types.llms.openai import BatchInputFormat, HttpxBinaryResponseContent
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -95,7 +96,6 @@ if TYPE_CHECKING:
     )
     from litellm.proxy.utils import InternalUsageCache as _InternalUsageCache
     from litellm.router import Router as _Router
-    from litellm.types.llms.openai import HttpxBinaryResponseContent
 
     Span = _Span
     InternalUsageCache = _InternalUsageCache
@@ -1057,6 +1057,12 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                     **_FileContentFetchKwargs(**fetch_kwargs),
                 )
 
+            input_format: Final = (
+                file_content.batch_input_format
+                if isinstance(file_content, HttpxBinaryResponseContent)
+                else BatchInputFormat.UNKNOWN
+            )
+            count_row: Final = batch_row_counter(input_format)
             file_content_bytes: Final = getattr(file_content, "content", None)
             if not isinstance(file_content_bytes, bytes):
                 raise ValueError(
@@ -1095,6 +1101,15 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                     output_tokens += entry_output_tokens
                     continue
 
+                try:
+                    if count_row is None or (counted := count_row(decoded_json_object(entry))) is None:
+                        entry_total_tokens = estimate_batch_entry_tokens(raw_line)
+                    else:
+                        entry_total_tokens = counted
+                except Exception:
+                    entry_total_tokens = estimate_batch_entry_tokens(raw_line)
+                total_tokens += entry_total_tokens
+
                 row_model: str | None = (entry.get("body") or {}).get("model") if isinstance(entry, dict) else None
                 model: str | None = routing_alias_by_row_model.get(row_model, row_model) if row_model else None
                 if model:
@@ -1105,12 +1120,6 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                 else:
                     entry_output_tokens = no_max_tokens_output_floor(min_configured_otpm_limit)
                 output_tokens += entry_output_tokens
-
-                try:
-                    entry_total_tokens = count_entry_tokens(decoded_json_object(entry))
-                except Exception:
-                    entry_total_tokens = estimate_batch_entry_tokens(raw_line)
-                total_tokens += entry_total_tokens
 
                 if isinstance(model, str) and isinstance(row_model, str):
                     model_usage = per_model_usage.setdefault(

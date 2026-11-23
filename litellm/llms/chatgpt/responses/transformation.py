@@ -1,12 +1,12 @@
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Final, cast
 
 import httpx
 from openai.types.responses.response_input_param import ResponseInputItemParam
 from pydantic import TypeAdapter
 
 from litellm.exceptions import AuthenticationError
-from litellm.litellm_core_utils.core_helpers import process_response_headers
+from litellm.litellm_core_utils.core_helpers import process_response_headers, require_get
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, set_hidden_params
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     safe_convert_created_field,
@@ -289,8 +289,8 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         except Exception:
             return ResponsesAPIResponse.model_construct(**response_payload)
 
-    def _extract_error_message(self, parsed_chunk: dict[str, Any]) -> str | None:
-        error_obj: Final = parsed_chunk.get("error") or (parsed_chunk.get("response") or {}).get("error")
+    def _extract_error_message(self, parsed_chunk: Mapping[str, object]) -> str | None:
+        error_obj: Final = parsed_chunk.get("error") or require_get(parsed_chunk.get("response") or {}).get("error")
         if error_obj is None:
             top_level_message: Final = parsed_chunk.get("message")
             return top_level_message if isinstance(top_level_message, str) else None

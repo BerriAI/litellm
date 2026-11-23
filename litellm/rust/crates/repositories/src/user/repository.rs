@@ -1,11 +1,12 @@
 //! The user repository: resolves a sign-in to its `LiteLLM_UserTable` row by id, then by SSO id, then by email,
 //! linking the SSO id the way the Python `get_user_object` did, and backfills a missing email.
 
-use litellm_db::{Call, Statements};
-use sqlx::PgConnection;
+use jiff::Timestamp;
+use litellm_db::Call;
+use serde_json::Value;
 
 use super::queries::{self, User};
-use crate::{Database, Side};
+use crate::{Database, Inserted, Side, database::Connections};
 
 const GET_USER_OBJECT: Call = Call {
     call_type: "get_user_object",
@@ -31,6 +32,12 @@ const UPDATE_USER: Call = Call {
     operation: Some("update"),
 };
 
+const CREATE_USER: Call = Call {
+    call_type: "create",
+    table: Some("LiteLLM_UserTable"),
+    operation: Some("insert"),
+};
+
 /// Who is signing in: the requested id plus the sign-in's SSO id and email. `links_any_user` is
 /// `LITELLM_EMAIL_FALLBACK_LINKS_ANY_USER`, which lets an email match any row and skips the SSO link guards.
 #[derive(Clone, Debug)]
@@ -42,7 +49,31 @@ pub struct SignIn {
     pub links_any_user: bool,
 }
 
-/// Reads and links `LiteLLM_UserTable` rows.
+/// What `default_internal_user_params` sets on a user created at sign-in. The host resolves them, the reset time
+/// of `budget_duration` and the opening windows of `budget_limits` included. `None` leaves the column unset.
+#[derive(Clone, Debug, Default)]
+pub struct NewUserDefaults {
+    pub user_role: Option<String>,
+    pub max_budget: Option<f64>,
+    pub budget_duration: Option<String>,
+    pub budget_reset_at: Option<Timestamp>,
+    pub models: Option<Vec<String>>,
+    pub budget_limits: Option<Value>,
+    pub tpm_limit: Option<i64>,
+    pub rpm_limit: Option<i64>,
+    pub max_parallel_requests: Option<i32>,
+    pub user_alias: Option<String>,
+    pub team_id: Option<String>,
+    pub organization_id: Option<String>,
+    pub object_permission_id: Option<String>,
+    pub password_reset_required: Option<bool>,
+    pub metadata: Option<Value>,
+    pub allowed_cache_controls: Option<Vec<String>>,
+    pub policies: Option<Vec<String>>,
+    pub model_max_budget: Option<Value>,
+}
+
+/// Reads, links and provisions `LiteLLM_UserTable` rows.
 pub struct UserRepository {
     database: Database,
 }
@@ -108,6 +139,35 @@ impl UserRepository {
             .await
     }
 
+    /// Sets the role of `user_id` and returns the row as stored, or `None` when no row has that id.
+    pub async fn set_role(
+        &self,
+        user_id: &str,
+        user_role: &str,
+    ) -> Result<Option<User>, litellm_db::Error> {
+        self.database
+            .run(UPDATE_USER, || async {
+                let mut session = self.database.session(Side::Writer).await?;
+                queries::set_user_role(session.executor(), user_id, user_role).await
+            })
+            .await
+    }
+
+    /// Creates the user `sign_in` names with `defaults`, as `get_user_object` did under `user_id_upsert`. The
+    /// email is stored unless another user holds it and `links_any_user` is off, and the SSO id only while
+    /// `links_any_user` is off. A sign-in that loses to a concurrent one gets the row that won.
+    pub async fn insert(
+        &self,
+        sign_in: &SignIn,
+        defaults: &NewUserDefaults,
+    ) -> Result<Inserted<User>, litellm_db::Error> {
+        self.database
+            .run(CREATE_USER, || async {
+                insert_once(&mut &self.database, sign_in, defaults).await
+            })
+            .await
+    }
+
     /// Records `sso_user_id` on `user_id` in the background, as Python did for an email match under
     /// `links_any_user`; the sign-in does not wait for it.
     fn set_sso_user_id_later(&self, user_id: String, sso_user_id: String) {
@@ -129,25 +189,38 @@ impl UserRepository {
     }
 }
 
-/// Where the steps of one resolve take their connection: a session per step from the database, one after the
-/// other so a resolve never holds two, or a single transaction in tests.
-pub(super) trait Connections {
-    async fn with<T>(
-        &mut self,
-        side: Side,
-        step: impl for<'e> AsyncFnOnce(Statements<&'e mut PgConnection>) -> Result<T, litellm_db::Error>,
-    ) -> Result<T, litellm_db::Error>;
-}
-
-impl Connections for &Database {
-    async fn with<T>(
-        &mut self,
-        side: Side,
-        step: impl for<'e> AsyncFnOnce(Statements<&'e mut PgConnection>) -> Result<T, litellm_db::Error>,
-    ) -> Result<T, litellm_db::Error> {
-        let mut session = self.session(side).await?;
-        step(session.executor()).await
+/// The insert, then on a conflict the read a later sign-in would make, in a statement of its own because the
+/// insert cannot see a row committed after it began.
+pub(super) async fn insert_once(
+    connections: &mut impl Connections,
+    sign_in: &SignIn,
+    defaults: &NewUserDefaults,
+) -> Result<Inserted<User>, litellm_db::Error> {
+    let sso_user_id = sign_in
+        .sso_user_id
+        .as_deref()
+        .filter(|_| !sign_in.links_any_user);
+    let new_user = queries::NewUser {
+        user_id: &sign_in.user_id,
+        user_email: sign_in.user_email.as_deref(),
+        email_may_be_shared: sign_in.links_any_user,
+        sso_user_id,
+        defaults,
+    };
+    let created = connections
+        .with(Side::Writer, async |db| {
+            queries::insert_user(db, &new_user).await
+        })
+        .await?;
+    if let Some(user) = created {
+        return Ok(Inserted::Created(user));
     }
+    connections
+        .with(Side::Writer, async |db| {
+            queries::find_user(db, Some(&sign_in.user_id), sso_user_id).await
+        })
+        .await
+        .map(Inserted::Conflict)
 }
 
 /// What a resolve found, and the SSO id link it leaves for the background under `links_any_user`.

@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Final
 
@@ -38,8 +39,11 @@ class OrganizationOutcome:
 def matches_patch(current: BaseModel | None, patch: BaseModel | None) -> bool:
     if current is None or patch is None:
         return current is patch
-    values: Final = current.model_dump()
-    return all(values.get(key) == value for key, value in patch.model_dump(exclude_unset=True).items())
+    return _values_match(current.model_dump(), patch.model_dump(exclude_unset=True))
+
+
+def _values_match(values: Mapping[str, object], patched: Mapping[str, object]) -> bool:
+    return all(values.get(key) == value for key, value in patched.items())
 
 
 async def organization_by_identity(
@@ -234,7 +238,9 @@ async def upsert_member(
         )
     )
     requested_budget: Final = (
-        patch.budget_id
+        None
+        if "budget" in patch.model_fields_set and patch.budget is None and patch.budget_id is None
+        else patch.budget_id
         if "budget_id" in patch.model_fields_set
         else organization.default_budget_template_id
         if isinstance(existing, Failure)
@@ -242,17 +248,25 @@ async def upsert_member(
     )
     selected: Final = (
         requested_budget or organization.default_budget_template_id
-        if isinstance(existing, Failure)
+        if isinstance(existing, Failure) and "budget" not in patch.model_fields_set
         else requested_budget
     )
-    if selected is not None and not any(template.budget_id == selected for template in organization.default_budgets):
+    selecting_template: Final = patch.budget_id is not None or (
+        isinstance(existing, Failure) and patch.budget is None and "budget" not in patch.model_fields_set
+    )
+    known_budget: Final = (
+        selected is None
+        or selected == (existing.budget_id if not isinstance(existing, Failure) else None)
+        or any(template.budget_id == selected for template in organization.default_budgets)
+    )
+    if selecting_template and not known_budget:
         return Failure(ErrorCode.TEMPLATE_NOT_IN_ORG)
     override: Final = (
         patch.budget_override
         if "budget_override" in patch.model_fields_set or isinstance(existing, Failure)
         else existing.budget_override
     )
-    if selected is None and override is None:
+    if selected is None and patch.budget is None and override is None:
         return Failure(ErrorCode.BUDGET_REQUIRED)
     team_ids: Final = await member_team_ids(
         store, organization.customer_org_id, existing, payload.parent_team_id, actor
@@ -274,6 +288,10 @@ async def upsert_member(
             return member
         return MemberUpsertResponse.model_validate({**member.model_dump(), "created": True})
     alias_matches: Final = "alias" not in patch.model_fields_set or existing.alias == patch.alias
+    budget_matches: Final = "budget" not in patch.model_fields_set or (
+        matches_patch(existing.budget, patch.budget)
+        and all(template.budget_id != existing.budget_id for template in organization.default_budgets)
+    )
     override_matches: Final = "budget_override" not in patch.model_fields_set or matches_patch(
         existing.budget_override, patch.budget_override
     )
@@ -284,6 +302,7 @@ async def upsert_member(
         existing.parent_team_ids == team_ids
         and selected == existing.budget_id
         and alias_matches
+        and budget_matches
         and override_matches
         and expiry_matches
     ):
