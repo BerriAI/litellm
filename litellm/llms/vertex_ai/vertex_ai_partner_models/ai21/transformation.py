@@ -45,8 +45,8 @@ class VertexAIAi21Config(OpenAIGPTConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict[str, object],
-        optional_params: dict[str, object],
+        non_default_params: dict,
+        optional_params: dict,
         model: str,
         drop_params: bool,
     ):

@@ -10,9 +10,8 @@ Has 4 methods:
 
 import asyncio
 import json
-from collections.abc import Iterable
 from contextlib import suppress
-from typing import Final, Protocol
+from typing import Final
 
 from pydantic import TypeAdapter
 
@@ -23,43 +22,8 @@ from .base_cache import BaseCache
 _DECODED_BLOB: Final = TypeAdapter(object)
 
 
-class _NamedBlob(Protocol):
-    @property
-    def name(self) -> str: ...
-
-
-class _BlobDownload(Protocol):
-    def readall(self) -> bytes: ...
-
-
-class _AsyncBlobDownload(Protocol):
-    async def readall(self) -> bytes: ...
-
-
-class _ContainerClient(Protocol):
-    def create_container(self) -> object: ...
-
-    def upload_blob(self, name: str, data: str) -> object: ...
-
-    def download_blob(self, blob: str) -> _BlobDownload: ...
-
-    def walk_blobs(self) -> Iterable[_NamedBlob]: ...
-
-    def delete_blob(self, blob: str) -> object: ...
-
-    def close(self) -> object: ...
-
-
-class _AsyncContainerClient(Protocol):
-    async def upload_blob(self, name: str, data: str, *, overwrite: bool) -> object: ...
-
-    async def download_blob(self, blob: str) -> _AsyncBlobDownload: ...
-
-    async def close(self) -> object: ...
-
-
 class AzureBlobCache(BaseCache):
-    def __init__(self, account_url: str | None, container: str | None) -> None:
+    def __init__(self, account_url, container) -> None:
         from azure.core.exceptions import ResourceExistsError
         from azure.identity import DefaultAzureCredential
         from azure.identity.aio import (
@@ -68,11 +32,11 @@ class AzureBlobCache(BaseCache):
         from azure.storage.blob import BlobServiceClient
         from azure.storage.blob.aio import BlobServiceClient as AsyncBlobServiceClient
 
-        self.container_client: _ContainerClient = BlobServiceClient(
+        self.container_client = BlobServiceClient(
             account_url=account_url,
             credential=DefaultAzureCredential(),
         ).get_container_client(container)
-        self.async_container_client: _AsyncContainerClient = AsyncBlobServiceClient(
+        self.async_container_client = AsyncBlobServiceClient(
             account_url=account_url,
             credential=AsyncDefaultAzureCredential(),
         ).get_container_client(container)
@@ -80,7 +44,7 @@ class AzureBlobCache(BaseCache):
         with suppress(ResourceExistsError):
             self.container_client.create_container()
 
-    def set_cache(self, key: str, value: object, **kwargs: object) -> None:
+    def set_cache(self, key, value, **kwargs) -> None:
         print_verbose(f"LiteLLM SET Cache - Azure Blob. Key={key}. Value={value}")
         serialized_value: Final = json.dumps(value)
         try:
@@ -89,7 +53,7 @@ class AzureBlobCache(BaseCache):
             # NON blocking - notify users Azure Blob is throwing an exception
             print_verbose(f"LiteLLM set_cache() - Got exception from Azure Blob: {e}")
 
-    async def async_set_cache(self, key: str, value: object, **kwargs: object) -> None:
+    async def async_set_cache(self, key, value, **kwargs) -> None:
         print_verbose(f"LiteLLM SET Cache - Azure Blob. Key={key}. Value={value}")
         serialized_value: Final = json.dumps(value)
         try:
@@ -98,7 +62,7 @@ class AzureBlobCache(BaseCache):
             # NON blocking - notify users Azure Blob is throwing an exception
             print_verbose(f"LiteLLM set_cache() - Got exception from Azure Blob: {e}")
 
-    def get_cache(self, key: str, **kwargs: object):
+    def get_cache(self, key, **kwargs):
         from azure.core.exceptions import ResourceNotFoundError
 
         try:
@@ -118,7 +82,7 @@ class AzureBlobCache(BaseCache):
         except ResourceNotFoundError:
             return None
 
-    async def async_get_cache(self, key: str, **kwargs: object):
+    async def async_get_cache(self, key, **kwargs):
         from azure.core.exceptions import ResourceNotFoundError
 
         try:
@@ -145,7 +109,7 @@ class AzureBlobCache(BaseCache):
         self.container_client.close()
         await self.async_container_client.close()
 
-    async def async_set_cache_pipeline(self, cache_list: Iterable[tuple[str, object]], **kwargs: object) -> None:
+    async def async_set_cache_pipeline(self, cache_list, **kwargs) -> None:
         tasks: Final = []
         for val in cache_list:
             tasks.append(self.async_set_cache(val[0], val[1], **kwargs))
