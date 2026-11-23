@@ -986,12 +986,15 @@ class MistralConfig(OpenAIGPTConfig):
         upstream_params: Final = {key: value for key, value in optional_params.items() if key not in withheld_params}
 
         # Call parent transform_request which handles _transform_messages
-        request: Final = super().transform_request(
-            model=model,
-            messages=messages,
-            optional_params=upstream_params,
-            litellm_params=litellm_params,
-            headers=headers,
+        request: Final = cast(  # cast-ok: the parent builds a JSON request body keyed by str
+            dict[str, object],
+            super().transform_request(
+                model=model,
+                messages=messages,
+                optional_params=upstream_params,
+                litellm_params=litellm_params,
+                headers=headers,
+            ),
         )
         sent_messages: Final = as_object_list(request.get("messages"))
         if sent_messages is None:
