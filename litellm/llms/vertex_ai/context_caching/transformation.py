@@ -13,7 +13,6 @@ from typing import Final, Literal
 from litellm.litellm_core_utils.prompt_templates.factory import convert_to_gemini_tool_call_invoke
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
     is_system_message,
-    message_field,
     place_mid_conversation_system,
     split_leading_system_run,
 )
@@ -113,10 +112,6 @@ def _normalize_ttl_to_seconds(ttl: object) -> str | None:
     return f"{seconds:.9f}".rstrip("0").rstrip(".") + "s"
 
 
-_TOOL_RESULT_ROLES: Final = frozenset({"tool", "function"})
-_MODEL_TURN_ROLES: Final = frozenset({"assistant", *_TOOL_RESULT_ROLES})
-
-
 def _cached_block_start(
     messages: Sequence[AllMessageValues], leading_run_end: int, block_start: int, block_end: int
 ) -> int:
@@ -126,14 +121,15 @@ def _cached_block_start(
     )
 
 
-def _cached_block_end(messages: Sequence[AllMessageValues], block_start: int, block_end: int) -> int:
-    next_turn: Final = next(
-        (idx for idx in range(block_end, len(messages)) if not is_system_message(messages[idx])), None
-    )
-    if next_turn is None or message_field(messages[next_turn], "role") not in _TOOL_RESULT_ROLES:
-        return block_end
+def _cached_block_end(
+    messages: Sequence[AllMessageValues], leading_run_end: int, block_start: int, block_end: int
+) -> int:
     return next(
-        (end for end in range(block_end, block_start, -1) if not is_system_message(messages[end - 1])),
+        (
+            end
+            for end in range(block_end, block_start, -1)
+            if end <= leading_run_end or not is_system_message(messages[end - 1])
+        ),
         block_start,
     )
 
@@ -148,11 +144,10 @@ def separate_cached_messages(
     The leading run of system messages outside that block stays as it is in the remaining messages, so it still
     becomes the system_instruction. Every later system message comes back already converted to a user turn in
     place, so a reminder added each turn is never hoisted into a system_instruction beside the cachedContent. A
-    system run that ends the cached block with only system messages between it and a tool result stays out of
-    the cached block, since its user turn goes after that tool result, and so does a later system run that
-    starts the cached block, since the cache would put it ahead of the turns it follows. A model without system
-    message support gets its later system messages back as they are, so the request renders them the way it
-    does without a cache.
+    later system run that starts or ends the cached block stays out of it too, since the cache would put it
+    ahead of the turns it follows, or let a block that ends on a model turn reach the cache only because a
+    reminder follows it. A model without system message support gets its later system messages back as they
+    are, so the request renders them the way it does without a cache.
     """
     filtered_messages: Final = [(idx, message) for idx, message in enumerate(messages) if is_cached_message(message)]
     if not filtered_messages:
@@ -162,7 +157,9 @@ def separate_cached_messages(
     last_continuous_block_idx: Final = get_first_continuous_block_idx(filtered_messages)
     marked_end: Final = filtered_messages[last_continuous_block_idx][0] + 1
     block_start: Final = _cached_block_start(messages, len(leading_system_run), filtered_messages[0][0], marked_end)
-    cached_block: Final = range(block_start, _cached_block_end(messages, block_start, marked_end))
+    cached_block: Final = range(
+        block_start, _cached_block_end(messages, len(leading_system_run), block_start, marked_end)
+    )
     uncached: Final = tuple((idx, message) for idx, message in enumerate(messages) if idx not in cached_block)
     later_messages: Final = tuple(message for idx, message in uncached if idx >= len(leading_system_run))
     return (
@@ -182,15 +179,14 @@ def cached_messages_end_on_supported_turn(cached_messages: Sequence[AllMessageVa
     """
     The cachedContents API rejects contents ending on a model turn, which is how it
     classifies both assistant messages and tool results, with HTTP 400
-    "Requests ending with a model turn are not supported". The leading system messages
-    are extracted into system_instruction and every later one becomes a user turn before
-    contents are built, so the terminal turn is the last message after that conversion.
+    "Requests ending with a model turn are not supported". The cached block never ends on
+    a later system message, and the leading ones are extracted into system_instruction
+    before contents are built, so the terminal turn is the last non-system message.
     """
-    _, rest = split_leading_system_run(cached_messages)
-    contents_messages: Final = place_mid_conversation_system(rest, supports_mid_conversation_system=False)
-    if not contents_messages:
+    non_system_messages: Final = tuple(message for message in cached_messages if message.get("role") != "system")
+    if not non_system_messages:
         return bool(cached_messages)
-    return message_field(contents_messages[-1], "role") not in _MODEL_TURN_ROLES
+    return non_system_messages[-1].get("role") not in ("assistant", "tool", "function")
 
 
 def reject_unusable_tool_call_arguments(

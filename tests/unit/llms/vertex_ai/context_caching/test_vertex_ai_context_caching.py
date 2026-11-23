@@ -1780,16 +1780,6 @@ def test_cached_messages_end_on_supported_turn():
                 {"role": "system", "content": "be brief"},
             ]
         )
-        is True
-    )
-    assert (
-        cached_messages_end_on_supported_turn(
-            [
-                {"role": "user", "content": "hello"},
-                {"role": "assistant", "content": "hi"},
-                {"role": "system", "content": ""},
-            ]
-        )
         is False
     )
     assert (
@@ -2650,6 +2640,39 @@ def test_an_uncached_leading_system_message_stays_a_system_message_beside_the_co
             "content": [{"type": "text", "text": CONVERTED_SYSTEM_NOTE}, {"type": "text", "text": "1 of 8 turns used"}],
         },
         {"role": "user", "content": "question 2"},
+    ]
+
+
+def test_a_cached_block_from_a_later_turn_that_ends_on_a_reminder_goes_out_uncached_and_in_order(
+    local_model_cost_map,
+) -> None:
+    calls: Final[list[httpx.Request]] = []
+    litellm.completion(
+        model="gemini/gemini-flash-latest",
+        messages=[
+            {"role": "system", "content": "shared policy"},
+            {"role": "user", "content": "question 1"},
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "answer 1 " * 3000, "cache_control": {"type": "ephemeral"}}],
+            },
+            {
+                "role": "system",
+                "content": [{"type": "text", "text": "1 of 8 turns used", "cache_control": {"type": "ephemeral"}}],
+            },
+            {"role": "user", "content": "question 2"},
+        ],
+        api_key="test-key",
+        client=_recording_gemini_client(calls),
+    )
+
+    assert not any(call.url.path.endswith("/cachedContents") for call in calls)
+    (generated,) = (json.loads(call.content) for call in calls if call.url.path.endswith(":generateContent"))
+    assert generated["system_instruction"] == {"parts": [{"text": "shared policy"}]}
+    assert generated["contents"] == [
+        {"role": "user", "parts": [{"text": "question 1"}]},
+        {"role": "model", "parts": [{"text": "answer 1 " * 3000}]},
+        {"role": "user", "parts": [{"text": CONVERTED_SYSTEM_NOTE}, {"text": "1 of 8 turns used"}, {"text": "question 2"}]},
     ]
 
 
