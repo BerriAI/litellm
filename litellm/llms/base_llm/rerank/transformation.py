@@ -70,7 +70,7 @@ class BaseRerankConfig(ABC):
         return api_base or ""
 
     @abstractmethod
-    def get_supported_cohere_rerank_params(self, model: str) -> list:
+    def get_supported_cohere_rerank_params(self, model: str) -> list[str]:
         pass
 
     @abstractmethod

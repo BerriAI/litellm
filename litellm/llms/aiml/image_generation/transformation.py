@@ -66,7 +66,7 @@ class AimlImageGenerationConfig(BaseImageGenerationConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
+        non_default_params: Mapping[str, object],
         optional_params: dict,
         model: str,
         drop_params: bool,
@@ -112,8 +112,8 @@ class AimlImageGenerationConfig(BaseImageGenerationConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         """
@@ -132,8 +132,8 @@ class AimlImageGenerationConfig(BaseImageGenerationConfig):
         headers: dict,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
@@ -152,9 +152,9 @@ class AimlImageGenerationConfig(BaseImageGenerationConfig):
         model: str,
         prompt: str,
         optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        litellm_params: Mapping[str, object],
+        headers: Mapping[str, object],
+    ) -> dict[str, object]:
         """
         Transform the image generation request to the AI/ML image generation request body
 
@@ -176,9 +176,9 @@ class AimlImageGenerationConfig(BaseImageGenerationConfig):
         raw_response: httpx.Response,
         model_response: ImageResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
-        optional_params: dict,
-        litellm_params: dict,
+        request_data: Mapping[str, object],
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
