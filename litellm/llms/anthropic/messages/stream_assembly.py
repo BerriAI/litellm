@@ -1145,22 +1145,12 @@ def _the_widest_reader_dispatches_no_other_json(sse_stream: str, client_frames: 
 def anthropic_sse_reads_alike(all_chunks: Sequence[object]) -> bool:
     """Whether every client reads the stream's content as assembly does, so the stream can be forwarded as sent.
 
-    The Anthropic SDKs apply a frame by its SSE ``event:`` name, other clients by its data ``type``, and a
-    client puts a block delta on the block at that list position or index. Assembly reads every one of
-    these the same way only when the names and types agree, ``message_start`` comes first with no content and
-    nothing follows ``message_stop``, each block starts at the next index and takes its deltas before it stops,
-    and the text of the blocks comes in their order. A frame named ``error`` may carry any data, since the SDKs
-    raise on it and other clients read its type. A leading byte order mark stays part of the first field name, as
-    the Python SDK reads it, so these rules refuse it wherever it changes what that SDK reads. No client dispatches
-    a frame the stream never ended, so a stream with one reads differently too. Only plain lines read alike, since
-    an LF-only reader keeps a bare CR inside a line and a lenient reader takes data from a line that starts with a
-    space or a comment. A reader taking each data line on its own, or reading lines with httpx, which also breaks
-    them at a form feed or U+2028, reads differently when that reveals a JSON object the others skip. The SDKs read
-    a block delta's field by its delta type and the TypeScript SDK puts a start's ``__json_buf`` in front of its
-    input deltas, so a delta also carrying a field assembly reads first, as text on an ``input_json_delta``, or a
-    start with that buffer reads differently.
-    So does an object Python cannot decode, nested too deep or holding too long a number, which a JavaScript client
-    reads.
+    Clients split lines, name frames and place block deltas differently, so the stream needs plain lines, each
+    ``event:`` name matching its data ``type`` (an ``error`` frame may carry any data), an empty ``message_start``
+    first and nothing after ``message_stop``, and blocks that start at the next index, take their deltas before
+    they stop and send their text in order. It must also hold nothing one client reads and another skips: a frame
+    the stream never ended, JSON a line-by-line or httpx reader reveals, a delta field assembly reads before the one
+    its type names, a ``__json_buf``, or an object Python cannot decode.
     """
     sse_stream: Final = _joined_sse_stream(all_chunks) or ""
     if not _has_only_plain_lines(sse_stream):
