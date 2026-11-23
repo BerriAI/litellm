@@ -76,8 +76,13 @@ class PrismaBackgroundResponseSettlementStore:
             insert: Final = asyncio.ensure_future(
                 table.create_many([_NewSettlementRow(response_id=response_id)], skip_duplicates=True)
             )
-            finished, _ = await asyncio.wait((insert,), timeout=self.timeout_seconds)
-            if not finished:
+            if not await self._recorded_in_time(response_id, insert):
+                verbose_proxy_logger.warning(
+                    "Recording the settlement of background response %s took over %s s, so it is settled when it "
+                    "returns",
+                    response_id,
+                    self.timeout_seconds,
+                )
                 self._settle_late_claim(response_id, insert, release_if_late)
                 return CLAIM_UNRECORDED
             inserted: Final = insert.result()
@@ -88,12 +93,15 @@ class PrismaBackgroundResponseSettlementStore:
             return CLAIM_UNRECORDED
         return CLAIMED if inserted > 0 else CLAIMED_BEFORE
 
+    async def _recorded_in_time(self, response_id: str, insert: "asyncio.Future[int]") -> bool:
+        try:
+            finished, _ = await asyncio.wait((insert,), timeout=self.timeout_seconds)
+        except asyncio.CancelledError:
+            self._settle_late_claim(response_id, insert, release_if_late=True)
+            raise
+        return bool(finished)
+
     def _settle_late_claim(self, response_id: str, insert: "asyncio.Future[int]", release_if_late: bool) -> None:
-        verbose_proxy_logger.warning(
-            "Recording the settlement of background response %s took over %s s, so it is settled when it returns",
-            response_id,
-            self.timeout_seconds,
-        )
         late_claim: Final = asyncio.create_task(self._release_late_claim(response_id, insert, release_if_late))
         self.late_claims.add(late_claim)
         late_claim.add_done_callback(self.late_claims.discard)

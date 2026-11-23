@@ -1,4 +1,4 @@
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 import asyncio
 import contextlib
 import json
@@ -3254,6 +3254,30 @@ class _FirstClaimWaitsUntilASecondClaimLoses:
         return await self.table.delete_many(where=where)
 
 
+@dataclass(frozen=True, slots=True)
+class _ClaimCommitsWhenAllowed:
+    table: _SettlementTable
+    insert_started: asyncio.Event = field(default_factory=asyncio.Event)
+    commit: asyncio.Event = field(default_factory=asyncio.Event)
+    released: asyncio.Event = field(default_factory=asyncio.Event)
+
+    async def create_many(self, data: Sequence[Mapping[str, str]], *, skip_duplicates: bool) -> int:
+        inserted: Final = await self.table.create_many(data, skip_duplicates=skip_duplicates)
+        self.insert_started.set()
+        await self.commit.wait()
+        return inserted
+
+    async def delete_many(self, *, where: Mapping[str, str]) -> int:
+        deleted: Final = await self.table.delete_many(where=where)
+        self.released.set()
+        return deleted
+
+    async def commit_and_wait_for_release(self) -> None:
+        self.commit.set()
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(self.released.wait(), timeout=1)
+
+
 class _ClaimUnrecordedOnCall:
     def __init__(self, table: _SettlementTable, failing_call: int) -> None:
         self.table: Final = table
@@ -3325,7 +3349,11 @@ class _CreatorDispatchFailsAfterTheCreate:
 def _creator_billing_passthrough_logging(
     rows: _DispatchedSpendRows | _CreatorDispatchFailsAfterTheCreate,
     settlements: (
-        _SettlementTable | _FirstClaimWaitsUntilASecondClaimLoses | _ClaimUnrecordedOnCall | _ClaimAcksLateOnCall
+        _SettlementTable
+        | _FirstClaimWaitsUntilASecondClaimLoses
+        | _ClaimUnrecordedOnCall
+        | _ClaimAcksLateOnCall
+        | _ClaimCommitsWhenAllowed
     ),
     creators: _CreatorTable,
     fetch: _ScriptedFetch,
@@ -3388,6 +3416,7 @@ async def _passed_through(
     request_body: dict[str, object],
     response_body: dict[str, object],
     custom_llm_provider: str | None = "openai",
+    finalize_before_dispatch: bool = True,
 ) -> None:
     await passthrough_logging.pass_through_async_success_handler(
         httpx_response=httpx.Response(200, json=response_body, request=upstream_request),
@@ -3403,7 +3432,7 @@ async def _passed_through(
             url=url_route, request_body=request_body, request_method=upstream_request.method
         ),
         custom_llm_provider=custom_llm_provider,
-        finalize_before_dispatch=True,
+        finalize_before_dispatch=finalize_before_dispatch,
     )
 
 
@@ -3425,7 +3454,9 @@ async def _background_create(
 
 
 async def _finished_read(
-    passthrough_logging: PassThroughEndpointLogging, custom_llm_provider: str | None = "openai"
+    passthrough_logging: PassThroughEndpointLogging,
+    custom_llm_provider: str | None = "openai",
+    finalize_before_dispatch: bool = True,
 ) -> None:
     url_route: Final = f"{RESPONSES_URL}/{STORED_RESPONSE_ID}"
     await _passed_through(
@@ -3436,6 +3467,7 @@ async def _finished_read(
         {},
         _stored_response("completed", True, RESPONSES_USAGE),
         custom_llm_provider=custom_llm_provider,
+        finalize_before_dispatch=finalize_before_dispatch,
     )
 
 
@@ -3940,6 +3972,52 @@ class TestOpenAIPassthroughBackgroundResponseCreatorBilling:
         assert len(rows.billed()) == 1
         _assert_billed_to_the_creator(rows.billed()[0], rows.spend_rows()[0], await _reader_paid_spend())
         assert len(rows.logged_for(READER_METADATA["user_api_key_team_id"])) == 2
+
+    @pytest.mark.asyncio
+    async def test_a_poll_cancelled_while_its_claim_is_in_flight_gives_the_claim_back_so_a_read_bills_the_creator(
+        self, local_model_cost_map
+    ):
+        rows: Final = _DispatchedSpendRows()
+        settlements: Final = _ClaimCommitsWhenAllowed(_SettlementTable())
+        fetch: Final = _ScriptedFetch()
+        passthrough_logging: Final = _creator_billing_passthrough_logging(
+            rows, settlements, _CreatorTable(), fetch, polls=True
+        )
+        await _background_create(passthrough_logging)
+        poll: Final = _running_poll(passthrough_logging)
+        fetch.outcomes.put_nowait(Fetched(body=_stored_response("completed", True, RESPONSES_USAGE)))
+        await asyncio.wait_for(settlements.insert_started.wait(), timeout=5)
+        poll.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await asyncio.wait_for(poll, timeout=5)
+        await settlements.commit_and_wait_for_release()
+
+        await _finished_read(passthrough_logging)
+
+        assert len(rows.billed()) == 1
+        _assert_billed_to_the_creator(rows.billed()[0], rows.spend_rows()[0], await _reader_paid_spend())
+
+    @pytest.mark.asyncio
+    async def test_a_read_cancelled_while_its_claim_is_in_flight_gives_the_claim_back_so_the_next_read_pays(
+        self, local_model_cost_map
+    ):
+        rows: Final = _DispatchedSpendRows()
+        settlements: Final = _ClaimCommitsWhenAllowed(_SettlementTable())
+        passthrough_logging: Final = _creator_billing_passthrough_logging(
+            rows, settlements, _CreatorTable(), _ScriptedFetch(), polls=False
+        )
+        read: Final = asyncio.ensure_future(_finished_read(passthrough_logging, finalize_before_dispatch=False))
+        await asyncio.wait_for(settlements.insert_started.wait(), timeout=5)
+        read.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await asyncio.wait_for(read, timeout=5)
+        await settlements.commit_and_wait_for_release()
+
+        await _finished_read(passthrough_logging)
+
+        assert len(rows.billed()) == 1
+        assert rows.billed()[0].spend_row["team_id"] == READER_METADATA["user_api_key_team_id"]
+        assert rows.billed()[0].spend_row["spend"] == pytest.approx(await _reader_paid_spend())
 
     @pytest.mark.asyncio
     async def test_the_creator_bill_spans_the_run_under_its_own_logging_id_so_it_never_overwrites_the_create_log(
