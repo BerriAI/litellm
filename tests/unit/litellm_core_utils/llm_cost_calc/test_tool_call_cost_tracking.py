@@ -890,96 +890,96 @@ _FLARE_TEXT_IN, _FLARE_IMAGE_IN, _FLARE_IMAGE_OUT = 40, 300, 1_000
 
 
 def _flare_deployment_rates(discount: float) -> dict[str, float]:
-        listed = litellm.get_model_info(_FLARE_IMAGE_TOOL_MODEL, custom_llm_provider="openai")
-        return {
-                    field: listed[field] * discount
-                    for field in ("input_cost_per_token", "input_cost_per_image_token", "output_cost_per_image_token")
-        }
-    
+    listed = litellm.get_model_info(_FLARE_IMAGE_TOOL_MODEL, custom_llm_provider="openai")
+    return {
+        field: listed[field] * discount
+        for field in ("input_cost_per_token", "input_cost_per_image_token", "output_cost_per_image_token")
+    }
+
 
 def _flare_image_tool_router(deployments: list[tuple[str, dict[str, float]]]) -> litellm.Router:
-        return litellm.Router(
-                    model_list=[
-                                    {
-                                                        "model_name": _FLARE_IMAGE_TOOL_MODEL,
-                                                        "litellm_params": {"model": f"openai/{_FLARE_IMAGE_TOOL_MODEL}", "api_key": "sk-test"},
-                                                        "model_info": {"id": deployment_id, "mode": "image_generation", **rates},
-                                    }
-                                for deployment_id, rates in deployments
-                    ]
-        )
-    
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": _FLARE_IMAGE_TOOL_MODEL,
+                "litellm_params": {"model": f"openai/{_FLARE_IMAGE_TOOL_MODEL}", "api_key": "sk-test"},
+                "model_info": {"id": deployment_id, "mode": "image_generation", **rates},
+            }
+            for deployment_id, rates in deployments
+        ]
+    )
+
 
 def _flare_image_tool_cost() -> float:
-        response = _openai_responses_response(
-                    "gpt-5",
-                    [{"type": "image_generation_call", "id": "ig_1", "status": "completed", "result": "AAAA"}],
-                    usage=_image_gen_token_usage(_FLARE_TEXT_IN, _FLARE_IMAGE_IN, _FLARE_IMAGE_OUT, 0),
-                    tools=[{"type": "image_generation", "model": _FLARE_IMAGE_TOOL_MODEL}],
-        )
-        return StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
-                    model="gpt-5",
-                    response_object=response,
-                    usage=None,
-                    custom_llm_provider="openai",
-                    standard_built_in_tools_params=None,
-        )
-    
+    response = _openai_responses_response(
+        "gpt-5",
+        [{"type": "image_generation_call", "id": "ig_1", "status": "completed", "result": "AAAA"}],
+        usage=_image_gen_token_usage(_FLARE_TEXT_IN, _FLARE_IMAGE_IN, _FLARE_IMAGE_OUT, 0),
+        tools=[{"type": "image_generation", "model": _FLARE_IMAGE_TOOL_MODEL}],
+    )
+    return StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model="gpt-5",
+        response_object=response,
+        usage=None,
+        custom_llm_provider="openai",
+        standard_built_in_tools_params=None,
+    )
+
 
 def test_image_tool_uses_deployment_custom_pricing(local_model_cost_map):
-        """A Responses image_generation tool's image bills at the Router deployment's custom rates, not list."""
-        rates = _flare_deployment_rates(0.5)
-        router = _flare_image_tool_router([("discounted-gpt-image-2.5-flare", rates)])
-        tools = [{"type": "image_generation", "model": _FLARE_IMAGE_TOOL_MODEL}]
-        usage = _image_gen_token_usage(_FLARE_TEXT_IN, _FLARE_IMAGE_IN, _FLARE_IMAGE_OUT, 0)
-        image_item = {"type": "image_generation_call", "id": "ig_1", "status": "completed", "result": "AAAA"}
-    
+    """A Responses image_generation tool's image bills at the Router deployment's custom rates, not list."""
+    rates = _flare_deployment_rates(0.5)
+    router = _flare_image_tool_router([("discounted-gpt-image-2.5-flare", rates)])
+    tools = [{"type": "image_generation", "model": _FLARE_IMAGE_TOOL_MODEL}]
+    usage = _image_gen_token_usage(_FLARE_TEXT_IN, _FLARE_IMAGE_IN, _FLARE_IMAGE_OUT, 0)
+    image_item = {"type": "image_generation_call", "id": "ig_1", "status": "completed", "result": "AAAA"}
+
     def _cost(output: list[dict[str, object]]) -> float:
-                return litellm.completion_cost(
-                                completion_response=_openai_responses_response("gpt-4.1-mini", output, usage=usage, tools=tools),
-                                model="gpt-4.1-mini",
-                                custom_llm_provider="openai",
-                                call_type="aresponses",
-                )
-        
+        return litellm.completion_cost(
+            completion_response=_openai_responses_response("gpt-4.1-mini", output, usage=usage, tools=tools),
+            model="gpt-4.1-mini",
+            custom_llm_provider="openai",
+            call_type="aresponses",
+        )
+
     image_part = _cost([image_item]) - _cost([])
 
     assert image_part == pytest.approx(
-                _expected_image_gen_token_cost(rates, _FLARE_TEXT_IN, _FLARE_IMAGE_IN, _FLARE_IMAGE_OUT, 0)
+        _expected_image_gen_token_cost(rates, _FLARE_TEXT_IN, _FLARE_IMAGE_IN, _FLARE_IMAGE_OUT, 0)
     )
     del router
 
 
 def test_image_tool_uses_custom_pricing_when_deployments_agree(local_model_cost_map):
-        """Two deployments of the tool model with identical custom rates bill the image at those rates."""
-        rates = _flare_deployment_rates(0.5)
-        router = _flare_image_tool_router([("flare-a", rates), ("flare-b", dict(rates))])
-    
+    """Two deployments of the tool model with identical custom rates bill the image at those rates."""
+    rates = _flare_deployment_rates(0.5)
+    router = _flare_image_tool_router([("flare-a", rates), ("flare-b", dict(rates))])
+
     cost = _flare_image_tool_cost()
 
     assert cost == pytest.approx(
-                _expected_image_gen_token_cost(rates, _FLARE_TEXT_IN, _FLARE_IMAGE_IN, _FLARE_IMAGE_OUT, 0)
+        _expected_image_gen_token_cost(rates, _FLARE_TEXT_IN, _FLARE_IMAGE_IN, _FLARE_IMAGE_OUT, 0)
     )
     del router
 
 
 def test_image_tool_falls_back_to_list_pricing_when_deployments_disagree(local_model_cost_map):
-        """Deployments of the tool model with different custom rates leave the image at list price."""
-        router = _flare_image_tool_router(
-                    [("flare-half", _flare_deployment_rates(0.5)), ("flare-quarter", _flare_deployment_rates(0.25))]
-        )
-    
+    """Deployments of the tool model with different custom rates leave the image at list price."""
+    router = _flare_image_tool_router(
+        [("flare-half", _flare_deployment_rates(0.5)), ("flare-quarter", _flare_deployment_rates(0.25))]
+    )
+
     cost = _flare_image_tool_cost()
 
     listed = litellm.get_model_info(_FLARE_IMAGE_TOOL_MODEL, custom_llm_provider="openai")
     assert cost == pytest.approx(
-                _expected_image_gen_token_cost(listed, _FLARE_TEXT_IN, _FLARE_IMAGE_IN, _FLARE_IMAGE_OUT, 0)
+        _expected_image_gen_token_cost(listed, _FLARE_TEXT_IN, _FLARE_IMAGE_IN, _FLARE_IMAGE_OUT, 0)
     )
     del router
 
 
 def test_responses_zero_image_gen_tokens_fall_back_to_per_image_pricing(local_model_cost_map):
-    """An all-zero image_gen usage block keeps the per-image path for the tool's model/quality/size."""
+    """Zero image generation tokens fall back to per-image pricing."""
     tool_model = "gpt-image-1"
     quality = "low"
     size = "1024x1024"
