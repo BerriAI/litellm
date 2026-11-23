@@ -314,10 +314,11 @@ async def test_invalid_callback_data_never_interrupts_model_requests(payload: ob
         {"messages": [{"role": "user", "content": "x" * MAX_EVENT_BYTES}], "response": {"id": "small"}},
         {"messages": [{"role": "user", "content": "\x01" * (MAX_EVENT_BYTES // 4)}], "response": {"id": "small"}},
         {"messages": [{"role": "user", "content": "hi"}], "response": {"text": "x" * MAX_EVENT_BYTES}},
+        {"model_parameters": {"tools": [{"type": "function", "strict": False}] * (MAX_EVENT_BYTES // 64)}},
     ),
-    ids=("long-conversation", "grows-past-the-budget-when-encoded", "long-response"),
+    ids=("long-conversation", "grows-past-the-budget-when-encoded", "long-response", "many-tool-definitions"),
 )
-async def test_a_request_with_a_conversation_over_the_budget_reaches_lens_with_its_cost(
+async def test_a_request_with_unexported_content_over_the_budget_reaches_lens_with_its_cost(
     conversation: dict[str, object],
 ) -> None:
     received: Final = asyncio.Queue[httpx.Request]()
