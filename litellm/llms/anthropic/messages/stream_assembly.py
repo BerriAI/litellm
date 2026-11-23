@@ -787,8 +787,51 @@ def _delta_as_its_type_reads(event: Mapping[str, object]) -> Mapping[str, object
     }
 
 
+_TYPESCRIPT_SDK_INPUT_BUFFER: Final = "__json_buf"
+
+
+def _carries_the_typescript_sdk_input_buffer(event: Mapping[str, object]) -> bool:
+    block: Final = as_str_mapping(event.get("content_block"))
+    return block is not None and _TYPESCRIPT_SDK_INPUT_BUFFER in block
+
+
+def _without_the_typescript_sdk_input_buffer(event: Mapping[str, object]) -> Mapping[str, object]:
+    """A block start without the ``__json_buf`` the TypeScript SDK puts in front of the block's input deltas."""
+    block: Final = as_str_mapping(event.get("content_block")) if event.get("type") == "content_block_start" else None
+    if block is None or _TYPESCRIPT_SDK_INPUT_BUFFER not in block:
+        return event
+    return {
+        **event,
+        "content_block": {key: value for key, value in block.items() if key != _TYPESCRIPT_SDK_INPUT_BUFFER},
+    }
+
+
+_BLOCK_CONTENT_EVENT_TYPES: Final = frozenset({"content_block_delta", "content_block_stop"})
+
+
+def _block_order_key(starts: Sequence[int], position: int, event: Mapping[str, object]) -> tuple[int, bool, int]:
+    """Sorts a delta or stop right after the start of the block both Anthropic SDKs apply it to.
+
+    The SDKs apply it to the block at its ``index`` in the order the blocks started, so an event for a block
+    not started before it, and every other event, keeps its own place.
+    """
+    index: Final = event.get("index") if event.get("type") in _BLOCK_CONTENT_EVENT_TYPES else None
+    block_start: Final = starts[index] if type(index) is int and 0 <= index < len(starts) else position
+    return min(block_start, position), event.get("type") == "content_block_stop", position
+
+
+def _in_block_order(events: Sequence[Mapping[str, object]]) -> tuple[Mapping[str, object], ...]:
+    starts: Final = tuple(
+        position for position, event in enumerate(events) if event.get("type") == "content_block_start"
+    )
+    ordered: Final = sorted(enumerate(events), key=lambda positioned: _block_order_key(starts, *positioned))
+    return tuple(event for _, event in ordered)
+
+
 def _canonical_sse_frames(events: Sequence[Mapping[str, object]]) -> tuple[str, ...]:
-    sdk_events: Final = tuple(_delta_as_its_type_reads(event) for event in events)
+    sdk_events: Final = tuple(
+        _without_the_typescript_sdk_input_buffer(_delta_as_its_type_reads(event)) for event in _in_block_order(events)
+    )
     streamed_input_indexes: Final = frozenset(
         index for event in sdk_events if (index := _streamed_input_index(event)) is not None
     )
@@ -799,10 +842,12 @@ def _canonical_sse_frames(events: Sequence[Mapping[str, object]]) -> tuple[str, 
 
 
 def anthropic_sse_frames_as_read(all_chunks: Sequence[object]) -> tuple[bytes, ...]:
-    """The stream's events exactly as assembly reads them, each as one ``event:`` line and one ``data:`` line.
+    """The stream's events as assembly reads them, each as one ``event:`` line and one ``data:`` line.
 
-    Every field the upstream sent stays, so a caller that cannot forward a stream some client reads
-    differently than assembly does can deliver these frames instead of a response rebuilt from the assembly.
+    Each block's deltas and stop follow its start, as the Anthropic SDKs apply them by index. Every field the
+    upstream sent stays except the ``__json_buf`` the TypeScript SDK would read as tool input, so a caller that
+    cannot forward a stream some client reads differently than assembly does can deliver these frames instead of
+    a response rebuilt from the assembly.
     """
     sse_stream: Final = _joined_sse_stream(all_chunks)
     if sse_stream is None:
@@ -895,7 +940,7 @@ def _after_block_event(blocks: _BlockOrder | None, event: Mapping[str, object]) 
     index: Final = event.get("index")
     match event.get("type"):
         case "content_block_start":
-            opens_next: Final = not is_open and _is_block_index(index, started)
+            opens_next: Final = _is_block_index(index, started) and not _carries_the_typescript_sdk_input_buffer(event)
             return (started + 1, True, _starts_with_input(event)) if opens_next else None
         case "content_block_delta":
             reads_alike: Final = (
@@ -922,19 +967,19 @@ def _opens_with_an_empty_message(events: Sequence[Mapping[str, object]]) -> bool
 def anthropic_sse_reads_alike(all_chunks: Sequence[object]) -> bool:
     """Whether every client reads the stream's content as assembly does, so the stream can be forwarded as sent.
 
-    The Anthropic SDKs apply a frame by its SSE ``event:`` name, other clients by its data ``type``, and a
-    client puts a block delta on the block at that list position or index. Assembly reads every one of
-    these the same way only when the names and types agree, ``message_start`` comes first with no content,
-    and each block starts at the next index and takes its deltas before it stops. The SDKs apply a delta by
-    its ``type`` and other clients by the field it carries, so each delta carries only its type's field. The
-    TypeScript SDK replaces a block's start ``input`` once an input delta arrives, even an empty one, and the
-    Python SDK keeps it, so a block that starts with its input takes no input delta. A frame named ``error``
-    may carry any data, since the SDKs raise on it and other clients read its type. A leading byte order mark
-    stays part of the first field name, as the Python SDK reads it, so these rules refuse it wherever it
-    changes what that SDK reads. No client dispatches a frame the stream never ended, a client splitting
-    lines with ``str.splitlines`` also breaks a line at a form feed or U+2028, and a client parsing each
-    ``data:`` line on its own reads a frame of several data lines as several events, so a stream with any of
-    these reads differently too.
+    The Anthropic SDKs apply a frame by its SSE ``event:`` name, other clients by its data ``type``, and a client
+    puts a block delta on the block at that list position or index. Assembly reads every one of these the same way
+    only when the names and types agree, ``message_start`` comes first with no content, and each block starts at the
+    next index and takes its deltas before it stops or the next block starts. The SDKs apply a delta by its ``type``
+    and other clients by the field it carries, so each delta carries only its type's field. The TypeScript SDK
+    replaces a block's start ``input`` once an input delta arrives, even an empty one, and the Python SDK keeps it,
+    so a block that starts with its input takes no input delta. The TypeScript SDK also puts a start's
+    ``__json_buf`` in front of the block's input deltas, so no block starts with one. A frame named ``error`` may
+    carry any data, since the SDKs raise on it and other clients read its type. A leading byte order mark stays part
+    of the first field name, as the Python SDK reads it, so these rules refuse it wherever it changes what that SDK
+    reads. No client dispatches a frame the stream never ended, a client splitting lines with ``str.splitlines``
+    also breaks a line at a form feed or U+2028, and a client parsing each ``data:`` line on its own reads a frame
+    of several data lines as several events, so a stream with any of these reads differently too.
     """
     sse_stream: Final = _joined_sse_stream(all_chunks) or ""
     client_frames: Final = _client_frames(_frames_a_client_dispatches(sse_stream))

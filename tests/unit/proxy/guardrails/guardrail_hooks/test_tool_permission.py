@@ -14,7 +14,7 @@ from unittest.mock import patch
 import anthropic
 import httpx
 import pytest
-from anthropic.types import Message
+from anthropic.types import Message, ToolUseBlock
 
 from litellm.caching.dual_cache import DualCache
 
@@ -4009,7 +4009,7 @@ class TestToolPermissionGuardrailAnthropicMessages:
                 },
             ],
             default_action="deny",
-            on_disallowed_action="block",
+            on_disallowed_action="rewrite",
         )
 
         def tool_start(index: int, tool_id: str, name: str) -> dict[str, object]:
@@ -4034,7 +4034,7 @@ class TestToolPermissionGuardrailAnthropicMessages:
 
         out: Final = await self._drain(guardrail, self._ended_by_upstream_error([self._sse_chunks("Bash")[0], *frames]))
 
-        assert b"rm -rf" not in b"".join(out)
+        assert {"command": "rm -rf /"} not in _tool_inputs_read_line_by_line(out)
         assert self._events(out)[-1] == self.UPSTREAM_ERROR
 
     @pytest.mark.asyncio
@@ -4247,6 +4247,18 @@ def _bash_call(command: dict[str, str]) -> tuple[bytes, ...]:
     )
 
 
+def _bash_start_behind_a_typescript_input_buffer(tool_input: dict[str, object] | None = None) -> dict[str, object]:
+    start: Final = _tool_start(1, "Bash", tool_input)
+    block: Final = start["content_block"]
+    assert isinstance(block, dict)
+    return {**start, "content_block": {**block, "__json_buf": '{"command": "rm -rf /", "ignored": '}}
+
+
+def _halves(value: dict[str, object]) -> tuple[str, str]:
+    text: Final = json.dumps(value)
+    return text[: len(text) // 2], text[len(text) // 2 :]
+
+
 _RM_RF_CALL: Final = _bash_call(_RM_RF)
 _DENIED_CALL_SHAPES: Final = {
     "commented-frames": _stream(*(b": data: keepalive\n" + frame for frame in _RM_RF_CALL)),
@@ -4305,6 +4317,17 @@ _DENIED_CALL_SHAPES: Final = {
             }
         ),
         _sse_frame(_block_stop(1)),
+    ),
+    "text-block-stopped-only-at-the-end": (
+        *_OPENING[:3],
+        *(_sse_frame(event) for event in (_tool_start(1, "Bash"), _input_delta(1, json.dumps(_RM_RF)))),
+        *(_sse_frame(_block_stop(index)) for index in (0, 1)),
+        *_CLOSING,
+    ),
+    "no-block-stops": (
+        *_OPENING[:3],
+        *(_sse_frame(event) for event in (_tool_start(1, "Bash"), _input_delta(1, json.dumps(_RM_RF)))),
+        *_CLOSING,
     ),
     "input-hidden-behind-a-text-field": _stream(
         _sse_frame(_tool_start(1, "Bash")),
@@ -4368,6 +4391,77 @@ _ALLOWED_CALL_SHAPES: Final = {
     "input-in-the-start-event-and-an-empty-delta": _stream(
         *(_sse_frame(event) for event in (_tool_start(1, "Bash", _LS), _input_delta(1, ""), _block_stop(1)))
     ),
+    "typescript-input-buffer-before-the-deltas": _stream(
+        *(
+            _sse_frame(event)
+            for event in (
+                _bash_start_behind_a_typescript_input_buffer(),
+                _input_delta(1, json.dumps(_LS)),
+                _block_stop(1),
+            )
+        )
+    ),
+    "typescript-input-buffer-beside-input-in-the-start-event": _stream(
+        *(
+            _sse_frame(event)
+            for event in (_bash_start_behind_a_typescript_input_buffer(_LS), _input_delta(1, ""), _block_stop(1))
+        )
+    ),
+}
+_READ_A: Final = {"file_path": "/tmp/a.txt"}
+_READ_AND_LS_IN_BLOCK_ORDER: Final = _stream(
+    *(
+        _sse_frame(event)
+        for event in (
+            _tool_start(1, "Read"),
+            _input_delta(1, json.dumps(_READ_A)),
+            _block_stop(1),
+            _tool_start(2, "Bash"),
+            _input_delta(2, json.dumps(_LS)),
+            _block_stop(2),
+        )
+    )
+)
+_READ_AND_LS_OUT_OF_BLOCK_ORDER: Final = {
+    "interleaved-input-deltas": _stream(
+        *(
+            _sse_frame(event)
+            for event in (
+                _tool_start(1, "Read"),
+                _tool_start(2, "Bash"),
+                _input_delta(1, _halves(_READ_A)[0]),
+                _input_delta(2, _halves(_LS)[0]),
+                _input_delta(1, _halves(_READ_A)[1]),
+                _input_delta(2, _halves(_LS)[1]),
+                _block_stop(1),
+                _block_stop(2),
+            )
+        )
+    ),
+    "block-stops-at-the-end": _stream(
+        *(
+            _sse_frame(event)
+            for event in (
+                _tool_start(1, "Read"),
+                _input_delta(1, json.dumps(_READ_A)),
+                _tool_start(2, "Bash"),
+                _input_delta(2, json.dumps(_LS)),
+                _block_stop(1),
+                _block_stop(2),
+            )
+        )
+    ),
+    "no-block-stops": _stream(
+        *(
+            _sse_frame(event)
+            for event in (
+                _tool_start(1, "Read"),
+                _input_delta(1, json.dumps(_READ_A)),
+                _tool_start(2, "Bash"),
+                _input_delta(2, json.dumps(_LS)),
+            )
+        )
+    ),
 }
 _TOOL_ONLY_SHAPES_THE_CHECK_CANNOT_FORWARD: Final = {
     "byte-order-mark": (b"\xef\xbb\xbf" + _LS_ONLY_STREAM[0], *_LS_ONLY_STREAM[1:]),
@@ -4396,12 +4490,19 @@ def _sdk_message(chunks: Sequence[object]) -> Message:
         return stream.get_final_message()
 
 
-def _tool_input_as_the_typescript_sdk_reads(start_input: object, partial_jsons: Sequence[str]) -> object:
-    # @anthropic-ai/sdk 1.12.0 internal/message-stream-utils.js: `jsonBuf ? partialParse(jsonBuf) : {}` (2026-11-22)
+def _tool_input_as_the_typescript_sdk_reads(start_input: object, json_buf: str, partial_jsons: Sequence[str]) -> object:
+    # @anthropic-ai/sdk 1.12.0 internal/message-stream-utils.js: `jsonBuf ? partialParse(jsonBuf) : {}`, and
+    # MessageStream.js copies the start's content_block whole, then reads `(snapshotContent.__json_buf || '')
+    # + event.delta.partial_json` (2026-11-23)
     if not partial_jsons:
         return start_input
-    streamed: Final = "".join(partial_jsons)
+    streamed: Final = json_buf + "".join(partial_jsons)
     return json.loads(streamed) if streamed else {}
+
+
+def _typescript_sdk_input_buffer(block: ToolUseBlock) -> str:
+    json_buf: Final = (block.model_extra or {}).get("__json_buf")
+    return json_buf if isinstance(json_buf, str) else ""
 
 
 def _typescript_sdk_tool_inputs(chunks: Sequence[object]) -> list[object]:
@@ -4411,20 +4512,21 @@ def _typescript_sdk_tool_inputs(chunks: Sequence[object]) -> list[object]:
         )
     )
     tool_starts: Final = [
-        (event.index, event.content_block.input)
+        (event.index, event.content_block)
         for event in events
         if event.type == "content_block_start" and event.content_block.type == "tool_use"
     ]
     return [
         _tool_input_as_the_typescript_sdk_reads(
-            start_input,
+            block.input,
+            _typescript_sdk_input_buffer(block),
             [
                 event.delta.partial_json
                 for event in events
                 if event.type == "content_block_delta" and event.index == index and event.delta.type == "input_json_delta"
             ],
         )
-        for index, start_input in tool_starts
+        for index, block in tool_starts
     ]
 
 
@@ -4520,6 +4622,18 @@ class TestToolPermissionGuardrailAnthropicStreamShapes:
         out: Final = await self._drain(self._bash_ls_only("block"), chunks)
 
         assert _sdk_message(out) == _sdk_message(list(_LS_ONLY_STREAM))
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "chunks", _READ_AND_LS_OUT_OF_BLOCK_ORDER.values(), ids=_READ_AND_LS_OUT_OF_BLOCK_ORDER
+    )
+    async def test_allowed_calls_out_of_block_order_reach_the_client_as_in_block_order(
+        self, chunks: tuple[bytes, ...]
+    ):
+        out: Final = await self._drain(self._bash_ls_only("block"), chunks)
+
+        assert _sdk_message(out) == _sdk_message(list(_READ_AND_LS_IN_BLOCK_ORDER))
+        assert _typescript_sdk_tool_inputs(out) == [_READ_A, _LS]
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
