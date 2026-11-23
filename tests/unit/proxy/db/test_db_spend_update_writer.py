@@ -4170,6 +4170,24 @@ def _responses_router() -> litellm.Router:
                 "litellm_params": {"model": "openai/gpt-5.1", "api_key": "sk-test", "use_chat_completions_api": True},
                 "model_info": {"id": "dep-forced-bridge"},
             },
+            {
+                "model_name": "native-router",
+                "litellm_params": {
+                    "model": "azure_ai/model_router/model-router",
+                    "api_base": "https://res.services.ai.azure.com/api/projects/proj/openai/v1",
+                    "api_key": "sk-test",
+                },
+                "model_info": {"id": "dep-native-router"},
+            },
+            {
+                "model_name": "azure-openai-router",
+                "litellm_params": {
+                    "model": "azure/model-router",
+                    "api_base": "https://res.services.ai.azure.com/openai/v1",
+                    "api_key": "sk-test",
+                },
+                "model_info": {"id": "dep-azure-openai-router"},
+            },
         ]
     )
 
@@ -4185,6 +4203,8 @@ def _responses_router() -> litellm.Router:
         ("aresponses", "dep-native", False),
         ("responses", "dep-native", False),
         ("acompletion", "dep-bridged", False),
+        ("aresponses", "dep-native-router", True),
+        ("aresponses", "dep-azure-openai-router", False),
     ],
 )
 async def test_insert_spend_log_asks_for_an_immediate_flush_only_on_rows_the_bridge_reads_back(
@@ -4203,6 +4223,33 @@ async def test_insert_spend_log_asks_for_an_immediate_flush_only_on_rows_the_bri
     await db_writer._insert_spend_log_to_db(payload=payload, prisma_client=prisma, llm_router=_responses_router())
 
     assert prisma.spend_log_transactions == [payload]
+    assert prisma.spend_log_flush_requested.is_set() is expects_flush
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "answered_id, expects_flush",
+    [pytest.param("chatcmpl-turn-1", True, id="bridged-turn"), pytest.param("resp_turn_1", False, id="native-turn")],
+)
+async def test_a_native_deployment_row_flushes_at_once_when_the_chat_bridge_answered_its_turn(
+    answered_id: str, expects_flush: bool
+):
+    from litellm.responses.utils import ResponsesAPIRequestUtils
+
+    prisma: Final = _tool_usage_prisma()
+    prisma.spend_log_flush_requested = asyncio.Event()
+    payload: Final = {
+        "request_id": ResponsesAPIRequestUtils._build_responses_api_response_id(
+            custom_llm_provider="openai", model_id="dep-native", response_id=answered_id
+        ),
+        "call_type": "aresponses",
+        "model_id": "dep-native",
+    }
+
+    await DBSpendUpdateWriter()._insert_spend_log_to_db(
+        payload=payload, prisma_client=prisma, llm_router=_responses_router()
+    )
+
     assert prisma.spend_log_flush_requested.is_set() is expects_flush
 
 

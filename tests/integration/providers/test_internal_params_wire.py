@@ -252,8 +252,6 @@ def _at(value: object, *path: str) -> object:
 
 def _custom_key(body: Mapping[str, object], provider: str) -> object:
     match provider:
-        case "anthropic":
-            return _at(body, "extra_body", "custom_provider_key")
         case "converse":
             return _at(body, "additionalModelRequestFields", "extra_body", "custom_provider_key")
     return _at(body, "custom_provider_key")
@@ -541,7 +539,8 @@ API_BASE_CHAT_PROVIDERS: Final = (
     "meta", "meta_llama", "minimax", "mistral", "modelscope", "moonshot", "morph", "nadir", "nano-gpt", "nebius",
     "neosantara", "novita", "nscale", "nvidia_nim", "ollama", "ollama_chat", "oobabooga", "openai", "openrouter",
     "ovhcloud", "parasail", "perplexity", "petals", "pinstripes", "poe", "prism", "publicai", "qwen_ai_platform",
-    "qwencloud", "reka", "sail", "sambanova", "scaleway", "scx-ai", "snowflake", "synthetic", "tencent", "tensormesh",
+    "qwencloud", "reka", "resetdata", "sail", "sambanova", "scaleway", "scx-ai", "snowflake", "synthetic", "tencent",
+    "tensormesh",
     "text-completion-codestral", "text-completion-inception", "text-completion-openai", "together_ai", "v0",
     "vercel_ai_gateway", "volcengine", "wandb", "xai", "xiaomi_mimo", "xinference", "zai",
 )  # fmt: skip

@@ -118,6 +118,7 @@ class VercelAIGatewayDecisionsConfig(OpenAIDecisionsConfig):
     """get_llm_provider already resolves the gateway's base and key, so never fall back to OpenAI credentials."""
 
     inlines_remote_images = True
+    supports_json_input = False
 
     def resolve_api_key(self, api_key: str | None) -> str | None:
         return api_key
@@ -130,7 +131,7 @@ class VercelAIGatewayDecisionsConfig(OpenAIDecisionsConfig):
     def parse_response(self, payload: object, request: DecisionsIRRequest) -> DecisionsIRResponse:
         response: Final = super().parse_response(payload, request)
         metadata: Final = _validated(_GatewayDecisionResponse, payload)
-        if metadata is None:
+        if metadata is None or response.usage is None:
             return response
         return replace(response, usage=_gateway_usage(response.usage, metadata.provider_metadata))
 

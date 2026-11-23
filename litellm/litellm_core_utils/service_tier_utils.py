@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final
 
 from litellm.types.utils import ServiceTier, StandardLoggingPayload
@@ -13,6 +15,10 @@ from litellm.types.utils import ServiceTier, StandardLoggingPayload
 # cost calculation cannot go missing here.
 KNOWN_REQUEST_SERVICE_TIERS: Final = frozenset(
     tuple(tier.value for tier in ServiceTier) + ("batch", "default", "reserved", "scale", "standard", "standard_only")
+)
+
+GEMINI_TRAFFIC_TYPE_SERVICE_TIERS: Final[Mapping[str, str]] = MappingProxyType(
+    {"ON_DEMAND_PRIORITY": "priority", "ON_DEMAND_FLEX": "flex", "FLEX": "flex", "BATCH": "flex"}
 )
 
 
