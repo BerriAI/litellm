@@ -149,7 +149,7 @@ export const buildUsageReportHtml = ({
   .summary .label { font-size: 11px; color: #6b7280; }
   .summary .value { font-size: 16px; font-weight: 600; font-family: ui-monospace, monospace; }
   table { width: 100%; border-collapse: collapse; font-size: 11px; }
-  th, td { text-align: left; padding: 4px 6px; border-bottom: 1px solid #e5e7eb; }
+  th, td { text-align: left; padding: 4px 6px; border-bottom: 1px solid #e5e7eb; overflow-wrap: anywhere; }
   th { background: #f3f4f6; }
   thead { display: table-header-group; }
   tr { break-inside: avoid; }
