@@ -1,11 +1,9 @@
 from datetime import datetime
-from io import BufferedReader, BytesIO
-from typing import Dict, Final
+from typing import Final
 
 import httpx
 import pytest
 
-from litellm import image_edit
 from litellm.images.utils import ImageEditRequestUtils
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.azure.image_edit.transformation import AzureImageEditConfig
@@ -21,12 +19,20 @@ def image_edit_config() -> OpenAIImageEditConfig:
 @pytest.mark.parametrize("config", [OpenAIImageEditConfig(), AzureImageEditConfig()])
 def test_transform_image_edit_response_retains_svg_authoring_usage(config: OpenAIImageEditConfig) -> None:
     svg_usage: Final = {
-        "model": "gpt-6.2-sol", "input_tokens": 10, "output_tokens": 20,
-        "reasoning_tokens": 5, "total_tokens": 30,
+        "model": "gpt-6.2-sol",
+        "input_tokens": 10,
+        "output_tokens": 20,
+        "reasoning_tokens": 5,
+        "total_tokens": 30,
     }
     logging_obj: Final = Logging(
-        model="gpt-image-2.6-flare", messages=[], stream=False, call_type="image_edit",
-        start_time=datetime(2026, 1, 1), litellm_call_id="svg-edit", function_id="svg-edit",
+        model="gpt-image-2.6-flare",
+        messages=[],
+        stream=False,
+        call_type="image_edit",
+        start_time=datetime(2026, 1, 1),
+        litellm_call_id="svg-edit",
+        function_id="svg-edit",
     )
     result: Final = config.transform_image_edit_response(
         model="gpt-image-2.6-flare",
@@ -334,3 +340,53 @@ def test_input_fidelity_passes_through_optional_param_filter():
     assert filtered["input_fidelity"] == "low"
     assert filtered["quality"] == "high"
     assert "unknown_param" not in filtered
+
+
+def test_get_supported_openai_params_includes_images(
+    image_edit_config: OpenAIImageEditConfig,
+):
+    """Test that images is in the supported params list for multi-image / JSON edits"""
+    supported = image_edit_config.get_supported_openai_params(model="gpt-image-1")
+    assert "images" in supported
+
+
+def test_transform_image_edit_request_with_json_images_and_mask(
+    image_edit_config: OpenAIImageEditConfig,
+):
+    """Test transformation with JSON images and mask (no uploaded files)"""
+    model = "gpt-image-1"
+    prompt = "Add a red border"
+    images = [{"image_url": "https://example.com/a.png"}]
+    mask = {"image_url": "https://example.com/mask.png"}
+    image_edit_optional_request_params = {"images": images, "mask": mask, "quality": "low"}
+    litellm_params = GenericLiteLLMParams()
+    headers = {}
+
+    data, files = image_edit_config.transform_image_edit_request(
+        model=model,
+        prompt=prompt,
+        image=None,
+        image_edit_optional_request_params=image_edit_optional_request_params,
+        litellm_params=litellm_params,
+        headers=headers,
+    )
+
+    assert data["model"] == model
+    assert data["prompt"] == prompt
+    assert data["images"] == images
+    assert data["mask"] == mask
+    assert data["quality"] == "low"
+    assert "image" not in data
+    assert files == []
+    assert image_edit_config.use_multipart_form_data_for_request(data=data, files=files) is False
+
+
+def test_use_multipart_form_data_for_request_with_files(
+    image_edit_config: OpenAIImageEditConfig,
+):
+    """Test that use_multipart_form_data_for_request is True when file parts exist"""
+    assert (
+        image_edit_config.use_multipart_form_data_for_request(files=[("image[]", ("image.png", b"...", "image/png"))])
+        is True
+    )
+    assert image_edit_config.use_multipart_form_data_for_request(files=[]) is False

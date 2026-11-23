@@ -158,6 +158,17 @@ class BaseImageEditConfig(ABC):
         """
         return True
 
+    def use_multipart_form_data_for_request(
+        self,
+        data: Mapping[str, object] | None = None,
+        files: RequestFiles | Sequence[tuple[str, Any]] | None = None,
+    ) -> bool:
+        """
+        Return True if this specific request should be sent as multipart/form-data.
+        Defaults to use_multipart_form_data() for backwards compatibility.
+        """
+        return self.use_multipart_form_data()
+
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
     ) -> BaseLLMException:

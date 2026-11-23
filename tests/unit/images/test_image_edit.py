@@ -1,5 +1,6 @@
 import asyncio
 import io
+import json
 from collections.abc import Iterator, Mapping
 from datetime import datetime
 from typing import Final
@@ -348,3 +349,88 @@ async def test_a_fal_edit_bills_the_deployment_price_per_image_on_a_logging_obje
 
     assert isinstance(result, ImageResponse)
     assert result._hidden_params["response_cost"] == pytest.approx(0.0456)
+
+
+@pytest.mark.asyncio
+async def test_openai_image_edit_json_images_sent_as_application_json(
+    respx_mock: respx.MockRouter,
+    httpx_transport: None,
+) -> None:
+    route: Final = respx_mock.post("https://api.openai.com/v1/images/edits").mock(
+        return_value=httpx.Response(200, json=_EDIT_RESPONSE)
+    )
+    images: Final = [
+        {"image_url": "data:image/png;base64," + _EDITED_IMAGE_B64},
+        {"image_url": "https://example.com/input.png"},
+    ]
+
+    result: Final = await litellm.aimage_edit(
+        model="openai/gpt-image-1",
+        prompt="Add a red border",
+        api_key="fake-key",
+        images=images,
+        quality="low",
+    )
+
+    assert isinstance(result, ImageResponse)
+    assert route.call_count == 1
+    sent_request: Final = route.calls[0].request
+    assert sent_request.headers["content-type"] == "application/json"
+    body: Final = json.loads(sent_request.content)
+    assert body["images"] == images
+    assert body["prompt"] == "Add a red border"
+    assert body["quality"] == "low"
+
+
+@pytest.mark.asyncio
+async def test_openai_image_edit_json_mask_sent_as_application_json(
+    respx_mock: respx.MockRouter,
+    httpx_transport: None,
+) -> None:
+    route: Final = respx_mock.post("https://api.openai.com/v1/images/edits").mock(
+        return_value=httpx.Response(200, json=_EDIT_RESPONSE)
+    )
+    images: Final = [{"image_url": "https://example.com/input.png"}]
+    mask: Final = {"image_url": "https://example.com/mask.png"}
+
+    result: Final = await litellm.aimage_edit(
+        model="openai/gpt-image-1",
+        prompt="Add a red border",
+        api_key="fake-key",
+        images=images,
+        mask=mask,
+    )
+
+    assert isinstance(result, ImageResponse)
+    assert route.call_count == 1
+    sent_request: Final = route.calls[0].request
+    assert sent_request.headers["content-type"] == "application/json"
+    body: Final = json.loads(sent_request.content)
+    assert body["images"] == images
+    assert body["mask"] == mask
+
+
+def test_openai_image_edit_sync_json_images(
+    respx_mock: respx.MockRouter,
+    httpx_transport: None,
+) -> None:
+    route: Final = respx_mock.post("https://api.openai.com/v1/images/edits").mock(
+        return_value=httpx.Response(200, json=_EDIT_RESPONSE)
+    )
+    images: Final = [{"image_url": "https://example.com/input.png"}]
+
+    result: Final = litellm.image_edit(
+        model="openai/gpt-image-1",
+        prompt="Add a red border",
+        api_key="fake-key",
+        images=images,
+        quality="low",
+    )
+
+    assert isinstance(result, ImageResponse)
+    assert route.call_count == 1
+    sent_request: Final = route.calls[0].request
+    assert sent_request.headers["content-type"] == "application/json"
+    body: Final = json.loads(sent_request.content)
+    assert body["images"] == images
+    assert body["quality"] == "low"

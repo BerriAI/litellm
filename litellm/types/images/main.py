@@ -13,8 +13,9 @@ class ImageEditOptionalRequestParams(TypedDict, total=False):
     """
 
     background: Literal["transparent", "opaque", "auto"] | None
+    images: list[dict[str, object]] | list[object] | None
     input_fidelity: Literal["high", "low"] | None
-    mask: str | None
+    mask: str | dict[str, object] | None
     n: int | None
     quality: Literal["high", "medium", "low", "standard", "auto"] | None
     response_format: Literal["url", "b64_json"] | None
@@ -31,5 +32,6 @@ class ImageEditRequestParams(ImageEditOptionalRequestParams, total=False):
     """
 
     image: FileTypes
+    images: list[dict[str, object]] | list[object] | None
     prompt: str
     model: str | None

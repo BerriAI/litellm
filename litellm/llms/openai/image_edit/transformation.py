@@ -1,4 +1,4 @@
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from io import BufferedReader
 from typing import TYPE_CHECKING, Any, Final, cast
 
@@ -55,6 +55,7 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
         """
         return [
             "image",
+            "images",
             "prompt",
             "background",
             "input_fidelity",
@@ -123,7 +124,9 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
         #########################################################
         _image_list: Final = request_dict.get("image")
         _mask = request_dict.get("mask")
-        data_without_files: Final = {k: v for k, v in request_dict.items() if k not in ["image", "mask"]}
+        data_without_files: Final[dict[str, Any]] = {
+            k: v for k, v in request_dict.items() if k not in ["image", "mask"]
+        }
         files_list: Final[list[tuple[str, Any]]] = []
 
         # Handle image parameter
@@ -132,11 +135,14 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
 
             for _image in image_list:
                 if _image is not None:
-                    self._add_image_to_files(
-                        files_list=files_list,
-                        image=_image,
-                        field_name="image[]",
-                    )
+                    if isinstance(_image, (dict, Mapping)):
+                        data_without_files.setdefault("images", []).append(_image)
+                    else:
+                        self._add_image_to_files(
+                            files_list=files_list,
+                            image=_image,
+                            field_name="image[]",
+                        )
         # Handle mask parameter if provided
         if _mask is not None:
             # Handle case where mask can be a list (extract first mask)
@@ -144,13 +150,31 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
                 _mask = _mask[0] if _mask else None
 
             if _mask is not None:
-                mask_content_type: Final[str] = ImageEditRequestUtils.get_image_content_type(_mask)
-                if isinstance(_mask, BufferedReader):
-                    files_list.append(("mask", (_mask.name, _mask, mask_content_type)))
+                if isinstance(_mask, (dict, Mapping)):
+                    data_without_files["mask"] = _mask
                 else:
-                    files_list.append(("mask", ("mask.png", _mask, mask_content_type)))
+                    mask_content_type: Final[str] = ImageEditRequestUtils.get_image_content_type(_mask)
+                    if isinstance(_mask, BufferedReader):
+                        files_list.append(("mask", (_mask.name, _mask, mask_content_type)))
+                    else:
+                        files_list.append(("mask", ("mask.png", _mask, mask_content_type)))
 
         return data_without_files, files_list
+
+    def use_multipart_form_data_for_request(
+        self,
+        data: Mapping[str, object] | None = None,
+        files: RequestFiles | Sequence[tuple[str, Any]] | None = None,
+    ) -> bool:
+        """
+        Return True if this specific request should be sent as multipart/form-data.
+
+        For OpenAI-style providers, image edits with no uploaded files (such as
+        JSON-form edits with image URLs or base64) are sent as application/json.
+        """
+        if not files:
+            return False
+        return self.use_multipart_form_data()
 
     def transform_image_edit_response(
         self,

@@ -1049,16 +1049,29 @@ def image_edit(
             or custom_llm_provider in litellm.openai_compatible_providers
         ):
             dropped_form_params: Final = header_auth_params(custom_llm_provider)
-            image_edit_request_params.update(
-                flatten_form_field_values(
-                    {key: value for key, value in non_default_params.items() if key not in dropped_form_params},
-                    (
-                        {key: value for key, value in extra_body.items() if key not in dropped_form_params}
-                        if isinstance(extra_body, dict)
-                        else None
-                    ),
-                )
+            filtered_non_default: Final = {
+                key: value for key, value in non_default_params.items() if key not in dropped_form_params
+            }
+            filtered_extra_body: Final = (
+                {key: value for key, value in extra_body.items() if key not in dropped_form_params}
+                if isinstance(extra_body, dict)
+                else None
             )
+            has_json_images: Final[bool] = not images and (
+                "images" in filtered_non_default
+                or (filtered_extra_body is not None and "images" in filtered_extra_body)
+            )
+            if has_json_images:
+                image_edit_request_params.update(filtered_non_default)
+                if filtered_extra_body is not None:
+                    image_edit_request_params.update(filtered_extra_body)
+            else:
+                image_edit_request_params.update(
+                    flatten_form_field_values(
+                        filtered_non_default,
+                        filtered_extra_body,
+                    )
+                )
 
         # Pre Call logging
         litellm_logging_obj.update_from_kwargs(
@@ -1170,9 +1183,9 @@ def image_edit(
 
 @client
 async def aimage_edit(
-    image: FileTypes | list[FileTypes] | None,
-    model: str,
-    prompt: str,
+    image: FileTypes | list[FileTypes] | None = None,
+    model: str | None = None,
+    prompt: str | None = None,
     mask: str | None = None,
     n: int | None = None,
     quality: str | ImageGenerationRequestQuality | None = None,

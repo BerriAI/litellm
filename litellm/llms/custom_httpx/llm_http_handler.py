@@ -7664,8 +7664,13 @@ class BaseLLMHTTPHandler:
             },
         )
 
+        use_multipart: Final[bool] = image_edit_provider_config.use_multipart_form_data_for_request(
+            data=data,
+            files=files,
+        )
+
         def send() -> httpx.Response:
-            if image_edit_provider_config.use_multipart_form_data():
+            if use_multipart:
                 return sync_httpx_client.post(
                     url=api_base,
                     headers=headers,
@@ -7772,8 +7777,13 @@ class BaseLLMHTTPHandler:
             },
         )
 
+        use_multipart: Final[bool] = image_edit_provider_config.use_multipart_form_data_for_request(
+            data=data,
+            files=files,
+        )
+
         async def send() -> httpx.Response:
-            if image_edit_provider_config.use_multipart_form_data():
+            if use_multipart:
                 return await async_httpx_client.post(
                     url=api_base,
                     headers=headers,
