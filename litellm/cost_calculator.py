@@ -50,7 +50,6 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     _SERVICE_TIER_TO_COST_KEY_SUFFIX,
     BilledTokenRates,
     CostCalculatorUtils,
-    _uses_inclusive_token_thresholds,
     calculate_cache_writing_cost,
     generic_cost_per_character,
     generic_cost_per_token,
@@ -65,6 +64,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     get_vertex_regional_endpoint_uplift,
     parse_prompt_tokens_details,
     select_cost_metric_for_model,
+    uses_inclusive_token_thresholds,
 )
 from litellm.litellm_core_utils.llm_response_utils.response_metadata import response_ms_since_logging_start
 from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
@@ -3475,7 +3475,7 @@ def batch_cost_calculator(
             batch_rates.cache_read_image,
             batch_rates.cache_creation,
             batch_rates.cache_creation_rates_by_ttl,
-            threshold_is_inclusive=_uses_inclusive_token_thresholds(custom_llm_provider),
+            threshold_is_inclusive=uses_inclusive_token_thresholds(custom_llm_provider),
         )
     elif input_cost_per_token is not None:
         total_prompt_cost = _half_price_prompt_cost(
