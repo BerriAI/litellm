@@ -3313,7 +3313,7 @@ def test_openai_chat_lets_the_extra_body_effort_override_the_top_level_one_and_k
     assert request_body["reasoning_effort"] == "low"
 
 
-@pytest.mark.parametrize("base_source", ["argument", "env"])
+@pytest.mark.parametrize("base_source", ["argument", "env", "sdk-client"])
 @pytest.mark.parametrize(
     "drop_params, reasoning",
     [
@@ -3341,7 +3341,8 @@ def test_openai_chat_does_not_judge_reasoning_fields_for_a_compatible_backend(
         messages=[{"role": "user", "content": "hello"}],
         drop_params=drop_params,
         api_key="fake-key",
-        **({"api_base": compatible_base} if base_source == "argument" else {}),
+        api_base=compatible_base if base_source == "argument" else None,
+        client=OpenAI(base_url=compatible_base, api_key="fake-key") if base_source == "sdk-client" else None,
         **reasoning,
     )
 
@@ -3390,6 +3391,25 @@ def test_function_tools_with_extra_body_reasoning_stay_on_chat_off_the_openai_ho
     assert json.loads(chat_route.calls[0].request.content)["reasoning"] == {"effort": "high"}
 
 
+@pytest.mark.parametrize("drop_params", [False, True])
+def test_function_tools_with_extra_body_reasoning_stay_on_chat_behind_a_compatible_sdk_client(
+    drop_params: bool, openai_chat_route: respx.Route, respx_mock: respx.MockRouter
+):
+    compatible_base: Final = "https://compatible.example/v1"
+    chat_route: Final = respx_mock.post(f"{compatible_base}/chat/completions").respond(json=_OPENAI_CHAT_ANSWER)
+
+    litellm.completion(
+        model="openai/gpt-5.4",
+        messages=[{"role": "user", "content": "hello"}],
+        tools=[{"type": "function", "function": {"name": "get_time", "parameters": {"type": "object"}}}],
+        extra_body={"reasoning": {"effort": "high"}},
+        drop_params=drop_params,
+        client=OpenAI(base_url=compatible_base, api_key="fake-key"),
+    )
+
+    assert json.loads(chat_route.calls[0].request.content)["reasoning"] == {"effort": "high"}
+
+
 _BRIDGED_OPENAI_ROUTES: Final = pytest.mark.parametrize(
     "model, route_kwargs",
     [
@@ -3403,10 +3423,18 @@ _BRIDGED_OPENAI_ROUTES: Final = pytest.mark.parametrize(
 )
 
 
-@pytest.mark.parametrize("key", ["reasoning", "reasoning_effort"])
+@pytest.mark.parametrize(
+    "reasoning",
+    [
+        {"extra_body": {"reasoning": _REFUSED_MODE_REASONING}},
+        {"extra_body": {"reasoning_effort": _REFUSED_MODE_REASONING}},
+        {"reasoning": _REFUSED_MODE_REASONING},
+    ],
+    ids=["extra-body-reasoning", "extra-body-reasoning-effort", "sdk-merged-reasoning"],
+)
 @_BRIDGED_OPENAI_ROUTES
 def test_openai_responses_bridge_drops_a_refused_mode_from_extra_body_reasoning_under_drop_params(
-    key: str,
+    reasoning: dict[str, dict[str, str]],
     model: str,
     route_kwargs: dict[str, list[dict[str, object]]],
     openai_chat_route: respx.Route,
@@ -3415,7 +3443,7 @@ def test_openai_responses_bridge_drops_a_refused_mode_from_extra_body_reasoning_
     litellm.completion(
         model=model,
         messages=[{"role": "user", "content": "hello"}],
-        extra_body={key: _REFUSED_MODE_REASONING},
+        **reasoning,
         drop_params=True,
         api_key="fake-key",
         **route_kwargs,
@@ -3423,6 +3451,23 @@ def test_openai_responses_bridge_drops_a_refused_mode_from_extra_body_reasoning_
 
     assert openai_chat_route.called is False
     assert json.loads(openai_responses_route.calls[0].request.content)["reasoning"] == {"effort": "low"}
+
+
+@pytest.mark.parametrize("drop_params", [False, True])
+def test_function_tools_send_an_extra_body_reasoning_object_to_the_responses_api_on_openai(
+    drop_params: bool, openai_chat_route: respx.Route, openai_responses_route: respx.Route
+):
+    litellm.completion(
+        model="openai/gpt-5.4",
+        messages=[{"role": "user", "content": "hello"}],
+        tools=[{"type": "function", "function": {"name": "get_time", "parameters": {"type": "object"}}}],
+        extra_body={"reasoning": {"effort": "high"}},
+        drop_params=drop_params,
+        api_key="fake-key",
+    )
+
+    assert openai_chat_route.called is False
+    assert json.loads(openai_responses_route.calls[0].request.content)["reasoning"]["effort"] == "high"
 
 
 @_BRIDGED_OPENAI_ROUTES

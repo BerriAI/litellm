@@ -1430,8 +1430,9 @@ async def _body_sent_upstream(
         {"reasoning_effort": REFUSED_REASONING},
         {"extra_body": {"reasoning": REFUSED_REASONING}},
         {"extra_body": {"reasoning_effort": REFUSED_REASONING}},
+        {"reasoning": REFUSED_REASONING},
     ],
-    ids=("top-level", "extra_body.reasoning", "extra_body.reasoning_effort"),
+    ids=("top-level", "extra_body.reasoning", "extra_body.reasoning_effort", "sdk-merged-reasoning"),
 )
 async def test_messages_drops_a_refused_reasoning_mode_and_keeps_the_effort_under_drop_params(
     request_fields: Mapping[str, object], respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch

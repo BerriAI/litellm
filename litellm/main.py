@@ -6130,6 +6130,12 @@ def completion(
             cast(object, model_info)  # cast-ok: model_info is the untyped dict kwarg
         )
         deployment_base_model: Final = base_model if isinstance(base_model, str) else None
+        supplied_client_api_base: Final = (
+            str(client.base_url)
+            if custom_llm_provider == "openai" and isinstance(client, openai.OpenAI | openai.AsyncOpenAI)
+            else None
+        )
+        reached_api_base: Final = supplied_client_api_base or api_base
         ## RESPONSES API BRIDGE LOGIC ## - check early and normalize model name
         responses_api_model_info, model = responses_api_bridge_check(
             model=model,
@@ -6149,7 +6155,7 @@ def completion(
             model=model,
             base_model=deployment_base_model,
             custom_llm_provider=custom_llm_provider,
-            api_base=api_base,
+            api_base=reached_api_base,
             deployment_model_info=deployment_model_info,
             drop_params=drop_unsupported_reasoning,
             additional_drop_params=routing_kwargs.get("additional_drop_params"),
@@ -6430,11 +6436,6 @@ def completion(
             messages if readable_messages is None else list(readable_messages)
         )
 
-        supplied_client_api_base: Final = (
-            str(client.base_url)
-            if custom_llm_provider == "openai" and isinstance(client, openai.OpenAI | openai.AsyncOpenAI)
-            else None
-        )
         # For logging - save the values of the litellm-specific params passed in
         requested_litellm_params: Final = get_litellm_params(
             acompletion=acompletion,
@@ -6443,7 +6444,7 @@ def completion(
             logger_fn=logger_fn,
             verbose=verbose,
             custom_llm_provider=custom_llm_provider,
-            api_base=supplied_client_api_base or api_base,
+            api_base=reached_api_base,
             litellm_call_id=kwargs.get("litellm_call_id", None),
             model_alias_map=litellm.model_alias_map,
             completion_call_id=id,
@@ -6603,7 +6604,7 @@ def completion(
                     resolved_reasoning_effort,
                     optional_params.get("extra_body"),
                     custom_llm_provider=custom_llm_provider,
-                    api_base=api_base,
+                    api_base=reached_api_base,
                 ),
                 reasoning_summary=_reasoning_summary_for_bridge,
                 api_base=api_base,
@@ -6669,7 +6670,7 @@ def completion(
             model=model,
             base_model=deployment_base_model,
             custom_llm_provider=custom_llm_provider,
-            api_base=api_base,
+            api_base=reached_api_base,
             deployment_model_info=typed_deployment_model_info,
             drop_params=drop_unsupported_reasoning,
             additional_drop_params=routing_kwargs.get("additional_drop_params"),

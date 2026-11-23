@@ -27,6 +27,7 @@ from litellm.utils import ProviderConfigManager, get_model_info_helper, model_co
 
 _OPENAI_DEFAULT_API_BASE: Final = "https://api.openai.com/v1"
 _REASONING_OBJECT_KEYS: Final = ("reasoning_effort", "reasoning")
+_SDK_MERGED_REASONING_KEYS: Final = ("reasoning",)
 RESPONSES_ONLY_PROVIDERS: Final = frozenset({"chatgpt", "github_copilot"})
 ROUTABLE_MODES: Final = frozenset({"chat", "responses"})
 
@@ -198,14 +199,14 @@ class _OpenAIReasoningJudge:
             refuses_level=OpenAIGPT5Config.row_disables_reasoning_effort_level,
         )
 
-    def cleaned(self, extra_body: Mapping[str, object]) -> Mapping[str, object]:
+    def cleaned(self, body: Mapping[str, object], keys: Sequence[str] = _REASONING_OBJECT_KEYS) -> Mapping[str, object]:
         judged: Final = {
             key: self.accepted(self._with_effort_checked(nested))
-            for key in _REASONING_OBJECT_KEYS
-            if (nested := str_keyed_mapping(extra_body.get(key))) is not None
+            for key in keys
+            if (nested := str_keyed_mapping(body.get(key))) is not None
         }
         return {
-            **{key: value for key, value in extra_body.items() if key not in judged},
+            **{key: value for key, value in body.items() if key not in judged},
             **{key: value for key, value in judged.items() if value is not None},
         }
 
@@ -221,11 +222,12 @@ def drop_refused_extra_body_reasoning(
     drop_params: bool,
     additional_drop_params: object,
 ) -> Mapping[str, object]:
-    extra_body: Final = str_keyed_mapping(params.get("extra_body"))
-    if extra_body is None or not drop_params or not _reaches_openai(custom_llm_provider, api_base):
+    if not drop_params or not _reaches_openai(custom_llm_provider, api_base):
         return params
     judge: Final = _OpenAIReasoningJudge(model, base_model, api_base, deployment_model_info, additional_drop_params)
-    return {**params, "extra_body": judge.cleaned(extra_body)}
+    sdk_merged: Final = judge.cleaned(params, keys=_SDK_MERGED_REASONING_KEYS)
+    extra_body: Final = str_keyed_mapping(params.get("extra_body"))
+    return sdk_merged if extra_body is None else {**sdk_merged, "extra_body": judge.cleaned(extra_body)}
 
 
 def drop_refused_forwarded_reasoning(forwarded_kwargs: Mapping[str, object], *, model: str) -> Mapping[str, object]:
@@ -248,7 +250,7 @@ def drop_refused_forwarded_reasoning(forwarded_kwargs: Mapping[str, object], *, 
     requested: Final = str_keyed_mapping(forwarded_kwargs.get("reasoning_effort"))
     extra_body: Final = str_keyed_mapping(forwarded_kwargs.get("extra_body"))
     return {
-        **forwarded_kwargs,
+        **judge.cleaned(forwarded_kwargs, keys=_SDK_MERGED_REASONING_KEYS),
         **({} if requested is None else {"reasoning_effort": judge.accepted(requested)}),
         **({} if extra_body is None else {"extra_body": _with_responses_reasoning(judge.cleaned(extra_body))}),
     }
