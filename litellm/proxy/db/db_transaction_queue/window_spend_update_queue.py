@@ -164,7 +164,7 @@ class WindowSpendUpdateQueue(BaseUpdateQueue):
         self,
     ) -> tuple[WindowSpendTransaction, ...]:
         """Drain the queue and return the increments aggregated per window."""
-        updates: Final = await self.flush_all_updates_from_in_memory_queue()
+        updates: Final[list[tuple[WindowSpendTransaction, ...]]] = await self.flush_all_updates_from_in_memory_queue()
         if len(updates) > 0:
             verbose_proxy_logger.info(
                 "Spend tracking - flushed %d budget window spend update batches from in-memory queue",

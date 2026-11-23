@@ -66,6 +66,7 @@ from litellm.types.utils import (
     Message,
     ModelResponse,
     ModelResponseStream,
+    TextChoices,
     TextCompletionResponse,
 )
 
@@ -1618,7 +1619,7 @@ class CiscoAIDefenseGuardrail(CiscoAIDefenseMcpMixin, CustomGuardrail):
 
     @staticmethod
     def _redact_text_completion_choices(
-        choices: list,
+        choices: Sequence[TextChoices],
         sanitized_text: str | None,
         sanitized_messages: list[dict[str, object]] | None,
     ) -> bool:
