@@ -3,8 +3,10 @@ Tests for AgenticAnthropicStreamingIterator and SSE rebuild helpers.
 """
 
 import asyncio
+import functools
 import json
-from typing import Any, Dict, List, Optional, Tuple
+import selectors
+from typing import Any, Callable, Coroutine, Dict, List, Optional, ParamSpec, Tuple, TypeVar
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -248,6 +250,43 @@ class MockSlowAsyncStream(MockAsyncStream):
         return await super().__anext__()
 
 
+class _IdleSkippingSelector(selectors.DefaultSelector):
+    def __init__(self) -> None:
+        super().__init__()
+        self.skipped_seconds = 0.0
+
+    def select(self, timeout: Optional[float] = None) -> List[Tuple[selectors.SelectorKey, int]]:
+        ready = super().select(0)
+        if ready or timeout == 0:
+            return ready
+        if timeout is None:
+            raise AssertionError("every task is waiting and no timer is left to fire")
+        self.skipped_seconds += timeout
+        return ready
+
+
+class _VirtualClockLoop(asyncio.SelectorEventLoop):
+    def __init__(self) -> None:
+        self._idle_skipping_selector = _IdleSkippingSelector()
+        super().__init__(self._idle_skipping_selector)
+
+    def time(self) -> float:
+        return super().time() + self._idle_skipping_selector.skipped_seconds
+
+
+_P = ParamSpec("_P")
+_T = TypeVar("_T")
+
+
+def _on_virtual_clock(test: Callable[_P, Coroutine[object, object, _T]]) -> Callable[_P, _T]:
+    @functools.wraps(test)
+    def run(*args: _P.args, **kwargs: _P.kwargs) -> _T:
+        with asyncio.Runner(loop_factory=_VirtualClockLoop) as runner:
+            return runner.run(test(*args, **kwargs))
+
+    return run
+
+
 class MockFailingAsyncStream(MockAsyncStream):
     """Async iterator that raises after yielding its chunks."""
 
@@ -261,10 +300,13 @@ class MockFailingAsyncStream(MockAsyncStream):
         return await super().__anext__()
 
 
+PING_INTERVAL_SECONDS = 15.0
+
+
 def _build_hold_back_iterator(
     stream: MockAsyncStream,
     mock_handler: MagicMock,
-    ping_interval_seconds: float = 15.0,
+    ping_interval_seconds: float = PING_INTERVAL_SECONDS,
     server_fulfilled_tool_names: frozenset = frozenset({"litellm_content_retrieve"}),
 ) -> AgenticAnthropicStreamingIterator:
     return AgenticAnthropicStreamingIterator(
@@ -1146,7 +1188,7 @@ class TestAgenticStreamingIteratorHoldBack:
         assert [chunk async for chunk in iterator] == frames
         handler._call_agentic_completion_hooks.assert_awaited_once()
 
-    @pytest.mark.asyncio
+    @_on_virtual_clock
     async def test_a_client_tool_use_waits_for_the_hooks_then_reaches_the_client_unchanged(self):
         chunks = _text_then_tool_use_stream(tool_name="get_weather")
         release_hooks = asyncio.Event()
@@ -1154,15 +1196,15 @@ class TestAgenticStreamingIteratorHoldBack:
         async def hooks(**_kwargs):
             await release_hooks.wait()
 
-        iterator = _build_hold_back_iterator(MockAsyncStream(chunks), _hooks_running(hooks), ping_interval_seconds=0.01)
+        iterator = _build_hold_back_iterator(MockAsyncStream(chunks), _hooks_running(hooks))
 
         assert await _read_until_ping(iterator) == chunks[:LIVE_TEXT_FRAMES]
         assert await iterator.__anext__() == STREAM_SSE_KEEPALIVE_PING_BYTES
         release_hooks.set()
         assert await _drain_without_pings(iterator) == chunks[LIVE_TEXT_FRAMES:]
 
-    @pytest.mark.asyncio
     @pytest.mark.parametrize("first_ending_frame", ["message_delta", "message_stop"])
+    @_on_virtual_clock
     async def test_the_end_of_an_answer_waits_for_the_hooks(self, first_ending_frame):
         frames = _build_simple_text_stream()
         chunks = frames if first_ending_frame == "message_delta" else [*frames[:LIVE_TEXT_FRAMES], frames[-1]]
@@ -1171,24 +1213,42 @@ class TestAgenticStreamingIteratorHoldBack:
         async def hooks(**_kwargs):
             await release_hooks.wait()
 
-        iterator = _build_hold_back_iterator(MockAsyncStream(chunks), _hooks_running(hooks), ping_interval_seconds=0.01)
+        iterator = _build_hold_back_iterator(MockAsyncStream(chunks), _hooks_running(hooks))
 
         assert await _read_until_ping(iterator) == chunks[:LIVE_TEXT_FRAMES]
         release_hooks.set()
         assert await _drain_without_pings(iterator) == chunks[LIVE_TEXT_FRAMES:]
 
-    @pytest.mark.asyncio
+    @_on_virtual_clock
+    async def test_a_frame_the_stream_cut_off_waits_for_the_hooks(self):
+        streamed = _build_simple_text_stream()[:3]
+        cut_off_delta = _sse_event(
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": " and then"}},
+        ).rstrip(b"\n")
+        release_hooks = asyncio.Event()
+
+        async def hooks(**_kwargs):
+            await release_hooks.wait()
+
+        iterator = _build_hold_back_iterator(MockAsyncStream([*streamed, cut_off_delta]), _hooks_running(hooks))
+
+        assert await _read_until_ping(iterator) == streamed
+        release_hooks.set()
+        assert await _drain_without_pings(iterator) == [cut_off_delta]
+
+    @_on_virtual_clock
     async def test_keepalive_pings_cover_a_stalled_upstream_without_losing_or_repeating_a_frame(self):
         chunks = _build_simple_text_stream()
         upstream = GatedStream(chunks[:2], chunks[2:])
-        iterator = _build_hold_back_iterator(upstream, _hooks_returning(None), ping_interval_seconds=0.01)
+        iterator = _build_hold_back_iterator(upstream, _hooks_returning(None))
 
         assert await _read_until_ping(iterator) == chunks[:2]
         assert await iterator.__anext__() == STREAM_SSE_KEEPALIVE_PING_BYTES
         upstream.gate.set()
         assert await _drain_without_pings(iterator) == chunks[2:]
 
-    @pytest.mark.asyncio
+    @_on_virtual_clock
     async def test_keepalive_pings_cover_a_slow_held_tail_and_slow_hooks_without_leaking_held_frames(self):
         chunks = _text_then_tool_use_stream()
         upstream = GatedStream(chunks[: LIVE_TEXT_FRAMES + 1], chunks[LIVE_TEXT_FRAMES + 1 :])
@@ -1200,7 +1260,7 @@ class TestAgenticStreamingIteratorHoldBack:
             await release_hooks.wait()
             return MockAsyncStream(_follow_up_stream())
 
-        iterator = _build_hold_back_iterator(upstream, _hooks_running(hooks), ping_interval_seconds=0.01)
+        iterator = _build_hold_back_iterator(upstream, _hooks_running(hooks))
 
         assert await _read_until_ping(iterator) == chunks[:LIVE_TEXT_FRAMES]
         assert await iterator.__anext__() == STREAM_SSE_KEEPALIVE_PING_BYTES
@@ -1214,7 +1274,7 @@ class TestAgenticStreamingIteratorHoldBack:
         assert _block_starts(_wire_events(received)) == [(1, "text")]
         assert b"litellm_content_retrieve" not in b"".join(received)
 
-    @pytest.mark.asyncio
+    @_on_virtual_clock
     async def test_keepalive_pings_keep_flowing_while_a_held_tool_use_trickles_in_faster_than_the_interval(self):
         chunks = _text_then_tool_use_stream(tool_name="get_weather")
         input_delta = _sse_event(
@@ -1223,11 +1283,12 @@ class TestAgenticStreamingIteratorHoldBack:
         )
         trickled = [*chunks[: LIVE_TEXT_FRAMES + 1], *[input_delta] * 10, *chunks[LIVE_TEXT_FRAMES + 1 :]]
         iterator = _build_hold_back_iterator(
-            MockSlowAsyncStream(trickled, delay_seconds=0.01), _hooks_returning(None), ping_interval_seconds=0.03
+            MockSlowAsyncStream(trickled, delay_seconds=PING_INTERVAL_SECONDS * 0.4), _hooks_returning(None)
         )
 
         received = [chunk async for chunk in iterator]
 
+        assert received[:LIVE_TEXT_FRAMES] == chunks[:LIVE_TEXT_FRAMES]
         held = received[received.index(chunks[LIVE_TEXT_FRAMES - 1]) + 1 : received.index(chunks[LIVE_TEXT_FRAMES])]
         assert STREAM_SSE_KEEPALIVE_PING_BYTES in held
         assert [chunk for chunk in received if chunk != STREAM_SSE_KEEPALIVE_PING_BYTES] == trickled
@@ -1338,13 +1399,13 @@ class TestAgenticStreamingIteratorHoldBack:
 
         assert [c for c in collected if c != STREAM_SSE_KEEPALIVE_PING_BYTES] == chunks
 
-    @pytest.mark.asyncio
+    @_on_virtual_clock
     async def test_keepalive_pings_cover_a_stalled_follow_up(self):
         follow_up = _follow_up_stream()
         stalled = GatedStream(follow_up[:2], follow_up[2:])
         chunks = _text_then_tool_use_stream()
         iterator = _build_hold_back_iterator(
-            MockAsyncStream(chunks), _hooks_returning(stalled), ping_interval_seconds=0.01
+            MockAsyncStream(chunks), _hooks_returning(stalled)
         )
 
         before_stall = await _read_until_ping(iterator)
@@ -1376,12 +1437,12 @@ class TestAgenticStreamingIteratorHoldBack:
             async for _ in iterator:
                 pass
 
-    @pytest.mark.asyncio
+    @_on_virtual_clock
     async def test_closing_while_upstream_is_pending_closes_upstream_without_running_hooks(self):
         chunks = _text_then_tool_use_stream()
         upstream = GatedStream(chunks[:LIVE_TEXT_FRAMES], chunks[LIVE_TEXT_FRAMES:])
         handler = _hooks_returning(None)
-        iterator = _build_hold_back_iterator(upstream, handler, ping_interval_seconds=0.01)
+        iterator = _build_hold_back_iterator(upstream, handler)
 
         await _read_until_ping(iterator)
         await iterator.aclose()
@@ -1389,13 +1450,13 @@ class TestAgenticStreamingIteratorHoldBack:
         assert upstream.closed
         handler._call_agentic_completion_hooks.assert_not_awaited()
 
-    @pytest.mark.asyncio
     @pytest.mark.parametrize("follow_up_frame_pending", [True, False])
+    @_on_virtual_clock
     async def test_closing_during_the_follow_up_closes_it(self, follow_up_frame_pending):
         follow_up_frames = _follow_up_stream()
         follow_up = GatedStream(follow_up_frames[:2], follow_up_frames[2:])
         iterator = _build_hold_back_iterator(
-            MockAsyncStream(_text_then_tool_use_stream()), _hooks_returning(follow_up), ping_interval_seconds=0.01
+            MockAsyncStream(_text_then_tool_use_stream()), _hooks_returning(follow_up)
         )
 
         if follow_up_frame_pending:
@@ -1407,7 +1468,7 @@ class TestAgenticStreamingIteratorHoldBack:
 
         assert follow_up.closed
 
-    @pytest.mark.asyncio
+    @_on_virtual_clock
     async def test_closing_while_hooks_run_cancels_them(self):
         hooks_started = asyncio.Event()
         hooks_cancelled = asyncio.Event()
@@ -1421,7 +1482,7 @@ class TestAgenticStreamingIteratorHoldBack:
                 raise
 
         iterator = _build_hold_back_iterator(
-            MockAsyncStream(_text_then_tool_use_stream()), _hooks_running(hooks), ping_interval_seconds=0.01
+            MockAsyncStream(_text_then_tool_use_stream()), _hooks_running(hooks)
         )
 
         while not hooks_started.is_set():

@@ -399,7 +399,12 @@ async def test_build_agentic_loop_plan_missing_key_fallback():
 
 
 @pytest.mark.asyncio
-async def test_build_agentic_loop_plan_keeps_text_written_before_the_retrieve_call():
+@pytest.mark.parametrize(
+    ("stream", "text_the_client_saw"),
+    [(True, [{"type": "text", "text": "I'll fetch your tides notes."}]), (False, [])],
+    ids=["streamed", "not_streamed"],
+)
+async def test_build_agentic_loop_plan_keeps_only_the_text_the_client_already_received(stream, text_the_client_saw):
     logger = CompressionInterceptionLogger()
     logger._compression_cache_by_call_id["call_text"] = ({"message_3": "tides notes"}, 9999999999.0)
     logging_obj = MagicMock()
@@ -409,7 +414,12 @@ async def test_build_agentic_loop_plan_keeps_text_written_before_the_retrieve_ca
     tool_use = {"type": "tool_use", "id": "toolu_1", "name": "litellm_content_retrieve", "input": {"key": "message_3"}}
     response = {
         "role": "assistant",
-        "content": [thinking, {"type": "text", "text": "I'll fetch your tides notes."}, tool_use],
+        "content": [
+            thinking,
+            {"type": "text", "text": "I'll fetch your tides notes."},
+            tool_use,
+            {"type": "text", "text": "Held back behind the call."},
+        ],
     }
     request_params = {"tools": [{"type": "custom", "name": "litellm_content_retrieve"}]}
 
@@ -418,7 +428,7 @@ async def test_build_agentic_loop_plan_keeps_text_written_before_the_retrieve_ca
         model="claude-sonnet",
         messages=[{"role": "user", "content": "quote my tides notes"}],
         tools=request_params["tools"],
-        stream=True,
+        stream=stream,
         custom_llm_provider="anthropic",
         kwargs={},
     )
@@ -430,17 +440,13 @@ async def test_build_agentic_loop_plan_keeps_text_written_before_the_retrieve_ca
         anthropic_messages_provider_config=None,
         anthropic_messages_optional_request_params=request_params,
         logging_obj=logging_obj,
-        stream=True,
+        stream=stream,
         kwargs={},
     )
 
     assert should_run is True
     assert plan.request_patch is not None
-    assert plan.request_patch.messages[-2]["content"] == [
-        thinking,
-        {"type": "text", "text": "I'll fetch your tides notes."},
-        tool_use,
-    ]
+    assert plan.request_patch.messages[-2]["content"] == [thinking, *text_the_client_saw, tool_use]
 
 
 def _stub_compress_result(original_tokens, compressed_tokens, cache):
