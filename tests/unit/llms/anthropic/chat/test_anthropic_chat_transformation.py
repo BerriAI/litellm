@@ -4,7 +4,7 @@ import json
 import logging
 import sys
 from collections import deque
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from itertools import chain
 from typing import Final, cast
 from unittest.mock import MagicMock, patch
@@ -11545,6 +11545,29 @@ def test_chat_transform_request_ignores_thinking_blocks_on_a_turn_it_never_repla
 )
 def test_chat_transform_request_replays_every_well_formed_thinking_block(local_model_cost_map, thinking_blocks: object):
     converted: Final = _chat_request(AnthropicConfig(), UNFLAGGED_CLAUDE, _replayed_turn(thinking_blocks))
+
+    assert _replayed_signatures(converted) == ["sig-1", "sig-2"]
+
+
+@pytest.mark.parametrize("drop_params", [False, True])
+@pytest.mark.parametrize(
+    "make_blocks",
+    [
+        pytest.param(lambda: {"a": _REPLAYED_THINKING, "b": _SECOND_REPLAYED_THINKING}.values(), id="dict_values"),
+        pytest.param(lambda: iter([_REPLAYED_THINKING, _SECOND_REPLAYED_THINKING]), id="iterator"),
+        pytest.param(lambda: (block for block in (_REPLAYED_THINKING, _SECOND_REPLAYED_THINKING)), id="generator"),
+    ],
+)
+def test_chat_transform_request_replays_thinking_blocks_from_any_iterable(
+    local_model_cost_map, make_blocks: Callable[[], Iterable[object]], drop_params: bool
+):
+    converted: Final = AnthropicConfig().transform_request(
+        model=UNFLAGGED_CLAUDE,
+        messages=_replayed_turn(make_blocks()),
+        optional_params={},
+        litellm_params={"drop_params": drop_params},
+        headers={},
+    )
 
     assert _replayed_signatures(converted) == ["sig-1", "sig-2"]
 
