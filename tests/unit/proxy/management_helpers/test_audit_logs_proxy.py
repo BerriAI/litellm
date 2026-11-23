@@ -923,14 +923,18 @@ async def test_a_batch_whose_retries_run_out_is_logged_by_row_and_counted_once_p
 
     with patch.object(verbose_proxy_logger, "error") as logged_error:
         await create_audit_logs_for_updates((first, second))
+        retry_names: Final = tuple(task.get_name() for task in asyncio.all_tasks() if "retry of" in task.get_name())
         await drain_audit_tasks()
 
     assert audit_log_store.rows == []
     assert audit_log_store.attempts == 3
     assert audit_failure_metric.callback_names == ["audit_log_database", "audit_log_database"]
-    logged_error.assert_called_once()
-    assert "team-a" in logged_error.call_args.args[1]
-    assert "team-b" in logged_error.call_args.args[1]
+    logged_rows: Final = [call.args[1] for call in logged_error.call_args_list]
+    assert len(logged_rows) == 2
+    assert ("team-a" in logged_rows[0], "team-b" in logged_rows[0]) == (True, False)
+    assert ("team-a" in logged_rows[1], "team-b" in logged_rows[1]) == (False, True)
+    assert len(retry_names) == 1
+    assert "team-a" not in retry_names[0] and "team-b" not in retry_names[0]
 
 
 @pytest.mark.asyncio

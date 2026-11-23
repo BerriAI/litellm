@@ -306,8 +306,11 @@ async def create_object_audit_log(
 @dataclass(frozen=True, slots=True)
 class _AuditWrite:
     insert: Callable[[], Awaitable[object]]
-    description: str
-    row_count: int
+    rows: tuple[LiteLLM_AuditLogs, ...]
+
+
+def _audit_write_label(write: _AuditWrite) -> str:
+    return _audit_row_label(write.rows[0]) if len(write.rows) == 1 else f"{len(write.rows)} audit logs"
 
 
 async def _attempt_audit_write(write: _AuditWrite) -> Exception | None:
@@ -327,9 +330,9 @@ def _is_stored_by_an_earlier_attempt(failure: Exception) -> bool:
 
 
 def _report_failed_audit_write(write: _AuditWrite, failure: Exception) -> None:
-    verbose_proxy_logger.error("Failed Creating audit log for %s: %s", write.description, failure)
     reporter: Final = CustomLogger()
-    for _ in range(write.row_count):
+    for row in write.rows:
+        verbose_proxy_logger.error("Failed Creating audit log for %s: %s", _audit_row_label(row), failure)
         reporter.handle_callback_failure(callback_name=_AUDIT_DATABASE_CALLBACK_NAME)
 
 
@@ -354,7 +357,7 @@ async def _insert_audit_logs(write: _AuditWrite) -> None:
     track_audit_task(
         asyncio.create_task(
             _retry_audit_write(write, failure, _AUDIT_WRITE_RETRY_DELAYS_SECONDS),
-            name=f"retry of {write.description} to the database",
+            name=f"retry of {_audit_write_label(write)} to the database",
         )
     )
 
@@ -436,13 +439,7 @@ async def create_audit_log_for_update(request_data: LiteLLM_AuditLogs):
 
     await track_audit_task(
         asyncio.create_task(
-            _insert_audit_logs(
-                _AuditWrite(
-                    insert=lambda: _insert_audit_log(prisma_client, encoded),
-                    description=_audit_row_label(encoded),
-                    row_count=1,
-                )
-            ),
+            _insert_audit_logs(_AuditWrite(insert=lambda: _insert_audit_log(prisma_client, encoded), rows=(encoded,))),
             name=_audit_task_name(encoded, "the database"),
         )
     )
@@ -469,11 +466,7 @@ async def create_audit_logs_for_updates(rows: Sequence[LiteLLM_AuditLogs]) -> No
     await track_audit_task(
         asyncio.create_task(
             _insert_audit_logs(
-                _AuditWrite(
-                    insert=lambda: _insert_audit_log_batch(prisma_client, encoded),
-                    description=", ".join(_audit_row_label(row) for row in encoded),
-                    row_count=len(encoded),
-                )
+                _AuditWrite(insert=lambda: _insert_audit_log_batch(prisma_client, encoded), rows=encoded)
             ),
             name=f"{len(encoded)} audit logs to the database",
         )
