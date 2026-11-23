@@ -294,6 +294,7 @@ _MODEL_LIST: Final = TypeAdapter(_ModelList)
 
 
 _PROXY_KEY_HINT: Final = "--test and --health send LITELLM_MASTER_KEY as the key, and only to a local --host"
+_HEALTH_CHECK_TIMEOUT: Final = httpx.Timeout(5.0, read=None)
 
 
 def _proxy_api_key(host: str) -> str:
@@ -308,6 +309,14 @@ def _raise_for_proxy_error(response: httpx.Response) -> None:
     raise click.ClickException(f"GET {response.url} answered {response.status_code}: {response.text}{hint}")
 
 
+def _is_retired(listed_model: str) -> bool:
+    provider, _, provider_model = listed_model.partition("/")
+    cost_map_keys: Final = (
+        (listed_model, provider_model) if provider_model and provider in litellm.provider_list else (listed_model,)
+    )
+    return any(is_cost_map_model_past_deprecation_date(key) for key in cost_map_keys)
+
+
 def _pick_test_model(api_base: str, api_key: str) -> str:
     response: Final = httpx.get(
         url=f"{api_base}/v1/models",
@@ -318,10 +327,12 @@ def _pick_test_model(api_base: str, api_key: str) -> str:
     named_models: Final = itertools.takewhile(
         lambda listed: "*" not in listed["id"], _MODEL_LIST.validate_json(response.content)["data"]
     )
-    chat_models: Final = tuple(listed["id"] for listed in named_models if listed.get("mode") in (None, "chat"))
+    chat_models: Final = tuple(
+        listed["id"] for listed in named_models if listed.get("mode") in (None, "chat", "responses")
+    )
     if not chat_models:
         raise click.ClickException(f"the proxy at {api_base} lists no chat model by name, pass one with --model")
-    return next((model for model in chat_models if not is_cost_map_model_past_deprecation_date(model)), chat_models[0])
+    return next((model for model in chat_models if not _is_retired(model)), chat_models[0])
 
 
 class _GunicornSettings(Protocol):
@@ -346,7 +357,9 @@ class ProxyInitializationHelpers:
     def run_health_check(host: str, port: int):
         print("\nLiteLLM: Health Testing models in config")
         response: Final = httpx.get(
-            url=f"http://{host}:{port}/health", headers={"Authorization": f"Bearer {_proxy_api_key(host)}"}
+            url=f"http://{host}:{port}/health",
+            headers={"Authorization": f"Bearer {_proxy_api_key(host)}"},
+            timeout=_HEALTH_CHECK_TIMEOUT,
         )
         _raise_for_proxy_error(response)
         print(json.dumps(response.json(), indent=4))

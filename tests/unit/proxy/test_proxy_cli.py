@@ -253,6 +253,24 @@ class TestProxyInitializationHelpers:
         assert ("LITELLM_MASTER_KEY" in raised.value.message) is names_the_master_key
         assert "proxy said no" not in capsys.readouterr().out
 
+    @respx.mock
+    def test_health_flag_waits_for_model_checks_slower_than_five_seconds(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        slowest_model_check_seconds: Final = 30
+
+        def slow_proxy(request: httpx.Request) -> httpx.Response:
+            read_timeout: Final = request.extensions["timeout"]["read"]
+            if read_timeout is not None and read_timeout < slowest_model_check_seconds:
+                raise httpx.ReadTimeout("timed out", request=request)
+            return httpx.Response(200, json={"healthy_count": 2})
+
+        respx.get(f"{_CLI_TEST_PROXY}/health").mock(side_effect=slow_proxy)
+
+        run_server.main(["--health", *_CLI_TEST_PROXY_ARGS], standalone_mode=False)
+
+        assert '"healthy_count": 2' in capsys.readouterr().out
+
     @pytest.mark.parametrize(
         ("listed_models", "expected_model"),
         [
@@ -283,6 +301,21 @@ class TestProxyInitializationHelpers:
                 ],
                 "retired-chat-model",
                 id="never-a-wildcard-expansion",
+            ),
+            pytest.param(
+                [{"id": "openai/retired-chat-model", "mode": "chat"}, {"id": "served-chat-model", "mode": "chat"}],
+                "served-chat-model",
+                id="skips-a-retired-model-behind-a-provider-prefix",
+            ),
+            pytest.param(
+                [{"id": "team-a/retired-chat-model", "mode": "chat"}, {"id": "served-chat-model", "mode": "chat"}],
+                "team-a/retired-chat-model",
+                id="a-non-provider-prefix-is-part-of-the-name",
+            ),
+            pytest.param(
+                [{"id": "embedding-model", "mode": "embedding"}, {"id": "responses-only-model", "mode": "responses"}],
+                "responses-only-model",
+                id="responses-mode-counts-as-chat",
             ),
         ],
     )
