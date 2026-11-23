@@ -28,6 +28,7 @@ from litellm._logging import (
     DiagnosticProcessingFilter,
     JsonFormatter,
     LevelRoutingStreamHandler,
+    MessageContentLogFilter,
     SecretRedactionFilter,
     StdoutLogTruncationFilter,
     _get_uvicorn_json_log_config,
@@ -1140,6 +1141,51 @@ class _CountingPattern:
 
 
 _REQUEST_DUMP = "{'model': 'gpt-4', 'messages': [{'role': 'user', 'content': 'hello world'}]}"
+
+
+@pytest.mark.parametrize("json_logs", [False, True])
+def test_message_privacy_keeps_cached_exception_credentials_scrubbed(
+    json_logs: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+    monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
+    token: Final = "example-bearer-credential-42896"
+    record: Final = logging.LogRecord("LiteLLM", logging.ERROR, __file__, 1, "provider failed", (), None)
+    try:
+        raise ValueError("Authorization: Bearer " + token)
+    except ValueError:
+        record.exc_info = sys.exc_info()
+    MessageContentLogFilter().filter(record)
+    DiagnosticProcessingFilter().filter(record)
+    formatter: Final = JsonFormatter() if json_logs else CorrelationPlainFormatter("%(message)s")
+    rendered: Final = formatter.format(record)
+    assert token not in rendered
+    assert "ValueError" in rendered
+
+
+@pytest.mark.parametrize("private", [False, True])
+def test_json_message_privacy_redacts_structured_extras_without_mutating_the_payload(
+    private: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "turn_off_message_logging", private)
+    payload: Final = {"body": {"messages": [{"content": "private-extra-prompt"}], "output_text": "private-extra-reply"}}
+    logger: Final = logging.Logger("native-extra-privacy")
+    record: Final = logger.makeRecord(
+        logger.name,
+        logging.DEBUG,
+        __file__,
+        1,
+        "provider event",
+        (),
+        None,
+        extra={"rust_fields": payload, "content": "private-top-level-extra", "trace_id": "trace-test"},
+    )
+    MessageContentLogFilter().filter(record)
+    rendered: Final = JsonFormatter().format(record)
+    for marker in ("private-extra-prompt", "private-extra-reply", "private-top-level-extra"):
+        assert (marker in rendered) is not private
+    assert payload["body"]["messages"][0]["content"] == "private-extra-prompt"
+    assert json.loads(rendered)["trace_id"] == "trace-test"
 
 
 @pytest.mark.parametrize(

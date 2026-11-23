@@ -37,7 +37,7 @@ from pydantic import BaseModel, TypeAdapter
 import litellm
 from litellm import _logging as litellm_logger_settings
 from litellm._internal_context import current_request_parent_otel_span, in_post_response_phase
-from litellm._logging import session_id_var, trace_id_var, verbose_logger
+from litellm._logging import session_id_var, trace_id_var, verbose_logger, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging
 from litellm.caching.caching import DualCache
 from litellm.constants import (
@@ -112,6 +112,7 @@ from litellm.types.utils import (
     TextCompletionResponse,
     Usage,
 )
+from litellm.utils import print_args_passed_to_litellm
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 
@@ -9942,8 +9943,8 @@ def test_restore_correlation_context_safe_to_call_repeatedly(monkeypatch):
 
 
 def test_restore_correlation_context_does_not_resanitize(monkeypatch):
-    from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm._logging import _sanitize_correlation_id
+    from litellm.litellm_core_utils.litellm_logging import Logging
 
     monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
     trace_id_var.set("outer-trace")
@@ -10090,11 +10091,11 @@ class TestNonInferenceCallTypesAreNotBilled:
         assert cost == 0.0
 
     def test_retrieved_usage_is_not_re_reported_in_standard_logging_payload(self):
+        from datetime import datetime
+
         from litellm.litellm_core_utils.litellm_logging import (
             get_standard_logging_object_payload,
         )
-
-        from datetime import datetime
 
         logging_obj = self._logging_obj("aget_responses")
         now = datetime.now()
@@ -10466,6 +10467,275 @@ def test_pre_call_raw_request_honors_per_request_turn_off_message_logging(loggin
     metadata = _pre_call_with_raw_request_logging(logging_obj)
 
     _assert_raw_request_redacted_for_callbacks_only(logging_obj, metadata)
+
+
+_DEBUG_PROMPT: Final = "account number 42896-private"
+_DEBUG_REPLY: Final = "reply body 42896-private"
+_DEBUG_MODEL: Final = "gpt-4o-mini"
+_DEBUG_API_BASE: Final = "https://api.openai.com/v1/chat/completions"
+
+
+def _debug_chat_request() -> dict[str, object]:
+    return {
+        "model": _DEBUG_MODEL,
+        "messages": [{"role": "user", "content": _DEBUG_PROMPT}],
+        "stream": False,
+    }
+
+
+def _debug_chat_response() -> str:
+    return json.dumps(
+        {
+            "id": "chatcmpl-debug",
+            "model": _DEBUG_MODEL,
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": _DEBUG_REPLY},
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {"prompt_tokens": 4, "completion_tokens": 2, "total_tokens": 6},
+        }
+    )
+
+
+def _emit_debug_request_and_response(logging_obj, body: dict[str, object]) -> None:
+    logging_obj.pre_call(
+        input=_DEBUG_PROMPT,
+        api_key="sk-test",
+        additional_args={
+            "api_base": _DEBUG_API_BASE,
+            "headers": {},
+            "complete_input_dict": body,
+        },
+    )
+    logging_obj.post_call(original_response=_debug_chat_response(), input=_DEBUG_PROMPT, api_key="sk-test")
+
+
+def test_debug_logs_include_prompt_and_reply_when_message_logging_is_on(logging_obj, caplog, monkeypatch):
+    monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+    caplog.set_level(logging.DEBUG, logger="LiteLLM")
+    body: Final = _debug_chat_request()
+
+    _emit_debug_request_and_response(logging_obj, body)
+
+    assert _DEBUG_PROMPT in caplog.text
+    assert _DEBUG_REPLY in caplog.text
+    assert body["messages"][0]["content"] == _DEBUG_PROMPT
+
+
+def test_turn_off_message_logging_redacts_prompt_and_reply_in_debug_logs(logging_obj, caplog, monkeypatch):
+    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+    caplog.set_level(logging.DEBUG, logger="LiteLLM")
+    logging_obj.model_call_details["litellm_params"] = {"metadata": {}}
+    body: Final = _debug_chat_request()
+
+    _emit_debug_request_and_response(logging_obj, body)
+
+    assert _DEBUG_PROMPT not in caplog.text
+    assert _DEBUG_REPLY not in caplog.text
+    assert _DEBUG_MODEL in caplog.text
+    assert _DEBUG_API_BASE in caplog.text
+    assert REDACTED_BY_LITELLM in caplog.text
+    assert "finish_reason" in caplog.text or "total_tokens" in caplog.text
+    assert body["messages"][0]["content"] == _DEBUG_PROMPT
+
+
+@pytest.mark.parametrize("private", [False, True])
+@pytest.mark.parametrize("style", ["exc_info", "argument", "message"])
+def test_message_privacy_survives_a_host_handler(
+    private: bool, style: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from io import StringIO
+
+    from litellm._logging import MessageContentLogFilter
+
+    monkeypatch.setattr(litellm, "turn_off_message_logging", private)
+    output: Final = StringIO()
+    logger: Final = logging.Logger("host-message-privacy")
+    logger.addFilter(MessageContentLogFilter())
+    logger.addHandler(logging.StreamHandler(output))
+    secret: Final = "private-exception-message-42896"
+    try:
+        raise ValueError({"content": secret})
+    except ValueError as error:
+        if style == "exc_info":
+            logger.exception("Provider failed")
+        elif style == "argument":
+            logger.error("Provider failed %s", error)
+        else:
+            logger.error(error)
+
+    assert (secret in output.getvalue()) is not private
+    if private:
+        assert REDACTED_BY_LITELLM in output.getvalue()
+
+
+def test_per_request_turn_off_message_logging_redacts_debug_prompt_and_reply(logging_obj, caplog, monkeypatch):
+    monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+    caplog.set_level(logging.DEBUG, logger="LiteLLM")
+    logging_obj.model_call_details["litellm_params"] = {"metadata": {}}
+    logging_obj.model_call_details["standard_callback_dynamic_params"] = {"turn_off_message_logging": True}
+    body: Final = _debug_chat_request()
+
+    _emit_debug_request_and_response(logging_obj, body)
+
+    assert _DEBUG_PROMPT not in caplog.text
+    assert _DEBUG_REPLY not in caplog.text
+    assert _DEBUG_MODEL in caplog.text
+    assert body["messages"][0]["content"] == _DEBUG_PROMPT
+
+
+def test_turn_off_message_logging_redacts_debug_payloads_outside_the_curl_line(caplog, monkeypatch):
+    from litellm.litellm_core_utils.token_counter import token_counter
+    from litellm.types.utils import Delta
+
+    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+    caplog.set_level(logging.DEBUG, logger="LiteLLM")
+    verbose_logger.debug("messages %s", [{"role": "user", "content": _DEBUG_PROMPT}])
+    verbose_logger.debug("delta %s", Delta(content=_DEBUG_REPLY, role="assistant"))
+    verbose_logger.debug(
+        "gemini %s",
+        {"model": _DEBUG_MODEL, "contents": [{"role": "user", "parts": [{"text": _DEBUG_PROMPT}]}]},
+    )
+    verbose_logger.debug(
+        "responses %s",
+        {
+            "model": _DEBUG_MODEL,
+            "input": _DEBUG_PROMPT,
+            "output": [{"type": "message", "content": [{"type": "text", "text": _DEBUG_REPLY}]}],
+        },
+    )
+    verbose_logger.debug(
+        "anthropic %s",
+        {
+            "model": _DEBUG_MODEL,
+            "system": _DEBUG_PROMPT,
+            "content": [{"type": "text", "text": _DEBUG_REPLY}],
+        },
+    )
+    token_counter(model="gpt-4o-mini", text=_DEBUG_PROMPT)
+    verbose_logger.warning("fallback failed: %s", "upstream timed out talking to gpt-4o-mini")
+
+    assert _DEBUG_PROMPT not in caplog.text
+    assert _DEBUG_REPLY not in caplog.text
+    assert _DEBUG_MODEL in caplog.text
+    assert "upstream timed out talking to gpt-4o-mini" in caplog.text
+    assert REDACTED_BY_LITELLM in caplog.text
+
+
+def test_request_str_debug_line_keeps_the_prompt_when_message_logging_is_on(logging_obj, caplog, monkeypatch):
+    monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+    caplog.set_level(logging.DEBUG, logger="LiteLLM")
+
+    logging_obj.pre_call(
+        input=_DEBUG_PROMPT,
+        api_key="",
+        additional_args={
+            "api_base": _DEBUG_API_BASE,
+            "headers": {},
+            "complete_input_dict": {},
+            "request_str": f"chat.send_message({_DEBUG_PROMPT})",
+        },
+    )
+
+    assert _DEBUG_PROMPT in caplog.text
+
+
+def test_turn_off_message_logging_redacts_request_str_debug_line(logging_obj, caplog, monkeypatch):
+    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+    caplog.set_level(logging.DEBUG, logger="LiteLLM")
+    logging_obj.model_call_details["litellm_params"] = {"metadata": {}}
+
+    logging_obj.pre_call(
+        input=_DEBUG_PROMPT,
+        api_key="",
+        additional_args={
+            "api_base": _DEBUG_API_BASE,
+            "headers": {},
+            "complete_input_dict": {},
+            "request_str": f"chat.send_message({_DEBUG_PROMPT})",
+        },
+    )
+
+    assert _DEBUG_PROMPT not in caplog.text
+    assert _DEBUG_API_BASE in caplog.text
+    assert REDACTED_BY_LITELLM in caplog.text
+
+
+def _embedding_call() -> None:
+    return None
+
+
+def _text_completion_call() -> None:
+    return None
+
+
+def test_print_args_redacts_scalar_input_and_prompt_when_message_logging_is_off(caplog, monkeypatch):
+    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+    caplog.set_level(logging.DEBUG, logger="LiteLLM")
+
+    print_args_passed_to_litellm(_embedding_call, (), {"model": "text-embedding-3-small", "input": _DEBUG_PROMPT})
+    print_args_passed_to_litellm(_text_completion_call, (), {"model": "gpt-3.5-turbo-instruct", "prompt": _DEBUG_REPLY})
+
+    assert _DEBUG_PROMPT not in caplog.text
+    assert _DEBUG_REPLY not in caplog.text
+    assert "text-embedding-3-small" in caplog.text
+    assert "gpt-3.5-turbo-instruct" in caplog.text
+    assert REDACTED_BY_LITELLM in caplog.text
+
+
+def test_print_args_keeps_scalar_input_when_message_logging_is_on(caplog, monkeypatch):
+    monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+    caplog.set_level(logging.DEBUG, logger="LiteLLM")
+
+    print_args_passed_to_litellm(_embedding_call, (), {"model": "text-embedding-3-small", "input": _DEBUG_PROMPT})
+
+    assert _DEBUG_PROMPT in caplog.text
+
+
+def test_print_args_redacts_scalar_input_for_a_per_request_opt_in(caplog, monkeypatch):
+    monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+    caplog.set_level(logging.DEBUG, logger="LiteLLM")
+
+    print_args_passed_to_litellm(
+        _embedding_call,
+        (),
+        {"model": "text-embedding-3-small", "input": _DEBUG_PROMPT, "turn_off_message_logging": True},
+    )
+
+    assert _DEBUG_PROMPT not in caplog.text
+    assert "text-embedding-3-small" in caplog.text
+
+
+def test_debug_filter_redacts_a_request_payload_when_only_the_request_opts_in(caplog, monkeypatch):
+    from litellm.litellm_core_utils.initialize_dynamic_callback_params import inherit_message_logging_privacy
+
+    monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+    caplog.set_level(logging.DEBUG, logger="LiteLLM Proxy")
+    payload: Final = json.dumps({"model": _DEBUG_MODEL, "messages": [{"role": "user", "content": _DEBUG_PROMPT}]})
+
+    verbose_proxy_logger.debug("Request received by LiteLLM:\n%s", payload)
+    assert _DEBUG_PROMPT in caplog.text
+
+    caplog.clear()
+    with inherit_message_logging_privacy(True):
+        verbose_proxy_logger.debug(
+            "Request received by LiteLLM:\n%s",
+            json.dumps(
+                {
+                    "model": _DEBUG_MODEL,
+                    "messages": [{"role": "user", "content": _DEBUG_PROMPT}],
+                    "message": _DEBUG_REPLY,
+                }
+            ),
+        )
+
+    assert _DEBUG_PROMPT not in caplog.text
+    assert _DEBUG_REPLY not in caplog.text
+    assert _DEBUG_MODEL in caplog.text
+    assert REDACTED_BY_LITELLM in caplog.text
 
 
 def test_debugging_log_honors_json_logs_set_after_import(logging_obj, monkeypatch):
@@ -13919,6 +14189,7 @@ def test_enterprise_alerting_loggers_resolves_real_classes():
     from litellm_enterprise.enterprise_callbacks.send_emails.resend_email import ResendEmailLogger
     from litellm_enterprise.enterprise_callbacks.send_emails.sendgrid_email import SendGridEmailLogger
     from litellm_enterprise.enterprise_callbacks.send_emails.smtp_email import SMTPEmailLogger
+
     from litellm.litellm_core_utils import litellm_logging as logging_module
 
     logging_module._enterprise_alerting_loggers.cache_clear()
@@ -13938,6 +14209,7 @@ def test_enterprise_alerting_loggers_falls_back_without_disabling_callback_contr
     from litellm_enterprise.enterprise_callbacks.callback_controls import (
         EnterpriseCallbackControls,
     )
+
     from litellm.integrations.custom_logger import CustomLogger
     from litellm.litellm_core_utils import litellm_logging as logging_module
 
@@ -13978,10 +14250,11 @@ def test_init_email_alerting_logger_reuses_instance(
     integration: Literal["smtp_email", "resend_email", "sendgrid_email"],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from litellm.litellm_core_utils import litellm_logging as logging_module
     from litellm_enterprise.enterprise_callbacks.send_emails.resend_email import ResendEmailLogger
     from litellm_enterprise.enterprise_callbacks.send_emails.sendgrid_email import SendGridEmailLogger
     from litellm_enterprise.enterprise_callbacks.send_emails.smtp_email import SMTPEmailLogger
+
+    from litellm.litellm_core_utils import litellm_logging as logging_module
 
     logger_class: Final = (
         SMTPEmailLogger
@@ -14016,9 +14289,10 @@ def test_init_email_alerting_logger_reuses_instance(
 
 
 def test_init_pagerduty_logger_reuses_instance(monkeypatch):
-    from litellm.types.integrations.pagerduty import AlertingConfig
     from litellm_enterprise.enterprise_callbacks.pagerduty.pagerduty import PagerDutyAlerting
+
     from litellm.litellm_core_utils import litellm_logging as logging_module
+    from litellm.types.integrations.pagerduty import AlertingConfig
 
     monkeypatch.setenv("PAGERDUTY_API_KEY", "test-pagerduty-key")
     logging_module._in_memory_loggers.clear()
@@ -14990,7 +15264,6 @@ def test_cost_breakdown_in_standard_logging_payload():
     Tests input_cost, output_cost, tool_usage_cost, and total_cost fields.
     """
     import time
-
     from datetime import datetime as datetime_standard_logging
 
     from litellm.litellm_core_utils.litellm_logging import (
