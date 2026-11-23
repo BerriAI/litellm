@@ -203,7 +203,7 @@ class RouterBudgetLimiting(CustomLogger):
         model: str,
         healthy_deployments: list,
         messages: list[AllMessageValues] | None,
-        request_kwargs: dict | None = None,
+        request_kwargs: Mapping[str, object] | None = None,
         parent_otel_span: Span | None = None,
     ) -> list[dict]:
         """
@@ -360,7 +360,7 @@ class RouterBudgetLimiting(CustomLogger):
     async def _async_get_cache_keys_for_router_budget_limiting(
         self,
         healthy_deployments: Sequence[Mapping[str, object]],
-        request_kwargs: dict | None = None,
+        request_kwargs: Mapping[str, object] | None = None,
     ) -> tuple[
         list[str],
         dict[str, GenericBudgetInfo],
@@ -377,7 +377,7 @@ class RouterBudgetLimiting(CustomLogger):
                 - Dict of deployment budget configs `deployment_configs`
                 - List of resolved providers aligned by deployment index `deployment_providers`
         """
-        cache_keys: Final[list[str]] = []
+        cache_keys: Final = []
         provider_configs: Final[dict[str, GenericBudgetInfo]] = {}
         deployment_configs: Final[dict[object, GenericBudgetInfo]] = {}
         deployment_providers: Final[list[str | None]] = []
@@ -564,7 +564,7 @@ class RouterBudgetLimiting(CustomLogger):
         return True
 
     @with_service_target("router_budgets")
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(self, kwargs, response_obj: object, start_time: object, end_time: object):
         """Original method now uses helper functions"""
         verbose_router_logger.debug("in RouterBudgetLimiting.async_log_success_event")
         callback_fields: Final = _CALLBACK_FIELDS.validate_python(kwargs)

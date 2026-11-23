@@ -76,7 +76,7 @@ async def acreate_container(
     extra_headers: dict[str, object] | None = None,
     extra_query: dict[str, object] | None = None,
     extra_body: dict[str, object] | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> ContainerObject:
     """Asynchronously calls the `create_container` function with the given arguments and keyword arguments.
 
@@ -308,7 +308,7 @@ async def alist_containers(
     extra_headers: dict[str, object] | None = None,
     extra_query: dict[str, object] | None = None,
     extra_body: dict[str, object] | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> ContainerListResponse:
     """Asynchronously list containers.
 
@@ -510,7 +510,7 @@ async def aretrieve_container(
     extra_headers: dict[str, object] | None = None,
     extra_query: dict[str, object] | None = None,
     extra_body: dict[str, object] | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> ContainerObject:
     """Asynchronously retrieve a container.
 
@@ -727,7 +727,7 @@ async def adelete_container(
     extra_headers: dict[str, object] | None = None,
     extra_query: dict[str, object] | None = None,
     extra_body: dict[str, object] | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> DeleteContainerResult:
     """Asynchronously delete a container.
 
@@ -945,7 +945,7 @@ async def alist_container_files(
     extra_headers: dict[str, object] | None = None,
     extra_query: dict[str, object] | None = None,
     extra_body: dict[str, object] | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> ContainerFileListResponse:
     """Asynchronously list files in a container.
 
@@ -1158,7 +1158,7 @@ async def aupload_container_file(
     extra_headers: dict[str, object] | None = None,
     extra_query: dict[str, object] | None = None,
     extra_body: dict[str, object] | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> ContainerFileObject:
     """Asynchronously upload a file to a container.
 

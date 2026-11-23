@@ -14,7 +14,7 @@ Anthropic Files API endpoints:
 
 import calendar
 import time
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Final, cast
 
 import httpx
@@ -77,8 +77,8 @@ class AnthropicFilesConfig(BaseFilesConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         api_base = AnthropicModelInfo.get_api_base(api_base) or ANTHROPIC_FILES_API_BASE
@@ -100,8 +100,8 @@ class AnthropicFilesConfig(BaseFilesConfig):
         self,
         headers: dict,
         model: str,
-        messages: list,
-        optional_params: dict,
+        messages: Sequence[object],
+        optional_params: Mapping[str, object],
         litellm_params: dict,
         api_key: str | None = None,
         api_base: str | None = None,
@@ -160,7 +160,7 @@ class AnthropicFilesConfig(BaseFilesConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
+        non_default_params: Mapping[str, object],
         optional_params: dict,
         model: str,
         drop_params: bool,
@@ -171,8 +171,8 @@ class AnthropicFilesConfig(BaseFilesConfig):
         self,
         model: str,
         create_file_data: CreateFileRequest,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
     ) -> dict:
         """
         Transform to multipart form data for Anthropic file upload.
@@ -202,7 +202,7 @@ class AnthropicFilesConfig(BaseFilesConfig):
         model: str | None,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> OpenAIFileObject:
         """
         Transform Anthropic file response to OpenAI format.
@@ -223,7 +223,7 @@ class AnthropicFilesConfig(BaseFilesConfig):
     def transform_retrieve_file_request(
         self,
         file_id: str,
-        optional_params: dict,
+        optional_params: Mapping[str, object],
         litellm_params: dict,
     ) -> tuple[str, dict]:
         api_base: Final = AnthropicModelInfo.get_api_base(litellm_params.get("api_base")) or ANTHROPIC_FILES_API_BASE
@@ -234,7 +234,7 @@ class AnthropicFilesConfig(BaseFilesConfig):
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> OpenAIFileObject:
         response_json: Final = _JSON_OBJECT.validate_python(raw_response.json())
         return self._parse_anthropic_file(response_json)
@@ -242,7 +242,7 @@ class AnthropicFilesConfig(BaseFilesConfig):
     def transform_delete_file_request(
         self,
         file_id: str,
-        optional_params: dict,
+        optional_params: Mapping[str, object],
         litellm_params: dict,
     ) -> tuple[str, dict]:
         api_base: Final = AnthropicModelInfo.get_api_base(litellm_params.get("api_base")) or ANTHROPIC_FILES_API_BASE
@@ -253,7 +253,7 @@ class AnthropicFilesConfig(BaseFilesConfig):
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> FileDeleted:
         response_json: Final = _JSON_OBJECT.validate_python(raw_response.json())
         file_id: Final = response_json.get("id", "")
@@ -262,7 +262,7 @@ class AnthropicFilesConfig(BaseFilesConfig):
     def transform_list_files_request(
         self,
         purpose: str | None,
-        optional_params: dict,
+        optional_params: Mapping[str, object],
         litellm_params: dict,
     ) -> tuple[str, dict]:
         api_base: Final = AnthropicModelInfo.get_api_base(litellm_params.get("api_base")) or ANTHROPIC_FILES_API_BASE
@@ -276,7 +276,7 @@ class AnthropicFilesConfig(BaseFilesConfig):
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> list[OpenAIFileObject]:
         """
         Anthropic list response:
@@ -294,7 +294,7 @@ class AnthropicFilesConfig(BaseFilesConfig):
     def transform_file_content_request(
         self,
         file_content_request: FileContentRequest,
-        optional_params: dict,
+        optional_params: Mapping[str, object],
         litellm_params: dict,
     ) -> tuple[str, dict]:
         file_id: Final = file_content_request.get("file_id")
@@ -308,7 +308,7 @@ class AnthropicFilesConfig(BaseFilesConfig):
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> HttpxBinaryResponseContent:
         return HttpxBinaryResponseContent(response=raw_response)
 
