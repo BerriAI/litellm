@@ -550,12 +550,14 @@ class TestMCPServerTable:
         "stored",
         ('{"enabled": true, "allowed_events": ["build.*"]}', {"enabled": True, "allowed_events": ["build.*"]}),
     )
-    def test_mcp_server_events_decode_from_the_json_column(self, stored):
-        server = LiteLLM_MCPServerTable(server_id="s1", transport="http", events=stored)
+    def test_mcp_server_events_decode_from_the_json_column(self, stored: str | dict[str, object]) -> None:
+        server: Final = LiteLLM_MCPServerTable.model_validate(
+            {"server_id": "s1", "transport": "http", "events": stored}
+        )
         assert server.events is not None
         assert (server.events.enabled, server.events.allowed_events) == (True, ("build.*",))
 
-    def test_mcp_server_events_default_to_none(self):
+    def test_mcp_server_events_default_to_none(self) -> None:
         assert LiteLLM_MCPServerTable(server_id="s1", transport="http").events is None
 
 
