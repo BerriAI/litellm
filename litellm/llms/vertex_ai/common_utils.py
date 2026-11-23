@@ -1053,7 +1053,7 @@ def _replace_boolean_subschemas(schema: object) -> None:
         subschemas = schema.get(keyword)
         if not isinstance(subschemas, dict):
             continue
-        dropped: Final = [name for name, value in subschemas.items() if isinstance(value, bool)]
+        dropped: Final = {name for name, value in subschemas.items() if isinstance(value, bool)}
         for name in dropped:
             del subschemas[name]
         if keyword == "properties" and dropped and isinstance(schema.get("required"), list):
