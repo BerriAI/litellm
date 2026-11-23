@@ -70,6 +70,7 @@ from .realtime_guardrails import (
 )
 from .realtime_turn_limits import (
     RealtimeTurnLimiterSource,
+    RealtimeTurnLimits,
     realtime_turn_limits,
     registered_realtime_turn_limiters,
     turn_token_usage,
@@ -564,6 +565,7 @@ class RealTimeStreaming:
         self._turn_limits: Final = realtime_turn_limits(
             turn_limiters, user_api_key_dict, logging_obj.model_call_details, model
         )
+        self._ended_over_token_limit: bool = False
         # Violation counter for end_session_after_n_fails support
         self._violation_count: int = 0
         # When a text message is blocked, hold the guardrail reason so the next
@@ -671,7 +673,7 @@ class RealTimeStreaming:
             return True
         return False
 
-    def store_message(self, message: str | bytes | dict | OpenAIRealtimeEvents):
+    def store_message(self, message: str | bytes | dict[str, object] | OpenAIRealtimeEvents):
         """Store message in list"""
         if isinstance(message, bytes):
             message = message.decode("utf-8")
@@ -727,7 +729,7 @@ class RealTimeStreaming:
         except (json.JSONDecodeError, AttributeError, TypeError):
             pass
 
-    def _collect_user_input_from_backend_event(self, event_obj: dict | OpenAIRealtimeEvents) -> None:
+    def _collect_user_input_from_backend_event(self, event_obj: dict[str, object] | OpenAIRealtimeEvents) -> None:
         """Extract user voice transcription from backend events for spend logging."""
         try:
             event_type: Final = event_obj.get("type", "")
@@ -757,7 +759,7 @@ class RealTimeStreaming:
         self.session_created_sent_to_client = True
         verbose_logger.debug("Sent synthetic session.created to client to unblock connection")
 
-    def _capture_transcription_usage(self, event_obj: dict | OpenAIRealtimeEvents) -> None:
+    def _capture_transcription_usage(self, event_obj: dict[str, object] | OpenAIRealtimeEvents) -> None:
         """
         Append a usage-only transcription completed event to the logged results so
         the cost calculator can bill it by audio duration. The default logged event
@@ -1619,8 +1621,33 @@ class RealTimeStreaming:
             await self._send_to_backend(event)
 
     async def _end_session_over_token_limit(self, refusal: str) -> None:
+        self._ended_over_token_limit = True
         await self.websocket.send_text(refusal)
         await self.backend_ws.close()
+
+    async def _dropped_after_token_limit_end(self, frame: object) -> bool:
+        if not self._ended_over_token_limit:
+            return False
+        event: Final = as_str_mapping(frame)
+        if event is not None and self._turn_limits is not None:
+            await self._count_billed_frame(event, self._turn_limits)
+        return True
+
+    async def _count_billed_frame(self, event: Mapping[str, object], turn_limits: RealtimeTurnLimits) -> None:
+        event_type: Final = event.get("type")
+        is_transcription: Final = (
+            self._is_transcription_session and event_type == "conversation.item.input_audio_transcription.completed"
+        )
+        if event_type != "response.done" and not is_transcription:
+            return
+        self.store_message(dict(event))
+        if is_transcription:
+            self._capture_transcription_usage(dict(event))
+        await turn_limits.charge(event)
+
+    async def _forward_unparsed_backend_frame(self, raw_response: str) -> None:
+        if not self._ended_over_token_limit:
+            await self.websocket.send_text(raw_response)
 
     async def _session_ended_by_turn_limits(self, event: Mapping[str, object]) -> bool:
         if self._turn_limits is None:
@@ -1897,13 +1924,13 @@ class RealTimeStreaming:
         self.session_configuration_request = returned_object["session_configuration_request"]
         events: Final = transformed_response if isinstance(transformed_response, list) else [transformed_response]
         for event in events:
-            if self._should_drop_event_from_client(event):
+            if await self._dropped_after_token_limit_end(event) or self._should_drop_event_from_client(event):
                 continue
             if isinstance(event, dict):
                 self._detect_transcription_session_from_backend(event)
                 self._capture_translation_output_audio(event)
                 if await self._session_ended_by_turn_limits(event):
-                    return
+                    continue
             is_session_created_event = isinstance(event, dict) and event.get("type") == "session.created"
             if is_session_created_event:
                 if self._awaiting_setup_complete:
@@ -1945,7 +1972,7 @@ class RealTimeStreaming:
                 self._capture_transcription_usage(event)
                 await self._send_event_to_client(event, event_str)
                 if await self._session_ended_by_transcription_limits(event):
-                    return
+                    continue
                 blocked = await self.run_realtime_guardrails(transcript)
                 if not blocked and self._should_disable_vad_auto_response():
                     await self._send_proxy_response_create((json.dumps({"type": "response.create"}),))
@@ -1984,7 +2011,7 @@ class RealTimeStreaming:
             return None
         return event if isinstance(event, dict) else None
 
-    async def _handle_raw_backend_message(self, event_obj: dict, raw_response: str) -> bool:
+    async def _handle_raw_backend_message(self, event_obj: dict[str, object], raw_response: str) -> bool:
         """Process a backend message without provider_config (raw path).
 
         Returns True if the caller should skip the default store+forward (i.e. continue the loop).
@@ -2011,9 +2038,10 @@ class RealTimeStreaming:
             if await self._session_ended_by_transcription_limits(event_obj):
                 return True
 
+            item_id: Final = event_obj.get("item_id")
             blocked: Final = await self.run_realtime_guardrails(
                 transcript,
-                item_id=event_obj.get("item_id"),
+                item_id=item_id if isinstance(item_id, str) else None,
             )
             if not blocked and self._should_disable_vad_auto_response():
                 await self._send_proxy_response_create((json.dumps({"type": "response.create"}),))
@@ -2043,7 +2071,7 @@ class RealTimeStreaming:
                 if event is None or event.get("type") != "error":
                     self._backend_sent_non_error_frames = True
                 if event is None:
-                    await self.websocket.send_text(raw_response)
+                    await self._forward_unparsed_backend_frame(raw_response)
                     continue
 
                 if self._should_drop_event_from_client(event):
@@ -2058,7 +2086,9 @@ class RealTimeStreaming:
 
                 self._detect_transcription_session_from_backend(event)
                 self._capture_translation_output_audio(event)
-                if await self._handle_raw_backend_message(event, raw_response):
+                if await self._dropped_after_token_limit_end(event) or await self._handle_raw_backend_message(
+                    event, raw_response
+                ):
                     continue
 
                 event = self._normalize_event_for_ga_client(event)

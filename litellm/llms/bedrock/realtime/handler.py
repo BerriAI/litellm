@@ -299,13 +299,12 @@ async def _refused_response_create(
     return client_event.get("type") == "response.create" and await _refused_turn(turn_limits, client_ws)
 
 
-async def _ended_audio_turn_over_limit(
+async def _ended_turn_over_limit(
     turn_limits: RealtimeTurnLimits | None,
     provider_event: Mapping[str, object],
-    client_audio_streamed: bool,
     client_ws: RealtimeClientWebSocket,
 ) -> bool:
-    if not client_audio_streamed or provider_event.get("type") != "response.created":
+    if provider_event.get("type") != "response.created":
         return False
     refusal: Final = None if turn_limits is None else await turn_limits.refusal()
     if refusal is None:
@@ -1033,9 +1032,7 @@ class BedrockRealtime(BaseAWSLLM):
                 for openai_message in openai_messages:
                     if turn_limits is not None:
                         await turn_limits.charge(openai_message)
-                    if await _ended_audio_turn_over_limit(
-                        turn_limits, openai_message, transformation_config.client_audio_streamed, client_ws
-                    ):
+                    if await _ended_turn_over_limit(turn_limits, openai_message, client_ws):
                         return
                     if not await send_to_client(json.dumps(openai_message)):
                         return

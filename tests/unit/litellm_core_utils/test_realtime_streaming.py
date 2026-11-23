@@ -6936,6 +6936,13 @@ async def test_a_response_the_provider_cannot_cancel_over_the_limit_ends_the_ses
         side_effect=[
             json.dumps({"setupComplete": {}}),
             json.dumps({"serverContent": {"modelTurn": {"parts": [{"text": "Hello"}]}}}),
+            json.dumps({"serverContent": {"modelTurn": {"parts": [{"text": " again"}]}}}),
+            json.dumps(
+                {
+                    "serverContent": {"turnComplete": True},
+                    "usageMetadata": {"promptTokenCount": 10, "responseTokenCount": 20, "totalTokenCount": 30},
+                }
+            ),
             ConnectionClosed(None, None),
         ]
     )
@@ -6953,7 +6960,8 @@ async def test_a_response_the_provider_cannot_cancel_over_the_limit_ends_the_ses
 
     sent: Final = [json.loads(call.args[0]) for call in client_ws.send_text.await_args_list]
     assert [event["error"]["type"] for event in sent if event["type"] == "error"] == ["rate_limit_exceeded"]
-    assert not [event for event in sent if event["type"].endswith(".delta")]
+    assert not [event for event in sent if event["type"].endswith(".delta") or event["type"] == "response.done"]
+    assert [charge[1] for charge in limiter.charges] == [30]
     backend_ws.close.assert_awaited_once()
 
 
@@ -6975,12 +6983,19 @@ _TRANSCRIPTION_TOKEN_USAGE: Final = MappingProxyType(
 
 
 def _transcription_session(
-    limiter: _ScriptedTurnLimiter, usage: Mapping[str, object], *, through_provider_config: bool, listens_only: bool
+    limiter: _ScriptedTurnLimiter,
+    usage: Mapping[str, object],
+    *,
+    through_provider_config: bool,
+    listens_only: bool,
+    buffered_frames: Sequence[str] = (),
 ) -> tuple[RealTimeStreaming, MagicMock, MagicMock]:
     client_ws: Final = _ga_client_ws()
     client_ws.close = AsyncMock()
     backend_ws: Final = MagicMock(send=AsyncMock(), close=AsyncMock())
-    backend_ws.recv = AsyncMock(side_effect=[_transcription_completed(usage), ConnectionClosed(None, None)])
+    backend_ws.recv = AsyncMock(
+        side_effect=[_transcription_completed(usage), *buffered_frames, ConnectionClosed(None, None)]
+    )
     streaming: Final = RealTimeStreaming(
         client_ws,
         backend_ws,
@@ -7014,6 +7029,31 @@ async def test_a_transcription_turn_counts_its_tokens_and_ends_the_session_over_
     assert [event["type"] for event in sent] == ["conversation.item.input_audio_transcription.completed", "error"]
     assert sent[1]["error"]["type"] == "rate_limit_exceeded"
     backend_ws.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("through_provider_config", [False, True], ids=["raw", "provider_config"])
+async def test_frames_buffered_when_the_session_ends_are_counted_and_never_reach_the_client(
+    through_provider_config: bool,
+) -> None:
+    limiter: Final = _ScriptedTurnLimiter(
+        check_error=RateLimitError(message="tpm limit reached", llm_provider="litellm_proxy", model="m")
+    )
+    streaming, client_ws, _ = _transcription_session(
+        limiter,
+        _TRANSCRIPTION_TOKEN_USAGE,
+        through_provider_config=through_provider_config,
+        listens_only=False,
+        buffered_frames=(_transcription_completed(_TRANSCRIPTION_TOKEN_USAGE), "not json"),
+    )
+
+    await streaming.backend_to_client_send_messages()
+
+    assert ([charge[1] for charge in limiter.charges], len(limiter.checks)) == ([120, 120], 1)
+    assert [json.loads(call.args[0])["type"] for call in client_ws.send_text.await_args_list] == [
+        "conversation.item.input_audio_transcription.completed",
+        "error",
+    ]
 
 
 @pytest.mark.asyncio

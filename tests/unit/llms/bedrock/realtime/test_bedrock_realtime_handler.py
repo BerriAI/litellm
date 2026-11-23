@@ -2479,11 +2479,9 @@ class TestBedrockRealtimeTurnLimits:
 
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        ("client_audio_streamed", "ended"), [(True, True), (False, False)], ids=["audio_started", "text_started"]
-    )
-    async def test_an_audio_started_turn_over_the_limit_ends_the_session_before_its_output(
-        self, client_audio_streamed: bool, ended: bool
+    @pytest.mark.parametrize("client_audio_streamed", [True, False], ids=["audio_started", "text_started"])
+    async def test_a_turn_bedrock_starts_over_the_limit_ends_the_session_before_its_output(
+        self, client_audio_streamed: bool
     ) -> None:
         over_limit: Final = _ScriptedTurnLimiter(
             check_error=RateLimitError(message="tpm limit reached", llm_provider="litellm_proxy", model=_NOVA_SONIC)
@@ -2511,10 +2509,8 @@ class TestBedrockRealtimeTurnLimits:
             pass
 
         events: Final = [json.loads(message) for message in client_ws.sent_to_client]
-        assert [event["error"]["type"] for event in events if event["type"] == "error"] == (
-            ["rate_limit_exceeded"] if ended else []
-        )
-        assert any(event["type"].endswith(".delta") for event in events) is not ended
+        assert [event["error"]["type"] for event in events if event["type"] == "error"] == ["rate_limit_exceeded"]
+        assert not any(event["type"].endswith(".delta") for event in events)
 
     @pytest.mark.asyncio
     async def test_a_guardrail_voice_reply_over_the_limit_is_not_sent_to_bedrock(self, stub_aws_models: None) -> None:
