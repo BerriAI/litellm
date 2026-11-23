@@ -1073,7 +1073,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         Detections of DIFFERENT entity types may still overlap, exactly as in a
         single-call response. The merged list is sorted by position.
         """
-        remapped: Final = []
+        remapped: Final[list[PresidioAnalyzeResponseItem]] = []
         for (char_offset, _), results in zip(text_chunks, chunk_results, strict=True):
             for item in results:
                 item_start = item.get("start")
@@ -1089,8 +1089,8 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             span_end: Final = item.get("end") or 0
             return (-(span_end - span_start), -(item.get("score") or 0.0))
 
-        merged: Final = []
-        kept_spans_by_type: Final = {}
+        merged: Final[list[PresidioAnalyzeResponseItem]] = []
+        kept_spans_by_type: Final[dict[str, list[tuple[int, int]]]] = {}
         for item in sorted(remapped, key=_priority):
             item_start = item.get("start")
             item_end = item.get("end")

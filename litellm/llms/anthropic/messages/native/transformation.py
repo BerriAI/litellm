@@ -128,7 +128,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
     def _resolved_provider(self) -> str:
         return self.custom_llm_provider or "anthropic"
 
-    def get_supported_anthropic_messages_params(self, model: str) -> list:
+    def get_supported_anthropic_messages_params(self, model: str) -> list[str]:
         return [
             "messages",
             "model",
@@ -197,7 +197,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             if isinstance(cache_control, dict):
                 cache_control.pop("scope", None)
 
-        def _process_content_list(content: list) -> None:
+        def _process_content_list(content: list[object]) -> None:
             for item in content:
                 if isinstance(item, dict) and "cache_control" in item:
                     _sanitize(item["cache_control"])
@@ -467,7 +467,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
 
     @staticmethod
     def _translate_reasoning_effort_to_anthropic(
-        model: str, optional_params: dict, max_tokens: int | None, custom_llm_provider: str
+        model: str, optional_params: dict[str, object], max_tokens: int | None, custom_llm_provider: str
     ) -> None:
         """Map OpenAI-style ``reasoning_effort`` to native Anthropic params.
 
@@ -532,7 +532,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
 
     @staticmethod
     def _translate_adaptive_effort_for_non_adaptive_model(
-        model: str, optional_params: dict, max_tokens: int | None, custom_llm_provider: str
+        model: str, optional_params: dict[str, object], max_tokens: int | None, custom_llm_provider: str
     ) -> None:
         """Translate the 4.6+ adaptive-thinking interface (``thinking.type=adaptive``
         and/or ``output_config.effort``) down to what an older Anthropic model
@@ -634,7 +634,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
 
     @staticmethod
     def _drop_incompatible_temperature_for_thinking(
-        model: str, optional_params: dict, custom_llm_provider: str
+        model: str, optional_params: dict[str, object], custom_llm_provider: str
     ) -> None:
         """Anthropic rejects any ``temperature`` other than 1 while extended thinking
         is enabled ("temperature may only be set to 1 when thinking is enabled").

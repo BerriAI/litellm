@@ -63,6 +63,7 @@ from litellm.types.utils import (
     Choices,
     GenericGuardrailAPIInputs,
     GuardrailStatus,
+    LLMResponseTypes,
     ModelResponse,
     ModelResponseStream,
     StandardLoggingGuardrailInformation,
@@ -280,7 +281,9 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             return self.api_endpoint
         return f"https://modelarmor.{self.location}.rep.googleapis.com"
 
-    def _create_sanitize_request(self, content: str, source: Literal["user_prompt", "model_response"]) -> dict:
+    def _create_sanitize_request(
+        self, content: str, source: Literal["user_prompt", "model_response"]
+    ) -> dict[str, object]:
         """Create request body for Model Armor API with correct camelCase field names."""
         if source == "user_prompt":
             return {"userPromptData": {"text": content}}
@@ -371,7 +374,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         self,
         content: str | None = None,
         source: Literal["user_prompt", "model_response"] = "user_prompt",
-        request_data: dict | None = None,
+        request_data: Mapping[str, object] | None = None,
         file_bytes: bytes | None = None,
         file_type: str | None = None,
     ) -> _ModelArmorResponse:
@@ -452,7 +455,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             await json_response if isinstance(json_response, _AwaitableJSON) else json_response
         ).root
 
-    def sanitize_file_prompt(self, file_bytes: bytes, file_type: str, source: str = "user_prompt") -> dict:
+    def sanitize_file_prompt(self, file_bytes: bytes, file_type: str, source: str = "user_prompt") -> dict[str, object]:
         """
         Helper to build the request body for file prompt sanitization for Model Armor.
         file_type should be one of: PLAINTEXT_UTF8, PDF, WORD_DOCUMENT, EXCEL_DOCUMENT, POWERPOINT_DOCUMENT, TXT, CSV
@@ -949,7 +952,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        response,
+        response: LLMResponseTypes,
     ):
         """Post-call hook to sanitize model responses."""
         from litellm.proxy.common_utils.callback_utils import (
