@@ -310,6 +310,7 @@ fn a_scrubbed_sink_scrubs_a_logged_json_body_value_by_value() {
         "model": "claude-haiku",
         "max_tokens": 20,
         "api_key": "another-credential",
+        "mcp_servers": [{"name": "docs", "authorization_token": "opaque-mcp-credential"}],
         "messages": [{"role": "user", "content": format!("my config is {pasted}")}],
     })
     .to_string();
@@ -323,6 +324,8 @@ fn a_scrubbed_sink_scrubs_a_logged_json_body_value_by_value() {
     assert_eq!(chunk["model"], "claude-haiku");
     assert_eq!(chunk["max_tokens"], 20);
     assert_eq!(chunk["api_key"], "REDACTED");
+    assert_eq!(chunk["mcp_servers"][0]["name"], "docs");
+    assert_eq!(chunk["mcp_servers"][0]["authorization_token"], "REDACTED");
     assert_eq!(chunk["messages"][0]["role"], "user");
     assert!(
         chunk["messages"][0]["content"]
