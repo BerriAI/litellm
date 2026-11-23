@@ -4395,6 +4395,17 @@ class TestToolPermissionGuardrailGenerateContentStream:
         assert _THOUGHT_SIGNATURE.keys().isdisjoint(other_part)
 
     @pytest.mark.asyncio
+    async def test_rewrite_leaves_a_signed_kept_call_its_own_signature(self) -> None:
+        kept_call: Final = {**_gemini_function_call("get_weather"), "thoughtSignature": "a2VwdA=="}
+
+        delivered: Final = await self._drain(self.rewriting, [_generate_content_frame([_DENIED_FIRST_CALL, kept_call])])
+
+        signed_denial, allowed_call = _stream_parts(delivered)
+        assert signed_denial == {"text": signed_denial["text"], **_THOUGHT_SIGNATURE}
+        assert "deny_delete" in signed_denial["text"]
+        assert allowed_call == kept_call
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "chunks, untouched",
         [

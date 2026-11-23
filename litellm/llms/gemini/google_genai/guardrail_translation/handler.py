@@ -363,7 +363,9 @@ def _signature_handoff(
 ) -> tuple[StreamedFunctionCall, StreamedFunctionCall] | None:
     first: Final = candidate_calls[0]
     kept: Final = next((call for call in candidate_calls if call.location not in texts), None)
-    if kept is None or first.location not in texts or not _thought_signature(first.part):
+    if kept is None or _thought_signature(kept.part):
+        return None
+    if first.location not in texts or not _thought_signature(first.part):
         return None
     return first, kept
 
@@ -428,8 +430,8 @@ def generate_content_sse_with_parts_replaced(
     """The stream with each of ``calls`` at a location in ``texts`` replaced by that text part, every other byte kept.
 
     A replaced call's thought signature stays on its text part, except that a turn's replaced first call hands it
-    to the first call kept after it, since Gemini 3 signs only a turn's first call and answers 400 to a next turn
-    whose first call is unsigned.
+    to the first call kept after it when that call is unsigned, since Gemini 3 signs only a turn's first call and
+    answers 400 to a next turn whose first call is unsigned.
     """
     replacements: Final = _replacement_parts(calls, texts)
     return "".join(
