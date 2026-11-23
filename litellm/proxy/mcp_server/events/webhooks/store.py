@@ -68,6 +68,8 @@ class ActivatedCursor(BaseModel, frozen=True):
 class Activation(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
+    expected_generation: str | None = None
+
     reactivation_gap_id: str | None = None
     client_secret: str
     upstream_subscription_id: str | None
@@ -95,7 +97,7 @@ class EventStore(Protocol):
         """Insert ``row`` as pending unless a live row with its id exists; False when one does."""
         ...
 
-    async def discard_pending(self, subscription_id: str) -> None: ...
+    async def discard_pending(self, subscription_id: str, generation: str | None = None) -> None: ...
 
     async def activate(
         self,
@@ -120,6 +122,8 @@ class EventStore(Protocol):
     ) -> bool:
         """Terminate the row only while it is still this upstream subscription; None when it changed or ended."""
         ...
+
+    async def acknowledge_teardown(self, row: SubscriptionRow) -> None: ...
 
     async def hold_for_unsubscribe(self, subscription_id: str, upstream_subscription_id: str | None) -> bool:
         """Freeze a live row as pending while it is torn down, so delivery stops and a racing subscribe is told to
@@ -254,8 +258,10 @@ class PrismaEventStore:
             return False
         return True
 
-    async def discard_pending(self, subscription_id: str) -> None:
-        await self._subscriptions.delete_many(where={"id": subscription_id, "status": "pending"})
+    async def discard_pending(self, subscription_id: str, generation: str | None = None) -> None:
+        await self._subscriptions.delete_many(
+            where={"id": subscription_id, "status": "pending", **({"generation": generation} if generation else {})}
+        )
 
     async def activate(
         self,
@@ -264,6 +270,10 @@ class PrismaEventStore:
         from_statuses: tuple[SubscriptionStatus, ...] = LIVE_STATUSES,
     ) -> ActivatedCursor | None:
         eligible: Final = [state for state in LIVE_STATUSES if state in from_statuses]
+        # bounded-ok: eligible contains at most the three live statuses
+        where: Final[LiteLLM_MCPEventSubscriptionWhereInput] = {"id": subscription_id, "status": {"in": eligible}}
+        if activation.expected_generation is not None:
+            where["generation"] = activation.expected_generation
         async with self._client.tx() as tx:
             # The receiver takes FOR SHARE on this row before it inserts a delivery.
             locked: Final = await tx.query_raw(
@@ -282,7 +292,7 @@ class PrismaEventStore:
             )
             watermark: Final = pending[0] if pending else ActivatedCursor(cursor=activation.cursor)
             updated: Final = await tx.litellm_mcpeventsubscription.update_many(
-                where={"id": subscription_id, "status": {"in": eligible}},  # bounded-ok: at most the three live states
+                where=where,
                 data={
                     "status": "active",
                     "generation": uuid.uuid4().hex,
@@ -349,6 +359,17 @@ class PrismaEventStore:
             if ended:
                 await tx.litellm_mcpeventdelivery.delete_many(where={"subscription_id": subscription_id})
         return ended > 0
+
+    async def acknowledge_teardown(self, row: SubscriptionRow) -> None:
+        await self._subscriptions.update_many(
+            where={
+                "id": row.id,
+                "status": "terminated",
+                "generation": row.generation,
+                "upstream_subscription_id": row.upstream_subscription_id,
+            },
+            data={"upstream_subscription_id": None},
+        )
 
     async def hold_for_unsubscribe(self, subscription_id: str, upstream_subscription_id: str | None) -> bool:
         held: Final = await self._subscriptions.update_many(
