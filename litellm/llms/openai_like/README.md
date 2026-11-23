@@ -119,13 +119,13 @@ The provider inherits all request/response handling from OpenAI's Responses API 
 
 If `supported_endpoints` is omitted, it defaults to `[]` (only chat completions, which is always enabled for JSON providers).
 
-When only some models need a `special_handling` flag, set it under `model_special_handling`. A model's flags override the provider's:
+When only some models need `reads_prompt_cache_breakpoint` or `rejects_json_object_response_format`, set it under `model_special_handling`. A model's flags override the provider's. Every other `special_handling` flag applies to the whole provider only:
 
 ```json
 {
   "your_provider": {
     "model_special_handling": {
-      "legacy-model": {"convert_content_list_to_string": true},
+      "legacy-model": {"rejects_json_object_response_format": true},
       "vendor/*": {"reads_prompt_cache_breakpoint": true}
     }
   }
