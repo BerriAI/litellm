@@ -852,6 +852,13 @@ def claim_request_stash_for_data(data: Mapping[str, object]) -> RequestRateLimit
     return stash
 
 
+def call_nested_in_request(request_data: Mapping[str, object]) -> bool:
+    stash: Final = get_request_stash()
+    owner_call_id: Final = None if stash is None else stash.owner_litellm_call_id
+    call_id: Final = request_data.get("litellm_call_id")
+    return owner_call_id is not None and isinstance(call_id, str) and call_id.startswith(f"{owner_call_id}_")
+
+
 def _ended_before_slot_reuse(ended_at: datetime | None, reused_at: datetime | None) -> bool:
     if ended_at is None or reused_at is None or (ended_at.tzinfo is None) != (reused_at.tzinfo is None):
         return False
@@ -1355,6 +1362,8 @@ class ParallelRequestLimiterHook(CustomLogger):
         partial usage settles the reservation at that usage instead of refunding it.
         """
         try:
+            if call_nested_in_request(request_data):
+                return
             native_state: Final = _native_state(self, get_request_stash())
             if native_state is None:
                 return

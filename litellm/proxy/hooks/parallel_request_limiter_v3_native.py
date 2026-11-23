@@ -333,6 +333,10 @@ class ParallelRequestLimiterNativeLogger(RustLogger):
                     hook, reads, view, ctx, {"call_id": _call_id(data), "batch": _batch_response(response)}
                 )
             case Hook.post_call_failure:
+                from litellm.proxy.hooks.parallel_request_limiter_v3 import call_nested_in_request
+
+                if call_nested_in_request(data):
+                    return None
                 return await self._call(
                     hook,
                     reads,
