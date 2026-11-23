@@ -202,6 +202,54 @@ async fn markdown_output_is_requested_on_the_analyze_call_and_split_into_pages(
 }
 
 #[rstest]
+#[case::at_the_limit(&[4], &["a".repeat(2048)])]
+#[case::past_the_limit_on_one_page(&[5], &["A".to_owned()])]
+#[case::past_the_limit_across_pages(&[2, 3], &["A".to_owned(), "B".to_owned()])]
+#[tokio::test]
+async fn markdown_pages_past_the_response_limit_fall_back_to_their_lines(
+    #[case] repeats_per_page: &[usize],
+    #[case] expected: &[String],
+) {
+    let pages = repeats_per_page
+        .iter()
+        .zip(["A", "B"])
+        .enumerate()
+        .map(|(index, (&repeats, line))| {
+            json!({
+                "pageNumber": index + 1,
+                "spans": vec![json!({"offset": 0, "length": 512}); repeats],
+                "lines": [{"content": line}]
+            })
+        })
+        .collect::<Vec<_>>();
+    let upstream = upstream([json_response(json!({
+        "status": "succeeded",
+        "analyzeResult": {
+            "content": "a".repeat(512),
+            "contentFormat": "markdown",
+            "stringIndexType": "unicodeCodePoint",
+            "pages": pages
+        }
+    }))])
+    .await;
+
+    let response = perform(ocr_request(
+        LAYOUT_MODEL,
+        &upstream.uri(),
+        json!({"outputContentFormat": "markdown", "max_response_bytes": 2048}),
+    ))
+    .await
+    .unwrap();
+
+    let markdown = response
+        .pages
+        .iter()
+        .map(|page| page.markdown.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(markdown, expected);
+}
+
+#[rstest]
 #[case::native_markdown(LAYOUT_MODEL, json!({"outputContentFormat": "markdown", "req_format": "native"}), Some("markdown"))]
 #[case::markdown_on_read(MODEL, json!({"outputContentFormat": "markdown"}), Some("markdown"))]
 #[case::text(LAYOUT_MODEL, json!({"outputContentFormat": "text"}), Some("text"))]
