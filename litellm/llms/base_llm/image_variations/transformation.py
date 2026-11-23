@@ -35,8 +35,8 @@ class BaseImageVariationConfig(BaseConfig, ABC):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         stream: bool | None = None,
     ) -> str:
         """
@@ -53,21 +53,21 @@ class BaseImageVariationConfig(BaseConfig, ABC):
         self,
         model: str | None,
         image: FileTypes,
-        optional_params: dict,
-        headers: dict,
+        optional_params: dict[str, object],
+        headers: dict[str, object],
     ) -> HttpHandlerRequestFields:
         pass
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         return {}
 
     @abstractmethod
@@ -77,10 +77,10 @@ class BaseImageVariationConfig(BaseConfig, ABC):
         raw_response: ClientResponse,
         model_response: ImageResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
+        request_data: dict[str, object],
         image: FileTypes,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
     ) -> ImageResponse:
@@ -93,10 +93,10 @@ class BaseImageVariationConfig(BaseConfig, ABC):
         raw_response: httpx.Response,
         model_response: ImageResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
+        request_data: dict[str, object],
         image: FileTypes,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
     ) -> ImageResponse:
@@ -106,10 +106,10 @@ class BaseImageVariationConfig(BaseConfig, ABC):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
+        headers: dict[str, object],
+    ) -> dict[str, object]:
         raise NotImplementedError(
             "ImageVariationConfig implementa 'transform_request_image_variation' for image variation models"
         )
@@ -120,10 +120,10 @@ class BaseImageVariationConfig(BaseConfig, ABC):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
+        request_data: dict[str, object],
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
