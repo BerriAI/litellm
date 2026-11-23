@@ -4904,6 +4904,27 @@ def test_transform_request_carries_prompt_cache_breakpoint_to_cache_control():
     ]
 
 
+def test_chat_transform_request_keeps_clear_at_on_a_mid_conversation_system_message():
+    body: Final = _anthropic_body(
+        [
+            {"role": "system", "content": "You are terse."},
+            {"role": "user", "content": "First question"},
+            {"role": "assistant", "content": "First answer"},
+            {"role": "user", "content": "Second question"},
+            {
+                "role": "system",
+                "content": "Reminder for this turn only.",
+                "clear_at": "next_user_message",
+            },
+            {"role": "user", "content": "Third question"},
+        ]
+    )
+
+    system_messages = [m for m in body["messages"] if m["role"] == "system"]
+    assert len(system_messages) == 1
+    assert system_messages[0]["clear_at"] == "next_user_message"
+
+
 @pytest.mark.parametrize(
     "marker, expected_block",
     [
