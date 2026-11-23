@@ -40,7 +40,7 @@ _BACKFILL_VALUE: Final = TypeAdapter(object)
 
 
 class LimitedSizeOrderedDict(OrderedDict):
-    def __init__(self, *args, max_size=100, **kwargs):
+    def __init__(self, *args, max_size: int = 100, **kwargs):
         super().__init__(*args, **kwargs)
         self.max_size = max_size
 
@@ -133,7 +133,7 @@ class DualCache(BaseCache):
             return {**kwargs, "ttl": self.default_in_memory_ttl}
         return kwargs
 
-    def set_cache(self, key, value, local_only: bool = False, **kwargs):
+    def set_cache(self, key, value: object, local_only: bool = False, **kwargs: object):
         # Update both Redis and in-memory cache
         try:
             if self.in_memory_cache is not None:
@@ -147,7 +147,7 @@ class DualCache(BaseCache):
         except Exception as e:
             print_verbose(e)
 
-    def increment_cache(self, key, value: int, local_only: bool = False, **kwargs) -> int:
+    def increment_cache(self, key: str, value: int, local_only: bool = False, **kwargs) -> int:
         """
         Key - the key in cache
 
@@ -208,7 +208,7 @@ class DualCache(BaseCache):
         keys: list,
         parent_otel_span: Span | None = None,
         local_only: bool = False,
-        **kwargs,
+        **kwargs: object,
     ):
         try:
             in_memory_result: Final = (
@@ -361,7 +361,7 @@ class DualCache(BaseCache):
         parent_otel_span: Span | None = None,
         local_only: bool = False,
         throttle_redis: bool = True,
-        **kwargs,
+        **kwargs: object,
     ):
         """With ``throttle_redis`` False every key memory cannot serve is read from Redis, exactly as a per-key
         ``async_get_cache`` would read it, instead of skipping keys that missed within ``redis_batch_cache_expiry``."""
@@ -459,7 +459,7 @@ class DualCache(BaseCache):
             with_traceback=True,
         )
 
-    async def async_set_cache(self, key, value, local_only: bool = False, **kwargs: object):
+    async def async_set_cache(self, key, value: object, local_only: bool = False, **kwargs: object):
         print_verbose("async set cache: cache key: %s; local_only: %s; value: %s", key, local_only, value)
         try:
             if self.in_memory_cache is not None:
@@ -499,7 +499,7 @@ class DualCache(BaseCache):
 
     async def async_increment_cache(
         self,
-        key,
+        key: str,
         value: float,
         parent_otel_span: Span | None = None,
         local_only: bool = False,
@@ -572,7 +572,7 @@ class DualCache(BaseCache):
             )
             return result
 
-    async def async_set_cache_sadd(self, key, value: list, local_only: bool = False, **kwargs) -> None:
+    async def async_set_cache_sadd(self, key: str, value: list, local_only: bool = False, **kwargs) -> None:
         """
         Add value to a set
 

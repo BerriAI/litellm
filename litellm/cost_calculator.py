@@ -67,6 +67,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
 )
 from litellm.litellm_core_utils.llm_response_utils.response_metadata import response_ms_since_logging_start
 from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
+from litellm.litellm_core_utils.service_tier_utils import GEMINI_TRAFFIC_TYPE_SERVICE_TIERS
 from litellm.llms.anthropic.cost_calculation import (
     cost_per_token as anthropic_cost_per_token,
 )
@@ -492,7 +493,7 @@ def cost_per_token(
     completion_tokens: int = 0,
     response_time_ms: float | None = 0.0,
     custom_llm_provider: str | None = None,
-    region_name=None,
+    region_name: object = None,
     ### CHARACTER PRICING ###
     prompt_characters: int | None = None,
     completion_characters: int | None = None,
@@ -1318,19 +1319,6 @@ def _get_response_model(completion_response: object) -> str | None:
     return None
 
 
-_GEMINI_TRAFFIC_TYPE_TO_SERVICE_TIER: Final[dict] = {
-    # ON_DEMAND_PRIORITY maps to "priority" — selects input_cost_per_token_priority, etc.
-    "ON_DEMAND_PRIORITY": "priority",
-    # FLEX / BATCH / ON_DEMAND_FLEX maps to "flex" — selects input_cost_per_token_flex, etc.
-    # Vertex AI reports flex/shared-capacity traffic as ON_DEMAND_FLEX, not FLEX.
-    "FLEX": "flex",
-    "BATCH": "flex",
-    "ON_DEMAND_FLEX": "flex",
-    # ON_DEMAND is standard pricing — no service_tier suffix applied
-    "ON_DEMAND": None,
-}
-
-
 def _map_traffic_type_to_service_tier(traffic_type: object) -> str | None:
     """
     Map a Gemini usageMetadata.trafficType value to a LiteLLM service_tier string.
@@ -1346,7 +1334,7 @@ def _map_traffic_type_to_service_tier(traffic_type: object) -> str | None:
     """
     if traffic_type is None:
         return None
-    service_tier: Final = _GEMINI_TRAFFIC_TYPE_TO_SERVICE_TIER.get(str(traffic_type).upper())
+    service_tier: Final = GEMINI_TRAFFIC_TYPE_SERVICE_TIERS.get(str(traffic_type).upper())
     return service_tier
 
 
@@ -1537,7 +1525,7 @@ def _extraction_usage(usage: ExtractionUsage) -> Usage:
     )
 
 
-def _is_known_usage_objects(usage_obj):
+def _is_known_usage_objects(usage_obj: object) -> bool:
     """Returns True if the usage obj is a known Usage type"""
     return (
         isinstance(usage_obj, litellm.Usage)
@@ -1915,9 +1903,9 @@ def _adjusted_provider_billed_cost(
 def completion_cost(
     completion_response: object | None = None,
     model: str | None = None,
-    prompt="",
+    prompt: str = "",
     messages: list = [],
-    completion="",
+    completion: str | list[str] | None = "",
     total_time: float | None = 0.0,  # used for replicate, sagemaker
     call_type: CallTypesLiteral | None = None,
     ### REGION ###
@@ -3196,7 +3184,7 @@ def default_image_cost_calculator(
     quality: str | None = None,
     n: int | None = 1,  # Default to 1 image
     size: str | None = "1024-x-1024",  # OpenAI default
-    optional_params: dict | None = None,
+    optional_params: Mapping[str, object] | None = None,
     model_info: ModelInfo | None = None,
 ) -> float:
     """

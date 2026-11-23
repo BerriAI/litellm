@@ -2946,6 +2946,26 @@ class TestConvertToModelResponseObjectAudioTranscription:
         assert result.usage.output_tokens == 5
         assert result.usage.input_token_details.audio_tokens == 4
 
+    @pytest.mark.parametrize(
+        ("hidden_params", "expected"),
+        [
+            (None, {"text": "Hello"}),
+            ({"cache_hit": True}, {"text": "Hello", "request_id": "rid-1", "truncated": True}),
+        ],
+    )
+    def test_request_id_and_truncation_come_back_only_from_the_cache(
+        self, hidden_params: dict[str, object] | None, expected: dict[str, object]
+    ) -> None:
+        from litellm.types.utils import TranscriptionResponse
+
+        result: Final = convert_to_model_response_object(
+            response_object={"text": "Hello", "request_id": "rid-1", "truncated": True},
+            model_response_object=TranscriptionResponse(),
+            response_type="audio_transcription",
+            hidden_params=hidden_params,
+        )
+        assert result.model_dump(exclude_none=True) == expected
+
     def test_parse_error_keeps_the_transcript_out_of_the_exception(self):
         import traceback
 

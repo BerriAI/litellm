@@ -11,7 +11,7 @@ from litellm.litellm_core_utils.aws_partition import is_bedrock_arn
 from litellm.litellm_core_utils.cloud_storage_security import (
     BEDROCK_MANAGED_S3_BATCH_PREFIX,
 )
-from litellm.litellm_core_utils.core_helpers import require_get
+from litellm.litellm_core_utils.core_helpers import SupportsGet, require_get
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.base_llm.batches.transformation import BaseBatchesConfig
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -154,8 +154,8 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         headers: dict,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
@@ -171,8 +171,8 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         data: CreateBatchRequest,
     ) -> str:
         """
@@ -403,8 +403,8 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
     def transform_retrieve_batch_request(
         self,
         batch_id: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
     ) -> dict[str, object]:
         """
         Transform batch retrieval request for Bedrock.
@@ -461,7 +461,9 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
             "data": None,
         }
 
-    def _parse_timestamps_and_status(self, response_data, status_str: str):
+    def _parse_timestamps_and_status(
+        self, response_data: SupportsGet, status_str: str
+    ) -> tuple[int | None, int | None, int | None, int | None, int | None, int | None]:
         """Helper to parse timestamps based on status."""
         import datetime
 
@@ -522,7 +524,7 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
     ) -> tuple[int | None, int | None, int | None, int | None, int | None, int | None]:
         return self._parse_timestamps_and_status(response_data, status_str)
 
-    def _extract_file_configs(self, response_data):
+    def _extract_file_configs(self, response_data: SupportsGet):
         """Helper to extract input and output file configurations."""
         # Extract input file ID
         input_file_id = ""
@@ -542,7 +544,7 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
 
         return input_file_id, output_file_id
 
-    def _extract_errors_and_metadata(self, response_data, raw_response):
+    def _extract_errors_and_metadata(self, response_data, raw_response: Response):
         """Helper to extract errors and enriched metadata."""
         # Extract errors
         message: Final = response_data.get("message")
@@ -586,7 +588,7 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         model: str | None,
         raw_response: Response,
         logging_obj: "LiteLLMLoggingObj",
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> LiteLLMBatch:
         """
         Transform Bedrock batch retrieval response to LiteLLM format.

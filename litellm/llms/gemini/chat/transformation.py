@@ -15,7 +15,7 @@ from litellm.utils import supports_reasoning
 
 from ...vertex_ai.common_utils import gemini_fetches_url_itself
 from ...vertex_ai.gemini.transformation import gemini_convert_messages_with_history
-from ...vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+from ...vertex_ai.gemini.vertex_and_google_ai_studio_gemini import GEMINI_SERVICE_TIER_ALIASES, VertexGeminiConfig
 
 
 def _image_url_fields(img_element: ChatCompletionImageObject) -> tuple[str | None, str | None, str | None]:
@@ -52,6 +52,7 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
 
     _route: ClassVar[str] = "gemini"
     _removes_undeclared_thinking_levels: ClassVar[bool] = True
+    _service_tier_aliases: ClassVar[Mapping[str, str]] = GEMINI_SERVICE_TIER_ALIASES
 
     temperature: float | None = None
     max_output_tokens: int | None = None

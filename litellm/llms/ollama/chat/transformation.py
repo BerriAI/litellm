@@ -10,6 +10,7 @@ from typing_extensions import TypedDict
 
 import litellm
 from litellm._uuid import uuid
+from litellm.litellm_core_utils.allowed_tools_tool_choice import HostedMcpToolHandling
 from litellm.litellm_core_utils.core_helpers import (
     decoded_json_object,
     json_contains,
@@ -218,6 +219,9 @@ class OllamaChatConfig(BaseConfig):
             "reasoning_effort",
         ]
 
+    def hosted_mcp_tool_handling(self, model: str) -> HostedMcpToolHandling:
+        return "drops"
+
     def map_openai_params(
         self,
         non_default_params: dict,
@@ -230,6 +234,7 @@ class OllamaChatConfig(BaseConfig):
             model=model,
             route="ollama_chat",
             drop_params=drop_params,
+            handling=self.hosted_mcp_tool_handling(model),
         )
         for param, value in request_params.items():
             if param == "max_tokens" or param == "max_completion_tokens":

@@ -31,6 +31,7 @@ from starlette.datastructures import FormData
 
 from litellm.redis.stores.auth_cache import AuthObject
 import litellm
+from litellm._logging import LevelRoutingStreamHandler
 from litellm.caching.caching import DualCache
 from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException, ModifyResponseException
@@ -3386,7 +3387,7 @@ class TestForwardHeaders:
         # Mock the request body
         mock_request_body = {"test": "data"}
 
-        mock_user_api_key_dict = MagicMock()
+        mock_user_api_key_dict = UserAPIKeyAuth()
 
         # Custom headers that should be merged with user headers
         custom_headers = {
@@ -3483,7 +3484,7 @@ class TestForwardHeaders:
         mock_request.query_params = {}
 
         mock_request_body = {"test": "data"}
-        mock_user_api_key_dict = MagicMock()
+        mock_user_api_key_dict = UserAPIKeyAuth()
 
         # Only these custom headers should be sent
         custom_headers = {
@@ -4619,6 +4620,75 @@ class TestCursorProxyRoute:
 
             expected_auth = base64.b64encode(b"crsr_ui_test_key:").decode("ascii")
             assert call_args["custom_headers"]["Authorization"] == f"Basic {expected_auth}"
+
+    def test_cursor_proxy_route_sends_the_secret_behind_a_ui_credential_oidc_reference(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from litellm.proxy.proxy_server import app
+        from litellm.types.utils import CredentialItem
+
+        monkeypatch.delenv("CURSOR_API_KEY", raising=False)
+        monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
+        monkeypatch.setenv("CURSOR_UI_TOKEN", "crsr_resolved_key")
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        monkeypatch.setattr(
+            litellm,
+            "credential_list",
+            [
+                CredentialItem(
+                    credential_name="my-cursor-oidc",
+                    credential_values={"api_key": "oidc/env/CURSOR_UI_TOKEN", "api_base": "https://api.cursor.com"},
+                    credential_info={"custom_llm_provider": "cursor"},
+                )
+            ],
+        )
+        litellm.in_memory_llm_clients_cache.flush_cache()
+        monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, lambda: UserAPIKeyAuth(api_key="sk-virtual"))
+
+        with respx.mock(assert_all_called=True) as upstream:
+            route: Final = upstream.get("https://api.cursor.com/v0/models").mock(
+                return_value=httpx.Response(200, json={"models": []})
+            )
+            response: Final = TestClient(app).get("/cursor/v0/models")
+
+        expected_auth: Final = base64.b64encode(b"crsr_resolved_key:").decode("ascii")
+        assert (response.status_code, response.json()) == (200, {"models": []})
+        assert route.calls.last.request.headers["authorization"] == f"Basic {expected_auth}"
+
+    @pytest.mark.asyncio
+    async def test_cursor_proxy_route_refuses_a_ui_credential_google_reference(self):
+        from litellm.types.utils import CredentialItem
+
+        ui_credential = CredentialItem(
+            credential_name="my-cursor-google",
+            credential_values={"api_key": "oidc/google/https://api.cursor.com"},
+            credential_info={"custom_llm_provider": "cursor"},
+        )
+
+        with (
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router.get_credentials",
+                return_value=None,
+            ),
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.litellm.credential_list",
+                [ui_credential],
+            ),
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
+            ) as mock_create_route,
+            pytest.raises(HTTPException) as caught,
+        ):
+            await cursor_proxy_route(
+                endpoint="v0/models",
+                request=MagicMock(spec=Request),
+                fastapi_response=MagicMock(spec=Response),
+                user_api_key_dict=MagicMock(),
+            )
+
+        assert caught.value.status_code == 401
+        assert "pass-through routes do not fetch Google ID tokens" in caught.value.detail
+        mock_create_route.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_cursor_proxy_route_custom_api_base(self):
@@ -8691,7 +8761,9 @@ async def test_bedrock_native_count_tokens_counts_on_the_callers_own_deployment_
                     "rpm": 1,
                 },
             ),
-            _bedrock_count_deployment(_BEDROCK_COUNT_ALIAS, _BEDROCK_COUNT_MODEL, {"id": "global-deployment", "rpm": 1}),
+            _bedrock_count_deployment(
+                _BEDROCK_COUNT_ALIAS, _BEDROCK_COUNT_MODEL, {"id": "global-deployment", "rpm": 1}
+            ),
         ),
         caller=UserAPIKeyAuth(api_key=f"sk-{team_id}-caller", team_id=team_id),
         routing_strategy="usage-based-routing-v2",
@@ -8955,6 +9027,65 @@ async def test_bedrock_native_count_tokens_logs_the_provider_status_when_the_cou
 
 
 @pytest.mark.parametrize(
+    ("aws_status", "aws_message", "log_level", "stream"),
+    [
+        # Bedrock us-east-1 answered a count for Claude Opus 5.5 with this message on 2026-11-22
+        (400, "The provided model doesn't support counting tokens.", logging.WARNING, "stdout"),
+        (429, "Too many requests, please wait before trying again.", logging.WARNING, "stdout"),
+        (400, "The provided model identifier is invalid.", logging.ERROR, "stderr"),
+        (400, "`max_tokens` must be greater than `thinking.budget_tokens`", logging.ERROR, "stderr"),
+        (
+            400,
+            "The provided model doesn't support counting tokens.: Extra inputs are not permitted",
+            logging.ERROR,
+            "stderr",
+        ),
+        (403, "The security token included in the request is invalid.", logging.ERROR, "stderr"),
+        (404, "The count failed.", logging.ERROR, "stderr"),
+        (500, "The count failed.", logging.ERROR, "stderr"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_bedrock_native_count_tokens_logs_caller_errors_as_stdout_warnings_and_other_failures_as_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_transport: None,
+    respx_mock: respx.MockRouter,
+    caplog: pytest.LogCaptureFixture,
+    capsys: pytest.CaptureFixture[str],
+    aws_status: int,
+    aws_message: str,
+    log_level: int,
+    stream: Literal["stdout", "stderr"],
+) -> None:
+    aws_reply: Final = httpx.Response(aws_status, json={"message": aws_message})
+    with caplog.at_level(logging.INFO, logger="LiteLLM Proxy"), pytest.raises(HTTPException) as exc_info:
+        await _bedrock_native_count(monkeypatch, respx_mock, aws_reply, Response())
+
+    assert exc_info.value.status_code == aws_status
+    alerts: Final = _proxy_alerts(caplog)
+    assert [(record.name, record.levelno) for record in alerts] == [("LiteLLM Proxy", log_level)]
+    assert _default_handler_stream(alerts[0], capsys) == stream
+
+
+def _proxy_alerts(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
+    return [
+        record
+        for record in caplog.records
+        if record.name.startswith("LiteLLM Proxy") and record.levelno >= logging.WARNING
+    ]
+
+
+def _default_handler_stream(record: logging.LogRecord, capsys: pytest.CaptureFixture[str]) -> str:
+    _ = capsys.readouterr()
+    routing: Final = LevelRoutingStreamHandler()
+    routing.setFormatter(logging.Formatter("%(message)s"))
+    routing.emit(record)
+    written: Final = capsys.readouterr()
+    line: Final = f"{record.getMessage()}\n"
+    return {(line, ""): "stdout", ("", line): "stderr"}.get((written.out, written.err), "both or neither")
+
+
+@pytest.mark.parametrize(
     ("request_body", "problem"),
     [
         ({"model": _BEDROCK_COUNT_ALIAS}, "Request must contain content to count tokens"),
@@ -8968,16 +9099,21 @@ async def test_bedrock_native_count_tokens_answers_400_for_a_malformed_body_with
     monkeypatch: pytest.MonkeyPatch,
     httpx_transport: None,
     respx_mock: respx.MockRouter,
+    caplog: pytest.LogCaptureFixture,
+    capsys: pytest.CaptureFixture[str],
     request_body: Mapping[str, object],
     problem: str,
 ) -> None:
-    with pytest.raises(HTTPException) as exc_info:
+    with caplog.at_level(logging.INFO, logger="LiteLLM Proxy"), pytest.raises(HTTPException) as exc_info:
         await _bedrock_native_count(
             monkeypatch, respx_mock, httpx.Response(200, json={"inputTokens": 12}), Response(), request_body
         )
 
     assert (exc_info.value.status_code, exc_info.value.detail) == (400, {"error": problem})
     assert len(respx_mock.calls) == 0
+    alerts: Final = _proxy_alerts(caplog)
+    assert [(record.name, record.levelno) for record in alerts] == [("LiteLLM Proxy", logging.WARNING)]
+    assert _default_handler_stream(alerts[0], capsys) == "stdout"
 
 
 @pytest.mark.parametrize(

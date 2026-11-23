@@ -4367,7 +4367,9 @@ class ComplexityRouter(CustomLogger):
             return None
         return self.config.resolve_classified_tier(route_choice.name)
 
-    async def _resolve_keyword_tier_override(self, user_message: str, request_kwargs: dict) -> KeywordOverride | None:
+    async def _resolve_keyword_tier_override(
+        self, user_message: str, request_kwargs: dict[str, object]
+    ) -> KeywordOverride | None:
         """Resolve a keyword_tier_rule override, semantically or lexically per config.
 
         Returns None (no override -> fall through to the scorer) not only when no rule
@@ -4398,7 +4400,7 @@ class ComplexityRouter(CustomLogger):
     def _resolve_messages(
         self,
         messages: list[dict[str, object]] | None,
-        request_kwargs: dict,
+        request_kwargs: dict[str, object],
     ) -> list[dict[str, object]] | None:
         """
         Resolve messages from the request, converting from other formats if needed.
@@ -4519,7 +4521,7 @@ class ComplexityRouter(CustomLogger):
         return self._get_session_id_from_request_kwargs(request_kwargs)
 
     @staticmethod
-    def _get_user_api_key_hash_from_request_kwargs(request_kwargs: dict) -> str | None:
+    def _get_user_api_key_hash_from_request_kwargs(request_kwargs: dict[str, object]) -> str | None:
         """Resolve the proxy-derived API key hash, the same trust boundary
         DeploymentAffinityCheck uses for its own key-based affinity (not the
         client-supplied OpenAI `user` param, which isn't authenticated)."""
@@ -4529,7 +4531,7 @@ class ComplexityRouter(CustomLogger):
                 return str(user_key)
         return None
 
-    def _get_session_affinity_cache_key(self, session_id: str, request_kwargs: dict) -> TierSessionPin:
+    def _get_session_affinity_cache_key(self, session_id: str, request_kwargs: dict[str, object]) -> TierSessionPin:
         return TierSessionPin(
             router=self.model_name,
             caller=(
@@ -4912,7 +4914,7 @@ class ComplexityRouter(CustomLogger):
         model: str,
         request_kwargs: dict[str, object],
         messages: list[dict[str, object]] | None = None,
-        input: str | list | None = None,
+        input: str | list[object] | None = None,
         specific_deployment: bool | None = False,
         conversation_continuing: bool = True,
         resolved_messages: Sequence[Mapping[str, object]] | None = None,
