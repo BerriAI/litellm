@@ -1,3 +1,4 @@
+from enum import Enum
 from typing import Annotated, Final, TypeAlias
 
 from openai._models import BaseModel as OpenAIObject
@@ -9,7 +10,7 @@ _ATTRIBUTE_VALUE: Final = TypeAdapter(object)
 
 
 def _str_as_given(value: object, handler: ValidatorFunctionWrapHandler) -> object:
-    return value if isinstance(value, str) else handler(value)
+    return value if isinstance(value, str) and not isinstance(value, Enum) else handler(value)
 
 
 StrAsGiven: TypeAlias = Annotated[str, WrapValidator(_str_as_given)]

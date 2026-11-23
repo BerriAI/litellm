@@ -57,9 +57,9 @@ class CallSetup:
     def kwargs(self) -> dict[str, object]:
         if self.asynchronous:
             return self.arguments
-        from litellm.utils import credential_updates
+        from litellm.utils import resolved_api_key_update
 
-        return {**self.arguments, **credential_updates(self.arguments, self.call_type)}
+        return {**self.arguments, **resolved_api_key_update(self.arguments, self.call_type)}
 
 
 def setup(
@@ -534,7 +534,7 @@ async def before_deployment_call(kwargs: Mapping[str, object], call_type: str) -
         DeploymentHook, utils.async_pre_call_deployment_hook
     )
     hooked: Final = await hook(kwargs, call_type, include_v2=True)
-    return {**hooked, **(await utils.acredential_updates(hooked, call_type))}
+    return {**hooked, **(await utils.aresolved_api_key_update(hooked, call_type))}
 
 
 def after_deployment_success(kwargs: dict[str, object], response: object, call_type: str) -> Awaitable[object]:

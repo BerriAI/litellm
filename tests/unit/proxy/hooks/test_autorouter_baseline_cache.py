@@ -52,7 +52,9 @@ _MODELS_JSON: Final = """[
     {"model_name":"opus","litellm_params":{"model":"anthropic/claude-opus-5","api_key":"test-selected"},
       "model_info":{"id":"baseline"}}]"""
 _MODELS: Final = _MESSAGES.validate_json(_MODELS_JSON)
-_GOOGLE_METADATA_IDENTITY: Final = "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity"
+_GOOGLE_METADATA_IDENTITY: Final = (
+    "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity"
+)
 
 
 def _message(completed: bool, model: str) -> Mapping[str, JsonValue]:
@@ -350,6 +352,42 @@ async def test_baseline_lookup_does_not_hold_the_request_on_a_slow_google_metada
     assert counted.observation.plan is not None and counted.observation.plan.total_tokens == 6000
 
 
+async def test_a_slow_baseline_credential_lookup_fits_inside_a_short_logging_worker_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.litellm_core_utils import logging_worker
+    from litellm.litellm_core_utils.logging_worker import LoggingWorker
+
+    monkeypatch.delenv("GCE_METADATA_HOST", raising=False)
+    audience: Final = f"https://baseline.example.test/{uuid4().hex}"
+    released: Final = threading.Event()
+
+    def identity(request: httpx.Request) -> httpx.Response:
+        _ = released.wait(timeout=5)
+        return httpx.Response(200, text="test-selected")
+
+    models: Final = _MESSAGES.validate_json(
+        _MODELS_JSON.replace(
+            'claude-opus-5","api_key":"test-selected"', f'claude-opus-5","api_key":"oidc/google/{audience}"'
+        )
+    )
+    worker: Final = LoggingWorker(timeout=0.4)
+    monkeypatch.setattr(logging_worker, "GLOBAL_LOGGING_WORKER", worker)
+    rig: Final = _Rig(monkeypatch, models=models)
+    try:
+        with respx.mock(assert_all_called=False) as upstream:
+            _ = upstream.post("https://api.anthropic.com/v1/messages").mock(side_effect=_upstream)
+            _ = upstream.get(_GOOGLE_METADATA_IDENTITY).mock(side_effect=identity)
+            await _call(rig.router, rig.logging())
+            payload: Final = await rig.capture.payload()
+        observed: Final = _observation(payload).observation
+        assert observed.plan is None and observed.reason == "provider_credentials_timeout"
+        assert worker._timeout_total == 0
+    finally:
+        released.set()
+        await worker.stop()
+
+
 async def test_native_retry_is_uncertain_even_when_final_response_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
     rig: Final = _Rig(monkeypatch, retries=1)
 
@@ -544,6 +582,24 @@ async def test_plain_requests_do_not_initialize_or_warn(
     assert logging.baseline_cache_context is None
     assert "baseline observation could not be initialized" not in caplog.text
     assert not rig.hook.counts
+
+
+async def test_the_baseline_context_repr_does_not_print_the_baseline_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    rig: Final = _Rig(
+        monkeypatch,
+        models=_MESSAGES.validate_json(
+            _MODELS_JSON.replace(
+                'claude-opus-5","api_key":"test-selected"', 'claude-opus-5","api_key":"baseline-secret"'
+            )
+        ),
+    )
+    logging: Final = rig.logging()
+
+    await rig.hook.async_pre_call_deployment_hook(_kwargs(logging), CallTypes.anthropic_messages)
+
+    assert logging.baseline_cache_context is not None
+    assert logging.baseline_cache_context.baseline_params.api_key == "baseline-secret"
+    assert "baseline-secret" not in repr(logging.baseline_cache_context)
 
 
 async def test_plain_fallback_invalidates_existing_autorouter_capture(monkeypatch: pytest.MonkeyPatch) -> None:

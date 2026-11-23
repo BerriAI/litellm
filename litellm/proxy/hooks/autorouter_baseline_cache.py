@@ -60,7 +60,9 @@ _MAX_COUNTS: Final = 4096
 
 async def _baseline_target(params: LiteLLM_Params) -> NativePredictionTarget | UnsupportedPredictionTarget:
     try:
-        return await asyncio.wait_for(aresolve_baseline_prediction_target(params), _TARGET_TIMEOUT)
+        return await asyncio.wait_for(
+            aresolve_baseline_prediction_target(params), optional_callback_budget(_TARGET_TIMEOUT)
+        )
     except asyncio.TimeoutError:
         return UnsupportedPredictionTarget("provider_credentials_timeout")
 
@@ -85,7 +87,7 @@ class CapturedBaselineObservation(LiteLLMBaseModel):
 class BaselineCacheContext:
     collector: AutoRouterBaselineCache
     capture: CapturedBaselineObservation
-    baseline_params: LiteLLM_Params
+    baseline_params: LiteLLM_Params = field(repr=False)
     baseline_deployment_id: str
     baseline_body: Mapping[str, JsonValue] | None = field(default=None, repr=False)
     selected_body_digest: str | None = field(default=None, repr=False)

@@ -21,6 +21,7 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.llms.gemini.common_utils import GeminiModelInfo
 from litellm.rag.ingestion.base_ingestion import BaseRAGIngestion
 from litellm.types.llms.base import LiteLLMBaseModel
+from litellm.utils import aresolve_api_key_secret_reference
 
 if TYPE_CHECKING:
     from litellm import Router
@@ -98,8 +99,17 @@ class GeminiRAGIngestion(BaseRAGIngestion):
         vector_store_config: Final = self.vector_store_config
 
         # Get API credentials
-        api_key: Final = cast(str | None, vector_store_config.get("api_key")) or GeminiModelInfo.get_api_key()
-        api_base: Final = cast(str | None, vector_store_config.get("api_base")) or GeminiModelInfo.get_api_base()
+        configured_api_base: Final = cast(str | None, vector_store_config.get("api_base"))
+        api_key: Final = (
+            await aresolve_api_key_secret_reference(
+                cast(str | None, vector_store_config.get("api_key")),
+                None,
+                "gemini",
+                {"api_base": configured_api_base},
+            )
+            or GeminiModelInfo.get_api_key()
+        )
+        api_base: Final = configured_api_base or GeminiModelInfo.get_api_base()
 
         if not api_key:
             raise ValueError("GEMINI_API_KEY or GOOGLE_API_KEY is required for Gemini File Search")
