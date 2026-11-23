@@ -54,9 +54,9 @@ const RESPONSE_STREAM_EXCEPTION_STATUSES: [(&str, u16); 6] = [
     ("serviceUnavailableException", 503),
 ];
 
-/// An exception Python's Bedrock stream decoder raises as it is, unmapped: botocore's
-/// `EventStreamBuffer` parser errors, `json.loads` failing on an event payload, and the
-/// chunk parser's `pop` on a payload that is not a JSON object.
+/// An error Python's Bedrock stream decoder hits: botocore's `EventStreamBuffer` parser errors,
+/// which end the stream as a 502 naming the class, plus `json.loads` failing on an event payload
+/// and the chunk parser's `pop` on a payload that is not a JSON object, which it raises as they are.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum BedrockStreamRaise {
     #[error("Checksum mismatch: expected 0x{expected:08x}, calculated 0x{calculated:08x}")]
@@ -73,11 +73,24 @@ pub enum BedrockStreamRaise {
     NotAnObject(String),
 }
 
+impl BedrockStreamRaise {
+    fn kind(&self) -> &'static str {
+        match self {
+            Self::ChecksumMismatch { .. } => "ChecksumMismatch",
+            Self::InvalidHeadersLength(_) => "InvalidHeadersLength",
+            Self::InvalidPayloadLength(_) => "InvalidPayloadLength",
+            Self::DuplicateHeader(_) => "DuplicateHeader",
+            Self::InvalidJson(_) => "InvalidJson",
+            Self::NotAnObject(_) => "NotAnObject",
+        }
+    }
+}
+
 pub(crate) fn raised(raise: BedrockStreamRaise) -> Error {
     Error::InvalidResponse(ErrorDetail::failed("Bedrock event stream", raise))
 }
 
-/// Port of Python's `_EventStreamTally`.
+/// Port of Python's `EventStreamTally`.
 #[derive(Default)]
 struct EventStreamTally {
     bytes_received: usize,
@@ -86,7 +99,7 @@ struct EventStreamTally {
     recognized_events: usize,
     unrecognized_event_types: std::collections::BTreeSet<String>,
     unrecognized_head: Vec<u8>,
-    head: Vec<u8>,
+    parser_error: Option<&'static str>,
 }
 
 type SharedEventStreamTally = Arc<Mutex<EventStreamTally>>;
@@ -246,7 +259,7 @@ fn bedrock_error(status: u16, message: String, headers: &[(String, String)]) -> 
     ))
 }
 
-/// Port of Python's `_EventStreamTally.add_event`.
+/// Port of Python's `EventStreamTally.add_event`.
 fn add_event(tally: &SharedEventStreamTally, message: &Message) {
     let message_type = header_text(message, ":message-type");
     let event_type = header_text(message, ":event-type");
@@ -266,7 +279,7 @@ fn add_event(tally: &SharedEventStreamTally, message: &Message) {
     });
 }
 
-/// Port of Python's `_EventStreamTally.undecoded_stream_error`.
+/// Port of Python's `EventStreamTally.undecoded_stream`.
 fn undecoded_stream_error(tally: &EventStreamTally, headers: &[(String, String)]) -> Option<Error> {
     let undecoded = tally.bytes_received.saturating_sub(tally.bytes_decoded);
     if tally.recognized_events > 0 && undecoded == 0 {
@@ -278,10 +291,14 @@ fn undecoded_stream_error(tally: &EventStreamTally, headers: &[(String, String)]
         python_optional_str_repr(response_header(headers, "x-amzn-requestid")),
         tally.bytes_received
     );
-    let message = if tally.events == 0 {
+    let message = if let Some(parser_error) = tally.parser_error {
         format!(
-            "Bedrock answered the stream with HTTP 200 but its body decoded to no events ({detail}, first bytes={})",
-            python_bytes_repr(&tally.head)
+            "Bedrock answered the stream with HTTP 200 but its body stopped decoding as an AWS event stream after {} events ({parser_error}, {detail})",
+            tally.events
+        )
+    } else if tally.events == 0 {
+        format!(
+            "Bedrock answered the stream with HTTP 200 but its body decoded to no events ({detail})"
         )
     } else if tally.recognized_events == 0 {
         let event_types = PythonValue::List(
@@ -307,11 +324,7 @@ fn undecoded_stream_error(tally: &EventStreamTally, headers: &[(String, String)]
     Some(bedrock_error(502, message, headers))
 }
 
-fn framing(error: FrameError) -> Error {
-    let error = match error {
-        FrameError::Raise(raise) => return raised(raise),
-        FrameError::Framing(error) => error,
-    };
+fn framing(error: EventStreamError) -> Error {
     match &error {
         EventStreamError::Body(body) if let Some(http) = tunnelled_http(body) => {
             Error::Http(http.clone())
@@ -396,13 +409,7 @@ pub fn aiter_bytes(
         let tally = tally.clone();
         bytes.inspect(move |chunk| {
             if let Ok(chunk) = chunk {
-                with_tally(&tally, |tally| {
-                    tally.bytes_received += chunk.len();
-                    let room = STREAM_HEAD_BYTES.saturating_sub(tally.head.len());
-                    tally
-                        .head
-                        .extend_from_slice(&chunk[..chunk.len().min(room)]);
-                });
+                with_tally(&tally, |tally| tally.bytes_received += chunk.len());
             }
         })
     };
@@ -416,11 +423,19 @@ pub fn aiter_bytes(
                 tally: tally.clone(),
             },
         )
-        .map(move |message| {
-            let message = message.map_err(framing)?;
-            add_event(&tally, &message);
-            parse_message_from_response(&message, &headers)
+        .map(move |message| match message {
+            Ok(message) => {
+                add_event(&tally, &message);
+                Some(parse_message_from_response(&message, &headers))
+            }
+            Err(FrameError::Raise(raise)) => {
+                with_tally(&tally, |tally| tally.parser_error = Some(raise.kind()));
+                None
+            }
+            Err(FrameError::Framing(error)) => Some(Err(framing(error))),
         })
+        .take_while(|item| futures_util::future::ready(item.is_some()))
+        .filter_map(futures_util::future::ready)
     };
     let end = stream::once(async move {
         with_tally(&tally, |tally| undecoded_stream_error(tally, &headers)).map_or(Ok(None), Err)
@@ -564,13 +579,33 @@ mod tests {
         assert_eq!(upstream(decoded(wire).await.1).0, 500);
     }
 
+    fn request_id() -> Vec<(String, String)> {
+        vec![("x-amzn-requestid".to_string(), "rid-1".to_string())]
+    }
+
+    fn reply_cut_before_its_checksum() -> Vec<u8> {
+        let wire =
+            chunk(&json!({"type": "content_block_delta", "delta": {"text": "a private reply"}}));
+        wire[..wire.len() - 4].to_vec()
+    }
+
+    #[rstest]
+    #[case::empty_body(Vec::new())]
+    #[case::first_frame_cut(reply_cut_before_its_checksum())]
     #[tokio::test]
-    async fn an_empty_body_is_a_502() {
-        let (_, body, _) = upstream(decoded(Vec::new()).await.1);
-        assert_eq!(
-            body,
-            "Bedrock answered the stream with HTTP 200 but its body decoded to no events (content-type='application/vnd.amazon.eventstream', x-amzn-requestid='rid-1', 0 bytes received, first bytes=b'')"
+    async fn a_body_with_no_events_is_a_502_naming_the_request_without_its_bytes(
+        #[case] wire: Vec<u8>,
+    ) {
+        let received = wire.len();
+        let (status, body, headers) = upstream(decoded(wire).await.1);
+        assert_eq!((status, headers), (502, request_id()));
+        assert!(
+            body.contains("decoded to no events")
+                && body.contains("x-amzn-requestid='rid-1'")
+                && body.contains(&format!("{received} bytes received")),
+            "{body}"
         );
+        assert!(!body.contains(r#""bytes":""#), "{body}");
     }
 
     #[tokio::test]
@@ -626,24 +661,6 @@ mod tests {
         assert!(items[0].is_err());
     }
 
-    fn raise_of(error: Option<Error>) -> BedrockStreamRaise {
-        litellm_error::find::<BedrockStreamRaise>(&error.expect("an error"))
-            .cloned()
-            .expect("a botocore parser error")
-    }
-
-    #[tokio::test]
-    async fn a_json_body_fails_the_prelude_checksum_as_botocore_does() {
-        let body = br#"{"id":"msg_1","type":"message","content":[]}"#;
-        assert_eq!(
-            raise_of(decoded(body.to_vec()).await.1),
-            BedrockStreamRaise::ChecksumMismatch {
-                expected: be_u32(body, 8),
-                calculated: crc32fast::hash(&body[..8]),
-            }
-        );
-    }
-
     fn with_prelude(total: u32, headers: u32) -> Vec<u8> {
         let mut prelude = [total.to_be_bytes(), headers.to_be_bytes()].concat();
         let crc = crc32fast::hash(&prelude);
@@ -651,35 +668,44 @@ mod tests {
         prelude
     }
 
-    #[rstest]
-    #[case::headers_too_long(
-        with_prelude(200_000, 140_000),
-        BedrockStreamRaise::InvalidHeadersLength(140_000)
-    )]
-    #[case::payload_too_long(
-        with_prelude(30_000_000, 0),
-        BedrockStreamRaise::InvalidPayloadLength(30_000_000 - 16)
-    )]
-    #[case::duplicate_header(
-        frame(&[(":message-type", "event"), (":message-type", "event")], b"{}"),
-        BedrockStreamRaise::DuplicateHeader(":message-type".into())
-    )]
-    #[tokio::test]
-    async fn a_malformed_frame_raises_the_botocore_parser_error(
-        #[case] wire: Vec<u8>,
-        #[case] expected: BedrockStreamRaise,
-    ) {
-        assert_eq!(raise_of(decoded(wire).await.1), expected);
+    fn corrupt_frame_after_an_event() -> Vec<u8> {
+        let mut corrupt = chunk(&json!({"type": "message_stop"}));
+        let last = corrupt.len() - 1;
+        corrupt[last] ^= 0xff;
+        [chunk(&json!({"type": "ping"})), corrupt].concat()
     }
 
+    #[rstest]
+    #[case::json_body(
+        br#"{"id":"msg_1","type":"message","content":[]}"#.to_vec(),
+        0,
+        "ChecksumMismatch"
+    )]
+    #[case::headers_too_long(with_prelude(200_000, 140_000), 0, "InvalidHeadersLength")]
+    #[case::payload_too_long(with_prelude(30_000_000, 0), 0, "InvalidPayloadLength")]
+    #[case::duplicate_header(
+        frame(&[(":message-type", "event"), (":message-type", "event")], b"{}"),
+        0,
+        "DuplicateHeader"
+    )]
+    #[case::corrupt_frame_after_an_event(corrupt_frame_after_an_event(), 1, "ChecksumMismatch")]
     #[tokio::test]
-    async fn a_corrupt_message_checksum_raises_a_checksum_mismatch() {
-        let mut wire = chunk(&json!({"type": "ping"}));
-        let last = wire.len() - 1;
-        wire[last] ^= 0xff;
-        assert!(matches!(
-            raise_of(decoded(wire).await.1),
-            BedrockStreamRaise::ChecksumMismatch { .. }
-        ));
+    async fn a_body_that_stops_decoding_is_a_502_naming_the_parser_error(
+        #[case] wire: Vec<u8>,
+        #[case] events: usize,
+        #[case] kind: &str,
+    ) {
+        let (decoded_events, error) = decoded(wire).await;
+        let (status, body, headers) = upstream(error);
+        assert_eq!(
+            (decoded_events.len(), status, headers),
+            (events, 502, request_id())
+        );
+        assert!(
+            body.contains(&format!("after {events} events ({kind}, "))
+                && body.contains("content-type='application/vnd.amazon.eventstream'")
+                && body.contains("x-amzn-requestid='rid-1'"),
+            "{body}"
+        );
     }
 }
