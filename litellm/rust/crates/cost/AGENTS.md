@@ -22,7 +22,7 @@ The price vocabulary (meter, band, channel, `When`, `Billing`) is explained in [
 - A row without an input or output rate bills that direction at 0.0 instead of moving on to the next candidate (`utils.py` `_get_model_info_helper` defaults), listed in `Receipt::defaulted_to_zero`
 - With `requested_model_info_override` the stored breakdown and the web search fee read the catalog row the candidate names, not the override that priced the total (`cost_calculator.py` `completion_cost`, `tool_call_cost_tracking.py` `_resolve_model_info`)
 - Prompt-caching savings leave out the geo and speed uplifts the total carries (`llm_cost_calc/utils.py` `calculate_prompt_caching_savings`)
-- The legacy budget hold reads flat rates only, so bands, cache-write rates, uplifts, discount and margin never reach it, and a router group's reasoning and image rates are dropped before it (`proxy/spend_tracking/budget_reservation.py` `_max_cost_for_cost_info`)
+- The legacy budget hold reads base rates, the tier a prompt picks, and for a counted Gemini body the `_above_<n>_tokens` prices of the row and its group's `deployment_pricing`. Cache-write rates, uplifts, discount and margin never reach it, and a router group's reasoning and image rates are dropped before it. The adapter (`proxy/spend_tracking/budget_reservation.py` `_bound`) reads which output caps reach the provider and how many outputs it returns per model, so `bound` reads only counts and flags off the request
 
 ## Not copied from main
 

@@ -4,11 +4,11 @@ import asyncio
 import json
 import math
 import time
-from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from functools import partial
-from itertools import accumulate, chain
+from functools import lru_cache, partial
+from itertools import accumulate, chain, product
 from types import MappingProxyType
 from typing import Final, Literal, NoReturn, SupportsFloat, SupportsIndex, SupportsInt, TypeAlias, cast
 
@@ -19,6 +19,7 @@ from typing_extensions import ReadOnly, TypedDict
 import litellm
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
+from litellm.exceptions import BadRequestError
 from litellm.google_genai.adapters.transformation import GOOGLE_GENAI_CONFIG_FIELDS
 from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
@@ -32,6 +33,9 @@ from litellm.litellm_core_utils.duration_parser import (
     get_budget_window_start as calendar_budget_window_start,
 )
 from litellm.litellm_core_utils.get_model_cost_map import model_cost_inputs
+from litellm.litellm_core_utils.tool_fields import drop_policy
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.openai.responses.transformation import OPENAI_RESPONSES_API_MIN_MAX_OUTPUT_TOKENS
 from litellm.models.budget import BudgetLimit
 from litellm.proxy._types import (
     LiteLLM_TeamMembership,
@@ -48,6 +52,7 @@ from litellm.proxy.common_utils.timezone_utils import (
     get_budget_reset_settings,
 )
 from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET, UserApiKeyCache
+from litellm.proxy.litellm_pre_call_utils import CURSOR_CHAT_COMPLETIONS_ROUTE, is_chat_completions_body
 from litellm.proxy.spend_tracking.customer_cost_margin import (
     apply_customer_cost_margin_to_estimate,
     key_customer_cost_margin,
@@ -55,6 +60,7 @@ from litellm.proxy.spend_tracking.customer_cost_margin import (
 from litellm.proxy.spend_tracking.input_tokens import (
     count_input_tokens,
     count_input_tokens_for_model,
+    gemini_body_has_inline_audio,
     inline_pdf_file_count,
     models_counted_for,
     models_served_for,
@@ -83,15 +89,18 @@ from litellm.redis.stores.spend_counters import (
     user_window_counter,
 )
 from litellm.redis.stores.spend_counters.types import customer_window_counter
+from litellm.responses.main import will_bridge_to_chat_completions
 from litellm.router import Router
+from litellm.router_api import RoutingContext
 from litellm.rust_bridge._native import BOUND_DEFAULT_MAX_OUTPUT_TOKENS
 from litellm.types.proxy.auth.customer_hierarchy import (
     AppDurationLimit,
     CustomerScopeKey,
 )
 from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
-from litellm.types.router import DeploymentTypedDict, ModelGroupInfo
-from litellm.types.utils import CallTypes
+from litellm.types.router import DeploymentPricing, DeploymentTypedDict, ModelGroupInfo
+from litellm.types.utils import CallTypes, LlmProviders
+from litellm.utils import ProviderConfigManager
 
 
 @dataclass
@@ -1309,18 +1318,22 @@ _InfoRow = TypedDict("_InfoRow", {"from": ReadOnly[Literal["row"]], "row": ReadO
 class _CostShape(TypedDict):
     flat: ReadOnly[_GroupRates | _InfoRow]
     tiers: ReadOnly[int | None]
+    deployments: ReadOnly[Sequence[int]]
 
 
 class _BoundModel(TypedDict):
     counted_input: ReadOnly[int | None]
+    requested_output: ReadOnly[int]
+    output_multiplier: ReadOnly[int]
     shapes: ReadOnly[Sequence[_CostShape]]
 
 
 class _RequestCaps(TypedDict):
-    requested_output: ReadOnly[int | None]
     n: ReadOnly[int | None]
-    best_of: ReadOnly[int | None]
     input_only: ReadOnly[bool]
+    inline_audio: ReadOnly[bool]
+    cached_content: ReadOnly[bool]
+    sized_prompt: ReadOnly[bool]
 
 
 class _BoundDocument(TypedDict):
@@ -1328,15 +1341,22 @@ class _BoundDocument(TypedDict):
     request: ReadOnly[_RequestCaps]
 
 
+class _OutputCaps(TypedDict):
+    requested_output: ReadOnly[int]
+    output_multiplier: ReadOnly[int]
+
+
 @dataclass(frozen=True, slots=True)
 class _ModelShapes:
-    """One requested model's cost shapes, the model info rows they read listed in ``rows`` by index."""
+    """One requested model's cost shapes, the model info rows they read listed in ``rows`` by index, and the
+    deployments that may serve it, whose parameters decide which output caps reach the provider."""
 
     shapes: tuple[_CostShape, ...]
     rows: tuple[Mapping[str, object], ...]
+    serving: tuple[_ServingDeployment, ...]
 
 
-_NO_SHAPES: Final = _ModelShapes(shapes=(), rows=())
+_NO_SHAPES: Final = _ModelShapes(shapes=(), rows=(), serving=())
 
 
 def _bound(
@@ -1346,28 +1366,87 @@ def _bound(
     input_token_counts: Mapping[str, int | None] | None,
     path_params: Mapping[str, object] | None,
 ) -> tuple[float | None, float | None]:
-    """The legacy budget hold and the input cost floor, priced by the Rust pricing core's ``bound``."""
+    """The budget hold and the input cost floor, priced by the Rust pricing core's ``bound``. Every cost shape of every
+    requested model is held against and the highest wins."""
     models: Final = _get_request_models(
         request_body=request_body, route=route, llm_router=llm_router, path_params=path_params
     )
+    body: Final = _WINDOW_OBJECT.validate_python(request_body)
     per_model: Final = tuple(_model_shapes(model, llm_router) for model in models)
     offsets: Final = tuple(accumulate((len(shapes.rows) for shapes in per_model), initial=0))
     document: Final = _BoundDocument(
         models=tuple(
             _BoundModel(
-                counted_input=_counted_input_tokens(request_body, model, input_token_counts),
+                counted_input=_model_input_tokens(request_body, model, input_token_counts),
+                **_output_caps(body, route, shapes.serving, llm_router),
                 shapes=tuple(_offset_shape(shape, offset) for shape in shapes.shapes),
             )
             for model, shapes, offset in zip(models, per_model, offsets)
         ),
-        request=_RequestCaps(
-            requested_output=_requested_output_tokens(request_body),
-            n=_to_int(request_body.get("n")),
-            best_of=_to_int(request_body.get("best_of")),
-            input_only=_is_input_only_route(route=route),
-        ),
+        request=_request_caps(body, route),
     )
     return model_cost_inputs.bound(document, tuple(chain.from_iterable(shapes.rows for shapes in per_model)))
+
+
+def max_cost_for_cost_info(
+    request_body: dict,
+    route: str,
+    model_info: Mapping[str, object],
+    requested_output_tokens: int,
+    output_multiplier: int,
+    input_tokens: int | None,
+) -> float | None:
+    """The hold for one model info row, the output caps already read off the request."""
+    return _hold_for_row(
+        request_body,
+        route,
+        model_info,
+        _OutputCaps(requested_output=requested_output_tokens, output_multiplier=output_multiplier),
+        input_tokens,
+    )[0]
+
+
+def input_cost_for_cost_info(
+    request_body: dict,
+    route: str,
+    model_info: Mapping[str, object],
+    input_tokens: int | None,
+) -> float | None:
+    """The input cost floor for one model info row."""
+    return _hold_for_row(
+        request_body,
+        route,
+        model_info,
+        _OutputCaps(requested_output=DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK, output_multiplier=1),
+        input_tokens,
+    )[1]
+
+
+def _hold_for_row(
+    request_body: dict,
+    route: str,
+    model_info: Mapping[str, object],
+    caps: _OutputCaps,
+    input_tokens: int | None,
+) -> tuple[float | None, float | None]:
+    deployment_rows: Final = _deployment_price_rows(model_info)
+    document: Final = _BoundDocument(
+        models=(
+            _BoundModel(
+                counted_input=input_tokens,
+                **caps,
+                shapes=(
+                    _CostShape(
+                        flat=_InfoRow({"from": "row", "row": 0}),
+                        tiers=None,
+                        deployments=tuple(range(1, len(deployment_rows) + 1)),
+                    ),
+                ),
+            ),
+        ),
+        request=_request_caps(_WINDOW_OBJECT.validate_python(request_body), route),
+    )
+    return model_cost_inputs.bound(document, (model_info, *deployment_rows))
 
 
 def _offset_shape(shape: _CostShape, offset: int) -> _CostShape:
@@ -1375,14 +1454,44 @@ def _offset_shape(shape: _CostShape, offset: int) -> _CostShape:
     return _CostShape(
         flat=_InfoRow({"from": "row", "row": flat["row"] + offset}) if flat["from"] == "row" else flat,
         tiers=None if shape["tiers"] is None else shape["tiers"] + offset,
+        deployments=tuple(row + offset for row in shape["deployments"]),
     )
 
 
-def _counted_input_tokens(
-    request_body: dict, model: str, input_token_counts: Mapping[str, int | None] | None
-) -> int | None:
-    counted: Final = (input_token_counts or {}).get(model)
-    return counted if counted is not None else count_input_tokens_for_model(request_body=request_body, model=model)
+def _request_caps(request_body: Mapping[str, object], route: str) -> _RequestCaps:
+    cached_contents: Final = (
+        *(request_body.get(field) for field in _CACHED_CONTENT_FIELDS),
+        *_gemini_config_values(request_body, _CACHED_CONTENT_FIELDS),
+    )
+    gemini_body: Final = "contents" in request_body
+    return _RequestCaps(
+        n=_to_int(request_body.get("n")),
+        input_only=_is_input_only_route(route=route),
+        inline_audio=gemini_body_has_inline_audio(request_body),
+        cached_content=gemini_body and any(cached_contents),
+        sized_prompt=gemini_body,
+    )
+
+
+def _output_caps(
+    request_body: Mapping[str, object],
+    route: str,
+    serving: Sequence[_ServingDeployment],
+    llm_router: Router | None,
+) -> _OutputCaps:
+    """The output tokens one model's hold asks for and how many outputs its serving deployments may return."""
+    caps: Final = _valid_output_token_caps(request_body)
+    surface: Final = _output_cap_surface(route, request_body)
+    honored_fields: Final = _honored_output_token_fields(
+        caps,
+        surface=surface,
+        serving=serving,
+        caller_dropped=_caller_dropped_fields(request_body, llm_router),
+    )
+    return _OutputCaps(
+        requested_output=_requested_output_tokens(caps, honored_fields=honored_fields, surface=surface),
+        output_multiplier=_output_multiplier(request_body, serving=serving, llm_router=llm_router),
+    )
 
 
 def _model_shapes(model: str, llm_router: Router | None) -> _ModelShapes:
@@ -1398,13 +1507,17 @@ def _model_shapes(model: str, llm_router: Router | None) -> _ModelShapes:
         base: Final = _get_model_cost_info(model=model, llm_router=llm_router)
         if base is None:
             return _NO_SHAPES
-        tiered_tables: Final = _get_deployment_tiered_pricing_tables(model=model, llm_router=llm_router)
+        deployments: Final = _get_serving_deployments(model=model, llm_router=llm_router)
+        tiered_tables: Final = _get_deployment_tiered_pricing_tables(
+            tuple(deployment.model_info for deployment in deployments)
+        )
     except Exception:
         verbose_proxy_logger.debug(
             "Unable to load model cost info for budget reservation",
             exc_info=True,
         )
         return _NO_SHAPES
+    base_info: Final[Mapping[str, object]] = base.model_dump() if isinstance(base, ModelGroupInfo) else base
     flat: Final = (
         _GroupRates(
             {
@@ -1419,12 +1532,34 @@ def _model_shapes(model: str, llm_router: Router | None) -> _ModelShapes:
         else _InfoRow({"from": "row", "row": 0})
     )
     base_rows: Final = () if isinstance(base, ModelGroupInfo) else (base,)
+    deployment_rows: Final = _deployment_price_rows(base_info)
+    deployment_refs: Final = tuple(range(len(base_rows), len(base_rows) + len(deployment_rows)))
+    first_tier: Final = len(base_rows) + len(deployment_rows)
     return _ModelShapes(
         shapes=(
-            _CostShape(flat=flat, tiers=None),
-            *(_CostShape(flat=flat, tiers=len(base_rows) + index) for index in range(len(tiered_tables))),
+            _CostShape(flat=flat, tiers=None, deployments=deployment_refs),
+            *(
+                _CostShape(flat=flat, tiers=first_tier + index, deployments=deployment_refs)
+                for index in range(len(tiered_tables))
+            ),
         ),
-        rows=(*base_rows, *({"tiered_pricing": table} for table in tiered_tables)),
+        rows=(*base_rows, *deployment_rows, *({"tiered_pricing": table} for table in tiered_tables)),
+        serving=tuple(deployments)
+        or tuple(
+            _ServingDeployment(model_info=info)
+            for info in (base_info, *({**base_info, "tiered_pricing": table} for table in tiered_tables))
+        ),
+    )
+
+
+_DEPLOYMENT_PRICES: Final = TypeAdapter(tuple[DeploymentPricing, ...])
+
+
+def _deployment_price_rows(model_info: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+    """The prices each deployment of a router model group bills at, which carry the audio, cache-read and
+    `_above_<n>_tokens` prices the group's own prices leave out."""
+    return tuple(
+        pricing.costs for pricing in _DEPLOYMENT_PRICES.validate_python(model_info.get("deployment_pricing") or ())
     )
 
 
@@ -1439,17 +1574,38 @@ def _get_model_cost_info(
     return dict(litellm.get_model_info(model=model))
 
 
-def _deployment_tiered_pricing_table(
+@dataclass(frozen=True, slots=True)
+class _ServingDeployment:
+    model_info: Mapping[str, object]
+    deployment: DeploymentTypedDict | None = None
+
+
+def _deployment_model_info(
     deployment: DeploymentTypedDict,
     llm_router: Router,
-) -> Sequence[Mapping[str, object]] | None:
+) -> Mapping[str, object] | None:
     model_id: Final = _get_value(_get_value(deployment, "model_info"), "id")
     backend_model: Final = _get_value(_get_value(deployment, "litellm_params"), "model")
     if not isinstance(model_id, str) or not isinstance(backend_model, str):
         return None
-    deployment_model_info: Final = llm_router.registry().deployment_model_info(model_id, backend_model, cached=True)
-    if deployment_model_info is None:
-        return None
+    return llm_router.registry().deployment_model_info(model_id, backend_model, cached=True)
+
+
+def _get_serving_deployments(
+    model: str,
+    llm_router: Router | None,
+) -> Sequence[_ServingDeployment]:
+    if llm_router is None:
+        return ()
+    deployments: Final = llm_router.registry().deployments(model) or []
+    return tuple(
+        _ServingDeployment(model_info=model_info, deployment=deployment)
+        for deployment in deployments
+        if (model_info := _deployment_model_info(deployment, llm_router)) is not None
+    )
+
+
+def _tiered_pricing_table(deployment_model_info: Mapping[str, object]) -> Sequence[Mapping[str, object]] | None:
     tiered_pricing: Final = deployment_model_info.get("tiered_pricing")
     if isinstance(tiered_pricing, list) and tiered_pricing:
         return tiered_pricing
@@ -1457,17 +1613,9 @@ def _deployment_tiered_pricing_table(
 
 
 def _get_deployment_tiered_pricing_tables(
-    model: str,
-    llm_router: Router | None,
+    deployment_infos: Sequence[Mapping[str, object]],
 ) -> Sequence[Sequence[Mapping[str, object]]]:
-    if llm_router is None:
-        return []
-    deployments: Final = llm_router.registry().deployments(model) or []
-    return [
-        table
-        for deployment in deployments
-        if (table := _deployment_tiered_pricing_table(deployment, llm_router)) is not None
-    ]
+    return [table for model_info in deployment_infos if (table := _tiered_pricing_table(model_info)) is not None]
 
 
 def _get_request_models(
@@ -1529,20 +1677,312 @@ def _largest_count(counts: Mapping[str, int], names: Sequence[str], chat_pdf_fil
     )
 
 
+def _model_input_tokens(
+    request_body: dict, model: str, input_token_counts: Mapping[str, int | None] | None
+) -> int | None:
+    if input_token_counts is not None and model in input_token_counts:
+        return input_token_counts[model]
+    return count_input_tokens_for_model(request_body=request_body, model=model)
+
+
 DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK: Final = BOUND_DEFAULT_MAX_OUTPUT_TOKENS
+
+
+_GEMINI_OUTPUT_TOKEN_FIELDS: Final = ("maxOutputTokens", "max_output_tokens")
+_GEMINI_CANDIDATE_COUNT_FIELDS: Final = ("candidateCount", "candidate_count")
+_CACHED_CONTENT_FIELDS: Final = ("cachedContent", "cached_content")
+
+
+def _gemini_config_values(request_body: Mapping[str, object], fields: Sequence[str]) -> tuple[object, ...]:
+    """What a Gemini body's generation config sets for `fields` under every name the config is sent as, since the
+    SDK route honors the first name present and Vertex the last one in the JSON."""
+    return tuple(config.get(field) for config, field in product(_gemini_generation_configs(request_body), fields))
+
+
+def _gemini_generation_configs(request_body: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+    if "contents" not in request_body:
+        return ()
+    return tuple(config for field in GOOGLE_GENAI_CONFIG_FIELDS if (config := as_str_mapping(request_body.get(field))))
+
+
+def _gemini_output_token_cap(request_body: Mapping[str, object]) -> int | None:
+    caps: Final = tuple(
+        _largest_int(config.get(field) for field in _GEMINI_OUTPUT_TOKEN_FIELDS)
+        for config in _gemini_generation_configs(request_body)
+    )
+    explicit_caps: Final = tuple(cap for cap in caps if cap is not None)
+    if not explicit_caps:
+        return None
+    uncapped_floor: Final = (DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK,) if None in caps else ()
+    return max((*explicit_caps, *uncapped_floor))
+
+
+def _largest_int(values: Iterable[object]) -> int | None:
+    return max((value for value in map(_to_int, values) if value is not None), default=None)
+
+
+_RESPONSES_CALL_TYPES: Final = frozenset({CallTypes.aresponses, CallTypes.responses})
+_ANTHROPIC_MESSAGES_CALL_TYPES: Final = frozenset({CallTypes.anthropic_messages, CallTypes.aanthropic_messages})
+_COMPLETION_CALL_TYPES: Final = frozenset(
+    {CallTypes.acompletion, CallTypes.completion, CallTypes.atext_completion, CallTypes.text_completion}
+)
+_INFERENCE_CONFIG_MAX_TOKENS: Final = "inferenceConfig.maxTokens"
+_GENERATION_CONFIG_MAX_OUTPUT_TOKENS: Final = "generationConfig.maxOutputTokens"
+_TOP_LEVEL_OUTPUT_TOKEN_FIELDS: Final = ("max_completion_tokens", "max_tokens", "max_output_tokens", "maxTokens")
+_COMPLETION_OUTPUT_TOKEN_FIELDS: Final = ("max_completion_tokens", "max_tokens")
+_PASS_THROUGH_OUTPUT_TOKEN_FIELDS: Final = (
+    "max_completion_tokens",
+    "max_tokens",
+    "max_output_tokens",
+    _INFERENCE_CONFIG_MAX_TOKENS,
+)
+
+
+_OutputCapSurface: TypeAlias = Literal[
+    "completion", "responses", "messages", "generate_content", "pass_through", "uncapped"
+]
+_CLAUDE_CODE_GATEWAY_PREFIX: Final = "/claude_code_gateway"
+_INTERACTIONS_ROUTES: Final = frozenset({"/interactions", "/v1beta/interactions"})
 _GENERATE_CONTENT_ROUTE_SUFFIXES: Final = (":generateContent", ":streamGenerateContent")
 
 
-_OUTPUT_TOKEN_FIELDS: Final = ("max_completion_tokens", "max_tokens", "max_output_tokens")
+def _output_cap_surface(route: str, request_body: Mapping[str, object]) -> _OutputCapSurface:
+    if CURSOR_CHAT_COMPLETIONS_ROUTE in route:
+        return "completion" if is_chat_completions_body(request_body) else "responses"
+    if route in _INTERACTIONS_ROUTES:
+        return "uncapped"
+    if route.endswith(_GENERATE_CONTENT_ROUTE_SUFFIXES):
+        return "generate_content"
+    call_types: Final = frozenset(get_call_types_for_route(route.removeprefix(_CLAUDE_CODE_GATEWAY_PREFIX)) or ())
+    if call_types & _RESPONSES_CALL_TYPES:
+        return "responses"
+    if call_types & _ANTHROPIC_MESSAGES_CALL_TYPES:
+        return "messages"
+    if call_types & _COMPLETION_CALL_TYPES:
+        return "completion"
+    return "pass_through"
 
 
-def _requested_output_tokens(request_body: Mapping[str, object]) -> int | None:
-    inference_config: Final = request_body.get("inferenceConfig")
-    candidates: Final = (
-        *(request_body.get(field) for field in _OUTPUT_TOKEN_FIELDS),
-        inference_config.get("maxTokens") if isinstance(inference_config, Mapping) else None,
+def _request_output_token_caps(request_body: Mapping[str, object]) -> Mapping[str, object]:
+    inference_config_max_tokens: Final = _get_value(request_body.get("inferenceConfig"), "maxTokens")
+    nested_cap: Final = (
+        ((_INFERENCE_CONFIG_MAX_TOKENS, inference_config_max_tokens),)
+        if inference_config_max_tokens is not None
+        else ()
     )
-    return next((tokens for tokens in map(_to_int, candidates) if tokens is not None), None)
+    top_level_caps: Final = tuple(
+        (field, request_body[field]) for field in _TOP_LEVEL_OUTPUT_TOKEN_FIELDS if field in request_body
+    )
+    generation_config_max_tokens: Final = _gemini_output_token_cap(request_body)
+    generation_config_cap: Final = (
+        ((_GENERATION_CONFIG_MAX_OUTPUT_TOKENS, generation_config_max_tokens),)
+        if generation_config_max_tokens is not None
+        else ()
+    )
+    return MappingProxyType(dict((*top_level_caps, *nested_cap, *generation_config_cap)))
+
+
+def _valid_output_token_caps(request_body: Mapping[str, object]) -> Mapping[str, int]:
+    return MappingProxyType(
+        {
+            field: tokens
+            for field, value in _request_output_token_caps(request_body).items()
+            if (tokens := _non_negative_int(value)) is not None
+        }
+    )
+
+
+def _caller_dropped_fields(request_body: Mapping[str, object], llm_router: Router | None) -> frozenset[str] | None:
+    if "additional_drop_params" in request_body:
+        return drop_policy(request_body).additional_drop_params
+    if llm_router is None:
+        return None
+    router_defaults: Final = RoutingContext(llm_router).default_litellm_params()
+    if "additional_drop_params" not in router_defaults:
+        return None
+    return drop_policy(router_defaults).additional_drop_params
+
+
+def _honored_output_token_fields(
+    caps: Mapping[str, int],
+    surface: _OutputCapSurface,
+    serving: Sequence[_ServingDeployment],
+    caller_dropped: frozenset[str] | None,
+) -> frozenset[str]:
+    return frozenset(
+        field
+        for field in caps
+        if all(_deployment_receives(field, surface, deployment, caller_dropped) for deployment in serving)
+    )
+
+
+def _deployment_receives(
+    field: str, surface: _OutputCapSurface, deployment: _ServingDeployment, caller_dropped: frozenset[str] | None
+) -> bool:
+    dropped: Final = caller_dropped if caller_dropped is not None else _deployment_dropped_fields(deployment)
+    return field not in dropped and _deployment_honors(field, surface, deployment)
+
+
+def _deployment_dropped_fields(deployment: _ServingDeployment) -> frozenset[str]:
+    if deployment.deployment is None:
+        return frozenset()
+    litellm_params: Final = deployment.deployment["litellm_params"]
+    if _get_value(litellm_params, "additional_drop_params") is None:
+        return frozenset()
+    return drop_policy(litellm_params).additional_drop_params
+
+
+def _deployment_honors(field: str, surface: _OutputCapSurface, deployment: _ServingDeployment) -> bool:
+    match surface:
+        case "completion":
+            if field in _COMPLETION_OUTPUT_TOKEN_FIELDS:
+                return _reads_chat_output_cap(deployment.model_info, field)
+            return field in _native_output_cap_fields(deployment)
+        case "responses":
+            return field == "max_output_tokens" or (
+                field in _COMPLETION_OUTPUT_TOKEN_FIELDS
+                and _reads_chat_output_cap(deployment.model_info, field)
+                and _always_bridges_to_chat_completions(deployment)
+            )
+        case "messages":
+            return field == "max_tokens"
+        case "generate_content":
+            return field == _GENERATION_CONFIG_MAX_OUTPUT_TOKENS and _reads_chat_output_cap(
+                deployment.model_info, "max_tokens"
+            )
+        case "pass_through":
+            return field in _PASS_THROUGH_OUTPUT_TOKEN_FIELDS
+        case "uncapped":
+            return False
+
+
+def _reads_chat_output_cap(model_info: Mapping[str, object], field: str) -> bool:
+    supported: Final = model_info.get("supported_openai_params")
+    if not isinstance(supported, list):
+        return field == "max_tokens"
+    return field in supported
+
+
+@dataclass(frozen=True, slots=True)
+class _ServingRoute:
+    requested_model: str
+    model: str
+    provider: str
+    api_base: str | None
+
+
+def _serving_route(deployment: _ServingDeployment) -> _ServingRoute | None:
+    litellm_params: Final = _get_value(deployment.deployment, "litellm_params")
+    model: Final = _get_value(litellm_params, "model") or deployment.model_info.get("key")
+    provider_hint: Final = _get_value(litellm_params, "custom_llm_provider")
+    api_base: Final = _get_value(litellm_params, "api_base")
+    if not isinstance(model, str):
+        return None
+    resolved: Final = _resolve_model_and_provider(model, provider_hint if isinstance(provider_hint, str) else None)
+    if resolved is None:
+        return None
+    return _ServingRoute(
+        requested_model=model,
+        model=resolved[0],
+        provider=resolved[1],
+        api_base=api_base if isinstance(api_base, str) else None,
+    )
+
+
+@lru_cache(maxsize=1024)
+def _resolve_model_and_provider(model: str, provider_hint: str | None) -> tuple[str, str] | None:
+    try:
+        resolved_model, provider, _, _ = litellm.get_llm_provider(model=model, custom_llm_provider=provider_hint)
+    except (BadRequestError, ValueError, TypeError, KeyError):
+        return None
+    return resolved_model, provider
+
+
+def _native_output_cap_fields(deployment: _ServingDeployment) -> frozenset[str]:
+    route: Final = _serving_route(deployment)
+    return _provider_output_cap_fields(route.model, route.provider) if route is not None else frozenset()
+
+
+_MAPPED_PARAMS: Final = TypeAdapter(dict[str, object])
+_CAP_PROBE: Final = 1
+
+
+@lru_cache(maxsize=1024)
+def _provider_output_cap_fields(model: str, provider: str) -> frozenset[str]:
+    try:
+        config: Final = ProviderConfigManager.get_provider_chat_config(model=model, provider=LlmProviders(provider))
+        mapped: Final = _MAPPED_PARAMS.validate_python(
+            config.map_openai_params({"max_tokens": _CAP_PROBE}, {}, model, False) if config is not None else {}
+        )
+    except (BadRequestError, BaseLLMException, ValueError, TypeError, KeyError):
+        return frozenset()
+    return frozenset(field for field, value in mapped.items() if value == _CAP_PROBE)
+
+
+def _always_bridges_to_chat_completions(deployment: _ServingDeployment) -> bool:
+    route: Final = _serving_route(deployment)
+    return route is not None and will_bridge_to_chat_completions(
+        route.requested_model,
+        route.provider,
+        use_chat_completions_api=False,
+        model_info=_get_value(deployment.deployment, "model_info"),
+        api_base=route.api_base,
+    )
+
+
+def _requested_output_tokens(
+    caps: Mapping[str, int], honored_fields: frozenset[str], surface: _OutputCapSurface
+) -> int:
+    uncapped_floor: Final = () if honored_fields else (DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK,)
+    forwarded_caps: Final = (_forwarded_output_tokens(field, tokens, surface) for field, tokens in caps.items())
+    return max((*forwarded_caps, *uncapped_floor))
+
+
+def _forwarded_output_tokens(field: str, tokens: int, surface: _OutputCapSurface) -> int:
+    if (
+        surface == "responses"
+        and field == "max_output_tokens"
+        and 0 < tokens < OPENAI_RESPONSES_API_MIN_MAX_OUTPUT_TOKENS
+    ):
+        return OPENAI_RESPONSES_API_MIN_MAX_OUTPUT_TOKENS
+    return tokens
+
+
+def _output_multiplier(
+    request_body: Mapping[str, object], serving: Sequence[_ServingDeployment], llm_router: Router | None
+) -> int:
+    router_defaults: Final[Mapping[str, object]] = (
+        RoutingContext(llm_router).default_litellm_params() if llm_router is not None else {}
+    )
+    candidate_count: Final = _largest_int(_gemini_config_values(request_body, _GEMINI_CANDIDATE_COUNT_FIELDS))
+    return max(
+        (
+            1,
+            candidate_count or 1,
+            *(_output_count(key, request_body, router_defaults, serving) for key in ("n", "best_of")),
+        )
+    )
+
+
+def _output_count(
+    key: str,
+    request_body: Mapping[str, object],
+    router_defaults: Mapping[str, object],
+    serving: Sequence[_ServingDeployment],
+) -> int:
+    requested: Final = _to_int(request_body.get(key))
+    if requested is not None:
+        return requested
+    router_default: Final = _to_int(router_defaults.get(key))
+    if router_default is not None:
+        return router_default
+    return max((1, *(count for deployment in serving if (count := _deployment_output_count(key, deployment)))))
+
+
+def _deployment_output_count(key: str, deployment: _ServingDeployment) -> int | None:
+    if deployment.deployment is None:
+        return None
+    return _to_int(_get_value(deployment.deployment["litellm_params"], key))
 
 
 def _is_input_only_route(route: str) -> bool:

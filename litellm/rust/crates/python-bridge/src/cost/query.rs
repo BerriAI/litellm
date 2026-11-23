@@ -36,16 +36,20 @@ struct BoundDocument {
 struct BoundModelFacts {
     #[serde(default)]
     counted_input: Option<i64>,
+    requested_output: i64,
+    output_multiplier: i64,
     shapes: Vec<ShapeFacts>,
 }
 
-/// One cost shape: the flat rates of a model info row or the router's group rates, beside a tier table. A row is the
-/// index of a mapping passed beside the document
+/// One cost shape: the flat rates of a model info row or the router's group rates, beside a tier table and the
+/// group's deployment prices. A row is the index of a mapping passed beside the document
 #[derive(Deserialize)]
 struct ShapeFacts {
     flat: FlatFacts,
     #[serde(default)]
     tiers: Option<usize>,
+    #[serde(default)]
+    deployments: Vec<usize>,
 }
 
 #[derive(Deserialize)]
@@ -202,6 +206,8 @@ pub(crate) fn bound<V: CatalogView + ?Sized>(
             .into_iter()
             .map(|model| BoundModel {
                 counted_input: model.counted_input,
+                requested_output: model.requested_output,
+                output_multiplier: model.output_multiplier,
                 candidates: model
                     .shapes
                     .into_iter()
@@ -212,6 +218,7 @@ pub(crate) fn bound<V: CatalogView + ?Sized>(
                                 FlatFacts::Group(rates) => FlatSource::Group(rates),
                             },
                             tiers: shape.tiers.and_then(at),
+                            deployments: shape.deployments.into_iter().filter_map(at).collect(),
                         })
                     })
                     .collect(),
