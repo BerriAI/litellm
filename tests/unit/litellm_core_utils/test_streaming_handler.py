@@ -2684,6 +2684,30 @@ async def test_anthropic_stream_with_message_stop_ends_with_its_finish_reason(
     )
 
 
+@pytest.mark.parametrize("handed_over_reversed", [False, True])
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_anthropic_stream_assembles_in_arrival_order_when_the_wall_clock_steps_back(
+    sync_mode: bool, handed_over_reversed: bool, logging_obj: Logging, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """stream_chunk_builder sorts chunks by created_at, so a clock that steps back must not reorder them."""
+    earlier_on_every_read: Final = itertools.count(1_800_000_000.0, -1.0)
+    monkeypatch.setattr(time, "time", lambda: next(earlier_on_every_read))
+    wrapper: Final = _anthropic_stream(
+        (*_ANTHROPIC_PARTIAL_EVENTS, *_ANTHROPIC_TERMINAL_EVENTS), sync_mode, logging_obj
+    )
+
+    await _collect(wrapper, sync_mode)
+    assembled: Final = litellm.stream_chunk_builder(
+        chunks=wrapper.chunks[::-1] if handed_over_reversed else wrapper.chunks
+    )
+
+    assert isinstance(assembled, ModelResponse)
+    assert assembled.usage.completion_tokens == 7
+    assert assembled.choices[0].message.content == '{"findings":[{"title":"unfinished'
+    assert assembled.choices[0].finish_reason == "stop"
+
+
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_generic_chunk_stream_without_a_finish_reason_keeps_the_default_stop(

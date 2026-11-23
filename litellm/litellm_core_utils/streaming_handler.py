@@ -4,6 +4,7 @@ import datetime
 import inspect
 import json
 import logging
+import math
 import threading
 import time
 import traceback
@@ -629,6 +630,7 @@ class CustomStreamWrapper:
         self.tool_call = False
         # keep track of the returned chunks - used for calculating the input/output tokens for stream options
         self.chunks: list[ModelResponseStream] = []
+        self._last_chunk_created_at = 0.0
         self._repeated_messages_count = 1
         self.is_function_call = self.check_is_function_call(logging_obj=logging_obj)
         self.created: int | None = None
@@ -1162,17 +1164,20 @@ class CustomStreamWrapper:
         # Spread order is load-bearing: _base_hidden_params (model_id, api_base, ...)
         # must win over both caller-supplied hidden_params and the computed
         # custom_llm_provider/created_at values, so it comes last.
+        # stream_chunk_builder sorts chunks by created_at and the wall clock can step back,
+        # so each chunk is stamped later than the one before it.
+        self._last_chunk_created_at = max(time.time(), math.nextafter(self._last_chunk_created_at, math.inf))
         if hidden_params is not None:
             model_response.hidden_params = {
                 **hidden_params,
                 "custom_llm_provider": _logging_obj_llm_provider,
-                "created_at": time.time(),
+                "created_at": self._last_chunk_created_at,
                 **self._base_hidden_params,
             }
         else:
             model_response.hidden_params = {
                 "custom_llm_provider": _logging_obj_llm_provider,
-                "created_at": time.time(),
+                "created_at": self._last_chunk_created_at,
                 **self._base_hidden_params,
             }
 
