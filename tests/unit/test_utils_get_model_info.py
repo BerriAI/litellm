@@ -619,3 +619,132 @@ def test_get_model_info_huggingface_models(monkeypatch):
         providers=["huggingface"],
         **info,
     )
+
+
+_JAMBA_ROW: Final = "jamba-1.5-large"
+_HI: Final = [{"role": "user", "content": "hi"}]
+
+
+def _billed(response: litellm.ModelResponse, input_rate: object, output_rate: object) -> float:
+    usage: Final = cast(litellm.Usage, response.usage)
+    return usage.prompt_tokens * cast(float, input_rate) + usage.completion_tokens * cast(float, output_rate)
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize("model", ["ai21/jamba-1.5-large", "jamba-1.5-large", "ai21_chat/jamba-1.5-large"])
+def test_ai21_jamba_completion_is_billed_at_its_catalog_rates(model: str) -> None:
+    row: Final = litellm.model_cost[_JAMBA_ROW]
+    response: Final = cast(
+        litellm.ModelResponse, litellm.completion(model=model, messages=_HI, mock_response="hello there")
+    )
+    expected: Final = _billed(response, row["input_cost_per_token"], row["output_cost_per_token"])
+
+    assert expected > 0
+    assert response._hidden_params["response_cost"] == pytest.approx(expected)
+    assert litellm.completion_cost(completion_response=response) == pytest.approx(expected)
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize(
+    "model, custom_llm_provider",
+    [
+        ("ai21/jamba-1.5-large", None),
+        ("jamba-1.5-large", None),
+        ("jamba-1.5-large", "ai21_chat"),
+        ("jamba-1.5-large", "ai21"),
+    ],
+)
+def test_get_model_info_resolves_every_ai21_jamba_spelling_to_its_catalog_row(
+    model: str, custom_llm_provider: str | None
+) -> None:
+    row: Final = litellm.model_cost[_JAMBA_ROW]
+
+    info: Final = get_model_info(model, custom_llm_provider=custom_llm_provider)
+
+    assert info["key"] == _JAMBA_ROW
+    assert info["input_cost_per_token"] == row["input_cost_per_token"]
+    assert info["output_cost_per_token"] == row["output_cost_per_token"]
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize(
+    "model, custom_llm_provider",
+    [("jamba-1.5-large", "openai"), ("jamba-not-a-real-model", "ai21_chat")],
+    ids=["other-provider-never-reads-the-ai21-row", "unknown-ai21-model"],
+)
+def test_get_model_info_still_rejects_unmapped_ai21_lookups(model: str, custom_llm_provider: str) -> None:
+    with pytest.raises(litellm.ModelNotMappedError):
+        get_model_info(model, custom_llm_provider=custom_llm_provider)
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize(
+    "registered_key, registered_provider",
+    [("jamba-1.5-large", None), ("ai21_chat/jamba-1.5-large", "ai21_chat")],
+    ids=["over-the-catalog-row", "under-the-ai21-chat-alias"],
+)
+@pytest.mark.parametrize("model", ["ai21/jamba-1.5-large", "jamba-1.5-large"])
+def test_registered_ai21_jamba_prices_win_over_catalog_rates(
+    registered_key: str, registered_provider: str | None, model: str
+) -> None:
+    custom: Final = {"input_cost_per_token": 1e-03, "output_cost_per_token": 2e-03}
+    provider: Final = {} if registered_provider is None else {"litellm_provider": registered_provider}
+    litellm.register_model(
+        {registered_key: {**custom, **provider}}, persist_across_reloads=False, add_to_provider_model_sets=False
+    )
+    response: Final = cast(
+        litellm.ModelResponse, litellm.completion(model=model, messages=_HI, mock_response="hello there")
+    )
+
+    assert litellm.completion_cost(completion_response=response) == pytest.approx(
+        _billed(response, custom["input_cost_per_token"], custom["output_cost_per_token"])
+    )
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_registering_an_ai21_chat_jamba_alias_leaves_the_catalog_row_untouched() -> None:
+    catalog_row: Final = dict(litellm.model_cost[_JAMBA_ROW])
+    litellm.register_model(
+        {
+            "ai21_chat/jamba-1.5-large": {
+                "input_cost_per_token": 1e-03,
+                "output_cost_per_token": 2e-03,
+                "litellm_provider": "ai21_chat",
+            }
+        },
+        persist_across_reloads=False,
+        add_to_provider_model_sets=False,
+    )
+
+    assert litellm.model_cost["ai21_chat/jamba-1.5-large"]["input_cost_per_token"] == 1e-03
+    assert litellm.model_cost[_JAMBA_ROW]["input_cost_per_token"] == catalog_row["input_cost_per_token"]
+    assert litellm.model_cost[_JAMBA_ROW]["output_cost_per_token"] == catalog_row["output_cost_per_token"]
+
+
+_DEPLOYMENT_RATES: Final = {"cheap": (1e-03, 2e-03), "pricey": (3e-03, 4e-03)}
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize("deployment", list(_DEPLOYMENT_RATES))
+def test_router_jamba_deployments_keep_their_own_prices(deployment: str) -> None:
+    from litellm import Router
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": name,
+                "litellm_params": {
+                    "model": "ai21/jamba-1.5-large",
+                    "api_key": "fake-key",
+                    "input_cost_per_token": input_rate,
+                    "output_cost_per_token": output_rate,
+                },
+            }
+            for name, (input_rate, output_rate) in _DEPLOYMENT_RATES.items()
+        ]
+    )
+    response: Final = cast(
+        litellm.ModelResponse, router.completion(model=deployment, messages=_HI, mock_response="hello there")
+    )
+
+    assert response._hidden_params["response_cost"] == pytest.approx(_billed(response, *_DEPLOYMENT_RATES[deployment]))

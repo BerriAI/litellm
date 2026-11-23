@@ -7237,6 +7237,17 @@ def _first_registered_match(
     return next(matches, (None, None))
 
 
+def _first_priced_match(
+    candidates: Sequence[str], custom_llm_provider: str | None, catalog_only: bool
+) -> tuple[str | None, dict[str, object] | None]:
+    match: Final = _first_registered_match(candidates, custom_llm_provider)
+    # AI21 chat calls resolve to ai21_chat while the catalog prices them under ai21. Catalog-only lookups decide
+    # where register_model writes land, so they keep the strict match.
+    if match[1] is not None or catalog_only or custom_llm_provider != "ai21_chat":
+        return match
+    return _first_registered_match(candidates, "ai21")
+
+
 def _model_cost_lookup_order(
     model: str, potential_model_names: PotentialModelNamesAndCustomLLMProvider
 ) -> tuple[str, ...]:
@@ -7581,8 +7592,8 @@ def get_model_info_helper(
                and strip it. Tried last so no model that already resolves through 1-6 can change.
             """
 
-            lookup: Final = _first_registered_match(
-                _model_cost_lookup_order(model, potential_model_names), model_cost_custom_llm_provider
+            lookup: Final = _first_priced_match(
+                _model_cost_lookup_order(model, potential_model_names), model_cost_custom_llm_provider, catalog_only
             )
             key: str | None = lookup[0]
             _model_info: dict[str, Any] | None = lookup[1]
