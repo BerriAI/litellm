@@ -317,11 +317,7 @@ async def reserve_subscription(
         return Ok(subscription)
     store: Final = subscription.request.store
     if not await store.reserve(subscription.base):
-        winner: Final = await store.get(subscription.base.id)
-        if winner is None or winner.status in ("terminated", "pending"):
-            return Error(_BEING_CREATED)
-        refreshed: Final = winner.model_copy(update={"client_secret": subscription.params.delivery.secret})
-        return Ok(replace(subscription, base=refreshed, existing=winner))
+        return Error(_BEING_CREATED)
     if await store.count_live(subscription.request.principal) > settings.max_subscriptions_per_key:
         await store.discard_pending(subscription.base.id, subscription.base.generation)
         return Error(exhausted("subscriptions", settings.max_subscriptions_per_key))
