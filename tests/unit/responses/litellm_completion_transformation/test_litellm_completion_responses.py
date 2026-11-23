@@ -5925,16 +5925,9 @@ class TestHostedWebSearchReplay:
         assert replayed == search
         assert input_item == original
 
-    @pytest.mark.parametrize(
-        "input_item",
-        (
-            {"type": "web_search_call", "id": "ws_no_action", "status": "completed"},
-            {"type": "web_search_call", "status": "completed", "action": {"type": "search", "query": "stripped id"}},
-            {"type": "web_search_call", "status": "completed"},
-        ),
-        ids=("missing-action", "missing-id", "missing-id-and-action"),
-    )
-    def test_replays_search_without_id_or_action(self, input_item: Mapping[str, object]) -> None:
+    def test_replays_search_without_action(self) -> None:
+        input_item: Final = {"type": "web_search_call", "id": "ws_no_action", "status": "completed"}
+
         messages: Final = (
             LiteLLMCompletionResponsesConfig._transform_responses_api_input_item_to_chat_completion_message(
                 input_item=input_item
@@ -5950,6 +5943,7 @@ class TestHostedWebSearchReplay:
     @pytest.mark.parametrize(
         "fields",
         (
+            {"status": "completed"},
             {"id": "ws_invalid"},
             {"id": 42, "status": "completed"},
             {"id": "ws_invalid", "status": "invalid"},
@@ -5957,9 +5951,9 @@ class TestHostedWebSearchReplay:
             {"id": "ws_invalid", "status": "completed", "action": 42},
             {"id": "ws_invalid", "status": "completed", "action": {"type": "invalid"}},
             {"id": "ws_invalid", "status": "completed", "action": {"type": "find_in_page"}},
-            {"status": "completed", "action": {"type": "invalid"}},
         ),
         ids=(
+            "missing-id",
             "missing-status",
             "invalid-id",
             "invalid-status",
@@ -5967,7 +5961,6 @@ class TestHostedWebSearchReplay:
             "invalid-action-type",
             "unknown-action",
             "incomplete-action",
-            "missing-id-invalid-action",
         ),
     )
     def test_rejects_search_with_other_invalid_fields(self, fields: Mapping[str, object]) -> None:
