@@ -62,13 +62,26 @@ describe("MCPEventPermissionsEditor", () => {
     expect(await screen.findByPlaceholderText("No event types")).toBeInTheDocument();
   });
 
+  it.each([
+    { catalog: "populated", types: [BUILD_FAILED] },
+    { catalog: "empty", types: [] },
+  ])("saves a new glob for an enabled server with a $catalog catalog", async ({ types }) => {
+    mocks.fetchMCPEventTypes.mockResolvedValue(types);
+    const user = userEvent.setup();
+    const onSave = renderEditor({ "srv-other": ["deploy.done"] });
+    await user.type(await screen.findByRole("combobox", { name: "All event types" }), "build.*");
+    await user.click(await screen.findByRole("option", { name: 'Create "build.*"' }));
+    await user.click(screen.getByRole("button", { name: "Save event permissions" }));
+    expect(onSave).toHaveBeenCalledWith({ "srv-ci": ["build.*"], "srv-other": ["deploy.done"] });
+  });
+
   it("offers a retry when event types fail to load", async () => {
     const user = userEvent.setup();
     mocks.fetchMCPEventTypes.mockRejectedValueOnce(new Error("offline"));
     renderEditor({});
     await user.click(await screen.findByRole("button", { name: "Retry" }));
     expect(await screen.findByText("CI")).toBeInTheDocument();
-    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
   });
 
   it("keeps a stored restriction editable when its server lists no event types", async () => {
@@ -76,6 +89,27 @@ describe("MCPEventPermissionsEditor", () => {
     renderEditor({ "srv-ci": ["build.failed"] });
     expect(await screen.findByText("CI")).toBeInTheDocument();
     expect(screen.getByText("build.failed")).toBeInTheDocument();
+  });
+
+  it("saves a published event name containing a comma as one restriction", async () => {
+    mocks.fetchMCPEventTypes.mockResolvedValue([{ ...BUILD_FAILED, name: "build,deploy" }]);
+    const user = userEvent.setup();
+    const onSave = renderEditor({});
+    await user.click(await screen.findByRole("combobox", { name: "All event types" }));
+    await user.click(await screen.findByRole("option", { name: "build,deploy" }));
+    await user.keyboard("{Escape}");
+    await user.click(screen.getByRole("button", { name: "Save event permissions" }));
+    expect(onSave).toHaveBeenCalledWith({ "srv-ci": ["build,deploy"] });
+  });
+
+  it("saves a new glob verbatim when a published name differs only by case", async () => {
+    mocks.fetchMCPEventTypes.mockResolvedValue([{ ...BUILD_FAILED, name: "Build,deploy.*" }]);
+    const user = userEvent.setup();
+    const onSave = renderEditor({});
+    await user.type(await screen.findByRole("combobox", { name: "All event types" }), "build,deploy.*");
+    await user.click(await screen.findByRole("option", { name: 'Create "build,deploy.*"' }));
+    await user.click(screen.getByRole("button", { name: "Save event permissions" }));
+    expect(onSave).toHaveBeenCalledWith({ "srv-ci": ["build,deploy.*"] });
   });
 
   it("keeps a restriction on a server that no longer publishes events so it can be cleared", async () => {
