@@ -30,7 +30,7 @@ MORSE_MODELS: Final = tuple(sorted(name for name in litellm.model_cost if name.s
 def test_morse_is_a_registered_provider():
     assert litellm.LlmProviders.MORSE.value == "morse"
     assert "morse" in litellm.provider_list
-    assert "morse" in litellm.constants.openai_compatible_providers
+    assert "morse" not in litellm.constants.openai_compatible_providers
     assert _DEFAULT_API_BASE in litellm.constants.openai_compatible_endpoints
 
 
@@ -164,3 +164,44 @@ def test_morse_without_a_key_never_sends_the_openai_key(monkeypatch: pytest.Monk
             )
 
     assert route.call_count == 0
+
+
+def _call_morse_endpoint(endpoint: str, audio_path: Path) -> None:
+    if endpoint == "speech":
+        litellm.speech(model="morse/a-lab/a-voice-model", voice="alloy", input="Say hello")
+    elif endpoint == "transcription":
+        with audio_path.open("rb") as audio:
+            litellm.transcription(model="morse/a-lab/a-transcription-model", file=audio)
+    else:
+        litellm.text_completion(model="morse/z-ai/glm-5.3-flash", prompt="Say hello")
+
+
+@pytest.fixture
+def openai_key_without_morse_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("MORSE_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-test-key")
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.setattr(litellm, "openai_key", "openai-test-key")
+
+
+@pytest.mark.usefixtures("openai_key_without_morse_key")
+@pytest.mark.parametrize("endpoint", ["speech", "transcription", "text_completion"])
+def test_morse_other_endpoints_never_send_the_openai_key(tmp_path: Path, endpoint: str):
+    audio_path: Final = tmp_path / "hello.wav"
+    audio_path.write_bytes(b"RIFF0000WAVEfmt ")
+    with respx.mock(assert_all_called=False) as upstream:
+        route: Final = upstream.route().respond(200, json={})
+        with pytest.raises(Exception, match="(?i)morse"):
+            _call_morse_endpoint(endpoint, audio_path)
+
+    assert route.call_count == 0
+
+
+@pytest.mark.usefixtures("openai_key_without_morse_key")
+def test_morse_image_generation_never_sends_the_openai_key():
+    with respx.mock(assert_all_called=False) as upstream:
+        route: Final = upstream.route().respond(200, json={})
+        response: Final = litellm.image_generation(model="morse/a-lab/an-image-model", prompt="Say hello")
+
+    assert route.call_count == 0
+    assert response.data == []
