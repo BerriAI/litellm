@@ -31,5 +31,6 @@ def test_an_added_mcp_server_is_a_table_codex_reads_next_to_the_gateway_provider
             "args": list(server.args),
             "env": dict(server.env),
             "default_tools_approval_mode": "approve",
+            "required": True,
         }
     }
