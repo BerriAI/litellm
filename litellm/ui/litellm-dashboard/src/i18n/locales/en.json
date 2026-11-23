@@ -13463,8 +13463,8 @@
       },
       "events": {
         "enabled": "MCP events",
-        "enabledTooltip": "Relay the upstream server's events/* (poll, push and webhook) through the gateway. Needs protocol 2026-07-28 and mcp_events_enabled in general settings.",
-        "description": "Clients subscribe to this server's event types through the gateway, with the same keys, guardrails and logs as tool calls.",
+        "requirements": "MCP events require HTTP or stdio transport and protocol 2026-07-28. Set the upstream protocol to auto or 2026-07-28.",
+        "description": "Relay this server's events with the same keys, guardrails and logs as tool calls. Enabling events pins auto negotiation to 2026-07-28 and requires mcp_events_enabled in general settings.",
         "allowed": "Allowed event types",
         "allowedTooltip": "Glob patterns such as build.* that limit which upstream event types the gateway publishes. Leave empty to allow every type.",
         "allowedPlaceholder": "Leave empty to allow every event type"

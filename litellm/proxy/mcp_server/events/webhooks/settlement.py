@@ -25,9 +25,10 @@ async def settle_delivery(
     async with client.tx() as tx:
         locked: Final = await tx.query_raw(
             """SELECT cursor FROM "LiteLLM_MCPEventSubscription"
-            WHERE id = $1 AND generation = $2 AND status IN ('active', 'suspended') FOR UPDATE""",
+            WHERE id = $1 AND generation = $2 AND ($3::boolean OR status IN ('active', 'suspended')) FOR UPDATE""",
             delivery.subscription_id,
             generation,
+            outcome == "discarded",
             model=GapEnvelope,
         )
         if not locked:

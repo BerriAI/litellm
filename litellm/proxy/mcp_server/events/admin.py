@@ -12,7 +12,7 @@ from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.mcp_server.contracts import OperationContext
 from litellm.proxy.mcp_server.events.access import principal_of
-from litellm.proxy.mcp_server.events.catalog import event_servers, gateway_name, publishable
+from litellm.proxy.mcp_server.events.catalog import event_servers, gateway_name, offered_modes, publishable
 from litellm.proxy.mcp_server.events.config import events_settings
 from litellm.proxy.mcp_server.events.errors import EventsFailure, forbidden
 from litellm.proxy.mcp_server.events.runtime import DEFAULT_RUNTIME, EventsRuntime
@@ -191,7 +191,12 @@ async def list_event_types(
         raise HTTPException(status_code=404, detail="No events-enabled MCP server with this id")
     descriptors: Final = await runtime.descriptors(await runtime.prepare_target(context, server.server, allowed))
     grant: Final = await runtime.grant(server.server.server_id, caller)
-    return tuple(item for item in descriptors if publishable(item, server.config, grant))
+    settings: Final = events_settings()
+    return tuple(
+        item.model_copy(update={"delivery": modes})
+        for item in descriptors
+        if publishable(item, server.config, grant) and (modes := offered_modes(item, server.server, settings, context))
+    )
 
 
 @router.get("/subscriptions", response_model=SubscriptionList)
