@@ -164,11 +164,9 @@ async def terminate_key_subscriptions(
 
 async def _terminate_for_key(token: str, services: AdminServices, notify: bool) -> None:
     store: Final = services.require_store()
-    after_id: str | None = None  # rebind-ok: advance past each page as termination removes live rows
-    while rows := await store.find(SubscriptionQuery(key_hash=token, live_only=True, after_id=after_id)):
+    while rows := await store.find(SubscriptionQuery(key_hash=token, live_only=True)):
         for row in rows:
             await terminate_subscription(row, forbidden("Key revoked"), services, notify=notify)
-        after_id = rows[-1].id
 
 
 @router.get("/types", response_model=tuple[EventType, ...])
@@ -191,11 +189,12 @@ async def list_event_types(
         raise HTTPException(status_code=404, detail="No events-enabled MCP server with this id")
     descriptors: Final = await runtime.descriptors(await runtime.prepare_target(context, server.server, allowed))
     grant: Final = await runtime.grant(server.server.server_id, caller)
-    settings: Final = events_settings()
+    webhooks_enabled: Final = services.store is not None and events_settings().public_base_url is not None
     return tuple(
         item.model_copy(update={"delivery": modes})
         for item in descriptors
-        if publishable(item, server.config, grant) and (modes := offered_modes(item, server.server, settings, context))
+        if publishable(item, server.config, grant)
+        and (modes := offered_modes(item, server.server, webhooks_enabled, context))
     )
 
 
