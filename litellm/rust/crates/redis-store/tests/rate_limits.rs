@@ -82,7 +82,7 @@ const SCRIPTS: [(&str, &str); 8] = [
     ),
     (
         "check_and_increment_by_n",
-        "cbf6fb1b9184f1834b44b05bdeda3806fbc2da41",
+        "6602ad40599d6d301ecf644fc96b340a4195cb20",
     ),
     (
         "window_guarded_token_increment",
@@ -406,7 +406,8 @@ async fn check_and_increment_is_all_or_nothing(
         AtomicReply::OverLimit {
             index: 1,
             current: 60,
-            limit: 100
+            limit: 100,
+            window_start: applied[1].window_start,
         }
     );
     assert_eq!(
@@ -435,7 +436,8 @@ async fn check_and_increment_is_all_or_nothing(
         AtomicReply::OverLimit {
             index: 0,
             current: 2,
-            limit: 2
+            limit: 2,
+            window_start: applied[0].window_start,
         }
     );
 }

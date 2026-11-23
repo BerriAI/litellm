@@ -7,7 +7,7 @@ import time
 from collections.abc import Iterator, Sequence
 from datetime import datetime, timedelta, timezone
 from functools import partial
-from typing import Any, Final
+from typing import Any, Final, Literal
 from unittest.mock import patch
 
 import pytest
@@ -1693,6 +1693,65 @@ def test_rate_limit_error_reports_reset_time_in_utc_on_a_non_utc_proxy(process_t
     }
     assert exc_info.value.detail == (
         "Rate limit exceeded for api_key: sk-test. Limit type: requests. "
+        f"Current limit: 2, Remaining: 0. Limit resets at: {expected_reset}"
+    )
+
+
+@pytest.mark.parametrize("kind", ["requests", "tokens"])
+@pytest.mark.parametrize("backend", ["redis", "local"])
+@pytest.mark.parametrize(("elapsed", "retry_after"), [(50, "10"), (49.25, "11"), (60, "1")])
+def test_rate_limit_error_reports_the_active_window_reset(
+    monkeypatch: pytest.MonkeyPatch,
+    kind: CounterKind,
+    backend: Literal["redis", "local"],
+    elapsed: float,
+    retry_after: str,
+) -> None:
+    monkeypatch.setenv("LITELLM_RATE_LIMIT_WINDOW_SIZE", "60")
+    window_start: Final = datetime(2026, 9, 4, 21, 52, 31, tzinfo=timezone.utc)
+    now: Final = window_start + timedelta(seconds=elapsed)
+    handler: Final = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache()), time_provider=lambda: now
+    )
+    expected_reset: Final = (window_start + timedelta(seconds=60)).strftime("%Y-%m-%d %H:%M:%S UTC")
+    over_limit: Final[RateLimitResponse] = {
+        "overall_code": "OVER_LIMIT",
+        "statuses": [
+            {
+                "code": "OVER_LIMIT",
+                "descriptor_key": "api_key",
+                "descriptor_value": "sk-test",
+                "limit_remaining": 0,
+                "rate_limit_type": kind,
+                "current_limit": 2,
+            }
+        ],
+        "reservation_windows": frozenset(
+            {
+                (RateLimitScope("api_key", "sk-other").counter(kind), str(now.timestamp()), backend),
+                (RateLimitScope("api_key", "sk-test").counter(kind), str(window_start.timestamp()), backend),
+            }
+        ),
+    }
+
+    with pytest.raises(ProxyRateLimitError) as exc_info:
+        handle_rate_limit_error(
+            handler,
+            response=over_limit,
+            descriptors=[
+                {"key": "api_key", "value": "sk-other", "rate_limit": None},
+                {"key": "api_key", "value": "sk-test", "rate_limit": None},
+            ],
+        )
+
+    assert exc_info.value.headers == {
+        "retry-after": retry_after,
+        "rate_limit_type": kind,
+        "rate_limited_by": "api_key",
+        "reset_at": expected_reset,
+    }
+    assert exc_info.value.detail == (
+        f"Rate limit exceeded for api_key: sk-test. Limit type: {kind}. "
         f"Current limit: 2, Remaining: 0. Limit resets at: {expected_reset}"
     )
 

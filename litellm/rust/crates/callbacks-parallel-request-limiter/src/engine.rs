@@ -360,10 +360,12 @@ impl Engine {
         states: &[State],
         metas: &[WindowMeta],
         read_only: bool,
+        backend: Backend,
     ) -> Response {
         let pending = i64::from(read_only);
         let mut overall = Code::Ok;
         let mut statuses = Vec::new();
+        let mut windows = Vec::new();
         for (counter, state) in counters.iter().zip(states) {
             let Some(meta) = metas.iter().find(|meta| meta.scope == counter.scope) else {
                 continue;
@@ -379,6 +381,13 @@ impl Engine {
             {
                 overall = Code::OverLimit;
                 code = Code::OverLimit;
+                if let Some(start) = &state.window {
+                    windows.push(WindowIdentity {
+                        counter: counter.clone(),
+                        window_start: start.clone(),
+                        backend,
+                    });
+                }
             }
             statuses.push(Status {
                 code,
@@ -392,7 +401,7 @@ impl Engine {
         Response {
             overall,
             statuses,
-            windows: None,
+            windows: (overall == Code::OverLimit).then(|| identities(windows)),
         }
     }
 
@@ -411,8 +420,13 @@ impl Engine {
         let (counters, metas, gauges) = self.collect(descriptors, skip_tpm_check);
         let mut windowed = Response::ok(Vec::new());
         if !counters.is_empty() {
-            let local =
-                Self::over_limit_list(&counters, &self.local_states(&counters), &metas, read_only);
+            let local = Self::over_limit_list(
+                &counters,
+                &self.local_states(&counters),
+                &metas,
+                read_only,
+                Backend::Local,
+            );
             if local.is_over() {
                 return Ok(local);
             }
@@ -442,7 +456,12 @@ impl Engine {
                 let _guard = self.store.memory_guard();
                 self.sliding_window_memory(&counters, now_int, self.settings.window_size)
             };
-            windowed = Self::over_limit_list(&counters, &states, &metas, read_only);
+            let backend = if self.store.has_redis() {
+                Backend::Redis
+            } else {
+                Backend::Local
+            };
+            windowed = Self::over_limit_list(&counters, &states, &metas, read_only, backend);
             if windowed.is_over() {
                 return Ok(windowed);
             }
@@ -458,7 +477,7 @@ impl Engine {
         Ok(Response {
             overall: gauge.overall,
             statuses,
-            windows: None,
+            windows: windowed.windows,
         })
     }
 
@@ -1033,16 +1052,19 @@ impl Engine {
                 index,
                 current,
                 limit,
+                window_start,
             } => {
                 let meta = meta
                     .get(*index)
                     .ok_or("an over-limit index outside the counters")?;
-                Ok(Response::over(atomic_status(
-                    meta,
-                    Code::OverLimit,
-                    *limit,
-                    *current,
-                )))
+                Ok(Response {
+                    windows: Some(vec![WindowIdentity {
+                        counter: meta.counter.clone(),
+                        window_start: window_start.to_string(),
+                        backend: Backend::Redis,
+                    }]),
+                    ..Response::over(atomic_status(meta, Code::OverLimit, *limit, *current))
+                })
             }
             AtomicReply::Applied(applied) => {
                 if applied.len() != meta.len() {
@@ -1275,18 +1297,25 @@ impl Engine {
             } else {
                 current >= meta.current_limit
             };
-            if over {
-                return Response::over(atomic_status(
-                    meta,
-                    Code::OverLimit,
-                    meta.current_limit,
-                    current,
-                ));
-            }
             let window_start = match start {
                 Some(start) if !expired => start,
                 _ => now_int,
             };
+            if over {
+                return Response {
+                    windows: Some(vec![WindowIdentity {
+                        counter: meta.counter.clone(),
+                        window_start: window_start.to_string(),
+                        backend: Backend::Local,
+                    }]),
+                    ..Response::over(atomic_status(
+                        meta,
+                        Code::OverLimit,
+                        meta.current_limit,
+                        current,
+                    ))
+                };
+            }
             states.push((expired, current, window_start.to_string()));
         }
         let mut expired_scopes: Vec<(Scope, i64)> = Vec::new();
@@ -1744,5 +1773,273 @@ impl Engine {
                     .await;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::{fixture, rstest};
+
+    use super::*;
+
+    #[fixture]
+    fn metas() -> Vec<AtomicMeta> {
+        [Kind::Requests, Kind::Tokens]
+            .into_iter()
+            .map(|kind| AtomicMeta {
+                descriptor_key: "api_key".into(),
+                descriptor_value: "key".into(),
+                current_limit: 2,
+                kind,
+                counter: counter_of(
+                    &Scope {
+                        descriptor: "api_key".into(),
+                        value: "key".into(),
+                    },
+                    kind,
+                ),
+                increment: 1,
+                ttl: 60,
+                window_size: 60,
+            })
+            .collect()
+    }
+
+    #[rstest]
+    #[case::requests(0)]
+    #[case::tokens(1)]
+    fn an_atomic_redis_rejection_identifies_the_blocked_window(
+        metas: Vec<AtomicMeta>,
+        #[case] index: usize,
+    ) {
+        let response = Engine::atomic_response(
+            &AtomicReply::OverLimit {
+                index,
+                current: 2,
+                limit: 2,
+                window_start: 1_000,
+            },
+            &metas,
+        )
+        .unwrap();
+
+        assert_eq!(response.overall, Code::OverLimit);
+        assert_eq!(
+            response.statuses,
+            vec![atomic_status(&metas[index], Code::OverLimit, 2, 2)]
+        );
+        assert_eq!(
+            response.windows,
+            Some(vec![WindowIdentity {
+                counter: metas[index].counter.clone(),
+                window_start: "1000".into(),
+                backend: Backend::Redis,
+            }])
+        );
+    }
+
+    #[rstest]
+    #[case::requests(0)]
+    #[case::tokens(1)]
+    fn an_atomic_local_rejection_identifies_the_active_window(
+        metas: Vec<AtomicMeta>,
+        #[case] index: usize,
+    ) {
+        let engine = Engine::new(
+            Arc::new(RateLimits::with_clock(
+                None,
+                None,
+                Arc::new(|| Duration::from_secs(1_050)),
+            )),
+            Settings {
+                window_size: 60,
+                tpm_reservation_enabled: true,
+            },
+            Arc::new(|| 1_050.0),
+        );
+        let meta = &metas[index];
+        engine.set_local(
+            Entry::Window(meta.counter.scope.clone()),
+            Local::Text("1000".into()),
+            seconds(60),
+        );
+        engine.set_local(
+            Entry::Counter(meta.counter.clone()),
+            Local::Number(Number::Int(2)),
+            seconds(60),
+        );
+
+        let response = engine.atomic_in_memory(&metas, 1_050.0);
+
+        assert_eq!(response.overall, Code::OverLimit);
+        assert_eq!(
+            response.statuses,
+            vec![atomic_status(meta, Code::OverLimit, 2, 2)]
+        );
+        assert_eq!(
+            response.windows,
+            Some(vec![WindowIdentity {
+                counter: meta.counter.clone(),
+                window_start: "1000".into(),
+                backend: Backend::Local,
+            }])
+        );
+    }
+
+    #[fixture]
+    fn window_meta() -> WindowMeta {
+        WindowMeta {
+            scope: Scope {
+                descriptor: "api_key".into(),
+                value: "key".into(),
+            },
+            requests_limit: Some(2),
+            tokens_limit: Some(2),
+            descriptor_key: "api_key".into(),
+            descriptor_value: "key".into(),
+        }
+    }
+
+    #[rstest]
+    #[case::known_window(Some("1000"))]
+    #[case::unknown_window(None)]
+    fn a_windowed_rejection_identifies_only_the_blocked_counter(
+        window_meta: WindowMeta,
+        #[case] start: Option<&str>,
+        #[values(Kind::Requests, Kind::Tokens)] kind: Kind,
+        #[values(Backend::Redis, Backend::Local)] backend: Backend,
+        #[values(true, false)] read_only: bool,
+    ) {
+        let blocked = counter_of(&window_meta.scope, kind);
+        let allowed = counter_of(
+            &window_meta.scope,
+            match kind {
+                Kind::Requests => Kind::Tokens,
+                Kind::Tokens => Kind::Requests,
+            },
+        );
+        let response = Engine::over_limit_list(
+            &[blocked.clone(), allowed],
+            &[
+                State {
+                    window: start.map(str::to_owned),
+                    count: Some(if read_only { 2 } else { 3 }),
+                },
+                State {
+                    window: Some("1000".into()),
+                    count: Some(0),
+                },
+            ],
+            &[window_meta],
+            read_only,
+            backend,
+        );
+
+        assert_eq!(response.overall, Code::OverLimit);
+        assert_eq!(response.statuses[0].code, Code::OverLimit);
+        assert_eq!(response.statuses[1].code, Code::Ok);
+        assert_eq!(
+            response.windows,
+            Some(
+                start
+                    .map(|start| WindowIdentity {
+                        counter: blocked,
+                        window_start: start.into(),
+                        backend,
+                    })
+                    .into_iter()
+                    .collect()
+            )
+        );
+    }
+
+    #[rstest]
+    fn an_allowed_windowed_check_has_no_window_identities(
+        window_meta: WindowMeta,
+        #[values(Kind::Requests, Kind::Tokens)] kind: Kind,
+        #[values(true, false)] read_only: bool,
+    ) {
+        let response = Engine::over_limit_list(
+            &[counter_of(&window_meta.scope, kind)],
+            &[State {
+                window: Some("1000".into()),
+                count: Some(1),
+            }],
+            &[window_meta],
+            read_only,
+            Backend::Local,
+        );
+
+        assert_eq!(response.overall, Code::Ok);
+        assert_eq!(response.statuses[0].code, Code::Ok);
+        assert_eq!(response.windows, None);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn a_read_only_check_returns_the_active_window_without_charging(
+        window_meta: WindowMeta,
+        #[values(Kind::Requests, Kind::Tokens)] kind: Kind,
+    ) {
+        let engine = Engine::new(
+            Arc::new(RateLimits::with_clock(
+                None,
+                None,
+                Arc::new(|| Duration::from_secs(1_050)),
+            )),
+            Settings {
+                window_size: 60,
+                tpm_reservation_enabled: true,
+            },
+            Arc::new(|| 1_050.0),
+        );
+        let counter = counter_of(&window_meta.scope, kind);
+        engine.set_local(
+            Entry::Window(counter.scope.clone()),
+            Local::Text("1000".into()),
+            seconds(60),
+        );
+        engine.set_local(
+            Entry::Counter(counter.clone()),
+            Local::Number(Number::Int(2)),
+            seconds(60),
+        );
+
+        let response = engine
+            .should_rate_limit(
+                &[Descriptor {
+                    key: window_meta.descriptor_key,
+                    value: window_meta.descriptor_value,
+                    rate_limit: Some(Limits {
+                        requests_per_unit: window_meta.requests_limit,
+                        tokens_per_unit: window_meta.tokens_limit,
+                        ..Limits::default()
+                    }),
+                }],
+                true,
+                false,
+                None,
+                true,
+                Ctx {
+                    policy: Policy::default(),
+                    request: None,
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.overall, Code::OverLimit);
+        assert_eq!(
+            response.windows,
+            Some(vec![WindowIdentity {
+                counter: counter.clone(),
+                window_start: "1000".into(),
+                backend: Backend::Local,
+            }])
+        );
+        assert_eq!(
+            engine.local(Entry::Counter(counter)),
+            Some(Local::Number(Number::Int(2)))
+        );
     }
 }

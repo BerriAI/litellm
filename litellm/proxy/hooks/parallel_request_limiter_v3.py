@@ -7,6 +7,7 @@ This is currently in development and not yet ready for production.
 import asyncio
 import json
 import logging
+import math
 import os
 import uuid
 from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
@@ -1849,12 +1850,28 @@ def handle_rate_limit_error(
             )
             descriptor_value = matching_descriptor["value"] if matching_descriptor is not None else "unknown"
 
-            now = current_time(limiter).timestamp()
-            reset_time = now + limiter.window_size
+            rate_limit_type: Final = status["rate_limit_type"]
+            window_counter: Final = (
+                RateLimitScope(descriptor_key, descriptor_value).counter(rate_limit_type)
+                if rate_limit_type in ("requests", "tokens")
+                else None
+            )
+            window_start: Final = next(
+                (
+                    float(start)
+                    for counter, start, _backend in response.get("reservation_windows", frozenset())
+                    if counter == window_counter
+                ),
+                None,
+            )
+            now: Final = current_time(limiter).timestamp()
+            reset_time: Final = (window_start if window_start is not None else now) + limiter.window_size
+            retry_after: Final = (
+                max(1, math.ceil(reset_time - now)) if window_start is not None else limiter.window_size
+            )
             reset_time_formatted = datetime.fromtimestamp(reset_time, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
             remaining_display = max(0, status["limit_remaining"])
-            rate_limit_type = status["rate_limit_type"]
             current_limit = status["current_limit"]
 
             detail = (
@@ -1868,7 +1885,7 @@ def handle_rate_limit_error(
             raise ProxyRateLimitError(
                 detail=detail,
                 headers={
-                    "retry-after": str(limiter.window_size),
+                    "retry-after": str(retry_after),
                     "rate_limit_type": str(status["rate_limit_type"]),
                     "rate_limited_by": descriptor_key,
                     "reset_at": reset_time_formatted,

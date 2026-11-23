@@ -264,11 +264,14 @@ fn atomic_reply(reply: Value) -> Result<AtomicReply, Error> {
             })
             .collect::<Result<_, _>>()
             .map(AtomicReply::Applied),
-        Some((Value::Int(1), [index_value, current, limit])) => Ok(AtomicReply::OverLimit {
-            index: index(index_value)?,
-            current: integer(current)?,
-            limit: integer(limit)?,
-        }),
+        Some((Value::Int(1), [index_value, current, limit, window_start])) => {
+            Ok(AtomicReply::OverLimit {
+                index: index(index_value)?,
+                current: integer(current)?,
+                limit: integer(limit)?,
+                window_start: integer(window_start)?,
+            })
+        }
         _ => Err(unexpected_reply("rate limiter script reply has no status")),
     }
 }
@@ -299,5 +302,38 @@ fn acquire_reply(reply: Value) -> Result<AcquireReply, Error> {
             limit: integer(limit)?,
         }),
         _ => Err(unexpected_reply("rate limiter script reply has no status")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::*;
+
+    #[rstest]
+    #[case::first_counter(1, 0)]
+    #[case::second_counter(2, 1)]
+    fn an_atomic_over_limit_reply_preserves_the_blocked_window(
+        #[case] wire_index: i64,
+        #[case] expected_index: usize,
+    ) {
+        let reply = atomic_reply(Value::Array(
+            [1, wire_index, 7, 7, 1_700_000_000]
+                .into_iter()
+                .map(Value::Int)
+                .collect(),
+        ))
+        .unwrap();
+
+        assert_eq!(
+            reply,
+            AtomicReply::OverLimit {
+                index: expected_index,
+                current: 7,
+                limit: 7,
+                window_start: 1_700_000_000,
+            }
+        );
     }
 }

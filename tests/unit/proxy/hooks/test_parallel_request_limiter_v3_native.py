@@ -2359,12 +2359,22 @@ def test_a_rust_callback_exception_is_treated_like_a_python_one(hook: Hook) -> N
 
 
 @pytest.mark.asyncio
-async def test_the_body_free_check_refuses_a_key_over_its_rpm_through_the_scoped_builder() -> None:
-    side: Final = _side(Clock())
+async def test_the_body_free_check_reports_the_active_window_reset(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_RATE_LIMIT_WINDOW_SIZE", "60")
+    clock: Final = Clock()
+    side: Final = _side(clock)
     auth: Final = _auth(rpm_limit=1)
     await raise_if_over_limit_before_body(side.limiter, auth)
     assert await _admitted(side, [Request(auth, _CHAT)]) == [None]
+    window_start: Final = clock.current.replace(microsecond=0)
+    clock.advance(50)
     with pytest.raises(ProxyRateLimitError) as refused:
         await raise_if_over_limit_before_body(side.limiter, auth)
     assert refused.value.status_code == 429
+    assert refused.value.headers == {
+        "retry-after": "10",
+        "rate_limit_type": "requests",
+        "rate_limited_by": "api_key",
+        "reset_at": (window_start + timedelta(seconds=side.limiter.window_size)).strftime("%Y-%m-%d %H:%M:%S UTC"),
+    }
     assert side.limiter.rate_limits.local((RateLimitScope("api_key", _KEY).counter("requests"),)) == (1,)
