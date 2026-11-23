@@ -15,18 +15,6 @@ fn python_repr(value: &Value) -> String {
     repr::to_str(&python_json::from_json(value.clone()))
 }
 
-fn python_type_name(value: &Value) -> &'static str {
-    match value {
-        Value::Null => "NoneType",
-        Value::Bool(_) => "bool",
-        Value::Number(number) if number.is_f64() => "float",
-        Value::Number(_) => "int",
-        Value::String(_) => "str",
-        Value::Array(_) => "list",
-        Value::Object(_) => "dict",
-    }
-}
-
 fn validation_error(location: &str, message: &str, kind: &str, input: &Value) -> String {
     let location = if location.is_empty() {
         String::new()
@@ -36,7 +24,7 @@ fn validation_error(location: &str, message: &str, kind: &str, input: &Value) ->
     format!(
         "1 validation error for GuardrailConfigBlock{location}\n  {message} [type={kind}, input_value={}, input_type={}]",
         python_repr(input),
-        python_type_name(input)
+        python_json::type_name(input)
     )
 }
 

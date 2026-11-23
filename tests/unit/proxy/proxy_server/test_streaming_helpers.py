@@ -392,6 +392,42 @@ def test_responses_failure_event_reads_a_numeric_status_code_the_way_base_did(st
     assert failure.response.error["code"] == code
 
 
+def test_responses_failure_event_keeps_the_routers_fallback_outcome_over_the_upstream_message() -> None:
+    error: Final = litellm.InternalServerError(
+        message="FLASH-ERROR",
+        llm_provider="hosted_vllm",
+        model="qwen-flash",
+        body={"message": "FLASH-ERROR", "code": "500"},
+    )
+    error.message += "\n\nLiteLLM: model group 'p' failed with the error above. Fallback to q also failed: Q-ERROR"
+
+    frame: Final = ResponsesStreamErrorState().format_failure(error)
+
+    assert frame is not None
+    failure: Final = ResponseFailedEvent.model_validate_json(frame.split("data: ", 1)[1])
+    assert failure.response.error is not None
+    message: Final = failure.response.error["message"]
+    assert "FLASH-ERROR" in message
+    assert message.endswith("Fallback to q also failed: Q-ERROR")
+
+
+def test_responses_failure_event_keeps_the_upstream_message_when_no_fallback_was_attempted() -> None:
+    error: Final = litellm.InternalServerError(
+        message="litellm wrapped FLASH-ERROR",
+        llm_provider="hosted_vllm",
+        model="qwen-flash",
+        body={"message": "FLASH-ERROR", "code": "500"},
+    )
+    error.message += "\n\nLiteLLM: model group 'p' failed with the error above. No fallback was attempted."
+
+    frame: Final = ResponsesStreamErrorState().format_failure(error)
+
+    assert frame is not None
+    failure: Final = ResponseFailedEvent.model_validate_json(frame.split("data: ", 1)[1])
+    assert failure.response.error is not None
+    assert failure.response.error["message"] == "FLASH-ERROR"
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("guardrail_error", "error_object"),

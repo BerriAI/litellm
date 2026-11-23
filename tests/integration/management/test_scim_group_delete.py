@@ -34,6 +34,7 @@ from integration._support.scim import (
     create_group,
     created_team,
     delete_group,
+    error_detail,
     groups_of,
     held_team_lock,
     held_user_row,
@@ -398,8 +399,7 @@ def test_deleting_an_unknown_group_is_404(gateway: Gateway) -> None:
     missing: Final = f"missing-{uuid.uuid4().hex}"
     response: Final = delete_group(gateway, missing)
     assert response.status_code == 404, response.text
-    assert "error" in body(response), response.text
-    assert missing in response.text
+    assert missing in error_detail(response), response.text
 
 
 def test_deleting_a_group_twice_is_404_the_second_time(gateway: Gateway) -> None:
@@ -410,7 +410,7 @@ def test_deleting_a_group_twice_is_404_the_second_time(gateway: Gateway) -> None
         assert first.status_code == 204, first.text
         second: Final = delete_group(gateway, team)
         assert second.status_code == 404, second.text
-        assert "error" in body(second), second.text
+        assert team in error_detail(second), second.text
         assert gateway.request("GET", f"/scim/v2/Groups/{team}").status_code == 404
         assert membership_user_ids(team) == frozenset()
 
@@ -438,7 +438,7 @@ def test_deleting_a_group_with_a_non_admin_key_is_refused(gateway: Gateway) -> N
         outsider: Final = scenario.key()
         response: Final = delete_group(gateway, team, key=outsider)
         assert response.status_code in (401, 403), response.text
-        assert "error" in body(response), response.text
+        assert "proxy admin" in error_detail(response), response.text
         assert_landed(gateway, team, users)
 
 

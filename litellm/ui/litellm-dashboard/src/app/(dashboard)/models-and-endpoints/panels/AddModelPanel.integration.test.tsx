@@ -557,7 +557,7 @@ describe("AddModelPanel behaviours the removed Advanced Settings form instance n
     const { user, openAdvanced, fillRequired, submit } = await setup();
     await fillRequired();
     await openAdvanced();
-    await user.click(screen.getByRole("switch", { name: "Use in pass through routes" }));
+    await user.click(screen.getByRole("switch", { name: "Use in pass-through routes" }));
     expect(screen.getByLabelText("LiteLLM Params")).toHaveValue("");
 
     await submit();

@@ -6,13 +6,14 @@
 
 use litellm_config::{GeneralSettings, JwtRoutingOverride, OneOrMany, RoutingPath};
 use litellm_fnmatch::Pattern;
+use litellm_python_compat::unicode::isspace;
 use serde_json::Value;
 
 use super::{BearerToken, Request};
 use crate::{
     authn::jwt::{Claims, unverified_claims},
     routes::table::is_lens_route,
-    value::{id_text, is_separator, trim},
+    value::{id_text, trim},
 };
 
 #[derive(Clone, Debug, Default)]
@@ -129,7 +130,7 @@ impl ClaimPattern {
         whole_values(claim).iter().any(|value| {
             self.0.iter().any(|selector| match selector {
                 Selector::Exact(exact) => exact == value,
-                Selector::Glob(glob) => !value.contains(is_separator) && glob.matches(value),
+                Selector::Glob(glob) => !value.contains(isspace) && glob.matches(value),
             })
         })
     }

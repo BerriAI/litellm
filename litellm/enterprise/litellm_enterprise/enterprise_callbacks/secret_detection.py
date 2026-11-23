@@ -34,7 +34,12 @@ from litellm.integrations.custom_guardrail import (
 )
 from litellm.llms.base_llm.guardrail_translation.utils import effective_skip_tool_message_for_guardrail
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.guardrails._content_utils import iter_tool_json_fields, map_tool_json_text, walk_user_text
+from litellm.proxy.guardrails._content_utils import (
+    iter_json_keys,
+    iter_tool_json_fields,
+    map_tool_json_text,
+    walk_user_text,
+)
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import GenericGuardrailAPIInputs
 
@@ -666,8 +671,15 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
 
     def redact_tool_payload(self, payload: JsonValue) -> JsonValue:
         """Redact secrets in a tool payload's string values, scanning each value alone and as its JSON lines."""
+        return self._redact_json(payload, rewrite_keys=False)
+
+    def redact_json_input(self, payload: JsonValue) -> JsonValue:
+        return self._redact_json(payload, rewrite_keys=True)
+
+    def _redact_json(self, payload: JsonValue, *, rewrite_keys: bool) -> JsonValue:
         fields: Final = tuple(iter_tool_json_fields(payload))
-        texts: Final = tuple(text for _, text in fields)
+        keys: Final = tuple(iter_json_keys(payload)) if rewrite_keys else ()
+        texts: Final = (*(text for _, text in fields), *keys)
         contexts: Final = {key: _key_context(key) for key in {key for key, _ in fields if key is not None}}
         keyed: Final = tuple(
             itertools.chain.from_iterable(
@@ -686,12 +698,13 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
             for secret in detected:
                 counts[secret["type"]] = counts.get(secret["type"], 0) + 1
         verbose_proxy_logger.warning(
-            "Detected and redacted secrets in tool payload: %s",
+            "Detected and redacted secrets in %s: %s",
+            "JSON input" if rewrite_keys else "tool payload",
             sorted(dict.fromkeys(secret["type"] for secret in detected)),
         )
         values: Final = sorted({secret["value"] for secret in detected}, key=len, reverse=True)
         pattern: Final = re.compile("|".join(re.escape(value) for value in values))
-        return map_tool_json_text(payload, lambda text: pattern.sub("[REDACTED]", text))
+        return map_tool_json_text(payload, lambda text: pattern.sub("[REDACTED]", text), rewrite_keys=rewrite_keys)
 
     async def should_run_check(self, user_api_key_dict: UserAPIKeyAuth) -> bool:
         if user_api_key_dict.permissions is not None:
@@ -759,6 +772,7 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
             self.redact_text,
             self.redact_tool_payload,
             skip_tool_message=effective_skip_tool_message_for_guardrail(self),
+            visit_json=self.redact_json_input,
         ) + self._redact_prompt(data)
 
         if inspected == 0:

@@ -16,7 +16,8 @@ vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
 const { POST } = vi.hoisted(() => ({ POST: vi.fn() }));
 vi.mock("@/lib/http/api", () => ({ fetchClient: { POST } }));
 
-vi.mock("@/utils/roles", () => ({
+vi.mock("@/utils/roles", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/utils/roles")>()),
   isUserTeamAdminForSingleTeam: vi.fn(() => false),
   isProxyAdminRole: vi.fn(() => false),
 }));

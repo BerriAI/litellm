@@ -20,18 +20,23 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.core_helpers import (
+    as_object_list,
+    as_str_mapping,
+    json_contains,
+    require_attributes,
+    set_item,
+    subscript,
+)
 from litellm.proxy._types import UserAPIKeyAuth, user_api_key_has_admin_view
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_utils.user_api_key_cache import (
-    tag_cache_key,
-    tag_registry_cache_key,
-)
 from litellm.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
     get_daily_activity,
 )
 from litellm.proxy.management_endpoints.common_utils import validate_finite_spend
 from litellm.proxy.management_helpers.utils import handle_budget_for_entity
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.redis.stores.spend_counters import (
     tag_counter,
 )
@@ -39,8 +44,8 @@ from litellm.repositories.daily_activity_buckets import api_key_from_bucket
 from litellm.repositories.model_repository import ModelRepository
 from litellm.repositories.table_repositories import (
     DailyTagSpendRepository,
-    TagRepository,
 )
+from litellm.repositories.tag_repository import TagRepository
 from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
@@ -151,7 +156,7 @@ async def _evict_tag_cache_keys(cache_keys: Sequence[str]) -> None:
     enforced and a newly created one stays invisible to the cached name registry until the TTL
     expires: auth reads tags cache-first, with no freshness check.
     """
-    from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
+    from litellm.proxy.common_utils.cache_invalidation_pubsub import (
         evict_and_broadcast,
     )
     from litellm.proxy.proxy_server import user_api_key_cache
@@ -322,7 +327,7 @@ async def new_tag(
             }
         )
 
-        await _evict_tag_cache_keys((tag_cache_key(tag.name), tag_registry_cache_key()))
+        await _evict_tag_cache_keys((AuthObject.tag(tag.name).key, AuthObject.tag_registry().key))
         await invalidate_spend_counter(counter_key=tag_counter(tag.name))
 
         # Update models with new tag
@@ -361,6 +366,45 @@ async def new_tag(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _decoded_litellm_params(stored: object) -> object:
+    if isinstance(stored, str):
+        return _DECODED_JSON.validate_python(json.loads(stored))
+    stored_mapping: Final = as_str_mapping(stored)
+    if stored_mapping is None or not isinstance(stored, dict):
+        raise Exception(f"Unexpected litellm_params type: {type(stored)}")
+    return stored_mapping
+
+
+def _with_tags(params: object, tags: object) -> object:
+    mapping: Final = as_str_mapping(params)
+    if mapping is not None:
+        return {**mapping, "tags": tags}
+    set_item(params, "tags", tags)
+    return params
+
+
+class _AppendsTag(Protocol):
+    def append(self, tag: str, /) -> None: ...
+
+
+def _with_appended_tag(tags: object, tag: str) -> object:
+    listed: Final = as_object_list(tags)
+    if listed is not None:
+        return [*listed, tag]
+    appendable: Final = require_attributes(tags, _AppendsTag, "append")
+    appendable.append(tag)
+    return appendable
+
+
+def _params_with_tag(params: object, tag: str) -> object:
+    if not json_contains(params, "tags"):
+        return _with_tags(params, [tag])
+    current_tags: Final = subscript(params, "tags")
+    if json_contains(current_tags, tag):
+        return params
+    return _with_tags(params, _with_appended_tag(current_tags, tag))
+
+
 async def _add_tag_to_deployment(deployment: "Deployment", tag: str):
     """Helper function to add tag to deployment"""
     from litellm.proxy.proxy_server import prisma_client
@@ -379,23 +423,15 @@ async def _add_tag_to_deployment(deployment: "Deployment", tag: str):
             )
 
         # Prisma returns litellm_params as dict (already parsed from JSON)
-        existing_params = db_model.litellm_params
-        if isinstance(existing_params, str):  # pyright: ignore[reportUnnecessaryIsInstance]  # prisma Json stub is str
-            # If it's a string, parse it
-            existing_params = json.loads(existing_params)
-        elif not isinstance(existing_params, dict):  # pyright: ignore[reportUnnecessaryIsInstance]  # prisma Json stub
-            raise Exception(f"Unexpected litellm_params type: {type(existing_params)}")
+        existing_params: Final = _decoded_litellm_params(db_model.litellm_params)
 
         # Add tag to tags array (preserve encryption of other fields)
-        if "tags" not in existing_params:
-            existing_params["tags"] = []
-        if tag not in existing_params["tags"]:
-            existing_params["tags"].append(tag)
+        tagged_params: Final = _params_with_tag(existing_params, tag)
 
         # Update database with modified params (keeps encrypted fields encrypted)
         await ModelRepository(prisma_client).table.update(
             where={"model_id": deployment.model_info.id},
-            data={"litellm_params": json.dumps(existing_params)},
+            data={"litellm_params": json.dumps(tagged_params)},
         )
     except Exception as e:
         verbose_proxy_logger.exception("Error adding tag to deployment: %s", e)
@@ -473,7 +509,7 @@ async def update_tag(
             data=update_data,
         )
 
-        await _evict_tag_cache_keys((tag_cache_key(tag.name),))
+        await _evict_tag_cache_keys((AuthObject.tag(tag.name).key,))
 
         if tag.spend is not None:
             await set_spend_counter_with_floor_and_broadcast(counter_key=f"spend:tag:{tag.name}", value=tag.spend)
@@ -727,7 +763,7 @@ async def delete_tag(
         # Delete tag from database
         await _table(TagRepository(prisma_client)).delete(where={"tag_name": data.name})
 
-        await _evict_tag_cache_keys((tag_cache_key(data.name), tag_registry_cache_key()))
+        await _evict_tag_cache_keys((AuthObject.tag(data.name).key, AuthObject.tag_registry().key))
 
         return {"message": f"Tag {data.name} deleted successfully"}
     except Exception as e:

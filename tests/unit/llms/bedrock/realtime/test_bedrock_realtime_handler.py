@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Final, Literal
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import HTTPException
@@ -1572,6 +1572,7 @@ class TestBedrockRealtimeAwsAuth:
             aws_session_name="realtime-session",
             aws_external_id="realtime-external-id",
             aws_session_tags=[{"Key": "team", "Value": "realtime"}],
+            litellm_metadata={"user_api_key_alias": "realtime-caller"},
         )
 
         assert handler.get_credentials_kwargs == {
@@ -1586,6 +1587,7 @@ class TestBedrockRealtimeAwsAuth:
             "aws_sts_endpoint": None,
             "aws_external_id": "realtime-external-id",
             "aws_session_tags": ({"Key": "team", "Value": "realtime"},),
+            "litellm_params": {"litellm_metadata": {"user_api_key_alias": "realtime-caller"}},
         }
         resolver = stub_aws_sdk_client["config_kwargs"]["aws_credentials_identity_resolver"]
         assert isinstance(resolver, FakeStaticCredentialsResolver)
@@ -2305,6 +2307,12 @@ class TestBedrockRealtimeGuardrails:
             def update_from_kwargs(self, **kwargs: object) -> None:
                 pass
 
+        frozen_credentials: Final = SimpleNamespace(access_key="k", secret_key="s", token=None)
+        credentials: Final = SimpleNamespace(get_frozen_credentials=lambda: frozen_credentials)
+        monkeypatch.setattr(
+            "litellm.llms.bedrock.realtime.handler.run_aws_signing",
+            AsyncMock(side_effect=[credentials, frozen_credentials]),
+        )
         guardrail: Final = self._guardrail()
         monkeypatch.setattr(litellm, "callbacks", [guardrail])
         stream: Final = ScriptedBedrockStream([], receiver_type=DrainedThenOpenBedrockReceiver)

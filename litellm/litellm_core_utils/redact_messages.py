@@ -59,7 +59,7 @@ def _opted_out_of_message_logging(custom_logger: CustomLogger) -> bool:
 
 
 def redact_message_input_output_from_custom_logger(
-    litellm_logging_obj: LiteLLMLoggingObject, result, custom_logger: CustomLogger
+    litellm_logging_obj: LiteLLMLoggingObject, result: object, custom_logger: CustomLogger
 ) -> object:
     if _opted_out_of_message_logging(custom_logger):
         return perform_redaction(litellm_logging_obj.model_call_details, result, redact_streaming_responses=False)
@@ -195,7 +195,7 @@ def _redact_streaming_response(streaming_response):
     return streaming_response
 
 
-def _redact_tool_calls(tool_calls) -> None:
+def _redact_tool_calls(tool_calls: Iterable[object] | None) -> None:
     """Redact tool call arguments (assistant tool calls carry prompt-derived data)."""
     if not tool_calls:
         return
@@ -225,6 +225,7 @@ def _redact_choice_content(choice):
             choice.message.thinking_blocks = None
         _drop_field_when_present(choice.message, "reasoning_items")
         _drop_field_when_present(choice.message, "audio")
+        _drop_field_when_present(choice.message, "images")
         _redact_provider_specific_fields(choice.message)
         _redact_tool_calls(getattr(choice.message, "tool_calls", None))
         _redact_function_call(getattr(choice.message, "function_call", None))
@@ -237,6 +238,7 @@ def _redact_choice_content(choice):
             choice.delta.thinking_blocks = None
         _drop_field_when_present(choice.delta, "reasoning_items")
         _drop_field_when_present(choice.delta, "audio")
+        _drop_field_when_present(choice.delta, "images")
         _redact_provider_specific_fields(choice.delta)
         _redact_tool_calls(getattr(choice.delta, "tool_calls", None))
         _redact_function_call(getattr(choice.delta, "function_call", None))
@@ -419,8 +421,8 @@ def _redact_responses_api_output(output_items):
     """Helper to redact ResponsesAPIResponse output items."""
     for output_item in output_items:
         output_type = stream_item_field(output_item, "type")
-        if getattr(output_item, "text", None) is not None:
-            output_item.text = REDACTED_BY_LITELLM
+        for field in ("text", "result") if output_type == "image_generation_call" else ("text",):
+            _redact_field_when_present(output_item, field)
 
         for content_part in stream_item_items(output_item, "content"):
             _redact_field_when_present(content_part, "text")
@@ -493,6 +495,11 @@ def _redacted_responses_api_output_item(item: object, redacted_str: str) -> obje
             else {}
         ),
         **(
+            {"result": redacted_str}
+            if item_mapping.get("type") == "image_generation_call" and item_mapping.get("result") is not None
+            else {}
+        ),
+        **(
             {"action": _redacted_web_search_action(item_mapping["action"])}
             if item_mapping.get("type") == "web_search_call" and item_mapping.get("action") is not None
             else {}
@@ -504,7 +511,7 @@ def _redact_responses_api_output_dict(output_items: Sequence[object], redacted_s
     return [_redacted_responses_api_output_item(item, redacted_str) for item in output_items]
 
 
-_REDACTED_REQUEST_FIELDS: Final = ("instructions", "query_image", *RETRIEVAL_QUERY_PARAMS)
+_REDACTED_REQUEST_FIELDS: Final = ("instructions", "query_image", "images", *RETRIEVAL_QUERY_PARAMS)
 _NESTED_REQUEST_FIELDS: Final = ("extra_body", "additional_args", "complete_input_dict")
 
 
@@ -608,7 +615,7 @@ def _redact_model_response_dict_choices(choices: Iterable[object], redacted_str:
                 for field in ("content", "reasoning_content"):
                     if body.get(field) is not None:
                         body[field] = redacted_str
-                for field in ("thinking_blocks", "reasoning_items", "audio"):
+                for field in ("thinking_blocks", "reasoning_items", "audio", "images"):
                     if field in body:
                         body[field] = None
                 _redact_tool_calls_dict(body)
@@ -671,7 +678,7 @@ def redacted_litellm_params(params: Mapping[str, object], *, redact_request_body
     }
 
 
-def perform_redaction(model_call_details: dict[str, object], result, redact_streaming_responses: bool = True):
+def perform_redaction(model_call_details: dict[str, object], result: object, redact_streaming_responses: bool = True):
     """
     Performs the actual redaction on the logging object and result.
 
@@ -814,7 +821,9 @@ def should_redact_message_logging(model_call_details: dict) -> bool:
     return litellm.turn_off_message_logging is True
 
 
-def redact_message_input_output_from_logging(model_call_details: dict, result, input: object | None = None) -> Any:
+def redact_message_input_output_from_logging(
+    model_call_details: dict, result: object, input: object | None = None
+) -> object:
     """
     Removes messages, prompts, input, response from logging. This modifies the data in-place
     only redacts when litellm.turn_off_message_logging == True

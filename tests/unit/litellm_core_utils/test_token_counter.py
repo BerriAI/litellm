@@ -14,7 +14,7 @@ from concurrent.futures import Future, ThreadPoolExecutor, wait
 from itertools import accumulate, chain
 from queue import SimpleQueue
 from typing import Final, cast
-from unittest.mock import MagicMock, sentinel
+from unittest.mock import AsyncMock, MagicMock, patch, sentinel
 
 import anyio.to_thread
 import pytest
@@ -22,12 +22,10 @@ import tiktoken
 from PIL import Image
 from tokenizers import Tokenizer
 
-from unittest.mock import AsyncMock, patch
-
 import litellm
+import litellm.constants
 from litellm import decode, encode, get_modified_max_tokens
 from litellm import token_counter as token_counter_old
-import litellm.constants
 from litellm.constants import (
     HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS,
     PDF_MAX_XOBJECT_DRAWS_PER_PAGE,
@@ -1033,6 +1031,7 @@ def test_img_url_token_counter(img_url, monkeypatch):
     third-party image URL goes away.
     """
     import base64
+
     from litellm.litellm_core_utils.token_counter import get_image_dimensions
 
     # Minimal valid 1x1 PNG, served by the mocked safe_get for the URL case.
@@ -1106,6 +1105,8 @@ from litellm.utils import (
     _return_huggingface_tokenizer,
     _select_tokenizer_helper,
     encoding,
+    huggingface_tokenizer_may_download,
+    without_huggingface_tokenizer_downloads,
 )
 
 # Clear the cache at module load to ensure clean state
@@ -1408,6 +1409,33 @@ def _eventually(probe: Callable[[], bool]) -> bool:
             return True
         time.sleep(0.01)
     return False
+
+
+def test_a_hub_tokenizer_may_download_only_until_it_has_loaded_once():
+    model: Final = "databricks/databricks-meta-llama-3-3-70b-instruct"
+    outcomes: Final = _HuggingFaceTokenizerLoadOutcomes()
+    before_loading: Final = huggingface_tokenizer_may_download(model, outcomes)
+
+    with patch("litellm.utils.tokenizer_dispatch.from_pretrained", return_value=sentinel.tokenizer):
+        _return_huggingface_tokenizer(model, outcomes)
+
+    assert before_loading
+    assert not huggingface_tokenizer_may_download(model, outcomes)
+
+
+def test_a_count_that_must_not_wait_on_a_download_uses_only_a_tokenizer_already_loaded():
+    model: Final = "hostinger_router/llama-3.1-8b-instruct"
+    outcomes: Final = _HuggingFaceTokenizerLoadOutcomes(start_retry=_run_now)
+
+    with patch("litellm.utils.tokenizer_dispatch.from_pretrained", return_value=sentinel.tokenizer) as from_pretrained:
+        with without_huggingface_tokenizer_downloads():
+            before_any_load: Final = _return_huggingface_tokenizer(model, outcomes)
+        loaded_by_a_normal_count: Final = _return_huggingface_tokenizer(model, outcomes)
+        with without_huggingface_tokenizer_downloads():
+            after_the_load: Final = _return_huggingface_tokenizer(model, outcomes)
+    assert before_any_load is None
+    assert from_pretrained.call_count == 1
+    assert loaded_by_a_normal_count == after_the_load == {"type": "huggingface_tokenizer", "tokenizer": sentinel.tokenizer}
 
 
 def test_failed_download_is_retried_once_per_window_until_it_loads():

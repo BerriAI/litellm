@@ -9,6 +9,11 @@ from typing import Final, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fakeredis import FakeServer
+from fakeredis.aioredis import FakeRedis
+from redis.asyncio.client import Pipeline
+from redis.exceptions import ConnectionError as RedisConnectionError
+from redis.exceptions import RedisClusterException, ResponseError
 
 import litellm
 from litellm._service_logger import ServiceLogging
@@ -77,6 +82,90 @@ async def test_async_delete_cache_applies_namespace(namespace, monkeypatch, redi
 
     expected_key = "litellm:3997c4abcdef" if namespace else "3997c4abcdef"
     mock_redis_instance.delete.assert_awaited_once_with(expected_key)
+
+
+@pytest.mark.parametrize("decode_responses", [False, True])
+@pytest.mark.asyncio
+async def test_async_getrange_reads_a_prefix_of_what_was_set_under_the_namespace(
+    decode_responses, monkeypatch, redis_no_ping
+):
+    from fakeredis import FakeServer
+    from fakeredis.aioredis import FakeRedis
+
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache: Final = RedisCache(namespace="litellm")
+    client: Final = FakeRedis(server=FakeServer(), decode_responses=decode_responses)
+
+    with patch.object(redis_cache, "init_async_client", return_value=client):
+        await redis_cache.async_set_cache("polling:1", {"status": "cancelled"}, ttl=60)
+
+        assert await redis_cache.async_getrange("polling:1", 0, 11) == '{"status": "'
+        assert await redis_cache.async_getrange("polling:never-set", 0, 11) == ""
+    await client.aclose()
+
+
+class _FakeRedisBefore62(FakeRedis):
+    async def set(self, name: str, value: str | bytes, *args: object, get: bool = False, **kwargs: object) -> object:
+        if get:
+            raise ResponseError("syntax error")
+        return await super().set(name, value, *args, **kwargs)
+
+
+class _FakeRedisBefore62LosingTheLinkAfterEachWrite(_FakeRedisBefore62):
+    async def expire(self, name: str, time: int | timedelta, *args: object, **kwargs: object) -> bool:
+        raise RedisConnectionError("connection lost")
+
+
+class _FakeRedisBefore62RefusingTransactionsLikeACluster(_FakeRedisBefore62):
+    def pipeline(self, transaction: bool = True, shard_hint: str | None = None) -> Pipeline:
+        if transaction:
+            raise RedisClusterException("transaction is deprecated in cluster mode")
+        return super().pipeline(transaction=False, shard_hint=shard_hint)
+
+
+@pytest.mark.parametrize(
+    "redis_type",
+    [
+        FakeRedis,
+        _FakeRedisBefore62,
+        _FakeRedisBefore62LosingTheLinkAfterEachWrite,
+        _FakeRedisBefore62RefusingTransactionsLikeACluster,
+    ],
+)
+@pytest.mark.parametrize("decode_responses", [False, True])
+@pytest.mark.asyncio
+async def test_async_set_existing_returning_previous_replaces_only_a_key_that_exists(
+    redis_type: type[FakeRedis], decode_responses: bool, monkeypatch: pytest.MonkeyPatch, redis_no_ping: None
+) -> None:
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache: Final = RedisCache(namespace="litellm")
+    client: Final = redis_type(server=FakeServer(), decode_responses=decode_responses)
+
+    with patch.object(redis_cache, "init_async_client", return_value=client):
+        await redis_cache.async_set_cache("polling:1", "first", ttl=600)
+
+        assert await redis_cache.async_set_existing_returning_previous("polling:1", "second", 30) == '"first"'
+        assert await redis_cache.async_set_existing_returning_previous("polling:never-set", "second", 30) is None
+        assert await redis_cache.async_getrange("polling:1", 0, -1) == "second"
+
+    assert 0 < await client.ttl("litellm:polling:1") <= 30
+    assert await client.exists("litellm:polling:never-set") == 0
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_async_getrange_that_cuts_a_multibyte_character_does_not_raise(monkeypatch, redis_no_ping):
+    from fakeredis import FakeServer
+    from fakeredis.aioredis import FakeRedis
+
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache: Final = RedisCache()
+    client: Final = FakeRedis(server=FakeServer())
+    await client.set("polling:1", "é".encode())
+
+    with patch.object(redis_cache, "init_async_client", return_value=client):
+        assert await redis_cache.async_getrange("polling:1", 0, 0) == "�"
+    await client.aclose()
 
 
 @pytest.mark.parametrize("namespace", [None, "litellm"])

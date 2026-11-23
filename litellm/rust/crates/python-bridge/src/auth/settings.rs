@@ -1,5 +1,5 @@
-use litellm_config::{GeneralSettings, JwtAuthSettings};
-use litellm_gateway_auth_core::plan::Settings;
+use litellm_config::{GeneralSettings, JwtAuthSettings, RolePermissions};
+use litellm_gateway_auth_core::{HostFacts, MasterKey, Settings};
 use litellm_host_python::from_py;
 use pyo3::{
     prelude::*,
@@ -10,6 +10,29 @@ use pyo3::{
 fn get<'py>(general: &Bound<'py, PyAny>, key: &str) -> PyResult<Option<Bound<'py, PyAny>>> {
     let value = general.call_method1("get", (key,))?;
     Ok((!value.is_none()).then_some(value))
+}
+
+/// `general_settings.role_permissions`: `RoleBasedPermissions` models or the dicts the config holds.
+fn role_permissions(general: &Bound<'_, PyAny>) -> PyResult<Option<Box<[RolePermissions]>>> {
+    let Some(value) = get(general, "role_permissions")? else {
+        return Ok(None);
+    };
+    let py = general.py();
+    value
+        .try_iter()?
+        .map(|item| {
+            let item = item?;
+            match item.hasattr("model_dump")? {
+                true => {
+                    let kwargs = PyDict::new(py);
+                    kwargs.set_item("mode", "json")?;
+                    from_py(&item.call_method("model_dump", (), Some(&kwargs))?)
+                }
+                false => from_py(&item),
+            }
+        })
+        .collect::<PyResult<Vec<_>>>()
+        .map(|permissions| Some(permissions.into()))
 }
 
 /// The validated `LiteLLM_JWTAuth`. `custom_validate` is a callable only Python can run, so the
@@ -33,10 +56,12 @@ pub(crate) fn jwt_auth(litellm_jwtauth: &Bound<'_, PyAny>) -> PyResult<JwtAuthSe
 }
 
 /// The `general_settings` keys the auth core reads.
-const AUTH_KEYS: [&str; 4] = [
+const AUTH_KEYS: [&str; 6] = [
     "enable_jwt_auth",
     "enable_oauth2_auth",
     "enable_oauth2_proxy_auth",
+    "allow_user_auth",
+    "enforce_rbac",
     "public_routes",
 ];
 
@@ -60,6 +85,7 @@ fn general_settings(
         }
     }
     Ok(GeneralSettings {
+        role_permissions: role_permissions(general)?,
         litellm_jwtauth: litellm_jwtauth.map(jwt_auth).transpose()?,
         ..from_py(selected.as_any())?
     })
@@ -72,11 +98,22 @@ fn general_settings(
 )]
 pub(crate) struct AuthSettings(pub(crate) Settings);
 
-/// The host facts Python passes in, read from a frozen dataclass (`core.HostFacts`).
+/// The host facts Python passes in, read from a frozen dataclass (`core.HostFacts`). `route_groups`
+/// is the one [`HostFacts`] field it leaves out, since the bridge reads `LiteLLMRoutes` itself.
 #[derive(FromPyObject)]
 struct Facts {
     #[pyo3(attribute)]
+    master_key: Option<String>,
+    #[pyo3(attribute)]
     premium: bool,
+    #[pyo3(attribute)]
+    has_db: bool,
+    #[pyo3(attribute)]
+    db_configured: bool,
+    #[pyo3(attribute)]
+    ui_login: bool,
+    #[pyo3(attribute)]
+    proxy_budget: bool,
     #[pyo3(attribute)]
     metrics_require_auth: bool,
 }
@@ -91,11 +128,23 @@ impl AuthSettings {
     ) -> PyResult<Self> {
         let general = self::general_settings(general_settings, litellm_jwtauth)?;
         let route_groups = super::route_groups::route_groups(general_settings.py())?;
-        Ok(Self(Settings::new(
-            &general,
-            facts.premium,
-            facts.metrics_require_auth,
-            &route_groups,
-        )))
+        let facts = HostFacts {
+            master_key: facts.master_key.map(MasterKey::new),
+            premium: facts.premium,
+            has_db: facts.has_db,
+            db_configured: facts.db_configured,
+            ui_login: facts.ui_login,
+            proxy_budget: facts.proxy_budget,
+            metrics_require_auth: facts.metrics_require_auth,
+            route_groups,
+        };
+        Ok(Self(Settings::new(&general, facts, &|name| {
+            std::env::var(name).ok()
+        })))
+    }
+
+    #[getter]
+    fn jwt_leeway_seconds(&self) -> u64 {
+        self.0.jwt.leeway_seconds
     }
 }

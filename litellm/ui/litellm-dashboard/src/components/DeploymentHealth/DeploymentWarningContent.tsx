@@ -26,7 +26,8 @@ const STATIC_CONTENT: Readonly<Record<string, DeploymentWarningContent & { title
         }}
       />
     ),
-    docsUrl: "https://docs.litellm.ai/docs/proxy/ui",
+    docsUrl:
+      "https://docs.litellm.ai/docs/proxy/ui#5-create-your-own-admin-account-and-disable-environment-credential-login",
   },
   no_redis: {
     title: "shell.deploymentWarnings.noRedis.title",

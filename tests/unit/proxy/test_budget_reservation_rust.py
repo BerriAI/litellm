@@ -11,7 +11,6 @@ import pytest
 from fastapi import HTTPException
 
 import litellm
-from litellm.caching.dual_cache import DualCache
 from litellm.constants import STREAM_SSE_KEEPALIVE_PING_BYTES
 from litellm.llms.anthropic.messages.native.agentic_streaming_iterator import (
     AgenticAnthropicStreamingIterator,
@@ -32,10 +31,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
-from litellm.proxy.common_utils.user_api_key_cache import (
-    UserApiKeyCache,
-    model_access_group_cache_key,
-)
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.spend_tracking.budget_reservation import (
     estimate_request_max_cost,
     invalidate_budget_reservation_counters,
@@ -50,8 +46,10 @@ from litellm.proxy.spend_tracking.input_tokens import (
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
 from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.spend_counters import SpendCounterStore, model_access_group_counter
+from tests.unit.proxy.rust_auth_stores import GroupBudget, RustAuthStores, install_rust_auth_stores
 from tests.unit.proxy.spend_tracking.native_budgets_replica import (
     RespRedis,
     install_native_owner,
@@ -337,7 +335,7 @@ async def test_should_shrink_second_tag_reservation_to_remaining_budget(
     request_body = _request_body()
     request_body["metadata"] = {"tags": ["tag-budget-race", "tag-without-budget", "tag-budget-race"]}
     await key_cache.async_set_cache(
-        key="tag:tag-budget-race",
+        key=AuthObject.tag("tag-budget-race"),
         value=LiteLLM_TagTable(
             tag_name="tag-budget-race",
             spend=0.0,
@@ -346,7 +344,7 @@ async def test_should_shrink_second_tag_reservation_to_remaining_budget(
         ).model_dump(),
     )
     await key_cache.async_set_cache(
-        key="tag:tag-without-budget",
+        key=AuthObject.tag("tag-without-budget"),
         value=LiteLLM_TagTable(
             tag_name="tag-without-budget",
             spend=0.0,
@@ -452,7 +450,7 @@ async def test_should_reserve_team_member_and_org_budget_counters(spend_counter_
         spend=0.0,
     )
     await key_cache.async_set_cache(
-        key="team_membership:user-budget-shared:team-budget-shared",
+        key=AuthObject.team_membership_reservation(user_id="user-budget-shared", team_id="team-budget-shared"),
         value=LiteLLM_TeamMembership(
             user_id="user-budget-shared",
             team_id="team-budget-shared",
@@ -461,7 +459,7 @@ async def test_should_reserve_team_member_and_org_budget_counters(spend_counter_
         ).model_dump(),
     )
     await key_cache.async_set_cache(
-        key="org_id:org-budget-shared:with_budget",
+        key=AuthObject.org_with_budget("org-budget-shared"),
         value=LiteLLM_OrganizationTable(
             organization_id="org-budget-shared",
             organization_alias="shared-org",
@@ -507,14 +505,14 @@ def _project_scoped_token() -> UserAPIKeyAuth:
 
 
 async def _seed_project_scoped_budgets(
-    key_cache: DualCache,
+    key_cache: UserApiKeyCache,
     team_member_spend: float,
     team_member_max_budget: float,
     project_spend: float,
     project_max_budget: float,
 ) -> None:
     await key_cache.async_set_cache(
-        key="team_membership:user-proj:team-proj",
+        key=AuthObject.team_membership_reservation(user_id="user-proj", team_id="team-proj"),
         value=LiteLLM_TeamMembership(
             user_id="user-proj",
             team_id="team-proj",
@@ -523,7 +521,7 @@ async def _seed_project_scoped_budgets(
         ).model_dump(),
     )
     await key_cache.async_set_cache(
-        key="project_id:proj-1",
+        key=AuthObject.project("proj-1"),
         value=LiteLLM_ProjectTableCachedObj(
             project_id="proj-1",
             team_id="team-proj",
@@ -859,7 +857,7 @@ async def test_should_clamp_reservation_to_default_when_output_cap_missing(
         max_budget=10000.0,
     )
     await key_cache.async_set_cache(
-        key="key-budget-uncapped",
+        key=AuthObject.virtual_key("key-budget-uncapped"),
         value=valid_token,
     )
     request_body = _request_body()
@@ -996,7 +994,7 @@ async def test_should_clamp_reservation_to_model_ceiling_when_caller_overrequest
         max_budget=10000.0,
     )
     await key_cache.async_set_cache(
-        key="key-budget-overrequest",
+        key=AuthObject.virtual_key("key-budget-overrequest"),
         value=valid_token,
     )
 
@@ -1050,7 +1048,7 @@ async def test_should_use_token_pricing_for_chat_model_with_image_cost_field(
         spend=0.0,
         max_budget=10.0,
     )
-    await key_cache.async_set_cache(key="key-multimodal-chat", value=valid_token)
+    await key_cache.async_set_cache(key=AuthObject.virtual_key("key-multimodal-chat"), value=valid_token)
 
     # Roughly the gemini-3.1-pro-preview shape: chat-mode model that
     # carries an output_cost_per_image alongside token pricing.
@@ -1478,7 +1476,7 @@ async def test_should_not_block_concurrent_team_request_when_first_request_lacks
         spend=0.144,
     )
     await key_cache.async_set_cache(
-        key=f"team_id:{team_object.team_id}",
+        key=AuthObject.team(team_object.team_id),
         value=team_object,
     )
 
@@ -1733,7 +1731,7 @@ async def test_should_preserve_budget_error_and_continue_partial_cleanup(
         max_budget=0.3,
     )
     await key_cache.async_set_cache(
-        key="team_id:team-budget-cleanup-failure",
+        key=AuthObject.team("team-budget-cleanup-failure"),
         value=team_object,
     )
     redis = RespRedis(values={})
@@ -2590,34 +2588,33 @@ async def test_small_prompt_is_tokenized_inline(spend_counter_state):
     assert threads == [threading.main_thread()]
 
 
-class _ModelAccessGroupBudgetPrisma:
-    """Serves ``LiteLLM_ModelAccessGroupBudgetTable`` rows, recording what reached the database."""
+class _ExplodingPrismaClient:
+    """Model access group budget rows come from the Rust store; a Prisma read is a bug."""
 
-    def __init__(self, **max_budget_by_group) -> None:
-        self.rows = {
-            group: SimpleNamespace(
-                access_group_name=group,
-                spend=7.0,
-                litellm_budget_table=None
-                if max_budget is None
-                else SimpleNamespace(max_budget=max_budget, budget_limits=None),
-            )
-            for group, max_budget in max_budget_by_group.items()
-        }
-        self.batches = []
-        self.db = SimpleNamespace(litellm_modelaccessgroupbudgettable=SimpleNamespace(find_many=self._find_many))
+    def __getattr__(self, name: str) -> object:
+        raise AssertionError(f"unexpected database access: {name}")
 
-    async def _find_many(self, **kwargs):
-        requested = list(kwargs["where"]["access_group_name"]["in"])
-        self.batches.append(requested)
-        return [self.rows[group] for group in requested if group in self.rows]
+
+@pytest.fixture
+def rust_auth_stores(monkeypatch: pytest.MonkeyPatch) -> RustAuthStores:
+    return install_rust_auth_stores(monkeypatch)
+
+
+def _seed_model_access_group_budgets(stores: RustAuthStores, **max_budget_by_group: float | None) -> None:
+    """``LiteLLM_ModelAccessGroupBudgetTable`` rows as the Rust model access group store serves them."""
+    stores.model_access_group.groups.update(
+        {group: GroupBudget(spend=7.0, max_budget=max_budget) for group, max_budget in max_budget_by_group.items()}
+    )
 
 
 @pytest.mark.asyncio
-async def test_model_access_group_counter_blocks_a_request_over_the_group_budget(spend_counter_state):
+async def test_model_access_group_counter_blocks_a_request_over_the_group_budget(
+    spend_counter_state, rust_auth_stores: RustAuthStores
+):
     """End to end through the reservation path, which is what runs when reservations are enabled."""
     counter_cache, key_cache = spend_counter_state
-    prisma_client = _ModelAccessGroupBudgetPrisma(premium=1.0)
+    _seed_model_access_group_budgets(rust_auth_stores, premium=1.0)
+    prisma_client = _ExplodingPrismaClient()
     valid_token = UserAPIKeyAuth(api_key="hashed", token="tok", matched_model_access_groups=["premium"])
 
     with patch(  # test-quality-ok: reserve_budget_for_request takes no estimator, so pinning the estimate needs this attribute
@@ -2643,7 +2640,7 @@ async def test_model_access_group_counter_blocks_a_request_over_the_group_budget
 
 async def _cache_model_access_group_budget(key_cache, group, spend, max_budget=None):
     await key_cache.async_set_cache(
-        key=model_access_group_cache_key(group),
+        key=AuthObject.model_access_group(group),
         value=ModelAccessGroupBudget(access_group_name=group, spend=spend, max_budget=max_budget),
         model_type=ModelAccessGroupBudget,
     )
@@ -2664,7 +2661,7 @@ async def _reserve_for_model_access_groups(key_cache, groups, estimate):
             ),
             team_object=None,
             user_object=None,
-            prisma_client=_ModelAccessGroupBudgetPrisma(),
+            prisma_client=_ExplodingPrismaClient(),
             user_api_key_cache=key_cache,
             proxy_logging_obj=ProxyLogging(user_api_key_cache=key_cache),
         )
@@ -2741,7 +2738,7 @@ async def test_should_reserve_image_generation_cost_per_image(
         spend=0.0,
         max_budget=10.0,
     )
-    await key_cache.async_set_cache(key="key-image-gen", value=valid_token)
+    await key_cache.async_set_cache(key=AuthObject.virtual_key("key-image-gen"), value=valid_token)
 
     request_body = {"model": "dall-e-3", "prompt": "a cat", "n": 3}
 
@@ -2790,7 +2787,7 @@ async def test_should_reject_concurrent_image_request_against_depleted_budget(
         spend=0.0,
     )
     await key_cache.async_set_cache(
-        key=f"team_id:{team_object.team_id}",
+        key=AuthObject.team(team_object.team_id),
         value=team_object,
     )
 
@@ -2846,7 +2843,7 @@ async def test_should_reserve_image_edit_cost_per_image(
         spend=0.0,
         max_budget=10.0,
     )
-    await key_cache.async_set_cache(key="key-image-edit", value=valid_token)
+    await key_cache.async_set_cache(key=AuthObject.virtual_key("key-image-edit"), value=valid_token)
 
     request_body = {"model": "stability/inpaint", "prompt": "a cat", "n": 2}
 
