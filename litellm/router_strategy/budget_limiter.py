@@ -377,7 +377,7 @@ class RouterBudgetLimiting(CustomLogger):
                 - Dict of deployment budget configs `deployment_configs`
                 - List of resolved providers aligned by deployment index `deployment_providers`
         """
-        cache_keys: Final = []
+        cache_keys: Final[list[str]] = []
         provider_configs: Final[dict[str, GenericBudgetInfo]] = {}
         deployment_configs: Final[dict[object, GenericBudgetInfo]] = {}
         deployment_providers: Final[list[str | None]] = []
@@ -754,7 +754,7 @@ class RouterBudgetLimiting(CustomLogger):
         if redis_cache is None or not await self._flush_queued_increment_operations(redis_cache):
             return
 
-        cache_keys: Final = []
+        cache_keys: Final[list[str]] = []
 
         if self.provider_budget_config is not None:
             for provider, config in self.provider_budget_config.items():
