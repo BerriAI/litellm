@@ -12,6 +12,7 @@ import {
   waitFor,
   within,
   testQueryClient,
+  chooseSelectOption,
 } from "../../../../../tests/test-utils";
 import CustomerOrganizationApps from "./CustomerOrganizationApps";
 import { AppOrganizationBudgetDialog } from "./AppOrganizationBudgetDialog";
@@ -114,6 +115,56 @@ async function openBudget() {
 const saveBudget = (user: UserEvent) => saveAppBudget(user, requests, "Save app budget");
 
 describe("customer app budgets", () => {
+  it("paginates app budgets in five-row pages without changing member pagination or customer filters", async () => {
+    bound = true;
+    assigned = true;
+    const apps = Array.from({ length: 6 }, (_, index) => ({
+      ...app,
+      app_id: `app-${index + 1}`,
+      alias: `App ${index + 1}`,
+    }));
+    const serve = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation(async (input, init) => {
+      const path = new URL(new Request(input, init).url).pathname;
+      if (path === "/management/v1/apps") return json(apps);
+      const requestedApp = apps.find((app) => path === `/management/v1/apps/${app.app_id}`);
+      if (requestedApp) return json(requestedApp);
+      const selected = apps.find((app) => path === `/management/v1/apps/${app.app_id}/customer_organizations/org-1`);
+      if (selected) return json({ ...assignedBudget, app_id: selected.app_id });
+      return serve(input, init);
+    });
+    const user = userEvent.setup();
+    const onUrlUpdate = vi.fn();
+    render(<CustomerOrganizationApps organizationId="org-1" />, {
+      searchParams: "?org=org-1&from=2026-11-01&to=2026-11-18&memberPage=2",
+      onUrlUpdate,
+    });
+    const table = within(await screen.findByRole("table", { name: "App budgets" }));
+    await table.findByRole("button", { name: "Edit budget for App 5" });
+    expect(table.getAllByRole("row")).toHaveLength(6);
+    expect(table.queryByText("App 6")).not.toBeInTheDocument();
+    expect(screen.getByTestId("pagination-page-size")).toHaveTextContent("5");
+    await user.click(screen.getByRole("button", { name: "Go to next page" }));
+    expect(await table.findByText("App 6")).toBeInTheDocument();
+    expect(table.getAllByRole("row")).toHaveLength(2);
+    expect(table.queryByText("App 1")).not.toBeInTheDocument();
+    await user.click(table.getByRole("button", { name: "Edit budget for App 6" }));
+    expect(await screen.findByRole("textbox", { name: "App", exact: true })).toHaveValue("App 6");
+    await user.click(await screen.findByRole("button", { name: "Cancel", exact: true }));
+    await chooseSelectOption(user, screen.getByTestId("pagination-page-size"), "10");
+    expect(await table.findByText("App 1")).toBeInTheDocument();
+    expect(table.getAllByRole("row")).toHaveLength(7);
+    expect(screen.getByRole("button", { name: "Go to previous page" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Go to next page" })).toBeDisabled();
+    await waitFor(() =>
+      expect(onUrlUpdate).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          queryString: "?org=org-1&from=2026-11-01&to=2026-11-18&memberPage=2&org_apps_page_size=10",
+        }),
+      ),
+    );
+  });
+
   it("opens the reusable dialog for one pair, validates periods and preserves temporary increases", async () => {
     assigned = true;
     customAssociation = {

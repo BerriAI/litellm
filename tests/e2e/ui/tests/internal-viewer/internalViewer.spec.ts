@@ -42,7 +42,7 @@ test.describe("Internal Viewer", () => {
     }
 
     // Items that must NOT be visible (admin-only surface)
-    const expectedHidden = ["Internal Users", "Organizations", "Models + Endpoints"];
+    const expectedHidden = ["Internal Users", "Organizations", "Model Management"];
     for (const label of expectedHidden) {
       await expect(
         nav.getByRole("link", { name: label, exact: true }),
@@ -64,9 +64,9 @@ test.describe("Internal Viewer", () => {
     await expect(page.getByText("Back to Keys")).toBeVisible({ timeout: 10_000 });
 
     // None of the destructive / mutating actions should render
-    await expect(page.getByRole("button", { name: "Regenerate Key" })).toHaveCount(0);
-    await expect(page.getByRole("button", { name: /Reset Spend/i })).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "Delete Key" })).toHaveCount(0);
+    await expect(page.getByRole("heading", { level: 1, name: E2E_VIEWER_KEY_ALIAS })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Regenerate key" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "More key actions" })).toHaveCount(0);
   });
 
   test("Team info page omits Members and Settings tabs for an Internal Viewer", async ({ page }) => {

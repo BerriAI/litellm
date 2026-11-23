@@ -103,6 +103,14 @@ fn keyed(record: &KeyRecord, label: &str) -> Keyed<String> {
     }
 }
 
+/// The key the script records a claim's mapping under.
+fn mapping_key(claim: MappedClaim<'_>) -> String {
+    match claim.issuer.filter(|issuer| !issuer.is_empty()) {
+        None => format!("jwt_key_mapping:{}:{}", claim.field, claim.value),
+        Some(issuer) => format!("jwt_key_mapping:{issuer}:{}:{}", claim.field, claim.value),
+    }
+}
+
 impl ScriptedHost {
     fn record(&self, call: impl Into<String>) {
         self.calls.lock().unwrap().push(call.into());
@@ -285,7 +293,7 @@ impl AuthHost for ScriptedHost {
         self.cache(key, value, ttl)
     }
     async fn cached_key_mapping(&self, claim: MappedClaim<'_>) -> Result<Option<Value>, Error> {
-        self.cached(&claim.cache_key())
+        self.cached(&mapping_key(claim))
     }
     async fn cache_key_mapping(
         &self,
@@ -293,10 +301,10 @@ impl AuthHost for ScriptedHost {
         value: &Value,
         ttl: Duration,
     ) -> Result<(), Error> {
-        self.cache(&claim.cache_key(), value, ttl)
+        self.cache(&mapping_key(claim), value, ttl)
     }
     async fn forget_key_mapping(&self, claim: MappedClaim<'_>) -> Result<(), Error> {
-        let key = claim.cache_key();
+        let key = mapping_key(claim);
         self.record(format!("forget {key}"));
         self.json_cache.lock().unwrap().remove(&key);
         Ok(())

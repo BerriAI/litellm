@@ -147,9 +147,9 @@
     },
     "test_a_refusal_on_a_widened_route_family_reaches_the_client_like_the_auth_refusal[gemini_pass_through]": {
       "python": {
-        "body": "{\"error\":{\"message\":\"Budget has been exceeded! Team=team-at-max Current cost: 2.4745600000000003, Max budget: 1.0\",\"type\":\"budget_exceeded\",\"param\":null,\"code\":\"422\"}}",
+        "body": "{\"error\":{\"message\":\"Budget has been exceeded! Team=team-at-max Current cost: 1.16384125, Max budget: 1.0\",\"type\":\"budget_exceeded\",\"param\":null,\"code\":\"422\"}}",
         "counters": {
-          "spend:team:team-at-max": 1.0000000000000002
+          "spend:team:team-at-max": 0.9999999999999999
         },
         "failure_hooks": [
           {
@@ -158,7 +158,7 @@
             "error_type": "auth_error",
             "exception": [
               "BudgetExceededError",
-              "Budget has been exceeded! Team=team-at-max Current cost: 2.4745600000000003, Max budget: 1.0"
+              "Budget has been exceeded! Team=team-at-max Current cost: 1.16384125, Max budget: 1.0"
             ],
             "identity": [
               "e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
@@ -176,7 +176,7 @@
           }
         ],
         "headers": {
-          "content-length": "167",
+          "content-length": "159",
           "content-security-policy": "frame-ancestors 'none'",
           "content-type": "application/json",
           "x-content-type-options": "nosniff",
@@ -187,9 +187,9 @@
     },
     "test_a_refusal_on_a_widened_route_family_reaches_the_client_like_the_auth_refusal[google]": {
       "python": {
-        "body": "{\"error\":{\"message\":\"Budget has been exceeded! Team=team-at-max Current cost: 2.4745600000000003, Max budget: 1.0\",\"type\":\"budget_exceeded\",\"param\":null,\"code\":\"422\"}}",
+        "body": "{\"error\":{\"message\":\"Budget has been exceeded! Team=team-at-max Current cost: 1.16384125, Max budget: 1.0\",\"type\":\"budget_exceeded\",\"param\":null,\"code\":\"422\"}}",
         "counters": {
-          "spend:team:team-at-max": 1.0000000000000002
+          "spend:team:team-at-max": 0.9999999999999999
         },
         "failure_hooks": [
           {
@@ -198,7 +198,7 @@
             "error_type": "auth_error",
             "exception": [
               "BudgetExceededError",
-              "Budget has been exceeded! Team=team-at-max Current cost: 2.4745600000000003, Max budget: 1.0"
+              "Budget has been exceeded! Team=team-at-max Current cost: 1.16384125, Max budget: 1.0"
             ],
             "identity": [
               "e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
@@ -215,7 +215,7 @@
           }
         ],
         "headers": {
-          "content-length": "167",
+          "content-length": "159",
           "content-security-policy": "frame-ancestors 'none'",
           "content-type": "application/json",
           "x-content-type-options": "nosniff",
@@ -226,9 +226,9 @@
     },
     "test_a_refusal_on_a_widened_route_family_reaches_the_client_like_the_auth_refusal[google_stream]": {
       "python": {
-        "body": "{\"error\":{\"message\":\"Budget has been exceeded! Team=team-at-max Current cost: 2.4745600000000003, Max budget: 1.0\",\"type\":\"budget_exceeded\",\"param\":null,\"code\":\"422\"}}",
+        "body": "{\"error\":{\"message\":\"Budget has been exceeded! Team=team-at-max Current cost: 1.16384125, Max budget: 1.0\",\"type\":\"budget_exceeded\",\"param\":null,\"code\":\"422\"}}",
         "counters": {
-          "spend:team:team-at-max": 1.0000000000000002
+          "spend:team:team-at-max": 0.9999999999999999
         },
         "failure_hooks": [
           {
@@ -237,7 +237,7 @@
             "error_type": "auth_error",
             "exception": [
               "BudgetExceededError",
-              "Budget has been exceeded! Team=team-at-max Current cost: 2.4745600000000003, Max budget: 1.0"
+              "Budget has been exceeded! Team=team-at-max Current cost: 1.16384125, Max budget: 1.0"
             ],
             "identity": [
               "e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
@@ -254,7 +254,7 @@
           }
         ],
         "headers": {
-          "content-length": "167",
+          "content-length": "159",
           "content-security-policy": "frame-ancestors 'none'",
           "content-type": "application/json",
           "x-content-type-options": "nosniff",
@@ -539,9 +539,9 @@
     },
     "test_a_refusal_on_a_widened_route_family_reaches_the_client_like_the_auth_refusal[vertex_pass_through]": {
       "python": {
-        "body": "{\"error\":{\"message\":\"Budget has been exceeded! Team=team-at-max Current cost: 2.4745600000000003, Max budget: 1.0\",\"type\":\"budget_exceeded\",\"param\":null,\"code\":\"422\"}}",
+        "body": "{\"error\":{\"message\":\"Budget has been exceeded! Team=team-at-max Current cost: 1.16384125, Max budget: 1.0\",\"type\":\"budget_exceeded\",\"param\":null,\"code\":\"422\"}}",
         "counters": {
-          "spend:team:team-at-max": 1.0000000000000002
+          "spend:team:team-at-max": 0.9999999999999999
         },
         "failure_hooks": [
           {
@@ -550,7 +550,7 @@
             "error_type": "auth_error",
             "exception": [
               "BudgetExceededError",
-              "Budget has been exceeded! Team=team-at-max Current cost: 2.4745600000000003, Max budget: 1.0"
+              "Budget has been exceeded! Team=team-at-max Current cost: 1.16384125, Max budget: 1.0"
             ],
             "identity": [
               "e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
@@ -567,7 +567,7 @@
           }
         ],
         "headers": {
-          "content-length": "167",
+          "content-length": "159",
           "content-security-policy": "frame-ancestors 'none'",
           "content-type": "application/json",
           "x-content-type-options": "nosniff",
@@ -1569,11 +1569,11 @@
           {
             "counter_key": "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
             "entity_type": "Key",
-            "reserved_cost": 1.47456
+            "reserved_cost": 0.16384125000000002
           }
         ],
         "held_after_pre_call": {
-          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 1.47456
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.16384125000000002
         },
         "settled": {
           "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.0
@@ -1586,14 +1586,14 @@
           {
             "counter_key": "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
             "entity_type": "Key",
-            "reserved_cost": 1.47456
+            "reserved_cost": 0.16384125000000002
           }
         ],
         "held_after_pre_call": {
-          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 1.47456
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.16384125000000002
         },
         "settled": {
-          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.0006999999999999229
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.0007000000000000062
         }
       }
     },
@@ -1603,11 +1603,11 @@
           {
             "counter_key": "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
             "entity_type": "Key",
-            "reserved_cost": 1.47456
+            "reserved_cost": 0.16384125000000002
           }
         ],
         "held_after_pre_call": {
-          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 1.47456
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.16384125000000002
         },
         "settled": {
           "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.0
@@ -1620,14 +1620,14 @@
           {
             "counter_key": "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
             "entity_type": "Key",
-            "reserved_cost": 1.47456
+            "reserved_cost": 0.16384125000000002
           }
         ],
         "held_after_pre_call": {
-          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 1.47456
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.16384125000000002
         },
         "settled": {
-          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.0006999999999999229
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.0007000000000000062
         }
       }
     },
@@ -1637,11 +1637,11 @@
           {
             "counter_key": "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
             "entity_type": "Key",
-            "reserved_cost": 1.47456
+            "reserved_cost": 0.16384125000000002
           }
         ],
         "held_after_pre_call": {
-          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 1.47456
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.16384125000000002
         },
         "settled": {
           "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.0
@@ -1654,14 +1654,14 @@
           {
             "counter_key": "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
             "entity_type": "Key",
-            "reserved_cost": 1.47456
+            "reserved_cost": 0.16384125000000002
           }
         ],
         "held_after_pre_call": {
-          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 1.47456
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.16384125000000002
         },
         "settled": {
-          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.0006999999999999229
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.0007000000000000062
         }
       }
     },
@@ -1909,11 +1909,11 @@
           {
             "counter_key": "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
             "entity_type": "Key",
-            "reserved_cost": 1.47456
+            "reserved_cost": 0.16384125000000002
           }
         ],
         "held_after_pre_call": {
-          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 1.47456
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.16384125000000002
         },
         "settled": {
           "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.0
@@ -1926,14 +1926,14 @@
           {
             "counter_key": "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf",
             "entity_type": "Key",
-            "reserved_cost": 1.47456
+            "reserved_cost": 0.16384125000000002
           }
         ],
         "held_after_pre_call": {
-          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 1.47456
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.16384125000000002
         },
         "settled": {
-          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.0006999999999999229
+          "spend:key:e84cc138c079b49eb8f8805f4303066abe817c7e85b28c67b9ffc5ff439402bf": 0.0007000000000000062
         }
       }
     },

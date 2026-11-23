@@ -119,7 +119,7 @@ class Admitted:
     remaining_s: float
 
 
-_R: Final = TypeVar("_R")
+_R = TypeVar("_R")
 
 
 class QueueBackend(Protocol):

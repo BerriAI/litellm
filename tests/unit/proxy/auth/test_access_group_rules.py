@@ -9,6 +9,7 @@ from pydantic import ValidationError
 from litellm.proxy._types import ConfigGeneralSettings, LiteLLM_AccessGroupTable, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.access_group_rules import AccessGroupRule, access_group_ids_for_identity
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.redis.stores.auth_cache import AuthObject
 
 
 @dataclass(frozen=True)
@@ -38,8 +39,8 @@ async def test_verified_attributes_grant_union_with_strict_claim_shapes(
     cache: Final = UserApiKeyCache()
     for name in ("science", "standard"):
         group: Final = LiteLLM_AccessGroupTable(access_group_id=f"{name}-id", access_group_name=name)
-        cache.set_cache(f"access_group_rule_name:{name}", group, model_type=LiteLLM_AccessGroupTable)
-        cache.set_cache(f"access_group_id:{name}-id", group, model_type=LiteLLM_AccessGroupTable)
+        cache.set_cache(AuthObject.access_group_rule_name(name), group, model_type=LiteLLM_AccessGroupTable)
+        cache.set_cache(AuthObject.access_group(f"{name}-id"), group, model_type=LiteLLM_AccessGroupTable)
     assert (
         await access_group_ids_for_identity(
             UserAPIKeyAuth(jwt_claims=dict(claims)), rules=rules, cache=cache, prisma_client=_Database(object())
@@ -105,8 +106,8 @@ async def test_virtual_key_user_grants_are_additive_and_do_not_mutate_cached_ide
         access_group_id="science-id", access_group_name="science", access_model_names=["group-model"]
     )
     cache: Final = UserApiKeyCache()
-    cache.set_cache("access_group_rule_name:science", group, model_type=LiteLLM_AccessGroupTable)
-    cache.set_cache("access_group_id:science-id", group, model_type=LiteLLM_AccessGroupTable)
+    cache.set_cache(AuthObject.access_group_rule_name("science"), group, model_type=LiteLLM_AccessGroupTable)
+    cache.set_cache(AuthObject.access_group("science-id"), group, model_type=LiteLLM_AccessGroupTable)
     ids: Final = await access_group_ids_for_identity(
         identity,
         rules=(AccessGroupRule(attribute="user_id", equals="science", access_group="science"),),
@@ -145,8 +146,8 @@ async def test_email_grants_read_verified_claims_not_the_locally_editable_email(
 ) -> None:
     group: Final = LiteLLM_AccessGroupTable(access_group_id="science-id", access_group_name="science")
     cache: Final = UserApiKeyCache()
-    cache.set_cache("access_group_rule_name:science", group, model_type=LiteLLM_AccessGroupTable)
-    cache.set_cache("access_group_id:science-id", group, model_type=LiteLLM_AccessGroupTable)
+    cache.set_cache(AuthObject.access_group_rule_name("science"), group, model_type=LiteLLM_AccessGroupTable)
+    cache.set_cache(AuthObject.access_group("science-id"), group, model_type=LiteLLM_AccessGroupTable)
     assert (
         await access_group_ids_for_identity(
             UserAPIKeyAuth(jwt_claims=dict(claims), user_email=local_email),
@@ -212,7 +213,7 @@ async def test_name_resolution_is_cached_and_renamed_group_does_not_keep_grantin
         UserAPIKeyAuth(user_id="subject"), rules=rules, cache=cache, prisma_client=database
     ) == ("science-id",)
     cache.set_cache(
-        "access_group_id:science-id",
+        AuthObject.access_group("science-id"),
         LiteLLM_AccessGroupTable(access_group_id="science-id", access_group_name="science"),
         model_type=LiteLLM_AccessGroupTable,
     )
@@ -221,7 +222,7 @@ async def test_name_resolution_is_cached_and_renamed_group_does_not_keep_grantin
     ) == ("science-id",)
     assert table.find_unique.await_count == 1
     cache.set_cache(
-        "access_group_id:science-id",
+        AuthObject.access_group("science-id"),
         LiteLLM_AccessGroupTable(access_group_id="science-id", access_group_name="renamed"),
         model_type=LiteLLM_AccessGroupTable,
     )

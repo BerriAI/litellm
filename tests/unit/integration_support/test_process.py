@@ -120,14 +120,21 @@ def test_worker_configuration_routes_stock_edges_to_its_own_servers_and_preserve
         "token_url": "http://127.0.0.1:8202/_oauth/token",
         "peer": "http://127.0.0.1:81910/v1",
         "custom": "http://127.0.0.1:9000/v1",
-        "general_settings": {"database_connection_pool_limit": 4},
+        "general_settings": {"database_connection_pool_limit": 6},
     }
     assert source.read_text() == original
 
 
-@pytest.mark.parametrize(("prisma", "limit"), ((1, 2), (2, 4), (4, 6)))
+@pytest.mark.parametrize(("prisma", "limit"), ((1, 2), (2, 6), (4, 8)))
 def test_pool_limit_for_prisma_leaves_prisma_its_connections_after_the_rust_share(prisma: int, limit: int) -> None:
     assert pool_limit_for_prisma(prisma) == limit
+
+
+@pytest.mark.parametrize(("prisma", "limit"), ((1, 2), (2, 4), (4, 6)))
+def test_pool_limit_for_prisma_drops_the_spend_log_writer_reserve_when_the_ledger_is_off(
+    prisma: int, limit: int
+) -> None:
+    assert pool_limit_for_prisma(prisma, rust_spend_log_writer=False) == limit
 
 
 @pytest.mark.parametrize("prisma", (0, -1))
@@ -163,7 +170,7 @@ def test_worker_configuration_budgets_implicit_pools_without_changing_connection
     decoded: Final = TypeAdapter(dict[str, object]).validate_python(yaml.safe_load(configured.read_text()))
     assert decoded == {
         "general_settings": {
-            "database_connection_pool_limit": 4,
+            "database_connection_pool_limit": 6,
             "database_extra_connection_params": {"connection_limit": "1"},
         }
     }

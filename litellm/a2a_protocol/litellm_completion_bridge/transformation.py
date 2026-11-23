@@ -22,9 +22,10 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Final
 from uuid import uuid4
 
-from pydantic import JsonValue, TypeAdapter, ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
 from litellm.types.utils import ModelResponse
 
 if TYPE_CHECKING:
@@ -40,13 +41,18 @@ def _as_object_mapping(value: object) -> Mapping[str, object]:
         return {}
 
 
+def _dict_fields(value: object) -> Mapping[str, object]:
+    fields: Final = as_str_mapping(value)
+    return fields if fields is not None and isinstance(value, dict) else {}
+
+
 class A2AStreamingContext:
     """
     Context holder for A2A streaming state.
     Tracks task_id, context_id, and message accumulation.
     """
 
-    def __init__(self, request_id: str, input_message: Mapping[str, JsonValue]):
+    def __init__(self, request_id: str, input_message: Mapping[str, object]):
         self.request_id = request_id
         self.task_id = str(uuid4())
         self.context_id = str(uuid4())
@@ -62,27 +68,26 @@ class A2ACompletionBridgeTransformation:
     """
 
     @staticmethod
-    def _text_from_a2a_part(part: JsonValue) -> str | None:
-        if not isinstance(part, dict):
-            return None
-        text: Final = part.get("text")
+    def _text_from_a2a_part(part: object) -> str | None:
+        fields: Final = _dict_fields(part)
+        text: Final = fields.get("text")
         if text is None:
             return None
-        if part.get("kind") not in (None, "", "text"):
+        if fields.get("kind") not in (None, "", "text"):
             return None
         return str(text)
 
     @staticmethod
-    def _extract_text_from_a2a_parts(parts: Sequence[JsonValue]) -> str:
+    def _extract_text_from_a2a_parts(parts: Sequence[object]) -> str:
         """Extract text from A2A parts (with or without explicit ``kind``)."""
         extracted: Final = (A2ACompletionBridgeTransformation._text_from_a2a_part(part) for part in parts)
         return "\n".join(text for text in extracted if text is not None)
 
     @staticmethod
     def get_forward_metadata(
-        a2a_message: Mapping[str, JsonValue],
-        params: Mapping[str, JsonValue] | None = None,
-    ) -> Mapping[str, JsonValue] | None:
+        a2a_message: Mapping[str, object],
+        params: Mapping[str, object] | None = None,
+    ) -> Mapping[str, object] | None:
         """
         Merge A2A metadata from MessageSendParams and the message for downstream providers.
 
@@ -91,17 +96,17 @@ class A2ACompletionBridgeTransformation:
         """
         params_metadata: Final = params.get("metadata") if params else None
         message_metadata: Final = a2a_message.get("metadata")
-        merged: Final[dict[str, JsonValue]] = {
-            **(params_metadata if isinstance(params_metadata, dict) else {}),
-            **(message_metadata if isinstance(message_metadata, dict) else {}),
+        merged: Final[Mapping[str, object]] = {
+            **_dict_fields(params_metadata),
+            **_dict_fields(message_metadata),
         }
         return merged or None
 
     @staticmethod
     def apply_forward_metadata_to_completion_params(
         completion_params: MutableMapping[str, object],
-        a2a_message: Mapping[str, JsonValue],
-        params: Mapping[str, JsonValue] | None = None,
+        a2a_message: Mapping[str, object],
+        params: Mapping[str, object] | None = None,
     ) -> None:
         """
         Attach A2A metadata to completion kwargs for provider bridges (e.g. LangGraph).
@@ -127,7 +132,7 @@ class A2ACompletionBridgeTransformation:
 
     @staticmethod
     def a2a_message_to_openai_messages(
-        a2a_message: Mapping[str, JsonValue],
+        a2a_message: Mapping[str, object],
     ) -> list[dict[str, object]]:
         """
         Transform an A2A message to OpenAI message format.
@@ -145,7 +150,7 @@ class A2ACompletionBridgeTransformation:
         openai_role: Final = (
             "user" if role == "user" else "assistant" if role == "assistant" else "system" if role == "system" else role
         )
-        parts: Final = raw_parts if isinstance(raw_parts, list) else []
+        parts: Final = as_object_list(raw_parts) or ()
 
         content: Final = A2ACompletionBridgeTransformation._extract_text_from_a2a_parts(parts)
 

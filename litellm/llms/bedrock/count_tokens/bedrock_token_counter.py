@@ -5,7 +5,7 @@ Bedrock Token Counter implementation using the CountTokens API.
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final
 
 from pydantic import JsonValue, TypeAdapter
 from typing_extensions import assert_never
@@ -29,7 +29,11 @@ from litellm.llms.bedrock.common_utils import (
     get_bedrock_base_model,
     strip_bedrock_routing_prefix,
 )
-from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensHandler, BedrockCountTokensRequestError
+from litellm.llms.bedrock.count_tokens.handler import (
+    BedrockCountTokensCredentialsError,
+    BedrockCountTokensHandler,
+    BedrockCountTokensRequestError,
+)
 from litellm.llms.bedrock.count_tokens.mantle_handler import BedrockMantleCountTokensHandler
 from litellm.llms.bedrock_mantle.common_utils import is_mantle_claude_model
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
@@ -231,7 +235,7 @@ class BedrockTokenCounter(BaseTokenCounter):
                 client=self._client,
             )
             reply: Final = _CountTokensReply.model_validate(result)
-        except BedrockCountTokensRequestError as e:
+        except (BedrockCountTokensRequestError, BedrockCountTokensCredentialsError) as e:
             return CountTokensFailure(
                 status_code=e.status_code,
                 message=e.message,
@@ -253,7 +257,7 @@ class BedrockTokenCounter(BaseTokenCounter):
         model_to_use: str,
         messages: Sequence[Mapping[str, object]] | None,
         contents: Sequence[Mapping[str, object]] | None,
-        deployment: dict[str, Any] | None = None,
+        deployment: Mapping[str, object] | None = None,
         request_model: str = "",
         tools: Sequence[Mapping[str, object]] | None = None,
         system: object | None = None,
