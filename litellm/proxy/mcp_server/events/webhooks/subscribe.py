@@ -86,7 +86,7 @@ class _Subscription:
     reserved: bool = False
 
 
-def _validate(
+def validate_subscription(
     context: OperationContext, params: SubscribeEventsParams, settings: EventsSettings, store: EventStore | None
 ) -> Result[_Request, EventsFailure]:
     if settings.public_base_url is None:
@@ -221,7 +221,7 @@ async def _roll_back(
     await _discard_pending(subscription)
 
 
-async def _activate(
+async def activate_subscription(
     subscription: _Subscription,
     upstream: SubscribeEventsResult,
     context: OperationContext,
@@ -300,7 +300,7 @@ async def _retire_if_moved(
     return row.model_copy(update={"status": "terminated"})
 
 
-async def _prepare(
+async def prepare_subscription(
     context: OperationContext,
     params: SubscribeEventsParams,
     headers: Mapping[str, str] | None,
@@ -337,7 +337,9 @@ async def _prepare(
     return Ok(_Subscription(base, existing, prepared.ok, params, opened.ok, binding, request))
 
 
-async def _reserve(subscription: _Subscription, settings: EventsSettings) -> Result[_Subscription, EventsFailure]:
+async def reserve_subscription(
+    subscription: _Subscription, settings: EventsSettings
+) -> Result[_Subscription, EventsFailure]:
     """Claim the subscription id before any upstream work, so racing subscribes share one row and one secret."""
     if subscription.existing is not None and subscription.existing.status == "pending":
         return Error(_BEING_CREATED)
@@ -365,13 +367,13 @@ async def subscribe(
     store: EventStore | None = None,
     post: Poster = post_callback,
 ) -> Result[SubscribeEventsResult, EventsFailure]:
-    request: Final = _validate(context, params, settings, store)
+    request: Final = validate_subscription(context, params, settings, store)
     if isinstance(request, Error):
         return Error(request.error)
-    prepared: Final = await _prepare(context, params, headers, settings, runtime, request.ok, post)
+    prepared: Final = await prepare_subscription(context, params, headers, settings, runtime, request.ok, post)
     if isinstance(prepared, Error):
         return Error(prepared.error)
-    reserved: Final = await _reserve(prepared.ok, settings)
+    reserved: Final = await reserve_subscription(prepared.ok, settings)
     if isinstance(reserved, Error):
         return Error(reserved.error)
     subscription: Final = reserved.ok
@@ -383,7 +385,7 @@ async def subscribe(
     if isinstance(upstream, Error):
         await _discard_pending(subscription)
         return Error(upstream.error)
-    return await _activate(subscription, upstream.ok, context, settings, runtime)
+    return await activate_subscription(subscription, upstream.ok, context, settings, runtime)
 
 
 async def unsubscribe(
