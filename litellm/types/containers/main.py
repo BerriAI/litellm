@@ -1,13 +1,33 @@
 import builtins
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Final, Literal
 
 from pydantic import PrivateAttr, TypeAdapter
-from typing_extensions import ReadOnly, TypedDict
+from pydantic.main import IncEx
+from typing_extensions import ReadOnly, TypedDict, Unpack
 
 from litellm.types.llms.base import LiteLLMBaseModel
 
 _ATTRIBUTE_VALUE: Final = TypeAdapter(builtins.object)
+
+
+class _ModelDumpOptions(TypedDict, total=False):
+    """Keyword arguments `json` forwards to pydantic's `BaseModel.model_dump`."""
+
+    mode: ReadOnly[str]
+    include: ReadOnly[IncEx | None]
+    exclude: ReadOnly[IncEx | None]
+    context: ReadOnly[builtins.object]
+    by_alias: ReadOnly[bool | None]
+    exclude_unset: ReadOnly[bool]
+    exclude_defaults: ReadOnly[bool]
+    exclude_none: ReadOnly[bool]
+    exclude_computed_fields: ReadOnly[bool]
+    round_trip: ReadOnly[bool]
+    warnings: ReadOnly[bool | Literal["none", "warn", "error"]]
+    fallback: ReadOnly[Callable[[builtins.object], builtins.object] | None]
+    serialize_as_any: ReadOnly[bool]
+    polymorphic_serialization: ReadOnly[bool | None]
 
 
 class ExpiresAfter(LiteLLMBaseModel):
@@ -49,7 +69,7 @@ class ContainerObject(LiteLLMBaseModel):
         # Allow dictionary-style access to attributes
         return _ATTRIBUTE_VALUE.validate_python(getattr(self, key))
 
-    def json(self, **kwargs):
+    def json(self, **kwargs: Unpack[_ModelDumpOptions]):
         try:
             return self.model_dump(**kwargs)
         except Exception:
@@ -73,7 +93,7 @@ class DeleteContainerResult(LiteLLMBaseModel):
     def __getitem__(self, key: str) -> builtins.object:
         return _ATTRIBUTE_VALUE.validate_python(getattr(self, key))
 
-    def json(self, **kwargs):
+    def json(self, **kwargs: Unpack[_ModelDumpOptions]):
         try:
             return self.model_dump(**kwargs)
         except Exception:
@@ -98,7 +118,7 @@ class ContainerListResponse(LiteLLMBaseModel):
     def __getitem__(self, key: str) -> builtins.object:
         return _ATTRIBUTE_VALUE.validate_python(getattr(self, key))
 
-    def json(self, **kwargs):
+    def json(self, **kwargs: Unpack[_ModelDumpOptions]):
         try:
             return self.model_dump(**kwargs)
         except Exception:
@@ -171,7 +191,7 @@ class ContainerFileObject(LiteLLMBaseModel):
     def __getitem__(self, key: str) -> builtins.object:
         return _ATTRIBUTE_VALUE.validate_python(getattr(self, key))
 
-    def json(self, **kwargs):
+    def json(self, **kwargs: Unpack[_ModelDumpOptions]):
         try:
             return self.model_dump(**kwargs)
         except Exception:
@@ -196,7 +216,7 @@ class ContainerFileListResponse(LiteLLMBaseModel):
     def __getitem__(self, key: str) -> builtins.object:
         return _ATTRIBUTE_VALUE.validate_python(getattr(self, key))
 
-    def json(self, **kwargs):
+    def json(self, **kwargs: Unpack[_ModelDumpOptions]):
         try:
             return self.model_dump(**kwargs)
         except Exception:
@@ -220,7 +240,7 @@ class DeleteContainerFileResponse(LiteLLMBaseModel):
     def __getitem__(self, key: str) -> builtins.object:
         return _ATTRIBUTE_VALUE.validate_python(getattr(self, key))
 
-    def json(self, **kwargs):
+    def json(self, **kwargs: Unpack[_ModelDumpOptions]):
         try:
             return self.model_dump(**kwargs)
         except Exception:
