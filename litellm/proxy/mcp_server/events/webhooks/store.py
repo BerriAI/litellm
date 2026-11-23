@@ -130,7 +130,9 @@ class EventStore(Protocol):
         retry instead of reclaiming it; the pending deadline frees the row if teardown never finishes."""
         ...
 
-    async def delete_held(self, subscription_id: str, upstream_subscription_id: str | None) -> None:
+    async def delete_held(
+        self, subscription_id: str, upstream_subscription_id: str | None, generation: str | None = None
+    ) -> None:
         """Delete the row only while it is still held for this upstream subscription's unsubscribe."""
         ...
 
@@ -261,9 +263,7 @@ class PrismaEventStore:
         return True
 
     async def discard_pending(self, subscription_id: str, generation: str | None = None) -> None:
-        await self._subscriptions.delete_many(
-            where={"id": subscription_id, "status": "pending", **({"generation": generation} if generation else {})}
-        )
+        await self.delete_held(subscription_id, None, generation)
 
     async def activate(
         self,
@@ -384,9 +384,16 @@ class PrismaEventStore:
         )
         return held > 0
 
-    async def delete_held(self, subscription_id: str, upstream_subscription_id: str | None) -> None:
+    async def delete_held(
+        self, subscription_id: str, upstream_subscription_id: str | None, generation: str | None = None
+    ) -> None:
         await self._subscriptions.delete_many(
-            where={"id": subscription_id, "upstream_subscription_id": upstream_subscription_id, "status": "pending"}
+            where={
+                "id": subscription_id,
+                "upstream_subscription_id": upstream_subscription_id,
+                "status": "pending",
+                **({"generation": generation} if generation else {}),
+            }
         )
 
     async def delete(self, subscription_id: str) -> None:

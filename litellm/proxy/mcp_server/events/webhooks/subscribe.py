@@ -5,7 +5,6 @@ from datetime import datetime, timezone
 from typing import Final
 
 import anyio
-
 from mcp.shared.exceptions import MCPError
 
 from litellm.proxy.mcp_server.contracts import OperationContext
@@ -34,7 +33,6 @@ from litellm.proxy.mcp_server.events.observability import EventActivity
 from litellm.proxy.mcp_server.events.runtime import EventsRuntime
 from litellm.proxy.mcp_server.events.webhooks.delivery import CALLBACK_DEADLINE_SECONDS, is_https_callback
 from litellm.proxy.mcp_server.events.webhooks.policy import (
-    callback_url,
     client_grant,
     granted_ttl_ms,
     iso,
@@ -55,7 +53,6 @@ from litellm.proxy.mcp_server.outbound_credentials.result import Error, Ok, Resu
 from litellm.types.mcp_server.events import (
     DeliveryStatus,
     EventsErrorCode,
-    JsonObject,
     SubscribeEventsParams,
     SubscribeEventsResult,
 )
@@ -152,23 +149,6 @@ async def _admit_new(
         return None
     failure: Final = await verify_callback(params.delivery.url, request.secret, sid, now, post)
     return callback_error(failure) if failure is not None else None
-
-
-def _upstream_params(subscription: _Subscription, settings: EventsSettings) -> JsonObject:
-    params: Final = subscription.params
-    prepared: Final = subscription.prepared
-    return {
-        "name": prepared.resolved.upstream_name,
-        "arguments": dict(params.arguments),
-        "delivery": {
-            "mode": "webhook",
-            "url": callback_url(settings, subscription.base.id, subscription.base.upstream_secret),
-            "secret": subscription.base.upstream_secret,
-        },
-        "cursor": subscription.opened.upstream,
-        **({"maxAgeMs": params.max_age_ms} if params.max_age_ms is not None else {}),
-        "ttlMs": granted_ttl_ms(params, prepared.resolved.target.server),
-    }
 
 
 async def _discard_pending(subscription: _Subscription) -> None:
