@@ -46,6 +46,18 @@ else:
 _CODEX_CLIENT_PREFIX_RE: Final = re.compile(r"^codex[-_ /]", re.IGNORECASE)
 
 
+def _camel_case(key: str) -> str:
+    head, *rest = key.split("_")
+    return head + "".join(part[:1].upper() + part[1:] for part in rest)
+
+
+def camel_case_keys(config: Mapping[str, object]) -> Mapping[str, object]:
+    return {
+        **{_camel_case(key): value for key, value in config.items() if "_" in key},
+        **{key: value for key, value in config.items() if "_" not in key},
+    }
+
+
 def is_codex_user_agent(user_agent: str) -> bool:
     return bool(_CODEX_CLIENT_PREFIX_RE.match(user_agent))
 
@@ -116,6 +128,44 @@ _LAX_BOOL: Final = TypeAdapter(bool)
 
 def as_str_mapping(value: object) -> Mapping[str, object] | None:
     return value if isinstance(value, (dict, Mapping)) else None
+
+
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
+def loads_json_object(payload: str | bytes | bytearray) -> Mapping[str, object] | None:
+    opens_object: Final = (
+        payload.lstrip().startswith(b"{")
+        if isinstance(payload, (bytes, bytearray))
+        else payload.lstrip().startswith("{")
+    )
+    if not opens_object:
+        return None
+    try:
+        return as_str_mapping(_DECODED_JSON.validate_python(json.loads(payload)))
+    except (ValueError, RecursionError):
+        return None
+
+
+_JSON_NESTING_ALWAYS_DECODABLE: Final = 100
+_DIGIT_RUN_PYTHON_MAY_REFUSE: Final = re.compile(r"[0-9]{640}")
+
+
+def is_undecodable_json_object(payload: str) -> bool:
+    if not payload.lstrip().startswith("{"):
+        return False
+    if (
+        payload.count("{") + payload.count("[") < _JSON_NESTING_ALWAYS_DECODABLE
+        and _DIGIT_RUN_PYTHON_MAY_REFUSE.search(payload) is None
+    ):
+        return False
+    try:
+        json.loads(payload)
+    except json.JSONDecodeError:
+        return False
+    except (ValueError, RecursionError):
+        return True
+    return False
 
 
 def as_object_list(value: object) -> Sequence[object] | None:
@@ -1173,7 +1223,7 @@ def redact_nested_match_and_regex_keys(payload: object, keys: Collection[str] = 
 
     # Iterative traversal; `seen` guards against cyclic refs preserved by deepcopy.
     try:
-        seen: Final[set] = set()
+        seen: Final[set[int]] = set()
         stack: Final[list[object]] = [redacted]
         while stack:
             node = stack.pop()

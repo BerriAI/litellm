@@ -12440,7 +12440,7 @@ async def test_early_rate_limit_check_uses_the_team_limits_full_auth_would_apply
         {"model": "gpt-5.6", "messages": []},
         "acompletion",
     )
-    user_api_key_cache: Final = DualCache()
+    user_api_key_cache: Final = UserApiKeyCache()
     writes: Final = MappingProxyType(
         {
             "key": partial(
@@ -12464,7 +12464,7 @@ async def test_early_rate_limit_check_uses_the_team_limits_full_auth_would_apply
                 proxy_logging_obj=None,
             ),
             "unreadable_team": partial(
-                user_api_key_cache.async_set_cache, key=f"team_id:{team_id}", value="not a team"
+                user_api_key_cache.async_set_cache, key=AuthObject.team(team_id), value="not a team"
             ),
         }
     )

@@ -160,12 +160,15 @@ class AmazonNovaEmbeddingConfig:
     - Multiple embedding purposes and dimensions
     """
 
+    servable_encoding_formats: Final = ("float", "base64")
+
     def __init__(self) -> None:
         pass
 
     def get_supported_openai_params(self) -> list[str]:
         return [
             "dimensions",
+            "encoding_format",
         ]
 
     def map_openai_params(self, non_default_params: dict, optional_params: dict) -> dict:
@@ -174,8 +177,8 @@ class AmazonNovaEmbeddingConfig:
             if k == "dimensions":
                 # Map OpenAI dimensions to Nova embedding_dimension
                 optional_params["embedding_dimension"] = v
-            elif k in self.get_supported_openai_params():
-                optional_params[k] = v
+            elif k == "encoding_format" and v == "base64":
+                optional_params["encoding_format"] = v
         return optional_params
 
     def _parse_data_url(self, data_url: str) -> tuple:

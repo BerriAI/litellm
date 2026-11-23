@@ -75,7 +75,7 @@ from litellm.constants import (
     TEAM_DELETE_TRANSACTION_TIMEOUT_SECONDS,
     VLLM_CHOICE_FIELDS,
 )
-from litellm.cost_calculator import BaseTokenUsageProcessor
+from litellm.cost_calculator import BaseTokenUsageProcessor, base_model_for_pricing
 from litellm.integrations.otel.runtime import seed_request_identity
 from litellm.litellm_core_utils.bug_report import (
     bug_report_notice,
@@ -1636,13 +1636,14 @@ def _estimated_input_cost(
 ) -> float:
     """A rerank model the provider prices per query bills the one query sent, the way the success path
     bills one search unit per query; every other estimate is priced per token."""
+    priced_base_model: Final = base_model_for_pricing(base_model)
     if str(model_call_details.get("call_type")) not in _RERANK_CALL_TYPES:
-        return _estimated_token_input_cost(model_call_details, prompt_tokens, deployment_id, base_model)
+        return _estimated_token_input_cost(model_call_details, prompt_tokens, deployment_id, priced_base_model)
     pricing_details: Final = _routed_deployment_pricing_details(model_call_details, deployment_id)
-    query_rate: Final = _input_cost_per_query(pricing_details, deployment_id, base_model)
+    query_rate: Final = _input_cost_per_query(pricing_details, deployment_id, priced_base_model)
     if query_rate is not None:
         return query_rate
-    return _estimated_token_input_cost(pricing_details, prompt_tokens, deployment_id, base_model)
+    return _estimated_token_input_cost(pricing_details, prompt_tokens, deployment_id, priced_base_model)
 
 
 def _routed_deployment_pricing_details(
@@ -5790,6 +5791,14 @@ class ProxyLogging:
         if not isinstance(limiter, (ParallelRequestLimiterHook, _PROXY_MaxParallelRequestsHandler)):
             return
         await limiter.async_release_max_parallel_requests_on_disconnect(user_api_key_dict)
+
+    async def arelease_refused_responses_websocket_slot(self, user_api_key_dict: UserAPIKeyAuth) -> None:
+        """Release the slot of a Responses WebSocket refused while opening, only when its admission got that far."""
+        limiter: Final = self.get_proxy_hook("parallel_request_limiter")
+        if isinstance(limiter, _PROXY_MaxParallelRequestsHandler):
+            await limiter.async_release_admitted_max_parallel_requests(user_api_key_dict)
+        elif isinstance(limiter, ParallelRequestLimiterHook):
+            await limiter.async_release_max_parallel_requests_on_disconnect(user_api_key_dict)
 
     async def enforce_mcp_server_rate_limits(
         self,
@@ -10066,29 +10075,9 @@ def get_error_message_str(e: Exception) -> str:
     return error_message
 
 
-def get_redoc_url() -> str | None:
-    """
-    Get the Redoc URL from the environment variables.
-
-    - If REDOC_URL is set, return it.
-    - If NO_REDOC is True, return None.
-    - Otherwise, default to "/redoc".
-    """
-    if redoc_url := os.getenv("REDOC_URL"):
-        return redoc_url
-
-    if str_to_bool(os.getenv("NO_REDOC")) is True:
-        return None
-
-    return "/redoc"
-
-
-_get_redoc_url: Final = get_redoc_url
-
-
 def get_docs_url() -> str | None:
     """
-    Get the docs (Swagger UI) URL from the environment variables.
+    Get the default API reference URL from the environment variables.
 
     - If DOCS_URL is set, return it.
     - If NO_DOCS is True, return None.
@@ -10104,6 +10093,18 @@ def get_docs_url() -> str | None:
 
 
 _get_docs_url: Final = get_docs_url
+
+
+def get_swagger_url() -> str | None:
+    """Use SWAGGER_URL, or default to /swagger unless NO_SWAGGER or NO_DOCS disables it."""
+    if swagger_url := os.getenv("SWAGGER_URL"):
+        return swagger_url
+    docs_url: Final = get_docs_url()
+    if docs_url is None or str_to_bool(os.getenv("NO_SWAGGER")) is True:
+        return None
+    if "/swagger" in (docs_url, get_openapi_url()):
+        return "/swagger/ui"
+    return "/swagger"
 
 
 def get_openapi_url() -> str | None:
