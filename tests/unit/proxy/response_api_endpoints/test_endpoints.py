@@ -4796,6 +4796,122 @@ class TestResponsesWSFirstFrameModelAuth:
         assert booked["request_data"]["model"] == "gpt-4o-mini"
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("failure_type", ["exception", "rate_limit"])
+    async def test_responses_websocket_releases_slot_on_post_admission_pre_call_failure(self, failure_type):
+        from litellm.proxy.response_api_endpoints.endpoints import (
+            responses_websocket_endpoint,
+        )
+
+        ws = MagicMock()
+        ws.headers = {}
+        ws.query_params = {}
+        ws.scope = {"headers": []}
+        ws.url = "ws://testserver/v1/responses"
+        ws.accept = AsyncMock()
+        ws.receive_text = AsyncMock(
+            return_value=json.dumps({"type": "response.create", "model": "gpt-4o-mini", "input": []})
+        )
+        ws.send_text = AsyncMock()
+        ws.close = AsyncMock()
+
+        processor = MagicMock()
+        def create_processor(data, **kwargs):
+            processor.data = data
+            return processor
+
+        async def failing_pre_call(*args, **kwargs):
+            # Simulate slot admission succeeded during pre-call before a subsequent error occurred
+            processor.data["_parallel_request_slot_admitted"] = True
+            if failure_type == "rate_limit":
+                raise litellm.RateLimitError(message="tag budget exceeded", model="gpt-4o-mini", llm_provider="openai")
+            raise RuntimeError("pre-call step failed after admission")
+
+        processor.common_processing_pre_call_logic = AsyncMock(side_effect=failing_pre_call)
+
+        proxy_logging_obj = MagicMock(during_call_hook=AsyncMock())
+        proxy_logging_obj.arelease_responses_websocket_slot = AsyncMock(return_value=None)
+        user_api_key_dict = MagicMock()
+
+        with (
+            patch(
+                "litellm.proxy.response_api_endpoints.endpoints._enforce_responses_ws_first_frame_model_auth",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "litellm.proxy.response_api_endpoints.endpoints.ProxyBaseLLMRequestProcessing",
+                side_effect=create_processor,
+            ),
+            patch(
+                "litellm.proxy.proxy_server.proxy_logging_obj",
+                proxy_logging_obj,
+            ),
+        ):
+            await responses_websocket_endpoint(
+                websocket=ws,
+                model=None,
+                user_api_key_dict=user_api_key_dict,
+            )
+
+        proxy_logging_obj.arelease_responses_websocket_slot.assert_awaited_once_with(user_api_key_dict)
+        ws.close.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_responses_websocket_does_not_release_slot_if_admission_never_happened(self):
+        from litellm.proxy.response_api_endpoints.endpoints import (
+            responses_websocket_endpoint,
+        )
+
+        ws = MagicMock()
+        ws.headers = {}
+        ws.query_params = {}
+        ws.scope = {"headers": []}
+        ws.url = "ws://testserver/v1/responses"
+        ws.accept = AsyncMock()
+        ws.receive_text = AsyncMock(
+            return_value=json.dumps({"type": "response.create", "model": "gpt-4o-mini", "input": []})
+        )
+        ws.send_text = AsyncMock()
+        ws.close = AsyncMock()
+
+        processor = MagicMock()
+        def create_processor(data, **kwargs):
+            processor.data = data
+            return processor
+
+        async def failing_pre_call(*args, **kwargs):
+            # Pre-call failed before admission
+            raise RuntimeError("pre-call failed before admission")
+
+        processor.common_processing_pre_call_logic = AsyncMock(side_effect=failing_pre_call)
+
+        proxy_logging_obj = MagicMock(during_call_hook=AsyncMock())
+        proxy_logging_obj.arelease_responses_websocket_slot = AsyncMock(return_value=None)
+        user_api_key_dict = MagicMock()
+
+        with (
+            patch(
+                "litellm.proxy.response_api_endpoints.endpoints._enforce_responses_ws_first_frame_model_auth",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "litellm.proxy.response_api_endpoints.endpoints.ProxyBaseLLMRequestProcessing",
+                side_effect=create_processor,
+            ),
+            patch(
+                "litellm.proxy.proxy_server.proxy_logging_obj",
+                proxy_logging_obj,
+            ),
+        ):
+            await responses_websocket_endpoint(
+                websocket=ws,
+                model=None,
+                user_api_key_dict=user_api_key_dict,
+            )
+
+        proxy_logging_obj.arelease_responses_websocket_slot.assert_not_awaited()
+        ws.close.assert_awaited_once()
+
+    @pytest.mark.asyncio
     async def test_reruns_model_auth_for_first_frame_model(self):
         from starlette.requests import Request
 

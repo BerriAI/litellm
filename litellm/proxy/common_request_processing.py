@@ -3412,6 +3412,8 @@ class ProxyBaseLLMRequestProcessing:
             call_type=route_type,
             skip_guardrails=skip_guardrails,
         )
+        if isinstance(self.data, dict):
+            self.data["_parallel_request_slot_admitted"] = True
         await _enforce_guardrail_added_tag_budgets(
             data=self.data,
             tags_before_guardrails=self._tags_before_guardrails,

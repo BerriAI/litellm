@@ -382,6 +382,8 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 rate_limit_type="key",
                 values_to_update_in_cache=values_to_update_in_cache,
             )
+            if isinstance(data, dict):
+                data["_parallel_request_slot_admitted"] = True
 
         # Check if request under RPM/TPM per model for a given API Key
         _model = data.get("model", None)
