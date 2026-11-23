@@ -59,11 +59,6 @@ class _SuccessKwargs(TypedDict, total=False):
 _SUCCESS_KWARGS_ADAPTER: Final = TypeAdapter(_SuccessKwargs)
 
 
-class _SuccessEventKwargs(TypedDict, total=False):
-    call_type: ReadOnly[object]
-    standard_logging_object: ReadOnly[StandardLoggingPayload | None]
-
-
 _active_prefetched_usage: Final[ContextVar["PrefetchedUsage | None"]] = ContextVar("prefetched_usage", default=None)
 
 
@@ -148,7 +143,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
     logged_failure: int = 0
     default_cache_time_seconds: int = 1 * 60 * 60  # 1 hour
 
-    def __init__(self, usage: RouterUsage, routing_args: Mapping[str, object] = {}):
+    def __init__(self, usage: RouterUsage, routing_args: dict = {}):
         self.routing_args = RoutingArgs.model_validate(routing_args)
         BaseRoutingStrategy.__init__(
             self,
@@ -309,9 +304,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             return deployment  # don't fail calls if eg. redis fails to connect
 
     @with_service_target(ROUTER_USAGE_TARGET)
-    def log_success_event(
-        self, kwargs: _SuccessEventKwargs, response_obj: object, start_time: object, end_time: object
-    ) -> None:
+    def log_success_event(self, kwargs, response_obj, start_time, end_time):
         if is_batch_retrieve_call_type(kwargs.get("call_type")):
             return
         try:
@@ -352,7 +345,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             )
 
     @with_service_target(ROUTER_USAGE_TARGET)
-    async def async_log_success_event(self, kwargs, response_obj: object, start_time: object, end_time: object) -> None:
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
         if is_batch_retrieve_call_type(kwargs.get("call_type")):
             return
         try:
@@ -446,7 +439,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
         rpm_counters: Sequence[UsageCounter],
         rpm_values: Sequence[float | None] | None,
         messages: list[dict[str, str]] | None = None,
-        input: str | list[str] | None = None,
+        input: str | list | None = None,
         routable_group: RoutableGroup = no_routable_group,
         refusal: type[RequestOverDeploymentTpmError] = RequestOverDeploymentTpmError,
     ) -> dict | None:
@@ -545,7 +538,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
         model_group: str,
         healthy_deployments: list,
         messages: list[dict[str, str]] | None = None,
-        input: str | list[str] | None = None,
+        input: str | list | None = None,
         routable_group: RoutableGroup = no_routable_group,
     ):
         """
@@ -654,7 +647,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
         model_group: str,
         healthy_deployments: list,
         messages: list[dict[str, str]] | None = None,
-        input: str | list[str] | None = None,
+        input: str | list | None = None,
         parent_otel_span: Span | None = None,
         routable_group: RoutableGroup = no_routable_group,
     ):

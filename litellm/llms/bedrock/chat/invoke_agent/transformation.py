@@ -6,11 +6,9 @@ https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent-runtime_Invoke
 
 import base64
 import json
-from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
-from typing_extensions import Never
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
@@ -49,7 +47,7 @@ else:
 
 
 class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
-    def __init__(self, **kwargs: Never):
+    def __init__(self, **kwargs):
         BaseConfig.__init__(self, **kwargs)
         BaseAWSLLM.__init__(self, **kwargs)
 
@@ -65,11 +63,11 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
 
     def map_openai_params(
         self,
-        non_default_params: Mapping[str, object],
-        optional_params: dict[str, object],
+        non_default_params: dict,
+        optional_params: dict,
         model: str,
         drop_params: bool,
-    ) -> dict[str, object]:
+    ) -> dict:
         """
         This is a base invoke agent model mapping. For Invoke Agent - define a bedrock provider specific config that extends this class.
         """
@@ -81,7 +79,7 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
         api_key: str | None,
         model: str,
         optional_params: dict,
-        litellm_params: Mapping[str, object],
+        litellm_params: dict,
         stream: bool | None = None,
     ) -> str:
         """
@@ -111,9 +109,9 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
 
     def sign_request(
         self,
-        headers: dict[str, object],
-        optional_params: dict[str, object],
-        request_data: dict[str, object],
+        headers: dict,
+        optional_params: dict,
+        request_data: dict,
         api_base: str,
         api_key: str | None = None,
         model: str | None = None,
@@ -153,10 +151,10 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: Mapping[str, object],
-        litellm_params: Mapping[str, object],
-        headers: Mapping[str, object],
-    ) -> dict[str, object]:
+        optional_params: dict,
+        litellm_params: dict,
+        headers: dict,
+    ) -> dict:
         # use the last message content as the query
         query: Final[str] = convert_content_list_to_str(messages[-1])
         return {
@@ -290,7 +288,7 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
 
     def _extract_response_content(self, events: InvokeAgentEventList) -> str:
         """Extract the final response content from parsed events."""
-        response_parts: Final[list[str]] = []
+        response_parts: Final = []
 
         for event in events:
             headers = event.get("headers", {})
@@ -378,7 +376,7 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
         if not metadata:
             return
 
-        usage: Final[InvokeAgentUsage | dict[str, int] | None] = metadata.get("usage", {})
+        usage: Final[InvokeAgentUsage | dict | None] = metadata.get("usage", {})
         if not usage:
             return
 
@@ -437,10 +435,10 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: Mapping[str, object],
+        request_data: dict,
         messages: list[AllMessageValues],
-        optional_params: Mapping[str, object],
-        litellm_params: Mapping[str, object],
+        optional_params: dict,
+        litellm_params: dict,
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
@@ -478,19 +476,17 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
 
     def validate_environment(
         self,
-        headers: dict[str, object],
+        headers: dict,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: Mapping[str, object],
-        litellm_params: Mapping[str, object],
+        optional_params: dict,
+        litellm_params: dict,
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict[str, object]:
+    ) -> dict:
         return headers
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return BedrockError(status_code=status_code, message=error_message, headers=headers)
 
     def should_fake_stream(

@@ -1,6 +1,6 @@
 import json
 import os
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Iterator
 from typing import Final, Literal, Protocol, get_args, runtime_checkable
 
 import httpx
@@ -107,7 +107,7 @@ class HuggingFaceEmbedding(BaseLLM):
     def __init__(self) -> None:
         super().__init__()
 
-    def _transform_input_on_pipeline_tag(self, input: Sequence[object], pipeline_tag: object) -> dict[str, object]:
+    def _transform_input_on_pipeline_tag(self, input: list, pipeline_tag: object) -> dict:
         if pipeline_tag is None:
             return {"inputs": input}
         if pipeline_tag == "sentence-similarity" or pipeline_tag == "similarity":
@@ -131,9 +131,9 @@ class HuggingFaceEmbedding(BaseLLM):
         model: str,
         task_type: str | None,
         embed_url: str,
-        input: Sequence[object],
-        optional_params: Mapping[str, object],
-    ) -> dict[str, object]:
+        input: list,
+        optional_params: dict,
+    ) -> dict:
         hf_task = await async_get_hf_task_embedding_for_model(model=model, task_type=task_type, api_base=HF_HUB_URL)
 
         data: Final = self._transform_input_on_pipeline_tag(input=input, pipeline_tag=hf_task)
@@ -143,7 +143,7 @@ class HuggingFaceEmbedding(BaseLLM):
 
         return data
 
-    def _process_optional_params(self, data: dict, optional_params: Mapping[str, object]) -> dict:
+    def _process_optional_params(self, data: dict, optional_params: dict) -> dict:
         special_options_keys: Final = config.get_special_options_params()
         special_parameters_keys: Final = [
             "min_length",
@@ -169,14 +169,14 @@ class HuggingFaceEmbedding(BaseLLM):
 
     def _transform_input(
         self,
-        input: Sequence[object],
+        input: list,
         model: str,
         call_type: Literal["sync", "async"],
         optional_params: dict,
         embed_url: str,
         timeout: float | httpx.Timeout | None = None,
-    ) -> dict[str, object]:
-        data: dict[str, object] = {}
+    ) -> dict:
+        data: dict = {}
 
         ## TRANSFORMATION ##
         if "sentence-transformers" in model:
@@ -210,10 +210,10 @@ class HuggingFaceEmbedding(BaseLLM):
         embeddings: object,
         model_response: EmbeddingResponse,
         model: str,
-        input: Sequence[object],
+        input: list,
         encoding: _SupportsTokenEncode,
     ) -> EmbeddingResponse:
-        output_data: Final[list[dict[str, object]]] = []
+        output_data: Final = []
         if json_contains(embeddings, "similarities"):
             for idx, embedding in _pairs(_subscript(embeddings, "similarities")):
                 output_data.append(
@@ -265,17 +265,17 @@ class HuggingFaceEmbedding(BaseLLM):
     async def aembedding(
         self,
         model: str,
-        input: Sequence[object],
+        input: list,
         model_response: litellm.utils.EmbeddingResponse,
         timeout: float | httpx.Timeout,
         logging_obj: LiteLLMLoggingObj,
-        optional_params: dict[str, object],
+        optional_params: dict,
         api_base: str,
         api_key: str | None,
-        headers: dict[str, object],
+        headers: dict,
         encoding: _SupportsTokenEncode,
         client: AsyncHTTPHandler | None = None,
-    ) -> EmbeddingResponse:
+    ):
         ## TRANSFORMATION ##
         data: Final = self._transform_input(
             input=input,
@@ -330,10 +330,10 @@ class HuggingFaceEmbedding(BaseLLM):
     def embedding(
         self,
         model: str,
-        input: Sequence[object],
+        input: list,
         model_response: EmbeddingResponse,
         optional_params: dict,
-        litellm_params: dict[str, object],
+        litellm_params: dict,
         logging_obj: LiteLLMLoggingObj,
         encoding: _SupportsTokenEncode,
         api_key: str | None = None,
@@ -341,7 +341,7 @@ class HuggingFaceEmbedding(BaseLLM):
         timeout: float | httpx.Timeout = httpx.Timeout(None),
         aembedding: bool | None = None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
-        headers: dict[str, object] = {},
+        headers={},
     ) -> EmbeddingResponse:
         super().embedding()
         headers = config.validate_environment(
