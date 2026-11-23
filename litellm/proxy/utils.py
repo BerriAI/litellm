@@ -210,7 +210,11 @@ from litellm.litellm_core_utils.litellm_logging import (
     deployment_pricing_model_info,
 )
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
-from litellm.litellm_core_utils.redact_messages import drop_token_ids, without_hidden_token_data
+from litellm.litellm_core_utils.redact_messages import (
+    TokenDataCheckedFields,
+    drop_token_ids,
+    without_hidden_token_data,
+)
 from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
@@ -4859,7 +4863,7 @@ class ProxyLogging:
             await self._post_call_without_v2(run, guardrails, guardrail_callbacks, other_callbacks)
             return run.response
         fields: Final = with_sources(
-            hook_fields(data, run, Field.response),
+            TokenDataCheckedFields(hook_fields(data, run, Field.response)),
             DERIVED_POST_CALL_SUCCESS_FIELDS,
             HookArgs(auth=user_api_key_dict, request=data),  # pyright: ignore[reportUnknownArgumentType]  # untyped legacy request dict
         )

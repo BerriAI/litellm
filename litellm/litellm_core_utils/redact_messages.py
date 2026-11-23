@@ -21,6 +21,9 @@ from pydantic_core import to_jsonable_python
 import litellm
 from litellm.constants import REDACTED_BY_LITELLM
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.custom_logger_v2.enums import Field
+from litellm.integrations.custom_logger_v2.outcomes import Patch
+from litellm.integrations.custom_logger_v2.patches import LiveFields, apply_patch
 from litellm.litellm_core_utils.classifier_logging import without_classifier_audit
 from litellm.litellm_core_utils.core_helpers import (
     as_object_list,
@@ -435,7 +438,7 @@ def _hides_original_output(holder: object, outputs_before: tuple[_TokenDataOutpu
     token_data: Final = _token_data(holder)
     output: Final = _holder_output(holder)
     originals: Final = tuple(before.output for before in outputs_before if before.token_data.pairs_with(token_data))
-    return bool(originals) and not any(_keeps_every_field(original, output) for original in originals)
+    return bool(originals) and not all(_keeps_every_field(original, output) for original in originals)
 
 
 def _drop_token_data_of_rewritten_outputs(response: object, outputs_before: tuple[_TokenDataOutput, ...]) -> None:
@@ -452,6 +455,28 @@ async def without_hidden_token_data(response: object, hooked: Awaitable[_Hooked]
     result: Final = await hooked
     _drop_token_data_of_rewritten_outputs(response if result is None else result, outputs_before)
     return result
+
+
+class TokenDataCheckedFields(LiveFields):
+    __slots__ = ("_inner",)
+
+    def __init__(self, inner: Mapping[Field, object]) -> None:
+        self._inner: Final = inner
+
+    def __getitem__(self, field: Field) -> object:
+        return self._inner[field]
+
+    def __iter__(self) -> Iterator[Field]:
+        return iter(self._inner)
+
+    def __len__(self) -> int:
+        return len(self._inner)
+
+    def apply(self, patch: Patch) -> Mapping[Field, object]:
+        outputs_before: Final = _token_data_outputs(self._inner.get(Field.response))
+        applied: Final = apply_patch(self._inner, patch)
+        _drop_token_data_of_rewritten_outputs(applied.get(Field.response), outputs_before)
+        return self if applied is self._inner else TokenDataCheckedFields(applied)
 
 
 def _redact_provider_specific_fields_dict(choice: Mapping[str, object]) -> None:

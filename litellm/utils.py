@@ -2084,9 +2084,15 @@ async def _post_call_success_deployment_response(
         and Hook.post_deployment_success in CustomLoggerV2.declared_hooks
         and (subscribers := hook_subscribers(Hook.post_deployment_success, callbacks, admit=Admit.every_logger)).has_v2
     ):
+        from litellm.litellm_core_utils.redact_messages import TokenDataCheckedFields
+
         fields: Final = ResultFields(request_data, PROXY_REQUEST_KEYS, Field.response, response)  # pyright: ignore[reportUnknownArgumentType]  # the attempt's request dict
         _ = kwargs_after(
-            await run_subscribers(subscribers, fields, partial(_start_post_deployment_success, fields, typed_call_type))
+            await run_subscribers(
+                subscribers,
+                TokenDataCheckedFields(fields),
+                partial(_start_post_deployment_success, fields, typed_call_type),
+            )
         )
         return fields.value
 

@@ -548,6 +548,29 @@ async def test_post_call_success_hook_drops_token_data_of_a_choice_rewritten_to_
     assert second["logprobs"] is not None
 
 
+@pytest.mark.asyncio
+async def test_post_call_success_hook_drops_logprobs_of_a_choice_rewritten_to_a_sibling_with_equal_logprobs_only(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    monkeypatch.setattr(litellm, "callbacks", [_AnswerCopyingLogger()])
+    hidden = _vllm_chat_response("The capital of France is Paris.").model_dump()["choices"][0]
+    sibling = _vllm_chat_response("Lyon is in France.").model_dump()["choices"][0]
+    logprobs_only = {"token_ids": None, "provider_specific_fields": None}
+
+    served = await proxy_logging.post_call_success_hook(
+        data={"model": "m", "messages": [{"role": "user", "content": "a city in France?"}], "n": 2, "logprobs": True},
+        response={
+            **_vllm_chat_response("").model_dump(),
+            "choices": [{**hidden, **logprobs_only}, {**sibling, **logprobs_only, "index": 1}],
+        },
+        user_api_key_dict=make_user_api_key_auth(),
+    )
+
+    first, _ = served["choices"]
+    assert first["message"]["content"] == "Lyon is in France."
+    assert first["logprobs"] is None
+
+
 class _FirstChoiceDroppingLogger(CustomLogger):
     async def async_post_call_success_hook(
         self, data: dict[str, object], user_api_key_dict: UserAPIKeyAuth, response: object
@@ -626,12 +649,48 @@ async def test_post_call_success_hook_drops_token_data_when_a_v2_callback_masks_
     assert choice["logprobs"] is None
 
 
+class _ParisReaskingV2Callback(CustomLoggerV2):
+    @on(Hook.post_call_success, reads={Field.response}, writes={Field.response})
+    async def post_call_success(self, view: object, ctx: CallContext[object]) -> Patch:
+        return Patch().set(Field.response, _vllm_chat_response("The capital of France is Paris.").model_dump())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("callbacks", "served_answer", "served_token_ids"),
+    [
+        (
+            [_ParisReaskingV2Callback(), _SerializedAnswerMaskingV2Callback()],
+            "The capital of France is [MASKED].",
+            None,
+        ),
+        ([_ParisReaskingV2Callback()], "The capital of France is Paris.", [785, 6722, 315, 9625, 374, 12095, 13]),
+    ],
+    ids=["masked-by-a-later-v2-callback", "left-alone"],
+)
+async def test_post_call_success_hook_checks_token_data_of_a_new_answer_after_each_v2_callback(
+    proxy_logging, make_user_api_key_auth, monkeypatch, callbacks, served_answer, served_token_ids
+):
+    monkeypatch.setattr(litellm, "callbacks", callbacks)
+
+    served = await proxy_logging.post_call_success_hook(
+        data={"model": "m", "messages": [{"role": "user", "content": "capital of Italy?"}]},
+        response=_vllm_chat_response("The capital of Italy is Rome.", token_ids=_ROME_TOKEN_IDS, logprob=-0.3).model_dump(),
+        user_api_key_dict=make_user_api_key_auth(),
+    )
+
+    choice = served["choices"][0]
+    assert choice["message"]["content"] == served_answer
+    assert choice["provider_specific_fields"]["token_ids"] == served_token_ids
+    assert (choice["logprobs"] is None) is (served_token_ids is None)
+
+
 def _responses_output_text(text: str, logprobs_requested: bool) -> ResponseOutputText:
     return ResponseOutputText(
         type="output_text",
         text=text,
         annotations=[],
-        logprobs=[Logprob(token=text, logprob=-0.1, bytes=[], top_logprobs=[])] if logprobs_requested else [],
+        logprobs=[Logprob(token=text, logprob=-len(text) / 100, bytes=[], top_logprobs=[])] if logprobs_requested else [],
     )
 
 

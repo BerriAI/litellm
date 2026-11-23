@@ -6245,18 +6245,37 @@ async def test_model_level_masking_guardrail_drops_token_data_of_a_new_answer_an
     assert response.choices[0].provider_specific_fields["token_ids"] is None
 
 
+def _masking_patch(view: object, word: str) -> Patch | None:
+    response: Final = getattr(view, "response")  # noqa: B009  # the view's declared field
+    if not isinstance(response, ModelResponse):
+        return None
+    masked: Final = response.model_copy(deep=True)
+    choice: Final = masked.choices[0]
+    if not isinstance(choice, Choices) or choice.message.content is None:
+        return None
+    choice.message.content = choice.message.content.replace(word, "[MASKED]")
+    return Patch().set(Field.response, masked)
+
+
 class _ParisMaskingDeploymentV2(CustomLoggerV2):
     @on(Hook.post_deployment_success, reads={Field.response}, writes={Field.response})
     async def post_success(self, view: object, ctx: CallContext[object]) -> Patch | None:
-        response: Final = getattr(view, "response")  # noqa: B009  # the view's declared field
-        if not isinstance(response, ModelResponse):
-            return None
-        masked: Final = response.model_copy(deep=True)
-        choice: Final = masked.choices[0]
-        if not isinstance(choice, Choices) or choice.message.content is None:
-            return None
-        choice.message.content = choice.message.content.replace("Paris", "[MASKED]")
-        return Patch().set(Field.response, masked)
+        return _masking_patch(view, "Paris")
+
+
+class _RomeMaskingDeploymentV2(CustomLoggerV2):
+    @on(Hook.post_deployment_success, reads={Field.response}, writes={Field.response})
+    async def post_success(self, view: object, ctx: CallContext[object]) -> Patch | None:
+        return _masking_patch(view, "Rome")
+
+
+class _RomeReaskingDeploymentV2(CustomLoggerV2):
+    @on(Hook.post_deployment_success, reads={Field.response}, writes={Field.response})
+    async def post_success(self, view: object, ctx: CallContext[object]) -> Patch | None:
+        rome: Final = await _ReaskingDeploymentHook().async_post_call_success_deployment_hook(
+            {}, getattr(view, "response"), None  # noqa: B009  # the view's declared field
+        )
+        return None if rome is None else Patch().set(Field.response, rome)
 
 
 @pytest.mark.asyncio
@@ -6278,6 +6297,39 @@ async def test_v2_deployment_callback_that_masks_the_answer_drops_vllm_token_dat
     assert isinstance(response, ModelResponse)
     assert response.choices[0].message.content == "The capital of France is [MASKED]."
     assert response.choices[0].provider_specific_fields["token_ids"] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("callbacks", "served_answer", "served_token_ids"),
+    [
+        (
+            [_RomeReaskingDeploymentV2(), _RomeMaskingDeploymentV2()],
+            "The capital of Italy is [MASKED].",
+            None,
+        ),
+        ([_RomeReaskingDeploymentV2()], "The capital of Italy is Rome.", _VLLM_ROME_TOKEN_IDS),
+    ],
+    ids=["masked-by-a-later-v2-callback", "left-alone"],
+)
+@respx.mock
+async def test_v2_deployment_callbacks_check_token_data_of_a_new_answer_after_each_callback(
+    monkeypatch: pytest.MonkeyPatch, callbacks: list[CustomLoggerV2], served_answer: str, served_token_ids: object
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", callbacks)
+    _mock_vllm_chat_answer(monkeypatch, "The capital of France is Paris.")
+
+    response: Final = await litellm.acompletion(
+        model="hosted_vllm/Qwen/Qwen3-0.6B",
+        api_base="http://vllm.invalid/v1",
+        messages=[{"role": "user", "content": "What is the capital of France?"}],
+        return_token_ids=True,
+        num_retries=0,
+    )
+
+    assert isinstance(response, ModelResponse)
+    assert response.choices[0].message.content == served_answer
+    assert response.choices[0].provider_specific_fields["token_ids"] == served_token_ids
 
 
 class _GuardrailBlocked(Exception):
