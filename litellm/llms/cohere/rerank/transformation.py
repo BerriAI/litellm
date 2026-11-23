@@ -151,5 +151,7 @@ class CohereRerankConfig(BaseRerankConfig):
 
         return RerankResponse.model_validate(_JSON_OBJECT.validate_python(raw_response_json))
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: Mapping[str, object] | httpx.Headers
+    ) -> BaseLLMException:
         return CohereError(message=error_message, status_code=status_code)
