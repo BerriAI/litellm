@@ -84,8 +84,8 @@ class VertexAILlama3Config(OpenAIGPTConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: dict[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
     ):
@@ -116,10 +116,10 @@ class VertexAILlama3Config(OpenAIGPTConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
+        request_data: Mapping[str, object],
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
@@ -175,7 +175,7 @@ class VertexAILlama3StreamingHandler(OpenAIChatCompletionStreamingHandler):
         self.sent_role = False
         self._pending_chunk: ModelResponseStream | None = None
 
-    def chunk_parser(self, chunk: dict) -> ModelResponseStream:
+    def chunk_parser(self, chunk: dict[str, object]) -> ModelResponseStream:
         result: Final = super().chunk_parser(chunk)
         if not self.sent_role and result.choices:
             delta: Final = result.choices[0].delta
