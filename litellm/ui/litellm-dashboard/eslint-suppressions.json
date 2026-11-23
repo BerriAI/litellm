@@ -2021,9 +2021,6 @@
     },
     "max-lines": {
       "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 1
     }
   },
   "src/components/ui/attachment.tsx": {
