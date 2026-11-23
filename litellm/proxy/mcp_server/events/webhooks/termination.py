@@ -6,6 +6,7 @@ import anyio
 from mcp.shared.exceptions import MCPError
 
 from litellm.proxy.mcp_server.contracts import OperationContext
+from litellm.proxy.mcp_server.events.catalog import PreparedEvent
 from litellm.proxy.mcp_server.events.config import EventsSettings
 from litellm.proxy.mcp_server.events.errors import EventsFailure
 from litellm.proxy.mcp_server.events.runtime import EventsRuntime
@@ -15,7 +16,8 @@ from litellm.proxy.mcp_server.events.webhooks.policy import callback_url, creden
 from litellm.proxy.mcp_server.events.webhooks.signing import new_webhook_id, parse_secret, signed_headers
 from litellm.proxy.mcp_server.events.webhooks.store import EventStore, SubscriptionRow
 from litellm.proxy.mcp_server.events.webhooks.verification import Poster
-from litellm.types.mcp_server.events import EventsError, EventsErrorCode, TerminatedEnvelope
+from litellm.proxy.mcp_server.subscriptions import SubscriptionTarget
+from litellm.types.mcp_server.events import EventsError, EventsErrorCode, EventType, TerminatedEnvelope
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 
@@ -30,17 +32,36 @@ async def end_upstream(
     settings: EventsSettings,
     runtime: EventsRuntime,
     lookup: Callable[[str], MCPServer | None] = registered_server,
+    *,
+    prepared: PreparedEvent | None = None,
 ) -> bool:
+    if row.upstream_subscription_id is None:
+        return True
+    if prepared is not None:
+        return await _send_unsubscribe(row, settings, runtime, prepared.upstream, prepared.descriptor)
     server: Final = lookup(row.server_id)
-    if server is None or row.upstream_subscription_id is None or not credential_outlives_request(server):
+    if server is None or not credential_outlives_request(server):
         return False
     try:
         target: Final = await runtime.prepare_target(OperationContext(_caller=None), server, (server,))
         descriptor: Final = next(
             (item for item in await runtime.descriptors(target) if item.name == row.event_name), None
         )
-        if descriptor is None:
-            return False
+    except (MCPError, OSError, TimeoutError):
+        return False
+    if descriptor is None:
+        return False
+    return await _send_unsubscribe(row, settings, runtime, target, descriptor)
+
+
+async def _send_unsubscribe(
+    row: SubscriptionRow,
+    settings: EventsSettings,
+    runtime: EventsRuntime,
+    target: SubscriptionTarget,
+    descriptor: EventType,
+) -> bool:
+    try:
         await runtime.call(
             target,
             "events/unsubscribe",
@@ -51,11 +72,11 @@ async def end_upstream(
             },
             routing_headers(row.event_name, row.arguments, descriptor),
         )
-        return True
     except MCPError as error:
         return error.error.code == EventsErrorCode.NOT_FOUND and error.error.data == {"kind": "subscription"}  # pyright: ignore[reportAny]  # SDK error data is arbitrary JSON
     except (OSError, TimeoutError):
         return False
+    return True
 
 
 def terminated_body(failure: EventsFailure) -> bytes:
