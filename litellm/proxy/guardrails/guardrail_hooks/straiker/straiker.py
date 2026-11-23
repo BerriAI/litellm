@@ -263,10 +263,14 @@ def _as_dict(value: object) -> dict:
     return value if isinstance(value, dict) else {}
 
 
-def _merged_metadata(request_data: Mapping[str, object]) -> dict:
+def _as_opaque_dict(value: object) -> dict[object, object]:
+    return value if isinstance(value, dict) else {}
+
+
+def _merged_metadata(request_data: Mapping[str, object]) -> dict[object, object]:
     return {
-        **_as_dict(request_data.get("metadata")),
-        **_as_dict(request_data.get("litellm_metadata")),
+        **_as_opaque_dict(request_data.get("metadata")),
+        **_as_opaque_dict(request_data.get("litellm_metadata")),
     }
 
 
@@ -274,7 +278,9 @@ def _as_optional_str(value: object) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
-def _build_webhook_metadata(request_data: dict, default_metadata: dict[str, str]) -> dict[str, object] | None:
+def _build_webhook_metadata(
+    request_data: Mapping[str, object], default_metadata: dict[str, str]
+) -> dict[str, object] | None:
     out: Final[dict[str, object]] = {}
     for key, value in _as_dict(request_data.get("metadata")).items():
         if key in _APPLICATION_METADATA_KEYS or key.startswith("user_api"):
@@ -287,7 +293,7 @@ def _build_webhook_metadata(request_data: dict, default_metadata: dict[str, str]
     return out or None
 
 
-def _extract_identity(request_data: dict) -> StraikerWebhookIdentity:
+def _extract_identity(request_data: Mapping[str, object]) -> StraikerWebhookIdentity:
     meta: Final = _merged_metadata(request_data)
     return StraikerWebhookIdentity(
         litellm_key=_as_optional_str(meta.get("user_api_key_alias"))
@@ -320,8 +326,8 @@ def _resolve_provider(request_data: dict, model: str | None) -> str | None:
     return provider or None
 
 
-def _resolve_destination(request_data: dict) -> str | None:
-    litellm_params: Final = _as_dict(request_data.get("litellm_params"))
+def _resolve_destination(request_data: Mapping[str, object]) -> str | None:
+    litellm_params: Final = _as_opaque_dict(request_data.get("litellm_params"))
     api_base: Final = request_data.get("api_base") or litellm_params.get("api_base")
     if not isinstance(api_base, str):
         return None
@@ -331,11 +337,11 @@ def _resolve_destination(request_data: dict) -> str | None:
         return None
 
 
-def _route_has_translation(request_data: dict) -> bool:
+def _route_has_translation(request_data: Mapping[str, object]) -> bool:
     from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
     from litellm.llms import load_guardrail_translation_mappings
 
-    route: Final = _as_dict(request_data.get("litellm_metadata")).get("user_api_key_request_route")
+    route: Final = _as_opaque_dict(request_data.get("litellm_metadata")).get("user_api_key_request_route")
     if not isinstance(route, str) or not route:
         return False
     mappings: Final = load_guardrail_translation_mappings()
@@ -385,7 +391,7 @@ _REPLY_CALL_SURFACES: Final = frozenset(
 )
 
 
-def _resolve_call_surface(logging_obj: LiteLLMLoggingObj | None, request_data: dict) -> str:
+def _resolve_call_surface(logging_obj: LiteLLMLoggingObj | None, request_data: Mapping[str, object]) -> str:
     call_type: Final = (
         (getattr(logging_obj, "call_type", None) if logging_obj is not None else None)
         or request_data.get("call_type")
@@ -469,10 +475,10 @@ def _build_usage(response: object) -> StraikerWebhookUsage | None:
     return StraikerWebhookUsage(input_tokens=input_tokens, output_tokens=output_tokens)
 
 
-def _is_streamed_request(request_data: dict) -> bool:
+def _is_streamed_request(request_data: Mapping[str, object]) -> bool:
     if request_data.get("stream") is True:
         return True
-    body: Final = _as_dict(_as_dict(request_data.get("proxy_server_request")).get("body"))
+    body: Final = _as_opaque_dict(_as_opaque_dict(request_data.get("proxy_server_request")).get("body"))
     return body.get("stream") is True
 
 
@@ -1115,7 +1121,7 @@ class StraikerGuardrail(CustomGuardrail):
             headers["X-Straiker-Webhook-Format"] = "litellm"
         return {**headers, **extra}
 
-    def _build_application(self, request_data: dict) -> StraikerWebhookApplication:
+    def _build_application(self, request_data: Mapping[str, object]) -> StraikerWebhookApplication:
         meta: Final = _merged_metadata(request_data)
         agent_id: Final = _as_optional_str(meta.get("agent_id"))
         return StraikerWebhookApplication(
@@ -1285,7 +1291,7 @@ class StraikerGuardrail(CustomGuardrail):
     def _record(
         self,
         *,
-        request_data: dict,
+        request_data: Mapping[str, object],
         logging_obj: LiteLLMLoggingObj | None,
         parsed: StraikerWebhookResponse,
     ) -> None:

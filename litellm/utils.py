@@ -5839,6 +5839,16 @@ def _map_params_with_provider_config(
             drop_params=drop_params,
             reasoning_drop_logger=reasoning_drop_logger,
         )
+    from litellm.llms.openai_like.dynamic_config import MapsAllowedOpenAIParams
+
+    if isinstance(provider_config, MapsAllowedOpenAIParams):
+        return provider_config.map_openai_params_allowing(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=drop_params,
+            allowed_openai_params=allowed_openai_param_names(allowed_openai_params),
+        )
     return provider_config.map_openai_params(
         non_default_params=non_default_params,
         optional_params=optional_params,
@@ -9378,9 +9388,13 @@ _FAILED_PROVIDER_LISTING_TTL_SECONDS: Final = 30
 
 
 def _provider_api_key_env_vars(provider: str) -> tuple[str, ...]:
+    from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
     if provider == LlmProviders.TOGETHER_AI:
         return TOGETHER_AI_API_KEY_ENV_VARS
-    return (f"{provider.replace('_', '').upper()}_API_KEY", f"{provider.upper()}_API_KEY")
+    json_provider: Final = JSONProviderRegistry.get(provider)
+    derived: Final = (f"{provider.replace('_', '').upper()}_API_KEY", f"{provider.upper()}_API_KEY")
+    return derived if json_provider is None else (*derived, *json_provider.api_key_envs)
 
 
 def _infer_valid_provider_from_env_vars(
