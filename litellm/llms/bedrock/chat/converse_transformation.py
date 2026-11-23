@@ -21,6 +21,7 @@ from litellm.constants import (
     RESPONSE_FORMAT_TOOL_NAME,
 )
 from litellm.exceptions import BadRequestError
+from litellm.litellm_core_utils.allowed_tools_tool_choice import HostedMcpToolHandling
 from litellm.litellm_core_utils.core_helpers import (
     drops_unsupported_params,
     filter_exceptions_from_params,
@@ -1232,6 +1233,9 @@ class AmazonConverseConfig(BaseConfig):
         if "meta.llama3-3-70b-instruct-v1:0" in model and non_default_params.get("stream", False) is True:
             optional_params["fake_stream"] = True
 
+    def hosted_mcp_tool_handling(self, model: str) -> HostedMcpToolHandling:
+        return "drops"
+
     def map_openai_params(
         self,
         non_default_params: dict,
@@ -1241,7 +1245,11 @@ class AmazonConverseConfig(BaseConfig):
         model_info: Mapping[str, object] | None = None,
     ) -> dict:
         request_params: Final = tool_params_without_hosted_mcp(
-            non_default_params, model=model, route="bedrock", drop_params=drop_params
+            non_default_params,
+            model=model,
+            route="bedrock",
+            drop_params=drop_params,
+            handling=self.hosted_mcp_tool_handling(model),
         )
         is_thinking_enabled: Final = self.is_thinking_enabled(request_params)
         base_model: Final = BedrockModelInfo.get_base_model(model)
