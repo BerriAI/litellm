@@ -383,7 +383,7 @@ class CodestralTextCompletion:
         api_key: str,
         logging_obj: LiteLLMLogging,
         stream: bool,
-        data: Mapping[str, object],
+        data: dict,
         optional_params: Mapping[str, object],
         timeout: float | httpx.Timeout,
         litellm_params: object = None,
