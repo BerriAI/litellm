@@ -69,6 +69,17 @@ def _record_cache_creation_tokens(logging_obj: Logging, created: _CreatedCachedC
     logging_obj.vertex_ai_cache_creation_input_tokens = max(tokens, 0)  # rebind-ok: set provider count
 
 
+def _reject_system_message_videos_gemini_would_drop(
+    messages: Sequence[AllMessageValues],
+    supports_system_message: bool,
+    drop_params: bool,
+    model: str,
+    custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
+) -> None:
+    if supports_system_message:
+        reject_system_message_videos(messages, drop_params, model, custom_llm_provider)
+
+
 class ContextCachingEndpoints(VertexBase):
     """
     Covers context caching endpoints for Vertex AI + Google AI Studio
@@ -332,9 +343,11 @@ class ContextCachingEndpoints(VertexBase):
         if cached_content is not None:
             return messages, optional_params, cached_content
 
+        supports_system_message: Final = get_supports_system_message(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
         cached_messages, non_cached_messages = separate_cached_messages(
-            messages=messages,
-            supports_system_message=get_supports_system_message(model=model, custom_llm_provider=custom_llm_provider),
+            messages=messages, supports_system_message=supports_system_message
         )
 
         if len(cached_messages) == 0:
@@ -363,7 +376,9 @@ class ContextCachingEndpoints(VertexBase):
             )
             return messages, optional_params, None
         reject_unusable_tool_call_arguments(cached_messages, model, custom_llm_provider, drop_params)
-        reject_system_message_videos(messages, drop_params, model, custom_llm_provider)
+        _reject_system_message_videos_gemini_would_drop(
+            messages, supports_system_message, drop_params, model, custom_llm_provider
+        )
 
         tools: Final = optional_params.pop("tools", None)
         tool_choice: Final = optional_params.pop("tool_choice", None)
@@ -497,9 +512,11 @@ class ContextCachingEndpoints(VertexBase):
         if cached_content is not None:
             return messages, optional_params, cached_content
 
+        supports_system_message: Final = get_supports_system_message(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
         cached_messages, non_cached_messages = separate_cached_messages(
-            messages=messages,
-            supports_system_message=get_supports_system_message(model=model, custom_llm_provider=custom_llm_provider),
+            messages=messages, supports_system_message=supports_system_message
         )
 
         if len(cached_messages) == 0:
@@ -528,7 +545,9 @@ class ContextCachingEndpoints(VertexBase):
             )
             return messages, optional_params, None
         reject_unusable_tool_call_arguments(cached_messages, model, custom_llm_provider, drop_params)
-        reject_system_message_videos(messages, drop_params, model, custom_llm_provider)
+        _reject_system_message_videos_gemini_would_drop(
+            messages, supports_system_message, drop_params, model, custom_llm_provider
+        )
 
         tools: Final = optional_params.pop("tools", None)
         tool_choice: Final = optional_params.pop("tool_choice", None)

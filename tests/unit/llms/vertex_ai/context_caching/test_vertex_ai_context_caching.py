@@ -1661,6 +1661,15 @@ class TestContextCachingEndpoints:
                 },
                 {"role": "tool", "tool_call_id": "call_abc123", "content": "72F and sunny"},
             ],
+            "system_before_an_uncached_reminder": [
+                {
+                    "role": "system",
+                    "content": "Tool results are authoritative.",
+                    "cache_control": {"type": "ephemeral"},
+                },
+                {"role": "system", "content": "2 of 8 turns used"},
+                {"role": "tool", "tool_call_id": "call_abc123", "content": "72F and sunny"},
+            ],
         }[final_cached_role]
         return [
             {
@@ -1683,7 +1692,7 @@ class TestContextCachingEndpoints:
             {"role": "user", "content": "What is the weather in Boston?"},
         ]
 
-    @pytest.mark.parametrize("final_cached_role", ["assistant", "tool", "system"])
+    @pytest.mark.parametrize("final_cached_role", ["assistant", "tool", "system", "system_before_an_uncached_reminder"])
     def test_check_and_create_cache_skips_when_cached_block_ends_on_model_turn(
         self, final_cached_role
     ):
@@ -1717,7 +1726,7 @@ class TestContextCachingEndpoints:
         self.mock_client.get.assert_not_called()
         self.mock_client.post.assert_not_called()
 
-    @pytest.mark.parametrize("final_cached_role", ["assistant", "tool", "system"])
+    @pytest.mark.parametrize("final_cached_role", ["assistant", "tool", "system", "system_before_an_uncached_reminder"])
     @pytest.mark.asyncio
     async def test_async_check_and_create_cache_skips_when_cached_block_ends_on_model_turn(
         self, final_cached_role
@@ -2645,12 +2654,16 @@ def test_a_video_in_a_system_message_after_the_cached_block_is_a_bad_request_bef
     assert calls == []
 
 
+def _last_generated_contents(calls: list[httpx.Request]) -> list[object]:
+    return next(json.loads(call.content) for call in reversed(calls) if call.url.path.endswith(":generateContent"))[
+        "contents"
+    ]
+
+
 def _last_gemini_request_contents(messages: list[AllMessageValues], model: str) -> object:
     calls: Final[list[httpx.Request]] = []
     litellm.completion(model=model, messages=messages, api_key="test-key", client=_recording_gemini_client(calls))
-    return next(
-        json.loads(call.content) for call in reversed(calls) if call.url.path.endswith(":generateContent")
-    )["contents"][-1]
+    return _last_generated_contents(calls)[-1]
 
 
 def test_a_model_without_system_messages_gets_a_later_reminder_the_same_way_with_or_without_a_cache(
@@ -2671,3 +2684,33 @@ def test_a_model_without_system_messages_gets_a_later_reminder_the_same_way_with
 
     assert with_cache == _last_gemini_request_contents(uncached, "gemini/gemma-3-27b-it")
     assert with_cache == {"role": "user", "parts": [{"text": "question 2"}, {"text": "2 of 8 turns used"}]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("complete", [_complete_sync, _complete_async])
+async def test_a_model_without_system_messages_takes_a_video_in_a_later_system_message_the_same_way_with_or_without_a_cache(
+    local_model_cost_map: None, complete: Callable[[Mapping[str, object], list[httpx.Request]], Awaitable[None]]
+) -> None:
+    later_turns: Final[list[AllMessageValues]] = [
+        {"role": "assistant", "content": "answer 1"},
+        {
+            "role": "system",
+            "content": [
+                {"type": "text", "text": "Watch this first"},
+                {"type": "video_url", "video_url": {"url": "gs://videos-example/clip.mp4"}},
+            ],
+        },
+        {"role": "user", "content": "Describe the clip"},
+    ]
+    cached: Final[list[AllMessageValues]] = [
+        {"role": "user", "content": [{"type": "text", "text": "shared policy " * 3000, "cache_control": {"type": "ephemeral"}}]},
+        *later_turns,
+    ]
+    uncached: Final[list[AllMessageValues]] = [{"role": "user", "content": "shared policy " * 3000}, *later_turns]
+    cached_calls: Final[list[httpx.Request]] = []
+    uncached_calls: Final[list[httpx.Request]] = []
+
+    await complete({"model": "gemini/gemma-3-27b-it", "messages": cached, "api_key": "test-key"}, cached_calls)
+    await complete({"model": "gemini/gemma-3-27b-it", "messages": uncached, "api_key": "test-key"}, uncached_calls)
+
+    assert _last_generated_contents(cached_calls)[-1] == _last_generated_contents(uncached_calls)[-1]
