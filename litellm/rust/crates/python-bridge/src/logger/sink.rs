@@ -10,10 +10,13 @@ struct PythonSink {
     levels: Option<Levels>,
 }
 
+pub(super) fn litellm_target(target: &str) -> bool {
+    target.starts_with("litellm_") || target.starts_with("_native::")
+}
+
 impl Sink for PythonSink {
     fn enabled(&self, metadata: &Metadata<'_>) -> bool {
-        if !metadata.target().starts_with("litellm_") && !metadata.target().starts_with("_native::")
-        {
+        if !litellm_target(metadata.target()) {
             return false;
         }
         let level = host::level(metadata.level());
@@ -27,7 +30,7 @@ impl Sink for PythonSink {
     }
 
     fn emit(&self, record: &Record) {
-        host::emit(record, (&self.correlation.0, &self.correlation.1));
+        host::emit(&record.into(), (&self.correlation.0, &self.correlation.1));
     }
 }
 

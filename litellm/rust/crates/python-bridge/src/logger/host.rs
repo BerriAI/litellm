@@ -4,6 +4,7 @@
 use litellm_host_python::Pythonized;
 use litellm_tracing::{Level, Record};
 use pyo3::prelude::*;
+use serde_json::{Map, Value};
 
 const MODULE: &str = "litellm.rust_bridge.host.logger";
 
@@ -60,8 +61,31 @@ pub(super) fn enabled(level: u8, target: &str) -> bool {
     .unwrap_or(false)
 }
 
-/// Logs one record through Python's filters and handlers.
-pub(super) fn emit(record: &Record, correlation: (&str, &str)) {
+/// One log line as Python's `emit` takes it.
+pub(super) struct Line<'a> {
+    pub(super) level: u8,
+    pub(super) message: &'a str,
+    pub(super) file: &'a str,
+    pub(super) line: u32,
+    pub(super) target: &'a str,
+    pub(super) fields: &'a Map<String, Value>,
+}
+
+impl<'a> From<&'a Record> for Line<'a> {
+    fn from(record: &'a Record) -> Self {
+        Self {
+            level: level(record.metadata.level()),
+            message: &record.message,
+            file: record.metadata.file().unwrap_or_default(),
+            line: record.metadata.line().unwrap_or_default(),
+            target: record.metadata.target(),
+            fields: &record.fields,
+        }
+    }
+}
+
+/// Logs one line through Python's filters and handlers.
+pub(super) fn emit(line: &Line<'_>, correlation: (&str, &str)) {
     Python::try_attach(|py| {
         report(
             py,
@@ -70,12 +94,12 @@ pub(super) fn emit(record: &Record, correlation: (&str, &str)) {
                     .call_method1(
                         "emit",
                         (
-                            level(record.metadata.level()),
-                            &record.message,
-                            record.metadata.file().unwrap_or_default(),
-                            record.metadata.line().unwrap_or_default(),
-                            record.metadata.target(),
-                            Pythonized(&record.fields),
+                            line.level,
+                            line.message,
+                            line.file,
+                            line.line,
+                            line.target,
+                            Pythonized(line.fields),
                             correlation,
                         ),
                     )
