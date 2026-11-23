@@ -407,7 +407,7 @@ async def public_skill_hub(uploads: PluginUploadRepositoryDep):
         counts: Final[Mapping[str, int]] = (
             await uploads.download_counts(tuple(plugin.id for plugin in plugins)) if uploads else {}
         )
-        items: Final = []
+        items: Final[list[PluginListItem]] = []
         for plugin in plugins:
             raw = plugin.manifest_json or {}
             manifest = json.loads(raw) if isinstance(raw, str) else raw
