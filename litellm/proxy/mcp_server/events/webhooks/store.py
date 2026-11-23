@@ -10,6 +10,8 @@ from litellm.proxy.mcp_server.events.webhooks.settlement import SettlementOutcom
 from litellm.types.mcp_server.events import CallbackFailure, JsonObject
 
 if TYPE_CHECKING:
+    from prisma.types import LiteLLM_MCPEventSubscriptionWhereInput
+
     from litellm.proxy.utils import PrismaClient
 
 SubscriptionStatus: TypeAlias = Literal["pending", "active", "suspended", "terminated"]
@@ -316,14 +318,16 @@ class PrismaEventStore:
     async def end_if_current(
         self, subscription_id: str, upstream_subscription_id: str | None, generation: str | None = None
     ) -> bool:
+        where: LiteLLM_MCPEventSubscriptionWhereInput = {
+            "id": subscription_id,
+            "upstream_subscription_id": upstream_subscription_id,
+            "status": {"not": "terminated"},
+        }
+        if generation is not None:
+            where["generation"] = generation
         async with self._client.tx() as tx:
             ended: Final = await tx.litellm_mcpeventsubscription.update_many(
-                where={
-                    "id": subscription_id,
-                    **({"generation": generation} if generation is not None else {}),
-                    "upstream_subscription_id": upstream_subscription_id,
-                    "status": _NOT_TERMINATED,
-                },
+                where=where,
                 data={"status": "terminated"},
             )
             if ended:
@@ -333,14 +337,16 @@ class PrismaEventStore:
     async def hold_for_unsubscribe(
         self, subscription_id: str, upstream_subscription_id: str | None, generation: str | None = None
     ) -> bool:
+        where: LiteLLM_MCPEventSubscriptionWhereInput = {
+            "id": subscription_id,
+            "upstream_subscription_id": upstream_subscription_id,
+            "status": {"in": ["active", "suspended"]},
+        }
+        if generation is not None:
+            where["generation"] = generation
         async with self._client.tx() as tx:
             held: Final = await tx.litellm_mcpeventsubscription.update_many(
-                where={
-                    "id": subscription_id,
-                    **({"generation": generation} if generation is not None else {}),
-                    "upstream_subscription_id": upstream_subscription_id,
-                    "status": {"in": ["active", "suspended"]},
-                },
+                where=where,
                 data={"status": "pending", "refresh_before": datetime.now(timezone.utc) + PENDING_TTL},
             )
             if held:
