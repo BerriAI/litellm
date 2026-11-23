@@ -1305,7 +1305,7 @@ class PrismaManager:
                         stdout=None,
                         stderr=None,
                     )
-                    ProxyExtrasDBManager.apply_event_scope_trigger()
+                    ProxyExtrasDBManager.apply_event_scope_trigger()  # pyright: ignore[reportUnknownMemberType]  # the type-check environment omits the optional proxy extras
                     PrismaManager._apply_environment_variables_revision_trigger()
                     PrismaManager._apply_replica_identity_full_if_requested()
                     return True
