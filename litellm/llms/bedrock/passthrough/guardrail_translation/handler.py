@@ -1191,7 +1191,7 @@ async def _post_call_rewritten_texts(
     """Run the post_call guardrails on a buffered stream's texts as one Converse response with a content block per
     group, and return each group's text as the guardrails left it, or None when the response came back in another
     shape."""
-    synthetic_response: Final[dict] = {
+    synthetic_response: Final[dict[str, object]] = {
         "output": {
             "message": {
                 "role": "assistant",

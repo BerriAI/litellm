@@ -2,7 +2,7 @@
 Translate from OpenAI's `/v1/chat/completions` to Groq's `/v1/chat/completions`
 """
 
-from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping
+from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Final, Literal, cast, overload
 
 import httpx
@@ -61,18 +61,18 @@ class GroqChatConfig(OpenAILikeChatConfig):
     def __init__(
         self,
         frequency_penalty: int | None = None,
-        function_call: str | dict | None = None,
-        functions: list | None = None,
-        logit_bias: dict | None = None,
+        function_call: str | Mapping[str, object] | None = None,
+        functions: Sequence[object] | None = None,
+        logit_bias: Mapping[str, object] | None = None,
         max_tokens: int | None = None,
         n: int | None = None,
         presence_penalty: int | None = None,
-        stop: str | list | None = None,
+        stop: str | Sequence[object] | None = None,
         temperature: int | None = None,
         top_p: int | None = None,
-        response_format: dict | None = None,
-        tools: list | None = None,
-        tool_choice: str | dict | None = None,
+        response_format: Mapping[str, object] | None = None,
+        tools: Sequence[object] | None = None,
+        tool_choice: str | Mapping[str, object] | None = None,
     ) -> None:
         locals_: Final[Mapping[str, object]] = dict(locals())
         for key, value in locals_.items():
@@ -188,7 +188,7 @@ class GroqChatConfig(OpenAILikeChatConfig):
     ) -> tuple[str | None, str | None]:
         return self._get_openai_compatible_provider_info(api_base, api_key)
 
-    def _should_fake_stream(self, optional_params: dict) -> bool:
+    def _should_fake_stream(self, optional_params: Mapping[str, object]) -> bool:
         """
         Groq doesn't support 'response_format' while streaming
         """
@@ -199,8 +199,8 @@ class GroqChatConfig(OpenAILikeChatConfig):
 
     def _create_json_tool_call_for_response_format(
         self,
-        json_schema: dict,
-    ):
+        json_schema: dict[str, object],
+    ) -> ChatCompletionToolParam:
         """
         Handles creating a tool call for getting responses in JSON format.
 

@@ -135,8 +135,8 @@ def mock_vector_store_create_response(
 async def acreate(
     name: str | None = None,
     file_ids: builtins.list[str] | None = None,
-    expires_after: dict | None = None,
-    chunking_strategy: dict | None = None,
+    expires_after: Mapping[str, object] | None = None,
+    chunking_strategy: Mapping[str, object] | None = None,
     metadata: dict[str, str] | None = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
@@ -199,8 +199,8 @@ async def acreate(
 def create(
     name: str | None = None,
     file_ids: builtins.list[str] | None = None,
-    expires_after: dict | None = None,
-    chunking_strategy: dict | None = None,
+    expires_after: Mapping[str, object] | None = None,
+    chunking_strategy: Mapping[str, object] | None = None,
     metadata: dict[str, str] | None = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
@@ -1000,7 +1000,7 @@ def list(
 async def aupdate(
     vector_store_id: str,
     name: str | None = None,
-    expires_after: dict | None = None,
+    expires_after: Mapping[str, object] | None = None,
     metadata: dict[str, str] | None = None,
     extra_headers: dict[str, object] | None = None,
     extra_query: dict[str, object] | None = None,
@@ -1058,7 +1058,7 @@ async def aupdate(
 def update(
     vector_store_id: str,
     name: str | None = None,
-    expires_after: dict | None = None,
+    expires_after: Mapping[str, object] | None = None,
     metadata: dict[str, str] | None = None,
     extra_headers: dict[str, object] | None = None,
     extra_query: dict[str, object] | None = None,
