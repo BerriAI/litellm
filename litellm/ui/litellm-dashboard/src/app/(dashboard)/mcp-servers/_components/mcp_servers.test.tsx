@@ -32,6 +32,7 @@ vi.mock("@/components/networking", () => ({
   clearMCPUserEnvVars: vi.fn(),
   listMCPUserEnvVarStatus: vi.fn().mockResolvedValue([]),
   fetchMCPGatewaySessions: vi.fn(),
+  fetchMCPEventSubscriptions: vi.fn().mockResolvedValue({ subscriptions: [] }),
   terminateMCPGatewaySessions: vi.fn(),
   getUiConfig: vi.fn().mockResolvedValue({}),
 }));
@@ -178,6 +179,13 @@ describe("MCPServers", () => {
 
     // Verify the title is rendered
     expect(screen.getByText("MCP Servers")).toBeInTheDocument();
+  });
+
+  it("restores the subscriptions tab and its page when an admin reloads a bookmark", async () => {
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue([]);
+    render(<MCPServers {...defaultProps} />, { searchParams: "mcpTab=event-subscriptions&subscriptionOffset=500" });
+    expect(await screen.findByRole("tab", { name: "Event Subscriptions", selected: true })).toBeVisible();
+    expect(networking.fetchMCPEventSubscriptions).toHaveBeenCalledWith(defaultProps.accessToken, 500, 1);
   });
 
   it("opens the user env vars modal from a deep link and removes only that query parameter", async () => {
