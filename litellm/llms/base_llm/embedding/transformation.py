@@ -60,7 +60,6 @@ def _float32_base64(vector: tuple[float, ...] | str) -> str:
 
 
 def with_base64_embeddings(response: EmbeddingResponse) -> EmbeddingResponse:
-    """The response in OpenAI's ``encoding_format="base64"`` shape: each vector as little-endian float32 bytes in base64."""
     items: Final = _EmbeddingItems.model_validate(response, from_attributes=True).data
     vectors: Final = _EMBEDDING_VECTORS.validate_python(items, from_attributes=True)
     return response.model_copy(
