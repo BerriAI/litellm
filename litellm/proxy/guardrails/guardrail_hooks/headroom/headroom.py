@@ -556,7 +556,7 @@ class HeadroomGuardrail(CustomGuardrail):
         )
         self.timeout = self._resolve_timeout(timeout)
 
-    def _should_bypass(self, request_data: Mapping[str, object]) -> bool:
+    def _should_bypass(self, request_data: dict) -> bool:
         psr: Final = request_data.get("proxy_server_request")
         if not _is_str_object_dict(psr):
             return False
@@ -889,7 +889,7 @@ class HeadroomGuardrail(CustomGuardrail):
         )
         add_guardrail_to_applied_guardrails_header(request_data=request_data, guardrail_name=self.guardrail_name)
 
-        hashes: Final[frozenset[str]] = result.ccr_hashes if self.ccr_retrieval else frozenset()
+        hashes: Final = result.ccr_hashes if self.ccr_retrieval else frozenset()
         if not hashes:
             return {**inputs, "structured_messages": compressed}  # pyright: ignore[reportReturnType]
 
@@ -927,12 +927,12 @@ class HeadroomGuardrail(CustomGuardrail):
         self,
         response: object,
         model: str,
-        messages: list[dict[str, object]],
-        tools: list[dict[str, object]] | None,
+        messages: list[dict],
+        tools: list[dict] | None,
         stream: bool,
         custom_llm_provider: str,
-        kwargs: dict[str, object],
-    ) -> tuple[bool, dict[str, list[dict[str, object]]]]:
+        kwargs: dict,
+    ) -> tuple[bool, dict]:
         if not has_headroom_retrieve_tool(tools):
             return False, {}
 
@@ -944,9 +944,9 @@ class HeadroomGuardrail(CustomGuardrail):
 
     async def async_build_agentic_loop_plan(
         self,
-        tools: dict[str, list[dict[str, object]]],
+        tools: dict,
         model: str,
-        messages: list[dict[str, object]],
+        messages: list[dict],
         response: object,
         anthropic_messages_provider_config: BaseAnthropicMessagesConfig | None,
         anthropic_messages_optional_request_params: dict,
@@ -960,7 +960,7 @@ class HeadroomGuardrail(CustomGuardrail):
         valid_context: Final = (
             context if isinstance(context, HeadroomRequestContext) and context.expires_at > time.monotonic() else None
         )
-        valid_hashes: Final[frozenset[str]] = valid_context.issued_hashes if valid_context is not None else frozenset()
+        valid_hashes: Final = valid_context.issued_hashes if valid_context is not None else frozenset()
 
         retrieved: Final[list[tuple[dict[str, object], str]]] = []
         for tc in tool_calls:
