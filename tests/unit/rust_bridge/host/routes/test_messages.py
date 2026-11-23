@@ -4041,3 +4041,16 @@ def test_a_bedrock_mantle_sso_profile_without_a_usable_token_answers_401(
 
     assert type(mapped) is litellm.AuthenticationError
     assert type(mapped.__context__) is SSOTokenLoadError
+
+
+@pytest.mark.usefixtures("no_aws_credentials", "unavailable_container_credentials")
+def test_a_mantle_route_credential_source_outage_stays_the_retryable_credential_error() -> None:
+    from botocore.exceptions import CredentialRetrievalError
+
+    mapped: Final = messages_host.map_failure(
+        _credential_failure("unavailable"),
+        {"model": _MANTLE_ROUTE, "messages": [], "aws_region_name": "us-east-1"},
+        "bedrock",
+    )
+
+    assert type(mapped) is CredentialRetrievalError

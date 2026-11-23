@@ -966,7 +966,10 @@ def _bedrock_credential_failure(
         from botocore.exceptions import NoCredentialsError
 
         sts_failure: Final = _sts_failure(getattr(error, "messages_sts_failure", None))
-        return _raised(sts_failure if sts_failure is not None else NoCredentialsError())
+        if sts_failure is not None:
+            return _raised(sts_failure)
+        signing_failure: Final = _python_signing_failure(request)
+        return _raised(signing_failure if signing_failure is not None else NoCredentialsError())
     return _python_signing_failure(request)
 
 
