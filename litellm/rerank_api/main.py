@@ -174,27 +174,31 @@ def rerank(
             api_key=optional_params.api_key,
         )
 
-        rerank_provider_config: Final[BaseRerankConfig] = ProviderConfigManager.get_provider_rerank_config(
+        rerank_provider_config: Final[BaseRerankConfig | None] = ProviderConfigManager.get_provider_rerank_config(
             model=model,
             provider=litellm.LlmProviders(_custom_llm_provider),
             api_base=optional_params.api_base,
             present_version_params=present_version_params,
         )
 
-        optional_rerank_params: Final[dict] = get_optional_rerank_params(
-            rerank_provider_config=rerank_provider_config,
-            model=model,
-            drop_params=kwargs.get("drop_params") or litellm.drop_params or False,
-            query=query,
-            documents=documents,
-            custom_llm_provider=_custom_llm_provider,
-            top_n=top_n,
-            rank_fields=rank_fields,
-            return_documents=return_documents,
-            max_chunks_per_doc=max_chunks_per_doc,
-            max_tokens_per_doc=max_tokens_per_doc,
-            instruction=instruction,
-            non_default_params=kwargs,
+        optional_rerank_params: Final[dict] = (
+            get_optional_rerank_params(
+                rerank_provider_config=rerank_provider_config,
+                model=model,
+                drop_params=kwargs.get("drop_params") or litellm.drop_params or False,
+                query=query,
+                documents=documents,
+                custom_llm_provider=_custom_llm_provider,
+                top_n=top_n,
+                rank_fields=rank_fields,
+                return_documents=return_documents,
+                max_chunks_per_doc=max_chunks_per_doc,
+                max_tokens_per_doc=max_tokens_per_doc,
+                instruction=instruction,
+                non_default_params=kwargs,
+            )
+            if rerank_provider_config is not None
+            else {}
         )
         verbose_logger.debug("optional_rerank_params: %s", optional_rerank_params)
         if isinstance(optional_params.timeout, str):
@@ -545,16 +549,7 @@ def rerank(
             # is handled in the respective transformation configs
 
             # Check if the provider is actually supported
-            # If rerank_provider_config is a default CohereRerankConfig but the provider is not Cohere or litellm_proxy,
-            # it means the provider is not supported
-            if (
-                (
-                    isinstance(rerank_provider_config, litellm.CohereRerankConfig)
-                    or isinstance(rerank_provider_config, litellm.CohereRerankV2Config)
-                )
-                and _custom_llm_provider != "cohere"
-                and _custom_llm_provider != "litellm_proxy"
-            ):
+            if rerank_provider_config is None:
                 raise ValueError(f"Unsupported provider: {_custom_llm_provider}")
 
             response = base_llm_http_handler.rerank(

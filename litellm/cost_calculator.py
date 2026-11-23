@@ -3256,7 +3256,7 @@ def rerank_cost(
     _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)
 
     try:
-        config: Final = ProviderConfigManager.get_provider_rerank_config(
+        config: Final[BaseRerankConfig | None] = ProviderConfigManager.get_provider_rerank_config(
             model=model,
             api_base=None,
             present_version_params=[],
@@ -3268,12 +3268,27 @@ def rerank_cost(
         except Exception:
             model_info = None
 
-        return config.calculate_rerank_cost(
-            model=model,
-            custom_llm_provider=custom_llm_provider,
-            billed_units=billed_units,
-            model_info=model_info,
-        )
+        if config is not None:
+            return config.calculate_rerank_cost(
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                billed_units=billed_units,
+                model_info=model_info,
+            )
+
+        # Fallback to per-query pricing for handler-backed providers (e.g. Bedrock)
+        # without dedicated HTTP BaseRerankConfig
+        if (
+            model_info is not None
+            and "input_cost_per_query" in model_info
+            and model_info["input_cost_per_query"] is not None
+            and billed_units is not None
+        ):
+            search_units: Final = billed_units.get("search_units")
+            if search_units is not None:
+                return float(model_info["input_cost_per_query"] * search_units), 0.0
+
+        return 0.0, 0.0
     except Exception as e:
         raise e
 

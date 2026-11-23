@@ -10670,8 +10670,12 @@ class ProviderConfigManager:
         provider: LlmProviders,
         api_base: str | None,
         present_version_params: list[str],
-    ) -> BaseRerankConfig:
-        if litellm.LlmProviders.COHERE == provider or litellm.LlmProviders.COHERE_CHAT == provider:
+    ) -> BaseRerankConfig | None:
+        if (
+            litellm.LlmProviders.COHERE == provider
+            or litellm.LlmProviders.COHERE_CHAT == provider
+            or litellm.LlmProviders.LITELLM_PROXY == provider
+        ):
             if should_use_cohere_v1_client(api_base, present_version_params):
                 return litellm.CohereRerankConfig()
             else:
@@ -10716,7 +10720,7 @@ class ProviderConfigManager:
             )
 
             return get_dashscope_family_rerank_config(provider.value)
-        return litellm.CohereRerankConfig()
+        return None
 
     @staticmethod
     @lru_cache(maxsize=1)
