@@ -5,6 +5,7 @@ import subprocess
 import sys
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from itertools import product
 from pathlib import Path
 from types import MappingProxyType
@@ -18,6 +19,9 @@ from integration._support.process import LEGACY_MIGRATE_DEPLOY, MIGRATE_DEPLOY, 
 from litellm_proxy_extras.request_log_indexes import REQUEST_LOG_INDEXES
 from psycopg import sql
 from psycopg.rows import class_row
+
+from litellm.constants import SPEND_LOG_PARTITION_PRECREATE_AHEAD
+from litellm.proxy.db.db_transaction_queue.spend_logs_partition_manager import upcoming_partitions
 
 pytestmark: Final = pytest.mark.timeout(240)
 
@@ -292,7 +296,11 @@ def assert_ready(booted_gateway: Gateway) -> None:
 def assert_all_indexes_cover_every_partition(database_url: str) -> None:
     """Every populated partition's managed index is attached and valid, every parent is valid,
     and a partition created afterwards inherits every index."""
-    populated: Final = (*POPULATED_PARTITIONS, DEFAULT_PARTITION)
+    today: Final = datetime.now(timezone.utc).date()
+    runbook_partitions: Final = (
+        name for name, _, _ in upcoming_partitions(today, "day", SPEND_LOG_PARTITION_PRECREATE_AHEAD)
+    )
+    populated: Final = (*POPULATED_PARTITIONS, DEFAULT_PARTITION, *runbook_partitions)
     assert ledger(database_url) == {name: True for name in SHIPPED_MIGRATIONS}
     assert attached_partition_indexes(database_url) == expected_attachments(populated)
     assert parent_index_validity(database_url) == {index: True for index in SPEND_LOGS_INDEXES}
