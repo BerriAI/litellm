@@ -2,7 +2,7 @@ import asyncio
 import inspect
 import json
 from collections.abc import Mapping
-from contextlib import ExitStack
+from contextlib import ExitStack, nullcontext
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Final, Literal
@@ -1188,6 +1188,11 @@ async def test_key_update_prepares_existing_object_permission_without_writing():
         "vector_stores": ["old_store"],
     }
     mock_prisma_client.db.litellm_objectpermissiontable.find_unique = AsyncMock(return_value=existing_permission)
+    mock_prisma_client.db.query_raw = AsyncMock(
+        side_effect=lambda query, *_args: (
+            [{"locked": 1}] if query.startswith('SELECT 1 FROM "LiteLLM_VerificationToken"') else []
+        )
+    )
     permission_upsert = AsyncMock()
     mock_prisma_client.db.litellm_objectpermissiontable.upsert = permission_upsert
 
@@ -1211,7 +1216,9 @@ async def test_key_update_prepares_existing_object_permission_without_writing():
     result = await _write_prepared_key_update_object_permission(
         data_json={"user_id": "user123"},
         upsert=upsert,
-        prisma_client=mock_prisma_client,
+        tx=mock_prisma_client.db,
+        hashed_token=existing_key_row.token,
+        existing_key_row=existing_key_row,
     )
 
     assert result == {"user_id": "user123", "object_permission_id": "existing_perm_id_123"}
@@ -1240,6 +1247,11 @@ async def test_key_update_prepares_json_object_permission_and_upserts_new_row():
         team_id=None,
     )
     mock_prisma_client.db.litellm_objectpermissiontable.find_unique = AsyncMock(return_value=None)
+    mock_prisma_client.db.query_raw = AsyncMock(
+        side_effect=lambda query, *_args: (
+            [{"locked": 1}] if query.startswith('SELECT 1 FROM "LiteLLM_VerificationToken"') else []
+        )
+    )
     permission_upsert = AsyncMock()
     mock_prisma_client.db.litellm_objectpermissiontable.upsert = permission_upsert
 
@@ -1255,7 +1267,9 @@ async def test_key_update_prepares_json_object_permission_and_upserts_new_row():
     result = await _write_prepared_key_update_object_permission(
         data_json={},
         upsert=upsert,
-        prisma_client=mock_prisma_client,
+        tx=mock_prisma_client.db,
+        hashed_token=existing_key_row.token,
+        existing_key_row=existing_key_row,
     )
 
     assert result["object_permission_id"] == upsert.object_permission_id
@@ -1283,6 +1297,11 @@ async def test_key_update_recreates_missing_object_permission_with_existing_id()
         team_id=None,
     )
     mock_prisma_client.db.litellm_objectpermissiontable.find_unique = AsyncMock(return_value=None)
+    mock_prisma_client.db.query_raw = AsyncMock(
+        side_effect=lambda query, *_args: (
+            [{"locked": 1}] if query.startswith('SELECT 1 FROM "LiteLLM_VerificationToken"') else []
+        )
+    )
     permission_upsert = AsyncMock()
     mock_prisma_client.db.litellm_objectpermissiontable.upsert = permission_upsert
 
@@ -1300,7 +1319,9 @@ async def test_key_update_recreates_missing_object_permission_with_existing_id()
     await _write_prepared_key_update_object_permission(
         data_json={},
         upsert=upsert,
-        prisma_client=mock_prisma_client,
+        tx=mock_prisma_client.db,
+        hashed_token=existing_key_row.token,
+        existing_key_row=existing_key_row,
     )
     permission_upsert.assert_awaited_once_with(
         where={"object_permission_id": "missing_perm_id_789"},
@@ -7933,7 +7954,8 @@ async def test_bulk_update_keys_object_permission_is_granted_not_dropped(monkeyp
     """
     prisma = await _bulk_update_one_key(monkeypatch, {"object_permission": {"vector_stores": ["vs-1"]}})
 
-    upserted = prisma.db.litellm_objectpermissiontable.upsert.call_args.kwargs["data"]["create"]
+    tx = prisma.tx.return_value.__aenter__.return_value
+    upserted = tx.litellm_objectpermissiontable.upsert.call_args.kwargs["data"]["create"]
     assert upserted["vector_stores"] == ["vs-1"]
     written = _written_key_row(prisma)
     assert written["object_permission_id"] == upserted["object_permission_id"]
@@ -13668,6 +13690,18 @@ def test_enforce_upperbound_no_config_is_noop(monkeypatch):
 # --- Tests: _execute_virtual_key_regeneration enforces upperbound ---
 
 
+def _mock_permission_writer(client: AsyncMock) -> None:
+    from litellm.proxy.utils import PrismaClient
+
+    client.tx = MagicMock(side_effect=lambda: nullcontext(client.db))
+    client.db.query_raw = AsyncMock(
+        side_effect=lambda query, *_args: (
+            [{"locked": 1}] if query.startswith('SELECT 1 FROM "LiteLLM_VerificationToken"') else []
+        )
+    )
+    client.jsonify_object = PrismaClient.jsonify_object.__get__(client)
+
+
 def _make_regenerate_mock_prisma():
     """Mock prisma client shaped for _execute_virtual_key_regeneration."""
 
@@ -13688,10 +13722,9 @@ def _make_regenerate_mock_prisma():
             }
         )
     )
-    mock_prisma_client.db.litellm_verificationtoken.create = AsyncMock(
-        return_value=None
-    )
+    mock_prisma_client.db.litellm_verificationtoken.create = AsyncMock(return_value=None)
     mock_prisma_client.jsonify_object = MagicMock(side_effect=lambda data: data)
+    _mock_permission_writer(mock_prisma_client)
     return mock_prisma_client
 
 
@@ -14394,6 +14427,7 @@ async def test_process_single_key_update_rejects_when_custom_key_policy_denies()
 
 
 def _record_object_permission_writes(mock_prisma_client: AsyncMock, events: list[str]) -> None:
+    _mock_permission_writer(mock_prisma_client)
     mock_prisma_client.db.litellm_objectpermissiontable.find_unique = AsyncMock(return_value=None)
 
     async def upsert(**_kwargs: object) -> MagicMock:
@@ -14432,6 +14466,9 @@ def _update_with_object_permission(max_budget: float) -> UpdateKeyRequest:
 
 def _setup_update_key_fn_object_permission_mocks(monkeypatch, allowed: bool) -> tuple[AsyncMock, list[str]]:
     mock_prisma_client = _setup_update_key_fn_policy_mocks(monkeypatch, _policy_existing_team_key())
+    updated = MagicMock()
+    updated.model_dump.return_value = {"max_budget": 50.0, "team_id": "team-a"}
+    mock_prisma_client.db.litellm_verificationtoken.update = AsyncMock(return_value=updated)
     events: list[str] = []
     _record_object_permission_writes(mock_prisma_client, events)
     monkeypatch.setattr("litellm.proxy.proxy_server.user_custom_key_policy", _recording_policy(events, allowed))
@@ -14458,7 +14495,9 @@ async def test_update_key_fn_writes_the_object_permission_row_only_after_the_pol
 
     await _update_key_fn_with_object_permission(max_budget=50.0)
 
-    _assert_permission_row_written_after_policy(events, mock_prisma_client.update_data.await_args.kwargs["data"])
+    _assert_permission_row_written_after_policy(
+        events, mock_prisma_client.db.litellm_verificationtoken.update.await_args.kwargs["data"]
+    )
 
 
 @pytest.mark.asyncio
@@ -14478,7 +14517,7 @@ async def test_process_single_key_update_writes_the_object_permission_row_only_a
     mock_prisma_client = AsyncMock()
     updated_row = MagicMock()
     updated_row.model_dump.return_value = {"max_budget": 50.0, "team_id": "team-a"}
-    mock_prisma_client.update_data = AsyncMock(return_value={"data": updated_row})
+    mock_prisma_client.db.litellm_verificationtoken.update = AsyncMock(return_value=updated_row)
     events: list[str] = []
     _record_object_permission_writes(mock_prisma_client, events)
 
@@ -14486,7 +14525,9 @@ async def test_process_single_key_update_writes_the_object_permission_row_only_a
         mock_prisma_client, _update_with_object_permission(max_budget=50.0), _recording_policy(events, allowed=True)
     )
 
-    _assert_permission_row_written_after_policy(events, mock_prisma_client.update_data.await_args.kwargs["data"])
+    _assert_permission_row_written_after_policy(
+        events, mock_prisma_client.db.litellm_verificationtoken.update.await_args.kwargs["data"]
+    )
 
 
 @pytest.mark.asyncio
@@ -23785,12 +23826,11 @@ async def test_key_update_invalidates_cached_object_permission(monkeypatch):
         user_id="user-123",
         object_permission_id=permission_id,
     )
-    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
-        return_value=existing_key_row
-    )
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=existing_key_row)
     updated_key = MagicMock()
     updated_key.model_dump.return_value = {"user_id": "user-123"}
-    mock_prisma_client.update_data = AsyncMock(return_value={"data": updated_key})
+    _mock_permission_writer(mock_prisma_client)
+    mock_prisma_client.db.litellm_verificationtoken.update = AsyncMock(return_value=updated_key)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
     user_api_key_cache = UserApiKeyCache()
@@ -23808,9 +23848,7 @@ async def test_key_update_invalidates_cached_object_permission(monkeypatch):
         await _process_single_key_update(
             update_key_request=UpdateKeyRequest(
                 key="sk-lit5479",
-                object_permission=LiteLLM_ObjectPermissionBase(
-                    mcp_tool_permissions={"server-1": grants["new"]}
-                ),
+                object_permission=LiteLLM_ObjectPermissionBase(mcp_tool_permissions={"server-1": grants["new"]}),
             ),
             user_api_key_dict=UserAPIKeyAuth(
                 user_role=LitellmUserRoles.PROXY_ADMIN,
@@ -23995,9 +24033,7 @@ async def test_key_update_evicts_object_permission_before_key_object(monkeypatch
         "object_permission_id": permission_id,
         "mcp_tool_permissions": {"server-1": ["tool_a"]},
     }
-    mock_prisma_client.db.litellm_objectpermissiontable.find_unique = AsyncMock(
-        return_value=existing_permission_row
-    )
+    mock_prisma_client.db.litellm_objectpermissiontable.find_unique = AsyncMock(return_value=existing_permission_row)
     mock_prisma_client.db.litellm_objectpermissiontable.upsert = AsyncMock(
         return_value=MagicMock(object_permission_id=permission_id)
     )
@@ -24009,7 +24045,8 @@ async def test_key_update_evicts_object_permission_before_key_object(monkeypatch
     mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=existing_key_row)
     updated_key = MagicMock()
     updated_key.model_dump.return_value = {"user_id": "user-123"}
-    mock_prisma_client.update_data = AsyncMock(return_value={"data": updated_key})
+    _mock_permission_writer(mock_prisma_client)
+    mock_prisma_client.db.litellm_verificationtoken.update = AsyncMock(return_value=updated_key)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
     with patch(
@@ -24018,9 +24055,7 @@ async def test_key_update_evicts_object_permission_before_key_object(monkeypatch
         await _process_single_key_update(
             update_key_request=UpdateKeyRequest(
                 key="sk-lit5479",
-                object_permission=LiteLLM_ObjectPermissionBase(
-                    mcp_tool_permissions={"server-1": ["tool_a", "tool_b"]}
-                ),
+                object_permission=LiteLLM_ObjectPermissionBase(mcp_tool_permissions={"server-1": ["tool_a", "tool_b"]}),
             ),
             user_api_key_dict=UserAPIKeyAuth(
                 user_role=LitellmUserRoles.PROXY_ADMIN,
