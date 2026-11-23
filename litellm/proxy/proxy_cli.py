@@ -24,7 +24,11 @@ from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import StartupOutputSettings, print_startup_message, print_startup_warning, terminal_text
-from litellm.constants import DEFAULT_MAX_REQUEST_HEADER_SIZE, DEFAULT_NUM_WORKERS_LITELLM_PROXY
+from litellm.constants import (
+    DEFAULT_MAX_REQUEST_HEADER_SIZE,
+    DEFAULT_NUM_WORKERS_LITELLM_PROXY,
+    DEFAULT_UVICORN_KEEPALIVE_TIMEOUT_SECONDS,
+)
 from litellm.proxy.db.pgbouncer import (
     PgBouncerError,
     PgBouncerSettings,
@@ -458,8 +462,9 @@ class ProxyInitializationHelpers:
             uvicorn_args["log_config"] = _get_uvicorn_json_log_config()
         elif litellm_log := os.environ.get("LITELLM_LOG"):
             uvicorn_args["log_level"] = resolve_log_level(litellm_log)
-        if keepalive_timeout is not None:
-            uvicorn_args["timeout_keep_alive"] = keepalive_timeout
+        uvicorn_args["timeout_keep_alive"] = (
+            DEFAULT_UVICORN_KEEPALIVE_TIMEOUT_SECONDS if keepalive_timeout is None else keepalive_timeout
+        )
         if timeout_worker_healthcheck is not None:
             if "timeout_worker_healthcheck" in inspect.signature(uvicorn.Config.__init__).parameters:
                 uvicorn_args["timeout_worker_healthcheck"] = timeout_worker_healthcheck
@@ -889,7 +894,11 @@ class ProxyInitializationHelpers:
             ProxyInitializationHelpers.gunicorn_keepalive_and_trusted_proxies()
             if server is Server.GUNICORN
             else (
-                uvicorn.Config(app="", log_config=None).timeout_keep_alive
+                (
+                    DEFAULT_UVICORN_KEEPALIVE_TIMEOUT_SECONDS
+                    if server is Server.UVICORN
+                    else uvicorn.Config(app="", log_config=None).timeout_keep_alive
+                )
                 if keepalive_timeout is None
                 else keepalive_timeout,
                 uvicorn_trusted_proxies(None),
@@ -2086,10 +2095,17 @@ def run_server(
                         "and an OS other than Windows, so only a single worker reloads.\033[0m"
                     )
                 uvicorn_args.update(worker_overrides)
-            uvicorn.run(
-                **uvicorn_args,
-                workers=num_workers,
-            )
+            if max_requests_before_restart is None:
+                uvicorn.run(**uvicorn_args, workers=num_workers)
+            else:
+                from litellm.proxy import dev_reload
+
+                dev_reload.run_uvicorn_with_recycling(
+                    dev_reload.RELOAD_OPTIONS.validate_python(
+                        {"reload": False, "reload_dirs": (), "reload_includes": (), **uvicorn_args}
+                    ),
+                    workers=TypeAdapter(int).validate_python(num_workers),
+                )
         elif run_gunicorn is True:
             from litellm.proxy.rust_forward.peer import wrap
 

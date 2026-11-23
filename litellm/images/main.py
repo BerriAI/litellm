@@ -223,11 +223,11 @@ def image_generation(
     size: str | None = None,
     style: str | None = None,
     user: str | None = None,
-    timeout=600,  # default to 10 minutes
+    timeout: float = 600,  # default to 10 minutes
     api_key: str | None = None,
     api_base: str | None = None,
     api_version: str | None = None,
-    custom_llm_provider=None,
+    custom_llm_provider: str | None = None,
     *,
     aimg_generation: Literal[True],
     **kwargs,
@@ -247,11 +247,11 @@ def image_generation(
     size: str | None = None,
     style: str | None = None,
     user: str | None = None,
-    timeout=600,  # default to 10 minutes
+    timeout: float = 600,  # default to 10 minutes
     api_key: str | None = None,
     api_base: str | None = None,
     api_version: str | None = None,
-    custom_llm_provider=None,
+    custom_llm_provider: str | None = None,
     *,
     aimg_generation: Literal[False] = False,
     **kwargs,
@@ -271,11 +271,11 @@ def image_generation(
     size: str | None = None,
     style: str | None = None,
     user: str | None = None,
-    timeout=600,  # default to 10 minutes
+    timeout: float = 600,  # default to 10 minutes
     api_key: str | None = None,
     api_base: str | None = None,
     api_version: str | None = None,
-    custom_llm_provider=None,
+    custom_llm_provider: str | None = None,
     **kwargs,
 ) -> ImageResponse | Coroutine[object, object, ImageResponse]:
     """
@@ -1054,12 +1054,14 @@ def image_edit(
             )
         )
         # Get optional parameters for the responses API
-        image_edit_request_params: Final[dict] = _get_ImageEditRequestUtils().get_optional_params_image_edit(
-            model=model,
-            image_edit_provider_config=image_edit_provider_config,
-            image_edit_optional_params=image_edit_optional_params,
-            drop_params=kwargs.get("drop_params"),
-            additional_drop_params=additional_drop_params,
+        image_edit_request_params: Final[dict[str, object]] = (
+            _get_ImageEditRequestUtils().get_optional_params_image_edit(
+                model=model,
+                image_edit_provider_config=image_edit_provider_config,
+                image_edit_optional_params=image_edit_optional_params,
+                drop_params=kwargs.get("drop_params"),
+                additional_drop_params=additional_drop_params,
+            )
         )
 
         if image_edit_provider_config.use_multipart_form_data() and (

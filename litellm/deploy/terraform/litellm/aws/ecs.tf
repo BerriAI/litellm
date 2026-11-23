@@ -164,9 +164,7 @@ locals {
     for k, v in var.backend_extra_env : { name = k, value = v }
   ]
 
-  # Storing models in the DB needs a DB. Without one the backend reads its
-  # model list from proxy_config only.
-  backend_default_env = local.database_enabled ? [
+  model_store_env = local.database_enabled ? [
     { name = "STORE_MODEL_IN_DB", value = "true" },
   ] : []
   gateway_extra_secrets_list = [
@@ -261,6 +259,7 @@ locals {
 
   gateway_environment = concat(
     local.shared_env,
+    [for e in local.model_store_env : e if !contains(concat(keys(var.gateway_extra_env), keys(var.gateway_extra_secrets)), e.name)],
     local.gateway_otel_env,
     local.billing_metrics_env,
     local.gateway_extra_env_list,
@@ -452,7 +451,7 @@ resource "aws_ecs_task_definition" "backend" {
         portMappings = [{ containerPort = 4001, protocol = "tcp" }]
         environment = concat(
           local.shared_env,
-          local.backend_default_env,
+          local.model_store_env,
           local.backend_otel_env,
           local.billing_metrics_env,
           local.backend_extra_env_list,

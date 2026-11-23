@@ -200,7 +200,7 @@ IMAGE_FILE_TYPES: Final = {
 }
 
 
-def is_image_file_type(file_type):
+def is_image_file_type(file_type: object):
     return file_type in IMAGE_FILE_TYPES
 
 
@@ -219,7 +219,7 @@ VIDEO_FILE_TYPES: Final = {
 }
 
 
-def is_video_file_type(file_type):
+def is_video_file_type(file_type: object):
     return file_type in VIDEO_FILE_TYPES
 
 
@@ -236,7 +236,7 @@ AUDIO_FILE_TYPES: Final = {
 }
 
 
-def is_audio_file_type(file_type):
+def is_audio_file_type(file_type: object):
     return file_type in AUDIO_FILE_TYPES
 
 
@@ -244,7 +244,7 @@ def is_audio_file_type(file_type):
 TEXT_FILE_TYPES: Final = {FileType.CSV, FileType.HTML, FileType.MD, FileType.RTF, FileType.TXT}
 
 
-def is_text_file_type(file_type):
+def is_text_file_type(file_type: object):
     return file_type in TEXT_FILE_TYPES
 
 

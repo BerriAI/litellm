@@ -73,6 +73,8 @@ from litellm.llms.openai.vector_store_files.transformation import OpenAIVectorSt
 from litellm.llms.openai.vector_stores.transformation import OpenAIVectorStoreConfig
 from litellm.llms.openai.videos.transformation import OpenAIVideoConfig
 from litellm.llms.tinyfish.search.transformation import TinyfishSearchConfig
+from litellm.llms.vertex_ai.image_edit.vertex_gemini_transformation import VertexAIGeminiImageEditConfig
+from litellm.llms.vertex_ai.image_edit.vertex_imagen_transformation import VertexAIImagenImageEditConfig
 from litellm.responses.streaming_iterator import (
     BaseResponsesAPIStreamingIterator,
     MockResponsesAPIStreamingIterator,
@@ -7528,11 +7530,15 @@ class _GeminiImageUpstream:
         self.bodies: Final[
             list[Mapping[str, object]]
         ] = []  # mutable-ok: records each upstream request the handler sends
+        self.wire_bodies: Final[list[bytes]] = []  # mutable-ok: retains the actual HTTP request buffers
 
     def respond(self, request: httpx.Request) -> httpx.Response:
         self.bodies.append(json.loads(request.content))
+        self.wire_bodies.append(request.content)
         if len(self.bodies) == self.failing_request:
             return httpx.Response(429, json={"error": {"message": "quota exceeded"}}, request=request)
+        if request.url.path.endswith(":predict"):
+            return httpx.Response(200, request=request, json={"predictions": [{"bytesBase64Encoded": "image-1"}]})
         return httpx.Response(
             200,
             request=request,
@@ -7622,6 +7628,100 @@ async def _gemini_images(
         api_key="test-key",
     )
     return await generated if inspect.isawaitable(generated) else generated
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.parametrize(
+    "model,n", [("gemini-3.1-flash-image", 1), ("gemini-3.1-flash-image", 2), ("imagegeneration@006", 1)]
+)
+@pytest.mark.asyncio
+async def test_vertex_image_edit_sends_replayable_bounded_body_without_changing_logging(
+    is_async: bool, model: str, n: int
+) -> None:
+    upstream: Final = _GeminiImageUpstream()
+    imagen: Final = model == "imagegeneration@006"
+    config: Final = VertexAIImagenImageEditConfig() if imagen else VertexAIGeminiImageEditConfig()
+    prompt: Final = 'add a café sign saying "open"'
+    image: Final = b"\x89PNG\r\n\x1a\n" + b"x" * (1024 * 1024)
+    logging_obj: Final = _gemini_image_log("edit", model, priced_as="vertex_ai")
+    encoded_image: Final = base64.b64encode(image).decode("ascii")
+    expected: Final = json.dumps(
+        {
+            "instances": [
+                {
+                    "prompt": prompt,
+                    "referenceImages": [
+                        {
+                            "referenceType": "REFERENCE_TYPE_RAW",
+                            "referenceId": 1,
+                            "referenceImage": {"bytesBase64Encoded": encoded_image},
+                        }
+                    ],
+                }
+            ],
+            "parameters": {
+                "sampleCount": 1,
+                "editMode": "EDIT_MODE_INPAINT_INSERTION",
+                "editConfig": {"baseSteps": 50},
+                "guidanceScale": 7.5,
+                "seed": None,
+            },
+        }
+        if imagen
+        else {
+            "contents": {
+                "role": "USER",
+                "parts": [
+                    {"inlineData": {"mimeType": "image/png", "data": encoded_image}},
+                    {"text": prompt},
+                ],
+            },
+            "generationConfig": {"responseModalities": ["IMAGE"]},
+        }
+    )
+
+    def verify_stream(request: httpx.Request, chunks: Sequence[bytes]) -> None:
+        assert request.headers["content-length"] == str(len(expected))
+        assert "transfer-encoding" not in request.headers
+        assert b"".join(chunks) == expected.encode()
+        assert max(map(len, chunks)) <= 1024 * 1024
+
+    def check_sync(request: httpx.Request) -> None:
+        assert isinstance(request.stream, httpx.SyncByteStream)
+        verify_stream(request, tuple(request.stream))
+
+    async def check_async(request: httpx.Request) -> None:
+        assert isinstance(request.stream, httpx.AsyncByteStream)
+        verify_stream(request, [chunk async for chunk in request.stream])
+
+    client: Final = upstream.client(is_async)
+    if isinstance(client, AsyncHTTPHandler):
+        client.client.event_hooks = {"request": [check_async]}
+    else:
+        client.client.event_hooks = {"request": [check_sync]}
+
+    edited: Final = BaseLLMHTTPHandler().image_edit_handler(
+        model=model,
+        image=image,
+        prompt=prompt,
+        image_edit_provider_config=config,
+        image_edit_optional_request_params={"n": n},
+        custom_llm_provider="vertex_ai",
+        litellm_params=GenericLiteLLMParams(
+            api_base="https://vertex.test" if imagen else "https://vertex.test/edit:generateContent",
+            vertex_project="image-test",
+            vertex_location="us-central1",
+        ),
+        logging_obj=logging_obj,
+        timeout=30,
+        client=client,
+        _is_async=is_async,
+    )
+    response: Final = await edited if inspect.isawaitable(edited) else edited
+
+    assert sorted(image.b64_json for image in response.data) == [f"image-{i + 1}" for i in range(n)]
+    assert upstream.wire_bodies == [expected.encode()] * n
+    assert logging_obj.model_call_details["additional_args"]["complete_input_dict"] == (expected if is_async else [])
 
 
 @pytest.mark.parametrize("route", ["generation", "edit"])
