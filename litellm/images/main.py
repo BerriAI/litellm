@@ -1093,7 +1093,7 @@ def image_edit(
             json_fields: Final = {**caller_fields, **(extra_body_fields or {})}
             image_edit_request_params.update(
                 json_fields
-                if image_edit_provider_config.uses_json_body(images, json_fields)
+                if image_edit_provider_config.uses_json_body(images, {**image_edit_request_params, **json_fields})
                 else flatten_form_field_values(caller_fields, extra_body_fields)
             )
 

@@ -442,3 +442,25 @@ async def test_aimage_edit_with_an_uploaded_file_still_reaches_openai_as_multipa
     assert content_type.startswith("multipart/form-data"), content_type
     assert _multipart_file_parts(content_type, cast(bytes, captured["body"])) == (("image[]", PNG_BYTES),)
     assert _multipart_text_fields(content_type, cast(bytes, captured["body"]))["prompt"] == "add a hat"
+
+
+@pytest.mark.asyncio
+async def test_aimage_edit_with_image_references_and_an_uploaded_mask_stays_multipart() -> None:
+    """guard: an uploaded mask file keeps the edit multipart, with the mask bytes in their own part."""
+    captured: Final[dict[str, object]] = {}  # mutable-ok: the MockTransport callback records the request
+    client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(_capture_image_edit_request(captured)))
+
+    await litellm.aimage_edit(
+        image=None,
+        images=[dict(reference) for reference in _IMAGE_REFERENCES],
+        mask=PNG_BYTES,
+        model="openai/gpt-image-1",
+        prompt="add a hat",
+        api_key="sk-test",
+        api_base="https://edit.example/v1",
+        client=client,
+    )
+
+    content_type: Final = cast(str, captured["content_type"])
+    assert content_type.startswith("multipart/form-data"), content_type
+    assert _multipart_file_parts(content_type, cast(bytes, captured["body"])) == (("mask", PNG_BYTES),)

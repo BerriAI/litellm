@@ -43,10 +43,10 @@ def _upload_file_name(image: object) -> object:
     return image.name if isinstance(image, BufferedReader) else "image.png"
 
 
-def _has_uploaded_image(image: FileTypes | Sequence[FileTypes | None] | None) -> bool:
-    if isinstance(image, list | tuple):
-        return any(item is not None for item in image)
-    return image is not None
+def _has_uploaded_file(value: object) -> bool:
+    if isinstance(value, list | tuple):
+        return any(_has_uploaded_file(item) for item in value)
+    return value is not None and not isinstance(value, Mapping)
 
 
 class OpenAIImageEditConfig(BaseImageEditConfig):
@@ -102,7 +102,9 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
         image_edit_optional_request_params: Mapping[str, object],
     ) -> bool:
         return super().uses_json_body(image, image_edit_optional_request_params) or (
-            "images" in image_edit_optional_request_params and not _has_uploaded_image(image)
+            "images" in image_edit_optional_request_params
+            and not _has_uploaded_file(image)
+            and not _has_uploaded_file(image_edit_optional_request_params.get("mask"))
         )
 
     def transform_image_edit_request(
