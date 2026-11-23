@@ -1699,7 +1699,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             if (parsed_file_object := _parse_managed_file_object(row.file_object, row.unified_file_id)) is not None
         ]
 
-    async def check_managed_file_id_access(self, data: Mapping[str, object], user_api_key_dict: UserAPIKeyAuth) -> bool:
+    async def check_managed_file_id_access(self, data: Dict, user_api_key_dict: UserAPIKeyAuth) -> bool:
         retrieve_file_id = cast(Optional[str], data.get("file_id"))
         potential_file_id = _is_base64_encoded_unified_file_id(retrieve_file_id) if retrieve_file_id else False
         if potential_file_id and retrieve_file_id:
@@ -1897,7 +1897,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         model: str,
         healthy_deployments: List,
         messages: Optional[List[AllMessageValues]],
-        request_kwargs: Optional[Dict[str, object]] = None,
+        request_kwargs: Optional[Dict] = None,
         parent_otel_span: Optional[Span] = None,
     ) -> List[Dict]:
         if request_kwargs is None:
@@ -1927,7 +1927,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
 
     async def async_pre_call_deployment_hook(
         self, kwargs: dict[str, object], call_type: Optional[CallTypes]
-    ) -> Optional[dict[str, object]]:
+    ) -> Optional[dict]:
         """
         Allow modifying the request just before it's sent to the deployment.
         """
@@ -2139,9 +2139,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     ),
                 )
 
-    async def get_model_file_id_mapping(
-        self, file_ids: Sequence[str], litellm_parent_otel_span: Span | None
-    ) -> dict[str, dict[str, str]]:
+    async def get_model_file_id_mapping(self, file_ids: Sequence[str], litellm_parent_otel_span: Span | None) -> dict:
         """
         Get model-specific file IDs for a list of proxy file IDs.
         Returns a dictionary mapping litellm_proxy/ file_id -> model_id -> model_file_id
@@ -2344,7 +2342,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         return file_id.split(marker, 1)[1].split(";")[0]
 
     async def async_post_call_success_hook(
-        self, data: Mapping[str, object], user_api_key_dict: UserAPIKeyAuth, response: LLMResponseTypes
+        self, data: Dict, user_api_key_dict: UserAPIKeyAuth, response: LLMResponseTypes
     ) -> LLMResponseTypes:
         if isinstance(response, LiteLLMBatch):
             decoded_batch_id: Final = _is_base64_encoded_unified_file_id(response.id)
