@@ -27,6 +27,7 @@ import {
   MCPServer,
   MCPServerCostInfo,
   TRANSPORT,
+  supportsEvents,
   TRANSPORT_ITEMS,
   AUTH_TYPE_ITEMS,
   getMcpOAuthMode,
@@ -192,6 +193,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
   const [logoUrl, setLogoUrl] = useState<string | undefined>(mcpServer.mcp_info?.logo_url || undefined);
   const authType = mountedValues.auth_type as string | undefined;
   const transportType = mountedValues.transport as string | undefined;
+  const eventsSupported = supportsEvents(transportType ?? effectiveTransport, mcpServer.mcp_info?.protocol_version);
   const isStdioTransport = transportType === "stdio";
   const isOpenAPITransport = transportType === TRANSPORT.OPENAPI;
   const isMCPTransport = !isStdioTransport && !isOpenAPITransport;
@@ -1007,24 +1009,24 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                   )}
                 </MountedFormField>
 
-                <div className="flex items-start justify-between gap-4">
-                  <div>
-                    <span className="text-sm font-medium text-foreground flex items-center">
-                      {t("mcpServers.serverEdit.events.enabled")}
-                      <SimpleTooltip content={t("mcpServers.serverEdit.events.enabledTooltip")}>
-                        <Info className="ml-2 size-4 text-info hover:text-info/80 cursor-help" />
-                      </SimpleTooltip>
-                    </span>
-                    <p className="text-sm text-muted-foreground mt-1">
-                      {t("mcpServers.serverEdit.events.description")}
-                    </p>
-                  </div>
-                  <MountedFormField name="events_enabled" className="mb-0">
-                    {(control) => (
-                      <Switch aria-label={t("mcpServers.serverEdit.events.enabled")} {...switchControl(control)} />
-                    )}
-                  </MountedFormField>
-                </div>
+                <MountedFormField
+                  name="events_enabled"
+                  label={t("mcpServers.serverEdit.events.enabled")}
+                  className="grid grid-cols-[1fr_auto] items-center gap-x-4"
+                  help={t(
+                    eventsSupported
+                      ? "mcpServers.serverEdit.events.description"
+                      : "mcpServers.serverEdit.events.requirements",
+                  )}
+                >
+                  {(control) => (
+                    <Switch
+                      aria-label={t("mcpServers.serverEdit.events.enabled")}
+                      disabled={!eventsSupported && !control.value}
+                      {...switchControl(control)}
+                    />
+                  )}
+                </MountedFormField>
 
                 <MountedFormField
                   label={

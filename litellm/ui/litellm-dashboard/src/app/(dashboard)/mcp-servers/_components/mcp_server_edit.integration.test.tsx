@@ -316,8 +316,7 @@ const CASES: readonly Case[] = [
   },
 ];
 
-const saveAndCapture = async (server: MCPServer): Promise<Record<string, unknown>> => {
-  vi.mocked(networking.updateMCPServer).mockResolvedValue(server as never);
+const renderServerEdit = (server: MCPServer) =>
   render(
     <MCPServerEdit
       mcpServer={server}
@@ -328,6 +327,10 @@ const saveAndCapture = async (server: MCPServer): Promise<Record<string, unknown
       availableAccessGroups={[]}
     />,
   );
+
+const saveAndCapture = async (server: MCPServer): Promise<Record<string, unknown>> => {
+  vi.mocked(networking.updateMCPServer).mockResolvedValue(server as never);
+  renderServerEdit(server);
   await act(async () => {
     screen.getAllByRole("button", { name: "Save Changes" })[0].click();
   });
@@ -346,6 +349,51 @@ describe("mcp_server_edit save payload contract", () => {
   it.each(CASES.map((c) => [c.label, c] as const))("%s", async (_label, testCase) => {
     const payload = await saveAndCapture(testCase.server);
     expect(payload).toStrictEqual(testCase.expected);
+  });
+
+  it("allows MCP events after switching an auto server from SSE to HTTP and saves the required revision", async () => {
+    const user = userEvent.setup();
+    renderServerEdit({ ...BASE, transport: "sse", mcp_info: { server_name: "srv", protocol_version: "auto" } });
+    const toggle = screen.getByRole("switch", { name: "MCP events" });
+    await user.click(toggle);
+    expect(toggle).not.toBeChecked();
+    expect(screen.getByText(/MCP events require HTTP or stdio/)).toBeInTheDocument();
+    await selectOption("Transport Type", "Streamable HTTP");
+    await user.click(toggle);
+    await user.click(screen.getAllByRole("button", { name: "Save Changes" })[0]);
+    await waitFor(() =>
+      expect(networking.updateMCPServer).toHaveBeenCalledWith(
+        "access-token",
+        expect.objectContaining({
+          transport: "http",
+          mcp_info: expect.objectContaining({ protocol_version: "2026-07-28" }),
+          events: { enabled: true, allowed_events: null },
+        }),
+      ),
+    );
+  });
+
+  it("lets an operator disable stored MCP events on a legacy pin without changing the pin", async () => {
+    const user = userEvent.setup();
+    renderServerEdit({
+      ...BASE,
+      mcp_info: { server_name: "srv", protocol_version: "2025-06-18" },
+      events: { enabled: true },
+    });
+    const toggle = screen.getByRole("switch", { name: "MCP events" });
+    await user.click(toggle);
+    await user.click(toggle);
+    expect(toggle).not.toBeChecked();
+    await user.click(screen.getAllByRole("button", { name: "Save Changes" })[0]);
+    await waitFor(() =>
+      expect(networking.updateMCPServer).toHaveBeenCalledWith(
+        "access-token",
+        expect.objectContaining({
+          mcp_info: expect.objectContaining({ protocol_version: "2025-06-18" }),
+          events: { enabled: false, allowed_events: null },
+        }),
+      ),
+    );
   });
 
   it("never sends a server-owned field the form does not bind", async () => {
