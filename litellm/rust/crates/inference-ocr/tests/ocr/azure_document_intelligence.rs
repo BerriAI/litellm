@@ -203,10 +203,10 @@ async fn markdown_output_is_requested_on_the_analyze_call_and_split_into_pages(
 
 #[rstest]
 #[case::spans_cover_the_content_once(vec![vec![(0, 256)], vec![(256, 256)]], &["a".repeat(256), "a".repeat(256)])]
-#[case::spans_overlap_by_one_character(vec![vec![(0, 257)], vec![(256, 256)]], &["A".to_owned(), "B".to_owned()])]
+#[case::spans_pass_the_content_by_one_character(vec![vec![(0, 257)], vec![(256, 256)]], &["A".to_owned(), "B".to_owned()])]
 #[case::page_repeats_one_span(vec![vec![(0, 512), (0, 512)]], &["A".to_owned()])]
 #[tokio::test]
-async fn markdown_pages_from_overlapping_spans_fall_back_to_their_lines(
+async fn markdown_pages_whose_span_text_passes_the_content_fall_back_to_their_lines(
     #[case] spans_per_page: Vec<Vec<(usize, usize)>>,
     #[case] expected: &[String],
 ) {
