@@ -125,6 +125,8 @@ const PAGE_FRAME_CLASS_NAMES = {
 } as const;
 
 const FRAMED_SEGMENTS: ReadonlyMap<string, keyof typeof PAGE_FRAME_CLASS_NAMES> = new Map([
+  ["", "default"],
+  ["access-groups", "default"],
   ["admin-panel", "default"],
   ["agents", "default"],
   ["alerts", "default"],
@@ -135,6 +137,7 @@ const FRAMED_SEGMENTS: ReadonlyMap<string, keyof typeof PAGE_FRAME_CLASS_NAMES> 
   ["cost-tracking", "default"],
   ["guardrails", "default"],
   ["guardrails-monitor", "default"],
+  ["home", "default"],
   ["logging-and-alerts", "default"],
   ["logs", "fill"],
   ["mcp-servers", "fill"],
@@ -142,15 +145,19 @@ const FRAMED_SEGMENTS: ReadonlyMap<string, keyof typeof PAGE_FRAME_CLASS_NAMES> 
   ["models-and-endpoints", "default"],
   ["organizations", "default"],
   ["playground", "fixed"],
+  ["policies", "fill"],
   ["projects", "default"],
   ["prompts", "default"],
   ["router-settings", "default"],
   ["search-tools", "fill"],
   ["skills", "default"],
   ["tag-management", "fill"],
+  ["teams", "fill"],
+  ["telemetry", "default"],
   ["tool-policies", "default"],
   ["ui-theme", "default"],
   ["usage", "default"],
+  ["users", "default"],
   ["vector-stores", "default"],
   ["workflows", "default"],
 ]);
