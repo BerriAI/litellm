@@ -15,6 +15,7 @@ import litellm
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
     CONVERTED_SYSTEM_NOTE,
     anthropic_system_blocks,
+    anthropic_system_messages,
     place_mid_conversation_system,
     split_leading_system_run,
 )
@@ -533,6 +534,50 @@ def test_flagged_placement_keeps_a_system_before_an_assistant_turn_whose_empty_t
     )
 
     assert _roles(placed) == ["user", "system", "assistant", "user"]
+
+
+def test_anthropic_system_messages_keeps_clear_at_on_a_mid_conversation_system_message():
+    assert anthropic_system_messages(
+        {"role": "system", "content": "Reminder for this turn only.", "clear_at": "next_user_message"}
+    ) == (
+        {
+            "role": "system",
+            "content": [{"type": "text", "text": "Reminder for this turn only."}],
+            "clear_at": "next_user_message",
+        },
+    )
+
+
+def test_flagged_placement_merges_clear_at_only_when_every_message_in_the_run_shares_it():
+    shared: Final = place_mid_conversation_system(
+        [
+            {"role": "user", "content": "q1"},
+            {"role": "system", "content": "first", "clear_at": "next_user_message"},
+            {"role": "system", "content": "second", "clear_at": "next_user_message"},
+            {"role": "user", "content": "q2"},
+            {"role": "assistant", "content": "a"},
+        ],
+        supports_mid_conversation_system=True,
+    )
+    merged = [m for m in shared if isinstance(m, dict) and m.get("role") == "system"]
+    assert len(merged) == 1
+    assert _texts(merged[0]) == ["first", "second"]
+    assert merged[0].get("clear_at") == "next_user_message"
+
+    mixed: Final = place_mid_conversation_system(
+        [
+            {"role": "user", "content": "q1"},
+            {"role": "system", "content": "permanent"},
+            {"role": "system", "content": "turn-scoped", "clear_at": "next_user_message"},
+            {"role": "user", "content": "q2"},
+            {"role": "assistant", "content": "a"},
+        ],
+        supports_mid_conversation_system=True,
+    )
+    merged = [m for m in mixed if isinstance(m, dict) and m.get("role") == "system"]
+    assert len(merged) == 1
+    assert _texts(merged[0]) == ["permanent", "turn-scoped"]
+    assert "clear_at" not in merged[0]
 
 
 def test_anthropic_system_blocks_keeps_text_parts_with_their_cache_control_and_drops_the_rest():
