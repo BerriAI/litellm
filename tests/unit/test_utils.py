@@ -1188,6 +1188,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "thinking_always_on": {"type": "boolean"},
                 "supports_mid_conversation_system": {"type": "boolean"},
                 "supports_sampling_params": {"type": "boolean"},
+                "supports_search_tools_with_functions": {"type": "boolean"},
                 "supports_output_config": {"type": "boolean"},
                 "supports_speed": {"type": "boolean"},
                 "supports_fast_mode": {"type": "boolean"},

@@ -450,8 +450,8 @@ _BlockT: Final = TypeVar("_BlockT", bound=Mapping[str, object])
 
 
 class LiteLLMAnthropicMessagesAdapter:
-    def __init__(self):
-        pass
+    def __init__(self, *, keep_cache_control: bool = False) -> None:
+        self.keep_cache_control: Final = keep_cache_control
 
     ### FOR [BETA] `/v1/messages` endpoint support
 
@@ -503,7 +503,7 @@ class LiteLLMAnthropicMessagesAdapter:
         cache_control: Final = (
             source.get("cache_control") if isinstance(source, dict) else getattr(source, "cache_control", None)
         )
-        if cache_control and model and self.target_consumes_cache_control(model):
+        if cache_control and (self.keep_cache_control or (model and self.target_consumes_cache_control(model))):
             # TypedDict objects support dict operations at runtime
             # Use type ignore consistent with codebase pattern (see anthropic/chat/transformation.py:432)
             if isinstance(target, dict):
