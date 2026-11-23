@@ -76,7 +76,31 @@ async def attach_object_permission_to_dict(
             except Exception:
                 object_permission = object_permission.dict()  # pyright: ignore[reportDeprecated]  # pydantic v1 fallback
             data_dict["object_permission"] = object_permission
-    return data_dict
+    return with_stored_key_scope(data_dict)
+
+
+_INHERITED_SCOPE: Final = "mcp_event_scope_inherited"
+_MCP_TOOL_SCOPE: Final = frozenset(
+    ("mcp_servers", "mcp_access_groups", "mcp_tool_permissions", "mcp_toolsets", "blocked_tools")
+)
+
+
+def with_stored_key_scope(row: dict[str, object]) -> dict[str, object]:
+    permission: Final = as_str_mapping(row.get("object_permission"))
+    if permission is not None and _INHERITED_SCOPE in permission:
+        fields: Final = dict(permission)
+        if fields.pop(_INHERITED_SCOPE) and fields.get("mcp_servers") == []:
+            fields["mcp_servers"] = None
+        row["object_permission"] = fields
+    return row
+
+
+def _key_scope_fields(fields: Mapping[str, object], *, first_write: bool) -> dict[str, bool]:
+    if _MCP_TOOL_SCOPE.intersection(fields):
+        return {_INHERITED_SCOPE: False}
+    if first_write and set(fields) == {"mcp_event_permissions"} and fields["mcp_event_permissions"] is not None:
+        return {_INHERITED_SCOPE: True}
+    return {}
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,23 +108,25 @@ class ObjectPermissionUpsert:
     object_permission_id: str
     record: dict[str, object]
 
+    async def write(self, prisma_client: PrismaClient) -> str:
+        row: Final = await ObjectPermissionRepository(prisma_client).table.upsert(
+            where={"object_permission_id": self.object_permission_id},
+            data={"create": self.record, "update": self.record},
+        )
+        return row.object_permission_id
+
 
 async def prepare_object_permission_upsert(
     new_object_permission: Mapping[str, object],
     existing_object_permission_id: str | None,
     prisma_client: PrismaClient,
     can_grant_apps: bool = False,
+    *,
+    is_key: bool = False,
 ) -> ObjectPermissionUpsert:
     """
-    Read-and-merge half of an object permission upsert; performs no writes.
-
-    Merges the sent grants over the existing row (looked up by
-    ``existing_object_permission_id``, or a fresh uuid when the entity has none) and
-    returns the id plus the full record to upsert. The id is pinned inside the record
-    because the column has ``@default(uuid())``, so a create without it would mint a
-    different id than the one the caller links. ``mcp_tool_permissions`` is serialized
-    to a JSON string to avoid GraphQL parsing issues (e.g. server IDs starting with
-    "3e64" being interpreted as floats).
+    Validate the supplied grants before any dependent writes. The update includes only supplied fields
+    so it cannot restore another writer's changes to omitted grants.
 
     Keeping this separate from the write lets callers run the upsert inside the same
     transaction as the row that links ``object_permission_id``, so a rolled-back
@@ -123,28 +149,14 @@ async def prepare_object_permission_upsert(
             prisma_client=prisma_client,
             field=field,
         )
-    merged: Final[dict[str, object]] = {
-        key: value
-        for key, value in (
-            *existing_fields.items(),
-            *new_object_permission.items(),
-            ("object_permission_id", object_permission_id),
-        )
-        if (can_grant_apps or key != "apps") and (key != "mcp_event_permissions" or key in new_object_permission)
-    }
     record: Final[dict[str, object]] = {
-        **merged,
-        **(
-            {"mcp_tool_permissions": safe_dumps(merged["mcp_tool_permissions"])}
-            if "mcp_tool_permissions" in merged
-            else {}
-        ),
-        **(
-            {"mcp_event_permissions": safe_dumps(merged["mcp_event_permissions"])}
-            if "mcp_event_permissions" in merged
-            else {}
-        ),
+        key: safe_dumps(value) if key in ("mcp_event_permissions", "mcp_tool_permissions") else value
+        for key, value in new_object_permission.items()
+        if key != _INHERITED_SCOPE and (can_grant_apps or key != "apps")
     }
+    if is_key:
+        record.update(_key_scope_fields(new_object_permission, first_write=existing_object_permission_id is None))
+    record["object_permission_id"] = object_permission_id
     return ObjectPermissionUpsert(object_permission_id=object_permission_id, record=record)
 
 
@@ -206,21 +218,7 @@ async def handle_update_object_permission_common(
         prisma_client=prisma_client,
         can_grant_apps=can_grant_apps,
     )
-    return await write_object_permission_upsert(upsert, prisma_client)
-
-
-async def write_object_permission_upsert(upsert: ObjectPermissionUpsert, prisma_client: PrismaClient) -> str:
-    created_object_permission_row: Final = await ObjectPermissionRepository(prisma_client).table.upsert(
-        where={"object_permission_id": upsert.object_permission_id},
-        data={
-            "create": upsert.record,
-            "update": upsert.record,
-        },
-    )
-
-    verbose_proxy_logger.debug("created_object_permission_row: %s", created_object_permission_row)
-
-    return created_object_permission_row.object_permission_id
+    return await upsert.write(prisma_client)
 
 
 async def invalidate_cached_object_permissions(
@@ -243,6 +241,8 @@ async def set_object_permission(
     data_json: dict[str, object],
     prisma_client: PrismaClient | None,
     can_grant_apps: bool = False,
+    *,
+    is_key: bool = False,
 ) -> dict[str, object]:
     """
     Creates the LiteLLM_ObjectPermissionTable record for the key/team.
@@ -258,7 +258,9 @@ async def set_object_permission(
 
     # Clean data: exclude None values and object_permission_id
     clean_data: Final[dict[str, object]] = {
-        k: v for k, v in permission_data.items() if v is not None and k != "object_permission_id"
+        k: v
+        for k, v in permission_data.items()
+        if v is not None and k not in ("object_permission_id", _INHERITED_SCOPE)
     }
 
     reject_app_grant_change(clean_data.get("apps"), None, can_grant_apps)
@@ -269,18 +271,12 @@ async def set_object_permission(
             prisma_client=prisma_client,
             field=field,
         )
+        if field in clean_data:
+            clean_data[field] = safe_dumps(clean_data[field])
+    if is_key:
+        clean_data.update(_key_scope_fields(clean_data, first_write=True))
 
-    # Serialize the JSON permission columns to strings for GraphQL compatibility
-    serialized: Final = {
-        **clean_data,
-        **{
-            column: safe_dumps(clean_data[column])
-            for column in ("mcp_tool_permissions", "mcp_event_permissions")
-            if column in clean_data
-        },
-    }
-
-    created_permission: Final = await ObjectPermissionRepository(prisma_client).table.create(data=serialized)
+    created_permission: Final = await ObjectPermissionRepository(prisma_client).table.create(data=clean_data)
 
     data_json["object_permission_id"] = created_permission.object_permission_id
     data_json.pop("object_permission")
