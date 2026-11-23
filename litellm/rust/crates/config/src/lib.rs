@@ -5,6 +5,7 @@ mod layer;
 mod mcp;
 mod model;
 mod pass_through;
+mod priority;
 mod redis;
 mod routes;
 mod settings;
@@ -26,6 +27,10 @@ pub use litellm_router_types::{
 pub use mcp::{McpAuth, McpServer, McpTransport};
 pub use model::Model;
 pub use pass_through::{PassThroughEndpoint, PassThroughGuardrail};
+pub use priority::{
+    BorrowingEntity, ClassShareEntity, ModelLimitBorrowingConfig, PriorityClassShareConfig,
+    PriorityReservation, PriorityReservationSettings, ReservationUnit,
+};
 pub use redis::{CacheSettings, RedisSettings};
 pub use routes::RouteList;
 pub use settings::{
