@@ -1,9 +1,11 @@
 from collections.abc import Callable, Generator, Mapping
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Annotated, Final, Literal, TypeAlias
+from itertools import chain
+from typing import TYPE_CHECKING, Annotated, Final, Literal, TypeAlias, get_args
 
 from pydantic import (
     AliasChoices,
+    BaseModel,
     ConfigDict,
     Field,
     ModelWrapValidatorHandler,
@@ -107,6 +109,19 @@ MCPAuthProfile: TypeAlias = Annotated[
     Field(discriminator="auth_type"),
     WrapValidator(_validate_profile),
 ]
+
+
+def secret_field_names(profile_type: type[BaseModel]) -> tuple[str, ...]:
+    return tuple(
+        name
+        for name, field in profile_type.model_fields.items()
+        if field.annotation is SecretStr or SecretStr in get_args(field.annotation)
+    )
+
+
+AUTH_PROFILE_SECRET_FIELDS: Final = tuple(
+    dict.fromkeys(chain.from_iterable(map(secret_field_names, get_args(get_args(MCPAuthProfile)[0]))))
+)
 
 
 _PROFILE: Final[TypeAdapter[MCPAuthProfile]] = TypeAdapter(MCPAuthProfile)

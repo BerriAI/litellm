@@ -1,17 +1,19 @@
 import json
 from collections.abc import Callable
 from inspect import signature
-from typing import Final
+from typing import Final, get_args
 
 import pytest
-from pydantic import BaseModel, PydanticUserError, TypeAdapter, ValidationError
+from pydantic import BaseModel, PydanticUserError, SecretStr, TypeAdapter, ValidationError
 
 from litellm.types.mcp_server.auth_profile import (
+    AUTH_PROFILE_SECRET_FIELDS,
     ClientCredentialsAuthProfile,
     MCPAuthProfile,
     StaticAuthProfile,
     parse_auth_profile_json,
     profile_id_key,
+    secret_field_names,
 )
 
 PROFILES: Final[TypeAdapter[MCPAuthProfile]] = TypeAdapter(MCPAuthProfile)
@@ -178,3 +180,26 @@ def test_reading_profile_json_accepts_both_static_and_oauth_credentials() -> Non
 )
 def test_profile_id_key_folds_ascii_case_and_leaves_other_text_unchanged(value: str, expected: str) -> None:
     assert profile_id_key(value) == expected
+
+
+def test_the_secret_fields_of_every_profile_type_match_auth_profile_secret_fields() -> None:
+    expected_by_type: Final[dict[type[BaseModel], set[str]]] = {
+        StaticAuthProfile: {"authentication_token"},
+        ClientCredentialsAuthProfile: {"client_id", "client_secret"},
+    }
+
+    assert set(expected_by_type) == set(get_args(get_args(MCPAuthProfile)[0]))
+    for profile_type, expected_fields in expected_by_type.items():
+        assert set(secret_field_names(profile_type)) == expected_fields
+    assert set(AUTH_PROFILE_SECRET_FIELDS) == {
+        field for fields in expected_by_type.values() for field in fields
+    }
+
+
+def test_a_required_secret_field_is_a_secret_field() -> None:
+    class _Profile(BaseModel):
+        required: SecretStr
+        optional: SecretStr | None = None
+        public: str = ""
+
+    assert set(secret_field_names(_Profile)) == {"required", "optional"}
