@@ -2,17 +2,32 @@
 //! each with who answers it, `rust` or `python`. A request for Python names the `reason` the client
 //! sees in `x-litellm-gateway`, and may name the setting or trait it goes to Python `over`.
 
+mod keys;
+
 use std::{collections::BTreeMap, path::Path, sync::Arc};
 
 use axum::{body::Body, extract::Request, http::Method};
 use litellm_config::{Config, Environment};
+use litellm_gateway::host::auth::AuthStore;
 use rstest::rstest;
 use serde::Deserialize;
 
 #[derive(Deserialize)]
 struct Scenario {
     config: serde_yaml_ng::Value,
+    /// The virtual keys the database holds, each token with its model list.
+    #[serde(default)]
+    keys: BTreeMap<String, Vec<String>>,
     requests: Vec<Sent>,
+}
+
+/// The database holding each key of the scenario, a plain row with the model list it gives.
+async fn listed(keys: &BTreeMap<String, Vec<String>>) -> keys::Held {
+    let held = keys::Held::start().await;
+    for (token, models) in keys {
+        held.key(token, serde_json::json!({"models": models})).await;
+    }
+    held
 }
 
 #[derive(Deserialize)]
@@ -83,7 +98,8 @@ impl Sent {
 #[case::router_setting_for_every_request("router_setting_for_every_request")]
 #[case::router_host_steps("router_host_steps")]
 #[case::callers("callers")]
-#[tokio::test]
+#[case::virtual_key_models("virtual_key_models")]
+#[tokio::test(flavor = "multi_thread")]
 async fn admit_answers_each_request_as_its_scenario_says(#[case] name: &str) {
     litellm_gateway::install_crypto_provider();
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("tests/admit/{name}.yaml"));
@@ -96,6 +112,20 @@ async fn admit_answers_each_request_as_its_scenario_says(#[case] name: &str) {
     let state = litellm_gateway::AppState::over(&config, &Environment::default(), &resources)
         .await
         .unwrap();
+    let held = match scenario.keys.is_empty() {
+        true => None,
+        false => Some(listed(&scenario.keys).await),
+    };
+    let state = match &held {
+        None => state,
+        Some(held) => litellm_gateway::AppState {
+            keys: Some(Arc::new(AuthStore::new(
+                keys::memory_cache(),
+                held.database(),
+            ))),
+            ..state
+        },
+    };
     let admit = Arc::new(litellm_gateway::Admit::new(
         &config,
         &Environment::default(),

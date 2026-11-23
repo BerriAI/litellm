@@ -604,15 +604,22 @@ mod tests {
     }
 
     #[rstest]
-    #[case::as_generated(json!({}), None)]
-    #[case::no_key_type(json!({"key_type": null}), None)]
-    #[case::unblocked(json!({"blocked": false}), None)]
-    #[case::expiring(json!({"expires": FAR_FUTURE}), Some("2100-01-01T00:00:00Z"))]
-    #[case::empty_json_columns(json!({"budget_limits": null, "aliases": {}, "metadata": {}}), None)]
+    #[case::as_generated(json!({}), None, &[])]
+    #[case::no_key_type(json!({"key_type": null}), None, &[])]
+    #[case::unblocked(json!({"blocked": false}), None, &[])]
+    #[case::expiring(json!({"expires": FAR_FUTURE}), Some("2100-01-01T00:00:00Z"), &[])]
+    #[case::with_a_model_list(json!({"models": ["claude", "haiku"]}), None, &["claude", "haiku"])]
+    #[case::reaching_every_model(
+        json!({"models": ["*", "all-proxy-models"]}),
+        None,
+        &["*", "all-proxy-models"]
+    )]
+    #[case::empty_json_columns(json!({"budget_limits": null, "aliases": {}, "metadata": {}}), None, &[])]
     #[tokio::test(flavor = "multi_thread")]
     async fn a_key_that_holds_only_what_the_native_app_honors_is_a_caller_named_by_its_stored_hash(
         #[case] columns: Columns,
         #[case] expires: Option<&str>,
+        #[case] models: &[&str],
     ) {
         let caller = authenticate_holding(columns).await.unwrap();
 
@@ -620,11 +627,17 @@ mod tests {
             panic!("the key authenticated as the master key");
         };
         assert_eq!(
-            (caller.hash(), caller.role(), key.key.record.expires),
+            (
+                caller.hash(),
+                caller.role(),
+                key.key.record.expires,
+                key.key.models().to_vec(),
+            ),
             (
                 Some(&Token::new(VIRTUAL_KEY).hash()),
                 LitellmRole::InternalUser,
                 expires.map(|at| at.parse::<Timestamp>().unwrap()),
+                models.iter().map(|model| (*model).to_owned()).collect(),
             )
         );
     }
@@ -632,7 +645,9 @@ mod tests {
     #[rstest]
     #[case::key_type(json!({"key_type": "management"}))]
     #[case::soft_budget_cooldown(json!({"soft_budget_cooldown": true}))]
-    #[case::models(json!({"models": ["claude"]}))]
+    #[case::a_model_pattern(json!({"models": ["claude", "anthropic/*"]}))]
+    #[case::the_team_models(json!({"models": ["all-team-models"]}))]
+    #[case::no_default_models(json!({"models": ["no-default-models"]}))]
     #[case::aliases(json!({"aliases": {"a": "b"}}))]
     #[case::config(json!({"config": {"a": 1}}))]
     #[case::router_settings(json!({"router_settings": {"a": 1}}))]

@@ -3,6 +3,7 @@ use axum::{
     Extension, Json,
     response::{IntoResponse, Response},
 };
+use litellm_gateway_auth_core::authz::Denied;
 use litellm_inference::Error as InferenceError;
 use litellm_llms::base_llm::ocr::error::Error as OcrError;
 use litellm_llms_types::formats::messages::MessagesErrorType;
@@ -16,6 +17,9 @@ use crate::{
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    /// The auth core found a model list of the caller's that does not reach the model.
+    #[error("operation is not permitted")]
+    ModelAccess(#[from] Denied),
     #[error("invalid request body")]
     InvalidBody(#[from] BodyError),
     #[error(
@@ -173,6 +177,7 @@ impl From<litellm_host_http::Error<InferenceError>> for Error {
 impl Error {
     pub fn status(&self) -> StatusCode {
         match self {
+            Self::ModelAccess(_) => StatusCode::FORBIDDEN,
             Self::BodyTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             Self::InvalidBody(_) | Self::UnknownModel { .. } => StatusCode::BAD_REQUEST,
             Self::NoDeployments(_) => StatusCode::TOO_MANY_REQUESTS,
@@ -226,6 +231,7 @@ impl Error {
     fn message(&self) -> String {
         match self {
             Self::Refused(refusal) => refusal.message.clone(),
+            Self::ModelAccess(_) => self.to_string(),
             Self::InvalidBody(_)
             | Self::UnknownModel { .. }
             | Self::Route(_)

@@ -2,6 +2,8 @@
 //! apart by name, so a field added to the cached key does not compile here until it is honored,
 //! left to a host step or named as one no step is asked about.
 
+use std::sync::Arc;
+
 use jiff::{Timestamp, civil::DateTime, tz::TimeZone};
 use litellm_gateway_auth_core::{
     KeyHash, StoredKey,
@@ -22,6 +24,16 @@ macro_rules! carried {
 
 /// The key type the proxy gives a key generated without one, which reaches every route.
 const DEFAULT_KEY_TYPE: &str = "default";
+
+/// The `models` entries the proxy reads through a team or a user, which a key with neither does
+/// not have.
+const OWNER_MODELS: [&str; 2] = ["all-team-models", "no-default-models"];
+
+/// Whether the auth core's model rule reads a `models` entry as the proxy does: a name, an
+/// access group or `*`. A pattern like `anthropic/*` the proxy matches against providers is not read.
+fn is_read(model: &str) -> bool {
+    !OWNER_MODELS.contains(&model) && (model == "*" || !model.contains('*'))
+}
 
 pub(super) trait Carried {
     fn is_carried(&self) -> bool;
@@ -83,6 +95,8 @@ const UI_TEAM: &str = "litellm-dashboard";
 #[derive(Clone, Debug, PartialEq)]
 pub struct Key {
     pub(super) record: KeyRecord,
+    /// The key's `models` list, which the auth core decides model access on.
+    models: Arc<[String]>,
     /// The first budget column the row holds, which `key_budgets` declines.
     pub(super) budget: Option<&'static str>,
     /// The row maps model names, which `normalize_model` declines.
@@ -95,6 +109,12 @@ impl StoredKey for Key {
     }
 }
 
+impl Key {
+    pub(crate) fn models(&self) -> &[String] {
+        &self.models
+    }
+}
+
 /// What the key holds beside the fields the core's record carries.
 struct Held {
     /// The first column that holds something no host step is asked about.
@@ -103,7 +123,7 @@ struct Held {
     aliased: bool,
 }
 
-/// The native app honors a key's expiry and its block. The owner, the team and the
+/// The native app honors a key's expiry, its block and its model list. The owner, the team and the
 /// project are the core's to ask the host for, the budgets and the aliases are steps the host
 /// declines, and every other field that holds something is one no step is asked about. The team,
 /// organization and project fields are only filled for a key that names one, and the last group
@@ -220,15 +240,16 @@ fn held(key: &CachedKey) -> Held {
     let other_key_type = key_type
         .as_deref()
         .is_some_and(|key_type| key_type != DEFAULT_KEY_TYPE);
+    let unread_models = models.iter().any(|model| !is_read(model));
     let ui_team = team_id.as_deref() == Some(UI_TEAM);
     let unread = &unread.iter().any(|(_, value)| value.is_carried());
     Held {
         unasked: other_key_type
             .then_some("key_type")
+            .or_else(|| unread_models.then_some("models"))
             .or_else(|| ui_team.then_some("team_id"))
             .or_else(|| {
                 carried![
-                    models,
                     config,
                     router_settings,
                     agent_id,
@@ -326,6 +347,7 @@ pub(super) fn read(key: &CachedKey) -> Result<Keyed<Key>, &'static str> {
         record: record.clone(),
         row: Key {
             record,
+            models: Arc::from(key.models.as_slice()),
             budget,
             aliased,
         },
@@ -399,6 +421,7 @@ mod tests {
                 key.record.token,
                 key.record.blocked,
                 key.record.expires,
+                key.row.models.clone(),
                 key.row.budget,
                 key.row.aliased,
             ),
@@ -407,8 +430,9 @@ mod tests {
                 Some(KeyHash::new("a".repeat(64))),
                 false,
                 None,
+                Arc::from([]),
                 None,
-                false
+                false,
             )
         );
     }
