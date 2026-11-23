@@ -1401,6 +1401,7 @@ async def _body_sent_upstream(
             "litellm_provider": "openai",
             "mode": "responses",
             "supports_reasoning": True,
+            "supports_minimal_reasoning_effort": False,
             "reasoning_modes": ["standard"],
             "reasoning_contexts": ["auto", "current_turn"],
             "input_cost_per_token": 0.0,
@@ -1572,6 +1573,31 @@ async def test_messages_prefers_extra_body_reasoning_over_a_reasoning_effort_obj
 
     assert body["reasoning"] == {"effort": "high"}
     assert "reasoning_effort" not in body
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", [MODE_REFUSING_MODEL, f"responses/{MODE_REFUSING_MODEL}"], ids=["bare", "responses-prefix"])
+@pytest.mark.parametrize(
+    "effort, expected_reasoning",
+    [("minimal", {"summary": "detailed"}), ("xhigh", {"effort": "xhigh", "summary": "detailed"})],
+    ids=["level-the-row-disables", "opt-in-level-the-row-omits"],
+)
+async def test_messages_drops_an_extra_body_effort_the_model_refuses_under_drop_params(
+    model: str,
+    effort: str,
+    expected_reasoning: dict[str, str],
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    body: Final = await _body_sent_upstream(
+        respx_mock,
+        monkeypatch,
+        model=model,
+        drop_params=True,
+        extra_body={"reasoning": {"effort": effort, "summary": "detailed", "mode": "pro"}},
+    )
+
+    assert body["reasoning"] == expected_reasoning
 
 
 @pytest.mark.asyncio

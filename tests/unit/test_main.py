@@ -3386,6 +3386,46 @@ def test_openai_chat_reads_the_reasoning_effort_key_first_when_extra_body_carrie
     assert request_body["reasoning_effort"] == "low"
 
 
+@pytest.mark.parametrize("key", ["reasoning", "reasoning_effort"])
+@pytest.mark.parametrize(
+    "model, effort, model_info",
+    [
+        ("gpt-6.1-standard-only", "minimal", None),
+        ("gpt-6.1-standard-only", "xhigh", None),
+        ("gpt-6.1-standard-only", "low", None),
+        ("gpt-6.1-standard-only", "minimal", {"reasoning_effort_levels": ["minimal", "low"]}),
+        ("o9", "xhigh", None),
+    ],
+    ids=[
+        "level-the-row-disables",
+        "opt-in-level-the-row-omits",
+        "accepted-level",
+        "level-the-deployment-declares",
+        "opt-in-level-outside-the-gpt-5-family",
+    ],
+)
+def test_openai_chat_gives_an_extra_body_effort_the_answer_a_top_level_one_gets_under_drop_params(
+    key: str,
+    model: str,
+    effort: str,
+    model_info: dict[str, list[str]] | None,
+    openai_chat_route: respx.Route,
+):
+    for reasoning in ({"reasoning_effort": effort}, {"extra_body": {key: {"effort": effort, "mode": "pro"}}}):
+        litellm.completion(
+            model=f"openai/{model}",
+            messages=[{"role": "user", "content": "hello"}],
+            drop_params=True,
+            api_key="fake-key",
+            model_info=model_info,
+            **reasoning,
+        )
+
+    top_level_body, extra_body_body = (json.loads(call.request.content) for call in openai_chat_route.calls)
+    assert "reasoning" not in extra_body_body
+    assert extra_body_body.get("reasoning_effort") == top_level_body.get("reasoning_effort")
+
+
 def test_openai_chat_reads_the_reasoning_catalog_row_of_the_base_model(openai_chat_route: respx.Route):
     with pytest.raises(litellm.UnsupportedParamsError, match=r"reasoning_effort\.mode"):
         litellm.completion(

@@ -1,4 +1,4 @@
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Final, cast  # noqa: TID251  # moved unchanged from litellm/main.py
 from urllib.parse import urlsplit
@@ -10,6 +10,7 @@ from litellm.litellm_core_utils.get_llm_provider_logic import (
     get_llm_provider,
     resolve_model_and_provider_for_metadata,
 )
+from litellm.litellm_core_utils.reasoning_effort_capability import deployment_reasoning_effort_levels
 from litellm.llms.azure_ai.chat.transformation import AzureAIGPT5Config
 from litellm.llms.azure_ai.common_utils import (
     azure_ai_supports_native_responses,
@@ -131,6 +132,29 @@ def _reaches_openai(custom_llm_provider: str, api_base: str | None) -> bool:
     return custom_llm_provider == "openai" and _targets_openai_api(api_base)
 
 
+def _chat_refuses_effort_level(model: str, level: str) -> bool:
+    return OpenAIGPT5Config.is_model_gpt_5_model(model) and OpenAIGPT5Config.refuses_reasoning_effort_level(
+        model, level
+    )
+
+
+def _without_refused_effort(
+    reasoning: Mapping[str, object],
+    *,
+    model: str,
+    deployment_model_info: Mapping[str, object] | None,
+    refuses_level: Callable[[str, str], bool],
+) -> Mapping[str, object]:
+    effort: Final = reasoning.get("effort")
+    if (
+        not isinstance(effort, str)
+        or effort in (deployment_reasoning_effort_levels(deployment_model_info) or ())
+        or not refuses_level(model.removeprefix("responses/"), effort)
+    ):
+        return reasoning
+    return {key: value for key, value in reasoning.items() if key != "effort"}
+
+
 @dataclass(frozen=True, slots=True)
 class _OpenAIReasoningJudge:
     model: str
@@ -157,9 +181,17 @@ class _OpenAIReasoningJudge:
             )
         )
 
+    def _with_effort_checked(self, nested: Mapping[str, object]) -> Mapping[str, object]:
+        return _without_refused_effort(
+            nested,
+            model=self.model,
+            deployment_model_info=self.deployment_model_info,
+            refuses_level=OpenAIGPT5Config.row_disables_reasoning_effort_level,
+        )
+
     def cleaned(self, extra_body: Mapping[str, object]) -> Mapping[str, object]:
         judged: Final = {
-            key: self.accepted(nested)
+            key: self.accepted(self._with_effort_checked(nested))
             for key in _REASONING_OBJECT_KEYS
             if (nested := str_keyed_mapping(extra_body.get(key))) is not None
         }
@@ -223,6 +255,9 @@ def _with_responses_reasoning(extra_body: Mapping[str, object]) -> Mapping[str, 
 
 def _with_chat_extra_body_effort(
     optional_params: dict[str, object],  # mutable-ok: the provider handlers write to this dict and logging shares it
+    *,
+    model: str,
+    deployment_model_info: Mapping[str, object] | None,
 ) -> dict[str, object]:  # mutable-ok: the provider handlers write to this dict and logging shares it
     extra_body: Final = str_keyed_mapping(optional_params.get("extra_body"))
     objects: Final = (
@@ -239,7 +274,12 @@ def _with_chat_extra_body_effort(
         for key, value in extra_body.items()
         if key not in _REASONING_OBJECT_KEYS or str_keyed_mapping(value) is None
     }
-    effort: Final = objects[0].get("effort")
+    effort: Final = _without_refused_effort(
+        objects[0],
+        model=model,
+        deployment_model_info=deployment_model_info,
+        refuses_level=_chat_refuses_effort_level,
+    ).get("effort")
     return {
         **optional_params,
         "extra_body": (
@@ -261,7 +301,7 @@ def settle_chat_reasoning_effort(
     additional_drop_params: object,
 ) -> dict[str, object]:  # mutable-ok: the provider handlers write to this dict and logging shares it
     chat_params: Final = (
-        _with_chat_extra_body_effort(optional_params)
+        _with_chat_extra_body_effort(optional_params, model=model, deployment_model_info=deployment_model_info)
         if drop_params and _reaches_openai(custom_llm_provider, api_base)
         else optional_params
     )
