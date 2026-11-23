@@ -10726,7 +10726,7 @@ class ProviderConfigManager:
         return ProviderConfigManager._get_provider_anthropic_messages_config_cached(model=model, provider=provider)
 
     @staticmethod
-    @lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)
+    @VersionCached
     def _get_provider_anthropic_messages_config_cached(
         model: str,
         provider: LlmProviders,

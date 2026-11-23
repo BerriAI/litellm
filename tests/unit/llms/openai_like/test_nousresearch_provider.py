@@ -375,3 +375,73 @@ def test_provider_is_available_in_add_model_form() -> None:
         "api_base": False,
         "api_key": True,
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["reload", "registration"])
+async def test_messages_routing_tracks_catalog_changes(change: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    bare_name: Final = "lit-test/messages-route-changes"
+    model: Final = f"nousresearch/{bare_name}"
+    catalog: Final = json.loads(GetModelCostMap.read_local_model_cost_map_bytes())
+    with respx.mock(assert_all_called=False) as upstream:
+        upstream.post(f"{BASE}/chat/completions").respond(json=CHAT)
+        upstream.post(f"{BASE}/messages").respond(
+            json={
+                "id": "msg-nous",
+                "type": "message",
+                "role": "assistant",
+                "model": bare_name,
+                "content": [{"type": "text", "text": "Native"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 4, "output_tokens": 3},
+            }
+        )
+        for native in (True, False, True):
+            entry: Final = {
+                "litellm_provider": "nousresearch",
+                "mode": "chat",
+                "supported_endpoints": ["/v1/messages"] if native else ["/v1/chat/completions"],
+            }
+            if change == "reload":
+                install_model_cost_map(json.dumps({**catalog, model: entry}).encode())
+            else:
+                litellm.register_model({model: entry})
+            response: Final = await litellm.anthropic.messages.acreate(
+                model=model, messages=[{"role": "user", "content": "Hello"}], max_tokens=32, api_key="dummy-nous"
+            )
+            assert response["content"] == [{"type": "text", "text": "Native" if native else "Hello"}]
+            assert upstream.calls.last.request.url.path == ("/v1/messages" if native else "/v1/chat/completions")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [True, False])
+@pytest.mark.parametrize("header", ["Authorization", "authorization", "X-Api-Key"])
+async def test_experimental_chat_accepts_explicit_authentication_headers(
+    asynchronous: bool, header: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER", "true")
+    monkeypatch.delenv("NOUSRESEARCH_API_KEY", raising=False)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    with respx.mock() as upstream:
+        route: Final = upstream.post(f"{BASE}/chat/completions").respond(json=CHAT)
+        params: Final = {
+            "model": f"nousresearch/{MODEL}",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "headers": {header: "dummy-nous-header"},
+        }
+        response: Final = await litellm.acompletion(**params) if asynchronous else litellm.completion(**params)
+    assert response.choices[0].message.content == "Hello"
+    assert route.calls.last.request.headers[header] == "dummy-nous-header"
+
+
+@pytest.mark.parametrize("headers", [{}, {"Authorization": ""}, {"X-Api-Key": ""}, {"X-Request-Id": "dummy-id"}])
+def test_experimental_chat_requires_nonempty_authentication_headers(
+    headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER", "true")
+    monkeypatch.delenv("NOUSRESEARCH_API_KEY", raising=False)
+    with pytest.raises(litellm.AuthenticationError, match="NOUSRESEARCH_API_KEY"):
+        litellm.completion(
+            model=f"nousresearch/{MODEL}", messages=[{"role": "user", "content": "Hello"}], headers=headers
+        )

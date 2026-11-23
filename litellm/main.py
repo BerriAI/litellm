@@ -2973,7 +2973,7 @@ def _complete_custom_openai(
 
     # for deepinfra/perplexity/anyscale/groq/friendliai we check in get_llm_provider and pass in the api base from there
     api_base = _resolve_openai_api_base(api_base)
-    if (missing_key_error := _missing_provider_key_error(ctx)) is not None:
+    if custom_llm_provider != "nousresearch" and (missing_key_error := _missing_provider_key_error(ctx)) is not None:
         raise missing_key_error
     _validate_vispark_api_key(
         custom_llm_provider,
@@ -2995,6 +2995,11 @@ def _complete_custom_openai(
             model,
             client=client if not get_secret_bool("EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER") else None,
             is_async=acompletion is True,
+            headers=(
+                _FORWARDED_HEADERS_ADAPTER.validate_python(headers or litellm.headers)
+                if get_secret_bool("EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER")
+                else None
+            ),
         )
         if custom_llm_provider == "nousresearch"
         else api_key or litellm.api_key or _openai_key_fallback(custom_llm_provider)
