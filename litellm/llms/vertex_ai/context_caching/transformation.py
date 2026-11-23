@@ -118,7 +118,10 @@ _MODEL_TURN_ROLES: Final = frozenset({"assistant", *_TOOL_RESULT_ROLES})
 
 
 def _cached_block_end(messages: Sequence[AllMessageValues], block_start: int, block_end: int) -> int:
-    if block_end >= len(messages) or message_field(messages[block_end], "role") not in _TOOL_RESULT_ROLES:
+    next_turn: Final = next(
+        (idx for idx in range(block_end, len(messages)) if not is_system_message(messages[idx])), None
+    )
+    if next_turn is None or message_field(messages[next_turn], "role") not in _TOOL_RESULT_ROLES:
         return block_end
     return next(
         (end for end in range(block_end, block_start, -1) if not is_system_message(messages[end - 1])),
@@ -137,9 +140,9 @@ def separate_cached_messages(
     messages, since generateContent rejects a system_instruction beside a cachedContent. Every other
     system message comes back in the remaining messages already converted to a user turn in place, so a
     reminder added each turn changes neither the cached set nor its cache key. A system run that ends the
-    cached block right before a tool result stays out of the cached set, since its user turn goes after
-    that tool result. A model without system message support gets its later system messages back as they
-    are, so the request renders them the way it does without a cache.
+    cached block with only system messages between it and a tool result stays out of the cached set, since
+    its user turn goes after that tool result. A model without system message support gets its later system
+    messages back as they are, so the request renders them the way it does without a cache.
     """
     filtered_messages: Final = [(idx, message) for idx, message in enumerate(messages) if is_cached_message(message)]
     if not filtered_messages:
