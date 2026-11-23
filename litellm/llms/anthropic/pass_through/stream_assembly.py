@@ -498,6 +498,17 @@ def assemble_anthropic_sse_stream(
     return assembled
 
 
+def _is_upstream_error_event(event: str) -> bool:
+    return any(event_data.get("type") == "error" for event_data in _parsed_sse_events(event))
+
+
+def anthropic_sse_events_before_upstream_error(all_chunks: Sequence[str | bytes]) -> Sequence[str | bytes]:
+    """The stream without its upstream ``error`` events, so what arrived before the failure still assembles."""
+    events: Final = tuple(event for chunk in all_chunks for event in split_sse_chunk_into_events(chunk))
+    kept: Final = tuple(event for event in events if not _is_upstream_error_event(event))
+    return all_chunks if len(kept) == len(events) else kept
+
+
 def is_sse_error_stream(all_chunks: Sequence[object]) -> bool:
     """Whether the buffered stream carries nothing but error frames.
 
