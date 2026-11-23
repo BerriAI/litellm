@@ -91,6 +91,7 @@ class StreamRoute:
             if self._dropping:
                 self.send.send_nowait(Overflow(cursor=self._dropped_cursor))
                 self._dropping = False
+                self._dropped_cursor = None
             while self._held:
                 self.send.send_nowait(self._held[0])
                 self._held.popleft()
@@ -115,7 +116,9 @@ class StreamRoute:
         except anyio.EndOfStream:
             if self._dropping:
                 self._dropping = False
-                return Overflow(cursor=self._dropped_cursor)
+                overflow: Final = Overflow(cursor=self._dropped_cursor)
+                self._dropped_cursor = None
+                return overflow
             if self._held:
                 return self._held.popleft()
             raise
