@@ -2075,12 +2075,18 @@ def completion_cost(
 
         priced_response: Final[object] = completion_response
         cost_candidates: Final = (
-            *potential_model_names,
-            *_ai21_catalog_candidates(potential_model_names, request_pricing_provider, completion_response),
+            *((candidate, request_pricing_provider) for candidate in potential_model_names),
+            *(
+                (candidate, None)
+                for candidate in _ai21_catalog_candidates(
+                    potential_model_names, request_pricing_provider, completion_response
+                )
+            ),
         )
-        for idx, (candidate_model, candidate_pricing_provider) in enumerate(cost_candidates):
+        for idx, ((candidate_model, candidate_pricing_provider), candidate_request_provider) in enumerate(
+            cost_candidates
+        ):
             model = candidate_model
-            candidate_request_provider: Final = request_pricing_provider if idx < len(potential_model_names) else None
             try:
                 if verbose_logger.isEnabledFor(logging.DEBUG):
                     verbose_logger.debug("selected model name for cost calculation: %s", model)
@@ -2906,9 +2912,8 @@ def _ai21_catalog_candidates(
     )
     if "ai21_chat" not in possible_providers:
         return ()
-    return tuple(
-        (model, "ai21") for model, _ in candidates if model is not None and _resolves_to_numeric_rates(model, "ai21")
-    )
+    ai21_models: Final = (model.removeprefix("ai21_chat/") for model, _ in candidates if model is not None)
+    return tuple((model, "ai21") for model in ai21_models if _resolves_to_numeric_rates(model, "ai21"))
 
 
 def _resolves_to_numeric_rates(model: str, custom_llm_provider: str) -> bool:

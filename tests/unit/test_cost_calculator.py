@@ -12579,12 +12579,11 @@ def test_another_providers_jamba_call_never_bills_the_ai21_row(_local_model_cost
     ],
 )
 def test_ai21_chat_calls_without_an_ai21_price_keep_the_original_error(
-    _local_model_cost_map: None, model: str, ai21_row: Mapping[str, object] | None
+    _local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch, model: str, ai21_row: Mapping[str, object] | None
 ) -> None:
     if ai21_row is not None:
-        litellm.register_model(
-            {model.split("/", 1)[1]: dict(ai21_row)}, persist_across_reloads=False, add_to_provider_model_sets=False
-        )
+        monkeypatch.setitem(litellm.model_cost, model.split("/", 1)[1], dict(ai21_row))
+        publish(litellm.model_cost)
     response: Final = _jamba_call(model)
 
     assert response._hidden_params["response_cost"] is None
