@@ -1,5 +1,7 @@
 import json
+import threading
 from collections.abc import Mapping, Sequence
+from datetime import datetime
 from itertools import chain
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -10,7 +12,10 @@ import respx
 from pydantic import BaseModel
 
 import litellm
+from litellm.constants import MAX_STRING_LENGTH_PROMPT_IN_DB
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.responses.litellm_completion_transformation.handler import (
     LiteLLMCompletionTransformationHandler,
 )
@@ -578,6 +583,82 @@ def _anthropic_message(*content: Mapping[str, object]) -> httpx.Response:
 def _sent_assistant_content(route: respx.Route) -> list[object]:
     sent: Final = json.loads(route.calls.last.request.content)
     return next(message["content"] for message in sent["messages"] if message["role"] == "assistant")
+
+
+class _SpendCallback(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.logged = threading.Event()
+        self.kwargs: dict[str, object] = {}
+        self.response: object = None
+
+    def log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        self.kwargs = kwargs
+        self.response = response_obj
+        self.logged.set()
+
+
+def _anthropic_signed_thinking_turn(signature: str, stream: bool) -> httpx.Response:
+    thinking: Final = {"type": "thinking", "thinking": "Count the divisors.", "signature": signature}
+    if not stream:
+        return _anthropic_message(thinking, {"type": "text", "text": "954"})
+    return httpx.Response(
+        200,
+        headers={"content-type": "text/event-stream"},
+        content=_anthropic_sse(
+            {
+                "type": "message_start",
+                "message": {
+                    "id": "msg_signed_thinking",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "claude-sonnet-5-5",
+                    "content": [],
+                    "usage": {"input_tokens": 9, "output_tokens": 1},
+                },
+            },
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "thinking", "thinking": ""}},
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "thinking_delta", "thinking": "Count."}},
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "signature_delta", "signature": signature}},
+            {"type": "content_block_stop", "index": 0},
+            {"type": "content_block_start", "index": 1, "content_block": {"type": "text", "text": ""}},
+            {"type": "content_block_delta", "index": 1, "delta": {"type": "text_delta", "text": "954"}},
+            {"type": "content_block_stop", "index": 1},
+            {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 4}},
+            {"type": "message_stop"},
+        ),
+    )
+
+
+@pytest.mark.usefixtures(httpx_transport.__name__)
+@pytest.mark.parametrize("stream", [False, True], ids=["not-streamed", "streamed"])
+def test_spend_row_of_a_bridged_turn_keeps_the_thinking_signature_whole(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, stream: bool
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"store_prompts_in_spend_logs": True})
+    spend_callback: Final = _SpendCallback()
+    monkeypatch.setattr(litellm, "callbacks", [spend_callback])
+    signature: Final = "Eq0BCkYICxgCKkB" * (MAX_STRING_LENGTH_PROMPT_IN_DB // 10)
+    respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(return_value=_anthropic_signed_thinking_turn(signature, stream))
+
+    response: Final = litellm.responses(
+        model=_MODEL,
+        input="How many divisor triples?",
+        reasoning={"effort": "low"},
+        stream=stream,
+        api_key="mock_api_key",
+    )
+    if stream:
+        tuple(response)
+    assert spend_callback.logged.wait(timeout=10)
+    now: Final = datetime.now()
+    row: Final = get_logging_payload(spend_callback.kwargs, spend_callback.response, now, now)
+
+    assert signature in row["response"]
 
 
 class _RecordingRawAnthropicMessages:

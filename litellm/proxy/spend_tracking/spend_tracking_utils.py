@@ -25,7 +25,6 @@ from litellm.constants import (
     LITTELM_CLI_SERVICE_ACCOUNT_NAME,
     LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
     MAX_SPEND_LOG_MODEL_NAME_LENGTH,
-    MAX_STRING_LENGTH_PROVIDER_SIGNED_IN_DB,
     MCP_SPEND_LOG_MODEL_PREFIX,
     NON_INFERENCE_CALL_TYPES,
     REDACTED_BY_LITELM_STRING,
@@ -34,6 +33,9 @@ from litellm.constants import (
 )
 from litellm.constants import (
     MAX_STRING_LENGTH_PROMPT_IN_DB as DEFAULT_MAX_STRING_LENGTH_PROMPT_IN_DB,
+)
+from litellm.constants import (
+    MAX_STRING_LENGTH_PROVIDER_SIGNED_IN_DB as DEFAULT_MAX_STRING_LENGTH_PROVIDER_SIGNED_IN_DB,
 )
 from litellm.litellm_core_utils.classifier_logging import (
     CLASSIFIER_AUDIT_FIELDS,
@@ -90,18 +92,28 @@ if TYPE_CHECKING:
     from litellm.router import Router
 
 
-def _get_max_string_length_prompt_in_db() -> int:
+def _max_string_length_in_db(env_var: str, default: int) -> int:
     """
-    Resolve prompt truncation threshold at runtime so values loaded later via
+    Resolve a truncation threshold at runtime so values loaded later via
     proxy config environment_variables are honored.
     """
-    max_length_str: Final = os.getenv("MAX_STRING_LENGTH_PROMPT_IN_DB")
+    max_length_str: Final = os.getenv(env_var)
     if max_length_str is None:
-        return DEFAULT_MAX_STRING_LENGTH_PROMPT_IN_DB
+        return default
     try:
         return int(max_length_str)
     except (TypeError, ValueError):
-        return DEFAULT_MAX_STRING_LENGTH_PROMPT_IN_DB
+        return default
+
+
+def _get_max_string_length_prompt_in_db() -> int:
+    return _max_string_length_in_db("MAX_STRING_LENGTH_PROMPT_IN_DB", DEFAULT_MAX_STRING_LENGTH_PROMPT_IN_DB)
+
+
+def _get_max_string_length_provider_signed_in_db() -> int:
+    return _max_string_length_in_db(
+        "MAX_STRING_LENGTH_PROVIDER_SIGNED_IN_DB", DEFAULT_MAX_STRING_LENGTH_PROVIDER_SIGNED_IN_DB
+    )
 
 
 def is_master_key(api_key: str | None, _master_key: str | None) -> bool:
@@ -1153,7 +1165,7 @@ _SENSITIVE_REQUEST_BODY_KEYS: Final = frozenset({"secret_fields"})
 _REQUEST_BODY_CREDENTIAL_MASKER: Final = SensitiveDataMasker(extra_sensitive_patterns=frozenset({"apikey"}))
 _TOOL_INPUT_BLOCK_TYPES: Final = frozenset({"tool_use", "server_tool_use", "mcp_tool_use"})
 _TOOL_OUTPUT_BLOCK_TYPES: Final = frozenset({"tool_result", "mcp_tool_result", "function_call_output"})
-_REPLAYED_RESPONSE_CALL_TYPES: Final = frozenset({"responses", "aresponses", "_aresponses_websocket"})
+_RESPONSES_CALL_TYPES: Final = frozenset({"responses", "aresponses"})
 
 
 def _is_request_body_credential(key: str, value: object) -> bool:
@@ -1174,7 +1186,7 @@ def _is_spend_log_content(parent: Mapping[str, object], key: str) -> bool:
 
 
 def _provider_signed_for_db(value: str, max_string_length_prompt_in_db: int) -> str:
-    return truncated_for_db(value, max(max_string_length_prompt_in_db, MAX_STRING_LENGTH_PROVIDER_SIGNED_IN_DB))
+    return truncated_for_db(value, max(max_string_length_prompt_in_db, _get_max_string_length_provider_signed_in_db()))
 
 
 def _stored_whole(value: object, sanitized: Callable[[object], object], max_string_length_prompt_in_db: int) -> object:
@@ -1835,6 +1847,14 @@ def _get_vector_store_request_for_spend_logs_payload(
     return vector_store_request_metadata
 
 
+def _replayed_by_responses_bridge(standard_payload: Mapping[str, object] | None) -> bool:
+    """A `/v1/responses` turn served through the chat completions bridge logs a chat-shaped response."""
+    if standard_payload is None or standard_payload.get("call_type") not in _RESPONSES_CALL_TYPES:
+        return False
+    response: Final = standard_payload.get("response")
+    return isinstance(response, Mapping) and "choices" in response
+
+
 def _get_response_for_spend_logs_payload(
     payload: StandardLoggingPayload | None,
     kwargs: dict | None = None,
@@ -1871,7 +1891,7 @@ def _get_response_for_spend_logs_payload(
 
         sanitized_wrapper: Final = _sanitize_request_body_for_spend_logs_payload(
             {"response": response_obj},
-            keep_provider_signed_fields=not redacted and payload.get("call_type") in _REPLAYED_RESPONSE_CALL_TYPES,
+            keep_provider_signed_fields=not redacted and _replayed_by_responses_bridge(payload),
         )
 
         sanitized_response: Final = sanitized_wrapper.get("response", response_obj)
