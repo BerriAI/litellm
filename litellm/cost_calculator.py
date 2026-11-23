@@ -3,7 +3,7 @@
 import logging
 import math
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from functools import lru_cache
 from itertools import accumulate
@@ -1105,13 +1105,6 @@ def _routed_model_pricing_provider(
     return "azure_ai" if _resolves_to_rates(served_model, "azure_ai") else None
 
 
-def _cost_or_none(price: Callable[[], float]) -> float | None:
-    try:
-        return price()
-    except Exception:  # noqa: BLE001  # completion_cost raises plain Exception for an unmapped model
-        return None
-
-
 def _pricing_provider_for_cost_candidate(
     candidate_provider: str | None,
     request_provider: str | None,
@@ -2080,7 +2073,11 @@ def completion_cost(
         )
 
         priced_response: Final[object] = completion_response
-        for idx, (candidate_model, candidate_pricing_provider) in enumerate(potential_model_names):
+        cost_candidates: Final = (
+            *potential_model_names,
+            *_ai21_catalog_candidates(potential_model_names, request_pricing_provider, completion_response),
+        )
+        for idx, (candidate_model, candidate_pricing_provider) in enumerate(cost_candidates):
             model = candidate_model
             try:
                 if verbose_logger.isEnabledFor(logging.DEBUG):
@@ -2597,48 +2594,10 @@ def completion_cost(
                 verbose_logger.debug(
                     "litellm.cost_calculator.py::completion_cost() - Error calculating cost for model=%s - %s", model, e
                 )
-                if idx < len(potential_model_names) - 1:
-                    continue
-                # Every AI21 catalog row is priced under ai21 while AI21 calls route as ai21_chat. Retrying under ai21
-                # only after every ai21_chat candidate missed keeps registered ai21_chat and provider-less prices first.
-                if (
-                    custom_llm_provider == "ai21_chat"
-                    and (
-                        ai21_catalog_cost := _cost_or_none(
-                            lambda: completion_cost(
-                                completion_response=priced_response,
-                                model=requested_model,
-                                prompt=prompt,
-                                messages=messages,
-                                completion=completion,
-                                total_time=total_time,
-                                call_type=call_type,
-                                custom_llm_provider="ai21",
-                                region_name=region_name,
-                                size=size,
-                                quality=quality,
-                                n=n,
-                                custom_cost_per_token=custom_cost_per_token,
-                                custom_cost_per_second=custom_cost_per_second,
-                                requested_model_info_override=requested_model_info_override,
-                                optional_params=optional_params,
-                                custom_pricing=custom_pricing,
-                                base_model=base_model,
-                                standard_built_in_tools_params=standard_built_in_tools_params,
-                                litellm_model_name=litellm_model_name,
-                                router_model_id=router_model_id,
-                                litellm_logging_obj=litellm_logging_obj,
-                                pricing_provider="ai21",
-                                service_tier=service_tier,
-                                data_residency=data_residency,
-                                vertex_location=vertex_location,
-                            )
-                        )
-                    )
-                    is not None
+                if idx == len(cost_candidates) - 1 or (
+                    idx == len(potential_model_names) - 1 and custom_llm_provider != "ai21_chat"
                 ):
-                    return ai21_catalog_cost
-                raise e
+                    raise e
         raise Exception(f"Unable to calculate cost for received potential model names - {potential_model_names}")
     except Exception as e:
         raise e
@@ -2928,6 +2887,19 @@ def _is_unpriced_generalized_candidate(candidate: _CostCandidate) -> bool:
         return False
     rule_info: Final = unmapped_model_generalization(model, pricing_provider)
     return rule_info is not None and not _cost_map_entry_prices_anything(rule_info)
+
+
+def _ai21_catalog_candidates(
+    candidates: tuple[_CostCandidate, ...], request_provider: str | None, completion_response: object | None
+) -> tuple[_CostCandidate, ...]:
+    """AI21 calls route as ``ai21_chat`` while every AI21 catalog row is priced under ``ai21``. These candidates are
+    tried only after every ``ai21_chat`` candidate missed, so registered ``ai21_chat`` and provider-less prices win and
+    discounts, margins and the cost breakdown keep the ``ai21_chat`` request provider."""
+    hidden_params: Final[object] = getattr(completion_response, "_hidden_params", None)
+    hidden_provider: Final = _get_hidden_str_for_cost_calc(hidden_params, "custom_llm_provider")
+    if "ai21_chat" not in (request_provider, hidden_provider):
+        return ()
+    return tuple((model, "ai21") for model, _ in candidates if model is not None and _resolves_to_rates(model, "ai21"))
 
 
 def _priced_candidates_before_unpriced_rules(candidates: tuple[_CostCandidate, ...]) -> tuple[_CostCandidate, ...]:

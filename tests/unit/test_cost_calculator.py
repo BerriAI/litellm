@@ -12551,17 +12551,108 @@ def test_inline_ai21_jamba_prices_bill_the_call_and_the_bare_response_falls_back
     )
 
 
-@pytest.mark.parametrize(
-    "model",
-    ["openai/jamba-1.5-large", "ai21_chat/jamba-not-a-real-model"],
-    ids=["other-provider-never-bills-the-ai21-row", "unknown-ai21-model"],
-)
-def test_unmapped_jamba_calls_stay_unpriced(_local_model_cost_map: None, model: str) -> None:
-    response: Final = _jamba_call(model, api_key="fake-key")
+def test_another_providers_jamba_call_never_bills_the_ai21_row(_local_model_cost_map: None) -> None:
+    response: Final = _jamba_call("openai/jamba-1.5-large", api_key="fake-key")
 
     assert response._hidden_params["response_cost"] is None
     with pytest.raises(litellm.ModelNotMappedError):
         completion_cost(completion_response=response)
+
+
+@pytest.mark.parametrize(
+    "model, ai21_row",
+    [
+        pytest.param("ai21_chat/jamba-not-a-real-model", None, id="unknown-model"),
+        pytest.param(
+            "ai21_chat/jamba-rate-free", {"litellm_provider": "ai21", "mode": "chat"}, id="ai21-row-without-rates"
+        ),
+    ],
+)
+def test_ai21_chat_calls_without_an_ai21_price_keep_the_original_error(
+    _local_model_cost_map: None, model: str, ai21_row: Mapping[str, object] | None
+) -> None:
+    if ai21_row is not None:
+        litellm.register_model(
+            {model.split("/", 1)[1]: dict(ai21_row)}, persist_across_reloads=False, add_to_provider_model_sets=False
+        )
+    response: Final = _jamba_call(model)
+
+    assert response._hidden_params["response_cost"] is None
+    with pytest.raises(litellm.ModelNotMappedError, match="custom_llm_provider=ai21_chat"):
+        completion_cost(completion_response=response)
+
+
+@pytest.mark.parametrize(
+    "discount_config, margin_config, discount, margin_percent, margin_fixed",
+    [
+        pytest.param({}, {}, 0.0, 0.0, 0.0, id="no-adjustment"),
+        pytest.param({"ai21_chat": 0.1}, {}, 0.1, 0.0, 0.0, id="provider-discount"),
+        pytest.param({"ai21_chat/jamba*": 0.1}, {}, 0.1, 0.0, 0.0, id="model-pattern-discount"),
+        pytest.param({}, {"ai21_chat": 0.2}, 0.0, 0.2, 0.0, id="margin-percent"),
+        pytest.param({}, {"ai21_chat": {"fixed_amount": 0.001}}, 0.0, 0.0, 0.001, id="margin-fixed"),
+        pytest.param(
+            {},
+            {"ai21_chat": {"percentage": 0.2, "fixed_amount": 0.001}},
+            0.0,
+            0.2,
+            0.001,
+            id="margin-percent-and-fixed",
+        ),
+        pytest.param({"ai21_chat": 0.1}, {"ai21_chat": 0.2}, 0.1, 0.2, 0.0, id="discount-and-margin"),
+        pytest.param({}, {"ai21_chat": 0.2, "global": 0.5}, 0.0, 0.2, 0.0, id="provider-margin-beats-global"),
+        pytest.param({}, {"global": 0.5}, 0.0, 0.5, 0.0, id="global-margin"),
+        pytest.param({"ai21": 0.1}, {"ai21": 0.2}, 0.0, 0.0, 0.0, id="ai21-keyed-config-never-applies"),
+    ],
+)
+def test_catalog_priced_ai21_jamba_calls_apply_the_ai21_chat_adjustments(
+    _local_model_cost_map: None,
+    monkeypatch: pytest.MonkeyPatch,
+    discount_config: Mapping[str, float],
+    margin_config: Mapping[str, object],
+    discount: float,
+    margin_percent: float,
+    margin_fixed: float,
+) -> None:
+    monkeypatch.setattr(litellm, "cost_discount_config", dict(discount_config))
+    monkeypatch.setattr(litellm, "cost_margin_config", dict(margin_config))
+    row: Final = litellm.model_cost[_JAMBA_ROW]
+    response: Final = _jamba_call("ai21/jamba-1.5-large")
+    base: Final = _billed_at(response, row["input_cost_per_token"], row["output_cost_per_token"])
+    expected: Final = base * (1 - discount) * (1 + margin_percent) + margin_fixed
+
+    assert response._hidden_params["response_cost"] == pytest.approx(expected)
+    assert completion_cost(completion_response=response) == pytest.approx(expected)
+
+
+def test_catalog_priced_ai21_jamba_cost_breakdown_records_the_ai21_chat_adjustments(
+    _local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "cost_discount_config", {"ai21_chat": 0.1})
+    monkeypatch.setattr(litellm, "cost_margin_config", {"ai21_chat": 0.2})
+    row: Final = litellm.model_cost[_JAMBA_ROW]
+    response: Final = _jamba_call("ai21/jamba-1.5-large")
+    base: Final = _billed_at(response, row["input_cost_per_token"], row["output_cost_per_token"])
+    logging_obj: Final = Logging(
+        model="ai21/jamba-1.5-large",
+        messages=_JAMBA_MESSAGES,
+        stream=False,
+        call_type="completion",
+        start_time=datetime.datetime(2026, 1, 1),
+        litellm_call_id="ai21-adjustments",
+        function_id="f",
+    )
+
+    cost: Final = completion_cost(completion_response=response, litellm_logging_obj=logging_obj)
+
+    breakdown: Final = logging_obj.cost_breakdown
+    assert cost == pytest.approx(base * 0.9 * 1.2)
+    assert breakdown is not None
+    assert breakdown["total_cost"] == pytest.approx(cost)
+    assert breakdown["original_cost"] == pytest.approx(base)
+    assert breakdown["discount_percent"] == pytest.approx(0.1)
+    assert breakdown["discount_amount"] == pytest.approx(base * 0.1)
+    assert breakdown["margin_percent"] == pytest.approx(0.2)
+    assert breakdown["margin_total_amount"] == pytest.approx(base * 0.9 * 0.2)
 
 
 _JAMBA_DEPLOYMENT_RATES: Final = {"cheap": (1e-03, 2e-03), "pricey": (3e-03, 4e-03)}
