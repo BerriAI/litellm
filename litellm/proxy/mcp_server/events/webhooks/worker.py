@@ -83,8 +83,7 @@ class DeliveryWorker:
     ) -> None:
         next_housekeeping = 0.0  # rebind-ok: monotonic deadline of the next expiry sweep
         while True:
-            store: Final = store_for_batch()
-            if store is None:
+            if (store := store_for_batch()) is None:
                 await asyncio.sleep(_IDLE_SECONDS)
             else:
                 next_housekeeping = await cls(store, settings)._tick(next_housekeeping)
