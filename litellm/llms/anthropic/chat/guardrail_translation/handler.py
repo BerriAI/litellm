@@ -526,7 +526,7 @@ _NOT_AS_SENT: Final = object()
 def _tools_after_guardrail(
     request_tools: Sequence[object],
     shown_fingerprints: Sequence[str],
-    returned_tools: Sequence[ChatCompletionToolParam],
+    returned_tools: Iterable[ChatCompletionToolParam],
     original_names: Mapping[str, str],
 ) -> list[object]:  # mutable-ok: becomes the request body's tools
     """
@@ -535,7 +535,8 @@ def _tools_after_guardrail(
     """
     never_shown: Final = tuple(tool for tool in request_tools if _is_hidden_from_guardrail(tool))
     shown: Final = tuple(tool for tool in request_tools if not _is_hidden_from_guardrail(tool))
-    returned_fingerprints: Final = tuple(map(stream_item_fingerprint, returned_tools))
+    returned: Final = tuple(returned_tools)
+    returned_fingerprints: Final = tuple(map(stream_item_fingerprint, returned))
     as_sent: Final = _as_sent_by_fingerprint(shown, shown_fingerprints, Counter(returned_fingerprints))
     anthropic_config: Final = AnthropicConfig()
     matched: Final = tuple(
@@ -544,13 +545,13 @@ def _tools_after_guardrail(
     kept: Final = tuple(
         tool
         for tool in (
-            _converted_tool(anthropic_config, returned, original_names) if original is _NOT_AS_SENT else original
-            for returned, original in zip(returned_tools, matched)
+            _converted_tool(anthropic_config, returned_tool, original_names) if original is _NOT_AS_SENT else original
+            for returned_tool, original in zip(returned, matched)
         )
         if tool is not None
     )
     all_as_sent: Final = _NOT_AS_SENT not in matched
-    return [*never_shown, *(_loaded_up_front(kept) if all_as_sent and len(returned_tools) < len(shown) else kept)]
+    return [*never_shown, *(_loaded_up_front(kept) if all_as_sent and len(returned) < len(shown) else kept)]
 
 
 def _write_back_system_block(system: object, block_idx: int, response: str) -> None:

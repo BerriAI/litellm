@@ -3597,6 +3597,33 @@ class TestToolsTheGuardrailLeftAloneReachTheProviderAsSent:
 
         assert tools == [self._WRITE, self._DEFERRED, self._READ]
 
+    @pytest.mark.parametrize(
+        ("one_shot", "expected_names"),
+        [
+            (iter, ["Read", "mcp__atlassian__create_confluence_footer_comment_with_a_very_long_name_x", "Write"]),
+            (reversed, ["Write", "mcp__atlassian__create_confluence_footer_comment_with_a_very_long_name_x", "Read"]),
+            (
+                lambda returned: map(
+                    lambda tool: {**tool, "function": {**tool["function"], "description": "masked"}}
+                    if tool["function"]["name"] == "Read"
+                    else tool,
+                    returned,
+                ),
+                ["Read", "mcp__atlassian__create_confluence_footer_comment_with_a_very_long_name_x", "Write"],
+            ),
+        ],
+        ids=["iterator", "reversed", "map-that-edits-one-tool"],
+    )
+    async def test_tools_a_guardrail_returns_as_a_one_shot_iterable_all_reach_the_provider(
+        self, one_shot: Callable[[list[object]], object], expected_names: list[str]
+    ) -> None:
+        tools: Final = await self._tools_after(
+            ReturnedToolsRewritingGuardrail(lambda returned: cast(list[object], one_shot(returned))),
+            json.loads(json.dumps([self._READ, self._DEFERRED, self._WRITE])),
+        )
+
+        assert [cast(dict[str, object], tool)["name"] for tool in tools] == expected_names
+
     async def test_the_time_to_write_back_renamed_tools_grows_in_step_with_the_tool_count(self):
         def renamed(returned: list[object]) -> list[object]:
             tools: Final = cast(list[dict[str, dict[str, object]]], json.loads(json.dumps(returned)))
