@@ -18,7 +18,7 @@ from litellm.proxy.auth.auth_checks import (
     get_user_object,
     key_model_aliases_for_auth_check,
 )
-from litellm.proxy.litellm_pre_call_utils import customer_request_auth, pre_call_served_model
+from litellm.proxy.litellm_pre_call_utils import customer_request_auth, global_then_key_alias_target
 from litellm.types.images.main import ImageSVGAuthorDeployment
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 
@@ -189,7 +189,7 @@ async def _authorized_author_updates(
 ) -> Mapping[str, object]:
     model_group_alias: Final = (_as_object(body.get(_ROUTER_SETTINGS_FIELD)) or {}).get("model_group_alias")
     grouped_author: Final = resolve_model_group_alias(model_group_alias, author) or author
-    served_author: Final = pre_call_served_model(grouped_author, user_api_key_dict, model_group_alias)
+    served_author: Final = global_then_key_alias_target(grouped_author, user_api_key_dict)
     auth: Final[UserAPIKeyAuth] = customer_request_auth(body) or user_api_key_dict
     deployment: Final = _author_deployment(served_author, user_api_key_dict.team_id, llm_router)
     sent_author: Final = served_author if deployment is not None else author

@@ -205,3 +205,14 @@ async def test_chained_key_aliases_cannot_approve_a_different_model_than_the_one
     with pytest.raises(ProxyException) as denied:
         await _authorize(_request(_svg_top_level, "nano-alias"), key, router)
     assert denied.value.code == "403"
+
+
+@pytest.mark.asyncio
+async def test_saved_model_group_alias_is_applied_once_to_the_author(router: Router) -> None:
+    request: Final = {
+        **_request(_svg_top_level, "nano-alias"),
+        "router_settings_override": {"model_group_alias": {"nano-alias": "my-nano", "my-nano": "restricted-chat"}},
+    }
+    authorized: Final = await _authorize(request, UserAPIKeyAuth(), router)
+    assert _author_sent(authorized) == "gpt-5-nano"
+    assert authorized["metadata"] == {SVG_AUTHOR_DEPLOYMENT_METADATA_KEY: AUTHOR_STAMP}
