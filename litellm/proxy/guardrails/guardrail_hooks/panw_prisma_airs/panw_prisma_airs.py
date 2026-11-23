@@ -989,7 +989,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
     def _extract_text_from_streaming_events(chunks: Sequence[object]) -> str:
         """Extract text from /v1/responses streaming events (object or dict)."""
 
-        def _attr(c, key):
+        def _attr(c: object, key: str) -> object:
             val = getattr(c, key, None)
             if val is None and isinstance(c, dict):
                 val = c.get(key)

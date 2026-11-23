@@ -1457,6 +1457,7 @@ def test_anthropic_messages_streaming_response_reports_withheld_output_of_its_st
 def test_anthropic_messages_response_as_sse_events_keeps_message_delta_fields_out_of_message_start():
     safeguard_results = [{"type": "dangerous_tool_use", "status": {"type": "available", "tool_uses": {}}}]
     stop_details = {"type": "refusal", "category": "cyber", "explanation": "declined"}
+    container = {"id": "container_1", "expires_at": "2026-12-01T00:00:00Z"}
     response = {
         "id": "msg_1",
         "model": "claude-haiku",
@@ -1466,6 +1467,7 @@ def test_anthropic_messages_response_as_sse_events_keeps_message_delta_fields_ou
         "stop_sequence": None,
         "stop_details": stop_details,
         "safeguard_results": safeguard_results,
+        "container": container,
         "content": [{"type": "text", "text": "no"}],
         "usage": {"input_tokens": 3, "output_tokens": 1},
     }
@@ -1473,11 +1475,13 @@ def test_anthropic_messages_response_as_sse_events_keeps_message_delta_fields_ou
     message_start = decoded[0][1]["message"]
     assert message_start["stop_details"] is None
     assert "safeguard_results" not in message_start
+    assert "container" not in message_start
     assert decoded[-2][1]["delta"] == {
         "stop_reason": "refusal",
         "stop_sequence": None,
         "stop_details": stop_details,
         "safeguard_results": safeguard_results,
+        "container": container,
     }
 
 

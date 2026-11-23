@@ -184,7 +184,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         if model:
             supports_ttl = self._supports_prompt_cache_ttl(model)
 
-        def _sanitize_cache_control(cache_control: dict) -> None:
+        def _sanitize_cache_control(cache_control: object) -> None:
             if not isinstance(cache_control, dict):
                 return
             # Bedrock doesn't support scope (e.g., "global" for cross-request caching)
@@ -196,7 +196,7 @@ class AmazonAnthropicClaudeMessagesConfig(
                     return
                 cache_control.pop("ttl", None)
 
-        def _process_content_list(content: list) -> None:
+        def _process_content_list(content: Sequence[object]) -> None:
             for item in content:
                 if isinstance(item, dict) and "cache_control" in item:
                     _sanitize_cache_control(item["cache_control"])
@@ -423,7 +423,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         tool_search_used: bool,
         programmatic_tool_calling_used: bool,
         input_examples_used: bool,
-        beta_set: set,
+        beta_set: set[str],
     ) -> None:
         """
         Adjust tool search beta header for Bedrock.
@@ -463,8 +463,8 @@ class AmazonAnthropicClaudeMessagesConfig(
     @classmethod
     def _filter_context_management_for_bedrock_invoke(
         cls,
-        anthropic_messages_request: dict,
-        beta_set: set,
+        anthropic_messages_request: dict[str, object],
+        beta_set: set[str],
     ) -> None:
         """
         Filter ``context_management.edits`` to the subset that Bedrock InvokeModel
@@ -666,8 +666,8 @@ class AmazonAnthropicClaudeMessagesConfig(
 
     def _strip_unsupported_bedrock_invoke_fields(
         self,
-        anthropic_messages_request: dict,
-    ) -> dict:
+        anthropic_messages_request: Mapping[str, object],
+    ) -> dict[str, object]:
         allowed: Final = self.BEDROCK_INVOKE_ALLOWED_TOP_LEVEL_FIELDS
         stripped: Final = sorted(k for k in anthropic_messages_request if k not in allowed)
         if stripped:
@@ -678,7 +678,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         return {k: v for k, v in anthropic_messages_request.items() if k in allowed}
 
     @staticmethod
-    def _clamp_adaptive_reasoning_effort_for_bedrock(model: str, optional_params: dict) -> None:
+    def _clamp_adaptive_reasoning_effort_for_bedrock(model: str, optional_params: dict[str, object]) -> None:
         """Lower ``reasoning_effort`` to the Bedrock effort ceiling before validation.
 
         The shared ``/v1/messages`` effort gate rejects tiers a model does not

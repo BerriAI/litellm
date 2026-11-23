@@ -11,7 +11,7 @@ from pydantic import JsonValue, TypeAdapter
 from typing_extensions import assert_never
 
 import litellm
-from litellm._logging import verbose_logger
+from litellm._logging import CALLER_ERROR_LOG_EXTRA, verbose_logger
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.common_utils import context_management_betas, context_management_with_edits
@@ -29,7 +29,12 @@ from litellm.llms.bedrock.common_utils import (
     get_bedrock_base_model,
     strip_bedrock_routing_prefix,
 )
-from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensHandler, BedrockCountTokensRequestError
+from litellm.llms.bedrock.count_tokens.handler import (
+    BedrockCountTokensCredentialsError,
+    BedrockCountTokensHandler,
+    BedrockCountTokensRequestError,
+    is_caller_refusal,
+)
 from litellm.llms.bedrock.count_tokens.mantle_handler import BedrockMantleCountTokensHandler
 from litellm.llms.bedrock_mantle.common_utils import is_mantle_claude_model
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
@@ -69,6 +74,7 @@ class CountTokensFailure:
     message: str
     tokenizer_type: str
     rejected_before_provider_call: bool = False
+    invalid_request: bool = False
 
 
 CountTokensOutcome = CountedTokens | CountTokensFailure
@@ -231,12 +237,13 @@ class BedrockTokenCounter(BaseTokenCounter):
                 client=self._client,
             )
             reply: Final = _CountTokensReply.model_validate(result)
-        except BedrockCountTokensRequestError as e:
+        except (BedrockCountTokensRequestError, BedrockCountTokensCredentialsError) as e:
             return CountTokensFailure(
                 status_code=e.status_code,
                 message=e.message,
                 tokenizer_type=tokenizer_type,
                 rejected_before_provider_call=True,
+                invalid_request=isinstance(e, BedrockCountTokensRequestError),
             )
         except BedrockError as e:
             verbose_logger.debug(
@@ -371,11 +378,15 @@ class BedrockTokenCounter(BaseTokenCounter):
                     original_response=dict(outcome.original_response),
                 )
             case CountTokensFailure():
+                refused_for_caller: Final = is_caller_refusal(
+                    outcome.status_code, outcome.message, outcome.invalid_request
+                )
                 verbose_logger.warning(
                     "%s CountTokens API error: status=%s, message=%s",
                     outcome.tokenizer_type,
                     outcome.status_code,
                     outcome.message,
+                    extra=CALLER_ERROR_LOG_EXTRA if refused_for_caller else None,
                 )
                 return TokenCountResponse(
                     total_tokens=0,
