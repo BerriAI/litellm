@@ -1,6 +1,8 @@
 import asyncio
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import asynccontextmanager
+from threading import Event
 from typing import Final
 
 import pytest
@@ -177,26 +179,27 @@ async def test_dry_run_leaves_users_teams_memberships_and_keys_untouched(team_ex
 
 
 @pytest.mark.asyncio
-async def test_second_worker_cannot_sync_while_first_workers_run_holds_the_lock(monkeypatch: pytest.MonkeyPatch):
+async def test_second_worker_cannot_sync_while_first_workers_run_holds_the_lock():
     prisma: Final = _FakePrisma(teams=[_team()])
     redis: Final = LeaseRedis()
-    first: Final = job_for(prisma, Connection([group(TEAM, member=[])]), redis=redis)
+    entered: Final = Event()
+    release: Final = Event()
     second_connection: Final = Connection([group(TEAM, member=[])])
-    entered: Final = asyncio.Event()
-    release: Final = asyncio.Event()
-    original: Final = first.sync_group
 
-    async def held_sync_group(group: DirectoryGroup, deadline: float) -> None:
+    def held_search() -> Iterator[Mapping[str, object]]:
         entered.set()
-        await release.wait()
-        await original(group, deadline)
+        assert release.wait(10), "test did not release the LDAP search"
+        yield group(TEAM, member=[])
 
-    monkeypatch.setattr(first, "sync_group", held_sync_group)
-    running: Final = asyncio.create_task(first.run())
-    await entered.wait()
-    await job_for(prisma, second_connection, redis=redis).run()
-    release.set()
-    await running
+    first_connection: Final = Connection(held_search())
+    running: Final = asyncio.create_task(job_for(prisma, first_connection, redis=redis).run())
+    try:
+        assert await asyncio.to_thread(entered.wait, 10)
+        await job_for(prisma, second_connection, redis=redis).run()
+    finally:
+        release.set()
+        await running
+    assert first_connection.closed
     assert not second_connection.closed
 
 
@@ -214,17 +217,17 @@ async def test_lock_outlives_a_finished_run_so_other_workers_skip_the_rest_of_th
 
 
 @pytest.mark.asyncio
-async def test_failed_run_keeps_the_lock_until_the_next_interval(monkeypatch: pytest.MonkeyPatch):
+async def test_failed_run_keeps_the_lock_until_the_next_interval(caplog: pytest.LogCaptureFixture):
+    prisma: Final = _FakePrisma(teams=[_team()])
     redis: Final = LeaseRedis()
-    job: Final = job_for(_FakePrisma(teams=[_team()]), Connection([group(TEAM, member=[])]), redis=redis)
+    failed: Final = Connection([], result_code=50)
+    later: Final = Connection([group(TEAM, member=[])])
 
-    async def failing_sync() -> None:
-        raise RuntimeError("database unavailable")
-
-    monkeypatch.setattr(job, "_sync", failing_sync)
-    with pytest.raises(RuntimeError):
-        await job.run()
-    assert redis.values
+    await job_for(prisma, failed, redis=redis).run()
+    await job_for(prisma, later, redis=redis).run()
+    assert "LDAP sync aborted:" in caplog.text
+    assert failed.closed
+    assert not later.closed
 
 
 @pytest.mark.asyncio
@@ -292,8 +295,6 @@ async def test_failed_team_creation_does_not_block_later_groups(monkeypatch: pyt
 
 @pytest.mark.asyncio
 async def test_team_write_already_started_finishes_past_the_time_budget(monkeypatch: pytest.MonkeyPatch):
-    import litellm.proxy.common_utils.ldap_sync as ldap_sync_module
-
     prisma: Final = _FakePrisma(users=[_user("alice")], teams=[_team()])
     connection: Final = Connection(
         [group(TEAM, member=[ALICE]), group("later", member=[ALICE])], {ALICE: [user("alice")]}
@@ -301,37 +302,44 @@ async def test_team_write_already_started_finishes_past_the_time_budget(monkeypa
     job: Final = job_for(prisma, connection, SETTINGS.model_copy(update={"litellm_match_field": "user_id"}))
     job.time_budget_seconds = 60
     clock: Final = _SkippableLoopClock(monkeypatch)
-    original: Final = ldap_sync_module.sync_team_roster
-    started: list[str] = []  # mutable-ok: records which teams began writing
+    transaction: Final = prisma.tx
 
-    async def slow_roster_write(*args: object, **kwargs: object) -> object:
-        started.append(str(args[1]))
-        clock.skip(61)
-        return await original(*args, **kwargs)  # pyright: ignore[reportArgumentType]  # forwards the real arguments
+    @asynccontextmanager
+    async def slow_transaction(*, timeout: object = None):
+        async with transaction(timeout=timeout) as tx:
+            clock.skip(61)
+            yield tx
 
-    monkeypatch.setattr(ldap_sync_module, "sync_team_roster", slow_roster_write)
+    monkeypatch.setattr(prisma, "tx", slow_transaction)
     await job.run()
-    assert started == [TEAM]
+    assert prisma.transactions == 1
     assert [member.user_id for member in prisma.writer_db.litellm_teamtable.rows[TEAM].members_with_roles] == ["alice"]
     assert set(prisma.writer_db.litellm_teamtable.rows) == {TEAM}
 
 
 @pytest.mark.asyncio
 async def test_no_team_write_starts_once_the_time_budget_is_spent(monkeypatch: pytest.MonkeyPatch):
-    import litellm.proxy.common_utils.ldap_sync as ldap_sync_module
-
     prisma: Final = _FakePrisma(users=[_user("alice")], teams=[_team()])
     connection: Final = Connection([group(TEAM, member=[ALICE])], {ALICE: [user("alice")]})
     job: Final = job_for(prisma, connection, SETTINGS.model_copy(update={"litellm_match_field": "user_id"}))
     job.time_budget_seconds = 60
     clock: Final = _SkippableLoopClock(monkeypatch)
-    original: Final = ldap_sync_module.resolve_user_ids
+    users: Final = prisma.writer_db.litellm_usertable
 
-    async def slow_user_match(*args: object, **kwargs: object) -> object:
+    find_users: Final = users.find_many
+
+    async def slow_user_lookup(
+        where: Mapping[str, object],
+        *,
+        take: int | None = None,
+        skip: int | None = None,
+        order: Mapping[str, str] | None = None,
+    ):
+        result: Final = await find_users(where, take=take, skip=skip, order=order)
         clock.skip(61)
-        return await original(*args, **kwargs)  # pyright: ignore[reportArgumentType]  # forwards the real arguments
+        return result
 
-    monkeypatch.setattr(ldap_sync_module, "resolve_user_ids", slow_user_match)
+    monkeypatch.setattr(users, "find_many", slow_user_lookup)
     await job.run()
     assert prisma.transactions == 0
     assert prisma.writer_db.litellm_teamtable.rows[TEAM].members_with_roles == []
