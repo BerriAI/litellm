@@ -3840,6 +3840,38 @@ class TestDropParamsWithPromptCacheKey:
         assert result.get("temperature") == 0.7
 
 
+class TestModelInfoDefaultReasoningEffort:
+    """model_info.default_reasoning_effort is the deployment's request default.
+    A chat request that omits reasoning_effort goes out with the declared
+    default, and a request that sets one keeps its own value."""
+
+    @pytest.mark.parametrize("model", ["my-model-backend", "gpt-5.1"])
+    def test_declared_default_is_sent_when_the_request_omits_reasoning_effort(self, model):
+        result = litellm.get_optional_params(
+            model=model,
+            custom_llm_provider="openai",
+            model_info={"default_reasoning_effort": "medium"},
+        )
+        assert result.get("reasoning_effort") == "medium", result
+
+    def test_an_explicit_reasoning_effort_wins_over_the_declared_default(self):
+        result = litellm.get_optional_params(
+            model="my-model-backend",
+            custom_llm_provider="openai",
+            reasoning_effort="high",
+            model_info={"default_reasoning_effort": "medium"},
+        )
+        assert result.get("reasoning_effort") == "high", result
+
+    def test_no_declared_default_sends_no_reasoning_effort(self):
+        result = litellm.get_optional_params(
+            model="my-model-backend",
+            custom_llm_provider="openai",
+            model_info={"supports_reasoning": True},
+        )
+        assert "reasoning_effort" not in result, result
+
+
 class TestGetOptionalParamsSpeedGate:
     UNSUPPORTED_LEGS: Final = (
         ("bedrock", "anthropic.claude-opus-4-8-v1:0"),

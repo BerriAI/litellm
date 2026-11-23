@@ -5964,6 +5964,10 @@ def get_optional_params(
     passed_params.pop("base_model", None)
     passed_params.pop("model_info", None)
     passed_params.pop("_litellm_reasoning_drop_logger", None)
+    if reasoning_effort is None and model_info is not None:
+        declared_default_effort: Final = model_info.get("default_reasoning_effort")
+        if isinstance(declared_default_effort, str):
+            passed_params["reasoning_effort"] = declared_default_effort
     provider_config: BaseConfig | None = None
     if custom_llm_provider is not None and custom_llm_provider in [provider.value for provider in LlmProviders]:
         provider_config = ProviderConfigManager.get_provider_chat_config(
