@@ -4,6 +4,7 @@ import io
 import os
 import re
 import stat
+import struct
 import tempfile
 import zipfile
 import zlib
@@ -23,6 +24,8 @@ from litellm.llms.custom_httpx.http_handler import (
 
 MAX_ARCHIVE_BYTES: Final = 10 * 1024 * 1024
 MAX_DOWNLOAD_BYTES: Final = MAX_ARCHIVE_BYTES * 5
+MAX_ARCHIVE_TOTAL_ENTRIES: Final = 20_000
+MAX_ARCHIVE_CENTRAL_DIRECTORY_BYTES: Final = 5 * 1024 * 1024
 PLUGIN_JSON_PATH: Final = ".claude-plugin/plugin.json"
 _FETCH_TIMEOUT_SECONDS: Final = 60.0
 _ZIP_EPOCH: Final = (1980, 1, 1, 0, 0, 0)
@@ -31,6 +34,14 @@ _GITHUB_HOSTS: Final = frozenset({"github.com", "www.github.com"})
 _GITHUB_REPO_RE: Final = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
 _GITHUB_REF_RE: Final = re.compile(r"^[A-Za-z0-9._/-]+$")
 _COMMIT_SHA_RE: Final = re.compile(r"[0-9a-f]{40}")
+_WINDOWS_DRIVE_RE: Final = re.compile(r"^[A-Za-z]:")
+_ZIP_EOCD_SIGNATURE: Final = b"PK\x05\x06"
+_ZIP64_EOCD_SIGNATURE: Final = b"PK\x06\x06"
+_ZIP64_EOCD_LOCATOR_SIGNATURE: Final = b"PK\x06\x07"
+_ZIP_EOCD_FIXED_SIZE: Final = 22
+_ZIP_EOCD_MAX_COMMENT: Final = 0xFFFF
+_ZIP64_EOCD_FIXED_SIZE: Final = 56
+_ZIP64_EOCD_LOCATOR_SIZE: Final = 20
 
 
 class ArchiveBuildError(Exception): ...
@@ -108,9 +119,72 @@ def archive_lock(plugin_name: str) -> asyncio.Lock:
     return asyncio.Lock()
 
 
+def _zip_directory_budget(content: bytes) -> tuple[int, int] | None:
+    if len(content) < _ZIP_EOCD_FIXED_SIZE:
+        return None
+
+    eocd_start: Final = max(0, len(content) - (_ZIP_EOCD_FIXED_SIZE + _ZIP_EOCD_MAX_COMMENT))
+    eocd_offset: Final = content.rfind(_ZIP_EOCD_SIGNATURE, eocd_start)
+    if eocd_offset < 0 or eocd_offset + _ZIP_EOCD_FIXED_SIZE > len(content):
+        return None
+
+    try:
+        _, _, _, _, entries_total, directory_size, _, comment_len = struct.unpack_from("<4sHHHHIIH", content, eocd_offset)
+    except struct.error:
+        return None
+
+    if eocd_offset + _ZIP_EOCD_FIXED_SIZE + comment_len > len(content):
+        return None
+
+    if entries_total != 0xFFFF and directory_size != 0xFFFFFFFF:
+        return entries_total, directory_size
+
+    locator_offset: Final = eocd_offset - _ZIP64_EOCD_LOCATOR_SIZE
+    if locator_offset < 0:
+        return None
+    try:
+        locator_signature, _, zip64_eocd_offset, _ = struct.unpack_from("<4sIQI", content, locator_offset)
+    except struct.error:
+        return None
+    if locator_signature != _ZIP64_EOCD_LOCATOR_SIGNATURE:
+        return None
+    if zip64_eocd_offset + _ZIP64_EOCD_FIXED_SIZE > len(content):
+        return None
+
+    try:
+        (
+            signature,
+            _,
+            _,
+            _,
+            _,
+            _,
+            _,
+            entries_total_zip64,
+            directory_size_zip64,
+            _,
+        ) = struct.unpack_from("<4sQHHIIQQQQ", content, zip64_eocd_offset)
+    except struct.error:
+        return None
+    if signature != _ZIP64_EOCD_SIGNATURE:
+        return None
+    if entries_total_zip64 > 0xFFFFFFFF or directory_size_zip64 > 0xFFFFFFFF:
+        return None
+    return int(entries_total_zip64), int(directory_size_zip64)
+
+
+def _within_archive_metadata_budget(content: bytes) -> bool:
+    budget: Final = _zip_directory_budget(content)
+    return (
+        budget is not None
+        and budget[0] <= MAX_ARCHIVE_TOTAL_ENTRIES
+        and budget[1] <= MAX_ARCHIVE_CENTRAL_DIRECTORY_BYTES
+    )
+
+
 def _reject_unsafe_member(name: str, info: zipfile.ZipInfo) -> None:
     path: Final = PurePosixPath(name)
-    if path.is_absolute() or ".." in path.parts or "\\" in name:
+    if path.is_absolute() or ".." in path.parts or "\\" in name or _WINDOWS_DRIVE_RE.match(name):
         raise ArchiveBuildError(f"the plugin archive contains an unsafe path: {name!r}")
     if stat.S_ISLNK(info.external_attr >> 16):
         raise ArchiveBuildError(f"the plugin archive contains a symlink: {name!r}")
@@ -119,9 +193,12 @@ def _reject_unsafe_member(name: str, info: zipfile.ZipInfo) -> None:
 
 
 def _read_member(archive: zipfile.ZipFile, info: zipfile.ZipInfo) -> bytes:
-    # A bounded read keeps the decompressor from expanding past the declared size, which a forged header can understate.
+    # Bound decompression by metadata; malformed payloads that exceed advertised size are rejected.
     with archive.open(info) as member:
-        return member.read(info.file_size)
+        data: Final = member.read(info.file_size + 1)
+    if len(data) > info.file_size:
+        raise ArchiveBuildError("the plugin source contains a ZIP member with inconsistent size metadata")
+    return data
 
 
 def _strip_prefix(entries: _Entries, prefix: str) -> _Entries:
@@ -177,6 +254,8 @@ def _write_zip(members: _Members) -> bytes:
 
 
 def normalize_archive(data: bytes, *, strip_top_level: bool, subdir: str | None = None) -> bytes:
+    if not _within_archive_metadata_budget(data):
+        raise ArchiveBuildError("the plugin source exceeds ZIP metadata safety limits")
     try:
         archive: Final = zipfile.ZipFile(io.BytesIO(data))
     except zipfile.BadZipFile as e:

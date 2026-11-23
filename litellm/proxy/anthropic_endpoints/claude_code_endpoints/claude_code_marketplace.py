@@ -7,8 +7,7 @@ Actual plugin files are hosted on GitHub/GitLab/Bitbucket or as a zip archive on
 any HTTPS host (S3, Artifactory, a static file server).
 
 Endpoints:
-/claude-code/marketplace.json  - GET  - List plugins for Claude Code discovery (anonymous unless
-                                 general_settings.claude_code_marketplace_auth_required; a key adds its granted skills)
+/claude-code/marketplace.json  - GET  - List plugins for Claude Code discovery (unauthenticated; `?key=` adds the key's granted skills)
 /claude-code/plugins           - POST - Register a new plugin (create-only, proxy admin only)
 /claude-code/plugins           - GET  - List plugins visible to the key (enabled, plus granted disabled ones)
 /claude-code/plugins/{name}    - GET  - Get plugin details (403 on a disabled plugin the key is not granted)
@@ -18,34 +17,12 @@ Endpoints:
 /claude-code/plugins/{name}    - DELETE - Delete a plugin (proxy admin only)
 """
 
-import asyncio
-import hashlib
 import json
 import re
 from collections.abc import Mapping, Sequence
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
 from typing import Annotated, Final, Protocol, TypedDict, get_args
-<<<<<<< HEAD
-
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
-from fastapi.responses import JSONResponse, Response
-from pydantic import Json, TypeAdapter
-from typing_extensions import ReadOnly, assert_never
-
-from litellm._logging import verbose_proxy_logger
-from litellm.litellm_core_utils.url_utils import is_https_url_with_host
-from litellm.models.plugin_upload import (
-    PluginDownloader,
-    PluginDownloadResult,
-    PluginDownloadsResponse,
-    PluginPublication,
-    PluginPublicationBase,
-    PluginPublicationError,
-    has_agent_skill_metadata,
-)
-from litellm.proxy._types import CommonProxyErrors, ProxyErrorTypes, ProxyException, UserAPIKeyAuth
-=======
 from urllib.parse import urlencode, urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -54,16 +31,12 @@ from pydantic import TypeAdapter
 from typing_extensions import ReadOnly
 
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy._types import CommonProxyErrors, ProxyException, UserAPIKeyAuth
+from litellm.proxy._types import CommonProxyErrors, ProxyErrorTypes, ProxyException, UserAPIKeyAuth
+from litellm.proxy.anthropic_endpoints.claude_code_endpoints.archive_retry_cache import PluginArchiveRetryCache
 from litellm.proxy.anthropic_endpoints.claude_code_endpoints import claude_code_plugin_archive as plugin_archive
->>>>>>> cf3abb938a (feat(claude-code): host plugin zips for Claude Desktop marketplaces)
 from litellm.proxy.anthropic_endpoints.claude_code_endpoints.claude_code_skill_access import (
     SkillVisibility,
     resolve_skill_visibility,
-)
-from litellm.proxy.anthropic_endpoints.claude_code_endpoints.skill_upload_archive import (
-    MAX_SKILL_UPLOAD_BYTES,
-    build_uploaded_skill_archive,
 )
 from litellm.proxy.auth.auth_exception_handler import DB_UNAVAILABLE_FALLBACK_USER_ID
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -72,12 +45,7 @@ from litellm.proxy.common_utils.claude_code_marketplace_auth import (
     marketplace_key_header_present,
 )
 from litellm.proxy.common_utils.resource_ownership import is_proxy_admin
-<<<<<<< HEAD
-from litellm.proxy.deps.repositories import PluginUploadRepositoryDep
-from litellm.repositories.plugin_publication import read_plugin_publisher, read_plugin_review
-=======
 from litellm.proxy.utils import get_custom_url
->>>>>>> cf3abb938a (feat(claude-code): host plugin zips for Claude Desktop marketplaces)
 from litellm.repositories.table_repositories import ClaudeCodePluginRepository
 from litellm.types.proxy.auth.special_headers import SpecialHeaders
 from litellm.types.proxy.claude_code_endpoints import (
@@ -89,7 +57,6 @@ from litellm.types.proxy.claude_code_endpoints import (
     RegisterPluginRequest,
     RegisterPluginResponse,
     UpdatePluginRequest,
-    UploadPluginRequest,
 )
 
 router: Final = APIRouter()
@@ -125,6 +92,12 @@ SOURCE_FIELDS: Final = TypeAdapter(dict[str, str])
 
 
 _SELF_INSTALLING_PREFERENCES: Final[frozenset[InstallationPreference]] = frozenset({"auto_install", "required"})
+_ARCHIVE_FAILURE_TTL: Final = timedelta(minutes=2)
+_ARCHIVE_RETRY_INTERVAL: Final = timedelta(seconds=30)
+_ARCHIVE_RETRY_CACHE: Final = PluginArchiveRetryCache(
+    failure_ttl=_ARCHIVE_FAILURE_TTL,
+    retry_interval=_ARCHIVE_RETRY_INTERVAL,
+)
 
 
 def get_installation_preference(manifest: Mapping[str, object]) -> InstallationPreference | None:
@@ -150,23 +123,6 @@ async def get_prisma_client() -> object:
 
 
 _get_prisma_client: Final = get_prisma_client
-
-
-<<<<<<< HEAD
-def plugin_archive_url(request: Request, name: str, digest: str) -> str:
-    from litellm.proxy.utils import get_custom_url
-
-    return get_custom_url(
-        request_base_url=str(request.base_url), route=f"claude-code/plugins/{name}/archive/{digest}.zip"
-    )
-
-
-def plugin_archive_source_matches(
-    request: Request, name: str, source: Mapping[str, str], digest: str, *, has_agent_skill_metadata: bool
-) -> bool:
-    if has_agent_skill_metadata:
-        return source.get("source") == "archive" and source.get("sha256") == digest
-    return source == {"source": "archive", "url": plugin_archive_url(request, name, digest), "sha256": digest}
 
 
 async def header_key_caller(request: Request) -> UserAPIKeyAuth:
@@ -199,8 +155,8 @@ async def header_key_caller(request: Request) -> UserAPIKeyAuth:
 async def _marketplace_caller(request: Request, key: str | None) -> UserAPIKeyAuth | None:
     """Resolve the effective caller for Claude Code marketplace access.
 
-    `claude_code_marketplace_auth_required` enforces credentials from the Authorization or
-    x-litellm-api-key headers before any anonymous or `?key=` fallback is considered.
+    When marketplace auth is required, only Authorization/x-litellm-api-key headers
+    are honored and `?key=` is ignored.
     """
     if marketplace_key_header_present(request) or marketplace_auth_required():
         return await header_key_caller(request)
@@ -209,155 +165,6 @@ async def _marketplace_caller(request: Request, key: str | None) -> UserAPIKeyAu
     return None
 
 
-@router.post(
-    "/claude-code/plugins/upload",
-    tags=["Claude Code Marketplace"],
-    response_model=RegisterPluginResponse,
-)
-async def upload_plugin(
-    request: Request,
-    uploads: PluginUploadRepositoryDep,
-    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
-    file: Annotated[UploadFile, File(description="Skill ZIP containing SKILL.md and supporting files, up to 10 MiB")],
-    metadata: Annotated[Json[UploadPluginRequest], Form(description="JSON skill metadata without a source URL")],
-) -> RegisterPluginResponse:
-    """Create a skill and its uploaded ZIP atomically. Duplicate names return 409."""
-    _require_proxy_admin(user_api_key_dict)
-    if uploads is None:
-        raise _error_response(500, CommonProxyErrors.db_not_connected_error.value)
-    content: Final = await file.read(MAX_SKILL_UPLOAD_BYTES + 1)
-    if len(content) > MAX_SKILL_UPLOAD_BYTES:
-        raise _error_response(413, "Skill ZIP must be 10 MiB or smaller")
-    archive: Final = await asyncio.to_thread(build_uploaded_skill_archive, content, metadata.name)
-    if archive is None:
-        raise _error_response(
-            400, "Upload a valid ZIP with SKILL.md at the root or inside one skill folder, and safe supporting files"
-        )
-    digest: Final = hashlib.sha256(archive).hexdigest()
-    source: Final = {
-        "source": "archive",
-        "url": plugin_archive_url(request, metadata.name, digest),
-        "sha256": digest,
-    }
-    spec: Final = RegisterPluginRequest.model_validate({**metadata.model_dump(), "source": source})
-    _validate_installation_preference(spec)
-    published: Final = await uploads.publish(
-        PluginPublication(
-            name=spec.name,
-            version=spec.version,
-            description=spec.description,
-            manifest=_build_plugin_manifest(spec.name, spec),
-            content=archive,
-            created_by=user_api_key_dict.user_id,
-        )
-    )
-    if isinstance(published, PluginPublicationError):
-        raise _publication_error(published)
-    return RegisterPluginResponse(
-        status="success",
-        action="created",
-        plugin=PluginResponse(
-            id=published.id,
-            name=spec.name,
-            version=published.version,
-            description=spec.description,
-            source=source,
-            installation_preference=spec.installation_preference,
-            enabled=True,
-        ),
-    )
-
-
-def require_download_recorded(result: PluginDownloadResult) -> None:
-    match result:
-        case PluginDownloadResult.RECORDED:
-            return
-        case PluginDownloadResult.SKILL_NOT_FOUND:
-            raise _error_response(404, "Skill archive not found")
-        case _:
-            assert_never(result)
-
-
-def plugin_downloader(caller: UserAPIKeyAuth | None) -> PluginDownloader:
-    return PluginDownloader(
-        authenticated=caller is not None,
-        user_id=caller.user_id if caller is not None else None,
-        user_email=caller.user_email if caller is not None else None,
-        key_alias=caller.key_alias if caller is not None else None,
-        team_id=caller.team_id if caller is not None else None,
-        team_alias=caller.team_alias if caller is not None else None,
-    )
-
-
-@router.get(
-    "/claude-code/plugins/{plugin_name}/archive/{digest}.zip",
-    tags=["Claude Code Marketplace"],
-    response_class=Response,
-    responses={200: {"content": {"application/zip": {"schema": {"type": "string", "format": "binary"}}}}},
-)
-async def download_plugin_archive(
-    request: Request,
-    plugin_name: str,
-    digest: str,
-    uploads: PluginUploadRepositoryDep,
-) -> Response:
-    """Download an uploaded ZIP under the same visibility policy as its skill."""
-    caller: Final = await _marketplace_caller(request, None)
-    visibility: Final = await resolve_skill_visibility(caller)
-    if uploads is None:
-        raise _error_response(500, CommonProxyErrors.db_not_connected_error.value)
-    archive: Final = await uploads.get_metadata(plugin_name)
-    if (
-        archive is None
-        or not visibility.allows(archive)
-        or not plugin_archive_source_matches(
-            request, plugin_name, archive.source, digest, has_agent_skill_metadata=archive.has_agent_skill_metadata
-        )
-    ):
-        raise _error_response(404, "Skill archive not found")
-    content: Final = await uploads.get_content(archive)
-    if content is None:
-        raise _error_response(404, "Skill archive not found")
-    require_download_recorded(await uploads.record_download(archive, digest, plugin_downloader(caller)))
-    return Response(
-        content=content,
-        media_type="application/zip",
-        headers={
-            "Content-Disposition": f'attachment; filename="{archive.name}.zip"',
-            "Cache-Control": "private, no-store",
-            "X-Content-Type-Options": "nosniff",
-        },
-    )
-
-
-@router.get(
-    "/claude-code/plugins/{plugin_name}/downloads",
-    tags=["Claude Code Marketplace"],
-    response_model=PluginDownloadsResponse,
-)
-async def get_plugin_downloads(
-    plugin_name: str,
-    uploads: PluginUploadRepositoryDep,
-    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
-    limit: Annotated[int, Query(ge=1, le=100, description="Maximum number of download events")] = 25,
-    cursor: Annotated[str | None, Query(pattern=r"^[1-9][0-9]{0,18}$", description="Previous next_cursor")] = None,
-) -> PluginDownloadsResponse:
-    """Admin-only ZIP download totals and authenticated downloader history.
-
-    Anonymous downloads contribute only to totals. Counts include repeat requests and client prefetches,
-    starting when tracking is deployed. External sources and installation completion are not observed.
-    """
-    _require_proxy_admin(user_api_key_dict)
-    if uploads is None:
-        raise _error_response(500, CommonProxyErrors.db_not_connected_error.value)
-    before: Final = int(cursor) if cursor is not None else None
-    if before is not None and before > 9223372036854775807:
-        raise _error_response(422, "Invalid download cursor")
-    result: Final = await uploads.downloads(plugin_name, limit, before)
-    if result is None:
-        raise _error_response(404, "Plugin not found")
-    return result
-=======
 def _archive_url(request: Request, plugin_name: str, key: str | None) -> str:
     """Same-origin URL of the plugin's ZIP; carries `?key=` so a granted disabled plugin stays fetchable."""
     base: Final = get_custom_url(str(request.base_url), route=None).rstrip("/")
@@ -373,7 +180,6 @@ def _hosted_archive_sha256(manifest: Mapping[str, object]) -> str | None:
 
 def _wants_hosted_archive(spec: PluginSpec) -> bool:
     return spec.source.get("source") == "archive" if spec.serve_archive is None else spec.serve_archive
->>>>>>> cf3abb938a (feat(claude-code): host plugin zips for Claude Desktop marketplaces)
 
 
 @router.get(
@@ -388,14 +194,9 @@ async def get_marketplace(request: Request, key: str | None = None):
     - claude plugin marketplace add <url>
     - claude plugin install <name>@<marketplace>
 
-    Without a key the catalog holds the enabled (public) plugins. With `?key=sk-...`
+    Without `key` the catalog holds the enabled (public) plugins. With `?key=sk-...`
     the key is authenticated and the catalog also holds the disabled plugins granted
     to it through `object_permission.skills` or an access group on the key or its team.
-
-    With `general_settings.claude_code_marketplace_auth_required: true` the key must come
-    in the `Authorization` or `x-litellm-api-key` header (Claude Code sends them from the
-    marketplace source's `headers`), `?key=` is ignored, and a caller with no valid key
-    gets a 401 with `WWW-Authenticate: Bearer`.
 
     Returns:
         Marketplace catalog with list of available plugins and their git sources.
@@ -409,6 +210,7 @@ async def get_marketplace(request: Request, key: str | None = None):
     """
     try:
         prisma_client: Final = await get_prisma_client()
+
         caller: Final = await _marketplace_caller(request, key)
         visibility: Final[SkillVisibility] = await resolve_skill_visibility(caller)
         plugins: Final[Sequence[_PluginRecord]] = await ClaudeCodePluginRepository(prisma_client).table.find_many(
@@ -481,7 +283,7 @@ async def get_marketplace(request: Request, key: str | None = None):
         verbose_proxy_logger.exception("Error generating marketplace: %s", e)
         raise HTTPException(
             status_code=500,
-            detail={"error": "Failed to generate marketplace"},
+            detail={"error": f"Failed to generate marketplace: {e}"},
         )
 
 
@@ -491,6 +293,14 @@ async def get_marketplace(request: Request, key: str | None = None):
 # This implicitly blocks '..', leading '/', backslashes, and percent-encoded sequences.
 _VALID_GIT_SUBDIR_PATH_RE: Final = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]*(/[a-zA-Z0-9][a-zA-Z0-9._-]*)*$")
 _VALID_SHA256_RE: Final = re.compile(r"^[0-9a-fA-F]{64}$")
+
+
+def _is_https_url_with_host(url: str) -> bool:
+    try:
+        parts: Final = urlsplit(url)
+    except ValueError:
+        return False
+    return parts.scheme == "https" and bool(parts.hostname)
 
 
 def _validate_plugin_source(source: Mapping[str, str]) -> None:
@@ -529,7 +339,7 @@ def _validate_plugin_source(source: Mapping[str, str]) -> None:
                 },
             )
     elif source_type == "archive":
-        if not is_https_url_with_host(source.get("url", "")):
+        if not _is_https_url_with_host(source.get("url", "")):
             raise HTTPException(
                 status_code=400,
                 detail={
@@ -581,16 +391,6 @@ def _error_response(status_code: int, message: str) -> HTTPException:
     return HTTPException(status_code=status_code, detail={"error": message})
 
 
-<<<<<<< HEAD
-def _publication_error(error: PluginPublicationError) -> HTTPException:
-    match error.kind:
-        case "invalid_version":
-            return _error_response(400, error.message)
-        case "not_found":
-            return _error_response(404, error.message)
-        case "conflict":
-            return _error_response(409, error.message)
-=======
 async def _build_manifest_with_archive(
     name: str, spec: PluginSpec
 ) -> tuple[Mapping[str, object], plugin_archive.BuiltArchive | None]:
@@ -623,10 +423,16 @@ async def _load_archive(plugin_name: str, manifest: Mapping[str, object], source
     if stored is not None and plugin_archive.sha256_hex(stored) == expected:
         return stored
 
+    if _ARCHIVE_RETRY_CACHE.should_skip(plugin_name):
+        raise _error_response(502, f"Archive rebuild for plugin '{plugin_name}' is temporarily throttled")
+
     async with plugin_archive.archive_lock(plugin_name):
         stored_again: Final = plugin_archive.read_stored_archive(plugin_name)
         if stored_again is not None and plugin_archive.sha256_hex(stored_again) == expected:
             return stored_again
+
+        if not _ARCHIVE_RETRY_CACHE.begin(plugin_name):
+            raise _error_response(502, f"Archive rebuild for plugin '{plugin_name}' is temporarily throttled")
 
         verbose_proxy_logger.info("Archive for plugin %s missing or stale, refetching from its source", plugin_name)
         pinned_ref: Final = manifest.get("archive_ref")
@@ -635,14 +441,17 @@ async def _load_archive(plugin_name: str, manifest: Mapping[str, object], source
                 source, pinned_ref=pinned_ref if isinstance(pinned_ref, str) else None
             )
         except plugin_archive.ArchiveBuildError as e:
+            _ARCHIVE_RETRY_CACHE.failure(plugin_name)
             raise _error_response(502, f"Could not rebuild the archive for plugin '{plugin_name}': {e}")
         if rebuilt.sha256 != expected:
+            _ARCHIVE_RETRY_CACHE.failure(plugin_name)
             raise _error_response(
                 502,
                 f"The source of plugin '{plugin_name}' no longer matches the archive advertised in the catalog; "
                 "update the plugin to republish it",
             )
         plugin_archive.store_archive(plugin_name, rebuilt.data)
+        _ARCHIVE_RETRY_CACHE.success(plugin_name)
         return rebuilt.data
 
 
@@ -664,13 +473,12 @@ async def get_plugin_archive(plugin_name: str, request: Request, key: str | None
     file is missing (new container, another replica) it is refetched from the plugin's source.
     """
     prisma_client: Final = await get_prisma_client()
-    caller: Final[UserAPIKeyAuth | None] = (
-        await user_api_key_auth(request=request, api_key=f"Bearer {key}") if key else None
-    )
+    caller: Final = await _marketplace_caller(request, key)
+    visibility: Final = await resolve_skill_visibility(caller)
     plugin: Final[_PluginRecord | None] = await ClaudeCodePluginRepository(prisma_client).table.find_unique(
         where={"name": plugin_name}
     )
-    if plugin is None or not (await resolve_skill_visibility(caller)).allows(plugin):
+    if plugin is None or not visibility.allows(plugin):
         raise _error_response(404, f"Plugin '{plugin_name}' not found")
 
     manifest: Final[Mapping[str, object]] = json.loads(plugin.manifest_json or "{}")
@@ -685,6 +493,7 @@ async def get_plugin_archive(plugin_name: str, request: Request, key: str | None
         headers={
             "Content-Disposition": f'attachment; filename="{plugin_name}.zip"',
             "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
         },
     )
 
@@ -693,7 +502,6 @@ def _name_conflict_error(name: str) -> HTTPException:
     return _error_response(
         409, f"A skill named '{name}' already exists. Update the existing skill instead of adding it again."
     )
->>>>>>> cf3abb938a (feat(claude-code): host plugin zips for Claude Desktop marketplaces)
 
 
 def _require_proxy_admin(user_api_key_dict: UserAPIKeyAuth) -> None:
@@ -716,7 +524,6 @@ def _require_proxy_admin(user_api_key_dict: UserAPIKeyAuth) -> None:
 )
 async def register_plugin(
     request: RegisterPluginRequest,
-    uploads: PluginUploadRepositoryDep,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -759,11 +566,12 @@ async def register_plugin(
           }'
         ```
     """
+    from prisma.errors import UniqueViolationError
+
     try:
         _require_proxy_admin(user_api_key_dict)
 
-        if uploads is None:
-            raise _error_response(500, CommonProxyErrors.db_not_connected_error.value)
+        prisma_client: Final = await get_prisma_client()
 
         if not re.match(r"^[a-z0-9-]+$", request.name):
             raise HTTPException(
@@ -774,9 +582,6 @@ async def register_plugin(
         _validate_plugin_source(request.source)
         _validate_installation_preference(request)
 
-<<<<<<< HEAD
-        manifest: Final[Mapping[str, object]] = _build_plugin_manifest(request.name, request)
-=======
         existing: Final[_PluginRecord | None] = await ClaudeCodePluginRepository(prisma_client).table.find_unique(
             where={"name": request.name}
         )
@@ -784,19 +589,23 @@ async def register_plugin(
             raise _name_conflict_error(request.name)
 
         manifest, built = await _build_manifest_with_archive(request.name, request)
->>>>>>> cf3abb938a (feat(claude-code): host plugin zips for Claude Desktop marketplaces)
 
-        plugin: Final = await uploads.publish(
-            PluginPublication(
-                name=request.name,
-                version=request.version,
-                description=request.description,
-                manifest=manifest,
-                created_by=user_api_key_dict.user_id,
+        try:
+            plugin: Final[_PluginRecord] = await ClaudeCodePluginRepository(prisma_client).table.create(
+                data={
+                    "name": request.name,
+                    "version": request.version,
+                    "description": request.description,
+                    "manifest_json": json.dumps(manifest),
+                    "files_json": "{}",
+                    "enabled": True,
+                    "created_at": datetime.now(timezone.utc),
+                    "updated_at": datetime.now(timezone.utc),
+                    "created_by": user_api_key_dict.user_id,
+                }
             )
-        )
-        if isinstance(plugin, PluginPublicationError):
-            raise _publication_error(plugin)
+        except UniqueViolationError:
+            raise _name_conflict_error(request.name)
 
         if built is not None:
             plugin_archive.store_archive(request.name, built.data)
@@ -810,7 +619,7 @@ async def register_plugin(
                 id=plugin.id,
                 name=plugin.name,
                 version=plugin.version,
-                description=request.description,
+                description=plugin.description,
                 source=request.source,
                 installation_preference=request.installation_preference,
                 serve_archive=built is not None,
@@ -835,10 +644,9 @@ async def register_plugin(
     response_model=ListPluginsResponse,
 )
 async def list_plugins(
-    uploads: PluginUploadRepositoryDep,
     enabled_only: bool = False,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-) -> ListPluginsResponse:
+):
     """
     List all plugins in the marketplace.
 
@@ -848,17 +656,6 @@ async def list_plugins(
     Returns:
         List of plugins with their metadata.
     """
-    catalog: Final = await list_visible_plugins(enabled_only, user_api_key_dict)
-    if uploads is None:
-        raise _error_response(500, CommonProxyErrors.db_not_connected_error.value)
-    counts: Final = await uploads.download_counts(tuple(plugin.id for plugin in catalog.plugins))
-    return ListPluginsResponse(
-        plugins=[plugin.model_copy(update={"download_count": counts.get(plugin.id, 0)}) for plugin in catalog.plugins],
-        count=catalog.count,
-    )
-
-
-async def list_visible_plugins(enabled_only: bool, user_api_key_dict: UserAPIKeyAuth) -> ListPluginsResponse:
     try:
         prisma_client: Final = await get_prisma_client()
 
@@ -873,19 +670,13 @@ async def list_visible_plugins(enabled_only: bool, user_api_key_dict: UserAPIKey
                 continue
             manifest = json.loads(p.manifest_json) if p.manifest_json else {}
 
-            review = read_plugin_review(MANIFEST_FIELDS.validate_python(manifest))
             plugin_list.append(
                 PluginListItem(
                     id=p.id,
-                    created_by=p.created_by,
-                    approved_by=review.approved_by if review else None,
-                    published_by=read_plugin_publisher(MANIFEST_FIELDS.validate_python(manifest)),
-                    security_scan_passed=review.security_scan_passed if review else False,
                     name=p.name,
                     version=p.version,
                     description=p.description,
                     source=manifest.get("source", {}),
-                    has_agent_skill_metadata=has_agent_skill_metadata(MANIFEST_FIELDS.validate_python(manifest)),
                     author=manifest.get("author"),
                     homepage=manifest.get("homepage"),
                     keywords=manifest.get("keywords"),
@@ -994,7 +785,6 @@ async def get_plugin(
 async def update_plugin(
     plugin_name: str,
     request: UpdatePluginRequest,
-    uploads: PluginUploadRepositoryDep,
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
 ):
     """
@@ -1003,8 +793,7 @@ async def update_plugin(
     The plugin is identified by its name in the path, which is the resource
     identity and cannot be changed here. This is a full replace, not a merge:
     the manifest is rebuilt from the request body, so any optional field left
-    out is reset to its default, except version which automatically increments
-    the published patch version when omitted or null.
+    out is reset to its default (e.g. an omitted version is cleared, not kept).
     Send the full desired state.
 
     Returns 404 if no plugin with the given name exists; use
@@ -1042,29 +831,23 @@ async def update_plugin(
 
     try:
         _require_proxy_admin(user_api_key_dict)
-        if uploads is None:
-            raise _error_response(500, CommonProxyErrors.db_not_connected_error.value)
 
         prisma_client: Final = await get_prisma_client()
 
-        repository: Final = ClaudeCodePluginRepository(prisma_client, use_writer=True)
-        existing: Final[_PluginRecord | None] = await repository.table.find_unique(where={"name": plugin_name})
+        existing: Final[_PluginRecord | None] = await ClaudeCodePluginRepository(prisma_client).table.find_unique(
+            where={"name": plugin_name}
+        )
         if not existing:
             raise _error_response(404, f"Plugin '{plugin_name}' not found")
-        if request.expected_updated_at is not None and request.expected_updated_at != existing.updated_at:
-            raise _error_response(409, "The published skill changed. Reload it before publishing an update")
 
-<<<<<<< HEAD
         current_manifest: Final = MANIFEST_FIELDS.validate_json(existing.manifest_json or "{}")
         if request.source != current_manifest.get("source"):
             _validate_plugin_source(request.source)
         _validate_installation_preference(request)
-=======
-        manifest, built = await _build_manifest_with_archive(plugin_name, request)
->>>>>>> cf3abb938a (feat(claude-code): host plugin zips for Claude Desktop marketplaces)
 
-        manifest: Final[Mapping[str, object]] = {
-            **_build_plugin_manifest(plugin_name, request),
+        manifest, built = await _build_manifest_with_archive(plugin_name, request)
+        merged_manifest: Final = {
+            **manifest,
             **(
                 {"agent_skill": current_manifest["agent_skill"]}
                 if "agent_skill" in current_manifest and request.source == current_manifest.get("source")
@@ -1072,18 +855,18 @@ async def update_plugin(
             ),
         }
 
-        plugin: Final = await uploads.publish(
-            PluginPublication(
-                name=plugin_name,
-                version=request.version,
-                description=request.description,
-                manifest=manifest,
-                created_by=user_api_key_dict.user_id,
-            ),
-            PluginPublicationBase(existing.id, existing.updated_at),
+        plugin: Final[_PluginRecord | None] = await ClaudeCodePluginRepository(prisma_client).table.update(
+            where={"name": plugin_name},
+            data={
+                "version": request.version,
+                "description": request.description,
+                "manifest_json": json.dumps(merged_manifest),
+                "files_json": "{}",
+                "updated_at": datetime.now(timezone.utc),
+            },
         )
-        if isinstance(plugin, PluginPublicationError):
-            raise _publication_error(plugin)
+        if plugin is None:
+            raise _error_response(404, f"Plugin '{plugin_name}' not found")
 
         if built is not None:
             plugin_archive.store_archive(plugin_name, built.data)
@@ -1099,7 +882,7 @@ async def update_plugin(
                 id=plugin.id,
                 name=plugin.name,
                 version=plugin.version,
-                description=request.description,
+                description=plugin.description,
                 source=request.source,
                 installation_preference=request.installation_preference,
                 serve_archive=built is not None,
