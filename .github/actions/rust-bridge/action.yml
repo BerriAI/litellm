@@ -10,7 +10,7 @@ runs:
   steps:
     - name: Restore the Cargo build cache
       if: inputs.artifact == ''
-      uses: ./.github/actions/cache-cargo-build
+      uses: $/.github/actions/cache-cargo-build
     - name: Download the Rust bridge artifact
       if: inputs.artifact != ''
       uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e

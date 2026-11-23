@@ -27,7 +27,7 @@ runs:
   steps:
     - name: Restore editable Rust bridge
       id: cache
-      uses: ./.github/actions/restore-rust-bridge
+      uses: $/.github/actions/restore-rust-bridge
       with:
         stale-cost-map: ${{ inputs.stale-cost-map }}
 
@@ -39,13 +39,13 @@ runs:
 
     - name: Set up uv
       if: steps.cache.outputs.restored != 'true'
-      uses: ./.github/actions/setup-uv-with-retries
+      uses: $/.github/actions/setup-uv-with-retries
       with:
         version: "0.10.9"
 
     - name: Cache the Rust build
       if: steps.cache.outputs.restored != 'true'
-      uses: ./.github/actions/cache-cargo-build
+      uses: $/.github/actions/cache-cargo-build
 
     - name: Build editable Rust bridge
       if: steps.cache.outputs.restored != 'true'

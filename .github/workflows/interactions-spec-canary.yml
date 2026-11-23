@@ -35,12 +35,12 @@ jobs:
           python-version: "3.12"
 
       - name: Set up uv
-        uses: ./.github/actions/setup-uv-with-retries
+        uses: $/.github/actions/setup-uv-with-retries
         with:
           version: "0.10.9"
 
       - name: Set up the Rust bridge
-        uses: ./.github/actions/rust-bridge
+        uses: $/.github/actions/rust-bridge
 
       - name: Install dependencies
         run: .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra proxy
