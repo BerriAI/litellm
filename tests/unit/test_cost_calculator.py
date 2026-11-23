@@ -2536,12 +2536,26 @@ def test_rerank_cost_keeps_a_configured_zero_price(rates: dict[str, float], _pri
 
 
 def test_rerank_cost_without_the_rate_the_provider_prices_by_is_unavailable_instead_of_zero(
-    _priced_test_reranker: None,
+    _priced_test_reranker: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _register_reranker("cohere/test-token-priced-reranker", {"input_cost_per_token": 5e-08})
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "cohere/test-token-priced-reranker",
+        {"input_cost_per_token": 5e-08, "litellm_provider": "cohere", "mode": "rerank"},
+    )
+    publish(litellm.model_cost)
 
     with pytest.raises(ValueError, match="No rerank price in the cost map"):
         _rerank_cost(_provider_usage_rerank({"search_units": _SEARCH_UNITS}), "cohere/test-token-priced-reranker")
+
+
+@pytest.mark.parametrize("usage", [{"search_units": _SEARCH_UNITS}, {"search_units": _SEARCH_UNITS, "cost": 0.5}])
+def test_registered_rerank_price_without_the_rate_the_provider_prices_by_stays_zero(
+    usage: Mapping[str, object], _priced_test_reranker: None
+) -> None:
+    _register_reranker("cohere/test-token-priced-reranker", {"input_cost_per_token": 5e-08})
+
+    assert _rerank_cost(_provider_usage_rerank(usage), "cohere/test-token-priced-reranker") == 0.0
 
 
 @pytest.mark.parametrize("billed_units", [{}, {"search_units": None}])

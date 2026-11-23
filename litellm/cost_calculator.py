@@ -2387,8 +2387,8 @@ def completion_cost(
                 model_for_discount = custom_priced_request_model or model
                 if (
                     not caller_set_prices
-                    and not _has_registered_rerank_price(call_type, model, custom_llm_provider)
                     and (reported_cost := billed_usage_cost(priced_response, custom_llm_provider)) is not None
+                    and not _has_registered_rerank_price(call_type, model, custom_llm_provider)
                 ):
                     return _adjusted_provider_billed_cost(
                         reported_cost=reported_cost,
@@ -2441,8 +2441,9 @@ def completion_cost(
                 (
                     prompt_tokens_cost_usd_dollar,
                     completion_tokens_cost_usd_dollar,
-                ) = _rerank_cost_or_caller_priced_zero(
+                ) = _rerank_cost_or_configured_zero(
                     caller_set_prices,
+                    partial(_has_registered_rerank_price, call_type, model, custom_llm_provider),
                     partial(
                         cost_per_token,
                         model=model,
@@ -3151,13 +3152,13 @@ class RerankPriceUnavailableError(ValueError):
     """Neither a cost map entry nor a rate the rerank provider prices by exists for the model."""
 
 
-def _rerank_cost_or_caller_priced_zero(
-    caller_set_prices: bool, price: Callable[[], tuple[float, float]]
+def _rerank_cost_or_configured_zero(
+    caller_set_prices: bool, has_registered_price: Callable[[], bool], price: Callable[[], tuple[float, float]]
 ) -> tuple[float, float]:
     try:
         return price()
     except RerankPriceUnavailableError:
-        if caller_set_prices:
+        if caller_set_prices or has_registered_price():
             return 0.0, 0.0
         raise
 

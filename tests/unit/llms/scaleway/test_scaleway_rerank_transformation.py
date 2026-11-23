@@ -10,6 +10,7 @@ import respx
 
 import litellm
 from litellm.caching.caching import Cache
+from litellm.litellm_core_utils.model_cost_table import publish
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.rerank import RerankResponse
 
@@ -336,6 +337,55 @@ async def test_scaleway_rerank_ignores_a_bare_name_registration_for_another_prov
 
     response: Final = await _rerank_via_router(
         sync_mode, TOKEN_REPORTED_BODY, respx_mock, model=f"scaleway/{SHARED_RERANK_NAME}"
+    )
+
+    assert response._hidden_params["response_cost"] == pytest.approx(expected)
+
+
+CATALOG_RERANK_ROW: Final = "test-catalog-reranker"
+CATALOG_RERANK_ALIAS: Final = f"cohere/{CATALOG_RERANK_ROW}"
+TOKEN_USAGE_WITH_COST: Final = {"total_tokens": 24, "cost": 0.002}
+SEARCH_USAGE_WITH_COST: Final = {"search_units": 1, "cost": 0.002}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize("persist", [True, False])
+@pytest.mark.parametrize(
+    ("registration", "usage", "expected"),
+    [
+        (None, TOKEN_USAGE_WITH_COST, 0.002),
+        (None, SEARCH_USAGE_WITH_COST, 0.002),
+        ({"litellm_provider": "scaleway", "input_cost_per_token": 1e-06}, TOKEN_USAGE_WITH_COST, 0.0),
+        ({"litellm_provider": "scaleway", "input_cost_per_token": 0.0}, SEARCH_USAGE_WITH_COST, 0.0),
+        ({"litellm_provider": "jina_ai", "input_cost_per_token": 1e-06}, TOKEN_USAGE_WITH_COST, 0.002),
+        ({"litellm_provider": None, "input_cost_per_token": 1e-06}, TOKEN_USAGE_WITH_COST, 0.0),
+        ({"input_cost_per_token": 1e-06}, TOKEN_USAGE_WITH_COST, 0.002),
+    ],
+)
+async def test_scaleway_rerank_honors_a_registration_merged_onto_a_published_catalog_row(
+    sync_mode: bool,
+    persist: bool,
+    registration: Mapping[str, object] | None,
+    usage: Mapping[str, object],
+    expected: float,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        CATALOG_RERANK_ROW,
+        {"litellm_provider": "cohere", "mode": "rerank", "input_cost_per_query": 0.002, "input_cost_per_token": 0.0},
+    )
+    publish(litellm.model_cost)
+    if registration is not None:
+        litellm.register_model(
+            {CATALOG_RERANK_ALIAS: {"mode": "rerank", **registration}}, persist_across_reloads=persist
+        )
+    assert CATALOG_RERANK_ALIAS not in litellm.model_cost
+
+    response: Final = await _rerank_via_router(
+        sync_mode, {**OPENROUTER_RERANK_BODY, "usage": usage}, respx_mock, model=f"scaleway/{CATALOG_RERANK_ALIAS}"
     )
 
     assert response._hidden_params["response_cost"] == pytest.approx(expected)

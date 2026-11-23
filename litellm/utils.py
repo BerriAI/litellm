@@ -4627,13 +4627,27 @@ def runtime_model_cost_registrations(
 def provider_matched_runtime_model_cost_registrations(
     model: str, custom_llm_provider: str
 ) -> tuple[tuple[str, Mapping[str, object]], ...]:
-    """``runtime_model_cost_registrations`` limited to rows whose effective provider, registered or inferred, passes
-    the same ``_check_provider_match`` a model info lookup applies."""
+    """Include direct registrations and their resolved catalog rows, retaining the effective provider constraint."""
+    names: Final = get_potential_model_names(model, custom_llm_provider)
+    candidates: Final = (
+        model,
+        names["combined_model_name"],
+        f"{custom_llm_provider}/{names['split_model']}",
+        names["split_model"],
+        names["stripped_model_name"],
+    )
+    published_rows: Final = (
+        _resolve_builtin_model_cost_entry(key=candidate, provider=custom_llm_provider) for candidate in candidates
+    )
+    landings: Final = tuple(match.key for match in published_rows if match is not None)
     table: Final = _builtin_cost_map()
+    entries: Final = ((key, table.get(key)) for key in dict.fromkeys((*candidates, *landings)))
     return tuple(
-        (key, fields)
-        for key, fields in runtime_model_cost_registrations(model, custom_llm_provider)
-        if _check_provider_match(dict(table.get(key) or {}), custom_llm_provider)
+        (key, MappingProxyType({name: value for name, value in entry.items() if name in entry.registered_fields}))
+        for key, entry in entries
+        if isinstance(entry, AliasedCostEntry)
+        and entry.registered_fields
+        and _check_provider_match(dict(entry), custom_llm_provider)
     )
 
 
