@@ -20,6 +20,7 @@ from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.types.extraction import (
     EXTRACTION_STATE_REWRITTEN_METADATA_KEY,
     ExtractionAnswer,
+    ExtractionBase64Document,
     ExtractionBase64Image,
     ExtractionField,
     ExtractionOptions,
@@ -36,6 +37,7 @@ from litellm.utils import (
 
 ExtractionFields: TypeAlias = Mapping[str, ExtractionField | Mapping[str, object]]
 ExtractionImages: TypeAlias = Sequence[str | ExtractionBase64Image | Mapping[str, object]]
+ExtractionDocuments: TypeAlias = Sequence[str | ExtractionBase64Document | Mapping[str, object]]
 ExtractionOptionsParam: TypeAlias = ExtractionOptions | Mapping[str, object]
 
 _REQUEST_ADAPTER: Final[TypeAdapter[ExtractionRequestBody]] = TypeAdapter(ExtractionRequestBody)
@@ -99,11 +101,19 @@ def _request_fields(
     state: str | None,
     fields: ExtractionFields | None,
     images: ExtractionImages | None,
+    documents: ExtractionDocuments | None,
     reference_date: str | None,
     options: ExtractionOptionsParam | None,
 ) -> Mapping[str, object]:
     sent: Final[Mapping[str, object | None]] = MappingProxyType(
-        {"state": state, "fields": fields, "images": images, "reference_date": reference_date, "options": options}
+        {
+            "state": state,
+            "fields": fields,
+            "images": images,
+            "documents": documents,
+            "reference_date": reference_date,
+            "options": options,
+        }
     )
     return MappingProxyType({name: value for name, value in sent.items() if value is not None})
 
@@ -291,6 +301,7 @@ async def aextraction(
     fields: ExtractionFields,
     state: str | None = None,
     images: ExtractionImages | None = None,
+    documents: ExtractionDocuments | None = None,
     reference_date: str | None = None,
     options: ExtractionOptionsParam | None = None,
     api_key: str | None = None,
@@ -305,7 +316,12 @@ async def aextraction(
             _prepare_call,
             model=model,
             request_fields=_request_fields(
-                state=state, fields=fields, images=images, reference_date=reference_date, options=options
+                state=state,
+                fields=fields,
+                images=images,
+                documents=documents,
+                reference_date=reference_date,
+                options=options,
             ),
             api_key=api_key,
             api_base=api_base,
@@ -324,6 +340,7 @@ def extraction(
     fields: ExtractionFields,
     state: str | None = None,
     images: ExtractionImages | None = None,
+    documents: ExtractionDocuments | None = None,
     reference_date: str | None = None,
     options: ExtractionOptionsParam | None = None,
     api_key: str | None = None,
@@ -336,7 +353,12 @@ def extraction(
     call: Final = _prepare_call(
         model=model,
         request_fields=_request_fields(
-            state=state, fields=fields, images=images, reference_date=reference_date, options=options
+            state=state,
+            fields=fields,
+            images=images,
+            documents=documents,
+            reference_date=reference_date,
+            options=options,
         ),
         api_key=api_key,
         api_base=api_base,

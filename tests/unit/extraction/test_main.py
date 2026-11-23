@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import Final
 
@@ -66,6 +66,8 @@ _RESULT: Final[Mapping[str, object]] = {
 }
 _ENVELOPE: Final[Mapping[str, object]] = {"result": _RESULT, "success": True, "errors": [], "messages": []}
 _PNG_DATA_URL: Final = "data:image/png;base64,AA=="
+_PDF_DATA_URL: Final = "data:application/pdf;base64,JVBERi0="
+_PDF_OBJECT: Final[Mapping[str, object]] = MappingProxyType({"content_type": "application/pdf", "base64": "JVBERi0="})
 
 
 @pytest.fixture(autouse=True)
@@ -420,3 +422,67 @@ async def test_a_dropped_stream_is_sent_and_logged_as_a_billed_non_stream_call(
     assert recording_logger.stream is False
     assert response.hidden_params["response_cost"] > 0
     assert logged["response_cost"] == pytest.approx(response.hidden_params["response_cost"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "documents",
+    (
+        ["https://example.com/invoice.pdf"],
+        [_PDF_DATA_URL] * 5,
+        [{"content_type": "application/json", "base64": "e30="}],
+    ),
+    ids=("remote_pdf", "too_many_documents", "wrong_content_type"),
+)
+@pytest.mark.usefixtures("cloudflare_env")
+async def test_an_invalid_documents_request_is_refused_before_http(
+    respx_mock: respx.MockRouter, documents: Sequence[str | Mapping[str, object]]
+) -> None:
+    with pytest.raises(litellm.BadRequestError, match="Invalid Extraction request"):
+        await litellm.aextraction(model="cloudflare/clairic", state="", fields=_FIELDS, documents=documents)
+
+    assert len(respx_mock.calls) == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("cloudflare_env")
+async def test_async_extraction_forwards_documents(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(_CLAIRIC_URL).respond(json=_ENVELOPE)
+
+    response: Final = await litellm.aextraction(
+        model="cloudflare/clairic",
+        state="",
+        fields=_FIELDS,
+        documents=[_PDF_DATA_URL, _PDF_OBJECT],
+    )
+
+    assert route.call_count == 1
+    request: Final = route.calls[0].request
+    assert json.loads(request.content) == {
+        "model": "clairic",
+        "state": "",
+        "fields": _FIELDS,
+        "documents": [_PDF_DATA_URL, dict(_PDF_OBJECT)],
+    }
+    _assert_invoice_answers(response)
+
+
+@pytest.mark.usefixtures("cloudflare_env")
+def test_sync_extraction_forwards_documents(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(_CLAIRIC_URL).respond(json=_ENVELOPE)
+
+    response: Final = litellm.extraction(
+        model="cloudflare/clairic",
+        state="",
+        fields=_FIELDS,
+        documents=[_PDF_DATA_URL, _PDF_OBJECT],
+    )
+
+    assert route.call_count == 1
+    assert json.loads(route.calls[0].request.content) == {
+        "model": "clairic",
+        "state": "",
+        "fields": _FIELDS,
+        "documents": [_PDF_DATA_URL, dict(_PDF_OBJECT)],
+    }
+    _assert_invoice_answers(response)

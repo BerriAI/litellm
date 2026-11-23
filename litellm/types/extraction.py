@@ -75,6 +75,23 @@ class ExtractionBase64Image(_ClairicObject):
 ExtractionImage: TypeAlias = Annotated[str, Field(pattern=r"^[Dd][Aa][Tt][Aa]:")] | ExtractionBase64Image
 
 
+class ExtractionBase64Document(_ClairicObject):
+    content_type: Annotated[Literal["application/pdf"], Field(description="The document media type, application/pdf")]
+    base64: Annotated[str, Field(description="Base64-encoded PDF bytes")]
+
+
+ExtractionDocument: TypeAlias = (
+    Annotated[
+        str,
+        Field(
+            pattern=r"^[Dd][Aa][Tt][Aa]:[Aa][Pp][Pp][Ll][Ii][Cc][Aa][Tt][Ii][Oo][Nn]/[Pp][Dd][Ff];[Bb][Aa][Ss][Ee]64,",
+            description="PDF as a base64 data URL",
+        ),
+    ]
+    | ExtractionBase64Document
+)
+
+
 class ExtractionOptions(_ClairicObject):
     include_quantiles: Annotated[StrictBool | None, Field(description="Add 99 percentiles to estimates")] = None
     return_state_text: Annotated[StrictBool | None, Field(description="Return the text that spans index into")] = None
@@ -83,7 +100,9 @@ class ExtractionOptions(_ClairicObject):
 class ExtractionRequestBody(_ClairicObject):
     state: Annotated[
         str,
-        Field(description="The text to read. Must be non-empty unless images are sent. Text answers are spans of it"),
+        Field(
+            description="The text to read. Must be non-empty unless images or documents are sent. Text answers are spans of it"
+        ),
     ] = ""
     fields: Annotated[
         Mapping[ExtractionFieldName, ExtractionField],
@@ -92,6 +111,13 @@ class ExtractionRequestBody(_ClairicObject):
     images: Annotated[
         tuple[ExtractionImage, ...] | None,
         Field(max_length=4, description="Up to 4 images as data URLs or content_type plus base64, no remote URLs"),
+    ] = None
+    documents: Annotated[
+        tuple[ExtractionDocument, ...] | None,
+        Field(
+            max_length=4,
+            description="Up to 4 embedded PDFs as data URLs or content_type plus base64, max 4 MiB each",
+        ),
     ] = None
     reference_date: Annotated[str | None, Field(description="ISO date that anchors dates written without a year")] = (
         None
@@ -155,6 +181,7 @@ class ExtractionCallParams(TypedDict, total=False):
     state: Required[ReadOnly[str]]
     fields: Required[ReadOnly[Mapping[str, Mapping[str, object]]]]
     images: ReadOnly[Sequence[str | Mapping[str, object]] | None]
+    documents: ReadOnly[Sequence[str | Mapping[str, object]] | None]
     reference_date: ReadOnly[str | None]
     api_key: ReadOnly[str | None]
     api_base: ReadOnly[str | None]
