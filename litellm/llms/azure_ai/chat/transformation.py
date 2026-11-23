@@ -4,6 +4,7 @@ import re
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final, cast
+from urllib.parse import quote
 
 import httpx
 from httpx import Response
@@ -11,7 +12,7 @@ from typing_extensions import assert_never
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.exceptions import UnsupportedParamsError
+from litellm.exceptions import BadRequestError, UnsupportedParamsError
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -21,8 +22,16 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 )
 from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.llms.azure_ai.common_utils import (
+    CHAT_COMPLETIONS_PATH,
+    OPENAI_V1_PATH,
+    AzureFoundryModelInfo,
     api_key_header_for_base,
+    foundry_project_root,
+    foundry_v1_root,
     is_foundry_model_inference_base,
+    is_openai_v1_resource_base,
+    with_foundry_project_scope,
+    without_api_version,
 )
 from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj
 from litellm.llms.fireworks_ai.common_utils import AZURE_FOUNDRY_FIREWORKS_MODEL_ID_PREFIX
@@ -47,6 +56,10 @@ from litellm.utils import (
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
+
+
+def _is_plain_path_segment(segment: str) -> bool:
+    return quote(segment, safe="") == segment and segment.strip(".") != ""
 
 
 class AzureFoundryErrorStrings(str, enum.Enum):
@@ -302,7 +315,9 @@ class AzureAIStudioConfig(OpenAIConfig):
                 headers["Authorization"] = f"Bearer {api_key}"
         else:
             # No api_key provided — fall back to Azure AD token-based auth
-            litellm_params_obj = GenericLiteLLMParams(**(litellm_params if isinstance(litellm_params, dict) else {}))
+            litellm_params_obj: Final = with_foundry_project_scope(
+                GenericLiteLLMParams(**(litellm_params if isinstance(litellm_params, dict) else {})), api_base
+            )
             headers = BaseAzureLLM.base_validate_azure_environment(headers=headers, litellm_params=litellm_params_obj)
 
         headers["Content-Type"] = "application/json"
@@ -313,7 +328,7 @@ class AzureAIStudioConfig(OpenAIConfig):
         """
         Returns True if the request should use `api-key` header for authentication.
         """
-        return api_key_header_for_base(api_base) == "api-key"
+        return api_key_header_for_base(api_base) == "api-key" and not foundry_project_root(httpx.URL(api_base))
 
     def get_complete_url(
         self,
@@ -355,6 +370,30 @@ class AzureAIStudioConfig(OpenAIConfig):
         # Add api_version if needed
         if "api-version" not in query_params and api_version:
             query_params["api-version"] = api_version
+
+        requested_api_version: Final = query_params.get("api-version")
+        resource_base: Final = is_openai_v1_resource_base(original_url)
+        if (
+            resource_base
+            and requested_api_version is not None
+            and not BaseAzureLLM.is_azure_v1_api_version(requested_api_version)
+        ):
+            deployment: Final = AzureFoundryModelInfo.get_base_model(model)
+            if not _is_plain_path_segment(deployment):
+                raise BadRequestError(
+                    message=f"azure_ai deployment name {deployment!r} must be one URL path segment made of letters, "
+                    "digits, '-', '_', '.', or '~'",
+                    model=model,
+                    llm_provider="azure_ai",
+                )
+            deployment_chat_path: Final = "/" + "/".join(("openai", "deployments", deployment, *CHAT_COMPLETIONS_PATH))
+            return str(original_url.copy_with(path=deployment_chat_path, params=query_params))
+        v1_root: Final = foundry_v1_root(original_url) or (OPENAI_V1_PATH if resource_base else None)
+        if v1_root is not None:
+            v1_chat_path: Final = "/" + "/".join((*v1_root, *CHAT_COMPLETIONS_PATH))
+            if foundry_project_root(original_url):
+                return str(original_url.copy_with(path=v1_chat_path, params=without_api_version(original_url)))
+            return str(original_url.copy_with(path=v1_chat_path, params=query_params))
 
         # Add the path to the base URL
         if "services.ai.azure.com" in api_base:

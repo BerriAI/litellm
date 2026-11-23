@@ -545,30 +545,20 @@ def test_azure_tool_choice(api_version):
         )
 
 
-@pytest.mark.parametrize(
-    "model, provider, should_drop",
-    [("command-r", "cohere", True), ("gpt-3.5-turbo", "openai", False)],
-)
-def test_drop_params_parallel_tool_calls(model, provider, should_drop):
+def test_drop_params_keeps_parallel_tool_calls_the_provider_supports():
     """
     https://github.com/BerriAI/litellm/issues/4584
     """
     response = litellm.utils.get_optional_params(
-        model=model,
-        custom_llm_provider=provider,
+        model="gpt-3.5-turbo",
+        custom_llm_provider="openai",
         response_format={"type": "json"},
         parallel_tool_calls=True,
         drop_params=True,
     )
 
-    print(response)
-
-    if should_drop:
-        assert "response_format" not in response
-        assert "parallel_tool_calls" not in response
-    else:
-        assert "response_format" in response
-        assert "parallel_tool_calls" in response
+    assert "response_format" in response
+    assert "parallel_tool_calls" in response
 
 
 def test_dynamic_drop_additional_params_stream_options():
@@ -1938,19 +1928,19 @@ def test_store_param_passed_through_openai_azure():
     assert optional_params_false["store"] is False
 
 
-def test_cohere_drop_params_removes_unsupported_response_format(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_cohere_drop_params_removes_unsupported_param(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
     params: Final = get_optional_params(
         model="command-r-plus-08-2024",
         custom_llm_provider="cohere",
-        response_format={"type": "json_object"},
+        parallel_tool_calls=True,
         drop_params=True,
     )
-    assert "response_format" not in params
+    assert "parallel_tool_calls" not in params
 
 
 @pytest.mark.parametrize("drop_params", [False, None])
-def test_cohere_drop_params_rejects_unsupported_response_format(
+def test_cohere_drop_params_rejects_unsupported_param(
     drop_params: bool | None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
@@ -1958,7 +1948,7 @@ def test_cohere_drop_params_rejects_unsupported_response_format(
         get_optional_params(
             model="command-r-plus-08-2024",
             custom_llm_provider="cohere",
-            response_format={"type": "json_object"},
+            parallel_tool_calls=True,
             drop_params=drop_params,
         )
 
@@ -1967,7 +1957,7 @@ def test_cohere_drop_params_rejects_unsupported_response_format(
 
 
 @pytest.mark.respx(assert_all_called=True)
-def test_cohere_completion_drops_response_format_from_request(
+def test_cohere_completion_sends_json_object_response_format(
     respx_mock: respx.MockRouter,
 ) -> None:
     route: Final = respx_mock.post("https://api.cohere.com/v2/chat")
@@ -1977,13 +1967,16 @@ def test_cohere_completion_drops_response_format_from_request(
         model="cohere/command-r-plus-08-2024",
         messages=[{"role": "user", "content": "hello"}],
         response_format={"type": "json_object"},
-        drop_params=True,
         api_key="test-api-key",
         client=HTTPHandler(),
     )
 
     request_body: Final = json.loads(route.calls[0].request.content)
-    assert request_body == {"model": "command-r-plus-08-2024", "messages": [{"role": "user", "content": "hello"}]}
+    assert request_body == {
+        "model": "command-r-plus-08-2024",
+        "messages": [{"role": "user", "content": "hello"}],
+        "response_format": {"type": "json_object"},
+    }
 
 
 @pytest.mark.respx(assert_all_called=True)

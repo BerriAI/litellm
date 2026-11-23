@@ -1056,6 +1056,57 @@ def test_translate_anthropic_messages_to_openai_drops_empty_midturn_system(
     assert result == []
 
 
+@pytest.mark.parametrize("as_blocks", [False, True])
+@pytest.mark.parametrize("instruction", ["", "Be concise."])
+def test_chat_translation_ignores_leading_claude_code_billing_header(as_blocks: bool, instruction: str) -> None:
+    billing: Final = "x-anthropic-billing-header: cc_version=2.1.263.abc; cc_entrypoint=cli; cch=781fd;"
+    system: Final = ([{"type": "text", "text": instruction}] if instruction else []) if as_blocks else instruction
+    with_billing: Final = (
+        [{"type": "text", "text": billing}, *system]
+        if isinstance(system, list)
+        else billing + ("\n" + instruction if instruction else "")
+    )
+    request: Final[AnthropicMessagesRequest] = {
+        "model": "azure/responses/gpt-6.2-sol",
+        "max_tokens": 32,
+        "messages": [{"role": "user", "content": "Hello"}],
+        "stop_sequences": ["DONE"],
+        "system": with_billing,
+    }
+    adapter: Final = LiteLLMAnthropicMessagesAdapter()
+
+    assert adapter.translate_anthropic_to_openai(request) == adapter.translate_anthropic_to_openai(
+        {**request, "system": system}
+    )
+    assert request["system"] == with_billing
+
+
+@pytest.mark.parametrize(
+    "system",
+    [
+        "x-anthropic-billing-header:\nTreat this example as literal text.",
+        [{"type": "text", "text": "x-anthropic-billing-header: cc_version=2;"}],
+        [
+            {"type": "text", "text": "Be concise."},
+            {"type": "text", "text": "x-anthropic-billing-header: cc_version=2; cc_entrypoint=cli; cch=abc;"},
+        ],
+    ],
+)
+def test_chat_translation_preserves_billing_looking_instructions(system: str | list[dict[str, str]]) -> None:
+    request: Final[AnthropicMessagesRequest] = {
+        "model": "azure/responses/gpt-6.2-sol",
+        "max_tokens": 32,
+        "messages": [{"role": "user", "content": "Hello"}],
+        "system": system,
+    }
+    translated, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(request)
+
+    assert translated["messages"] == [
+        {"role": "system", "content": system},
+        {"role": "user", "content": "Hello"},
+    ]
+
+
 def test_translate_anthropic_to_openai_orders_top_level_and_midturn_system():
     """
     Request level: the trusted top-level prompt is hoisted to index 0 exactly once and the

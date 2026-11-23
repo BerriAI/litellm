@@ -77,6 +77,7 @@ from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module expo
     get_team_member_default_budget,
     get_team_membership,
     get_team_object,
+    get_team_object_from_cache,
     get_user_object,
     get_user_role,
     is_mcp_discovery_request,
@@ -2078,6 +2079,37 @@ def _is_bodyless_get(request: Request) -> bool:
     )
 
 
+def _team_fields_newer_than_key(key: UserAPIKeyAuth, team: LiteLLM_TeamTableCachedObj) -> Mapping[str, object]:
+    if team.last_refreshed_at is None or key.last_refreshed_at is None:
+        return MappingProxyType({})
+    if team.last_refreshed_at <= key.last_refreshed_at:
+        return MappingProxyType({})
+    key_fields: Final = type(key).model_fields
+    return MappingProxyType(
+        {f"team_{name}": value for name, value in team.__dict__.items() if f"team_{name}" in key_fields}
+    )
+
+
+async def _cached_team_fields_for_key(
+    key: UserAPIKeyAuth, user_api_key_cache: UserApiKeyCache, parent_otel_span: Span | None
+) -> Mapping[str, object] | None:
+    if key.team_id is None or key.team_id == UI_TEAM_ID:
+        return MappingProxyType({})
+    try:
+        team: Final = await get_team_object_from_cache(
+            key=f"team_id:{key.team_id}", user_api_key_cache=user_api_key_cache, parent_otel_span=parent_otel_span
+        )
+        return None if team is None else _team_fields_newer_than_key(key, team)
+    except Exception:  # noqa: BLE001  # an unreadable team entry is treated like a team cache miss
+        return None
+
+
+def _refused_by_team_limit(rejection: HTTPException) -> bool:
+    from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+
+    return isinstance(rejection, ProxyRateLimitError) and rejection.descriptor_key == "team"
+
+
 async def _reject_from_headers_before_reading_body(
     request: Request, api_key: str | None, custom_litellm_key_header: str | None, route: str
 ) -> None:
@@ -2143,8 +2175,10 @@ async def _reject_from_headers_before_reading_body(
     limiter: Final = proxy_logging_obj.get_proxy_hook("parallel_request_limiter")
     if not isinstance(limiter, PROXY_MaxParallelRequestsHandler_v3):
         return
+    team_fields: Final = await _cached_team_fields_for_key(cached_key, user_api_key_cache, parent_otel_span)
     rate_limited: Final = cached_key.model_copy(
         update={
+            **(team_fields or {}),
             "api_key": cached_key.api_key or hashed_token,
             "parent_otel_span": parent_otel_span,
             "request_route": normalize_request_route(route),
@@ -2153,6 +2187,8 @@ async def _reject_from_headers_before_reading_body(
     try:
         await limiter.raise_if_over_limit_before_body(rate_limited)
     except HTTPException as rejection:
+        if team_fields is None and _refused_by_team_limit(rejection):
+            return
         failure_data: Final = dict(await _preflight_failure_request_data(request, route, rate_limited))
         transformed: Final = await proxy_logging_obj.post_call_failure_hook(  # pyright: ignore[reportUnknownMemberType]  # bare dict in sig
             request_data=failure_data,
@@ -2851,17 +2887,8 @@ async def user_api_key_auth_builder(
                     check_cache_only=True,
                 )
 
-                if (
-                    team_obj.last_refreshed_at is not None
-                    and valid_token.last_refreshed_at is not None
-                    and team_obj.last_refreshed_at > valid_token.last_refreshed_at
-                ):
-                    team_obj_dict: Final = team_obj.__dict__
-
-                    for k, v in team_obj_dict.items():
-                        field_name = f"team_{k}"
-                        if field_name in valid_token.__fields__:
-                            setattr(valid_token, field_name, v)
+                for field_name, value in _team_fields_newer_than_key(valid_token, team_obj).items():
+                    setattr(valid_token, field_name, value)
             except Exception as e:
                 verbose_logger.debug(e)  # moving from .warning to .debug as it spams logs when team missing from cache.
 

@@ -1017,3 +1017,34 @@ async def test_async_codestral_call_after_an_openai_call_sends_an_uploaded_file_
 
     sent_content: Final = json.loads(codestral_route.calls.last.request.content)["messages"][0]["content"]
     assert sent_content[1] == {"type": "file", "file_id": "file-12345"}
+
+
+def test_mistral_api_receives_the_callers_tool_call_ids():
+    tool_call: Final = {"id": "call_abc123", "type": "function", "function": {"name": "get_time", "arguments": "{}"}}
+    messages: Final = cast(
+        List[AllMessageValues],
+        [
+            {"role": "user", "content": "What time is it?"},
+            {"role": "assistant", "content": None, "tool_calls": [tool_call]},
+            {"role": "tool", "tool_call_id": "call_abc123", "content": "12:00"},
+        ],
+    )
+
+    request: Final = MistralConfig().transform_request(
+        model="mistral-medium-2508", messages=messages, optional_params={}, litellm_params={}, headers={}
+    )
+
+    assert request["messages"][1:] == [
+        {"role": "assistant", "tool_calls": [tool_call]},
+        {"role": "tool", "tool_call_id": "call_abc123", "content": "12:00"},
+    ]
+
+
+def test_mistral_api_chat_leaves_n_out_of_the_body() -> None:
+    import litellm
+
+    optional_params: Final = litellm.get_optional_params(
+        model="mistral-large-latest", custom_llm_provider="mistral", n=1
+    )
+
+    assert "n" not in optional_params

@@ -9,7 +9,7 @@ from typing_extensions import (
     TypedDict,
 )
 
-from litellm.types.llms.openai import ChatCompletionFileObject, EmbeddingInput
+from litellm.types.llms.openai import ChatCompletionFileObject, EmbeddingInput, ImageURLListItem
 from litellm.types.token_count import TokenCountSourceFields
 
 # Gemini supports nested-list inputs (e.g. [["text", "image"]]) as an explicit
@@ -19,6 +19,14 @@ GeminiEmbeddingElement = str | ChatCompletionFileObject
 GeminiEmbeddingInput = (
     EmbeddingInput | list[GeminiEmbeddingElement] | list[list[str]] | list[list[GeminiEmbeddingElement]]
 )
+
+
+class GeminiImageProviderSpecificFields(TypedDict, total=False):
+    thought_signature: ReadOnly[str]
+
+
+class GeminiImageURLListItem(ImageURLListItem):
+    provider_specific_fields: ReadOnly[GeminiImageProviderSpecificFields]
 
 
 class FunctionResponse(TypedDict, total=False):
@@ -303,8 +311,8 @@ class TTL(TypedDict, total=False):
 
 
 class PromptTokensDetails(TypedDict):
-    modality: Literal["TEXT", "AUDIO", "IMAGE", "VIDEO"]
-    tokenCount: int
+    modality: ReadOnly[str]
+    tokenCount: ReadOnly[int]
 
 
 class UsageMetadata(TypedDict, total=False):
@@ -642,6 +650,7 @@ class VertexAIBatchEmbeddingsRequestBody(TypedDict, total=False):
 
 class VertexAIBatchEmbeddingsResponseObject(TypedDict):
     embeddings: list[ContentEmbeddings]
+    usageMetadata: NotRequired[ReadOnly[object]]
 
 
 class GeminiEmbedContentRequestBody(TypedDict, total=False):

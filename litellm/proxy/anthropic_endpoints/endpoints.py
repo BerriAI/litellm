@@ -23,6 +23,7 @@ from litellm.litellm_core_utils.tool_fields import first_validation_error
 from litellm.llms.anthropic.pass_through.context_management import (
     AnthropicContextManagementError,
 )
+from litellm.llms.anthropic.pass_through.responses_adapters.handler import SYSTEM_PLACEMENT_PARAMS
 from litellm.llms.base_llm.guardrail_translation.utils import (
     blocked_response_usage as _blocked_response_usage,
 )
@@ -332,7 +333,7 @@ def _requested_output_format(data: Mapping[str, JsonValue]) -> JsonValue:
     return output_config.get("format")
 
 
-_COUNTED_LITELLM_PARAMS: Final = ("additional_drop_params", "drop_params")
+_COUNTED_LITELLM_PARAMS: Final = (*SYSTEM_PLACEMENT_PARAMS, "drop_params")
 
 
 class _CountTokensBodyOptions(TypedDict):

@@ -13,6 +13,7 @@ from unittest.mock import MagicMock, patch
 import boto3
 import httpx
 import pytest
+import respx
 from botocore.credentials import Credentials
 from botocore.exceptions import ClientError
 
@@ -375,3 +376,32 @@ def test_sync_converse_stream_error_keeps_the_status_class_and_raw_body(
 
     assert raised.value.status_code == status_code
     assert repr(_INVALID_REQUEST_BODY) in raised.value.message
+
+
+@pytest.mark.parametrize(
+    "api_base",
+    [
+        "https://gateway.example.com/openai/v1/chat/completions",
+        "https://gateway.example.com/openai/v1/responses",
+        "https://gateway.example.com/openai/v1",
+    ],
+)
+def test_converse_fallback_on_a_full_route_url_api_base_calls_converse_on_that_host(
+    api_base: str, respx_mock: respx.MockRouter
+) -> None:
+    gateway: Final = respx_mock.post(url__startswith="https://gateway.example.com/").mock(
+        return_value=httpx.Response(200, json=CONVERSE_RESPONSE)
+    )
+
+    litellm.completion(
+        model="bedrock/us.openai.gpt-6.1-sol",
+        messages=[{"role": "user", "content": "hi"}],
+        api_base=api_base,
+        api_key="bedrock-api-key",
+        aws_region_name="us-east-1",
+        response_format={"type": "json_object"},
+    )
+
+    assert [call.request.url for call in gateway.calls] == [
+        httpx.URL("https://gateway.example.com/model/us.openai.gpt-6.1-sol/converse")
+    ]

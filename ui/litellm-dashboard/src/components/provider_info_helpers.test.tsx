@@ -20,6 +20,17 @@ const BUNDLED_MODEL_MAP: Record<string, { litellm_provider?: string }> = JSON.pa
 );
 
 describe("provider_info_helpers", () => {
+  it("resolves ResetData name, logo and model placeholder", () => {
+    expect(provider_map.RESETDATA).toBe("resetdata");
+    expect(getProviderLogoAndName("resetdata")).toEqual({
+      displayName: "ResetData",
+      logo: providerLogoMap[Providers.RESETDATA],
+    });
+    expect(getProviderLogoAndName("RESETDATA")).toEqual(getProviderLogoAndName("resetdata"));
+    expect(providerLogoMap[Providers.RESETDATA]).toContain("resetdata");
+    expect(getPlaceholder(Providers.RESETDATA)).toBe("resetdata/zai/glm-5.3");
+  });
+
   it("maps Microsoft 365 Copilot to its chat model provider and placeholder", () => {
     expect(provider_map.MICROSOFT_365_COPILOT).toBe("microsoft_365_copilot");
     expect(getPlaceholder(Providers.MICROSOFT_365_COPILOT)).toBe("microsoft_365_copilot/chat");
@@ -368,6 +379,12 @@ describe("provider_info_helpers", () => {
       expect(getPlaceholder(Providers.CORALBRICKS)).toBe("coralbricks/glm-5.3-fast");
     });
 
+    it("should return a perplexity_orchestrator/ placeholder for the Perplexity Orchestrator provider", () => {
+      expect(getPlaceholder(Providers.PERPLEXITY_ORCHESTRATOR)).toBe(
+        "perplexity_orchestrator/anthropic/claude-sonnet-5-5",
+      );
+    });
+
     it("should return decision model placeholders for the TypeSafe and StrandsDecider dropdown keys", () => {
       expect(getPlaceholder("TypeSafe")).toBe("typesafe/jev-latest");
       expect(getPlaceholder("StrandsDecider")).toBe("strands_decider/strands-decider-2B-hobson-v19");
@@ -672,6 +689,19 @@ describe("provider_info_helpers", () => {
       const result = getProviderModels("MINIMAX" as Providers, BUNDLED_MODEL_MAP);
 
       expect([...result].sort()).toEqual([...minimaxModels].sort());
+    });
+
+    it("keeps Perplexity Orchestrator models out of the Perplexity dropdown and lists them under their own provider", () => {
+      const modelsOf = (provider: string) =>
+        Object.keys(BUNDLED_MODEL_MAP).filter((key) => BUNDLED_MODEL_MAP[key]?.litellm_provider === provider);
+      const orchestratorModels = modelsOf("perplexity_orchestrator");
+      expect(orchestratorModels.length).toBeGreaterThan(0);
+      expect(getProviderModels("Perplexity" as Providers, BUNDLED_MODEL_MAP).sort()).toEqual(
+        modelsOf("perplexity").sort(),
+      );
+      expect(getProviderModels("PERPLEXITY_ORCHESTRATOR" as Providers, BUNDLED_MODEL_MAP).sort()).toEqual(
+        orchestratorModels.sort(),
+      );
     });
 
     it("should handle multiple providers correctly", () => {
