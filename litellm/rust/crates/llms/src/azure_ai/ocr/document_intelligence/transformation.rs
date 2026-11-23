@@ -22,9 +22,9 @@ use crate::base_llm::ocr::{
     settings::OcrSettings,
     transformation::{
         BaseOcrConfig, DROP_PARAMS_PARAM, DecodedOcrResponse, OCR_INLINE_MAX_BYTES,
-        OCR_POLL_RETRY_SECS, OcrConnection, OcrCredentialInputs, OcrResponseContext,
-        PreparedOcrRequest, ResolvedOcrCredentials, decode_and_normalize_response, decode_response,
-        drops_unsupported_params, response_format,
+        OCR_POLL_RETRY_SECS, OCR_RESPONSE_MAX_BYTES, OcrConnection, OcrCredentialInputs,
+        OcrResponseContext, PreparedOcrRequest, ResolvedOcrCredentials,
+        decode_and_normalize_response, decode_response, drops_unsupported_params, response_format,
     },
 };
 use litellm_llms_types::formats::ocr::{
@@ -724,6 +724,22 @@ fn transform_completed_response(
                     .flat_map(|page| page.spans.iter().flatten()),
             )
         });
+    let page_markdown_bytes = markdown_content
+        .as_ref()
+        .map(|content| {
+            result
+                .pages
+                .iter()
+                .flat_map(|page| page.spans.iter().flatten())
+                .map(|span| content.slice(span).len())
+                .fold(0, usize::saturating_add)
+        })
+        .unwrap_or_default();
+    if page_markdown_bytes > OCR_RESPONSE_MAX_BYTES {
+        return Err(Error::TooLarge {
+            limit: OCR_RESPONSE_MAX_BYTES,
+        });
+    }
     let pages = result
         .pages
         .into_iter()
@@ -1634,7 +1650,7 @@ mod tests {
         assert_eq!(error.http_status_code(), Some(400));
     }
 
-    #[test]
+    #[rstest]
     fn text_elements_on_another_model_reach_azure() {
         let mapped = map_for_model(
             json!({"outputContentFormat": "markdown", "stringIndexType": "textElements"}),
@@ -1794,6 +1810,30 @@ mod tests {
             response.extra_fields.get(STRING_INDEX_TYPE_FIELD),
             reported.as_ref()
         );
+    }
+
+    #[rstest]
+    fn repeated_spans_past_the_response_cap_are_rejected_before_copying() {
+        let content = "a".repeat(1024 * 1024);
+        let repeats = OCR_RESPONSE_MAX_BYTES / content.len() + 1;
+        let raw = serde_json::to_vec(&json!({"status": "succeeded", "analyzeResult": {
+            "content": content,
+            "contentFormat": "markdown",
+            "stringIndexType": "unicodeCodePoint",
+            "pages": [{"spans": vec![json!({"offset": 0, "length": content.len()}); repeats]}]
+        }}))
+        .unwrap();
+
+        let error = AzureDocumentIntelligenceOcrConfig
+            .transform_ocr_response("model", &raw, OcrResponseFormat::Litellm)
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            Error::TooLarge {
+                limit: OCR_RESPONSE_MAX_BYTES
+            }
+        ));
     }
 
     #[rstest]
