@@ -198,6 +198,9 @@ class MapsAllowedResponsesParams(ABC):
         allowed_openai_params: Collection[str] = (),
     ) -> Mapping[str, object]: ...
 
+    def adjust_mapped_params(self, params: Mapping[str, object], model: str, drop_params: bool) -> Mapping[str, object]:
+        return params
+
 
 def create_config_class(provider: SimpleProviderConfig):
     """Generate config class dynamically from JSON configuration"""
@@ -519,21 +522,25 @@ def create_responses_config_class(provider: SimpleProviderConfig) -> "type[OpenA
             declared_reasoning_efforts: Collection[str] | None,
             allowed_openai_params: Collection[str] = (),
         ) -> Mapping[str, object]:
-            return {
-                **_params_the_provider_accepts(
-                    super().map_openai_params_for_deployment(
-                        response_api_optional_params,
+            return self.adjust_mapped_params(
+                {
+                    **_params_the_provider_accepts(
+                        super().map_openai_params_for_deployment(
+                            response_api_optional_params,
+                            model,
+                            drop_params,
+                            declared_reasoning_efforts=declared_reasoning_efforts,
+                        ),
+                        provider,
                         model,
-                        drop_params,
-                        declared_reasoning_efforts=declared_reasoning_efforts,
-                    ),
-                    provider,
-                    model,
-                    drop_params or litellm.drop_params is True,
-                    provider.responses_unsupported_params,
-                    allowed_openai_params,
-                )
-            }
+                        drop_params or litellm.drop_params is True,
+                        provider.responses_unsupported_params,
+                        allowed_openai_params,
+                    )
+                },
+                model,
+                drop_params,
+            )
 
         def transform_responses_api_request(
             self,
