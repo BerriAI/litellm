@@ -2513,6 +2513,9 @@ _MODEL_ROUTING_SESSION_MODEL_ROUTE_MARKERS: Final = (
     "/live/sessions",
 )
 _MODEL_ROUTING_SVG_MODEL_ROUTE_MARKERS: Final = ("/images/",)
+# Multipart form bodies keep nested fields flat, so the forwardable SVG model
+# arrives as a literal ``svg[model]`` key instead of a nested object.
+_SVG_MODEL_FORM_KEY: Final = "svg[model]"
 _MODEL_ROUTING_ID_FIELDS: Final = (
     "file_id",
     "input_file_id",
@@ -2806,12 +2809,19 @@ def _extract_model_candidates_from_request(
 
 
 def _svg_model_candidates(request_data: Mapping[str, object], route: str) -> list[str]:
-    svg: Final = request_data.get("svg")
+    if not _route_matches_any_marker(route=route, markers=_MODEL_ROUTING_SVG_MODEL_ROUTE_MARKERS):
+        return []
     candidates: Final[list[str]] = []
-    if isinstance(svg, Mapping) and _route_matches_any_marker(
-        route=route, markers=_MODEL_ROUTING_SVG_MODEL_ROUTE_MARKERS
-    ):
+    svg: Final[Any] = request_data.get("svg")
+    if isinstance(svg, Mapping):
         _append_model_candidates(candidates, svg.get("model"))
+    extra_body: Final[Any] = request_data.get("extra_body")
+    # extra_body is flattened into the provider form fields the same way a
+    # multipart body already arrives, so both shapes are read here.
+    extra_body_svg: Final = extra_body.get("svg") if isinstance(extra_body, Mapping) else None
+    if isinstance(extra_body_svg, Mapping):
+        _append_model_candidates(candidates, extra_body_svg.get("model"))
+    _append_model_candidates(candidates, request_data.get(_SVG_MODEL_FORM_KEY))
     return candidates
 
 
