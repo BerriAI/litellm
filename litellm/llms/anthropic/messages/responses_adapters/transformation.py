@@ -8,10 +8,12 @@ path used for OpenAI and Azure models.
 import json
 from collections.abc import Iterable, Mapping, Sequence
 from itertools import groupby
-from typing import Any, Final, cast
+from types import MappingProxyType
+from typing import Final, cast
 
-from pydantic import TypeAdapter
+from pydantic import BaseModel, TypeAdapter
 
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, iter_items
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     TOOL_RESULT_IMAGE_BOUNDARY,
     TOOL_RESULT_IMAGE_PLACEHOLDER,
@@ -27,6 +29,7 @@ from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
 from litellm.litellm_core_utils.reasoning_effort_utils import (
     reasoning_effort_from_thinking,
 )
+from litellm.llms.anthropic.common_utils import system_without_claude_code_billing_header
 from litellm.llms.anthropic.messages.convertible_blocks import tool_result_text_parts
 from litellm.llms.anthropic.messages.native.utils import (
     refusal_stop_details,
@@ -35,6 +38,8 @@ from litellm.llms.anthropic.messages.native.utils import (
 from litellm.llms.anthropic.messages.utils import (
     is_reasoning_auto_summary_enabled,
     json_copy_or_original,
+    object_mapping,
+    openai_strict_json_schema,
     prompt_cache_key_from_user_id,
 )
 from litellm.types.llms.anthropic import (
@@ -47,7 +52,6 @@ from litellm.types.llms.anthropic import (
     AnthropicResponseContentBlockText,
     AnthropicResponseContentBlockThinking,
     AnthropicResponseContentBlockToolUse,
-    AnthropicSystemMessageContent,
 )
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
@@ -61,6 +65,12 @@ from litellm.types.llms.openai import (
 REASONING_SUMMARY_PART_SEPARATOR: Final = "\n\n"
 RESPONSES_INCLUDE_ENCRYPTED_REASONING: Final = "reasoning.encrypted_content"
 _DECODED_JSON: Final = TypeAdapter(object)
+
+
+def _output_item_mapping(item: object) -> Mapping[str, object]:
+    if isinstance(item, BaseModel):
+        return item.model_dump()
+    return as_str_mapping(item) or MappingProxyType({})
 
 
 class LiteLLMAnthropicToResponsesAPIAdapter:
@@ -225,7 +235,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
 
     @staticmethod
     def _translate_midturn_system_content_to_responses(
-        content: str | Iterable[AnthropicSystemMessageContent],
+        content: str | Iterable[object],
     ) -> list[dict[str, object]]:  # mutable-ok: API message payload
         """Convert in-sequence system content to Responses input-text parts."""
         if isinstance(content, str):
@@ -234,8 +244,10 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             return []
         return [
             with_prompt_cache_breakpoint({"type": "input_text", "text": text}, block.get("prompt_cache_breakpoint"))
-            for block in content
-            if isinstance(block, dict) and block.get("type") == "text" and (text := block.get("text"))  # pyright: ignore[reportUnnecessaryIsInstance]  # untrusted client payload
+            for raw_block in content
+            if (block := as_str_mapping(raw_block)) is not None
+            and block.get("type") == "text"
+            and (text := block.get("text"))
         ]
 
     @staticmethod
@@ -246,7 +258,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         return str(getattr(part, "text", None) or "")
 
     @classmethod
-    def _thinking_block_from_reasoning_item(
+    def thinking_block_from_reasoning_item(
         cls,
         summary: Iterable[object],
         encrypted_content: object,
@@ -264,7 +276,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         if not isinstance(encrypted_content, str) or not encrypted_content:
             if not text:
                 return None
-            return AnthropicResponseContentBlockThinking(type="thinking", thinking=text, signature=None).model_dump()
+            return AnthropicResponseContentBlockThinking(type="thinking", thinking=text, signature="").model_dump()
         signature: Final = encrypted_reasoning_signature(encrypted_content)
         if not text:
             return AnthropicResponseContentBlockRedactedThinking(type="redacted_thinking", data=signature).model_dump()
@@ -587,11 +599,15 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             if block.get("type") == "text" and isinstance(text := block.get("text"), str) and text
         )
 
+    @classmethod
+    def system_instructions(cls, system: object) -> str | None:
+        if system is None or isinstance(system, str):
+            return system
+        return cls.system_blocks_to_instructions(system) or None
+
     @staticmethod
-    def _resolve_output_format_strict(strict: bool | None) -> bool:
-        if strict is None:
-            return True
-        return strict
+    def _resolve_output_format_strict(strict: object) -> bool:
+        return True if strict is None else bool(strict)
 
     def translate_request(
         self,
@@ -600,7 +616,8 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         auto_summary_level: str = "detailed",
         *,
         drop_params: bool = True,
-    ) -> dict[str, Any]:
+        preserve_system_instructions: bool = False,
+    ) -> dict[str, object]:
         """
         Translate a full Anthropic /v1/messages request dict to
         litellm.responses() / litellm.aresponses() kwargs.
@@ -618,11 +635,19 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         )
 
         input_items: Final = self.translate_messages_to_responses_input(messages_list)
-        system: Final = anthropic_request.get("system")
+        system: Final = system_without_claude_code_billing_header(anthropic_request.get("system"))
         developer_parts: Final = (
             self._translate_midturn_system_content_to_responses(system)
-            if isinstance(system, list)
-            and any(isinstance(block, dict) and block.get("prompt_cache_breakpoint") is not None for block in system)
+            if isinstance(system, (str, list))
+            and (
+                not preserve_system_instructions
+                or (
+                    isinstance(system, list)
+                    and any(
+                        isinstance(block, dict) and block.get("prompt_cache_breakpoint") is not None for block in system
+                    )
+                )
+            )
             else ()
         )
         if developer_parts:
@@ -690,19 +715,23 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         # output_format / output_config.format -> text format
         # output_format: {"type": "json_schema", "schema": {...}}
         # output_config: {"format": {"type": "json_schema", "schema": {...}}}
-        output_format: object = anthropic_request.get("output_format")
-        output_config = anthropic_request.get("output_config")
-        if not isinstance(output_format, dict) and isinstance(output_config, dict):
-            output_format = output_config.get("format")
-        if isinstance(output_format, dict) and output_format.get("type") == "json_schema":
+        output_config_object: Final = object_mapping(anthropic_request.get("output_config"))
+        top_level_output_format: Final = object_mapping(anthropic_request.get("output_format"))
+        output_format: Final = (
+            top_level_output_format
+            if top_level_output_format is not None or output_config_object is None
+            else object_mapping(output_config_object.get("format"))
+        )
+        if output_format is not None and output_format.get("type") == "json_schema":
             schema: Final = output_format.get("schema")
             if schema:
+                output_strict: Final = self._resolve_output_format_strict(output_format.get("strict"))
                 responses_kwargs["text"] = {
                     "format": {
                         "type": "json_schema",
                         "name": "structured_output",
-                        "schema": schema,
-                        "strict": self._resolve_output_format_strict(output_format.get("strict")),
+                        "schema": openai_strict_json_schema(schema) if output_strict else schema,
+                        "strict": output_strict,
                     }
                 }
 
@@ -734,94 +763,52 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         """
         Translate an OpenAI ResponsesAPIResponse to AnthropicMessagesResponse.
         """
-        from openai.types.responses import (
-            ResponseFunctionToolCall,
-            ResponseOutputMessage,
-            ResponseReasoningItem,
-        )
-
         content: Final[list[dict[str, object]]] = []
         stop_reason: AnthropicFinishReason = "end_turn"
         refusal_text: Final = responses_output_refusal_text(
             cast(Iterable[object], response.output)  # cast-ok: output items re-validated per item
         )
 
-        for item in response.output:
-            if isinstance(item, ResponseReasoningItem):
-                reasoning_block = self._thinking_block_from_reasoning_item(item.summary, item.encrypted_content)
-                if reasoning_block is not None:
-                    content.append(reasoning_block)
-
-            elif isinstance(item, ResponseOutputMessage):
-                for part in item.content:
-                    part_type = getattr(part, "type", None)
+        for item in map(_output_item_mapping, response.output):
+            item_type = item.get("type")
+            if item_type == "message":
+                for part in filter(None, map(as_str_mapping, iter_items(item.get("content") or ()))):
+                    part_type = part.get("type")
                     if part_type == "output_text":
                         content.append(
-                            AnthropicResponseContentBlockText(type="text", text=getattr(part, "text", "")).model_dump()
+                            AnthropicResponseContentBlockText(
+                                type="text", text=str(part.get("text") or "")
+                            ).model_dump()
                         )
                     elif part_type == "refusal":
                         content.append(
                             AnthropicResponseContentBlockText(
-                                type="text", text=getattr(part, "refusal", "") or ""
+                                type="text", text=str(part.get("refusal") or "")
                             ).model_dump()
                         )
-
-            elif isinstance(item, ResponseFunctionToolCall):
+            elif item_type == "reasoning":
+                reasoning_block = self.thinking_block_from_reasoning_item(
+                    iter_items(item.get("summary") or item.get("content") or ()),
+                    item.get("encrypted_content"),
+                )
+                if reasoning_block is not None:
+                    content.append(reasoning_block)
+            elif item_type == "function_call":
                 try:
-                    input_data = json.loads(item.arguments) if item.arguments else {}
-                except (json.JSONDecodeError, TypeError):
+                    input_data = _DECODED_JSON.validate_python(json.loads(str(item.get("arguments") or "{}")))
+                except json.JSONDecodeError:
                     input_data = {}
                 content.append(
-                    AnthropicResponseContentBlockToolUse(
-                        type="tool_use",
-                        id=item.call_id or item.id or "",
-                        name=item.name,
-                        input=input_data,
+                    AnthropicResponseContentBlockToolUse.model_validate(
+                        {
+                            "type": "tool_use",
+                            "id": item.get("call_id") or item.get("id") or "",
+                            "name": item.get("name") or "",
+                            "input": input_data,
+                        }
                     ).model_dump(exclude_none=True)
                 )
                 stop_reason = "tool_use"
-
-            elif isinstance(item, dict):
-                item_type = item.get("type")
-                if item_type == "message":
-                    for part in item.get("content", ()):
-                        if isinstance(part, dict):
-                            part_type = part.get("type")
-                            if part_type == "output_text":
-                                content.append(
-                                    AnthropicResponseContentBlockText(
-                                        type="text", text=part.get("text", "")
-                                    ).model_dump()
-                                )
-                            elif part_type == "refusal":
-                                content.append(
-                                    AnthropicResponseContentBlockText(
-                                        type="text", text=part.get("refusal", "") or ""
-                                    ).model_dump()
-                                )
-                elif item_type == "reasoning":
-                    reasoning_block = self._thinking_block_from_reasoning_item(
-                        cast(Iterable[object], item.get("summary") or ()),  # cast-ok: untyped provider json
-                        item.get("encrypted_content"),
-                    )
-                    if reasoning_block is not None:
-                        content.append(reasoning_block)
-                elif item_type == "function_call":
-                    try:
-                        input_data = _DECODED_JSON.validate_python(json.loads(item.get("arguments", "{}")))
-                    except (json.JSONDecodeError, TypeError):
-                        input_data = {}
-                    content.append(
-                        AnthropicResponseContentBlockToolUse.model_validate(
-                            {
-                                "type": "tool_use",
-                                "id": item.get("call_id") or item.get("id", ""),
-                                "name": item.get("name", ""),
-                                "input": input_data,
-                            }
-                        ).model_dump(exclude_none=True)
-                    )
-                    stop_reason = "tool_use"
         if response.status == "incomplete":
             stop_reason = "max_tokens"
         elif refusal_text is not None:

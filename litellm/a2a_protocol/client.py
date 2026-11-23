@@ -10,13 +10,15 @@ from typing import TYPE_CHECKING, Final
 from litellm.types.agents import LiteLLMSendMessageResponse
 
 if TYPE_CHECKING:
-    from a2a.client import A2AClient as A2AClientType
-    from a2a.types import (
-        AgentCard,
+    from collections.abc import Mapping
+
+    from a2a.client import Client as A2AClientType
+    from a2a.compat.v0_3.types import (
         SendMessageRequest,
         SendStreamingMessageRequest,
         SendStreamingMessageResponse,
     )
+    from a2a.types import AgentCard
 
 
 class A2AClient:
@@ -97,7 +99,7 @@ class A2AClient:
 
     async def send_message_streaming(
         self, request: "SendStreamingMessageRequest"
-    ) -> AsyncIterator["SendStreamingMessageResponse"]:
+    ) -> AsyncIterator["SendStreamingMessageResponse | Mapping[str, object]"]:
         """Send a streaming message to the A2A agent."""
         from litellm.a2a_protocol.main import asend_message_streaming
 

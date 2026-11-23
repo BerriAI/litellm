@@ -44,8 +44,10 @@ def test_a_uvicorn_worker_reimports_the_launcher_without_loading_litellm():
             sys.executable,
             "-I",
             "-c",
-            'import runpy, sys; runpy.run_module("gateway.launch", run_name="__mp_main__", alter_sys=True); '
+            'import runpy, sys; sys.path.insert(0, sys.argv[1]); '
+            'runpy.run_module("gateway.launch", run_name="__mp_main__", alter_sys=True); '
             'print("litellm" in sys.modules)',
+            str(Path(__file__).resolve().parents[3] / "litellm" / "runtime"),
         ],
         capture_output=True,
         text=True,
@@ -186,6 +188,15 @@ class TestUvicornArgv:
         graceful: Final = GracefulShutdownManager.get_timeout() if flag is None else float(str(flag))
         assert python_server(argv).graceful_timeout_seconds == graceful
 
+    def test_rust_is_told_the_config_file_the_gateway_image_loads(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        config: Final = tmp_path / "config.yaml"
+        config.write_text("model_list: []\n")
+        monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+        monkeypatch.setenv("CONFIG_FILE_PATH", str(config))
+        assert python_server(()).config_path == str(config)
+
     @pytest.mark.parametrize(
         ("mode", "served"),
         [
@@ -214,12 +225,24 @@ class TestUvicornArgv:
         assert params["workers"] == 4
         assert params["timeout_keep_alive"] == 75
 
-    def test_unset_env_keeps_the_uvicorn_default(self):
-        assert _uvicorn_params(uvicorn_argv(("--workers", "4"), {}))["timeout_keep_alive"] == 5
+    def test_unset_env_uses_the_litellm_default(self):
+        assert _uvicorn_params(uvicorn_argv(("--workers", "4"), {}))["timeout_keep_alive"] == 95
 
     def test_an_explicit_flag_wins_over_the_env(self):
         argv: Final = uvicorn_argv(("--timeout-keep-alive", "30"), {"KEEPALIVE_TIMEOUT": "75"})
         assert _uvicorn_params(argv)["timeout_keep_alive"] == 30
+
+    @pytest.mark.parametrize("timeout", [0, 5])
+    def test_explicit_keepalive_values_survive(self, timeout: int) -> None:
+        env_argv: Final = uvicorn_argv((), {"KEEPALIVE_TIMEOUT": str(timeout)})
+        flag_argv: Final = uvicorn_argv((f"--timeout-keep-alive={timeout}",), {"KEEPALIVE_TIMEOUT": "75"})
+        assert _uvicorn_params(env_argv)["timeout_keep_alive"] == timeout
+        assert _uvicorn_params(flag_argv)["timeout_keep_alive"] == timeout
+
+    def test_the_native_uvicorn_env_still_reaches_the_server(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("KEEPALIVE_TIMEOUT", raising=False)
+        monkeypatch.setenv("UVICORN_TIMEOUT_KEEP_ALIVE", "0")
+        assert _uvicorn_params(uvicorn_argv((), os.environ))["timeout_keep_alive"] == 0
 
     def test_the_app_uvicorn_is_told_to_serve_is_the_trimmed_gateway(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(proxy_app.router, "lifespan_context", proxy_app.router.lifespan_context)

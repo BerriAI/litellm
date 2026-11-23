@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final
 
 if TYPE_CHECKING:
@@ -12,10 +13,10 @@ from litellm.types.prompts.init_prompts import PromptLiteLLMParams, PromptSpec, 
 from .gitlab_prompt_manager import GitLabPromptCache, GitLabPromptManager
 
 # Global instances
-global_gitlab_config: Final[dict | None] = None
+global_gitlab_config: Final[Mapping[str, object] | None] = None
 
 
-def set_global_gitlab_config(config: dict) -> None:
+def set_global_gitlab_config(config: Mapping[str, object]) -> None:
     """
     Set the global gitlab configuration for prompt management.
 

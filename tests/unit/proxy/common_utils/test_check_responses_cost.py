@@ -8,7 +8,7 @@ import hashlib
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from types import MappingProxyType, SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
@@ -77,6 +77,7 @@ class _StoredResponse:
     org_id: str | None = None
     request_tags: object = None
     end_user_id: str | None = None
+    creator_billing_context: Mapping[str, object] | None = None
 
 
 class _InMemoryManagedObjectTable:
@@ -1760,6 +1761,7 @@ def _priced_poller(
     requested_model: str = "priced-gpt",
     model_group_alias: Mapping[str, str] = MappingProxyType({}),
     team_id: str | None = None,
+    creator_billing_context: Mapping[str, object] | None = None,
 ) -> _PricedPoller:
     from types import SimpleNamespace
 
@@ -1779,6 +1781,7 @@ def _priced_poller(
                 status="queued",
                 api_key=api_key,
                 file_object={"model": requested_model},
+                creator_billing_context=creator_billing_context,
                 team_id=team_id or _team_alpha_when_its_rows_exist(team_row, deleted_team_row, default_team_settings),
             ),
         )
@@ -2495,3 +2498,54 @@ async def test_a_key_that_disabled_a_callback_has_its_charge_logged_wherever_its
 
     assert len(billed_events) == len(request_events)
     assert all(cost == pytest.approx(_PRICED_COST) for cost, _ in billed_events)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("with_context", (True, False))
+async def test_background_settlement_keeps_the_admitted_app_customer_and_request_period_once(
+    monkeypatch: pytest.MonkeyPatch, with_context: bool
+) -> None:
+    import litellm
+    from litellm_enterprise.proxy.common_utils.check_responses_cost import BilledCharge
+
+    started_at: Final = datetime(2025, 12, 31, 23, 59, 59, tzinfo=timezone.utc)
+    scope: Final = {
+        "key": "app_customer_org",
+        "entity_id": "app-created:customer-created",
+        "budget_limits": [{"budget_duration": "1mo", "max_budget": 20, "reset_at": "2026-01-01T00:00:00Z"}],
+    }
+    context: Final = {
+        "hierarchy": {
+            "app_id": "app-created",
+            "app_alias": "Created app",
+            "customer_org_id": "customer-created",
+            "customer_member_id": "member-created",
+            "scopes": [scope],
+        },
+        "started_at": started_at.isoformat(),
+    }
+    capture: Final = _spend_capture_logger()
+    monkeypatch.setattr(litellm, "_async_success_callback", [capture])
+    priced: Final = _priced_poller(creator_billing_context=context if with_context else None)
+    charge: Final = await priced.bill(_terminal_response())
+    repeated: Final = await priced.bill(_terminal_response())
+
+    assert isinstance(charge, BilledCharge)
+    assert charge.cost == pytest.approx(_PRICED_COST)
+    assert repeated is None
+    (payload,) = capture.payloads
+    assert payload["response_cost"] == pytest.approx(_PRICED_COST)
+    metadata: Final = payload["metadata"]
+    assert metadata["user_api_key_hash"] == _CREATING_KEY_HASH
+    if with_context:
+        assert charge.logging_obj.start_time == started_at
+        assert metadata["user_api_key_app_id"] == "app-created"
+        assert metadata["user_api_key_customer_org_id"] == "customer-created"
+        assert metadata["user_api_key_customer_member_id"] == "member-created"
+        assert json.loads(metadata["user_api_key_customer_budget_scopes"]) == [
+            {**scope, "soft_budget_duration": None}
+        ]
+    else:
+        assert metadata.get("user_api_key_app_id") is None
+        assert metadata.get("user_api_key_customer_org_id") is None
+        assert metadata.get("user_api_key_customer_budget_scopes") is None

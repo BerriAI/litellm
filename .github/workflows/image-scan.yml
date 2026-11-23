@@ -1,37 +1,9 @@
 name: Image Scan
 
 on:
-  pull_request:
-    branches:
-      - main
-      - litellm_oss_branch
-      - "litellm_**"
-    paths:
-      - Dockerfile
-      - .dockerignore
-      - docker-entrypoint.sh
-      - migrations/run.py
-      - gateway/main.py
-      - gateway/launch.py
-      - gateway/routes/allowlist.py
-      - litellm_cli/**
-      - backend/main.py
-      - backend/routes/allowlist.py
-      - litellm-rust/**
-      - litellm/proxy/lens/**
-      - litellm/proxy/prisma_migration.py
-      - litellm/proxy/admin_mcp.py
-      - litellm/proxy/proxy_server.py
-      - pyproject.toml
-      - litellm-proxy-extras/**
-      - tests/integration/database/image/**
-      - uv.lock
-      - ui/litellm-dashboard/package-lock.json
-      - ui/nginx.conf
-      - .github/workflows/image-scan.yml
-      - .grype.yaml
   schedule:
-    - cron: "41 6 * * *"
+    - cron: "5 8-20/3 * * 1-6"
+      timezone: America/Los_Angeles
   workflow_dispatch:
 
 permissions: {}
@@ -48,9 +20,6 @@ jobs:
   build:
     name: build
     runs-on: ubuntu-latest
-    if: >-
-      github.event_name != 'pull_request' ||
-      github.event.pull_request.head.repo.full_name == github.repository
     timeout-minutes: 60
     permissions:
       contents: read
@@ -60,7 +29,7 @@ jobs:
           persist-credentials: false
 
       - name: Build the image
-        run: docker build --build-arg MATURIN_PEP517_ARGS="--profile ci" --build-arg LITELLM_RELEASE_TAG=v0.0.0-lens-ci -t "$IMAGE" .
+        run: docker build -f litellm/deploy/docker/Dockerfile --build-arg MATURIN_PEP517_ARGS="--profile ci" --build-arg LITELLM_RELEASE_TAG=v0.0.0-lens-ci -t "$IMAGE" .
 
       - name: Save the image for the verify matrix
         run: docker save "$IMAGE" | zstd -T0 -3 -o "$RUNNER_TEMP/litellm-image.tar.zst"
@@ -73,7 +42,7 @@ jobs:
           compression-level: 0
 
       - name: Build the Admin MCP schema image
-        run: docker build --build-arg MATURIN_PEP517_ARGS="--profile ci" --build-arg LITELLM_RELEASE_TAG=v0.0.0-lens-ci --target builder -t "$ADMIN_MCP_SCHEMA_IMAGE" .
+        run: docker build -f litellm/deploy/docker/Dockerfile --build-arg MATURIN_PEP517_ARGS="--profile ci" --build-arg LITELLM_RELEASE_TAG=v0.0.0-lens-ci --target builder -t "$ADMIN_MCP_SCHEMA_IMAGE" .
 
       - name: Save the Admin MCP schema image for the verify matrix
         run: docker save "$ADMIN_MCP_SCHEMA_IMAGE" | zstd -T0 -3 -o "$RUNNER_TEMP/litellm-admin-mcp-schema.tar.zst"
@@ -201,7 +170,7 @@ jobs:
           GRYPE_MATCH_PYTHON_USING_CPES: "true"
         run: |
           "$RUNNER_TEMP/grype" "$IMAGE" \
-            --config .grype.yaml \
+            --config .github/grype.yaml \
             --only-fixed \
             --fail-on high \
             --output table

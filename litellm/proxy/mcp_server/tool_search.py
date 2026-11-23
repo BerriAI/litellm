@@ -588,6 +588,7 @@ async def handle_mcp_tool_search(
         mcp_server_auth_headers=mcp_server_auth_headers,
         oauth2_headers=oauth2_headers,
         raw_headers=raw_headers,
+        use_tool_list_cache=False,
     )
     results: Final = await search_mcp_tools(query, mcp_listing.tools, top_k, settings, ranker)
     if isinstance(results, EmbeddingFailed):
@@ -628,6 +629,7 @@ async def handle_mcp_proxy_tool(
             oauth2_headers=oauth2_headers,
             raw_headers=raw_headers,
             mcp_proxy_mode=True,
+            use_tool_list_cache=False,
         )
         llm_router: Final = proxy_server.llm_router
         proxy_logging_obj: Final = proxy_server.proxy_logging_obj
@@ -719,6 +721,7 @@ async def handle_mcp_tool_call(
     guardrail_context: Mapping[str, object] | None = None,
     incoming_bearer_token: SecretStr | None | EllipsisType = ...,
     guardrail_auth: UserAPIKeyAuth | None = None,
+    flatten_url_elicitation: bool = False,
 ) -> CallToolResult:
     from litellm.proxy.mcp_server.operations import (
         _get_allowed_mcp_servers,
@@ -762,5 +765,6 @@ async def handle_mcp_tool_call(
         guardrail_context=guardrail_context,
         guardrail_auth=guardrail_auth,
         incoming_bearer_token=incoming_bearer_token,
+        flatten_url_elicitation=flatten_url_elicitation,
     )
     return complete_call_tool_result(result, WireCompat.LEGACY)

@@ -10,11 +10,15 @@ import _hashlib
 import base64
 import hmac
 import re
+from collections.abc import Callable
+from traceback import walk_tb
 from typing import Final
 
 import pytest
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from litellm.proxy import proxy_server
+from litellm.proxy.common_utils import encrypt_decrypt_utils
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     V2_GCM_PREFIX,
     decrypt_bearer_token,
@@ -279,15 +283,19 @@ _needs_shared_openssl: Final = pytest.mark.skipif(
 
 @_needs_shared_openssl
 @pytest.mark.usefixtures("fips_openssl")
-@pytest.mark.parametrize("salt_key", ["sk-" + bytes(range(32)).hex(), bytes(range(32)).hex().upper()])
-def test_derive_key_from_salt_key_is_sp800_108_counter_mode_hmac_sha256(
+@pytest.mark.parametrize(
+    "salt_key",
+    ["sk-" + bytes(range(32)).hex(), "fourteen-bytes", "é" * 7],
+    ids=["openssl-rand-hex-32", "14-ascii-bytes", "14-utf8-bytes-in-7-characters"],
+)
+def test_derive_key_from_salt_key_is_sp800_108_counter_mode_hmac_sha256_over_the_salt_key_bytes(
     monkeypatch: pytest.MonkeyPatch, salt_key: str
 ) -> None:
     label: Final = b"litellm-test:label:"
     context: Final = b"sk-test-master-key"
     monkeypatch.setenv("LITELLM_SALT_KEY", salt_key)
     fixed_input: Final = (1).to_bytes(4, "big") + label + b"\x00" + context + (256).to_bytes(4, "big")
-    assert derive_key_from_salt_key(label, context) == hmac.digest(bytes(range(32)), fixed_input, "sha256").hex()
+    assert derive_key_from_salt_key(label, context) == hmac.digest(salt_key.encode(), fixed_input, "sha256").hex()
 
 
 @_needs_shared_openssl
@@ -296,3 +304,141 @@ def test_derive_key_from_salt_key_refuses_an_openssl_without_a_fips_provider(mon
     monkeypatch.setenv("LITELLM_SALT_KEY", "sk-" + bytes(range(32)).hex())
     with pytest.raises(ValueError, match="OpenSSL could not run KBKDF"):
         derive_key_from_salt_key(b"litellm-test:label:", b"sk-test-master-key")
+
+
+@pytest.mark.parametrize(
+    "salt_key", ["thirteen-byte", "é" * 6 + "x", "", None], ids=["13-ascii-bytes", "13-utf8-bytes", "empty", "unset"]
+)
+def test_derive_key_from_salt_key_refuses_a_salt_key_under_112_bits(
+    monkeypatch: pytest.MonkeyPatch, salt_key: str | None
+) -> None:
+    monkeypatch.delenv("LITELLM_SALT_KEY")
+    if salt_key is not None:
+        monkeypatch.setenv("LITELLM_SALT_KEY", salt_key)
+    with pytest.raises(ValueError, match=r"LITELLM_SALT_KEY must be set and at least 112 bits \(14 bytes\)"):
+        derive_key_from_salt_key(b"litellm-test:label:", b"sk-test-master-key")
+
+
+_FRAME_SECRET: Final = "frame-secret"
+
+
+def test_a_refused_derive_key_from_salt_key_leaves_the_salt_key_in_no_frame_local(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LITELLM_SALT_KEY", _FRAME_SECRET)
+    with pytest.raises(ValueError, match="LITELLM_SALT_KEY must be set") as refused:
+        derive_key_from_salt_key(b"litellm-test:label:", b"litellm-test:context")
+    held_by: Final = tuple(
+        frame.f_code.co_name for frame, _ in walk_tb(refused.tb) if _FRAME_SECRET in repr(frame.f_locals)
+    )
+    assert held_by == ()
+
+
+_FIPS_SALT_KEY: Final = "sk-" + bytes(range(32)).hex()
+_FIPS_AT_REST_KEY: Final = hmac.digest(
+    _FIPS_SALT_KEY.encode(),
+    (1).to_bytes(4, "big") + b"litellm-at-rest:aes-256-gcm:" + b"\x00" + (256).to_bytes(4, "big"),
+    "sha256",
+)
+
+
+@_needs_shared_openssl
+@pytest.mark.usefixtures("fips_mode")
+@pytest.mark.parametrize("settings", [{}, {"encryption_algorithm": "xsalsa20-poly1305"}])
+@pytest.mark.parametrize("plaintext", ["sk-secret-value", "", "ключ-🔑" * 50])
+def test_fips_mode_writes_aes_gcm_under_the_kbkdf_key_with_a_nonce_from_openssl(
+    monkeypatch: pytest.MonkeyPatch, settings: dict[str, str], plaintext: str
+) -> None:
+    monkeypatch.setenv("LITELLM_SALT_KEY", _FIPS_SALT_KEY)
+    monkeypatch.setattr(proxy_server, "general_settings", settings)
+    first: Final = encrypt_value_helper(plaintext)
+    second: Final = encrypt_value_helper(plaintext)
+    assert first.startswith(V2_GCM_PREFIX)
+    sealed: Final = base64.urlsafe_b64decode(first.removeprefix(V2_GCM_PREFIX))
+    assert AESGCM(_FIPS_AT_REST_KEY).decrypt(sealed[:12], sealed[12:], None).decode() == plaintext
+    assert sealed[:12] != base64.urlsafe_b64decode(second.removeprefix(V2_GCM_PREFIX))[:12]
+    assert decrypt_value_helper(first, key="k") == plaintext
+    assert decrypt_if_encrypted_with(first, _FIPS_SALT_KEY) == plaintext
+
+
+@_needs_shared_openssl
+def test_fips_mode_refuses_values_it_did_not_write(
+    monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest
+) -> None:
+    monkeypatch.setenv("LITELLM_SALT_KEY", _FIPS_SALT_KEY)
+    legacy: Final = encrypt_value_helper("sk-secret-value")
+    _use_aes(monkeypatch)
+    standard_gcm: Final = encrypt_value_helper("sk-secret-value")
+    request.getfixturevalue("fips_mode")
+    assert decrypt_value_helper(legacy, key="k") is None
+    assert decrypt_value_helper(standard_gcm, key="k") is None
+    assert decrypt_if_encrypted_with(legacy, _FIPS_SALT_KEY) is None
+
+
+@_needs_shared_openssl
+@pytest.mark.usefixtures("fips_mode")
+def test_fips_mode_encrypts_under_an_explicit_new_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_SALT_KEY", _FIPS_SALT_KEY)
+    new_key: Final = "ab" * 32
+    rotated: Final = encrypt_value_helper("sk-secret-value", new_encryption_key=new_key)
+    assert decrypt_if_encrypted_with(rotated, new_key) == "sk-secret-value"
+    assert decrypt_if_encrypted_with(rotated, _FIPS_SALT_KEY) is None
+
+
+@pytest.mark.usefixtures("fips_mode")
+def test_fips_mode_refuses_to_encrypt_under_a_salt_key_under_112_bits(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_SALT_KEY", "thirteen-byte")
+    with pytest.raises(ValueError, match=r"the salt key must be at least 112 bits \(14 bytes\)"):
+        encrypt_value_helper("sk-secret-value")
+
+
+@pytest.mark.parametrize("key_bytes", [0, 16, 24, 31, 33])
+def test_fips_aes_gcm_refuses_a_key_that_is_not_32_bytes(key_bytes: int) -> None:
+    with pytest.raises(ValueError, match=f"AES-256-GCM needs a 32-byte key, got {key_bytes} bytes"):
+        encrypt_decrypt_utils._fips_seal_aes_gcm(b"k" * key_bytes, b"sk-secret-value")
+
+
+def _store_callback_var(secret: str) -> object:
+    from litellm.proxy.common_utils.callback_utils import _encrypt_if_plaintext
+
+    return _encrypt_if_plaintext("gcs_path_service_account", secret)
+
+
+def _store_guardrail_param(secret: str) -> object:
+    from litellm.proxy.guardrails.guardrail_registry import _encrypted_param
+
+    return _encrypted_param("api_key", secret, None)
+
+
+def _store_search_tool_value(secret: str) -> object:
+    from litellm.proxy.search_endpoints.search_tool_registry import _encrypted_search_tool_value
+
+    return _encrypted_search_tool_value(secret)
+
+
+@pytest.mark.parametrize("store", [_store_callback_var, _store_guardrail_param, _store_search_tool_value])
+def test_fips_mode_never_stores_a_secret_as_written_when_it_cannot_be_encrypted(
+    monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest, store: Callable[[str], object]
+) -> None:
+    monkeypatch.setenv("LITELLM_SALT_KEY", "thirteen-byte")
+    monkeypatch.setattr("litellm.proxy.common_utils.encrypt_decrypt_utils.encrypt_value", _raise_no_key)
+    assert store("my-secret") == "my-secret"
+    request.getfixturevalue("fips_mode")
+    with pytest.raises(ValueError, match=r"the salt key must be at least 112 bits \(14 bytes\)"):
+        store("my-secret")
+
+
+def _raise_no_key(value: str, signing_key: str | None) -> bytes:
+    raise ValueError("no salt key or master key configured")
+
+
+@_needs_shared_openssl
+@pytest.mark.skipif(_hashlib.get_fips_mode() == 1, reason="this OpenSSL runs a FIPS provider")
+@pytest.mark.usefixtures("fips_mode")
+def test_fips_mode_refuses_to_encrypt_on_an_openssl_without_a_fips_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_SALT_KEY", _FIPS_SALT_KEY)
+    key: Final = encrypt_decrypt_utils._fips_at_rest_key(_FIPS_SALT_KEY)
+    monkeypatch.setattr(encrypt_decrypt_utils, "_FIPS_PROPERTIES", b"fips=yes")
+    monkeypatch.setattr(encrypt_decrypt_utils, "_fips_at_rest_key", lambda signing_key: key)
+    with pytest.raises(ValueError, match="OpenSSL could not run AES-256-GCM"):
+        encrypt_value_helper("sk-secret-value")

@@ -2,7 +2,7 @@ from typing import Final
 
 import pytest
 
-from scripts.check_schema_compatibility import check_breaking_changes, parse_model_fields
+from litellm.scripts.check_schema_compatibility import check_breaking_changes, parse_model_fields
 
 ORIGINAL: Final = "model Item {\n id String @id\n label String?\n}\n"
 
@@ -60,3 +60,17 @@ def test_only_the_dropped_accounting_models_may_be_removed() -> None:
     assert check_breaking_changes(
         previous, parse_model_fields(ORIGINAL + "model LiteLLM_AccountingDelivery {\n event_id String\n}\n")
     ) == ("Breaking: Field LiteLLM_AccountingDelivery.note was removed",)
+
+
+def test_only_the_renamed_customer_member_fields_may_be_removed() -> None:
+    member: Final = (
+        "model LiteLLM_CustomerMemberTable {\n alias String?\n budget_template_id String?\n budget_template Item?\n}\n"
+    )
+    previous: Final = parse_model_fields(ORIGINAL + member)
+    renamed: Final = "model LiteLLM_CustomerMemberTable {\n alias String?\n budget_id String?\n}\n"
+    without_alias: Final = "model LiteLLM_CustomerMemberTable {\n budget_id String?\n}\n"
+
+    assert check_breaking_changes(previous, parse_model_fields(ORIGINAL + renamed)) == ()
+    assert check_breaking_changes(previous, parse_model_fields(ORIGINAL + without_alias)) == (
+        "Breaking: Field LiteLLM_CustomerMemberTable.alias was removed",
+    )

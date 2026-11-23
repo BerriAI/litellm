@@ -48,6 +48,23 @@ def test_completion_keeps_stream_chunk_size_out_of_invoke_bodies(model: str) -> 
     assert "stream_chunk_size" not in keys_at_every_depth(json.loads(request.content)), request.content
 
 
+def test_transform_request_drops_internal_params() -> None:
+    """LiteLLM-internal MCP params (e.g. skip_mcp_handler) are control flags used
+    inside LiteLLM and are not valid Bedrock inference parameters. Leaking them
+    into the provider request body makes Bedrock reject the request. The Converse
+    path already filters them via filter_internal_params; the invoke path must do
+    the same."""
+    request_body: Final = AmazonInvokeConfig().transform_request(
+        model="mistral.mistral-7b-instruct-v0:2",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={"skip_mcp_handler": True, "max_tokens": 10},
+        litellm_params={},
+        headers={},
+    )
+
+    assert "skip_mcp_handler" not in json.dumps(request_body)
+
+
 def test_validate_environment_maps_guardrail_config_to_invoke_headers():
     """The InvokeModel API takes the guardrail identifier/version/trace as
     X-Amzn-Bedrock-* request headers, unlike Converse which takes them in the
@@ -654,3 +671,30 @@ def test_guarded_non_claude_invoke_stream_yields_only_the_text_and_stop_chunks(
         ([(choice.delta.content, choice.finish_reason) for choice in chunk.choices], chunk.provider_specific_fields or {})
         for chunk in stream
     ] == [([("hi", None)], {}), ([(None, "stop")], {})]
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "anthropic.claude-sonnet-4-6",
+        "amazon.titan-text-express-v1",
+        "mistral.mistral-7b-instruct-v0:2",
+    ],
+)
+def test_a_native_service_tier_sends_no_tier_header_to_invoke_models_whose_replies_do_not_report_it(model: str) -> None:
+    send: Final = MagicMock(return_value=httpx.Response(200))
+    client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(send)))
+
+    litellm.completion(
+        model=f"bedrock/invoke/{model}",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        max_tokens=10,
+        client=client,
+        aws_access_key_id="fake",
+        aws_secret_access_key="fake",
+        aws_region_name="us-east-1",
+        serviceTier={"type": "priority"},
+    )
+
+    assert "X-Amzn-Bedrock-Service-Tier" not in send.call_args.args[0].headers

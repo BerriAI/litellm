@@ -12,6 +12,7 @@ if TYPE_CHECKING:
     from litellm.images.utils import ImageEditRequestUtils
 
 import httpx
+import openai
 
 import litellm
 
@@ -19,6 +20,7 @@ import litellm
 from litellm import client
 from litellm.constants import request_timeout as DEFAULT_REQUEST_TIMEOUT
 from litellm.exceptions import LiteLLMUnknownProvider
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.get_llm_provider_logic import (
     invalid_provider_routing_hints_message,
 )
@@ -26,6 +28,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.llm_request_utils import flatten_form_field_values
 from litellm.litellm_core_utils.mock_functions import mock_image_generation
+from litellm.llms.azure.common_utils import AZURE_V1_API_VERSION, is_azure_openai_v1_base
 from litellm.llms.base_llm import BaseImageEditConfig, BaseImageGenerationConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
@@ -39,6 +42,7 @@ from openai.types.audio.transcription_create_params import FileTypes
 from litellm.llms.black_forest_labs.image_edit.handler import bfl_image_edit
 from litellm.llms.black_forest_labs.image_generation.handler import bfl_image_generation
 from litellm.llms.openai.workload_identity import resolve_openai_workload_identity_config
+from litellm.llms.openai_like.common_utils import missing_json_provider_key_error, with_canonical_authorization
 from litellm.main import (
     azure_chat_completions,
     base_llm_aiohttp_handler,
@@ -51,11 +55,12 @@ from litellm.main import (
 
 ###########################################
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.images.main import ImageEditOptionalRequestParams
+from litellm.types.images.main import IMAGE_CONFIG_FIELDS, ImageEditOptionalRequestParams, UnsupportedImageParam
 from litellm.types.llms.openai import ImageGenerationRequestQuality
 from litellm.types.router import CustomPricingLiteLLMParams, GenericLiteLLMParams
 from litellm.types.utils import (
     LITELLM_IMAGE_VARIATION_PROVIDERS,
+    DynamicPromptManagementParamLiteral,
     LlmProviders,
     ProviderRoutingHints,
 )
@@ -218,11 +223,11 @@ def image_generation(
     size: str | None = None,
     style: str | None = None,
     user: str | None = None,
-    timeout=600,  # default to 10 minutes
+    timeout: float = 600,  # default to 10 minutes
     api_key: str | None = None,
     api_base: str | None = None,
     api_version: str | None = None,
-    custom_llm_provider=None,
+    custom_llm_provider: str | None = None,
     *,
     aimg_generation: Literal[True],
     **kwargs,
@@ -242,11 +247,11 @@ def image_generation(
     size: str | None = None,
     style: str | None = None,
     user: str | None = None,
-    timeout=600,  # default to 10 minutes
+    timeout: float = 600,  # default to 10 minutes
     api_key: str | None = None,
     api_base: str | None = None,
     api_version: str | None = None,
-    custom_llm_provider=None,
+    custom_llm_provider: str | None = None,
     *,
     aimg_generation: Literal[False] = False,
     **kwargs,
@@ -266,11 +271,11 @@ def image_generation(
     size: str | None = None,
     style: str | None = None,
     user: str | None = None,
-    timeout=600,  # default to 10 minutes
+    timeout: float = 600,  # default to 10 minutes
     api_key: str | None = None,
     api_base: str | None = None,
     api_version: str | None = None,
-    custom_llm_provider=None,
+    custom_llm_provider: str | None = None,
     **kwargs,
 ) -> ImageResponse | Coroutine[object, object, ImageResponse]:
     """
@@ -336,7 +341,11 @@ def image_generation(
         ]
         non_default_params: Final = filter_out_litellm_params(
             kwargs,
-            excluding=[*openai_params, "extra_headers", "headers"] if chatgpt_params is not None else openai_params,
+            excluding=(
+                *openai_params,
+                *(("extra_headers", "headers") if chatgpt_params is not None else ()),
+                *DynamicPromptManagementParamLiteral.list_all_params(),
+            ),
         )
 
         image_generation_config: BaseImageGenerationConfig | None = None
@@ -390,7 +399,11 @@ def image_generation(
 
             api_base = api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")
 
-            api_version = api_version or litellm.api_version or get_secret_str("AZURE_API_VERSION")
+            api_version = (
+                api_version
+                or litellm.api_version
+                or (AZURE_V1_API_VERSION if is_azure_openai_v1_base(api_base) else get_secret_str("AZURE_API_VERSION"))
+            )
 
             api_key = (
                 api_key
@@ -465,6 +478,7 @@ def image_generation(
             litellm.LlmProviders.AIML,
             litellm.LlmProviders.GEMINI,
             litellm.LlmProviders.FAL_AI,
+            litellm.LlmProviders.REPLICATE,
             litellm.LlmProviders.STABILITY,
             litellm.LlmProviders.RUNWAYML,
             litellm.LlmProviders.VERTEX_AI,
@@ -496,6 +510,7 @@ def image_generation(
                 logging_obj=litellm_logging_obj,
                 timeout=timeout,
                 client=client,
+                _is_async=aimg_generation is True and custom_llm_provider == litellm.LlmProviders.REPLICATE,
             )
         elif custom_llm_provider == "black_forest_labs":
             # Route to BFL-specific handler (polling required)
@@ -563,8 +578,18 @@ def image_generation(
             or custom_llm_provider == LlmProviders.LITELLM_PROXY.value
             or custom_llm_provider in litellm.openai_compatible_providers
         ):
+            if (
+                missing_key_error := missing_json_provider_key_error(
+                    custom_llm_provider,
+                    model,
+                    api_key or dynamic_api_key,
+                    isinstance(client, openai.OpenAI | openai.AsyncOpenAI),
+                    _OBJECT_DICT_ADAPTER.validate_python(headers),
+                )
+            ) is not None:
+                raise missing_key_error
             if extra_headers is not None and chatgpt_params is None:
-                optional_params["extra_headers"] = extra_headers
+                optional_params["extra_headers"] = with_canonical_authorization(custom_llm_provider, extra_headers)
             # Forward OpenAI organization if present (set by proxy pre-call utils)
             organization: Final[str | None] = kwargs.get("organization", None)
             sdk_max_retries: Final = 0 if is_router_call else max_retries
@@ -591,7 +616,7 @@ def image_generation(
                         )
                     )
                     if chatgpt_params is not None
-                    else headers
+                    else with_canonical_authorization(custom_llm_provider, headers)
                 ),
                 litellm_params=litellm_params_dict,
             )
@@ -827,12 +852,14 @@ def image_variation(
 
 _IMAGE_EDIT_OPENAI_PARAMS: Final = frozenset(get_type_hints(ImageEditOptionalRequestParams))
 _DROP_PARAM_KWARGS: Final = frozenset({"drop_params", "additional_drop_params"})
-_ADDITIONAL_DROP_PARAMS: Final = TypeAdapter[tuple[str, ...]](tuple[str, ...])
+_ADDITIONAL_DROP_PARAMS: Final = TypeAdapter[tuple[object, ...]](tuple[object, ...])
 
 
 def _listed_drop_params(additional_drop_params: object) -> tuple[str, ...]:
     try:
-        return _ADDITIONAL_DROP_PARAMS.validate_python(additional_drop_params)
+        return tuple(
+            item for item in _ADDITIONAL_DROP_PARAMS.validate_python(additional_drop_params) if isinstance(item, str)
+        )
     except ValidationError:
         return ()
 
@@ -849,6 +876,14 @@ def _tokenhub_passthrough_edit_params(
         **{key: value for key, value in non_default_params.items() if key not in unmapped_excluded},
         **{key: value for key, value in (extra_body or {}).items() if key not in dropped | EXTRA_BODY_ROUTING_KEYS},
     }
+
+
+def _custom_handler_edit_params(
+    kwargs: Mapping[str, object], openai_params: Mapping[str, object]
+) -> dict[str, object]:  # mutable-ok: CustomLLM.image_edit takes optional_params as a dict
+    dropped: Final = frozenset(_listed_drop_params(kwargs.get("additional_drop_params")))
+    requested: Final = {key: value for key, value in openai_params.items() if value is not None}
+    return {key: value for key, value in {**kwargs, **requested}.items() if key not in dropped}
 
 
 @client
@@ -895,7 +930,9 @@ def image_edit(
             "style",
             "async_call",
         ]
-        non_default_params: Final = filter_out_litellm_params(kwargs, excluding=openai_params)
+        non_default_params: Final = filter_out_litellm_params(
+            kwargs, excluding=(*openai_params, *DynamicPromptManagementParamLiteral.list_all_params())
+        )
         litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
         model_info: Final = kwargs.get("model_info", None)
@@ -930,6 +967,17 @@ def image_edit(
                 raise LiteLLMUnknownProvider(model=model, custom_llm_provider=custom_llm_provider)
 
             model_response: Final = ImageResponse()
+            custom_optional_params: Final = _custom_handler_edit_params(
+                _OBJECT_DICT_ADAPTER.validate_python(kwargs),
+                {
+                    "mask": mask,
+                    "n": n,
+                    "quality": quality,
+                    "response_format": response_format,
+                    "size": size,
+                    "user": user,
+                },
+            )
 
             if _is_async:
                 async_custom_client: AsyncHTTPHandler | None = None
@@ -943,7 +991,7 @@ def image_edit(
                     model_response=model_response,
                     api_key=kwargs.get("api_key"),
                     api_base=kwargs.get("api_base"),
-                    optional_params=kwargs,
+                    optional_params=custom_optional_params,
                     logging_obj=litellm_logging_obj,
                     timeout=timeout,
                     client=async_custom_client,
@@ -960,7 +1008,7 @@ def image_edit(
                     model_response=model_response,
                     api_key=kwargs.get("api_key"),
                     api_base=kwargs.get("api_base"),
-                    optional_params=kwargs,
+                    optional_params=custom_optional_params,
                     logging_obj=litellm_logging_obj,
                     timeout=timeout,
                     client=custom_client,
@@ -979,21 +1027,41 @@ def image_edit(
         provider_supported_params: Final[frozenset[str]] = frozenset(
             image_edit_provider_config.get_supported_openai_params(model)
         )
+        should_drop_params: Final = drops_unsupported_params(kwargs.get("drop_params"))
+        additional_drop_params: Final = _listed_drop_params(kwargs.get("additional_drop_params"))
+        kept_params: Final = {
+            key: value
+            for key, value in non_default_params.items()
+            if key not in additional_drop_params and key.split("[", 1)[0] not in additional_drop_params
+        }
+        requested_params: Final = _get_ImageEditRequestUtils().fold_bracket_form_fields(
+            kept_params,
+            tuple(field for field in IMAGE_CONFIG_FIELDS if field in provider_supported_params),
+            should_drop_params,
+        )
+        if isinstance(requested_params, UnsupportedImageParam):
+            raise litellm.UnsupportedParamsError(
+                model=model,
+                llm_provider=custom_llm_provider,
+                message=f"`{requested_params.param}` {requested_params.reason} for {model}. "
+                "To drop it from the call, set `litellm.drop_params = True`.",
+            )
         # Get ImageEditOptionalRequestParams with only valid parameters
         image_edit_optional_params: Final[ImageEditOptionalRequestParams] = (
             _get_ImageEditRequestUtils().get_requested_image_edit_optional_param(
-                local_vars,
-                provider_supported_params=provider_supported_params.intersection(non_default_params),
+                {**local_vars, **requested_params},
+                provider_supported_params=provider_supported_params.intersection(requested_params),
             )
         )
         # Get optional parameters for the responses API
-        additional_drop_params: Final = _listed_drop_params(kwargs.get("additional_drop_params"))
-        image_edit_request_params: Final[dict] = _get_ImageEditRequestUtils().get_optional_params_image_edit(
-            model=model,
-            image_edit_provider_config=image_edit_provider_config,
-            image_edit_optional_params=image_edit_optional_params,
-            drop_params=kwargs.get("drop_params"),
-            additional_drop_params=additional_drop_params,
+        image_edit_request_params: Final[dict[str, object]] = (
+            _get_ImageEditRequestUtils().get_optional_params_image_edit(
+                model=model,
+                image_edit_provider_config=image_edit_provider_config,
+                image_edit_optional_params=image_edit_optional_params,
+                drop_params=kwargs.get("drop_params"),
+                additional_drop_params=additional_drop_params,
+            )
         )
 
         if image_edit_provider_config.use_multipart_form_data() and (
@@ -1002,9 +1070,25 @@ def image_edit(
             or custom_llm_provider in litellm.openai_compatible_providers
         ):
             dropped_form_params: Final = header_auth_params(custom_llm_provider)
+            drops_for_upstream: Final = custom_llm_provider != LlmProviders.LITELLM_PROXY.value
+            unsupported_edit_params: Final[frozenset[str]] = (
+                _IMAGE_EDIT_OPENAI_PARAMS - provider_supported_params if drops_for_upstream else frozenset()
+            )
+            dropped_edit_params: Final = (
+                dropped_form_params
+                | (_DROP_PARAM_KWARGS if drops_for_upstream else frozenset[str]())
+                | unsupported_edit_params
+            )
+            dropped_form_field_roots: Final[frozenset[str]] = (
+                unsupported_edit_params if should_drop_params else frozenset()
+            )
             image_edit_request_params.update(
                 flatten_form_field_values(
-                    {key: value for key, value in non_default_params.items() if key not in dropped_form_params},
+                    {
+                        key: value
+                        for key, value in kept_params.items()
+                        if key not in dropped_edit_params and key.split("[", 1)[0] not in dropped_form_field_roots
+                    },
                     (
                         {key: value for key, value in extra_body.items() if key not in dropped_form_params}
                         if isinstance(extra_body, dict)

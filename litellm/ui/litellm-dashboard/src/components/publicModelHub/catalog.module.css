@@ -1,0 +1,61 @@
+@reference "../../app/globals.css";
+
+.typography {
+  --page-width: 1600px;
+  --page-gutter: 44px;
+  --radius: 8px;
+  --primary: #2445e7;
+  --border: #dce1e8;
+  --catalog-rule-strong: #b8c1cf;
+  --foreground: #1a2130;
+  --catalog-secondary: #414c60;
+  --muted-foreground: #647084;
+  --background: #f7f8fa;
+  --card: #fff;
+  --catalog-hover: #edf0f5;
+  --catalog-focus-ring: rgba(36, 69, 231, 0.16);
+  --card-foreground: var(--foreground);
+  --popover: var(--card);
+  --popover-foreground: var(--foreground);
+  --muted: #f0f2f5;
+  --accent: #e9edf3;
+  --accent-foreground: var(--foreground);
+  --primary-foreground: #fff;
+  --input: var(--border);
+  --ring: var(--foreground);
+  --font-sans: var(--font-catalog-sans), sans-serif;
+  --font-mono: var(--font-catalog-mono), monospace;
+  font-family: var(--font-sans);
+  color: var(--foreground);
+  font-weight: 400;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+:global(.dark) .typography {
+  --primary: #91a2ff;
+  --border: #33373e;
+  --catalog-rule-strong: #535a66;
+  --foreground: #f1f3f6;
+  --catalog-secondary: #c8cbd2;
+  --muted-foreground: #a2a6af;
+  --background: #111215;
+  --card: #191b20;
+  --catalog-hover: #23262c;
+  --muted: var(--card);
+  --accent: #ffffff05;
+  --catalog-focus-ring: rgba(145, 162, 255, 0.2);
+  --primary-foreground: var(--background);
+}
+
+@variant catalog-narrow {
+  .typography {
+    --page-gutter: 28px;
+  }
+}
+
+@media (max-width: 640px) {
+  .typography {
+    --page-gutter: 20px;
+  }
+}

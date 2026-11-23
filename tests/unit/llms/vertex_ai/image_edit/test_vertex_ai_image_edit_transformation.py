@@ -1,9 +1,12 @@
 import base64
 import json
 import os
+import re
+from collections.abc import Mapping
 from datetime import datetime
 from io import BytesIO, StringIO
 from pathlib import Path
+from types import MappingProxyType
 from typing import Dict, Final
 from unittest.mock import MagicMock, patch
 
@@ -21,6 +24,7 @@ from litellm.llms.vertex_ai.image_edit.vertex_gemini_transformation import (
 from litellm.llms.vertex_ai.image_edit.vertex_imagen_transformation import (
     VertexAIImagenImageEditConfig,
 )
+from litellm.types.images.main import ImageEditOptionalRequestParams
 from litellm.types.router import GenericLiteLLMParams
 
 
@@ -79,12 +83,8 @@ def test_vertex_gemini_edit_size_reaches_request(size: str, model: str) -> None:
     request: Final = TypeAdapter(dict[str, JsonValue]).validate_json(TypeAdapter(str).validate_python(payload))
     expected: Final = map_openai_size_to_gemini_image_config(size, model) or {}
     assert request["generationConfig"] == {
-        "response_modalities": ["IMAGE"],
-        **(
-            {"image_config": {"aspect_ratio": expected["aspectRatio"], "image_size": expected["imageSize"]}}
-            if expected
-            else {}
-        ),
+        "responseModalities": ["IMAGE"],
+        **({"imageConfig": expected} if expected else {}),
     }
 
 
@@ -115,37 +115,9 @@ def test_vertex_imagen_edit_size_reaches_request(size: str, expected_ratio: str 
 
 
 @pytest.mark.parametrize("size", ("auto", "unknown", "0x1024", "-1x1024", "1024x", "3:2"))
-@pytest.mark.parametrize(
-    "config_type, model, config_key, expected",
-    (
-        (
-            VertexAIGeminiImageEditConfig,
-            "gemini-3.1-flash-image",
-            "generationConfig",
-            {"response_modalities": ["IMAGE"], "image_config": {"aspect_ratio": "1:1"}},
-        ),
-        (
-            VertexAIImagenImageEditConfig,
-            "imagen-3.0-capability-001",
-            "parameters",
-            {
-                "sampleCount": 1,
-                "editMode": "EDIT_MODE_INPAINT_INSERTION",
-                "editConfig": {"baseSteps": 50},
-                "guidanceScale": 7.5,
-                "seed": None,
-            },
-        ),
-    ),
-)
-def test_vertex_edit_preserves_legacy_size_fallback(
-    size: str,
-    config_type: type[VertexAIGeminiImageEditConfig] | type[VertexAIImagenImageEditConfig],
-    model: str,
-    config_key: str,
-    expected: dict[str, object],
-) -> None:
-    config: Final = config_type()
+def test_vertex_imagen_edit_preserves_legacy_size_fallback(size: str) -> None:
+    model: Final = "imagen-3.0-capability-001"
+    config: Final = VertexAIImagenImageEditConfig()
     payload, _ = config.transform_image_edit_request(
         model,
         "mountains",
@@ -155,7 +127,13 @@ def test_vertex_edit_preserves_legacy_size_fallback(
         {},
     )
     request: Final = TypeAdapter(dict[str, JsonValue]).validate_json(TypeAdapter(str).validate_python(payload))
-    assert request[config_key] == expected
+    assert request["parameters"] == {
+        "sampleCount": 1,
+        "editMode": "EDIT_MODE_INPAINT_INSERTION",
+        "editConfig": {"baseSteps": 50},
+        "guidanceScale": 7.5,
+        "seed": None,
+    }
 
 
 class TestVertexAIGeminiImageEditTransformation:
@@ -178,6 +156,39 @@ class TestVertexAIGeminiImageEditTransformation:
         )
 
         assert mapped["aspectRatio"] == "16:9"
+
+    @pytest.mark.parametrize(
+        ("requested", "request_count"),
+        [
+            (ImageEditOptionalRequestParams(size="1792x1024"), 1),
+            (ImageEditOptionalRequestParams(size="1792x1024", n=1), 1),
+            (ImageEditOptionalRequestParams(size="1792x1024", n=3), 3),
+        ],
+    )
+    def test_n_is_accepted_and_served_by_single_image_requests(
+        self, requested: ImageEditOptionalRequestParams, request_count: int
+    ) -> None:
+        assert "n" in self.config.get_supported_openai_params(self.model)
+        mapped = self.config.map_openai_params(
+            image_edit_optional_params=requested,
+            model=self.model,
+            drop_params=False,
+        )
+
+        request_body, _ = self.config.transform_image_edit_request(
+            model=self.model,
+            prompt=self.prompt,
+            image=[BytesIO(b"fake_image_data")],
+            image_edit_optional_request_params=mapped,
+            litellm_params=MagicMock(),
+            headers={},
+        )
+
+        assert self.config.get_request_count(self.model, mapped) == request_count
+        assert json.loads(request_body)["generationConfig"] == {
+            "responseModalities": ["IMAGE"],
+            "imageConfig": {"aspectRatio": "16:9"},
+        }
 
     def test_get_complete_url(self) -> None:
         """Test URL generation for Vertex AI Gemini"""
@@ -229,8 +240,7 @@ class TestVertexAIGeminiImageEditTransformation:
         assert base64.b64decode(inline_data["data"]) == image_bytes
 
         generation_config = request_body["generationConfig"]
-        assert generation_config["response_modalities"] == ["IMAGE"]
-        assert generation_config["image_config"]["aspect_ratio"] == "1:1"
+        assert generation_config == {"responseModalities": ["IMAGE"], "imageConfig": {"aspectRatio": "1:1"}}
 
     def test_transform_image_edit_response(self) -> None:
         """Test response transformation for Vertex AI Gemini"""
@@ -242,9 +252,7 @@ class TestVertexAIGeminiImageEditTransformation:
                             {
                                 "inlineData": {
                                     "mimeType": "image/png",
-                                    "data": base64.b64encode(b"image-one").decode(
-                                        "utf-8"
-                                    ),
+                                    "data": base64.b64encode(b"image-one").decode("utf-8"),
                                 }
                             }
                         ]
@@ -266,9 +274,7 @@ class TestVertexAIGeminiImageEditTransformation:
 
         assert image_response.data is not None
         assert len(image_response.data) == 1
-        assert image_response.data[0].b64_json == base64.b64encode(b"image-one").decode(
-            "utf-8"
-        )
+        assert image_response.data[0].b64_json == base64.b64encode(b"image-one").decode("utf-8")
 
     def test_transform_image_edit_request_without_image_raises(self) -> None:
         """Test that missing image raises BadRequestError with 400 status code"""
@@ -481,25 +487,18 @@ class TestVertexAIImagenImageEditTransformation:
         # Second should be MASK reference
         assert reference_images[1]["referenceType"] == "REFERENCE_TYPE_MASK"
         assert "maskImageConfig" in reference_images[1]
-        assert (
-            reference_images[1]["maskImageConfig"]["maskMode"]
-            == "MASK_MODE_USER_PROVIDED"
-        )
+        assert reference_images[1]["maskImageConfig"]["maskMode"] == "MASK_MODE_USER_PROVIDED"
 
     def test_transform_image_edit_response(self) -> None:
         """Test response transformation for Vertex AI Imagen"""
         response_payload = {
             "predictions": [
                 {
-                    "bytesBase64Encoded": base64.b64encode(b"image-one").decode(
-                        "utf-8"
-                    ),
+                    "bytesBase64Encoded": base64.b64encode(b"image-one").decode("utf-8"),
                     "mimeType": "image/png",
                 },
                 {
-                    "bytesBase64Encoded": base64.b64encode(b"image-two").decode(
-                        "utf-8"
-                    ),
+                    "bytesBase64Encoded": base64.b64encode(b"image-two").decode("utf-8"),
                     "mimeType": "image/png",
                 },
             ]
@@ -518,12 +517,8 @@ class TestVertexAIImagenImageEditTransformation:
 
         assert image_response.data is not None
         assert len(image_response.data) == 2
-        assert image_response.data[0].b64_json == base64.b64encode(b"image-one").decode(
-            "utf-8"
-        )
-        assert image_response.data[1].b64_json == base64.b64encode(b"image-two").decode(
-            "utf-8"
-        )
+        assert image_response.data[0].b64_json == base64.b64encode(b"image-one").decode("utf-8")
+        assert image_response.data[1].b64_json == base64.b64encode(b"image-two").decode("utf-8")
 
     def test_transform_image_edit_request_without_image_raises(self) -> None:
         """Test that missing image raises ValueError"""
@@ -549,10 +544,7 @@ class TestVertexAIImagenImageEditTransformation:
         assert self.config._read_all_bytes(bio) == b"test_bytesio"
 
         # Test with bytearray
-        assert (
-            self.config._read_all_bytes(bytearray(b"test_bytearray"))
-            == b"test_bytearray"
-        )
+        assert self.config._read_all_bytes(bytearray(b"test_bytearray")) == b"test_bytearray"
 
     @pytest.mark.parametrize(
         ("image", "expected"),
@@ -758,3 +750,245 @@ def test_imagen_image_edit_maps_malformed_predictions_to_a_connection_error_with
         500,
         False,
     )
+
+
+_LABEL_FIELDS: Final = ("user_api_key_alias", "user_api_key_team_alias", "spend_logs_metadata")
+_IDENTITY: Final = MappingProxyType({"user_api_key_alias": "chargeback-key", "user_api_key_team_alias": "ai-platform"})
+_PROXY_METADATA: Final = MappingProxyType({**_IDENTITY, "spend_logs_metadata": {"cost-center": "cc-1"}})
+_FORGED: Final = MappingProxyType({"user_api_key_alias": "forged", "app": "bot"})
+_SENT_BODY: Final = TypeAdapter(Mapping[str, object])
+_SENT_LABELS: Final = TypeAdapter(Mapping[str, str])
+
+
+def _sent_gemini_edit(extra_headers: Mapping[str, str] | None = None) -> httpx.Request:
+    sent: Final[list[httpx.Request]] = []
+
+    def reply(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        return httpx.Response(
+            200,
+            json={"candidates": [{"content": {"parts": [{"inlineData": {"mimeType": "image/png", "data": "aW1n"}}]}}]},
+        )
+
+    litellm.image_edit(
+        model="vertex_ai/gemini-3.1-flash-image",
+        image=BytesIO(b"\x89PNG\r\n\x1a\nimage"),
+        prompt="mountains",
+        api_base="https://vertex.test/edit",
+        metadata=dict(_PROXY_METADATA),
+        labels=dict(_FORGED),
+        extra_headers=dict(extra_headers or {}),
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(reply))),
+    )
+    return sent[0]
+
+
+def _sent_gemini_edit_body() -> Mapping[str, object]:
+    return _SENT_BODY.validate_json(_sent_gemini_edit().content)
+
+
+def test_vertex_gemini_edit_sends_identity_labels_only_while_the_setting_is_on(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", None)
+    setting_off: Final = _sent_gemini_edit_body()
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", _LABEL_FIELDS)
+    setting_on: Final = _sent_gemini_edit_body()
+
+    assert sorted(setting_off) == ["contents", "generationConfig"]
+    assert {key: value for key, value in setting_on.items() if key != "labels"} == setting_off
+    assert list(_SENT_LABELS.validate_python(setting_on["labels"]).items()) == [
+        *_IDENTITY.items(),
+        ("app", "bot"),
+        ("cost-center", "cc-1"),
+    ]
+
+
+_FORGED_LABELS_HEADER: Final = base64.b64encode(json.dumps({"user_api_key_team_alias": "forged"}).encode()).decode()
+
+
+def test_vertex_gemini_edit_drops_a_caller_labels_header_only_while_the_setting_is_on(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    caller_headers: Final = {"X-Vertex-AI-Labels": _FORGED_LABELS_HEADER, "x-trace-id": "t-1"}
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", None)
+    setting_off: Final = _sent_gemini_edit(caller_headers).headers
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", _LABEL_FIELDS)
+    setting_on: Final = _sent_gemini_edit(caller_headers).headers
+
+    assert setting_off["x-vertex-ai-labels"] == _FORGED_LABELS_HEADER
+    assert "x-vertex-ai-labels" not in setting_on
+    assert setting_on["x-trace-id"] == "t-1"
+
+
+def _sent_gemini_edit_request(**params: object) -> Mapping[str, object]:
+    sent: Final[list[httpx.Request]] = []  # mutable-ok: MockTransport hands each request to a callback
+
+    def reply(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        return httpx.Response(
+            200,
+            json={"candidates": [{"content": {"parts": [{"inlineData": {"mimeType": "image/png", "data": "aW1n"}}]}}]},
+        )
+
+    litellm.image_edit(
+        model="vertex_ai/gemini-3.1-flash-image",
+        image=BytesIO(b"\x89PNG\r\n\x1a\nimage"),
+        prompt="mountains",
+        api_base="https://vertex.test/edit",
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(reply))),
+        **params,
+    )
+    return _SENT_BODY.validate_json(sent[0].content)
+
+
+def _sent_gemini_edit_generation_config(**params: object) -> Mapping[str, object]:
+    return _SENT_BODY.validate_python(_sent_gemini_edit_request(**params)["generationConfig"])
+
+
+@pytest.mark.parametrize(
+    ("controls", "image_config"),
+    (
+        ({"aspect_ratio": "9:16"}, {"aspectRatio": "9:16"}),
+        ({"image_size": "2K"}, {"imageSize": "2K"}),
+        ({"aspectRatio": "9:16", "imageSize": "2K"}, {"aspectRatio": "9:16", "imageSize": "2K"}),
+        ({"imageConfig": '{"aspectRatio": "9:16", "imageSize": "2K"}'}, {"aspectRatio": "9:16", "imageSize": "2K"}),
+        (
+            {"imageConfig": {"aspectRatio": "9:16", "personGeneration": "DONT_ALLOW"}},
+            {"aspectRatio": "9:16", "personGeneration": "DONT_ALLOW"},
+        ),
+        ({"size": "1536x1024", "aspect_ratio": "9:16", "image_size": "2K"}, {"aspectRatio": "9:16", "imageSize": "2K"}),
+        ({"imageConfig": {"aspectRatio": "1:1"}, "aspect_ratio": "9:16"}, {"aspectRatio": "9:16"}),
+        ({"aspectRatio": "16:9", "aspect_ratio": "9:16"}, {"aspectRatio": "16:9"}),
+        ({"imageConfig": {"aspect_ratio": "9:16", "image_size": "4K"}}, {"aspectRatio": "9:16", "imageSize": "4K"}),
+        ({"size": "3072x2048", "imageConfig": {"aspect_ratio": "9:16"}}, {"aspectRatio": "9:16", "imageSize": "2K"}),
+        ({"image_config": {"aspect_ratio": "9:16"}}, {"aspectRatio": "9:16"}),
+        (
+            {"imageConfig[aspectRatio]": "9:16", "imageConfig[imageSize]": "2K"},
+            {"aspectRatio": "9:16", "imageSize": "2K"},
+        ),
+        (
+            {"image_config[aspect_ratio]": "9:16", "image_config[imageSize]": "2K"},
+            {"aspectRatio": "9:16", "imageSize": "2K"},
+        ),
+        (
+            {"imageConfig": '{"aspectRatio": "1:1", "imageSize": "2K"}', "imageConfig[aspectRatio]": "9:16"},
+            {"aspectRatio": "9:16", "imageSize": "2K"},
+        ),
+        (
+            {"imageConfig[imageOutputOptions][mimeType]": "image/jpeg", "imageConfig[aspectRatio]": "9:16"},
+            {"imageOutputOptions": {"mimeType": "image/jpeg"}, "aspectRatio": "9:16"},
+        ),
+        ({"imageConfig": {"aspectRatio": "1:1"}, "imageConfig[aspect_ratio]": "9:16"}, {"aspectRatio": "9:16"}),
+        ({"imageConfig": {"aspect_ratio": "1:1"}, "imageConfig[aspectRatio]": "9:16"}, {"aspectRatio": "9:16"}),
+        (
+            {"imageConfig[aspectRatio]": "9:16", "image_config[image_size]": "2K"},
+            {"aspectRatio": "9:16", "imageSize": "2K"},
+        ),
+        (
+            {"imageConfig": {"aspectRatio": "9:16"}, "image_config": {"aspect_ratio": "1:1", "image_size": "2K"}},
+            {"aspectRatio": "9:16", "imageSize": "2K"},
+        ),
+    ),
+)
+def test_vertex_gemini_edit_forwards_image_controls(
+    controls: Mapping[str, object], image_config: Mapping[str, object]
+) -> None:
+    assert _sent_gemini_edit_generation_config(**controls) == {
+        "responseModalities": ["IMAGE"],
+        "imageConfig": image_config,
+    }
+
+
+@pytest.mark.parametrize("drop_params", (True, "true"))
+@pytest.mark.parametrize(
+    ("param", "value"),
+    (
+        ("size", "not-a-size"),
+        ("size", "1024x"),
+        ("imageConfig", "banana"),
+        ("imageConfig", "[1]"),
+    ),
+)
+def test_vertex_gemini_edit_rejects_an_unmappable_control_unless_dropping_params(
+    param: str, value: object, drop_params: object
+) -> None:
+    with pytest.raises(litellm.UnsupportedParamsError, match=f"`{param}`"):
+        _sent_gemini_edit_request(**{param: value})
+
+    assert _sent_gemini_edit_generation_config(**{param: value}, drop_params=drop_params) == {
+        "responseModalities": ["IMAGE"]
+    }
+
+
+def test_vertex_gemini_edit_folds_up_to_64_bracket_fields() -> None:
+    fields: Final = {f"imageConfig[k{index}]": "v" for index in range(64)}
+
+    assert _sent_gemini_edit_generation_config(**fields) == {
+        "responseModalities": ["IMAGE"],
+        "imageConfig": {f"k{index}": "v" for index in range(64)},
+    }
+
+
+@pytest.mark.parametrize(
+    ("fields", "rejected", "generation_config_when_dropping"),
+    (
+        (
+            {f"imageConfig[k{index}]": "v" for index in range(65)},
+            "`imageConfig` takes at most 64 form fields",
+            {"responseModalities": ["IMAGE"]},
+        ),
+        (
+            {"imageConfig[a][b][c][d][e]": "x", "imageConfig[aspectRatio]": "9:16"},
+            "`imageConfig[a][b][c][d][e]` must be",
+            {"responseModalities": ["IMAGE"], "imageConfig": {"aspectRatio": "9:16"}},
+        ),
+        (
+            {"imageConfig[aspectRatio": "9:16", "imageConfig[imageSize]": "2K"},
+            "`imageConfig[aspectRatio` must be",
+            {"responseModalities": ["IMAGE"], "imageConfig": {"imageSize": "2K"}},
+        ),
+        (
+            {"imageConfig[]": "9:16", "imageConfig[imageSize]": "2K"},
+            "`imageConfig[]` must be",
+            {"responseModalities": ["IMAGE"], "imageConfig": {"imageSize": "2K"}},
+        ),
+        (
+            {"imageConfig[a[b]": "9:16", "imageConfig[imageSize]": "2K"},
+            "`imageConfig[a[b]` must be",
+            {"responseModalities": ["IMAGE"], "imageConfig": {"imageSize": "2K"}},
+        ),
+        (
+            {"imageConfig[a]b]": "9:16", "imageConfig[imageSize]": "2K"},
+            "`imageConfig[a]b]` must be",
+            {"responseModalities": ["IMAGE"], "imageConfig": {"imageSize": "2K"}},
+        ),
+        (
+            {"imageConfig[imageOutputOptions]": "x", "imageConfig[imageOutputOptions][mimeType]": "image/jpeg"},
+            "`imageConfig[imageOutputOptions]` sets a value",
+            {"responseModalities": ["IMAGE"], "imageConfig": {"imageOutputOptions": {"mimeType": "image/jpeg"}}},
+        ),
+        (
+            {"imageConfig": "banana", "imageConfig[aspectRatio]": "9:16"},
+            "`imageConfig` must be a JSON object",
+            {"responseModalities": ["IMAGE"], "imageConfig": {"aspectRatio": "9:16"}},
+        ),
+    ),
+)
+def test_vertex_gemini_edit_rejects_unfoldable_bracket_fields_unless_dropping_params(
+    fields: Mapping[str, object], rejected: str, generation_config_when_dropping: Mapping[str, object]
+) -> None:
+    with pytest.raises(litellm.UnsupportedParamsError, match=re.escape(rejected)):
+        _sent_gemini_edit_request(**fields)
+
+    assert _sent_gemini_edit_generation_config(**fields, drop_params=True) == generation_config_when_dropping
+    assert _sent_gemini_edit_generation_config(**fields, additional_drop_params=["imageConfig"]) == {
+        "responseModalities": ["IMAGE"]
+    }
+
+
+@pytest.mark.parametrize("value", (100, "100", 50))
+def test_vertex_gemini_edit_leaves_out_output_compression_without_failing_the_call(value: object) -> None:
+    assert _sent_gemini_edit_generation_config(output_compression=value) == {"responseModalities": ["IMAGE"]}
+
+
+def test_vertex_gemini_edit_auto_size_keeps_the_input_image_shape() -> None:
+    assert _sent_gemini_edit_generation_config(size="auto") == {"responseModalities": ["IMAGE"]}
