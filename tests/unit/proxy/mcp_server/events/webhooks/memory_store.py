@@ -163,6 +163,13 @@ class MemoryStore:
         self.rows[subscription_id] = current.model_copy(update={"status": "terminated"})
         return True
 
+    async def enqueue_current(self, row: SubscriptionRow, delivery: QueuedDelivery) -> bool:
+        current: Final = self.rows.get(delivery.subscription_id)
+        if current is None or (current.generation, current.status) != (row.generation, row.status):
+            return False
+        await self.enqueue(delivery)
+        return True
+
     async def enqueue(self, delivery: QueuedDelivery) -> bool:
         if self.fail_enqueue:
             raise ConnectionError("database unavailable")
