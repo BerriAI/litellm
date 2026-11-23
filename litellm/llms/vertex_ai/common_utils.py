@@ -1,3 +1,4 @@
+import math
 import re
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from copy import deepcopy
@@ -19,6 +20,11 @@ from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.litellm_core_utils.prompt_templates.common_utils import unpack_defs
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.gemini.common_utils import (
+    GEMINI_IMAGE_ASPECT_RATIOS,
+    GEMINI_IMAGE_SIZE_TO_ASPECT_RATIO,
+    map_openai_size_to_gemini_image_config,
+)
 from litellm.llms.vertex_ai.request_labels import (
     VERTEX_REQUEST_LABELS_MAX,
     resolve_vertex_request_labels,
@@ -61,6 +67,20 @@ def normalize_youtube_url(url: str) -> str:
         return url
     parts: Final = urlsplit(url)
     return urlunsplit(parts._replace(scheme=parts.scheme.lower(), netloc=parts.hostname or parts.netloc))
+
+
+def map_vertex_image_size(size: object, model: str) -> Mapping[str, str] | None:
+    if not isinstance(size, str) or (image_config := map_openai_size_to_gemini_image_config(size, model)) is None:
+        return None
+
+    width, height = map(int, size.lower().split("x"))
+    aspect_ratio: Final = image_config["aspectRatio"]
+    if (
+        not math.isclose(GEMINI_IMAGE_ASPECT_RATIOS[aspect_ratio], width / height)
+        and GEMINI_IMAGE_SIZE_TO_ASPECT_RATIO.get((width, height)) != aspect_ratio
+    ):
+        verbose_logger.warning("Vertex AI size %s is approximated with aspectRatio %s", size, aspect_ratio)
+    return MappingProxyType(image_config)
 
 
 def gemini_video_metadata_from_openai(video_metadata: Mapping[str, object]) -> dict[str, object]:
