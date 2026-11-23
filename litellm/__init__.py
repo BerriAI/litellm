@@ -13,6 +13,7 @@ warnings.filterwarnings("ignore", message=".*`ReadOnly` qualifier.*")
 ### INIT VARIABLES #########################
 import threading
 import os
+import datetime
 
 # Load .env before any other litellm imports so env vars (e.g. LITELLM_UI_SESSION_DURATION) are available
 import dotenv as _dotenv
@@ -83,7 +84,6 @@ from litellm.constants import (
     modelscope_models,
     empower_models,
     together_ai_models,
-    baseten_models,
     WANDB_MODELS,
     REPEATED_STREAMING_CHUNK_LIMIT,
     request_timeout,
@@ -237,6 +237,7 @@ overwrite_user_with_key_hash: bool = (
 bedrock_request_metadata_fields: Optional[Sequence[str]] = (
     None  # allow-list of `user_api_key_*` fields (+ `spend_logs_metadata`) sent as Bedrock `requestMetadata`
 )
+vertex_request_label_fields: Optional[Sequence[str]] = None
 store_audit_logs: bool | None = None
 skip_system_message_in_guardrail: bool = False
 skip_tool_message_in_guardrail: bool = False
@@ -646,6 +647,7 @@ bedrock_models: Set = set()
 bedrock_converse_models: Set = set(BEDROCK_CONVERSE_MODELS)
 fal_ai_models: Set = set()
 fireworks_ai_models: Set = set()
+baseten_models: Set[str] = set()
 fireworks_ai_embedding_models: Set = set()
 deepinfra_models: Set = set()
 perplexity_models: Set = set()
@@ -677,6 +679,7 @@ nadir_models: Set = set()
 galadriel_models: Set = set()
 nvidia_nim_models: Set = set()
 nvidia_riva_models: Set = set()
+gnani_models: Final[set[str]] = set()  # mutable-ok: price reloads add keys to this registry in place
 soniox_models: Set = set()
 sambanova_models: Set = set()
 scaledown_models: Final[Set[str]] = set()  # Price reloads update this registry through existing references.
@@ -692,12 +695,14 @@ nebius_embedding_models: Set = set()
 aiml_models: Set = set()
 deepgram_models: Set = set()
 elevenlabs_models: Set = set()
+gradium_models: Final[set[str]] = set()  # mutable-ok: filled from the cost map at import time
 dashscope_models: Set = set()
 qwencloud_models: Set = set()
 qwen_ai_platform_models: Set = set()
 moonshot_models: Set = set()
 publicai_models: Set = set()
 darkbloom_models: Set = set()
+resetdata_models: Final[set[str]] = set()  # mutable-ok: populated when the shared model catalog loads
 v0_models: Set = set()
 morph_models: Set = set()
 lambda_ai_models: Set = set()
@@ -726,6 +731,7 @@ transcribe_models: Set = set()
 gigachat_models: Set = set()
 llamagate_models: Set = set()
 coralbricks_models: Set[str] = set()
+perplexity_orchestrator_models: Final[set[str]] = set()  # mutable-ok: populated when the shared model catalog loads
 reducto_models: Set = set()
 bedrock_mantle_models: Set = set()
 
@@ -761,6 +767,16 @@ def is_openai_finetune_model(key: str) -> bool:
         bool: True if the key matches the OpenAI finetune pattern, False otherwise.
     """
     return key.startswith("ft:") and not key.count(":") > 1
+
+
+def _is_past_deprecation_date(value: Mapping[str, object]) -> bool:
+    deprecation_date: Final = value.get("deprecation_date")
+    if not isinstance(deprecation_date, str):
+        return False
+    try:
+        return datetime.date.fromisoformat(deprecation_date) <= datetime.date.today()
+    except ValueError:
+        return False
 
 
 def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, object]]) -> None:
@@ -863,6 +879,11 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             # ignore the 'up-to', '-to-' model names -> not real models. just for cost tracking based on model params.
             if "-to-" not in key and "fireworks-ai-default" not in key:
                 fireworks_ai_models.add(key)
+        elif value.get("litellm_provider") == "baseten":
+            if _is_past_deprecation_date(value):
+                baseten_models.discard(key)
+            else:
+                baseten_models.add(key)
         elif value.get("litellm_provider") == "fireworks_ai-embedding-models":
             # ignore the 'up-to', '-to-' model names -> not real models. just for cost tracking based on model params.
             if "-to-" not in key:
@@ -921,6 +942,8 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             nvidia_nim_models.add(key)
         elif value.get("litellm_provider") == "nvidia_riva":
             nvidia_riva_models.add(key)
+        elif value.get("litellm_provider") == "gnani":
+            gnani_models.add(key)
         elif value.get("litellm_provider") == "soniox":
             soniox_models.add(key)
         elif value.get("litellm_provider") == "sambanova":
@@ -951,6 +974,8 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             deepgram_models.add(key)
         elif value.get("litellm_provider") == "elevenlabs":
             elevenlabs_models.add(key)
+        elif value.get("litellm_provider") == "gradium":
+            gradium_models.add(key)
         elif value.get("litellm_provider") == "heroku":
             heroku_models.add(key)
         elif value.get("litellm_provider") == "dashscope":
@@ -967,6 +992,8 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             publicai_models.add(key)
         elif value.get("litellm_provider") == "darkbloom":
             darkbloom_models.add(key)
+        elif value.get("litellm_provider") == "resetdata":
+            resetdata_models.add(key)
         elif value.get("litellm_provider") == "v0":
             v0_models.add(key)
         elif value.get("litellm_provider") == "morph":
@@ -1019,6 +1046,8 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             llamagate_models.add(key)
         elif value.get("litellm_provider") == "coralbricks":
             coralbricks_models.add(key)
+        elif value.get("litellm_provider") == "perplexity_orchestrator":
+            perplexity_orchestrator_models.add(key)
         elif value.get("litellm_provider") == "reducto":
             reducto_models.add(key)
         elif value.get("litellm_provider") == "bedrock_mantle":
@@ -1115,6 +1144,7 @@ model_list = list(
     | galadriel_models
     | nvidia_nim_models
     | nvidia_riva_models
+    | gnani_models
     | soniox_models
     | sambanova_models
     | scaledown_models
@@ -1129,12 +1159,14 @@ model_list = list(
     | nscale_models
     | deepgram_models
     | elevenlabs_models
+    | gradium_models
     | dashscope_models
     | qwencloud_models
     | qwen_ai_platform_models
     | moonshot_models
     | publicai_models
     | darkbloom_models
+    | resetdata_models
     | v0_models
     | morph_models
     | lambda_ai_models
@@ -1154,6 +1186,7 @@ model_list = list(
     | reducto_models
     | bedrock_mantle_models
     | coralbricks_models
+    | perplexity_orchestrator_models
     | set(clarifai_models)
 )
 
@@ -1226,6 +1259,7 @@ def _build_models_by_provider() -> dict:
         "galadriel": galadriel_models,
         "nvidia_nim": nvidia_nim_models,
         "nvidia_riva": nvidia_riva_models,
+        "gnani": gnani_models,
         "soniox": soniox_models,
         "sambanova": sambanova_models | sambanova_embedding_models,
         "scaledown": scaledown_models,
@@ -1241,6 +1275,7 @@ def _build_models_by_provider() -> dict:
         "featherless_ai": featherless_ai_models,
         "deepgram": deepgram_models,
         "elevenlabs": elevenlabs_models,
+        "gradium": gradium_models,
         "heroku": heroku_models,
         "dashscope": dashscope_models,
         "qwencloud": qwencloud_models,
@@ -1249,6 +1284,7 @@ def _build_models_by_provider() -> dict:
         "moonshot": moonshot_models,
         "publicai": publicai_models,
         "darkbloom": darkbloom_models,
+        "resetdata": resetdata_models,
         "v0": v0_models,
         "morph": morph_models,
         "lambda_ai": lambda_ai_models,
@@ -1274,6 +1310,7 @@ def _build_models_by_provider() -> dict:
         "gigachat": gigachat_models,
         "llamagate": llamagate_models,
         "coralbricks": coralbricks_models,
+        "perplexity_orchestrator": perplexity_orchestrator_models,
         "reducto": reducto_models,
         "bedrock_mantle": bedrock_mantle_models,
     }
@@ -1569,6 +1606,7 @@ from litellm.litellm_core_utils.cli_token_utils import get_litellm_gateway_api_k
 ### PASSTHROUGH ###
 from .passthrough import allm_passthrough_route, llm_passthrough_route
 from .google_genai import agenerate_content
+from .google_genai import generate_content as generate_content  # pyright: ignore[reportUnknownVariableType]  # native request types require the optional google-genai SDK
 
 ### GLOBAL CONFIG ###
 global_bitbucket_config: Optional[Mapping[str, object]] = None
@@ -1693,6 +1731,9 @@ if TYPE_CHECKING:
     from .llms.perplexity.decisions.transformation import (
         PerplexityDecisionsConfig as PerplexityDecisionsConfig,
     )
+    from .llms.gemini.decisions.transformation import (
+        GeminiDecisionsConfig as GeminiDecisionsConfig,
+    )
     from .llms.typesafe.decisions.transformation import (
         TypeSafeDecisionsConfig as TypeSafeDecisionsConfig,
     )
@@ -1723,8 +1764,17 @@ if TYPE_CHECKING:
     from .llms.openai.decisions.transformation import (
         OpenAIDecisionsConfig as OpenAIDecisionsConfig,
     )
+    from .llms.azure.decisions.transformation import (
+        AzureDecisionsConfig as AzureDecisionsConfig,
+    )
     from .llms.azure_ai.decisions.transformation import (
         AzureAIDecisionsConfig as AzureAIDecisionsConfig,
+    )
+    from .llms.vercel_ai_gateway.decisions.transformation import (
+        VercelAIGatewayDecisionsConfig as VercelAIGatewayDecisionsConfig,
+    )
+    from .llms.litellm_proxy.decisions.transformation import (
+        LiteLLMProxyDecisionsConfig as LiteLLMProxyDecisionsConfig,
     )
     from .llms.nvidia_nim.rerank.transformation import (
         NvidiaNimRerankConfig as NvidiaNimRerankConfig,

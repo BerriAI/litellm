@@ -1,6 +1,6 @@
 import base64
 import re
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from functools import reduce
 from typing import Any, Final, Optional, TypeVar, Union, cast, get_type_hints, overload
 
@@ -9,6 +9,7 @@ from typing_extensions import TypeIs  # noqa: TID251  # narrows untyped wire pay
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import allowed_openai_param_names
 from litellm.litellm_core_utils.dot_notation_indexing import delete_nested_value, is_nested_path
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.types.llms.openai import (
@@ -60,6 +61,20 @@ def normalize_responses_api_stream_options(
     if not isinstance(include_obfuscation, bool):
         return None
     return ResponsesAPIStreamOptions(include_obfuscation=include_obfuscation)
+
+
+def _provider_mapped_params(
+    config: BaseResponsesAPIConfig,
+    params: ResponsesAPIOptionalRequestParams,
+    model: str,
+    drop_params: bool,
+    allowed_openai_params: Collection[str],
+) -> Mapping[str, object]:
+    from litellm.llms.openai_like.dynamic_config import MapsAllowedResponsesParams
+
+    if isinstance(config, MapsAllowedResponsesParams):
+        return config.map_openai_params_allowing(params, model, drop_params, allowed_openai_params)
+    return config.map_openai_params(response_api_optional_params=params, model=model, drop_params=drop_params)
 
 
 def _is_chat_text_part(part: object) -> bool:
@@ -200,7 +215,7 @@ class ResponsesAPIRequestUtils:
         model: str,
         responses_api_provider_config: BaseResponsesAPIConfig,
         response_api_optional_params: ResponsesAPIOptionalRequestParams,
-        allowed_openai_params: list[str] | None = None,
+        allowed_openai_params: Sequence[str] | None = None,
         drop_params: bool | None = None,
     ) -> dict:
         """
@@ -225,7 +240,7 @@ class ResponsesAPIRequestUtils:
         non_default_params: Final = cast(dict, response_api_optional_params)
         # Check for unsupported parameters
         ResponsesAPIRequestUtils._check_valid_arg(
-            supported_params=supported_params + (allowed_openai_params or []),
+            supported_params=[*supported_params, *allowed_openai_param_names(allowed_openai_params)],
             non_default_params=non_default_params,
             drop_params=should_drop_params,
             custom_llm_provider=responses_api_provider_config.custom_llm_provider,
@@ -234,10 +249,12 @@ class ResponsesAPIRequestUtils:
 
         # Map parameters to provider-specific format
         mapped_params: Final[dict[str, object]] = TypeAdapter(dict[str, object]).validate_python(
-            responses_api_provider_config.map_openai_params(
-                response_api_optional_params=response_api_optional_params,
-                model=model,
-                drop_params=should_drop_params,
+            _provider_mapped_params(
+                responses_api_provider_config,
+                response_api_optional_params,
+                model,
+                should_drop_params,
+                allowed_openai_param_names(allowed_openai_params),
             ),
             strict=True,
         )
@@ -252,7 +269,7 @@ class ResponsesAPIRequestUtils:
         return apply_openai_param_overrides(
             optional_params=params_with_normalized_stream_options,
             non_default_params=non_default_params,
-            allowed_openai_params=allowed_openai_params or [],
+            allowed_openai_params=allowed_openai_params,
         )
 
     @staticmethod

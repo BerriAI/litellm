@@ -63,7 +63,7 @@ _SINGLE_OPTION: Final = UnsupportedDecisionsRequest(
 )
 
 
-def _ir_input(decision_input: OpenAIDecisionInput) -> DecisionsIRState | DecisionsIRMessages:
+def openai_input_to_ir(decision_input: OpenAIDecisionInput) -> DecisionsIRState | DecisionsIRMessages:
     if isinstance(decision_input, str):
         return DecisionsIRState(state=decision_input)
     return DecisionsIRMessages(messages=tuple(decision_input))
@@ -98,7 +98,7 @@ def _ir_question(question: OpenAIDecisionQuestion) -> DecisionsIRQuestion:
 
 def openai_request_to_ir(request: OpenAIDecisionRequestBody) -> DecisionsIRRequest:
     return DecisionsIRRequest(
-        input=_ir_input(request.input),
+        input=openai_input_to_ir(request.input),
         audio=request.audio,
         videos=request.videos,
         questions=tuple(_ir_question(question) for question in request.questions),
@@ -311,6 +311,7 @@ def _openai_answer(question: DecisionsIRQuestion, answer: DecisionsIRAnswer) -> 
 def ir_to_openai_response(
     response: DecisionsIRResponse, request: DecisionsIRRequest, requested_model: str
 ) -> OpenAIDecisionResponse:
+    usage: Final = response.usage or DecisionsIRUsage()
     return OpenAIDecisionResponse(
         model=response.model or requested_model,
         answers=tuple(
@@ -318,14 +319,14 @@ def ir_to_openai_response(
             for question, answer in zip(request.questions, response.answers, strict=True)
         ),
         usage=OpenAIDecisionUsage(
-            input_tokens=response.usage.input_tokens,
+            input_tokens=usage.input_tokens,
             input_tokens_details=OpenAIDecisionInputTokensDetails(
-                cached_tokens=response.usage.cached_tokens,
-                cache_write_tokens=response.usage.cache_write_tokens,
+                cached_tokens=usage.cached_tokens,
+                cache_write_tokens=usage.cache_write_tokens,
             ),
-            output_tokens=response.usage.output_tokens,
-            output_tokens_details=OpenAIDecisionOutputTokensDetails(reasoning_tokens=response.usage.reasoning_tokens),
-            total_tokens=response.usage.input_tokens + response.usage.output_tokens,
+            output_tokens=usage.output_tokens,
+            output_tokens_details=OpenAIDecisionOutputTokensDetails(reasoning_tokens=usage.reasoning_tokens),
+            total_tokens=usage.input_tokens + usage.output_tokens,
         ),
     )
 
@@ -334,6 +335,7 @@ class OpenAIDecisionsConfig(BaseDecisionsConfig):
     path = "/v1/decisions"
     supports_safety_identifier = True
     supports_images = True
+    supports_json_input = True
 
     def get_default_api_base(self) -> str | None:
         return "https://api.openai.com"

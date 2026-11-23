@@ -1,3 +1,5 @@
+import asyncio
+import base64
 import copy
 import datetime
 import json
@@ -24,6 +26,8 @@ import litellm
 from litellm.completion_extras.litellm_responses_transformation.transformation import (
     LiteLLMResponsesTransformationHandler,
 )
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.responses.stored_system_prompt import awithout_stored_instructions
 from litellm.types.llms.openai import AllMessageValues, REASONING_EFFORT
 
 if TYPE_CHECKING:
@@ -80,6 +84,85 @@ def test_completion_over_responses_maps_anthropic_search_tool_to_openai_tool_sea
 
     request_body: Final = json.loads(upstream.calls[0].request.content)
     assert request_body["tools"][0] == {"type": "tool_search", "execution": "server"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_params,wire_controls,preserve_instructions",
+    [
+        ({}, {}, False),
+        ({"store": False, "drop_params": True}, {"store": False}, False),
+        ({"extra_body": {"store": False}, "drop_params": True}, {"store": False}, False),
+        ({"store": False, "additional_drop_params": ["store"]}, {}, False),
+        ({"extra_body": {"store": False}, "additional_drop_params": ["store"]}, {}, False),
+        ({"extra_body": {"store": False}, "additional_drop_params": ["extra_body.store"]}, {}, False),
+        ({"extra_body": {"store": False}, "additional_drop_params": ["extra_body"]}, {}, False),
+        ({"extra_body": {"store": None}}, {}, False),
+        ({"store": True}, {"store": True}, False),
+        ({"store": False}, {"store": False}, False),
+        ({"extra_body": {"store": False}}, {"store": False}, False),
+        ({"store": False, "extra_body": {"store": True}}, {"store": True}, False),
+        ({"store": True, "extra_body": {"store": False}}, {"store": False}, False),
+        ({"store": False, "conversation": "conv_prior"}, {"store": False}, False),
+        (
+            {"store": False, "previous_response_id": "resp_prior"},
+            {"store": False, "previous_response_id": "resp_prior"},
+            True,
+        ),
+        ({"store": False, "truncation": "auto"}, {"store": False, "truncation": "auto"}, True),
+        ({"previous_response_id": "resp_prior"}, {"previous_response_id": "resp_prior"}, True),
+        ({"store": True, "truncation": "auto"}, {"store": True, "truncation": "auto"}, True),
+    ],
+)
+async def test_acompletion_system_goes_in_input_unless_the_request_continues_a_chain(
+    request_params: dict[str, object],
+    wire_controls: dict[str, object],
+    preserve_instructions: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    response_body: Final = {
+        "id": "resp_wire",
+        "object": "response",
+        "created_at": 1789788253,
+        "status": "completed",
+        "model": "gpt-6.2-sol",
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_wire",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+            }
+        ],
+        "usage": {"input_tokens": 10, "output_tokens": 1, "total_tokens": 11},
+    }
+    with respx.mock(assert_all_called=True) as router:
+        upstream: Final = router.post("https://api.openai.com/v1/responses").mock(
+            return_value=httpx.Response(200, json=response_body)
+        )
+        await litellm.acompletion(
+            model="openai/responses/gpt-6.2-sol",
+            messages=[{"role": "system", "content": "Stable prefix"}, {"role": "user", "content": "hi"}],
+            api_key="sk-test",
+            cache={"no-cache": True},
+            **request_params,
+        )
+    assert upstream.call_count == 1
+    request_body: Final = json.loads(upstream.calls[0].request.content)
+    assert {
+        key: request_body[key]
+        for key in ("store", "conversation", "previous_response_id", "truncation")
+        if key in request_body
+    } == wire_controls
+    user_input: Final = {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]}
+    if preserve_instructions:
+        assert request_body["instructions"] == "Stable prefix"
+        assert request_body["input"] == [user_input]
+    else:
+        assert "instructions" not in request_body
+        assert request_body["input"] == [_system_input_item("Stable prefix"), user_input]
 
 
 def test_convert_chat_completion_messages_to_responses_api_image_input():
@@ -307,6 +390,32 @@ def test_openai_responses_chunk_parser_reasoning_summary():
     assert delta.reasoning_content == "**Compar"
     assert delta.tool_calls is None
     assert delta.function_call is None
+
+
+def test_bridged_reasoning_summary_parts_stream_on_the_one_choice_with_a_space_between_parts():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator: Final = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
+    events: Final = (
+        {"type": "response.reasoning_summary_part.added", "output_index": 0, "summary_index": 0},
+        {"type": "response.reasoning_summary_text.delta", "delta": "First part.", "output_index": 0, "summary_index": 0},
+        {"type": "response.reasoning_summary_part.added", "output_index": 0, "summary_index": 1},
+        {"type": "response.reasoning_summary_text.delta", "delta": "Second part.", "output_index": 0, "summary_index": 1},
+        {"type": "response.reasoning_summary_part.added", "output_index": 1, "summary_index": 0},
+        {"type": "response.reasoning_summary_text.delta", "delta": "Next item.", "output_index": 1, "summary_index": 0},
+        {"type": "response.output_text.delta", "delta": "Answer", "output_index": 2, "content_index": 0},
+    )
+
+    streamed: Final = tuple(choice for event in events for choice in iterator.chunk_parser(event).choices)
+
+    assert {choice.index for choice in streamed} == {0}
+    assert (
+        "".join(getattr(choice.delta, "reasoning_content", None) or "" for choice in streamed)
+        == "First part. Second part. Next item."
+    )
+    assert "".join(choice.delta.content or "" for choice in streamed) == "Answer"
 
 
 def test_chunk_parser_string_output_text_delta_produces_text():
@@ -1314,9 +1423,16 @@ _COLORS_SCHEMA: Final = {
             ],
             None,
         ),
-        (_COLORS_SCHEMA, [_PLAIN_USER_ITEM], _JSON_SYSTEM_PROMPT),
+        (
+            _COLORS_SCHEMA,
+            [
+                {"type": "message", "role": "system", "content": [{"type": "input_text", "text": _JSON_SYSTEM_PROMPT}]},
+                _PLAIN_USER_ITEM,
+            ],
+            None,
+        ),
     ],
-    ids=["json_object_keeps_system_in_input", "json_schema_keeps_system_in_instructions"],
+    ids=["json_object_keeps_system_in_input", "json_schema_keeps_system_in_input"],
 )
 def test_transform_request_json_object_keeps_system_prompt_where_the_json_word_check_reads_it(
     response_format, expected_input, expected_instructions
@@ -1327,8 +1443,8 @@ def test_transform_request_json_object_keeps_system_prompt_where_the_json_word_c
             {"role": "system", "content": _JSON_SYSTEM_PROMPT},
             {"role": "user", "content": "List three colors."},
         ],
-        optional_params={"response_format": response_format},
-        litellm_params={},
+        optional_params={"store": False, "response_format": response_format},
+        litellm_params={"custom_llm_provider": "openai"},
         headers={},
         litellm_logging_obj=Mock(),
     )
@@ -5281,6 +5397,269 @@ def _system_input_item(text: str) -> dict[str, object]:
     return {"type": "message", "role": "system", "content": [{"type": "input_text", "text": text}]}
 
 
+def _stored_chain(*items: dict[str, object]) -> dict[str, object]:
+    return {"object": "list", "data": list(items), "first_id": "msg_1", "last_id": "msg_2", "has_more": False}
+
+
+_STORED_USER_TURN: Final = {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "first"}]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("stored_chain", "sent_instructions"),
+    [
+        (httpx.Response(200, json=_stored_chain(_system_input_item("Stable prefix"), _STORED_USER_TURN)), None),
+        (
+            httpx.Response(200, json=_stored_chain(_system_input_item("Older prefix"), _STORED_USER_TURN)),
+            "Stable prefix",
+        ),
+        (httpx.Response(200, json=_stored_chain(_STORED_USER_TURN)), "Stable prefix"),
+        (
+            httpx.Response(404, json={"error": {"message": "Response not found", "type": "invalid_request_error"}}),
+            "Stable prefix",
+        ),
+    ],
+)
+async def test_acompletion_follow_up_sends_the_system_prompt_only_when_the_stored_chain_lacks_it(
+    stored_chain: httpx.Response, sent_instructions: str | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    response_body: Final = {
+        "id": "resp_wire",
+        "object": "response",
+        "created_at": 1789788253,
+        "status": "completed",
+        "model": "gpt-6.2-sol",
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_wire",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+            }
+        ],
+        "usage": {"input_tokens": 10, "output_tokens": 1, "total_tokens": 11},
+    }
+    with respx.mock(assert_all_called=True) as router:
+        chain: Final = router.get("https://api.openai.com/v1/responses/resp_prior/input_items").mock(
+            return_value=stored_chain
+        )
+        upstream: Final = router.post("https://api.openai.com/v1/responses").mock(
+            return_value=httpx.Response(200, json=response_body)
+        )
+        response: Final = await litellm.acompletion(
+            model="openai/responses/gpt-6.2-sol",
+            messages=[{"role": "system", "content": "Stable prefix"}, {"role": "user", "content": "again"}],
+            api_key="sk-test",
+            cache={"no-cache": True},
+            previous_response_id="resp_prior",
+        )
+    assert dict(chain.calls[0].request.url.params) == {"order": "asc", "limit": "20"}
+    assert chain.calls[0].request.headers["authorization"] == "Bearer sk-test"
+    assert json.loads(upstream.calls[0].request.content) == {
+        "model": "gpt-6.2-sol",
+        "input": [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "again"}]}],
+        "previous_response_id": "resp_prior",
+        **({"instructions": sent_instructions} if sent_instructions else {}),
+    }
+    assert response.choices[0].message.content == "ok"
+
+
+class _FinishedCalls(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.call_types: Final[list[object]] = []
+
+    async def async_log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.call_types.append(kwargs.get("call_type"))
+
+    async def async_log_failure_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.call_types.append(kwargs.get("call_type"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "stored_chain",
+    [
+        httpx.Response(200, json=_stored_chain(_system_input_item("Stable prefix"), _STORED_USER_TURN)),
+        httpx.Response(404, json={"error": {"message": "Response not found", "type": "invalid_request_error"}}),
+    ],
+)
+@pytest.mark.parametrize("no_log", [False, True])
+async def test_acompletion_follow_up_never_logs_the_stored_chain_lookup_as_a_call(
+    stored_chain: httpx.Response, no_log: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    finished: Final = _FinishedCalls()
+    monkeypatch.setattr(litellm, "callbacks", [finished])
+    response_body: Final = {
+        "id": "resp_wire",
+        "object": "response",
+        "created_at": 1789788253,
+        "status": "completed",
+        "model": "gpt-6.2-sol",
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_wire",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+            }
+        ],
+        "usage": {"input_tokens": 10, "output_tokens": 1, "total_tokens": 11},
+    }
+    with respx.mock(assert_all_called=True) as router:
+        router.get("https://api.openai.com/v1/responses/resp_prior/input_items").mock(return_value=stored_chain)
+        router.post("https://api.openai.com/v1/responses").mock(return_value=httpx.Response(200, json=response_body))
+        await litellm.acompletion(
+            model="openai/responses/gpt-6.2-sol",
+            messages=[{"role": "system", "content": "Stable prefix"}, {"role": "user", "content": "again"}],
+            api_key="sk-test",
+            cache={"no-cache": True},
+            previous_response_id="resp_prior",
+            **({"no-log": True} if no_log else {}),
+        )
+        await asyncio.sleep(0.5)
+    assert finished.call_types == ([] if no_log else ["responses"])
+
+
+@pytest.mark.asyncio
+async def test_follow_up_with_truncation_auto_keeps_instructions_without_reading_the_stored_chain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    request: Final = {
+        "instructions": "Stable prefix",
+        "previous_response_id": "resp_prior",
+        "truncation": "auto",
+        "custom_llm_provider": "openai",
+        "api_key": "sk-test",
+    }
+    with respx.mock(assert_all_called=False) as router:
+        chain: Final = router.get("https://api.openai.com/v1/responses/resp_prior/input_items").mock(
+            return_value=httpx.Response(200, json=_stored_chain(_system_input_item("Stable prefix"), _STORED_USER_TURN))
+        )
+        sent: Final = await awithout_stored_instructions(request)
+    assert not chain.called
+    assert sent == request
+
+
+def _litellm_response_id(provider: str, upstream_id: str) -> str:
+    return "resp_" + base64.b64encode(
+        f"litellm:custom_llm_provider:{provider};model_id:deployment-1;response_id:{upstream_id}".encode()
+    ).decode()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("previous_response_id", "lookups", "sent_instructions"),
+    [
+        (_litellm_response_id("openai", "resp_prior"), 1, None),
+        (_litellm_response_id("openrouter", "resp_prior"), 0, "Stable prefix"),
+        (_litellm_response_id("openai", _litellm_response_id("openrouter", "resp_prior")), 0, "Stable prefix"),
+    ],
+)
+async def test_follow_up_reads_the_stored_chain_only_from_the_provider_of_the_request(
+    previous_response_id: str, lookups: int, sent_instructions: str | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    with respx.mock(assert_all_called=False) as router:
+        own_provider: Final = router.get("https://api.openai.com/v1/responses/resp_prior/input_items").mock(
+            return_value=httpx.Response(200, json=_stored_chain(_system_input_item("Stable prefix"), _STORED_USER_TURN))
+        )
+        anywhere_else: Final = router.route().mock(return_value=httpx.Response(200, json=_stored_chain()))
+        sent: Final = await awithout_stored_instructions(
+            {
+                "instructions": "Stable prefix",
+                "previous_response_id": previous_response_id,
+                "custom_llm_provider": "openai",
+                "api_key": "sk-test",
+            }
+        )
+    assert (len(own_provider.calls), len(anywhere_else.calls)) == (lookups, 0)
+    assert sent.get("instructions") == sent_instructions
+
+
+@pytest.mark.asyncio
+async def test_follow_up_reads_the_stored_chain_with_the_timeout_and_extra_headers_of_the_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    with respx.mock(assert_all_called=True) as router:
+        chain: Final = router.get("https://api.openai.com/v1/responses/resp_prior/input_items").mock(
+            return_value=httpx.Response(200, json=_stored_chain(_system_input_item("Stable prefix"), _STORED_USER_TURN))
+        )
+        await awithout_stored_instructions(
+            {
+                "instructions": "Stable prefix",
+                "previous_response_id": "resp_prior",
+                "custom_llm_provider": "openai",
+                "api_key": "sk-test",
+                "timeout": 7.5,
+                "extra_headers": {"x-gateway-auth": "gateway-secret"},
+            }
+        )
+    lookup: Final = chain.calls[0].request
+    assert lookup.extensions["timeout"] == {"connect": 7.5, "read": 7.5, "write": 7.5, "pool": 7.5}
+    assert lookup.headers["x-gateway-auth"] == "gateway-secret"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("instructions", "sent_instructions"),
+    [
+        ("Stable prefix\nAnswer in French", "Answer in French"),
+        ("Stable prefix and more", "Stable prefix and more"),
+    ],
+)
+async def test_follow_up_keeps_only_the_instructions_the_stored_chain_lacks(
+    instructions: str, sent_instructions: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    with respx.mock(assert_all_called=True) as router:
+        router.get("https://api.openai.com/v1/responses/resp_prior/input_items").mock(
+            return_value=httpx.Response(200, json=_stored_chain(_system_input_item("Stable prefix"), _STORED_USER_TURN))
+        )
+        sent: Final = await awithout_stored_instructions(
+            {
+                "instructions": instructions,
+                "previous_response_id": "resp_prior",
+                "custom_llm_provider": "openai",
+                "api_key": "sk-test",
+            }
+        )
+    assert sent.get("instructions") == sent_instructions
+
+
+@pytest.mark.asyncio
+async def test_follow_up_reads_the_stored_chain_of_an_azure_deployment_with_its_ad_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    with respx.mock(assert_all_called=True) as router:
+        chain: Final = router.get(url__regex=r"https://qa\.openai\.azure\.com/.*responses/resp_prior/input_items.*").mock(
+            return_value=httpx.Response(200, json=_stored_chain(_system_input_item("Stable prefix"), _STORED_USER_TURN))
+        )
+        sent: Final = await awithout_stored_instructions(
+            {
+                "instructions": "Stable prefix",
+                "previous_response_id": "resp_prior",
+                "custom_llm_provider": "azure",
+                "api_base": "https://qa.openai.azure.com",
+                "api_version": "2025-03-01-preview",
+                "azure_ad_token": "ad-token",
+            }
+        )
+    assert chain.calls[0].request.headers["authorization"] == "Bearer ad-token"
+    assert "instructions" not in sent
+
+
 @pytest.mark.parametrize(
     ("content_block", "expected_content"),
     [
@@ -5734,6 +6113,292 @@ def test_transform_request_strips_the_breakpoint_for_a_served_provider_without_a
     ]
 
 
+_CACHE_CONTROL: Final = {"type": "ephemeral"}
+_EXPLICIT_BREAKPOINT: Final = {"mode": "explicit"}
+_OPENAI_API_BASE: Final = "https://api.openai.com/v1"
+_THIRD_PARTY_API_BASE: Final = "https://gateway.example.com/v1"
+_FOUNDRY_GPT_ROW: Final = {"litellm_provider": "azure_ai", "mode": "chat", "supports_prompt_cache_breakpoint": True}
+
+
+def _bridged_transform_request(
+    model: str,
+    messages: list[dict[str, object]],
+    litellm_params: dict[str, object],
+    optional_params: dict[str, object] | None = None,
+) -> dict[str, object]:
+    return LiteLLMResponsesTransformationHandler().transform_request(
+        model=model,
+        messages=cast(List[AllMessageValues], messages),  # cast-ok: the test builds chat messages as plain mappings
+        optional_params={"store": False, **(optional_params or {})},
+        litellm_params=litellm_params,
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+
+
+def _system_part_marked_with_cache_control() -> list[dict[str, object]]:
+    return [
+        {"role": "system", "content": [{"type": "text", "text": "Stable prefix", "cache_control": _CACHE_CONTROL}]},
+        {"role": "user", "content": "hi"},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("model", "litellm_params", "optional_params"),
+    [
+        ("gpt-5.6", {"custom_llm_provider": "openai", "api_base": _OPENAI_API_BASE}, {}),
+        ("my-gpt", {"custom_llm_provider": "openai", "api_base": _OPENAI_API_BASE, "base_model": "gpt-5.6"}, {}),
+        (
+            "gpt-5.6",
+            {"custom_llm_provider": "openai", "api_base": _THIRD_PARTY_API_BASE},
+            {"extra_body": {"prompt_cache_options": {"mode": "explicit"}}},
+        ),
+        ("unit-foundry-gpt", {"custom_llm_provider": "azure_ai"}, {}),
+    ],
+    ids=("openai-api", "base-model", "opted-in-through-prompt-cache-options", "foundry-row-flags-it"),
+)
+def test_transform_request_turns_cache_control_into_a_breakpoint_where_the_deployment_reads_them(
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    litellm_params: dict[str, object],
+    optional_params: dict[str, object],
+) -> None:
+    monkeypatch.setitem(litellm.model_cost, "azure_ai/unit-foundry-gpt", _FOUNDRY_GPT_ROW)
+
+    request: Final = _bridged_transform_request(
+        model, _system_part_marked_with_cache_control(), litellm_params, optional_params
+    )
+
+    assert request["input"] == [
+        {
+            "type": "message",
+            "role": "system",
+            "content": [
+                {"type": "input_text", "text": "Stable prefix", "prompt_cache_breakpoint": _EXPLICIT_BREAKPOINT}
+            ],
+        },
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("model", "litellm_params"),
+    [
+        ("gpt-5.6", {"custom_llm_provider": "openai", "api_base": _THIRD_PARTY_API_BASE}),
+        ("gpt-5.4", {"custom_llm_provider": "openai", "api_base": _OPENAI_API_BASE}),
+        ("unit-foundry-gpt", {"custom_llm_provider": "azure_ai"}),
+        ("my-gpt", {"custom_llm_provider": "openai", "api_base": _OPENAI_API_BASE, "base_model": "gpt-5.4"}),
+    ],
+    ids=("openai-provider-on-a-third-party-host", "model-without-breakpoints", "foundry-row-opts-out", "base-model"),
+)
+def test_transform_request_drops_cache_control_where_the_deployment_does_not_read_breakpoints(
+    monkeypatch: pytest.MonkeyPatch, model: str, litellm_params: dict[str, object]
+) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost, "azure_ai/unit-foundry-gpt", {**_FOUNDRY_GPT_ROW, "supports_prompt_cache_breakpoint": False}
+    )
+    messages: Final = [
+        *_system_part_marked_with_cache_control(),
+        {"role": "user", "content": "and again", "cache_control": _CACHE_CONTROL},
+    ]
+
+    request: Final = _bridged_transform_request(model, messages, litellm_params)
+
+    assert request["input"] == [
+        {"type": "message", "role": "system", "content": [{"type": "input_text", "text": "Stable prefix"}]},
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "and again"}]},
+    ]
+
+
+def test_transform_request_moves_a_message_level_cache_control_onto_the_last_part_as_a_breakpoint() -> None:
+    messages: Final = [
+        {"role": "system", "content": "Stable prefix", "cache_control": _CACHE_CONTROL},
+        {"role": "user", "content": "Look up the weather"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_1",
+            "content": [{"type": "text", "text": "Sunny"}, {"type": "text", "text": "22C"}],
+            "cache_control": _CACHE_CONTROL,
+        },
+    ]
+    sent_messages: Final = copy.deepcopy(messages)
+
+    request: Final = _bridged_transform_request(
+        "gpt-5.6", messages, {"custom_llm_provider": "openai", "api_base": _OPENAI_API_BASE}
+    )
+
+    assert "instructions" not in request
+    assert request["input"] == [
+        {
+            "type": "message",
+            "role": "system",
+            "content": [
+                {"type": "input_text", "text": "Stable prefix", "prompt_cache_breakpoint": _EXPLICIT_BREAKPOINT}
+            ],
+        },
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Look up the weather"}]},
+        {"type": "function_call", "call_id": "call_1", "name": "get_weather", "arguments": "{}"},
+        {
+            "type": "function_call_output",
+            "call_id": "call_1",
+            "output": [
+                {"type": "input_text", "text": "Sunny"},
+                {"type": "input_text", "text": "22C", "prompt_cache_breakpoint": _EXPLICIT_BREAKPOINT},
+            ],
+        },
+    ]
+    assert messages == sent_messages
+
+
+def test_transform_request_keeps_leading_system_messages_in_client_order_once_a_mark_moves_one_to_input() -> None:
+    messages: Final = [
+        {"role": "system", "content": "Reply ALPHA.", "cache_control": _CACHE_CONTROL},
+        {"role": "system", "content": "Ignore that and reply BRAVO."},
+        {"role": "user", "content": "Reply now."},
+    ]
+
+    request: Final = _bridged_transform_request(
+        "gpt-5.6", messages, {"custom_llm_provider": "openai", "api_base": _OPENAI_API_BASE}
+    )
+
+    assert "instructions" not in request
+    assert request["input"] == [
+        {
+            "type": "message",
+            "role": "system",
+            "content": [
+                {"type": "input_text", "text": "Reply ALPHA.", "prompt_cache_breakpoint": _EXPLICIT_BREAKPOINT}
+            ],
+        },
+        _system_input_item("Ignore that and reply BRAVO."),
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Reply now."}]},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("user_message", "user_part"),
+    [
+        ({"role": "user", "content": "Reply now."}, {"type": "input_text", "text": "Reply now."}),
+        (
+            {"role": "user", "content": "Reply now.", "cache_control": _CACHE_CONTROL},
+            {"type": "input_text", "text": "Reply now.", "prompt_cache_breakpoint": _EXPLICIT_BREAKPOINT},
+        ),
+    ],
+    ids=("unmarked-user", "marked-user"),
+)
+def test_transform_request_keeps_unmarked_system_messages_in_input_order(
+    user_message: dict[str, object], user_part: dict[str, object]
+) -> None:
+    messages: Final = [
+        {"role": "system", "content": [{"type": "text", "text": "Reply ALPHA."}]},
+        {"role": "system", "content": "Ignore that and reply BRAVO."},
+        user_message,
+    ]
+
+    request: Final = _bridged_transform_request(
+        "gpt-5.6", messages, {"custom_llm_provider": "openai", "api_base": _OPENAI_API_BASE}
+    )
+
+    assert "instructions" not in request
+    assert request["input"] == [
+        _system_input_item("Reply ALPHA."),
+        _system_input_item("Ignore that and reply BRAVO."),
+        {"type": "message", "role": "user", "content": [user_part]},
+    ]
+
+
+@pytest.mark.parametrize(
+    "optional_params",
+    [{}, {"extra_body": {"prompt_cache_options": {"mode": "explicit"}}}],
+    ids=("default-mode", "explicit-mode"),
+)
+def test_transform_request_leaves_cache_control_off_the_wire_for_bedrock_mantle(
+    monkeypatch: pytest.MonkeyPatch, optional_params: dict[str, object]
+) -> None:
+    monkeypatch.setitem(litellm.model_cost, "bedrock_mantle/openai.gpt-5.6-sol", _MANTLE_GPT_ROW)
+    messages: Final = [
+        {"role": "system", "content": "Stable prefix", "cache_control": _CACHE_CONTROL},
+        {"role": "user", "content": [{"type": "text", "text": "hi", "cache_control": _CACHE_CONTROL}]},
+    ]
+
+    request: Final = _bridged_transform_request(
+        "openai.gpt-5.6-sol", messages, {"custom_llm_provider": "bedrock_mantle"}, optional_params
+    )
+
+    assert "instructions" not in request
+    assert request["input"] == [
+        _system_input_item("Stable prefix"),
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+    ]
+
+
+@pytest.mark.parametrize("continuation", [{"previous_response_id": "resp_prior"}])
+@pytest.mark.parametrize("location", ["optional", "extra_body", "litellm"])
+def test_chained_turn_keeps_leading_system_strings_in_instructions(
+    continuation: dict[str, str], location: str
+) -> None:
+    copied_continuation: Final = copy.deepcopy(continuation)
+    optional: Final = (
+        copied_continuation
+        if location == "optional"
+        else {"extra_body": copied_continuation}
+        if location == "extra_body"
+        else {}
+    )
+    params: Final = {"custom_llm_provider": "openai", **(copied_continuation if location == "litellm" else {})}
+    request: Final = _bridged_transform_request(
+        "gpt-6.2-sol",
+        [
+            {"role": "system", "content": "Be brief."},
+            {"role": "system", "content": "Be helpful."},
+            {"role": "user", "content": "hi"},
+        ],
+        params,
+        optional,
+    )
+    assert request["instructions"] == "Be brief. Be helpful."
+    assert request["input"] == [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]}]
+
+
+@pytest.mark.parametrize("location", ["optional", "extra_body", "litellm", "litellm_extra_body"])
+def test_auto_truncation_keeps_system_prompt_in_instructions(location: str) -> None:
+    truncation: Final = {"truncation": "auto"}
+    optional: Final = truncation if location == "optional" else {"extra_body": truncation} if location == "extra_body" else {}
+    params: Final = {
+        "custom_llm_provider": "openai",
+        **(truncation if location == "litellm" else {"extra_body": truncation} if location == "litellm_extra_body" else {}),
+    }
+    request: Final = _bridged_transform_request(
+        "gpt-6.2-sol",
+        [{"role": "system", "content": "Be brief."}, {"role": "user", "content": "hi"}],
+        params,
+        optional,
+    )
+    assert request.get("instructions") == "Be brief."
+    assert request["input"] == [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]}]
+
+
+@pytest.mark.parametrize("continuation", [{}, {"previous_response_id": "resp_prior"}])
+def test_explicit_instructions_are_preserved(continuation: dict[str, str]) -> None:
+    request: Final = _bridged_transform_request(
+        "gpt-6.2-sol",
+        [{"role": "system", "content": "Be brief."}, {"role": "user", "content": "hi"}],
+        {"custom_llm_provider": "openai"},
+        {"instructions": "Caller instructions", **continuation},
+    )
+    assert request["instructions"] == ("Be brief.\nCaller instructions" if continuation else "Caller instructions")
+    if not continuation:
+        assert request["input"][0] == _system_input_item("Be brief.")
+
+
 def test_mid_conversation_system_string_stays_in_input_after_a_user_turn():
     handler: Final = LiteLLMResponsesTransformationHandler()
 
@@ -5743,29 +6408,70 @@ def test_mid_conversation_system_string_stays_in_input_after_a_user_turn():
             {"role": "user", "content": "Read the file."},
             {"role": "system", "content": "<total_tokens>14982391 tokens left</total_tokens>"},
             {"role": "user", "content": "Now summarize it."},
-        ]
+        ],
+        preserve_system_instructions=False,
     )
 
-    assert instructions == "You are a helpful assistant."
+    assert instructions is None
     assert input_items == [
+        _system_input_item("You are a helpful assistant."),
         {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Read the file."}]},
         _system_input_item("<total_tokens>14982391 tokens left</total_tokens>"),
         {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Now summarize it."}]},
     ]
 
 
-def test_leading_system_strings_still_join_instructions_without_a_following_turn():
+def test_leading_system_strings_remain_separate_input_items_without_a_following_turn():
     handler: Final = LiteLLMResponsesTransformationHandler()
 
     input_items, instructions = handler.convert_chat_completion_messages_to_responses_api(
         [
             {"role": "system", "content": "Be brief."},
             {"role": "system", "content": "Answer in French."},
-        ]
+        ],
+        preserve_system_instructions=False,
     )
 
-    assert instructions == "Be brief. Answer in French."
-    assert input_items == []
+    assert instructions is None
+    assert input_items == [_system_input_item("Be brief."), _system_input_item("Answer in French.")]
+
+
+def test_message_conversion_keeps_instructions_by_default() -> None:
+    handler: Final = LiteLLMResponsesTransformationHandler()
+    input_items, instructions = handler.convert_chat_completion_messages_to_responses_api(
+        [
+            {"role": "system", "content": "Be brief."},
+            {"role": "system", "content": "Be helpful."},
+            {"role": "user", "content": "hi"},
+        ]
+    )
+    assert instructions == "Be brief. Be helpful."
+    assert input_items == [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]}]
+
+
+@pytest.mark.parametrize(
+    ("provider", "system_in_input"),
+    [
+        ("openai", True),
+        ("azure", True),
+        ("azure_ai", True),
+        ("bedrock_mantle", True),
+        ("xai", False),
+        ("anthropic", False),
+        (None, False),
+    ],
+)
+def test_system_input_is_limited_to_openai_family_bridges(provider: str | None, system_in_input: bool) -> None:
+    request: Final = _bridged_transform_request(
+        "gpt-6.2-sol",
+        [{"role": "system", "content": "Be brief."}, {"role": "user", "content": "hi"}],
+        {"custom_llm_provider": provider},
+    )
+    assert request.get("instructions") == (None if system_in_input else "Be brief.")
+    assert request["input"] == [
+        *([_system_input_item("Be brief.")] if system_in_input else []),
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+    ]
 
 
 def test_mid_conversation_system_reminder_as_string_and_as_text_block_produce_identical_input_items():
@@ -5791,7 +6497,18 @@ def test_mid_conversation_system_reminder_as_string_and_as_text_block_produce_id
     assert as_string[1] == _system_input_item(reminder)
 
 
-def test_claude_code_shaped_history_keeps_a_byte_stable_input_prefix_across_requests():
+def _without_prompt_cache_breakpoint(item: dict[str, object]) -> dict[str, object]:
+    content: Final = item.get("content")
+    if not isinstance(content, list):
+        return item
+    parts: Final = cast(list[dict[str, object]], content)  # cast-ok: the bridge emits content parts as mappings
+    return {
+        **item,
+        "content": [{key: value for key, value in part.items() if key != "prompt_cache_breakpoint"} for part in parts],
+    }
+
+
+def test_claude_code_shaped_history_keeps_a_stable_input_prefix_across_requests():
     handler: Final = LiteLLMResponsesTransformationHandler()
     top_level_system: Final = [{"type": "text", "text": "You are Claude Code.", "cache_control": {"type": "ephemeral"}}]
     first_reminder: Final = "<system-reminder>27k chars of deferred tools</system-reminder>"
@@ -5843,11 +6560,13 @@ def test_claude_code_shaped_history_keeps_a_byte_stable_input_prefix_across_requ
         litellm_logging_obj=Mock(),
     )
 
+    first_input: Final = [_without_prompt_cache_breakpoint(item) for item in first_request["input"]]
+    second_input: Final = [_without_prompt_cache_breakpoint(item) for item in second_request["input"]]
     assert "instructions" not in first_request
     assert "instructions" not in second_request
-    assert first_request["input"][0] == _system_input_item("You are Claude Code.")
-    assert json.dumps(second_request["input"][: len(first_request["input"])]) == json.dumps(first_request["input"])
-    assert second_request["input"][len(first_request["input"]) :] == [
+    assert first_input[0] == _system_input_item("You are Claude Code.")
+    assert json.dumps(second_input[: len(first_input)]) == json.dumps(first_input)
+    assert second_input[len(first_input) :] == [
         {"type": "function_call", "call_id": "call_1", "name": "Read", "arguments": '{"file_path": "inventory.py"}'},
         {"type": "function_call_output", "call_id": "call_1", "output": [{"type": "input_text", "text": "ITEMS = []"}]},
         _system_input_item(second_reminder),

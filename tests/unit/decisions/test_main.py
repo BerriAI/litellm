@@ -24,6 +24,7 @@ from litellm.constants import AWS_SIGNING_MAX_THREADS
 from litellm.cost_calculator import get_response_cost_from_hidden_params
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.llms.azure_ai.common_utils import get_azure_ai_auth_headers
 from litellm.llms.bedrock.base_aws_llm import AWS_SIGNING_EXECUTOR
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.decisions import (
@@ -31,12 +32,14 @@ from litellm.types.decisions import (
     DecisionsResponse,
     DecisionsUsage,
     NoulAnswer,
+    OpenAIChoiceAnswer,
     OpenAIDecisionResponse,
     ScoreAnswer,
 )
 from litellm.types.router import ModelInfo
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
+from tests.unit.conftest import AsyncOnlyImageFetch
 
 _QUESTIONS: Final[Mapping[str, object]] = MappingProxyType(
     {
@@ -141,6 +144,15 @@ _OPENAI_RESPONSE: Final[Mapping[str, object]] = {
         "output_tokens_details": {"reasoning_tokens": 0},
         "total_tokens": _INPUT_TOKENS + _OUTPUT_TOKENS,
     },
+}
+_OPENAI_PREDICATE_RESPONSE: Final[Mapping[str, object]] = {
+    **_OPENAI_RESPONSE,
+    "answers": [{"type": "predicate", "name": "is_defect", "probability": 0.9}],
+}
+
+_OPENAI_PREDICATE_RESPONSE: Final[Mapping[str, object]] = {
+    **_OPENAI_RESPONSE,
+    "answers": [{"type": "predicate", "name": "is_defect", "probability": 0.9}],
 }
 
 
@@ -380,6 +392,411 @@ async def test_openai_decisions_uses_evaluation_pricing_and_explicit_base_model(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("use_litellm_proxy", "model"),
+    [(True, "openai/gpt-6-luna"), (False, "litellm_proxy/openai/gpt-6-luna")],
+)
+async def test_litellm_proxy_decisions_go_to_the_proxy_with_its_own_key(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    use_litellm_proxy: bool,
+    model: str,
+) -> None:
+    monkeypatch.setattr(litellm, "use_litellm_proxy", use_litellm_proxy)
+    monkeypatch.setenv("LITELLM_PROXY_API_BASE", "https://proxy.example/v1")
+    monkeypatch.setenv("LITELLM_PROXY_API_KEY", "proxy-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
+    route: Final = respx_mock.post("https://proxy.example/v1/decisions").respond(json=_OPENAI_PREDICATE_RESPONSE)
+
+    await litellm.adecisions(
+        model=model,
+        input="The package arrived broken.",
+        questions=[{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+    )
+
+    assert route.called
+    assert route.calls[0].request.headers["authorization"] == "Bearer proxy-key"
+    assert json.loads(route.calls[0].request.content)["model"] == "openai/gpt-6-luna"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("use_litellm_proxy", "model"),
+    [(True, "openai/gpt-6-luna"), (False, "litellm_proxy/openai/gpt-6-luna")],
+)
+async def test_litellm_proxy_decisions_without_a_proxy_base_never_go_to_openai(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    use_litellm_proxy: bool,
+    model: str,
+) -> None:
+    monkeypatch.setattr(litellm, "use_litellm_proxy", use_litellm_proxy)
+    monkeypatch.delenv("LITELLM_PROXY_API_BASE", raising=False)
+    monkeypatch.setenv("LITELLM_PROXY_API_KEY", "proxy-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://openai-base.example/v1")
+    openai_routes: Final = tuple(
+        respx_mock.post(url).respond(json=_OPENAI_PREDICATE_RESPONSE)
+        for url in ("https://api.openai.com/v1/decisions", "https://openai-base.example/v1/decisions")
+    )
+
+    with pytest.raises(litellm.BadRequestError, match="LITELLM_PROXY_API_BASE"):
+        await litellm.adecisions(
+            model=model,
+            input="The package arrived broken.",
+            questions=[{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+        )
+
+    assert not any(route.called for route in openai_routes)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("use_litellm_proxy", "model"),
+    [(True, "openai/gpt-6-luna"), (False, "litellm_proxy/openai/gpt-6-luna")],
+)
+async def test_litellm_proxy_decisions_never_send_the_openai_key_to_the_proxy(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    use_litellm_proxy: bool,
+    model: str,
+) -> None:
+    monkeypatch.setattr(litellm, "use_litellm_proxy", use_litellm_proxy)
+    monkeypatch.setenv("LITELLM_PROXY_API_BASE", "https://proxy.example/v1")
+    monkeypatch.delenv("LITELLM_PROXY_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
+    proxy_route: Final = respx_mock.post("https://proxy.example/v1/decisions").respond(json=_OPENAI_PREDICATE_RESPONSE)
+
+    await litellm.adecisions(
+        model=model,
+        input="The package arrived broken.",
+        questions=[{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+    )
+
+    assert [call.request.headers.get("authorization") for call in proxy_route.calls] == [None]
+
+
+_PROXY_COST_REQUEST: Final[Mapping[str, object]] = MappingProxyType(
+    {
+        "input": "The package arrived broken.",
+        "questions": [{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+    }
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("cost_header", "billed"), [("0.00042", 0.00042), ("0", 0.0)])
+async def test_litellm_proxy_decisions_bill_the_cost_the_proxy_reports(
+    respx_mock: respx.MockRouter,
+    cost_header: str,
+    billed: float,
+) -> None:
+    respx_mock.post("https://proxy.example/v1/decisions").respond(
+        json=_OPENAI_PREDICATE_RESPONSE, headers={"x-litellm-response-cost": cost_header}
+    )
+
+    response: Final = await litellm.adecisions(
+        model="litellm_proxy/openai/gpt-6-luna",
+        **_PROXY_COST_REQUEST,
+        api_base="https://proxy.example/v1",
+        api_key="proxy-key",
+    )
+
+    assert response._hidden_params["response_cost"] == billed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cost_header", [None, "not-a-cost", "-1", "nan", "inf"])
+async def test_litellm_proxy_decisions_bill_the_model_price_without_a_usable_cost_header(
+    respx_mock: respx.MockRouter,
+    cost_header: str | None,
+) -> None:
+    respx_mock.post("https://proxy.example/v1/decisions").respond(
+        json=_OPENAI_PREDICATE_RESPONSE,
+        headers={} if cost_header is None else {"x-litellm-response-cost": cost_header},
+    )
+    respx_mock.post("https://openai.example/v1/decisions").respond(json=_OPENAI_PREDICATE_RESPONSE)
+
+    proxied: Final = await litellm.adecisions(
+        model="litellm_proxy/openai/gpt-6-luna",
+        **_PROXY_COST_REQUEST,
+        api_base="https://proxy.example/v1",
+        api_key="proxy-key",
+    )
+    direct: Final = await litellm.adecisions(
+        model="openai/gpt-6-luna",
+        **_PROXY_COST_REQUEST,
+        api_base="https://openai.example/v1",
+        api_key="caller-key",
+    )
+
+    assert direct._hidden_params["response_cost"] > 0
+    assert proxied._hidden_params["response_cost"] == direct._hidden_params["response_cost"]
+
+
+@pytest.mark.asyncio
+async def test_litellm_proxy_systemone_goes_to_the_proxy_systemone_endpoint_unchanged(
+    respx_mock: respx.MockRouter,
+) -> None:
+    decisions_route: Final = respx_mock.post("https://proxy.example/v1/decisions").respond(
+        json=_OPENAI_PREDICATE_RESPONSE
+    )
+    systemone_route: Final = respx_mock.post("https://proxy.example/v1/systemone").respond(json=_RESPONSE)
+
+    response: Final = await litellm.asystemone(
+        model="litellm_proxy/gemini/gemini-decision-1",
+        state="review photo-1",
+        questions=_QUESTIONS,
+        assets={"photo-1": {"format": "png", "data_base64": "AA=="}},
+        images=[_PNG_DATA_URL],
+        safety_identifier="end-user-1",
+        api_base="https://proxy.example/v1",
+        api_key="proxy-key",
+    )
+
+    assert not decisions_route.called
+    sent: Final = json.loads(systemone_route.calls.last.request.content)
+    assert sent["model"] == "gemini/gemini-decision-1"
+    assert sent["questions"] == _QUESTIONS
+    assert sent["assets"] == {"photo-1": {"format": "png", "data_base64": "AA=="}}
+    assert sent["images"] == [_PNG_DATA_URL]
+    assert sent["safety_identifier"] == "end-user-1"
+    assert systemone_route.calls.last.request.headers["authorization"] == "Bearer proxy-key"
+    assert response.answers["sentiment"].confidence == 0.8
+
+
+@pytest.mark.asyncio
+async def test_litellm_proxy_calls_pass_on_answers_the_proxy_returns_without_confidence(
+    respx_mock: respx.MockRouter,
+) -> None:
+    respx_mock.post("https://proxy.example/v1/decisions").respond(
+        json={
+            **_OPENAI_RESPONSE,
+            "answers": [
+                {
+                    "type": "choice",
+                    "name": "sentiment",
+                    "choice": "positive",
+                    "probabilities": [{"value": "positive", "probability": 0.8}, {"value": "negative", "probability": 0.2}],
+                }
+            ],
+        }
+    )
+    respx_mock.post("https://proxy.example/v1/systemone").respond(
+        json={
+            **_RESPONSE,
+            "answers": {
+                "sentiment": {"type": "choice", "choice": "positive", "probabilities": {"positive": 0.8, "negative": 0.2}}
+            },
+        }
+    )
+
+    decision: Final = await litellm.adecisions(
+        model="litellm_proxy/parallel_ai/decider",
+        input="The package arrived broken.",
+        questions=[
+            {
+                "type": "choice",
+                "name": "sentiment",
+                "instructions": "What is the tone?",
+                "choices": [{"value": "positive"}, {"value": "negative"}],
+            }
+        ],
+        api_base="https://proxy.example/v1",
+        api_key="proxy-key",
+    )
+    systemone: Final = await litellm.asystemone(
+        model="litellm_proxy/parallel_ai/decider",
+        state="The package arrived broken.",
+        questions={"sentiment": {"type": "choice", "criteria": {"positive": None, "negative": None}}},
+        api_base="https://proxy.example/v1",
+        api_key="proxy-key",
+    )
+
+    answer: Final = decision.answers[0]
+    assert isinstance(answer, OpenAIChoiceAnswer)
+    assert answer.choice == "positive"
+    assert answer.confidence is None
+    assert systemone.answers["sentiment"].confidence is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("question", "answer"),
+    [
+        (
+            {
+                "type": "choice",
+                "name": "sentiment",
+                "instructions": "What is the tone?",
+                "choices": [{"value": "positive"}, {"value": "negative"}],
+            },
+            {
+                "type": "choice",
+                "name": "sentiment",
+                "choice": "positive",
+                "probabilities": [{"value": "positive", "probability": 0.8}, {"value": "negative", "probability": 0.2}],
+            },
+        ),
+        (
+            {
+                "type": "score",
+                "name": "severity",
+                "instructions": "How severe is the damage?",
+                "levels": [{"label": "minor"}, {"label": "major"}],
+            },
+            {
+                "type": "score",
+                "name": "severity",
+                "score": 1,
+                "probabilities": [
+                    {"value": 0, "label": "minor", "probability": 0.3},
+                    {"value": 1, "label": "major", "probability": 0.7},
+                ],
+            },
+        ),
+    ],
+    ids=("choice", "score"),
+)
+async def test_a_provider_answer_without_confidence_is_still_a_server_error(
+    question: Mapping[str, object],
+    answer: Mapping[str, object],
+    respx_mock: respx.MockRouter,
+) -> None:
+    respx_mock.post("https://api.openai.com/v1/decisions").respond(json={**_OPENAI_RESPONSE, "answers": [answer]})
+
+    with pytest.raises(litellm.InternalServerError, match="returned an unexpected response") as raised:
+        await litellm.adecisions(
+            model="openai/gpt-6-luna",
+            input="The package arrived broken.",
+            questions=[question],
+            api_key="caller-key",
+            api_base="https://api.openai.com/v1",
+        )
+
+    assert raised.value.status_code == 500
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("api", "request_kwargs", "proxy_response"),
+    [
+        (
+            "decisions",
+            {"input": "review", "questions": [{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}]},
+            _OPENAI_PREDICATE_RESPONSE,
+        ),
+        ("systemone", {"state": "review", "questions": _QUESTIONS}, _RESPONSE),
+    ],
+    ids=("decisions", "systemone"),
+)
+@pytest.mark.parametrize("scope", ("call", "global", "off"))
+async def test_litellm_proxy_calls_pass_on_only_the_callers_own_drop_params(
+    api: str,
+    request_kwargs: dict[str, object],
+    proxy_response: dict[str, object],
+    scope: str,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", scope == "global")
+    route: Final = respx_mock.post(f"https://proxy.example/v1/{api}").respond(json=proxy_response)
+
+    await getattr(litellm, f"a{api}")(
+        model="litellm_proxy/gemini/gemini-decision-1",
+        safety_identifier="end-user-1",
+        api_base="https://proxy.example/v1",
+        api_key="proxy-key",
+        **request_kwargs,
+        **({"drop_params": True} if scope == "call" else {}),
+    )
+
+    sent: Final = json.loads(route.calls.last.request.content)
+    assert sent["safety_identifier"] == "end-user-1"
+    assert sent.get("drop_params") is (True if scope == "call" else None)
+
+
+@pytest.mark.asyncio
+async def test_a_deployment_flagged_use_litellm_proxy_sends_decisions_to_the_proxy(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "use_litellm_proxy", False)
+    monkeypatch.delenv("USE_LITELLM_PROXY", raising=False)
+    monkeypatch.setenv("LITELLM_PROXY_API_BASE", "https://proxy.example/v1")
+    monkeypatch.setenv("LITELLM_PROXY_API_KEY", "proxy-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "decider",
+                "litellm_params": {"model": "openai/gpt-6-luna", "use_litellm_proxy": True},
+            }
+        ]
+    )
+    proxy_route: Final = respx_mock.post("https://proxy.example/v1/decisions").respond(json=_OPENAI_PREDICATE_RESPONSE)
+
+    await router.adecisions(
+        model="decider",
+        input="The package arrived broken.",
+        questions=[{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+    )
+
+    assert proxy_route.called
+    assert proxy_route.calls[0].request.headers["authorization"] == "Bearer proxy-key"
+
+
+_PROXY_AUDIO: Final = ("data:audio/wav;base64,YQ==", MappingProxyType({"content_type": "audio/wav", "base64": "YQ=="}))
+_PROXY_VIDEOS: Final = (MappingProxyType({"content_type": "video/mp4", "base64": "YQ=="}),)
+
+
+@pytest.mark.asyncio
+async def test_litellm_proxy_decisions_leave_audio_video_and_box_questions_to_the_proxy(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LITELLM_PROXY_API_BASE", "https://proxy.example/v1")
+    monkeypatch.setenv("LITELLM_PROXY_API_KEY", "proxy-key")
+    proxy_route: Final = respx_mock.post("https://proxy.example/v1/decisions").respond(
+        json={**_OPENAI_RESPONSE, "answers": [dict(_CRACK_BOX_ANSWER)]}
+    )
+
+    response: Final = await litellm.adecisions(
+        model="litellm_proxy/gemini/gemini-decision-1",
+        input="Is the screen cracked?",
+        audio=list(_PROXY_AUDIO),
+        videos=list(_PROXY_VIDEOS),
+        questions=[_CRACK_BOX_QUESTION],
+    )
+
+    sent: Final = json.loads(proxy_route.calls.last.request.content)
+    assert sent["audio"] == [_PROXY_AUDIO[0], dict(_PROXY_AUDIO[1])]
+    assert sent["videos"] == [dict(_PROXY_VIDEOS[0])]
+    assert sent["questions"] == [dict(_CRACK_BOX_QUESTION)]
+    assert [answer.model_dump(mode="json") for answer in response.answers] == [dict(_CRACK_BOX_ANSWER)]
+
+
+@pytest.mark.asyncio
+async def test_a_litellm_proxy_deployment_that_turns_box_questions_off_is_refused_before_the_proxy(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LITELLM_PROXY_API_BASE", "https://proxy.example/v1")
+    monkeypatch.setenv("LITELLM_PROXY_API_KEY", "proxy-key")
+    proxy_route: Final = respx_mock.post("https://proxy.example/v1/decisions").respond(json=_OPENAI_RESPONSE)
+
+    with pytest.raises(litellm.UnsupportedParamsError, match=re.escape("['box questions']")):
+        await litellm.adecisions(
+            model="litellm_proxy/gemini/gemini-decision-1",
+            input="Is the screen cracked?",
+            questions=[_CRACK_BOX_QUESTION],
+            model_info={"supports_box_questions": False},
+        )
+
+    assert not proxy_route.called
+
+
+@pytest.mark.asyncio
 async def test_systemone_uses_evaluation_pricing(respx_mock: respx.MockRouter, decisions_pricing_fields: None) -> None:
     route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_OPENAI_RESPONSE)
     response: Final = await litellm.asystemone(
@@ -610,13 +1027,39 @@ async def test_oss_classifier_rejects_unknown_models_and_ambiguous_bases_before_
     assert len(respx_mock.calls) == 0
 
 
-@pytest.mark.asyncio
-async def test_upstream_reply_without_answers_is_a_server_error(respx_mock: respx.MockRouter) -> None:
-    respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(
-        json={"model": "pplx-decider-v1-27b", "usage": {"input_tokens": 10, "output_tokens": 0}}
-    )
+_PPLX_USAGE: Final = {"model": "pplx-decider-v1-27b", "usage": {"input_tokens": 10, "output_tokens": 0}}
 
-    with pytest.raises(litellm.InternalServerError, match="unexpected response"):
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("reply", "detail"),
+    (
+        pytest.param(_PPLX_USAGE, "DecisionsResponse answers: Field required", id="usage"),
+        pytest.param(
+            {"error": "Rate limit reached"}, "DecisionsResponse answers: Field required", id="rate_limit_text"
+        ),
+        pytest.param({"error": "Request timed out"}, "DecisionsResponse answers: Field required", id="timeout_text"),
+        pytest.param(
+            {**_PPLX_USAGE, "answers": {"rate_limit": None}},
+            "DecisionsResponse answers.rate_limit: Input should be a valid dictionary",
+            id="null_answer_named_rate_limit",
+        ),
+        pytest.param(
+            {**_PPLX_USAGE, "answers": {"is_defect": {"type": "Request timed out"}}},
+            "DecisionsResponse answers.is_defect",
+            id="answer_type_timeout_text",
+        ),
+        pytest.param(
+            ["Rate limit reached"], "DecisionsResponse Input should be a valid dictionary", id="not_an_object"
+        ),
+    ),
+)
+async def test_a_malformed_upstream_reply_is_a_server_error_whatever_its_text(
+    reply: object, detail: str, respx_mock: respx.MockRouter
+) -> None:
+    respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(json=reply)
+
+    with pytest.raises(litellm.InternalServerError, match=re.escape(f"unexpected response: {detail}")):
         await litellm.asystemone(
             model="perplexity/pplx-decider-v1-27b",
             state="review",
@@ -1439,7 +1882,13 @@ async def test_databricks_router_deployment_sends_its_own_key_to_its_own_base(
 
 
 _PROVIDERS_WHOSE_CHAT_MODELS_ALSO_DECIDE: Final = frozenset(
-    {LlmProviders.OPENAI.value, LlmProviders.OPENROUTER.value, LlmProviders.HOSTED_VLLM.value}
+    {
+        LlmProviders.OPENAI.value,
+        LlmProviders.AZURE.value,
+        LlmProviders.OPENROUTER.value,
+        LlmProviders.HOSTED_VLLM.value,
+        LlmProviders.LITELLM_PROXY.value,
+    }
 )
 _DEDICATED_DECIDER_PROVIDERS: Final[tuple[str, ...]] = tuple(
     sorted(
@@ -1452,14 +1901,16 @@ _DEDICATED_DECIDER_PROVIDERS: Final[tuple[str, ...]] = tuple(
 
 
 @pytest.mark.parametrize("provider", _DEDICATED_DECIDER_PROVIDERS)
-def test_every_dedicated_decider_provider_ships_an_evaluation_mode_cost_map_entry(provider: str) -> None:
+def test_every_dedicated_decider_provider_ships_a_decisions_mode_cost_map_entry(provider: str) -> None:
     evaluation_entries: Final = tuple(
         name
         for name, info in litellm.model_cost.items()
-        if isinstance(info, Mapping) and info.get("litellm_provider") == provider and info.get("mode") == "evaluation"
+        if isinstance(info, Mapping)
+        and info.get("litellm_provider") == provider
+        and info.get("mode") in ("evaluation", "decisions")
     )
 
-    assert evaluation_entries, f"a {provider} decider would be health-checked as chat without a mode: evaluation entry"
+    assert evaluation_entries, f"a {provider} decider would be health-checked as chat without a Decisions mode entry"
 
 
 @pytest.mark.asyncio
@@ -2327,6 +2778,127 @@ async def test_dropping_the_only_malformed_input_images_is_rejected_before_http(
     assert not route.called
 
 
+_ORDER_EVIDENCE: Final[Mapping[str, object]] = MappingProxyType(
+    {"ticket": {"body": "Please refund the duplicate charge.", "attachment": None}, "order": {"charges": [49, 49]}}
+)
+_EVIDENCE_INSTRUCTION: Final[Mapping[str, object]] = MappingProxyType(
+    {"type": "input_text", "text": "Evaluate the ticket using the order evidence."}
+)
+
+
+def _evidence_message(data: object) -> Mapping[str, object]:
+    return {
+        "type": "message",
+        "role": "user",
+        "content": [dict(_EVIDENCE_INSTRUCTION), {"type": "input_json", "data": data}],
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("openai_default_base")
+@pytest.mark.parametrize(
+    "data",
+    (dict(_ORDER_EVIDENCE), [dict(_ORDER_EVIDENCE), {"refund": None}]),
+    ids=("object", "array_of_objects"),
+)
+async def test_openai_receives_input_json_parts_as_sent(data: object, respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(_OPENAI_DECISIONS_URL).respond(json=_OPENAI_PREDICATE_RESPONSE)
+
+    await litellm.adecisions(
+        model="openai/gpt-6-luna",
+        api_key="caller-key",
+        input=[_evidence_message(data)],
+        questions=_PREDICATE_QUESTIONS,
+    )
+
+    assert json.loads(route.calls[0].request.content)["input"] == [_evidence_message(data)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("openai_default_base")
+@pytest.mark.parametrize("data", ("ticket 7", [1, 2]), ids=("string_data", "scalar_array_data"))
+async def test_input_json_shapes_openai_refuses_are_refused_before_http(
+    data: object, respx_mock: respx.MockRouter
+) -> None:
+    route: Final = respx_mock.post(_OPENAI_DECISIONS_URL).respond(json=_OPENAI_PREDICATE_RESPONSE)
+
+    with pytest.raises(litellm.BadRequestError, match="Invalid Decisions request"):
+        await litellm.adecisions(
+            model="openai/gpt-6-luna",
+            api_key="caller-key",
+            input=[_evidence_message(data)],
+            questions=_PREDICATE_QUESTIONS,
+            drop_params=True,
+        )
+
+    assert not route.called
+
+
+@pytest.mark.asyncio
+async def test_input_json_is_refused_by_a_provider_without_it(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = respx_mock.post(_PERPLEXITY_DECISIONS_URL).respond(json=_RESPONSE)
+
+    with pytest.raises(litellm.UnsupportedParamsError, match=r"\['input_json'\].*drop_params"):
+        await litellm.adecisions(
+            model="perplexity/pplx-decider-v1-27b",
+            api_key="caller-key",
+            input=[_evidence_message(dict(_ORDER_EVIDENCE))],
+            questions=_PREDICATE_QUESTIONS,
+        )
+
+    assert not route.called
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "url", "upstream_model"),
+    (
+        ("perplexity/pplx-decider-v1-27b", _PERPLEXITY_DECISIONS_URL, "pplx-decider-v1-27b"),
+        ("typesafe/jev-1.13", "https://api.typesafe.ai/v1/systemone", "jev-1.13"),
+    ),
+    ids=("perplexity", "typesafe"),
+)
+async def test_drop_params_drops_input_json_for_a_provider_without_it(
+    model: str, url: str, upstream_model: str, respx_mock: respx.MockRouter
+) -> None:
+    route: Final = respx_mock.post(url).respond(json=_RESPONSE)
+
+    await litellm.adecisions(
+        model=model,
+        api_key="caller-key",
+        input=[_evidence_message(dict(_ORDER_EVIDENCE)), {"role": "user", "content": _SCREEN_TEXT}],
+        questions=_PREDICATE_QUESTIONS,
+        drop_params=True,
+    )
+
+    assert json.loads(route.calls[0].request.content) == {
+        "model": upstream_model,
+        "state": f"{_EVIDENCE_INSTRUCTION['text']}\n\n{_SCREEN_TEXT}",
+        "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+    }
+
+
+@pytest.mark.asyncio
+async def test_drop_params_refuses_input_with_only_input_json_for_a_provider_without_it(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post(_PERPLEXITY_DECISIONS_URL).respond(json=_RESPONSE)
+
+    with pytest.raises(litellm.BadRequestError, match="leaves no input to decide on"):
+        await litellm.adecisions(
+            model="perplexity/pplx-decider-v1-27b",
+            api_key="caller-key",
+            input=[{"role": "user", "content": [{"type": "input_json", "data": dict(_ORDER_EVIDENCE)}]}],
+            questions=_PREDICATE_QUESTIONS,
+            drop_params=True,
+        )
+
+    assert not route.called
+
+
 _MIB: Final = 1024 * 1024
 
 
@@ -2679,6 +3251,269 @@ async def test_azure_ai_decision_requires_api_base_before_http(
         )
 
     assert len(respx_mock.calls) == 0
+
+
+def _clear_azure_ai_auth_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("AZURE_AI_API_KEY", raising=False)
+    monkeypatch.delenv("AZURE_AD_TOKEN", raising=False)
+    monkeypatch.delenv("AZURE_TENANT_ID", raising=False)
+    monkeypatch.delenv("AZURE_CLIENT_ID", raising=False)
+    monkeypatch.delenv("AZURE_CLIENT_SECRET", raising=False)
+    monkeypatch.delenv("AZURE_USERNAME", raising=False)
+    monkeypatch.delenv("AZURE_PASSWORD", raising=False)
+    monkeypatch.delenv("AZURE_AI_API_BASE", raising=False)
+    monkeypatch.setattr(litellm, "enable_azure_ad_token_refresh", False)
+
+
+def test_azure_ai_systemone_uses_entra_token_without_api_key(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    _clear_azure_ai_auth_environment(monkeypatch)
+    route: Final = respx_mock.post("https://res.services.ai.azure.com/providers/microsoft/v1/systemone").respond(
+        json={**_RESPONSE, "model": "microsoft-decision-1"}
+    )
+
+    litellm.systemone(
+        model="azure_ai/decision-1",
+        state="review",
+        questions={"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+        api_base="https://res.services.ai.azure.com",
+        azure_ad_token="entra-access-token",
+    )
+
+    assert route.called
+    assert route.calls[0].request.headers["authorization"] == "Bearer entra-access-token"
+
+
+@pytest.mark.asyncio
+async def test_azure_ai_decisions_use_entra_token_without_api_key(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    _clear_azure_ai_auth_environment(monkeypatch)
+    route: Final = respx_mock.post("https://res.services.ai.azure.com/providers/microsoft/v1/systemone").respond(
+        json={**_RESPONSE, "model": "microsoft-decision-1"}
+    )
+
+    await litellm.adecisions(
+        model="azure_ai/decision-1",
+        input="review",
+        questions=_PREDICATE_QUESTIONS,
+        api_base="https://res.services.ai.azure.com",
+        azure_ad_token="entra-access-token",
+    )
+
+    assert route.called
+    assert route.calls[0].request.headers["authorization"] == "Bearer entra-access-token"
+
+
+def test_azure_ai_systemone_environment_api_key_wins_over_deployment_entra(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    _clear_azure_ai_auth_environment(monkeypatch)
+    monkeypatch.setenv("AZURE_AI_API_KEY", "env-key")
+    route: Final = respx_mock.post("https://res.services.ai.azure.com/providers/microsoft/v1/systemone").respond(
+        json={**_RESPONSE, "model": "microsoft-decision-1"}
+    )
+
+    litellm.systemone(
+        model="azure_ai/decision-1",
+        state="review",
+        questions={"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+        api_base="https://res.services.ai.azure.com",
+        azure_ad_token="entra-access-token",
+    )
+
+    assert route.called
+    assert route.calls[0].request.headers["authorization"] == "Bearer env-key"
+
+
+@pytest.mark.asyncio
+async def test_azure_ai_decisions_environment_api_key_wins_over_deployment_entra(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    _clear_azure_ai_auth_environment(monkeypatch)
+    monkeypatch.setenv("AZURE_AI_API_KEY", "env-key")
+    route: Final = respx_mock.post("https://res.services.ai.azure.com/providers/microsoft/v1/systemone").respond(
+        json={**_RESPONSE, "model": "microsoft-decision-1"}
+    )
+
+    await litellm.adecisions(
+        model="azure_ai/decision-1",
+        input="review",
+        questions=_PREDICATE_QUESTIONS,
+        api_base="https://res.services.ai.azure.com",
+        azure_ad_token="entra-access-token",
+    )
+
+    assert route.called
+    assert route.calls[0].request.headers["authorization"] == "Bearer env-key"
+
+
+def test_azure_ai_decisions_uses_environment_api_key_without_entra_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    _clear_azure_ai_auth_environment(monkeypatch)
+    monkeypatch.setenv("AZURE_AI_API_KEY", "env-key")
+    route: Final = respx_mock.post("https://res.services.ai.azure.com/providers/microsoft/v1/systemone").respond(
+        json={**_RESPONSE, "model": "microsoft-decision-1"}
+    )
+
+    litellm.decisions(
+        model="azure_ai/decision-1",
+        input="review",
+        questions=_PREDICATE_QUESTIONS,
+        api_base="https://res.services.ai.azure.com",
+    )
+
+    assert route.called
+    assert route.calls[0].request.headers["authorization"] == "Bearer env-key"
+
+
+def test_azure_ai_decisions_explicit_api_key_precedes_entra_and_environment(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    _clear_azure_ai_auth_environment(monkeypatch)
+    monkeypatch.setenv("AZURE_AI_API_KEY", "env-key")
+    route: Final = respx_mock.post("https://res.services.ai.azure.com/providers/microsoft/v1/systemone").respond(
+        json={**_RESPONSE, "model": "microsoft-decision-1"}
+    )
+
+    litellm.decisions(
+        model="azure_ai/decision-1",
+        input="review",
+        questions=_PREDICATE_QUESTIONS,
+        api_base="https://res.services.ai.azure.com",
+        api_key="call-key",
+        azure_ad_token="entra-access-token",
+    )
+
+    assert route.called
+    assert route.calls[0].request.headers["authorization"] == "Bearer call-key"
+
+
+def test_azure_ai_decisions_does_not_validate_noncredential_params_as_auth(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    _clear_azure_ai_auth_environment(monkeypatch)
+    route: Final = respx_mock.post("https://res.services.ai.azure.com/providers/microsoft/v1/systemone").respond(
+        json={**_RESPONSE, "model": "microsoft-decision-1"}
+    )
+
+    litellm.decisions(
+        model="azure_ai/decision-1",
+        input="review",
+        questions=_PREDICATE_QUESTIONS,
+        api_base="https://res.services.ai.azure.com",
+        azure_ad_token="entra-access-token",
+        max_retries="three",
+    )
+
+    assert route.called
+    assert route.calls[0].request.headers["authorization"] == "Bearer entra-access-token"
+
+
+def test_azure_ai_decisions_malformed_credential_is_a_sanitized_bad_request(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    _clear_azure_ai_auth_environment(monkeypatch)
+    route: Final = respx_mock.post("https://res.services.ai.azure.com/providers/microsoft/v1/systemone").respond(
+        json={**_RESPONSE, "model": "microsoft-decision-1"}
+    )
+
+    with pytest.raises(litellm.BadRequestError) as caught:
+        litellm.decisions(
+            model="azure_ai/decision-1",
+            input="review",
+            questions=_PREDICATE_QUESTIONS,
+            api_base="https://res.services.ai.azure.com",
+            tenant_id="tenant-id",
+            client_id="client-id",
+            client_secret=123,
+        )
+
+    assert caught.value.status_code == 400
+    assert "`client_secret`" in str(caught.value)
+    assert "123" not in str(caught.value)
+    assert not route.called
+
+
+def test_azure_ai_decisions_prefer_api_key_when_both_are_set(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    _clear_azure_ai_auth_environment(monkeypatch)
+    route: Final = respx_mock.post("https://res.services.ai.azure.com/providers/microsoft/v1/systemone").respond(
+        json={**_RESPONSE, "model": "microsoft-decision-1"}
+    )
+
+    litellm.decisions(
+        model="azure_ai/decision-1",
+        input="review",
+        questions=_PREDICATE_QUESTIONS,
+        api_base="https://res.services.ai.azure.com",
+        api_key="foundry-key",
+        azure_ad_token="entra-access-token",
+    )
+
+    assert route.called
+    assert route.calls[0].request.headers["authorization"] == "Bearer foundry-key"
+
+
+def test_azure_ai_decisions_without_credentials_raise_authentication_error(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    _clear_azure_ai_auth_environment(monkeypatch)
+    with pytest.raises(ValueError, match="Missing Azure AI credentials") as helper_error:
+        get_azure_ai_auth_headers(None, {})
+    route: Final = respx_mock.post("https://res.services.ai.azure.com/providers/microsoft/v1/systemone").respond(
+        json={**_RESPONSE, "model": "microsoft-decision-1"}
+    )
+
+    with pytest.raises(litellm.AuthenticationError) as caught:
+        litellm.decisions(
+            model="azure_ai/decision-1",
+            input="review",
+            questions=_PREDICATE_QUESTIONS,
+            api_base="https://res.services.ai.azure.com",
+        )
+
+    assert caught.value.status_code == 401
+    assert str(helper_error.value) in str(caught.value)
+    assert not route.called
+
+
+@pytest.mark.asyncio
+async def test_azure_ai_systemone_without_credentials_raises_authentication_error(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    _clear_azure_ai_auth_environment(monkeypatch)
+    with pytest.raises(ValueError, match="Missing Azure AI credentials") as helper_error:
+        get_azure_ai_auth_headers(None, {})
+    route: Final = respx_mock.post("https://res.services.ai.azure.com/providers/microsoft/v1/systemone").respond(
+        json={**_RESPONSE, "model": "microsoft-decision-1"}
+    )
+
+    with pytest.raises(litellm.AuthenticationError) as caught:
+        await litellm.asystemone(
+            model="azure_ai/decision-1",
+            state="review",
+            questions={"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+            api_base="https://res.services.ai.azure.com",
+        )
+
+    assert caught.value.status_code == 401
+    assert str(helper_error.value) in str(caught.value)
+    assert not route.called
 
 
 _CLEF_OMNI_UPSTREAM: Final = "https://example.com/ai/run/@cf/cloudflare/clef-omni"
@@ -3345,3 +4180,362 @@ def test_dropping_every_question_answers_400_before_http(respx_mock: respx.MockR
 
     assert caught.value.status_code == 400
     assert not route.called
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.parametrize(
+    "usage", [None, {"input_tokens": 0, "output_tokens": 0}, {"input_tokens": 12, "output_tokens": 1}]
+)
+async def test_native_decisions_distinguishes_missing_usage_from_reported_zero(
+    is_async: bool, usage: dict[str, int] | None, respx_mock: respx.MockRouter
+) -> None:
+    body: Final = {
+        **{key: value for key, value in _RESPONSE.items() if key != "usage"},
+        "model": "jev-1.13.0",
+        **({"usage": usage} if usage is not None else {}),
+    }
+    respx_mock.post("https://api.typesafe.ai/v1/systemone").respond(json=body)
+    params: Final = {
+        "model": "typesafe/jev-1.13.0",
+        "state": "review",
+        "questions": _QUESTIONS,
+        "api_key": "synthetic-key",
+    }
+    response: Final = await litellm.adecisions(**params) if is_async else litellm.decisions(**params)
+
+    assert isinstance(response, DecisionsResponse)
+    if usage is None:
+        assert response.usage is None
+        assert response._hidden_params.get("response_cost") is None
+        with pytest.raises(ValueError, match="provider did not report usage"):
+            litellm.completion_cost(completion_response=response)
+    else:
+        assert response.usage is not None
+        assert response.usage.input_tokens == usage["input_tokens"]
+        assert response.usage.output_tokens == usage["output_tokens"]
+        expected: Final = litellm.completion_cost(completion_response=response)
+        assert response._hidden_params["response_cost"] == pytest.approx(expected)
+        assert (expected == 0) == (usage["input_tokens"] == usage["output_tokens"] == 0)
+
+
+@pytest.mark.asyncio
+async def test_vercel_ai_gateway_decisions_send_the_gateway_key_to_the_gateway_and_price_the_call(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.delenv("VERCEL_AI_GATEWAY_API_BASE", raising=False)
+    monkeypatch.setenv("VERCEL_AI_GATEWAY_API_KEY", "gateway-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "unrelated-openai-key")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://openai.example")
+    route: Final = respx_mock.post("https://ai-gateway.vercel.sh/v1/decisions").respond(
+        json={
+            "model": "openai/gpt-6-luna-decisions",
+            "answers": [{"type": "predicate", "name": "is_defect", "probability": 0.9}],
+            "usage": {"input_tokens": _INPUT_TOKENS, "output_tokens": 0, "total_tokens": _INPUT_TOKENS},
+        }
+    )
+
+    response: Final = await litellm.adecisions(
+        model="vercel_ai_gateway/openai/gpt-6-luna-decisions",
+        input="The package arrived broken.",
+        questions=[{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+    )
+
+    assert route.calls.last.request.headers["authorization"] == "Bearer gateway-key"
+    assert json.loads(route.calls.last.request.content) == {
+        "model": "openai/gpt-6-luna-decisions",
+        "input": "The package arrived broken.",
+        "questions": [{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+    }
+    assert response.answers[0].probability == 0.9
+    input_rate: Final = litellm.model_cost["vercel_ai_gateway/openai/gpt-6-luna-decisions"]["input_cost_per_token"]
+    assert input_rate > 0
+    assert litellm.completion_cost(completion_response=response) == pytest.approx(_INPUT_TOKENS * input_rate)
+
+
+@pytest.mark.asyncio
+async def test_vercel_ai_gateway_decisions_never_fall_back_to_the_openai_key(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.delenv("VERCEL_AI_GATEWAY_API_KEY", raising=False)
+    monkeypatch.delenv("VERCEL_OIDC_TOKEN", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "unrelated-openai-key")
+
+    with pytest.raises(litellm.AuthenticationError):
+        await litellm.adecisions(
+            model="vercel_ai_gateway/openai/gpt-6-luna-decisions",
+            input="review",
+            questions=[{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+        )
+
+    assert len(respx_mock.calls) == 0
+
+
+_VERCEL_DECISIONS_URL: Final = "https://ai-gateway.vercel.sh/v1/decisions"
+
+
+def _gateway_routing(*attempts: tuple[str, bool]) -> Mapping[str, object]:
+    return {
+        "modelAttempts": [
+            {
+                "providerAttempts": [
+                    {"provider": "openai", "credentialType": credential_type, "success": success}
+                    for credential_type, success in attempts
+                ]
+            }
+        ]
+    }
+
+
+def _vercel_response(model: str, provider_metadata: Mapping[str, object]) -> Mapping[str, object]:
+    return {
+        "model": model,
+        "answers": [{"type": "predicate", "name": "is_defect", "probability": 0.9}],
+        "usage": {"input_tokens": _INPUT_TOKENS, "output_tokens": 0, "total_tokens": _INPUT_TOKENS},
+        "provider_metadata": provider_metadata,
+    }
+
+
+@pytest.fixture
+def vercel_gateway_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("VERCEL_AI_GATEWAY_API_BASE", raising=False)
+    monkeypatch.setenv("VERCEL_AI_GATEWAY_API_KEY", "gateway-key")
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("vercel_gateway_key")
+async def test_vercel_ai_gateway_decisions_refuse_input_json_without_drop_params(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = respx_mock.post(_VERCEL_DECISIONS_URL).respond(
+        json=_vercel_response("openai/gpt-6-luna-decisions", {})
+    )
+
+    with pytest.raises(litellm.UnsupportedParamsError, match="input_json"):
+        await litellm.adecisions(
+            model="vercel_ai_gateway/openai/gpt-6-luna-decisions",
+            input=[_evidence_message(dict(_ORDER_EVIDENCE))],
+            questions=_PREDICATE_QUESTIONS,
+        )
+
+    assert not route.called
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("vercel_gateway_key")
+@pytest.mark.parametrize(
+    ("model", "gateway", "billed"),
+    (
+        ("example/unpriced-decider", {"cost": "0.000001386"}, 1.386e-06),
+        ("openai/gpt-6-luna-decisions", {"cost": "0.00005722"}, 5.722e-05),
+        (
+            "openai/gpt-6-luna-decisions",
+            {"cost": "0", "marketCost": "0.0000164", "routing": _gateway_routing(("byok", True))},
+            1.64e-05,
+        ),
+        (
+            "openai/gpt-6-luna-decisions",
+            {
+                "cost": "0.0000164",
+                "marketCost": "0.0000164",
+                "routing": _gateway_routing(("byok", False), ("system", True)),
+            },
+            1.64e-05,
+        ),
+    ),
+    ids=("unpriced_model", "cache_hit_on_priced_model", "own_provider_key", "own_key_failed_over_to_gateway_credits"),
+)
+async def test_vercel_ai_gateway_decisions_bill_the_charge_the_gateway_reports(
+    model: str, gateway: Mapping[str, object], billed: float, respx_mock: respx.MockRouter
+) -> None:
+    respx_mock.post(_VERCEL_DECISIONS_URL).respond(json=_vercel_response(model, {"gateway": gateway}))
+
+    response: Final = await litellm.adecisions(
+        model=f"vercel_ai_gateway/{model}",
+        input="The package arrived broken.",
+        questions=_PREDICATE_QUESTIONS,
+    )
+
+    assert response.answers[0].probability == 0.9
+    assert get_response_cost_from_hidden_params(response.hidden_params) == pytest.approx(billed)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("vercel_gateway_key")
+async def test_vercel_ai_gateway_decisions_price_an_unreadable_charge_from_the_cost_map(
+    respx_mock: respx.MockRouter,
+) -> None:
+    respx_mock.post(_VERCEL_DECISIONS_URL).respond(
+        json=_vercel_response("openai/gpt-6-luna-decisions", {"gateway": {"cost": "not-a-number"}})
+    )
+
+    response: Final = await litellm.adecisions(
+        model="vercel_ai_gateway/openai/gpt-6-luna-decisions",
+        input="The package arrived broken.",
+        questions=_PREDICATE_QUESTIONS,
+    )
+
+    luna: Final = litellm.model_cost["vercel_ai_gateway/openai/gpt-6-luna-decisions"]
+    assert get_response_cost_from_hidden_params(response.hidden_params) is None
+    assert litellm.completion_cost(completion_response=response) == pytest.approx(
+        _INPUT_TOKENS * float(luna["input_cost_per_token"])
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("vercel_gateway_key")
+@pytest.mark.parametrize("model", ("typesafe-ai/jev", "typesafe-ai/jev-1.13.0", "typesafe-ai/jev-1.14.0"))
+async def test_vercel_ai_gateway_jev_decisions_send_images(model: str, respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(_VERCEL_DECISIONS_URL).respond(json=_vercel_response(model, {}))
+
+    await litellm.adecisions(
+        model=f"vercel_ai_gateway/{model}", input=_screen_messages(_PNG_DATA_URL), questions=_PREDICATE_QUESTIONS
+    )
+
+    assert json.loads(route.calls.last.request.content)["input"][0]["content"] == [
+        {"type": "input_text", "text": _SCREEN_TEXT},
+        {"type": "input_image", "image_url": _PNG_DATA_URL, "detail": "high"},
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("vercel_gateway_key")
+async def test_vercel_ai_gateway_decisions_inline_remote_images(
+    respx_mock: respx.MockRouter, async_only_image_fetch: AsyncOnlyImageFetch
+) -> None:
+    route: Final = respx_mock.post(_VERCEL_DECISIONS_URL).respond(
+        json=_vercel_response("openai/gpt-6-luna-decisions", {})
+    )
+
+    await litellm.adecisions(
+        model="vercel_ai_gateway/openai/gpt-6-luna-decisions",
+        input=_screen_messages(_REMOTE_IMAGE_URL),
+        questions=_PREDICATE_QUESTIONS,
+    )
+
+    assert async_only_image_fetch.fetched == [_REMOTE_IMAGE_URL]
+    sent_image: Final = json.loads(route.calls.last.request.content)["input"][0]["content"][1]
+    assert sent_image["image_url"] == async_only_image_fetch.data_url
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("vercel_gateway_key")
+async def test_vercel_ai_gateway_decisions_never_send_caller_provider_options(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(_VERCEL_DECISIONS_URL).respond(
+        json=_vercel_response("openai/gpt-6-luna-decisions", {})
+    )
+
+    await litellm.adecisions(
+        model="vercel_ai_gateway/openai/gpt-6-luna-decisions",
+        input="The package arrived broken.",
+        questions=_PREDICATE_QUESTIONS,
+        providerOptions={"gateway": {"models": ["openai/gpt-6"], "byok": {"openai": [{"apiKey": "caller-openai-key"}]}}},
+    )
+
+    assert "providerOptions" not in json.loads(route.calls.last.request.content)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", ("typesafe-ai/jev", "typesafe-ai/jev-1.14.0"))
+async def test_vercel_ai_gateway_jev_sends_box_questions(
+    model: str, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.delenv("VERCEL_AI_GATEWAY_API_BASE", raising=False)
+    monkeypatch.setenv("VERCEL_AI_GATEWAY_API_KEY", "gateway-key")
+    box_question: Final = {"type": "box", "name": "crack", "instructions": "the crack on the screen"}
+    route: Final = respx_mock.post("https://ai-gateway.vercel.sh/v1/decisions").respond(
+        json={
+            "model": model,
+            "answers": [
+                {
+                    "type": "box",
+                    "name": "crack",
+                    "box": {"top": 0.1, "bottom": 0.9, "left": 0.1, "right": 0.9},
+                    "confidence": 0.8,
+                }
+            ],
+            "usage": {"input_tokens": _INPUT_TOKENS, "output_tokens": 0, "total_tokens": _INPUT_TOKENS},
+        }
+    )
+
+    response: Final = await litellm.adecisions(
+        model=f"vercel_ai_gateway/{model}", input="The screen arrived cracked.", questions=[box_question]
+    )
+
+    assert json.loads(route.calls.last.request.content)["questions"] == [box_question]
+    assert response.answers[0].confidence == 0.8
+
+
+_UPSTREAM_SPLIT: Final[Mapping[str, int]] = {"cached_tokens": _INPUT_TOKENS - 20, "cache_write_tokens": 20}
+_TOP_LEVEL_SPLIT: Final[Mapping[str, int]] = {"cached_tokens": 300, "cache_write_tokens": 7}
+
+
+def _upstream_usage(input_tokens: int, details: Mapping[str, int] | None) -> Mapping[str, object]:
+    return {
+        "usage": {
+            "input_tokens": input_tokens,
+            **({} if details is None else {"input_tokens_details": details}),
+            "output_tokens": 0,
+            "total_tokens": input_tokens,
+        }
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("vercel_gateway_key")
+@pytest.mark.parametrize(
+    ("top_level_split", "served_by", "upstream", "expected_split"),
+    (
+        (None, "openai", _upstream_usage(_INPUT_TOKENS, _UPSTREAM_SPLIT), _UPSTREAM_SPLIT),
+        (None, "openai", _upstream_usage(_INPUT_TOKENS + 1, _UPSTREAM_SPLIT), {"cached_tokens": 0, "cache_write_tokens": 0}),
+        (_TOP_LEVEL_SPLIT, "openai", _upstream_usage(_INPUT_TOKENS, None), _TOP_LEVEL_SPLIT),
+        (None, "anthropic", _upstream_usage(_INPUT_TOKENS, _UPSTREAM_SPLIT), {"cached_tokens": 0, "cache_write_tokens": 0}),
+    ),
+    ids=(
+        "serving_provider_reports_this_call",
+        "upstream_count_disagrees",
+        "upstream_omits_the_split",
+        "report_from_a_provider_that_did_not_serve",
+    ),
+)
+async def test_vercel_ai_gateway_decisions_report_the_upstream_cache_split(
+    top_level_split: Mapping[str, int] | None,
+    served_by: str,
+    upstream: Mapping[str, object],
+    expected_split: Mapping[str, int],
+    respx_mock: respx.MockRouter,
+) -> None:
+    respx_mock.post(_VERCEL_DECISIONS_URL).respond(
+        json={
+            "model": "openai/gpt-6-luna-decisions",
+            "answers": [{"type": "predicate", "name": "is_defect", "probability": 0.9}],
+            "usage": {
+                "input_tokens": _INPUT_TOKENS,
+                **({} if top_level_split is None else {"input_tokens_details": top_level_split}),
+                "output_tokens": 0,
+                "total_tokens": _INPUT_TOKENS,
+            },
+            "provider_metadata": {
+                "openai": upstream,
+                "gateway": {
+                    "cost": "0.00005722",
+                    "routing": {
+                        "modelAttempts": [
+                            {"providerAttempts": [{"provider": served_by, "credentialType": "system", "success": True}]}
+                        ]
+                    },
+                },
+            },
+        }
+    )
+
+    response: Final = await litellm.adecisions(
+        model="vercel_ai_gateway/openai/gpt-6-luna-decisions",
+        input="The package arrived broken.",
+        questions=_PREDICATE_QUESTIONS,
+    )
+
+    assert response.usage.input_tokens_details.cached_tokens == expected_split["cached_tokens"]
+    assert response.usage.input_tokens_details.cache_write_tokens == expected_split["cache_write_tokens"]
+    assert get_response_cost_from_hidden_params(response.hidden_params) == pytest.approx(5.722e-05)

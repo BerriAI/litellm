@@ -18,7 +18,10 @@ use crate::{
         common_utils::{existing_betas, merge_beta_headers},
         messages::{
             handler::shape_anthropic_messages_request,
-            transformation::{provider_feature_betas, transform_messages_request},
+            transformation::{
+                drop_sampling_params_removed_by_requested_version, provider_feature_betas,
+                transform_messages_request,
+            },
         },
     },
     base_llm::{
@@ -175,6 +178,16 @@ impl BaseMessagesConfig for BedrockMantleAnthropicMessagesConfig {
 
     fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
         DEFAULT_HEADERS
+    }
+
+    fn request_body(
+        &self,
+        request: MessagesRequest,
+        _url: &str,
+        headers: &Headers,
+        drop_params: bool,
+    ) -> Result<MessagesRequest, Error> {
+        drop_sampling_params_removed_by_requested_version(request, headers, drop_params)
     }
 
     fn request_headers(&self, headers: Headers, request: &MessagesRequest) -> Headers {
