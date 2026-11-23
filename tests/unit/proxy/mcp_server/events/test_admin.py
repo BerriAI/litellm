@@ -179,3 +179,11 @@ def test_keys_limited_to_mcp_routes_reach_the_event_subscription_endpoints() -> 
 
     for route in ("/v1/mcp/events/types", "/v1/mcp/events/subscriptions", "/v1/mcp/events/subscriptions/sub_1/test"):
         assert RouteChecks.check_route_access(route=route, allowed_routes=LiteLLMRoutes.mcp_routes.value)
+
+
+@pytest.mark.asyncio
+async def test_admin_catalog_removes_webhook_mode_when_there_is_no_public_origin() -> None:
+    async with _client(ALICE, None, Callback()) as client:
+        response = await client.get("/events/types", params={"server_id": "srv-ci"})
+    assert response.status_code == 200
+    assert response.json()[0]["delivery"] == ["poll", "push"]
