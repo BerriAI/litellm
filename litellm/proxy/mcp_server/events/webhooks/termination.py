@@ -46,7 +46,7 @@ async def end_upstream(
             {
                 "name": row.event_name,
                 "arguments": dict(row.arguments),
-                "delivery": {"url": callback_url(settings, row.id)},
+                "delivery": {"url": callback_url(settings, row.id, row.upstream_secret)},
             },
             routing_headers(row.event_name, row.arguments, descriptor),
         )

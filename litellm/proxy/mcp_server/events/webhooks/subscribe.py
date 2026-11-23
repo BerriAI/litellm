@@ -179,7 +179,12 @@ async def _roll_back(
 ) -> None:
     """Undo an upstream subscription this request created but could not record."""
     current: Final = await subscription.request.store.get(subscription.base.id)
-    if current is not None and current.generation != subscription.base.generation and current.status != "terminated":
+    if (
+        current is not None
+        and current.upstream_secret == subscription.base.upstream_secret
+        and current.generation != subscription.base.generation
+        and current.status != "terminated"
+    ):
         return
     orphan: Final = subscription.base.model_copy(update={"upstream_subscription_id": upstream.id})
     await _unsubscribe_upstream(orphan, subscription.prepared, settings, runtime)
@@ -335,7 +340,7 @@ async def _unsubscribe_upstream(
             {
                 "name": row.event_name,
                 "arguments": dict(row.arguments),
-                "delivery": {"url": callback_url(settings, row.id)},
+                "delivery": {"url": callback_url(settings, row.id, row.upstream_secret)},
             },
             routing_headers(row.event_name, row.arguments, prepared.descriptor),
         )
