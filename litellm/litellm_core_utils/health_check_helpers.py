@@ -11,6 +11,9 @@ from typing import TYPE_CHECKING, Final, Literal
 
 from pydantic import TypeAdapter
 
+from litellm._uuid import uuid
+from litellm.constants import SESSION_ID_GENERATED_METADATA_KEY
+from litellm.litellm_core_utils.provider_affinity import get_stable_session_id
 from litellm.llms.base_llm.ocr.transformation import DocumentType
 from litellm.rust_bridge import runtime
 from litellm.rust_bridge.ocr.entrypoints import NATIVE_OCR_HEALTH_CHECK_DOCUMENT
@@ -36,6 +39,36 @@ BEDROCK_ANY_MODEL_ROUTES: Final = frozenset({"converse", "invoke"})
 EXTRACTION_HEALTH_CHECK_FIELDS: Final[Mapping[str, Mapping[str, str]]] = MappingProxyType(
     {"reachable": MappingProxyType({"type": "text", "instructions": "Any word from the text"})}
 )
+
+
+_STRING_OBJECT_MAP: Final = TypeAdapter(dict[str, object])
+
+
+def _metadata_without_generated_session(metadata: Mapping[str, object]) -> Mapping[str, object]:
+    return {key: value for key, value in metadata.items() if key != SESSION_ID_GENERATED_METADATA_KEY}
+
+
+def _optional_unmarked_metadata(raw_metadata: object) -> Mapping[str, object] | None:
+    if not isinstance(raw_metadata, Mapping):
+        return None
+    return _metadata_without_generated_session(_STRING_OBJECT_MAP.validate_python(raw_metadata))
+
+
+def _cleared_generated_session_marks(model_params: Mapping[str, object]) -> Mapping[str, Mapping[str, object]]:
+    metadata: Final = _optional_unmarked_metadata(model_params.get("metadata"))
+    litellm_metadata: Final = _optional_unmarked_metadata(model_params.get("litellm_metadata"))
+    return {
+        **({"metadata": metadata} if metadata is not None else {}),
+        **({"litellm_metadata": litellm_metadata} if litellm_metadata is not None else {}),
+    }
+
+
+def with_opencode_go_probe_session(model_params: Mapping[str, object]) -> Mapping[str, object]:
+    stable_session_id: Final = get_stable_session_id(model_params)
+    session_id: Final = stable_session_id or str(uuid.uuid4())
+    if stable_session_id is not None:
+        return {**model_params, "litellm_session_id": session_id}
+    return {**model_params, "litellm_session_id": session_id, **_cleared_generated_session_marks(model_params)}
 
 
 def native_health_check_mode(

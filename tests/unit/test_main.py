@@ -124,6 +124,13 @@ WHITE_PNG: Final = (Path(__file__).parents[1] / "white_100x100.png").read_bytes(
         ({}, None),
         ({"session_id": "caller-session"}, "caller-session"),
         ({"litellm_session_id": ""}, None),
+        (
+            {
+                "litellm_session_id": "generated-session",
+                "metadata": {"session_id": "generated-session", "litellm_session_id_generated": True},
+            },
+            None,
+        ),
         ({"metadata": {"session_id": "metadata-session"}}, "metadata-session"),
         ({"litellm_session_id": "litellm-session"}, "litellm-session"),
         ({"extra_headers": {"X-OpenCode-Session": "header-session"}}, "header-session"),
@@ -174,6 +181,57 @@ async def test_opencode_go_health_check_sends_session_header(
     header: Final = route.calls.last.request.headers.get("x-opencode-session")
     assert header
     assert header == (expected or str(UUID(header)))
+    assert header != "generated-session"
+
+
+@pytest.mark.asyncio
+async def test_opencode_go_health_check_rejects_a_session_header_control_character(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    with respx.mock:
+        route: Final = respx.post("https://health-test.example/v1/chat/completions").respond(200)
+        result: Final = await litellm.ahealth_check(
+            model_params={
+                "model": "opencode_go/health-model",
+                "api_base": "https://health-test.example/v1",
+                "api_key": "test-key",
+                "session_id": "bad\nsession",
+            },
+            mode="chat",
+        )
+    assert "session_id cannot contain HTTP header control characters" in str(result.get("error"))
+    assert route.calls == []
+
+
+@pytest.mark.asyncio
+async def test_other_provider_health_check_does_not_send_opencode_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    with respx.mock:
+        route: Final = respx.post("https://health-test.example/v1/chat/completions").respond(
+            200,
+            json={
+                "id": "health-probe",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "health-model",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+        result: Final = await litellm.ahealth_check(
+            model_params={
+                "model": "openai/health-model",
+                "api_base": "https://health-test.example/v1",
+                "api_key": "test-key",
+                "session_id": "caller-session",
+            },
+            mode="chat",
+        )
+    assert "error" not in result, result
+    assert route.calls.last.request.headers.get("x-opencode-session") is None
 
 
 @pytest.mark.asyncio
