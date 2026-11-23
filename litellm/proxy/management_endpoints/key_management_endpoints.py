@@ -184,6 +184,7 @@ from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: 
     validate_key_mcp_servers_against_team,
     validate_key_search_tools_against_team,
     validate_key_vector_stores_against_team,
+    with_stored_key_scope,
 )
 from litellm.proxy.management_helpers.team_member_permission_checks import (
     TeamMemberPermissionChecks,
@@ -1874,6 +1875,7 @@ async def _common_key_generation_helper(
     data_json = await set_object_permission(  # rebind-ok: pre-existing rebinding on a rename-only line
         data_json=data_json,
         prisma_client=prisma_client,
+        is_key=True,
     )
     written_object_permission_id: Final = data_json.get("object_permission_id")
     created_object_permission_id: Final = (
@@ -3018,6 +3020,7 @@ async def _apply_object_permission_update(
         new_object_permission=grants,
         existing_object_permission_id=existing_object_permission_id,
         prisma_client=prisma_client,
+        is_key=True,
     )
     row: Final = await table.upsert(
         where={"object_permission_id": upsert.object_permission_id},
@@ -3376,6 +3379,7 @@ async def _prepare_key_update_object_permission(
         new_object_permission=permission_data,
         existing_object_permission_id=existing_key_row.object_permission_id,
         prisma_client=prisma_client,
+        is_key=True,
     )
 
 
@@ -3769,7 +3773,7 @@ async def _process_single_key_update(
 
     updated_key_info.pop("token", None)
 
-    return updated_key_info
+    return with_stored_key_scope({**updated_key_info})
 
 
 async def _with_validated_object_permission(
@@ -4580,7 +4584,7 @@ async def update_key_fn(
         if response is None:
             raise ValueError("Failed to update key got response = None")
 
-        return {"key": key, **response["data"]}
+        return with_stored_key_scope({"key": key, **response["data"]})
         # update based on remaining passed in values
     except Exception as e:
         verbose_proxy_logger.exception("litellm.proxy.proxy_server.update_key_fn(): Exception occured - %s", e)
