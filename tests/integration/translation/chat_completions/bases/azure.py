@@ -648,6 +648,14 @@ GPT_6_1_SOL_CONTENT_FILTERS: Final[JsonValue] = [
         "source_type": "prompt",
         "content_filter_raw": [],
         "content_filter_results": {
+            "defender_for_ai": {
+                "detected": False,
+                "filtered": False,
+                "details": {
+                    "evaluation": "unavailable",
+                    "evaluationReason": "missing_or_unknown_provider_evaluation_status",
+                },
+            },
             "hate": {"filtered": False, "severity": "safe"},
             "sexual": {"filtered": False, "severity": "safe"},
             "violence": {"filtered": False, "severity": "safe"},
@@ -663,38 +671,46 @@ GPT_6_1_SOL_CONTENT_FILTERS: Final[JsonValue] = [
         "content_filter_results": {
             "protected_material_code": {"detected": False, "filtered": False},
             "protected_material_text": {"detected": False, "filtered": False},
+            "defender_for_ai": {
+                "detected": False,
+                "filtered": False,
+                "details": {
+                    "evaluation": "unavailable",
+                    "evaluationReason": "missing_or_unknown_provider_evaluation_status",
+                },
+            },
             "hate": {"filtered": False, "severity": "safe"},
             "sexual": {"filtered": False, "severity": "safe"},
             "violence": {"filtered": False, "severity": "safe"},
             "self_harm": {"filtered": False, "severity": "safe"},
         },
-        "content_filter_offsets": {"start_offset": 0, "end_offset": 578, "check_offset": 0},
+        "content_filter_offsets": {"start_offset": 0, "end_offset": 524, "check_offset": 0},
     },
 ]
 
 GPT_6_1_SOL_ENCRYPTED_REASONING: Final = (
-    "gAAAAABq0COvgomuqwo0Z3KFAStLOih2JmYOubPtUjtpD1zCRSCXdDnHGkj8asyVemaCsQr8szo_esDZ"
-    "PIT2Y9ghPTx1d5moHnS_lyX4nn3Almf4SYZ1pm8maTgEdntGFzcNtPRwW70-CgpeKe5z8zTwxsxyyKDb"
-    "OYTjt4hjUbAa4pM0K9JR9u5Q_P-LKgfcv3SNCeNSMs5lSV1aBMpuWEGJrlYF020C4wtmru3lH9VjQlOn"
-    "nW8uD1SCcPm7Sp1_Mm16PJBX4j2grbcIOJZDqj7OcjzRMAb2Gw96QfIg1_efR4BDVHzACkDClzPaiWuI"
-    "rAmGMA8bJDtQBPijZN3Hahu8eMoMd-XZDVQPx_7XM3F5OWUiuos_kEZNAhIIQHcLrXvyyf7slWvbT4Af"
-    "c8bvO45t1wOu5E_ALLhWcUCvbfPKBmHrlsRtBEVd_5n0q8jRwR1e5nyjPhMo3YsHvPmwHUJ5Gi1DZycD"
-    "-FDj6NpwlLcV3eeKaD8c-wNnHuXwfzi_KzIwU1phF_QxJ3ofegtM-3HwCqgaxxVFEhtIh3yezUKeqC7R"
-    "fSSHpmI-Q59TRf6-R7h6NFJKMG4Hg6C5twvVloHV2YMUHfBrgWr44X9FTzEwxJ89niDRtaB9Xvo2Qzme"
-    "9LUF-CWuGYTKj5QyRUQFOtclmBL335YTvTDWT8V-eN6KTE33XQNDEPSKuecES6fGHVCuIOeyQkWkvrW8"
-    "O2OrPJAmoW5g9AFWSWbeLWmDTTav6vbTyu0Ef9cvaRHRTOMq6q8VlEQoTQkJNUM8OKguY7Ad-1VSoIFW"
-    "D4_LvhuRsDsQiBu1diEq3hRNhXssBUd5wkFLOXw7UITRHONHhk7TDmVh0yjOwBr_e323vmL2e4BouKoX"
-    "x_0Umeb1jkjFlGgmpW59LmqXd91aXxjioYLxVMOMC7ib7O01_dD-OvWavSxAy9GLnex06mgThS2T5_u4"
-    "MRmpXIVVqdniqvoxx6YwX5F3TwRoIVc511oXyOG0QkKVLD1k0pI9OdFjiWNVH6XuhWPpVnAhqR6KYejn"
-    "hQQwuHA4KV4Nd6wOMFbhPjKPCuRcaN1vbgTbRJlwD8O2OV537hjDq6TQaezFJMk3HPK5bB_-J3kmUCul"
-    "YOXw0jgw-Ze8EmKLDZoCz3jq4NjNA9s0sLGd_Xg0kR6GeOmpLMWtT024yQ7gowGendkcHjIw3S-fIfiI"
-    "zJtZ-Hk9_iMBk8FE5Syb-j0kmzGF2gFj7ywTTdGoMsM3aTOvusVL14D1N_IfMryUdeoNJ41G8SvqGjtH"
-    "gyqCER9grGItYgKueDjt6IC5I086__HogkmrpzLZxSIpFCXX6rArVDsIYdS9XFgLW1oBKsVUs5DLnIYe"
-    "Ncv_cC-oTvEDBaYdhDPYbn_5N6q0q7dtbvohO-XJxOfLh0jC3TelEn7m5EXMPpAygQP2sPtI4_SmhA1C"
-    "Tji-B-6J60kBUiKmp65ZVxx8BDMI9dv3PLxsw4R0zh6fP_Fsok0UKJOQlfC6k47yhDuTcdN_vq7sAc3q"
-    "6P9b7Ud7Bz3JtY8Lg516vLK2vti4iwu7dcHlNiIoNZTGMANKYccO-XSRuJbX09bypgJB9sSR56_-Cb1i"
-    "b1C5RtkTv3ueRvq58Hw1RIINmiTTJn2MiYi_P-yXAirR39YTxcyRNUk4UDgK1lK73lrnpiBELJe-CPQg"
-    "wgLlalzjk8j0CnIMUA=="
+    "gAAAAABrBFQR5hOS2Fgn8rkGVtf_7BPwIaLxG7AXRCgT47PkbNx5GQqluW-js-qYYPTuvTnCaFStTYF_sp0ahwRA6JYJl5koERUUv295GRLYHb"
+    "qbzPvp9X6fR6Hpg4Q3GKXURzx_Dq8v58TKapLqtSJChzvnGHy7WCRfZuxrtqXjJnZ1ygYyyT6XyeKAhjdH3TyXtlI__vMMAWl0LZGH8MFd7USk"
+    "_CYieic0xpOD8J8BeXkhLghQM0XRyjil_caTK6t5hCj8YXi1cdju5Sncbwqfh1DkFRI1uU-6LJNg6accHsCBbooELwM77qNi7K9o5sPo7yKE_q"
+    "kICYMWK9XjUC7N3YGeFTDl6Q-ErGP91mK2PSDViD4jt7GuWJ4No9WtEBVtMAERpRS0ajiFiIpaDizCD7V2v9gVRpsWBZ8_8rjri5nsWV5NDZqy"
+    "G2ttro7iYKWzDZAWVmfxw1K5dXx510Y8s_bTlN3gxrbUiAYgRGPz8EmPjY99ilsEj1jbMV6sI2zRiFkro_WuQLNBQmhRZjpPKQSbp-rb6cUt9U"
+    "6vK54dbX9kV0Yt5N7cwo0D9tdpbFiWX48uBUq1phWEBJiQWfc88bh_3eEOdk38XAAfswOqD_KPn06ec33_5oUHYAwvJd4r_fDYR_z9JW1ogAgK"
+    "qLj0-h1iwwjMHpIe8CvATNpv78B3tTEah1WswooBLHaYyAgo7Vr0hV6jZDHQCgGjOCHh4FHUopH8qz2kZyniiFYP7jixE5zlCTq3DqSnnvX1kf"
+    "727Lt6jV-xxEVT7NrlI_PbsDmFDK-YIq-J1y12eumpDCbKz_y2U-wWnikD9AQXuMu9DApSG68In9OrpFdsId0mfsNu8qnBJ1EhPBaaPCukmik6"
+    "JhVyT5B1NPFCLvDtIJfbgg_q8BuDN0T-D4VetmAT2gG3K3Kva1fxyu6cW2GZ-rIwlod0wPGiEyLMSgk4fd9u-E1GChCL0ZpAIo3b47YLOd2Ydc"
+    "SUKQaAQklPg3Wg-mFlkd_QOJ5UWL2fniktWhvar-M0em2e-QadHKlGGm2RlhLnqgznR_9VnZ3JjXlWIZZ4LmtTe9s523vRMcSI143yoxqqXvKu"
+    "yopZ6E8rJ0LCh3xOpAsSLQbwFQBIZHb7yOdi1jJSZrESyDQEpgBaoy64uDRkWFHEsGvNqCJf69ESHkbwfpbz_xJMg1vzaSTwJ_Z96MqwwwC_Lp"
+    "pxenic__1IFtInFj-hq8VWSBs6bSXjtVNu0tu8hdauvaJL7eJqotSFNcsUaSIpi2QkiWYdHtI_Btq2sxw5HASXzMXE4GBE6v1ZtEU2kInax_7V"
+    "-HvFTRXFSX5Atym-2ZtXqysFqVXt0h_emhN5smnHtnrnw4YTMraiESpOtJB0QCkHocZ4G9WkOwSUMNaMd8hzk1fXUcxYY7RNwdVizz9Qv6y8dM"
+    "_JkHa2ReIa-D4KPMjLBmWuEdsq_mTjhHtYxhYgH_dgP6ZfdswmtftPtSJeADTEfDm7tsG5O9InA59tUDr05ALPxUz9dmJCKBUaHztHbA5bZ3Af"
+    "ttt5tBM7UsZoX-e2d1JcI4uSCetn4gnfACotoCNBvQqD_jPjRhFDEBIyWTN6StpvXb4fQ_Y5242FsuEQAbY7ZUANUaVRvti1byhEW-Ox_qRh6r"
+    "XrrOSmNPzohm0JLXkxZwSoI0b_gW5H5N5qxJkSHZ4GsIUT6LpsJ_8JNYExUHfwW-2PHZlH_qIbjPTdJYuWM2x_S77wNyDhugciRSN8XGdE4O9N"
+    "KurRgsbnlt6v9t1kgJfh9SO3j-BmcoTH5MbYbQMf229A31Thz-5yY8Wif_xoDVA6s_IIzA8bgFSvmHTIhgmWfGAFXQqmL4DU0Np5bjwqDFq0PJ"
+    "bhuwWmN3rWY-k_CmI6aGcQx3tn3cpETh7idbuIYc1rL1uFWHre-dMRWa51_r6dgE7_cmm5ltZ_3mJfbgoVt45YBQWaSKQrROCxD-89j1IvL2LY"
+    "wIhUYBpV2Zn4jDq7Z7wdXn5OCq1l94SBNVernpAuEpErGV6lHKTnuXzs1R1YuI0PS8BXjUaXtm7kEfUaVBBeXwJFEPCpo9He4XUGJH9NFBucDj"
+    "NLdvJD29bpT_Ggue1stbKAiqa3r6kQazx3T7UwPEMLz8dOeF5BHVVunNJemEgU1JTQ0b8QaT6NcbrnEi41Pa3cZCGgAxQ_0pWjkdOWfOWlCjuU"
+    "i-YooGtgZMu3rli27Ly1qWt_aAi3oznad3qowAP7IcMNdJA7SKZHQbwSgXVT0DpRngMB6Kz3FjgRJHZyoj93H74cEXmP3Cmaqq1kSNUqOqveCc"
+    "18snaW4g_q5iFYbbSzIFrf3bDtIdtFuIHFPEzzr84Sj9uVAezmMAZoKJ9T75hqAJhn_hZl"
 )
 
 GPT_6_1_SOL_TEST_CASE: Final = TranslationTestCase(
@@ -703,61 +719,113 @@ GPT_6_1_SOL_TEST_CASE: Final = TranslationTestCase(
     litellm_request={**CHAT_COMPLETIONS_REQUEST, "model": "azure/gpt-6.1-sol"},
     expected_provider_endpoint="/openai/responses?api-version=2025-04-01-preview",
     expected_provider_headers={"content-type": "application/json", "api-key": "synthetic-azure-key"},
-    expected_provider_request={
-        **AZURE_RESPONSES_BRIDGE_REQUEST,
-        "model": "gpt-6.1-sol",
-        "stream": False,
+    expected_provider_request={**AZURE_RESPONSES_BRIDGE_REQUEST, "model": "gpt-6.1-sol", "stream": False},
+    mock_provider_response={
+        **AZURE_RESPONSES_RESPONSE,
+        "id": "resp_01c2d42cd4ede2fb006b04540bf1fc819699733a8c5501bafc",
+        "created_at": 1795445772,
+        "completed_at": 1795445777,
+        "content_filters": GPT_6_1_SOL_CONTENT_FILTERS,
+        "instructions": None,
+        "output": [
+            {
+                "id": "rs_01c2d42cd4ede2fb006b04540defc48196958401e7c836a0d5",
+                "type": "reasoning",
+                "content": [],
+                "encrypted_content": GPT_6_1_SOL_ENCRYPTED_REASONING,
+                "summary": [],
+            },
+            {
+                "id": "msg_01c2d42cd4ede2fb006b0454103c288196869653b273a7770a",
+                "type": "message",
+                "status": "completed",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "annotations": [],
+                        "logprobs": [],
+                        "text": "I’ll read `shop/validation.py` first to check how it handles zero, negative, and "
+                        "non-integer quantities.\n",
+                    }
+                ],
+                "phase": "commentary",
+                "role": "assistant",
+            },
+            {
+                "id": "fc_01c2d42cd4ede2fb006b045410ccf48196afd6e2855f15e013",
+                "type": "function_call",
+                "status": "completed",
+                "arguments": '{"path":"shop/validation.py","start_line":1,"end_line":200}',
+                "call_id": "call_ZkSvg6xufGGYY0Pp0KdfM3Kw",
+                "name": "read_file",
+            },
+        ],
+        "usage": {
+            "input_tokens": 312,
+            "input_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0},
+            "output_tokens": 142,
+            "output_tokens_details": {"reasoning_tokens": 77},
+            "total_tokens": 454,
+        },
     },
-    mock_provider_response={**AZURE_RESPONSES_RESPONSE},
     expected_litellm_response={
         **CHAT_COMPLETIONS_RESPONSE,
-        "id": "resp_03952e888f4f1827006ad023aa00108190b24e51d376e9a373",
         "model": "azure/gpt-6.1-sol",
         "choices": [
             {
                 "finish_reason": "tool_calls",
                 "index": 0,
                 "message": {
-                    "content": (
-                        "I’ll read `shop/validation.py` first to check how it handles zero, negative, and "
-                        "non-integer quantities.\n"
-                    ),
+                    "content": "I’ll read `shop/validation.py` first to check how it handles zero, negative, "
+                    "and non-integer quantities.\n",
                     "role": "assistant",
                     "tool_calls": [
                         {
                             "index": 0,
                             "function": {
-                                "arguments": ('{"path":"shop/validation.py","start_line":1,"end_line":200}'),
+                                "arguments": '{"path":"shop/validation.py","start_line":1,"end_line":200}',
                                 "name": "read_file",
                             },
-                            "id": "call_mWfqifVeCXVWLiiNM1Ac2MjL",
+                            "id": "call_ZkSvg6xufGGYY0Pp0KdfM3Kw",
                             "type": "function",
                         }
                     ],
                     "reasoning_items": [
                         {
                             "type": "reasoning",
-                            "id": "rs_03952e888f4f1827006ad023ae0c048190acdee29b5d20c5b3",
+                            "id": "rs_01c2d42cd4ede2fb006b04540defc48196958401e7c836a0d5",
                             "encrypted_content": GPT_6_1_SOL_ENCRYPTED_REASONING,
                             "summary": [],
                         }
                     ],
-                    "provider_specific_fields": {"phase": "commentary", "openai_responses_replay": ANY},
+                    "provider_specific_fields": {
+                        "phase": "commentary",
+                        "openai_responses_replay": ANY,
+                    },
                 },
             }
         ],
         "usage": {
-            "completion_tokens": 154,
+            "completion_tokens": 142,
             "prompt_tokens": 312,
-            "total_tokens": 466,
-            "completion_tokens_details": {"reasoning_tokens": 89},
+            "total_tokens": 454,
+            "completion_tokens_details": {"reasoning_tokens": 77},
             "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0, "cache_creation_tokens": 0},
         },
         "content_filters": GPT_6_1_SOL_CONTENT_FILTERS,
         "frequency_penalty": 0.0,
         "presence_penalty": 0.0,
         "service_tier": "default",
-        "tool_usage": AZURE_RESPONSES_RESPONSE["tool_usage"],
+        "tool_usage": {
+            "image_gen": {
+                "input_tokens": 0,
+                "input_tokens_details": {"image_tokens": 0, "text_tokens": 0},
+                "output_tokens": 0,
+                "output_tokens_details": {"image_tokens": 0, "text_tokens": 0},
+                "total_tokens": 0,
+            },
+            "web_search": {"num_requests": 0},
+        },
     },
 )
 

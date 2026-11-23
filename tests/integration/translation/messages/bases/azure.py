@@ -434,6 +434,14 @@ GPT_6_1_SOL_CONTENT_FILTERS: Final[JsonValue] = [
         "source_type": "prompt",
         "content_filter_raw": [],
         "content_filter_results": {
+            "defender_for_ai": {
+                "detected": False,
+                "filtered": False,
+                "details": {
+                    "evaluation": "unavailable",
+                    "evaluationReason": "missing_or_unknown_provider_evaluation_status",
+                },
+            },
             "hate": {"filtered": False, "severity": "safe"},
             "sexual": {"filtered": False, "severity": "safe"},
             "violence": {"filtered": False, "severity": "safe"},
@@ -447,34 +455,45 @@ GPT_6_1_SOL_CONTENT_FILTERS: Final[JsonValue] = [
         "source_type": "completion",
         "content_filter_raw": [],
         "content_filter_results": {
-            "protected_material_text": {"detected": False, "filtered": False},
             "protected_material_code": {"detected": False, "filtered": False},
+            "protected_material_text": {"detected": False, "filtered": False},
+            "defender_for_ai": {
+                "detected": False,
+                "filtered": False,
+                "details": {
+                    "evaluation": "unavailable",
+                    "evaluationReason": "missing_or_unknown_provider_evaluation_status",
+                },
+            },
             "hate": {"filtered": False, "severity": "safe"},
             "sexual": {"filtered": False, "severity": "safe"},
             "violence": {"filtered": False, "severity": "safe"},
             "self_harm": {"filtered": False, "severity": "safe"},
         },
-        "content_filter_offsets": {"start_offset": 0, "end_offset": 475, "check_offset": 0},
+        "content_filter_offsets": {"start_offset": 0, "end_offset": 395, "check_offset": 0},
     },
 ]
 
 GPT_6_1_SOL_ENCRYPTED_CONTENT: Final = (
-    "gAAAAABq0CO0QoINZ4oOVkvDvinFAJAMUBmzqqpXLoppdlyP4fFQsNqPOh-L08mQt8yf4OUtOwzk3E6Q7CLHieco0s_tfuYHRlTU"
-    "0Blr62KF_C77RScOjKYa6p4E2fjdwO44Y2HIiGfIo_GnUpkfwW1EiVZmj6L8PO0biPqihvK3KJ-GNKB_R4-lLyKXrrvVN-985glS"
-    "dHg-_fRrmyVGBvVxPFyERlD-WPm8fPujqMmXnUcAv3N-wUoIEccd7PfJGqBs52UzllpH27mNCI71C_qbc2nZ97jZgSabTvAZKF8Q"
-    "9zSJzWA_Gs72iQqd0X55F5vD0-xrMuVdXFTYLV-y-S_1rN8tY1bEbdJWr7Dl84NvNWCYqA5byZgsMxAVyjADWXcVaagrZhNtQ1ol"
-    "II2oePJL2WyrKrOs4d7ZuGFW5BcFCDS5zxk6MwckKbLkSi3HM34z-AhIOjr6SNc5qcR8yur4Phm9pSJQqFscqQwtmEgbAzXqC9U5"
-    "rwQ_c11N7o6Xc2bnoRXxeXQvKyGCPZWOqQr8AffHBCCOmeKjbPMV0ITek7HyRiOWg_Pjq-_xlVCoUGM7gIq5nq3HG1SqH7Yr6qev"
-    "5Arq24UALiBbr0NAtmq3p-YGRgia3oDnSrnygIX8AbqhnGrHz1kjBbwGr6fXF2XruSKuL96bQghfWGx6nhsbIDH4FI3akERb6Rh1"
-    "B9XIWsWw4Zzo6-tg6DnjzfaJteZqIY4qS5mHSD9stXEVqu_CfnGh7EdOlZlnkG6kIQ3m6oAo2ZG9E58m32X-KEqZDjD4yUgWss9y"
-    "7cnFbYeEzntQneytoBpaTNXtSEsM1fUoz73Ol7FzqPI0CKIsp3UGje2K7LqAwkV54JrhqCfxkD5HmPJnyEOnP0dODvyqD3CK-cbk"
-    "oPoszI2Ba0dk11re5kF985he-Fjm7dXDNhQX93__nj4awDCtnX8_Ke5ld7O3sA1ou7WHhgfGo-Jr4ZcGL5JWflPbI9oPpGOOvLsS"
-    "-e8CUjTcTRb_eA2jApeGU2nAdW42U-CnXeScaR5eJE1RoXTFXIP6MMSpxqpTRWYBfhIDyPEzwTveki-WOWgJtyNJ5W3GJxaEZla2"
-    "uJ5_cdiD4-HgRy1UwxIJODUh0F2hKC6niDVIZqoZ6Z4nb4OUvJP00_nGBA5-IL31Ij8I8U740RAZvnOsMOIsKelsJioM8Ii4MdPi"
-    "O2FYSdKjijEJmXLDdbYkQEXeqwfKGC7trXBOyRwO5AF6mLR9Yf8Bu_eiKbuf5DT9sw88P4JtfPi5LLIso2Ki44UnxePraO7vinqg"
-    "7H7oOi-1gw7BbDaKH7tJs3vUOaxl6mA0BNTg5cDt6TtFZMpFgKNRyanWzSwGWQGYlYbfUGVUnM_tjtgoBNFJAQz1s8fd-qOl1NQD"
-    "ggjlryl6TJk3RSiNYKyJ3fmpE10LM3LUtN3AoFMDFbEEBstDuVg0zzvwe64zaKosn7PIh_Ym-y7QlMdcvUbsqO-T6pfsq8iqEz2a"
-    "nv3yujHkAXIaa3292lbAdFIq80ycQSJbWNd2MtkYQHdWtWmQQoqMX1PdyJGp6N3GG45A4A=="
+    "gAAAAABrBFQW0YnbNoJmgDOvxmZCrZqZ9o4Cw9BmFcaYOHSqK7L9sDSJ_n5TlaCMHz01XshzAGE4ZvGso8ubRTfZ2qod6t3qNf1bwCpcNt4X2x"
+    "VYIwZSTsKwKxuYz6NSLQxaGbO_53scww_-A8hgw-4SXSLIafe0aPxT3nt3S1GOiDvvnRLk1lQ11C5d4PsQDj4nlxfmeulJczftPUOrBGZwhYAo"
+    "evQHzFqxoNB-bqBk2OOKBbtsrz1Zte6namYfxOERzGMDbGxT1iTTV4FzswE2nzsaxck2xNMCo08oVYvqjSVLLu7KWYY5G45d9RSv7iEYJR4ClS"
+    "m0ng2rBrEbPqPbs7n9zXxMGLBKFOqttPzOicZkmPBhTcd_Jo0hXTBD5EcfnnMQCKkRh34GVJUB4BiX82hnMxOsJ7ZLTk9J6d8kW8ZTEfCPI39F"
+    "cTHFaEH73VSa3BURs7AceiF6b8Lk53N1CpeyBTmTLcOCk69Be2TVrT_Fvhne4ENf_Dl7ZgXQoGNgGkavHWhdlZ2exQgA6PfV4XXKiZaNh1N_Lm"
+    "hkQcsuByCoNtO48CblpFZ-XBkXJW1MiXrw3tXOogUpZCrKT84FfyR4W0tkYuBn1j3GJRYd37X3XAWno72_e3YGItTjp4hqnpzMkSU9JXwv8C_X"
+    "6xgVR_JRxcL8O54DjVfEd0fDZC7txFfAUFK8Jg4Tt8rrje2dod49w1lD4xJonBpF0MjV0uf07dzGzVQZ9K_eqrFbLl6X0nGqLE8tEHdW0ecnkm"
+    "_YHnMOQWHXT9prvUGTHPNXYUZaFNSu2ZUqlkW5f3Iei1Va7SsmrviznEp35txO5Oyi4m5QanNy1CoYb_GMkoXJlrsloozu9iDHBuRN_Dh5AxEk"
+    "o7Kut_ZgLvj9HZtEnXy0Ny6ilzTOfBUsy21xmHvzWOBLHwXPIDfHt368Mz9VCzpFhtknXcsw05Z0uiIl9Q1fznWpIBhNdcRc-0HLr2idD2itI2"
+    "1bMgIJDzgjWpJu3TPWMgVrhlx82ElownJ0dfIcn6GRIgC2tz0O2W75kp7jMbz3A5y_oBsuAZ2bUGowczBw3pyVCgJb11jJCx246i361SlJaDX3"
+    "tXFqjpGL1DRxJpOonzUwOouJ7PlMNO2MOpPiLt9PgiYKWEeW2j-MqlzcbjDh67cBYM9bt4VGcznpEs00lSOiZzcgLylae7RitQAOvBDEDgK0Lw"
+    "xs0J1u6BSDmSyoUm7nvBH9m-0iCriBhZgWqA-eQ9NMYFjXSlAJqSF_XuI0zFWhLJZGj8CRohnP1PoQFx3gW83ynYTFdqg10IcH0eR3g-G_VGMH"
+    "7yKLv1TpxXyj2D0ltNCYFnrbQssbdELrcpdETqUy_ngS2K1OuqKVNT4x3PDISqhUojBYWYJ_RUEyW0eEhTeNvmr2ztpDEX4oZ3RhaYGb7GQ9_r"
+    "4dCx9eEdIQU76O2cVopbs-ueSezoqbhToWMQGGyWW6azyqMTXvK6vGo0acMQ19C747CXFuP6kG1bAt_re9KXDXWNmDshIb7s7aqBlDj71dUpj-"
+    "Vi9CZbcsdseIPMQCawnBXk9UNDjblefUx15NKlgkkLmWisgSd80Q6nlygbK7aKOYUc72Vkvj_ZNVi1C_KO4UJWzqC3BCiNf10ec785hqur7Fpy"
+    "lPqAN9FPk1qHtKFIKMMqqVXXR15_1Q1t7vL4UY90jBICf8CRKTT8Efuv9PAvk6o_F-MXxqkehGPkzSzRkHtHmm_EMx-7Q6BfF3nxH0Fxa63q1C"
+    "LgM4KwQlKQcBC38qxl3XSESaPkqIIYT_i-kiSIgInVt3dLY-srWGt36Db7fIXa781sDJkV7D3Tg24uGH3oSeX-MB6Af4HxwCPVkxhIXwsmwmEJ"
+    "J8OzEAFdxBMeZ6f-q6c66MPOK6oNue9X2WMHkhOkF58pjo-q_p5ou0Avcy5Cf0ZMUffrIT-Hg1-SFTR9tKNg3YpumNBn0RVtM7MwAgoIC7zvpX"
+    "cEvYg5ixMRHDlVzsZeIiLQe7CvFExb49N_k0ww=="
 )
 
 GPT_6_1_SOL_TEST_CASE: Final = TranslationTestCase(
@@ -488,21 +507,21 @@ GPT_6_1_SOL_TEST_CASE: Final = TranslationTestCase(
     ),
     mock_provider_response={
         **AZURE_RESPONSES_RESPONSE,
-        "id": "resp_0a4a896afe94ce65006ad023b047248193999d7c3a0c4fec39",
-        "created_at": 1792025520,
-        "completed_at": 1792025524,
+        "id": "resp_00faf38051ae216e006b045411623c81908fcc5c2ed599ea4c",
+        "created_at": 1795445777,
+        "completed_at": 1795445782,
         "content_filters": GPT_6_1_SOL_CONTENT_FILTERS,
-        "instructions": MESSAGES_REQUEST["system"],
+        "instructions": None,
         "output": [
             {
-                "id": "rs_0a4a896afe94ce65006ad023b19f8481938d51de793f83feed",
+                "id": "rs_00faf38051ae216e006b045412fddc819096be5de965d2dd59",
                 "type": "reasoning",
                 "content": [],
                 "encrypted_content": GPT_6_1_SOL_ENCRYPTED_CONTENT,
                 "summary": [],
             },
             {
-                "id": "msg_0a4a896afe94ce65006ad023b2cc3081939533c6e664038345",
+                "id": "msg_00faf38051ae216e006b0454150f0c8190afb4c475593645b4",
                 "type": "message",
                 "status": "completed",
                 "content": [
@@ -510,52 +529,45 @@ GPT_6_1_SOL_TEST_CASE: Final = TranslationTestCase(
                         "type": "output_text",
                         "annotations": [],
                         "logprobs": [],
-                        "text": (
-                            "I’ll read `shop/validation.py` first to check how it handles zero, negative, and "
-                            "non-integer quantities.\n"
-                        ),
+                        "text": "I’ll read `shop/validation.py` first to check how it handles zero, negative, and "
+                        "non-integer quantities.",
                     }
                 ],
                 "phase": "commentary",
                 "role": "assistant",
             },
             {
-                "id": "fc_0a4a896afe94ce65006ad023b3229881938388d9bef2b4a8ef",
+                "id": "fc_00faf38051ae216e006b045415c2388190ba7013616d12dd45",
                 "type": "function_call",
                 "status": "completed",
                 "arguments": '{"path":"shop/validation.py","start_line":1,"end_line":200}',
-                "call_id": "call_5drWfeHZt2S3rfVa9SYefgB1",
+                "call_id": "call_s7Ti3dCqT4mSu2VTwYP5GZK7",
                 "name": "read_file",
             },
         ],
         "usage": {
             "input_tokens": 309,
             "input_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0},
-            "output_tokens": 137,
-            "output_tokens_details": {"reasoning_tokens": 72},
-            "total_tokens": 446,
+            "output_tokens": 113,
+            "output_tokens_details": {"reasoning_tokens": 48},
+            "total_tokens": 422,
         },
     },
     expected_litellm_response={
         **MESSAGES_BRIDGE_RESPONSE,
-        "id": "resp_0a4a896afe94ce65006ad023b047248193999d7c3a0c4fec39",
+        "id": "resp_00faf38051ae216e006b045411623c81908fcc5c2ed599ea4c",
         "model": "azure/gpt-6.1-sol",
-        "usage": {"input_tokens": 309, "output_tokens": 137},
+        "usage": {"input_tokens": 309, "output_tokens": 113},
         "content": [
-            {
-                "type": "redacted_thinking",
-                "data": "litellm_encrypted_reasoning:" + GPT_6_1_SOL_ENCRYPTED_CONTENT,
-            },
+            {"type": "redacted_thinking", "data": "litellm_encrypted_reasoning:" + GPT_6_1_SOL_ENCRYPTED_CONTENT},
             {
                 "type": "text",
-                "text": (
-                    "I’ll read `shop/validation.py` first to check how it handles zero, negative, and "
-                    "non-integer quantities.\n"
-                ),
+                "text": "I’ll read `shop/validation.py` first to check how it handles zero, negative, and non-integer "
+                "quantities.",
             },
             {
                 "type": "tool_use",
-                "id": "call_5drWfeHZt2S3rfVa9SYefgB1",
+                "id": "call_s7Ti3dCqT4mSu2VTwYP5GZK7",
                 "name": "read_file",
                 "input": {"path": "shop/validation.py", "start_line": 1, "end_line": 200},
             },
