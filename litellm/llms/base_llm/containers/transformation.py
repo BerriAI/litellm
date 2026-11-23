@@ -65,7 +65,7 @@ class BaseContainerConfig(ABC):
         }
 
     @abstractmethod
-    def get_supported_openai_params(self) -> list[str]:
+    def get_supported_openai_params(self) -> list:
         pass
 
     @abstractmethod
@@ -73,23 +73,23 @@ class BaseContainerConfig(ABC):
         self,
         container_create_optional_params: ContainerCreateOptionalRequestParams,
         drop_params: bool,
-    ) -> dict[str, object]:
+    ) -> dict:
         pass
 
     @abstractmethod
     def validate_environment(
         self,
-        headers: dict[str, object],
+        headers: dict,
         api_key: str | None = None,
         litellm_params: GenericLiteLLMParams | None = None,
-    ) -> dict[str, object]:
+    ) -> dict:
         return {}
 
     @abstractmethod
     def get_complete_url(
         self,
         api_base: str | None,
-        litellm_params: dict[str, object],
+        litellm_params: dict,
     ) -> str:
         """Get the complete url for the request.
 
@@ -104,10 +104,10 @@ class BaseContainerConfig(ABC):
     def transform_container_create_request(
         self,
         name: str,
-        container_create_optional_request_params: Mapping[str, object],
+        container_create_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
-        headers: dict[str, object],
-    ) -> dict[str, object]:
+        headers: dict,
+    ) -> dict:
         """Transform the container creation request.
 
         Returns:
@@ -129,12 +129,12 @@ class BaseContainerConfig(ABC):
         self,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict[str, object],
+        headers: dict,
         after: str | None = None,
         limit: int | None = None,
         order: str | None = None,
         extra_query: Mapping[str, object] | None = None,
-    ) -> tuple[str, dict[str, object]]:
+    ) -> tuple[str, dict]:
         """Transform the container list request into a URL and params.
 
         Returns:
@@ -157,8 +157,8 @@ class BaseContainerConfig(ABC):
         container_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict[str, object],
-    ) -> tuple[str, dict[str, object]]:
+        headers: dict,
+    ) -> tuple[str, dict]:
         """Transform the container retrieve request into a URL and data/params.
 
         Returns:
@@ -181,8 +181,8 @@ class BaseContainerConfig(ABC):
         container_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict[str, object],
-    ) -> tuple[str, dict[str, object]]:
+        headers: dict,
+    ) -> tuple[str, dict]:
         """Transform the container delete request into a URL and data.
 
         Returns:
@@ -205,12 +205,12 @@ class BaseContainerConfig(ABC):
         container_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict[str, object],
+        headers: dict,
         after: str | None = None,
         limit: int | None = None,
         order: str | None = None,
         extra_query: Mapping[str, object] | None = None,
-    ) -> tuple[str, dict[str, object]]:
+    ) -> tuple[str, dict]:
         """Transform the container file list request into a URL and params.
 
         Returns:
@@ -234,8 +234,8 @@ class BaseContainerConfig(ABC):
         file_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict[str, object],
-    ) -> tuple[str, dict[str, object]]:
+        headers: dict,
+    ) -> tuple[str, dict]:
         """Transform the container file content request into a URL and params.
 
         Returns:
@@ -260,7 +260,7 @@ class BaseContainerConfig(ABC):
         self,
         error_message: str,
         status_code: int,
-        headers: dict[str, object] | httpx.Headers,
+        headers: dict | httpx.Headers,
     ) -> BaseLLMException:
         from ..chat.transformation import BaseLLMException
 

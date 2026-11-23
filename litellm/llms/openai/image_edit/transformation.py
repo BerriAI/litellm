@@ -49,7 +49,7 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
     Used for models like gpt-image-1 that support multiple images.
     """
 
-    def get_supported_openai_params(self, model: str) -> list[str]:
+    def get_supported_openai_params(self, model: str) -> list:
         """
         All OpenAI Image Edits params are supported
         """
@@ -76,7 +76,7 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
         image_edit_optional_params: ImageEditOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> dict[str, object]:
+    ) -> dict:
         """No mapping applied since inputs are in OpenAI spec already"""
         return dict(image_edit_optional_params)
 
@@ -97,8 +97,8 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
         image: FileTypes | Sequence[FileTypes | None] | None,
         image_edit_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
-        headers: dict[str, object],
-    ) -> tuple[dict[str, object], RequestFiles]:
+        headers: dict,
+    ) -> tuple[dict, RequestFiles]:
         """
         Transform image edit request to OpenAI API format.
 
@@ -167,12 +167,12 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
 
     def validate_environment(
         self,
-        headers: dict[str, object],
+        headers: dict,
         model: str,
         api_key: str | None = None,
-        litellm_params: dict[str, object] | None = None,
+        litellm_params: dict | None = None,
         api_base: str | None = None,
-    ) -> dict[str, object]:
+    ) -> dict:
         bearer_token: Final = resolve_openai_bearer_token(
             api_key=api_key, api_base=api_base, litellm_params=litellm_params
         )
@@ -183,7 +183,7 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
         self,
         model: str,
         api_base: str | None,
-        litellm_params: dict[str, object],
+        litellm_params: dict,
     ) -> str:
         """
         Get the endpoint for OpenAI responses API
