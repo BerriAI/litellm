@@ -150,7 +150,7 @@ fn across_teams(registry: &Registry, model: &str) -> Result<Vec<Arc<Deployment>>
 /// The access groups of the rows `_core_get_model_list(model_name, team_id)` lists: the
 /// group's deployments, an alias's target deployments, a routing group's rows (which carry no
 /// access groups), and only when there are none of those, the wildcard's deployments.
-fn model_access_groups(
+pub fn model_access_groups(
     registry: &Registry,
     model: &str,
     team_id: Option<&str>,
