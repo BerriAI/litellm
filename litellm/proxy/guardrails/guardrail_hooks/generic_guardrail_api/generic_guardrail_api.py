@@ -288,7 +288,7 @@ class GenericGuardrailAPI(CustomGuardrail):
         unreachable_fallback: Literal["fail_closed", "fail_open"] = "fail_closed",
         fail_on_error: bool | None = True,
         forward_messages_as_sent: bool | None = False,
-        extra_headers: list | None = None,
+        extra_headers: Sequence[object] | None = None,
         streaming_end_of_stream_only: bool | None = None,
         streaming_sampling_rate: int | None = None,
         streaming_transform_mode: Literal["block_only", "incremental_diff"] | None = None,

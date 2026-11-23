@@ -95,7 +95,7 @@ class ReplicateConfig(BaseConfig):
     def get_config(cls):
         return super().get_config()
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         return [
             "stream",
             "temperature",
@@ -111,11 +111,11 @@ class ReplicateConfig(BaseConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: dict[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         for param, value in non_default_params.items():
             if param == "stream":
                 optional_params["stream"] = value
@@ -150,8 +150,8 @@ class ReplicateConfig(BaseConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         stream: bool | None = None,
     ) -> str:
         version_id = self.model_to_version_id(model)
@@ -169,10 +169,10 @@ class ReplicateConfig(BaseConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
+        headers: dict[str, object],
+    ) -> dict[str, object]:
         ## Load Config
         config: Final[Mapping[str, object]] = types.MappingProxyType(litellm.ReplicateConfig.get_config())
         for k, v in config.items():
@@ -227,7 +227,7 @@ class ReplicateConfig(BaseConfig):
             input_data = {"prompt": prompt, **optional_params}
 
         version_id: Final = self.model_to_version_id(model)
-        request_data: Final[dict] = {"input": input_data}
+        request_data: Final[dict[str, object]] = {"input": input_data}
         if ":" in version_id and len(version_id) > REPLICATE_MODEL_NAME_WITH_ID_LENGTH:
             model_parts: Final = version_id.split(":")
             if (
@@ -243,10 +243,10 @@ class ReplicateConfig(BaseConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LoggingClass,
-        request_data: dict,
+        request_data: dict[str, object],
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
@@ -309,14 +309,14 @@ class ReplicateConfig(BaseConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         headers = {
             "Authorization": f"Token {api_key}",
             "Content-Type": "application/json",
