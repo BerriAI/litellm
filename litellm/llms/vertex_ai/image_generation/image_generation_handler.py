@@ -48,12 +48,12 @@ class VertexImageGeneration(VertexLLM):
         model_response.data = response_data
         return model_response
 
-    def transform_optional_params(self, optional_params: dict | None) -> dict:
+    def transform_optional_params(self, optional_params: Mapping[str, object] | None) -> dict[str, object]:
         """
         Transform the optional params to the format expected by the Vertex AI API.
         For example, "aspect_ratio" is transformed to "aspectRatio".
         """
-        default_params: Final = {
+        default_params: Final[dict[str, object]] = {
             "sampleCount": 1,
         }
         if optional_params is None:
@@ -85,9 +85,9 @@ class VertexImageGeneration(VertexLLM):
         logging_obj: "LiteLLMLoggingObj",
         model: str = "imagegeneration",  # vertex ai uses imagegeneration as the default model
         client: Any | None = None,
-        optional_params: dict | None = None,
+        optional_params: Mapping[str, object] | None = None,
         timeout: int | None = None,
-        aimg_generation=False,
+        aimg_generation: object = False,
         extra_headers: dict | None = None,
     ) -> ImageResponse:
         if aimg_generation is True:
@@ -184,10 +184,10 @@ class VertexImageGeneration(VertexLLM):
         logging_obj: "LiteLLMLoggingObj",
         model: str = "imagegeneration",  # vertex ai uses imagegeneration as the default model
         client: AsyncHTTPHandler | None = None,
-        optional_params: dict | None = None,
+        optional_params: Mapping[str, object] | None = None,
         timeout: int | None = None,
         extra_headers: dict | None = None,
-    ):
+    ) -> ImageResponse:
         response = None
         if client is None:
             _params: Final = {}
