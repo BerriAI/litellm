@@ -37,7 +37,7 @@ from litellm.llms.anthropic.common_utils import (
     write_anthropic_server_tool_call_arguments,
 )
 from litellm.llms.base_llm.guardrail_translation.utils import (
-    claude_hosted_web_tool_arguments,
+    hosted_web_tool_arguments,
     with_web_search_call_arguments,
 )
 from litellm.llms.custom_httpx.http_handler import (
@@ -616,7 +616,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
     @staticmethod
     def _responses_hosted_web_calls(response: ResponsesAPIResponse) -> Iterator[tuple[object, str]]:
         for item in attribute_items(response, "output"):
-            hosted_arguments = claude_hosted_web_tool_arguments(item)
+            hosted_arguments = hosted_web_tool_arguments(item)
             if hosted_arguments:
                 yield item, hosted_arguments
 

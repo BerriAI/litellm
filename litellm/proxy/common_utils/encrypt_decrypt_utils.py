@@ -315,7 +315,7 @@ def decrypt_bearer_token(token: str, prefix: str) -> str | None:
         return None
 
 
-_Passthrough: Final = TypeVar("_Passthrough")
+_Passthrough = TypeVar("_Passthrough")
 
 
 @overload

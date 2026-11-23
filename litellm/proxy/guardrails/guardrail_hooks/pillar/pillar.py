@@ -338,7 +338,7 @@ class PillarGuardrail(CustomGuardrail):
             "mcp_call",
             "anthropic_messages",
         ],
-    ) -> Exception | str | dict | None:
+    ) -> Exception | str | dict[str, object] | None:
         """
         Pre-call hook to scan the request for security threats before sending to LLM.
 
@@ -382,7 +382,7 @@ class PillarGuardrail(CustomGuardrail):
             "mcp_call",
             "anthropic_messages",
         ],
-    ) -> Exception | str | dict | None:
+    ) -> Exception | str | dict[str, object] | None:
         """
         During-call hook to scan the request in parallel with LLM processing.
 
@@ -466,7 +466,7 @@ class PillarGuardrail(CustomGuardrail):
     # CORE LOGIC METHOD
     # =========================================================================
 
-    async def run_pillar_guardrail(self, data: dict, user_api_key_dict: UserAPIKeyAuth) -> dict:
+    async def run_pillar_guardrail(self, data: dict, user_api_key_dict: UserAPIKeyAuth) -> dict[str, object]:
         """
         Core method to run the Pillar guardrail scan.
 
@@ -512,7 +512,7 @@ class PillarGuardrail(CustomGuardrail):
     # PRIVATE HELPER METHODS (In logical order of usage)
     # =========================================================================
 
-    def _handle_api_error(self, error: Exception, data: dict) -> dict:
+    def _handle_api_error(self, error: Exception, data: dict[str, object]) -> dict[str, object]:
         """
         Handle API errors based on fallback_on_error configuration.
 

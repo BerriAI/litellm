@@ -117,20 +117,31 @@ export function AgentControlPlaneView() {
 
 const FULL_BLEED_SEGMENTS = new Set(["logs"]);
 
-const PAGE_FRAME_CLASS_NAMES = { default: "" } as const;
+const PAGE_FRAME_CLASS_NAMES = {
+  default: "",
+  fill: "h-full",
+  fixed: "h-full overflow-hidden pb-0 sm:pb-0",
+} as const;
 
 const FRAMED_SEGMENTS: ReadonlyMap<string, keyof typeof PAGE_FRAME_CLASS_NAMES> = new Map([
   ["admin-panel", "default"],
   ["agents", "default"],
+  ["api-keys", "fill"],
+  ["budgets", "fill"],
   ["caching", "default"],
   ["cost-optimization", "default"],
   ["cost-tracking", "default"],
   ["guardrails", "default"],
   ["guardrails-monitor", "default"],
   ["logging-and-alerts", "default"],
+  ["logs", "fill"],
+  ["mcp-servers", "fill"],
   ["memory", "default"],
+  ["playground", "fixed"],
   ["prompts", "default"],
   ["router-settings", "default"],
+  ["search-tools", "fill"],
+  ["tag-management", "fill"],
   ["ui-theme", "default"],
   ["vector-stores", "default"],
   ["workflows", "default"],

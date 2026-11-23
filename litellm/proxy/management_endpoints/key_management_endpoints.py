@@ -490,6 +490,7 @@ _KEY_METADATA_REQUEST_FIELDS: Final = frozenset(
 
 
 _DECODED_JSON: Final = TypeAdapter(object)
+_ROLLOVER_CAP_VALUE: Final[TypeAdapter[BudgetRolloverCap]] = TypeAdapter(BudgetRolloverCap)
 _METADATA_OBJECT: Final = TypeAdapter(Mapping[str, object])
 _HASHED_TOKEN: Final = re.compile(r"[0-9a-f]{64}")
 
@@ -1070,7 +1071,7 @@ _KEY_TYPE_PRESET_ROUTES: Final = MappingProxyType(
 )
 
 
-_KeyJsonT: Final = TypeVar("_KeyJsonT", bound=dict[str, object])
+_KeyJsonT = TypeVar("_KeyJsonT", bound=dict[str, object])
 
 
 def handle_key_type(data: GenerateKeyRequest, data_json: _KeyJsonT) -> _KeyJsonT:
@@ -5577,6 +5578,7 @@ async def generate_key_helper_fn(
     *,
     llm_router: Router | None = None,
     actor: UserAPIKeyAuth | None = None,
+    rollover_max_budget: object = None,
 ):
     customer_metadata: Final = validated_customer_key_metadata(_DECODED_JSON.validate_python(metadata), None, actor)
     from litellm.proxy.proxy_server import premium_user, prisma_client
@@ -5671,6 +5673,8 @@ async def generate_key_helper_fn(
         }
         if teams is not None:
             user_data["teams"] = teams
+        if request_type == "user" and rollover_max_budget is not None:
+            user_data["rollover_max_budget"] = _ROLLOVER_CAP_VALUE.validate_python(rollover_max_budget)
         if request_type == "user" and budget_limits_json is not None:
             user_data["budget_limits"] = budget_limits_json
         if model_max_budget:

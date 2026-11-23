@@ -7,6 +7,7 @@ from urllib.parse import urlencode
 
 import pytest
 from fastapi import HTTPException, Request
+from starlette.routing import compile_path
 
 from litellm.proxy._types import (
     LiteLLM_JWTAuth,
@@ -4390,7 +4391,13 @@ def test_team_callback_routes_reach_their_handler_for_non_admins(route, role):
             "/v1beta/models/publishers/google/gemini-2.5-flash:generateContent",
             True,
         ),
-        # the value must not swallow that suffix and match a different verb
+        ("/v1beta/models/{model_name:path}:generateContent", "/v1beta/models/:generateContent", True),
+        ("/models/{model_name:path}:streamGenerateContent", "/models/:streamGenerateContent", True),
+        ("/v1beta/models/{model_name:path}:generateContent", "/v1beta/models/:countTokens", False),
+        ("/v1beta/models/{model_name:path}:generateContent", "/v1beta/models/a:b:generateContent", True),
+        ("/v1beta/models/{model_name:path}:countTokens", "/v1beta/models/a:generateContent:countTokens", True),
+        ("/v1beta/models/{model_name:path}:generateContent", "/v1beta/models/a:generateContent:countTokens", False),
+        # the route still has to end in the template's own verb
         (
             "/v1beta/models/{model_name:path}:generateContent",
             "/v1beta/models/gemini-2.5-flash:countTokens",
@@ -4412,11 +4419,44 @@ def test_path_placeholder_matches_what_the_router_accepts(pattern, route, matche
 
     A team id may carry a slash, a colon, or both, and the router mounted these
     paths with the same :path converter, so an id the router routes must not be
-    an id the gate fails to recognize. The one narrowing that stays is a template
-    whose own suffix begins with a colon: there the value stops before it, or
-    ":generateContent" would also match a ":countTokens" request.
+    an id the gate fails to recognize. A template whose own suffix begins with a
+    colon still has to end in that suffix, so ":generateContent" never matches a
+    ":countTokens" request.
     """
     assert RouteChecks._route_matches_pattern(route=route, pattern=pattern) is matches
+
+
+GOOGLE_MODEL_PATH_TEMPLATES: Final = tuple(
+    route for route in LiteLLMRoutes.google_routes.value if "{model_name:path}" in route
+)
+
+
+@pytest.mark.parametrize(
+    "route, unbilled",
+    [
+        ("/v1beta/models/gemini-text:countTokens", True),
+        ("/v1beta/models/gemini-text:v1:countTokens", True),
+        ("/models/a:generateContent:countTokens", True),
+        ("/v1beta/models/:countTokens", True),
+        ("/v1/messages/count_tokens", True),
+        ("/v1beta/models/gemini-text:v1:generateContent", False),
+        ("/v1beta/models/countTokens:generateContent", False),
+        ("/v1beta/models/a:countTokens:generateContent", False),
+    ],
+)
+def test_count_tokens_is_unbilled_whatever_colons_the_model_name_holds(route: str, unbilled: bool) -> None:
+    assert RouteChecks.is_unbilled_route(route) is unbilled
+
+
+@pytest.mark.parametrize("template", GOOGLE_MODEL_PATH_TEMPLATES)
+@pytest.mark.parametrize("model_name", ["", "gemini-text", "publishers/google/gemini-2.5-flash", "a:b"])
+def test_google_model_route_gate_agrees_with_the_router(template: str, model_name: str) -> None:
+    route: Final = template.replace("{model_name:path}", model_name)
+    router_regex, _, _ = compile_path(template)
+
+    assert router_regex.match(route) is not None
+    assert RouteChecks._route_matches_pattern(route=route, pattern=template) is True
+    assert RouteChecks.is_llm_api_route(route=route) is True
 
 
 # Every other route the proxy mounts under /team/{team_id}, spelled the way it

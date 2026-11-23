@@ -217,22 +217,25 @@ describe("(dashboard) Layout", () => {
     expect(screen.getByTestId("sidebar")).toHaveAttribute("data-collapsed", "false");
   });
 
-  it("draws the page frame around a mapped route and leaves an unmapped route unframed", async () => {
-    const dashboard = () => (
+  it.each([
+    { segment: "caching", present: ["p-4", "sm:p-6"], absent: ["h-full", "overflow-hidden", "pb-0"] },
+    { segment: "api-keys", present: ["p-4", "sm:p-6", "h-full"], absent: ["overflow-hidden", "pb-0"] },
+    { segment: "playground", present: ["p-4", "sm:p-6", "h-full", "overflow-hidden", "pb-0", "sm:pb-0"], absent: [] },
+    { segment: "lens", present: [], absent: ["p-4", "sm:p-6", "h-full", "pb-0"] },
+  ])("wraps /ui/$segment in only the classes of its page frame variant", async ({ segment, present, absent }) => {
+    vi.mocked(usePathname).mockReturnValue(`/ui/${segment}`);
+    render(
       <AuthProvider>
         <Layout>
           <p>Route content</p>
         </Layout>
-      </AuthProvider>
+      </AuthProvider>,
     );
-    vi.mocked(usePathname).mockReturnValue("/ui/caching");
-    const { rerender } = render(dashboard());
     pendingUiConfig.resolve();
-    expect((await screen.findByText("Route content")).parentElement).toHaveClass("p-4", "sm:p-6");
 
-    vi.mocked(usePathname).mockReturnValue("/ui/lens");
-    rerender(dashboard());
-    expect(screen.getByText("Route content").parentElement).not.toHaveClass("p-4");
+    const wrapperClasses = [...((await screen.findByText("Route content")).parentElement?.classList ?? [])];
+    expect(wrapperClasses).toEqual(expect.arrayContaining(present));
+    expect(wrapperClasses.filter((name) => absent.includes(name))).toEqual([]);
   });
 
   it("does not mount route content until getUiConfig has resolved", async () => {

@@ -59,7 +59,7 @@ from litellm.types.tool_management import (
     ToolUsageLogsResponse,
 )
 
-_RowT_co: Final = TypeVar("_RowT_co", covariant=True)
+_RowT_co = TypeVar("_RowT_co", covariant=True)
 
 if TYPE_CHECKING:
 

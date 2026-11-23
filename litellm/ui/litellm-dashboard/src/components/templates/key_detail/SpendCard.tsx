@@ -60,7 +60,7 @@ export function SpendCard(props: SpendCardProps) {
       }
       footer={footer.length > 0 ? footer : undefined}
     >
-      <div className="grid grid-cols-1 items-end gap-6 md:grid-cols-[minmax(180px,240px)_minmax(0,1fr)]">
+      <div className="grid grid-cols-1 items-start gap-6 md:grid-cols-[minmax(180px,240px)_minmax(0,1fr)]">
         <div className="flex flex-col gap-3">
           <SpendHeadline {...props} />
           <LifetimeStat {...props} />
@@ -117,10 +117,9 @@ function SpendHeadline({ spend, budgetDuration, budgetResetAt, hasOwnBudget }: S
   );
 }
 
-function LifetimeStat({ spend, totalSpend, lifetimeNeedsBackfill, budgetResetAt, createdAt }: SpendCardProps) {
+function LifetimeStat({ totalSpend, lifetimeNeedsBackfill, createdAt }: SpendCardProps) {
   const { t } = useTranslation();
   const total = totalSpend ?? 0;
-  if (!budgetResetAt && !lifetimeNeedsBackfill && total === spend) return null;
   return (
     <div data-testid="key-lifetime-spend">
       <div className="flex items-center gap-1 text-xs font-medium text-muted-foreground">

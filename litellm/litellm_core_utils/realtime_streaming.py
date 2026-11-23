@@ -503,6 +503,8 @@ class RealTimeStreaming:
         self.websocket: _ClientWebSocket = websocket
         self._listens_only: Final = listens_only
         self._clock: Final = clock
+        self._joined_at: Final = clock()
+        self._call_closed_at: float | None = None
         self._lazy_setup_deadline: Final = clock() + lazy_setup_deadline_seconds
         self._lazy_setup_content_grace_seconds: Final = lazy_setup_content_grace_seconds
         self._held_client_content: tuple[str, ...] = ()
@@ -847,6 +849,8 @@ class RealTimeStreaming:
         if not self._is_translation_session:
             return
         if event_obj.get("type") == "session.closed":
+            if self._call_closed_at is None:
+                self._call_closed_at = self._clock()
             usage: Final = as_str_mapping(event_obj.get("usage"))
             output_seconds: Final = (
                 normalized_audio_duration_seconds(usage.get("output_seconds")) if usage is not None else None
@@ -963,6 +967,11 @@ class RealTimeStreaming:
             ) is not None:
                 self._translation_usage_finalized = True
                 return
+        if self._listens_only and self._is_translation_session:
+            # A call the proxy only listens to sends its audio past the proxy and the provider reports no usage,
+            # and a microphone track sends audio for as long as the call runs.
+            ended_at: Final = self._clock() if self._call_closed_at is None else self._call_closed_at
+            self._translation_input_seconds = max(ended_at - self._joined_at, 0.0)
         if self._translation_output_seconds == 0 and self._translation_input_seconds == 0:
             return
         synthetic_usage: Final = (
@@ -2018,6 +2027,11 @@ class RealTimeStreaming:
             return BackendClose(code=1011, reason="proxy failed while relaying the upstream websocket")
 
     def _backend_refused_session(self, close: BackendClose) -> bool:
+        heard_nothing: Final = self._listens_only and self._is_translation_session and not self._backend_sent_frames
+        if heard_nothing and close.code in (1000, 1006):
+            # A translation call sends its listener nothing while nobody speaks, and the provider
+            # refuses to let a listener join a call that is over.
+            return False
         return (
             not self._backend_sent_non_error_frames
             and (close.code != 1000 or self._backend_sent_frames)
@@ -2492,7 +2506,7 @@ class RealTimeStreaming:
             return ClientLoopExit.RELAY_FAILED
 
     async def bidirectional_forward(self) -> None:
-        if self._is_translation_session and translation_guardrails_apply(self.request_data):
+        if self._is_translation_session and not self._listens_only and translation_guardrails_apply(self.request_data):
             await self.websocket.send_text(
                 realtime_error_event(TRANSLATION_GUARDRAILS_UNSUPPORTED_MESSAGE, error_type="guardrail_error")
             )

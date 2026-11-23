@@ -6,11 +6,15 @@ import copy
 import json
 import logging
 import re
+from collections.abc import AsyncIterator, Sequence
 from itertools import chain
 from typing import Final, Literal
 from unittest.mock import patch
 
+import anthropic
+import httpx
 import pytest
+from anthropic.types import Message
 
 from litellm.caching.dual_cache import DualCache
 
@@ -3916,7 +3920,7 @@ class TestToolPermissionGuardrailAnthropicMessages:
         frames: Final = self._ended_by_upstream_error([])
         chunks: Final = [frame.replace(b"\n", b"\r\n") for frame in (*frames, *self._sse_chunks("Read"))]
 
-        with pytest.raises(GuardrailRaisedException, match="could not be verified"):
+        with pytest.raises(GuardrailRaisedException, match="deny_read"):
             await self._drain(self.blocking, chunks)
 
     @pytest.mark.asyncio
@@ -3926,7 +3930,7 @@ class TestToolPermissionGuardrailAnthropicMessages:
 
         chunks: Final = self._ended_by_upstream_error([over_two_data_lines(frame) for frame in self._sse_chunks("Read")])
 
-        with pytest.raises(GuardrailRaisedException, match="could not be verified"):
+        with pytest.raises(GuardrailRaisedException, match="deny_read"):
             await self._drain(self.blocking, chunks)
 
     DENIED_CALL_EVENTS: Final = (
@@ -3944,12 +3948,14 @@ class TestToolPermissionGuardrailAnthropicMessages:
     ERROR_WITH_CR_LINE_ENDS: Final = f"event: error\rdata: {json.dumps(UPSTREAM_ERROR)}\r\r".encode()
     DENIED_CALLS_ASSEMBLY_CANNOT_READ: Final = {
         "reused-block-index": (*DENIED_CALL[:2], THINKING_AT_THE_SAME_INDEX),
-        "cr-line-ends": tuple(frame.replace(b"\n", b"\r") for frame in DENIED_CALL),
-        "behind-a-glued-crlf-ping": (b'event: ping\r\ndata: {"type": "ping"}\r\n\r\n' + b"".join(DENIED_CALL),),
         "finished-mcp-call": tuple(frame.replace(b'"tool_use"', b'"mcp_tool_use"') for frame in DENIED_CALL),
         "behind-a-form-feed": tuple(
             b'data: {"type": "ping"}\x0c' + frame.split(b"\n", 1)[1] for frame in DENIED_CALL
         ),
+    }
+    DENIED_CALLS_IN_FRAMES_A_CLIENT_READS: Final = {
+        "cr-line-ends": tuple(frame.replace(b"\n", b"\r") for frame in DENIED_CALL),
+        "behind-a-glued-crlf-ping": (b'event: ping\r\ndata: {"type": "ping"}\r\n\r\n' + b"".join(DENIED_CALL),),
         "over-two-data-lines": tuple(frame.replace(b", ", b",\ndata: ", 1) for frame in DENIED_CALL),
         "glued-to-the-error-frame": (ERROR_WITH_CR_LINE_ENDS + b"".join(DENIED_CALL).replace(b"\n", b"\r"),),
     }
@@ -3967,6 +3973,18 @@ class TestToolPermissionGuardrailAnthropicMessages:
         assert self._events(out)[-1] == self.UPSTREAM_ERROR
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "frames", DENIED_CALLS_IN_FRAMES_A_CLIENT_READS.values(), ids=DENIED_CALLS_IN_FRAMES_A_CLIENT_READS
+    )
+    async def test_denied_call_in_frames_a_client_reads_is_blocked_past_an_upstream_error(
+        self, frames: tuple[bytes, ...]
+    ):
+        chunks: Final = self._ended_by_upstream_error([self._sse_chunks("Read")[0], *frames])
+
+        with pytest.raises(GuardrailRaisedException, match="deny_read"):
+            await self._drain(self.blocking, chunks)
+
+    @pytest.mark.asyncio
     async def test_denied_call_inside_message_start_never_reaches_the_client_past_an_upstream_error(self):
         message_start, *_ = self._sse_chunks("Read")
         call: Final = json.dumps(self._tool_use("Read")).encode()
@@ -3978,7 +3996,7 @@ class TestToolPermissionGuardrailAnthropicMessages:
         assert self._events(out)[-1] == self.UPSTREAM_ERROR
 
     @pytest.mark.asyncio
-    async def test_client_gets_the_input_the_check_read_when_deltas_interleave_before_an_upstream_error(self):
+    async def test_denied_tool_input_whose_deltas_interleave_before_an_upstream_error_is_blocked(self):
         guardrail: Final = ToolPermissionGuardrail(
             guardrail_name="anthropic-param-block",
             rules=[
@@ -4014,19 +4032,17 @@ class TestToolPermissionGuardrailAnthropicMessages:
         )
         frames: Final = [f"event: {e['type']}\ndata: {json.dumps(e)}\n\n".encode() for e in events]
 
-        out: Final = await self._drain(guardrail, self._ended_by_upstream_error([self._sse_chunks("Bash")[0], *frames]))
-
-        assert b"rm -rf" not in b"".join(out)
-        assert self._events(out)[-1] == self.UPSTREAM_ERROR
+        with pytest.raises(GuardrailRaisedException, match="rm -rf"):
+            await self._drain(guardrail, self._ended_by_upstream_error([self._sse_chunks("Bash")[0], *frames]))
 
     @pytest.mark.asyncio
     async def test_denied_tool_use_named_only_by_its_event_lines_beside_an_upstream_error_is_blocked(self):
         def without_type(frame: bytes) -> bytes:
             return re.sub(rb'"type": "(?:content_block_\w+|message_\w+)"', b'"error": {}', frame, count=1)
 
-        chunks: Final = self._ended_by_upstream_error([without_type(frame) for frame in self._sse_chunks("Bash")])
+        chunks: Final = self._ended_by_upstream_error([without_type(frame) for frame in self._sse_chunks("Read")])
 
-        with pytest.raises(GuardrailRaisedException, match="could not be verified"):
+        with pytest.raises(GuardrailRaisedException, match="deny_read"):
             await self._drain(self.blocking, chunks)
 
     @pytest.mark.asyncio
@@ -4034,9 +4050,9 @@ class TestToolPermissionGuardrailAnthropicMessages:
         def wrapped(frame: bytes) -> bytes:
             return b' data: {"type": "error", "error": {}, "w": [\n' + frame.rstrip(b"\n") + b"\n data: ]}\n\n"
 
-        chunks: Final = [wrapped(frame) for frame in self._sse_chunks("Bash")]
+        chunks: Final = [wrapped(frame) for frame in self._sse_chunks("Read")]
 
-        with pytest.raises(GuardrailRaisedException, match="could not be verified"):
+        with pytest.raises(GuardrailRaisedException, match="deny_read"):
             await self._drain(self.blocking, chunks)
 
     @pytest.mark.asyncio
@@ -4162,3 +4178,553 @@ class TestToolPermissionGuardrailAnthropicMessages:
         with patch.object(self.blocking, "should_run_guardrail", return_value=True):
             with pytest.raises(GuardrailRaisedException):
                 await self._drain(self.blocking, [b"data: not-json\n\n", b"event: weird\n\n"])
+
+
+def _sse_frame(event: dict[str, object], name: str | None = None) -> bytes:
+    return f"event: {name or event['type']}\ndata: {json.dumps(event)}\n\n".encode()
+
+
+def _tool_start(index: int, name: str, tool_input: dict[str, object] | None = None) -> dict[str, object]:
+    block: Final = {"type": "tool_use", "id": f"tu_{index}", "name": name, "input": tool_input or {}}
+    return {"type": "content_block_start", "index": index, "content_block": block}
+
+
+def _input_delta(index: int, partial_json: str) -> dict[str, object]:
+    return {
+        "type": "content_block_delta",
+        "index": index,
+        "delta": {"type": "input_json_delta", "partial_json": partial_json},
+    }
+
+
+def _block_stop(index: int) -> dict[str, object]:
+    return {"type": "content_block_stop", "index": index}
+
+
+_LS: Final = {"command": "ls"}
+_RM_RF: Final = {"command": "rm -rf /"}
+_OPENING: Final = tuple(
+    _sse_frame(event)
+    for event in (
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-5",
+                "content": [],
+                "stop_reason": None,
+                "usage": {"input_tokens": 10, "output_tokens": 0},
+            },
+        },
+        {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "working"}},
+        _block_stop(0),
+    )
+)
+_CLOSING: Final = (
+    _sse_frame({"type": "message_delta", "delta": {"stop_reason": "tool_use"}, "usage": {"output_tokens": 5}}),
+    _sse_frame({"type": "message_stop"}),
+)
+
+
+def _stream(*call_frames: bytes) -> tuple[bytes, ...]:
+    return (*_OPENING, *call_frames, *_CLOSING)
+
+
+def _bash_call(command: dict[str, str]) -> tuple[bytes, ...]:
+    return tuple(
+        _sse_frame(event) for event in (_tool_start(1, "Bash"), _input_delta(1, json.dumps(command)), _block_stop(1))
+    )
+
+
+_RM_RF_CALL: Final = _bash_call(_RM_RF)
+_DENIED_CALL_SHAPES: Final = {
+    "commented-frames": _stream(*(b": data: keepalive\n" + frame for frame in _RM_RF_CALL)),
+    "crlf-frames": _stream(*(frame.replace(b"\n", b"\r\n") for frame in _RM_RF_CALL)),
+    "cr-frames": _stream(*(frame.replace(b"\n", b"\r") for frame in _RM_RF_CALL)),
+    "over-many-data-lines": _stream(*(frame.replace(b", ", b",\ndata: ") for frame in _RM_RF_CALL)),
+    "byte-order-mark": (b"\xef\xbb\xbf" + _OPENING[0].split(b"\n", 1)[1], *_stream(*_RM_RF_CALL)[1:]),
+    "typed-only-by-event-names": _stream(
+        *(re.sub(rb'"type": "content_block_\w+", ', b"", frame, count=1) for frame in _RM_RF_CALL)
+    ),
+    "inside-message-start": (
+        _OPENING[0].replace(
+            b'"content": []',
+            b'"content": ['
+            + json.dumps({"type": "tool_use", "id": "tu_9", "name": "Bash", "input": _RM_RF}).encode()
+            + b"]",
+        ),
+        *_OPENING[1:],
+        *_CLOSING,
+    ),
+    "interleaved-input-deltas": _stream(
+        *(
+            _sse_frame(event)
+            for event in (
+                _tool_start(1, "Read"),
+                _tool_start(2, "Bash"),
+                _input_delta(1, json.dumps(_LS)),
+                {"type": "content_block_start", "index": 3, "content_block": {"type": "text", "text": ""}},
+                _input_delta(2, json.dumps(_RM_RF)),
+                _block_stop(1),
+                _block_stop(2),
+                _block_stop(3),
+            )
+        )
+    ),
+    "input-finished-by-a-ping-named-frame": _stream(
+        _sse_frame(_tool_start(1, "Bash")),
+        _sse_frame(_input_delta(1, '{"command": "rm -rf /"')),
+        _sse_frame(_input_delta(1, ', "command": "ls"}'), name="ping"),
+        _sse_frame(_block_stop(1)),
+    ),
+    "input-finished-by-a-frame-the-stream-never-ended": (
+        *_OPENING,
+        _sse_frame(_tool_start(1, "Bash")),
+        _sse_frame(_input_delta(1, '{"command": "rm -rf /"')),
+        _sse_frame(_input_delta(1, ', "command": "ls"}')).removesuffix(b"\n\n"),
+    ),
+}
+
+
+def _overlapped_calls(first_command: dict[str, str], second_command: dict[str, str]) -> tuple[bytes, ...]:
+    return _stream(
+        *(
+            _sse_frame(event)
+            for event in (
+                _tool_start(1, "Bash"),
+                _tool_start(2, "Bash"),
+                _input_delta(1, json.dumps(first_command)),
+                _block_stop(1),
+                _input_delta(2, json.dumps(second_command)),
+                _block_stop(2),
+            )
+        )
+    )
+
+
+_LS_STREAM: Final = _stream(*_bash_call(_LS))
+_ALLOWED_CALL_SHAPES: Final = {
+    "crlf": tuple(frame.replace(b"\n", b"\r\n") for frame in _LS_STREAM),
+    "commented": tuple(b": data: keepalive\n" + frame for frame in _LS_STREAM),
+    "input-in-the-start-event": _stream(_sse_frame(_tool_start(1, "Bash", _LS)), _sse_frame(_block_stop(1))),
+    "input-in-the-start-event-and-its-deltas": _stream(
+        *(
+            _sse_frame(event)
+            for event in (_tool_start(1, "Bash", _LS), _input_delta(1, json.dumps(_LS)), _block_stop(1))
+        )
+    ),
+    "byte-order-mark": (b"\xef\xbb\xbf" + _LS_STREAM[0], *_LS_STREAM[1:]),
+}
+
+
+def _sdk_message(chunks: list[object]) -> Message:
+    body: Final = b"".join(chunk for chunk in chunks if isinstance(chunk, bytes))
+    transport: Final = httpx.MockTransport(
+        lambda _request: httpx.Response(200, headers={"content-type": "text/event-stream"}, content=body)
+    )
+    client: Final = anthropic.Anthropic(
+        api_key="test", base_url="http://test", http_client=httpx.Client(transport=transport)
+    )
+    with client.messages.stream(
+        model="claude-sonnet-4-5", max_tokens=1, messages=[{"role": "user", "content": "hi"}]
+    ) as stream:
+        return stream.get_final_message()
+
+
+class TestToolPermissionGuardrailAnthropicStreamShapes:
+    """What an Anthropic SDK client reads from the stream the guardrail delivers, whatever SSE shape it has."""
+
+    def _bash_ls_only(self, on_disallowed_action: Literal["block", "rewrite"]) -> ToolPermissionGuardrail:
+        return ToolPermissionGuardrail(
+            guardrail_name=f"anthropic-bash-ls-only-{on_disallowed_action}",
+            rules=[
+                {"id": "read_any", "tool_name": r"^Read$", "decision": "allow"},
+                {
+                    "id": "bash_ls_only",
+                    "tool_name": r"^Bash$",
+                    "decision": "allow",
+                    "allowed_param_patterns": {"command": r"^ls$"},
+                },
+            ],
+            default_action="deny",
+            on_disallowed_action=on_disallowed_action,
+        )
+
+    async def _drain(self, guardrail: ToolPermissionGuardrail, chunks: tuple[bytes, ...]) -> list[object]:
+        async def _stream() -> AsyncIterator[bytes]:
+            for chunk in chunks:
+                yield chunk
+
+        return [
+            chunk
+            async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=UserAPIKeyAuth(), response=_stream(), request_data={}
+            )
+        ]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("chunks", _DENIED_CALL_SHAPES.values(), ids=_DENIED_CALL_SHAPES)
+    async def test_client_never_reads_a_denied_call_whatever_the_stream_shape(self, chunks: tuple[bytes, ...]):
+        out: Final = await self._drain(self._bash_ls_only("rewrite"), chunks)
+
+        tool_inputs: Final = [block.input for block in _sdk_message(out).content if block.type == "tool_use"]
+        assert _RM_RF not in tool_inputs
+
+    @pytest.mark.asyncio
+    async def test_allowed_calls_that_overlap_are_forwarded_as_the_upstream_sent_them(self):
+        chunks: Final = _overlapped_calls(_LS, _LS)
+
+        assert await self._drain(self._bash_ls_only("block"), chunks) == list(chunks)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(("first", "second", "kept_id"), [(_LS, _RM_RF, "tu_1"), (_RM_RF, _LS, "tu_2")])
+    async def test_of_two_calls_that_overlap_only_the_allowed_one_reaches_the_client_with_its_own_input(
+        self, first: dict[str, str], second: dict[str, str], kept_id: str
+    ):
+        out: Final = await self._drain(self._bash_ls_only("rewrite"), _overlapped_calls(first, second))
+
+        calls: Final = [block for block in _sdk_message(out).content if block.type == "tool_use"]
+        assert [(call.id, call.input) for call in calls] == [(kept_id, _LS)]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("chunks", _ALLOWED_CALL_SHAPES.values(), ids=_ALLOWED_CALL_SHAPES)
+    async def test_allowed_call_reaches_the_client_as_the_plain_stream_would(self, chunks: tuple[bytes, ...]):
+        out: Final = await self._drain(self._bash_ls_only("block"), chunks)
+
+        assert _sdk_message(out) == _sdk_message(list(_LS_STREAM))
+
+
+_GENERATE_CONTENT_STREAM_ROUTE: Final = "/v1beta/models/gemini-3.8-flash:streamGenerateContent"
+
+
+def _generate_content_frame(*candidate_parts: list[dict[str, object]], first_index: int = 0) -> bytes:
+    candidates: Final = [
+        {"content": {"role": "model", "parts": parts}, "index": index}
+        for index, parts in enumerate(candidate_parts, start=first_index)
+    ]
+    return f"data: {json.dumps({'candidates': candidates})}\r\n\r\n".encode()
+
+
+_THOUGHT_SIGNATURE: Final = {"thoughtSignature": "c2lnbmF0dXJl"}
+
+
+def _gemini_function_call(name: str) -> dict[str, object]:
+    return {"functionCall": {"name": name, "args": {"path": "/tmp/report.txt"}}}
+
+
+def _signed(part: dict[str, object]) -> dict[str, object]:
+    return {**part, **_THOUGHT_SIGNATURE}
+
+
+def _generate_content_request() -> dict[str, object]:
+    return {
+        "model": "gemini-3.8-flash",
+        "contents": [{"role": "user", "parts": [{"text": "Check the weather, then delete the report"}]}],
+        "tools": [{"functionDeclarations": [{"name": "get_weather"}, {"name": "delete_file"}]}],
+    }
+
+
+def _joined_text(chunks: Sequence[object]) -> str:
+    return "".join(chunk.decode() if isinstance(chunk, bytes) else str(chunk) for chunk in chunks)
+
+
+def _event_parts(event: str) -> tuple[dict[str, object], ...]:
+    candidates: Final = json.loads(event.removeprefix("data: "))["candidates"]
+    return tuple(chain.from_iterable(candidate["content"]["parts"] for candidate in candidates))
+
+
+def _stream_parts(chunks: Sequence[object]) -> tuple[dict[str, object], ...]:
+    events: Final = (event for event in _joined_text(chunks).split("\r\n\r\n") if event)
+    return tuple(chain.from_iterable(map(_event_parts, events)))
+
+
+_DENIED_IN_A_LATER_FRAME: Final = [
+    _generate_content_frame([{"text": "Deleting it"}]),
+    _generate_content_frame([_signed(_gemini_function_call("delete_file"))]),
+]
+_DENIED_FRAME: Final = _generate_content_frame(
+    [_signed(_gemini_function_call("get_weather")), _gemini_function_call("delete_file")]
+)
+_DENIED_FIRST_CALL: Final = _signed(_gemini_function_call("delete_file"))
+_COMPACT_SIGNED_ALLOWED_FRAME: Final = (
+    b'data: {"candidates":[{"content":{"parts":[{"functionCall":{"name":"get_weather"},'
+    b'"thoughtSignature":"c2lnbmF0dXJl"}]}}]}\r\n\r\n'
+)
+_COMPACT_ALLOWED_FRAME: Final = b'data: {"candidates":[{"content":{"parts":[{"functionCall":{"name":"get_weather"}}]}}]}\r\n\r\n'
+
+
+class TestToolPermissionGuardrailGenerateContentStream:
+    """The Google ``:streamGenerateContent`` route hands the hook raw Gemini SSE frames, which the guardrail
+    refused as an unparseable Anthropic stream, so every stream on that route answered 400."""
+
+    def setup_method(self) -> None:
+        rules: Final = [
+            {"id": "allow_weather", "tool_name": r"^get_weather$", "decision": "allow"},
+            {"id": "deny_delete", "tool_name": r"^delete_file$", "decision": "deny"},
+        ]
+        self.blocking = ToolPermissionGuardrail(
+            guardrail_name="gemini-block", rules=rules, default_action="deny", on_disallowed_action="block"
+        )
+        self.rewriting = ToolPermissionGuardrail(
+            guardrail_name="gemini-rewrite", rules=rules, default_action="deny", on_disallowed_action="rewrite"
+        )
+
+    async def _drain(self, guardrail: ToolPermissionGuardrail, chunks: Sequence[object]) -> list[object]:
+        async def _stream() -> AsyncIterator[object]:
+            for chunk in chunks:
+                yield chunk
+
+        return [
+            c
+            async for c in guardrail.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=UserAPIKeyAuth(request_route=_GENERATE_CONTENT_STREAM_ROUTE),
+                response=_stream(),
+                request_data=_generate_content_request(),
+            )
+        ]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("mode", ["block", "rewrite"])
+    @pytest.mark.parametrize(
+        "chunks",
+        [
+            pytest.param(
+                [_generate_content_frame([{"text": "Sunny"}]), _generate_content_frame([{"text": " and warm"}])],
+                id="text",
+            ),
+            pytest.param(
+                [
+                    _generate_content_frame([{"text": "Checking"}]),
+                    _generate_content_frame([_signed(_gemini_function_call("get_weather"))]),
+                ],
+                id="allowed-call",
+            ),
+            pytest.param(
+                [_generate_content_frame([_gemini_function_call("get_weather")])[:37],
+                 _generate_content_frame([_gemini_function_call("get_weather")])[37:]],
+                id="allowed-call-split-mid-line",
+            ),
+            pytest.param(
+                [
+                    b": keepalive\r\n\r\n",
+                    b'data: {"candidates": [{"finishReason": "STOP", "index": 0}]}\r\n\r\n',
+                    b'data: {"usageMetadata": {"totalTokenCount": 3}}\r\n\r\n',
+                    b"data: [DONE]\r\n\r\n",
+                ],
+                id="frames-without-parts",
+            ),
+            pytest.param(
+                [b'data: {"error": {"code": 429, "message": "quota", "status": "RESOURCE_EXHAUSTED"}}\r\n\r\n'],
+                id="upstream-error",
+            ),
+        ],
+    )
+    async def test_stream_without_a_denied_call_is_delivered_verbatim(self, chunks: list[bytes], mode: str) -> None:
+        guardrail: Final = self.blocking if mode == "block" else self.rewriting
+
+        delivered: Final = await self._drain(guardrail, chunks)
+
+        assert len(delivered) == len(chunks)
+        assert all(out is sent for out, sent in zip(delivered, chunks))
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "chunks",
+        [
+            pytest.param(_DENIED_IN_A_LATER_FRAME, id="later-frame"),
+            pytest.param([_DENIED_FRAME], id="second-part"),
+            pytest.param(
+                [_generate_content_frame([{"text": "Done"}], [_gemini_function_call("delete_file")])],
+                id="second-candidate",
+            ),
+            pytest.param(
+                [b'data: {"candidates": [{"content": {"parts": [{"function_call": {"name": "delete_file"}}]}}]}\r\r'],
+                id="snake-case-cr-line-breaks",
+            ),
+            pytest.param([_DENIED_FRAME[:50], _DENIED_FRAME[50:]], id="split-mid-line"),
+        ],
+    )
+    async def test_denied_call_blocks_the_stream(self, chunks: list[bytes]) -> None:
+        with pytest.raises(GuardrailRaisedException, match="deny_delete"):
+            await self._drain(self.blocking, chunks)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("as_text", [False, True], ids=["bytes", "str"])
+    async def test_rewrite_replaces_only_the_denied_call(self, as_text: bool) -> None:
+        sent: Final = [
+            _generate_content_frame([{"text": "Checking"}]),
+            _DENIED_FRAME,
+            _generate_content_frame([{"text": "Done"}]),
+        ]
+        chunks: Final = [chunk.decode() for chunk in sent] if as_text else sent
+
+        delivered: Final = await self._drain(self.rewriting, chunks)
+
+        assert all(isinstance(chunk, str if as_text else bytes) for chunk in delivered)
+        first, rewritten, last, after_last = _joined_text(delivered).split("\r\n\r\n")
+        assert (first, last, after_last) == (sent[0].decode().removesuffix("\r\n\r\n"), sent[2].decode().removesuffix("\r\n\r\n"), "")
+        allowed_call, denial = _event_parts(rewritten)
+        assert allowed_call == _signed(_gemini_function_call("get_weather"))
+        assert list(denial) == ["text"]
+        assert "deny_delete" in denial["text"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "chunks",
+        [
+            pytest.param([_generate_content_frame([_DENIED_FIRST_CALL, _gemini_function_call("get_weather")])], id="same-frame"),
+            pytest.param(
+                [
+                    _generate_content_frame([_DENIED_FIRST_CALL]),
+                    _generate_content_frame([_gemini_function_call("get_weather")]),
+                ],
+                id="later-frame",
+            ),
+        ],
+    )
+    async def test_rewrite_moves_a_denied_first_call_signature_to_the_first_kept_call(
+        self, chunks: list[bytes]
+    ) -> None:
+        delivered: Final = await self._drain(self.rewriting, chunks)
+
+        denial, allowed_call = _stream_parts(delivered)
+        assert list(denial) == ["text"]
+        assert "deny_delete" in denial["text"]
+        assert allowed_call == _signed(_gemini_function_call("get_weather"))
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "chunks",
+        [
+            pytest.param(
+                [_generate_content_frame([_DENIED_FIRST_CALL, _gemini_function_call("delete_file")])],
+                id="every-call-denied",
+            ),
+            pytest.param(
+                [_generate_content_frame([_DENIED_FIRST_CALL], [_gemini_function_call("get_weather")])],
+                id="kept-call-in-another-candidate",
+            ),
+            pytest.param(
+                [
+                    _generate_content_frame([_DENIED_FIRST_CALL]),
+                    _generate_content_frame([_gemini_function_call("get_weather")], first_index=1),
+                ],
+                id="kept-call-of-another-candidate-in-a-later-frame",
+            ),
+        ],
+    )
+    async def test_rewrite_keeps_the_signature_on_the_denial_when_its_turn_has_no_kept_call(
+        self, chunks: list[bytes]
+    ) -> None:
+        delivered: Final = await self._drain(self.rewriting, chunks)
+
+        signed_denial, other_part = _stream_parts(delivered)
+        assert signed_denial == {"text": signed_denial["text"], **_THOUGHT_SIGNATURE}
+        assert "deny_delete" in signed_denial["text"]
+        assert _THOUGHT_SIGNATURE.keys().isdisjoint(other_part)
+
+    @pytest.mark.asyncio
+    async def test_rewrite_leaves_a_signed_kept_call_its_own_signature(self) -> None:
+        kept_call: Final = {**_gemini_function_call("get_weather"), "thoughtSignature": "a2VwdA=="}
+
+        delivered: Final = await self._drain(self.rewriting, [_generate_content_frame([_DENIED_FIRST_CALL, kept_call])])
+
+        signed_denial, allowed_call = _stream_parts(delivered)
+        assert signed_denial == {"text": signed_denial["text"], **_THOUGHT_SIGNATURE}
+        assert "deny_delete" in signed_denial["text"]
+        assert allowed_call == kept_call
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "chunks, untouched",
+        [
+            pytest.param(
+                [_COMPACT_SIGNED_ALLOWED_FRAME, _generate_content_frame([_gemini_function_call("delete_file")])],
+                0,
+                id="signed-kept-call-first",
+            ),
+            pytest.param(
+                [_generate_content_frame([_gemini_function_call("delete_file")]), _COMPACT_ALLOWED_FRAME],
+                1,
+                id="unsigned-denied-call-first",
+            ),
+        ],
+    )
+    async def test_rewrite_leaves_a_frame_without_a_changed_part_byte_for_byte(
+        self, chunks: list[bytes], untouched: int
+    ) -> None:
+        delivered: Final = await self._drain(self.rewriting, chunks)
+
+        frames: Final = _joined_text(delivered).split("\r\n\r\n")
+        assert frames[untouched] == chunks[untouched].decode().removesuffix("\r\n\r\n")
+        assert "deny_delete" in frames[1 - untouched]
+
+    @pytest.mark.asyncio
+    async def test_rewrite_keeps_the_other_candidates_of_the_denied_frame(self) -> None:
+        finished: Final = {"finishReason": "STOP", "index": 0}
+        denied: Final = {"content": {"role": "model", "parts": [_gemini_function_call("delete_file")]}, "index": 1}
+        frame: Final = f"data: {json.dumps({'candidates': [finished, denied]})}\r\n\r\n".encode()
+
+        delivered: Final = await self._drain(self.rewriting, [frame])
+
+        kept, rewritten = json.loads(_joined_text(delivered).removeprefix("data: "))["candidates"]
+        assert kept == finished
+        (denial,) = rewritten["content"]["parts"]
+        assert list(denial) == ["text"]
+        assert "deny_delete" in denial["text"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("mode", ["block", "rewrite"])
+    @pytest.mark.parametrize(
+        "chunks",
+        [
+            pytest.param([b"data: {not json\r\n\r\n"], id="non-json-data"),
+            pytest.param(
+                [b'{"candidates": [{"content": {"parts": [{"functionCall": {"name": "delete_file"}}]}}]}\r\n'],
+                id="raw-json-line",
+            ),
+            pytest.param(
+                [_generate_content_frame([{"functionCall": {"name": "delete_file", "partialArgs": [], "willContinue": True}}])],
+                id="unknown-call-field",
+            ),
+            pytest.param([_generate_content_frame([{"functionCall": {"args": {}}}])], id="nameless-call"),
+            pytest.param([_generate_content_frame([{"functionCall": {"name": "get_weather", "args": "rm"}}])], id="non-object-args"),
+            pytest.param(
+                [_generate_content_frame([{"functionCall": {"name": "get_weather"}, "function_call": {"name": "delete_file"}}])],
+                id="both-call-keys",
+            ),
+            pytest.param([b'data: {"candidates": {"content": {}}}\r\n\r\n'], id="candidates-not-a-list"),
+            pytest.param([b'data: {"candidates": [{"content": "delete_file"}]}\r\n\r\n'], id="content-not-an-object"),
+            pytest.param([b'data: {"candidates": [{"content": {"parts": ["delete_file"]}}]}\r\n\r\n'], id="part-not-an-object"),
+            pytest.param(
+                [b'data: {"candidates": [{"content": {"parts": {"functionCall": {"name": "delete_file"}}}}]}\r\n\r\n'],
+                id="parts-not-a-list",
+            ),
+            pytest.param(
+                [b'data: {"candidates": [{"index": "1", "content": {"parts": [{"functionCall": {"name": "get_weather"}}]}}]}\r\n\r\n'],
+                id="non-integer-candidate-index",
+            ),
+            pytest.param(
+                [f"data: {json.dumps({'candidates': [{'content': {'parts': [{'text': 'a data: {}'}]}}]}, ensure_ascii=False)}\r\n\r\n".encode()],
+                id="line-separator-starts-a-data-line",
+            ),
+            pytest.param(
+                [b'data: {"candidates": [{"content": {"parts": [{"text": "caf\xe9"}]}}]}\r\n\r\n'], id="invalid-utf8"
+            ),
+            pytest.param(
+                [
+                    _generate_content_frame([{"text": "Deleting the report"}]),
+                    {"candidates": [{"content": {"parts": [_gemini_function_call("delete_file")]}}]},
+                ],
+                id="non-text-chunk",
+            ),
+        ],
+    )
+    async def test_stream_no_client_reads_safely_fails_closed(self, chunks: list[object], mode: str) -> None:
+        guardrail: Final = self.blocking if mode == "block" else self.rewriting
+
+        with pytest.raises(GuardrailRaisedException, match="could not be verified"):
+            await self._drain(guardrail, chunks)

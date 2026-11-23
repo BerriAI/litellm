@@ -17170,6 +17170,8 @@
           "defaultBudget": "Default Budget (USD)",
           "defaultBudgetHint": "Default spend budget for each member in this team.",
           "defaultBudgetDuration": "Default Budget Duration",
+          "rolloverCap": "Member Rollover Cap (USD)",
+          "rolloverCapHint": "Maximum total allowance including carryover per member. Set a reset period and enter a cap above the default member budget. The team budget still applies.",
           "inheritResetPeriod": "Inherit team reset period",
           "defaultPerModelBudget": "Default Per-Model Budget",
           "defaultPerModelBudgetHint": "Set a default per-model spend cap for each team member, with an independent reset window.",
@@ -17467,6 +17469,7 @@
       "empty": "No permissions available"
     },
     "memberTab": {
+      "rolledOver": "${{amount}} carried over",
       "budgetSource": {
         "teamDefault": "Team default",
         "custom": "Custom"
@@ -21083,6 +21086,7 @@
       "overview": {
         "spend": "Spend",
         "budgetOf": "of {{budget}}",
+        "rolledOver": "${{amount}} carried over",
         "teams": "Teams",
         "addTeam": "Add Team",
         "teamName": "Team Name",
@@ -21157,6 +21161,8 @@
         "unlimitedBudget": "Unlimited Budget",
         "maxBudgetPlaceholder": "Enter a numerical value",
         "resetBudget": "Reset Budget",
+        "rolloverCap": "Rollover Cap (USD)",
+        "rolloverCapHint": "Maximum total allowance including carryover. Set a reset period and enter a cap above the base budget. Leave blank to disable rollover.",
         "noChange": "No change",
         "tpmLimit": "TPM Limit",
         "rpmLimit": "RPM Limit",

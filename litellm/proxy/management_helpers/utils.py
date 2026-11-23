@@ -399,6 +399,7 @@ async def handle_budget_for_entity(
 # default member-budget into an individual member-budget so that the new
 # row starts with the same limits as the default.
 _CLONABLE_BUDGET_FIELDS: Final[tuple[str, ...]] = (
+    "rollover_max_budget",
     "max_budget",
     "soft_budget",
     "max_parallel_requests",
@@ -930,8 +931,8 @@ async def _emit_management_endpoint_otel_span(
         )
 
 
-_P: Final = ParamSpec("_P")
-_R: Final = TypeVar("_R")
+_P = ParamSpec("_P")
+_R = TypeVar("_R")
 
 
 def management_endpoint_wrapper(func: Callable[_P, Awaitable[_R]]) -> Callable[_P, Awaitable[_R]]:

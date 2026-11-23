@@ -297,6 +297,8 @@ export interface TeamMembership {
   budget_source: TeamMemberBudgetSource;
   spend: number;
   total_spend: number | null;
+  rollover_credit?: number | null;
+  effective_max_budget?: number | null;
   litellm_budget_table: {
     budget_id: string;
     soft_budget: number | null;
@@ -357,6 +359,7 @@ export interface TeamData {
     caller_edit_access?: CallerEditAccess;
     team_member_budget_table: {
       max_budget: number | null;
+      rollover_max_budget?: number | null;
       budget_duration: string | null;
       tpm_limit: number | null;
       rpm_limit: number | null;
@@ -387,6 +390,7 @@ const buildMemberDefaultsSchema = (t: TFunction) => {
   const fields = {
     default_team_member_models: z.array(z.string()).optional(),
     team_member_budget: numericInputSchema,
+    team_member_rollover_max_budget: numericInputSchema,
     team_member_budget_duration: z.string().nullish(),
     team_member_key_duration: z.string().optional(),
     team_member_tpm_limit: numericInputSchema,
@@ -554,6 +558,7 @@ const computeEffectiveGuardrails = (info: TeamInfoRecord, globalGuardrailNames: 
 const toMemberDefaultsValues = (info: TeamInfoRecord): MemberDefaultsValues => ({
   default_team_member_models: info.default_team_member_models || [],
   team_member_budget: info.team_member_budget_table?.max_budget,
+  team_member_rollover_max_budget: info.team_member_budget_table?.rollover_max_budget,
   team_member_budget_duration: info.team_member_budget_table?.budget_duration,
   team_member_key_duration: info.metadata?.team_member_key_duration,
   team_member_tpm_limit: info.team_member_budget_table?.tpm_limit,
@@ -1084,6 +1089,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       default_team_member_models: values.default_team_member_models,
       team_member_budget: budget,
       team_member_budget_duration: values.team_member_budget_duration,
+      ...(memberDefaultsForm.getFieldState("team_member_rollover_max_budget").isDirty
+        ? { team_member_rollover_max_budget: numberOrNull(values.team_member_rollover_max_budget) }
+        : {}),
       team_member_key_duration: values.team_member_key_duration,
       ...(values.team_member_tpm_limit !== undefined || values.team_member_rpm_limit !== undefined
         ? {
@@ -1418,6 +1426,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const noLimit = t("teams.teamInfo.settingsView.noLimit");
   const memberDefaultSummary = [
     [t("teams.teamInfo.editForm.teamMemberSettings.defaultBudget"), memberBudget?.max_budget ?? noLimit],
+    [t("teams.teamInfo.editForm.teamMemberSettings.rolloverCap"), memberBudget?.rollover_max_budget ?? noLimit],
     [
       t("teams.teamInfo.editForm.teamMemberSettings.defaultBudgetDuration"),
       memberBudget?.budget_duration ??
@@ -1561,6 +1570,18 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
               label={labelWithHint(
                 t("teams.teamInfo.editForm.teamMemberSettings.defaultBudget"),
                 t("teams.teamInfo.editForm.teamMemberSettings.defaultBudgetHint"),
+              )}
+            >
+              {({ ref, value, ...field }) => (
+                <NumericalInput {...field} ref={ref} value={value ?? ""} step={0.01} precision={2} />
+              )}
+            </FormField>
+            <FormField
+              control={memberDefaultsForm.control}
+              name="team_member_rollover_max_budget"
+              label={labelWithHint(
+                t("teams.teamInfo.editForm.teamMemberSettings.rolloverCap"),
+                t("teams.teamInfo.editForm.teamMemberSettings.rolloverCapHint"),
               )}
             >
               {({ ref, value, ...field }) => (
