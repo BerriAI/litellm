@@ -330,6 +330,25 @@ async def test_losing_the_claim_or_subscription_generation_blocks_all_settlement
                 for d in await first_worker.claim(later, later + timedelta(minutes=1), 100)
                 if d.subscription_id == row.id
             ]
-            assert [d.body for d in due] == (['{"type":"gap","cursor":"previous-safe"}'] if outcome == "timeout" else [])
+            assert [d.body for d in due] == (
+                ['{"type":"gap","cursor":"previous-safe"}'] if outcome == "timeout" else []
+            )
         finally:
             await first_worker.delete(row.id)
+
+
+@pytest.mark.asyncio
+async def test_inbound_insert_acknowledges_duplicates_and_rejects_a_replaced_subscription() -> None:
+    async with _connected() as receiver, _connected() as admin:
+        row: Final = await _active(receiver)
+        active: Final = await receiver.get(row.id)
+        assert active is not None
+        try:
+            event: Final = _delivery(row.id)
+            assert await receiver.enqueue_current(active, event)
+            assert await receiver.enqueue_current(active, event)
+            await admin.terminate(row.id)
+            assert await admin.reserve(_row().model_copy(update={"id": row.id}))
+            assert not await receiver.enqueue_current(active, _delivery(row.id))
+        finally:
+            await admin.delete(row.id)
