@@ -73,11 +73,8 @@ def _raised(model: str, body: str, *, asynchronous: bool, stream: bool, **deploy
     [(_PROFILE_ARN, {}), (_CONVERSE_LIKE_PROFILE_ARN, {"api_base": "https://bedrock-like.example.com"})],
     ids=["converse", "converse_like"],
 )
-@pytest.mark.parametrize(
-    ("asynchronous", "stream"),
-    [(False, False), (True, False), (True, True)],
-    ids=["sync-non_streaming", "async-non_streaming", "async-streaming"],
-)
+@pytest.mark.parametrize("stream", [False, True], ids=["non_streaming", "streaming"])
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
 def test_profile_arn_without_base_model_names_base_model_when_bedrock_rejects_enabled_thinking(
     model: str, deployment: dict[str, str], asynchronous: bool, stream: bool
 ) -> None:

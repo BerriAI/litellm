@@ -4,7 +4,12 @@ from typing import Final
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.bedrock.chat.converse_transformation import UNRESOLVED_ARN_BASE_MODEL_EXAMPLE
 from litellm.llms.bedrock.chat.native_output_fallback import NativeOutputAttemptResult, NativeOutputResponse
-from litellm.llms.bedrock.common_utils import bedrock_capability_model, is_bedrock_application_inference_profile_arn
+from litellm.llms.bedrock.common_utils import (
+    BedrockError,
+    bedrock_capability_model,
+    is_bedrock_application_inference_profile_arn,
+)
+from litellm.llms.custom_httpx.http_handler import MaskedHTTPStatusError
 
 UNRESOLVED_ARN_THINKING_HINT: Final = (
     "An application inference profile ARN does not name its model, so LiteLLM cannot tell that this model needs "
@@ -16,8 +21,12 @@ UNRESOLVED_ARN_THINKING_HINT: Final = (
 )
 
 
+def _is_enabled_thinking_rejection(status_code: int, message: str) -> bool:
+    return status_code == 400 and "thinking.type.enabled" in message and "is not supported" in message
+
+
 def is_bedrock_enabled_thinking_rejection(error: BaseLLMException) -> bool:
-    return error.status_code == 400 and "thinking.type.enabled" in error.message and "is not supported" in error.message
+    return _is_enabled_thinking_rejection(error.status_code, error.message)
 
 
 def _with_hint(error: BaseLLMException) -> BaseLLMException:
@@ -29,6 +38,15 @@ def _with_hint(error: BaseLLMException) -> BaseLLMException:
         response=error.response,
         body=error.body,  # pyright: ignore[reportUnknownMemberType]  # BaseLLMException.body is a bare dict
         status_code_is_synthesized=error.status_code_is_synthesized,
+    )
+
+
+def _sync_stream_error_with_hint(error: MaskedHTTPStatusError) -> BedrockError:
+    return BedrockError(
+        status_code=error.response.status_code,
+        message=f"{error.response.text}\n\n{UNRESOLVED_ARN_THINKING_HINT}",
+        headers=error.response.headers,
+        response=error.response,
     )
 
 
@@ -48,6 +66,10 @@ def _with_unresolved_arn_thinking_hint(attempt: Callable[[], NativeOutputAttempt
         if not is_bedrock_enabled_thinking_rejection(error):
             raise
         raise _with_hint(error) from error
+    except MaskedHTTPStatusError as error:
+        if not _is_enabled_thinking_rejection(error.response.status_code, error.response.text):
+            raise
+        raise _sync_stream_error_with_hint(error) from error
     return _await_with_hint(result) if isinstance(result, Coroutine) else result
 
 
