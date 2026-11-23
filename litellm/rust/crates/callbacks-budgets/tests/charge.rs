@@ -833,6 +833,7 @@ async fn a_pipeline_that_fails_drops_every_counter_it_carried_and_reports_the_fa
     assert!(snapshot(&store).is_empty());
 }
 
+#[rstest]
 #[tokio::test]
 async fn two_pods_charging_one_cold_counter_hold_its_cached_spend_once() {
     let server = RedisServer::start().await.unwrap();
@@ -861,6 +862,7 @@ async fn two_pods_charging_one_cold_counter_hold_its_cached_spend_once() {
     assert_eq!(held, Some(10.0));
 }
 
+#[rstest]
 #[tokio::test]
 async fn a_cached_spend_seed_that_fails_leaves_nothing_in_this_process() {
     let server = RedisServer::start().await.unwrap();
