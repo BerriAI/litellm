@@ -7640,3 +7640,118 @@ async def test_a_refused_placeholder_merge_keeps_the_proxy_error_shape(
         "404",
     )
     assert "User not found with ID: ghost-user" in error["message"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("user_email", "expected_emails"),
+    [
+        ("jane.doe@example.com", [{"value": "jane.doe@example.com", "type": None, "primary": True}]),
+        (None, []),
+    ],
+    ids=["with-email", "without-email"],
+)
+async def test_get_users_matched_by_user_id_returns_matching_username(
+    proxy_scim_client: AsyncClient,
+    proxy_admin_caller: None,
+    monkeypatch: pytest.MonkeyPatch,
+    user_email: str | None,
+    expected_emails: list[dict[str, object]],
+):
+    object_id: Final = "1b2c-object-id"
+    existing: Final = LiteLLM_UserTable(
+        user_id=object_id,
+        user_email=user_email,
+        user_alias="Jane Doe",
+        teams=[],
+        metadata={},
+    )
+    users: Final = MagicMock()
+    users.find_many = AsyncMock(return_value=[existing])
+    users.count = AsyncMock(return_value=1)
+    _proxy_database(monkeypatch, users=users, teams=MagicMock())
+
+    async with proxy_scim_client as client:
+        response = await client.get("/scim/v2/Users", params={"filter": f'userName eq "{object_id}"'})
+
+    assert response.status_code == 200
+    payload: Final = response.json()
+    assert payload["totalResults"] == 1
+    resource: Final = payload["Resources"][0]
+    assert resource["id"] == object_id
+    assert resource["userName"] == object_id
+    assert resource["emails"] == expected_emails
+
+
+@pytest.mark.asyncio
+async def test_get_users_matched_by_email_keeps_email_as_username(
+    proxy_scim_client: AsyncClient,
+    proxy_admin_caller: None,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    existing: Final = LiteLLM_UserTable(
+        user_id="1b2c-object-id",
+        user_email="jane.doe@example.com",
+        user_alias="Jane Doe",
+        teams=[],
+        metadata={},
+    )
+    users: Final = MagicMock()
+    users.find_many = AsyncMock(return_value=[existing])
+    users.count = AsyncMock(return_value=1)
+    _proxy_database(monkeypatch, users=users, teams=MagicMock())
+
+    async with proxy_scim_client as client:
+        response = await client.get("/scim/v2/Users", params={"filter": 'userName eq "jane.doe@example.com"'})
+
+    assert response.status_code == 200
+    resource: Final = response.json()["Resources"][0]
+    assert resource["id"] == "1b2c-object-id"
+    assert resource["userName"] == "jane.doe@example.com"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "bad_filter",
+    [
+        'emails[type eq "work"].value eq "jane.doe@example.com"',
+        'externalId eq "ext-1"',
+        'userName eq "a" and active eq true',
+        'userName sw "jane"',
+        'userName eq "unterminated',
+        "not a filter",
+        "   ",
+    ],
+    ids=[
+        "path-filter",
+        "unsupported-attribute",
+        "compound-and",
+        "unsupported-operator",
+        "unmatched-quote",
+        "malformed",
+        "blank",
+    ],
+)
+async def test_get_users_rejects_unparseable_and_unsupported_filters_with_invalid_filter(
+    proxy_scim_client: AsyncClient,
+    proxy_admin_caller: None,
+    monkeypatch: pytest.MonkeyPatch,
+    bad_filter: str,
+):
+    users: Final = MagicMock()
+    users.find_many = AsyncMock(return_value=[])
+    users.count = AsyncMock(return_value=0)
+    _proxy_database(monkeypatch, users=users, teams=MagicMock())
+
+    async with proxy_scim_client as client:
+        response = await client.get("/scim/v2/Users", params={"filter": bad_filter})
+
+    assert response.status_code == 400
+    assert response.headers["content-type"] == "application/scim+json"
+    body: Final = response.json()
+    assert body["schemas"] == [_SCIM_ERROR_URN]
+    assert body["status"] == "400"
+    assert body["scimType"] == "invalidFilter"
+    assert body["detail"]
+    users.find_many.assert_not_awaited()
+    users.count.assert_not_awaited()

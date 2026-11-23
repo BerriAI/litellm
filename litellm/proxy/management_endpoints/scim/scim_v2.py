@@ -9,6 +9,7 @@ from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Se
 from copy import deepcopy
 from dataclasses import dataclass
 from functools import partial, reduce
+from http import HTTPStatus
 from itertools import chain, groupby
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Final, NamedTuple, NoReturn, Protocol, TypeAlias, overload
@@ -65,7 +66,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
 )
 from litellm.proxy.litellm_pre_call_utils import sanitize_for_log
 from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
-from litellm.proxy.management_endpoints.scim.scim_errors import ScimRoute, scim_detail_of
+from litellm.proxy.management_endpoints.scim.scim_errors import ScimError, ScimRoute, scim_detail_of
 from litellm.proxy.management_endpoints.scim.scim_transformations import (
     ScimTransformations,
 )
@@ -1762,15 +1763,34 @@ async def get_service_provider_config(request: Request):
 
 
 def _parse_scim_eq_filter(scim_filter: str) -> tuple[str, str] | None:
-    """Parse the SCIM equality filters Okta uses before user lifecycle changes."""
+    """Parse supported single-clause SCIM equality filters."""
     match: Final = re.match(
-        r"""\s*([\w.]+)\s+eq\s+(['"]?)(.*?)\2\s*$""",
+        r"""^\s*([\w.]+)\s+eq\s+(?:"([^"]*)"|'([^']*)'|([^\s"']+))\s*$""",
         scim_filter,
         flags=re.IGNORECASE,
     )
     if not match:
         return None
-    return match.group(1).lower(), match.group(3)
+    value: Final = next((v for v in match.group(2, 3, 4) if v is not None), "")
+    return match.group(1).lower(), value
+
+
+def _align_filtered_scim_user_name(
+    user: LiteLLM_UserTable,
+    scim_user: SCIMUser,
+    filter_attribute: str | None,
+    filter_value: str | None,
+) -> SCIMUser:
+    """Keep Entra userName lookup round-trippable when a pre-existing user matched on user_id."""
+    if (
+        filter_attribute == "username"
+        and filter_value is not None
+        and user.user_id
+        and user.user_id.lower() == filter_value.lower()
+        and (scim_user.userName is None or scim_user.userName.lower() != filter_value.lower())
+    ):
+        return scim_user.model_copy(update={"userName": user.user_id})
+    return scim_user
 
 
 # User Endpoints
@@ -1799,20 +1819,31 @@ async def get_users(
         prisma_client: Final = await _get_prisma_client_or_raise_exception()
         # Parse filter if provided (basic support)
         where_conditions: Final[dict[str, object]] = {}
+        filter_attribute: str | None = None
+        filter_value: str | None = None
         if filter:
-            # Okta locates users by userName before deprovisioning. LiteLLM
-            # exposes SCIM userName from user_email, while older SCIM-created
-            # users may still have user_id == userName, so support both.
+            # Okta locates users by userName before deprovisioning while Entra
+            # looks up users by objectId stored as user_id. Reject unsupported or
+            # unparseable filters per RFC 7644 Section 3.4.2.2 instead of running
+            # an unfiltered scan.
             parsed_filter: Final = _parse_scim_eq_filter(filter)
-            if parsed_filter:
-                filter_attribute, filter_value = parsed_filter
-                if filter_attribute == "username":
-                    where_conditions["OR"] = [
-                        {"user_email": filter_value},
-                        {"user_id": filter_value},
-                    ]
-                elif filter_attribute == "emails.value":
-                    where_conditions["user_email"] = filter_value
+            if not parsed_filter or parsed_filter[0] not in ("username", "emails.value"):
+                raise ScimError(
+                    status_code=HTTPStatus.BAD_REQUEST.value,
+                    detail=(
+                        "Unsupported or invalid SCIM user filter. "
+                        "Supported filters are 'userName eq \"<value>\"' and 'emails.value eq \"<value>\"'."
+                    ),
+                    scim_type="invalidFilter",
+                )
+            filter_attribute, filter_value = parsed_filter
+            if filter_attribute == "username":
+                where_conditions["OR"] = [
+                    {"user_email": filter_value},
+                    {"user_id": filter_value},
+                ]
+            elif filter_attribute == "emails.value":
+                where_conditions["user_email"] = filter_value
 
         # Get users from database
         users: Final[Sequence[LiteLLM_UserTable]] = await _table(UserRepository(prisma_client)).find_many(
@@ -1829,7 +1860,9 @@ async def get_users(
         scim_users: Final[list[SCIMUser]] = []
         for user in users:
             scim_user = await ScimTransformations.transform_litellm_user_to_scim_user(user=user)
-            scim_users.append(scim_user)
+            scim_users.append(
+                _align_filtered_scim_user_name(user, scim_user, filter_attribute, filter_value)
+            )
 
         return SCIMListResponse(
             totalResults=total_count,
@@ -1838,6 +1871,8 @@ async def get_users(
             Resources=scim_users,
         )
 
+    except ScimError:
+        raise
     except Exception as e:
         raise handle_exception_on_proxy(e)
 

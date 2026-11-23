@@ -170,7 +170,7 @@ class SCIMGroup(SCIMResource):
 
 
 SCIM_ERROR_SCHEMA: Final = "urn:ietf:params:scim:api:messages:2.0:Error"
-ScimType: TypeAlias = Literal["uniqueness"]
+ScimType: TypeAlias = Literal["uniqueness", "invalidFilter"]
 
 
 class ScimErrorDetail(TypedDict):

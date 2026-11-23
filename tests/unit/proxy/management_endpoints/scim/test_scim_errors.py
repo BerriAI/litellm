@@ -7,7 +7,13 @@ from fastapi import HTTPException
 
 from litellm.litellm_core_utils.bug_report import NOTICE_PREFIX
 from litellm.proxy._types import ProxyErrorTypes, ProxyException
-from litellm.proxy.management_endpoints.scim.scim_errors import scim_error_from, scim_error_response
+from litellm.proxy.management_endpoints.scim.scim_errors import (
+    ScimError,
+    _scim_error_for,
+    scim_detail_of,
+    scim_error_from,
+    scim_error_response,
+)
 from litellm.proxy.management_endpoints.scim.scim_v2 import RosterWriteFailure, SCIMRosterSyncError
 from litellm.proxy.utils import handle_exception_on_proxy
 
@@ -179,3 +185,22 @@ def test_the_http_exception_headers_reach_the_scim_response():
         "Bearer",
         "application/scim+json",
     )
+
+
+def test_direct_scim_error_preserves_explicit_scim_type():
+    err: Final = ScimError(400, "Unsupported SCIM filter", scim_type="invalidFilter")
+    assert _scim_error_for(err) is err
+    assert scim_detail_of(err) == "Unsupported SCIM filter"
+
+    response: Final = scim_error_response(err)
+    assert response.status_code == 400
+    assert json.loads(bytes(response.body)) == {
+        "schemas": [_SCIM_ERROR_URN],
+        "status": "400",
+        "detail": "Unsupported SCIM filter",
+        "scimType": "invalidFilter",
+    }
+
+    conflict_response: Final = scim_error_response(ScimError(409, "Already exists"))
+    assert conflict_response.status_code == 409
+    assert json.loads(bytes(conflict_response.body))["scimType"] == "uniqueness"
