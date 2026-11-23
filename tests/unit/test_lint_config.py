@@ -181,3 +181,24 @@ def test_duplicate_key_in_included_file_is_reported_beside_its_other_mistakes(tm
         'config.yaml:17: warning: litellm_settings.drop_parms: unknown key, did you mean "drop_params"? '
         "(in an included file)",
     ]
+
+
+def test_fallback_shape_is_checked_when_models_live_in_the_db(tmp_path: Path) -> None:
+    text: Final = "litellm_settings:\n  fallbacks: chat\n  default_fallbacks: backup\n"
+    assert _lint(tmp_path, text) == [
+        "config.yaml:2: error: litellm_settings.fallbacks: must be a list like [{model_group: [fallback_group]}]",
+        "config.yaml:3: error: litellm_settings.default_fallbacks: must be a list of model groups like [fallback_group]",
+    ]
+
+
+def test_fallbacks_to_db_models_are_not_reported_without_a_model_list(tmp_path: Path) -> None:
+    text: Final = "router_settings:\n  fallbacks: [{chat: [backup]}]\n  default_fallbacks: [backup]\n"
+    assert _lint(tmp_path, text) == []
+
+
+def test_mistake_in_included_section_that_replaces_a_root_section_is_attributed_to_the_include(tmp_path: Path) -> None:
+    (tmp_path / "settings.yaml").write_text("router_settings:\n  routing_strategy: simple-shufle\n", encoding="utf-8")
+    assert _lint(tmp_path, VALID + "include:\n  - settings.yaml\n") == [
+        'config.yaml:17: error: router_settings.routing_strategy: unknown strategy "simple-shufle", '
+        'did you mean "simple-shuffle"? (in an included file)'
+    ]

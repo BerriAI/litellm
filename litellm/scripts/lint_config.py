@@ -271,10 +271,13 @@ def _fallback_findings(section: Mapping[str, object], path: PathKey, known: froz
                     continue
                 names = (source, *(target for target in listed if isinstance(target, str)))
                 for name in names:
-                    if not _is_known_model(name, known):
+                    if known and not _is_known_model(name, known):
                         yield Finding("warning", (*path, key, index), f'model group "{name}" is not in model_list')
-    for name in _sequence(section.get("default_fallbacks")) or ():
-        if isinstance(name, str) and not _is_known_model(name, known):
+    defaults: Final = _sequence(section.get("default_fallbacks"))
+    if defaults is None and section.get("default_fallbacks") is not None:
+        yield Finding("error", (*path, "default_fallbacks"), "must be a list of model groups like [fallback_group]")
+    for name in defaults or ():
+        if known and isinstance(name, str) and not _is_known_model(name, known):
             yield Finding("warning", (*path, "default_fallbacks"), f'model group "{name}" is not in model_list')
 
 
@@ -292,8 +295,7 @@ def _section_findings(config: Mapping[str, object], known_models: frozenset[str]
         for key in litellm_settings:
             if not _is_litellm_setting(key):
                 yield Finding("warning", ("litellm_settings", key), f"unknown key{_suggestion(key, candidates)}")
-        if known_models:
-            yield from _fallback_findings(litellm_settings, ("litellm_settings",), known_models)
+        yield from _fallback_findings(litellm_settings, ("litellm_settings",), known_models)
 
     general_settings: Final = parsed.get("general_settings")
     if general_settings is not None:
@@ -317,8 +319,7 @@ def _section_findings(config: Mapping[str, object], known_models: frozenset[str]
         if isinstance(strategy, str) and strategy not in _known_routing_strategies():
             hint = _suggestion(strategy, _known_routing_strategies())
             yield Finding("error", ("router_settings", "routing_strategy"), f'unknown strategy "{strategy}"{hint}')
-        if known_models:
-            yield from _fallback_findings(router_settings, ("router_settings",), known_models)
+        yield from _fallback_findings(router_settings, ("router_settings",), known_models)
 
 
 def lint_config(config: Mapping[str, object], environ: Mapping[str, str]) -> Iterator[Finding]:
@@ -392,22 +393,26 @@ def lint_file(config_path: Path, environ: Mapping[str, str]) -> tuple[Finding, .
             *duplicates,
             Finding("error", ("include",), f"cannot load included config: {error}", lines.get(("include",))),
         )
-    located: Final = (
-        _located(found, lines, has_includes="include" in config) for found in lint_config(merged, environ)
-    )
     root: Final = str(config_path.resolve())
     entries: Final = tuple((entry, root) for entry in _sequence(config.get("include")) or () if isinstance(entry, str))
+    locations: Final = _included_files(entries, frozenset(), root)
+    included_keys: Final = itertools.chain.from_iterable(_included_keys(location) for location in locations)
+    replaced: Final = frozenset(key for key in included_keys if not isinstance(config.get(key), list))
+    located: Final = (_located(found, lines, replaced, "include" in config) for found in lint_config(merged, environ))
     included_duplicates: Final = itertools.chain.from_iterable(
-        _included_duplicates(location, lines.get(("include",)))
-        for location in _included_files(entries, frozenset(), root)
+        _included_duplicates(location, lines.get(("include",))) for location in locations
     )
     return tuple(
         sorted((*duplicates, *included_duplicates, *located), key=lambda found: (found.line or 0, found.severity))
     )
 
 
-def _located(found: Finding, lines: Mapping[PathKey, int], *, has_includes: bool) -> Finding:
-    if has_includes and found.path and found.path not in lines:
+def _included_keys(location: str) -> tuple[str, ...]:
+    return tuple(_mapping(yaml.safe_load(Path(location).read_text(encoding="utf-8"))) or ())
+
+
+def _located(found: Finding, lines: Mapping[PathKey, int], replaced: frozenset[str], has_includes: bool) -> Finding:
+    if has_includes and found.path and (found.path not in lines or found.path[0] in replaced):
         return Finding(found.severity, found.path, f"{found.message} (in an included file)", lines.get(("include",)))
     return Finding(found.severity, found.path, found.message, _nearest_line(found.path, lines))
 
