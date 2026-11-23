@@ -97,6 +97,8 @@ class DescriptorCache:
     async def get(
         self, target: SubscriptionTarget, load: Callable[[SubscriptionTarget], Awaitable[tuple[EventType, ...]]]
     ) -> tuple[EventType, ...]:
+        if target.server.transport == "stdio":
+            return await load(target)
         key: Final = (target.server.server_id, target.credential)
         cached: Final = self._entries.get(key)
         now: Final = self._clock()
