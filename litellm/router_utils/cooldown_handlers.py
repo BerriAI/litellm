@@ -27,6 +27,7 @@ from litellm.constants import (
     SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD,
 )
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
+from litellm.llms.gemini.empty_image_response import IMAGE_ANSWER_ERRORS
 from litellm.router_utils.cooldown_cache import ROUTER_COOLDOWNS_TARGET, CooldownCacheValue
 from litellm.router_utils.cooldown_callbacks import router_cooldown_event_callback
 from litellm.types.router import Deployment
@@ -346,6 +347,10 @@ def _should_run_cooldown_logic(
         verbose_router_logger.debug(
             "Should Not Run Cooldown Logic: litellm rejected the request before calling the deployment"
         )
+        return False
+
+    if isinstance(original_exception, IMAGE_ANSWER_ERRORS):
+        verbose_router_logger.debug("Should Not Run Cooldown Logic: the deployment answered without an image")
         return False
 
     if request_kwargs is not None and _is_per_user_provider_request(request_kwargs):

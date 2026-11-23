@@ -74,6 +74,7 @@ from litellm.litellm_core_utils.bug_report import (
     should_report_bug,
     strip_bug_report_notice,
 )
+from litellm.llms.gemini.empty_image_response import IMAGE_ANSWER_ERRORS
 from litellm.proxy._types import (
     CommonProxyErrors,
     ProxyErrorTypes,
@@ -571,6 +572,8 @@ class _StreamIteratorHook(Protocol[_T]):
 
 
 def _is_client_error_exception(exc: Exception) -> bool:
+    if isinstance(exc, IMAGE_ANSWER_ERRORS):
+        return True
     if isinstance(exc, HTTPException):
         return exc.status_code < 500
     if isinstance(exc, ProxyException):

@@ -161,6 +161,7 @@ from litellm.types.utils import (
     EmbeddingResponse,
     GuardrailStatus,
     ImageResponse,
+    ImageUsage,
     LiteLLMBatch,
     LiteLLMLoggingBaseClass,
     LiteLLMRealtimeStreamLoggingObject,
@@ -335,6 +336,12 @@ def _get_provider_request_id(original_exception: Exception) -> str | None:
 # Cache custom pricing keys as frozenset for O(1) lookups instead of looping through 49 keys
 _CUSTOM_PRICING_KEYS: Final[frozenset[str]] = frozenset(CustomPricingLiteLLMParams.model_fields.keys())
 _MODEL_INFO_CUSTOM_PRICING_KEYS: Final[frozenset[str]] = _CUSTOM_PRICING_KEYS | DEPLOYMENT_SCOPED_PRICING_FIELDS
+_PREVIOUS_ATTEMPT_FAILURE_DETAILS: Final = (
+    "has_logged_async_failure",
+    "has_logged_sync_failure",
+    "exception",
+    "traceback_exception",
+)
 _UNSERIALIZABLE_METADATA_KEYS: Final[frozenset[str]] = frozenset(
     ("user_api_key_auth", "user_api_key_budget_reservation")
 )
@@ -902,8 +909,19 @@ class Logging(LiteLLMLoggingBaseClass):
     def follow_attempt_callback_settings(self, attempt_fields: Mapping[str, object]) -> None:
         """A Logging object shared across router attempts logs each one by its own deployment's settings."""
         self.logs_each_attempt = True
-        self.model_call_details.pop("has_logged_async_failure", None)
-        self.model_call_details.pop("has_logged_sync_failure", None)
+        for failure_detail in _PREVIOUS_ATTEMPT_FAILURE_DETAILS:
+            self.model_call_details.pop(failure_detail, None)
+        previous_params: Final[Mapping[str, object]] = self.litellm_params
+        attempt_params: Final[dict[str, object]] = {
+            **get_litellm_params(
+                **attempt_fields,  # pyright: ignore[reportArgumentType]  # the same loose kwargs __init__ passes
+            ),
+            "api_base": previous_params.get("api_base"),
+            "_langfuse_masking_function": previous_params.get("_langfuse_masking_function"),
+        }
+        scrubbed_params: Final = scrub_sensitive_keys_in_metadata(attempt_params)
+        self.litellm_params = scrubbed_params
+        self.model_call_details["litellm_params"] = scrubbed_params
         self.standard_callback_dynamic_params = _initialize_standard_callback_dynamic_params(dict(attempt_fields))
         self.model_call_details["standard_callback_dynamic_params"] = self.standard_callback_dynamic_params
         if not self._request_set_success_callbacks:
@@ -2400,11 +2418,11 @@ class Logging(LiteLLMLoggingBaseClass):
     def with_failed_attempts_owed(self, own_cost: float) -> float:
         return own_cost + sum(cost for _, cost in self._failed_attempts_owed_on_success)
 
-    def _add_failed_attempts_spend(self, served_response: object) -> None:
+    def _add_failed_attempts_spend(self, served_response: object, image_usage: Usage | None) -> None:
         failed_attempts: Final = self._failed_attempts_owed_on_success
         if not failed_attempts:
             return
-        own_usage: Final = get_usage_object(completion_response=served_response)
+        own_usage: Final = image_usage or get_usage_object(completion_response=served_response)
         if own_usage is None:
             return
         stored_cost: Final = self.model_call_details.get("response_cost")
@@ -2663,6 +2681,7 @@ class Logging(LiteLLMLoggingBaseClass):
     ) -> StandardLoggingPayload | None:
         """Resolve hidden params, compute response cost, and emit the standard logging payload."""
         self._surface_response_headers_from_result(logging_result)
+        image_usage: Final = _image_usage(logging_result.usage) if isinstance(logging_result, ImageResponse) else None
         hidden_params: Final = getattr(logging_result, HIDDEN_PARAMS_ATTR, {})
         if hidden_params:
             if self.model_call_details.get("litellm_params") is not None:
@@ -2675,11 +2694,11 @@ class Logging(LiteLLMLoggingBaseClass):
 
         if self.model_call_details.get("cache_hit") is True:
             self.model_call_details["response_cost"] = 0.0
-            self._add_failed_attempts_spend(logging_result)
+            self._add_failed_attempts_spend(logging_result, image_usage)
         elif "response_cost" in hidden_params:
             self.model_call_details["response_cost"] = hidden_params["response_cost"]
             self._record_zero_cost_diagnostic(logging_result, hidden_params["response_cost"])
-            self._add_failed_attempts_spend(logging_result)
+            self._add_failed_attempts_spend(logging_result, image_usage)
         elif (existing_cost := self.model_call_details.get("response_cost")) is not None and existing_cost != 0:
             # Preserve response_cost if already calculated (e.g., by pass-through
             # handlers like Gemini/Vertex which call completion_cost directly).
@@ -2687,7 +2706,7 @@ class Logging(LiteLLMLoggingBaseClass):
             pass
         else:
             self.model_call_details["response_cost"] = self.response_cost_calculator(result=logging_result)
-            self._add_failed_attempts_spend(logging_result)
+            self._add_failed_attempts_spend(logging_result, image_usage)
 
         if not build_logging_payload:
             return None
@@ -7429,6 +7448,12 @@ def get_standard_logging_metadata(
             if is_valid_sha256_hash(str(metadata.get("user_api_key"))):
                 clean_metadata["user_api_key_hash"] = metadata.get("user_api_key")  # this is the hash
     return clean_metadata
+
+
+def _image_usage(usage: object) -> Usage | None:
+    if not isinstance(usage, ImageUsage):
+        return None
+    return ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(usage.model_dump())
 
 
 def scrub_sensitive_keys_in_metadata(litellm_params: dict | None):

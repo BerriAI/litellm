@@ -82,7 +82,8 @@ def test_refused_image_is_a_400_carrying_the_finish_reason_and_message(
         provider,
         {"finish_reason": finish_reason, "finish_message": _NOT_CHARGED},
     )
-    assert f"finishReason={finish_reason}: {_NOT_CHARGED}" in str(refused.value)
+    assert f"finishReason={finish_reason}" in str(refused.value)
+    assert _NOT_CHARGED not in str(refused.value)
 
 
 @pytest.mark.parametrize(("route", "model", "provider"), _ROUTES)
@@ -99,6 +100,8 @@ def test_blocked_prompt_is_a_400_carrying_the_block_reason(route: str, model: st
         provider,
         {"block_reason": "PROHIBITED_CONTENT", "block_reason_message": "prompt not allowed"},
     )
+    assert "blockReason=PROHIBITED_CONTENT" in str(blocked.value)
+    assert "prompt not allowed" not in str(blocked.value)
 
 
 @pytest.mark.parametrize(("route", "model", "provider"), _ROUTES)
@@ -293,6 +296,95 @@ def _upstream_calls_through_a_retrying_router(reply: httpx.Response) -> int:
 def test_router_does_not_retry_an_answer_without_an_image(reply: Mapping[str, object]):
     assert _upstream_calls_through_a_retrying_router(httpx.Response(200, json=reply)) == 1
     assert _upstream_calls_through_a_retrying_router(httpx.Response(503, json={"error": {"code": 503}})) == 3
+
+
+@pytest.mark.parametrize(
+    "reply",
+    (
+        pytest.param({"candidates": [{"finishReason": "IMAGE_SAFETY", "content": {"role": "model"}}]}, id="refused"),
+        pytest.param(
+            {"candidates": [{"finishReason": "NO_IMAGE", "content": {"parts": [{"text": "no"}]}}]}, id="no-image"
+        ),
+    ),
+)
+def test_answer_without_an_image_keeps_its_deployment_in_service_and_names_no_other_group(
+    reply: Mapping[str, object],
+):
+    calls: Final[list[httpx.Request]] = []  # mutable-ok: MockTransport hands each request to a callback
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(200, json=reply)
+
+    gemini: Final = {
+        "model": "gemini/gemini-3.1-flash-image",
+        "api_key": "test-key",
+        "api_base": "https://google.invalid/v1",
+    }
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "image-group",
+                "litellm_params": gemini,
+                "model_info": {
+                    "id": "image-deployment",
+                    "allowed_fails_policy": {
+                        "ContentPolicyViolationErrorAllowedFails": 0,
+                        "BadRequestErrorAllowedFails": 0,
+                    },
+                },
+            },
+            {"model_name": "unrelated-group", "litellm_params": gemini},
+            {"model_name": "unrelated-backup", "litellm_params": gemini},
+        ],
+        fallbacks=[{"unrelated-group": ["unrelated-backup"]}],
+        num_retries=0,
+    )
+
+    for _ in range(3):
+        with pytest.raises(openai.APIStatusError) as failed:
+            router.image_generation(
+                model="image-group",
+                prompt="a single small red dot",
+                client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(answer))),
+            )
+        assert "unrelated" not in str(failed.value)
+
+    assert len(calls) == 3
+
+
+@pytest.mark.asyncio
+async def test_refusal_after_a_failed_fallback_names_no_model_group(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": group,
+                "litellm_params": {
+                    "model": "gemini/gemini-3.1-flash-image",
+                    "api_key": "test-key",
+                    "api_base": f"https://{host}.invalid/v1",
+                },
+            }
+            for group, host in (("image-group", "first"), ("backup-group", "second"))
+        ],
+        fallbacks=[{"image-group": ["backup-group"]}],
+        num_retries=0,
+    )
+
+    with respx.mock(assert_all_called=True) as upstream:
+        upstream.post(url__startswith="https://first.invalid/").mock(
+            side_effect=lambda request: httpx.Response(
+                200, json={"candidates": [{"finishReason": "IMAGE_SAFETY", "content": {"role": "model"}}]}
+            )
+        )
+        upstream.post(url__startswith="https://second.invalid/").mock(
+            side_effect=lambda request: httpx.Response(503, json={"error": {"code": 503}})
+        )
+        with pytest.raises(litellm.ContentPolicyViolationError) as refused:
+            await router.aimage_generation(model="image-group", prompt="a single small red dot")
+
+    assert "backup-group" not in str(refused.value)
 
 
 _SERVED: Final = {

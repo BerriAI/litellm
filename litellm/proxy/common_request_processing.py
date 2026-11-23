@@ -48,6 +48,7 @@ from litellm.anthropic_interface.exceptions import AnthropicErrorSseFrame, anthr
 from litellm.constants import (
     DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE,
     DEFAULT_MAX_RECURSE_DEPTH,
+    IMAGE_CALL_TYPES,
     LITELLM_CLIENT_DISCONNECT_DETAIL,
     LITELLM_DETAILED_TIMING,
     LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED,
@@ -688,6 +689,14 @@ def serialize_http_exception_detail(
 
 
 _REQUEST_FIELDS: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(strict=True))
+
+
+def _failed_image_response_cost(request_data: Mapping[str, object]) -> float:
+    if request_data.get("call_type") not in IMAGE_CALL_TYPES:
+        return 0
+    return failure_row_response_cost(request_data) or 0
+
+
 _UNSEEN_DEPLOYMENT: Final = DropPolicy(drop_params=True, additional_drop_params=frozenset())
 
 
@@ -4261,7 +4270,7 @@ class ProxyBaseLLMRequestProcessing:
             call_id=self.litellm_call_id,
             model_id=model_id,
             version=version,
-            response_cost=failure_row_response_cost(_REQUEST_FIELDS.validate_python(self.data)),
+            response_cost=_failed_image_response_cost(_REQUEST_FIELDS.validate_python(self.data)),
             model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
             request_data=self.data,
             timeout=timeout,

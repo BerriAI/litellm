@@ -137,6 +137,7 @@ from litellm.llms.base_llm.vector_store.transformation import (
 )
 from litellm.llms.bedrock.common_utils import get_bedrock_base_model
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_async_httpx_client
+from litellm.llms.gemini.empty_image_response import IMAGE_ANSWER_ERRORS
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.llms.openai_like.model_info import (
     MODEL_INFO_DISCOVERY_PROVIDERS,
@@ -8245,7 +8246,7 @@ class Router:
                         to fallbacks, if available.{error_message}"
                     )
 
-                    if litellm.expose_router_debug_in_errors:
+                    if litellm.expose_router_debug_in_errors and not isinstance(e, IMAGE_ANSWER_ERRORS):
                         e.message += f"\n{error_message}"
             if fallbacks is not None and lookup_groups:
                 verbose_router_logger.debug("inside model fallbacks: %s", mask_sensitive_structure(fallbacks))
@@ -8270,6 +8271,7 @@ class Router:
                     if (
                         hasattr(original_exception, "message")
                         and litellm.expose_router_debug_in_errors
+                        and not isinstance(original_exception, IMAGE_ANSWER_ERRORS)
                         and not nested_fallback_hop
                     ):
                         original_exception.message += format_no_fallback_group_message(lookup_groups, fallbacks)
@@ -8308,6 +8310,7 @@ class Router:
         if (
             hasattr(original_exception, "message")
             and litellm.expose_router_debug_in_errors
+            and not isinstance(original_exception, IMAGE_ANSWER_ERRORS)
             and not no_fallback_group_explained
             and not nested_fallback_hop
         ):

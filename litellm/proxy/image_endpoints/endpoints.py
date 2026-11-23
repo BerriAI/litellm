@@ -41,7 +41,6 @@ from litellm.types.llms.openai import ChatCompletionUserMessage
 
 router: Final = APIRouter()
 _REQUEST_FIELDS: Final = TypeAdapter(Mapping[str, object])
-_FUNCTION_SETUP_PARAMS: Final = frozenset({"original_function", "rules_obj", "start_time", "is_async_call"})
 
 
 def _with_image_logging_setup(request_fields: Mapping[str, object]) -> Mapping[str, object]:
@@ -50,13 +49,9 @@ def _with_image_logging_setup(request_fields: Mapping[str, object]) -> Mapping[s
         rules_obj=litellm.utils.Rules(),
         start_time=datetime.now(),  # noqa: DTZ005  # Logging subtracts it from naive end times
         is_async_call=True,
-        **{key: value for key, value in request_fields.items() if key not in _FUNCTION_SETUP_PARAMS},
+        **request_fields,
     )
-    return {
-        **setup_fields,
-        **{key: request_fields[key] for key in _FUNCTION_SETUP_PARAMS & request_fields.keys()},
-        "litellm_logging_obj": logging_obj,
-    }
+    return {**setup_fields, "litellm_logging_obj": logging_obj}
 
 
 IMAGE_EDIT_NUMERIC_FORM_FIELDS: Final = numeric_form_fields(get_type_hints(ImageEditRequestParams))

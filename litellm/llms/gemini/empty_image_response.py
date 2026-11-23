@@ -26,6 +26,9 @@ class ImageRefusalError(ContentPolicyViolationError):
     pass
 
 
+IMAGE_ANSWER_ERRORS: Final = (ImageRefusalError, UnservedImageError)
+
+
 class FailedImageBilling(Protocol):
     def response_cost_calculator(self, result: ImageResponse) -> float | None: ...
 
@@ -86,10 +89,6 @@ def _bill_refusal(reason: str, billing: FailedImageBilling, answer: ImageRespons
     _bill_answer(billing, answer)
 
 
-def _with_detail(summary: str, detail: str | None) -> str:
-    return f"{summary}: {detail}" if detail else summary
-
-
 def _answered_as(status_code: int, raw_response: httpx.Response) -> httpx.Response:
     return error_response_without_credentials(status_code, raw_response, _ERROR_DOCS_URL)
 
@@ -115,9 +114,7 @@ def empty_image_response_error(
     if feedback is not None and feedback.block_reason:
         _bill_refusal(feedback.block_reason, billing, answer)
         return ImageRefusalError(
-            message=_with_detail(
-                f"Gemini blocked the image prompt, blockReason={feedback.block_reason}", feedback.block_reason_message
-            ),
+            message=f"Gemini blocked the image prompt, blockReason={feedback.block_reason}",
             model=model,
             llm_provider=llm_provider,
             response=_answered_as(400, raw_response),
@@ -131,9 +128,7 @@ def empty_image_response_error(
     if refusal is not None and refusal.finish_reason is not None:
         _bill_refusal(refusal.finish_reason, billing, answer)
         return ImageRefusalError(
-            message=_with_detail(
-                f"Gemini refused to return an image, finishReason={refusal.finish_reason}", refusal.finish_message
-            ),
+            message=f"Gemini refused to return an image, finishReason={refusal.finish_reason}",
             model=model,
             llm_provider=llm_provider,
             response=_answered_as(400, raw_response),

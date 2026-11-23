@@ -22,6 +22,7 @@ from litellm._internal_context import with_service_target
 from litellm._logging import print_verbose, verbose_logger
 from litellm.constants import (
     AUTH_OBJECTS_TARGET,
+    IMAGE_CALL_TYPES,
     PROMETHEUS_OVERFLOW_SERIES_LABEL_VALUE,
     PROXY_LLM_PROVIDER_FALLBACK,
     PROXY_REJECTED_BEFORE_ROUTING_KEY,
@@ -2932,9 +2933,35 @@ class PrometheusLogger(CustomLogger):
                 enum_values,
                 label_context=_label_ctx,
             )
+            self._increment_billed_image_failure_metrics(request_data, enum_values)
 
         except Exception as e:
             verbose_logger.exception("prometheus Layer Error(): Exception occured - %s", e)
+
+    def _increment_billed_image_failure_metrics(
+        self, request_data: Mapping[str, object], enum_values: UserAPIKeyLabelValues
+    ) -> None:
+        usage: Final = request_data.get("combined_usage_object")
+        response_cost: Final = request_data.get("response_cost")
+        if (
+            request_data.get("call_type") not in IMAGE_CALL_TYPES
+            or not isinstance(usage, litellm.Usage)
+            or not isinstance(response_cost, (int, float))
+        ):
+            return
+        billed_model: Final = _logged_fields(request_data.get("standard_logging_object")).get("model")
+        billed_values: Final = replace(enum_values, model=billed_model if isinstance(billed_model, str) else None)
+        label_context: Final = PrometheusLabelFactoryContext(billed_values)
+
+        def count_billed(counter: object, metric_name: DEFINED_PROMETHEUS_METRICS, amount: float) -> None:
+            PrometheusLogger._inc_labeled_counter(
+                self, counter, metric_name, billed_values, label_context=label_context, amount=amount
+            )
+
+        count_billed(self.litellm_spend_metric, "litellm_spend_metric", float(response_cost))
+        count_billed(self.litellm_tokens_metric, "litellm_total_tokens_metric", float(usage.total_tokens))
+        count_billed(self.litellm_input_tokens_metric, "litellm_input_tokens_metric", float(usage.prompt_tokens))
+        count_billed(self.litellm_output_tokens_metric, "litellm_output_tokens_metric", float(usage.completion_tokens))
 
     async def async_post_call_success_hook(self, data: dict, user_api_key_dict: UserAPIKeyAuth, response):
         """

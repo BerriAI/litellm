@@ -133,6 +133,7 @@ DEFAULT_FAILURE_THRESHOLD_PERCENT: Final = get_env_float(
     "DEFAULT_FAILURE_THRESHOLD_PERCENT", 0.5
 )  # default cooldown a deployment if 50% of requests fail in a given minute
 DEFAULT_MAX_TOKENS: Final = get_env_int("DEFAULT_MAX_TOKENS", 4096)
+IMAGE_CALL_TYPES: Final = frozenset({"image_generation", "aimage_generation", "image_edit", "aimage_edit"})
 DEFAULT_ALLOWED_FAILS: Final = get_env_int("DEFAULT_ALLOWED_FAILS", 3)
 DEFAULT_REDIS_SYNC_INTERVAL: Final = get_env_int("DEFAULT_REDIS_SYNC_INTERVAL", 1)
 DEFAULT_COOLDOWN_TIME_SECONDS: Final = get_env_int("DEFAULT_COOLDOWN_TIME_SECONDS", 5)
