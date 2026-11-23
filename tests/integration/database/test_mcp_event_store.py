@@ -11,6 +11,7 @@ import pytest
 from litellm.proxy.mcp_server.events.webhooks.store import (
     Activation,
     PrismaEventStore,
+    QueuedDelivery,
     SubscriptionQuery,
     SubscriptionRow,
 )
@@ -44,6 +45,16 @@ def _row(status: str = "active") -> SubscriptionRow:
         client_secret=SECRET,
         upstream_secret=SECRET,
         status=status,  # pyright: ignore[reportArgumentType]  # the table's status values
+    )
+
+
+def _delivery(subscription_id: str, delivery_id: str | None = None) -> QueuedDelivery:
+    return QueuedDelivery(
+        delivery_id=delivery_id or f"dlv_{uuid.uuid4().hex}",
+        subscription_id=subscription_id,
+        body='{"eventId":"evt_1"}',
+        webhook_id="msg_gw",
+        next_attempt_at=NOW,
     )
 
 
@@ -167,6 +178,46 @@ async def test_failures_count_up_set_failed_since_once_and_suspend_at_the_thresh
 
 
 @pytest.mark.asyncio
+async def test_a_delivered_message_is_never_claimed_again_and_its_replay_stays_a_duplicate() -> None:
+    async with _connected() as store:
+        row: Final = await _active(store)
+        delivery: Final = _delivery(row.id)
+        assert await store.enqueue(delivery)
+        claimed: Final = await store.claim(NOW, NOW + timedelta(seconds=60), 100)
+        (mine,) = [item for item in claimed if item.delivery_id == delivery.delivery_id]
+        await store.prepare(mine, '{"eventId":"evt_1","name":"ci-build.failed"}', "msg_built")
+        await store.finish(mine, NOW)
+        later: Final = await store.claim(NOW + timedelta(minutes=5), NOW + timedelta(minutes=6), 100)
+        assert delivery.delivery_id not in {item.delivery_id for item in later}
+        assert await store.enqueue(delivery) is False
+        await store.purge_delivered(NOW + timedelta(minutes=11))
+        assert await store.enqueue(delivery) is True
+        await store.delete(row.id)
+
+
+@pytest.mark.asyncio
+async def test_a_prepared_delivery_is_claimed_with_its_built_body() -> None:
+    async with _connected() as store:
+        row: Final = await _active(store)
+        delivery: Final = _delivery(row.id)
+        assert await store.enqueue(delivery)
+        (first,) = [
+            item
+            for item in await store.claim(NOW, NOW + timedelta(seconds=60), 100)
+            if item.delivery_id == delivery.delivery_id
+        ]
+        await store.prepare(first, '{"eventId":"evt_1","name":"ci-build.failed"}', "msg_built")
+        await store.reschedule(first, 1, NOW)
+        (claimed,) = [
+            item
+            for item in await store.claim(NOW, NOW + timedelta(seconds=60), 100)
+            if item.delivery_id == delivery.delivery_id
+        ]
+        assert (claimed.prepared, claimed.webhook_id, claimed.attempt) == (True, "msg_built", 1)
+        await store.delete(row.id)
+
+
+@pytest.mark.asyncio
 async def test_a_live_only_query_skips_terminated_rows() -> None:
     async with _connected() as store:
         live: Final = await _active(store)
@@ -211,3 +262,28 @@ async def test_an_unsubscribe_holds_only_the_upstream_subscription_it_read_and_d
         assert await store.get(row.id) is not None
         await store.delete_held(row.id, "up_1")
         assert await store.get(row.id) is None
+
+
+@pytest.mark.asyncio
+async def test_only_the_current_claim_can_finish_or_reschedule_a_delivery() -> None:
+    async with _connected() as store:
+        row: Final = await _active(store)
+        delivery: Final = _delivery(row.id)
+        assert await store.enqueue(delivery)
+        (stale,) = [
+            item
+            for item in await store.claim(NOW, NOW + timedelta(seconds=1), 100)
+            if item.delivery_id == delivery.delivery_id
+        ]
+        later: Final = NOW + timedelta(seconds=5)
+        (current,) = [
+            item
+            for item in await store.claim(later, later + timedelta(seconds=300), 100)
+            if item.delivery_id == delivery.delivery_id
+        ]
+        assert stale.claim_id and current.claim_id and stale.claim_id != current.claim_id
+        await store.finish(stale, NOW)
+        await store.reschedule(stale, 3, NOW)
+        await store.finish(current, NOW)
+        assert await store.enqueue(delivery) is False
+        await store.delete(row.id)
