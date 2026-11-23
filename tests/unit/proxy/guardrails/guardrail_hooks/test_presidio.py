@@ -3839,6 +3839,24 @@ def test_unmask_sse_bytes_chunk_handles_malformed_json():
     assert result == chunk
 
 
+@pytest.mark.parametrize(
+    "undecodable_payload",
+    [b"9" * 5000, b"[" * 100_000 + b"]" * 100_000],
+    ids=["huge-number", "deep-nesting"],
+)
+def test_unmask_sse_bytes_chunk_unmasks_the_next_event_past_one_it_cannot_decode(undecodable_payload: bytes):
+    undecodable_line = b"data: " + undecodable_payload
+    masked_delta = b'data: {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Hi <PERSON_1>"}}'
+
+    result = OPTIONAL_PresidioPIIMasking._unmask_sse_bytes_chunk(
+        undecodable_line + b"\n\n" + masked_delta + b"\n\n", {"<PERSON_1>": "Bobby"}
+    )
+
+    undecodable_out, delta_out = result.split(b"\n\n")[:2]
+    assert undecodable_out == undecodable_line
+    assert json.loads(delta_out.removeprefix(b"data: "))["delta"]["text"] == "Hi Bobby"
+
+
 def test_unmask_sse_bytes_chunk_handles_unicode_decode_error():
     chunk = b"\xff\xfe invalid utf-8"
     result = OPTIONAL_PresidioPIIMasking._unmask_sse_bytes_chunk(chunk, {"<PERSON_1>": "Bobby"})

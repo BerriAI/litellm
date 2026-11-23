@@ -1026,6 +1026,7 @@ class StraikerGuardrail(CustomGuardrail):
         fail_on_error: bool = True,
         max_payload_bytes: int = DEFAULT_MAX_PAYLOAD_BYTES,
         stream_mode: StraikerStreamMode = "buffered",
+        hold_tool_calls: bool | None = True,
         custom_headers: dict[str, str] | None = None,
         metadata: dict[str, str] | None = None,
         verbose: bool = False,
@@ -1079,10 +1080,16 @@ class StraikerGuardrail(CustomGuardrail):
         # `buffered` withholds every chunk until that check passes. `streaming` releases chunks
         # as they arrive and holds back only the stream's final frames, which a block replaces
         # with the block message. These are the flags LiteLLM's streaming hook reads; they are
-        # set from `stream_mode` alone rather than exposed as options of their own.
+        # set from `stream_mode` and `hold_tool_calls` rather than exposed as options of their own.
         self.stream_mode: StraikerStreamMode = stream_mode
         self.streaming_end_of_stream_only = True
         self.streaming_buffer_until_moderated = stream_mode == "buffered"
+        # In `streaming` mode a tool call the client would run is held with those final frames,
+        # so a blocked tool call never reaches the client. Text before it still streams live.
+        # `hold_tool_calls: false` turns that off: tool calls then stream as they arrive, and a
+        # block can only end the stream after the client already has the tool call.
+        self.hold_tool_calls = hold_tool_calls is not False  # only an explicit false turns the hold off
+        self.streaming_hold_tool_calls = stream_mode == "streaming" and self.hold_tool_calls
 
         self.async_handler = async_handler or get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback,
@@ -1411,6 +1418,8 @@ class StraikerGuardrail(CustomGuardrail):
         # A route that cannot send a reply maps this exception to an HTTP error and reads the
         # status from it. Without one the block is reported as a 500.
         reply.status_code = 400  # pyright: ignore[reportAttributeAccessIssue]  # the class declares no status
+        # A blocked prompt answered as a reply reaches no logging callback unless it asks to.
+        reply.log_as_failure = True
         raise reply
 
     @staticmethod

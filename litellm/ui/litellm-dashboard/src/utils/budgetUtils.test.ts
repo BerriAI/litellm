@@ -5,7 +5,28 @@ import {
   describeBudgetResetSchedule,
   formatBudgetResetTime,
   formatBudgetResetUtc,
+  isValidBudgetDuration,
+  normalizeBudgetDuration,
 } from "./budgetUtils";
+
+describe("isValidBudgetDuration", () => {
+  it.each(["30s", "15m", "2h", "6d", "2w", "1mo", "12mo", "hourly", "daily", "weekly", "monthly", " 6d "])(
+    "accepts the supported reset duration %s",
+    (duration) => expect(isValidBudgetDuration(duration)).toBe(true),
+  );
+  it.each(["", "6days", "0d", "-6d", "6", "1.5h", "2mo", "6mo", "24mo", "9007199254740992s"])(
+    "rejects the unsupported reset duration %s",
+    (duration) => expect(isValidBudgetDuration(duration)).toBe(false),
+  );
+  it.each([
+    ["1w", "7d"],
+    ["monthly", "1mo"],
+    ["30d", "1mo"],
+    ["01mo", "1mo"],
+  ])("compares equivalent periods %s and %s consistently", (duration, canonical) => {
+    expect(normalizeBudgetDuration(duration)).toBe(canonical);
+  });
+});
 
 const utcIso = (year: number, monthIndex: number, day: number, hour = 12): string =>
   new Date(Date.UTC(year, monthIndex, day, hour, 0, 0)).toISOString();

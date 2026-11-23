@@ -26,6 +26,7 @@ from pydantic import BaseModel, ConfigDict, TypeAdapter
 from typing_extensions import LiteralString, ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.core_helpers import float_of
 from litellm.proxy._types import Litellm_EntityType
 from litellm.proxy.db.db_span import db_span
 from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
@@ -66,6 +67,16 @@ _ROLL_WINDOW_SPEND_SQL: Final = (
     "updated_at = ($5::timestamptz AT TIME ZONE 'UTC') "
     "WHERE entity_type = $1 AND entity_id = $2 AND window_duration = $3 "
     "AND window_start < ($4::timestamptz AT TIME ZONE 'UTC')"
+)
+
+_ROLL_WINDOW_SPEND_ROWS_SQL: Final = (
+    'UPDATE "LiteLLM_BudgetWindowSpend" AS stored SET '
+    "window_start = pending.window_start, spend = 0, "
+    "updated_at = ($5::text::timestamptz AT TIME ZONE 'UTC') "
+    "FROM (SELECT duration, starts::timestamptz AT TIME ZONE 'UTC' AS window_start "
+    "FROM unnest($3::text[], $4::text[]) AS windows(duration, starts)) AS pending "
+    "WHERE stored.entity_type = $1 AND stored.entity_id = $2 "
+    "AND stored.window_duration = pending.duration AND stored.window_start < pending.window_start"
 )
 
 _OPEN_WINDOW_SPEND_SQL: Final = (
@@ -169,11 +180,11 @@ def _with_charged_reset(
 
 
 class _SeedTotalsQuery(Protocol):
-    async def __call__(self, query: LiteralString, *args: object) -> Sequence[_SeedTotalsRow]: ...
+    async def __call__(self, query: LiteralString, *args: object) -> Sequence[Mapping[str, object]]: ...
 
 
 class _ExistingKeysQuery(Protocol):
-    async def __call__(self, query: LiteralString, *args: object) -> Sequence[_ExistingKeyRow]: ...
+    async def __call__(self, query: LiteralString, *args: object) -> Sequence[Mapping[str, object]]: ...
 
 
 class _UpsertBatch(Protocol):
@@ -198,6 +209,10 @@ class _UpsertTransaction(Protocol):
     async def query_raw(self, query: LiteralString, *args: object) -> Sequence[Mapping[str, object]]: ...
 
 
+class WindowSpendRollTransaction(Protocol):
+    async def execute_raw(self, query: LiteralString, *args: object) -> int: ...
+
+
 class _UpsertTransactionManager(Protocol):
     async def __aenter__(self) -> _UpsertTransaction: ...
 
@@ -211,11 +226,25 @@ class _UpsertTransactionManager(Protocol):
 
 
 def _seed_totals_query(prisma_client: "PrismaClient") -> _SeedTotalsQuery:
-    return prisma_client.db.query_raw
+    from litellm.proxy.utils import query_raw_rows
+
+    database: Final = prisma_client.db
+
+    async def query_raw(query: LiteralString, *args: object) -> Sequence[Mapping[str, object]]:
+        return await query_raw_rows(database, query, *args)
+
+    return query_raw
 
 
 def _existing_keys_query(prisma_client: "PrismaClient") -> _ExistingKeysQuery:
-    return prisma_client.db.query_raw
+    from litellm.proxy.utils import query_raw_rows
+
+    database: Final = prisma_client.db
+
+    async def query_raw(query: LiteralString, *args: object) -> Sequence[Mapping[str, object]]:
+        return await query_raw_rows(database, query, *args)
+
+    return query_raw
 
 
 def _upsert_transaction(prisma_client: "PrismaClient") -> _UpsertTransactionManager:
@@ -300,8 +329,8 @@ async def spend_logs_seed_totals(
     if not rows:
         return WindowSeedTotals(total=0.0, before_batch=0.0)
     return WindowSeedTotals(
-        total=float(rows[0].get("total") or 0.0),
-        before_batch=float(rows[0].get("before_batch") or 0.0),
+        total=float_of(rows[0].get("total") or 0.0),
+        before_batch=float_of(rows[0].get("before_batch") or 0.0),
     )
 
 
@@ -323,7 +352,7 @@ async def _existing_primary_keys(
     prisma_client: "PrismaClient",
     transactions: tuple[WindowSpendTransaction, ...],
     query: _ExistingKeysQuery | None = None,
-) -> frozenset[tuple[str, str, str]]:
+) -> frozenset[tuple[object, object, object]]:
     async with db_span("select_window_spend_rows", "LiteLLM_BudgetWindowSpend"):
         rows: Final = await (query or _existing_keys_query(prisma_client))(
             _SELECT_EXISTING_ROWS_SQL,
@@ -337,7 +366,7 @@ async def _existing_primary_keys(
 async def _seed_base_for_missing_row(
     prisma_client: "PrismaClient",
     transaction: WindowSpendTransaction,
-    existing_primary_keys: frozenset[tuple[str, str, str]],
+    existing_primary_keys: frozenset[tuple[object, object, object]],
     spend_logs_aggregate: WindowSpendLogsAggregate,
     query: _SeedTotalsQuery | None = None,
 ) -> float:
@@ -492,7 +521,8 @@ async def commit_window_spend_updates(
                 zip(ordered, seed_bases),
                 key=lambda item: (
                     capture_spend
-                    and item[0]["entity_type"] in ("app", "app_customer_org", "app_customer_member")
+                    and item[0]["entity_type"]
+                    in ("app", "app_customer_org", "app_customer_member", "app_group", "app_group_customer_org")
                     and item[0]["spend"] > 0
                 ),
             )
@@ -555,6 +585,31 @@ async def roll_window_spend_row(
             window_duration,
             to_naive_utc(new_window_start),
             to_naive_utc(datetime.now(timezone.utc)),
+        )
+
+
+async def roll_window_spend_rows(
+    transaction: WindowSpendRollTransaction,
+    entity_type: str,
+    entity_id: str,
+    windows: Sequence[tuple[str, datetime]],
+) -> None:
+    """Roll an entity's distinct windows in one statement, within its JSON write transaction."""
+    if not windows:
+        return
+    normalized: Final = tuple((duration, to_naive_utc(start)) for duration, start in windows)
+    unique: Final = tuple(
+        (duration, max(start for _, start in entries))
+        for duration, entries in groupby(sorted(normalized), key=lambda window: window[0])
+    )
+    async with db_span("roll_window_spend_row", "LiteLLM_BudgetWindowSpend"):
+        await transaction.execute_raw(
+            _ROLL_WINDOW_SPEND_ROWS_SQL,
+            entity_type,
+            entity_id,
+            tuple(duration for duration, _ in unique),
+            tuple(start.replace(tzinfo=timezone.utc).isoformat() for _, start in unique),
+            datetime.now(timezone.utc).isoformat(),
         )
 
 

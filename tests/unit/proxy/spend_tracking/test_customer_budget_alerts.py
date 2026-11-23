@@ -579,3 +579,51 @@ async def test_no_interested_callback_does_not_read_customer_rows(
         now=_NOW,
     )
     assert receiver.call_count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope", ("app_group", "app_group_customer_org"))
+@pytest.mark.parametrize("duration", (None, "1mo"))
+async def test_group_alerts_report_shared_usage_and_deduplicate_each_threshold(
+    scope: CustomerBudgetScope,
+    duration: str | None,
+    alerts: DualCache,
+    respx_mock: respx.MockRouter,
+) -> None:
+    from litellm.proxy.management_helpers.app_groups import AppGroupStore
+    from litellm.types.proxy.management_endpoints.app_groups import AppGroup, AppGroupBudgetPut, AppGroupCreate
+    from litellm.types.proxy.management_endpoints.customer_hierarchy import Budget
+
+    database: Final = AppDatabase()
+    groups: Final = AppGroupStore(AppStore(database, _NOW))
+    policy: Final = Budget(max_budget=10, soft_budget=5, budget_duration=duration)
+    group: Final = await groups.create(AppGroupCreate(name="Product", budget=policy), "admin")
+    assert isinstance(group, AppGroup)
+    await database.litellm_customerorganizationtable.create({"customer_org_id": "customer"})
+    await groups.put_organization(group.app_group_id, "customer", AppGroupBudgetPut(budget=policy), "admin")
+    entity_id: Final = group.app_group_id + (":customer" if scope == "app_group_customer_org" else "")
+    receiver: Final = respx_mock.post(_URL).respond(200)
+    for spend in (4, 6, 11, 12):
+        await database.litellm_appgrouptable.update_many({}, {"spend": spend})
+        await database.litellm_appgroupcustomerorgtable.update_many({}, {"spend": spend})
+        windows: Final = (
+            (
+                CommittedWindowSpend(
+                    entity_type=scope, entity_id=entity_id, window_duration=duration, window_start=_NOW, spend=spend
+                ),
+            )
+            if duration
+            else ()
+        )
+        await CustomerBudgetAlerting.detect_committed_batch(
+            {f"{scope}_list_transactions": {entity_id: 1}}, database, alerts, now=_NOW, windows=windows
+        )
+    payloads: Final = tuple(_PAYLOAD.validate_json(call.request.content) for call in receiver.calls)
+    assert tuple((item["event"], item["spend"]) for item in payloads) == (
+        ("soft_budget_crossed", 6),
+        ("budget_crossed", 11),
+    )
+    assert {item["app_group_id"] for item in payloads} == {group.app_group_id}
+    assert {item["customer_org_id"] for item in payloads} == (
+        {"customer"} if scope == "app_group_customer_org" else {None}
+    )
