@@ -251,6 +251,26 @@ def test_a_sealed_gap_cursor_falls_back_to_the_last_known_watermark() -> None:
     assert json.loads(outgoing.body) == {"type": "gap", "cursor": stored.ok}
 
 
+@pytest.mark.asyncio
+async def test_the_last_scheduled_retry_is_delayed_eight_minutes() -> None:
+    store: Final = _store(attempt=2)
+    (delivery,) = await store.claim(NOW, NOW + timedelta(minutes=5), 1)
+    await _worker(store, _Client(503)).process(delivery)
+    queued: Final = store.queue["d1"]
+    assert (queued.attempt, queued.next_attempt_at) == (3, NOW + timedelta(minutes=8))
+
+
+@pytest.mark.asyncio
+async def test_a_temporarily_unreadable_signing_secret_keeps_the_event_for_retry() -> None:
+    store: Final = _store(ROW.model_copy(update={"client_secret": ""}))
+    client: Final = _Client()
+    (delivery,) = await store.claim(NOW, NOW + timedelta(minutes=5), 1)
+    await _worker(store, client).process(delivery)
+    assert not client.posts and not store.delivered
+    retry: Final = store.queue["d1"]
+    assert retry.claim_id is None and retry.attempt == 0 and retry.next_attempt_at > NOW
+
+
 class _SlowClient(_Client):
     """A callback that lets something else change the subscription while the POST is in flight."""
 
