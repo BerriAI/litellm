@@ -144,6 +144,25 @@ def test_redis_compat_path_filter(changed: str, expected: str) -> None:
     assert classify("redis-compat", [changed]) == expected
 
 
+@pytest.mark.parametrize(
+    ("changed", "expected"),
+    (
+        ("litellm/proxy/db/prisma_engine.py", "run"),
+        ("litellm/proxy/db/prisma_client.py", "run"),
+        ("tests/unit/proxy/db/test_prisma_engine.py", "run"),
+        ("tests/unit/proxy/db/conftest.py", "run"),
+        ("tests/_process_helpers.py", "run"),
+        (".github/workflows/test-unit.yml", "run"),
+        ("uv.lock", "run"),
+        ("litellm/proxy/db/log_db_metrics.py", "skip"),
+        ("tests/unit/proxy/db/test_prisma_client.py", "skip"),
+        ("litellm/router.py", "skip"),
+    ),
+)
+def test_prisma_engine_path_filter(changed: str, expected: str) -> None:
+    assert classify("prisma-engine", [changed]) == expected
+
+
 def test_markdown_under_ui_counts_as_client_not_docs() -> None:
     assert classify("client", ["litellm/ui/litellm-dashboard/README.md"]) == "run"
     assert classify("backend", ["litellm/ui/litellm-dashboard/README.md"]) == "skip"

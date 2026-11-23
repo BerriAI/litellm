@@ -1036,6 +1036,8 @@ jobs:
         id: changes
         timeout-minutes: 2
         uses: ./.github/actions/detect-changes
+        with:
+          category: ${{ matrix.changes-category || 'backend' }}
 
       - name: Set up Python
         if: steps.changes.outputs.decision != 'skip'
@@ -1327,6 +1329,33 @@ jobs:
             reruns: 0
             timeout-minutes: 7
             dist: worksteal
+    steps: *unit-steps
+  unit-python-310:
+    name: ${{ matrix.shard }}
+    needs: [rust-bridge]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ matrix.job-timeout-minutes }}
+    permissions:
+      contents: read
+      pull-requests: read
+    env:
+      UV_PYTHON: ${{ matrix.python-version }}
+      LITELLM_LOCAL_MODEL_COST_MAP: "True"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shard: prisma-engine-python-310
+            changes-category: prisma-engine
+            test-path: >-
+              tests/unit/proxy/db/test_prisma_engine.py
+            python-version: "3.10"
+            workers: 0
+            reruns: 0
+            timeout-minutes: 5
+            job-timeout-minutes: 60
+            dist: loadscope
     steps: *unit-steps
   lint-runtime:
     name: lint-runtime
@@ -1815,7 +1844,7 @@ jobs:
   unit-passed:
     name: unit passed
     permissions: {}
-    needs: [rust-bridge, plan, unit, unit-core, unit-changed, lint-runtime, ui-unit, docs, helm, openai-sdk-compat, redis-compat]
+    needs: [rust-bridge, plan, unit, unit-core, unit-changed, unit-python-310, lint-runtime, ui-unit, docs, helm, openai-sdk-compat, redis-compat]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 2
