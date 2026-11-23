@@ -9,6 +9,7 @@ Docs - https://docs.mistral.ai/api/
 import reprlib
 from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping, Sequence
 from itertools import accumulate, count
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, cast, get_type_hints, overload
 from urllib.parse import urlparse
 
@@ -101,6 +102,14 @@ _SENT_AS_IS: Final = frozenset(
     ("temperature", "top_p", "stop", "response_format", "parallel_tool_calls", "prompt_cache_key")
 )
 _SENT_AS_IS_WHEN_SUPPORTED: Final = frozenset(("presence_penalty", "frequency_penalty", "n"))
+_ACCEPTED_MESSAGE_FIELDS: Final = MappingProxyType(
+    {
+        "system": frozenset(("role", "content")),
+        "user": frozenset(("role", "content")),
+        "assistant": frozenset(("role", "content", "tool_calls", "prefix")),
+        "tool": frozenset(("role", "content", "tool_call_id", "name")),
+    }
+)
 _NON_LEVEL_EFFORT_REASON: Final = "the Mistral API takes it only as a level such as 'high'."
 _UNUSABLE_TOOL_CHOICE_REASON: Final = (
     "the Mistral API takes tool_choice only as 'auto', 'none', 'any', 'required', "
@@ -341,10 +350,13 @@ class MistralConfig(OpenAIGPTConfig):
             model=model,
         )
 
-    def accepts_prompt_cache_key_at(self, api_base: str | None) -> bool:
+    def _is_mistral_api(self, api_base: str | None) -> bool:
         resolved_api_base, _ = self._get_openai_compatible_provider_info(api_base, None)
         hostname: Final = urlparse(resolved_api_base).hostname or ""
         return hostname == "mistral.ai" or hostname.endswith(".mistral.ai")
+
+    def accepts_prompt_cache_key_at(self, api_base: str | None) -> bool:
+        return self._is_mistral_api(api_base)
 
     @staticmethod
     def takes_prompt_cache_key_value(prompt_cache_key: object) -> bool:
@@ -963,24 +975,66 @@ class MistralConfig(OpenAIGPTConfig):
         Returns:
             dict: The transformed request. Sent as the body of the API call.
         """
+        routing: Final = _MISTRAL_REQUEST_ROUTING.validate_python(litellm_params)
         cache_key_params: Final = _MISTRAL_CACHE_KEY_PARAMS.validate_python(optional_params)
         withheld_params: Final = (
             ("client_metadata", "prompt_cache_key")
             if "prompt_cache_key" in cache_key_params
-            and self._prompt_cache_key_withheld(
-                model, cache_key_params["prompt_cache_key"], _MISTRAL_REQUEST_ROUTING.validate_python(litellm_params)
-            )
+            and self._prompt_cache_key_withheld(model, cache_key_params["prompt_cache_key"], routing)
             else ("client_metadata",)
         )
         upstream_params: Final = {key: value for key, value in optional_params.items() if key not in withheld_params}
 
         # Call parent transform_request which handles _transform_messages
-        return super().transform_request(
+        request: Final = super().transform_request(
             model=model,
             messages=messages,
             optional_params=upstream_params,
             litellm_params=litellm_params,
             headers=headers,
+        )
+        sent_messages: Final = as_object_list(request.get("messages"))
+        if sent_messages is None:
+            return request
+        return {**request, "messages": self._with_accepted_message_fields(sent_messages, model, routing)}
+
+    @staticmethod
+    def _unaccepted_fields(message: object) -> Mapping[str, object]:
+        fields: Final = as_str_mapping(message) or {}
+        accepted: Final = _ACCEPTED_MESSAGE_FIELDS.get(str(fields.get("role")))
+        return {name: value for name, value in fields.items() if accepted is not None and name not in accepted}
+
+    @staticmethod
+    def _without_unaccepted_fields(message: object) -> object:
+        unaccepted: Final = MistralConfig._unaccepted_fields(message)
+        fields: Final = as_str_mapping(message)
+        if not unaccepted or fields is None:
+            return message
+        return {name: value for name, value in fields.items() if name not in unaccepted}
+
+    @staticmethod
+    def _sent_field_names(message: object) -> frozenset[str]:
+        return frozenset(name for name, value in MistralConfig._unaccepted_fields(message).items() if value is not None)
+
+    def _with_accepted_message_fields(
+        self, messages: Sequence[object], model: str, routing: MistralRequestRouting
+    ) -> list[object]:  # mutable-ok: the request body's messages list
+        sent_fields: Final = sorted(frozenset[str]().union(*map(MistralConfig._sent_field_names, messages)))
+        if not sent_fields or litellm.drop_params is True or routing.get("drop_params") is True:
+            return list(map(MistralConfig._without_unaccepted_fields, messages))
+        api_base: Final = routing.get("api_base")
+        if self.custom_llm_provider != "mistral" or not self._is_mistral_api(
+            api_base if isinstance(api_base, str) else None
+        ):
+            return list(messages)
+        raise UnsupportedParamsError(
+            message=(
+                f"mistral does not support message fields: {sent_fields}, for model={model}, since the Mistral API "
+                "rejects any message field outside its schema. To drop them, set `litellm.drop_params=True` or for "
+                "proxy:\n\n`litellm_settings:\n drop_params: true`\n"
+            ),
+            llm_provider=self.custom_llm_provider,
+            model=model,
         )
 
     def transform_response(
