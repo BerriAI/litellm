@@ -1,11 +1,13 @@
+import math
 from typing import Final
 
 import anyio
 import pytest
 from mcp.shared.exceptions import MCPError
+from mcp.types import CallToolRequestParams, CallToolResult, ClientCapabilities, TextContent
+from pydantic import JsonValue, TypeAdapter
 
 from litellm.proxy.mcp_server.events.upstream import (
-    EventsClientSession,
     call,
     list_all,
     routing_headers,
@@ -65,19 +67,49 @@ async def test_listing_follows_upstream_pages(cursor: str) -> None:
 
 @pytest.mark.asyncio
 async def test_an_events_call_does_not_change_the_session_later_tool_calls_use() -> None:
-    from mcp.client.session import ClientSession
-
-    seen: Final[list[type]] = []  # mutable-ok: records the session type of each call
-
-    async with events_client(EventsUpstream()) as client:
+    upstream: Final = EventsUpstream()
+    async with events_client(upstream) as client:
         await call(client, "events/list", {}, {}, 5.0)
+        result: Final = await client.call_tool(CallToolRequestParams(name="example", arguments={}))
+    assert result == CallToolResult(
+        _meta={"io.modelcontextprotocol/serverInfo": {"name": "events-upstream", "version": "1.0.0"}},
+        content=[TextContent(type="text", text="tool still works")],
+        isError=False,
+    )
+    method, _, params = upstream.seen[-1]
+    assert method == "tools/call"
+    metadata: Final = TypeAdapter[dict[str, JsonValue]](dict[str, JsonValue]).validate_python(params["_meta"])
+    capabilities: Final = ClientCapabilities.model_validate(metadata["io.modelcontextprotocol/clientCapabilities"])
+    assert "io.modelcontextprotocol/events" not in (capabilities.extensions or {})
 
-        async def probe(session: ClientSession) -> dict[str, object]:
-            seen.append(type(session))
-            return {}
 
-        await client.run_with_session(probe, quiet_on_error=True)
-    assert seen and seen[0] is not EventsClientSession
+@pytest.mark.asyncio
+async def test_catalog_larger_than_python_stack_depth_is_fully_returned() -> None:
+    names: Final = tuple(f"build.event_{index}" for index in range(1100))
+    upstream: Final = EventsUpstream(pages=tuple((name,) for name in names))
+    async with events_client(upstream, timeout=60.0) as client:
+        listed: Final = await list_all(client, 1100, 60.0)
+    assert tuple(item.name for item in listed) == names
+
+
+@pytest.mark.asyncio
+async def test_catalog_exceeding_page_cap_is_rejected() -> None:
+    upstream: Final = EventsUpstream(pages=(("a.one",), ("b.two",)))
+    async with events_client(upstream) as client:
+        with pytest.raises(MCPError) as rejected:
+            await list_all(client, 1, 5.0)
+    assert rejected.value.error.code == -32603
+    assert len(upstream.seen) == 1
+
+
+@pytest.mark.asyncio
+async def test_catalog_pages_share_one_finite_deadline() -> None:
+    upstream: Final = EventsUpstream(pages=(("a.one",), ("b.two",)))
+    async with events_client(upstream) as client:
+        await list_all(client, 10, 5.0)
+    first, second = upstream.catalog_deadlines
+    assert math.isfinite(first)
+    assert second == first
 
 
 @pytest.mark.asyncio

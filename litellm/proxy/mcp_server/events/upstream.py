@@ -1,6 +1,7 @@
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Final
 
+import anyio
 from mcp import ClientSession
 from mcp.client._transport import ReadStream, WriteStream
 from mcp.client.session import ElicitationFnT, LoggingFnT, MessageHandlerFnT, SamplingFnT
@@ -93,23 +94,23 @@ async def _pages(
     session: EventsClientSession,
     max_pages: int,
     timeout: float,
-    cursor: str | None = None,
-    collected: tuple[EventType, ...] = (),
 ) -> Mapping[str, object]:
-    """Every upstream page within one session, following nextCursor up to ``max_pages``."""
-    if max_pages <= 0:
-        raise MCPError(code=-32603, message="Upstream events/list exceeds the pagination limit")
-    raw: Final = await session.events_request(
-        "events/list", {"cursor": cursor} if cursor is not None else {}, {}, timeout=timeout
-    )
-    page: Final = ListEventsResult.model_validate(raw)
-    events: Final = collected + page.events
-    if page.next_cursor is None:
-        return {"events": [item.model_dump(by_alias=True, mode="json") for item in events]}
-    return await _pages(session, max_pages - 1, timeout, page.next_cursor, events)
+    cursor: str | None = None  # rebind-ok: upstream supplies the next token after each awaited page
+    events: tuple[EventType, ...] = ()  # rebind-ok: accumulate bounded pages without recursive stack growth
+    for _ in range(max_pages):
+        raw: Mapping[str, object] = await session.events_request(
+            "events/list", {"cursor": cursor} if cursor is not None else {}, {}, timeout=timeout
+        )
+        page: ListEventsResult = ListEventsResult.model_validate(raw)
+        events = events + page.events
+        if page.next_cursor is None:
+            return {"events": [item.model_dump(by_alias=True, mode="json") for item in events]}
+        cursor = page.next_cursor
+    raise MCPError(code=-32603, message="Upstream events/list exceeds the pagination limit")
 
 
 async def list_all(client: MCPClient, max_pages: int, timeout: float) -> tuple[EventType, ...]:
-    return ListEventsResult.model_validate(
-        await _run(client, lambda session: _pages(session, max_pages, timeout))
-    ).events
+    with anyio.fail_after(timeout):
+        return ListEventsResult.model_validate(
+            await _run(client, lambda session: _pages(session, max_pages, timeout))
+        ).events

@@ -34,6 +34,7 @@ class EventsUpstream:
     advertises_events: bool = True
     second_page_cursor: str = "1"
     hang: bool = False
+    catalog_deadlines: list[float] = field(default_factory=list)  # mutable-ok: captures per-page deadline evidence
     seen: list[tuple[str, Mapping[str, str], dict[str, object]]] = field(
         default_factory=list
     )  # mutable-ok: records requests
@@ -65,6 +66,18 @@ class EventsUpstream:
             raise MCPError(code=-32023, message="NotFound", data={"kind": "event"})
         return {"events": [], "cursor": "c1", "truncated": False, "hasMore": False, "nextPollMs": 1000}
 
+    async def call_tool(self, ctx: ServerRequestContext[object, object], params: _Params) -> dict[str, object]:
+        self.record(ctx, params)
+        return {"content": [{"type": "text", "text": "tool still works"}], "isError": False, "resultType": "complete"}
+
+    async def list_tools(self, ctx: ServerRequestContext[object, object], params: _Params) -> dict[str, object]:
+        return {
+            "tools": [{"name": "example", "inputSchema": {"type": "object"}}],
+            "cacheScope": "private",
+            "resultType": "complete",
+            "ttlMs": 0,
+        }
+
     async def stream(self, ctx: ServerRequestContext[object, object], params: _Params) -> dict[str, object]:
         self.record(ctx, params)
         meta: Final = {SUBSCRIPTION_ID: ctx.request_id}
@@ -82,14 +95,27 @@ class EventsUpstream:
         return {"_meta": meta}
 
 
+class _CatalogTransport(httpx2.AsyncBaseTransport):
+    def __init__(self, transport: httpx2.ASGITransport, upstream: EventsUpstream) -> None:
+        self._transport = transport
+        self._upstream = upstream
+
+    async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
+        if request.method == "POST" and b'"events/list"' in request.content:
+            self._upstream.catalog_deadlines.append(anyio.current_effective_deadline())
+        return await self._transport.handle_async_request(request)
+
+
 @asynccontextmanager
 async def events_client(upstream: EventsUpstream, timeout: float = 5.0) -> AsyncGenerator[MCPClient, None]:
-    server = Server[object]("events-upstream")
+    server = Server[object]("events-upstream", version="1.0.0")
     if upstream.advertises_events:
         server.extensions["io.modelcontextprotocol/events"] = {}
     server.add_request_handler("events/list", _Params, upstream.list_events)
     server.add_request_handler("events/poll", _Params, upstream.poll)
     server.add_request_handler("events/stream", _Params, upstream.stream)
+    server.add_request_handler("tools/call", _Params, upstream.call_tool)
+    server.add_request_handler("tools/list", _Params, upstream.list_tools)
     manager = StreamableHTTPSessionManager(server, stateless=True)
     async with manager.run():
         yield MCPClient(
@@ -97,5 +123,5 @@ async def events_client(upstream: EventsUpstream, timeout: float = 5.0) -> Async
             transport_type="http",
             protocol_version="2026-07-28",
             timeout=timeout,
-            upstream_transport=httpx2.ASGITransport(app=manager.handle_request),
+            upstream_transport=_CatalogTransport(httpx2.ASGITransport(app=manager.handle_request), upstream),
         )
