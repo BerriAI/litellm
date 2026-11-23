@@ -520,7 +520,7 @@ def is_model_embedded_id(file_id: str) -> bool:
 
 def extract_model_from_sources(
     file_id: str,
-    request,  # FastAPI Request object
+    request: "Request",  # FastAPI Request object
     data: dict | None = None,
 ) -> tuple[str | None, str | None]:
     """
@@ -553,7 +553,7 @@ def extract_model_from_sources(
 
 
 def get_credentials_for_model(
-    llm_router,  # Router instance
+    llm_router: Optional["Router"],  # Router instance
     model_id: str,
     operation_context: str = "file operation",
 ):
@@ -1234,8 +1234,8 @@ def prepare_data_with_credentials(
 
 async def handle_model_based_routing(
     file_id: str,
-    request,  # FastAPI Request object
-    llm_router,  # Router instance
+    request: "Request",  # FastAPI Request object
+    llm_router: Optional["Router"],  # Router instance
     data: dict,
     user_api_key_dict: "UserAPIKeyAuth",
     check_file_id_encoding: bool = True,
@@ -1752,7 +1752,7 @@ def _extract_model_param(request: "Request", request_body: dict) -> str | None:
 
 
 def _batch_response_model_id_candidates(
-    response,
+    response: object,
     unified_batch_id: str | Literal[False] | None,
 ) -> tuple[str, ...]:
     response_id: Final = getattr(response, "id", None)
@@ -1813,7 +1813,7 @@ def _batch_owner_auth_from_db_object(db_batch_object: object) -> "UserAPIKeyAuth
     return UserAPIKeyAuth(user_id=created_by, team_id=raw_team_id if isinstance(raw_team_id, str) else None)
 
 
-async def resolve_input_file_id_to_unified(response, prisma_client) -> None:
+async def resolve_input_file_id_to_unified(response, prisma_client: "PrismaClient | None") -> None:
     """
     If the batch response contains a raw provider input_file_id (not already a
     unified ID), look up the corresponding unified file ID from the managed file
@@ -1835,7 +1835,7 @@ async def resolve_input_file_id_to_unified(response, prisma_client) -> None:
             pass
 
 
-async def resolve_output_file_ids_to_unified(response, prisma_client) -> None:
+async def resolve_output_file_ids_to_unified(response, prisma_client: "PrismaClient | None") -> None:
     """
     If the batch response contains raw provider output_file_id or error_file_id
     (not already unified IDs), look up the corresponding unified file IDs from
@@ -1947,9 +1947,9 @@ async def ensure_batch_response_managed_file_ids(
 async def get_batch_from_database(
     batch_id: str,
     unified_batch_id: str | Literal[False],
-    managed_files_obj,
-    prisma_client,
-    verbose_proxy_logger,
+    managed_files_obj: object | None,
+    prisma_client: "PrismaClient | None",
+    verbose_proxy_logger: logging.Logger,
 ):
     """
     Try to retrieve batch object from ManagedObjectTable for consistent state.
@@ -2072,12 +2072,12 @@ async def update_batch_in_database(
     batch_id: str,
     unified_batch_id: str | Literal[False],
     response,
-    managed_files_obj,
-    prisma_client,
-    verbose_proxy_logger,
+    managed_files_obj: object | None,
+    prisma_client: "PrismaClient | None",
+    verbose_proxy_logger: logging.Logger,
     db_batch_object: "LiteLLM_ManagedObjectTable | None" = None,
     operation: str = "update",
-    user_api_key_dict=None,
+    user_api_key_dict: "UserAPIKeyAuth | None" = None,
     poller_owns_accounting: bool | None = None,
 ):
     """

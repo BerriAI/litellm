@@ -1166,7 +1166,7 @@ def _pending_claude_server_tool_call(search: ResponseFunctionWebSearch) -> ChatC
 
 class LiteLLMCompletionResponsesConfig:
     @staticmethod
-    def get_supported_openai_params(model: str) -> list:
+    def get_supported_openai_params(model: str) -> list[str]:
         """
         LiteLLM Adapter from OpenAI Responses API to Chat Completion API supports a subset of OpenAI Responses API params
         """
@@ -1512,7 +1512,7 @@ class LiteLLMCompletionResponsesConfig:
         if malformed_field_error is not None:
             raise malformed_field_error
 
-        litellm_completion_request: dict = {
+        litellm_completion_request: dict[str, object] = {
             "messages": (
                 list(
                     _request_messages_for_cache_points(
@@ -3923,6 +3923,9 @@ class LiteLLMCompletionResponsesConfig:
             LiteLLMCompletionResponsesConfig._extract_reasoning_output_items(chat_completion_response, choices)
         )
         responses_output.extend(
+            LiteLLMCompletionResponsesConfig._unclaimed_web_search_calls(chat_completion_response, choices)
+        )
+        responses_output.extend(
             LiteLLMCompletionResponsesConfig._extract_message_output_items(chat_completion_response, choices)
         )
         responses_output.extend(
@@ -3960,6 +3963,21 @@ class LiteLLMCompletionResponsesConfig:
                 and getattr(item, "call_id", None) in server_tool_call_ids
             )
         ]
+
+    @staticmethod
+    def _unclaimed_web_search_calls(
+        chat_completion_response: ModelResponse, choices: Sequence[Choices]
+    ) -> tuple[ResponseFunctionWebSearch, ...]:
+        claimed_call_ids: Final = frozenset(
+            tool_call.id
+            for tool_call in chain.from_iterable(
+                (*anthropic_server_tool_calls(choice.message), *(choice.message.tool_calls or ())) for choice in choices
+            )
+        )
+        web_search_calls: Final = LiteLLMCompletionResponsesConfig._web_search_calls_by_call_id(
+            chat_completion_response
+        )
+        return tuple(call for call_id, call in web_search_calls.items() if call_id not in claimed_call_ids)
 
     @staticmethod
     def _server_tool_call_ids(choices: Sequence[Choices]) -> frozenset[str]:
@@ -4183,7 +4201,7 @@ class LiteLLMCompletionResponsesConfig:
         messages: Final[list[AllMessageValues | GenericChatCompletionMessage | ChatCompletionMessageToolCall]] = []
         output_items: Final = responses_api_output.output
         for _output_item in output_items:
-            output_item: dict = dict(_output_item)
+            output_item: dict[str, object] = dict(_output_item)
             if output_item.get("type") == "function_call":
                 # handle function call output
                 messages.append(

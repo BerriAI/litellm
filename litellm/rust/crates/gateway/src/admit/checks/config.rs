@@ -3,7 +3,11 @@
 //! key the config types do not name is always named.
 
 use axum::http::request::Parts;
-use litellm_config::{Config, Environment, GeneralSettings, LiteLlmSettings, RouterSettings};
+use litellm_callbacks_model_capacity::NAME as MODEL_CAPACITY;
+use litellm_config::{
+    Config, Environment, GeneralSettings, LiteLlmSettings, PriorityReservationSettings,
+    RouterSettings, Value,
+};
 
 use super::{
     Admit, Reason, Refused,
@@ -28,9 +32,8 @@ const LAYERED: [&str; 12] = [
 
 pub(super) fn settings(admit: &Admit, _: &Parts) -> Option<Reason> {
     admit
-        .database
+        .stored_models
         .iter()
-        .chain(&admit.stored_models)
         .cloned()
         .chain(unhonored(&admit.config, &admit.environment))
         .next()
@@ -90,6 +93,8 @@ fn variables(environment: &Environment) -> impl Iterator<Item = Box<str>> + use<
         max_request_body_decompression_ratio: _,
         max_decompressed_request_bodies_in_flight_mb: _,
         non_llm_connection_timeout: _,
+        litellm_rate_limit_window_size: _,
+        litellm_tpm_token_reservation_enabled: _,
         legacy_multi_instance_rate_limiting,
         use_aws_kms,
         litellm_ssl_ciphers,
@@ -127,8 +132,8 @@ fn variables(environment: &Environment) -> impl Iterator<Item = Box<str>> + use<
     .map(|field| field.to_uppercase().into())
 }
 
-/// A database is `Admit::database`, whichever of `database_url` and the variables set it, and
-/// `STORE_MODEL_IN_DB` is `Admit::stored_models`. The other database settings only tune one. The JWT settings shape only a caller whose token is a JWT, and the public routes
+/// The database settings are read as the proxy reads them, and what the proxy holds in its
+/// database beyond keys is not checked. `STORE_MODEL_IN_DB` is `Admit::stored_models`. The JWT settings shape only a caller whose token is a JWT, and the public routes
 /// only one who sends no key.
 fn general(config: &Config) -> impl Iterator<Item = Box<str>> + '_ {
     let GeneralSettings {
@@ -156,6 +161,7 @@ fn general(config: &Config) -> impl Iterator<Item = Box<str>> + '_ {
         enable_jwt_auth: _,
         litellm_jwtauth: _,
         allow_user_auth: _,
+        token_rate_limit_type: _,
         completion_model,
         max_in_flight_requests_per_worker,
         max_queued_requests_per_worker,
@@ -280,9 +286,29 @@ fn router(settings: &RouterSettings) -> impl Iterator<Item = Box<str>> + '_ {
     .chain(other("router_settings.", additional_fields.keys(), &[]))
 }
 
+/// A callback other than `dynamic_rate_limiter_v3`, the one the native app runs.
+fn other_callbacks(callbacks: &Option<Vec<Value>>) -> bool {
+    callbacks
+        .iter()
+        .flatten()
+        .any(|callback| callback.as_str() != Some(MODEL_CAPACITY))
+}
+
+/// A per-model limit that borrows a model's idle capacity, which the dynamic rate limiter holds
+/// tokens for before the call. The native app serves no caller that holds one.
+fn borrows(settings: &Option<PriorityReservationSettings>) -> bool {
+    settings.as_ref().is_some_and(|settings| {
+        !settings
+            .model_limit_borrowing_config
+            .borrow_idle_capacity
+            .is_empty()
+    })
+}
+
 /// `drop_params` is honored whichever of the config and its variable set it, and
-/// `use_chat_completions_url_for_anthropic_messages` is [`messages_only`]. The others the native
-/// app does not read only shape another route or the UI.
+/// `use_chat_completions_url_for_anthropic_messages` is [`messages_only`]. `callbacks` is honored
+/// when it names only the dynamic rate limiter, which reads `priority_reservation` and its
+/// settings. The others the native app does not read only shape another route or the UI.
 fn litellm(config: &Config) -> impl Iterator<Item = Box<str>> + '_ {
     let LiteLlmSettings {
         ssl_verify: _,
@@ -297,11 +323,14 @@ fn litellm(config: &Config) -> impl Iterator<Item = Box<str>> + '_ {
         drop_params: _,
         json_logs: _,
         set_verbose: _,
+        enable_redis_auth_cache: _,
         use_chat_completions_url_for_anthropic_messages: _,
         route_all_chat_openai_to_responses: _,
         gemini_live_defer_setup: _,
         blog_posts_url: _,
         autorouter_presets_url: _,
+        priority_reservation: _,
+        priority_reservation_settings,
         modify_params,
         enable_anthropic_prompt_caching,
         reasoning_auto_summary,
@@ -323,7 +352,6 @@ fn litellm(config: &Config) -> impl Iterator<Item = Box<str>> + '_ {
             request_timeout,
             num_retries,
             cache_params,
-            callbacks,
             success_callback,
             failure_callback,
             anthropic_prompt_caching_ttl,
@@ -335,7 +363,8 @@ fn litellm(config: &Config) -> impl Iterator<Item = Box<str>> + '_ {
             modify_params,
             enable_anthropic_prompt_caching,
             reasoning_auto_summary,
-        ]
+        ],
+        by: [callbacks => other_callbacks, priority_reservation_settings => borrows]
     )
     .chain(unknown("litellm_settings.", additional_fields))
     .map(|key| spelled(config, key))
@@ -434,6 +463,10 @@ mod tests {
         "router_settings.provider_budget_config"
     )]
     #[case::a_section_the_config_types_do_not_name("future_section: {}\n", "future_section")]
+    #[case::a_callback_beside_the_dynamic_rate_limiter(
+        "litellm_settings:\n  callbacks: [dynamic_rate_limiter_v3, prometheus]\n",
+        "litellm_settings.callbacks"
+    )]
     fn a_setting_the_native_app_does_not_honor_is_named(#[case] yaml: &str, #[case] setting: &str) {
         assert_eq!(written(yaml), [setting]);
     }

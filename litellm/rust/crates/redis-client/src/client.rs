@@ -179,7 +179,9 @@ impl RedisClient {
         Pipeline::new(self.0.namespace.clone())
     }
 
-    pub(crate) fn namespace(&self) -> &Namespace {
+    /// The prefix this client puts on every key, which a pub/sub channel shared with other
+    /// processes is prefixed with by hand.
+    pub fn namespace(&self) -> &Namespace {
         &self.0.namespace
     }
 

@@ -18,8 +18,9 @@ use litellm_llms::base_llm::{
     },
 };
 use litellm_llms_types::formats::messages::MessagesResponse;
+use litellm_redaction::REDACTED;
 use litellm_secrets::source::Secrets;
-use litellm_tracing::{ByteChunk, REDACTED};
+use litellm_tracing::ByteChunk;
 use serde_json::{Map, Value};
 
 use super::{
