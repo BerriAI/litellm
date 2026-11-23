@@ -14,7 +14,6 @@ from typing_extensions import ReadOnly, TypedDict
 
 from litellm.models.budget import LiteLLM_BudgetTable
 from litellm.models.end_user import LiteLLM_EndUserTable
-from litellm.models.project import LiteLLM_ProjectTable
 from litellm.models.team import LiteLLM_TeamTable
 from litellm.models.user import LiteLLM_UserTable
 from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
@@ -161,11 +160,6 @@ def user_facts(user: LiteLLM_UserTable) -> UserFacts:
     )
 
 
-def with_owner(token: UserAPIKeyAuth, owner: LiteLLM_UserTable | None) -> UserAPIKeyAuth:
-    """The key with its owner's per-model budget, which the budget checks and the identity read."""
-    return token if owner is None else token.model_copy(update={"user_model_max_budget": owner.model_max_budget})
-
-
 def with_end_user(token: UserAPIKeyAuth, params: EndUserParams) -> UserAPIKeyAuth:
     """The key with an end user's limits, except its max budget. A limit that is unset keeps the key's own."""
     return token.model_copy(
@@ -174,12 +168,6 @@ def with_end_user(token: UserAPIKeyAuth, params: EndUserParams) -> UserAPIKeyAut
             "end_user_id": params.get("end_user_id"),
         }
     )
-
-
-def with_project(token: UserAPIKeyAuth, project: LiteLLM_ProjectTable | None) -> UserAPIKeyAuth:
-    if project is None:
-        return token
-    return token.model_copy(update={"project_metadata": project.metadata, "project_alias": project.project_alias})
 
 
 def _epoch(expires: str | datetime) -> float:

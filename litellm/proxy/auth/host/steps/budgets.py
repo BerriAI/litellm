@@ -37,7 +37,7 @@ from litellm.proxy.auth.auth_checks import (
     virtual_key_max_budget_check,
     virtual_key_soft_budget_check,
 )
-from litellm.proxy.auth.host.facts import with_owner
+from litellm.proxy.auth.grants import with_owner_model_budget
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.user_api_key_auth import (
     budget_served_model,
@@ -186,7 +186,7 @@ class BudgetChecks:
 
     async def key_model_budgets(self, key: UserAPIKeyAuth, owner: LiteLLM_UserTable | None) -> None:
         """The key's per-model budgets with the router's model fallback, then its owner's per-model budget."""
-        token: Final = with_owner(key, owner)
+        token: Final = with_owner_model_budget(key, owner)
         models: Final = self._request_models(token)
         if token.model_max_budget and self.prisma_client is not None and models and token.token is not None:
             for model_name in models:

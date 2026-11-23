@@ -519,6 +519,33 @@ async def test_custom_auth_does_not_enforce_key_model_access_by_default(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_post_custom_auth_checks_give_the_token_its_projects_alias_and_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cache: Final = UserApiKeyCache()
+    cache.set_cache(
+        AuthObject.project("p1"),
+        LiteLLM_ProjectTableCachedObj(
+            project_id="p1", project_alias="Project One", metadata={"tags": ["a"]}, created_by="a", updated_by="a"
+        ),
+        model_type=LiteLLM_ProjectTableCachedObj,
+    )
+    server: Final = litellm.proxy.proxy_server
+    monkeypatch.setattr(server, "user_api_key_cache", cache)
+    monkeypatch.setattr(server, "prisma_client", prisma_with_empty_config())
+
+    token: Final = await _run_post_custom_auth_checks(
+        valid_token=UserAPIKeyAuth(token="test_token", project_id="p1"),
+        request=MagicMock(),
+        request_data={},
+        route="/v1/chat/completions",
+        parent_otel_span=None,
+    )
+
+    assert (token.project_alias, token.project_metadata) == ("Project One", {"tags": ["a"]})
+
+
+@pytest.mark.asyncio
 async def test_post_custom_auth_expired_key_returns_unauthorized():
     expired_token = UserAPIKeyAuth(
         token="test_token",
@@ -6247,7 +6274,7 @@ async def test_centralized_common_checks_team_404_does_not_zero_other_contexts()
     fetched_project = LiteLLM_ProjectTableCachedObj(
         project_id="proj-1",
         project_alias="Proj 1",
-        metadata={},
+        metadata={"tags": ["gold"]},
         created_by="admin",
         updated_by="admin",
     )
@@ -6300,6 +6327,7 @@ async def test_centralized_common_checks_team_404_does_not_zero_other_contexts()
         assert kwargs["user_object"] is fetched_user
         assert kwargs["end_user_object"] is fetched_end_user
         assert kwargs["project_object"] is fetched_project
+        assert (token.project_alias, token.project_metadata) == ("Proj 1", {"tags": ["gold"]})
     finally:
         for k, v in originals.items():
             setattr(_proxy_server_mod, k, v)

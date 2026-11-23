@@ -22,6 +22,7 @@ from litellm.proxy._types import (
     Member,
     UserAPIKeyAuth,
 )
+from litellm.proxy.auth.grants import organization_grants
 from litellm.types.llms.base import LiteLLMBaseModel
 
 _MODEL_ALIASES_ADAPTER: Final = TypeAdapter(dict[str, str])
@@ -154,17 +155,7 @@ async def team_grant_billing_auth_update(
     )
     if org_object is None:
         return MappingProxyType({**team_auth_update, **organization_auth_fields})
-    budget: Final = org_object.litellm_budget_table
-    return MappingProxyType(
-        {
-            **team_auth_update,
-            "organization_alias": org_object.organization_alias,
-            "organization_metadata": org_object.metadata,
-            "organization_max_budget": budget.max_budget if budget is not None else None,
-            "organization_tpm_limit": budget.tpm_limit if budget is not None else None,
-            "organization_rpm_limit": budget.rpm_limit if budget is not None else None,
-        }
-    )
+    return MappingProxyType({**team_auth_update, **organization_grants(org_object)})
 
 
 def _json_column(team_object: LiteLLM_TeamTable, column: Mapping[str, IncEx | bool]) -> _TeamJsonColumns:

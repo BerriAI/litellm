@@ -60,6 +60,7 @@ from litellm.proxy.auth.auth_checks import (
     resolve_and_validate_end_user_id,
 )
 from litellm.proxy.auth.auth_object_prefetch import prefetch_identity_keys
+from litellm.proxy.auth.grants import with_project
 from litellm.proxy.auth.host.facts import (
     AliasMissing,
     EndUserRow,
@@ -68,7 +69,6 @@ from litellm.proxy.auth.host.facts import (
     TeamMissing,
     end_user_params,
     team_facts,
-    with_project,
 )
 from litellm.proxy.auth.host.identity import auto_registered_key
 from litellm.proxy.auth.host.steps import jwt_auto_register, team_member_add
