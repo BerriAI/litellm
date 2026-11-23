@@ -13,7 +13,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from litellm.proxy.mcp_server.idp_token_exchange import REJECTED_SUBJECT_TOKEN
 from tests.integration._support.client import Gateway, eventually, string_value
 from tests.integration._support.database import read_rows
-from tests.integration._support.process import owned_proxy
+from tests.integration._support.process import graceful_stop_seconds, owned_proxy
 from tests.integration._support.wire import Reply, Request, wire_server
 
 pytestmark: Final = pytest.mark.shares_worker_state
@@ -389,3 +389,51 @@ def test_another_teams_ungranted_deployment_neither_blocks_nor_serves_a_request_
         }
         assert statuses == (200,) * 6, statuses
         assert served_by == {"Bearer granted-deployment"}, served_by
+
+
+@pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
+def test_a_wildcard_route_blocks_a_litellm_model_grant_only_for_the_names_it_matches(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    with wire_server(_completion) as wire, gateway.scenario() as scenario:
+        suffix: Final = uuid.uuid4().hex
+        group: Final = f"granted-{suffix}"
+        unmatched_raw: Final = f"openai/unmatched-{suffix}"
+        matched_raw: Final = f"openai/matched-{suffix}-raw"
+        for raw in (unmatched_raw, matched_raw):
+            scenario.model(
+                model=raw,
+                api_base=f"{wire.url}/v1",
+                api_key="granted-deployment",
+                model_info={"access_groups": [group]},
+            )
+        key: Final = scenario.key(models=[group])
+        config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+        config["model_list"] = [
+            *config["model_list"],
+            *(
+                {
+                    "model_name": pattern,
+                    "litellm_params": {"model": "openai/*", "api_base": f"{wire.url}/v1", "api_key": "wildcard"},
+                }
+                for pattern in (f"unrelated-{suffix}/*", f"openai/matched-{suffix}-*")
+            ),
+        ]
+        path: Final = tmp_path / "wildcard_routes.yaml"
+        path.write_text(yaml.safe_dump(config))
+        with owned_proxy(gateway, tmp_path, {}, config=path, workers=2) as candidate:
+            wire.drain()
+            statuses: Final = tuple(
+                (raw, _chat(candidate, raw, key).status_code) for raw in (unmatched_raw, matched_raw)
+            )
+            granted_served_by: Final = [
+                entry.headers.get("authorization") for entry in wire.drain() if entry.target == "/v1/chat/completions"
+            ]
+            admin: Final = _chat(candidate, matched_raw, candidate.key)
+            admin_served_by: Final = [
+                entry.headers.get("authorization") for entry in wire.drain() if entry.target == "/v1/chat/completions"
+            ]
+        assert statuses == ((unmatched_raw, 200), (matched_raw, 403)), statuses
+        assert granted_served_by == ["Bearer granted-deployment"], granted_served_by
+        assert admin.status_code == 200, admin.text
+        assert admin_served_by == ["Bearer wildcard"], admin_served_by

@@ -523,3 +523,49 @@ def test_key_model_max_budget_on_the_public_name_or_access_group_governs_request
         assert refused.status_code == 422, refused.text
         assert _Error.model_validate_json(refused.content).error.type == "budget_exceeded", refused.text
         assert _provider_calls(wire) == (), f"A refused request reached the provider: {refused.text}"
+
+
+@pytest.mark.timeout(120)
+def test_a_litellm_model_request_served_by_a_team_deployment_charges_another_namesakes_public_name_budget(
+    gateway: Gateway,
+) -> None:
+    litellm_model: Final = f"openai/raw-{uuid.uuid4().hex}"
+
+    with wire_server(_billed) as wire, gateway.scenario() as scenario:
+        team_id: Final = scenario.team()
+
+        def deployment(api_key: str, order: int, model_info: dict[str, str]) -> str:
+            return scenario.model(
+                model=litellm_model,
+                api_base=f"{wire.url}/v1",
+                api_key=api_key,
+                order=order,
+                input_cost_per_token=_INPUT_RATE,
+                output_cost_per_token=_OUTPUT_RATE,
+                model_info=model_info,
+            )
+
+        deployment("team-deployment", 1, {"team_id": team_id, "team_public_model_name": f"team-{uuid.uuid4().hex}"})
+        global_name: Final = deployment("global-deployment", 2, {})
+        key: Final = scenario.key(
+            team_id=team_id,
+            models=[],
+            model_max_budget={global_name: {"max_budget": _MAX_BUDGET, "budget_duration": "30d"}},
+        )
+        body: Final = {"model": litellm_model, "messages": [{"role": "user", "content": "namesake budget"}]}
+        served: Final = gateway.request("POST", "/v1/chat/completions", body, key=key)
+        assert served.status_code == 200, served.text
+        assert [entry.headers.get("authorization") for entry in _provider_calls(wire)] == ["Bearer team-deployment"], (
+            served.text
+        )
+        spent: Final = eventually(
+            lambda: _model_budget_spend(gateway, key, global_name),
+            lambda value: value >= _MAX_BUDGET,
+            seconds=60,
+            return_last_on_timeout=True,
+        )
+        assert spent >= _MAX_BUDGET, f"{global_name} was not charged for {litellm_model}: {spent}"
+        refused: Final = gateway.request("POST", "/v1/chat/completions", body, key=key)
+        assert refused.status_code == 422, refused.text
+        assert _Error.model_validate_json(refused.content).error.type == "budget_exceeded", refused.text
+        assert _provider_calls(wire) == (), f"A refused request reached the provider: {refused.text}"

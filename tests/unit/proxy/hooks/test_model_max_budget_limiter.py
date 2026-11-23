@@ -801,6 +801,72 @@ async def test_a_team_public_name_that_matches_another_deployments_litellm_model
         assert await limiter.is_key_within_model_budget(user_api_key_dict=key, model="gpt-4o")
 
 
+RAW_MODEL: Final = "openai/raw-x"
+PUBLIC_NAME: Final = "chat-public"
+
+
+def _router_with_public_name() -> Router:
+    return Router(
+        model_list=[{"model_name": PUBLIC_NAME, "litellm_params": {"model": RAW_MODEL, "api_key": "sk-test"}}]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("strict_name", "requested", "blocked"),
+    [
+        (RAW_MODEL, RAW_MODEL, True),
+        (PUBLIC_NAME, RAW_MODEL, True),
+        (RAW_MODEL, PUBLIC_NAME, False),
+        (PUBLIC_NAME, PUBLIC_NAME, True),
+    ],
+)
+async def test_budgets_on_a_litellm_model_and_its_public_name_gate_litellm_model_requests_by_the_stricter_one(
+    monkeypatch: pytest.MonkeyPatch, strict_name: str, requested: str, blocked: bool
+):
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", _router_with_public_name())
+    limiter: Final = _family_limiter(groups_by_model={})
+    budget: Final = {name: FAMILY_CAP if name == strict_name else ROOMY_CAP for name in (RAW_MODEL, PUBLIC_NAME)}
+    assert await limiter.is_key_within_model_budget(user_api_key_dict=_key(budget), model=requested)
+
+    await _spend_on(limiter, model=RAW_MODEL, model_max_budget=budget)
+
+    if blocked:
+        with pytest.raises(litellm.BudgetExceededError, match="exceeded budget"):
+            await limiter.is_key_within_model_budget(user_api_key_dict=_key(budget), model=requested)
+    else:
+        assert await limiter.is_key_within_model_budget(user_api_key_dict=_key(budget), model=requested)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("requested", "raw_charged"), [(RAW_MODEL, True), (PUBLIC_NAME, False)])
+async def test_budgets_on_a_litellm_model_and_its_public_name_each_charge_a_request_once(
+    monkeypatch: pytest.MonkeyPatch, requested: str, raw_charged: bool
+):
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", _router_with_public_name())
+    cache: Final = DualCache()
+    limiter: Final = _family_limiter(groups_by_model={}, dual_cache=cache)
+    budget: Final = {RAW_MODEL: ROOMY_CAP, PUBLIC_NAME: ROOMY_CAP}
+    requests: Final = 3
+
+    for _ in range(requests):
+        await _spend_on(limiter, model=requested, model_max_budget=budget)
+
+    charged: Final = {
+        name: await cache.async_get_cache(
+            model_budget_spend_cache_key(
+                entity_type=Litellm_EntityType.KEY, entity_id=KEY_HASH, budget_model=name, budget_duration="1d"
+            ),
+            local_only=True,
+        )
+        for name in (RAW_MODEL, PUBLIC_NAME)
+    }
+    assert charged == {
+        RAW_MODEL: pytest.approx(CHAT_COST * requests) if raw_charged else None,
+        PUBLIC_NAME: pytest.approx(CHAT_COST * requests),
+    }
+
+
 @pytest.mark.asyncio
 async def test_a_model_added_to_the_access_group_later_is_covered_with_no_key_change():
     budget: Final = {OPUS_GROUP: FAMILY_CAP}

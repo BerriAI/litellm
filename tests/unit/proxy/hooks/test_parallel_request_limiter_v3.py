@@ -2036,6 +2036,113 @@ async def test_success_tpm_accounting_charges_the_public_names_of_a_litellm_mode
     ]
 
 
+_RAW_MODEL: Final = "openai/raw-x"
+_PUBLIC_NAME: Final = "chat-public"
+
+
+def _public_name_limiter() -> NativeLimiter:
+    router: Final = Router(
+        model_list=[{"model_name": _PUBLIC_NAME, "litellm_params": {"model": _RAW_MODEL, "api_key": "sk-test"}}]
+    )
+    return NativeLimiter(
+        internal_usage_cache=InternalUsageCache(DualCache()),
+        namesake_models_resolver=lambda model, team: public_model_names_of_deployments_routed_by_litellm_model(
+            model, router, team
+        ),
+    )
+
+
+async def _served_request(handler: NativeLimiter, auth: UserAPIKeyAuth, model: str, request_id: str) -> None:
+    await handler.async_pre_call_hook(
+        user_api_key_dict=auth,
+        cache=DualCache(),
+        data={"model": model, "messages": [{"role": "user", "content": "hello"}], "max_tokens": 10},
+        call_type="acompletion",
+    )
+    await _log_success(
+        handler,
+        {
+            "standard_logging_object": {"metadata": {"user_api_key_hash": auth.api_key}},
+            "litellm_params": {"metadata": {"model_group": model, "user_api_key_metadata": auth.metadata}},
+            "model": model,
+        },
+        ModelResponse(
+            id=request_id,
+            object="chat.completion",
+            created=int(datetime.now().timestamp()),
+            model=model,
+            usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+            choices=[],
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    "limit_field, strict, roomy",
+    [("model_rpm_limit", 1, 100), ("model_tpm_limit", 100, 100_000)],
+)
+@pytest.mark.parametrize(
+    "strict_name, requested, refused",
+    [
+        (_RAW_MODEL, _RAW_MODEL, True),
+        (_PUBLIC_NAME, _RAW_MODEL, True),
+        (_RAW_MODEL, _PUBLIC_NAME, False),
+        (_PUBLIC_NAME, _PUBLIC_NAME, True),
+    ],
+)
+@pytest.mark.asyncio
+async def test_limits_on_a_litellm_model_and_its_public_name_gate_litellm_model_requests_by_the_stricter_one(
+    monkeypatch: pytest.MonkeyPatch,
+    limit_field: str,
+    strict: int,
+    roomy: int,
+    strict_name: str,
+    requested: str,
+    refused: bool,
+) -> None:
+    _set_token_rate_limit_type(monkeypatch, "total")
+    handler: Final = _public_name_limiter()
+    limits: Final = {name: strict if name == strict_name else roomy for name in (_RAW_MODEL, _PUBLIC_NAME)}
+    auth: Final = UserAPIKeyAuth(api_key=hash_token("sk-both-names"), metadata={limit_field: limits})
+
+    await _served_request(handler, auth, _RAW_MODEL, "both-names-first")
+
+    if refused:
+        with pytest.raises(ProxyRateLimitError, match="model_per_key"):
+            await _served_request(handler, auth, requested, "both-names-second")
+    else:
+        await _served_request(handler, auth, requested, "both-names-second")
+
+
+@pytest.mark.parametrize("requested, raw_counted", [(_RAW_MODEL, True), (_PUBLIC_NAME, False)])
+@pytest.mark.asyncio
+async def test_limits_on_a_litellm_model_and_its_public_name_each_count_a_request_once(
+    monkeypatch: pytest.MonkeyPatch, requested: str, raw_counted: bool
+) -> None:
+    _set_token_rate_limit_type(monkeypatch, "total")
+    handler: Final = _public_name_limiter()
+    roomy: Final = {_RAW_MODEL: 100_000, _PUBLIC_NAME: 100_000}
+    auth: Final = UserAPIKeyAuth(
+        api_key=hash_token("sk-both-names-count"), metadata={"model_rpm_limit": roomy, "model_tpm_limit": roomy}
+    )
+    requests: Final = 3
+
+    for index in range(requests):
+        await _served_request(handler, auth, requested, f"both-names-count-{index}")
+
+    counted: Final = {
+        name: (
+            _local(handler, _counter("model_per_key", f"{auth.api_key}:{name}", "requests")),
+            _tokens(handler, "model_per_key", f"{auth.api_key}:{name}"),
+        )
+        for name in (_RAW_MODEL, _PUBLIC_NAME)
+    }
+    assert counted == {
+        _RAW_MODEL: (requests, 150 * requests) if raw_counted else (None, 0),
+        _PUBLIC_NAME: (requests, 150 * requests),
+    }
+
+
 # --- a team's PTU share on a shared Azure provisioned deployment ---------------------------
 
 

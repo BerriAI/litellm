@@ -923,6 +923,59 @@ def test_policy_attachment_with_a_blocking_guardrail_stops_the_request_before_th
         _assert_provider_request(provider_requests[0], _PROMPT)
 
 
+@pytest.mark.parametrize("key_models", ("all", "public_name"))
+def test_model_scoped_policy_attachment_applies_to_a_request_by_the_deployment_litellm_model(
+    gateway: Gateway, key_models: Literal["all", "public_name"]
+) -> None:
+    blocked_reason: Final = f"policy attachment blocked {uuid.uuid4().hex}"
+    litellm_model: Final = f"openai/raw-{uuid.uuid4().hex}"
+    with (
+        wire_server(lambda _request: Reply(body=json.dumps(_PROVIDER_RESPONSE).encode())) as provider,
+        wire_server(
+            lambda _request: Reply(body=json.dumps({"action": "BLOCKED", "blocked_reason": blocked_reason}).encode())
+        ) as guardrail,
+        gateway.scenario() as scenario,
+    ):
+        public_name: Final = scenario.model(
+            model=litellm_model, api_base=f"{provider.url}/v1", api_key="synthetic-provider-key"
+        )
+        key: Final = scenario.key(models=[] if key_models == "all" else [public_name])
+        prefix: Final = f"attachment-{uuid.uuid4().hex}"
+        guardrail_name: Final = _create_guardrail(
+            gateway,
+            scenario.cleanups,
+            f"guardrail-{prefix}",
+            f"{guardrail.url}/beta/litellm_basic_guardrail_api",
+            "synthetic-guardrail-key",
+        )
+        policy_name: Final = f"policy-{prefix}"
+        _create_policy(gateway, scenario.cleanups, policy_name, guardrail_name)
+        attachment: Final = gateway.request(
+            "POST", "/policies/attachments", {"policy_name": policy_name, "models": [public_name]}
+        )
+        assert attachment.status_code == 200, attachment.text
+        scenario.cleanups.callback(
+            _delete_attachment, gateway, _AttachmentResponse.model_validate_json(attachment.content).attachment_id
+        )
+
+        responses: Final = tuple(
+            gateway.request(
+                "POST",
+                "/v1/chat/completions",
+                {"model": model, "messages": [{"role": "user", "content": _PROMPT}]},
+                key=key,
+            )
+            for model in (public_name, litellm_model)
+        )
+        assert [response.status_code for response in responses] == [400, 400], [r.text for r in responses]
+        assert [_ChatError.model_validate_json(response.content).error.message for response in responses] == [
+            blocked_reason,
+            blocked_reason,
+        ]
+        assert len(guardrail.drain()) == 2
+        assert [request.target for request in provider.drain() if request.target != "/v1/models"] == []
+
+
 @pytest.mark.parametrize(
     "tag_spelling",
     (
