@@ -2,8 +2,8 @@
 Seltz Search API.
 
 Endpoint: POST https://api.seltz.ai/v1/search
-Docs: https://docs.seltz.ai/api-reference/search
-OpenAPI: https://docs.seltz.ai/api-reference/openapi.json
+Docs: https://docs.seltz.ai/api-reference/search?utm_source=litellm&utm_medium=integration&utm_campaign=marketplace
+OpenAPI: https://docs.seltz.ai/api-reference/openapi.json?utm_source=litellm&utm_medium=integration&utm_campaign=marketplace
 """
 
 from __future__ import annotations
