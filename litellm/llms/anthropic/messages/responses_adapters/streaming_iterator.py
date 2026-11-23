@@ -313,7 +313,7 @@ class AnthropicResponsesStreamWrapper:
                 call_id: Final = (
                     getattr(item, "call_id", None) or (item.get("call_id") if isinstance(item, dict) else None) or ""
                 )
-                name = getattr(item, "name", None) or _dict_value(item, "name") or ""
+                name: Final = getattr(item, "name", None) or _dict_value(item, "name") or ""
                 if item_id:
                     self._pending_tool_ids[item_id] = call_id
                 self._open_block(

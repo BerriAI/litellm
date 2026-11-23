@@ -88,7 +88,7 @@ def _resolve_session_key(kwargs: _LoggedCallKwargs) -> str | None:
         # crediting the bandit for conversations that are too short to signal.
         return None
 
-    identity = ":".join(str(metadata.get(f) or "") if metadata is not None else "" for f in _IDENTITY_FIELDS)
+    identity: Final = ":".join(str(metadata.get(f) or "") if metadata is not None else "" for f in _IDENTITY_FIELDS)
     anchor: Final = messages[:SIGNAL_GATE_MIN_MESSAGES]
     payload: Final = (
         identity

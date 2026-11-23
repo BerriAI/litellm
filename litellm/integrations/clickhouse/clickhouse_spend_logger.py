@@ -108,14 +108,14 @@ def _json_mapping(value: Mapping[str, object]) -> str:
 
 
 def _find_traceparent(metadata: Mapping[str, object], kwargs: Mapping[str, object]) -> tuple[str, str]:
-    custom_headers = metadata.get("requester_custom_headers") or _EMPTY_MAPPING
-    proxy_request = (
+    custom_headers: Final = metadata.get("requester_custom_headers") or _EMPTY_MAPPING
+    proxy_request: Final = (
         require_attributes(kwargs.get("litellm_params") or _EMPTY_MAPPING, _SupportsGet, "get").get(
             "proxy_server_request"
         )
         or _EMPTY_MAPPING
     )
-    request_headers = require_attributes(proxy_request, _SupportsGet, "get").get("headers") or _EMPTY_MAPPING
+    request_headers: Final = require_attributes(proxy_request, _SupportsGet, "get").get("headers") or _EMPTY_MAPPING
     for headers in (custom_headers, request_headers):
         for name, value in require_attributes(headers, _SupportsItems, "items").items():
             if str(name).lower() == "traceparent":
@@ -125,7 +125,7 @@ def _find_traceparent(metadata: Mapping[str, object], kwargs: Mapping[str, objec
 
 def _cache_tokens(usage: _SupportsGet) -> tuple[int, int]:
     """(cache_read, cache_write) from a Usage dict: OpenAI prompt_tokens_details first, Anthropic fields as fallback."""
-    details = require_attributes(usage.get("prompt_tokens_details") or _EMPTY_MAPPING, _SupportsGet, "get")
+    details: Final = require_attributes(usage.get("prompt_tokens_details") or _EMPTY_MAPPING, _SupportsGet, "get")
     cache_read = _int(details.get("cached_tokens")) or _int(usage.get("cache_read_input_tokens"))
     cache_write = (
         _int(details.get("cache_write_tokens"))
@@ -143,7 +143,7 @@ def _request_tags(value: Sequence[object] | None) -> list[str]:
 
 def _session_id(payload: StandardLoggingPayload | SpendLogPayload, kwargs: Mapping[str, object]) -> str:
     """Mirrors proxy `_get_session_id_for_spend_log`: explicit session id, else the payload trace id."""
-    request_metadata = (
+    request_metadata: Final = (
         require_attributes(kwargs.get("litellm_params") or _EMPTY_MAPPING, _SupportsGet, "get").get("metadata")
         or _EMPTY_MAPPING
     )
