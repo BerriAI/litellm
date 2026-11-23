@@ -5,7 +5,7 @@ import struct
 import sys
 import types
 from binascii import crc32
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 from types import MappingProxyType
 from typing import Final
@@ -917,7 +917,9 @@ INVOCATION_METRICS: Final = {
 }
 
 
-def _openai_shaped_invoke_chunk(model: str, choices: list[dict], extra: Mapping[str, object]) -> bytes:
+def _openai_shaped_invoke_chunk(
+    model: str, choices: Sequence[Mapping[str, object]], extra: Mapping[str, object]
+) -> bytes:
     return _invoke_chunk(
         {
             "id": "chatcmpl-1",
