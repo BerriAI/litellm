@@ -327,3 +327,35 @@ def test_count_tokens_leaves_a_message_that_is_not_an_object_for_bedrock_to_judg
     messages: Final = ["hi", *_GEMINI_THOUGHT_HISTORY]
 
     assert _counted_invoke_body(model, messages, model)["messages"] == messages
+
+
+_GEMINI_TOOL_TURN: Final = [
+    {"role": "user", "content": "What is the weather in Oslo?"},
+    {
+        "role": "assistant",
+        "content": [
+            {
+                "type": "tool_use",
+                "id": "toolu_01",
+                "name": "get_weather",
+                "input": {"city": "Oslo"},
+                "provider_specific_fields": {"signature": "gemini-thought-signature"},
+            }
+        ],
+    },
+    {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_01", "content": "4 C"}]},
+]
+_GEMINI_TOOL_TURN_AS_SENT: Final = [
+    {"role": "user", "content": "What is the weather in Oslo?"},
+    {
+        "role": "assistant",
+        "content": [{"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": {"city": "Oslo"}}],
+    },
+    {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_01", "content": "4 C"}]},
+]
+
+
+def test_count_tokens_drops_the_provider_specific_fields_litellm_puts_on_a_returned_block():
+    model: Final = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+
+    assert _counted_invoke_body(model, _GEMINI_TOOL_TURN, model)["messages"] == _GEMINI_TOOL_TURN_AS_SENT

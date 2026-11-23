@@ -497,6 +497,42 @@ async def test_handler_sends_an_unsigned_thought_only_to_a_host_that_does_not_ch
     assert (sent["messages"] == _GEMINI_THOUGHT_HISTORY) is kept
 
 
+_GEMINI_TOOL_TURN: Final[list[dict[str, JsonValue]]] = [
+    {"role": "user", "content": "What is the weather in Oslo?"},
+    {
+        "role": "assistant",
+        "content": [
+            {
+                "type": "tool_use",
+                "id": "toolu_01",
+                "name": "get_weather",
+                "input": {"city": "Oslo"},
+                "provider_specific_fields": {"signature": "gemini-thought-signature"},
+            }
+        ],
+    },
+    {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_01", "content": "4 C"}]},
+]
+_GEMINI_TOOL_TURN_AS_SENT: Final[list[dict[str, JsonValue]]] = [
+    {"role": "user", "content": "What is the weather in Oslo?"},
+    {
+        "role": "assistant",
+        "content": [{"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": {"city": "Oslo"}}],
+    },
+    {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_01", "content": "4 C"}]},
+]
+
+
+@pytest.mark.parametrize("count_config", (AnthropicCountTokensConfig(), AzureAIAnthropicCountTokensConfig()))
+@pytest.mark.parametrize("model", ("claude-opus-5-5", "kimi-k3"))
+def test_count_drops_the_provider_specific_fields_litellm_puts_on_a_returned_block(
+    count_config: AnthropicCountTokensConfig, model: str
+) -> None:
+    counted: Final = count_config.transform_request_to_count_tokens(model=model, messages=_GEMINI_TOOL_TURN)
+
+    assert counted["messages"] == _GEMINI_TOOL_TURN_AS_SENT
+
+
 @pytest.mark.asyncio
 async def test_handler_sends_the_leading_system_run_as_system_not_as_a_message(httpx_transport_clients):
     """The wire body is what the provider judges: ``system`` carries the prompt and no message has

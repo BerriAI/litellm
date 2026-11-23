@@ -14,6 +14,7 @@ from pydantic import JsonValue, TypeAdapter
 from litellm.llms.anthropic.common_utils import (
     anthropic_message_objects,
     is_claude_model_target,
+    json_message_without_provider_specific_fields,
     strip_unsigned_thinking_from_anthropic_messages,
 )
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
@@ -43,7 +44,13 @@ def count_tokens_request_body(request_data: Mapping[str, object], model: str) ->
     )
     if claude_messages is None:
         return request_data
-    return {**request_data, "messages": strip_unsigned_thinking_from_anthropic_messages(claude_messages)}
+    return {
+        **request_data,
+        "messages": [
+            json_message_without_provider_specific_fields(message)
+            for message in strip_unsigned_thinking_from_anthropic_messages(claude_messages)
+        ],
+    }
 
 
 class VertexAIPartnerModelsTokenCounter(VertexBase):

@@ -16,6 +16,7 @@ from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import 
     split_leading_system_run,
 )
 from litellm.llms.anthropic.common_utils import (
+    json_message_without_provider_specific_fields,
     merge_anthropic_beta_headers,
     strip_unsigned_thinking_from_anthropic_messages,
     verifies_claude_thinking_signatures,
@@ -121,11 +122,12 @@ class AnthropicCountTokensConfig:
         system-role messages is counted through ``system``, the only place count_tokens accepts it.
         """
         options: Final[Mapping[str, JsonValue]] = optional_params or MappingProxyType({})
-        sent_messages: Final[Sequence[Mapping[str, JsonValue]]] = (
+        replayed_messages: Final[Sequence[Mapping[str, JsonValue]]] = (
             strip_unsigned_thinking_from_anthropic_messages(messages)
             if verifies_claude_thinking_signatures(custom_llm_provider, model, api_base)
             else messages
         )
+        sent_messages: Final = tuple(map(json_message_without_provider_specific_fields, replayed_messages))
         counted_messages, counted_system = _lift_leading_system(sent_messages, system)
         return _COUNT_REQUEST.validate_python(
             MappingProxyType(
