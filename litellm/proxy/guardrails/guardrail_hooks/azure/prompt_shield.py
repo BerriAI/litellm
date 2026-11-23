@@ -66,7 +66,7 @@ def _resolved_secret_value(value: object) -> object:
     return value
 
 
-def _updated_param(litellm_params: "LitellmParams | dict[str, object]", key: str) -> object:  # mutable-ok: DB dict
+def _updated_param(litellm_params: "LitellmParams | dict", key: str) -> object:  # mutable-ok: DB dict
     """Read one param from a Mapping or a pydantic object, including pydantic
     extras (cost_tier / price_per_1000_text_records live there), which the base
     class ``vars()`` loop never sees."""
@@ -137,7 +137,7 @@ class AzureContentSafetyPromptShieldGuardrail(AzureGuardrailBase, CustomGuardrai
         guardrail_name: str,
         api_key: str,
         api_base: str,
-        **kwargs: object,
+        **kwargs,
     ):
         """Initialize Azure Prompt Shield guardrail handler."""
         # AzureGuardrailBase.__init__ stores api_key, api_base, api_version,
@@ -223,7 +223,7 @@ class AzureContentSafetyPromptShieldGuardrail(AzureGuardrailBase, CustomGuardrai
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict[str, object],
+        request_data: dict,
         input_type: Literal["request", "response"],
         logging_obj: "LiteLLMLoggingObj | None" = None,
     ) -> GenericGuardrailAPIInputs:
@@ -274,10 +274,7 @@ class AzureContentSafetyPromptShieldGuardrail(AzureGuardrailBase, CustomGuardrai
             verbose_proxy_logger.warning("Azure Prompt Shield: No user prompt found")
         return None
 
-    def update_in_memory_litellm_params(
-        self,
-        litellm_params: "LitellmParams | dict[str, object]",  # mutable-ok: DB dict
-    ) -> None:
+    def update_in_memory_litellm_params(self, litellm_params: "LitellmParams | dict") -> None:  # mutable-ok: DB dict
         """Apply updated params in place, re-resolving billing and credentials.
 
         Pricing is read via ``_updated_param`` (the values are pydantic extras, and
@@ -333,14 +330,14 @@ class AzureContentSafetyPromptShieldGuardrail(AzureGuardrailBase, CustomGuardrai
 
     def _process_response(
         self,
-        response: dict[str, object] | None,  # mutable-ok: matches CustomGuardrail._process_response signature
-        request_data: dict[str, object],  # mutable-ok: matches CustomGuardrail._process_response signature
+        response: dict | None,  # mutable-ok: matches CustomGuardrail._process_response signature
+        request_data: dict,  # mutable-ok: matches CustomGuardrail._process_response signature
         start_time: float | None = None,
         end_time: float | None = None,
         duration: float | None = None,
         event_type: GuardrailEventHooks | None = None,
         original_inputs: dict | None = None,  # mutable-ok: matches CustomGuardrail._process_response signature
-    ) -> dict[str, object] | None:  # mutable-ok: matches CustomGuardrail._process_response return
+    ) -> dict | None:  # mutable-ok: matches CustomGuardrail._process_response return
         """Override to attach the Azure billing tracing detail (usage counters and
         estimated cost) and the ``azure`` provider label to the recorded guardrail
         information. Follows the OpenAI moderation override pattern
@@ -366,7 +363,7 @@ class AzureContentSafetyPromptShieldGuardrail(AzureGuardrailBase, CustomGuardrai
     def _process_error(
         self,
         e: Exception,
-        request_data: dict[str, object],  # mutable-ok: matches CustomGuardrail._process_error signature
+        request_data: dict,  # mutable-ok: matches CustomGuardrail._process_error signature
         start_time: float | None = None,
         end_time: float | None = None,
         duration: float | None = None,
