@@ -11769,15 +11769,29 @@ class TestBindChatGPTSubscriptionLogins:
             assert all(value not in shown for value in owner.values())
 
     @pytest.mark.parametrize(
-        ("team_id", "key_hash"), [("team-unbound", "hash-unbound"), (None, None)], ids=["unbound", "no-owner"]
+        ("team_id", "key_hash", "added"),
+        [
+            (
+                "team-unbound",
+                "hash-unbound",
+                {
+                    "chatgpt_subscription_owner": {
+                        "chatgpt_owner_team_id": "team-unbound",
+                        "chatgpt_owner_key_hash": "hash-unbound",
+                    }
+                },
+            ),
+            (None, None, {}),
+        ],
+        ids=["unbound", "no-owner"],
     )
-    def test_a_caller_who_owns_no_login_gets_no_logins_entry(self, monkeypatch, team_id, key_hash):
+    def test_a_caller_who_owns_no_login_gets_no_logins_entry(self, monkeypatch, team_id, key_hash, added):
         self._serve_logins(monkeypatch)
         data = {"model": "chatgpt-seat", "secret_fields": {"raw_headers": {}}}
 
         _bind_chatgpt_subscription_logins_for_request(data=data, team_id=team_id, key_hash=key_hash)
 
-        assert data["secret_fields"] == {"raw_headers": {}}
+        assert data["secret_fields"] == {"raw_headers": {}, **added}
 
     @pytest.mark.asyncio
     async def test_a_request_gets_its_keys_and_teams_logins_and_nothing_else_shows_them(self, monkeypatch):

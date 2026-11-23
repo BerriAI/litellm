@@ -242,6 +242,14 @@ class ChatGPTLoginRefresher:
         )
         return token.access_token if token is not None else None
 
+    async def stored_access_token(self, credential_name: str, team_id: str | None, key_hash: str | None) -> str | None:
+        if team_id is None and key_hash is None:
+            return None
+        stored: Final = await self._stored(credential_name, self.rows)
+        if stored is None or not owns_chatgpt_login(stored, team_id, key_hash):
+            return None
+        return await self.access_token(stored)
+
     async def _stored(self, credential_name: str, rows: CredentialRows) -> CredentialItem | None:
         try:
             return await rows.find_by_name(credential_name)
@@ -422,14 +430,17 @@ async def owned_chatgpt_subscription_access_token(
     clock: Callable[[], float] = time.time,
 ) -> str | None:
     credential: Final = CredentialAccessor.find_credential(credential_name)
-    if credential is None or not owns_chatgpt_login(credential, team_id, key_hash):
-        return None
-    fresh: Final = _fresh_access_token(credential.credential_values, clock())
+    held: Final = credential if credential is not None and owns_chatgpt_login(credential, team_id, key_hash) else None
+    fresh: Final = _fresh_access_token(held.credential_values, clock()) if held is not None else None
     if fresh is not None:
         return fresh
     try:
         refresher: Final = refresher_factory()
-        return await refresher.access_token(credential) if refresher is not None else None
+        if refresher is None:
+            return None
+        if held is None:
+            return await refresher.stored_access_token(credential_name, team_id, key_hash)
+        return await refresher.access_token(held)
     except Exception:  # noqa: BLE001  # a refresh failure fails only this login closed, never the request
         verbose_proxy_logger.exception("Failed to refresh ChatGPT subscription login %s", credential_name)
         return None

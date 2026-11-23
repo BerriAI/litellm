@@ -395,11 +395,10 @@ async def test_async_attach_never_refreshes_for_a_call_that_names_no_subscriptio
 @pytest.mark.parametrize(
     ("secret_fields", "model"),
     [
-        (_caller("team-b", "hash-k", (TEAM_B_LOGIN, TEAM_B_TOKEN)), "chatgpt/gpt-5.5"),
         (_owned(), "chatgpt/gpt-5.5"),
         (_caller("team-a", None), "openai/gpt-5.4-mini"),
     ],
-    ids=["another_owner", "no_owner_identity", "another_provider"],
+    ids=["no_owner_identity", "another_provider"],
 )
 async def test_async_attach_fails_a_login_the_caller_cannot_use_closed_without_refreshing_it(
     secret_fields: dict[str, object], model: str
@@ -418,25 +417,20 @@ async def test_async_attach_fails_a_login_the_caller_cannot_use_closed_without_r
 
 
 @pytest.mark.parametrize(
-    "credential_info",
-    [{1: "not-a-string-key", "chatgpt_owner_team_id": "team-a"}, ["chatgpt_owner_team_id", "team-a"]],
-    ids=["non_string_key", "not_a_mapping"],
+    "credential_name",
+    [TEAM_A_LOGIN, "signed-in-on-another-replica"],
+    ids=["held_here_under_another_owner", "not_loaded_here_yet"],
 )
-async def test_async_attach_treats_a_login_with_malformed_credential_info_as_unowned(
-    monkeypatch: pytest.MonkeyPatch, credential_info: object
+async def test_async_attach_asks_the_proxy_for_a_login_this_replica_does_not_show_the_caller_owning(
+    credential_name: str,
 ) -> None:
-    malformed: Final = _subscription(TEAM_A_LOGIN, TEAM_A_TOKEN, "team-a").model_copy(
-        update={"credential_info": credential_info}
-    )
-    monkeypatch.setattr(litellm, "credential_list", [malformed])
     refresh: Final = _Refresh(REFRESHED_TEAM_A_TOKEN)
-    kwargs: Final = _request(secret_fields=_caller("team-a", None))
+    kwargs: Final = _request(litellm_credential_name=credential_name, secret_fields=_caller(None, "hash-regenerated"))
 
-    with pytest.raises(CallerCredentialAuthenticationError) as raised:
-        await aattach_chatgpt_subscription_login(kwargs, "chatgpt/gpt-5.5", refresh=refresh)
+    await aattach_chatgpt_subscription_login(kwargs, "chatgpt/gpt-5.5", refresh=refresh)
 
-    assert raised.value.status_code == 401
-    assert refresh.calls == []
+    assert refresh.calls == [(credential_name, None, "hash-regenerated")]
+    assert kwargs["api_key"] == REFRESHED_TEAM_A_TOKEN
 
 
 @pytest.mark.parametrize(

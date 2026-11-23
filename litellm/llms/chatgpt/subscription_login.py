@@ -169,8 +169,16 @@ def _secret_field(kwargs: Mapping[str, object], field: str) -> Mapping[str, obje
     return (_str_keyed(secret_fields.get(field)) if secret_fields is not None else None) or _NOTHING
 
 
-def _owned_access_token(kwargs: Mapping[str, object], credential_name: str) -> str | None:
-    return _non_empty_str(_secret_field(kwargs, CHATGPT_SUBSCRIPTION_LOGINS_SECRET_FIELD).get(credential_name))
+@dataclass(frozen=True, slots=True)
+class _NamedLogin:
+    credential_name: str
+    credential: CredentialItem | None
+
+
+def _owned_access_token(kwargs: Mapping[str, object], login: _NamedLogin) -> str | None:
+    if login.credential is None:
+        return None
+    return _non_empty_str(_secret_field(kwargs, CHATGPT_SUBSCRIPTION_LOGINS_SECRET_FIELD).get(login.credential_name))
 
 
 def _caller_owner(kwargs: Mapping[str, object]) -> tuple[str | None, str | None] | None:
@@ -239,12 +247,6 @@ def _request_updates(kwargs: Mapping[str, object], access_token: str) -> Mapping
     )
 
 
-@dataclass(frozen=True, slots=True)
-class _NamedLogin:
-    credential_name: str
-    credential: CredentialItem | None
-
-
 def _named_login(kwargs: Mapping[str, object], model: object) -> _NamedLogin | None:
     credential_name: Final = kwargs.get("litellm_credential_name")
     if not isinstance(credential_name, str) or not credential_name:
@@ -260,11 +262,11 @@ def _named_login(kwargs: Mapping[str, object], model: object) -> _NamedLogin | N
 def _bind_login(
     kwargs: dict[str, object],  # mutable-ok: kwargs is the request mutation channel
     model: object,
-    login: _NamedLogin,
+    credential_name: str,
     access_token: str | None,
 ) -> None:
-    if login.credential is None or access_token is None or not _is_chatgpt_call(kwargs, model):
-        raise _login_unavailable(login.credential_name)
+    if access_token is None or not _is_chatgpt_call(kwargs, model):
+        raise _login_unavailable(credential_name)
     updates: Final = _request_updates(kwargs, access_token)
     kwargs.pop("chatgpt_auth_file", None)
     kwargs.pop("base_url", None)
@@ -278,7 +280,7 @@ def attach_chatgpt_subscription_login(
     login: Final = _named_login(kwargs, model)
     if login is None:
         return
-    _bind_login(kwargs, model, login, _owned_access_token(kwargs, login.credential_name))
+    _bind_login(kwargs, model, login.credential_name, _owned_access_token(kwargs, login))
 
 
 async def _refresh_through_proxy(credential_name: str, team_id: str | None, key_hash: str | None) -> str | None:
@@ -290,14 +292,12 @@ async def _refresh_through_proxy(credential_name: str, team_id: str | None, key_
 
 
 async def _refreshed_access_token(
-    kwargs: Mapping[str, object], model: object, login: _NamedLogin, refresh: ChatGPTLoginRefresh
+    kwargs: Mapping[str, object], model: object, credential_name: str, refresh: ChatGPTLoginRefresh
 ) -> str | None:
     owner: Final = _caller_owner(kwargs)
-    if login.credential is None or owner is None or not _is_chatgpt_call(kwargs, model):
+    if owner is None or not _is_chatgpt_call(kwargs, model):
         return None
-    if not owns_chatgpt_login(login.credential, *owner):
-        return None
-    return await refresh(login.credential_name, *owner)
+    return await refresh(credential_name, *owner)
 
 
 async def aattach_chatgpt_subscription_login(
@@ -308,7 +308,7 @@ async def aattach_chatgpt_subscription_login(
     login: Final = _named_login(kwargs, model)
     if login is None:
         return
-    access_token: Final = _owned_access_token(kwargs, login.credential_name) or await _refreshed_access_token(
-        kwargs, model, login, refresh
+    access_token: Final = _owned_access_token(kwargs, login) or await _refreshed_access_token(
+        kwargs, model, login.credential_name, refresh
     )
-    _bind_login(kwargs, model, login, access_token)
+    _bind_login(kwargs, model, login.credential_name, access_token)

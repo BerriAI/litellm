@@ -790,7 +790,7 @@ async def test_a_caller_gets_only_the_logins_its_team_or_key_owns(monkeypatch, t
     bound: Final = fresh_chatgpt_subscription_logins(owned_chatgpt_subscription_logins(team_id, key_hash), _now)
 
     assert resolved == bound == {name: tokens[name] for name in expected}
-    assert (rows.reads, oauth.posts) == ([], [])
+    assert (rows.updates, oauth.posts) == ([], [])
 
 
 @pytest.mark.parametrize(
@@ -1071,9 +1071,13 @@ async def test_a_refresh_for_one_login_leaves_the_callers_other_stale_logins_alo
 
 
 @pytest.mark.parametrize(
-    ("team_id", "key_hash"), [("team-b", "hash-k"), (None, None)], ids=["another-owner", "no-owner"]
+    ("team_id", "key_hash", "reads"),
+    [("team-b", "hash-k", ["login-a"]), (None, None, [])],
+    ids=["another-owner", "no-owner"],
 )
-async def test_a_stale_login_is_never_refreshed_for_a_caller_that_does_not_own_it(monkeypatch, team_id, key_hash):
+async def test_a_stale_login_is_never_refreshed_for_a_caller_that_does_not_own_it(
+    monkeypatch, team_id, key_hash, reads
+):
     stale: Final = _login("login-a", _login_values(_access_token("old"), "rt-a", STALE_EXPIRES_AT), team_id="team-a")
     _serve(monkeypatch, stale)
     rows: Final = _CredentialRows(_stored(stale))
@@ -1084,7 +1088,54 @@ async def test_a_stale_login_is_never_refreshed_for_a_caller_that_does_not_own_i
     )
 
     assert token is None
-    assert (rows.reads, oauth.posts) == ([], [])
+    assert (rows.reads, rows.updates, oauth.posts) == (reads, [], [])
+    assert _served("login-a") == stale.credential_values
+
+
+_KEY_SEAT: Final = _login_values(_access_token("key-seat"), "rt-key-seat", FRESH_EXPIRES_AT)
+
+
+@pytest.mark.parametrize(
+    "held",
+    [(_login("login-k", _KEY_SEAT, key_hash="hash-old"),), ()],
+    ids=["held-for-the-key-before-regeneration", "not-loaded-yet"],
+)
+async def test_a_login_the_database_gives_the_caller_is_served_before_this_replica_syncs(monkeypatch, held):
+    _serve(monkeypatch, *held)
+    rows: Final = _CredentialRows(_stored(_login("login-k", _KEY_SEAT, key_hash="hash-new")))
+    oauth: Final = _TokenEndpoint(status=500)
+    refresher: Final = _refresher(rows, oauth)
+
+    tokens: Final = [
+        await owned_chatgpt_subscription_access_token(
+            "login-k", None, key_hash, refresher_factory=lambda: refresher, clock=_now
+        )
+        for key_hash in ("hash-new", "hash-old")
+    ]
+
+    assert tokens == [_KEY_SEAT["chatgpt_access_token"], None]
+    assert (rows.updates, oauth.posts) == ([], [])
+
+
+@pytest.mark.parametrize(
+    "credential_info",
+    [{1: "not-a-string-key", "chatgpt_owner_team_id": "team-a"}, ["chatgpt_owner_team_id", "team-a"]],
+    ids=["non_string_key", "not_a_mapping"],
+)
+async def test_a_login_with_malformed_credential_info_is_served_to_no_one(monkeypatch, credential_info):
+    malformed: Final = _login(
+        "login-a", _login_values(_access_token("a"), "rt-a", FRESH_EXPIRES_AT), team_id="team-a"
+    ).model_copy(update={"credential_info": credential_info})
+    _serve(monkeypatch, malformed)
+    rows: Final = _CredentialRows(_stored(malformed))
+    oauth: Final = _TokenEndpoint(status=500)
+
+    token: Final = await owned_chatgpt_subscription_access_token(
+        "login-a", "team-a", None, refresher_factory=lambda: _refresher(rows, oauth), clock=_now
+    )
+
+    assert token is None
+    assert (rows.updates, oauth.posts) == ([], [])
 
 
 async def test_a_refresh_that_fails_unexpectedly_serves_no_token(monkeypatch, proxy_log):

@@ -3935,17 +3935,15 @@ def _bind_chatgpt_subscription_logins_for_request(
     )
 
     secret_fields: Final = data.get("secret_fields")
-    if not isinstance(secret_fields, dict):
+    owner: Final = chatgpt_subscription_owner(team_id, key_hash)
+    if not isinstance(secret_fields, dict) or not owner:
         return
+    secret_fields[CHATGPT_SUBSCRIPTION_OWNER_SECRET_FIELD] = RedactedDict(dict(owner))
     owned: Final = owned_chatgpt_subscription_logins(team_id, key_hash)
-    if not owned:
-        return
-    secret_fields[CHATGPT_SUBSCRIPTION_LOGINS_SECRET_FIELD] = RedactedDict(
-        dict(fresh_chatgpt_subscription_logins(owned))
-    )
-    secret_fields[CHATGPT_SUBSCRIPTION_OWNER_SECRET_FIELD] = RedactedDict(
-        dict(chatgpt_subscription_owner(team_id, key_hash))
-    )
+    if owned:
+        secret_fields[CHATGPT_SUBSCRIPTION_LOGINS_SECRET_FIELD] = RedactedDict(
+            dict(fresh_chatgpt_subscription_logins(owned))
+        )
 
 
 def _warn_stale_team_alias_once(warning_key: str, message: str, *args: str) -> None:
