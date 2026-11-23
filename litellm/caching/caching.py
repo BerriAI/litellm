@@ -110,11 +110,37 @@ def _extra_body_mapping(raw_extra_body: object) -> Mapping[str, object] | None:
     )
 
 
+def _concrete_sequence(value: object) -> Sequence[object] | None:
+    return value if isinstance(value, (list, tuple)) else None
+
+
+def _extra_body_pair(item: object) -> tuple[str, object] | None:
+    pair: Final = _concrete_sequence(item)
+    if pair is None or len(pair) != 2:
+        return None
+    key: Final = pair[0]
+    return (key, pair[1]) if isinstance(key, str) else None
+
+
+def _extra_body_from_pairs(raw_extra_body: object) -> Mapping[str, object] | None:
+    items: Final = _concrete_sequence(raw_extra_body)
+    if items is None:
+        return None
+    pairs: Final = tuple(pair for pair in map(_extra_body_pair, items) if pair is not None)
+    return dict(pairs) if len(pairs) == len(items) else None
+
+
 def _extra_body_beyond_always_keyed_params(raw_extra_body: object) -> Mapping[str, object]:
-    extra_body: Final = _extra_body_mapping(raw_extra_body)
+    mapping: Final = as_str_mapping(raw_extra_body)
+    extra_body: Final = mapping if mapping is not None else _extra_body_from_pairs(raw_extra_body)
     if extra_body is None:
         return {}
-    return {key: value for key, value in extra_body.items() if key not in _ALWAYS_KEYED_PROVIDER_PARAMS}
+    token_ids_keyed_separately: Final = isinstance(raw_extra_body, dict)
+    return {
+        key: value
+        for key, value in extra_body.items()
+        if key not in _ALWAYS_KEYED_PROVIDER_PARAMS or (not token_ids_keyed_separately and value)
+    }
 
 
 def _keyed_provider_params_in_extra_body(kwargs: Mapping[str, object]) -> str:

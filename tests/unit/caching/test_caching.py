@@ -7,8 +7,8 @@ import re
 import traceback
 import tracemalloc
 import uuid
-from collections import OrderedDict
-from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from collections import OrderedDict, UserDict
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from datetime import timedelta
 from enum import Enum
@@ -601,6 +601,14 @@ _EXTRA_BODY_REQUEST: Final = MappingProxyType(
 _LARGE_EXTRA_BODY_TEXT: Final = "x" * 70_000
 
 
+def _as_pair_list(body: Mapping[str, object]) -> Sequence[tuple[str, object]]:
+    return list(body.items())
+
+
+def _as_pair_tuple(body: Mapping[str, object]) -> Sequence[tuple[str, object]]:
+    return tuple(body.items())
+
+
 @pytest.mark.parametrize(
     ("first", "second"),
     [
@@ -648,12 +656,34 @@ def test_default_cache_key_tells_apart_requests_whose_extra_body_differs(
         None,
         {},
         "top_k=5",
-        [("top_k", 5)],
+        [],
+        (),
+        [("return_token_ids", False), ("continuation_token", "")],
+        [("top_k",)],
+        [("top_k", 5, 6)],
+        [(5, "top_k")],
+        ["ab"],
+        [("top_k", 5), ("min_p",)],
         {"return_token_ids": False},
         {"continuation_token": ""},
         {"return_token_ids": None, "continuation_token": ""},
     ],
-    ids=["none", "empty", "string", "pairs", "falsy_token_ids", "empty_continuation", "falsy_legacy_fields"],
+    ids=[
+        "none",
+        "empty",
+        "string",
+        "empty_pair_list",
+        "empty_pair_tuple",
+        "falsy_token_id_pairs",
+        "short_pair",
+        "long_pair",
+        "non_string_pair_key",
+        "string_item",
+        "one_malformed_pair",
+        "falsy_token_ids",
+        "empty_continuation",
+        "falsy_legacy_fields",
+    ],
 )
 def test_default_cache_key_ignores_extra_body_that_adds_nothing_to_the_request(
     monkeypatch: pytest.MonkeyPatch, extra_body: object
@@ -680,6 +710,19 @@ def test_default_cache_key_ignores_extra_body_that_adds_nothing_to_the_request(
             "extra_body: {'return_token_ids': True, 'top_k': 5}extra_body.return_token_ids: True",
         ),
         (True, "top_k=5", "extra_body: top_k=5"),
+        (
+            True,
+            MappingProxyType({"return_token_ids": True, "top_k": 5}),
+            "extra_body: {'return_token_ids': True, 'top_k': 5}",
+        ),
+        (True, UserDict({"return_token_ids": True, "top_k": 5}), "extra_body: {'return_token_ids': True, 'top_k': 5}"),
+        (
+            False,
+            MappingProxyType({"return_token_ids": True, "top_k": 5}),
+            "extra_body: {'return_token_ids': True, 'top_k': 5}",
+        ),
+        (False, [("return_token_ids", True), ("top_k", 5)], "extra_body: {'return_token_ids': True, 'top_k': 5}"),
+        (True, [("return_token_ids", True), ("top_k", 5)], "extra_body: [('return_token_ids', True), ('top_k', 5)]"),
     ],
     ids=[
         "default_token_ids",
@@ -689,6 +732,11 @@ def test_default_cache_key_ignores_extra_body_that_adds_nothing_to_the_request(
         "flag_falsy_token_ids",
         "flag_beside_token_ids",
         "flag_string",
+        "flag_mapping_proxy",
+        "flag_user_dict",
+        "default_mapping_proxy_beside_token_ids",
+        "default_pairs_beside_token_ids",
+        "flag_pairs",
     ],
 )
 def test_extra_body_cache_key_keeps_its_preimage(
@@ -698,6 +746,57 @@ def test_extra_body_cache_key_keeps_its_preimage(
     expected: Final = hashlib.sha256(f"model: mmessages: hi{extra_body_preimage}".encode()).hexdigest()
 
     assert Cache(type=LiteLLMCacheType.LOCAL).get_cache_key(model="m", messages="hi", extra_body=extra_body) == expected
+
+
+@pytest.mark.parametrize("mapping_type", [MappingProxyType, UserDict])
+def test_default_cache_key_reads_extra_body_from_any_mapping(
+    monkeypatch: pytest.MonkeyPatch, mapping_type: Callable[[Mapping[str, object]], Mapping[str, object]]
+) -> None:
+    monkeypatch.setattr(litellm, "enable_caching_on_provider_specific_optional_params", False)
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    thinking: Final = {"chat_template_kwargs": {"enable_thinking": True}}
+    no_thinking: Final = {"chat_template_kwargs": {"enable_thinking": False}}
+
+    def key_of(extra_body: Mapping[str, object] | None) -> str:
+        return cache.get_cache_key(**_EXTRA_BODY_REQUEST, extra_body=extra_body)
+
+    assert key_of(mapping_type(thinking)) == key_of(thinking)
+    assert key_of(mapping_type(no_thinking)) == key_of(no_thinking)
+    assert key_of(mapping_type(thinking)) != key_of(mapping_type(no_thinking))
+    assert key_of(mapping_type({})) == key_of(None)
+    assert key_of(mapping_type({"return_token_ids": False, "continuation_token": ""})) == key_of(None)
+    assert key_of(mapping_type({"return_token_ids": True})) != key_of(None)
+    assert key_of(mapping_type({"continuation_token": "a"})) != key_of(mapping_type({"continuation_token": "b"}))
+
+
+@pytest.mark.parametrize("pair_sequence", [list, tuple])
+def test_default_cache_key_reads_extra_body_given_as_key_value_pairs(
+    monkeypatch: pytest.MonkeyPatch, pair_sequence: Callable[[Iterable[Sequence[object]]], Sequence[Sequence[object]]]
+) -> None:
+    monkeypatch.setattr(litellm, "enable_caching_on_provider_specific_optional_params", False)
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    thinking_pairs: Final = pair_sequence([("chat_template_kwargs", {"enable_thinking": True})])
+    sent_pairs: Final = copy.deepcopy(thinking_pairs)
+
+    def key_of(extra_body: object) -> str:
+        return cache.get_cache_key(**_EXTRA_BODY_REQUEST, extra_body=extra_body)
+
+    assert key_of(thinking_pairs) == key_of({"chat_template_kwargs": {"enable_thinking": True}})
+    assert key_of(thinking_pairs) != key_of(pair_sequence([("chat_template_kwargs", {"enable_thinking": False})]))
+    assert thinking_pairs == sent_pairs
+    assert key_of(pair_sequence([("top_k", 1), ("top_k", 5)])) == key_of({"top_k": 5})
+    assert key_of(pair_sequence([("top_k", 1), ("top_k", 5)])) != key_of({"top_k": 1})
+    assert key_of(pair_sequence([("return_token_ids", True)])) != key_of(None)
+    assert key_of(pair_sequence([["top_k", 5]])) == key_of({"top_k": 5})
+
+
+def test_default_cache_key_leaves_one_shot_extra_body_iterators_unread(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "enable_caching_on_provider_specific_optional_params", False)
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    pairs: Final = iter([("top_k", 5)])
+
+    assert cache.get_cache_key(**_EXTRA_BODY_REQUEST, extra_body=pairs) == cache.get_cache_key(**_EXTRA_BODY_REQUEST)
+    assert next(pairs) == ("top_k", 5)
 
 
 def test_extra_body_keeps_preset_keys_and_namespaces_in_charge(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -736,8 +835,11 @@ def test_semantic_cache_scope_separates_extra_body_but_still_ignores_the_prompt(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("provider_specific_params_keyed", [False, True])
+@pytest.mark.parametrize("extra_body_type", [dict, MappingProxyType, UserDict, _as_pair_list, _as_pair_tuple])
 async def test_response_cache_answers_each_extra_body_with_its_own_reply(
-    monkeypatch: pytest.MonkeyPatch, provider_specific_params_keyed: bool
+    monkeypatch: pytest.MonkeyPatch,
+    provider_specific_params_keyed: bool,
+    extra_body_type: Callable[[Mapping[str, object]], object],
 ) -> None:
     monkeypatch.setattr(litellm, "enable_caching_on_provider_specific_optional_params", provider_specific_params_keyed)
     monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL))
@@ -747,7 +849,7 @@ async def test_response_cache_answers_each_extra_body_with_its_own_reply(
             model="hosted_vllm/qwen",
             api_base="http://localhost:8000",
             messages=[{"role": "user", "content": "extra-body"}],
-            extra_body={"chat_template_kwargs": {"enable_thinking": enable_thinking}},
+            extra_body=extra_body_type({"chat_template_kwargs": {"enable_thinking": enable_thinking}}),
             mock_response=mock_response,
         )
         await asyncio.gather(*_PENDING_CACHE_WRITES)
