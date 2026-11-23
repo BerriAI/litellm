@@ -256,8 +256,8 @@ class _CombinedChunkSplitter:
     would advance them out of sync.
     """
 
-    def __init__(self, completion_stream: _ChunkStream):
-        self._stream: _ChunkStream = completion_stream
+    def __init__(self, completion_stream: _ChunkStream | None):
+        self._stream: _ChunkStream | None = completion_stream
         self._sync_iter: Iterator[ModelResponseStream] | None = None
         self._async_iter: AsyncIterator[ModelResponseStream] | None = None
         self._buffer: deque[ModelResponseStream] = deque()
@@ -606,6 +606,8 @@ class _CombinedChunkSplitter:
         if self._buffer:
             return self._buffer.popleft()
         if self._sync_iter is None:
+            if self._stream is None:
+                raise StopIteration
             self._sync_iter = iter(self._stream)
         while not self._buffer:
             try:
@@ -625,6 +627,8 @@ class _CombinedChunkSplitter:
         if self._buffer:
             return self._buffer.popleft()
         if self._async_iter is None:
+            if self._stream is None:
+                raise StopAsyncIteration
             self._async_iter = self._stream.__aiter__()
         while not self._buffer:
             try:
@@ -666,7 +670,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
 
     def __init__(
         self,
-        completion_stream: _ChunkStream,
+        completion_stream: _ChunkStream | None,
         model: str,
         tool_name_mapping: dict[str, str] | None = None,
         applied_edits: list[AppliedEdit] | None = None,

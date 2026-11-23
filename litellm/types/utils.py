@@ -3161,6 +3161,8 @@ class AdapterCompletionStreamWrapper:
         return self
 
     def __next__(self):
+        if self.completion_stream is None:
+            raise StopIteration
         try:
             for chunk in self.completion_stream:
                 if chunk == "None" or chunk is None:
@@ -3173,6 +3175,8 @@ class AdapterCompletionStreamWrapper:
             verbose_logger.debug("AdapterCompletionStreamWrapper - %s", e)
 
     async def __anext__(self):
+        if self.completion_stream is None:
+            raise StopAsyncIteration
         try:
             async for chunk in self.completion_stream:
                 if chunk == "None" or chunk is None:
