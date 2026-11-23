@@ -69,12 +69,13 @@ async def terminate(
     lookup: Callable[[str], MCPServer | None] = registered_server,
     *,
     notify: bool = True,
-) -> None:
-    if row.status == "terminated" or not await store.end_if_current(
-        row.id, row.upstream_subscription_id, row.generation
-    ):
-        return
+) -> bool:
+    if row.status == "terminated":
+        return True
+    if not await store.end_if_current(row.id, row.upstream_subscription_id, row.generation):
+        return False
     await notify_termination(row, failure, settings, runtime, post, lookup, notify=notify)
+    return True
 
 
 async def notify_termination(
