@@ -18,9 +18,9 @@ from litellm.proxy.auth.host.facts import (
     with_end_user,
     with_owner,
     with_project,
-    with_team,
 )
 from litellm.proxy.auth.jwt import auth_from_result, jwt_result
+from litellm.proxy.auth.team_grants import newer_team_row_update
 from litellm.rust_bridge._native import (
     RustAuthOutcome,
     RustIdentity,
@@ -66,9 +66,15 @@ def _linked_key(
 def _with_team_grant(token: UserAPIKeyAuth, grant: RustTeamGrant) -> UserAPIKeyAuth:
     match grant:
         case RustTeamGrant.Loaded(team=team):
-            return with_team(token, team.object_permission, team.metadata)
+            return token.model_copy(
+                update={
+                    **newer_team_row_update(token, team),
+                    "team_object_permission": team.object_permission,
+                    "team_metadata": team.metadata,
+                }
+            )
         case RustTeamGrant.KeyCopy(object_permission=object_permission):
-            return with_team(token, object_permission, token.team_metadata)
+            return token.model_copy(update={"team_object_permission": object_permission})
         case _:
             return token
 

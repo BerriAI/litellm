@@ -84,7 +84,7 @@ from litellm.proxy.auth.resolvers.grants import (
     user_models,
 )
 from litellm.proxy.auth.resolvers.store import IdentityStore
-from litellm.proxy.auth.team_grants import team_grants, team_model_aliases
+from litellm.proxy.auth.team_grants import team_grants, team_model_aliases, with_team_row
 from litellm.proxy.auth.user_api_key_auth import (
     arm_routing_cooldowns,
     identity_cache_keys,
@@ -185,10 +185,6 @@ class SharedFetches:
 _JWT_FETCHES: Final = SharedFetches()
 
 _PER_MODEL_END_USER_LIMITS: Final = frozenset({"end_user_model_tpm_limit", "end_user_model_rpm_limit"})
-
-
-def _attributes(team: LiteLLM_TeamTableCachedObj) -> Mapping[str, object]:
-    return vars(team)
 
 
 @dataclass(frozen=True, slots=True)
@@ -372,10 +368,7 @@ class PythonAuthHost:
         )
 
     async def with_team(self, token: UserAPIKeyAuth, team: LiteLLM_TeamTableCachedObj) -> UserAPIKeyAuth:
-        fields: Final = UserAPIKeyAuth.model_fields
-        return token.model_copy(
-            update={f"team_{name}": value for name, value in _attributes(team).items() if f"team_{name}" in fields}
-        )
+        return with_team_row(token, team)
 
     async def db_key(self, hash: str, end_user: EndUserRow) -> UserAPIKeyAuth | None:
         try:

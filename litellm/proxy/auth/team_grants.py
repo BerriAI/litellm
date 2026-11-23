@@ -1,9 +1,9 @@
 """Project a team row (plus the caller's membership in it) onto the ``team_*`` fields of ``UserAPIKeyAuth``.
 
-The virtual-key path gets these fields for free from the combined-view SQL join. Every other auth path
-starts from a ``LiteLLM_TeamTable`` object instead and has to copy them over by hand, which is how JWT
-callers kept losing grants (aliases, permissions, limits) one field at a time. Build the badge through
-``team_grants`` and the two paths cannot drift.
+A fresh virtual-key read gets these fields from the combined-view SQL join. Everything else starts from a
+``LiteLLM_TeamTable`` object: the JWT path, and a virtual key whose cached copy is older than its team.
+Copying them over by hand is how callers kept losing grants (aliases, permissions, limits) one field at a
+time. Build the badge through ``team_grants`` or ``with_team_row`` and the paths cannot drift.
 """
 
 from collections.abc import Mapping, Sequence
@@ -18,14 +18,16 @@ from litellm.proxy._types import (
     LiteLLM_ObjectPermissionTable,
     LiteLLM_TeamMembership,
     LiteLLM_TeamTable,
+    LiteLLM_TeamTableCachedObj,
     Member,
     UserAPIKeyAuth,
 )
 from litellm.types.llms.base import LiteLLMBaseModel
 
 _MODEL_ALIASES_ADAPTER: Final = TypeAdapter(dict[str, str])
-_JSON_COLUMNS: Final[Mapping[str, IncEx | bool]] = MappingProxyType(
-    {"metadata": True, "litellm_model_table": MappingProxyType({"model_aliases": True})}
+_METADATA_COLUMN: Final[Mapping[str, IncEx | bool]] = MappingProxyType({"metadata": True})
+_ALIAS_COLUMN: Final[Mapping[str, IncEx | bool]] = MappingProxyType(
+    {"litellm_model_table": MappingProxyType({"model_aliases": True})}
 )
 
 
@@ -52,8 +54,8 @@ class _TeamJsonColumns(LiteLLMBaseModel):
     litellm_model_table: TeamModelAliasTable | None = None
 
 
-class TeamGrants(TypedDict, total=False):
-    """Keyword arguments for ``UserAPIKeyAuth``. Empty when the caller has no team, so the model's own defaults apply."""
+class TeamRowGrants(TypedDict, total=False):
+    """What the team's own row grants: every field but the caller's membership spend and limits."""
 
     team_alias: ReadOnly[str | None]
     team_tpm_limit: ReadOnly[int | None]
@@ -70,6 +72,11 @@ class TeamGrants(TypedDict, total=False):
     team_object_permission_id: ReadOnly[str | None]
     team_object_permission: ReadOnly[LiteLLM_ObjectPermissionTable | None]
     team_member: ReadOnly[Member | None]
+
+
+class TeamGrants(TeamRowGrants, total=False):
+    """Keyword arguments for ``UserAPIKeyAuth``. Empty when the caller has no team, so the model's own defaults apply."""
+
     team_member_spend: ReadOnly[float | None]
     team_member_tpm_limit: ReadOnly[int | None]
     team_member_rpm_limit: ReadOnly[int | None]
@@ -160,9 +167,10 @@ async def team_grant_billing_auth_update(
     )
 
 
-def _json_columns(team_object: LiteLLM_TeamTable) -> _TeamJsonColumns:
+def _json_column(team_object: LiteLLM_TeamTable, column: Mapping[str, IncEx | bool]) -> _TeamJsonColumns:
+    """One column at a time, so an alias table that fails to parse never takes the metadata with it."""
     try:
-        return _TeamJsonColumns.model_validate(team_object.model_dump(include=_JSON_COLUMNS))
+        return _TeamJsonColumns.model_validate(team_object.model_dump(include=column))
     except ValidationError:
         return _TeamJsonColumns()
 
@@ -170,8 +178,37 @@ def _json_columns(team_object: LiteLLM_TeamTable) -> _TeamJsonColumns:
 def team_model_aliases(team_object: LiteLLM_TeamTable | None) -> Mapping[str, str] | None:
     if team_object is None:
         return None
-    alias_table: Final = _json_columns(team_object).litellm_model_table
+    alias_table: Final = _json_column(team_object, _ALIAS_COLUMN).litellm_model_table
     return alias_table.model_aliases if alias_table is not None else None
+
+
+def _team_member(team_object: LiteLLM_TeamTable, user_id: str | None) -> Member | None:
+    """A user listed twice gets the last entry, which is the one the key read's SQL join picks."""
+    if user_id is None:
+        return None
+    entries: Final = tuple(member for member in team_object.members_with_roles if member.user_id == user_id)
+    return entries[-1] if entries else None
+
+
+def _team_row_grants(team_object: LiteLLM_TeamTable, user_id: str | None) -> TeamRowGrants:
+    alias_table: Final = _json_column(team_object, _ALIAS_COLUMN).litellm_model_table
+    return TeamRowGrants(
+        team_alias=team_object.team_alias,
+        team_tpm_limit=team_object.tpm_limit,
+        team_rpm_limit=team_object.rpm_limit,
+        team_tpd_limit=team_object.tpd_limit,
+        team_max_budget=team_object.max_budget,
+        team_soft_budget=team_object.soft_budget,
+        team_model_max_budget=team_object.model_max_budget,
+        team_spend=team_object.spend,
+        team_models=list(team_object.models),
+        team_blocked=team_object.blocked,
+        team_metadata=_json_column(team_object, _METADATA_COLUMN).metadata,
+        team_model_aliases=alias_table.model_aliases if alias_table is not None else None,
+        team_object_permission_id=team_object.object_permission_id,
+        team_object_permission=team_object.object_permission,
+        team_member=_team_member(team_object, user_id),
+    )
 
 
 def team_grants(
@@ -181,28 +218,8 @@ def team_grants(
 ) -> TeamGrants:
     if team_object is None:
         return TeamGrants()
-    json_columns: Final = _json_columns(team_object)
     return TeamGrants(
-        team_alias=team_object.team_alias,
-        team_tpm_limit=team_object.tpm_limit,
-        team_rpm_limit=team_object.rpm_limit,
-        team_tpd_limit=team_object.tpd_limit,
-        team_max_budget=team_object.max_budget,
-        team_soft_budget=team_object.soft_budget,
-        team_model_max_budget=team_object.model_max_budget,
-        team_spend=team_object.spend,
-        team_models=tuple(team_object.models),
-        team_blocked=team_object.blocked,
-        team_metadata=json_columns.metadata,
-        team_model_aliases=(
-            json_columns.litellm_model_table.model_aliases if json_columns.litellm_model_table is not None else None
-        ),
-        team_object_permission_id=team_object.object_permission_id,
-        team_object_permission=team_object.object_permission,
-        team_member=next(
-            (m for m in team_object.members_with_roles if user_id is not None and m.user_id == user_id),
-            None,
-        ),
+        **_team_row_grants(team_object, user_id),
         team_member_spend=team_membership.spend if team_membership is not None else None,
         team_member_tpm_limit=(
             team_membership.safe_get_team_member_tpm_limit() if team_membership is not None else None
@@ -211,3 +228,25 @@ def team_grants(
             team_membership.safe_get_team_member_rpm_limit() if team_membership is not None else None
         ),
     )
+
+
+def team_row_update(token: UserAPIKeyAuth, team_object: LiteLLM_TeamTable) -> Mapping[str, object]:
+    """The fields a key takes from its team row's current values. Its membership spend and limits stay as the
+    key read them, and so do its aliases when the row names an alias table it was cached without."""
+    grants: Final = _team_row_grants(team_object, token.user_id)
+    aliases_unread: Final = team_object.model_id is not None and team_object.litellm_model_table is None
+    return {**grants, "team_model_aliases": token.team_model_aliases} if aliases_unread else grants
+
+
+def newer_team_row_update(token: UserAPIKeyAuth, team_object: LiteLLM_TeamTableCachedObj) -> Mapping[str, object]:
+    """The team row's values when the team was read after the key, else nothing: an older team must not
+    overwrite what a newer key read holds."""
+    if team_object.last_refreshed_at is None or token.last_refreshed_at is None:
+        return MappingProxyType({})
+    if team_object.last_refreshed_at <= token.last_refreshed_at:
+        return MappingProxyType({})
+    return team_row_update(token, team_object)
+
+
+def with_team_row(token: UserAPIKeyAuth, team_object: LiteLLM_TeamTable) -> UserAPIKeyAuth:
+    return token.model_copy(update=team_row_update(token, team_object))
