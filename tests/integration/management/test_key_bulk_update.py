@@ -5,7 +5,7 @@ import pytest
 from litellm.proxy.utils import hash_token
 
 from tests.integration._support.actors import Actor
-from tests.integration._support.actors import create_scratch_key
+from tests.integration._support.actors import create_scratch_key, create_scratch_team, owned_settings_client
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
@@ -121,3 +121,48 @@ async def test_key_bulk_update_per_key_failure_is_isolated(
         where={"token": hash_token(valid)}
     )
     assert row is not None and row.max_budget == _MARKER_BUDGET
+
+
+async def test_key_bulk_updates_explicit_null_cannot_remove_capped_limit(
+    gateway_client, db, resources, actors, tmp_path
+):
+    admin = actors.keys[Actor.PROXY_ADMIN]
+    headers = {"Authorization": f"Bearer {admin.cleartext}"}
+    await create_scratch_team(db, resources.prefix, organization_id=actors.org_a_id)
+    limited, unlimited, team_limited = [
+        await create_scratch_key(
+            gateway_client,
+            admin.cleartext,
+            resources.prefix,
+            user_id=admin.user_id,
+            team_id=resources.prefix if name == "team-limited" else None,
+            key_alias=f"{resources.prefix}-{name}",
+        )
+        for name in ("limited", "unlimited", "team-limited")
+    ]
+    for key in (limited, team_limited):
+        seeded = await gateway_client.post("/key/update", headers=headers, json={"key": key, "max_budget": 50.0})
+        assert seeded.status_code == 200, seeded.text
+
+    with owned_settings_client(
+        gateway_client, tmp_path, {"upperbound_key_generate_params": {"max_budget": 100.0}}
+    ) as client:
+        bulk = await client.post(
+            "/key/bulk_update",
+            headers=headers,
+            json={"keys": [{"key": limited, "max_budget": None}, {"key": unlimited, "max_budget": None}]},
+        )
+        team_bulk = await client.post(
+            "/team/key/bulk_update",
+            headers=headers,
+            json={"team_id": resources.prefix, "key_ids": [team_limited], "update_fields": {"max_budget": None}},
+        )
+
+    assert bulk.status_code == 200, bulk.text
+    assert [item["key"] for item in bulk.json()["failed_updates"]] == [limited]
+    assert [item["key"] for item in bulk.json()["successful_updates"]] == [unlimited]
+    assert team_bulk.status_code == 200, team_bulk.text
+    assert [item["key"] for item in team_bulk.json()["failed_updates"]] == [team_limited]
+    for key in (limited, team_limited):
+        row = await db.db.litellm_verificationtoken.find_unique(where={"token": hash_token(key)})
+        assert row is not None and row.max_budget == 50.0
