@@ -10,12 +10,13 @@
 import asyncio
 import copy
 import inspect
+import json
 from collections.abc import Iterable, Iterator, Mapping, Sequence
-from dataclasses import replace
-from types import MappingProxyType
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Final, Protocol
 
 from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
+from pydantic_core import to_jsonable_python
 
 import litellm
 from litellm.constants import REDACTED_BY_LITELLM
@@ -325,8 +326,11 @@ _MESSAGE_OUTPUT_FIELDS: Final = (
 )
 
 
+_JSONABLE: Final = TypeAdapter(object)
+
+
 def _comparable_value(value: object) -> object:
-    return value.model_dump() if isinstance(value, BaseModel) else copy.deepcopy(value)
+    return _JSONABLE.validate_python(to_jsonable_python(value, serialize_unknown=True))
 
 
 def _comparable_message(message: object) -> tuple[object, ...]:
@@ -352,19 +356,49 @@ def _carries_token_data(holder: object) -> bool:
     )
 
 
-def _output_item_parts(item_index: int, item: object) -> Iterator[tuple[tuple[int, ...], object]]:
-    return (((item_index, part_index), part) for part_index, part in enumerate(stream_item_items(item, "content")))
+def _token_data_holders(response: object) -> Iterator[object]:
+    yield from stream_item_items(response, "choices")
+    for item in stream_item_items(response, "output"):
+        yield from stream_item_items(item, "content")
 
 
-def _token_data_holders(response: object) -> Iterator[tuple[tuple[int, ...], object]]:
-    yield from (((index,), choice) for index, choice in enumerate(stream_item_items(response, "choices")))
-    for item_index, item in enumerate(stream_item_items(response, "output")):
-        yield from _output_item_parts(item_index, item)
+def _logprob_entries(logprobs: object) -> tuple[object, ...]:
+    if isinstance(logprobs, (list, tuple)):
+        return _RESPONSE_ITEMS.validate_python(logprobs)
+    return (*stream_item_items(logprobs, "content"), *stream_item_items(logprobs, "refusal"))
 
 
-def token_data_outputs(response: object) -> Mapping[tuple[int, ...], tuple[object, ...]]:
-    return MappingProxyType(
-        {key: _holder_output(holder) for key, holder in _token_data_holders(response) if _carries_token_data(holder)}
+def _logprobs_key(logprobs: object) -> tuple[object, ...]:
+    values: Final = (
+        *(stream_item_field(entry, "logprob") for entry in _logprob_entries(logprobs)),
+        *stream_item_items(logprobs, "token_logprobs"),
+    )
+    return values if values or logprobs in (None, []) else (logprobs,)
+
+
+def _token_data(holder: object) -> tuple[str, ...]:
+    components: Final = (
+        stream_item_items(holder, "token_ids"),
+        *(
+            stream_item_items(stream_item_field(field_holder, "provider_specific_fields"), "token_ids")
+            for field_holder in (holder, stream_item_field(holder, "message"))
+        ),
+        _logprobs_key(stream_item_field(holder, "logprobs")),
+    )
+    return tuple(json.dumps(to_jsonable_python(part, serialize_unknown=True)) if part else "" for part in components)
+
+
+@dataclass(frozen=True, slots=True)
+class TokenDataOutput:
+    token_data: tuple[str, ...]
+    output: tuple[object, ...]
+
+
+def token_data_outputs(response: object) -> tuple[TokenDataOutput, ...]:
+    return tuple(
+        TokenDataOutput(_token_data(holder), _holder_output(holder))
+        for holder in _token_data_holders(response)
+        if _carries_token_data(holder)
     )
 
 
@@ -374,15 +408,26 @@ def _drop_token_data(holder: object) -> None:
         _set_field(holder, "logprobs", None)
 
 
-def _rewrite_hides_output(before: tuple[object, ...], after: tuple[object, ...]) -> bool:
-    return not all(keeps_original_output(original, served) for original, served in zip(before, after, strict=True))
+def _shares_token_data(original: tuple[str, ...], served: tuple[str, ...]) -> bool:
+    return any(part and part == served_part for part, served_part in zip(original, served, strict=True))
 
 
-def drop_token_data_of_rewritten_outputs(
-    response: object, outputs_before: Mapping[tuple[int, ...], tuple[object, ...]]
-) -> None:
-    for key, holder in _token_data_holders(response):
-        if key in outputs_before and _rewrite_hides_output(outputs_before[key], _holder_output(holder)):
+def _keeps_every_field(original: tuple[object, ...], served: tuple[object, ...]) -> bool:
+    return all(keeps_original_output(before, after) for before, after in zip(original, served, strict=True))
+
+
+def _hides_original_output(holder: object, outputs_before: tuple[TokenDataOutput, ...]) -> bool:
+    token_data: Final = _token_data(holder)
+    output: Final = _holder_output(holder)
+    originals: Final = tuple(
+        before.output for before in outputs_before if _shares_token_data(before.token_data, token_data)
+    )
+    return bool(originals) and not any(_keeps_every_field(original, output) for original in originals)
+
+
+def drop_token_data_of_rewritten_outputs(response: object, outputs_before: tuple[TokenDataOutput, ...]) -> None:
+    for holder in _token_data_holders(response):
+        if _carries_token_data(holder) and _hides_original_output(holder, outputs_before):
             _drop_token_data(holder)
 
 
