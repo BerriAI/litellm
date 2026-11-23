@@ -11,9 +11,7 @@ SETTINGS: Final = EventsSettings(enabled=True, public_base_url="https://gateway.
 
 def virtual_key(api_key: str, **fields: str | None) -> UserAPIKeyAuth:  # noqa: ANN003  # test builder mirrors the auth path's marker
     """A caller authenticated by a virtual key, carrying the server-only marker the key auth path sets."""
-    caller: Final = UserAPIKeyAuth(api_key=api_key, **fields)
-    caller.via_virtual_key = True
-    return caller
+    return UserAPIKeyAuth(api_key=api_key, **fields).model_copy(update={"via_virtual_key": True})
 
 
 CALLER: Final = virtual_key("sk-caller-one", user_id="user-1")
@@ -45,9 +43,7 @@ JWT: Final = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1In0.c2lnbmF0dXJlLWE"
 
 
 def admitted_subject(user_id: str) -> UserAPIKeyAuth:
-    subject: Final = UserAPIKeyAuth(user_id=user_id)
-    subject.mcp_admitted_user_subject = True
-    return subject
+    return UserAPIKeyAuth(user_id=user_id).model_copy(update={"mcp_admitted_user_subject": True})
 
 
 def context(caller: UserAPIKeyAuth | None = CALLER) -> OperationContext:
