@@ -9365,6 +9365,7 @@ export interface paths {
          *     - router_settings: Optional[UpdateRouterConfig] - key-specific router settings. Example - {"model_group_retry_policy": {"gpt-4": {"RateLimitErrorRetries": 5}}}. IF null or {} then no router settings.
          *     - access_group_ids: Optional[List[str]] - List of access group IDs to associate with the key. Access groups define which models a key can access. Example - ["access_group_1", "access_group_2"].
          *     - budget_limits: Optional[list] - List of concurrent budget windows for the key. Each window specifies a budget_limit, time_period, and optional budget_duration. Example - [{"budget_limit": 10.0, "time_period": "1d"}, {"budget_limit": 50.0, "time_period": "7d"}].
+         *     - lens_enabled: Optional[bool] - Whether this key's requests are sent to Lens. `null` inherits the team default, which is on when unset.
          *
          *     Example:
          *     ```bash
@@ -20921,7 +20922,7 @@ export interface paths {
          *         - aliases: Optional[dict] - Model aliases for the user - [Docs](https://litellm.vercel.app/docs/proxy/virtual_keys#model-aliases)
          *         - config: Optional[dict] - [DEPRECATED PARAM] User-specific config.
          *         - allowed_cache_controls: Optional[list] - List of allowed cache control values. Example - ["no-cache", "no-store"]. See all values - https://docs.litellm.ai/docs/proxy/caching#turn-on--off-caching-per-request-
-         *         - blocked: Optional[bool] - [Not Implemented Yet] Whether the user is blocked.
+         *         - blocked: Optional[bool] - Proxy admin only. true disables the user: they stay listed, but every request authenticated as them is denied and their keys are blocked. false re-enables a disabled user and unblocks only the keys that disabling them blocked.
          *         - guardrails: Optional[List[str]] - [Not Implemented Yet] List of active guardrails for the user
          *         - policies: Optional[List[str]] - List of policy names to apply to the user. Policies define guardrails, conditions, and inheritance rules.
          *         - permissions: Optional[dict] - [Not Implemented Yet] User-specific permissions, eg. turning off pii masking.
@@ -58890,6 +58891,7 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["TranscriptionResponse"];
                     "text/event-stream": string;
+                    "text/plain": string;
                 };
             };
             /** @description Validation Error */
@@ -87842,6 +87844,7 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["TranscriptionResponse"];
                     "text/event-stream": string;
+                    "text/plain": string;
                 };
             };
             /** @description Validation Error */

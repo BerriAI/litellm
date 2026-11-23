@@ -13,11 +13,11 @@ import pytest
 
 from litellm.proxy._types import LiteLLM_UserTable
 from litellm.proxy.management_endpoints.scim.scim_v2 import (
-    _set_user_keys_blocked,
     delete_user,
     patch_user,
     update_user,
 )
+from litellm.proxy.management_helpers.user_key_blocking import set_user_keys_blocked
 from litellm.types.proxy.management_endpoints.scim_v2 import (
     SCIMPatchOp,
     SCIMPatchOperation,
@@ -68,7 +68,7 @@ def _build_prisma_with_keys(user_keys, mock_user=None, updated_user=None):
 
 @pytest.mark.asyncio
 async def test_set_user_keys_blocked_flips_state_and_invalidates_cache():
-    """_set_user_keys_blocked must update_many AND invalidate each token in the cache."""
+    """set_user_keys_blocked must update_many AND invalidate each token in the cache."""
     keys = [
         _build_token_row("hash-1", "user-x", blocked=False),
         _build_token_row("hash-2", "user-x", blocked=False),
@@ -85,11 +85,11 @@ async def test_set_user_keys_blocked_flips_state_and_invalidates_cache():
         patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
         patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
         patch(
-            "litellm.proxy.management_endpoints.scim.scim_v2.delete_cache_key_object",
+            "litellm.proxy.management_helpers.user_key_blocking.delete_cache_key_object",
             AsyncMock(side_effect=fake_delete),
         ),
     ):
-        flipped = await _set_user_keys_blocked(user_id="user-x", blocked=True)
+        flipped = await set_user_keys_blocked(user_id="user-x", blocked=True)
 
     assert flipped == 2
     # Each key gets a per-row update that flips `blocked` and stamps the
@@ -116,11 +116,11 @@ async def test_set_user_keys_blocked_noop_when_no_matching_keys():
         patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
         patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
         patch(
-            "litellm.proxy.management_endpoints.scim.scim_v2.delete_cache_key_object",
+            "litellm.proxy.management_helpers.user_key_blocking.delete_cache_key_object",
             AsyncMock(),
         ) as mocked_delete,
     ):
-        flipped = await _set_user_keys_blocked(user_id="user-x", blocked=True)
+        flipped = await set_user_keys_blocked(user_id="user-x", blocked=True)
 
     assert flipped == 0
     mock_db.litellm_verificationtoken.update.assert_not_called()
@@ -151,11 +151,11 @@ async def test_set_user_keys_unblocked_skips_admin_blocked_keys():
         patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
         patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
         patch(
-            "litellm.proxy.management_endpoints.scim.scim_v2.delete_cache_key_object",
+            "litellm.proxy.management_helpers.user_key_blocking.delete_cache_key_object",
             AsyncMock(side_effect=fake_delete),
         ),
     ):
-        flipped = await _set_user_keys_blocked(user_id="user-x", blocked=False)
+        flipped = await set_user_keys_blocked(user_id="user-x", blocked=False)
 
     assert flipped == 1
     mock_db.litellm_verificationtoken.update.assert_awaited_once()
@@ -184,7 +184,7 @@ async def test_scim_delete_user_blocks_keys_before_deleting_user():
         patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
         patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
         patch(
-            "litellm.proxy.management_endpoints.scim.scim_v2.delete_cache_key_object",
+            "litellm.proxy.management_helpers.user_key_blocking.delete_cache_key_object",
             AsyncMock(),
         ),
     ):
@@ -232,7 +232,7 @@ async def test_scim_delete_user_clears_fk_referenced_rows_before_user_delete():
         patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
         patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
         patch(
-            "litellm.proxy.management_endpoints.scim.scim_v2.delete_cache_key_object",
+            "litellm.proxy.management_helpers.user_key_blocking.delete_cache_key_object",
             AsyncMock(),
         ),
     ):
@@ -306,7 +306,7 @@ async def test_scim_patch_user_active_false_blocks_keys():
             AsyncMock(return_value=mock_scim_user),
         ),
         patch(
-            "litellm.proxy.management_endpoints.scim.scim_v2.delete_cache_key_object",
+            "litellm.proxy.management_helpers.user_key_blocking.delete_cache_key_object",
             AsyncMock(),
         ),
     ):
@@ -366,7 +366,7 @@ async def test_scim_patch_user_active_true_unblocks_keys():
             AsyncMock(return_value=mock_scim_user),
         ),
         patch(
-            "litellm.proxy.management_endpoints.scim.scim_v2.delete_cache_key_object",
+            "litellm.proxy.management_helpers.user_key_blocking.delete_cache_key_object",
             AsyncMock(),
         ),
     ):
@@ -423,7 +423,7 @@ async def test_scim_patch_user_no_active_change_does_not_touch_keys():
             AsyncMock(return_value=mock_scim_user),
         ),
         patch(
-            "litellm.proxy.management_endpoints.scim.scim_v2.delete_cache_key_object",
+            "litellm.proxy.management_helpers.user_key_blocking.delete_cache_key_object",
             AsyncMock(),
         ),
     ):
@@ -486,7 +486,7 @@ async def test_scim_put_user_omitting_active_preserves_deactivated_state():
             AsyncMock(return_value=mock_scim_user),
         ),
         patch(
-            "litellm.proxy.management_endpoints.scim.scim_v2.delete_cache_key_object",
+            "litellm.proxy.management_helpers.user_key_blocking.delete_cache_key_object",
             AsyncMock(),
         ),
     ):
@@ -542,7 +542,7 @@ async def test_scim_put_user_explicit_active_false_blocks_keys():
             AsyncMock(return_value=mock_scim_user),
         ),
         patch(
-            "litellm.proxy.management_endpoints.scim.scim_v2.delete_cache_key_object",
+            "litellm.proxy.management_helpers.user_key_blocking.delete_cache_key_object",
             AsyncMock(),
         ),
     ):

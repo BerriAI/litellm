@@ -1510,7 +1510,7 @@ async def test_update_user_put_with_valueless_entitlements_deactivates_user(scim
         AsyncMock(),
     )
     set_keys_blocked_mock = mocker.patch(  # test-quality-ok: endpoint collaborators are module-level, not injectable
-        "litellm.proxy.management_endpoints.scim.scim_v2._set_user_keys_blocked",
+        "litellm.proxy.management_endpoints.scim.scim_v2.set_user_keys_blocked",
         AsyncMock(return_value=1),
     )
     mocker.patch(  # test-quality-ok: endpoint collaborators are module-level, not injectable
@@ -1568,7 +1568,7 @@ async def test_update_user_put_deactivates_and_blocks_keys_when_a_group_has_no_t
         AsyncMock(return_value=existing_user),
     )
     set_keys_blocked_mock: Final = mocker.patch(  # test-quality-ok: endpoint collaborators are module-level, not injectable
-        "litellm.proxy.management_endpoints.scim.scim_v2._set_user_keys_blocked",
+        "litellm.proxy.management_endpoints.scim.scim_v2.set_user_keys_blocked",
         AsyncMock(return_value=1),
     )
     mocker.patch(  # test-quality-ok: endpoint collaborators are module-level, not injectable
@@ -4017,7 +4017,7 @@ def _patch_delete_user_dependencies(mocker, mock_prisma_client, existing_user) -
         AsyncMock(return_value=existing_user),
     )
     mocker.patch(
-        "litellm.proxy.management_endpoints.scim.scim_v2._set_user_keys_blocked",
+        "litellm.proxy.management_endpoints.scim.scim_v2.set_user_keys_blocked",
         AsyncMock(),
     )
     return (

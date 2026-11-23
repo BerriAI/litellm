@@ -49,7 +49,6 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module exports
     _delete_cache_key_object,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
-    delete_cache_key_object,
     delete_cache_team_object,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -95,6 +94,7 @@ from litellm.proxy.management_helpers.team_roster_sync import (
     team_tx_db,
     user_tx_db,
 )
+from litellm.proxy.management_helpers.user_key_blocking import set_user_keys_blocked
 from litellm.proxy.utils import (  # noqa: F401  # legacy module exports
     PrismaClient,
     _premium_user_check,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -1215,76 +1215,6 @@ async def _sync_requested_teams(
     return teams_to_keep
 
 
-SCIM_BLOCKED_METADATA_KEY: Final = "scim_blocked"
-
-
-def _key_was_scim_blocked(metadata: object) -> bool:
-    """True if a verification token carries the SCIM-block marker in metadata."""
-    return isinstance(metadata, dict) and metadata.get(SCIM_BLOCKED_METADATA_KEY) is True
-
-
-async def _set_user_keys_blocked(user_id: str, blocked: bool) -> int:
-    """
-    Block or unblock virtual keys owned by a user and invalidate them in the
-    in-memory/redis caches so the change takes effect immediately.
-
-    Each key SCIM blocks is tagged with ``metadata.scim_blocked = True``. On
-    reactivation we only unblock keys carrying that marker, so a key an admin
-    blocked manually for unrelated reasons is left alone.
-
-    Returns the number of keys whose state was flipped.
-    """
-    from litellm.proxy.proxy_server import proxy_logging_obj, user_api_key_cache
-
-    prisma_client: Final = await _get_prisma_client_or_raise_exception()
-
-    if blocked:
-        # `blocked` is a nullable column with no default, so existing rows
-        # typically hold NULL; treat NULL as "not blocked" since SQL equality
-        # on NULL would otherwise silently skip them.
-        candidates = await _table(VerificationTokenRepository(prisma_client)).find_many(
-            where={
-                "user_id": user_id,
-                "OR": [{"blocked": False}, {"blocked": None}],
-            },
-        )
-        affected_keys = candidates
-    else:
-        candidates = await _table(VerificationTokenRepository(prisma_client)).find_many(
-            where={"user_id": user_id, "blocked": True},
-        )
-        affected_keys = [k for k in candidates if _key_was_scim_blocked(k.metadata)]
-
-    if not affected_keys:
-        return 0
-
-    for key_row in affected_keys:
-        current_metadata: dict[str, object] = dict(key_row.metadata) if isinstance(key_row.metadata, dict) else {}
-        if blocked:
-            new_metadata = {**current_metadata, SCIM_BLOCKED_METADATA_KEY: True}
-        else:
-            new_metadata = {k: v for k, v in current_metadata.items() if k != SCIM_BLOCKED_METADATA_KEY}
-        await _table(VerificationTokenRepository(prisma_client)).update(
-            where={"token": key_row.token},
-            data={"blocked": blocked, "metadata": safe_dumps(new_metadata)},
-        )
-
-    for key_row in affected_keys:
-        await delete_cache_key_object(
-            hashed_token=key_row.token,
-            user_api_key_cache=user_api_key_cache,
-            proxy_logging_obj=proxy_logging_obj,
-        )
-
-    verbose_proxy_logger.info(
-        "SCIM: %s %d virtual key(s) for user_id=%s",
-        "blocked" if blocked else "unblocked",
-        len(affected_keys),
-        user_id,
-    )
-    return len(affected_keys)
-
-
 def _scim_active_value(metadata: Mapping[str, object] | None) -> bool | None:
     """Read the SCIM active flag from a user's metadata dict, if present."""
     if not metadata:
@@ -2024,7 +1954,7 @@ async def update_user(
         if client_set_active:
             new_active: Final = _scim_active_value(metadata)
             if new_active is not None and new_active != (True if prev_active is None else prev_active):
-                await _set_user_keys_blocked(user_id=user_id, blocked=not new_active)
+                await set_user_keys_blocked(user_id=user_id, blocked=not new_active)
 
         # Convert back to SCIM format
         scim_user: Final = await ScimTransformations.transform_litellm_user_to_scim_user(updated_user)
@@ -2076,7 +2006,7 @@ async def delete_user(
                     user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
                 )
 
-        await _set_user_keys_blocked(user_id=user_id, blocked=True)
+        await set_user_keys_blocked(user_id=user_id, blocked=True)
 
         from litellm.proxy.proxy_server import proxy_logging_obj, user_api_key_cache
 
@@ -2853,7 +2783,7 @@ async def patch_user(
         await evict_and_broadcast(cache_keys=(user_id,), user_api_key_cache=user_api_key_cache)
 
         if new_active is not None and new_active != (True if prev_active is None else prev_active):
-            await _set_user_keys_blocked(user_id=user_id, blocked=not new_active)
+            await set_user_keys_blocked(user_id=user_id, blocked=not new_active)
 
         scim_user: Final = await ScimTransformations.transform_litellm_user_to_scim_user(updated_user)
 

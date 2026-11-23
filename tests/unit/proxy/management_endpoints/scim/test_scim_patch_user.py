@@ -840,7 +840,7 @@ async def test_patch_user_deactivates_and_blocks_keys_when_a_group_has_no_team()
     with (
         patch("litellm.proxy.proxy_server.prisma_client", mock_client),
         patch("litellm.proxy.proxy_server.proxy_config") as mock_proxy_config,
-        patch("litellm.proxy.management_endpoints.scim.scim_v2._set_user_keys_blocked", mock_block_keys),
+        patch("litellm.proxy.management_endpoints.scim.scim_v2.set_user_keys_blocked", mock_block_keys),
         patch("litellm.proxy.management_endpoints.scim.scim_v2.patch_team_membership", mock_patch_team_membership),
     ):
         mock_proxy_config.get_config = AsyncMock(return_value={})
