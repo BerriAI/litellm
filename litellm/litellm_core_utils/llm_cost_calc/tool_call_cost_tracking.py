@@ -350,7 +350,7 @@ class StandardBuiltInToolCostTracking:
             except Exception as e:  # noqa: BLE001  # get_model_info raises bare Exception for unmapped models
                 verbose_logger.debug("Could not resolve pricing for image tool model %s: %s", tool_model, e)
                 return None
-                image_gen: Final = tool_usage.image_gen
+                        image_gen: Final = tool_usage.image_gen
         input_details: Final = image_gen.input_tokens_details
         output_details: Final = image_gen.output_tokens_details
         token_cost: Final = (
