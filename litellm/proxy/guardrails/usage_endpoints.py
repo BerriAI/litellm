@@ -773,7 +773,7 @@ def _usage_log_entry_from_row(
     action_filter: str | None,
 ) -> UsageLogEntry | None:
     meta: Final = _decoded_metadata(sl.metadata)
-    guardrail_info_list: Final = require_get(meta or {}).get("guardrail_information") or []
+    guardrail_info_list: Final[object] = require_get(meta or {}).get("guardrail_information") or []
     run_infos: Final = (require_get(gi) for gi in iter_items(guardrail_info_list))
     entry_for_guardrail: Final = max(
         (gi for gi in run_infos if (gi.get("guardrail_id") or gi.get("guardrail_name")) == r.guardrail_id),

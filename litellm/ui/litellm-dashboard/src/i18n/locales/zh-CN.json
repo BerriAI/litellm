@@ -1,4 +1,24 @@
 {
+  "lensControls": {
+    "title": "Lens",
+    "tracing": "追踪",
+    "new": "新增",
+    "description": "追踪 · 告警 · 评估",
+    "on": "开启",
+    "off": "关闭",
+    "open": "打开 Lens",
+    "teamDefault": "团队密钥的默认设置",
+    "keyInherited": "使用团队设置",
+    "keyCustom": "自定义设置",
+    "useTeam": "使用团队设置",
+    "saveFailed": "无法保存 Lens 日志设置",
+    "loading": "加载中…",
+    "unknown": "未知",
+    "teamUnavailable": "无法获取团队 Lens 设置",
+    "statusUnavailable": "无法获取 Lens 连接状态",
+    "notConfigured": "请配置网关的 Lens 连接以记录追踪"
+  },
+
   "apps": {
     "title": "应用",
     "list": {
