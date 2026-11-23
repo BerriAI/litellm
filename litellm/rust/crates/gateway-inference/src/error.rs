@@ -1,8 +1,9 @@
 use axum::http::StatusCode;
 use axum::{
     Extension, Json,
-    response::{IntoResponse, Response},
+    response::{AppendHeaders, IntoResponse, Response},
 };
+use litellm_gateway_auth_core::authz::Denied;
 use litellm_inference::Error as InferenceError;
 use litellm_llms::base_llm::ocr::error::Error as OcrError;
 use litellm_llms_types::formats::messages::MessagesErrorType;
@@ -16,8 +17,9 @@ use crate::{
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error(transparent)]
-    Auth(#[from] litellm_gateway_auth::Error),
+    /// The auth core found a model list of the caller's that does not reach the model.
+    #[error("operation is not permitted")]
+    ModelAccess(#[from] Denied),
     #[error("invalid request body")]
     InvalidBody(#[from] BodyError),
     #[error(
@@ -175,7 +177,7 @@ impl From<litellm_host_http::Error<InferenceError>> for Error {
 impl Error {
     pub fn status(&self) -> StatusCode {
         match self {
-            Self::Auth(error) => error.status(),
+            Self::ModelAccess(_) => StatusCode::FORBIDDEN,
             Self::BodyTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             Self::InvalidBody(_) | Self::UnknownModel { .. } => StatusCode::BAD_REQUEST,
             Self::NoDeployments(_) => StatusCode::TOO_MANY_REQUESTS,
@@ -188,16 +190,33 @@ impl Error {
     }
 
     pub fn openai_response(self) -> Response {
-        (self.status(), Json(self.openai_body())).into_response()
+        let body = Json(self.openai_body());
+        match self {
+            Self::Refused(refusal) => (
+                refusal.status,
+                AppendHeaders(crate::rate_limited::header_pairs(refusal.headers)),
+                body,
+            )
+                .into_response(),
+            other => (other.status(), body).into_response(),
+        }
     }
 
+    /// A refusal names its own `type` and `code` when the proxy's exception does.
     fn openai_body(&self) -> Value {
         let status = self.status();
+        let (kind, code) = match self {
+            Self::Refused(refusal) => (refusal.kind.clone(), refusal.code.clone()),
+            _ => (None, None),
+        };
         json!({"error": {
             "message": self.message(),
-            "type": MessagesErrorType::for_status(status.as_u16()),
+            "type": kind.map_or_else(
+                || json!(MessagesErrorType::for_status(status.as_u16())),
+                Value::from,
+            ),
             "param": null,
-            "code": status.as_u16(),
+            "code": code.map_or_else(|| json!(status.as_u16()), Value::from),
         }})
     }
 
@@ -228,8 +247,8 @@ impl Error {
 
     fn message(&self) -> String {
         match self {
-            Self::Auth(error) => error.to_string(),
             Self::Refused(refusal) => refusal.message.clone(),
+            Self::ModelAccess(_) => self.to_string(),
             Self::InvalidBody(_)
             | Self::UnknownModel { .. }
             | Self::Route(_)
@@ -524,22 +543,5 @@ mod tests {
         assert_eq!(message.matches(&cause).count(), 1, "{message}");
         assert_eq!(body["error"]["type"], "invalid_request_error");
         assert_eq!(body["error"]["code"], 400);
-    }
-
-    fn auth_outage() -> Error {
-        Error::Auth(litellm_gateway_auth::Error::Unavailable(
-            litellm_error::Source::new(std::io::Error::other("private-backend-detail")),
-        ))
-    }
-
-    #[rstest]
-    #[case::openai(auth_outage().openai_body()["error"]["message"].clone())]
-    #[case::anthropic(auth_outage().body(None)["error"]["message"].clone())]
-    #[case::anthropic_sse(Value::from(auth_outage().sse_frame()))]
-    fn an_auth_failure_hides_its_backend_cause(#[case] rendered: Value) {
-        let top = auth_outage().to_string();
-        let rendered = rendered.to_string();
-        assert!(rendered.contains(&top), "{rendered}");
-        assert!(!rendered.contains("private-backend-detail"), "{rendered}");
     }
 }
