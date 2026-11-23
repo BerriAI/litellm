@@ -53,7 +53,7 @@ pub trait Sink: Send + Sync + 'static {
     fn emit(&self, record: &Record);
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Record {
     pub metadata: &'static Metadata<'static>,
     pub message: String,
