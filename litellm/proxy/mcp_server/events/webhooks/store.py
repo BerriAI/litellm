@@ -62,6 +62,7 @@ class QueuedDelivery(BaseModel):
 class Activation(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
+    reactivation_gap: QueuedDelivery | None = None
     client_secret: str
     upstream_subscription_id: str | None
     upstream_refresh_before: datetime | None
@@ -253,19 +254,32 @@ class PrismaEventStore:
         from_statuses: tuple[SubscriptionStatus, ...] = LIVE_STATUSES,
     ) -> bool:
         eligible: Final = [state for state in LIVE_STATUSES if state in from_statuses]
-        updated: Final = await self._subscriptions.update_many(
-            where={"id": subscription_id, "status": {"in": eligible}},  # bounded-ok: at most the three live states
-            data={
-                "status": "active",
-                "generation": uuid.uuid4().hex,
-                "client_secret": _encrypt(activation.client_secret),
-                "upstream_subscription_id": activation.upstream_subscription_id,
-                "upstream_refresh_before": activation.upstream_refresh_before,
-                "refresh_before": activation.refresh_before,
-                "cursor": activation.cursor,
-                "consecutive_failures": 0,
-            },
-        )
+        async with self._client.tx() as tx:
+            updated: Final = await tx.litellm_mcpeventsubscription.update_many(
+                where={"id": subscription_id, "status": {"in": eligible}},  # bounded-ok: at most the three live states
+                data={
+                    "status": "active",
+                    "generation": uuid.uuid4().hex,
+                    "client_secret": _encrypt(activation.client_secret),
+                    "upstream_subscription_id": activation.upstream_subscription_id,
+                    "upstream_refresh_before": activation.upstream_refresh_before,
+                    "refresh_before": activation.refresh_before,
+                    "cursor": activation.cursor,
+                    "consecutive_failures": 0,
+                },
+            )
+            gap: Final = activation.reactivation_gap
+            if updated and gap is not None:
+                await tx.execute_raw(
+                    """INSERT INTO "LiteLLM_MCPEventDelivery"
+                    (delivery_id, subscription_id, webhook_id, body, next_attempt_at, prepared)
+                    VALUES ($1, $2, $3, $4, $5::timestamp, true)""",
+                    gap.delivery_id,
+                    subscription_id,
+                    gap.webhook_id,
+                    gap.body,
+                    gap.next_attempt_at.isoformat(),
+                )
         return updated > 0
 
     async def mark_delivered(self, subscription_id: str, at: datetime) -> None:
