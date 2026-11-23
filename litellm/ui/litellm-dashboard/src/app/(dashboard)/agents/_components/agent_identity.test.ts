@@ -55,12 +55,13 @@ describe("agent identity configuration", () => {
       enabled: false,
     };
     const payload = withAgentIdentity({ litellm_params: { model: "runtime" } }, formValues);
-    expect(payload).toMatchObject({
+    const expected = {
       litellm_params: { model: "runtime" },
       identity: { client_id: identity.client_id, service_principal_id: identity.service_principal_id },
       execution_mode: "both",
       enabled: false,
-    });
+    };
+    expect(payload).toMatchObject(expected);
   });
   it("requires a service principal for autonomous execution", () => {
     const values = {
@@ -147,12 +148,13 @@ describe("agent identity configuration", () => {
         enabled: true,
       };
       const payload = withAgentIdentity({ agent_name: "okta-agent" }, values);
-      expect(payload).toEqual({
+      const expected = {
         agent_name: "okta-agent",
         identity: { ...okta, required_scopes: [] },
         execution_mode: mode,
         enabled: true,
-      });
+      };
+      expect(payload).toEqual(expected);
     });
     it("clears an Okta binding when the admin picks no provider", () => {
       expect(buildIdentityParams({ identity_provider: "none" }, stored)).toEqual({ identity: null });
