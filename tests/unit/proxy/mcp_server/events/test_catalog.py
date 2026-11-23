@@ -49,6 +49,37 @@ def test_resolution_picks_the_longest_matching_prefix() -> None:
     assert resolve("unknown-build.failed", servers) is None
 
 
+@pytest.mark.parametrize("other", (False, True))
+def test_the_published_prefix_precedes_longer_historical_prefixes(other: bool) -> None:
+    servers: Final = (server("ci-prod", "cd"), server("first", "ci")) if other else (server("ci-prod", "ci"),)
+    resolved: Final = resolve("ci-prod-build.failed", event_servers(servers))
+    assert resolved is not None
+    assert (resolved.target.server.alias, resolved.upstream_name) == ("ci", "prod-build.failed")
+
+
+@pytest.mark.asyncio
+async def test_overlapping_current_prefixes_publish_only_events_that_route_back_to_the_source() -> None:
+    servers: Final = (server("first", "ci"), server("second", "ci-prod"))
+    prefixed: Final = EventType(name="prod-build.failed", delivery=("poll",))
+    listed: Final = await list_events(context(), SETTINGS, runtime(servers, (BUILD_FAILED, prefixed)))
+    assert [item.name for item in listed] == ["ci-build.failed", "ci-prod-build.failed", "ci-prod-prod-build.failed"]
+
+
+@pytest.mark.asyncio
+async def test_a_server_that_misses_the_deadline_does_not_hide_a_healthy_catalog() -> None:
+    base: Final = runtime((server("slow", "slow"), server("fast", "fast")))
+
+    async def listing(target: SubscriptionTarget) -> tuple[EventType, ...]:
+        if target.server.server_id == "slow":
+            await asyncio.Event().wait()
+        return (BUILD_FAILED,)
+
+    listed: Final = await asyncio.wait_for(
+        list_events(context(), SETTINGS, replace(base, list_upstream=listing), deadline=0.1), timeout=5
+    )
+    assert [item.name for item in listed] == ["fast-build.failed"]
+
+
 @pytest.mark.parametrize(
     ("settings", "caller", "modes"),
     (
