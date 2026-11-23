@@ -56,6 +56,7 @@ from litellm.constants import (
     CLI_SSO_SESSION_CACHE_KEY_PREFIX,
     CLI_SSO_SESSION_TTL_SECONDS,
     CP_RETURN_TO_COOKIE_PREFIX,
+    LITELLM_CLI_SESSION_TOKEN_PREFIX,
     LITELLM_CLI_SOURCE_IDENTIFIER,
     LITELLM_UI_SESSION_DURATION,
     MAX_SPENDLOG_ROWS_TO_QUERY,
@@ -355,6 +356,12 @@ def _cli_sso_verification_uri_complete_enabled() -> bool:
     from litellm.proxy.proxy_server import general_settings
 
     return bool(general_settings.get("allow_cli_sso_verification_uri_complete", False))
+
+
+def _dashboard_saml_relay_state(return_to: str | None) -> str | None:
+    if return_to is None or return_to.startswith(f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:"):
+        return None
+    return return_to
 
 
 def _cli_sso_start_response_body(
@@ -1239,7 +1246,7 @@ async def google_login(
         return await SAMLAuthHandler.build_login_redirect(
             request=request,
             cache=saml_sso_cache,
-            relay_state=cli_state or return_to,
+            relay_state=cli_state or _dashboard_saml_relay_state(return_to),
         )
 
     # Check if we should use SSO handler
@@ -2460,7 +2467,9 @@ async def saml_login(request: Request, return_to: str | None = None):
     if is_admin_ui_disabled():
         return admin_ui_disabled()
 
-    return await SAMLAuthHandler.build_login_redirect(request=request, cache=saml_sso_cache, relay_state=return_to)
+    return await SAMLAuthHandler.build_login_redirect(
+        request=request, cache=saml_sso_cache, relay_state=_dashboard_saml_relay_state(return_to)
+    )
 
 
 @router.get("/sso/saml/metadata", tags=["experimental"], include_in_schema=False)
@@ -2475,7 +2484,6 @@ async def saml_metadata(request: Request):
 @router.post("/sso/saml/callback", tags=["experimental"], include_in_schema=False)
 async def saml_callback(request: Request):
     """Assertion Consumer Service. Validates the IdP assertion and issues a UI session."""
-    from litellm.constants import LITELLM_CLI_SESSION_TOKEN_PREFIX
     from litellm.proxy.proxy_server import (
         general_settings,
         litellm_jwtauth,

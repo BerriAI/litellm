@@ -20,6 +20,7 @@ from urllib.parse import parse_qs, urlencode, urlparse
 
 import pytest
 from fastapi import HTTPException, Request
+from fastapi.responses import RedirectResponse
 
 pytest.importorskip("onelogin", reason="python3-saml (saml extra) is required for SAML SSO tests")
 
@@ -644,19 +645,18 @@ async def test_build_login_redirect_targets_idp_and_caches_request_id(saml_env):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("user_code", "relay_override", "sign", "unsolicited", "prefill_enabled", "direct_login", "disable_admin_ui"),
+    ("user_code", "relay_override", "sign", "unsolicited", "prefill_enabled", "disable_admin_ui"),
     [
-        (None, None, True, False, True, False, False),
-        ("ABCD-EFGH", None, True, False, True, False, False),
-        (None, "litellm-session-token:", True, False, True, False, False),
-        (None, "litellm-session-token:cli-never-issued-session-00", True, False, True, False, False),
-        (None, None, False, False, True, False, False),
-        (None, None, True, True, True, False, False),
-        ("ABCD-EFGH", None, True, False, False, True, False),
-        ("ABCD-EFGH", None, True, False, True, True, False),
-        pytest.param(None, None, True, False, True, False, True, id="disabled-ui-cli"),
-        pytest.param(None, None, False, False, True, False, True, id="disabled-ui-unsigned"),
-        pytest.param(None, None, True, True, True, False, True, id="disabled-ui-unsolicited"),
+        (None, None, True, False, True, False),
+        ("ABCD-EFGH", None, True, False, True, False),
+        (None, "litellm-session-token:", True, False, True, False),
+        (None, "litellm-session-token:cli-never-issued-session-00", True, False, True, False),
+        (None, None, False, False, True, False),
+        (None, None, True, True, True, False),
+        ("ABCD-EFGH", None, True, False, False, False),
+        pytest.param(None, None, True, False, True, True, id="disabled-ui-cli"),
+        pytest.param(None, None, False, False, True, True, id="disabled-ui-unsigned"),
+        pytest.param(None, None, True, True, True, True, id="disabled-ui-unsolicited"),
     ],
 )
 async def test_saml_cli_device_login_completes_after_signed_assertion(
@@ -667,7 +667,6 @@ async def test_saml_cli_device_login_completes_after_signed_assertion(
     sign: bool,
     unsolicited: bool,
     prefill_enabled: bool,
-    direct_login: bool,
     disable_admin_ui: bool,
 ) -> None:
     from litellm.proxy import proxy_server
@@ -675,7 +674,6 @@ async def test_saml_cli_device_login_completes_after_signed_assertion(
         _get_cli_sso_flow_cache_key,
         google_login,
         saml_callback,
-        saml_login,
     )
 
     key_pem, cert_pem = saml_env
@@ -719,12 +717,8 @@ async def test_saml_cli_device_login_completes_after_signed_assertion(
             "headers": [],
         }
     )
-    expected_relay: Final = f"litellm-session-token:{login_id}" + (f":{user_code}" if user_code else "")
-    redirect: Final = (
-        await saml_login(request, return_to=expected_relay)
-        if direct_login
-        else await google_login(request, source="litellm-cli", key=login_id, user_code=user_code)
-    )
+    expected_relay: Final = f"litellm-session-token:{login_id}" + (f":{user_code}" if user_code and prefill_enabled else "")
+    redirect: Final = await google_login(request, source="litellm-cli", key=login_id, user_code=user_code)
     relay: Final = parse_qs(urlparse(redirect.headers["location"]).query)["RelayState"][0]
     assert relay == expected_relay
     ticket: Final = SimpleCookie(redirect.headers["set-cookie"])[_SAML_AUTHN_STATE_COOKIE].value
@@ -772,9 +766,24 @@ async def test_saml_cli_device_login_completes_after_signed_assertion(
 
 
 @pytest.mark.asyncio
-async def test_saml_ui_login_preserves_return_to(saml_env: tuple[str, str], monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("entry_point", ["google_login", "saml_login"])
+@pytest.mark.parametrize(
+    ("return_to", "carried"),
+    [
+        ("/ui/?tab=keys", True),
+        ("litellm-session-token:cli-saml-device-login-0001", False),
+        ("litellm-session-token:cli-saml-device-login-0001:ABCD-EFGH", False),
+    ],
+)
+async def test_saml_login_never_turns_return_to_into_a_cli_relay_state(
+    saml_env: tuple[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+    entry_point: str,
+    return_to: str,
+    carried: bool,
+) -> None:
     from litellm.proxy import proxy_server
-    from litellm.proxy.management_endpoints.ui_sso import google_login
+    from litellm.proxy.management_endpoints.ui_sso import google_login, saml_login
 
     monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace())
     monkeypatch.setattr(proxy_server, "master_key", "sk-test-master")
@@ -782,8 +791,25 @@ async def test_saml_ui_login_preserves_return_to(saml_env: tuple[str, str], monk
     monkeypatch.setattr(proxy_server, "user_custom_ui_sso_sign_in_handler", None)
     for name in ("MICROSOFT_CLIENT_ID", "GOOGLE_CLIENT_ID", "GENERIC_CLIENT_ID", "DISABLE_ADMIN_UI"):
         monkeypatch.delenv(name, raising=False)
-    response: Final = await google_login(_fake_request(), return_to="/ui/?tab=keys")
-    assert parse_qs(urlparse(response.headers["location"]).query)["RelayState"] == ["/ui/?tab=keys"]
+    login: Final = google_login if entry_point == "google_login" else saml_login
+    request: Final = Request(
+        {
+            "type": "http",
+            "scheme": "https",
+            "server": ("proxy.example.com", 443),
+            "path": "/sso/key/generate",
+            "query_string": b"",
+            "headers": [],
+        }
+    )
+
+    async def relay_for(value: str | None) -> list[str]:
+        response: Final[object] = await login(request, return_to=value)
+        assert isinstance(response, RedirectResponse)
+        return parse_qs(urlparse(response.headers["location"]).query)["RelayState"]
+
+    relay: Final = await relay_for(return_to)
+    assert relay == ([return_to] if carried else await relay_for(None))
 
 
 @pytest.mark.asyncio
