@@ -92,6 +92,7 @@ const SidebarAccountMenu: React.FC<SidebarAccountMenuProps> = ({ onLogout, colla
   const {
     userId,
     userEmail,
+    userAlias,
     userRole: role,
     userRoleLabel: userRole,
     isViewOnly,
@@ -152,12 +153,12 @@ const SidebarAccountMenu: React.FC<SidebarAccountMenuProps> = ({ onLogout, colla
   ];
 
   const seed = userEmail || userId || "user";
-  const initials = initialsFromIdentity(userEmail, userId);
+  const initials = initialsFromIdentity(userEmail?.trim() || userAlias, userId);
   const hue = hueFromString(seed);
-  const displayName = navAccountDisplayName(userEmail, userId);
+  const displayName = navAccountDisplayName(userEmail, userId, userAlias);
   const triggerLabel = t("shell.sidebarAccountMenu.triggerLabel", {
     role: userRole ?? t("shell.sidebarAccountMenu.unknownRole"),
-    identity: userEmail || userId || t("shell.sidebarAccountMenu.unknownIdentity"),
+    identity: displayName,
   });
 
   return (

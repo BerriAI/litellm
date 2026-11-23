@@ -247,7 +247,12 @@ def test_config_update_accepts_a_config_owned_success_callback_the_file_spells_i
     assert persisted["success_callback"] == ["langfuse"]
 
 
-def test_config_update_rejects_assistants_config(client, auth_as, mock_prisma, monkeypatch):
+@pytest.mark.parametrize("payload,field", [
+    ({"router_settings": {"assistants_config": {"enabled": True}}}, "assistants_config"),
+    *[({"general_settings": {"required_customer_headers": value}}, "required_customer_headers")
+      for value in ([], ["X-Tenant-ID"])],
+])
+def test_config_update_rejects_assistants_config(client, auth_as, mock_prisma, monkeypatch, payload, field):
     from litellm.proxy import proxy_server as ps
     from litellm.proxy._types import LitellmUserRoles
 
@@ -257,11 +262,11 @@ def test_config_update_rejects_assistants_config(client, auth_as, mock_prisma, m
     with auth_as(LitellmUserRoles.PROXY_ADMIN):
         response = client.post(
             "/config/update",
-            json={"router_settings": {"assistants_config": {"enabled": True}}},
+            json=payload,
         )
 
     assert response.status_code == 400
-    assert "assistants_config" in response.json()["error"]["message"]
+    assert field in response.text
     table.upsert.assert_not_called()
 
 
@@ -415,25 +420,30 @@ def test_config_field_update_non_admin_rejected(client, auth_as, mock_prisma, mo
     assert "error" in response.json().get("detail", {})
 
 
-def test_config_field_update_invalid_field(client, auth_as, mock_prisma, monkeypatch):
+@pytest.mark.parametrize("field,value,message", [
+    ("not_a_real_field_xyz", 1, "Invalid field"),
+    ("required_customer_headers", ["X-Tenant-ID"], "can only be set in the YAML config file"),
+])
+def test_config_field_update_invalid_field(client, auth_as, mock_prisma, monkeypatch, field, value, message):
     """Unknown field_name is rejected with 400 + 'Invalid field=' detail."""
     from litellm.proxy import proxy_server as ps
     from litellm.proxy._types import LitellmUserRoles
 
-    _install_litellm_config(mock_prisma)
+    table = _install_litellm_config(mock_prisma)
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
 
     with auth_as(LitellmUserRoles.PROXY_ADMIN):
         response = client.post(
             "/config/field/update",
             json={
-                "field_name": "not_a_real_field_xyz",
-                "field_value": 1,
+                "field_name": field,
+                "field_value": value,
                 "config_type": "general_settings",
             },
         )
     assert response.status_code == 400
-    assert "Invalid field" in response.json().get("detail", {}).get("error", "")
+    assert message in response.text
+    table.upsert.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -1570,6 +1580,58 @@ def test_get_config_callbacks_accepts_scalar_and_null_yaml_callbacks(client, aut
     assert [(cb["name"], cb["type"], cb.get("read_only", False)) for cb in response.json()["callbacks"]] == [
         ("langfuse", "success", False),
         ("langsmith", "success", True),
+    ]
+
+
+@pytest.mark.parametrize(
+    "config_owned_list, expected_sources",
+    [
+        ("success_callback", ("config", None, None)),
+        ("failure_callback", (None, "config", None)),
+        ("callbacks", (None, None, "config")),
+    ],
+)
+def test_get_config_callbacks_marks_rows_from_lists_the_config_file_sets(
+    client, auth_as, mock_prisma, monkeypatch, config_owned_list, expected_sources
+):
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    _install_litellm_config(mock_prisma)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    monkeypatch.setattr(ps, "llm_router", None)
+
+    fake_proxy_config = MagicMock()
+    fake_proxy_config.get_config = AsyncMock(
+        return_value={
+            "litellm_settings": {
+                "success_callback": ["langfuse"],
+                "failure_callback": ["langfuse"],
+                "callbacks": ["generic_api"],
+            },
+            "general_settings": {},
+            "environment_variables": dict(_CALLBACK_ENV_FIXTURE),
+        }
+    )
+    fake_proxy_config.litellm_settings.owned_by_config = frozenset({config_owned_list}).__contains__
+    monkeypatch.setattr(ps, "proxy_config", fake_proxy_config)
+
+    import litellm
+
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+    monkeypatch.setattr(litellm, "callbacks", [])
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN):
+        response = client.get("/get/config/callbacks")
+    assert response.status_code == 200
+
+    assert [(cb["name"], cb["type"], cb.get("source")) for cb in response.json()["callbacks"]] == [
+        ("langfuse", "success", expected_sources[0]),
+        ("langfuse", "failure", expected_sources[1]),
+        ("generic_api", "success_and_failure", expected_sources[2]),
     ]
 
 

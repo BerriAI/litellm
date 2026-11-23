@@ -1302,13 +1302,13 @@ def test_mistral_drops_replayed_reasoning_for_a_model_without_reasoning(
     [pytest.param(MistralConfig(), id="mistral"), pytest.param(VertexAIMistralConfig(), id="vertex_ai")],
 )
 def test_mistral_drops_a_native_chunk_without_text_for_a_model_without_reasoning(config: MistralConfig):
-    tool_call: Final = {"id": "call_1", "type": "function", "function": {"name": "get_time", "arguments": "{}"}}
+    tool_call: Final = {"id": "D681PevKs", "type": "function", "function": {"name": "get_time", "arguments": "{}"}}
 
     result: Final = _mistral_request_messages(
         [
             {"role": "user", "content": "What time is it?"},
             {"role": "assistant", "content": [_think_chunk("I should call get_time.")], "tool_calls": [tool_call]},
-            {"role": "tool", "tool_call_id": "call_1", "content": "12:00"},
+            {"role": "tool", "tool_call_id": "D681PevKs", "content": "12:00"},
         ],
         config=config,
         model="mistral-chat-model-without-reasoning",
@@ -1338,6 +1338,23 @@ def test_mistral_drops_a_native_chunk_from_an_image_history_for_a_model_without_
     )
 
     assert result[1] == {"role": "assistant", "content": [{"type": "text", "text": "A cat."}]}
+
+
+def test_mistral_api_receives_the_callers_tool_call_ids():
+    tool_call: Final = {"id": "call_abc123", "type": "function", "function": {"name": "get_time", "arguments": "{}"}}
+
+    result: Final = _mistral_request_messages(
+        [
+            {"role": "user", "content": "What time is it?"},
+            {"role": "assistant", "content": None, "tool_calls": [tool_call]},
+            {"role": "tool", "tool_call_id": "call_abc123", "content": "12:00"},
+        ]
+    )
+
+    assert result[1:] == [
+        {"role": "assistant", "tool_calls": [tool_call]},
+        {"role": "tool", "tool_call_id": "call_abc123", "content": "12:00"},
+    ]
 
 
 def test_mistral_transform_request_keeps_an_empty_tool_message_after_its_tool_call():
@@ -2126,3 +2143,13 @@ class TestMistralToolChoice:
         monkeypatch.setattr(litellm, "drop_params", True)
 
         assert "tool_choice" not in self._request_body({"type": "function", "function": {}})
+
+
+def test_mistral_api_chat_leaves_n_out_of_the_body() -> None:
+    import litellm
+
+    optional_params: Final = litellm.get_optional_params(
+        model="mistral-large-latest", custom_llm_provider="mistral", n=1
+    )
+
+    assert "n" not in optional_params

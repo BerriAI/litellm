@@ -334,6 +334,7 @@ _PROXY_READ_TEAM_METADATA_KEYS: Final = (
     "otel_service_name_override",
     "otel_service_name",
     "soft_budget_alerting_emails",
+    "max_budget_alert_emails",
     "team_member_max_budget_alert_emails",
     "batch_enqueued_token_limit",
     "max_batch_file_records",
@@ -344,7 +345,8 @@ _PROXY_READ_TEAM_METADATA_KEYS: Final = (
     "phoenix_project_name_override",
     "phoenix_project_name",
     "opik",
-    "team_model_limit_max_borrow_multiple",
+    "model_limit_max_borrow_multiple",
+    "required_customer_headers",
 )
 
 _STORED_METADATA: Final = {"cost_center": "eng", "region": "eu", "priority": "high", "guardrails": ["pii"]}

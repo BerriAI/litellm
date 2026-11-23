@@ -37,6 +37,26 @@ pub enum AzureCredentialType {
     WorkloadIdentityCredential,
 }
 
+/// How a native credential's Entra ID token POST is retried.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum AzureTokenRetry {
+    /// azure_core's own retry options, what every consumer gets unless it asks otherwise.
+    #[default]
+    SdkDefault,
+    /// What Python's credentials cost: azure-identity's `RetryPolicy` for a client secret or
+    /// workload identity, and one POST for an OIDC assertion, which LiteLLM's own HTTP handler mints.
+    Python,
+}
+
+/// The HTTP stack that fetches a native Entra ID token: azure_core's own, or one that reads the
+/// proxy and CA settings Python's azure-identity reads through `requests`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum TokenTransport {
+    #[default]
+    AzureSdk,
+    PythonRequests,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct AzureAuthInputs {
     pub azure_ad_token: ConfigValue<SecretValue>,
@@ -50,6 +70,8 @@ pub struct AzureAuthInputs {
     pub azure_credential: ConfigValue<String>,
     pub federated_token_file: ConfigValue<String>,
     pub enable_azure_ad_token_refresh: Sourced<bool>,
+    pub token_retry: AzureTokenRetry,
+    pub token_transport: TokenTransport,
 }
 
 impl AzureAuthInputs {
@@ -105,6 +127,8 @@ impl AzureAuthInputs {
                     .unwrap_or(false),
                 source_for(sources, "enable_azure_ad_token_refresh"),
             ),
+            token_retry: AzureTokenRetry::SdkDefault,
+            token_transport: TokenTransport::default(),
         })
     }
 }

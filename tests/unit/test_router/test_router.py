@@ -17,12 +17,13 @@ from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, I
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import CodeType, FrameType, MappingProxyType, SimpleNamespace
-from typing import TYPE_CHECKING, Final, Literal, TypeVar, cast
+from typing import TYPE_CHECKING, Final, Literal, TypeAlias, TypeVar, cast
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import httpx
 import openai
 import pytest
+import responses
 import respx
 from fastapi import HTTPException
 from opentelemetry import trace
@@ -34,7 +35,12 @@ from litellm._logging import verbose_logger, verbose_router_logger
 from litellm.caching import RedisClusterCache
 from litellm.caching.in_memory_cache import DEFAULT_MAX_SIZE_IN_MEMORY
 from litellm.caching.redis_cache import _redis_circuit_breaker_guard
-from litellm.exceptions import GuardrailRaisedException, MidStreamFallbackError, ModifyResponseException
+from litellm.exceptions import (
+    GuardrailRaisedException,
+    MidStreamFallbackError,
+    ModifyResponseException,
+    RequestOverDeploymentTpmError,
+)
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
@@ -106,6 +112,7 @@ from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outco
 from tests.fake_openai_endpoint import FAKE_OPENAI_API_BASE
 from tests.large_text import text
 from tests.unit.conftest import redis_cache_double
+from tests.unit.proxy.rust_auth_stores import FakeTeamStore, RustAuthStores, install_rust_auth_stores
 import traceback
 import inspect
 from typing import List, Optional
@@ -4694,10 +4701,11 @@ async def test_a_chat_pre_call_count_does_not_wait_behind_long_embedding_batches
         ],
         enable_pre_call_checks=True,
     )
-    batch: Final = ["word " * 2100] * 76
     batches: Final = tuple(
-        asyncio.create_task(router.aembedding(model="embed", input=batch))
-        for _ in range(TOKEN_COUNTER_MAX_CONCURRENT_COUNTS)
+        asyncio.create_task(
+            router.aembedding(model="embed", input=[f"{batch} {text} " + "word " * 2100 for text in range(76)])
+        )
+        for batch in range(TOKEN_COUNTER_MAX_CONCURRENT_COUNTS)
     )
     await asyncio.wait_for(_until_every_count_slot_is_taken(), timeout=30)
     chat: Final = asyncio.create_task(router.acompletion(model="chat", messages=[{"role": "user", "content": "hi"}]))
@@ -13287,11 +13295,13 @@ class TestMemberAutoRouterInference:
         )
         self.database = SimpleNamespace(
             db=SimpleNamespace(
-                litellm_teamtable=SimpleNamespace(find_unique=AsyncMock(return_value=self.team)),
-                litellm_teammembership=SimpleNamespace(find_unique=AsyncMock(return_value=None)),
                 litellm_accessgrouptable=SimpleNamespace(find_unique=AsyncMock()),
             )
         )
+        self.stores = install_rust_auth_stores(
+            monkeypatch, RustAuthStores(team=FakeTeamStore(rows={"router-team": self.team}))
+        )
+        self.teams = self.stores.team
         monkeypatch.setattr(proxy_server, "user_api_key_cache", self.cache)
         monkeypatch.setattr(proxy_server, "prisma_client", self.database)
 
@@ -13413,9 +13423,9 @@ class TestMemberAutoRouterInference:
         assert first.model == "permitted-model" and first.routing_decision is not None
         assert first.routing_decision["cause"] == "llm_classifier"
         assert (await self._route(router, request)).model == "permitted-model"
-        assert self.database.db.litellm_teamtable.find_unique.await_count == 1
-        assert self.database.db.litellm_teammembership.find_unique.await_count == 1
-        self.database.db.litellm_teamtable.find_unique.return_value = self.team.model_copy(
+        assert len(self.teams.lookups) == 1
+        assert len(self.stores.team_membership.lookups) == 1
+        self.teams.rows["router-team"] = self.team.model_copy(
             update={"members_with_roles": []}
         )
         await delete_cache_team_object(
@@ -13462,9 +13472,10 @@ class TestMemberAutoRouterInference:
                 )
             )
         )
-        self.database.db.litellm_teamtable.find_unique.return_value = (
-            None if state == "deleted" else self.team.model_copy(update={"blocked": state == "blocked"})
-        )
+        if state == "deleted":
+            del self.teams.rows["router-team"]
+        else:
+            self.teams.rows["router-team"] = self.team.model_copy(update={"blocked": state == "blocked"})
         if state == "unavailable":
             monkeypatch.setattr(proxy_server, "prisma_client", None)
         with pytest.raises(HTTPException) as error:
@@ -13494,9 +13505,9 @@ class TestMemberAutoRouterInference:
         from litellm.models.organization import LiteLLM_OrganizationTable
         from litellm.models.team_membership import LiteLLM_TeamMembership
         from litellm.proxy._types import LiteLLM_ProjectTableCachedObj
-        from litellm.proxy.common_utils.user_api_key_cache import team_membership_reservation_cache_key
+        from litellm.redis.stores.auth_cache import AuthObject
 
-        self.database.db.litellm_teamtable.find_unique.return_value = self.team.model_copy(
+        self.teams.rows["router-team"] = self.team.model_copy(
             update={
                 "models": ["member-router"] if ceiling == "team" else self.team.models,
                 "organization_id": "router-org" if ceiling == "organization" else None,
@@ -13504,7 +13515,7 @@ class TestMemberAutoRouterInference:
         )
         if ceiling == "member":
             await self.cache.async_set_cache(
-                key=team_membership_reservation_cache_key(user_id="router-member", team_id="router-team"),
+                key=AuthObject.team_membership_reservation(user_id="router-member", team_id="router-team"),
                 value=LiteLLM_TeamMembership(
                     user_id="router-member",
                     team_id="router-team",
@@ -13514,7 +13525,7 @@ class TestMemberAutoRouterInference:
             )
         elif ceiling == "organization":
             await self.cache.async_set_cache(
-                key="org_id:router-org",
+                key=AuthObject.org("router-org"),
                 value=LiteLLM_OrganizationTable(
                     organization_id="router-org",
                     budget_id="org-budget",
@@ -13526,7 +13537,7 @@ class TestMemberAutoRouterInference:
             )
         elif ceiling == "project":
             await self.cache.async_set_cache(
-                key="project_id:router-project",
+                key=AuthObject.project("router-project"),
                 value=LiteLLM_ProjectTableCachedObj(
                     project_id="router-project",
                     team_id="router-team",
@@ -13549,16 +13560,19 @@ class TestMemberAutoRouterInference:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("group_owner", ("team", "key"))
-    async def test_access_group_grants_are_cached_and_revoked(self, group_owner: str) -> None:
-        from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
+    async def test_access_group_grants_are_cached_and_revoked(
+        self, group_owner: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from litellm.proxy.common_utils.cache_invalidation_pubsub import evict_and_broadcast
 
         group: Final = LiteLLM_AccessGroupTable(
             access_group_id="router-group",
             access_group_name="Router targets",
             access_model_names=["permitted-model"],
         )
-        self.database.db.litellm_accessgrouptable.find_unique.return_value = group
-        self.database.db.litellm_teamtable.find_unique.return_value = self.team.model_copy(
+        stores: Final = self.stores
+        stores.access_group.seed("router-group", group)
+        self.teams.rows["router-team"] = self.team.model_copy(
             update={
                 "models": ["member-router"] if group_owner == "team" else self.team.models,
                 "access_group_ids": ["router-group"] if group_owner == "team" else [],
@@ -13575,14 +13589,12 @@ class TestMemberAutoRouterInference:
         router: Final = self._router()
         assert (await self._route(router, request)).model == "permitted-model"
         assert (await self._route(router, request)).model == "permitted-model"
-        assert self.database.db.litellm_accessgrouptable.find_unique.await_count == 1
-        self.database.db.litellm_accessgrouptable.find_unique.return_value = group.model_copy(
-            update={"access_model_names": []}
-        )
+        assert len(stores.access_group.lookups) == 1
+        stores.access_group.seed("router-group", group.model_copy(update={"access_model_names": []}))
         await evict_and_broadcast(cache_keys=("access_group_id:router-group",), user_api_key_cache=self.cache)
         with pytest.raises(ProxyException, match="is not available for this API key"):
             await self._route(router, request)
-        assert self.database.db.litellm_accessgrouptable.find_unique.await_count == 2
+        assert len(stores.access_group.lookups) == 2
 
     @pytest.mark.asyncio
     async def test_sdk_router_does_not_import_proxy_dependencies(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -14365,6 +14377,29 @@ class TestAutoRouterTraceProvenance:
         assert retry.attributes["error.type"] == "ValueError"
         assert retry.attributes["litellm.retry.count"] == 1
         assert "private-error-text" not in str(retry.attributes)
+
+    @pytest.mark.asyncio
+    async def test_retry_records_name_the_over_tpm_refusal_as_its_logs_do(
+        self, _tracing: "tuple[OpenTelemetryV2, InMemorySpanExporter]"
+    ) -> None:
+        logger, exporter = _tracing
+        router: Final = Router(
+            model_list=[
+                self._marker("blue"),
+                {"model_name": "answer", "litellm_params": {"model": "openai/gpt-5.6-luna", "api_key": "test"}},
+            ],
+        )
+        request: Final = {"metadata": {}}
+        refusal: Final = RequestOverDeploymentTpmError(message="over tpm", model="answer", llm_provider="openai")
+        with logger.tracer.start_as_current_span("request"):
+            await router.async_get_available_deployment(
+                model="traced-router", request_kwargs=request, messages=[{"role": "user", "content": "hello"}]
+            )
+            router.log_retry({**request, "model": "answer"}, refusal)
+        spans: Final = {span.name: span for span in exporter.get_finished_spans()}
+        retry: Final = next(event for event in spans["request"].events if event.name == "litellm.routing.retry")
+        assert retry.attributes["error.type"] == refusal.logged_error_class
+        assert request["metadata"]["previous_models"][-1]["exception_type"] == refusal.logged_error_class
 
 
 @pytest.fixture()
@@ -15333,6 +15368,283 @@ async def test_router_caller_entra_rejection_on_a_stream_leaves_the_shared_deplo
 
     with pytest.raises(litellm.AuthenticationError):
         await stream_request(router)
+
+
+_AWS_DEPLOYMENT: Final = MappingProxyType(
+    {"aws_access_key_id": "configured-key-id", "aws_secret_access_key": "configured-secret"}
+)
+_VERTEX_DEPLOYMENT: Final = MappingProxyType(
+    {"vertex_project": "configured-project", "vertex_location": "us-central1", "vertex_credentials": "configured"}
+)
+_AZURE_DEPLOYMENT: Final = MappingProxyType(
+    {"api_base": "https://litellm-qa.openai.azure.com", "api_version": "2025-04-01-preview", "api_key": "configured"}
+)
+_OPENAI_DEPLOYMENT: Final = MappingProxyType({"api_key": "configured-key", "organization": "org-configured"})
+
+_CallerFailure: TypeAlias = type[litellm.AuthenticationError | litellm.NotFoundError | litellm.RateLimitError]
+
+
+def _shared_pair_router(
+    litellm_params: Mapping[str, object], default_litellm_params: Mapping[str, object] | None = None
+) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "shared-model",
+                "litellm_params": {**litellm_params},
+                "model_info": {"id": deployment_id},
+            }
+            for deployment_id in ("shared-a", "shared-b")
+        ],
+        default_litellm_params=None if default_litellm_params is None else {**default_litellm_params},
+        num_retries=0,
+    )
+
+
+async def _shared_deployments_cooled_after(
+    router: Router, failure: _CallerFailure, caller_fields: Mapping[str, object]
+) -> bool:
+    with pytest.raises(failure):
+        await router.acompletion(
+            model="shared-model",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response=failure(message="The provider refused the request.", llm_provider="openai", model="m"),
+            **caller_fields,
+        )
+    return bool(await router.health().cooldowns.async_get_active_cooldowns(["shared-a", "shared-b"], None))
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
+@pytest.mark.parametrize(
+    ("litellm_params", "caller_fields", "failure"),
+    [
+        pytest.param(
+            {"model": "bedrock_mantle/anthropic.claude-opus-5-5", **_AWS_DEPLOYMENT},
+            {"aws_profile_name": "caller-profile"},
+            litellm.AuthenticationError,
+            id="bedrock_mantle",
+        ),
+        pytest.param(
+            {"model": "sagemaker/configured-endpoint", **_AWS_DEPLOYMENT},
+            {"aws_session_token": "caller-session"},
+            litellm.AuthenticationError,
+            id="sagemaker",
+        ),
+        pytest.param(
+            {"model": "sagemaker_chat/configured-endpoint", **_AWS_DEPLOYMENT},
+            {"aws_role_name": "caller-role"},
+            litellm.AuthenticationError,
+            id="sagemaker_chat",
+        ),
+        pytest.param(
+            {"model": "sagemaker_nova/configured-endpoint", **_AWS_DEPLOYMENT},
+            {"aws_secret_access_key": "caller-secret"},
+            litellm.AuthenticationError,
+            id="sagemaker_nova",
+        ),
+        pytest.param(
+            {"model": "vertex_ai_beta/gemini-4-neon", **_VERTEX_DEPLOYMENT},
+            {"vertex_ai_credentials": "caller-credentials"},
+            litellm.AuthenticationError,
+            id="vertex_ai_beta",
+        ),
+        pytest.param(
+            {"model": "azure_text/gpt-6.2-sol", **_AZURE_DEPLOYMENT},
+            {"azure_ad_token": "caller-token"},
+            litellm.AuthenticationError,
+            id="azure_text",
+        ),
+        pytest.param(
+            {
+                "model": "azure_ai/gpt-6.2-sol",
+                "api_base": "https://litellm-qa.services.ai.azure.com",
+                "azure_ad_token": "configured-token",
+            },
+            {"azure_ad_token": "caller-token"},
+            litellm.AuthenticationError,
+            id="azure_ai",
+        ),
+        pytest.param(
+            {"model": "text-completion-openai/gpt-6.2-sol", **_OPENAI_DEPLOYMENT},
+            {"organization": "org-caller"},
+            litellm.AuthenticationError,
+            id="text_completion_openai",
+        ),
+        pytest.param(
+            {"model": "gpt-6.2-sol", "custom_llm_provider": "azure", **_AZURE_DEPLOYMENT},
+            {"azure_ad_token": "caller-token"},
+            litellm.AuthenticationError,
+            id="custom_llm_provider_over_the_model_name",
+        ),
+        pytest.param(
+            {"model": "bedrock/anthropic.claude-opus-5-5", **_AWS_DEPLOYMENT},
+            {"aws_region_name": "eu-west-1"},
+            litellm.NotFoundError,
+            id="aws_region_on_not_found",
+        ),
+        pytest.param(
+            {"model": "vertex_ai/gemini-4-neon", **_VERTEX_DEPLOYMENT},
+            {"vertex_location": "europe-west4"},
+            litellm.NotFoundError,
+            id="vertex_location_on_not_found",
+        ),
+        pytest.param(
+            {"model": "vertex_ai/gemini-4-neon", "vertex_credentials": "configured", "vertex_location": "us-central1"},
+            {"vertex_credentials": "caller-credentials-for-another-project"},
+            litellm.NotFoundError,
+            id="vertex_credentials_picking_another_project",
+        ),
+    ],
+)
+async def test_router_failure_a_caller_field_can_cause_leaves_the_shared_deployment_routable(
+    litellm_params: Mapping[str, object],
+    caller_fields: Mapping[str, object],
+    failure: _CallerFailure,
+) -> None:
+    router: Final = _shared_pair_router(litellm_params)
+
+    assert await _shared_deployments_cooled_after(router, failure, caller_fields) is False
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
+@pytest.mark.parametrize(
+    ("litellm_params", "caller_fields", "failure", "default_litellm_params"),
+    [
+        pytest.param(
+            {"model": "azure/gpt-6.2-sol", **_AZURE_DEPLOYMENT},
+            {"azure_ad_token": "default-token"},
+            litellm.AuthenticationError,
+            {"azure_ad_token": "default-token"},
+            id="echoed_router_default",
+        ),
+        pytest.param(
+            {"model": "vertex_ai/gemini-4-neon", "vertex_project": "configured-project"},
+            {"vertex_ai_project": "configured-project"},
+            litellm.NotFoundError,
+            None,
+            id="echoed_vertex_project_under_its_alias",
+        ),
+        pytest.param(
+            {"model": "azure_ai/gpt-6.2-sol", **_AZURE_DEPLOYMENT},
+            {"azure_ad_token": ""},
+            litellm.AuthenticationError,
+            None,
+            id="empty_caller_value",
+        ),
+        pytest.param(
+            {"model": "bedrock/anthropic.claude-opus-5-5", **_AWS_DEPLOYMENT},
+            {"organization": "org-caller"},
+            litellm.AuthenticationError,
+            None,
+            id="field_bedrock_does_not_read",
+        ),
+        pytest.param(
+            {"model": "openai/gpt-6.2-sol", **_OPENAI_DEPLOYMENT},
+            {"organization": "org-caller"},
+            litellm.RateLimitError,
+            None,
+            id="openai_organization_on_a_rate_limit",
+        ),
+        pytest.param(
+            {"model": "azure/gpt-6.2-sol", **_AZURE_DEPLOYMENT},
+            {"azure_ad_token": "caller-token"},
+            litellm.RateLimitError,
+            None,
+            id="azure_token_on_a_rate_limit",
+        ),
+        pytest.param(
+            {"model": "vertex_ai/gemini-4-neon", **_VERTEX_DEPLOYMENT},
+            {"vertex_credentials": "caller-credentials"},
+            litellm.RateLimitError,
+            None,
+            id="vertex_credentials_on_a_rate_limit",
+        ),
+    ],
+)
+async def test_router_failure_a_caller_field_cannot_cause_cools_down_the_shared_deployment(
+    litellm_params: Mapping[str, object],
+    caller_fields: Mapping[str, object],
+    failure: _CallerFailure,
+    default_litellm_params: Mapping[str, object] | None,
+) -> None:
+    router: Final = _shared_pair_router(litellm_params, default_litellm_params)
+
+    assert await _shared_deployments_cooled_after(router, failure, caller_fields) is True
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
+@pytest.mark.parametrize(
+    ("caller_organization", "cooled"),
+    [pytest.param("org-credential", True, id="echoed"), pytest.param("org-caller", False, id="caller_own")],
+)
+async def test_router_caller_organization_is_compared_with_the_deployment_credential(
+    caller_organization: str, cooled: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="shared-openai",
+                credential_info={"custom_llm_provider": "openai"},
+                credential_values={"api_key": "configured-key", "organization": "org-credential"},
+            )
+        ],
+    )
+    router: Final = _shared_pair_router({"model": "openai/gpt-6.2-sol", "litellm_credential_name": "shared-openai"})
+
+    assert (
+        await _shared_deployments_cooled_after(
+            router, litellm.AuthenticationError, {"organization": caller_organization}
+        )
+        is cooled
+    )
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
+async def test_router_vertex_stream_failing_on_a_caller_project_leaves_the_shared_deployment_routable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.router_rust.invoke.streaming import _RECORDINGS
+    from tests.integration._support.vertex import service_account_json
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "vertex-model",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-4-neon",
+                    "vertex_credentials": service_account_json("configured-project", "https://oauth2.test"),
+                    "vertex_project": "configured-project",
+                    "vertex_location": "us-central1",
+                },
+                "model_info": {"id": "vertex-deployment"},
+            }
+        ],
+        num_retries=0,
+    )
+
+    with responses.RequestsMock(assert_all_requests_are_fired=False) as token_endpoint, respx.mock:
+        token_endpoint.add(
+            responses.POST,
+            "https://oauth2.test/_oauth/token",
+            json={"access_token": "configured-token", "token_type": "Bearer", "expires_in": 3600},
+        )
+        stream_route: Final = respx.post(url__startswith="https://us-central1-aiplatform.googleapis.com").mock(
+            return_value=httpx.Response(404, json={"error": {"code": 404, "message": "Project not found"}})
+        )
+        with pytest.raises(litellm.NotFoundError):
+            await router.acompletion(
+                model="vertex-model",
+                messages=[{"role": "user", "content": "hi"}],
+                stream=True,
+                vertex_project="caller-project",
+            )
+        await asyncio.gather(*_RECORDINGS)
+
+    assert "/projects/caller-project/" in str(stream_route.calls.last.request.url)
+    assert await router.health().cooldowns.async_get_active_cooldowns(["vertex-deployment"], None) == []
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")

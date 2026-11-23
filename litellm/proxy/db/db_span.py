@@ -32,7 +32,7 @@ from litellm.proxy.db.log_db_metrics import (  # noqa: F401  # legacy module exp
 _T = TypeVar("_T")
 
 
-def _service_logging() -> ServiceLogging | None:
+def proxy_service_logging() -> ServiceLogging | None:
     try:
         from litellm.proxy.proxy_server import proxy_logging_obj
     except ImportError:
@@ -40,7 +40,9 @@ def _service_logging() -> ServiceLogging | None:
     return proxy_logging_obj.service_logging_obj
 
 
-def _event_metadata(table: str | None, operation: str | None) -> dict[str, str]:
+def db_event_metadata(
+    table: str | None, operation: str | None
+) -> dict[str, str]:  # mutable-ok: ServiceLogging hooks take event_metadata as a dict
     pairs: Final = (("table_name", table), ("db_operation", operation))
     return {key: value for key, value in pairs if value is not None}
 
@@ -73,9 +75,9 @@ async def db_span(call_type: str, table: str | None, operation: str | None = Non
     if db_io_claimed():
         yield
         return
-    service_logging: Final = _service_logging()
+    service_logging: Final = proxy_service_logging()
     start_time: Final = datetime.now()
-    event_metadata: Final = _event_metadata(table, operation)
+    event_metadata: Final = db_event_metadata(table, operation)
     with claim_db_io() as witness:
         try:
             yield

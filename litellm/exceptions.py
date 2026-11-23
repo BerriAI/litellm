@@ -229,6 +229,10 @@ class CallerCredentialAuthenticationError(AuthenticationError):
     caller's credential, so routers must not cool down the shared deployment."""
 
 
+class DeploymentCredentialAuthenticationError(AuthenticationError):
+    pass
+
+
 # raise when invalid models passed, example gpt-8
 class NotFoundError(openai.NotFoundError):
     def __init__(
@@ -486,6 +490,7 @@ class PermissionDeniedError(openai.PermissionDeniedError):
         litellm_debug_info: str | None = None,
         max_retries: int | None = None,
         num_retries: int | None = None,
+        body: Mapping[str, object] | None = None,
     ):
         self.status_code = 403
         self.message = f"litellm.PermissionDeniedError: {message}"
@@ -495,7 +500,7 @@ class PermissionDeniedError(openai.PermissionDeniedError):
         self.max_retries = max_retries
         self.num_retries = num_retries
         super().__init__(
-            self.message, response=response, body=None
+            self.message, response=response, body=body
         )  # Call the base class constructor with the parameters it needs
 
     def __str__(self):
@@ -607,6 +612,24 @@ class CallerCredentialRateLimitError(RateLimitError):
     """429 raised when a per-user credential exchange is rate limited by the
     provider (e.g. GitHub's token endpoint). Scoped to one caller's
     credential, so routers must not cool down the shared deployment."""
+
+
+class RequestOverDeploymentTpmError(RateLimitError):
+    """429 raised when one request alone is estimated over the tpm limit of every deployment
+    it could route to, unavailable ones included, so a retry can never clear it. Loggers and
+    Prometheus keep naming it ``RateLimitError``, as they named this refusal before."""
+
+    logged_error_class: Final = "RateLimitError"
+    prometheus_exception_class_name: Final = "RateLimitError"
+
+
+class SyncRequestOverDeploymentTpmError(RequestOverDeploymentTpmError, ValueError):
+    """The sync ``Router``'s form, still a ``ValueError`` as the sync refusal was before."""
+
+
+def logged_class_name(error: BaseException) -> str:
+    logged: Final[object] = getattr(error, "logged_error_class", None)
+    return logged if isinstance(logged, str) else type(error).__name__
 
 
 # sub class of rate limit error - meant to give more granularity for error handling context window exceeded errors
@@ -787,9 +810,9 @@ class ContentPolicyViolationError(BadRequestError):
 class ServiceUnavailableError(openai.APIStatusError):
     def __init__(
         self,
-        message,
-        llm_provider,
-        model,
+        message: object,
+        llm_provider: object,
+        model: object,
         response: httpx.Response | None = None,
         litellm_debug_info: str | None = None,
         max_retries: int | None = None,
@@ -1375,12 +1398,16 @@ class ModifyResponseException(Exception):
         guardrail_name: str | None = None,
         detection_info: Mapping[str, object] | None = None,
         original_response: object = None,
+        log_as_failure: bool = False,
     ):
         self.message = message
         self.model = model
         self.request_data = request_data
         self.guardrail_name = guardrail_name
         self.detection_info = detection_info or {}
+        # A block of the prompt never calls the LLM, and its 200 reply runs no success logging, so
+        # it reaches no logging callback. True asks the proxy to log it as a failure event instead.
+        self.log_as_failure = log_as_failure
         # The LLM response that was blocked (post-call). Carries the real token
         # usage the upstream call consumed, so the synthetic block response can
         # report it instead of discarding it. None for pre-call blocks (the LLM

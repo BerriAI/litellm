@@ -47,7 +47,7 @@ impl CyberArkSecretManager {
         }
         let verify = environment
             .get(CYBERARK_SSL_VERIFY)
-            .map(|value| !value.trim().eq_ignore_ascii_case("false"))
+            .map(|value| str_to_bool(&value) != Some(false))
             .unwrap_or(true);
         if !verify {
             litellm_tracing::warn!(

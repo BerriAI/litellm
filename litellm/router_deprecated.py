@@ -62,8 +62,8 @@ if TYPE_CHECKING:
     )
     from litellm.types.utils import ModelInfo as ModelMapInfo
 
-_T: Final = TypeVar("_T")
-_P: Final = ParamSpec("_P")
+_T = TypeVar("_T")
+_P = ParamSpec("_P")
 
 DEPRECATED_ROUTER_MEMBER_USES: Final[Counter[str]] = Counter()  # mutable-ok: the live tally _note increments
 
@@ -668,18 +668,18 @@ class DeprecatedRouterMembers:
     @staticmethod
     def is_deployment_blocked(deployment: "Deployment") -> bool:
         _note("is_deployment_blocked", "health().is_blocked(deployment)")
-        from litellm.router_api import RouterHealth
+        from litellm.router_rust.surface.health_routing import is_blocked as deployment_is_blocked
 
-        return RouterHealth.is_blocked(deployment)
+        return deployment_is_blocked(deployment)
 
     _is_deployment_blocked = is_deployment_blocked
 
     @staticmethod
     def are_all_deployments_blocked(deployments: "Sequence[DeploymentTypedDict]") -> bool:
         _note("are_all_deployments_blocked", "health().all_blocked(deployments)")
-        from litellm.router_api import RouterHealth
+        from litellm.router_rust.surface.health_routing import all_blocked as deployments_all_blocked
 
-        return RouterHealth.all_blocked(deployments)
+        return deployments_all_blocked(deployments)
 
     _are_all_deployments_blocked = are_all_deployments_blocked
 
@@ -836,7 +836,7 @@ class DeprecatedRouterMembers:
 # Router-family functions and classes that took the Router (``litellm_router_instance=``,
 # ``router=``, ...) take its RoutingContext now. These keep the old spellings working.
 
-_RoutingCallable: Final = TypeVar("_RoutingCallable", bound=Callable[..., object])
+_RoutingCallable = TypeVar("_RoutingCallable", bound=Callable[..., object])
 
 
 @functools.cache
