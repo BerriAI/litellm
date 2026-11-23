@@ -244,7 +244,9 @@ vi.mock("@/components/cloudzero_export_modal", () => ({
 }));
 
 vi.mock("@/components/EntityUsageExport", () => ({
-  default: () => <div>Entity Usage Export Modal</div>,
+  default: ({ canIncludeMetadata }: { canIncludeMetadata: boolean }) => (
+    <div role="dialog" aria-label="Usage export" data-metadata-option={String(canIncludeMetadata)} />
+  ),
 }));
 
 vi.mock("@/components/liteadmin/LiteAdmin", () => ({
@@ -813,7 +815,7 @@ describe("UsagePage", () => {
     const errorsTab = within(await screen.findByTestId("usage-errors-tab"));
     expect(await errorsTab.findByText("10.0%")).toBeInTheDocument();
     expect(errorsTab.getByRole("list", { name: "Failed requests by status code" })).toHaveTextContent("429");
-    const keys = errorsTab.getByRole("table", { name: "Virtual keys ranked by failed requests" });
+    const keys = errorsTab.getByRole("table", { name: "Virtual Keys ranked by failed requests" });
     expect(within(keys).getAllByRole("row")[1]).toHaveTextContent("prod-key");
   });
 
@@ -1446,6 +1448,22 @@ describe("UsagePage", () => {
       });
 
       expect(screen.getByText("Export Data")).toBeInTheDocument();
+    });
+
+    it("offers the metadata export option to an admin but not to an internal user", async () => {
+      const { unmount } = renderWithProviders(<UsagePage {...defaultProps} />);
+      expect(await screen.findByRole("dialog", { name: "Usage export" })).toHaveAttribute(
+        "data-metadata-option",
+        "true",
+      );
+      unmount();
+
+      mockUseAuthorized.mockReturnValue(nonAdminSession);
+      renderWithProviders(<UsagePage {...defaultProps} />);
+      expect(await screen.findByRole("dialog", { name: "Usage export" })).toHaveAttribute(
+        "data-metadata-option",
+        "false",
+      );
     });
   });
 

@@ -6,13 +6,13 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+litellm-env.workspace = true
 litellm-secret-value.workspace = true
 litellm-auth-aws.workspace = true
 litellm-secrets-types.workspace = true
-litellm-core-utils.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-litellm-tracing.workspace = true
+tracing.workspace = true
 veil.workspace = true
 aws-sdk-kms = "1.120.0"
 aws-sdk-secretsmanager = "1.117.0"

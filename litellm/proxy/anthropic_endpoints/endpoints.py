@@ -55,6 +55,7 @@ from litellm.proxy.common_utils.token_count_settings import count_source_fields
 from litellm.proxy.hooks.proxy_track_cost_callback import failure_row_response_cost
 from litellm.proxy.litellm_pre_call_utils import (
     forwarded_anthropic_oauth_token,
+    request_routing_metadata,
     should_auto_drop_params_for_agentic_cli,
 )
 from litellm.proxy.utils import ProxyLogging
@@ -302,7 +303,15 @@ def _requested_output_format(data: Mapping[str, JsonValue]) -> JsonValue:
     return output_config.get("format")
 
 
-_COUNTED_LITELLM_PARAMS: Final = ("additional_drop_params", "drop_params")
+_COUNTED_LITELLM_PARAMS: Final = (
+    "additional_drop_params",
+    "drop_params",
+    "store",
+    "extra_body",
+    "previous_response_id",
+    "conversation",
+    "truncation",
+)
 
 
 class _CountTokensBodyOptions(TypedDict):
@@ -330,6 +339,7 @@ def _count_tokens_body_options(data: Mapping[str, JsonValue], auto_drop_params: 
 
 
 _PROVIDER_COUNT_REPLY: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
+_COUNT_REQUEST_FIELDS: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 
 
 def _provider_context_management(response: TokenCountResponse) -> Mapping[str, object]:
@@ -418,6 +428,10 @@ async def _count_tokens(
             messages_format="anthropic",
             litellm_call_id=litellm_call_id,
             client_oauth_token=forwarded_anthropic_oauth_token(request.headers),
+            caller=user_api_key_dict,
+            request_routing=request_routing_metadata(
+                request, _COUNT_REQUEST_FIELDS.validate_python(data), user_api_key_dict
+            ),
             **_count_tokens_body_options(data, auto_drop_params),
         )
     except HTTPException as e:

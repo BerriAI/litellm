@@ -8,7 +8,8 @@ use std::{collections::BTreeMap, future::Future, sync::Arc, time::Duration};
 use litellm_auth::{InputSource, Sourced, TokenProviderHandle};
 use litellm_secret_value::SecretValue;
 
-use litellm_core_utils::{call_arguments::CallArguments, settings::ProcessEnvironment};
+use litellm_core_utils::call_arguments::CallArguments;
+use litellm_env::ProcessEnvironment;
 use litellm_http::outbound::RequestSigner;
 use litellm_llms_types::formats::ocr::{LiteLLMOcrResponse, OcrDocument, OcrResponseFormat};
 use litellm_secrets::source::Secrets;

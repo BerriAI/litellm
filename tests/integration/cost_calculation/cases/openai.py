@@ -42,6 +42,7 @@ def _responses_json_body(
     include_content_filters: bool = False,
     content_filters: JsonValue = None,
     include_reasoning: bool = True,
+    cache_write_ttl_details: bool = False,
 ) -> dict[str, JsonValue]:
     reasoning_item: Final[dict[str, JsonValue]] = {
         "content": [],
@@ -103,7 +104,15 @@ def _responses_json_body(
         "truncation": "disabled",
         "usage": {
             "input_tokens": 1840,
-            "input_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0},
+            "input_tokens_details": {
+                "cache_write_tokens": 0,
+                **(
+                    {"cache_write_tokens_details": {"ttl_12h_tokens": 0, "ttl_30m_tokens": 0}}
+                    if cache_write_ttl_details
+                    else {}
+                ),
+                "cached_tokens": 0,
+            },
             "output_tokens": 412,
             "output_tokens_details": {"reasoning_tokens": 0},
             "total_tokens": 2252,
@@ -120,12 +129,14 @@ def _responses_stream_response(
     include_content_filters: bool = False,
     content_filters: JsonValue = None,
     include_reasoning: bool = True,
+    cache_write_ttl_details: bool = False,
 ) -> SseResponse:
     response_body: Final = _responses_json_body(
         model,
         include_content_filters=include_content_filters,
         content_filters=content_filters,
         include_reasoning=include_reasoning,
+        cache_write_ttl_details=cache_write_ttl_details,
     )
     in_progress_body: Final = {
         **response_body,
@@ -270,6 +281,7 @@ def _responses_stream_case(
     include_content_filters: bool = False,
     content_filters: JsonValue = None,
     include_reasoning: bool = True,
+    cache_write_ttl_details: bool = False,
 ) -> CostTrackingTestCase:
     return base.model_copy(
         update={
@@ -281,6 +293,7 @@ def _responses_stream_case(
                 include_content_filters=include_content_filters,
                 content_filters=content_filters,
                 include_reasoning=include_reasoning,
+                cache_write_ttl_details=cache_write_ttl_details,
             ),
         }
     )
@@ -7037,8 +7050,8 @@ GPT_5_6_RESPONSES_CACHE_WRITE_12H: Final = CostTrackingTestCase(
     ),
 )
 
-GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H_NO_12H_RATE: Final = CostTrackingTestCase(
-    name="gpt-6-luna-responses_cache_write_12h_no_12h_rate",
+GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H: Final = CostTrackingTestCase(
+    name="gpt-6-luna-responses_cache_write_12h",
     covers="quota_management.spend_tracking.cost_matrix.logs_cost",
     model="gpt-6-luna",
     endpoint="/v1/responses",
@@ -7078,12 +7091,12 @@ GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H_NO_12H_RATE: Final = CostTrackingTestCase(
         },
     ),
     expected=ExactExpected(
-        spend=0.0016078,
-        input_cost=0.0014178,
+        spend=0.0018578,
+        input_cost=0.0016678,
         output_cost=0.00019,
         prompt_tokens=12928,
         completion_tokens=380,
-        cache_creation_cost=0.000625,
+        cache_creation_cost=0.000875,
     ),
 )
 
@@ -8470,6 +8483,19 @@ GPT_5_6_CHAT_REQUEST_TO_EMBEDDING_ENTRY: Final = CostTrackingTestCase(
 
 
 # gpt-6.1-sol
+_PROVIDER_CACHEABLE_PROMPT: Final = (
+    "The pricing harness keeps one stable instruction block so the provider can cache it. " * 220
+)
+_GPT_6_PROMPT_CACHE_REQUEST: Final[Mapping[str, JsonValue]] = {
+    "model": "$MODEL",
+    "messages": [
+        {"role": "system", "content": _PROVIDER_CACHEABLE_PROMPT},
+        {"role": "user", "content": "Reply with OK."},
+    ],
+    "reasoning_effort": "low",
+    "stream": False,
+}
+
 GPT_6_1_SOL_INPUT_TEXT: Final = CostTrackingTestCase(
     name="gpt-6.1-sol-input_text",
     covers="quota_management.spend_tracking.cost_matrix.logs_cost",
@@ -8511,31 +8537,7 @@ GPT_6_1_SOL_CACHE_READ: Final = GPT_5_6_CACHE_READ.model_copy(
     update={
         "name": "gpt-6.1-sol-cache_read",
         "model": "gpt-6.1-sol",
-        "request": {
-            "model": "$MODEL",
-            "messages": [
-                {
-                    "role": "system",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
-                        }
-                    ],
-                },
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": "b770f5df16a2 summarize the attached material in one line and name the city weather",
-                        }
-                    ],
-                },
-            ],
-            "stream": False,
-            "allowed_openai_params": [],
-        },
+        "request": _GPT_6_PROMPT_CACHE_REQUEST,
         "response": JsonResponse(
             content_type="application/json",
             body={
@@ -8585,31 +8587,7 @@ GPT_6_LUNA_CACHE_READ: Final = GPT_5_6_CACHE_READ.model_copy(
     update={
         "name": "gpt-6-luna-cache_read",
         "model": "gpt-6-luna",
-        "request": {
-            "model": "$MODEL",
-            "messages": [
-                {
-                    "role": "system",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
-                        }
-                    ],
-                },
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": "a880e9da100c summarize the attached material in one line and name the city weather",
-                        }
-                    ],
-                },
-            ],
-            "stream": False,
-            "allowed_openai_params": [],
-        },
+        "request": _GPT_6_PROMPT_CACHE_REQUEST,
         "response": JsonResponse(
             content_type="application/json",
             body={
@@ -8659,31 +8637,7 @@ GPT_6_ASTRA_CACHE_READ: Final = GPT_5_6_CACHE_READ.model_copy(
     update={
         "name": "gpt-6-astra-cache_read",
         "model": "gpt-6-astra",
-        "request": {
-            "model": "$MODEL",
-            "messages": [
-                {
-                    "role": "system",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line.",
-                        }
-                    ],
-                },
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": "d45eefac915d summarize the attached material in one line and name the city weather",
-                        }
-                    ],
-                },
-            ],
-            "stream": False,
-            "allowed_openai_params": [],
-        },
+        "request": _GPT_6_PROMPT_CACHE_REQUEST,
         "response": JsonResponse(
             content_type="application/json",
             body={
@@ -9645,7 +9599,11 @@ GPT_6_LUNA_RESPONSES_NATIVE_JSON: Final = CostTrackingTestCase(
             "truncation": "disabled",
             "usage": {
                 "input_tokens": 1840,
-                "input_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0},
+                "input_tokens_details": {
+                    "cache_write_tokens": 0,
+                    "cache_write_tokens_details": {"ttl_12h_tokens": 0, "ttl_30m_tokens": 0},
+                    "cached_tokens": 0,
+                },
                 "output_tokens": 412,
                 "output_tokens_details": {"reasoning_tokens": 0},
                 "total_tokens": 2252,
@@ -11848,6 +11806,7 @@ GPT_6_LUNA_RESPONSES_NATIVE_STREAM: Final = _responses_stream_case(
     "gpt-6-luna-responses_native_stream",
     "gpt-6-luna",
     45,
+    cache_write_ttl_details=True,
 )
 GPT_6_ASTRA_RESPONSES_NATIVE_STREAM: Final = _responses_stream_case(
     GPT_6_ASTRA_RESPONSES_NATIVE_JSON,
@@ -12089,7 +12048,1233 @@ GATEWAY_REPORTED_COST_OPENROUTER_OPERATOR_PRICED_STREAM: Final = (
     )
 )
 
+def _gpt_6_on_model(base: CostTrackingTestCase, model: str, shape: str, expected: ExactExpected) -> CostTrackingTestCase:
+    response: Final = (
+        _stream_for_model(base.response, model)
+        if isinstance(base.response, SseResponse)
+        else _response_for_model(cast(JsonResponse, base.response), model)
+    )
+    return base.model_copy(
+        update={"name": f"{model}-{shape}", "model": model, "response": response, "expected": expected}
+    )
+
+
+def _gpt_6_with_real_usage(
+    base: CostTrackingTestCase,
+    model: str,
+    shape: str,
+    request: Mapping[str, JsonValue],
+    usage: Mapping[str, JsonValue],
+    expected: ExactExpected,
+) -> CostTrackingTestCase:
+    body: Final = {**cast(JsonResponse, base.response).body, "model": model, "usage": dict(usage)}
+    return base.model_copy(
+        update={
+            "name": f"{model}-{shape}",
+            "model": model,
+            "request": dict(request),
+            "response": cast(JsonResponse, base.response).model_copy(update={"body": body}),
+            "expected": expected,
+        }
+    )
+
+
+def _gpt_6_tool_call_served_by_responses_api(model: str, expected: ExactExpected) -> CostTrackingTestCase:
+    body: Final = cast(JsonResponse, GPT_6_LUNA_RESPONSES_NATIVE_JSON.response).body
+    function_call: Final[dict[str, JsonValue]] = {
+        "type": "function_call",
+        "id": "fc_$REQUEST_ID",
+        "call_id": "call_$REQUEST_ID",
+        "name": "get_weather",
+        "arguments": '{"city": "Lisbon"}',
+        "status": "completed",
+    }
+    return GPT_6_LUNA_TOOL_CALL.model_copy(
+        update={
+            "name": f"{model}-tool_call",
+            "model": model,
+            "request": {**GPT_6_LUNA_TOOL_CALL.request, "reasoning_effort": "low"},
+            "response": JsonResponse(
+                content_type="application/json", body={**body, "model": model, "output": [function_call]}
+            ),
+            "expected": expected,
+        }
+    )
+
+
+_GPT_6_RESPONSES_CACHE_WRITE_12H_REQUEST: Final[Mapping[str, JsonValue]] = {
+    "model": "$MODEL",
+    "input": f"{_PROVIDER_CACHEABLE_PROMPT} Reply with OK.",
+    "prompt_cache_options": {"mode": "implicit", "ttl": "12h"},
+    "reasoning": {"effort": "low"},
+}
+_GPT_6_RESPONSES_CACHE_WRITE_30M_REQUEST: Final[Mapping[str, JsonValue]] = {
+    "model": "$MODEL",
+    "input": f"{_PROVIDER_CACHEABLE_PROMPT} Reply with OK.",
+    "reasoning": {"effort": "low"},
+}
+_GPT_6_RESPONSES_WEB_SEARCH_REQUEST: Final[Mapping[str, JsonValue]] = {
+    "model": "$MODEL",
+    "input": "What is the population of Lisbon? Search the web and answer in one line.",
+    "tools": [{"type": "web_search", "search_context_size": "medium"}],
+    "reasoning": {"effort": "low"},
+}
+
+GPT_6_1_TERRA_INPUT_TEXT: Final = _gpt_6_on_model(
+    GPT_6_LUNA_INPUT_TEXT,
+    "gpt-6.1-terra",
+    "input_text",
+    ExactExpected(spend=0.004017, input_cost=0.0018952, output_cost=0.0021218, prompt_tokens=1840, completion_tokens=412),
+)
+GPT_6_1_TERRA_STREAM: Final = _gpt_6_on_model(
+    GPT_6_LUNA_STREAM,
+    "gpt-6.1-terra",
+    "stream",
+    ExactExpected(spend=0.004017, input_cost=0.0018952, output_cost=0.0021218, prompt_tokens=1840, completion_tokens=412),
+)
+GPT_6_1_TERRA_REASONING: Final = _gpt_6_on_model(
+    GPT_6_LUNA_REASONING,
+    "gpt-6.1-terra",
+    "reasoning",
+    ExactExpected(spend=0.0220832, input_cost=0.0012772, output_cost=0.020806, prompt_tokens=1240, completion_tokens=4040),
+)
+GPT_6_1_TERRA_TOOL_CALL: Final = _gpt_6_on_model(
+    GPT_6_LUNA_TOOL_CALL,
+    "gpt-6.1-terra",
+    "tool_call",
+    ExactExpected(spend=0.004017, input_cost=0.0018952, output_cost=0.0021218, prompt_tokens=1840, completion_tokens=412),
+)
+GPT_6_1_TERRA_SERVICE_TIER_FLEX: Final = _gpt_6_on_model(
+    GPT_6_LUNA_SERVICE_TIER_FLEX,
+    "gpt-6.1-terra",
+    "service_tier_flex",
+    ExactExpected(spend=0.0020085, input_cost=0.0009476, output_cost=0.0010609, prompt_tokens=1840, completion_tokens=412),
+)
+GPT_6_1_TERRA_SERVICE_TIER_PRIORITY: Final = _gpt_6_on_model(
+    GPT_6_LUNA_SERVICE_TIER_PRIORITY,
+    "gpt-6.1-terra",
+    "service_tier_priority",
+    ExactExpected(spend=0.008034, input_cost=0.0037904, output_cost=0.0042436, prompt_tokens=1840, completion_tokens=412),
+)
+GPT_6_1_TERRA_RESPONSES_NATIVE_JSON: Final = _gpt_6_on_model(
+    GPT_6_LUNA_RESPONSES_NATIVE_JSON,
+    "gpt-6.1-terra",
+    "responses_native_json",
+    ExactExpected(spend=0.004017, input_cost=0.0018952, output_cost=0.0021218, prompt_tokens=1840, completion_tokens=412),
+)
+GPT_6_ASTRA_TOOL_CALL: Final = _gpt_6_tool_call_served_by_responses_api(
+    "gpt-6-astra",
+    ExactExpected(spend=0.0468, input_cost=0.02208, output_cost=0.02472, prompt_tokens=1840, completion_tokens=412),
+)
+GPT_6_1_SOL_TOOL_CALL: Final = _gpt_6_tool_call_served_by_responses_api(
+    "gpt-6.1-sol",
+    ExactExpected(spend=0.0078, input_cost=0.00368, output_cost=0.00412, prompt_tokens=1840, completion_tokens=412),
+)
+GPT_6_LUNA_PROMPT_CACHE_WRITE: Final = _gpt_6_with_real_usage(
+    GPT_6_LUNA_CACHE_READ,
+    "gpt-6-luna",
+    "prompt_cache_write",
+    _GPT_6_PROMPT_CACHE_REQUEST,
+    {"prompt_tokens": 3334, "completion_tokens": 4, "total_tokens": 3338, "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 3331, "audio_tokens": 0}, "completion_tokens_details": {"reasoning_tokens": 0, "audio_tokens": 0, "accepted_prediction_tokens": 0, "rejected_prediction_tokens": 0}},
+    ExactExpected(spend=0.000418675, input_cost=0.000416675, output_cost=2e-06, prompt_tokens=3334, completion_tokens=4, cache_creation_cost=0.000416375),
+)
+GPT_6_LUNA_PROMPT_CACHE_READ: Final = _gpt_6_with_real_usage(
+    GPT_6_LUNA_CACHE_READ,
+    "gpt-6-luna",
+    "prompt_cache_read",
+    _GPT_6_PROMPT_CACHE_REQUEST,
+    {"prompt_tokens": 3334, "completion_tokens": 4, "total_tokens": 3338, "prompt_tokens_details": {"cached_tokens": 3331, "cache_write_tokens": 0, "audio_tokens": 0}, "completion_tokens_details": {"reasoning_tokens": 0, "audio_tokens": 0, "accepted_prediction_tokens": 0, "rejected_prediction_tokens": 0}},
+    ExactExpected(spend=3.561e-05, input_cost=3.361e-05, output_cost=2e-06, prompt_tokens=3334, completion_tokens=4, cache_read_cost=3.331e-05),
+)
+GPT_6_LUNA_RESPONSES_PROMPT_CACHE_WRITE_12H: Final = _gpt_6_with_real_usage(
+    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H,
+    "gpt-6-luna",
+    "responses_prompt_cache_write_12h",
+    _GPT_6_RESPONSES_CACHE_WRITE_12H_REQUEST,
+    {"input_tokens": 3334, "input_tokens_details": {"cache_write_tokens": 3331, "cache_write_tokens_details": {"ttl_12h_tokens": 3331, "ttl_30m_tokens": 0}, "cached_tokens": 0}, "output_tokens": 5, "output_tokens_details": {"reasoning_tokens": 0}, "total_tokens": 3339},
+    ExactExpected(spend=0.00083555, input_cost=0.00083305, output_cost=2.5e-06, prompt_tokens=3334, completion_tokens=5, cache_creation_cost=0.00083275),
+)
+GPT_6_LUNA_RESPONSES_WEB_SEARCH_MEDIUM: Final = _gpt_6_with_real_usage(
+    GPT_5_6_RESPONSES_WEB_SEARCH_MEDIUM,
+    "gpt-6-luna",
+    "responses_web_search_medium",
+    _GPT_6_RESPONSES_WEB_SEARCH_REQUEST,
+    {"input_tokens": 8636, "input_tokens_details": {"cache_write_tokens": 20, "cache_write_tokens_details": {"ttl_12h_tokens": 0, "ttl_30m_tokens": 20}, "cached_tokens": 4435}, "output_tokens": 81, "output_tokens_details": {"reasoning_tokens": 43}, "total_tokens": 8717},
+    ExactExpected(spend=0.01050545, input_cost=0.00046495, output_cost=4.05e-05, prompt_tokens=8636, completion_tokens=81, tool_usage_cost=0.01, cache_read_cost=4.435e-05, cache_creation_cost=2.5e-06),
+)
+GPT_6_SOL_PROMPT_CACHE_WRITE: Final = _gpt_6_with_real_usage(
+    GPT_6_LUNA_CACHE_READ,
+    "gpt-6-sol",
+    "prompt_cache_write",
+    _GPT_6_PROMPT_CACHE_REQUEST,
+    {"prompt_tokens": 3336, "completion_tokens": 4, "total_tokens": 3340, "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 3333, "audio_tokens": 0}, "completion_tokens_details": {"reasoning_tokens": 0, "audio_tokens": 0, "accepted_prediction_tokens": 0, "rejected_prediction_tokens": 0}},
+    ExactExpected(spend=0.00921635, input_cost=0.00917235, output_cost=4.4e-05, prompt_tokens=3336, completion_tokens=4, cache_creation_cost=0.00916575),
+)
+GPT_6_SOL_PROMPT_CACHE_READ: Final = _gpt_6_with_real_usage(
+    GPT_6_LUNA_CACHE_READ,
+    "gpt-6-sol",
+    "prompt_cache_read",
+    _GPT_6_PROMPT_CACHE_REQUEST,
+    {"prompt_tokens": 3336, "completion_tokens": 4, "total_tokens": 3340, "prompt_tokens_details": {"cached_tokens": 3333, "cache_write_tokens": 0, "audio_tokens": 0}, "completion_tokens_details": {"reasoning_tokens": 0, "audio_tokens": 0, "accepted_prediction_tokens": 0, "rejected_prediction_tokens": 0}},
+    ExactExpected(spend=0.00078386, input_cost=0.00073986, output_cost=4.4e-05, prompt_tokens=3336, completion_tokens=4, cache_read_cost=0.00073326),
+)
+GPT_6_SOL_RESPONSES_PROMPT_CACHE_WRITE_12H: Final = _gpt_6_with_real_usage(
+    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H,
+    "gpt-6-sol",
+    "responses_prompt_cache_write_12h",
+    _GPT_6_RESPONSES_CACHE_WRITE_12H_REQUEST,
+    {"input_tokens": 3332, "input_tokens_details": {"cache_write_tokens": 3329, "cache_write_tokens_details": {"ttl_12h_tokens": 3329, "ttl_30m_tokens": 0}, "cached_tokens": 0}, "output_tokens": 6, "output_tokens_details": {"reasoning_tokens": 0}, "total_tokens": 3338},
+    ExactExpected(spend=0.0183821, input_cost=0.0183161, output_cost=6.6e-05, prompt_tokens=3332, completion_tokens=6, cache_creation_cost=0.0183095),
+)
+GPT_6_SOL_RESPONSES_WEB_SEARCH_MEDIUM: Final = _gpt_6_with_real_usage(
+    GPT_5_6_RESPONSES_WEB_SEARCH_MEDIUM,
+    "gpt-6-sol",
+    "responses_web_search_medium",
+    _GPT_6_RESPONSES_WEB_SEARCH_REQUEST,
+    {"input_tokens": 8763, "input_tokens_details": {"cache_write_tokens": 4455, "cache_write_tokens_details": {"ttl_12h_tokens": 0, "ttl_30m_tokens": 4455}, "cached_tokens": 0}, "output_tokens": 94, "output_tokens_details": {"reasoning_tokens": 52}, "total_tokens": 8857},
+    ExactExpected(spend=0.03276285, input_cost=0.02172885, output_cost=0.001034, prompt_tokens=8763, completion_tokens=94, tool_usage_cost=0.01, cache_creation_cost=0.01225125),
+)
+GPT_6_ASTRA_PROMPT_CACHE_WRITE: Final = _gpt_6_with_real_usage(
+    GPT_6_LUNA_CACHE_READ,
+    "gpt-6-astra",
+    "prompt_cache_write",
+    _GPT_6_PROMPT_CACHE_REQUEST,
+    {"prompt_tokens": 3333, "completion_tokens": 4, "total_tokens": 3337, "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 3330, "audio_tokens": 0}, "completion_tokens_details": {"reasoning_tokens": 0, "audio_tokens": 0, "accepted_prediction_tokens": 0, "rejected_prediction_tokens": 0}},
+    ExactExpected(spend=0.050226, input_cost=0.049986, output_cost=0.00024, prompt_tokens=3333, completion_tokens=4, cache_creation_cost=0.04995),
+)
+GPT_6_ASTRA_PROMPT_CACHE_READ: Final = _gpt_6_with_real_usage(
+    GPT_6_LUNA_CACHE_READ,
+    "gpt-6-astra",
+    "prompt_cache_read",
+    _GPT_6_PROMPT_CACHE_REQUEST,
+    {"prompt_tokens": 3333, "completion_tokens": 4, "total_tokens": 3337, "prompt_tokens_details": {"cached_tokens": 3330, "cache_write_tokens": 0, "audio_tokens": 0}, "completion_tokens_details": {"reasoning_tokens": 0, "audio_tokens": 0, "accepted_prediction_tokens": 0, "rejected_prediction_tokens": 0}},
+    ExactExpected(spend=0.004272, input_cost=0.004032, output_cost=0.00024, prompt_tokens=3333, completion_tokens=4, cache_read_cost=0.003996),
+)
+GPT_6_ASTRA_RESPONSES_PROMPT_CACHE_WRITE_12H: Final = _gpt_6_with_real_usage(
+    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H,
+    "gpt-6-astra",
+    "responses_prompt_cache_write_12h",
+    _GPT_6_RESPONSES_CACHE_WRITE_12H_REQUEST,
+    {"input_tokens": 3329, "input_tokens_details": {"cache_write_tokens": 3326, "cache_write_tokens_details": {"ttl_12h_tokens": 3326, "ttl_30m_tokens": 0}, "cached_tokens": 0}, "output_tokens": 5, "output_tokens_details": {"reasoning_tokens": 0}, "total_tokens": 3334},
+    ExactExpected(spend=0.100116, input_cost=0.099816, output_cost=0.0003, prompt_tokens=3329, completion_tokens=5, cache_creation_cost=0.09978),
+)
+GPT_6_ASTRA_RESPONSES_WEB_SEARCH_MEDIUM: Final = _gpt_6_with_real_usage(
+    GPT_5_6_RESPONSES_WEB_SEARCH_MEDIUM,
+    "gpt-6-astra",
+    "responses_web_search_medium",
+    _GPT_6_RESPONSES_WEB_SEARCH_REQUEST,
+    {"input_tokens": 8580, "input_tokens_details": {"cache_write_tokens": 4455, "cache_write_tokens_details": {"ttl_12h_tokens": 0, "ttl_30m_tokens": 4455}, "cached_tokens": 0}, "output_tokens": 81, "output_tokens_details": {"reasoning_tokens": 38}, "total_tokens": 8661},
+    ExactExpected(spend=0.131185, input_cost=0.116325, output_cost=0.00486, prompt_tokens=8580, completion_tokens=81, tool_usage_cost=0.01, cache_creation_cost=0.066825),
+)
+GPT_6_1_SOL_PROMPT_CACHE_WRITE: Final = _gpt_6_with_real_usage(
+    GPT_6_LUNA_CACHE_READ,
+    "gpt-6.1-sol",
+    "prompt_cache_write",
+    _GPT_6_PROMPT_CACHE_REQUEST,
+    {"prompt_tokens": 3333, "completion_tokens": 4, "total_tokens": 3337, "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 3330, "audio_tokens": 0}, "completion_tokens_details": {"reasoning_tokens": 0, "audio_tokens": 0, "accepted_prediction_tokens": 0, "rejected_prediction_tokens": 0}},
+    ExactExpected(spend=0.008371, input_cost=0.008331, output_cost=4e-05, prompt_tokens=3333, completion_tokens=4, cache_creation_cost=0.008325),
+)
+GPT_6_1_SOL_PROMPT_CACHE_READ: Final = _gpt_6_with_real_usage(
+    GPT_6_LUNA_CACHE_READ,
+    "gpt-6.1-sol",
+    "prompt_cache_read",
+    _GPT_6_PROMPT_CACHE_REQUEST,
+    {"prompt_tokens": 3333, "completion_tokens": 4, "total_tokens": 3337, "prompt_tokens_details": {"cached_tokens": 3330, "cache_write_tokens": 0, "audio_tokens": 0}, "completion_tokens_details": {"reasoning_tokens": 0, "audio_tokens": 0, "accepted_prediction_tokens": 0, "rejected_prediction_tokens": 0}},
+    ExactExpected(spend=0.000379, input_cost=0.000339, output_cost=4e-05, prompt_tokens=3333, completion_tokens=4, cache_read_cost=0.000333),
+)
+GPT_6_1_SOL_RESPONSES_PROMPT_CACHE_WRITE_12H: Final = _gpt_6_with_real_usage(
+    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H,
+    "gpt-6.1-sol",
+    "responses_prompt_cache_write_12h",
+    _GPT_6_RESPONSES_CACHE_WRITE_12H_REQUEST,
+    {"input_tokens": 3328, "input_tokens_details": {"cache_write_tokens": 3325, "cache_write_tokens_details": {"ttl_12h_tokens": 3325, "ttl_30m_tokens": 0}, "cached_tokens": 0}, "output_tokens": 5, "output_tokens_details": {"reasoning_tokens": 0}, "total_tokens": 3333},
+    ExactExpected(spend=0.016681, input_cost=0.016631, output_cost=5e-05, prompt_tokens=3328, completion_tokens=5, cache_creation_cost=0.016625),
+)
+GPT_6_1_SOL_RESPONSES_WEB_SEARCH_MEDIUM: Final = _gpt_6_with_real_usage(
+    GPT_5_6_RESPONSES_WEB_SEARCH_MEDIUM,
+    "gpt-6.1-sol",
+    "responses_web_search_medium",
+    _GPT_6_RESPONSES_WEB_SEARCH_REQUEST,
+    {"input_tokens": 8617, "input_tokens_details": {"cache_write_tokens": 4455, "cache_write_tokens_details": {"ttl_12h_tokens": 0, "ttl_30m_tokens": 4455}, "cached_tokens": 0}, "output_tokens": 83, "output_tokens_details": {"reasoning_tokens": 38}, "total_tokens": 8700},
+    ExactExpected(spend=0.0302915, input_cost=0.0194615, output_cost=0.00083, prompt_tokens=8617, completion_tokens=83, tool_usage_cost=0.01, cache_creation_cost=0.0111375),
+)
+GPT_6_1_TERRA_PROMPT_CACHE_WRITE: Final = _gpt_6_with_real_usage(
+    GPT_6_LUNA_CACHE_READ,
+    "gpt-6.1-terra",
+    "prompt_cache_write",
+    _GPT_6_PROMPT_CACHE_REQUEST,
+    {"prompt_tokens": 3333, "completion_tokens": 4, "total_tokens": 3337, "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 3330, "audio_tokens": 0}, "completion_tokens_details": {"reasoning_tokens": 0, "audio_tokens": 0, "accepted_prediction_tokens": 0, "rejected_prediction_tokens": 0}},
+    ExactExpected(spend=0.004311065, input_cost=0.004290465, output_cost=2.06e-05, prompt_tokens=3333, completion_tokens=4, cache_creation_cost=0.004287375),
+)
+GPT_6_1_TERRA_PROMPT_CACHE_READ: Final = _gpt_6_with_real_usage(
+    GPT_6_LUNA_CACHE_READ,
+    "gpt-6.1-terra",
+    "prompt_cache_read",
+    _GPT_6_PROMPT_CACHE_REQUEST,
+    {"prompt_tokens": 3333, "completion_tokens": 4, "total_tokens": 3337, "prompt_tokens_details": {"cached_tokens": 3330, "cache_write_tokens": 0, "audio_tokens": 0}, "completion_tokens_details": {"reasoning_tokens": 0, "audio_tokens": 0, "accepted_prediction_tokens": 0, "rejected_prediction_tokens": 0}},
+    ExactExpected(spend=0.000195185, input_cost=0.000174585, output_cost=2.06e-05, prompt_tokens=3333, completion_tokens=4, cache_read_cost=0.000171495),
+)
+GPT_6_1_TERRA_RESPONSES_PROMPT_CACHE_WRITE_12H: Final = _gpt_6_with_real_usage(
+    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H,
+    "gpt-6.1-terra",
+    "responses_prompt_cache_write_12h",
+    _GPT_6_RESPONSES_CACHE_WRITE_12H_REQUEST,
+    {"input_tokens": 3332, "input_tokens_details": {"cache_write_tokens": 3329, "cache_write_tokens_details": {"ttl_12h_tokens": 3329, "ttl_30m_tokens": 0}, "cached_tokens": 0}, "output_tokens": 5, "output_tokens_details": {"reasoning_tokens": 0}, "total_tokens": 3337},
+    ExactExpected(spend=0.008601015, input_cost=0.008575265, output_cost=2.575e-05, prompt_tokens=3332, completion_tokens=5, cache_creation_cost=0.008572175),
+)
+GPT_6_1_TERRA_RESPONSES_WEB_SEARCH_MEDIUM: Final = _gpt_6_with_real_usage(
+    GPT_5_6_RESPONSES_WEB_SEARCH_MEDIUM,
+    "gpt-6.1-terra",
+    "responses_web_search_medium",
+    _GPT_6_RESPONSES_WEB_SEARCH_REQUEST,
+    {"input_tokens": 8657, "input_tokens_details": {"cache_write_tokens": 4455, "cache_write_tokens_details": {"ttl_12h_tokens": 0, "ttl_30m_tokens": 4455}, "cached_tokens": 0}, "output_tokens": 77, "output_tokens_details": {"reasoning_tokens": 36}, "total_tokens": 8734},
+    ExactExpected(spend=0.0204604225, input_cost=0.0100638725, output_cost=0.00039655, prompt_tokens=8657, completion_tokens=77, tool_usage_cost=0.01, cache_creation_cost=0.0057358125),
+)
+GPT_6_LUNA_RESPONSES_PROMPT_CACHE_WRITE_30M: Final = _gpt_6_with_real_usage(
+    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H,
+    "gpt-6-luna",
+    "responses_prompt_cache_write_30m",
+    _GPT_6_RESPONSES_CACHE_WRITE_30M_REQUEST,
+    {"input_tokens": 3329, "input_tokens_details": {"cache_write_tokens": 3326, "cache_write_tokens_details": {"ttl_12h_tokens": 0, "ttl_30m_tokens": 3326}, "cached_tokens": 0}, "output_tokens": 5, "output_tokens_details": {"reasoning_tokens": 0}, "total_tokens": 3334},
+    ExactExpected(spend=0.00041855, input_cost=0.00041605, output_cost=2.5e-06, prompt_tokens=3329, completion_tokens=5, cache_creation_cost=0.00041575),
+)
+GPT_6_SOL_RESPONSES_PROMPT_CACHE_WRITE_30M: Final = _gpt_6_with_real_usage(
+    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H,
+    "gpt-6-sol",
+    "responses_prompt_cache_write_30m",
+    _GPT_6_RESPONSES_CACHE_WRITE_30M_REQUEST,
+    {"input_tokens": 3328, "input_tokens_details": {"cache_write_tokens": 3325, "cache_write_tokens_details": {"ttl_12h_tokens": 0, "ttl_30m_tokens": 3325}, "cached_tokens": 0}, "output_tokens": 6, "output_tokens_details": {"reasoning_tokens": 0}, "total_tokens": 3334},
+    ExactExpected(spend=0.00921635, input_cost=0.00915035, output_cost=6.6e-05, prompt_tokens=3328, completion_tokens=6, cache_creation_cost=0.00914375),
+)
+GPT_6_ASTRA_RESPONSES_PROMPT_CACHE_WRITE_30M: Final = _gpt_6_with_real_usage(
+    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H,
+    "gpt-6-astra",
+    "responses_prompt_cache_write_30m",
+    _GPT_6_RESPONSES_CACHE_WRITE_30M_REQUEST,
+    {"input_tokens": 3327, "input_tokens_details": {"cache_write_tokens": 3324, "cache_write_tokens_details": {"ttl_12h_tokens": 0, "ttl_30m_tokens": 3324}, "cached_tokens": 0}, "output_tokens": 5, "output_tokens_details": {"reasoning_tokens": 0}, "total_tokens": 3332},
+    ExactExpected(spend=0.050196, input_cost=0.049896, output_cost=0.0003, prompt_tokens=3327, completion_tokens=5, cache_creation_cost=0.04986),
+)
+GPT_6_1_SOL_RESPONSES_PROMPT_CACHE_WRITE_30M: Final = _gpt_6_with_real_usage(
+    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H,
+    "gpt-6.1-sol",
+    "responses_prompt_cache_write_30m",
+    _GPT_6_RESPONSES_CACHE_WRITE_30M_REQUEST,
+    {"input_tokens": 3329, "input_tokens_details": {"cache_write_tokens": 3326, "cache_write_tokens_details": {"ttl_12h_tokens": 0, "ttl_30m_tokens": 3326}, "cached_tokens": 0}, "output_tokens": 5, "output_tokens_details": {"reasoning_tokens": 0}, "total_tokens": 3334},
+    ExactExpected(spend=0.008371, input_cost=0.008321, output_cost=5e-05, prompt_tokens=3329, completion_tokens=5, cache_creation_cost=0.008315),
+)
+GPT_6_1_TERRA_RESPONSES_PROMPT_CACHE_WRITE_30M: Final = _gpt_6_with_real_usage(
+    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H,
+    "gpt-6.1-terra",
+    "responses_prompt_cache_write_30m",
+    _GPT_6_RESPONSES_CACHE_WRITE_30M_REQUEST,
+    {"input_tokens": 3329, "input_tokens_details": {"cache_write_tokens": 3326, "cache_write_tokens_details": {"ttl_12h_tokens": 0, "ttl_30m_tokens": 3326}, "cached_tokens": 0}, "output_tokens": 5, "output_tokens_details": {"reasoning_tokens": 0}, "total_tokens": 3334},
+    ExactExpected(spend=0.004311065, input_cost=0.004285315, output_cost=2.575e-05, prompt_tokens=3329, completion_tokens=5, cache_creation_cost=0.004282225),
+)
+TEXT_EMBEDDING_3_LARGE_DIMENSIONS: Final = CostTrackingTestCase(
+    name="text-embedding-3-large-dimensions",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="text-embedding-3-large",
+    endpoint="/v1/embeddings",
+    request={"model": "$MODEL", "input": "price this embedding request", "dimensions": 256},
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "object": "list",
+            "data": [{"object": "embedding", "embedding": [-0.060546875, -0.0176849365234375], "index": 0}],
+            "model": "text-embedding-3-large",
+            "usage": {"prompt_tokens": 4, "total_tokens": 4},
+        },
+    ),
+    expected=ExactExpected(spend=5.2e-07, input_cost=5.2e-07, output_cost=0.0, prompt_tokens=4, completion_tokens=0),
+)
+
+def _gpt_image_2_6_sunburst_body(usage: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
+    return {
+        "created": 1794891118,
+        "background": "opaque",
+        "data": [{"b64_json": "AA=="}],
+        "output_format": "png",
+        "quality": "low",
+        "size": "1024x1024",
+        "usage": dict(usage),
+    }
+
+
+GPT_IMAGE_2_6_SUNBURST_IMAGES_LOW: Final = CostTrackingTestCase(
+    name="gpt-image-2.6-sunburst-images-low",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gpt-image-2.6-sunburst",
+    endpoint="/v1/images/generations",
+    deployment=Deployment(model="openai/gpt-image-2.6-sunburst"),
+    request={"prompt": "a plain red square", "size": "1024x1024", "quality": "low", "n": 1},
+    response=JsonResponse(
+        content_type="application/json",
+        body=_gpt_image_2_6_sunburst_body(
+            {
+                "input_tokens": 10,
+                "input_tokens_details": {"image_tokens": 0, "text_tokens": 10},
+                "output_tokens": 824,
+                "output_tokens_details": {"image_tokens": 824, "text_tokens": 0},
+                "total_tokens": 834,
+            }
+        ),
+    ),
+    expected=ExactExpected(
+        spend=0.0247702,
+        input_cost=5.02e-05,
+        output_cost=0.02472,
+        prompt_tokens=10,
+        completion_tokens=824,
+        breakdown_persisted=False,
+    ),
+)
+GPT_IMAGE_2_6_SUNBURST_IMAGES_EDIT: Final = CostTrackingTestCase(
+    name="gpt-image-2.6-sunburst-images-edit",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gpt-image-2.6-sunburst",
+    endpoint="/v1/images/edits",
+    deployment=Deployment(model="openai/gpt-image-2.6-sunburst"),
+    upload=PngUpload(kind="png"),
+    request={"prompt": "make the square blue", "size": "1024x1024", "quality": "low", "n": 1},
+    response=JsonResponse(
+        content_type="application/json",
+        body=_gpt_image_2_6_sunburst_body(
+            {
+                "input_tokens": 1044,
+                "input_tokens_details": {"image_tokens": 1024, "text_tokens": 20},
+                "output_tokens": 824,
+                "output_tokens_details": {"image_tokens": 824, "text_tokens": 0},
+                "total_tokens": 1868,
+            }
+        ),
+    ),
+    expected=ExactExpected(
+        spend=0.0330124,
+        input_cost=0.0082924,
+        output_cost=0.02472,
+        prompt_tokens=1044,
+        completion_tokens=824,
+        breakdown_persisted=False,
+    ),
+)
+GPT_4O_TRANSCRIBE_TRANSCRIPTIONS_TOKENS: Final = CostTrackingTestCase(
+    name="gpt-4o-transcribe-transcriptions-tokens",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gpt-4o-transcribe",
+    endpoint="/v1/audio/transcriptions",
+    upload=WavUpload(kind="wav", seconds=3.0),
+    request={"response_format": "json"},
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "text": "The pricing harness says hello.",
+            "usage": {
+                "type": "tokens",
+                "total_tokens": 38,
+                "input_tokens": 30,
+                "input_token_details": {"text_tokens": 0, "audio_tokens": 30},
+                "output_tokens": 8,
+            },
+        },
+    ),
+    expected=ExactExpected(spend=0.00026, input_cost=0.00018, output_cost=8e-05, prompt_tokens=30, completion_tokens=8),
+)
+GPT_4O_MINI_TTS_SPEECH: Final = CostTrackingTestCase(
+    name="gpt-4o-mini-tts-speech",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gpt-4o-mini-tts",
+    endpoint="/v1/audio/speech",
+    request={"input": "The pricing harness says hello.", "voice": "alloy", "response_format": "mp3"},
+    response=SseResponse(
+        content_type="text/event-stream",
+        frames=(
+            'data: {"type":"speech.audio.delta","audio":"c2NyaXB0ZWQgYXVkaW8="}',
+            'data: {"type":"speech.audio.done","usage":{"input_tokens":6,"output_tokens":50,"total_tokens":56}}',
+            "data: [DONE]",
+        ),
+    ),
+    expected=ExactExpected(
+        spend=0.00060366, input_cost=3.66e-06, output_cost=0.0006, prompt_tokens=6, completion_tokens=50
+    ),
+)
+
+GPT_6_1_TERRA_RESPONSES_NATIVE_STREAM: Final = CostTrackingTestCase(
+    name="gpt-6.1-terra-responses_native_stream",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gpt-6.1-terra",
+    endpoint="/v1/responses",
+    request={"model": "$MODEL", "input": "responses native fixture", "stream": True},
+    response=SseResponse(
+        content_type="text/event-stream",
+        frames=(
+            "event: response.created\n"
+            "data: "
+            '{"type":"response.created","response":{"id":"resp_$REQUEST_ID","object":"response","created_at":1793550482,"status":"in_progress","access_programs":{"cyber":"standard"},"background":false,"completed_at":null,"error":null,"frequency_penalty":0.0,"incomplete_details":null,"instructions":null,"max_output_tokens":null,"max_tool_calls":null,"model":"gpt-6.1-terra","moderation":null,"output":[],"parallel_tool_calls":true,"presence_penalty":0.0,"previous_response_id":null,"prompt_cache_key":null,"prompt_cache_retention":"24h","reasoning":{"context":"all_turns","effort":"medium","mode":"standard","summary":null},"safety_identifier":null,"service_tier":"auto","store":true,"temperature":1.0,"text":{"format":{"type":"text"},"verbosity":"medium"},"tool_choice":"auto","tool_usage":{"image_gen":{"input_tokens":0,"input_tokens_details":{"image_tokens":0,"text_tokens":0},"output_tokens":0,"output_tokens_details":{"image_tokens":0,"text_tokens":0},"total_tokens":0},"web_search":{"num_requests":0}},"tools":[],"top_logprobs":0,"top_p":0.98,"truncation":"disabled","usage":null,"user":null,"metadata":{}},"sequence_number":0}',
+            "event: response.in_progress\n"
+            "data: "
+            '{"type":"response.in_progress","response":{"id":"resp_$REQUEST_ID","object":"response","created_at":1793550482,"status":"in_progress","access_programs":{"cyber":"standard"},"background":false,"completed_at":null,"error":null,"frequency_penalty":0.0,"incomplete_details":null,"instructions":null,"max_output_tokens":null,"max_tool_calls":null,"model":"gpt-6.1-terra","moderation":null,"output":[],"parallel_tool_calls":true,"presence_penalty":0.0,"previous_response_id":null,"prompt_cache_key":null,"prompt_cache_retention":"24h","reasoning":{"context":"all_turns","effort":"medium","mode":"standard","summary":null},"safety_identifier":null,"service_tier":"auto","store":true,"temperature":1.0,"text":{"format":{"type":"text"},"verbosity":"medium"},"tool_choice":"auto","tool_usage":{"image_gen":{"input_tokens":0,"input_tokens_details":{"image_tokens":0,"text_tokens":0},"output_tokens":0,"output_tokens_details":{"image_tokens":0,"text_tokens":0},"total_tokens":0},"web_search":{"num_requests":0}},"tools":[],"top_logprobs":0,"top_p":0.98,"truncation":"disabled","usage":null,"user":null,"metadata":{}},"sequence_number":1}',
+            "event: response.output_item.added\n"
+            "data: "
+            '{"type":"response.output_item.added","item":{"id":"rs_$REQUEST_ID","type":"reasoning","content":[],"encrypted_content":"gAAAAABq52iT_lK9OyCJUuDXlzdJ3FX1QD01svdydIIJBHfWCL4eWlT26dAxoavxpPSzcTXNUZtcdR7EzrVqR0IyhCd-kPJJ9FdF_pomv_LUSaQf3Xal2znb3ByAz642c8jmew8nkfNiqHsgclkggndAbe13DZt_jmEb07JtnhKFEsu7qbQA4lVksJOe9ovwGqC5fKxYs2OSQz-hDrFkBPKZbtCNgRNixPq7D79_v9_azyHfVxK7MvpqvIBfiObNtZwBhLlL4HXKnA__BHGjAVYveH4RDKKTvHCcfObqw0RE00I9IMe3AE5LjkdwiUAXPVJe9IbinfcLeXWAXMOAbJCSF4k-OWBYtmbpaibyCZQZN6Yh_BubpFnJtsGiQVdZMtlyx4HuxvLAetIo9ppz7UEPLe0teaPWaxHUqMOpERl1ZcQJFmQEghxMPM2rk5sBBFgBr3tlQUmpxJEYT9A3N5WK9izrs9khZc9fazDDZrrSJ2wJdo5Yo0oXbJV3it2a_7UlfNNfLe_GHal4GSor5C_iki1dLhCkHLZAFdv-MgHeUXd9BTaH7Uc-yyCcN_LUpCS30QRVLOPZB86sr6ximq6nHasYknhDv4e52kHyGIgFMlFZxumypFe4JMVNBpHHBdNBpsdeD_Z1EPO8kpn7RNF6qch0KO2LDkNkSbW-NU5-OUXEosDW5wb84DF-1kctFpUfTwtI_vk0KwINbVcRLh0vHgNPwXEIUKPHKi4SU_tKyXc2m9DCirhhCjcdbRgAI2cEezxlLoE3qqrUg1VK1RxhEDcb7djiec4uZ9W8yZhLQURx9QnK5NXH_59MiNZpS54EbmiVYLkh19EQ1Widqm8eMz1xgv7Lyox-faHsUeESUbIb3BowijB_w3inKxzBbIipc0IdbRq2OSqbfLDEXn9ffcdIpjmpKcctgw0zjkIxU7_LuL3o2EM--iSgXPHN8v54EBpTpGrOKqKhJhleKkeAFwX_XR5lzGuwr78xf4H_h-ERbEoypFTI6e9r8Brrbkd3Ai4kjDy5lrZ6wh5LMpCpOuoFBu6DCl2GQtcSmimdKkx1QpjKAVwpx6OdlOAUr_Uf17XXvhQe_BACsL6F5l3dYFHwZ7-IPnhvXGvW3-EaeD35x9TaZQ-d3DRKHlvKBgtZ6c7wgk969UOB1cxLvd975MGZsuZbg2CjSqfD12U3rW35gnDDW7j2lBrUYuOKTF1bf2nO5ocl","summary":[]},"output_index":0,"sequence_number":2}',
+            "event: response.output_item.done\n"
+            "data: "
+            '{"type":"response.output_item.done","item":{"id":"rs_$REQUEST_ID","type":"reasoning","content":[],"encrypted_content":"gAAAAABq52iUqG8tEb_xF36BEfJWBH58SYtrRaBLB3-SJOeRPsdWLdX9L98t_9G6f9D11g6oIqiUS93TVazEp8z4jT1KZYIZb26G_i5LC_Xl72OqnIMDW2JoOopESrZ_ozSnTf9T6GANMZHhaUfQyx8mmUm3phdC1xYtFC_RKsXiNjDUL_7Tm6XE2SCgLICljezY17L94CNpuL0zrhQPoFOjdXeo4mCsKiBn4SAzC4-Y1qbM7KZOlCZSDxg-Dj5GEco1r2qzdq04RhvfVwDgHgvz4SXWLoDEfl4DkARGzkEflQAzjb7Ob_bB7vIjmEtaiI8fpAutCFTrDHSIuhmCuQVZMFaY-Hs6cuZ7TnFJlwEZV0Uz1mdD1-Z0E7UAZ9_H4uVsVTq256GHDl-Y6aaRhw0gqNzGgVkc-0TiGoOHA1kvHnTL4lkauEVK7HuTCcwc5k1GjPldyqoxOgvYJ4Bhf-Rbc-D3rueq9bTc2DB9zarCThtPfBydh0HxYr0ouh4iSdZVkU4Jnt_v7e6AM9uJ3Ycgio-BRXj4G6XL03kr5EqWsJ6uLW1pVWcFbegx4lBxIO0nkp0op0OYS-M3O9KUKry_-JpIrl0i-PVJvMTQunAFbmDzG8iPag7TQ2R5gUw56RLPFLGtTNzTVcrk4L-JxrSf5PWR94qwi2sag43lGiM-S0Karaa1W4hmyXcTuCeKRm0oaEDcMYmub0AG0JEzwj-AMYJ3UlgKywkBOSPhm_q-IKN94bvqiGoqwQJ4otj8AildzeMXCl60R_o0mbC6Wt-mhbw36e4O3TCt26iw2I2vR6Z9iWHck1jOq6Bt7WiwNdsJLZxGhSG3j3fvaKYMUSak29o7DpNytkBI9ZJmRDIVEqaefGetMJndEqvHsfZVfMYcV07YJjyy2YoLdGAc24p0YAl4UAOV5Yd9KNpbk_NB3TPlNQS75rgMUC8lLbNWhGSrZrQu1b3MSAZHSlzLhgo1RUk3bntG1tRBHdgkGhsXi9bkwuX7ffuzh1GSZ-fY71NvwtVbNqUfFwwWMB--_w9_G6qf9GFzVssRsYEJ_fVhz2paLLsmltaWAKXte5FM9ThfTsXJ-9YYQY0Xkcm0xcnXhSUobJcx0RQnJZSzbOEa985wgZ-9kMntbgS6W0dYxDwksArG-aOeoJXP99YNJKKCVmTwMmSrqEChhXefM_mtFRRUJuYoB8wbh-Dv2fs-XjM__E2DQ0r6bcNtrsnNNZiKwDhoPY-6fn2ygn0dTDepfoxjQ3u9RMbiRo5KORN39h0MmaA8oATrG9MLLKxlcc4mK_VIsokt6YOoKdew7I4aO7uGfxf6S8grunxuRsCHAJy0RlQAWzd2xS7Jt1A8uuZx5CVb_mixDaJqhryePU93EM39rIlDzv1DrYDO_y35QBdNSY8ZeaSCFu2dXvl-OgGCrzyj--7aATJP9pVY3joUhL9bg5aaLvPRTFBilSqkfu0uTE3x-RDcckVn8tjCabG6sX25hf1HcYmSNI7z6yLHnQWtYmIrR5pRjti2Mm069ezFHVuMkPZq7OlO6zo-ZWRMR1k5-cNcB0K_542rNST-mu87Qxv1gBMoAsN7RH-pQRD7yX--fdPfudQiIADessceNMtHpgK3oqVN4G3wCbkdE-z5UYBmAWschMjymShjR5Y5p9VmFe92_xW_D68O_Arj3mqTEl024Byf7MIiJVR3Ks49aPtfc2_-fDeKfwvu5nL-JiOPMeve8HAFI-k--5a5sp_Br3K0yzE5TfcVi2mAdMN18AGMvHk6u9fj0GI2DxlCPcI3hhRwBK2pVOZBRShzecHdYLgj8Bu2WT4zLiJMEXbqQQ_0MZS6C0cmnkSjjgvrZu7V5j0n7ivOOSKkMVKcC57pcqrwWCOLWSbeIakPFDCf5JeGnXQgaueI2wElpnalKn8J4g7Xf-q9rmW7Kxcw03hTabY-QlQC3QPLF7F3XsHadqecRZEb2-qVqksGW1nyVaDgwojdj6qCoGTHwls3vmYFnTwPwWnYgkEzQfyRefmCOkeUUat_kkXtcGmwmqbTwc-XTLHTbcPjy8WUAQc2gvctGhavLAotLT-G9vt4_0wbPgd297k5D9rRIF3z0kjOT1rEJRbDiEuCwsXQYT1WQEEFayko3XOy0wWzGDqvk7LFU4jZUaemP6TK2QfY50D4wwfoBCOhfZzfPqW8YcCLRTPiFQAu3ch-c90UdQqGgDf1v6uUP7-7_QkCugHq83eeL3JHAGGd4DcUZv_PlSF5EFpaHvE60iIOBIaC-lBqOs_5BWWhS0o=","summary":[]},"output_index":0,"sequence_number":3}',
+            "event: response.output_item.added\n"
+            "data: "
+            '{"type":"response.output_item.added","item":{"id":"msg_$REQUEST_ID","type":"message","status":"in_progress","content":[],"phase":"final_answer","role":"assistant"},"output_index":1,"sequence_number":4}',
+            "event: response.content_part.added\n"
+            "data: "
+            '{"type":"response.content_part.added","content_index":0,"item_id":"msg_$REQUEST_ID","output_index":1,"part":{"type":"output_text","annotations":[],"logprobs":[],"text":"scripted '
+            'response"},"sequence_number":5}',
+            "event: response.output_text.delta\n"
+            'data: {"type":"response.output_text.delta","content_index":0,"delta":"scripted '
+            'response","item_id":"msg_$REQUEST_ID","logprobs":[],"obfuscation":"BNlrxoKanmvoh","output_index":1,"sequence_number":6}',
+            "event: response.output_text.delta\n"
+            'data: {"type":"response.output_text.delta","content_index":0,"delta":"scripted '
+            'response","item_id":"msg_$REQUEST_ID","logprobs":[],"obfuscation":"d6wAn19psL70","output_index":1,"sequence_number":7}',
+            "event: response.output_text.delta\n"
+            'data: {"type":"response.output_text.delta","content_index":0,"delta":"scripted '
+            'response","item_id":"msg_$REQUEST_ID","logprobs":[],"obfuscation":"jMGY8bec","output_index":1,"sequence_number":8}',
+            "event: response.output_text.delta\n"
+            'data: {"type":"response.output_text.delta","content_index":0,"delta":"scripted '
+            'response","item_id":"msg_$REQUEST_ID","logprobs":[],"obfuscation":"HmpVCzj8PFzc","output_index":1,"sequence_number":9}',
+            "event: response.output_text.delta\n"
+            'data: {"type":"response.output_text.delta","content_index":0,"delta":"scripted '
+            'response","item_id":"msg_$REQUEST_ID","logprobs":[],"obfuscation":"9Vjs4mK0JawGR1","output_index":1,"sequence_number":10}',
+            "event: response.output_text.delta\n"
+            'data: {"type":"response.output_text.delta","content_index":0,"delta":"scripted '
+            'response","item_id":"msg_$REQUEST_ID","logprobs":[],"obfuscation":"HqaRQ2JEQ","output_index":1,"sequence_number":11}',
+            "event: response.output_text.delta\n"
+            'data: {"type":"response.output_text.delta","content_index":0,"delta":"scripted '
+            'response","item_id":"msg_$REQUEST_ID","logprobs":[],"obfuscation":"gdho1n5Vt","output_index":1,"sequence_number":12}',
+            "event: response.output_text.delta\n"
+            'data: {"type":"response.output_text.delta","content_index":0,"delta":"scripted '
+            'response","item_id":"msg_$REQUEST_ID","logprobs":[],"obfuscation":"K87IZj","output_index":1,"sequence_number":13}',
+            "event: response.output_text.delta\n"
+            'data: {"type":"response.output_text.delta","content_index":0,"delta":"scripted '
+            'response","item_id":"msg_$REQUEST_ID","logprobs":[],"obfuscation":"x5JBl1t1t7fr","output_index":1,"sequence_number":14}',
+            "event: response.output_text.delta\n"
+            'data: {"type":"response.output_text.delta","content_index":0,"delta":"scripted '
+            'response","item_id":"msg_$REQUEST_ID","logprobs":[],"obfuscation":"gjt97uyl","output_index":1,"sequence_number":15}',
+            "event: response.output_text.delta\n"
+            'data: {"type":"response.output_text.delta","content_index":0,"delta":"scripted '
+            'response","item_id":"msg_$REQUEST_ID","logprobs":[],"obfuscation":"q1LP8GolRM9Pfk7","output_index":1,"sequence_number":16}',
+            "event: response.output_text.delta\n"
+            'data: {"type":"response.output_text.delta","content_index":0,"delta":"scripted '
+            'response","item_id":"msg_$REQUEST_ID","logprobs":[],"obfuscation":"TYZMPgoiJYwGJ","output_index":1,"sequence_number":17}',
+            "event: response.output_text.delta\n"
+            'data: {"type":"response.output_text.delta","content_index":0,"delta":"scripted '
+            'response","item_id":"msg_$REQUEST_ID","logprobs":[],"obfuscation":"I3Gw9kr6Cq7g8","output_index":1,"sequence_number":18}',
+            "event: response.output_text.delta\n"
+            'data: {"type":"response.output_text.delta","content_index":0,"delta":"scripted '
+            'response","item_id":"msg_$REQUEST_ID","logprobs":[],"obfuscation":"Zz0A6WnHpDAVPnP","output_index":1,"sequence_number":19}',
+            "event: response.output_text.delta\n"
+            'data: {"type":"response.output_text.delta","content_index":0,"delta":"scripted '
+            'response","item_id":"msg_$REQUEST_ID","logprobs":[],"obfuscation":"5LEGsKITSF","output_index":1,"sequence_number":20}',
+            "event: response.output_text.delta\n"
+            'data: {"type":"response.output_text.delta","content_index":0,"delta":"scripted '
+            'response","item_id":"msg_$REQUEST_ID","logprobs":[],"obfuscation":"Nr6ahaM","output_index":1,"sequence_number":21}',
+            "event: response.output_text.delta\n"
+            'data: {"type":"response.output_text.delta","content_index":0,"delta":"scripted '
+            'response","item_id":"msg_$REQUEST_ID","logprobs":[],"obfuscation":"hEetz35s15FDz","output_index":1,"sequence_number":22}',
+            "event: response.output_text.delta\n"
+            'data: {"type":"response.output_text.delta","content_index":0,"delta":"scripted '
+            'response","item_id":"msg_$REQUEST_ID","logprobs":[],"obfuscation":"O5kMNPuVTYr","output_index":1,"sequence_number":23}',
+            "event: response.output_text.delta\n"
+            'data: {"type":"response.output_text.delta","content_index":0,"delta":"scripted '
+            'response","item_id":"msg_$REQUEST_ID","logprobs":[],"obfuscation":"HHChpZ","output_index":1,"sequence_number":24}',
+            "event: response.output_text.delta\n"
+            'data: {"type":"response.output_text.delta","content_index":0,"delta":"scripted '
+            'response","item_id":"msg_$REQUEST_ID","logprobs":[],"obfuscation":"aYh85gozY4Zp","output_index":1,"sequence_number":25}',
+            "event: response.output_text.delta\n"
+            'data: {"type":"response.output_text.delta","content_index":0,"delta":"scripted '
+            'response","item_id":"msg_$REQUEST_ID","logprobs":[],"obfuscation":"gQG8S0pMKCom","output_index":1,"sequence_number":26}',
+            "event: response.output_text.delta\n"
+            'data: {"type":"response.output_text.delta","content_index":0,"delta":"scripted '
+            'response","item_id":"msg_$REQUEST_ID","logprobs":[],"obfuscation":"jqOoYUeCiN","output_index":1,"sequence_number":27}',
+            "event: response.output_text.delta\n"
+            'data: {"type":"response.output_text.delta","content_index":0,"delta":"scripted '
+            'response","item_id":"msg_$REQUEST_ID","logprobs":[],"obfuscation":"FLNhK86Yqg2gYgq","output_index":1,"sequence_number":28}',
+            "event: response.output_text.done\n"
+            "data: "
+            '{"type":"response.output_text.done","content_index":0,"item_id":"msg_$REQUEST_ID","logprobs":[],"output_index":1,"sequence_number":29,"text":"scripted '
+            'response"}',
+            "event: response.content_part.done\n"
+            "data: "
+            '{"type":"response.content_part.done","content_index":0,"item_id":"msg_$REQUEST_ID","output_index":1,"part":{"type":"output_text","annotations":[],"logprobs":[],"text":"scripted '
+            'response"},"sequence_number":30}',
+            "event: response.output_item.done\n"
+            "data: "
+            '{"type":"response.output_item.done","item":{"id":"msg_$REQUEST_ID","type":"message","status":"completed","content":[{"type":"output_text","annotations":[],"logprobs":[],"text":"scripted '
+            'response"}],"phase":"final_answer","role":"assistant"},"output_index":1,"sequence_number":31}',
+            "event: response.completed\n"
+            "data: "
+            '{"type":"response.completed","response":{"id":"resp_$REQUEST_ID","object":"response","created_at":1793550482,"status":"completed","access_programs":{"cyber":"standard"},"background":false,"completed_at":1793550484,"error":null,"frequency_penalty":0.0,"incomplete_details":null,"instructions":null,"max_output_tokens":null,"max_tool_calls":null,"model":"gpt-6.1-terra","moderation":null,"output":[{"id":"rs_$REQUEST_ID","type":"reasoning","content":[],"encrypted_content":"gAAAAABq52iUDgldbCdlDfQqIlheMaTv1sfoxtG261Dz8GrQlERV2ayPHJ69kxZNRAN1bCj6d-W2ssHd962G1wjgtm-8BLs8RZluhpSxA-JaIERag4nuIzMeMAZWJGNCaXSHKsqO9hZl50GLt0EfC_VUD2KvZov4FN-uG31ydbOVojI5SspKq-iRh4HQ0cJPq67gQ47gep8zg2xUToLoQdm1sy4N_CnR0JJ-qKsHo19Mwi07y3ZYBJOm3bBGVRwjkqkkC85oP7xkWHU_CmHVYnOCLvtXfej8VEpHQ2kUJj6ZWSh7VfMCKynvj1vnZb2aVJ-IngO8qVpKjFx_hatfJH2HVOiu0Tg5pXZZkcihdR_nTBX_qFVvFuyxvFtafg45R8kL9nWfBNmM59yVuTz4rv2PTyAc2rKe59L_yBO_s9GJ8ENywKZICvB1tbbCIzBLgA7ovBhfnQPxY1VedCO2geHKwFlEcU2ePNzg58C-I9C3qG6ywU50-gbEiy4ECLayaOIVyjJbjwjcu8HLmmko_UKqhNOZ_PvQyt3Gg4QLeY2nTatNL71iPj3DobKSQq_gi2n7oJ0wN7asqPMWfec5EPq7lQxDlwpUas28Yu0Lpf_uEgLJn-VHPeVAw3vpeRblKdC_df6Y6v8jY5H9Htg0bV1qvg1Ow_hnHVHvB4QZyf46hU89lAwYiOPzofrUd_rUO3EHRZ_4Bu4gulI0LySulXbBSM98PXLwN8Ml-lVPqpJ2FZ6gRQtgZyTGmFk_DOdGdUz-1vwR61zYolDajZu6y7Y9Xlg8JydYBAOZN2Clf8BKbZ-5O13W5ks9UyNHIe7AUnYjIuu8a38T5zof1W1nRFDfrJFYiu5ul_zcNyIWF6v5fEAKIbnNYSXdTWwVZEBEkz3dHdZoJ_AEJIIUTzd5GN-JlBijdiwarOFqgGtOpNHr89MC1pSEOK9AucKWsOsYZxRTnSVYHGxWn9tgDLG733Skm7-rodmYstnys9SDHjJcUWtBImSmttFDq0xtnuTvCpV9AfoHCEoktmr-zbzn2f2goIyb8SvChNkzAAGHkkOIa-5_JWD2u7nCBgEYhv16brPKIJzHEfR6UNUUyuZ2hgsHro9mGIEaf7ymM9_SgKkzkJuNk17Xt9JA5bZWYH455SDauQIlUgjOaI_dN2A3DdaW-1-EL2BeRQ2gVinJQctt6gH21S2WATqFDIC5gttMPL2pJi1hR5Fu_g9fz0r4aV-mkeLjsBhOddVbfttFeOtWeVdc2YAig8euR4y29JsKfxAk0kQtSQGN_PZ6C0JVurCYjrsZC24lgzECX9ABqmS1b6spVb-5r--JVa-XEKYeh0hSw55q7qFJJhU2ksTiS0IadfUnAmPPrgHIYs21BnmKTgGaUDT82C_sqT9bVsx65UjycbOvFT7r8DxgBjbD9WnsUntJt2jrwU4Bwy5bYDx6GCX7DtDjoIYMj-Wo9z0seGQXgLm0P277RLjZQOOJIKaeukdm9dCCn9NfQoHG73TylMfCxZv__BlvXFNcPn291xBPnn3A9QHIdVrJBA0O8wlqzjUndp3_WNSqyvY9KsJFyh82gcf6OwDL6j46kjELlRhw83p7LneHeGlfLXjtTDuKK1n7LgXmK8HFyLq3axaGqmaoCRIu18bLVsDx6ZrEZy1_s4yS9mOrOkBuq1IBB-L3OeDwvUYKAi3ay5y5_nivHo3rSa3-0PxX0hiPBafXSPtcJOM9dUOm6Pqx8uZfxRWUKkd6D6JNgbLcHiZfj85DHOSOtk-mD9kpL08HfBIwybzP0gX3uoJJT8mLsPRTM2UyWWOmUq2NnMbIp4GHUHADdFSs00IQDxFnF2ARAlp4yUTGWlUnHMQdd4Nigc9M80TOL3RnDDnHeNLLEzfpz19YPZgvyQl_TSN2WIJKgE7Iv7pTcUq5r_Fo0-NX4WTgIbGAdbR973gXvOiAQOrF0cOazZUyZxI7qjNuSvn7fbif7xk0WG5McD5FyC_-W6kaVV2Fc_H_XG6zRTVZMrl-zgj1jrVXtwwXXMM-qCO9T3O0ULf4zwAj5ZOsssw1064Z0ETsQCWv-MLdS3mQpZfCkhr9afabZXxyjvKkeje9G-RkAa3D8B-bqGTMoBsfu5zTDEAFLUP2Af8qsOzoRpEh8VYvnHQVO4LT_h4KLEVuswCzS1v3MWHjbZ4Bmi7UkyRf_a0LTJXjyMYTQyhMf21k92ghq8UL8_z-DC2SxIPylOIwsipgeIUzoHx_bNNAwwyuQhZhQ1eMsrbnpCzH9WmjQWSlnQ5rKcFmnWw=","summary":[]},{"id":"msg_$REQUEST_ID","type":"message","status":"completed","content":[{"type":"output_text","annotations":[],"logprobs":[],"text":"scripted '
+            'response"}],"phase":"final_answer","role":"assistant"}],"parallel_tool_calls":true,"presence_penalty":0.0,"previous_response_id":null,"prompt_cache_key":null,"prompt_cache_retention":"24h","reasoning":{"context":"all_turns","effort":"medium","mode":"standard","summary":null},"safety_identifier":null,"service_tier":"default","store":true,"temperature":1.0,"text":{"format":{"type":"text"},"verbosity":"medium"},"tool_choice":"auto","tool_usage":{"image_gen":{"input_tokens":0,"input_tokens_details":{"image_tokens":0,"text_tokens":0},"output_tokens":0,"output_tokens_details":{"image_tokens":0,"text_tokens":0},"total_tokens":0},"web_search":{"num_requests":0}},"tools":[],"top_logprobs":0,"top_p":0.98,"truncation":"disabled","usage":{"input_tokens":1840,"input_tokens_details":{"cache_write_tokens":0,"cache_write_tokens_details":{"ttl_12h_tokens":0,"ttl_30m_tokens":0},"cached_tokens":0},"output_tokens":412,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":2252},"user":null,"metadata":{}},"sequence_number":32}',
+        ),
+    ),
+    expected=ExactExpected(
+        spend=0.004017, input_cost=0.0018952, output_cost=0.0021218, prompt_tokens=1840, completion_tokens=412
+    ),
+)
+
+GPT_6_1_TERRA_MESSAGES_BRIDGED_JSON: Final = CostTrackingTestCase(
+    name="gpt-6.1-terra-messages_bridged_json",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gpt-6.1-terra",
+    endpoint="/v1/messages",
+    request={
+        "model": "$MODEL",
+        "max_tokens": 412,
+        "messages": [{"role": "user", "content": "responses native fixture"}],
+    },
+    response=GPT_6_1_TERRA_RESPONSES_NATIVE_JSON.response,
+    expected=ExactExpected(
+        spend=0.004017, input_cost=0.0018952, output_cost=0.0021218, prompt_tokens=1840, completion_tokens=412
+    ),
+)
+
+GPT_6_1_TERRA_MESSAGES_BRIDGED_STREAM: Final = CostTrackingTestCase(
+    name="gpt-6.1-terra-messages_bridged_stream",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gpt-6.1-terra",
+    endpoint="/v1/messages",
+    request={
+        "model": "$MODEL",
+        "max_tokens": 412,
+        "messages": [{"role": "user", "content": "responses native fixture"}],
+        "stream": True,
+    },
+    response=GPT_6_1_TERRA_RESPONSES_NATIVE_STREAM.response,
+    expected=ExactExpected(
+        spend=0.004017, input_cost=0.0018952, output_cost=0.0021218, prompt_tokens=1840, completion_tokens=412
+    ),
+)
+
+GPT_6_1_TERRA_RESPONSES_DEPLOYMENT_JSON: Final = CostTrackingTestCase(
+    name="gpt-6.1-terra-responses_deployment_json",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gpt-6.1-terra",
+    endpoint="/v1/responses",
+    deployment=Deployment(model="openai/responses/gpt-6.1-terra"),
+    request={"model": "$MODEL", "input": "responses native fixture", "stream": False},
+    response=GPT_6_1_TERRA_RESPONSES_NATIVE_JSON.response,
+    expected=ExactExpected(
+        spend=0.004017, input_cost=0.0018952, output_cost=0.0021218, prompt_tokens=1840, completion_tokens=412
+    ),
+)
+
+GPT_6_1_TERRA_CHAT_BRIDGED_JSON: Final = CostTrackingTestCase(
+    name="gpt-6.1-terra-chat_bridged_json",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gpt-6.1-terra",
+    deployment=Deployment(model="openai/responses/gpt-6.1-terra"),
+    request={"model": "$MODEL", "messages": [{"role": "user", "content": "responses native fixture"}], "stream": False},
+    response=GPT_6_1_TERRA_RESPONSES_NATIVE_JSON.response,
+    expected=ExactExpected(
+        spend=0.004017, input_cost=0.0018952, output_cost=0.0021218, prompt_tokens=1840, completion_tokens=412
+    ),
+)
+
+GPT_6_1_TERRA_CACHE_READ: Final = CostTrackingTestCase(
+    name="gpt-6.1-terra-cache_read",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gpt-6.1-terra",
+    request={
+        "model": "$MODEL",
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a "
+                        "single short line.",
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "b770f5df16a2 summarize the attached material in one line and name the city weather",
+                    }
+                ],
+            },
+        ],
+        "stream": False,
+        "allowed_openai_params": [],
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "id": "chatcmpl-$REQUEST_ID",
+            "object": "chat.completion",
+            "created": 1793550524,
+            "model": "gpt-6.1-terra",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "Material: alpha, beta, gamma, and delta; city and weather not specified.",
+                        "refusal": None,
+                        "annotations": [],
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 12928,
+                "completion_tokens": 380,
+                "total_tokens": 13308,
+                "prompt_tokens_details": {"cached_tokens": 12288, "cache_write_tokens": 0, "audio_tokens": 0},
+                "completion_tokens_details": {
+                    "reasoning_tokens": 0,
+                    "audio_tokens": 0,
+                    "accepted_prediction_tokens": 0,
+                    "rejected_prediction_tokens": 0,
+                },
+            },
+            "service_tier": "default",
+            "system_fingerprint": None,
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.003249032, input_cost=0.001292032, output_cost=0.001957, prompt_tokens=12928, completion_tokens=380
+    ),
+)
+
+GPT_6_1_TERRA_CACHE_WRITE_5M: Final = CostTrackingTestCase(
+    name="gpt-6.1-terra-cache_write_5m",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="gpt-6.1-terra",
+    request={
+        "model": "$MODEL",
+        "messages": [
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "You are a deterministic pricing-harness assistant. Keep answers to a "
+                        "single short line.",
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "b770f5df16a2 summarize the attached material in one line and name the city weather",
+                    }
+                ],
+            },
+        ],
+        "stream": False,
+        "allowed_openai_params": [],
+    },
+    response=JsonResponse(
+        content_type="application/json",
+        body={
+            "id": "chatcmpl-$REQUEST_ID",
+            "object": "chat.completion",
+            "created": 1793550522,
+            "model": "gpt-6.1-terra",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "The material mentions alpha, beta, gamma, and delta; no city or "
+                        "weather is specified.",
+                        "refusal": None,
+                        "annotations": [],
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 12928,
+                "completion_tokens": 380,
+                "total_tokens": 13308,
+                "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 12288, "audio_tokens": 0},
+                "completion_tokens_details": {
+                    "reasoning_tokens": 0,
+                    "audio_tokens": 0,
+                    "accepted_prediction_tokens": 0,
+                    "rejected_prediction_tokens": 0,
+                },
+            },
+            "service_tier": "default",
+            "system_fingerprint": None,
+        },
+    ),
+    expected=ExactExpected(
+        spend=0.018437, input_cost=0.01648, output_cost=0.001957, prompt_tokens=12928, completion_tokens=380
+    ),
+)
+
+GPT_6_1_TERRA_TIERED_INPUT_ABOVE_272K: Final = with_usage(
+    GPT_6_1_TERRA_INPUT_TEXT,
+    "gpt-6.1-terra-tiered_input_above_272k",
+    {
+        "prompt_tokens": 300000,
+        "total_tokens": 300412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 0},
+    },
+    ExactExpected(
+        spend=2.231433, input_cost=2.22, output_cost=0.011433, prompt_tokens=300000, completion_tokens=412
+    ),
+)
+GPT_6_1_TERRA_TIERED_CACHE_READ_ABOVE_272K: Final = with_usage(
+    GPT_6_1_TERRA_INPUT_TEXT,
+    "gpt-6.1-terra-tiered_cache_read_above_272k",
+    {
+        "prompt_tokens": 300000,
+        "total_tokens": 300412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 200000},
+    },
+    ExactExpected(
+        spend=0.825433, input_cost=0.814, output_cost=0.011433, prompt_tokens=300000, completion_tokens=412
+    ),
+)
+
+GPT_6_2_SOL_INPUT_TEXT: Final = _gpt_6_on_model(
+    GPT_6_LUNA_INPUT_TEXT,
+    "gpt-6.2-sol",
+    "input_text",
+    ExactExpected(
+        spend=0.01092, input_cost=0.005152, output_cost=0.005768, prompt_tokens=1840, completion_tokens=412
+    ),
+)
+GPT_6_2_SOL_STREAM: Final = _gpt_6_on_model(
+    GPT_6_LUNA_STREAM,
+    "gpt-6.2-sol",
+    "stream",
+    ExactExpected(
+        spend=0.01092, input_cost=0.005152, output_cost=0.005768, prompt_tokens=1840, completion_tokens=412
+    ),
+)
+GPT_6_2_SOL_REASONING: Final = _gpt_6_on_model(
+    GPT_6_LUNA_REASONING,
+    "gpt-6.2-sol",
+    "reasoning",
+    ExactExpected(
+        spend=0.060032, input_cost=0.003472, output_cost=0.05656, prompt_tokens=1240, completion_tokens=4040
+    ),
+)
+GPT_6_2_SOL_SERVICE_TIER_PRIORITY: Final = _gpt_6_on_model(
+    GPT_6_LUNA_SERVICE_TIER_PRIORITY,
+    "gpt-6.2-sol",
+    "service_tier_priority",
+    ExactExpected(
+        spend=0.02184, input_cost=0.010304, output_cost=0.011536, prompt_tokens=1840, completion_tokens=412
+    ),
+)
+GPT_6_2_SOL_RESPONSES_NATIVE_JSON: Final = _gpt_6_on_model(
+    GPT_6_LUNA_RESPONSES_NATIVE_JSON,
+    "gpt-6.2-sol",
+    "responses_native_json",
+    ExactExpected(
+        spend=0.01092, input_cost=0.005152, output_cost=0.005768, prompt_tokens=1840, completion_tokens=412
+    ),
+)
+GPT_6_2_SOL_CACHE_READ: Final = _gpt_6_on_model(
+    GPT_6_LUNA_CACHE_READ,
+    "gpt-6.2-sol",
+    "cache_read",
+    ExactExpected(
+        spend=0.00883232, input_cost=0.00351232, output_cost=0.00532, prompt_tokens=12928, completion_tokens=380
+    ),
+)
+GPT_6_2_SOL_TOOL_CALL: Final = _gpt_6_tool_call_served_by_responses_api(
+    "gpt-6.2-sol",
+    ExactExpected(
+        spend=0.01092, input_cost=0.005152, output_cost=0.005768, prompt_tokens=1840, completion_tokens=412
+    ),
+)
+GPT_6_2_SOL_CACHE_WRITE_5M: Final = with_response_usage(
+    GPT_6_2_SOL_CACHE_READ,
+    "gpt-6.2-sol-cache_write_5m",
+    _GPT_6_CACHE_WRITE_USAGE,
+    ExactExpected(
+        spend=0.05012, input_cost=0.0448, output_cost=0.00532, prompt_tokens=12928, completion_tokens=380
+    ),
+)
+GPT_6_2_SOL_RESPONSES_NATIVE_STREAM: Final = _responses_stream_case(
+    GPT_6_2_SOL_RESPONSES_NATIVE_JSON,
+    "gpt-6.2-sol-responses_native_stream",
+    "gpt-6.2-sol",
+    44,
+    cache_write_ttl_details=True,
+)
+GPT_6_2_SOL_MESSAGES_BRIDGED_JSON: Final = GPT_6_2_SOL_RESPONSES_NATIVE_JSON.model_copy(
+    update={
+        "name": "gpt-6.2-sol-messages_bridged_json",
+        "endpoint": "/v1/messages",
+        "request": {
+            "model": "$MODEL",
+            "max_tokens": 412,
+            "messages": [{"role": "user", "content": "responses native fixture"}],
+        },
+    }
+)
+GPT_6_2_SOL_MESSAGES_BRIDGED_STREAM: Final = GPT_6_2_SOL_MESSAGES_BRIDGED_JSON.model_copy(
+    update={
+        "name": "gpt-6.2-sol-messages_bridged_stream",
+        "request": {**GPT_6_2_SOL_MESSAGES_BRIDGED_JSON.request, "stream": True},
+        "response": GPT_6_2_SOL_RESPONSES_NATIVE_STREAM.response,
+    }
+)
+GPT_6_2_SOL_RESPONSES_DEPLOYMENT_JSON: Final = GPT_6_2_SOL_RESPONSES_NATIVE_JSON.model_copy(
+    update={
+        "name": "gpt-6.2-sol-responses_deployment_json",
+        "deployment": Deployment(model="openai/responses/gpt-6.2-sol"),
+    }
+)
+GPT_6_2_SOL_CHAT_BRIDGED_JSON: Final = GPT_6_2_SOL_RESPONSES_DEPLOYMENT_JSON.model_copy(
+    update={
+        "name": "gpt-6.2-sol-chat_bridged_json",
+        "endpoint": "/v1/chat/completions",
+        "request": {
+            "model": "$MODEL",
+            "messages": [{"role": "user", "content": "responses native fixture"}],
+            "stream": False,
+        },
+    }
+)
+GPT_6_2_SOL_PROMPT_CACHE_WRITE: Final = _gpt_6_with_real_usage(
+    GPT_6_LUNA_CACHE_READ,
+    "gpt-6.2-sol",
+    "prompt_cache_write",
+    _GPT_6_PROMPT_CACHE_REQUEST,
+    {"prompt_tokens": 3315, "completion_tokens": 4, "total_tokens": 3319, "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 3312, "audio_tokens": 0}, "completion_tokens_details": {"reasoning_tokens": 0, "audio_tokens": 0, "accepted_prediction_tokens": 0, "rejected_prediction_tokens": 0}},
+    ExactExpected(
+        spend=0.0116564, input_cost=0.0116004, output_cost=5.6e-05, prompt_tokens=3315, completion_tokens=4, cache_creation_cost=0.011592
+    ),
+)
+GPT_6_2_SOL_PROMPT_CACHE_READ: Final = _gpt_6_with_real_usage(
+    GPT_6_LUNA_CACHE_READ,
+    "gpt-6.2-sol",
+    "prompt_cache_read",
+    _GPT_6_PROMPT_CACHE_REQUEST,
+    {"prompt_tokens": 3315, "completion_tokens": 4, "total_tokens": 3319, "prompt_tokens_details": {"cached_tokens": 3312, "cache_write_tokens": 0, "audio_tokens": 0}, "completion_tokens_details": {"reasoning_tokens": 0, "audio_tokens": 0, "accepted_prediction_tokens": 0, "rejected_prediction_tokens": 0}},
+    ExactExpected(
+        spend=0.00052808, input_cost=0.00047208, output_cost=5.6e-05, prompt_tokens=3315, completion_tokens=4, cache_read_cost=0.00046368
+    ),
+)
+GPT_6_2_SOL_RESPONSES_PROMPT_CACHE_WRITE_12H: Final = _gpt_6_with_real_usage(
+    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H,
+    "gpt-6.2-sol",
+    "responses_prompt_cache_write_12h",
+    _GPT_6_RESPONSES_CACHE_WRITE_12H_REQUEST,
+    {"input_tokens": 3311, "input_tokens_details": {"cache_write_tokens": 3308, "cache_write_tokens_details": {"ttl_12h_tokens": 3308, "ttl_30m_tokens": 0}, "cached_tokens": 0}, "output_tokens": 5, "output_tokens_details": {"reasoning_tokens": 0}, "total_tokens": 3316},
+    ExactExpected(
+        spend=0.0232344, input_cost=0.0231644, output_cost=7e-05, prompt_tokens=3311, completion_tokens=5, cache_creation_cost=0.023156
+    ),
+)
+GPT_6_2_SOL_RESPONSES_PROMPT_CACHE_WRITE_30M: Final = _gpt_6_with_real_usage(
+    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H,
+    "gpt-6.2-sol",
+    "responses_prompt_cache_write_30m",
+    _GPT_6_RESPONSES_CACHE_WRITE_30M_REQUEST,
+    {"input_tokens": 3311, "input_tokens_details": {"cache_write_tokens": 3308, "cache_write_tokens_details": {"ttl_12h_tokens": 0, "ttl_30m_tokens": 3308}, "cached_tokens": 0}, "output_tokens": 5, "output_tokens_details": {"reasoning_tokens": 0}, "total_tokens": 3316},
+    ExactExpected(
+        spend=0.0116564, input_cost=0.0115864, output_cost=7e-05, prompt_tokens=3311, completion_tokens=5, cache_creation_cost=0.011578
+    ),
+)
+GPT_6_2_SOL_TIERED_INPUT_ABOVE_272K: Final = with_usage(
+    GPT_6_2_SOL_INPUT_TEXT,
+    "gpt-6.2-sol-tiered_input_above_272k",
+    {
+        "prompt_tokens": 300000,
+        "total_tokens": 300412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 0},
+    },
+    ExactExpected(
+        spend=1.688652, input_cost=1.68, output_cost=0.008652, prompt_tokens=300000, completion_tokens=412
+    ),
+)
+GPT_6_2_SOL_TIERED_CACHE_READ_ABOVE_272K: Final = with_usage(
+    GPT_6_2_SOL_INPUT_TEXT,
+    "gpt-6.2-sol-tiered_cache_read_above_272k",
+    {
+        "prompt_tokens": 300000,
+        "total_tokens": 300412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 200000},
+    },
+    ExactExpected(
+        spend=0.624652, input_cost=0.616, output_cost=0.008652, prompt_tokens=300000, completion_tokens=412
+    ),
+)
+GPT_6_2_SOL_TIERED_AT_272K_BOUNDARY: Final = with_usage(
+    GPT_6_2_SOL_INPUT_TEXT,
+    "gpt-6.2-sol-tiered_at_272k_boundary",
+    {
+        "prompt_tokens": 272000,
+        "total_tokens": 272412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 0},
+    },
+    ExactExpected(
+        spend=0.767368, input_cost=0.7616, output_cost=0.005768, prompt_tokens=272000, completion_tokens=412
+    ),
+)
+GPT_6_2_SOL_TIERED_PRIORITY_ABOVE_272K: Final = with_usage(
+    GPT_6_2_SOL_SERVICE_TIER_PRIORITY,
+    "gpt-6.2-sol-tiered_priority_above_272k",
+    {
+        "prompt_tokens": 300000,
+        "total_tokens": 300412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 0},
+    },
+    ExactExpected(
+        spend=3.377304, input_cost=3.36, output_cost=0.017304, prompt_tokens=300000, completion_tokens=412
+    ),
+)
+
+GPT_6_2_ASTRA_INPUT_TEXT: Final = _gpt_6_on_model(
+    GPT_6_LUNA_INPUT_TEXT,
+    "gpt-6.2-astra",
+    "input_text",
+    ExactExpected(
+        spend=0.04992, input_cost=0.023552, output_cost=0.026368, prompt_tokens=1840, completion_tokens=412
+    ),
+)
+GPT_6_2_ASTRA_STREAM: Final = _gpt_6_on_model(
+    GPT_6_LUNA_STREAM,
+    "gpt-6.2-astra",
+    "stream",
+    ExactExpected(
+        spend=0.04992, input_cost=0.023552, output_cost=0.026368, prompt_tokens=1840, completion_tokens=412
+    ),
+)
+GPT_6_2_ASTRA_REASONING: Final = _gpt_6_on_model(
+    GPT_6_LUNA_REASONING,
+    "gpt-6.2-astra",
+    "reasoning",
+    ExactExpected(
+        spend=0.274432, input_cost=0.015872, output_cost=0.25856, prompt_tokens=1240, completion_tokens=4040
+    ),
+)
+GPT_6_2_ASTRA_SERVICE_TIER_PRIORITY: Final = _gpt_6_on_model(
+    GPT_6_LUNA_SERVICE_TIER_PRIORITY,
+    "gpt-6.2-astra",
+    "service_tier_priority",
+    ExactExpected(
+        spend=0.09984, input_cost=0.047104, output_cost=0.052736, prompt_tokens=1840, completion_tokens=412
+    ),
+)
+GPT_6_2_ASTRA_RESPONSES_NATIVE_JSON: Final = _gpt_6_on_model(
+    GPT_6_LUNA_RESPONSES_NATIVE_JSON,
+    "gpt-6.2-astra",
+    "responses_native_json",
+    ExactExpected(
+        spend=0.04992, input_cost=0.023552, output_cost=0.026368, prompt_tokens=1840, completion_tokens=412
+    ),
+)
+GPT_6_2_ASTRA_CACHE_READ: Final = _gpt_6_on_model(
+    GPT_6_LUNA_CACHE_READ,
+    "gpt-6.2-astra",
+    "cache_read",
+    ExactExpected(
+        spend=0.04037632, input_cost=0.01605632, output_cost=0.02432, prompt_tokens=12928, completion_tokens=380
+    ),
+)
+GPT_6_2_ASTRA_TOOL_CALL: Final = _gpt_6_tool_call_served_by_responses_api(
+    "gpt-6.2-astra",
+    ExactExpected(
+        spend=0.04992, input_cost=0.023552, output_cost=0.026368, prompt_tokens=1840, completion_tokens=412
+    ),
+)
+GPT_6_2_ASTRA_CACHE_WRITE_5M: Final = with_response_usage(
+    GPT_6_2_ASTRA_CACHE_READ,
+    "gpt-6.2-astra-cache_write_5m",
+    _GPT_6_CACHE_WRITE_USAGE,
+    ExactExpected(
+        spend=0.22912, input_cost=0.2048, output_cost=0.02432, prompt_tokens=12928, completion_tokens=380
+    ),
+)
+GPT_6_2_ASTRA_RESPONSES_NATIVE_STREAM: Final = _responses_stream_case(
+    GPT_6_2_ASTRA_RESPONSES_NATIVE_JSON,
+    "gpt-6.2-astra-responses_native_stream",
+    "gpt-6.2-astra",
+    179,
+    cache_write_ttl_details=True,
+)
+GPT_6_2_ASTRA_MESSAGES_BRIDGED_JSON: Final = GPT_6_2_ASTRA_RESPONSES_NATIVE_JSON.model_copy(
+    update={
+        "name": "gpt-6.2-astra-messages_bridged_json",
+        "endpoint": "/v1/messages",
+        "request": {
+            "model": "$MODEL",
+            "max_tokens": 412,
+            "messages": [{"role": "user", "content": "responses native fixture"}],
+        },
+    }
+)
+GPT_6_2_ASTRA_MESSAGES_BRIDGED_STREAM: Final = GPT_6_2_ASTRA_MESSAGES_BRIDGED_JSON.model_copy(
+    update={
+        "name": "gpt-6.2-astra-messages_bridged_stream",
+        "request": {**GPT_6_2_ASTRA_MESSAGES_BRIDGED_JSON.request, "stream": True},
+        "response": GPT_6_2_ASTRA_RESPONSES_NATIVE_STREAM.response,
+    }
+)
+GPT_6_2_ASTRA_RESPONSES_DEPLOYMENT_JSON: Final = GPT_6_2_ASTRA_RESPONSES_NATIVE_JSON.model_copy(
+    update={
+        "name": "gpt-6.2-astra-responses_deployment_json",
+        "deployment": Deployment(model="openai/responses/gpt-6.2-astra"),
+    }
+)
+GPT_6_2_ASTRA_CHAT_BRIDGED_JSON: Final = GPT_6_2_ASTRA_RESPONSES_DEPLOYMENT_JSON.model_copy(
+    update={
+        "name": "gpt-6.2-astra-chat_bridged_json",
+        "endpoint": "/v1/chat/completions",
+        "request": {
+            "model": "$MODEL",
+            "messages": [{"role": "user", "content": "responses native fixture"}],
+            "stream": False,
+        },
+    }
+)
+GPT_6_2_ASTRA_PROMPT_CACHE_WRITE: Final = _gpt_6_with_real_usage(
+    GPT_6_LUNA_CACHE_READ,
+    "gpt-6.2-astra",
+    "prompt_cache_write",
+    _GPT_6_PROMPT_CACHE_REQUEST,
+    {"prompt_tokens": 3315, "completion_tokens": 4, "total_tokens": 3319, "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 3312, "audio_tokens": 0}, "completion_tokens_details": {"reasoning_tokens": 0, "audio_tokens": 0, "accepted_prediction_tokens": 0, "rejected_prediction_tokens": 0}},
+    ExactExpected(
+        spend=0.0532864, input_cost=0.0530304, output_cost=0.000256, prompt_tokens=3315, completion_tokens=4, cache_creation_cost=0.052992
+    ),
+)
+GPT_6_2_ASTRA_PROMPT_CACHE_READ: Final = _gpt_6_with_real_usage(
+    GPT_6_LUNA_CACHE_READ,
+    "gpt-6.2-astra",
+    "prompt_cache_read",
+    _GPT_6_PROMPT_CACHE_REQUEST,
+    {"prompt_tokens": 3315, "completion_tokens": 4, "total_tokens": 3319, "prompt_tokens_details": {"cached_tokens": 3312, "cache_write_tokens": 0, "audio_tokens": 0}, "completion_tokens_details": {"reasoning_tokens": 0, "audio_tokens": 0, "accepted_prediction_tokens": 0, "rejected_prediction_tokens": 0}},
+    ExactExpected(
+        spend=0.00241408, input_cost=0.00215808, output_cost=0.000256, prompt_tokens=3315, completion_tokens=4, cache_read_cost=0.00211968
+    ),
+)
+GPT_6_2_ASTRA_RESPONSES_PROMPT_CACHE_WRITE_12H: Final = _gpt_6_with_real_usage(
+    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H,
+    "gpt-6.2-astra",
+    "responses_prompt_cache_write_12h",
+    _GPT_6_RESPONSES_CACHE_WRITE_12H_REQUEST,
+    {"input_tokens": 3311, "input_tokens_details": {"cache_write_tokens": 3308, "cache_write_tokens_details": {"ttl_12h_tokens": 3308, "ttl_30m_tokens": 0}, "cached_tokens": 0}, "output_tokens": 5, "output_tokens_details": {"reasoning_tokens": 0}, "total_tokens": 3316},
+    ExactExpected(
+        spend=0.1062144, input_cost=0.1058944, output_cost=0.00032, prompt_tokens=3311, completion_tokens=5, cache_creation_cost=0.105856
+    ),
+)
+GPT_6_2_ASTRA_RESPONSES_PROMPT_CACHE_WRITE_30M: Final = _gpt_6_with_real_usage(
+    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H,
+    "gpt-6.2-astra",
+    "responses_prompt_cache_write_30m",
+    _GPT_6_RESPONSES_CACHE_WRITE_30M_REQUEST,
+    {"input_tokens": 3311, "input_tokens_details": {"cache_write_tokens": 3308, "cache_write_tokens_details": {"ttl_12h_tokens": 0, "ttl_30m_tokens": 3308}, "cached_tokens": 0}, "output_tokens": 5, "output_tokens_details": {"reasoning_tokens": 0}, "total_tokens": 3316},
+    ExactExpected(
+        spend=0.0532864, input_cost=0.0529664, output_cost=0.00032, prompt_tokens=3311, completion_tokens=5, cache_creation_cost=0.052928
+    ),
+)
+GPT_6_2_ASTRA_TIERED_INPUT_ABOVE_272K: Final = with_usage(
+    GPT_6_2_ASTRA_INPUT_TEXT,
+    "gpt-6.2-astra-tiered_input_above_272k",
+    {
+        "prompt_tokens": 300000,
+        "total_tokens": 300412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 0},
+    },
+    ExactExpected(
+        spend=7.719552, input_cost=7.68, output_cost=0.039552, prompt_tokens=300000, completion_tokens=412
+    ),
+)
+GPT_6_2_ASTRA_TIERED_CACHE_READ_ABOVE_272K: Final = with_usage(
+    GPT_6_2_ASTRA_INPUT_TEXT,
+    "gpt-6.2-astra-tiered_cache_read_above_272k",
+    {
+        "prompt_tokens": 300000,
+        "total_tokens": 300412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 200000},
+    },
+    ExactExpected(
+        spend=2.855552, input_cost=2.816, output_cost=0.039552, prompt_tokens=300000, completion_tokens=412
+    ),
+)
+GPT_6_2_ASTRA_TIERED_AT_272K_BOUNDARY: Final = with_usage(
+    GPT_6_2_ASTRA_INPUT_TEXT,
+    "gpt-6.2-astra-tiered_at_272k_boundary",
+    {
+        "prompt_tokens": 272000,
+        "total_tokens": 272412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 0},
+    },
+    ExactExpected(
+        spend=3.507968, input_cost=3.4816, output_cost=0.026368, prompt_tokens=272000, completion_tokens=412
+    ),
+)
+GPT_6_2_ASTRA_TIERED_PRIORITY_ABOVE_272K: Final = with_usage(
+    GPT_6_2_ASTRA_SERVICE_TIER_PRIORITY,
+    "gpt-6.2-astra-tiered_priority_above_272k",
+    {
+        "prompt_tokens": 300000,
+        "total_tokens": 300412,
+        "prompt_tokens_details": {"audio_tokens": 0, "cache_write_tokens": 0, "cached_tokens": 0},
+    },
+    ExactExpected(
+        spend=15.439104, input_cost=15.36, output_cost=0.079104, prompt_tokens=300000, completion_tokens=412
+    ),
+)
+
 CASES: Final[tuple[CostTrackingTestCase, ...]] = (
+    GPT_6_1_TERRA_RESPONSES_NATIVE_STREAM,
+    GPT_6_1_TERRA_MESSAGES_BRIDGED_JSON,
+    GPT_6_1_TERRA_MESSAGES_BRIDGED_STREAM,
+    GPT_6_1_TERRA_RESPONSES_DEPLOYMENT_JSON,
+    GPT_6_1_TERRA_CHAT_BRIDGED_JSON,
+    GPT_6_1_TERRA_CACHE_READ,
+    GPT_6_1_TERRA_CACHE_WRITE_5M,
+    GPT_6_LUNA_RESPONSES_PROMPT_CACHE_WRITE_30M,
+    GPT_6_SOL_RESPONSES_PROMPT_CACHE_WRITE_30M,
+    GPT_6_ASTRA_RESPONSES_PROMPT_CACHE_WRITE_30M,
+    GPT_6_1_SOL_RESPONSES_PROMPT_CACHE_WRITE_30M,
+    GPT_6_1_TERRA_RESPONSES_PROMPT_CACHE_WRITE_30M,
+    GPT_IMAGE_2_6_SUNBURST_IMAGES_LOW,
+    GPT_IMAGE_2_6_SUNBURST_IMAGES_EDIT,
+    GPT_4O_TRANSCRIBE_TRANSCRIPTIONS_TOKENS,
+    GPT_4O_MINI_TTS_SPEECH,
+    GPT_6_1_TERRA_INPUT_TEXT,
+    GPT_6_1_TERRA_STREAM,
+    GPT_6_1_TERRA_REASONING,
+    GPT_6_1_TERRA_TOOL_CALL,
+    GPT_6_1_TERRA_SERVICE_TIER_FLEX,
+    GPT_6_1_TERRA_SERVICE_TIER_PRIORITY,
+    GPT_6_1_TERRA_RESPONSES_NATIVE_JSON,
+    GPT_6_ASTRA_TOOL_CALL,
+    GPT_6_1_SOL_TOOL_CALL,
+    GPT_6_LUNA_PROMPT_CACHE_WRITE,
+    GPT_6_LUNA_PROMPT_CACHE_READ,
+    GPT_6_LUNA_RESPONSES_PROMPT_CACHE_WRITE_12H,
+    GPT_6_LUNA_RESPONSES_WEB_SEARCH_MEDIUM,
+    GPT_6_SOL_PROMPT_CACHE_WRITE,
+    GPT_6_SOL_PROMPT_CACHE_READ,
+    GPT_6_SOL_RESPONSES_PROMPT_CACHE_WRITE_12H,
+    GPT_6_SOL_RESPONSES_WEB_SEARCH_MEDIUM,
+    GPT_6_ASTRA_PROMPT_CACHE_WRITE,
+    GPT_6_ASTRA_PROMPT_CACHE_READ,
+    GPT_6_ASTRA_RESPONSES_PROMPT_CACHE_WRITE_12H,
+    GPT_6_ASTRA_RESPONSES_WEB_SEARCH_MEDIUM,
+    GPT_6_1_SOL_PROMPT_CACHE_WRITE,
+    GPT_6_1_SOL_PROMPT_CACHE_READ,
+    GPT_6_1_SOL_RESPONSES_PROMPT_CACHE_WRITE_12H,
+    GPT_6_1_SOL_RESPONSES_WEB_SEARCH_MEDIUM,
+    GPT_6_1_TERRA_PROMPT_CACHE_WRITE,
+    GPT_6_1_TERRA_PROMPT_CACHE_READ,
+    GPT_6_1_TERRA_RESPONSES_PROMPT_CACHE_WRITE_12H,
+    GPT_6_1_TERRA_RESPONSES_WEB_SEARCH_MEDIUM,
+    TEXT_EMBEDDING_3_LARGE_DIMENSIONS,
     GATEWAY_REPORTED_COST,
     GATEWAY_REPORTED_COST_STREAM,
     GATEWAY_REPORTED_COST_OPERATOR_PRICED,
@@ -12238,7 +13423,7 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     OMNI_MODERATIONS_NEXT_LIST,
     GPT_5_6_RESPONSES_CACHE_READ,
     GPT_5_6_RESPONSES_CACHE_WRITE_12H,
-    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H_NO_12H_RATE,
+    GPT_6_LUNA_RESPONSES_CACHE_WRITE_12H,
     GPT_5_6_RESPONSES_REASONING,
     GPT_5_6_RESPONSES_STREAM,
     GPT_5_6_RESPONSES_STREAM_CACHE_READ,
@@ -12341,9 +13526,123 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     GPT_6_LUNA_MESSAGES_BRIDGED_STREAM,
     GPT_6_ASTRA_MESSAGES_BRIDGED_STREAM,
     GPT_5_6_TERRA_MESSAGES_BRIDGED_STREAM,
+    GPT_6_1_TERRA_TIERED_INPUT_ABOVE_272K,
+    GPT_6_1_TERRA_TIERED_CACHE_READ_ABOVE_272K,
+    GPT_6_2_SOL_INPUT_TEXT,
+    GPT_6_2_SOL_STREAM,
+    GPT_6_2_SOL_REASONING,
+    GPT_6_2_SOL_TOOL_CALL,
+    GPT_6_2_SOL_SERVICE_TIER_PRIORITY,
+    GPT_6_2_SOL_RESPONSES_NATIVE_JSON,
+    GPT_6_2_SOL_RESPONSES_NATIVE_STREAM,
+    GPT_6_2_SOL_MESSAGES_BRIDGED_JSON,
+    GPT_6_2_SOL_MESSAGES_BRIDGED_STREAM,
+    GPT_6_2_SOL_RESPONSES_DEPLOYMENT_JSON,
+    GPT_6_2_SOL_CHAT_BRIDGED_JSON,
+    GPT_6_2_SOL_CACHE_READ,
+    GPT_6_2_SOL_CACHE_WRITE_5M,
+    GPT_6_2_SOL_PROMPT_CACHE_WRITE,
+    GPT_6_2_SOL_PROMPT_CACHE_READ,
+    GPT_6_2_SOL_RESPONSES_PROMPT_CACHE_WRITE_12H,
+    GPT_6_2_SOL_RESPONSES_PROMPT_CACHE_WRITE_30M,
+    GPT_6_2_SOL_TIERED_INPUT_ABOVE_272K,
+    GPT_6_2_SOL_TIERED_CACHE_READ_ABOVE_272K,
+    GPT_6_2_SOL_TIERED_AT_272K_BOUNDARY,
+    GPT_6_2_SOL_TIERED_PRIORITY_ABOVE_272K,
+    GPT_6_2_ASTRA_INPUT_TEXT,
+    GPT_6_2_ASTRA_STREAM,
+    GPT_6_2_ASTRA_REASONING,
+    GPT_6_2_ASTRA_TOOL_CALL,
+    GPT_6_2_ASTRA_SERVICE_TIER_PRIORITY,
+    GPT_6_2_ASTRA_RESPONSES_NATIVE_JSON,
+    GPT_6_2_ASTRA_RESPONSES_NATIVE_STREAM,
+    GPT_6_2_ASTRA_MESSAGES_BRIDGED_JSON,
+    GPT_6_2_ASTRA_MESSAGES_BRIDGED_STREAM,
+    GPT_6_2_ASTRA_RESPONSES_DEPLOYMENT_JSON,
+    GPT_6_2_ASTRA_CHAT_BRIDGED_JSON,
+    GPT_6_2_ASTRA_CACHE_READ,
+    GPT_6_2_ASTRA_CACHE_WRITE_5M,
+    GPT_6_2_ASTRA_PROMPT_CACHE_WRITE,
+    GPT_6_2_ASTRA_PROMPT_CACHE_READ,
+    GPT_6_2_ASTRA_RESPONSES_PROMPT_CACHE_WRITE_12H,
+    GPT_6_2_ASTRA_RESPONSES_PROMPT_CACHE_WRITE_30M,
+    GPT_6_2_ASTRA_TIERED_INPUT_ABOVE_272K,
+    GPT_6_2_ASTRA_TIERED_CACHE_READ_ABOVE_272K,
+    GPT_6_2_ASTRA_TIERED_AT_272K_BOUNDARY,
+    GPT_6_2_ASTRA_TIERED_PRIORITY_ABOVE_272K,
+)
+
+BILLED_AGAINST_REAL_PROVIDER_BY_COST_TRACKING_RECONCILIATION_AUTOMATION: Final[tuple[CostTrackingTestCase, ...]] = (
+    GPT_6_LUNA_RESPONSES_PROMPT_CACHE_WRITE_30M,
+    GPT_6_SOL_RESPONSES_PROMPT_CACHE_WRITE_30M,
+    GPT_6_ASTRA_RESPONSES_PROMPT_CACHE_WRITE_30M,
+    GPT_6_1_SOL_RESPONSES_PROMPT_CACHE_WRITE_30M,
+    GPT_6_1_TERRA_RESPONSES_PROMPT_CACHE_WRITE_30M,
+    GPT_IMAGE_2_6_SUNBURST_IMAGES_LOW,
+    GPT_IMAGE_2_6_SUNBURST_IMAGES_EDIT,
+    GPT_4O_TRANSCRIBE_TRANSCRIPTIONS_TOKENS,
+    GPT_4O_MINI_TTS_SPEECH,
+    GPT_6_1_TERRA_INPUT_TEXT,
+    GPT_6_1_TERRA_STREAM,
+    GPT_6_1_TERRA_REASONING,
+    GPT_6_1_TERRA_TOOL_CALL,
+    GPT_6_1_TERRA_SERVICE_TIER_FLEX,
+    GPT_6_1_TERRA_SERVICE_TIER_PRIORITY,
+    GPT_6_1_TERRA_RESPONSES_NATIVE_JSON,
+    GPT_6_ASTRA_TOOL_CALL,
+    GPT_6_1_SOL_TOOL_CALL,
+    GPT_6_LUNA_PROMPT_CACHE_WRITE,
+    GPT_6_LUNA_PROMPT_CACHE_READ,
+    GPT_6_LUNA_RESPONSES_PROMPT_CACHE_WRITE_12H,
+    GPT_6_LUNA_RESPONSES_WEB_SEARCH_MEDIUM,
+    GPT_6_SOL_PROMPT_CACHE_WRITE,
+    GPT_6_SOL_PROMPT_CACHE_READ,
+    GPT_6_SOL_RESPONSES_PROMPT_CACHE_WRITE_12H,
+    GPT_6_SOL_RESPONSES_WEB_SEARCH_MEDIUM,
+    GPT_6_ASTRA_PROMPT_CACHE_WRITE,
+    GPT_6_ASTRA_PROMPT_CACHE_READ,
+    GPT_6_ASTRA_RESPONSES_PROMPT_CACHE_WRITE_12H,
+    GPT_6_ASTRA_RESPONSES_WEB_SEARCH_MEDIUM,
+    GPT_6_1_SOL_PROMPT_CACHE_WRITE,
+    GPT_6_1_SOL_PROMPT_CACHE_READ,
+    GPT_6_1_SOL_RESPONSES_PROMPT_CACHE_WRITE_12H,
+    GPT_6_1_SOL_RESPONSES_WEB_SEARCH_MEDIUM,
+    GPT_6_1_TERRA_PROMPT_CACHE_WRITE,
+    GPT_6_1_TERRA_PROMPT_CACHE_READ,
+    GPT_6_1_TERRA_RESPONSES_PROMPT_CACHE_WRITE_12H,
+    GPT_6_1_TERRA_RESPONSES_WEB_SEARCH_MEDIUM,
+    TEXT_EMBEDDING_3_LARGE_DIMENSIONS,
+    GPT_6_LUNA_INPUT_TEXT,
+    GPT_6_LUNA_STREAM,
+    GPT_6_LUNA_REASONING,
+    GPT_6_LUNA_TOOL_CALL,
+    GPT_6_LUNA_SERVICE_TIER_FLEX,
+    GPT_6_LUNA_SERVICE_TIER_PRIORITY,
+    GPT_6_LUNA_RESPONSES_NATIVE_JSON,
+    GPT_6_SOL_INPUT_TEXT,
+    GPT_6_SOL_STREAM,
+    GPT_6_SOL_REASONING,
+    GPT_6_SOL_TOOL_CALL,
+    GPT_6_SOL_SERVICE_TIER_FLEX,
+    GPT_6_SOL_SERVICE_TIER_PRIORITY,
+    GPT_6_SOL_RESPONSES_NATIVE_JSON,
+    GPT_6_ASTRA_INPUT_TEXT,
+    GPT_6_ASTRA_STREAM,
+    GPT_6_ASTRA_REASONING,
+    GPT_6_ASTRA_SERVICE_TIER_FLEX,
+    GPT_6_ASTRA_SERVICE_TIER_PRIORITY,
+    GPT_6_ASTRA_RESPONSES_NATIVE_JSON,
+    GPT_6_1_SOL_INPUT_TEXT,
+    GPT_6_1_SOL_STREAM,
+    GPT_6_1_SOL_REASONING,
+    GPT_6_1_SOL_SERVICE_TIER_FLEX,
+    GPT_6_1_SOL_SERVICE_TIER_PRIORITY,
+    GPT_6_1_SOL_RESPONSES_NATIVE_JSON,
 )
 
 PARITY: Final[tuple[StreamParityTestCase, ...]] = (
+    StreamParityTestCase(plain=GPT_6_1_TERRA_RESPONSES_NATIVE_JSON, streamed=GPT_6_1_TERRA_RESPONSES_NATIVE_STREAM),
+    StreamParityTestCase(plain=GPT_6_1_TERRA_MESSAGES_BRIDGED_JSON, streamed=GPT_6_1_TERRA_MESSAGES_BRIDGED_STREAM),
     StreamParityTestCase(plain=GATEWAY_REPORTED_COST, streamed=GATEWAY_REPORTED_COST_STREAM),
     StreamParityTestCase(
         plain=GATEWAY_REPORTED_COST_OPERATOR_PRICED, streamed=GATEWAY_REPORTED_COST_OPERATOR_PRICED_STREAM
@@ -12386,6 +13685,7 @@ PARITY: Final[tuple[StreamParityTestCase, ...]] = (
     StreamParityTestCase(plain=GPT_6_ASTRA_INPUT_TEXT, streamed=GPT_6_ASTRA_STREAM),
     StreamParityTestCase(plain=GPT_6_1_SOL_INPUT_TEXT, streamed=GPT_6_1_SOL_STREAM),
     StreamParityTestCase(plain=GPT_5_6_TERRA_INPUT_TEXT, streamed=GPT_5_6_TERRA_STREAM),
+    StreamParityTestCase(plain=GPT_6_1_TERRA_INPUT_TEXT, streamed=GPT_6_1_TERRA_STREAM),
     StreamParityTestCase(plain=GPT_6_1_SOL_RESPONSES_NATIVE_JSON, streamed=GPT_6_1_SOL_RESPONSES_NATIVE_STREAM),
     StreamParityTestCase(plain=GPT_6_LUNA_RESPONSES_NATIVE_JSON, streamed=GPT_6_LUNA_RESPONSES_NATIVE_STREAM),
     StreamParityTestCase(plain=GPT_6_ASTRA_RESPONSES_NATIVE_JSON, streamed=GPT_6_ASTRA_RESPONSES_NATIVE_STREAM),
@@ -12396,9 +13696,20 @@ PARITY: Final[tuple[StreamParityTestCase, ...]] = (
     StreamParityTestCase(
         plain=GPT_5_6_TERRA_MESSAGES_BRIDGED_JSON, streamed=GPT_5_6_TERRA_MESSAGES_BRIDGED_STREAM
     ),
+    StreamParityTestCase(plain=GPT_6_2_SOL_INPUT_TEXT, streamed=GPT_6_2_SOL_STREAM),
+    StreamParityTestCase(plain=GPT_6_2_SOL_RESPONSES_NATIVE_JSON, streamed=GPT_6_2_SOL_RESPONSES_NATIVE_STREAM),
+    StreamParityTestCase(plain=GPT_6_2_SOL_MESSAGES_BRIDGED_JSON, streamed=GPT_6_2_SOL_MESSAGES_BRIDGED_STREAM),
+    StreamParityTestCase(plain=GPT_6_2_ASTRA_INPUT_TEXT, streamed=GPT_6_2_ASTRA_STREAM),
+    StreamParityTestCase(plain=GPT_6_2_ASTRA_RESPONSES_NATIVE_JSON, streamed=GPT_6_2_ASTRA_RESPONSES_NATIVE_STREAM),
+    StreamParityTestCase(plain=GPT_6_2_ASTRA_MESSAGES_BRIDGED_JSON, streamed=GPT_6_2_ASTRA_MESSAGES_BRIDGED_STREAM),
 )
 
 BRIDGE_COST_PARITY: Final[tuple[BridgeCostParityTestCase, ...]] = (
+    BridgeCostParityTestCase(native=GPT_6_1_TERRA_RESPONSES_NATIVE_JSON, bridged=GPT_6_1_TERRA_MESSAGES_BRIDGED_JSON),
+    BridgeCostParityTestCase(
+        native=GPT_6_1_TERRA_RESPONSES_NATIVE_STREAM, bridged=GPT_6_1_TERRA_MESSAGES_BRIDGED_STREAM
+    ),
+    BridgeCostParityTestCase(native=GPT_6_1_TERRA_RESPONSES_DEPLOYMENT_JSON, bridged=GPT_6_1_TERRA_CHAT_BRIDGED_JSON),
     *bridge_pairs(
         (
             GPT_5_6_RESPONSES_NATIVE_JSON,
@@ -12438,4 +13749,10 @@ BRIDGE_COST_PARITY: Final[tuple[BridgeCostParityTestCase, ...]] = (
     BridgeCostParityTestCase(
         native=GPT_5_6_TERRA_RESPONSES_DEPLOYMENT_JSON, bridged=GPT_5_6_TERRA_CHAT_BRIDGED_JSON
     ),
+    BridgeCostParityTestCase(native=GPT_6_2_SOL_RESPONSES_NATIVE_JSON, bridged=GPT_6_2_SOL_MESSAGES_BRIDGED_JSON),
+    BridgeCostParityTestCase(native=GPT_6_2_SOL_RESPONSES_NATIVE_STREAM, bridged=GPT_6_2_SOL_MESSAGES_BRIDGED_STREAM),
+    BridgeCostParityTestCase(native=GPT_6_2_SOL_RESPONSES_DEPLOYMENT_JSON, bridged=GPT_6_2_SOL_CHAT_BRIDGED_JSON),
+    BridgeCostParityTestCase(native=GPT_6_2_ASTRA_RESPONSES_NATIVE_JSON, bridged=GPT_6_2_ASTRA_MESSAGES_BRIDGED_JSON),
+    BridgeCostParityTestCase(native=GPT_6_2_ASTRA_RESPONSES_NATIVE_STREAM, bridged=GPT_6_2_ASTRA_MESSAGES_BRIDGED_STREAM),
+    BridgeCostParityTestCase(native=GPT_6_2_ASTRA_RESPONSES_DEPLOYMENT_JSON, bridged=GPT_6_2_ASTRA_CHAT_BRIDGED_JSON),
 )

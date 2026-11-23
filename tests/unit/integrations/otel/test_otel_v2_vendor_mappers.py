@@ -681,6 +681,18 @@ def test_langfuse_trace_attributes_match_between_root_and_generation():
     assert all(generation[key] == value for key, value in root.items())
 
 
+def test_langfuse_mapper_sends_release_and_version_on_root_and_generation():
+    controls: Final = TraceControls(release="commit-abc", version="v2")
+
+    root: Final = LangfuseMapper.trace_attributes(controls)
+    generation: Final = LangfuseMapper().map(_llm_call(trace=controls))
+
+    assert root == {"langfuse.release": "commit-abc", "langfuse.version": "v2"}
+    assert all(generation[key] == value for key, value in root.items())
+    assert root.keys() <= LangfuseMapper.LLM_CALL_ATTRIBUTES
+    assert root.keys().isdisjoint(LangfuseMapper().map(_llm_call(trace=TraceControls(release="", version=None))))
+
+
 def test_langfuse_mapper_skips_when_no_messages():
     data = _llm_call(messages_in=(), choices_out=())
     attrs = LangfuseMapper().map(data)

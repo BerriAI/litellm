@@ -160,6 +160,13 @@ impl Error {
         }
     }
 
+    pub fn refused_response(&self) -> Option<&ErrorDetail> {
+        match self {
+            Self::Llm(error) => error.invalid_response(),
+            _ => None,
+        }
+    }
+
     /// The provider's response headers on an upstream failure; empty for every other error.
     pub fn upstream_headers(&self) -> &[(String, String)] {
         match self {
@@ -175,6 +182,15 @@ impl Error {
             Self::Llm(error) => error.is_body_read_timeout(),
             Self::Http(error) => error.is_body_read_timeout(),
             _ => false,
+        }
+    }
+
+    /// The `scheme://host:port` a request that never connected was sent to.
+    pub fn connect_origin(&self) -> Option<&str> {
+        match self {
+            Self::Llm(error) => error.connect_origin(),
+            Self::Http(error) => error.connect_origin(),
+            _ => None,
         }
     }
 
@@ -215,11 +231,6 @@ impl Error {
 
 impl From<litellm_http::Error> for Error {
     fn from(error: litellm_http::Error) -> Self {
-        // Python drops the caller's copy and prefers a forwarded Authorization
-        // over the signature, so leave the request to it.
-        if error.is_computed_header() {
-            return Self::Declined(Decline::new("request forwards a header AWS SigV4 computes"));
-        }
         Self::Http(error)
     }
 }
@@ -328,16 +339,6 @@ mod tests {
     )]
     fn a_missing_api_key_is_a_missing_credential_wherever_it_is_raised(#[case] error: Error) {
         assert!(error.is_missing_credential());
-    }
-
-    #[rstest]
-    #[case::direct(litellm_http::Error::computed_header("authorization").into())]
-    #[case::through_a_transformation(
-        LlmError::Http(litellm_http::Error::computed_header("authorization")).into()
-    )]
-    fn a_header_the_signer_computes_is_left_to_the_host_on_every_route(#[case] error: Error) {
-        assert!(error.declined().is_some(), "{error:?}");
-        assert!(!error.dispatched());
     }
 
     #[test]

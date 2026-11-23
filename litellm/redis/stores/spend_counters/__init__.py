@@ -6,7 +6,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
 from litellm._internal_context import with_service_target
-from litellm.caching.redis_batch import Batch, PostCallSettlement
+from litellm.caching.redis_batch import Batch
 from litellm.redis.stores._route import post_call_request, ready, route
 from litellm.redis.stores.spend_counters.handle import SpendCountersHandle
 from litellm.redis.stores.spend_counters.types import (
@@ -32,6 +32,7 @@ from litellm.redis.stores.spend_counters.types import (
     user_counter,
     user_window_counter,
 )
+from litellm.rust_bridge._native import NativeSpendCounters
 
 if TYPE_CHECKING:
     from litellm.redis.stores.connection import RedisStores
@@ -79,9 +80,21 @@ class SpendCounterStore:
             self._handle.attach(redis.client)
 
     @property
+    def handle(self) -> SpendCountersHandle:
+        return self._handle
+
+    @property
     def redis_ttl(self) -> float | None:
         """The TTL every Redis write gives a counter, None when there is no Redis."""
         return self._handle.redis_ttl_seconds
+
+    @property
+    def native(self) -> NativeSpendCounters:
+        """The native store behind this one, which the native invalidation channel applies broadcasts to. Raises for
+        any other handle, such as a test double, since broadcasts would never reach it."""
+        if not isinstance(self._handle, NativeSpendCounters):
+            raise TypeError(f"the spend counters are backed by {type(self._handle).__name__}, not the native store")
+        return self._handle
 
     @property
     def has_redis(self) -> bool:
@@ -115,14 +128,12 @@ class SpendCounterStore:
         return tuple(await self._handle.increment_many(increments))
 
     @with_service_target(SPEND_COUNTERS_TARGET)
-    def increment_many_post_call(self, increments: Sequence[SpendIncrement]) -> PostCallSettlement | None:
-        """Declares the increments on the request's post-call batch, None when there is no Redis or request.
-        Each total lands in memory once the batch goes out; a counter whose increment failed is dropped everywhere.
-        The settlement reports when every reply is back, whoever sent the batch."""
+    def increment_many_post_call(self, increments: Sequence[SpendIncrement]) -> bool:
+        """Declares the increments on the request's post-call batch, False when there is no Redis or request. Each
+        total lands in memory once the batch goes out; a counter whose increment failed is dropped everywhere. The
+        request tracks a committed charge until it lands, which ``tracked_writes_settled`` reports."""
         request: Final = post_call_request() if self.has_redis and increments else None
-        if request is None:
-            return None
-        return self._handle.increment_many_post_call(request, increments)
+        return request is not None and self._handle.increment_many_post_call(request, increments)
 
     @with_service_target(SPEND_COUNTERS_TARGET)
     async def set_max(self, counter: str, spend: float) -> float | None:
@@ -165,16 +176,3 @@ class SpendCounterStore:
 
     def snapshot(self) -> Mapping[str, float]:
         return self._handle.snapshot()
-
-    def apply_broadcast(self, cache_key: str, new_value: float | None, ttl: float | None) -> None:
-        """A cross-worker auth cache invalidation: a SET writes this worker's copy, a delete drops it. Keys outside
-        the spend counter keyspace are not this store's."""
-        if not cache_key.startswith(SPEND_COUNTER_PREFIX):
-            return
-        try:
-            if new_value is None:
-                self.delete_local(cache_key)
-            else:
-                self.set_local(cache_key, new_value, ttl)
-        except ValueError:
-            return

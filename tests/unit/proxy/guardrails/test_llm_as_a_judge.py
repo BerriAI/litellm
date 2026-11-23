@@ -192,6 +192,37 @@ def _judge_router(overall_score: float) -> MagicMock:
     return router
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True], ids=["non-stream", "stream"])
+async def test_a_responses_reply_is_judged_once_on_its_answer_and_reasoning(stream: bool):
+    from litellm.llms.openai.responses.guardrail_translation.handler import OpenAIResponsesHandler
+
+    router: Final = _judge_router(90.0)
+    guardrail: Final = _make_guardrail(event_hook=GuardrailEventHooks.post_call, router_provider=lambda: router)
+    response: Final = {
+        "model": "gpt-5-mini",
+        "output": [
+            {"type": "reasoning", "summary": [{"type": "summary_text", "text": "**Planning** I weigh two options"}]},
+            {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Use option A"}]},
+        ],
+    }
+    request_data: Final[dict[str, object]] = {"messages": [{"role": "user", "content": "A or B?"}], "metadata": {}}
+
+    if stream:
+        await OpenAIResponsesHandler().process_output_streaming_response(
+            responses_so_far=[{"type": "response.completed", "response": response}],
+            guardrail_to_apply=guardrail,
+            request_data=request_data,
+        )
+    else:
+        await OpenAIResponsesHandler().process_output_response(response, guardrail, request_data=request_data)
+
+    judged: Final = [call.kwargs["messages"][1]["content"] for call in router.acompletion.call_args_list]
+    assert len(judged) == 1
+    assert "Use option A" in judged[0]
+    assert "I weigh two options" in judged[0]
+
+
 @pytest.mark.parametrize("mode", [GuardrailEventHooks.pre_call, GuardrailEventHooks.during_call])
 def test_guardrail_accepts_request_side_modes(mode: GuardrailEventHooks):
     guardrail: Final = _make_guardrail(event_hook=mode)

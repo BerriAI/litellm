@@ -1,6 +1,6 @@
 use base64::{Engine, engine::general_purpose::STANDARD};
 use google_cloud_kms_v1::client::KeyManagementService;
-use litellm_core_utils::settings::Lookup;
+use litellm_env::Lookup;
 use litellm_secrets_google::{Error, GoogleKms, kms::validate_environment};
 use rstest::rstest;
 use wiremock::{

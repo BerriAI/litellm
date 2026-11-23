@@ -14,7 +14,7 @@ from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.common_utils.http_parsing_utils import read_request_body, safe_set_request_parsed_body
-from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
+from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3, request_capacity
 from litellm.llms.anthropic.prompt_cache_prediction import PromptPrefix, cache_scope, parse_prompt
 from litellm.proxy.hooks.prompt_cache_prediction import (
     CacheObservation,
@@ -387,7 +387,7 @@ async def test_occupied_parallel_capacity_rejects_before_provider_count(monkeypa
     limiter: Final = PROXY_MaxParallelRequestsHandler_v3(InternalUsageCache(cache))
     caller: Final = UserAPIKeyAuth(api_key=_CALLER, max_parallel_requests=1)
     app: Final = _app(monkeypatch, cache, caller=caller, counts=_unexpected_count, limiter=limiter)
-    async with limiter.request_capacity(caller, "opus"):
+    async with request_capacity(limiter, caller, "opus"):
         response: Final = await _post(app, _body())
 
     assert response.status_code == 429, response.text

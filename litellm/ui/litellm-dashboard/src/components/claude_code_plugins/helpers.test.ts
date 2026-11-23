@@ -159,28 +159,51 @@ describe("getSourceDisplayText", () => {
 describe("getSourceLink", () => {
   it("returns github link for github source", () => {
     expect(getSourceLink({ source: "github", repo: "org/repo" })).toBe("https://github.com/org/repo");
+    expect(getSourceLink({ source: "github", repo: "org/repo.git", ref: "v2.0" })).toBe(
+      "https://github.com/org/repo/tree/v2.0",
+    );
   });
 
-  it("returns url for url source", () => {
-    expect(getSourceLink({ source: "url", url: "https://example.com" })).toBe("https://example.com");
+  it.each([
+    "https://example.com",
+    "https://git.internal.example/team/repo.git",
+    "https://dev.azure.com/team/project/_git/repo",
+    "https://github.com/org/repo/tree/release/plugins/example",
+    "https://gitlab.com/team/repo/-/tree/release/plugins/example",
+  ])("returns url for an unknown forge or existing browser source %s", (url) => {
+    const source = { source: "url", url, ref: "release", path: "plugins/example" };
+    expect(getSourceLink(source)).toBe(url);
   });
 
   it("returns the repo url for a github git-subdir source", () => {
-    expect(getSourceLink({ source: "git-subdir", url: "https://github.com/org/repo", path: "plugins/x" })).toBe(
+    expect(getSourceLink({ source: "git-subdir", url: "https://github.com/org/repo.git", path: "plugins/x" })).toBe(
       "https://github.com/org/repo",
     );
   });
 
   it("returns the repo url for a gitlab git-subdir source", () => {
-    expect(getSourceLink({ source: "git-subdir", url: "https://gitlab.com/org/repo", path: "sub/dir" })).toBe(
+    expect(getSourceLink({ source: "git-subdir", url: "https://gitlab.com/org/repo.git/", path: "sub/dir" })).toBe(
       "https://gitlab.com/org/repo",
     );
+  });
+
+  it.each([
+    ["github.com/org/repo", "tree"],
+    ["gitlab.com/team/nested/repo", "-/tree"],
+  ])("links branches and commits at %s", (repo, route) => {
+    const root = `https://${repo}`;
+    const sha = "abcde12345".repeat(4);
+    const source = { source: "git-subdir", url: `${root}.git/`, path: "plugins/example" };
+    expect(getSourceLink({ ...source, ref: "release/2" })).toBe(`${root}/${route}/release%2F2/plugins/example`);
+    expect(getSourceLink({ ...source, ref: "release/2", sha })).toBe(`${root}/${route}/${sha}/plugins/example`);
   });
 
   it("returns the archive url for an archive source", () => {
     expect(getSourceLink({ source: "archive", url: "https://bucket.s3.amazonaws.com/skill.zip" })).toBe(
       "https://bucket.s3.amazonaws.com/skill.zip",
     );
+    const url = "https://gitlab.com/team/repo/-/archive/release/repo.zip?download=1";
+    expect(getSourceLink({ source: "archive", url })).toBe(url);
   });
 
   it("returns null when no repo or url", () => {
@@ -192,7 +215,7 @@ describe("getSourceLink", () => {
       "http://git.internal.example/org/repo",
     );
     expect(getSourceLink({ source: "git-subdir", url: "HTTPS://gitlab.com/org/repo", path: "sub/dir" })).toBe(
-      "HTTPS://gitlab.com/org/repo",
+      "https://gitlab.com/org/repo",
     );
   });
 
@@ -320,6 +343,8 @@ describe("parseKeywords", () => {
 });
 
 describe("parseSkillSource", () => {
+  const githubRefSource = { source: "git-subdir", url: "https://github.com/org/repo", ref: "main" };
+
   it("parses a plain github repo", () => {
     expect(parseSkillSource("github.com/org/repo")?.parsed).toEqual({ source: "github", repo: "org/repo" });
   });
@@ -333,16 +358,14 @@ describe("parseSkillSource", () => {
 
   it("parses a github tree URL into a git-subdir", () => {
     expect(parseSkillSource("github.com/org/repo/tree/main/plugins/x")?.parsed).toEqual({
-      source: "git-subdir",
-      url: "https://github.com/org/repo",
+      ...githubRefSource,
       path: "plugins/x",
     });
   });
 
   it("drops a trailing file segment from a github blob URL", () => {
     expect(parseSkillSource("github.com/org/repo/blob/main/x/SKILL.md")?.parsed).toEqual({
-      source: "git-subdir",
-      url: "https://github.com/org/repo",
+      ...githubRefSource,
       path: "x",
     });
   });
@@ -355,10 +378,10 @@ describe("parseSkillSource", () => {
     });
   });
 
-  it("treats a gitlab repo as a raw url source", () => {
-    expect(parseSkillSource("gitlab.com/org/repo")?.parsed).toEqual({
+  it.each(["gitlab.com", "www.gitlab.com", "www.gitlab.com:8443"])("treats a %s repo as a raw url source", (host) => {
+    expect(parseSkillSource(`${host}/org/repo`)?.parsed).toEqual({
       source: "url",
-      url: "https://gitlab.com/org/repo",
+      url: `https://${host}/org/repo`,
     });
   });
 
@@ -377,18 +400,23 @@ describe("parseSkillSource", () => {
     });
   });
 
-  it("combines a self-hosted host with an explicit subfolder", () => {
-    expect(parseSkillSource("https://git.acme.com/team/repo", "sub/dir")?.parsed).toEqual({
+  it.each([
+    "https://git.acme.com/team/repo",
+    "https://dev.azure.com/org/project/_git/repo",
+    "https://git.example.test/team/repo/-/tree/main",
+    "https://www.gitlab.com.example.test/team/repo/-/tree/main",
+  ])("combines a self-hosted host %s with an explicit subfolder", (url) => {
+    expect(parseSkillSource(url, "sub/dir")?.parsed).toEqual({
       source: "git-subdir",
-      url: "https://git.acme.com/team/repo",
+      url,
       path: "sub/dir",
     });
+    expect(parseSkillSource(url, "sub/dir", "release/v2")?.parsed).toMatchObject({ url, ref: "release/v2" });
   });
 
   it("lets a github URL-encoded subdir win over an also-provided subfolder", () => {
     expect(parseSkillSource("github.com/org/repo/tree/main/plugins/x", "ignored/path")?.parsed).toEqual({
-      source: "git-subdir",
-      url: "https://github.com/org/repo",
+      ...githubRefSource,
       path: "plugins/x",
     });
   });
@@ -416,6 +444,7 @@ describe("parseSkillSource", () => {
       "ssh://git@ghe.example.com:2222/org/nested/repo.git",
     ]) {
       expect(parseSkillSource(url)?.parsed).toEqual({ source: "url", url });
+      expect(parseSkillSource(url, "plugins/x", "release/v2")?.parsed).toMatchObject({ url, ref: "release/v2" });
     }
     expect(parseSkillSource("git@ssh.dev.azure.com:v3/org/project/repo")?.suggestedName).toBe("repo");
   });
@@ -477,11 +506,11 @@ describe("parseSkillSource", () => {
     });
   });
 
-  it("keeps the query string of a zip URL so versioned or signed object links still resolve", () => {
-    expect(parseSkillSource("https://bucket.s3.amazonaws.com/skill.ZIP?versionId=abc")?.parsed).toEqual({
-      source: "archive",
-      url: "https://bucket.s3.amazonaws.com/skill.ZIP?versionId=abc",
-    });
+  it.each([
+    "https://bucket.s3.amazonaws.com/skill.ZIP?versionId=abc",
+    "https://www.gitlab.com:8443/team/repo/-/archive/release/repo.zip?download=1",
+  ])("preserves the archive URL %s including its query string", (url) => {
+    expect(parseSkillSource(url)?.parsed).toEqual({ source: "archive", url });
   });
 
   it("ignores the subfolder for a zip URL since the archive is installed whole", () => {
@@ -514,10 +543,11 @@ describe("parseSkillSource", () => {
     expect(parseSkillSource("github.com/org/repo", "a//b")).toBeNull();
   });
 
-  it("treats a blob URL pointing at a root file as the plain repo", () => {
-    expect(parseSkillSource("github.com/org/repo/blob/main/SKILL.md")?.parsed).toEqual({
+  it.each(["main", "a".repeat(40)])("treats a root blob at %s as the plain repo", (target) => {
+    expect(parseSkillSource(`github.com/org/repo/blob/${target}/SKILL.md`)?.parsed).toEqual({
       source: "github",
       repo: "org/repo",
+      ...(target === "main" ? { ref: target } : { sha: target }),
     });
   });
 
@@ -533,23 +563,65 @@ describe("parseSkillSource", () => {
 
   it("routes uppercase and www github hosts through the github shorthand", () => {
     expect(parseSkillSource("GitHub.com/org/repo/tree/main/x")?.parsed).toEqual({
-      source: "git-subdir",
-      url: "https://github.com/org/repo",
+      ...githubRefSource,
       path: "x",
     });
     expect(parseSkillSource("www.github.com/org/repo")?.parsed).toEqual({ source: "github", repo: "org/repo" });
   });
 
-  it("keeps a dotted folder name as the subdir path", () => {
+  it("keeps a dotted tree directory and removes a blob filename regardless of extension", () => {
+    expect(parseSkillSource("github.com/org/repo/tree/main/my.md")?.parsed).toEqual({
+      ...githubRefSource,
+      path: "my.md",
+    });
     expect(parseSkillSource("github.com/org/repo/blob/main/my.skill")?.parsed).toEqual({
-      source: "git-subdir",
-      url: "https://github.com/org/repo",
-      path: "my.skill",
+      source: "github",
+      repo: "org/repo",
+      ref: "main",
     });
   });
 
-  it("falls back to the repo for a tree URL with a branch but no folder", () => {
-    expect(parseSkillSource("github.com/org/repo/tree/main")?.parsed).toEqual({ source: "github", repo: "org/repo" });
+  it.each([
+    ["github.com/org/repo/tree/main", { source: "github", repo: "org/repo", ref: "main" }],
+    ["gitlab.com/team/repo/-/tree/release", { source: "url", url: "https://gitlab.com/team/repo", ref: "release" }],
+  ])("keeps the root repository and ref for %s", (url, source) => {
+    expect(parseSkillSource(url)?.parsed).toEqual(source);
+    const selected = { source: "git-subdir", ref: source.ref, path: "skills/review" };
+    expect(parseSkillSource(url, selected.path)?.parsed).toMatchObject(selected);
+  });
+
+  it.each([
+    ["gitlab.com", "tree/release/plugins/x", ""],
+    ["WWW.GITLAB.COM:8443", "blob/release/plugins/x/SKILL.md", ":8443"],
+    ["www.gitlab.com", "blob/release/plugins/x/example.zip", ""],
+  ])("normalizes GitLab browser host %s and path %s", (host, route, port) => {
+    const expected = {
+      source: "git-subdir",
+      url: `https://gitlab.com${port}/team/subgroup/repo`,
+      path: "plugins/x",
+      ref: "release",
+    };
+    const source = parseSkillSource(`https://${host}/team/subgroup/repo/-/${route}`);
+    expect(source?.parsed).toEqual(expected);
+    expect(source?.label).toContain("release");
+  });
+
+  it.each(["github.com/org/repo/tree", "gitlab.com/team/repo/-/tree"])(
+    "preserves an encoded or explicitly selected slash-containing ref in %s",
+    (prefix) => {
+      const encoded = parseSkillSource(`https://${prefix}/release%2Fv2/plugins/x`);
+      const explicit = parseSkillSource(`https://${prefix}/release/v2/plugins/x`, "", "release/v2");
+      expect(encoded?.parsed).toEqual(explicit?.parsed);
+      expect(explicit?.parsed).toMatchObject({ ref: "release/v2", path: "plugins/x" });
+      expect(parseSkillSource(`https://${prefix}/release/v2/plugins/x`, "", "different")).toBeNull();
+    },
+  );
+
+  it("normalizes commit pins for an explicit clone ref", () => {
+    const sha = "abcdef1234".repeat(4);
+    const fromInput = parseSkillSource("https://gitlab.com/team/repo", "plugins/x", sha.toUpperCase())?.parsed;
+    expect(fromInput).toMatchObject({ sha });
+    expect(fromInput).not.toHaveProperty("ref");
   });
 
   it("kebab-cases the suggested name from a mixed-case repo", () => {

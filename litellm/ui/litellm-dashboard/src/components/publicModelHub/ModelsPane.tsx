@@ -8,9 +8,12 @@ import { useTranslation } from "react-i18next";
 import type { ModelGroupInfo } from "@/components/PublicModelHubTableColumns";
 import { DataTable, DataTableSortHeader } from "@/components/shared/DataTable";
 import { ButtonGroup } from "@/components/ui/button-group";
-import { Checkbox } from "@/components/ui/checkbox";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { MultiSelect } from "@/components/shared/MultiSelect";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Toggle } from "@/components/ui/toggle";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { displayMode } from "@/lib/decisionModels";
 
@@ -22,6 +25,7 @@ import { ProviderAvatar, SearchInput } from "./HubParts";
 import { type HubData, useOpenedModel } from "./useHubData";
 import { useOpenHref } from "./useHubUrlState";
 import { ModelInspector } from "./ModelInspector";
+import { catalogTypography } from "./fonts";
 
 const SORTS = [
   { value: "model_group", label: "Name", desc: false },
@@ -35,6 +39,12 @@ const SORTS = [
 ];
 
 type Models = HubData["models"];
+const filterSection = "min-w-0 border-b border-b-border pb-[22px] last:border-b-0";
+const filterLegend = "mb-3 text-xs leading-[1.2] font-semibold";
+const modeButton =
+  "h-auto gap-[normal] rounded-none border border-transparent bg-transparent px-3 py-[7px] text-xs leading-[1.6] font-normal text-muted-foreground hover:border-border hover:bg-background hover:text-foreground focus-visible:border-transparent focus-visible:ring-0 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-foreground active:not-aria-[haspopup]:translate-y-0 aria-pressed:border-(--catalog-rule-strong) aria-pressed:bg-muted aria-pressed:text-foreground aria-pressed:hover:border-border aria-pressed:focus-visible:border-(--catalog-rule-strong) focus-visible:hover:border-border dark:hover:bg-background dark:aria-pressed:hover:bg-muted max-[640px]:px-[9px]";
+const tableCell = "h-[66px] px-4 py-3 text-[13px] leading-[1.6] font-normal text-foreground max-[640px]:px-3";
+const tableHeading = "h-auto py-3.5 text-[11px] font-medium text-muted-foreground";
 
 function SortControl({ models }: { models: Models }) {
   const { t } = useTranslation();
@@ -51,11 +61,15 @@ function SortControl({ models }: { models: Models }) {
   return (
     <ButtonGroup>
       <Select items={options} value={field} onValueChange={pick}>
-        <SelectTrigger size="sm" className="w-auto gap-1.5" aria-label={t("publicModelHub.sortControl.sortBy")}>
+        <SelectTrigger
+          size="sm"
+          className="w-auto gap-1.5 text-xs leading-[1.6] font-normal shadow-none"
+          aria-label={t("publicModelHub.sortControl.sortBy")}
+        >
           <span className="hidden text-muted-foreground sm:inline">{t("publicModelHub.sortControl.sort")}</span>
           <SelectValue />
         </SelectTrigger>
-        <SelectContent align="end" className="w-auto min-w-(--anchor-width)">
+        <SelectContent align="end" className={`${catalogTypography} w-auto min-w-(--anchor-width)`}>
           {options.map((sort) => (
             <SelectItem key={sort.value} value={sort.value}>
               {sort.label}
@@ -72,7 +86,7 @@ function SortControl({ models }: { models: Models }) {
               aria-label={t("publicModelHub.sortControl.descending")}
               pressed={desc}
               onPressedChange={(pressed) => models.onSortingChange([{ id: field, desc: pressed }])}
-              className="dark:bg-input/30 dark:hover:bg-input/50"
+              className="text-xs leading-[1.6] font-normal shadow-none dark:bg-input/30 dark:hover:bg-input/50"
             />
           }
         >
@@ -87,7 +101,6 @@ function SortControl({ models }: { models: Models }) {
 interface FilterOption {
   value: string;
   label: string;
-  provider?: string;
 }
 
 function CatalogFilter({
@@ -102,18 +115,24 @@ function CatalogFilter({
   onChange: (values: string[]) => void;
 }) {
   return (
-    <fieldset data-slot="catalog-filter-section" className="min-w-0">
-      <legend className="mb-3 text-sm font-medium">{label}</legend>
-      <div className="flex flex-col gap-3">
+    <fieldset data-slot="catalog-filter-section" className={filterSection}>
+      <legend className={filterLegend}>{label}</legend>
+      <div className="flex flex-col gap-[11px]">
         {options.map((option) => (
-          <label key={option.value} className="flex cursor-pointer items-center gap-2.5 text-sm">
-            <Checkbox
+          <label
+            key={option.value}
+            className="flex cursor-pointer items-center gap-2.5 text-xs leading-[1.6] font-normal"
+          >
+            <Input
+              type="checkbox"
+              className="size-3.5 shrink-0 appearance-auto rounded-none border-0 bg-transparent p-0 accent-foreground shadow-none focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-foreground focus-visible:ring-0 dark:bg-transparent"
               checked={values.includes(option.value)}
-              onCheckedChange={(checked) =>
-                onChange(checked ? [...values, option.value] : values.filter((value) => value !== option.value))
+              onChange={(event) =>
+                onChange(
+                  event.target.checked ? [...values, option.value] : values.filter((value) => value !== option.value),
+                )
               }
             />
-            {option.provider && <ProviderAvatar provider={option.provider} />}
             <span className="min-w-0 break-words">{option.label}</span>
           </label>
         ))}
@@ -128,27 +147,91 @@ function ModelFilters({ hub }: { hub: HubData }) {
   return (
     <CatalogFilters count={models.columnFilters.length} onClear={() => models.onColumnFiltersChange([])}>
       <CatalogFilter
-        label={t("publicModelHub.catalog.provider", { defaultValue: "Provider" })}
-        options={facets.providers.map((provider) => ({ value: provider, label: providerName(provider), provider }))}
-        values={models.providerValues}
-        onChange={models.onProvidersChange}
-      />
-      <CatalogFilter
         label={t("publicModelHub.catalog.capabilities", { defaultValue: "Capabilities" })}
         options={facets.features.map((feature) => ({ value: feature, label: featureFacetLabel(feature) }))}
         values={models.featureValues}
         onChange={models.onFeaturesChange}
       />
-      <CatalogFilter
-        label={t("publicModelHub.catalog.mode", { defaultValue: "Mode" })}
-        options={[...new Set(facets.modes.map((mode) => displayMode(mode) ?? mode))].map((mode) => ({
-          value: mode,
-          label: modeLabel(mode),
-        }))}
-        values={models.modeValues}
-        onChange={models.onModesChange}
-      />
+      <fieldset data-slot="catalog-filter-section" className={filterSection}>
+        <legend className={filterLegend}>{t("publicModelHub.catalog.provider")}</legend>
+        <div className="relative">
+          <svg
+            className="pointer-events-none absolute top-[19px] left-[9px] z-raised -translate-y-1/2 text-muted-foreground"
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.6"
+            aria-hidden="true"
+          >
+            <rect x="3" y="3" width="7" height="7" rx="1.5" />
+            <rect x="14" y="3" width="7" height="7" rx="1.5" />
+            <rect x="3" y="14" width="7" height="7" rx="1.5" />
+            <rect x="14" y="14" width="7" height="7" rx="1.5" />
+          </svg>
+          <MultiSelect
+            options={facets.providers.map((provider) => ({
+              value: provider,
+              label: providerName(provider),
+              icon: <ProviderAvatar provider={provider} />,
+            }))}
+            value={models.providerValues}
+            onValueChange={models.onProvidersChange}
+            placeholder={t("publicModelHub.catalog.allProviders")}
+            className="min-h-[38px] gap-[5px] rounded-[7px] border bg-card py-2 pr-[25px] pl-[29px] text-xs leading-[1.6] font-normal text-foreground shadow-none dark:bg-card [&_input]:leading-[1.35] [&_input::placeholder]:text-foreground [&_input::placeholder]:opacity-100"
+            contentClassName={catalogTypography}
+          />
+          <svg
+            className="pointer-events-none absolute top-[19px] right-[9px] z-raised -translate-y-1/2 text-muted-foreground"
+            width="12"
+            height="12"
+            viewBox="0 0 20 20"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            aria-hidden="true"
+          >
+            <path d="m6 8 4 4 4-4" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </div>
+      </fieldset>
     </CatalogFilters>
+  );
+}
+
+function ModeFilters({ hub }: { hub: HubData }) {
+  const { t } = useTranslation();
+  const { models, facets } = hub;
+  const modes = [...new Set(facets.modes.map((mode) => displayMode(mode) ?? mode))];
+  return (
+    <div
+      data-slot="catalog-modes"
+      className="flex flex-wrap items-center gap-[7px] border-b border-b-border pt-1.5 pb-[18px] text-base leading-[1.6] max-[640px]:gap-1"
+    >
+      <span className="mr-[9px] text-[11px] text-muted-foreground">{t("publicModelHub.catalog.mode")}</span>
+      <Button
+        className={modeButton}
+        variant="ghost"
+        aria-pressed={models.modeValues.length === 0}
+        onClick={() => models.onModesChange([])}
+      >
+        {t("publicModelHub.catalog.allModes")}
+      </Button>
+      <ToggleGroup
+        className="flex-wrap gap-[7px] max-[640px]:gap-1"
+        multiple
+        value={models.modeValues}
+        onValueChange={models.onModesChange}
+        aria-label={t("publicModelHub.catalog.mode")}
+      >
+        {modes.map((mode) => (
+          <ToggleGroupItem className={modeButton} key={mode} value={mode}>
+            {modeLabel(mode)}
+          </ToggleGroupItem>
+        ))}
+      </ToggleGroup>
+    </div>
   );
 }
 
@@ -173,13 +256,20 @@ function ModelLink({
     <a
       href={hrefFor(model.model_group)}
       aria-current={selected === model.model_group ? "true" : undefined}
-      className="flex min-w-0 items-center gap-3 rounded-sm py-2 outline-none hover:text-primary focus-visible:ring-2 focus-visible:ring-ring"
+      data-slot="catalog-model-link"
+      className="flex min-h-0 min-w-0 items-center gap-3 rounded-sm text-sm leading-[1.6] outline-none hover:text-primary focus-visible:ring-2 focus-visible:ring-ring"
       onClick={follow}
     >
-      <ProviderAvatar provider={model.providers?.[0] ?? ""} className="size-6 shrink-0 sm:size-8" />
-      <span className="flex min-w-0 flex-col gap-1">
-        <span className="font-medium whitespace-normal wrap-anywhere">{model.model_group}</span>
-        <span className="text-xs whitespace-normal text-muted-foreground">
+      <svg className="size-3.5 shrink-0 text-muted-foreground" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+        <path d="m6 4 4 4-4 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+      <ProviderAvatar
+        provider={model.providers?.[0] ?? ""}
+        className="size-[30px] shrink-0 gap-[3px] rounded-sm ring-0"
+      />
+      <span className="flex min-w-0 flex-col gap-[3px]">
+        <span className="leading-[1.4] font-medium whitespace-normal wrap-break-word">{model.model_group}</span>
+        <span className="text-[11px] leading-[1.3] font-normal whitespace-normal text-muted-foreground">
           {(model.providers ?? []).map(providerName).join(", ")}
         </span>
       </span>
@@ -210,21 +300,31 @@ export function ModelsPane({
   const columns: ColumnDef<ModelGroupInfo>[] = [
     {
       accessorKey: "model_group",
-      meta: { skeleton: "twoLine" },
+      meta: {
+        skeleton: "twoLine",
+        className: `${tableCell} text-sm/[1.6] font-medium`,
+        headerClassName: `${tableHeading} w-[38%]`,
+      },
+      size: 245,
       sortDescFirst: false,
       header: ({ column }) => (
-        <DataTableSortHeader column={column} title={t("publicModelHub.catalog.model", { defaultValue: "Model" })} />
+        <DataTableSortHeader
+          className="[font:inherit] text-inherit"
+          column={column}
+          title={t("publicModelHub.catalog.model", { defaultValue: "Model" })}
+        />
       ),
       cell: ({ row }) => <ModelLink model={row.original} selected={selected} onSelect={onSelect} />,
     },
     {
       accessorKey: "max_input_tokens",
-      meta: { numeric: true, className: "hidden sm:table-cell" },
+      meta: { className: `${tableCell} hidden sm:table-cell tabular-nums`, headerClassName: tableHeading },
       size: 140,
       sortDescFirst: true,
       header: ({ column }) => (
         <DataTableSortHeader
           column={column}
+          className="[font:inherit] text-inherit"
           title={t("publicModelHub.catalog.inputLimit", { defaultValue: "Input limit" })}
         />
       ),
@@ -232,29 +332,41 @@ export function ModelsPane({
     },
     {
       accessorKey: "input_cost_per_token",
-      meta: { numeric: true },
+      meta: { className: `${tableCell} text-(--catalog-secondary) tabular-nums`, headerClassName: tableHeading },
       size: 130,
       sortDescFirst: false,
       header: ({ column }) => (
         <DataTableSortHeader
           column={column}
+          className="[font:inherit] text-inherit"
           title={t("publicModelHub.catalog.inputPrice", { defaultValue: "Input /1M" })}
         />
       ),
-      cell: ({ row }) => formatPerMillion(row.original.input_cost_per_token),
+      cell: ({ row }) => (
+        <span>
+          {formatPerMillion(row.original.input_cost_per_token)}
+          {!!row.original.input_cost_per_token && t("publicModelHub.catalog.perMillion")}
+        </span>
+      ),
     },
     {
       accessorKey: "output_cost_per_token",
-      meta: { numeric: true },
+      meta: { className: `${tableCell} text-(--catalog-secondary) tabular-nums`, headerClassName: tableHeading },
       size: 130,
       sortDescFirst: false,
       header: ({ column }) => (
         <DataTableSortHeader
           column={column}
+          className="[font:inherit] text-inherit"
           title={t("publicModelHub.catalog.outputPrice", { defaultValue: "Output /1M" })}
         />
       ),
-      cell: ({ row }) => formatPerMillion(row.original.output_cost_per_token),
+      cell: ({ row }) => (
+        <span>
+          {formatPerMillion(row.original.output_cost_per_token)}
+          {!!row.original.output_cost_per_token && t("publicModelHub.catalog.perMillion")}
+        </span>
+      ),
     },
   ];
   const clear = () => {
@@ -262,27 +374,43 @@ export function ModelsPane({
     models.onColumnFiltersChange([]);
   };
   return (
-    <div data-slot="catalog-layout" className="grid min-w-0 gap-8 lg:grid-cols-[220px_minmax(0,1fr)]">
+    <div
+      data-slot="catalog-layout"
+      className="grid min-w-0 grid-cols-[218px_minmax(0,1fr)] items-start gap-[34px] pt-6 catalog-narrow:grid-cols-1 catalog-narrow:gap-5 catalog-narrow:pt-[22px]"
+    >
       <ModelFilters hub={hub} />
-      <div data-slot="catalog-results" className="flex min-w-0 flex-col gap-4">
-        <div data-slot="catalog-toolbar" className="flex flex-wrap items-center gap-3">
+      <div data-slot="catalog-results" className="flex min-w-0 flex-col gap-0">
+        <div data-slot="catalog-toolbar" className="mb-4 flex flex-wrap items-center gap-3">
           <SearchInput
             value={models.searchValue}
             onChange={models.onSearchChange}
             placeholder={t("publicModelHub.catalog.searchModels", { defaultValue: "Search models" })}
+            showShortcut
           />
-          <SortControl models={models} />
         </div>
-        <div data-slot="catalog-count" className="text-sm text-muted-foreground tabular-nums" aria-live="polite">
-          {models.isFetching || models.isLoading
-            ? t("publicModelHub.catalog.loadingModels", { defaultValue: "Loading models…" })
-            : !models.error && t("publicModelHub.catalog.modelCount", countOptions)}
+        <ModeFilters hub={hub} />
+        <div className="flex flex-wrap items-center justify-between gap-3 py-4">
+          <div
+            data-slot="catalog-count"
+            className="text-xs leading-[1.6] font-normal text-muted-foreground tabular-nums"
+            aria-live="polite"
+          >
+            {models.isFetching || models.isLoading
+              ? t("publicModelHub.catalog.loadingModels", { defaultValue: "Loading models…" })
+              : !models.error && t("publicModelHub.catalog.modelCount", countOptions)}
+          </div>
+          <SortControl models={models} />
         </div>
         {models.error && models.rows.length > 0 && (
           <LoadFailed noun={t("publicModelHub.modelsPane.noun")} onRetry={models.refetch} />
         )}
-        <div data-slot="catalog-table" aria-busy={models.isFetching || models.isLoading}>
+        <div
+          data-slot="catalog-table"
+          className="overflow-hidden rounded-lg bg-card [&_table]:min-w-[640px] [&_table]:text-base [&_table]:leading-[1.6] [&_thead]:bg-transparent [&_thead_tr]:bg-transparent [&_thead_tr]:border-border [&_[data-slot=table-pagination]]:flex-wrap [&_[data-slot=table-pagination]]:gap-3 [&_[data-slot=table-pagination]]:px-4 [&_[data-slot=table-pagination]]:py-3 [&_[data-slot=table-pagination]]:text-xs/[1.4285714286] [&_[data-slot=table-pagination-summary]]:flex-wrap [&_[data-slot=table-pagination-summary]]:gap-3 [&_[data-slot=table-pagination]_:is(p,span,button)]:text-xs/[1.6] [&_[data-slot=table-pagination]_:is(p,span,button)]:font-normal [&_[data-slot=table-pagination]_:is(p,span,button)]:text-muted-foreground"
+          aria-busy={models.isFetching || models.isLoading}
+        >
           <DataTable
+            rowClassName={() => "border-border hover:bg-(--catalog-hover) hover:shadow-[inset_3px_0_0_var(--primary)]"}
             data={models.rows}
             columns={columns}
             getRowId={(model) => model.model_group}

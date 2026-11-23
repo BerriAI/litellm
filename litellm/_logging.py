@@ -10,7 +10,7 @@ import sys
 from collections.abc import Iterator, Mapping
 from datetime import datetime
 from logging import Formatter
-from types import FrameType
+from types import FrameType, MappingProxyType
 from typing import Final, Protocol, TextIO
 from urllib.parse import unquote
 
@@ -91,6 +91,8 @@ _redact_string = redact_string
 
 _REDACTED_RECORD_ATTR: Final = "litellm_redacted"
 _REDACTED_STAMP: Final = object()
+_CALLER_ERROR_RECORD_ATTR: Final = "litellm_caller_error"
+CALLER_ERROR_LOG_EXTRA: Final = MappingProxyType({_CALLER_ERROR_RECORD_ATTR: True})
 _DECODED_LOG_PAYLOAD: Final = TypeAdapter(object)
 _UNREDACTED_SCALAR_TYPES: Final = (bool, int, float, type(None))
 
@@ -668,15 +670,20 @@ def _plain_log_format(stdout: TextIO | None, stderr: TextIO | None) -> str:
 
 
 class LevelRoutingStreamHandler(logging.StreamHandler):
-    """Writes records below WARNING and invalid-key warnings to stdout, others to stderr.
+    """Writes records below WARNING and caller-error warnings to stdout, others to stderr.
 
     Collectors that derive severity from the stream report every stderr line as an error.
-    Invalid-key warnings route to stdout so LITELLM_LOG=ERROR can suppress them.
+    Caller-error warnings (a malformed virtual key, a token count the provider refused) route
+    to stdout so LITELLM_LOG=ERROR can suppress them.
     """
 
     def emit(self, record: logging.LogRecord) -> None:
         is_stdout_record: Final = record.levelno < logging.WARNING or (
-            record.levelno == logging.WARNING and record.name == verbose_proxy_stdout_logger.name
+            record.levelno == logging.WARNING
+            and (
+                record.name == verbose_proxy_stdout_logger.name
+                or getattr(record, _CALLER_ERROR_RECORD_ATTR, False) is True
+            )
         )
         preferred: Final = sys.stdout if is_stdout_record else sys.stderr
         if preferred is None or getattr(preferred, "closed", False):
@@ -780,7 +787,7 @@ def _get_standard_record_attrs() -> frozenset:
 
 
 _STANDARD_RECORD_ATTRS: Final = _get_standard_record_attrs()
-_NON_EXTRA_RECORD_ATTRS: Final = _STANDARD_RECORD_ATTRS | {_REDACTED_RECORD_ATTR}
+_NON_EXTRA_RECORD_ATTRS: Final = _STANDARD_RECORD_ATTRS | {_REDACTED_RECORD_ATTR, _CALLER_ERROR_RECORD_ATTR}
 
 # CorrelationContextFilter is the only legitimate source for these two JSON fields;
 # see JsonFormatter.format() for why they're excluded from the generic message-content
@@ -850,6 +857,25 @@ class JsonFormatter(Formatter):
         )
 
 
+RUST_FIELDS_RECORD_ATTR: Final = "rust_fields"
+_RUST_FIELDS: Final = TypeAdapter(dict[str, object])
+
+
+def _rust_fields_suffix(record: logging.LogRecord) -> str:
+    """The fields as ``[name=value ...]``. Each value is JSON, so a newline or control code in it cannot start a
+    line, and the fields together are held to the base64 and length limits a message is."""
+    fields: Final = _record_attributes(record).get(RUST_FIELDS_RECORD_ATTR)
+    if not isinstance(fields, dict) or not fields:
+        return ""
+    named: Final = _RUST_FIELDS.validate_python(fields)
+    rendered: Final = " ".join(f"{name}={safe_dumps(value)}" for name, value in named.items())
+    base64_limit: Final = _get_max_base64_length_stdout_log()
+    collapsed: Final = _collapse_base64_runs(rendered, base64_limit) if base64_limit > 0 else rendered
+    text_limit: Final = _get_max_string_length_stdout_log() if record.levelno >= logging.INFO else 0
+    bounded: Final = _truncate_for_stdout_log(collapsed, text_limit) if 0 < text_limit < len(collapsed) else collapsed
+    return f" [{bounded}]"
+
+
 class CorrelationPlainFormatter(logging.Formatter):
     """Appends trace_id/session_id to plain-text log lines stamped by CorrelationContextFilter.
 
@@ -861,7 +887,8 @@ class CorrelationPlainFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         rendered: Final = super().format(record)
         uncolored: Final = rendered if self._fmt == _COLOR_LOG_FORMAT else _ANSI_ESCAPE.sub("", rendered)
-        formatted: Final = uncolored if _is_redacted(record) else redact_string(uncolored)
+        with_fields: Final = uncolored + _rust_fields_suffix(record)
+        formatted: Final = with_fields if _is_redacted(record) else redact_string(with_fields)
         trace_id: Final = getattr(record, "trace_id", None)
         session_id: Final = getattr(record, "session_id", None)
         if not trace_id and not session_id:
@@ -942,8 +969,6 @@ class WarningLogger(Protocol):
 
 
 verbose_proxy_logger = logging.getLogger("LiteLLM Proxy")
-# Malformed virtual key rejections log through this child; LevelRoutingStreamHandler
-# writes its WARNING records to stdout. It has no handler or level of its own.
 verbose_proxy_stdout_logger: Final = verbose_proxy_logger.getChild("stdout")
 verbose_router_logger = logging.getLogger("LiteLLM Router")
 verbose_logger = logging.getLogger("LiteLLM")
@@ -1127,7 +1152,7 @@ def _initialize_loggers_with_handler(handler: logging.Handler):
         logging.getLogger().setLevel(resolve_log_level(configured_level))
 
 
-def _get_uvicorn_json_log_config():
+def _get_uvicorn_json_log_config() -> Mapping[str, object]:
     """
     Generate a uvicorn log_config dictionary that applies JSON formatting to all loggers.
 

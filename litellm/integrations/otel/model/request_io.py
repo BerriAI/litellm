@@ -8,7 +8,7 @@ import litellm
 from litellm.integrations.otel.mappers.utils import json_or_none
 from litellm.llms.anthropic.messages.stream_assembly import assemble_anthropic_sse_stream, is_raw_sse_stream
 from litellm.types.llms.base import LiteLLMBaseModel
-from litellm.types.llms.openai import ResponseCompletedEvent, ResponsesAPIResponse
+from litellm.types.llms.openai import ResponseCompletedEvent, ResponseIncompleteEvent, ResponsesAPIResponse
 from litellm.types.utils import ModelResponse, ModelResponseStream
 
 _SYSTEM_KEYS: Final = ("system", "instructions")
@@ -88,4 +88,11 @@ def _assembled_chat_stream(chunks: Sequence[object], data: Mapping[str, object])
 
 
 def _completed_response(chunks: Sequence[object]) -> ResponsesAPIResponse | None:
-    return next((chunk.response for chunk in reversed(chunks) if isinstance(chunk, ResponseCompletedEvent)), None)
+    return next(
+        (
+            chunk.response
+            for chunk in reversed(chunks)
+            if isinstance(chunk, (ResponseCompletedEvent, ResponseIncompleteEvent))
+        ),
+        None,
+    )

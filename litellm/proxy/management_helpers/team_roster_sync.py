@@ -18,7 +18,7 @@ from litellm.proxy.auth.auth_checks import (
     delete_cache_team_object,
     get_jwt_key_mapping_cache_keys_for_tokens,
 )
-from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
+from litellm.proxy.common_utils.cache_invalidation_pubsub import (
     broadcast_evictions,
     evict_local,
     evict_shared,

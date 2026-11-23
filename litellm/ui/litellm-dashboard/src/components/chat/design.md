@@ -157,9 +157,9 @@ Sizes: `default` (h-9), `sm` (h-8), `xs` (h-6), `lg` (h-10), `icon` (size-9), `i
 
 ### Sidebar nav item
 
-Use `Sidebar`, `SidebarContent`, `SidebarFooter` and `SidebarMenuButton` from `components/shared/Sidebar`. Both workspaces use `SidebarBrand`, `ViewSwitcher` and `DashboardHeader`. Chat has a compact account menu with its existing identity, Settings and Sign out actions. Theme lives in the shared top bar. Gateway account preferences and admin controls stay in the gateway. Keep the shared 280px expanded and 72px collapsed widths, 56px header and 768px mobile breakpoint
+Use `Sidebar`, `SidebarContent`, `SidebarFooter` and `SidebarMenuButton` from the stock shadcn block in `components/ui/sidebar`, with our look in the className overrides from `components/shared/sidebarStyles`. Both workspaces use `SidebarBrand`, `ViewSwitcher` and `DashboardHeader`. Chat has a compact account menu with its existing identity, Settings and Sign out actions. Theme lives in the shared top bar. Gateway account preferences and admin controls stay in the gateway. Keep the shared 280px expanded and 72px collapsed widths, 56px header and 768px mobile breakpoint
 
-Use one New Chat action for the blank composer; do not duplicate it with a Chats destination. Chat retains Models, Integrations, Workspace and conversation history. Chat has no gateway-wide header search or worker selector. Search chats in the sidebar owns Cmd/Ctrl+K, including when the sidebar is collapsed or on mobile. Mobile navigation uses the same Sheet treatment as the dashboard
+Use one New Chat action for the blank composer; do not duplicate it with a Chats destination. Chat retains Models, Integrations, Workspace and conversation history. Chat has no gateway-wide header search or worker selector. Cmd/Ctrl+K and Search chats open one conversation search that `ChatShell` renders outside the sidebar, so the shortcut also works with the sidebar collapsed and on phones opens only the search. Mobile navigation is the stock shadcn Sidebar sheet, the same as the dashboard
 
 The conversation title appears in the shared header. Do not repeat it in a second content header. Routed pages keep their content-specific headings and actions
 
@@ -200,14 +200,15 @@ No max-width cap on panel content — matches the rest of the dashboard's own pa
 
 Card, Textarea and sonner are installed. Earlier versions of this document listed them as missing and encouraged parallel implementations; use the shared owners above
 
-Shared sidebar primitives are available in `components/shared/Sidebar`. Use them instead of hand-writing a separate rail
+The stock shadcn Sidebar is installed in `components/ui/sidebar`. Use it instead of hand-writing a separate rail
 
 ## File Structure
 
 ```
 src/components/chat/
-  ChatShell.tsx          # Desktop navigation / mobile Sheet, shared across all /chat/* routes
-  ConversationList.tsx   # Date-grouped chat list and conversation search
+  ChatShell.tsx          # Sidebar, header and conversation search, shared across all /chat/* routes
+  ConversationList.tsx   # Date-grouped chat list
+  ConversationSearchDialog.tsx # Cmd/Ctrl+K conversation search
   ChatMessages.tsx       # Shared list and single-message rendering (user, assistant, tool)
   MCPAppsPanel.tsx       # Integrations grid + detail view
   MCPConnectPicker.tsx   # MCP server toggle popover

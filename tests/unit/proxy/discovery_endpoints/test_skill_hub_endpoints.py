@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import csv
 import hashlib
 import io
 import json
@@ -10,7 +11,7 @@ import zipfile
 import zlib
 from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
@@ -23,6 +24,7 @@ import litellm
 from litellm.caching.caching import DualCache
 from litellm.proxy import proxy_server
 from litellm.proxy._types import LiteLLM_ObjectPermissionTable, UserAPIKeyAuth
+from litellm.proxy.proxy_server import UserApiKeyCache
 from litellm.proxy.deps.repositories import get_plugin_upload_repository, get_skill_submission_repository
 from litellm.proxy.discovery_endpoints.agent_skills_archive import (
     MAX_ARCHIVE_ENTRIES,
@@ -31,9 +33,11 @@ from litellm.proxy.discovery_endpoints.agent_skills_archive import (
 from litellm.proxy.discovery_endpoints.skill_hub_endpoints import import_http_client
 from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
 from litellm.proxy.utils import InternalUsageCache
-from litellm.repositories.plugin_upload_repository import PluginUploadRepository
+from litellm.redis.stores.auth_cache import AuthObject
+from litellm.repositories.plugin_upload_repository import DOWNLOAD_EXPORT_BATCH_SIZE, PluginUploadRepository
 from litellm.repositories.skill_submission_repository import SkillSubmissionRepository
 from tests._master_key import MASTER_KEY
+from tests.unit.proxy._prisma import prisma_with_empty_config
 from tests.unit.proxy.skill_submission_rows import SubmissionRows
 
 NAME: Final = "portable-notes"
@@ -84,8 +88,7 @@ class HubClient:
 
 @pytest.fixture
 async def hub(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[HubClient]:
-    prisma: Final = MagicMock()
-    prisma.writer_db = prisma.db
+    prisma: Final = prisma_with_empty_config()
     prisma.db.execute_raw = AsyncMock(return_value=1)
     prisma.get_data = AsyncMock(return_value=None)
     prisma.db.litellm_skillstable.find_many = AsyncMock(return_value=[])
@@ -128,14 +131,14 @@ async def hub(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[HubClient]:
     monkeypatch.setattr(proxy_server, "prisma_client", prisma)
     monkeypatch.setattr(proxy_server, "master_key", MASTER_KEY)
     monkeypatch.setattr(proxy_server, "general_settings", {})
-    monkeypatch.setattr(proxy_server, "user_api_key_cache", DualCache())
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", UserApiKeyCache())
     monkeypatch.setattr(litellm, "public_skills_index", True)
     monkeypatch.setenv("PROXY_BASE_URL", "http://test")
     monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
     for key, skills in ((GRANTED_KEY, [NAME]), (PLAIN_KEY, [])):
         proxy_server.user_api_key_cache.set_cache(
-            key=proxy_server.hash_token(key),
-            value=UserAPIKeyAuth(
+            AuthObject.virtual_key(proxy_server.hash_token(key)),
+            UserAPIKeyAuth(
                 token=proxy_server.hash_token(key),
                 user_role=proxy_server.LitellmUserRoles.INTERNAL_USER,
                 object_permission=LiteLLM_ObjectPermissionTable(object_permission_id=key, skills=skills),
@@ -147,8 +150,8 @@ async def hub(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[HubClient]:
         (VIEWER_KEY, proxy_server.LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY),
     ):
         proxy_server.user_api_key_cache.set_cache(
-            key=proxy_server.hash_token(key),
-            value=UserAPIKeyAuth(token=proxy_server.hash_token(key), user_role=role, user_id=key),
+            AuthObject.virtual_key(proxy_server.hash_token(key)),
+            UserAPIKeyAuth(token=proxy_server.hash_token(key), user_role=role, user_id=key),
         )
     async with (
         httpx.AsyncClient(transport=httpx.MockTransport(upstream), trust_env=False) as source_client,
@@ -164,23 +167,47 @@ async def hub(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[HubClient]:
 
 async def _upload(
     hub: HubClient, content: bytes, key: str | None = MASTER_KEY, version: str | None = "2.0.0",
+    *, metadata: Mapping[str, object] | None = None,
 ) -> httpx.Response:
     return await hub.client.post(
         f"{HUB}/upload",
         headers=_headers(key),
-        data={"version": version} if version is not None else {},
+        data={
+            **({"version": version} if version is not None else {}),
+            **({"metadata": json.dumps(metadata)} if metadata is not None else {}),
+        },
         files={"file": ("notes.zip", content, "application/zip")},
     )
 
 
-def _stored_upload(hub: HubClient, enabled: bool = True) -> prisma_models.LiteLLM_ClaudeCodePluginTable:
-    data: Final = hub.plugins.create.await_args.kwargs["data"]
-    record: Final = prisma_models.LiteLLM_ClaudeCodePluginTable(
-        id="hub-id", name=data["name"], version=data["version"], description=data["description"], anonymous_download_count=0,
-        manifest_json=data["manifest_json"], enabled=enabled, updated_at=data["updated_at"],
+async def _replace_archive(
+    hub: HubClient, path: str, files: Mapping[str, bytes], data: Mapping[str, str],
+    key: str = MEMBER_KEY,
+) -> httpx.Response:
+    return await hub.client.put(
+        path + "/upload", headers=_headers(key), data=data,
+        files={"file": ("replacement.zip", _zip(files), "application/zip")},
     )
+
+
+async def _edit_metadata(
+    hub: HubClient, path: str, metadata: Mapping[str, object], key: str = MEMBER_KEY,
+) -> httpx.Response:
+    return await hub.client.put(path, headers=_headers(key), json=metadata)
+
+
+def _stored_plugin(hub: HubClient, enabled: bool = True) -> prisma_models.LiteLLM_ClaudeCodePluginTable:
+    record: Final = prisma_models.LiteLLM_ClaudeCodePluginTable.model_validate({
+        "id": "hub-id", "anonymous_download_count": 0,
+        **hub.plugins.create.await_args.kwargs["data"], "enabled": enabled,
+    })
     hub.plugins.find_unique.return_value = record
     hub.plugins.find_many.return_value = [record]
+    return record
+
+
+def _stored_upload(hub: HubClient, enabled: bool = True) -> prisma_models.LiteLLM_ClaudeCodePluginTable:
+    record: Final = _stored_plugin(hub, enabled)
     hub.archives.find_first.return_value = prisma_models.LiteLLM_ClaudeCodePluginUpload(
         plugin_name=record.name, content=hub.archives.create.await_args.kwargs["data"]["content"],
     )
@@ -373,7 +400,65 @@ async def test_deleted_skill_is_not_served_when_download_cannot_be_recorded(hub:
     assert hub.downloads.create.await_count == (0 if key is None else 2)
 
 
-async def test_search_paginates_visible_matches(hub: HubClient) -> None:
+@pytest.mark.parametrize("key,status", ((None, 401), (PLAIN_KEY, 403), (VIEWER_KEY, 403), (MASTER_KEY, 404)))
+async def test_download_export_rejects_non_admins_and_unknown_skills(
+    hub: HubClient, key: str | None, status: int,
+) -> None:
+    response: Final = await hub.client.get(f"{HUB}/{NAME}/downloads/export", headers=_headers(key))
+    assert response.status_code == status, response.text
+    hub.downloads.find_many.assert_not_called()
+
+
+async def test_download_export_reads_all_batches_without_counting_or_mixing_skills(hub: HubClient) -> None:
+    assert (await _upload(hub, _zip(FILES))).status_code == 200
+    record: Final = _stored_upload(hub)
+    events: Final = tuple(
+        prisma_models.LiteLLM_ClaudeCodePluginDownload(
+            id=index, plugin_id=record.id if index % 2 else "other-skill",
+            downloaded_at=datetime(2026, 10, 1, tzinfo=timezone.utc),
+            authenticated=True, digest="a" * 64, user_email=f"reader-{index}@example.test",
+        )
+        for index in range(1, DOWNLOAD_EXPORT_BATCH_SIZE * 2 + 4)
+    )
+
+    async def find_many(
+        *, where: Mapping[str, str | Mapping[str, int]], order: Mapping[str, str], take: int,
+    ) -> tuple[prisma_models.LiteLLM_ClaudeCodePluginDownload, ...]:
+        before: Final = where.get("id")
+        cursor: Final = before["lt"] if isinstance(before, Mapping) else len(events) + 1
+        ordered: Final = sorted(events, key=lambda row: row.id, reverse=order["id"] == "desc")
+        return tuple(row for row in ordered if row.plugin_id == where["plugin_id"] and row.id < cursor)[:take]
+
+    hub.downloads.find_many = AsyncMock(side_effect=find_many)
+    response: Final = await hub.client.get(f"{HUB}/{NAME}/downloads/export", headers=_headers(MASTER_KEY))
+    assert response.status_code == 200, response.text
+    assert response.headers["content-type"].startswith("text/csv")
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["content-disposition"] == f"attachment; filename*=UTF-8''{NAME}.csv"
+    rows: Final = tuple(csv.DictReader(io.StringIO(response.text)))
+    assert tuple(row["download_id"] for row in rows) == tuple(str(row.id) for row in reversed(events) if row.plugin_id == record.id)
+    assert tuple(row["user_email"] for row in rows) == tuple(row.user_email for row in reversed(events) if row.plugin_id == record.id)
+    assert hub.downloads.find_many.await_count == 2
+    hub.downloads.count.assert_not_called()
+
+
+async def test_download_export_keeps_empty_history_as_a_valid_csv(hub: HubClient) -> None:
+    assert (await _upload(hub, _zip(FILES))).status_code == 200
+    _stored_upload(hub)
+    hub.downloads.find_many = AsyncMock(return_value=[])
+    response: Final = await hub.client.get(f"{HUB}/{NAME}/downloads/export", headers=_headers(MASTER_KEY))
+    assert response.status_code == 200, response.text
+    assert response.text == "download_id,downloaded_at,user_email,user_id,team,key,version\r\n"
+
+
+@pytest.mark.parametrize("key,enabled_only,names", (
+    (PLAIN_KEY, False, ("other-notes", NAME)),
+    (MASTER_KEY, True, ("other-notes", NAME)),
+    (MASTER_KEY, False, ("other-notes", NAME, "private-notes")),
+))
+async def test_search_paginates_visible_matches(
+    hub: HubClient, key: str, enabled_only: bool, names: tuple[str, ...],
+) -> None:
     assert (await _upload(hub, _zip(FILES))).status_code == 200
     record: Final = _stored_upload(hub)
     hub.plugins.find_many.return_value = [
@@ -381,14 +466,21 @@ async def test_search_paginates_visible_matches(hub: HubClient) -> None:
         record.model_copy(update={"name": "other-notes"}),
         record.model_copy(update={"name": "unmatched", "description": "Different topic"}),
     ]
-    for offset, name in enumerate(("other-notes", NAME)):
+
+    async def find_rows(where: Mapping[str, object]) -> list[prisma_models.LiteLLM_ClaudeCodePluginTable]:
+        return [row for row in hub.plugins.find_many.return_value if where.get("enabled") is not True or row.enabled]
+
+    hub.plugins.find_many.side_effect = find_rows
+    for offset, name in enumerate(names):
         response: Final = await hub.client.get(
-            HUB, headers=_headers(PLAIN_KEY), params={"query": "SYNTHETIC", "limit": 1, "offset": offset},
+            HUB, headers=_headers(key), params={
+                "query": "SYNTHETIC", "limit": 1, "offset": offset, "enabled_only": str(enabled_only).lower(),
+            },
         )
         assert response.status_code == 200
         assert [item["name"] for item in response.json()["skills"]] == [name]
-        assert response.json()["count"] == 2
-        assert response.json()["next_offset"] == (1 if offset == 0 else None)
+        assert response.json()["count"] == len(names)
+        assert response.json()["next_offset"] == (offset + 1 if offset + 1 < len(names) else None)
 
 
 async def test_metadata_publication_and_deletion_preserve_files_and_grants(hub: HubClient) -> None:
@@ -397,16 +489,27 @@ async def test_metadata_publication_and_deletion_preserve_files_and_grants(hub: 
     manifest: Final = json.loads(original.manifest_json)
 
     for route, metadata in (
-        (f"/claude-code/plugins/{NAME}", {"source": manifest["source"], "description": "Legacy edit"}),
-        (f"{HUB}/{NAME}", {"description": "Neutral edit", "version": "3.0.0", "keywords": ["notes"]}),
-        (f"{HUB}/{NAME}", {}),
+        (f"/claude-code/plugins/{NAME}", {
+            "source": manifest["source"], "description": "Legacy edit", "installation_preference": "required",
+        }),
+        (f"{HUB}/{NAME}", {"description": "Registry description " * 80, "version": "3.0.0", "keywords": ["notes"]}),
+        (f"{HUB}/{NAME}", {"description": None}),
     ):
         response: Final = await hub.client.put(route, headers=_headers(MASTER_KEY), json=metadata)
         assert response.status_code == 200, response.text
         assert json.loads(hub.plugins.find_unique.return_value.manifest_json)["agent_skill"] == manifest["agent_skill"]
         details: Final = await hub.client.get(f"{HUB}/{NAME}", headers=_headers(PLAIN_KEY))
         assert details.json()["description"] == metadata.get("description")
+        assert "installation_preference" not in details.json()
+        legacy: Final = await hub.client.get(f"/claude-code/plugins/{NAME}", headers=_headers(MASTER_KEY))
+        assert legacy.json()["installation_preference"] == "required"
+        assert legacy.json()["description"] == metadata.get("description")
         _assert_portable(await hub.client.get(details.json()["download_url"]))
+    invalid: Final = await _edit_metadata(
+        hub, f"{HUB}/{NAME}", {"source": {"source": "url", "url": "https://gitlab.com/example/skills"}}, MASTER_KEY,
+    )
+    assert invalid.status_code == 400, invalid.text
+    assert json.loads(hub.plugins.find_unique.return_value.manifest_json)["source"] == manifest["source"]
     for action, public in (("unpublish", False), ("publish", True)):
         changed: Final = await hub.client.post(f"{HUB}/{NAME}/{action}", headers=_headers(MASTER_KEY))
         assert changed.status_code == 200
@@ -438,25 +541,51 @@ async def test_rejected_uploads_do_not_write(hub: HubClient, content: bytes, key
     hub.plugins.create.assert_not_awaited()
 
 
-async def test_stored_content_survives_duplicate_upload_and_is_hidden_after_source_replacement(hub: HubClient) -> None:
+@pytest.mark.parametrize("route,key", (
+    ("/claude-code/plugins", MASTER_KEY), (HUB, MASTER_KEY), (HUB, MEMBER_KEY),
+))
+async def test_stored_content_survives_duplicate_upload_and_is_hidden_after_source_replacement(
+    pending_hub: HubClient, route: str, key: str,
+) -> None:
+    hub: Final = pending_hub
     assert (await _upload(hub, _zip(FILES))).status_code == 200
     original: Final = _stored_upload(hub)
     hub.plugins.create.side_effect = UniqueViolationError({"message": "duplicate", "error_code": "P2002"})
     response: Final = await _upload(hub, _zip({**FILES, "references/guide.md": b"replacement"}))
-    assert response.status_code == 409
+    assert response.status_code == 409, response.text
+    legacy: Final = await _upload(hub, _zip({"SKILL.md": b"Legacy instructions.\n"}), metadata={"name": NAME})
+    reference: Final = await hub.client.post(
+        f"{HUB}/import", headers=_headers(MASTER_KEY),
+        json={"name": NAME, "source": {"source": "github", "repo": "example/skills"}},
+    )
+    assert legacy.status_code == reference.status_code == 409
+    assert hub.plugins.create.await_count == 1
     _assert_portable(await hub.client.get(f"{HUB}/{NAME}/archive"))
     hub.plugins.update.assert_not_awaited()
     hub.archives.find_first.reset_mock()
     manifest: Final = json.loads(original.manifest_json)
-    external: Final = {
+    external: Final = {"source": "url", "url": "https://gitlab.com/example/replacement"} if key == MEMBER_KEY else {
         **manifest["source"],
         "url": str(httpx.URL(manifest["source"]["url"]).copy_with(scheme="https", host="external.example")),
     }
     replaced: Final = await hub.client.put(
-        f"/claude-code/plugins/{NAME}", headers=_headers(MASTER_KEY),
-        json={"source": external, "agent_skill": manifest["agent_skill"]},
+        f"{route}/{NAME}", headers=_headers(key),
+        json={
+            "source": external, "expected_updated_at": original.updated_at.isoformat(),
+            **({"agent_skill": manifest["agent_skill"]} if route != HUB else {}),
+        },
     )
     assert replaced.status_code == 200, replaced.text
+    if key == MEMBER_KEY:
+        path: Final = f"/skill-hub/submissions/{replaced.json()['submission_id']}"
+        proposal: Final = (await hub.client.get(path, headers=_headers(MEMBER_KEY))).json()["submission"]
+        assert proposal["has_archive"] is False and proposal["proposal"]["agent_skill"] is None
+        assert proposal["proposal"]["source"] == external
+        _assert_portable(await hub.client.get(f"{HUB}/{NAME}/archive"))
+        hub.archives.find_first.reset_mock()
+        approved: Final = await hub.client.put(path + "/approve", headers=_headers(MASTER_KEY))
+        assert approved.status_code == 200, approved.text
+        hub.archives.delete_many.assert_awaited_once_with(where={"plugin_name": NAME})
     assert "agent_skill" not in json.loads(hub.plugins.find_unique.return_value.manifest_json)
     details: Final = await hub.client.get(f"{HUB}/{NAME}", headers=_headers(MASTER_KEY))
     assert details.json()["source"] == external and details.json()["download_url"] is None
@@ -477,9 +606,10 @@ async def test_publication_limit_is_shared_by_user_and_route_and_resets(
 ) -> None:
     for key in (PLAIN_KEY, GRANTED_KEY):
         proxy_server.user_api_key_cache.set_cache(
-            key=proxy_server.hash_token(key),
-            value=UserAPIKeyAuth(
-                token=proxy_server.hash_token(key), user_id=user_id,
+            AuthObject.virtual_key(proxy_server.hash_token(key)),
+            UserAPIKeyAuth(
+                token=proxy_server.hash_token(key),
+                user_id=user_id,
                 user_role=role,
             ),
         )
@@ -537,10 +667,11 @@ async def test_neutral_metadata_publication_pairs_version_and_preserved_skill_sn
         return current
 
     hub.plugins.update.side_effect = replace_row
-    updated: Final = await hub.client.put(
-        f"{HUB}/{NAME}", headers=_headers(MASTER_KEY),
-        json={"description": "Registry description", "domain": "notes", "namespace": "team", "keywords": ["notes"]},
-    )
+    metadata: Final = {
+        **REGISTRY_METADATA, "description": "Registry description",
+        "domain": "notes", "namespace": "team", "keywords": ["notes"],
+    }
+    updated: Final = await _edit_metadata(hub, f"{HUB}/{NAME}", metadata, MASTER_KEY)
     assert updated.status_code == 200, updated.text
     assert updated.json()["version"] == "1.0.1"
     assert updated.json()["download_url"] == f"https://public.example{HUB}/{NAME}/archive"
@@ -553,14 +684,25 @@ async def test_neutral_metadata_publication_pairs_version_and_preserved_skill_sn
     assert first["version"] == "1.0.0"
     assert latest["content"].decode() == first["content"].decode()
     _assert_portable(await hub.client.get(updated.json()["download_url"]))
+    preserved: Final = await _edit_metadata(hub, f"{HUB}/{NAME}", {"source": updated.json()["source"]}, MASTER_KEY)
+    assert preserved.status_code == 200, preserved.text
+    assert {field: preserved.json()[field] for field in metadata} == metadata
+    assert preserved.json()["version"] == "1.0.2"
+    cleared: Final = await _edit_metadata(hub, f"{HUB}/{NAME}", dict.fromkeys(metadata), MASTER_KEY)
+    assert cleared.status_code == 200, cleared.text
+    assert {field: cleared.json()[field] for field in metadata} == dict.fromkeys(metadata)
+    assert not metadata.keys() & json.loads(hub.plugins.find_unique.return_value.manifest_json).keys()
 
 
 @pytest.mark.parametrize("key,status", ((MASTER_KEY, 200), (GRANTED_KEY, 200), (PLAIN_KEY, 404)))
+@pytest.mark.parametrize("portable", (True, False))
 @pytest.mark.asyncio
-async def test_neutral_history_list_detail_and_portable_download_share_current_visibility(
-    hub: HubClient, key: str, status: int,
+async def test_neutral_history_list_detail_and_archive_download_share_current_visibility(
+    hub: HubClient, key: str, status: int, portable: bool,
 ) -> None:
-    assert (await _upload(hub, _zip(FILES), version=None)).status_code == 200
+    files: Final = FILES if portable else {"SKILL.md": b"Legacy skill instructions.\n"}
+    uploaded: Final = await _upload(hub, _zip(files), version=None, metadata={"name": NAME})
+    assert uploaded.status_code == 200, uploaded.text
     original: Final = _stored_upload(hub, enabled=False)
     data: Final = hub.database.litellm_claudecodepluginversion.create.await_args.kwargs["data"]
     version: Final = prisma_models.LiteLLM_ClaudeCodePluginVersion.model_validate({"id": "retained", **data})
@@ -581,9 +723,14 @@ async def test_neutral_history_list_detail_and_portable_download_share_current_v
         assert event["version"] == version.version != "3.0.0"
         assert event["digest"] == hashlib.sha256(downloaded.content).hexdigest()
         assert listed.json() == {"versions": [detail.json()], "next_offset": None}
-        assert detail.json()["manifest"]["agent_skill"] == json.loads(original.manifest_json)["agent_skill"]
+        assert ("agent_skill" in detail.json()["manifest"]) is portable
         assert detail.json()["download_url"] == f"http://test{HUB}/{NAME}/versions/retained/archive"
-        _assert_portable(downloaded)
+        if portable:
+            assert detail.json()["manifest"]["agent_skill"] == json.loads(original.manifest_json)["agent_skill"]
+            _assert_portable(downloaded)
+        else:
+            with zipfile.ZipFile(io.BytesIO(downloaded.content)) as archive:
+                assert archive.read(f"skills/{NAME}/SKILL.md") == files["SKILL.md"]
         assert downloaded.headers["etag"] == f'"sha256:{hashlib.sha256(downloaded.content).hexdigest()}"'
         hub.database.query_raw.return_value = []
         assert (await hub.client.get(f"{HUB}/{NAME}/versions/missing", headers=_headers(key))).status_code == 404
@@ -609,6 +756,11 @@ async def test_neutral_history_labels_external_sources_and_bounds_pagination(hub
     assert len(listed.json()["versions"]) == 1
     assert listed.json()["versions"][0]["content_kind"] == "source_reference"
     assert listed.json()["versions"][0]["download_url"] is None
+    downloaded: Final = await hub.client.get(f"{HUB}/{NAME}/versions/reference/archive", headers=_headers(MASTER_KEY))
+    assert downloaded.status_code == 404, downloaded.text
+    hub.downloads.create.assert_not_awaited()
+    hub.upstream.assert_not_called()
+    _assert_portable(await hub.client.get(f"{HUB}/{NAME}/archive"))
     assert (await hub.client.get(
         f"{HUB}/{NAME}/versions?limit=101", headers=_headers(MASTER_KEY),
     )).status_code == 422
@@ -675,26 +827,37 @@ async def test_member_archive_stays_private_until_admin_review(
 
 
 @pytest.mark.parametrize("replacement", (False, True), ids=("metadata", "archive"))
-async def test_member_updates_preserve_manifest_and_original_editor_base(pending_hub: HubClient, replacement: bool) -> None:
+@pytest.mark.parametrize("author", ("legacy author", {"name": 42}), ids=("legacy-author", "malformed-author"))
+@pytest.mark.parametrize("description,refreshed", (
+    ("Summarize synthetic notes.", "Summarize revised notes."), ("Registry override", "Registry override"), (None, None),
+))
+async def test_member_updates_preserve_manifest_and_original_editor_base(
+    pending_hub: HubClient, replacement: bool, monkeypatch: pytest.MonkeyPatch, author: str | Mapping[str, int],
+    description: str | None, refreshed: str | None,
+) -> None:
     hub: Final = pending_hub
-    assert (await _upload(hub, _zip(FILES))).status_code == 200
+    monkeypatch.setenv("PROXY_BASE_URL", "https://public.example")
+    created: Final = await _upload(hub, _zip(FILES), metadata={"name": NAME, "description": description})
+    assert created.status_code == 200, created.text
     original: Final = _stored_upload(hub)
     manifest: Final = {
         **json.loads(original.manifest_json), "domain": "Tools", "namespace": "research",
-        "keywords": ["notes"], "extension": {"retained": True}, "author": "legacy author",
+        "keywords": ["notes"], "extension": {"retained": True}, "author": author,
     }
     hub.plugins.find_unique.return_value = original.model_copy(update={"manifest_json": json.dumps(manifest)})
     before: Final = hub.database.litellm_claudecodepluginversion.create.await_count
-    updated_files: Final = {**FILES, "references/guide.md": b"Updated supporting instructions.\n"}
+    updated_files: Final = {
+        **FILES, "references/guide.md": b"Updated supporting instructions.\n",
+        "SKILL.md": MANIFEST.replace(b"Summarize synthetic notes.", b"Summarize revised notes."),
+    }
     expected: Final = original.updated_at.isoformat()
     response: Final = (
-        await hub.client.put(
-            f"{HUB}/{NAME}/upload", headers=_headers(MEMBER_KEY),
-            data={"expected_updated_at": expected}, files={"file": ("new.zip", _zip(updated_files), "application/zip")},
-        ) if replacement else await hub.client.put(
+        await _replace_archive(hub, f"{HUB}/{NAME}", updated_files, {"expected_updated_at": expected})
+        if replacement else await hub.client.put(
             f"{HUB}/{NAME}", headers=_headers(MEMBER_KEY),
             json={"description": "Reviewed description", "expected_updated_at": expected,
-                  "domain": "Tools", "namespace": "research", "keywords": ["notes"]},
+                  "domain": "Tools", "namespace": "research", "keywords": ["notes"],
+                  "source": created.json()["source"]},
         )
     )
     assert response.status_code == 200, response.text
@@ -704,12 +867,12 @@ async def test_member_updates_preserve_manifest_and_original_editor_base(pending
     assert detail["submission"]["proposal"]["domain"] == "Tools"
     assert detail["submission"]["proposal"]["keywords"] == ["notes"]
     assert detail["current_skill"]["namespace"] == "research"
+    expected_author: Final = {"name": author, "email": None} if isinstance(author, str) else None
+    assert detail["submission"]["proposal"]["author"] == detail["current_skill"]["author"] == expected_author
     for version in ("1.0.0", original.version):
-        invalid: Final = await hub.client.put(
-            path + ("/upload" if replacement else ""), headers=_headers(MEMBER_KEY),
-            **({"data": {"expected_revision": "0", "version": version},
-                "files": {"file": ("new.zip", _zip(updated_files), "application/zip")}}
-               if replacement else {"json": {"expected_revision": 0, "version": version}}),
+        invalid: Final = (
+            await _replace_archive(hub, path, updated_files, {"expected_revision": "0", "version": version})
+            if replacement else await _edit_metadata(hub, path, {"expected_revision": 0, "version": version})
         )
         assert invalid.status_code == 400, invalid.text
         assert (await hub.client.get(path, headers=_headers(MEMBER_KEY))).json() == detail
@@ -717,6 +880,15 @@ async def test_member_updates_preserve_manifest_and_original_editor_base(pending
     hub.plugins.update.assert_not_awaited()
     approved: Final = await hub.client.put(path + "/approve", headers=_headers(MASTER_KEY))
     assert approved.status_code == 200, approved.text
+    assert approved.json()["skill"]["description"] == (refreshed if replacement else "Reviewed description")
+    listed: Final = await hub.client.get(HUB, headers=_headers(MASTER_KEY))
+    catalog: Final = await hub.client.get("/claude-code/plugins", headers=_headers(MASTER_KEY))
+    assert (listed.status_code, catalog.status_code) == (200, 200), (listed.text, catalog.text)
+    assert listed.json()["skills"][0]["author"] == catalog.json()["plugins"][0]["author"] == expected_author
+    legacy: Final = await hub.client.get(f"/claude-code/plugins/{NAME}", headers=_headers(MASTER_KEY))
+    marketplace: Final = await hub.client.get("/claude-code/marketplace.json", headers=_headers(MASTER_KEY))
+    assert (legacy.status_code, marketplace.status_code) == (200, 200), (legacy.text, marketplace.text)
+    assert legacy.json()["author"] == marketplace.json()["plugins"][0]["author"] == author
     stored: Final = json.loads(hub.plugins.find_unique.return_value.manifest_json)
     assert (stored["extension"], stored["author"]) == (manifest["extension"], manifest["author"])
     assert stored["agent_skill"]["digest"] == response.json()["proposal"]["agent_skill"]["digest"]
@@ -731,16 +903,21 @@ async def test_member_updates_preserve_manifest_and_original_editor_base(pending
         assert stored["agent_skill"] == manifest["agent_skill"]
 
 
-@pytest.mark.parametrize("failure,status", (("stale", 409), ("wrong-name", 422), ("viewer", 403)),
-                         ids=("stale", "wrong-name", "viewer"))
+@pytest.mark.parametrize("failure,status", (("stale", 409), ("wrong-name", 422), ("viewer", 403), ("unsafe-legacy", 422)))
 async def test_replacement_rejections_do_not_stage_or_change_files(pending_hub: HubClient, failure: str, status: int) -> None:
     hub: Final = pending_hub
-    assert (await _upload(hub, _zip(FILES))).status_code == 200
+    files: Final = {"SKILL.md": b"Legacy instructions.\n"} if failure == "unsafe-legacy" else FILES
+    created: Final = await _upload(hub, _zip(files), version=None, metadata={"name": NAME})
+    assert created.status_code == 200, created.text
     _stored_upload(hub)
-    response: Final = await hub.client.put(
-        f"{HUB}/{NAME}/upload", headers=_headers(VIEWER_KEY if failure == "viewer" else MEMBER_KEY),
-        data={"expected_updated_at": "2020-01-01T00:00:00Z"} if failure == "stale" else {},
-        files={"file": ("new.zip", _zip({"SKILL.md": MANIFEST.replace(NAME.encode(), b"different-name")}), "application/zip")},
+    replacement: Final = (
+        {**files, "../outside.txt": b"Unsafe replacement"} if failure == "unsafe-legacy"
+        else {"SKILL.md": MANIFEST.replace(NAME.encode(), b"different-name")}
+    )
+    response: Final = await _replace_archive(
+        hub, f"{HUB}/{NAME}", replacement,
+        {"expected_updated_at": "2020-01-01T00:00:00Z"} if failure == "stale" else {},
+        VIEWER_KEY if failure == "viewer" else MEMBER_KEY,
     )
     assert response.status_code == status, response.text
     assert hub.database.litellm_skillsubmission.rows == ()
@@ -1080,6 +1257,10 @@ async def test_pending_edits_preserve_owner_and_files_until_fresh_review(pending
     created: Final = await _upload(hub, _zip(FILES), MEMBER_KEY)
     path: Final = f"/skill-hub/submissions/{created.json()['submission_id']}"
     before: Final = (await hub.client.get(path, headers=_headers(MEMBER_KEY))).json()["submission"]
+    for field in ("installation_preference", "installationPreference", "descripton"):
+        invalid: Final = await _edit_metadata(hub, path, {"expected_revision": 0, field: "required"})
+        assert invalid.status_code == 422, invalid.text
+        assert (await hub.client.get(path, headers=_headers(MEMBER_KEY))).json()["submission"] == before
     edited: Final = await hub.client.put(path, headers=_headers(MEMBER_KEY), json={
         "expected_revision": 0, "description": "Revised metadata", "version": "3.0.0", "keywords": ["review"],
     })
@@ -1090,12 +1271,17 @@ async def test_pending_edits_preserve_owner_and_files_until_fresh_review(pending
     )
     assert result["proposal"]["description"] == "Revised metadata"
     _assert_portable(await hub.client.get(path + "/archive", headers=_headers(MEMBER_KEY)))
+    retained: Final = await hub.client.put(path, headers=_headers(MEMBER_KEY), json={
+        "expected_revision": 1, "version": "3.0.0",
+    })
+    assert retained.status_code == 200, retained.text
+    assert retained.json()["proposal"] == result["proposal"]
     for body in ({}, {"expected_revision": 0}):
         stale: Final = await hub.client.put(path + "/approve", headers=_headers(MASTER_KEY), json=body or None)
         assert stale.status_code == 409, stale.text
     assert (await hub.client.put(path, headers=_headers(MEMBER_KEY), json={"expected_revision": 0})).status_code == 409
     hub.plugins.create.assert_not_awaited()
-    approved: Final = await hub.client.put(path + "/approve", headers=_headers(MASTER_KEY), json={"expected_revision": 1})
+    approved: Final = await hub.client.put(path + "/approve", headers=_headers(MASTER_KEY), json={"expected_revision": 2})
     assert approved.status_code == 200, approved.text
     assert approved.json()["skill"]["description"] == "Revised metadata"
     assert approved.json()["skill"]["version"] == "3.0.0"
@@ -1120,32 +1306,55 @@ async def test_withdrawn_submission_cannot_be_edited_reviewed_or_published(pendi
     hub.plugins.create.assert_not_awaited()
 
 
-async def test_pending_archive_edit_revalidates_and_clears_scan(pending_hub: HubClient) -> None:
+@pytest.mark.parametrize("version,target,published", (
+    (None, None, "1.0.0"), ("2.1.0", "2.1.0", "2.1.0"), ("", None, "1.0.0"),
+))
+@pytest.mark.parametrize("portable", (True, False))
+async def test_pending_archive_edit_revalidates_and_clears_scan(
+    pending_hub: HubClient, version: str | None, target: str | None, published: str, portable: bool,
+) -> None:
     hub: Final = pending_hub
-    created: Final = await _upload(hub, _zip(FILES), MEMBER_KEY)
+    files: Final = FILES if portable else {"SKILL.md": b"Use the supplied notes.\n"}
+    created: Final = await _upload(hub, _zip(files), MEMBER_KEY, metadata={"name": "registry-alias"})
+    assert created.status_code == 200, created.text
     identifier: Final = created.json()["submission_id"]
     path: Final = f"/skill-hub/submissions/{identifier}"
     await hub.database.litellm_skillsubmission.update(where={"id": identifier}, data={"scan_json": "old scan"})
     invalid: Final = await hub.client.put(path + "/upload", headers=_headers(MEMBER_KEY),
         data={"expected_revision": "0"}, files={"file": ("invalid.zip", b"invalid")})
     assert invalid.status_code == 422, invalid.text
-    updated_files: Final = {**FILES, "references/guide.md": b"Revised pending instructions.\n"}
-    edited: Final = await hub.client.put(path + "/upload", headers=_headers(MEMBER_KEY),
-        data={"expected_revision": "0", "version": "2.1.0"}, files={"file": ("edit.zip", _zip(updated_files))})
+    updated_files: Final = {
+        **files, "references/guide.md": b"Revised pending instructions.\n",
+        "SKILL.md": files["SKILL.md"].replace(b"Summarize synthetic notes.", b"Summarize revised notes."),
+    }
+    edited: Final = await _replace_archive(
+        hub, path, updated_files, {"expected_revision": "0", **({"version": version} if version is not None else {})},
+    )
     assert edited.status_code == 200, edited.text
     assert edited.json()["revision"] == 1
+    assert edited.json()["proposal"]["version"] == target
+    assert edited.json()["proposal"]["description"] == ("Summarize revised notes." if portable else None)
     stored: Final = await hub.database.litellm_skillsubmission.find_unique(where={"id": identifier})
     assert stored.scan_json is None
     archive: Final = await hub.client.get(path + "/archive", headers=_headers(MEMBER_KEY))
     with zipfile.ZipFile(io.BytesIO(archive.content)) as content:
-        assert content.read("references/guide.md") == updated_files["references/guide.md"]
+        assert content.read("references/guide.md" if portable else "skills/registry-alias/references/guide.md") == (
+            updated_files["references/guide.md"]
+        )
     hub.plugins.create.assert_not_awaited()
+    approved: Final = await _edit_metadata(hub, path + "/approve", {"expected_revision": 1}, MASTER_KEY)
+    assert approved.status_code == 200, approved.text
+    assert approved.json()["skill"]["version"] == published
+    wrapper: Final = hub.archives.create.await_args.kwargs["data"]["content"].decode()
+    with zipfile.ZipFile(io.BytesIO(wrapper)) as content:
+        assert content.read("skills/registry-alias/SKILL.md") == updated_files["SKILL.md"]
 
 
-@pytest.mark.parametrize("published_version", (None, "legacy"))
+@pytest.mark.parametrize("published_version", (None, "legacy", "2.0.0"))
 @pytest.mark.parametrize("replacement", (False, True), ids=("metadata", "archive"))
-async def test_pending_legacy_update_keeps_explicit_version_requirement(
-    pending_hub: HubClient, published_version: str | None, replacement: bool,
+@pytest.mark.parametrize("send_null", (False, True), ids=("omitted", "null"))
+async def test_pending_update_uses_automatic_version_unless_explicitly_supplied(
+    pending_hub: HubClient, published_version: str | None, replacement: bool, send_null: bool,
 ) -> None:
     hub: Final = pending_hub
     assert (await _upload(hub, _zip(FILES))).status_code == 200
@@ -1156,13 +1365,113 @@ async def test_pending_legacy_update_keeps_explicit_version_requirement(
     )
     assert created.status_code == 200, created.text
     path: Final = f"/skill-hub/submissions/{created.json()['submission_id']}"
-    before: Final = (await hub.client.get(path, headers=_headers(MEMBER_KEY))).json()
-    edited: Final = await hub.client.put(
-        path + ("/upload" if replacement else ""), headers=_headers(MEMBER_KEY),
-        **({"data": {"expected_revision": "0"}, "files": {"file": ("new.zip", _zip(FILES))}}
-           if replacement else {"json": {"expected_revision": 0}}),
+    edited: Final = (
+        await _replace_archive(hub, path, FILES, {"expected_revision": "0", "version": "3.0.0"})
+        if replacement else await _edit_metadata(hub, path, {"expected_revision": 0, "version": "3.0.0"})
     )
-    assert edited.status_code == 409, edited.text
-    assert "explicit semantic version" in edited.json()["detail"]
-    assert (await hub.client.get(path, headers=_headers(MEMBER_KEY))).json() == before
+    assert edited.status_code == 200, edited.text
+    assert edited.json()["proposal"]["version"] == "3.0.0"
+    retained: Final = (await hub.client.get(path, headers=_headers(MEMBER_KEY))).json()
+    cleared: Final = (
+        await _replace_archive(hub, path, FILES, {"expected_revision": "1", **({"version": ""} if send_null else {})})
+        if replacement else await _edit_metadata(hub, path, {"expected_revision": 1, **({"version": None} if send_null else {})})
+    )
+    if published_version == "2.0.0":
+        assert cleared.status_code == 200, cleared.text
+        assert cleared.json()["proposal"]["version"] is None
+        approved: Final = await _edit_metadata(hub, path + "/approve", {"expected_revision": 2}, MASTER_KEY)
+        assert approved.status_code == 200, approved.text
+        assert approved.json()["skill"]["version"] == "2.0.1"
+        return
+    assert cleared.status_code == 409, cleared.text
+    assert "explicit semantic version" in cleared.json()["detail"]
+    assert (await hub.client.get(path, headers=_headers(MEMBER_KEY))).json() == retained
     hub.plugins.update.assert_not_awaited()
+
+
+REGISTRY_METADATA: Final = {
+    "description": "Registered skill description",
+    "author": {"name": "Example Author", "email": "author@example.org"},
+    "category": "Development", "domain": "Engineering", "namespace": "tools",
+    "keywords": ["review,build", "notes"], "homepage": "https://docs.example.org/skills",
+}
+
+
+@pytest.mark.parametrize("key", (MASTER_KEY, MEMBER_KEY))
+async def test_reference_registration_preserves_sources_and_metadata_without_fetching(
+    pending_hub: HubClient, key: str,
+) -> None:
+    hub: Final = pending_hub
+    source: Final = {"source": "url", "url": "https://gitlab.com/example/skills"}
+    created: Final = await hub.client.post(
+        f"{HUB}/import", headers=_headers(key), json={"name": NAME, "source": source, **REGISTRY_METADATA},
+    )
+    assert created.status_code == 200, created.text
+    if key == MEMBER_KEY:
+        path: Final = f"/skill-hub/submissions/{created.json()['submission_id']}"
+        hub.plugins.create.assert_not_awaited()
+        approved: Final = await _edit_metadata(hub, path + "/approve", {"expected_revision": 0}, MASTER_KEY)
+        assert approved.status_code == 200, approved.text
+    _stored_plugin(hub)
+    details: Final = await hub.client.get(f"{HUB}/{NAME}", headers=_headers(MASTER_KEY))
+    listed: Final = await hub.client.get(HUB, headers=_headers(MASTER_KEY))
+    assert details.json() == listed.json()["skills"][0]
+    assert details.json()["version"] == "1.0.0" and details.json()["download_url"] is None
+    assert {field: details.json()[field] for field in REGISTRY_METADATA} == REGISTRY_METADATA
+    assert details.json()["source"] == source
+    hub.upstream.assert_not_called()
+    hub.archives.create.assert_not_awaited()
+
+
+@pytest.mark.parametrize("field", ("installation_preference", "installationPreference", "descripton"))
+@pytest.mark.parametrize("operation", ("register", "upload", "import", "import-metadata", "update"))
+@pytest.mark.parametrize("value", ("required", None))
+async def test_skill_hub_rejects_unknown_metadata_fields(
+    hub: HubClient, field: str, operation: str, value: str | None,
+) -> None:
+    preference: Final = {field: value}
+    response: Final = (
+        await _upload(hub, _zip(FILES), version=None, metadata={"name": NAME, **preference})
+        if operation == "upload"
+        else await hub.client.request(
+            "PUT" if operation == "update" else "POST",
+            f"{HUB}/{NAME}" if operation == "update" else f"{HUB}/import",
+            headers=_headers(MASTER_KEY), json={
+                "register": {"name": NAME, "source": {"source": "github", "repo": "example/skills"}, **preference},
+                "import": {"url": "https://github.com/example/skills", **preference},
+                "import-metadata": {
+                    "url": "https://github.com/example/skills", "metadata": {"name": NAME, **preference},
+                },
+                "update": preference,
+            }[operation],
+        )
+    )
+    assert response.status_code == 422, response.text
+    hub.plugins.create.assert_not_awaited()
+    hub.plugins.update.assert_not_awaited()
+    hub.upstream.assert_not_called()
+
+
+@pytest.mark.parametrize("operation", ("upload", "import"))
+async def test_portable_creation_accepts_registry_overrides_and_rejects_conflicting_versions(
+    hub: HubClient, operation: str,
+) -> None:
+    hub.upstream.return_value = httpx.Response(200, content=_zip(FILES, "repository/"))
+    metadata: Final = {"name": "registry-alias", "version": "3.0.0", **REGISTRY_METADATA}
+    body: Final = {"url": "https://github.com/example/skills", "metadata": metadata}
+    conflict: Final = (
+        await _upload(hub, _zip(FILES), metadata=metadata) if operation == "upload"
+        else await hub.client.post(f"{HUB}/import", headers=_headers(MASTER_KEY), json={**body, "version": "2.0.0"})
+    )
+    assert conflict.status_code == 400, conflict.text
+    hub.plugins.create.assert_not_awaited()
+    imported: Final = (
+        await _upload(hub, _zip(FILES), version=None, metadata=metadata) if operation == "upload"
+        else await hub.client.post(f"{HUB}/import", headers=_headers(MASTER_KEY), json=body)
+    )
+    assert imported.status_code == 200, imported.text
+    assert imported.json()["name"] == "registry-alias" and imported.json()["version"] == "3.0.0"
+    assert {field: imported.json()[field] for field in REGISTRY_METADATA} == REGISTRY_METADATA
+    record: Final = _stored_upload(hub)
+    assert json.loads(record.manifest_json)["agent_skill"]["name"] == NAME
+    _assert_portable(await hub.client.get(imported.json()["download_url"]))

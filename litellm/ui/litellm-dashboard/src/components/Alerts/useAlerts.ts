@@ -3,17 +3,17 @@ import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { backgroundFetchClient } from "@/lib/http/api";
 import { getProxyBaseUrl } from "@/components/networking";
 import { AlertStatus } from "@/components/ModelDeprecationAlerts/migrationState";
-import type { AlertFilter } from "./alertPresentation";
+import { listedAlertType, type AlertFilter } from "./alertPresentation";
 
-export function useAlerts(scope: string, enabled: boolean, status: AlertStatus, filter: AlertFilter) {
+export function useAlerts(scope: string, enabled: boolean, status: AlertStatus, filter: AlertFilter | "prompt_cache") {
+  const type = filter === "prompt_cache" ? filter : listedAlertType(filter);
   const options = {
     queryKey: ["alerts", getProxyBaseUrl(), scope, status, filter],
-    enabled: enabled && filter !== "model-deprecations",
+    enabled: enabled && type !== null,
     initialPageParam: undefined as string | undefined,
     queryFn: async ({ pageParam, signal }: { pageParam: string | undefined; signal: AbortSignal }) => {
-      const type = filter === "all" || filter === "model-deprecations" ? "performance" : filter;
       const { data } = await backgroundFetchClient.GET("/alerts", {
-        params: { query: { status, type, limit: 25, cursor: pageParam } },
+        params: { query: { status, type: type ?? undefined, limit: 25, cursor: pageParam } },
         signal,
       });
       if (!data) throw new Error("Could not load alerts");
