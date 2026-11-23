@@ -129,6 +129,8 @@ pub struct GeneralSettings {
     #[serde_as(as = "Truthy")]
     pub enforce_rbac: bool,
     pub user_header_name: Option<String>,
+    /// Which tokens a TPM limit counts: `input`, `output`, or anything else for their total.
+    pub token_rate_limit_type: Option<String>,
     #[serde(deserialize_with = "user_header_mappings")]
     pub user_header_mappings: Box<[UserHeaderMapping]>,
     #[serde(flatten)]
@@ -191,6 +193,7 @@ impl Default for GeneralSettings {
             role_permissions: None,
             enforce_rbac: false,
             user_header_name: None,
+            token_rate_limit_type: None,
             user_header_mappings: Box::default(),
             additional_fields: AdditionalFields::default(),
         }

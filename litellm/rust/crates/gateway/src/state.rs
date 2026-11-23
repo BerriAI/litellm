@@ -20,7 +20,7 @@ use litellm_repositories::{Database, KeyRepository, ObjectPermissionRepository};
 use tokio::runtime::Handle;
 
 use crate::{
-    Error, Gateway, RedisClients, Resources, db,
+    Error, Gateway, Inference, KeyLimiter, RedisClients, Resources, db,
     host::{
         self, NativeRows,
         auth::{AuthStore, KEY_TTL},
@@ -37,6 +37,9 @@ pub struct AppState {
     /// without a database.
     pub keys: Option<Arc<AuthStore>>,
     pub entitlements: Arc<Entitlements>,
+    /// The proxy's `parallel_request_limiter_v3`, which the inference routes' callback stage runs
+    /// and the limit check before the body asks.
+    pub key_limiter: Arc<KeyLimiter>,
     /// The config's `environment_variables` in front of the process environment.
     pub environment: Arc<dyn Lookup + Send + Sync>,
 }
@@ -54,7 +57,10 @@ impl AppState {
     ) -> Result<Self, Error> {
         let redis = crate::redis::connect(config, resources).await?;
         let routing = crate::redis::routing(&redis, environment);
-        let inference = crate::build_inference(config, resources, routing).await?;
+        let Inference {
+            gateway: inference,
+            key_limiter,
+        } = crate::build_inference(config, environment, resources, routing, &redis).await?;
         let (database, keys) = db::connect(config, &resources.secrets)
             .await?
             .map(|(pools, repositories)| (pools, Arc::new(keys(config, &redis, repositories))))
@@ -66,6 +72,7 @@ impl AppState {
             database,
             keys,
             entitlements,
+            key_limiter,
             environment: resources.environment.clone(),
         })
     }
