@@ -12108,6 +12108,21 @@ class TestAnthropicMessagesStreamErrorFrame:
         assert payload["error"]["type"] == expected_error_type
         assert "upstream stopped sending" in payload["error"]["message"]
 
+    async def test_mid_stream_failure_relays_redacted_provider_fields(self) -> None:
+        failure: Final = litellm.BadRequestError(
+            message="rejected",
+            model="claude-sonnet-4-5",
+            llm_provider="hosted_vllm",
+            body={"message": "rejected", "request_id": "req-kept", "api_key": "opaque-upstream-credential"},
+        )
+
+        frames: Final = [frame async for frame in self._sse_generator_failing_with(failure)]
+
+        assert len(frames) == 1
+        payload: Final = json.loads(frames[0].split("data: ", 1)[1])
+        assert payload["error"]["provider_specific_fields"]["request_id"] == "req-kept"
+        assert "opaque-upstream-credential" not in frames[0]
+
     _CONTENT_DELTA_FRAME: Final = (
         b"event: content_block_delta\n"
         b'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"1\\n2\\n3"}}\n\n'

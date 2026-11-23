@@ -4592,6 +4592,7 @@ class ProxyBaseLLMRequestProcessing:
                 type=openai_error_type(e, stream_error_status),
                 param=openai_error_param(e),
                 code=stream_error_status,
+                provider_specific_fields=relayed_provider_specific_fields(e),
             )
             stream_completed = True
             error_frame: Final = serialize_error(proxy_exception)
@@ -4639,6 +4640,7 @@ class ProxyBaseLLMRequestProcessing:
             serialize_error=lambda proxy_exc: anthropic_error_sse_frame(
                 status_code=error_status_code(proxy_exc, status.HTTP_500_INTERNAL_SERVER_ERROR),
                 raw_message=proxy_exc.message,
+                provider_specific_fields=proxy_exc.provider_specific_fields,
             ),
             request=request,
             flush_tail=None if restamper is None else restamper.flush,
