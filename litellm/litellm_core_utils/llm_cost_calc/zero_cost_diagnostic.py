@@ -24,7 +24,9 @@ _CACHE_READ_AUDIO_INPUT_RATE: Final = "cache_read_input_audio_token_cost"
 _TEXT_OUTPUT_RATE: Final = "output_cost_per_token"
 _AUDIO_OUTPUT_RATE: Final = "output_cost_per_audio_token"
 _RATE_KEY_MARKERS: Final = ("cost", "pricing")
-_NESTED_PRICING: Final = TypeAdapter(Mapping[str, object] | tuple[object, ...])
+_NESTED_PRICING: Final[TypeAdapter[Mapping[str, object] | tuple[object, ...]]] = TypeAdapter(
+    Mapping[str, object] | tuple[object, ...]
+)
 _PRICING_TIERS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
 _MAX_PRICING_DEPTH: Final = 4
 
