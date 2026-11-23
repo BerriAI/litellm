@@ -5,7 +5,7 @@ use crate::Error;
 
 /// Where a fetched catalog comes from
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Source {
+pub enum Location {
     Http(Url),
     S3(S3Uri),
     Gcs(GcsUri),
@@ -38,7 +38,7 @@ impl TryFrom<&str> for GcsUri {
     }
 }
 
-impl Source {
+impl Location {
     pub fn parse(url: &str) -> Result<Self, Error> {
         let parsed = Url::parse(url)?;
         match parsed.scheme() {
@@ -61,16 +61,16 @@ mod tests {
     #[case::http("http://127.0.0.1:8000/cost.json")]
     fn http_urls_are_fetched_over_http(#[case] url: &str) {
         assert_eq!(
-            Source::parse(url).unwrap(),
-            Source::Http(Url::parse(url).unwrap())
+            Location::parse(url).unwrap(),
+            Location::Http(Url::parse(url).unwrap())
         );
     }
 
     #[rstest]
     fn s3_urls_name_a_bucket_and_key() {
         assert_eq!(
-            Source::parse("s3://bucket/prices/cost.json").unwrap(),
-            Source::S3(S3Uri {
+            Location::parse("s3://bucket/prices/cost.json").unwrap(),
+            Location::S3(S3Uri {
                 bucket: "bucket".into(),
                 key: "prices/cost.json".into(),
             })
@@ -88,8 +88,8 @@ mod tests {
         #[case] object: &str,
     ) {
         assert_eq!(
-            Source::parse(url).unwrap(),
-            Source::Gcs(GcsUri {
+            Location::parse(url).unwrap(),
+            Location::Gcs(GcsUri {
                 bucket: bucket.into(),
                 object: object.into(),
             })
@@ -105,6 +105,6 @@ mod tests {
     #[case::file("file:///tmp/cost.json")]
     #[case::not_a_url("not a url")]
     fn other_urls_are_refused(#[case] url: &str) {
-        assert!(Source::parse(url).is_err());
+        assert!(Location::parse(url).is_err());
     }
 }

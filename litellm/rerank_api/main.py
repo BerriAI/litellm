@@ -49,6 +49,13 @@ async def arerank(
 ) -> RerankResponse | Awaitable[RerankResponse]:
     """
     Async: Reranks a list of documents based on their relevance to the query
+
+    The returned response carries this call's cost in ``response._hidden_params.get("response_cost")``,
+    which may be None when the cost is unavailable. Success callbacks receive the same value in
+    ``kwargs["response_cost"]``. They run in the background and may still be pending when this coroutine
+    returns, so a ledger or exporter written from a callback may be incomplete at that point. A caller
+    that needs that write done must wait for an acknowledgment from its own callback.
+    ``CustomLogger.log_post_api_call`` is not a final-cost hook.
     """
     _custom_llm_provider: str | None = None
     try:
@@ -124,6 +131,13 @@ def rerank(
 ) -> RerankResponse | Awaitable[RerankResponse]:
     """
     Reranks a list of documents based on their relevance to the query
+
+    The returned response carries this call's cost in ``response._hidden_params.get("response_cost")``,
+    which may be None when the cost is unavailable. Success callbacks receive the same value in
+    ``kwargs["response_cost"]``. They run on a background logging thread and may still be pending when
+    this function returns, so a ledger or exporter written from a callback may be incomplete at that point.
+    A caller that needs that write done must wait for an acknowledgment from its own callback.
+    ``CustomLogger.log_post_api_call`` is not a final-cost hook.
     """
     # `instruction` is read from kwargs rather than declared as a named param.
     # The router forwards rerank calls via an untyped `**kwargs` unpack, and a

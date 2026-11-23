@@ -104,7 +104,7 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
+        non_default_params: Mapping[str, object],
         optional_params: dict,
         model: str,
         drop_params: bool,
@@ -120,7 +120,7 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
         api_key: str | None,
         model: str,
         optional_params: dict,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         """
@@ -192,10 +192,10 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
+        headers: Mapping[str, object],
+    ) -> dict[str, object]:
         # use the last message content as the query
         query: Final[str] = convert_content_list_to_str(messages[-1])
         return {
@@ -318,7 +318,7 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
 
     def _extract_response_content(self, events: InvokeAgentEventList) -> str:
         """Extract the final response content from parsed events."""
-        response_parts: Final = []
+        response_parts: Final[list[str]] = []
 
         for event in events:
             headers = event.get("headers", {})
@@ -406,7 +406,7 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
         if not metadata:
             return
 
-        usage: Final[InvokeAgentUsage | dict | None] = metadata.get("usage", {})
+        usage: Final[InvokeAgentUsage | dict[str, int] | None] = metadata.get("usage", {})
         if not usage:
             return
 
@@ -465,10 +465,10 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
+        request_data: Mapping[str, object],
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
@@ -511,8 +511,8 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
         headers: dict,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:

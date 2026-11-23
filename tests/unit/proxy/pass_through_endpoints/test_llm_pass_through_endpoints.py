@@ -3387,7 +3387,7 @@ class TestForwardHeaders:
         # Mock the request body
         mock_request_body = {"test": "data"}
 
-        mock_user_api_key_dict = MagicMock()
+        mock_user_api_key_dict = UserAPIKeyAuth()
 
         # Custom headers that should be merged with user headers
         custom_headers = {
@@ -3484,7 +3484,7 @@ class TestForwardHeaders:
         mock_request.query_params = {}
 
         mock_request_body = {"test": "data"}
-        mock_user_api_key_dict = MagicMock()
+        mock_user_api_key_dict = UserAPIKeyAuth()
 
         # Only these custom headers should be sent
         custom_headers = {
@@ -4620,6 +4620,75 @@ class TestCursorProxyRoute:
 
             expected_auth = base64.b64encode(b"crsr_ui_test_key:").decode("ascii")
             assert call_args["custom_headers"]["Authorization"] == f"Basic {expected_auth}"
+
+    def test_cursor_proxy_route_sends_the_secret_behind_a_ui_credential_oidc_reference(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from litellm.proxy.proxy_server import app
+        from litellm.types.utils import CredentialItem
+
+        monkeypatch.delenv("CURSOR_API_KEY", raising=False)
+        monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
+        monkeypatch.setenv("CURSOR_UI_TOKEN", "crsr_resolved_key")
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        monkeypatch.setattr(
+            litellm,
+            "credential_list",
+            [
+                CredentialItem(
+                    credential_name="my-cursor-oidc",
+                    credential_values={"api_key": "oidc/env/CURSOR_UI_TOKEN", "api_base": "https://api.cursor.com"},
+                    credential_info={"custom_llm_provider": "cursor"},
+                )
+            ],
+        )
+        litellm.in_memory_llm_clients_cache.flush_cache()
+        monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, lambda: UserAPIKeyAuth(api_key="sk-virtual"))
+
+        with respx.mock(assert_all_called=True) as upstream:
+            route: Final = upstream.get("https://api.cursor.com/v0/models").mock(
+                return_value=httpx.Response(200, json={"models": []})
+            )
+            response: Final = TestClient(app).get("/cursor/v0/models")
+
+        expected_auth: Final = base64.b64encode(b"crsr_resolved_key:").decode("ascii")
+        assert (response.status_code, response.json()) == (200, {"models": []})
+        assert route.calls.last.request.headers["authorization"] == f"Basic {expected_auth}"
+
+    @pytest.mark.asyncio
+    async def test_cursor_proxy_route_refuses_a_ui_credential_google_reference(self):
+        from litellm.types.utils import CredentialItem
+
+        ui_credential = CredentialItem(
+            credential_name="my-cursor-google",
+            credential_values={"api_key": "oidc/google/https://api.cursor.com"},
+            credential_info={"custom_llm_provider": "cursor"},
+        )
+
+        with (
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router.get_credentials",
+                return_value=None,
+            ),
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.litellm.credential_list",
+                [ui_credential],
+            ),
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
+            ) as mock_create_route,
+            pytest.raises(HTTPException) as caught,
+        ):
+            await cursor_proxy_route(
+                endpoint="v0/models",
+                request=MagicMock(spec=Request),
+                fastapi_response=MagicMock(spec=Response),
+                user_api_key_dict=MagicMock(),
+            )
+
+        assert caught.value.status_code == 401
+        assert "pass-through routes do not fetch Google ID tokens" in caught.value.detail
+        mock_create_route.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_cursor_proxy_route_custom_api_base(self):
@@ -8692,7 +8761,9 @@ async def test_bedrock_native_count_tokens_counts_on_the_callers_own_deployment_
                     "rpm": 1,
                 },
             ),
-            _bedrock_count_deployment(_BEDROCK_COUNT_ALIAS, _BEDROCK_COUNT_MODEL, {"id": "global-deployment", "rpm": 1}),
+            _bedrock_count_deployment(
+                _BEDROCK_COUNT_ALIAS, _BEDROCK_COUNT_MODEL, {"id": "global-deployment", "rpm": 1}
+            ),
         ),
         caller=UserAPIKeyAuth(api_key=f"sk-{team_id}-caller", team_id=team_id),
         routing_strategy="usage-based-routing-v2",

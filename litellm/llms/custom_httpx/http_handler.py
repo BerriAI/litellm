@@ -284,9 +284,9 @@ def _repair_surrogates(value: str) -> str:
 
 
 def _prepare_request_data_and_content(
-    data: dict | str | bytes | None = None,
+    data: Mapping[str, object] | str | bytes | None = None,
     content: _RequestContent | None = None,
-) -> tuple[dict | Mapping | None, _RequestContent | None]:
+) -> tuple[Mapping[str, object] | None, _RequestContent | None]:
     """
     Helper function to route data/content parameters correctly for httpx requests
 
@@ -765,7 +765,7 @@ class AsyncHTTPHandler:
         self,
         timeout: float | httpx.Timeout | None = None,
         event_hooks: Mapping[str, list[Callable[..., object]]] | None = None,
-        concurrent_limit=None,  # Kept for backward compatibility, but ignored (no limits)
+        concurrent_limit: object = None,  # Kept for backward compatibility, but ignored (no limits)
         client_alias: str | None = None,  # name for client in logs
         ssl_verify: VerifyTypes | None = None,
         shared_session: Optional["ClientSession"] = None,
@@ -1612,7 +1612,7 @@ class HTTPHandler:
     def __init__(
         self,
         timeout: float | httpx.Timeout | None = None,
-        concurrent_limit=None,  # Kept for backward compatibility, but ignored (no limits)
+        concurrent_limit: object = None,  # Kept for backward compatibility, but ignored (no limits)
         client: httpx.Client | None = None,
         ssl_verify: bool | str | None = None,
         disable_default_headers: bool

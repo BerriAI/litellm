@@ -102,6 +102,7 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     prepare_metadata_fields,
     raise_on_invalid_key_expiry_alert_days,
     raise_on_invalid_key_logging_config,
+    raise_on_invalid_key_metadata,
     raise_on_logging_credential_change,
     reset_key_spend_fn,
     update_key_fn,
@@ -112,6 +113,53 @@ from litellm.proxy.proxy_server import app, budget_windows_absent_cache_key
 from litellm.redis.stores.auth_cache import AuthObject
 from litellm.redis.stores.cache_invalidation import PythonCaches
 from litellm.rust_bridge._native import NativeRedisStoreError
+
+
+@pytest.mark.parametrize("value", ("false", 0, 1, [], {}))
+def test_key_lens_policy_rejects_non_boolean_values(value: object) -> None:
+    with pytest.raises(HTTPException) as error:
+        raise_on_invalid_key_metadata({"lens_enabled": value})
+    assert error.value.status_code == 400
+    assert error.value.detail == {"error": "metadata.lens_enabled must be a boolean or null"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enabled", (True, False, None))
+async def test_lens_only_key_update_preserves_stored_integration_credentials_and_metadata(enabled: bool | None) -> None:
+    stored_metadata: Final = {
+        "cost_center": "engineering",
+        "logging": [{"callback_name": "langfuse", "callback_vars": {"langfuse_secret_key": "litellm_enc::stored-value"}}],
+        "lens_enabled": True,
+    }
+    prepared: Final = await prepare_key_update_data(
+        UpdateKeyRequest(key="key-hash", lens_enabled=enabled),
+        LiteLLM_VerificationToken(token="key-hash", metadata=stored_metadata),
+    )
+    assert prepared == {"metadata": {**stored_metadata, "lens_enabled": enabled}}
+
+
+@pytest.mark.asyncio
+async def test_typed_lens_update_wins_over_metadata_while_preserving_metadata_replacement_semantics() -> None:
+    prepared: Final = await prepare_key_update_data(
+        UpdateKeyRequest(key="key-hash", lens_enabled=False, metadata={"lens_enabled": True, "cost_center": "new"}),
+        LiteLLM_VerificationToken(token="key-hash", metadata={"unrelated": "stored"}),
+    )
+    assert prepared == {"metadata": {"lens_enabled": False, "cost_center": "new"}}
+
+
+@pytest.mark.asyncio
+async def test_omitting_typed_lens_update_preserves_existing_metadata_replacement_contract() -> None:
+    prepared: Final = await prepare_key_update_data(
+        UpdateKeyRequest(key="key-hash", metadata={"cost_center": "new"}),
+        LiteLLM_VerificationToken(token="key-hash", metadata={"lens_enabled": False, "unrelated": "stored"}),
+    )
+    assert prepared == {"metadata": {"cost_center": "new"}}
+
+
+@pytest.mark.parametrize("value", ("false", 0, 1))
+def test_typed_lens_key_update_rejects_coerced_values(value: object) -> None:
+    with pytest.raises(ValidationError):
+        UpdateKeyRequest.model_validate({"key": "key-hash", "lens_enabled": value})
 from litellm.types.proxy.management_endpoints.key_management_endpoints import (
     BulkUpdateKeyRequest,
     BulkUpdateKeyResponse,
@@ -2486,6 +2534,32 @@ async def test_update_without_metadata_still_preserves_existing():
 
     assert result["metadata"]["service_account_id"] == "sa-123"
     assert result["metadata"]["other"] == "kept"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("resubmit_logging", [False, True])
+async def test_prepare_key_update_only_normalizes_credential_references_when_admin_resubmits_logging(
+    resubmit_logging: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entries: Final = [{"callback_name": "arize", "litellm_credential_name": "space-a", "callback_vars": {}}]
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [CredentialItem(credential_name="space-a", credential_values={"arize_api_key": "test-key"}, credential_info={})],
+    )
+    serialized: Final = json.dumps(entries)
+    existing_key: Final = LiteLLM_VerificationToken(token="hashed", metadata={"logging": serialized})
+    request: Final = (
+        UpdateKeyRequest(key="sk-1", metadata={"logging": serialized})
+        if resubmit_logging
+        else UpdateKeyRequest(key="sk-1", max_budget=100)
+    )
+    admin: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    result: Final = await prepare_key_update_data(data=request, existing_key_row=existing_key, user_api_key_dict=admin)
+
+    assert result["metadata"]["logging"] == (entries if resubmit_logging else serialized)
 
 
 @pytest.mark.asyncio
@@ -12931,6 +13005,48 @@ class TestLIT1884KeyGenerateValidation:
                 route="key_generate",
             )
             assert result is True
+
+    @pytest.mark.parametrize("spend", [-9999.0, 5.0])
+    def test_key_generation_check_non_admin_cannot_set_spend(self, spend: float) -> None:
+        data: Final = GenerateKeyRequest(spend=spend)
+        user_api_key_dict: Final = UserAPIKeyAuth(
+            user_id="internal-user",
+            user_role=LitellmUserRoles.INTERNAL_USER,
+        )
+
+        with patch.object(litellm, "key_generation_settings", None):
+            with pytest.raises(HTTPException) as exc_info:
+                key_generation_check(
+                    team_table=None,
+                    user_api_key_dict=user_api_key_dict,
+                    data=data,
+                    route="key_generate",
+                )
+        assert exc_info.value.status_code == 403
+        assert "Only proxy admins can set spend" in str(exc_info.value.detail)
+
+    @pytest.mark.parametrize(
+        "user_role, spend",
+        [
+            (LitellmUserRoles.INTERNAL_USER, 0.0),
+            (LitellmUserRoles.INTERNAL_USER, None),
+            (LitellmUserRoles.PROXY_ADMIN, -5.0),
+        ],
+    )
+    def test_key_generation_check_spend_allowed(self, user_role: LitellmUserRoles, spend: float | None) -> None:
+        data: Final = GenerateKeyRequest(spend=spend)
+        user_api_key_dict: Final = UserAPIKeyAuth(user_id="some-user", user_role=user_role)
+
+        with patch.object(litellm, "key_generation_settings", None):
+            assert (
+                key_generation_check(
+                    team_table=None,
+                    user_api_key_dict=user_api_key_dict,
+                    data=data,
+                    route="key_generate",
+                )
+                is True
+            )
 
 
 class TestLIT1884KeyUpdateValidation:
@@ -24802,7 +24918,7 @@ def test_key_health_failure_body_carries_a_json_null_param():
     import litellm.proxy.proxy_server as ps
 
     app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
-        api_key="hashed-key", metadata={"logging": ["not-a-callback-object"]}
+        api_key="hashed-key", metadata={"logging": [{"callback_vars": {}}]}
     )
     try:
         response = client.post("/key/health", headers={"Authorization": "Bearer sk-test"})
@@ -24811,6 +24927,7 @@ def test_key_health_failure_body_carries_a_json_null_param():
 
     assert response.status_code == 500
     error = response.json()["error"]
+    assert "callback_name is required in key_logging" in error["message"]
     assert error["type"] == "internal_server_error"
     assert error["param"] is None
 
@@ -24909,6 +25026,18 @@ def test_non_admin_resaving_referencing_key_metadata_read_back_encrypted_is_not_
         raise_on_logging_credential_change({"note": "unrelated edit"}, key_row, internal_user)
 
     assert removed.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_non_admin_resaving_unchanged_referencing_logging_as_json_persists_a_list() -> None:
+    entries: Final = [{"callback_name": "arize", "litellm_credential_name": "owned-credential", "callback_vars": {}}]
+    key_row: Final = LiteLLM_VerificationToken(token="test-key", metadata={"logging": entries})
+    prepared: Final = await prepare_key_update_data(
+        UpdateKeyRequest(key="test-key", metadata={"logging": json.dumps(entries)}),
+        key_row,
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER),
+    )
+    assert prepared["metadata"]["logging"] == entries
 
 
 @pytest.mark.parametrize(
