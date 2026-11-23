@@ -7174,7 +7174,6 @@ async def test_a_responses_websocket_refused_after_admission_gives_its_parallel_
         await proxy_logging.pre_call_hook(
             user_api_key_dict=key, data={"model": "gpt-4o-mini"}, call_type="_aresponses_websocket"
         )
-        await asyncio.sleep(0)
         raise open_failure
 
     ws: Final = MagicMock()
