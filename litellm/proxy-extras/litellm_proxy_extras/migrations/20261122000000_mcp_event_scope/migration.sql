@@ -13,4 +13,4 @@ CREATE TRIGGER litellm_explicit_mcp_scope BEFORE UPDATE OF
     mcp_servers, mcp_access_groups, mcp_tool_permissions, mcp_toolsets, blocked_tools
     ON "LiteLLM_ObjectPermissionTable" FOR EACH ROW
     WHEN (OLD.mcp_event_scope_inherited)
-    EXECUTE FUNCTION litellm_explicit_mcp_scope();
+    EXECUTE PROCEDURE litellm_explicit_mcp_scope();
