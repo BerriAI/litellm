@@ -972,6 +972,17 @@ def _bounded_compaction_summary(
     return None if summary is None else with_compaction_summary(value, _compaction_summary_for_db(summary))
 
 
+def _is_web_search_result_ciphertext(
+    parent: Mapping[str, object], key: str, value: object, keep_compaction_blocks: bool
+) -> bool:
+    return (
+        keep_compaction_blocks
+        and key == "encrypted_content"
+        and isinstance(value, str)
+        and parent.get("type") == "web_search_result"
+    )
+
+
 def _sanitize_request_body_for_spend_logs_payload(
     request_body: Mapping[str, object],
     visited: set | None = None,
@@ -1013,6 +1024,8 @@ def _sanitize_request_body_for_spend_logs_payload(
     def _stored_value(key: str, value: object) -> object:
         if mask_credentials and _is_request_body_credential(key, value):
             return REDACTED_BY_LITELM_STRING
+        if _is_web_search_result_ciphertext(request_body, key, value, keep_compaction_blocks):
+            return value
         bounded_summary: Final = _bounded_compaction_summary(request_body, key, value, keep_compaction_blocks)
         if bounded_summary is not None:
             return bounded_summary

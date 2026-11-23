@@ -95,21 +95,25 @@ impl SpendLogRowBuilder {
                 continue;
             }
             let name = as_str(key).unwrap_or_default();
-            let stored =
-                if mask_credentials && matches!(value, Value::Str(_)) && is_sensitive_key(name) {
-                    text(REDACTED)
-                } else if let Some(bounded) = compaction
-                    .then(|| self.bounded_compaction_summary(body, name, value))
-                    .flatten()
-                {
-                    Value::Str(bounded)
-                } else {
-                    self.sanitize_value(
-                        value,
-                        mask_credentials && !content.holds(name),
-                        keep_compaction_blocks,
-                    )
-                };
+            let stored = if mask_credentials
+                && matches!(value, Value::Str(_))
+                && is_sensitive_key(name)
+            {
+                text(REDACTED)
+            } else if keep_compaction_blocks && is_web_search_result_ciphertext(body, name, value) {
+                value.clone()
+            } else if let Some(bounded) = compaction
+                .then(|| self.bounded_compaction_summary(body, name, value))
+                .flatten()
+            {
+                Value::Str(bounded)
+            } else {
+                self.sanitize_value(
+                    value,
+                    mask_credentials && !content.holds(name),
+                    keep_compaction_blocks,
+                )
+            };
             result.push((key.clone(), stored));
         }
         Value::Dict(result)
@@ -273,6 +277,12 @@ pub(crate) fn truncated(value: &str, max_length: i64) -> String {
         length - start_chars - end_chars,
         slice(value, Some(-tail), None),
     )
+}
+
+fn is_web_search_result_ciphertext(parent: &[(Value, Value)], key: &str, value: &Value) -> bool {
+    key == "encrypted_content"
+        && matches!(value, Value::Str(_))
+        && matches!(lookup(parent, "type"), Some(Value::Str(kind)) if kind == "web_search_result")
 }
 
 fn is_sensitive_key(key: &str) -> bool {
