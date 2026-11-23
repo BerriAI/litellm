@@ -68,6 +68,21 @@ def _tool_payload_indicates_failure(content: object) -> bool:
     return status_val in {"error", "failed", "failure", "denied", "rejected"}
 
 
+def _slice_current_turn_messages(
+    messages: list[Mapping[str, Any]],
+) -> list[Mapping[str, Any]]:
+    """Slice conversation history from the latest `user` turn onward so receipts
+    from earlier turns cannot ground newly requested actions in the current turn.
+    """
+    last_user_idx = -1
+    for idx, msg in enumerate(messages):
+        if str(msg.get("role", "")).lower() == "user":
+            last_user_idx = idx
+    if last_user_idx >= 0:
+        return messages[last_user_idx:]
+    return messages
+
+
 def _normalize_tool_error_messages(
     messages: list[Mapping[str, Any]],
 ) -> list[Mapping[str, Any]]:
@@ -195,9 +210,11 @@ class EpistemicGuardrail(CustomGuardrail):
             supervisor, verify_chat_turn = self._get_supervisor()
             raw_msgs = request_data.get("messages")
             messages = _normalize_tool_error_messages(
-                [m for m in raw_msgs if isinstance(m, Mapping)]
-                if isinstance(raw_msgs, list)
-                else []
+                _slice_current_turn_messages(
+                    [m for m in raw_msgs if isinstance(m, Mapping)]
+                    if isinstance(raw_msgs, list)
+                    else []
+                )
             )
 
             processed: Final[list[str]] = []

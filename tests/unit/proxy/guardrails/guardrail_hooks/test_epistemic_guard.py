@@ -304,3 +304,44 @@ async def test_structured_json_failed_tool_claim_blocked():
             input_type="response",
         )
     assert exc_info.value.status_code == 400
+
+
+
+@pytest.mark.asyncio
+async def test_prior_turn_receipt_cannot_ground_new_turn_claim():
+    pytest.importorskip("epistemic_guard")
+    guardrail = EpistemicGuardrail(guardrail_name="eg-turn", on_fail="block")
+    request_data = {
+        "messages": [
+            {"role": "user", "content": "Delete report.txt."},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_old",
+                        "type": "function",
+                        "function": {
+                            "name": "delete_file",
+                            "arguments": '{"path": "report.txt"}',
+                        },
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_old",
+                "name": "delete_file",
+                "content": '{"ok": true}',
+            },
+            {"role": "assistant", "content": "I deleted report.txt."},
+            {"role": "user", "content": "Delete report.txt again now."},
+        ]
+    }
+    with pytest.raises(HTTPException) as exc_info:
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["I deleted report.txt."]},
+            request_data=request_data,
+            input_type="response",
+        )
+    assert exc_info.value.status_code == 400
