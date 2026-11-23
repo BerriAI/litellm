@@ -158,6 +158,7 @@ def _uploader(
     delays: Sequence[float] = (),
     max_queued_bytes: int = 1_000,
     validate_upload_url: bool = False,
+    refusal_pause: float = 600.0,
 ) -> MediaUploader:
     client: Final = httpx.Client(transport=httpx.MockTransport(transport))
     return MediaUploader(
@@ -167,6 +168,7 @@ def _uploader(
         delays=delays,
         max_queued_bytes=max_queued_bytes,
         validate_upload_url=validate_upload_url,
+        refusal_pause=refusal_pause,
     )
 
 
@@ -374,6 +376,79 @@ def test_a_failed_registration_is_logged_without_its_headers_and_the_next_upload
     assert "HTTP 400 from the media API" in caplog.text
     assert "do-not-log" not in caplog.text
     assert uploader.failed_uploads == 1
+
+
+def _refusing_langfuse(
+    requests: list[httpx.Request],
+    statuses: Sequence[int],
+    storage: Sequence[httpx.Response] = (httpx.Response(200, text="stored"),),
+) -> Transport:
+    """Answers each media registration with the next of ``statuses``, then registers like ``_langfuse``."""
+    langfuse: Final = _langfuse(requests, storage=storage)
+    refusals: Final = iter(statuses)
+
+    def transport(request: httpx.Request) -> httpx.Response:
+        status: Final = next(refusals, None) if request.method == "POST" else None
+        if status is None:
+            return langfuse(request)
+        requests.append(request)
+        return httpx.Response(status, json={"message": "Media upload to blob storage not enabled"})
+
+    return transport
+
+
+@pytest.mark.parametrize("status", [404, 500])
+def test_a_langfuse_that_cannot_take_media_is_sent_no_further_references(status: int, caplog):
+    requests: list[httpx.Request] = []
+    uploader = _uploader(_refusing_langfuse(requests, (status,) * 3))
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        assert uploader.submit((_upload(),)) is True
+        assert uploader.drain(5_000) is True
+        registrations = len(requests)
+
+        assert uploader.submit((_upload(),)) is False
+        assert uploader.drain(5_000) is True
+
+    assert len(requests) == registrations
+    assert {(request.method, request.url.path) for request in requests} == {("POST", "/api/public/media")}
+    assert uploader.failed_uploads == 1
+    assert f"Langfuse media cannot be stored (HTTP {status} from the media API), so media stays inline" in caplog.text
+
+
+def test_a_refused_upload_url_keeps_later_media_inline():
+    requests: list[httpx.Request] = []
+    uploader = _uploader(
+        _langfuse(requests, upload_url="http://169.254.169.254/latest/meta-data"), validate_upload_url=True
+    )
+    uploader.submit((_upload(),))
+    assert uploader.drain(5_000) is True
+
+    assert uploader.submit((_upload(),)) is False
+    assert uploader.drain(5_000) is True
+    assert [(request.method, request.url.path) for request in requests] == [("POST", "/api/public/media")]
+
+
+def test_media_stays_inline_while_one_upload_per_pause_checks_whether_langfuse_takes_media_again():
+    requests: list[httpx.Request] = []
+    stored: Final = (httpx.Response(200, text="stored"),) * 2
+    uploader = _uploader(_refusing_langfuse(requests, (404, 404), storage=stored), refusal_pause=0.0)
+    uploader.submit((_upload(),))
+    assert uploader.drain(5_000) is True
+    refused = len(requests)
+
+    assert uploader.submit((_upload(), _upload(field="output"))) is False
+    assert uploader.drain(5_000) is True
+    still_refused = len(requests)
+    assert uploader.submit((_upload(),)) is False
+    assert uploader.drain(5_000) is True
+
+    assert uploader.submit((_upload(),)) is True
+    assert uploader.drain(5_000) is True
+    assert refused == 1
+    assert [json.loads(request.content)["field"] for request in requests[refused:still_refused]] == ["input"]
+    assert [request.method for request in requests[still_refused:]] == ["POST", "PUT", "PATCH", "POST", "PUT", "PATCH"]
+    assert uploader.failed_uploads == 2
 
 
 def _blocked_uploader(release: threading.Event, started: threading.Event, **limits: int) -> MediaUploader:

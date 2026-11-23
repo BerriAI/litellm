@@ -16,7 +16,7 @@ from types import MappingProxyType
 from typing import Final, Literal, TypeAlias
 
 import httpx
-from langfuse.api import LangfuseAPI, MediaContentType
+from langfuse.api import GetMediaUploadUrlResponse, LangfuseAPI, MediaContentType
 from langfuse.api.core.api_error import ApiError
 from pydantic import JsonValue, TypeAdapter
 
@@ -30,6 +30,7 @@ MediaField: TypeAlias = Literal["input", "output", "metadata"]
 _REFERENCE_PREFIX: Final = "@@@langfuseMedia:"
 _MAX_DEPTH: Final = 10
 _MAX_QUEUED_BYTES: Final = 100 * 1024 * 1024
+_REFUSAL_PAUSE_SECONDS: Final = 600.0
 _IDLE_POLL_SECONDS: Final = 1.0
 _DRAIN_POLL_SECONDS: Final = 0.01
 _URL_SAFE_TO_STANDARD: Final = str.maketrans("-_", "+/")
@@ -142,6 +143,11 @@ def _retryable_status(status: int) -> bool:
     return status in (408, 429) or status >= 500
 
 
+def _media_api_unavailable(status: int | None) -> bool:
+    """The answers of a Langfuse with no media route or no media bucket, which hold for every payload."""
+    return status is not None and (status == 404 or status >= 500)
+
+
 def _storage_headers(upload_url: str, host: str, media: Media) -> Mapping[str, str]:
     """Google Cloud Storage rejects the S3 checksum and Azure blob headers, so its URLs get the content type only."""
     return {
@@ -167,6 +173,7 @@ class MediaUploader:
         delays: Sequence[float],
         validate_upload_url: bool = False,
         max_queued_bytes: int = _MAX_QUEUED_BYTES,
+        refusal_pause: float = _REFUSAL_PAUSE_SECONDS,
     ) -> None:
         self._api: Final = api
         self._client: Final = client
@@ -174,6 +181,8 @@ class MediaUploader:
         self._delays: Final = tuple(delays)
         self._validate_upload_url: Final = validate_upload_url
         self._max_queued_bytes: Final = max_queued_bytes
+        self._refusal_pause: Final = refusal_pause
+        self._probe_at: float | None = None
         self._queue: Final[Queue[MediaUpload]] = Queue()
         self._lock: Final = threading.Lock()
         self._queued_bytes = 0
@@ -182,16 +191,24 @@ class MediaUploader:
         threading.Thread(target=self._run, name="langfuse-media-upload", daemon=True).start()
 
     def submit(self, uploads: Sequence[MediaUpload]) -> bool:
-        """All of ``uploads`` or none: ``False`` when they do not fit next to the payloads still waiting, so the
-        caller keeps them inline."""
-        size: Final = sum(len(upload.media.content) for upload in uploads)
+        """All of ``uploads`` or none: ``False`` when the caller has to keep them inline, because they do not fit
+        next to the payloads still waiting or Langfuse is refusing media.
+
+        While Langfuse refuses media, one upload per pause is still sent to find out whether it takes media again.
+        """
         with self._lock:
+            refusing: Final = self._probe_at is not None
+            probing: Final = self._probe_at is not None and monotonic() >= self._probe_at
+            accepted: Final = tuple(uploads[:1]) if probing else () if refusing else tuple(uploads)
+            size: Final = sum(len(upload.media.content) for upload in accepted)
             if self._queued_bytes + size > self._max_queued_bytes:
                 return False
+            if probing:
+                self._probe_at = monotonic() + self._refusal_pause
             self._queued_bytes += size
-        for upload in uploads:
+        for upload in accepted:
             self._queue.put_nowait(upload)
-        return True
+        return not refusing
 
     def drain(self, timeout_millis: int) -> bool:
         """``True`` once every submitted upload has been attempted, ``False`` if ``timeout_millis`` passes first."""
@@ -243,24 +260,19 @@ class MediaUploader:
         storage status but never the storage response body.
         """
         media: Final = upload.media
-        registered: Final = self._api.media.get_upload_url(
-            content_type=media.content_type,
-            content_length=len(media.content),
-            sha256hash=media.sha256_hash,
-            field=upload.field,
-            trace_id=upload.trace_id,
-            observation_id=upload.observation_id,
-        )
-        if not registered.upload_url:
-            return None
+        registered: Final = self._registered(upload)
+        upload_url: Final = registered.upload_url or ""
         try:
-            url, host = (
-                validate_url(registered.upload_url) if self._validate_upload_url else (registered.upload_url, "")
-            )
+            url, host = validate_url(upload_url) if self._validate_upload_url and upload_url else (upload_url, "")
         except SSRFError as error:
+            self._keep_media_inline(f"its upload URL was refused: {error}")
             return f"its upload URL was refused: {error}"
+        with self._lock:
+            self._probe_at = None
+        if not url:
+            return None
         started: Final = monotonic()
-        response: Final = self._put(url, _storage_headers(registered.upload_url, host, media), media)
+        response: Final = self._put(url, _storage_headers(upload_url, host, media), media)
         if response is None:
             return "the media storage was not reached"
         self._api.media.patch(
@@ -271,6 +283,33 @@ class MediaUploader:
             upload_time_ms=int((monotonic() - started) * 1000),
         )
         return None if response.is_success else f"the media storage refused it with HTTP {response.status_code}"
+
+    def _keep_media_inline(self, reason: str) -> None:
+        """Langfuse cannot store media for a reason that holds for every payload, so no reference is exported
+        until a later upload gets through."""
+        with self._lock:
+            if self._probe_at is None:
+                verbose_logger.warning(
+                    "Langfuse media cannot be stored (%s), so media stays inline in traces until an upload gets "
+                    "through. A self-hosted Langfuse needs a media bucket (LANGFUSE_S3_MEDIA_UPLOAD_BUCKET).",
+                    reason,
+                )
+            self._probe_at = monotonic() + self._refusal_pause
+
+    def _registered(self, upload: MediaUpload) -> GetMediaUploadUrlResponse:
+        try:
+            return self._api.media.get_upload_url(
+                content_type=upload.media.content_type,
+                content_length=len(upload.media.content),
+                sha256hash=upload.media.sha256_hash,
+                field=upload.field,
+                trace_id=upload.trace_id,
+                observation_id=upload.observation_id,
+            )
+        except ApiError as error:
+            if _media_api_unavailable(error.status_code):
+                self._keep_media_inline(f"HTTP {error.status_code} from the media API")
+            raise
 
     def _put(self, url: str, headers: Mapping[str, str], media: Media) -> httpx.Response | None:
         """The storage response, re-sent after each delay on a transport failure or a retryable status; ``None``
