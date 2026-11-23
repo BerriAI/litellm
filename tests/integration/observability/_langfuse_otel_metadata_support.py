@@ -210,6 +210,9 @@ def langfuse_rig(
     sink_reply: Callable[[Request], Reply] | None = None,
     overrides: Mapping[str, str] | None = None,
     model_list: Callable[[str], Sequence[Mapping[str, object]]] | None = None,
+    remove_environment: tuple[str, ...] = (),
+    operator_keys: bool = True,
+    allow_collector_host: bool = False,
 ) -> Iterator[LangfuseRig]:
     def upstream(request: Request) -> Reply:
         if request.method == "GET":
@@ -245,7 +248,12 @@ def langfuse_rig(
         config: Final = {
             **raw_config,
             "model_list": [*raw_config.get("model_list", []), *(model_list(provider.url) if model_list else ())],
-            "litellm_settings": {**raw_config["litellm_settings"], "callbacks": ["langfuse_otel"], **settings},
+            "litellm_settings": {
+                **raw_config["litellm_settings"],
+                "callbacks": ["langfuse_otel"],
+                **({"provider_url_destination_allowed_hosts": [collector.url]} if allow_collector_host else {}),
+                **settings,
+            },
         }
         path: Final = tmp_path / "langfuse_otel.yaml"
         path.write_text(yaml.safe_dump(config))
@@ -253,8 +261,11 @@ def langfuse_rig(
             gateway,
             tmp_path,
             {
-                "LANGFUSE_PUBLIC_KEY": "pk-lf-integration",
-                "LANGFUSE_SECRET_KEY": "sk-lf-integration",
+                **(
+                    {"LANGFUSE_PUBLIC_KEY": "pk-lf-integration", "LANGFUSE_SECRET_KEY": "sk-lf-integration"}
+                    if operator_keys
+                    else {}
+                ),
                 "LANGFUSE_HOST": collector.url,
                 "LITELLM_OTEL_V2": "1",
                 **{
@@ -264,6 +275,11 @@ def langfuse_rig(
             },
             config=path,
             workers=2,
+            remove_environment=(
+                remove_environment
+                if operator_keys
+                else (*remove_environment, "LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY")
+            ),
         ) as owned:
             yield LangfuseRig(owned.gateway, provider, collector, owned)
 

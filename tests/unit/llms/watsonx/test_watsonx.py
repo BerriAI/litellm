@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import importlib
 import json
 from typing import Final, Optional, cast
@@ -10,6 +11,8 @@ import pytest
 import litellm
 from litellm import completion, embedding
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.watsonx.chat.transformation import IBMWatsonXChatConfig
+from litellm.types.utils import ModelResponseStream
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 
@@ -542,3 +545,76 @@ def test_watsonx_deployment_space_id_embedding(monkeypatch, watsonx_embedding_ca
 
     # nor space_id or project_id is required by wx.ai API when inferencing deployment
     assert "project_id" not in json_data and "space_id" not in json_data
+
+
+def _strict_weather_tool() -> dict[str, object]:
+    return {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "strict": True,
+            "parameters": {
+                "type": "object",
+                "properties": {"city": {"type": "string"}},
+                "required": ["city"],
+                "additionalProperties": False,
+            },
+        },
+    }
+
+
+def test_watsonx_chat_tools_are_rewritten_without_touching_the_callers_tool() -> None:
+    tools: Final = [_strict_weather_tool()]
+    tools_before: Final = copy.deepcopy(tools)
+
+    optional_params: Final = IBMWatsonXChatConfig().map_openai_params(
+        non_default_params={"tools": tools}, optional_params={}, model="ibm/granite-4-h-small", drop_params=False
+    )
+
+    assert optional_params["tools"] == [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"city": {"type": "string"}},
+                    "required": ["city"],
+                },
+            },
+        }
+    ]
+    assert tools == tools_before
+
+
+async def test_watsonx_async_stream_reads_with_the_deployment_stream_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("WATSONX_TOKEN", "mock-watsonx-token")
+    monkeypatch.setenv("WATSONX_API_BASE", "https://us-south.ml.cloud.ibm.com")
+    monkeypatch.setenv("WATSONX_PROJECT_ID", "mock-project-id")
+    chunk: Final = {
+        "id": "chatcmpl-watsonx",
+        "object": "chat.completion.chunk",
+        "created": 1760000000,
+        "model": "ibm/granite-3-8b-instruct",
+        "choices": [{"index": 0, "delta": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+    }
+    read_timeouts: Final[list[object]] = []
+
+    def handle_request(request: httpx.Request) -> httpx.Response:
+        read_timeouts.append(request.extensions["timeout"]["read"])
+        return httpx.Response(
+            200, text=f"id: 0\nevent: message\ndata: {json.dumps(chunk)}\n\n", headers={"content-type": "text/event-stream"}
+        )
+
+    response: Final = await litellm.acompletion(
+        model="watsonx/ibm/granite-3-8b-instruct",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        timeout=60,
+        stream_timeout=8,
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(handle_request)),
+    )
+    chunks: Final[list[ModelResponseStream]] = [streamed async for streamed in response]
+
+    assert read_timeouts == [8]
+    assert "".join(streamed.choices[0].delta.content or "" for streamed in chunks) == "hi"

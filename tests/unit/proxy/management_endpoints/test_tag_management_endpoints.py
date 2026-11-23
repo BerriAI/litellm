@@ -1,7 +1,7 @@
 import inspect
 import json
-from collections.abc import Mapping, Sequence
-from contextlib import contextmanager
+from collections.abc import AsyncIterator, Mapping, Sequence
+from contextlib import asynccontextmanager, contextmanager
 from datetime import datetime
 from types import MappingProxyType, SimpleNamespace
 from typing import Final, cast
@@ -16,6 +16,7 @@ from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.proxy_server import app
 from litellm.proxy.utils import PrismaClient
 from litellm.types.tag_management import TagNewRequest
+from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 
 client = TestClient(app)
 
@@ -49,9 +50,7 @@ class FakeVerificationTokenTable:
         self.calls: list[dict[str, object]] = []
 
     async def find_many(self, **kwargs: object) -> tuple[Mock, ...]:
-        inspect.signature(LiteLLM_VerificationTokenActions.find_many).bind(
-            self, **kwargs
-        )
+        inspect.signature(LiteLLM_VerificationTokenActions.find_many).bind(self, **kwargs)
         self.calls.append(kwargs)
         return self._records
 
@@ -76,9 +75,7 @@ async def test_create_and_get_tag():
         with (
             patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
             patch("litellm.proxy.proxy_server.llm_router"),
-            patch(
-                "litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id"
-            ),
+            patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id"),
             patch(
                 "litellm.proxy.management_endpoints.tag_management_endpoints.get_deployments_by_model"
             ) as mock_get_deployments,
@@ -171,9 +168,7 @@ async def test_update_tag():
     try:
         with (
             patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
-            patch(
-                "litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id"
-            ),
+            patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id"),
         ):
             # Setup prisma mocks
             mock_db = Mock()
@@ -228,6 +223,138 @@ async def test_update_tag():
     finally:
         # Clean up dependency overrides
         app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("spend_fields", [{"spend": 0}, {}, {"spend": None}])
+async def test_update_tag_changes_spend_and_counter_only_when_provided(
+    spend_fields: Mapping[str, float | None],
+) -> None:
+    from litellm.proxy.management_endpoints.tag_management_endpoints import update_tag
+    from litellm.types.tag_management import TagUpdateRequest
+
+    updated_tag: Final = SimpleNamespace(
+        tag_name="reset-tag",
+        description=None,
+        models=[],
+        budget_id=None,
+        created_at=datetime(2024, 1, 1),
+        updated_at=datetime(2024, 1, 1),
+        created_by="admin",
+    )
+    update_row: Final = AsyncMock(return_value=updated_tag)
+    spend: Final = FakeSpendCounters(redis=None)
+    mock_prisma: Final = SimpleNamespace(
+        db=SimpleNamespace(
+            litellm_tagtable=SimpleNamespace(
+                find_unique=AsyncMock(return_value=updated_tag), update=update_row
+            ),
+            litellm_proxymodeltable=SimpleNamespace(find_many=AsyncMock(return_value=[])),
+        )
+    )
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        _tag_cache_doubles(),
+        patch("litellm.proxy.proxy_server.invalidate_spend_counter", new_callable=AsyncMock) as invalidate,
+        patch("litellm.proxy.proxy_server.spend_counter_cache") as counter_cache,
+        patch("litellm.proxy.proxy_server.spend_counter_store", spend.store()),
+    ):
+        counter_cache.redis_cache = None
+        response: Final = await update_tag(
+            tag=TagUpdateRequest.model_validate({"name": "reset-tag", **spend_fields}),
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert response["message"] == "Tag reset-tag updated successfully"
+    update_row.assert_awaited_once_with(
+        where={"tag_name": "reset-tag"},
+        data={
+            "description": None,
+            "models": [],
+            "model_info": "{}",
+            **({"spend": spend_fields["spend"]} if spend_fields.get("spend") is not None else {}),
+        },
+    )
+    if spend_fields.get("spend") is not None:
+        assert spend.memory["spend:tag:reset-tag"] == 0
+    else:
+        assert "spend:tag:reset-tag" not in spend.memory
+        counter_cache.in_memory_cache.set_cache.assert_not_called()
+    invalidate.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("spend", [float("nan"), float("inf"), float("-inf")])
+async def test_update_tag_rejects_non_finite_spend_before_writing(spend: float) -> None:
+    from litellm.proxy.management_endpoints.tag_management_endpoints import update_tag
+    from litellm.types.tag_management import TagUpdateRequest
+
+    update_row: Final = AsyncMock()
+    mock_prisma: Final = SimpleNamespace(
+        db=SimpleNamespace(litellm_tagtable=SimpleNamespace(update=update_row))
+    )
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch("litellm.proxy.proxy_server.invalidate_spend_counter", new_callable=AsyncMock) as invalidate,
+        pytest.raises(HTTPException) as error,
+    ):
+        await update_tag(
+            tag=TagUpdateRequest(name="reset-tag", spend=spend),
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+    assert error.value.status_code == 400
+    assert "spend must be a finite number" in str(error.value.detail)
+    update_row.assert_not_awaited()
+    invalidate.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("redis_state", ["available", "absent", "error"])
+async def test_update_tag_overwrites_stale_counter_repopulated_during_tag_cache_eviction(redis_state: str) -> None:
+    from litellm.proxy.management_endpoints.tag_management_endpoints import update_tag
+    from litellm.types.tag_management import TagUpdateRequest
+
+    counter_key: Final = "spend:tag:overlap-reset-tag"
+    spend: Final = FakeSpendCounters(redis=None if redis_state == "absent" else {}, fail=redis_state == "error")
+    updated_tag: Final = SimpleNamespace(
+        tag_name="overlap-reset-tag",
+        description=None,
+        models=[],
+        budget_id=None,
+        created_at=datetime(2024, 1, 1),
+        updated_at=datetime(2024, 1, 1),
+        created_by="admin",
+    )
+    mock_prisma: Final = SimpleNamespace(
+        db=SimpleNamespace(
+            litellm_tagtable=SimpleNamespace(
+                find_unique=AsyncMock(return_value=updated_tag), update=AsyncMock(return_value=updated_tag)
+            ),
+            litellm_proxymodeltable=SimpleNamespace(find_many=AsyncMock(return_value=[])),
+        )
+    )
+
+    async def overlapping_completion(cache_keys: Sequence[str]) -> None:
+        spend.set_local(counter_key, 1.5, ttl_seconds=60)
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch(
+            "litellm.proxy.proxy_server.spend_counter_store", spend.store(),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.tag_management_endpoints._evict_tag_cache_keys",
+            overlapping_completion,
+        ),
+    ):
+        await update_tag(
+            tag=TagUpdateRequest(name="overlap-reset-tag", spend=0),
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+    assert spend.memory[counter_key] == 0
+    if redis_state == "available":
+        assert spend.redis is not None
+        assert spend.redis[counter_key] == 0
 
 
 @pytest.mark.asyncio
@@ -382,6 +509,9 @@ async def test_update_tag_clears_or_sets_only_provided_budget_fields(
                 litellm_tagtable=SimpleNamespace(find_unique=find_tag, update=update_tag_row),
                 litellm_proxymodeltable=SimpleNamespace(find_many=find_models),
                 litellm_budgettable=SimpleNamespace(update=update_budget),
+                litellm_customermembertable=SimpleNamespace(find_many=AsyncMock(return_value=[])),
+                litellm_customerteamtable=SimpleNamespace(find_many=AsyncMock(return_value=[])),
+                litellm_customerorganizationtable=SimpleNamespace(find_many=AsyncMock(return_value=[])),
             )
         ),
     )
@@ -424,6 +554,7 @@ async def test_update_tag_clears_or_sets_only_provided_budget_fields(
 @pytest.mark.asyncio
 async def test_update_tag_explicit_null_clears_budget_duration():
     from datetime import datetime
+    from prisma.models import LiteLLM_BudgetTable
 
     from litellm.proxy.management_endpoints.tag_management_endpoints import update_tag
     from litellm.types.tag_management import TagUpdateRequest
@@ -439,14 +570,26 @@ async def test_update_tag_explicit_null_clears_budget_duration():
         created_by="admin",
     )
     mock_db = Mock()
-    mock_prisma = SimpleNamespace(db=mock_db)
+    mock_db.litellm_customermembertable.find_many = AsyncMock(return_value=[])
+    mock_db.litellm_customerteamtable.find_many = AsyncMock(return_value=[])
+    mock_db.litellm_customerorganizationtable.find_many = AsyncMock(return_value=[])
+    mock_db.query_raw = AsyncMock(return_value=[{"budget_limits": None}])
+
+    @asynccontextmanager
+    async def transaction() -> AsyncIterator[Mock]:
+        yield mock_db
+
+    mock_prisma = SimpleNamespace(db=mock_db, tx=transaction)
     mock_db.litellm_tagtable.find_unique = AsyncMock(return_value=existing_tag)
     mock_db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
     mock_db.litellm_tagtable.update = AsyncMock(return_value=updated_tag)
+    mock_db.litellm_budgettable.find_unique = AsyncMock(
+        return_value=LiteLLM_BudgetTable.model_construct(budget_id="budget-1", budget_duration="30d")
+    )
 
     async def update_budget(where, data, **_):
         budget_state.store(data)
-        return budget_state.row()
+        return LiteLLM_BudgetTable.model_construct(**vars(budget_state.row()))
 
     mock_db.litellm_budgettable.update = update_budget
     with (
@@ -541,7 +684,7 @@ def _tag_cache_doubles():
     with (
         patch("litellm.proxy.proxy_server.user_api_key_cache", recording_cache),
         patch(
-            "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.publish_auth_cache_invalidation",
+            "litellm.proxy.common_utils.cache_invalidation_pubsub.publish_cache_invalidation",
             mock_publish,
         ),
     ):
@@ -576,9 +719,7 @@ async def test_new_tag_invalidates_tag_and_registry_caches():
             _tag_cache_doubles() as (recording_cache, mock_publish),
             patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
             patch("litellm.proxy.proxy_server.llm_router"),
-            patch(
-                "litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id"
-            ),
+            patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id"),
             patch(
                 "litellm.proxy.management_endpoints.tag_management_endpoints.get_deployments_by_model"
             ) as mock_get_deployments,
@@ -631,9 +772,7 @@ async def test_update_tag_invalidates_only_the_tag_cache():
         with (
             _tag_cache_doubles() as (recording_cache, mock_publish),
             patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
-            patch(
-                "litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id"
-            ),
+            patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id"),
         ):
             mock_db = Mock()
             mock_prisma.db = mock_db
@@ -779,9 +918,7 @@ async def test_list_tags_with_dynamic_tags():
             assert "dynamic-tag-2" in tag_names
 
             # Verify dynamic tags include created_at/updated_at
-            dynamic_tags = {
-                t["name"]: t for t in result if t["name"].startswith("dynamic-")
-            }
+            dynamic_tags = {t["name"]: t for t in result if t["name"].startswith("dynamic-")}
             assert dynamic_tags["dynamic-tag-1"]["created_at"] is not None
             assert dynamic_tags["dynamic-tag-1"]["updated_at"] is not None
 
@@ -903,9 +1040,7 @@ async def test_internal_user_list_tags_only_returns_tags_used_by_their_keys():
                 "stored-owned-tag",
                 "dynamic-owned-tag",
             ]
-            assert fake_token_table.calls == [
-                {"where": {"user_id": "internal-user-123"}}
-            ]
+            assert fake_token_table.calls == [{"where": {"user_id": "internal-user-123"}}]
             mock_db.litellm_dailytagspend.group_by.assert_awaited_once_with(
                 by=["tag"],
                 where={
@@ -959,15 +1094,11 @@ async def test_internal_user_list_tags_does_not_500_on_unsupported_prisma_kwarg(
             mock_db.litellm_dailytagspend.group_by = AsyncMock(return_value=[])
             mock_db.litellm_tagtable.find_many = AsyncMock(return_value=[])
 
-            response = client.get(
-                "/tag/list", headers={"Authorization": "Bearer new-user-key"}
-            )
+            response = client.get("/tag/list", headers={"Authorization": "Bearer new-user-key"})
 
             assert response.status_code == 200, response.text
             assert response.json() == []
-            assert fake_token_table.calls == [
-                {"where": {"user_id": "brand-new-internal-user"}}
-            ]
+            assert fake_token_table.calls == [{"where": {"user_id": "brand-new-internal-user"}}]
     finally:
         app.dependency_overrides.clear()
 
@@ -1058,7 +1189,8 @@ async def test_internal_user_tag_daily_activity_is_scoped_to_their_keys():
 
 
 @pytest.mark.asyncio
-async def test_internal_user_tag_daily_activity_rejects_unowned_api_key_filter():
+@pytest.mark.parametrize("api_key", ["unowned-key", "unattributed", "raw:unattributed", "raw:raw:unattributed"])
+async def test_internal_user_tag_daily_activity_rejects_unowned_api_key_filter(api_key: str):
     """
     If an internal user filters tag usage by an API key they do not own, the
     endpoint should return an empty scoped filter instead of exposing that key's
@@ -1092,7 +1224,7 @@ async def test_internal_user_tag_daily_activity_rejects_unowned_api_key_filter()
         result = await get_tag_daily_activity(
             start_date="2025-01-01",
             end_date="2025-01-31",
-            api_key="unowned-key",
+            api_key=api_key,
             user_api_key_dict=mock_user_auth,
         )
 
@@ -1143,9 +1275,7 @@ async def test_internal_user_tag_daily_activity_scopes_to_current_key_without_us
         assert result == "daily-activity-response"
         assert fake_token_table.calls == []
         mock_get_daily_activity.assert_awaited_once()
-        assert mock_get_daily_activity.await_args.kwargs["api_key"] == [
-            "current-owned-key"
-        ]
+        assert mock_get_daily_activity.await_args.kwargs["api_key"] == ["current-owned-key"]
 
 
 @pytest.mark.asyncio
@@ -1309,13 +1439,13 @@ async def test_get_deployments_by_model_id():
         litellm_params=LiteLLM_Params(model="gpt-3.5-turbo"),
         model_info=ModelInfo(),
     )
-    mock_router.get_deployment.return_value = mock_deployment
+    mock_router.registry.return_value.deployment.return_value = mock_deployment
 
     result = await get_deployments_by_model("model-123", mock_router)
 
     assert len(result) == 1
     assert result[0] == mock_deployment
-    mock_router.get_deployment.assert_called_once_with(model_id="model-123")
+    mock_router.registry.return_value.deployment.assert_called_once_with("model-123")
 
 
 @pytest.mark.asyncio
@@ -1334,8 +1464,8 @@ async def test_get_deployments_by_model_name():
     mock_router = Mock()
 
     # Setup mock to not find by model_id but find by model_name
-    mock_router.get_deployment.return_value = None
-    mock_router.get_model_list.return_value = [
+    mock_router.registry.return_value.deployment.return_value = None
+    mock_router.registry.return_value.deployments.return_value = [
         {
             "model_name": "gpt-3.5-turbo",
             "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "test-key"},
@@ -1348,8 +1478,8 @@ async def test_get_deployments_by_model_name():
     assert len(result) == 1
     assert result[0].model_name == "gpt-3.5-turbo"
     assert isinstance(result[0], Deployment)
-    mock_router.get_deployment.assert_called_once_with(model_id="gpt-3.5-turbo")
-    mock_router.get_model_list.assert_called_once_with(model_name="gpt-3.5-turbo")
+    mock_router.registry.return_value.deployment.assert_called_once_with("gpt-3.5-turbo")
+    mock_router.registry.return_value.deployments.assert_called_once_with("gpt-3.5-turbo")
 
 
 @pytest.mark.asyncio
@@ -1367,15 +1497,15 @@ async def test_get_deployments_by_model_not_found():
     mock_router = Mock()
 
     # Setup mock to not find model by either method
-    mock_router.get_deployment.return_value = None
-    mock_router.get_model_list.return_value = None
+    mock_router.registry.return_value.deployment.return_value = None
+    mock_router.registry.return_value.deployments.return_value = None
 
     result = await get_deployments_by_model("nonexistent-model", mock_router)
 
     assert len(result) == 0
     assert result == []
-    mock_router.get_deployment.assert_called_once_with(model_id="nonexistent-model")
-    mock_router.get_model_list.assert_called_once_with(model_name="nonexistent-model")
+    mock_router.registry.return_value.deployment.assert_called_once_with("nonexistent-model")
+    mock_router.registry.return_value.deployments.assert_called_once_with("nonexistent-model")
 
 
 @pytest.mark.asyncio
@@ -1422,9 +1552,7 @@ async def test_add_tag_to_deployment_preserves_encrypted_fields():
         await _add_tag_to_deployment(deployment, "test-tag")
 
         # Verify find_unique was called
-        mock_db.litellm_proxymodeltable.find_unique.assert_called_once_with(
-            where={"model_id": "model-123"}
-        )
+        mock_db.litellm_proxymodeltable.find_unique.assert_called_once_with(where={"model_id": "model-123"})
 
         # Verify update was called with preserved encrypted fields
         update_call = mock_db.litellm_proxymodeltable.update.call_args
@@ -1646,3 +1774,28 @@ def test_tag_info_and_tag_list_return_the_stored_model_info_decoded(
     assert info_response.json()["routed-tag"]["model_info"] == returned_model_info
     assert list_response.status_code == 200
     assert [tag["model_info"] for tag in list_response.json()] == [returned_model_info]
+
+
+@pytest.mark.asyncio
+async def test_impersonated_internal_user_tag_activity_filter_excludes_actor_key() -> None:
+    from litellm.proxy.management_endpoints.tag_management_endpoints import get_tag_daily_activity_api_key_filter
+
+    actor_token = "service-key-hash"
+    subject_token = "subject-key-hash"
+    prisma = cast(
+        PrismaClient,
+        SimpleNamespace(
+            db=SimpleNamespace(litellm_verificationtoken=FakeVerificationTokenTable((Mock(token=subject_token),)))
+        ),
+    )
+    auth = UserAPIKeyAuth(
+        api_key=actor_token,
+        token=actor_token,
+        user_id="internal-user",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+    ).model_copy(update={"impersonated_by": "service-key"})
+
+    api_keys = await get_tag_daily_activity_api_key_filter(prisma, auth, None)
+
+    assert api_keys == [subject_token]
+    assert actor_token not in api_keys

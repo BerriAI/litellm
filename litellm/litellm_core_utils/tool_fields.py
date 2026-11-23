@@ -1,13 +1,36 @@
-from collections.abc import Callable, Mapping
+import hashlib
+from collections.abc import Callable, Container, Mapping, Sequence
+from copy import copy
 from dataclasses import dataclass
 from functools import reduce
-from typing import Annotated, Final, TypeAlias
+from itertools import chain
+from types import MappingProxyType
+from typing import Annotated, Final, TypeAlias, TypeVar
 
 from pydantic import BeforeValidator, ConfigDict, Json, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
-from litellm.litellm_core_utils.core_helpers import normalize_drop_params
+from litellm._logging import verbose_logger
+from litellm.exceptions import UnsupportedParamsError
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params, normalize_drop_params
+from litellm.types.utils import (
+    ChatCompletionDeltaCustomToolCall,
+    ChatCompletionDeltaToolCall,
+    ChatCompletionMessageCustomToolCall,
+    ChatCompletionMessageToolCall,
+    Choices,
+    ModelResponse,
+    ModelResponseStream,
+    StreamingChoices,
+)
+
+OPENAI_MAX_TOOL_NAME_LENGTH: Final = 64
+TOOL_NAME_HASH_LENGTH: Final = 8
+TOOL_NAME_PREFIX_LENGTH: Final = OPENAI_MAX_TOOL_NAME_LENGTH - TOOL_NAME_HASH_LENGTH - 1
+
+
+BRIDGED_TOOL_NAMES_KWARG: Final = "litellm_bridged_tool_names"
 
 ROUTES_WITH_TOOLS: Final = frozenset(
     {
@@ -53,6 +76,134 @@ class _ToolEntry(TypedDict, total=False):
 
 _TOOL_ENTRY: Final = TypeAdapter(_ToolEntry)
 _WEB_SEARCH_OPTIONS: Final = TypeAdapter(dict[str, object] | None, config=ConfigDict(strict=True))
+
+
+def declared_function_name(tool: object) -> str | None:
+    fields: Final = as_str_mapping(tool)
+    if fields is None:
+        return None
+    function: Final = as_str_mapping(fields.get("function"))
+    name: Final = (fields if function is None else function).get("name")
+    return name if isinstance(name, str) and name else None
+
+
+def qualified_member_name(namespace: str, name: str) -> str:
+    return f"{namespace}__{name}"
+
+
+@dataclass(frozen=True, slots=True)
+class BridgedToolNames:
+    full_name_by_sent_name: tuple[tuple[str, str], ...]
+
+    def as_mapping(self) -> Mapping[str, str]:
+        return dict(self.full_name_by_sent_name)
+
+
+@dataclass(frozen=True, slots=True)
+class SentToolNames:
+    member_chat_names: Mapping[str, str]
+    self_named_namespace_members: Container[str]
+
+
+_RenamableResponse = TypeVar("_RenamableResponse", ModelResponse, ModelResponseStream)
+_RenamableToolCall = TypeVar(
+    "_RenamableToolCall",
+    ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall,
+    ChatCompletionDeltaToolCall | ChatCompletionDeltaCustomToolCall,
+)
+
+
+def with_renamed_tool_calls(response: _RenamableResponse, new_names: Mapping[str, str]) -> _RenamableResponse:
+    if not new_names:
+        return response
+    return response.model_copy(
+        update={"choices": [_choice_with_renamed_tool_calls(choice, new_names) for choice in response.choices]}
+    )
+
+
+def _choice_with_renamed_tool_calls(
+    choice: Choices | StreamingChoices, new_names: Mapping[str, str]
+) -> Choices | StreamingChoices:
+    if isinstance(choice, StreamingChoices):
+        return _streaming_choice_with_renamed_tool_calls(choice, new_names)
+    if not choice.message.tool_calls:
+        return choice
+    tool_calls: Final = [_renamed_tool_call(tool_call, new_names) for tool_call in choice.message.tool_calls]
+    return choice.model_copy(update={"message": choice.message.model_copy(update={"tool_calls": tool_calls})})
+
+
+def _streaming_choice_with_renamed_tool_calls(
+    choice: StreamingChoices, new_names: Mapping[str, str]
+) -> StreamingChoices:
+    if not choice.delta.tool_calls:
+        return choice
+    tool_calls: Final = [_renamed_tool_call(tool_call, new_names) for tool_call in choice.delta.tool_calls]
+    return choice.model_copy(update={"delta": choice.delta.model_copy(update={"tool_calls": tool_calls})})
+
+
+def _renamed_tool_call(tool_call: _RenamableToolCall, new_names: Mapping[str, str]) -> _RenamableToolCall:
+    if not isinstance(tool_call, ChatCompletionMessageToolCall | ChatCompletionDeltaToolCall):
+        return tool_call
+    new_name: Final = new_names.get(tool_call.function.name or "")
+    if new_name is None or new_name == tool_call.function.name:
+        return tool_call
+    return tool_call.model_copy(update={"function": tool_call.function.model_copy(update={"name": new_name})})
+
+
+def _function_call_names(choice: Choices | StreamingChoices) -> tuple[str, ...]:
+    if not isinstance(choice, Choices):
+        return ()
+    return tuple(
+        tool_call.function.name
+        for tool_call in choice.message.tool_calls or ()
+        if isinstance(tool_call, ChatCompletionMessageToolCall) and tool_call.function.name
+    )
+
+
+def declared_function_names(tools: object) -> frozenset[str]:
+    try:
+        entries: Final = _TOOLS.validate_python(tools)
+    except ValidationError:
+        return frozenset()
+    return frozenset(name for name in map(declared_function_name, entries) if name)
+
+
+def with_tool_calls_named_as_declared(response: ModelResponse, declared_names: frozenset[str]) -> ModelResponse:
+    called_names: Final = frozenset(chain.from_iterable(map(_function_call_names, response.choices)))
+    return with_renamed_tool_calls(
+        response,
+        MappingProxyType(
+            {
+                name: truncate_tool_name(name)
+                for name in called_names
+                if name not in declared_names and truncate_tool_name(name) in declared_names
+            }
+        ),
+    )
+
+
+def truncate_tool_name(name: str) -> str:
+    """
+    Truncate tool names that exceed OpenAI's 64-character limit.
+
+    Uses format: {55-char-prefix}_{8-char-hash} to avoid collisions
+    when multiple tools have similar long names.
+
+    Args:
+        name: The original tool name
+
+    Returns:
+        The original name if <= 64 chars, otherwise truncated with hash
+    """
+    if len(name) <= OPENAI_MAX_TOOL_NAME_LENGTH:
+        return name
+
+    name_hash: Final = hashlib.sha256(name.encode()).hexdigest()[:TOOL_NAME_HASH_LENGTH]
+    return f"{name[:TOOL_NAME_PREFIX_LENGTH]}_{name_hash}"
+
+
+def chat_member_name(namespace: str, name: str) -> str:
+    return truncate_tool_name(qualified_member_name(namespace, name))
 
 
 @dataclass(frozen=True, slots=True)
@@ -162,3 +313,145 @@ def resolve_deployment_tool_fields(
     if "proxy_server_request" not in kwargs or route not in ROUTES_WITH_TOOLS:
         return kwargs
     return resolve_tool_fields(kwargs, lambda: (drop_policy(kwargs),))
+
+
+_ToolT = TypeVar("_ToolT")
+
+HOSTED_MCP_DROP_WARNING: Final = (
+    "Dropping the hosted MCP tool(s) %s for model=%s on %s (drop_params=True) because this route cannot run a "
+    "hosted MCP tool."
+)
+
+
+def _hosted_mcp_server_label(tool: object) -> str | None:
+    match tool:
+        case {"type": "mcp", "server_label": str() as server_label}:
+            return server_label
+        case {"type": "mcp"}:
+            return "unlabeled"
+        case _:
+            return None
+
+
+def _drop_params_hint(dropped: str) -> str:
+    return (
+        f"To drop {dropped} instead, set `litellm.drop_params=True` or for proxy:\n\n"
+        "`litellm_settings:\n drop_params: true`\n"
+    )
+
+
+def _one_log_line(text: str) -> str:
+    return text.replace("\r", "").replace("\n", "")
+
+
+def _unrunnable_mcp_error(message: str, model: str, route: str) -> UnsupportedParamsError:
+    return UnsupportedParamsError(message=message, model=model, llm_provider=route, status_code=400)
+
+
+def tools_without_hosted_mcp(tools: Sequence[_ToolT], model: str, route: str, drop_params: bool) -> Sequence[_ToolT]:
+    server_labels: Final = tuple(label for label in map(_hosted_mcp_server_label, tools) if label is not None)
+    if not server_labels:
+        return tools
+    named_servers: Final = ", ".join(f"`{label}`" for label in server_labels)
+    if not drops_unsupported_params(drop_params):
+        raise _unrunnable_mcp_error(
+            f'{model} on {route} cannot run the hosted MCP tool {named_servers} (`type: "mcp"`). To have LiteLLM '
+            "run the MCP server for this model, register it on the LiteLLM MCP gateway and send "
+            '`server_url: "litellm_proxy/mcp/<server name>"`. ' + _drop_params_hint("hosted MCP tools"),
+            model=model,
+            route=route,
+        )
+    verbose_logger.warning(
+        HOSTED_MCP_DROP_WARNING, _one_log_line(named_servers), _one_log_line(model), _one_log_line(route)
+    )
+    return [tool for tool in tools if _hosted_mcp_server_label(tool) is None]
+
+
+MCP_SERVERS_DROP_WARNING: Final = (
+    "Dropping mcp_servers %s and their mcp_toolset tools for model=%s on %s (drop_params=True) because LiteLLM "
+    "cannot pass mcp_servers to this route."
+)
+
+ROUTES_WITHOUT_MCP_SERVERS: Final = frozenset(
+    {"bedrock", "databricks", "deepseek", "gemini", "gigachat", "ollama", "ollama_chat", "vertex_ai", "vertex_ai_beta"}
+)
+
+
+def _mcp_server_name(server: object) -> str:
+    match server:
+        case {"name": str() as name}:
+            return name
+        case _:
+            return "unnamed"
+
+
+def _mcp_server_names(mcp_servers: object) -> tuple[str, ...]:
+    if not mcp_servers:
+        return ()
+    if not isinstance(mcp_servers, list):
+        return ("unnamed",)
+    return tuple(map(_mcp_server_name, _TOOLS.validate_python(mcp_servers)))
+
+
+def _is_mcp_toolset(tool: object) -> bool:
+    match tool:
+        case {"type": "mcp_toolset"}:
+            return True
+        case _:
+            return False
+
+
+def drops_mcp_servers(request_kwargs: Mapping[str, object]) -> bool:
+    additional_drop_params: Final = request_kwargs.get("additional_drop_params")
+    return drops_unsupported_params(request_kwargs.get("drop_params")) or (
+        isinstance(additional_drop_params, list) and "mcp_servers" in additional_drop_params
+    )
+
+
+def tools_without_mcp_servers(
+    mcp_servers: object, tools: Sequence[_ToolT], model: str, route: str, drop_params: bool
+) -> Sequence[_ToolT]:
+    server_names: Final = _mcp_server_names(mcp_servers)
+    if not server_names:
+        return tools
+    named_servers: Final = ", ".join(f"`{name}`" for name in server_names)
+    if not drops_unsupported_params(drop_params):
+        raise _unrunnable_mcp_error(
+            f"LiteLLM cannot pass `mcp_servers` to {model} on {route}, so the MCP server {named_servers} would not "
+            'run. To have LiteLLM run it for this model, register it on the LiteLLM MCP gateway and send a `type: "mcp"` '
+            'tool with `server_url: "litellm_proxy/mcp/<server name>"`. ' + _drop_params_hint("`mcp_servers`"),
+            model=model,
+            route=route,
+        )
+    verbose_logger.warning(
+        MCP_SERVERS_DROP_WARNING, _one_log_line(named_servers), _one_log_line(model), _one_log_line(route)
+    )
+    return [tool for tool in tools if not _is_mcp_toolset(tool)]
+
+
+_TOOL_SELECTION_PARAMS: Final = frozenset({"tools", "tool_choice", "parallel_tool_calls"})
+_ParamsT = TypeVar("_ParamsT", bound=dict[str, object])
+
+
+def tool_params_without_hosted_mcp(
+    params: _ParamsT, model: str, route: str, drop_params: bool, runs_hosted_mcp: Callable[[], bool] | None = None
+) -> _ParamsT:
+    tools: Final = params.get("tools")
+    if not isinstance(tools, list) or not tools:
+        return params
+    sent_tools: Final = _TOOLS.validate_python(tools)
+    if all(_hosted_mcp_server_label(tool) is None for tool in sent_tools) or (
+        runs_hosted_mcp is not None and runs_hosted_mcp()
+    ):
+        return params
+    kept_tools: Final = tools_without_hosted_mcp(tools=sent_tools, model=model, route=route, drop_params=drop_params)
+    if len(kept_tools) == len(sent_tools):
+        return params
+    kept_params: Final = copy(params)
+    if kept_tools:
+        kept_params["tools"] = list(kept_tools)
+        return kept_params
+    dropped_keys: Final = ("tools",) if params.get("functions") else _TOOL_SELECTION_PARAMS
+    for key in dropped_keys:
+        _ = kept_params.pop(key, None)
+    return kept_params

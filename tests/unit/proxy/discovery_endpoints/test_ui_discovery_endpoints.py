@@ -523,3 +523,33 @@ def test_ui_config_tells_the_dashboard_whether_to_use_si_terminology(
 
     assert response.status_code == 200
     assert response.json()["use_si_terminology"] is expected
+
+
+@pytest.mark.parametrize(
+    ("settings", "expected"),
+    [
+        ({}, False),
+        ({"claude_code_marketplace_auth_required": False}, False),
+        ({"claude_code_marketplace_auth_required": True}, True),
+        ({"claude_code_marketplace_auth_required": "true"}, True),
+        ({"claude_code_marketplace_auth_required": "maybe"}, True),
+    ],
+)
+def test_ui_config_reports_whether_the_marketplace_requires_a_key_as_the_marketplace_reads_it(
+    monkeypatch: pytest.MonkeyPatch, settings: dict[str, object], expected: bool
+) -> None:
+    import litellm.proxy.proxy_server
+
+    monkeypatch.setattr(litellm.proxy.proxy_server, "general_settings", settings)
+    app: Final[FastAPI] = FastAPI()
+    app.include_router(router)
+
+    with (
+        patch("litellm.proxy.utils.get_server_root_path", return_value="/"),
+        patch("litellm.proxy.utils.get_proxy_base_url", return_value=None),
+        patch("litellm.proxy.auth.auth_utils.has_user_setup_sso", return_value=False),
+    ):
+        response: Final = TestClient(app).get("/.well-known/litellm-ui-config")
+
+    assert response.status_code == 200
+    assert response.json()["claude_code_marketplace_auth_required"] is expected

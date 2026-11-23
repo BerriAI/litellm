@@ -728,7 +728,7 @@ async def test_invalidate_byok_cred_cache_evicts_locally_and_broadcasts_the_same
             "litellm.proxy.proxy_server.prisma_client", MagicMock()
         ),
         patch.object(  # test-quality-ok: the redis publisher is module-level; asserting the broadcast without a redis
-            mcp_operations, "publish_auth_cache_invalidation", new=publish
+            mcp_operations, "publish_cache_invalidation", new=publish
         ),
     ):
         assert await mcp_operations._get_byok_credential(server, user_auth) == "sk-before-revoke"

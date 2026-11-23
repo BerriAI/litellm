@@ -160,6 +160,18 @@ def test_native_function_response_preserves_json_when_media_is_malformed(invalid
     assert messages == [{"role": "tool", "tool_call_id": "call_lookup", "content": '{"ok": true}'}]
 
 
+@pytest.mark.parametrize("role", ["user", "model"])
+def test_one_object_content_parts_translate_like_their_list_form(role: str) -> None:
+    part: Final = {"text": "Reply with OK"}
+
+    def messages(parts: object) -> object:
+        return GoogleGenAIAdapter().translate_generate_content_to_completion(
+            model="anthropic/claude-haiku-5-5", contents=[{"role": role, "parts": parts}]
+        )["messages"]
+
+    assert messages(part) == messages([part]) != []
+
+
 @pytest.mark.parametrize(
     ("args", "expected_arguments"),
     [(None, "null"), ('{"query":"x"}', '"{\\"query\\":\\"x\\"}"')],
@@ -255,7 +267,15 @@ def test_list_contents_transformation():
     assert completion_request["messages"][2]["content"] == "What's the weather like?"
 
 
-def test_config_parameter_mapping():
+@pytest.mark.parametrize(
+    "config",
+    [
+        {"temperature": 0.8, "maxOutputTokens": 150, "topP": 0.9, "stopSequences": ["END", "STOP"]},
+        {"temperature": 0.8, "max_output_tokens": 150, "top_p": 0.9, "stop_sequences": ["END", "STOP"]},
+    ],
+    ids=["camelCase", "snake_case"],
+)
+def test_config_parameter_mapping(config: Mapping[str, object]):
     """Test that config parameters are correctly mapped"""
     from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
 
@@ -263,12 +283,6 @@ def test_config_parameter_mapping():
 
     model = "gpt-3.5-turbo"
     contents = {"role": "user", "parts": [{"text": "Test"}]}
-    config = {
-        "temperature": 0.8,
-        "maxOutputTokens": 150,
-        "topP": 0.9,
-        "stopSequences": ["END", "STOP"],
-    }
 
     completion_request = adapter.translate_generate_content_to_completion(
         model=model, contents=contents, config=config

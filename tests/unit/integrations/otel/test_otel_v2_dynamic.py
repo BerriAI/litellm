@@ -2,6 +2,7 @@
 
 import base64
 import logging
+from typing import Final
 
 import pytest
 from opentelemetry.trace import NoOpTracer
@@ -743,3 +744,21 @@ def test_signoz_keyless_team_endpoint_is_ignored_so_the_operator_key_never_reach
     owned = next(e for e in routed.exporters if e.owner == "signoz")
     assert owned.endpoint == "https://ingest.us.signoz.cloud:443"
     assert owned.headers == "signoz-ingestion-key=OPERATOR"
+
+
+def test_an_exporter_routed_to_a_tenants_credentials_drops_the_operators_resource_attributes() -> None:
+    cache: Final = _cache(
+        "langfuse_otel",
+        exporters=[
+            ExporterSpec(
+                kind="otlp_http",
+                owner="langfuse_otel",
+                headers="Authorization=Basic operator",
+                resource_attributes={"langfuse.environment": "operator-env"},
+            )
+        ],
+    )
+
+    (routed,) = cache._routed_config({"Authorization": "Basic tenant"}, {}).exporters
+
+    assert (routed.headers, dict(routed.resource_attributes)) == ("Authorization=Basic tenant", {})
