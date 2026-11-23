@@ -126,7 +126,7 @@ class _ENTERPRISE_LLMGuard(CustomLogger):
 
     async def async_moderation_hook(
         self,
-        data: dict[str, object],
+        data: dict,
         user_api_key_dict: UserAPIKeyAuth,
         call_type: CallTypesLiteral,
     ):
