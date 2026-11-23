@@ -2326,3 +2326,190 @@ def test_native_messages_tool_config_point_marks_last_tool_and_drops_the_key(mon
     assert "cache_control" not in captured["params"]["tools"][0]
     assert captured["messages"][0]["content"][-1]["cache_control"] == {"type": "ephemeral"}
     assert tools == tools_before
+
+
+_KIMI_TOOL_USE_ID: Final = "functions.Bash:0"
+_SANITIZED_KIMI_TOOL_USE_ID: Final = "functions_Bash_0"
+_KIMI_HOST: Final = "https://kimi.example.com/anthropic"
+_KIMI_TOOL_ROUND: Final = (
+    {"role": "user", "content": "run ls"},
+    {
+        "role": "assistant",
+        "content": [{"type": "tool_use", "id": _KIMI_TOOL_USE_ID, "name": "Bash", "input": {"command": "ls"}}],
+    },
+    {"role": "user", "content": [{"type": "tool_result", "tool_use_id": _KIMI_TOOL_USE_ID, "content": "README.md"}]},
+)
+
+
+def _body_recording_client(bodies: list[dict[str, Any]]) -> AsyncHTTPHandler:
+    def record_and_answer(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_kimi",
+                "type": "message",
+                "role": "assistant",
+                "model": "kimi-k2.7-code",
+                "content": [{"type": "text", "text": "done"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 3, "output_tokens": 1},
+            },
+            request=request,
+        )
+
+    upstream = AsyncHTTPHandler()
+    upstream.client = httpx.AsyncClient(transport=httpx.MockTransport(record_and_answer))
+    return upstream
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "custom_llm_provider", "api_base", "env", "expected_id"),
+    [
+        pytest.param(
+            "moonshotai/kimi-k2.7-code", "anthropic", _KIMI_HOST, {}, _KIMI_TOOL_USE_ID, id="non_claude_on_a_custom_host"
+        ),
+        pytest.param(
+            "moonshotai/kimi-k2.7-code",
+            "anthropic",
+            None,
+            {"ANTHROPIC_API_BASE": _KIMI_HOST},
+            _KIMI_TOOL_USE_ID,
+            id="non_claude_under_api_base_env",
+        ),
+        pytest.param(
+            "moonshotai/kimi-k2.7-code",
+            "anthropic",
+            None,
+            {"ANTHROPIC_BASE_URL": _KIMI_HOST},
+            _KIMI_TOOL_USE_ID,
+            id="non_claude_under_sdk_base_url_env",
+        ),
+        pytest.param(
+            "anthropic/moonshotai/kimi-k2.7-code", None, _KIMI_HOST, {}, _KIMI_TOOL_USE_ID, id="provider_prefixed"
+        ),
+        pytest.param(
+            "claude-sonnet-5-5", "anthropic", _KIMI_HOST, {}, _SANITIZED_KIMI_TOOL_USE_ID, id="claude_on_a_custom_host"
+        ),
+        pytest.param(
+            "moonshotai/kimi-k2.7-code",
+            "anthropic",
+            None,
+            {},
+            _SANITIZED_KIMI_TOOL_USE_ID,
+            id="non_claude_on_the_default_host",
+        ),
+        pytest.param(
+            "my-deployment",
+            "anthropic",
+            "https://example.services.ai.azure.com/anthropic",
+            {},
+            _SANITIZED_KIMI_TOOL_USE_ID,
+            id="non_claude_on_a_foundry_host",
+        ),
+        pytest.param("deepseek-v4-pro", "deepseek", _KIMI_HOST, {}, _SANITIZED_KIMI_TOOL_USE_ID, id="deepseek"),
+        pytest.param("MiniMax-M3", "minimax", _KIMI_HOST, {}, _SANITIZED_KIMI_TOOL_USE_ID, id="minimax"),
+    ],
+)
+async def test_native_messages_rewrite_tool_use_ids_only_for_an_upstream_that_enforces_anthropics_id_pattern(
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    custom_llm_provider: str | None,
+    api_base: str | None,
+    env: dict[str, str],
+    expected_id: str,
+) -> None:
+    from litellm.llms.anthropic.pass_through.messages import handler
+
+    for name in ("ANTHROPIC_API_BASE", "ANTHROPIC_BASE_URL"):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    bodies: list[dict[str, Any]] = []
+
+    await handler.anthropic_messages(
+        max_tokens=16,
+        messages=copy.deepcopy(list(_KIMI_TOOL_ROUND)),
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        api_base=api_base,
+        api_key="sk-test",
+        client=_body_recording_client(bodies),
+    )
+
+    (body,) = bodies
+    assert (body["messages"][1]["content"][0]["id"], body["messages"][2]["content"][0]["tool_use_id"]) == (
+        expected_id,
+        expected_id,
+    )
+
+
+def test_native_messages_keep_rewriting_tool_use_ids_when_the_provider_cannot_be_resolved():
+    from litellm.llms.anthropic.pass_through.messages.utils import prepare_native_messages
+
+    messages, _ = prepare_native_messages(copy.deepcopy(list(_KIMI_TOOL_ROUND)), None, {}, model="kimi-without-a-provider")
+
+    assert (messages[1]["content"][0]["id"], messages[2]["content"][0]["tool_use_id"]) == (
+        _SANITIZED_KIMI_TOOL_USE_ID,
+        _SANITIZED_KIMI_TOOL_USE_ID,
+    )
+
+
+def _kimi_tool_call_response() -> ModelResponse:
+    from litellm.types.utils import ChatCompletionMessageToolCall, Choices, Function, Message, Usage
+
+    return ModelResponse(
+        model="kimi-k2.7-code",
+        usage=Usage(prompt_tokens=3, completion_tokens=1, total_tokens=4),
+        choices=[
+            Choices(
+                finish_reason="tool_calls",
+                message=Message(
+                    role="assistant",
+                    content=None,
+                    tool_calls=[
+                        ChatCompletionMessageToolCall(
+                            id="functions.Bash:1", function=Function(name="Bash", arguments='{"command": "pwd"}')
+                        )
+                    ],
+                ),
+            )
+        ],
+    )
+
+
+def _chat_tool_call_ids(chat_messages: list[dict[str, Any]]) -> tuple[object, object]:
+    return chat_messages[1]["tool_calls"][0]["id"], chat_messages[2]["tool_call_id"]
+
+
+@pytest.mark.asyncio
+async def test_bridged_messages_keep_the_backend_tool_ids_both_ways():
+    completion: Final = AsyncMock(return_value=_kimi_tool_call_response())
+
+    with patch("litellm.acompletion", new=completion):
+        response = await litellm.anthropic.messages.acreate(
+            max_tokens=16,
+            messages=copy.deepcopy(list(_KIMI_TOOL_ROUND)),
+            model="hosted_vllm/moonshotai/kimi-k2.7-code",
+            api_base="http://vllm.example.com/v1",
+        )
+
+    assert _chat_tool_call_ids(completion.call_args.kwargs["messages"]) == (_KIMI_TOOL_USE_ID, _KIMI_TOOL_USE_ID)
+    assert [block["id"] for block in response["content"] if block["type"] == "tool_use"] == ["functions.Bash:1"]
+
+
+def test_sync_bridged_messages_keep_the_backend_tool_ids_both_ways():
+    completion: Final = MagicMock(return_value=_kimi_tool_call_response())
+
+    with patch("litellm.completion", new=completion):
+        response = litellm.anthropic.messages.create(
+            max_tokens=16,
+            messages=copy.deepcopy(list(_KIMI_TOOL_ROUND)),
+            model="hosted_vllm/moonshotai/kimi-k2.7-code",
+            api_base="http://vllm.example.com/v1",
+        )
+
+    assert _chat_tool_call_ids(completion.call_args.kwargs["messages"]) == (_KIMI_TOOL_USE_ID, _KIMI_TOOL_USE_ID)
+    assert [block["id"] for block in response["content"] if block["type"] == "tool_use"] == ["functions.Bash:1"]

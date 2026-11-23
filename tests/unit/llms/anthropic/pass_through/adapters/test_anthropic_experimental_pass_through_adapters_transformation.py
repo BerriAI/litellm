@@ -1485,8 +1485,7 @@ def test_translate_openai_content_to_anthropic_strips_gemini_thought_from_tool_c
     assert result[0]["provider_specific_fields"] == {"signature": sig}
 
 
-def test_translate_openai_content_to_anthropic_sanitizes_colon_dot_tool_call_ids():
-    """Cross-provider ids like ``functions.Bash:0`` must be normalized for Anthropic replay."""
+def test_translate_openai_content_to_anthropic_keeps_the_provider_tool_call_id():
     openai_choices = [
         Choices(
             message=Message(
@@ -1509,9 +1508,35 @@ def test_translate_openai_content_to_anthropic_sanitizes_colon_dot_tool_call_ids
     adapter = LiteLLMAnthropicMessagesAdapter()
     result = adapter._translate_openai_content_to_anthropic(choices=openai_choices)
 
-    assert len(result) == 1
-    assert result[0]["type"] == "tool_use"
-    assert result[0]["id"] == "functions_Bash_0"
+    assert [(block["type"], block["id"]) for block in result] == [("tool_use", "functions.Bash:0")]
+
+
+def test_translate_streaming_openai_chunk_keeps_the_provider_tool_call_id():
+    choices = [
+        StreamingChoices(
+            finish_reason=None,
+            index=0,
+            delta=Delta(
+                content=None,
+                role="assistant",
+                tool_calls=[
+                    ChatCompletionDeltaToolCall(
+                        id="functions.Bash:0",
+                        function=Function(arguments="", name="Bash"),
+                        type="function",
+                        index=0,
+                    )
+                ],
+            ),
+        )
+    ]
+
+    (
+        block_type,
+        content_block_start,
+    ) = LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_chunk_to_anthropic_content_block(choices=choices)
+
+    assert (block_type, content_block_start["id"]) == ("tool_use", "functions.Bash:0")
 
 
 def test_translate_openai_response_to_anthropic_text_and_tool_calls():

@@ -12,7 +12,10 @@ use litellm_llms_types::{
 use litellm_router_types::LitellmParams;
 use serde_json::{Map, Value, json};
 
-use super::{handler::shape_anthropic_messages_request, thinking::translate_thinking};
+use super::{
+    handler::{shape_anthropic_messages_request_keeping_tool_use_ids, with_sanitized_tool_use_ids},
+    thinking::translate_thinking,
+};
 use crate::base_llm::messages::context::MessagesTransformContext;
 use crate::{
     Error,
@@ -47,7 +50,7 @@ impl BaseMessagesConfig for AnthropicMessagesConfig {
         request: MessagesRequest,
         reasoning_auto_summary: bool,
     ) -> Result<MessagesRequest, Error> {
-        shape_anthropic_messages_request(request, reasoning_auto_summary)
+        shape_anthropic_messages_request_keeping_tool_use_ids(request, reasoning_auto_summary)
     }
 
     fn get_complete_url(
@@ -133,10 +136,17 @@ impl BaseMessagesConfig for AnthropicMessagesConfig {
         headers: &Headers,
         drop_params: bool,
     ) -> Result<MessagesRequest, Error> {
-        if !serves_anthropic_api_versions(url) {
-            return Ok(request);
+        if serves_anthropic_api_versions(url) {
+            return drop_sampling_params_removed_by_requested_version(
+                with_sanitized_tool_use_ids(request),
+                headers,
+                drop_params,
+            );
         }
-        drop_sampling_params_removed_by_requested_version(request, headers, drop_params)
+        if is_claude_model(&request.model) {
+            return Ok(with_sanitized_tool_use_ids(request));
+        }
+        Ok(request)
     }
 }
 

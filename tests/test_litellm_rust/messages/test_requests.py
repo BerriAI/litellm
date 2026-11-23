@@ -58,6 +58,23 @@ async def test_replayed_tool_ids_are_sanitized_before_they_reach_the_provider(se
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [True, False])
+async def test_replayed_tool_ids_reach_a_non_claude_model_on_its_own_host_unchanged(
+    server: RecordingServer, asynchronous: bool
+) -> None:
+    history: Final = [
+        {"role": "user", "content": "run it"},
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "functions.Bash:0", "name": "Bash", "input": {}}]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "functions.Bash:0", "content": "ok"}]},
+    ]
+
+    await call(server, asynchronous=asynchronous, model="anthropic/moonshotai/kimi-k2.7-code", messages=history)
+
+    body, _ = sent(server)
+    assert body["messages"] == history
+
+
+@pytest.mark.asyncio
 async def test_provider_specific_headers_scoped_to_anthropic_reach_the_wire(server: RecordingServer) -> None:
     await call(
         server,
