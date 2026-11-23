@@ -337,6 +337,7 @@ NOVA_EMBEDDING_MODELS: Final = (
 
 
 @pytest.mark.parametrize("model", NOVA_EMBEDDING_MODELS)
+@pytest.mark.parametrize("drop_params", [False, True])
 @pytest.mark.parametrize(
     ("encoding_format", "expected_params"),
     [
@@ -345,13 +346,14 @@ NOVA_EMBEDDING_MODELS: Final = (
     ],
 )
 def test_bedrock_nova_embeddings_accept_the_encoding_formats_openai_serves(
-    model: str, encoding_format: str, expected_params: dict[str, object]
+    model: str, drop_params: bool, encoding_format: str, expected_params: dict[str, object]
 ) -> None:
     optional_params: Final = get_optional_params_embeddings(
         model=model,
         encoding_format=encoding_format,
         dimensions=256,
         custom_llm_provider="bedrock",
+        drop_params=drop_params,
     )
 
     assert optional_params == expected_params

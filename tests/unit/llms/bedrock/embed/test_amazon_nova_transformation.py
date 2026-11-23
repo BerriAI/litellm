@@ -658,6 +658,28 @@ def test_nova_embedding_with_a_base64_encoding_format_passes_an_upstream_base64_
     assert [item.embedding for item in response.data] == ["AAAAPw=="]
 
 
+def test_async_invoke_nova_embedding_with_a_base64_encoding_format_returns_an_empty_base64_placeholder(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post("https://bedrock-runtime.us-east-1.amazonaws.com/async-invoke").mock(
+        return_value=httpx.Response(
+            200, json={"invocationArn": "arn:aws:bedrock:us-east-1:123456789012:async-invoke/abc123"}
+        )
+    )
+
+    response: Final = litellm.embedding(
+        model="bedrock/async_invoke/amazon.nova-2-multimodal-embeddings-v1:0",
+        input=["hello"],
+        encoding_format="base64",
+        output_s3_uri="s3://bucket/embeddings/",
+        api_key="test-bearer-token",
+        aws_region_name="us-east-1",
+    )
+
+    assert route.called
+    assert [item.embedding for item in response.data] == [""]
+
+
 async def test_async_nova_embedding_with_a_base64_encoding_format_returns_the_vector_as_base64_float32() -> None:
     requests: Final[list[httpx.Request]] = []
 
