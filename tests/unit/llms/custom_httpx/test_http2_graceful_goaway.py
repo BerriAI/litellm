@@ -1,15 +1,18 @@
+import asyncio
 from collections.abc import Iterable, Iterator, Sequence
 from typing import Final
 
 import httpcore
+import httpcore._async.http2
+import httpcore._sync.http2
 import pytest
 from h2.config import H2Configuration
 from h2.connection import H2Connection
 from h2.errors import ErrorCodes
-from h2.events import ConnectionTerminated
+from h2.events import ConnectionTerminated, StreamEnded
 from h2.exceptions import NoAvailableStreamIDError
 from httpcore._backends.base import SOCKET_OPTION
-from hyperframe.frame import GoAwayFrame, PingFrame
+from hyperframe.frame import GoAwayFrame, PingFrame, RstStreamFrame, WindowUpdateFrame
 from typing_extensions import override
 
 from litellm.llms.custom_httpx.http2_graceful_goaway import (
@@ -20,6 +23,7 @@ from litellm.llms.custom_httpx.http2_graceful_goaway import (
 URL: Final = "https://search.example/v1/search"
 ANSWER: Final = b'{"results": [{"id": "answered"}]}'
 LAST_POSSIBLE_STREAM_ID: Final = 2**31 - 1
+UPLOAD_WINDOW: Final = H2Connection().remote_settings.initial_window_size
 REQUEST_HEADERS: Final = (
     (":method", "POST"),
     (":scheme", "https"),
@@ -30,6 +34,14 @@ REQUEST_HEADERS: Final = (
 
 def _goaway(last_stream_id: int, error_code: ErrorCodes = ErrorCodes.NO_ERROR) -> bytes:
     return GoAwayFrame(stream_id=0, last_stream_id=last_stream_id, error_code=error_code).serialize()
+
+
+def _reset(stream_id: int) -> bytes:
+    return RstStreamFrame(stream_id=stream_id, error_code=ErrorCodes.CANCEL).serialize()
+
+
+def _window_update(stream_id: int) -> bytes:
+    return WindowUpdateFrame(stream_id=stream_id, window_increment=UPLOAD_WINDOW).serialize()
 
 
 def _two_step_goaway() -> tuple[bytes, ...]:
@@ -68,24 +80,33 @@ def _script(*middle: bytes, answered: bool = True) -> tuple[bytes, ...]:
 
 
 @pytest.fixture(autouse=True)
-def _draining_connections() -> Iterator[None]:
+def _draining_connections(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    monkeypatch.setattr(httpcore._async.http2, "AsyncHTTP2Connection", httpcore.AsyncHTTP2Connection)
+    monkeypatch.setattr(httpcore._sync.http2, "HTTP2Connection", httpcore.HTTP2Connection)
+    drain_http2_connections_on_graceful_goaway.cache_clear()
     drain_http2_connections_on_graceful_goaway()
     yield
+    drain_http2_connections_on_graceful_goaway.cache_clear()
 
 
-class _ResetAfterScriptStream(httpcore.AsyncMockStream):
+class _FailAfterScriptStream(httpcore.AsyncMockStream):
+    def __init__(self, script: Sequence[bytes], error: Exception) -> None:
+        super().__init__(list(script), http2=True)
+        self._error: Final = error
+
     @override
     async def read(self, max_bytes: int, timeout: float | None = None) -> bytes:
         chunk: Final = await super().read(max_bytes, timeout)
         if chunk:
             return chunk
-        raise httpcore.ReadError("Connection reset by peer")
+        raise self._error
 
 
-class _ResetAfterScriptBackend(httpcore.AsyncMockBackend):
-    def __init__(self, script: Sequence[bytes]) -> None:
+class _FailAfterScriptBackend(httpcore.AsyncMockBackend):
+    def __init__(self, script: Sequence[bytes], error: Exception) -> None:
         super().__init__(list(script), http2=True)
         self._script: Final = script
+        self._error: Final = error
 
     @override
     async def connect_tcp(
@@ -96,19 +117,54 @@ class _ResetAfterScriptBackend(httpcore.AsyncMockBackend):
         local_address: str | None = None,
         socket_options: Iterable[SOCKET_OPTION] | None = None,
     ) -> httpcore.AsyncNetworkStream:
-        return _ResetAfterScriptStream(list(self._script), http2=True)
+        return _FailAfterScriptStream(self._script, self._error)
 
 
-async def _async_search(script: Sequence[bytes], backend: httpcore.AsyncNetworkBackend | None = None) -> bytes:
+class _FailAfterScriptSyncStream(httpcore.MockStream):
+    def __init__(self, script: Sequence[bytes], error: Exception) -> None:
+        super().__init__(list(script), http2=True)
+        self._error: Final = error
+
+    @override
+    def read(self, max_bytes: int, timeout: float | None = None) -> bytes:
+        chunk: Final = super().read(max_bytes, timeout)
+        if chunk:
+            return chunk
+        raise self._error
+
+
+class _FailAfterScriptSyncBackend(httpcore.MockBackend):
+    def __init__(self, script: Sequence[bytes], error: Exception) -> None:
+        super().__init__(list(script), http2=True)
+        self._script: Final = script
+        self._error: Final = error
+
+    @override
+    def connect_tcp(
+        self,
+        host: str,
+        port: int,
+        timeout: float | None = None,
+        local_address: str | None = None,
+        socket_options: Iterable[SOCKET_OPTION] | None = None,
+    ) -> httpcore.NetworkStream:
+        return _FailAfterScriptSyncStream(self._script, self._error)
+
+
+async def _async_search(
+    script: Sequence[bytes], backend: httpcore.AsyncNetworkBackend | None = None, content: bytes = b"{}"
+) -> bytes:
     async with httpcore.AsyncConnectionPool(
         http2=True, network_backend=backend or httpcore.AsyncMockBackend(list(script), http2=True)
     ) as pool:
-        response: Final = await pool.request("POST", URL, content=b"{}")
+        response: Final = await pool.request("POST", URL, content=content)
         return response.content
 
 
-def _sync_search(script: Sequence[bytes]) -> bytes:
-    with httpcore.ConnectionPool(http2=True, network_backend=httpcore.MockBackend(list(script), http2=True)) as pool:
+def _sync_search(script: Sequence[bytes], backend: httpcore.NetworkBackend | None = None) -> bytes:
+    with httpcore.ConnectionPool(
+        http2=True, network_backend=backend or httpcore.MockBackend(list(script), http2=True)
+    ) as pool:
         return pool.request("POST", URL, content=b"{}").content
 
 
@@ -119,6 +175,95 @@ def _sync_search(script: Sequence[bytes]) -> bytes:
 async def test_a_search_sent_before_a_graceful_goaway_gets_its_answer(goaway: tuple[bytes, ...]) -> None:
     assert await _async_search(_script(*goaway)) == ANSWER
     assert _sync_search(_script(*goaway)) == ANSWER
+
+
+def _refusing_script() -> list[bytes]:
+    peer: Final = _Peer()
+    return [peer.preface(), peer.answer_headers(), _goaway(1), peer.answer_body()]
+
+
+async def test_a_search_a_graceful_goaway_refused_is_answered_while_the_accepted_one_still_streams() -> None:
+    async with httpcore.AsyncConnectionPool(
+        http2=True, network_backend=httpcore.AsyncMockBackend(_refusing_script(), http2=True)
+    ) as async_pool:
+        async with async_pool.stream("POST", URL, content=b"{}") as accepted:
+            refused: Final = await async_pool.request("POST", URL, content=b"{}")
+            assert (refused.content, await accepted.aread()) == (ANSWER, ANSWER)
+
+    with httpcore.ConnectionPool(
+        http2=True, network_backend=httpcore.MockBackend(_refusing_script(), http2=True)
+    ) as sync_pool:
+        with sync_pool.stream("POST", URL, content=b"{}") as sync_accepted:
+            sync_refused: Final = sync_pool.request("POST", URL, content=b"{}")
+            assert (sync_refused.content, sync_accepted.read()) == (ANSWER, ANSWER)
+
+
+async def test_a_search_still_uploading_at_a_graceful_goaway_gets_its_answer() -> None:
+    peer: Final = _Peer()
+    script: Final = (
+        peer.preface(),
+        _goaway(1),
+        _window_update(0) + _window_update(1),
+        peer.answer_headers(),
+        peer.answer_body(),
+    )
+
+    assert await _async_search(script, content=b"x" * (UPLOAD_WINDOW + 1)) == ANSWER
+
+
+class _AnswersOnceBothSearchesArriveStream(httpcore.AsyncMockStream):
+    def __init__(self) -> None:
+        super().__init__([], http2=True)
+        self._server: Final = H2Connection(config=H2Configuration(client_side=False))
+        self._server.initiate_connection()
+        self._both_arrived: Final = asyncio.Event()
+        self._arrived = 0
+        self._answered = False
+
+    @override
+    async def write(self, buffer: bytes, timeout: float | None = None) -> None:
+        self._arrived += sum(isinstance(event, StreamEnded) for event in self._server.receive_data(buffer))
+        if self._arrived == 2:
+            self._both_arrived.set()
+
+    @override
+    async def read(self, max_bytes: int, timeout: float | None = None) -> bytes:
+        pending: Final = self._server.data_to_send()
+        if pending or self._answered:
+            return pending
+        await self._both_arrived.wait()
+        self._answered = True
+        return _goaway(3) + b"".join(self._answer(stream_id) for stream_id in (1, 3))
+
+    def _answer(self, stream_id: int) -> bytes:
+        self._server.send_headers(stream_id, [(":status", "200"), ("content-type", "application/json")])
+        self._server.send_data(stream_id, ANSWER, end_stream=True)
+        return self._server.data_to_send()
+
+
+class _AnswersOnceBothSearchesArriveBackend(httpcore.AsyncMockBackend):
+    def __init__(self) -> None:
+        super().__init__([], http2=True)
+
+    @override
+    async def connect_tcp(
+        self,
+        host: str,
+        port: int,
+        timeout: float | None = None,
+        local_address: str | None = None,
+        socket_options: Iterable[SOCKET_OPTION] | None = None,
+    ) -> httpcore.AsyncNetworkStream:
+        return _AnswersOnceBothSearchesArriveStream()
+
+
+async def test_two_searches_answered_in_one_read_with_a_graceful_goaway_both_get_their_answers() -> None:
+    async with httpcore.AsyncConnectionPool(
+        http2=True, network_backend=_AnswersOnceBothSearchesArriveBackend()
+    ) as pool:
+        responses: Final = await asyncio.gather(*(pool.request("POST", URL, content=b"{}") for _ in range(2)))
+
+    assert [response.content for response in responses] == [ANSWER, ANSWER]
 
 
 async def test_a_draining_connection_takes_no_new_requests() -> None:
@@ -156,13 +301,38 @@ async def test_a_server_that_hangs_up_after_a_graceful_goaway_reports_the_goaway
     assert _terminated_by(sync_error.value).last_stream_id == 1
 
 
-async def test_a_server_that_resets_the_connection_after_a_graceful_goaway_reports_the_goaway() -> None:
+@pytest.mark.parametrize(
+    "error",
+    [
+        pytest.param(httpcore.ReadError("Connection reset by peer"), id="reset"),
+        pytest.param(httpcore.ReadTimeout("The read operation timed out"), id="silent"),
+    ],
+)
+async def test_a_server_that_resets_or_goes_silent_after_a_graceful_goaway_reports_the_goaway(
+    error: Exception,
+) -> None:
     script: Final = _script(*_two_step_goaway(), answered=False)
 
-    with pytest.raises(httpcore.RemoteProtocolError) as error:
-        _ = await _async_search(script, _ResetAfterScriptBackend(script))
+    with pytest.raises(httpcore.RemoteProtocolError) as async_error:
+        _ = await _async_search(script, _FailAfterScriptBackend(script, error))
+    with pytest.raises(httpcore.RemoteProtocolError) as sync_error:
+        _ = _sync_search(script, _FailAfterScriptSyncBackend(script, error))
 
-    assert _terminated_by(error.value).last_stream_id == 1
+    assert _terminated_by(async_error.value).last_stream_id == 1
+    assert _terminated_by(sync_error.value).last_stream_id == 1
+
+
+@pytest.mark.parametrize("last_stream_id", [LAST_POSSIBLE_STREAM_ID, 1])
+async def test_a_search_reset_after_a_graceful_goaway_reports_the_goaway(last_stream_id: int) -> None:
+    script: Final = _script(_goaway(last_stream_id), _reset(1), answered=False)
+
+    with pytest.raises(httpcore.RemoteProtocolError) as async_error:
+        _ = await _async_search(script)
+    with pytest.raises(httpcore.RemoteProtocolError) as sync_error:
+        _ = _sync_search(script)
+
+    assert _terminated_by(async_error.value).last_stream_id == last_stream_id
+    assert _terminated_by(sync_error.value).last_stream_id == last_stream_id
 
 
 async def test_an_error_goaway_ends_the_stream_without_waiting_for_an_answer() -> None:
