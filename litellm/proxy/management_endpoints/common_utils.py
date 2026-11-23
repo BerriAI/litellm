@@ -1,6 +1,6 @@
 import json
 import math
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Optional, Union
 
@@ -181,7 +181,7 @@ def require_caller_user_id_for_non_admin(
     return user_api_key_dict.user_id
 
 
-_ROUTE_LIST: Final = TypeAdapter(list[str] | None)
+_ROUTE_LIST: Final[TypeAdapter[Sequence[str] | None]] = TypeAdapter(list[str] | None)
 
 
 def _passthrough_routes_permission_error(field: str, entity: str) -> HTTPException:
