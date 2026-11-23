@@ -19,13 +19,13 @@ import pytest
 import yaml
 from integration._support.client import Gateway, Scenario, eventually
 from integration._support.process import graceful_stop_seconds, owned_proxy_process
-from integration._support.vertex import service_account_json
+from integration._support.vertex import assert_vertex_authorization, service_account_json
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 
 _INLINE_TOOLS: Final = "inline-tools-2026-09-15"
 _THINKING: Final = "interleaved-thinking-2025-05-14"
-_VERTEX_UNSUPPORTED: Final = "effort-2025-11-24"
+_VERTEX_UNSUPPORTED: Final = "skills-2025-10-02"
 _UNKNOWN: Final = "not-a-beta-2099-01-01"
 _BACKEND: Final = "claude-opus-5-5"
 _PROJECT: Final = "scripted-project"
@@ -92,7 +92,7 @@ def _streams(request: Request) -> bool:
 
 def _peer(request: Request) -> Reply:
     if request.target in (_VERTEX_TARGET, _VERTEX_STREAM_TARGET):
-        assert request.headers["authorization"] == "Bearer scripted-token", request.headers
+        assert_vertex_authorization(request.headers["authorization"], _PROJECT)
     elif request.target == _ANTHROPIC_TARGET:
         assert request.headers["x-api-key"] == _ANTHROPIC_KEY, request.headers
     else:

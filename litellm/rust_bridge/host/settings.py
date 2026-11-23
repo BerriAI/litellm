@@ -10,6 +10,7 @@ class HttpSettings:
     ssl_certificate: object
     ssl_security_level: object
     ssl_ecdh_curve: object
+    rsa_key_exchange_and_chacha20_excluded: bool
     force_ipv4: object
     http2: object
     aiohttp_trust_env: object
@@ -29,6 +30,24 @@ class ProviderDefaults:
     vertex_project: object
     vertex_location: object
     enable_azure_ad_token_refresh: object
+    api_key: object
+    api_base: object
+    azure_key: object
+    drop_params: object
+    bedrock_request_metadata_fields: object
+    bedrock_session_tag_fields: object
+    bedrock_session_name_fields: object
+    vertex_request_label_fields: object
+
+
+@dataclass(frozen=True, slots=True)
+class RouterTierSettings:
+    """The memory-over-Redis tier values `main`'s router reads from the environment and `litellm` globals."""
+
+    cooldown_redis_read_interval: float
+    usage_redis_read_interval: float
+    max_redis_batch_cache_size: int
+    default_in_memory_ttl: float | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,6 +127,22 @@ def secret_manager_binding() -> SecretManagerBinding:
     )
 
 
+def router_tiers() -> RouterTierSettings:
+    import litellm
+    from litellm.constants import (
+        DEFAULT_COOLDOWN_REDIS_READ_INTERVAL_SECONDS,
+        DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE,
+        DEFAULT_REDIS_BATCH_CACHE_EXPIRY_SECONDS,
+    )
+
+    return RouterTierSettings(
+        cooldown_redis_read_interval=DEFAULT_COOLDOWN_REDIS_READ_INTERVAL_SECONDS,
+        usage_redis_read_interval=litellm.default_redis_batch_cache_expiry or DEFAULT_REDIS_BATCH_CACHE_EXPIRY_SECONDS,
+        max_redis_batch_cache_size=DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE,
+        default_in_memory_ttl=litellm.default_in_memory_ttl,
+    )
+
+
 def provider_defaults() -> ProviderDefaults:
     import litellm
 
@@ -115,6 +150,14 @@ def provider_defaults() -> ProviderDefaults:
         vertex_project=litellm.vertex_project,
         vertex_location=litellm.vertex_location,
         enable_azure_ad_token_refresh=litellm.enable_azure_ad_token_refresh,
+        api_key=litellm.api_key,
+        api_base=litellm.api_base,
+        azure_key=litellm.azure_key,
+        drop_params=litellm.drop_params,
+        bedrock_request_metadata_fields=litellm.bedrock_request_metadata_fields,
+        bedrock_session_tag_fields=litellm.bedrock_session_tag_fields,
+        bedrock_session_name_fields=litellm.bedrock_session_name_fields,
+        vertex_request_label_fields=litellm.vertex_request_label_fields,
     )
 
 
@@ -129,13 +172,14 @@ def url_policy() -> UrlPolicy:
 
 def http_settings() -> HttpSettings:
     import litellm
-    from litellm.llms.custom_httpx.http_handler import default_user_agent
+    from litellm.llms.custom_httpx.http_handler import default_user_agent, rsa_key_exchange_and_chacha20_excluded
 
     return HttpSettings(
         ssl_verify=litellm.ssl_verify,
         ssl_certificate=litellm.ssl_certificate,
         ssl_security_level=litellm.ssl_security_level,
         ssl_ecdh_curve=litellm.ssl_ecdh_curve,
+        rsa_key_exchange_and_chacha20_excluded=rsa_key_exchange_and_chacha20_excluded(),
         force_ipv4=litellm.force_ipv4,
         http2=litellm.http2,
         aiohttp_trust_env=litellm.aiohttp_trust_env,

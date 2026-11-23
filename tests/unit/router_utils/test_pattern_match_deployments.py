@@ -1,4 +1,4 @@
-"""Behavior pins for ``litellm/router_utils/pattern_match_deployments.py``."""
+"""Behavior pins for ``litellm/litellm_core_utils/pattern_match_deployments.py``."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ import litellm
 from litellm import Router
 from litellm.litellm_core_utils import get_llm_provider_logic
 from litellm.router import Deployment, LiteLLM_Params
-from litellm.router_utils.pattern_match_deployments import PatternMatchRouter, PatternUtils
+from litellm.litellm_core_utils.pattern_match_deployments import PatternMatchRouter, PatternUtils
 from litellm.types.router import ModelInfo
 import json
 from unittest.mock import MagicMock
@@ -325,6 +325,22 @@ async def test_route_with_no_matching_pattern():
         )
 
 
+def _anthropic_message_response() -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "my-custom-model",
+            "content": [{"type": "text", "text": "Hi"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        },
+        request=httpx.Request("POST", "https://api.anthropic.com/v1/messages"),
+    )
+
+
 def test_router_pattern_match_e2e():
     """
     Tests the end to end flow of the router
@@ -341,7 +357,7 @@ def test_router_pattern_match_e2e():
         ]
     )
 
-    with patch.object(client, "post", new=MagicMock()) as mock_post:
+    with patch.object(client, "post", new=MagicMock(return_value=_anthropic_message_response())) as mock_post:
 
         router.completion(
             model="llmengine/my-custom-model",
@@ -406,7 +422,7 @@ def test_sorted_patterns():
     """
     Tests that the pattern specificity is calculated correctly
     """
-    from litellm.router_utils.pattern_match_deployments import PatternUtils
+    from litellm.litellm_core_utils.pattern_match_deployments import PatternUtils
 
     sorted_patterns = PatternUtils.sorted_patterns(
         {
@@ -418,7 +434,7 @@ def test_sorted_patterns():
 
 
 def test_calculate_pattern_specificity():
-    from litellm.router_utils.pattern_match_deployments import PatternUtils
+    from litellm.litellm_core_utils.pattern_match_deployments import PatternUtils
 
     assert PatternUtils.calculate_pattern_specificity("llmengine/*") == (11, 1)
     assert PatternUtils.calculate_pattern_specificity("*") == (1, 1)

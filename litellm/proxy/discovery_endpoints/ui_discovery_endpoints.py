@@ -2,7 +2,7 @@
 import os
 from typing import Final
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 
 from litellm.proxy.common_utils.admin_ui_utils import is_admin_ui_disabled
 from litellm.proxy.common_utils.claude_code_marketplace_auth import marketplace_auth_required
@@ -15,10 +15,12 @@ from litellm.types.proxy.discovery_endpoints.ui_discovery_endpoints import (
 
 router: Final = APIRouter()
 
+SSO_FALLBACK_COOKIE: Final = "litellm_sso_fallback"
+
 
 @router.get("/.well-known/litellm-ui-config", response_model=UiDiscoveryEndpoints)
 @router.get("/litellm/.well-known/litellm-ui-config", response_model=UiDiscoveryEndpoints)  # if mounted at root path
-async def get_ui_config():
+async def get_ui_config(request: Request) -> UiDiscoveryEndpoints:
     from litellm.proxy.auth.auth_utils import has_user_setup_sso
     from litellm.proxy.proxy_server import general_settings
     from litellm.proxy.utils import get_proxy_base_url, get_server_root_path
@@ -46,7 +48,9 @@ async def get_ui_config():
         server_root_path=get_server_root_path(),
         proxy_base_url=get_proxy_base_url(),
         gateway_base_url=gateway_base_url,
-        auto_redirect_to_sso=sso_configured and auto_redirect_ui_login_to_sso,
+        auto_redirect_to_sso=sso_configured
+        and auto_redirect_ui_login_to_sso
+        and request.cookies.get(SSO_FALLBACK_COOKIE) != "1",
         admin_ui_disabled=admin_ui_disabled,
         sso_configured=sso_configured,
         hide_default_credentials_hint=hide_default_credentials_hint,

@@ -6,8 +6,10 @@ import random
 import sys
 import threading
 import time
-from collections.abc import Mapping, Sequence
+import uuid
+from collections.abc import Iterable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
+from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, TypeVar
 
@@ -19,20 +21,21 @@ if TYPE_CHECKING:
     from litellm.router import Router
 
 logger: Final = logging.getLogger(__name__)
-_DeploymentT: Final = TypeVar("_DeploymentT", bound=Mapping[str, object])
+_DeploymentT = TypeVar("_DeploymentT", bound=Mapping[str, object])
 from litellm.constants import (
     BACKGROUND_HEALTH_CHECK_MAX_TOKENS,
     BACKGROUND_HEALTH_CHECK_MAX_TOKENS_REASONING,
     DEFAULT_HEALTH_CHECK_PROMPT,
     HEALTH_CHECK_TIMEOUT_SECONDS,
 )
+from litellm.litellm_core_utils.get_llm_provider_logic import resolve_model_and_provider_for_metadata
 from litellm.litellm_core_utils.health_check_helpers import native_health_check_mode
+from litellm.litellm_core_utils.routing_common_utils import deployment_model_id_pin, is_model_capability_field
 from litellm.router_strategy.auto_router.auto_router_model_naming import (
     StrategyRouterDependency,
     classify_strategy_router_model,
     strategy_router_dependencies,
 )
-from litellm.router_utils.common_utils import is_model_capability_field
 from litellm.types.utils import secret_bearing_wif_litellm_params, server_owned_wif_litellm_params
 
 # Provider routing and server-owned federation or OAuth token-exchange fields. Allowed for proxy
@@ -410,10 +413,101 @@ def _resolved_deployment_ids(router: "Router", model_name: str) -> frozenset[str
     working tier broken. An alias whose target is gone resolves to nothing, which fails a
     request exactly like an unknown name.
     """
-    resolved: Final = router.get_model_list(model_name=model_name)
+    resolved: Final = router.registry().deployments(model_name)
     if not resolved:
         return None
     return frozenset(ident for entry in resolved if (ident := _deployment_id(entry)))
+
+
+_WILDCARD_CHILD_ID_NAMESPACE: Final = uuid.uuid5(uuid.NAMESPACE_URL, "litellm:public-wildcard-health-check")
+
+
+def _is_probe_tuning(key: str) -> bool:
+    return key in ("id", "mode", "base_model") or (key.startswith("health_check_") and key != "health_check_timeout")
+
+
+def _as_mapping(value: object) -> Mapping[str, object]:
+    try:
+        return _MODEL_INFO_ADAPTER.validate_python(value)
+    except ValidationError:
+        return MappingProxyType({})
+
+
+def _wildcard_child(public_name: str, wildcard_id: str, row: Mapping[str, object]) -> Mapping[str, object]:
+    """``row`` checked as ``public_name``, its id stable per wildcard and routed model across pods and cycles."""
+    params: Final = _as_mapping(row.get("litellm_params"))
+    info: Final = _as_mapping(row.get("model_info"))
+    child_id: Final = uuid.uuid5(_WILDCARD_CHILD_ID_NAMESPACE, f"{wildcard_id}|{params.get('model')}")
+    return {
+        **row,
+        "model_name": public_name,
+        "litellm_params": dict(params),
+        "model_info": {**{k: v for k, v in info.items() if not _is_probe_tuning(k)}, "id": str(child_id)},
+    }
+
+
+def _in_model_groups(public_name: str, row: Mapping[str, object], model_groups: AbstractSet[str] | None) -> bool:
+    return model_groups is None or public_name in model_groups or row.get("model_name") in model_groups
+
+
+def _wildcard_children_for(
+    public_name: str, router: "Router", model_groups: AbstractSet[str] | None
+) -> tuple[Mapping[str, object], ...]:
+    served_name: Final = router.registry().resolve(public_name, kind="alias") or public_name
+    rows: Final = router.registry().deployments(served_name, source="wildcard")
+    ids: Final = tuple(_deployment_id(row) for row in rows)
+    if _resolved_deployment_ids(router, served_name) != frozenset(i for i in ids if i):
+        return ()
+    eligible: Final = (
+        (row, wildcard_id) for row, wildcard_id in zip(rows, ids) if wildcard_id and not _skips_health_checks(row)
+    )
+    return tuple(
+        _wildcard_child(public_name, wildcard_id, row)
+        for row, wildcard_id in eligible
+        if _in_model_groups(public_name, row, model_groups)
+    )
+
+
+def public_wildcard_children(
+    public_names: Iterable[str], router: "Router", model_groups: AbstractSet[str] | None
+) -> tuple[Mapping[str, object], ...]:
+    """A background-check entry per wildcard for each public name that only wildcards serve, under that name.
+
+    A failure here is logged and yields none, so it never stops the background loop that calls it.
+    """
+    try:
+        return tuple(
+            chain.from_iterable(
+                _wildcard_children_for(name, router, model_groups) for name in dict.fromkeys(public_names)
+            )
+        )
+    except Exception:
+        logger.exception("background_health_check_public_wildcard_children_failed")
+        return ()
+
+
+def deployment_ids(deployments: Iterable[Mapping[str, object]]) -> frozenset[str]:
+    return frozenset(ident for deployment in deployments if (ident := _deployment_id(deployment)))
+
+
+_ENDPOINTS_ADAPTER: Final = TypeAdapter(tuple[object, ...])
+
+
+def _endpoint_model_id(endpoint: object) -> str | None:
+    match endpoint:
+        case {"model_id": str(model_id)}:
+            return model_id
+        case _:
+            return None
+
+
+def split_by_model_ids(endpoints: object, model_ids: AbstractSet[str]) -> tuple[tuple[object, ...], tuple[object, ...]]:
+    """``endpoints`` untouched, split into those without, then with, a ``model_id`` in ``model_ids``."""
+    checked: Final = _ENDPOINTS_ADAPTER.validate_python(endpoints)
+    return (
+        tuple(e for e in checked if _endpoint_model_id(e) not in model_ids),
+        tuple(e for e in checked if _endpoint_model_id(e) in model_ids),
+    )
 
 
 def _dependency_failure(
@@ -831,6 +925,24 @@ _PROBE_PARAMS_ADAPTER: Final = TypeAdapter(dict[str, object])
 _MODEL_INFO_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 
+def _same_health_check_model(deployment_model: str | None, probe_params: Mapping[str, object]) -> bool:
+    model: Final = probe_params.get("model")
+    if model == deployment_model:
+        return True
+    if not isinstance(model, str) or deployment_model is None:
+        return False
+    provider_param: Final = probe_params.get("custom_llm_provider")
+    provider: Final = provider_param if isinstance(provider_param, str) else None
+    try:
+        deployment_name, deployment_provider = resolve_model_and_provider_for_metadata(
+            model=deployment_model, custom_llm_provider=provider
+        )
+        probe_name, probe_provider = resolve_model_and_provider_for_metadata(model=model, custom_llm_provider=provider)
+    except litellm.exceptions.BadRequestError:
+        return False
+    return (deployment_name, deployment_provider) == (probe_name, probe_provider)
+
+
 def update_litellm_params_for_health_check(
     model_info: dict, litellm_params: dict, deployment_model: str | None = None
 ) -> dict:
@@ -855,6 +967,8 @@ def update_litellm_params_for_health_check(
       `deployment_model` (default: the incoming `litellm_params` model), so a `health_check_model` or a `model`
       in `health_check_params` is judged on its own. Keys already set through `health_check_params` are kept,
       and `modalities` set there without "audio" turns the audio fields off
+    - sends a SageMaker deployment's `X-Amzn-SageMaker-Inference-Component` extra header as `model_id` when the
+      deployment sets none, so legacy `sagemaker/` probes reach that component the way routed requests do
     """
     incoming_model: Final = _PROBE_PARAMS_ADAPTER.validate_python(litellm_params).get("model")
     base_model_owner: Final = deployment_model or (incoming_model if isinstance(incoming_model, str) else None)
@@ -892,6 +1006,15 @@ def update_litellm_params_for_health_check(
         litellm_params["model"] = _health_check_model
     if mode == "audio_speech":
         litellm_params["voice"] = model_info.get("health_check_voice", "alloy")
+
+    logging_model_info: Final = _MODEL_INFO_ADAPTER.validate_python(
+        _PROBE_PARAMS_ADAPTER.validate_python(litellm_params).get("model_info") or {}
+    )
+    probe_logging_model_info: Final = (
+        logging_model_info
+        if _same_health_check_model(base_model_owner, _PROBE_PARAMS_ADAPTER.validate_python(litellm_params))
+        else {key: value for key, value in logging_model_info.items() if key == "id"}
+    )
 
     # Handle Bedrock region routing format: bedrock/region/model
     # This is needed because health checks bypass get_llm_provider() for the model param
@@ -935,9 +1058,16 @@ def update_litellm_params_for_health_check(
     audio_output_params: Final = _health_check_audio_output_params(
         _MODEL_INFO_ADAPTER.validate_python(model_info), probe_params, mode, base_model_owner
     )
+    model_id_pin: Final = deployment_model_id_pin(probe_params)
+    model_id_params: Final = {} if model_id_pin is None else {"model_id": model_id_pin}
     return {
         key: value
-        for key, value in {**audio_output_params, **probe_params}.items()
+        for key, value in {
+            **audio_output_params,
+            **model_id_params,
+            **probe_params,
+            **({"model_info": probe_logging_model_info} if "model_info" in probe_params else {}),
+        }.items()
         if not is_model_capability_field(key)
     }
 

@@ -25,7 +25,7 @@ def remote_and_clone(tmp_path: Path) -> tuple[Path, Path]:
     seed: Final = tmp_path / "seed"
     seed.mkdir()
     _git(seed, "init", "-q", "-b", "release_branch")
-    (seed / "scripts").mkdir()
+    (seed / "litellm/scripts").mkdir(parents=True)
     for name in (
         "default_branch.py",
         "lint_base_counts.py",
@@ -35,9 +35,9 @@ def remote_and_clone(tmp_path: Path) -> tuple[Path, Path]:
         "type_check_gate.py",
         "gate_slot_lock.py",
     ):
-        shutil.copyfile(ROOT / "scripts" / name, seed / "scripts" / name)
+        shutil.copyfile(ROOT / "litellm/scripts" / name, seed / "litellm/scripts" / name)
     shutil.copyfile(ROOT / "Makefile", seed / "Makefile")
-    (seed / "litellm").mkdir()
+    (seed / "litellm").mkdir(exist_ok=True)
     (seed / "litellm" / "example.py").write_text("value = 0\n")
     _commit(seed, "staging base")
     _git(seed, "checkout", "-qb", "main")
@@ -53,7 +53,7 @@ def remote_and_clone(tmp_path: Path) -> tuple[Path, Path]:
 
 def _resolve(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [sys.executable, str(ROOT / "scripts" / "default_branch.py"), *args],
+        [sys.executable, str(ROOT / "litellm/scripts" / "default_branch.py"), *args],
         cwd=repo,
         capture_output=True,
         text=True,
@@ -119,13 +119,24 @@ def test_explicit_base_works_without_remote_access(
     assert "No changed litellm Python files" in checked.stdout
 
 
+def test_format_check_reads_staged_renames(remote_and_clone: tuple[Path, Path]) -> None:
+    _, repo = remote_and_clone
+    (repo / "litellm" / "before_move.py").write_text("value = 2\n")
+    _commit(repo, "add module")
+    _git(repo, "mv", "litellm/before_move.py", "litellm/after_move.py")
+    checked: Final = _make(repo, "lint-format-check-changed", "BASE_REF=origin/release_branch", "UV_RUN=echo")
+    assert checked.returncode == 0, checked.stdout + checked.stderr
+    assert "litellm/after_move.py" in checked.stdout
+    assert "before_move.py" not in checked.stdout
+
+
 def _freshness(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [
             sys.executable,
             "-c",
             "import sys; from pathlib import Path; "
-            "from ci_cd.run_migration import _check_branch_freshness; "
+            "from litellm.scripts.ci_cd.run_migration import _check_branch_freshness; "
             "_check_branch_freshness(Path(sys.argv[1]), sys.argv[2] if len(sys.argv) > 2 else None)",
             str(repo),
             *args,
@@ -178,7 +189,7 @@ def test_each_gate_refuses_an_unverifiable_default(remote_and_clone: tuple[Path,
     remote, repo = remote_and_clone
     _git(repo, "remote", "set-url", "origin", str(remote / "missing"))
     result: Final = subprocess.run(
-        [sys.executable, f"scripts/{gate}.py"],
+        [sys.executable, f"litellm/scripts/{gate}.py"],
         cwd=repo,
         capture_output=True,
         text=True,
@@ -192,7 +203,7 @@ def test_each_gate_refuses_an_unverifiable_default(remote_and_clone: tuple[Path,
 def test_direct_make_target_fetches_default_once(remote_and_clone: tuple[Path, Path], target: str) -> None:
     _, repo = remote_and_clone
     trace: Final = repo.parent / "git-trace.jsonl"
-    shutil.copyfile(ROOT / "scripts" / "check_test_quality.py", repo / "scripts" / "check_test_quality.py")
+    shutil.copyfile(ROOT / "litellm/scripts" / "check_test_quality.py", repo / "litellm/scripts" / "check_test_quality.py")
     (repo / "tests").mkdir()
     result: Final = subprocess.run(
         ["make", "-o", "install-dev", target, "LINT_DEP_INSTALL=", "UV_RUN=env"],

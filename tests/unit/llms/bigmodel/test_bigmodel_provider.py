@@ -197,6 +197,29 @@ def test_chat_does_not_send_the_openai_organization_to_bigmodel(monkeypatch: pyt
     assert "openai-organization" not in route.calls.last.request.headers
 
 
+@respx.mock
+def test_chat_sends_json_schema_response_format_as_given() -> None:
+    route: Final = respx.post(f"{BASE}/api/paas/v4/chat/completions").respond(
+        json={
+            "id": "chat_test",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "glm-4.6",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "{}"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        }
+    )
+    messages: Final = [{"role": "user", "content": "Ann likes 7"}]
+    response_format: Final = {
+        "type": "json_schema",
+        "json_schema": {"name": "profile", "schema": {"type": "object", "properties": {"n": {"type": "integer"}}}},
+    }
+    _ = litellm.completion(model="bigmodel/glm-4.6", messages=messages, response_format=response_format)
+    body: Final = json.loads(route.calls.last.request.content)
+    assert body["response_format"] == response_format
+    assert body["messages"] == messages
+
+
 @pytest.mark.parametrize("is_async", (False, True))
 @pytest.mark.asyncio
 @respx.mock
@@ -665,17 +688,24 @@ async def test_responses_stream_answered_with_a_failure_envelope_raises_its_stat
 
 
 @pytest.mark.parametrize("is_async", (False, True))
+@pytest.mark.parametrize(
+    ("answer_status", "terminal_type"),
+    (("completed", "response.completed"), ("incomplete", "response.incomplete")),
+)
 @pytest.mark.asyncio
 @respx.mock
-async def test_responses_stream_answered_with_one_json_response_replays_it_as_events(is_async: bool) -> None:
-    respx.post(f"{BASE}/api/v1/responses").respond(json=response_payload())
+async def test_responses_stream_answered_with_one_json_response_replays_it_as_events(
+    is_async: bool, answer_status: str, terminal_type: str
+) -> None:
+    respx.post(f"{BASE}/api/v1/responses").respond(json={**response_payload(), "status": answer_status})
     request: Final = {"model": f"bigmodel/{MODEL}", "input": "Hello", "stream": True}
     chunks: Final = (
         tuple([chunk async for chunk in await litellm.aresponses(**request)])
         if is_async
         else tuple(litellm.responses(**request))
     )
-    assert chunks[-1].type == "response.completed"
+    assert chunks[-1].type == terminal_type
+    assert chunks[-1].response.status == answer_status
     assert chunks[-1].response.output_text == "Hello"
     assert chunks[-1].response.usage.total_tokens == 30
 

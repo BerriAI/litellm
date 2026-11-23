@@ -419,22 +419,26 @@ BRIDGES: Final[Mapping[str, Callable[..., Answer]]] = {
 
 
 @pytest.mark.parametrize(
-    ("bridge", "stream"),
-    [("messages", False), ("messages", True), ("responses", False), ("responses", True), ("completions", False)],
+    ("bridge", "endpoint", "stream"),
+    [
+        ("messages", "/v1/messages", False),
+        ("messages", "/v1/messages", True),
+        ("responses", "/v1/responses", False),
+        ("responses", "/v1/responses", True),
+        ("completions", "/v1/completions", False),
+    ],
     ids=["messages", "messages-stream", "responses", "responses-stream", "completions"],
 )
-def test_bridged_endpoints_carry_the_deployment_voice(gateway: Gateway, bridge: str, stream: bool) -> None:
+def test_bridged_endpoints_refuse_a_gemini_tts_deployment_before_the_provider_call(
+    gateway: Gateway, bridge: str, endpoint: str, stream: bool
+) -> None:
     with wire_server(gemini_peer) as wire, gateway.scenario() as scenario:
         model: Final = gemini_deployment(scenario, wire.url, audio=audio_param("alloy"), modalities=["audio"])
-        text: Final = marker()
-        answer: Final = BRIDGES[bridge](gateway, model, text, stream=stream)
-        assert answer.status == 200, answer.text
-        request: Final = _received(wire, text)
-        _assert_target(request, "gemini", stream=stream)
-        assert received_voice(request) == "Kore", request.body
-        assert answer.content == text, answer.text
-        row: Final = spend_row_by_call(answer.call_id)
-        assert row["completion_tokens"] == AUDIO_TOKENS, row
+        answer: Final = BRIDGES[bridge](gateway, model, marker(), stream=stream)
+        assert answer.status == 400, answer.text
+        assert f"which {endpoint} cannot carry" in answer.text, answer.text
+        assert "/v1/chat/completions" in answer.text, answer.text
+        assert wire.drain() == ()
 
 
 def _gcs_peer(request: Request) -> Reply:
@@ -501,7 +505,7 @@ def test_vertex_batch_file_rows_carry_the_mapped_voice(gateway: Gateway) -> None
         assert tuple(text_in(row) for row in rows) == (first, second)
 
 
-def test_vertex_live_default_mode_sends_one_setup_without_the_client_voice(gateway: Gateway) -> None:
+def test_vertex_live_sends_one_setup_carrying_the_mapped_session_update_voice(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
         handle: Final = live_scenario(scenario)
         key: Final = scenario.key()
@@ -511,7 +515,7 @@ def test_vertex_live_default_mode_sends_one_setup_without_the_client_voice(gatew
         assert types[0] == "session.created" and types[-1] == "response.done", frames
         setups: Final = live_setups(gateway, handle.scenario_id)
         assert len(setups) == 1, setups
-        assert voice_in(setups[0]) == NO_VOICE, setups[0]
+        assert voice_in(setups[0]) == "Umbriel", setups[0]
 
 
 @dataclass(frozen=True, slots=True)

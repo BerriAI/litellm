@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any, Final
 import httpx
 from pydantic import ConfigDict, TypeAdapter
 
+from litellm.litellm_core_utils.core_helpers import json_contains
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
@@ -25,6 +26,7 @@ else:
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 _JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class CometAPIImageGenerationConfig(BaseImageGenerationConfig):
@@ -144,7 +146,7 @@ class CometAPIImageGenerationConfig(BaseImageGenerationConfig):
         https://api.cometapi.com/v1/images/generations
         """
         try:
-            response_data: Final = raw_response.json()
+            response_data: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Error transforming image generation response: {e}",
@@ -157,7 +159,7 @@ class CometAPIImageGenerationConfig(BaseImageGenerationConfig):
 
         # CometAPI returns OpenAI-compatible format
         # Expected format: {"created": timestamp, "data": [{"url": "...", "b64_json": "..."}]}
-        if "data" in response_data:
+        if json_contains(response_data, "data"):
             payload: Final = _JSON_OBJECT.validate_python(response_data)
             for image_data in _JSON_OBJECTS.validate_python(payload["data"]):
                 image_obj = ImageObject(

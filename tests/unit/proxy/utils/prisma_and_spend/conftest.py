@@ -128,6 +128,9 @@ def mock_prisma_client() -> MagicMock:
     client.proxy_logging_obj = MagicMock()
     client.proxy_logging_obj.failure_handler = AsyncMock()
     client.spend_log_transactions = []
+    client.baseline_accounting_transactions = []
+    client.baseline_accounting_lock = asyncio.Lock()
+    client.baseline_accounting_recovery_due_at = 0.0
     client._spend_log_transactions_lock = asyncio.Lock()
     client.spend_logs_queue_monitor_task = None
     client.spend_log_write_lock = asyncio.Lock()
@@ -139,9 +142,12 @@ def mock_prisma_client() -> MagicMock:
     client.db.is_connected = MagicMock(return_value=False)
     client.db.connect = AsyncMock()
     client.db.disconnect = AsyncMock()
+    client.db.stop_token_refresh_task = AsyncMock()
     client.db.query_raw = AsyncMock(return_value=[{"?column?": 1}])
     client.db.execute_raw = AsyncMock()
-    client.db.tx = MagicMock()
+    client.db.tx = MagicMock(
+        return_value=MagicMock(__aenter__=AsyncMock(return_value=client.db), __aexit__=AsyncMock(return_value=False))
+    )
     client.db.batch_ = MagicMock()
     for table_name in _PRISMA_TABLES:
         setattr(client.db, table_name, _make_table_mock())

@@ -22,6 +22,7 @@ from litellm.integrations.SlackAlerting.slack_alerting import DeploymentMetrics,
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import CallInfo, Litellm_EntityType
 from litellm.router import Router
+from litellm.types.router import ModelInfo as RouterModelInfo
 from litellm.types.integrations.slack_alerting import AlertQueueItem, AlertType, SlackAlertingCacheKeys
 from litellm.utils import get_api_base
 from datetime import timedelta
@@ -803,7 +804,7 @@ async def test_daily_reports_unit_test(slack_alerting):
 @pytest.mark.asyncio
 async def test_send_daily_reports_ignores_zero_values():
     router = MagicMock()
-    router.get_model_ids.return_value = ["model1", "model2", "model3"]
+    router.registry.return_value.names.return_value = ["model1", "model2", "model3"]
 
     slack_alerting = SlackAlerting(internal_usage_cache=MagicMock())
     # model1:failed=None, model2:failed=0, model3:failed=10, model1:latency=0; model2:latency=0; model3:latency=None
@@ -812,7 +813,7 @@ async def test_send_daily_reports_ignores_zero_values():
     )
     slack_alerting.internal_usage_cache.async_set_cache_pipeline = AsyncMock()
 
-    router.get_model_info.side_effect = lambda x: {"litellm_params": {"model": x}}
+    router.registry.return_value.deployment_dict.side_effect = lambda x: {"litellm_params": {"model": x}}
 
     with patch.object(slack_alerting, "send_alert", new=AsyncMock()) as mock_send_alert:
         result = await slack_alerting.send_daily_reports(router)
@@ -831,7 +832,7 @@ async def test_send_daily_reports_ignores_zero_values():
 @pytest.mark.asyncio
 async def test_send_daily_reports_all_zero_or_none():
     router = MagicMock()
-    router.get_model_ids.return_value = ["model1", "model2", "model3"]
+    router.registry.return_value.names.return_value = ["model1", "model2", "model3"]
 
     slack_alerting = SlackAlerting(internal_usage_cache=MagicMock())
     slack_alerting.internal_usage_cache.async_batch_get_cache = AsyncMock(
@@ -1265,3 +1266,27 @@ async def test_soft_budget_alerts_webhook(entity_info):
         assert logged_webhook_event.user_email == entity_info.user_email
         assert logged_webhook_event.key_alias == entity_info.key_alias
         assert logged_webhook_event.event_group == entity_info.event_group
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("profile_row", ({"litellm_provider": "bedrock"}, None), ids=("unpriced_row", "no_row"))
+async def test_model_added_alert_shows_served_prices_for_an_unpriced_bedrock_arn_base_model(
+    monkeypatch: pytest.MonkeyPatch, profile_row: dict[str, str] | None
+) -> None:
+    served: Final = "bedrock/anthropic.slack-alert-served-test"
+    profile: Final = "bedrock/arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/slack-alert-test"
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            **litellm.model_cost,
+            served: {"litellm_provider": "bedrock", "mode": "chat", "input_cost_per_token": 0.03},
+            **({profile: profile_row} if profile_row is not None else {}),
+        },
+    )
+    monkeypatch.setenv("SLACK_WEBHOOK_URL", "https://hooks.slack.com/services/T0/B0/X0")
+    slack_alerting: Final = _slack_alerting_with_env_resolution()
+    await slack_alerting.model_added_alert("by-model-id", served, RouterModelInfo(base_model=profile))
+    message: Final = slack_alerting.log_queue[0]["payload"]["text"]
+    assert f"Base Model: `{profile}`" in message
+    assert "input_cost_per_token: 0.03000000" in message
