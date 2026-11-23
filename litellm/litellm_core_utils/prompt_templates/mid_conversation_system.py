@@ -35,11 +35,15 @@ from operator import itemgetter
 from types import MappingProxyType
 from typing import Final, Literal, TypeAlias, TypeVar
 
+from pydantic import ValidationError
+
+from litellm.litellm_core_utils.core_helpers import spread
 from litellm.types.llms.anthropic import (
     ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX,
     ANTHROPIC_TOOL_SEARCH_TOOL_NAMES,
     AnthropicMessagesSystemMessageParam,
     AnthropicSystemMessageContent,
+    AnthropicToolSearchToolResultBlock,
 )
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -63,7 +67,7 @@ _RENDERED_ASSISTANT_PART_TYPES: Final = frozenset({"text", "server_tool_use"})
 _THINKING_BLOCK_TYPES: Final = frozenset({"thinking", "redacted_thinking"})
 
 _MessageKind: TypeAlias = Literal["system", "tool", "user", "other"]
-_Message: Final = TypeVar("_Message")
+_Message = TypeVar("_Message")
 _TextPart: TypeAlias = tuple[str, ChatCompletionCachedContent | None]
 
 
@@ -299,14 +303,23 @@ def is_anthropic_tool_search_use(tool_id: str, tool_name: str) -> bool:
     return tool_id.startswith(ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX) and tool_name in ANTHROPIC_TOOL_SEARCH_TOOL_NAMES
 
 
+def anthropic_tool_search_result(block: object) -> AnthropicToolSearchToolResultBlock | None:
+    if message_field(block, "type") != "tool_search_tool_result":
+        return None
+    try:
+        return AnthropicToolSearchToolResultBlock.model_validate(block)
+    except ValidationError:
+        return None
+
+
 def find_anthropic_server_tool_result(
     tool_id: str,
-    web_search_results: Sequence[object] | None,
-    tool_results: Sequence[object] | None,
+    web_search_results: object,
+    tool_results: object,
 ) -> dict[str, object] | None:
     if not tool_id.startswith(ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX):
         return None
-    candidates: Final = (*(web_search_results or ()), *(tool_results or ()))
+    candidates: Final = (*spread(web_search_results or ()), *spread(tool_results or ()))
     return next(
         (result for result in candidates if isinstance(result, dict) and result.get("tool_use_id") == tool_id),
         None,

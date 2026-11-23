@@ -18,7 +18,7 @@ import json
 import os
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, ClassVar, Final
 
 import httpx
 from pydantic import ConfigDict, TypeAdapter, with_config
@@ -27,8 +27,10 @@ from typing_extensions import ReadOnly, TypedDict
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
+from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.litellm_core_utils.optional_imports import ensure_optional_import
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+from litellm.llms.bedrock.web_identity_session_policy import SECRETS_MANAGER_SESSION_POLICY, WebIdentitySessionPolicy
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     get_httpx_client,
@@ -50,9 +52,12 @@ class _SecretStringResponse(TypedDict):
 
 _SECRET_STRING_RESPONSE: Final = TypeAdapter(_SecretStringResponse)
 _AWS_SECRET_MANAGER_RESPONSE: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
+_PRIMARY_SECRET_JSON: Final = TypeAdapter(object)
 
 
 class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
+    _web_identity_session_policy: ClassVar[WebIdentitySessionPolicy] = SECRETS_MANAGER_SESSION_POLICY
+
     def __init__(
         self,
         aws_region_name: str | None = None,
@@ -243,7 +248,8 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         Returns:
             Dictionary of key-value pairs from the primary secret
         """
-        return json.loads(primary_secret_json_str or "{}")
+        decoded: Final = _PRIMARY_SECRET_JSON.validate_python(json.loads(primary_secret_json_str or "{}"))
+        return require_attributes(decoded, dict[str, object], "get")
 
     def sync_read_secret_from_primary_secret(self, secret_name: str, primary_secret_name: str) -> str | None:
         """

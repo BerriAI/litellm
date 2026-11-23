@@ -1,11 +1,13 @@
 import asyncio
 import json
+import os
 import uuid
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from typing import Final
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import pytest
 import pytest_asyncio
@@ -29,10 +31,42 @@ from tests.integration._support.prisma_clients import connected_prisma
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
 
+_ISOLATED_TABLES: Final = (
+    "LiteLLM_AutoRouterBaselineComparison",
+    "LiteLLM_AutoRouterBaselineObservation",
+    "LiteLLM_AutoRouterDailySpend",
+    "LiteLLM_AutoRouterSession",
+    "LiteLLM_AutoRouterUserSession",
+    "LiteLLM_DailyAgentSpend",
+    "LiteLLM_DailyEndUserSpend",
+    "LiteLLM_DailyOrganizationSpend",
+    "LiteLLM_DailyTagSpend",
+    "LiteLLM_DailyTeamSpend",
+    "LiteLLM_DailyUserSpend",
+    "LiteLLM_SpendLogs",
+)
+
+
+def _with_schema(database_url: str, schema: str) -> str:
+    parts: Final = urlsplit(database_url)
+    kept: Final = tuple((name, value) for name, value in parse_qsl(parts.query) if name != "schema")
+    return urlunsplit(parts._replace(query=urlencode((*kept, ("schema", schema)))))
+
+
 @pytest_asyncio.fixture(scope="module", loop_scope="session")
 async def db() -> AsyncIterator[Prisma]:
-    async with connected_prisma() as client:
-        yield client
+    schema: Final = f"baseline_accounting_{uuid.uuid4().hex}"
+    async with connected_prisma() as admin:
+        await admin.execute_raw(f'CREATE SCHEMA "{schema}"')
+        try:
+            for table in _ISOLATED_TABLES:
+                await admin.execute_raw(f'CREATE TABLE "{schema}"."{table}" (LIKE "{table}" INCLUDING ALL)')
+            with pytest.MonkeyPatch.context() as environment:
+                environment.setenv("DATABASE_URL", _with_schema(os.environ["DATABASE_URL"], schema))
+                async with connected_prisma() as client:
+                    yield client
+        finally:
+            await admin.execute_raw(f'DROP SCHEMA "{schema}" CASCADE')
 
 
 @asynccontextmanager

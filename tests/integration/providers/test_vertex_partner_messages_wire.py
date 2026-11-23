@@ -8,7 +8,7 @@ import pytest
 from anthropic.types import Message
 from integration._support import claude_code as cc
 from integration._support.client import Gateway, Scenario
-from integration._support.vertex import service_account_json
+from integration._support.vertex import assert_vertex_authorization, service_account_json
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue, TypeAdapter
 
@@ -83,7 +83,7 @@ def _peer(
             )
 
         assert request.method == "POST" and request.target == target, request.target
-        assert request.headers["authorization"] == f"Bearer {_VERTEX_TOKEN}", request.headers
+        assert_vertex_authorization(request.headers["authorization"], _PROJECT, oauth_token=None)
         assert request.headers["anthropic-beta"] == _SUPPORTED_BETA, request.headers
         assert _JSON_OBJECT.validate_json(request.body) == expected_body, request.body
         if target == _STREAM_TARGET:
@@ -181,13 +181,9 @@ def test_vertex_partner_messages_uses_raw_predict_contract_and_typed_response(ga
                     )
 
             requests: Final = wire.drain()
-            assert tuple(request.target for request in requests) == (
-                "/_oauth/token",
-                _STREAM_TARGET if stream else _MODEL_TARGET,
-            ), requests
-            token_request: Final = requests[0]
-            assert token_request.method == "POST", token_request
-            assert token_request.headers["content-type"] == "application/x-www-form-urlencoded", token_request.headers
-            model_request: Final = requests[1]
+            assert tuple(request.target for request in requests) == (_STREAM_TARGET if stream else _MODEL_TARGET,), (
+                requests
+            )
+            (model_request,) = requests
             assert model_request.method == "POST", model_request
-            assert model_request.headers["authorization"] == f"Bearer {_VERTEX_TOKEN}", model_request.headers
+            assert_vertex_authorization(model_request.headers["authorization"], _PROJECT, oauth_token=None)

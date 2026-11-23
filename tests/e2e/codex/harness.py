@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 import tempfile
 from collections.abc import Generator, Mapping
@@ -7,13 +8,15 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from itertools import chain
 from pathlib import Path
-from typing import Final
+from types import MappingProxyType
+from typing import Final, Literal
 
 from cli_harness.lockdown import isolated_home, locked_down_env
 from cli_harness.rate_limiter import RateBucket, RateLimiter
-from codex.rollout import Compaction, rollout_compactions
+from codex.rollout import Compaction, Subagent, rollout_compactions, rollout_parent_thread, rollout_subagent
 from codex.run import CodexRun, codex_run
 from e2e_metadata import step
+from pydantic import BaseModel, ConfigDict
 
 CODEX_CLI: Final = "codex"
 EXEC_TIMEOUT_SECONDS: Final = 600.0
@@ -37,6 +40,36 @@ model_catalog_url = "{gateway}/v1/models"
 """
 
 
+type CodexCatalog = Literal["gateway", "openai", "amazon-bedrock", "amazon-bedrock-runtime"]
+
+
+class _CatalogTier(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+
+
+class _CatalogModel(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    slug: str
+    service_tiers: tuple[_CatalogTier, ...] = ()
+    tool_mode: str | None = None
+
+
+class _Catalog(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    models: tuple[_CatalogModel, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class McpServer:
+    command: str
+    args: tuple[str, ...]
+    env: Mapping[str, str]
+
+
 @dataclass(frozen=True, slots=True)
 class CodexHarness:
     home: Path
@@ -57,9 +90,36 @@ class CodexHarness:
             _ = (workspace / name).write_text(content)
         return workspace
 
+    @step("Give Codex the {name} MCP server")
+    def add_mcp_server(self, name: str, server: McpServer) -> None:
+        with (self.codex_home / "config.toml").open("a") as config:
+            _ = config.write(_mcp_server_table(name, server))
+
     @step('Run Codex on {model} through the proxy with the prompt "{prompt}"')
-    def exec(self, prompt: str, *, model: str, cwd: Path, compact_after_tokens: int | None = None) -> CodexRun:
-        return self._run(("exec",), (*_compaction_flags(compact_after_tokens), "--model", model, "--", prompt), cwd)
+    def exec(
+        self,
+        prompt: str,
+        *,
+        model: str,
+        cwd: Path,
+        compact_after_tokens: int | None = None,
+        enable: tuple[str, ...] = (),
+        disable: tuple[str, ...] = (),
+        fast: bool = False,
+    ) -> CodexRun:
+        return self._run(
+            ("exec",),
+            (
+                *_compaction_flags(compact_after_tokens),
+                *_feature_flags(enable=enable, disable=disable),
+                *_fast_mode_flags(fast),
+                "--model",
+                model,
+                "--",
+                prompt,
+            ),
+            cwd,
+        )
 
     @step('Resume Codex thread {thread_id} on {model} through the proxy with the prompt "{prompt}"')
     def resume(
@@ -75,14 +135,49 @@ class CodexHarness:
         rollouts: Final = sorted(self.codex_home.glob(f"sessions/**/rollout-*-{thread_id}.jsonl"))
         return tuple(chain.from_iterable(rollout_compactions(rollout.read_text()) for rollout in rollouts))
 
+    def subagents(self, thread_id: str) -> tuple[Subagent, ...]:
+        rollouts: Final = tuple(
+            path.read_text() for path in sorted(self.codex_home.glob("sessions/**/rollout-*.jsonl"))
+        )
+        return tuple(rollout_subagent(rollout) for rollout in rollouts if rollout_parent_thread(rollout) == thread_id)
+
+    @step("Read the service tiers Codex's catalog from the gateway offers each model")
+    def service_tiers(self) -> Mapping[str, frozenset[str]]:
+        return MappingProxyType(
+            {
+                model.slug: frozenset(tier.id for tier in model.service_tiers)
+                for model in self._catalog("gateway").models
+            }
+        )
+
+    @step("Read the tool mode the {source} catalog gives each model in Codex")
+    def tool_modes(self, source: CodexCatalog = "gateway") -> Mapping[str, str | None]:
+        return MappingProxyType({model.slug: model.tool_mode for model in self._catalog(source).models})
+
+    def _catalog(self, source: CodexCatalog) -> _Catalog:
+        completed: Final = subprocess.run(
+            (self.cli, *_catalog_args(source)),
+            cwd=self.home,
+            env=self._env(),
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=self.timeout_seconds,
+            check=True,
+        )
+        return _Catalog.model_validate_json(completed.stdout)
+
+    def _env(self) -> Mapping[str, str]:
+        return locked_down_env(
+            home=self.home, overrides={"CODEX_HOME": str(self.codex_home), _API_KEY_ENV: self.api_key}
+        )
+
     def _run(self, subcommand: tuple[str, ...], args: tuple[str, ...], cwd: Path) -> CodexRun:
         _ = self.limiter.acquire(self.rate_bucket)
         completed: Final = subprocess.run(
             (self.cli, *subcommand, "--json", "--skip-git-repo-check", *args),
             cwd=cwd,
-            env=locked_down_env(
-                home=self.home, overrides={"CODEX_HOME": str(self.codex_home), _API_KEY_ENV: self.api_key}
-            ),
+            env=self._env(),
             stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
@@ -90,6 +185,34 @@ class CodexHarness:
             check=False,
         )
         return codex_run(exit_code=completed.returncode, stdout=completed.stdout, stderr=completed.stderr)
+
+
+def _mcp_server_table(name: str, server: McpServer) -> str:
+    env: Final = ", ".join(f"{json.dumps(key)} = {json.dumps(value)}" for key, value in server.env.items())
+    return (
+        f"\n[mcp_servers.{json.dumps(name)}]\n"
+        f"command = {json.dumps(server.command)}\n"
+        f"args = {json.dumps(server.args)}\n"
+        f"env = {{ {env} }}\n"
+        'default_tools_approval_mode = "approve"\n'
+    )
+
+
+def _feature_flags(*, enable: tuple[str, ...], disable: tuple[str, ...]) -> tuple[str, ...]:
+    return (
+        *chain.from_iterable(("--enable", feature) for feature in enable),
+        *chain.from_iterable(("--disable", feature) for feature in disable),
+    )
+
+
+def _catalog_args(catalog: CodexCatalog) -> tuple[str, ...]:
+    match catalog:
+        case "gateway":
+            return ("debug", "models")
+        case "openai":
+            return ("debug", "models", "--bundled")
+        case "amazon-bedrock" | "amazon-bedrock-runtime":
+            return ("--config", f'model_provider="{catalog}"', "debug", "models")
 
 
 def _compaction_flags(after_tokens: int | None) -> tuple[str, ...]:
@@ -105,6 +228,10 @@ def _compaction_flags(after_tokens: int | None) -> tuple[str, ...]:
                 "--config",
                 f"model_auto_compact_token_limit={after_tokens}",
             )
+
+
+def _fast_mode_flags(fast: bool) -> tuple[str, ...]:
+    return ("--config", 'service_tier="priority"') if fast else ()
 
 
 @step("Give Codex a fresh empty home whose config sends every request to the proxy")

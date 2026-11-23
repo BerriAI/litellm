@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Final
 
 import pytest
+from litellm import get_model_info
 from integration._support.client import Gateway, object_value
 from integration._support.process import owned_proxy
 from pydantic import JsonValue
@@ -102,6 +103,21 @@ def test_v1_models_carries_cost_map_context_window_for_a_known_model(gateway: Ga
         # OpenAI publishes these for gpt-4o-mini: https://platform.openai.com/docs/models/gpt-4o-mini (checked 2026-09-24)
         assert listed["max_input_tokens"] == 128000, listed
         assert listed["max_output_tokens"] == 16384, listed
+
+
+def test_v1_models_keeps_a_sibling_override_off_a_plain_deployment_of_the_same_model(gateway: Gateway) -> None:
+    catalog_info: Final = get_model_info("openai/gpt-4o-mini")
+    with gateway.scenario() as scenario:
+        overridden: Final = scenario.model(
+            model="openai/gpt-4o-mini",
+            model_info={"max_input_tokens": 4321, "max_output_tokens": 987},
+        )
+        plain: Final = scenario.model(model="openai/gpt-4o-mini")
+        listed_override: Final = _listed_model(gateway, overridden)
+        listed_plain: Final = _listed_model(gateway, plain)
+
+        assert _limits(listed_plain) == (catalog_info["max_input_tokens"], catalog_info["max_output_tokens"])
+        assert _limits(listed_override) == (4321, 987)
 
 
 def test_v1_models_carries_deployment_model_info_limits_for_an_unknown_model(gateway: Gateway) -> None:
