@@ -60,7 +60,6 @@ impl KeyExchangeGroup {
     }
 }
 
-/// The provider TLS configs are built from: the process default the bridge installs, or ring when none is installed.
 pub(crate) fn provider() -> CryptoProvider {
     CryptoProvider::get_default().map_or_else(ring::default_provider, |installed| {
         installed.as_ref().clone()
