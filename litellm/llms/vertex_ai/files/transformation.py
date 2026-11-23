@@ -22,6 +22,7 @@ from typing_extensions import ReadOnly, Required
 import litellm
 from litellm._uuid import uuid
 from litellm.constants import DEFAULT_CHAT_COMPLETION_PARAM_VALUES, RESPONSE_FORMAT_TOOL_NAME
+from litellm.exceptions import UnsupportedParamsError
 from litellm.files.types import FileContentStreamingResult
 from litellm.files.utils import FilesAPIUtils
 from litellm.litellm_core_utils.cloud_storage_security import (
@@ -70,6 +71,7 @@ from litellm.llms.vertex_ai.common_utils import (
 )
 from litellm.llms.vertex_ai.gemini.transformation import transform_request_body
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+    VERTEX_SHARED_REQUEST_TIERS,
     VertexGeminiConfig,
 )
 from litellm.llms.vertex_ai.gemini_embeddings.batch_embed_content_transformation import (
@@ -80,6 +82,7 @@ from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation im
 from litellm.types.files import StreamingMediaUploadConfig
 from litellm.types.llms.openai import (
     AllMessageValues,
+    BatchInputFormat,
     CreateFileRequest,
     FileContent,
     FileContentRequest,
@@ -1051,7 +1054,10 @@ def _openai_batch_jsonl_entry_to_vertex_rows(
     if not isinstance(entry_body, dict):
         raise TypeError("`body` on batch requests must be a JSON object, but was missing or not an object")
     chat_request_body: Final = (
-        responses_batch_body_to_chat_body(entry_body, custom_llm_provider="vertex_ai")
+        {
+            **responses_batch_body_to_chat_body(entry_body, custom_llm_provider="vertex_ai"),
+            **{key: value for key, value in entry_body.items() if key == "drop_params" and value is not None},
+        }
         if _is_responses_batch_entry(openai_entry)
         else entry_body
     )
@@ -1520,6 +1526,19 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             allow_parameters_json_schema=False,
             allowed_openai_params=allowed_openai_param_names(openai_request_body.get("allowed_openai_params")),
         )
+        if (
+            "service_tier" in vertex_params
+            and vertex_params["service_tier"] in VERTEX_SHARED_REQUEST_TIERS
+            and not drop_params
+        ):
+            raise UnsupportedParamsError(
+                message=(
+                    "Vertex AI batch requests do not support `service_tier`, since batch jobs run on the batch tier. "
+                    "To drop this param, set `litellm.drop_params = True` or pass in `(.., drop_params=True)` "
+                    "in the request - https://docs.litellm.ai/docs/completion/drop_params"
+                ),
+                status_code=400,
+            )
         return vertex_params
 
     def transform_create_file_request(
@@ -1728,9 +1747,9 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             # Allow users to opt out of automatic Vertex batch output -> OpenAI
             # transformation, e.g. if they consume raw `predictions.jsonl` directly.
             if getattr(litellm, "disable_vertex_batch_output_transformation", False):
-                return HttpxBinaryResponseContent(response=raw_response)
+                return HttpxBinaryResponseContent(response=raw_response, batch_input_format=BatchInputFormat.VERTEX)
             if is_passthrough_managed_gcs_url(str(raw_response.request.url)):
-                return HttpxBinaryResponseContent(response=raw_response)
+                return HttpxBinaryResponseContent(response=raw_response, batch_input_format=BatchInputFormat.VERTEX)
 
             # Try to transform batch output if it's a JSONL file
             content: Final = raw_response.content
@@ -1757,7 +1776,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             # If transformation fails, return as-is
             pass
 
-        return HttpxBinaryResponseContent(response=raw_response)
+        return HttpxBinaryResponseContent(response=raw_response, batch_input_format=BatchInputFormat.VERTEX)
 
     async def transform_file_content_stream(
         self,

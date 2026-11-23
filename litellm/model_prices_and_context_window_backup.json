@@ -44375,6 +44375,7 @@
         "supports_system_messages": true,
         "supports_native_structured_output": true,
         "supports_response_schema": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "mistral.ministral-3-3b-instruct": {
@@ -44396,6 +44397,7 @@
         "supports_system_messages": true,
         "supports_native_structured_output": true,
         "supports_response_schema": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "mistral.ministral-3-8b-instruct": {
@@ -44417,6 +44419,7 @@
         "supports_system_messages": true,
         "supports_native_structured_output": true,
         "supports_response_schema": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "mistral.mistral-7b-instruct-v0:2": {
@@ -44472,6 +44475,7 @@
         "supports_system_messages": true,
         "supports_native_structured_output": true,
         "supports_response_schema": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "mistral.mistral-small-2402-v1:0": {
@@ -101844,11 +101848,13 @@
     },
     "fal_ai/blackforestlabs/flux-3-max/image-to-video": {
         "litellm_provider": "fal_ai",
-        "metadata": {"comment":"per second of generated video by resolution; output_cost_per_second is the default resolution 720p rate; promotional 50% off rate through 2026-11-22 23:59 UTC per the page; regular rates $0.17 (720p) and $0.29 (1080p) per second resume 2026-11-23 00:00 UTC (ruling fal-ai-promotional-rates-apply-until-promotion-ends, 2026-11-10)"},
+        "metadata": {"comment":"per second of generated video by resolution; output_cost_per_second is the default resolution 720p rate"},
         "mode": "video_generation",
-        "output_cost_per_second": 0.085,
-        "output_cost_per_second_1080p": 0.145,
-        "output_cost_per_second_720p": 0.085,
+        "output_cost_per_second": 0.17,
+        "output_cost_per_second_1080p": 0.29,
+        "output_cost_per_second_2k": 0.4,
+        "output_cost_per_second_4k": 0.8,
+        "output_cost_per_second_720p": 0.17,
         "source": "https://fal.ai/models/blackforestlabs/flux-3-max/image-to-video",
         "supported_endpoints": [
             "/v1/videos"
@@ -101863,11 +101869,13 @@
     },
     "fal_ai/blackforestlabs/flux-3-max/text-to-video": {
         "litellm_provider": "fal_ai",
-        "metadata": {"comment":"per second of generated video by resolution; output_cost_per_second is the default resolution 720p rate; promotional 50% off rate through 2026-11-22 23:59 UTC per the page; regular rates $0.17 (720p) and $0.29 (1080p) per second resume 2026-11-23 00:00 UTC (ruling fal-ai-promotional-rates-apply-until-promotion-ends, 2026-11-10)"},
+        "metadata": {"comment":"per second of generated video by resolution; output_cost_per_second is the default resolution 720p rate"},
         "mode": "video_generation",
-        "output_cost_per_second": 0.085,
-        "output_cost_per_second_1080p": 0.145,
-        "output_cost_per_second_720p": 0.085,
+        "output_cost_per_second": 0.17,
+        "output_cost_per_second_1080p": 0.29,
+        "output_cost_per_second_2k": 0.4,
+        "output_cost_per_second_4k": 0.8,
+        "output_cost_per_second_720p": 0.17,
         "source": "https://fal.ai/models/blackforestlabs/flux-3-max/text-to-video",
         "supported_endpoints": [
             "/v1/videos"
@@ -101881,13 +101889,13 @@
     },
     "fal_ai/blackforestlabs/flux-3-max/keyframes-to-video": {
         "litellm_provider": "fal_ai",
-        "metadata": {
-            "comment": "per second of generated video by resolution; output_cost_per_second is the default resolution 720p rate; promotional 50% off rate through 2026-11-22 23:59 UTC per the page; regular rates $0.17 (720p) and $0.29 (1080p) per second resume 2026-11-23 00:00 UTC (ruling fal-ai-promotional-rates-apply-until-promotion-ends, 2026-11-10)"
-        },
+        "metadata": {"comment":"per second of generated video by resolution; output_cost_per_second is the default resolution 720p rate"},
         "mode": "video_generation",
-        "output_cost_per_second": 0.085,
-        "output_cost_per_second_1080p": 0.145,
-        "output_cost_per_second_720p": 0.085,
+        "output_cost_per_second": 0.17,
+        "output_cost_per_second_1080p": 0.29,
+        "output_cost_per_second_2k": 0.4,
+        "output_cost_per_second_4k": 0.8,
+        "output_cost_per_second_720p": 0.17,
         "source": "https://fal.ai/models/blackforestlabs/flux-3-max/keyframes-to-video",
         "supported_endpoints": [
             "/v1/videos"
@@ -109302,6 +109310,7 @@
         "supports_native_structured_output": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "bedrock/ap-northeast-1/mistral.ministral-3-3b-instruct": {
@@ -109321,6 +109330,7 @@
         "supports_native_structured_output": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "bedrock/ap-northeast-1/mistral.ministral-3-8b-instruct": {
@@ -109340,6 +109350,7 @@
         "supports_native_structured_output": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "bedrock/ap-northeast-1/mistral.mistral-large-3-675b-instruct": {
@@ -109359,6 +109370,7 @@
         "supports_native_structured_output": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "bedrock/ap-northeast-1/moonshot.kimi-k2-thinking": {
@@ -110062,6 +110074,7 @@
         "supports_native_structured_output": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "bedrock/ap-south-1/mistral.ministral-3-3b-instruct": {
@@ -110081,6 +110094,7 @@
         "supports_native_structured_output": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "bedrock/ap-south-1/mistral.ministral-3-8b-instruct": {
@@ -110100,6 +110114,7 @@
         "supports_native_structured_output": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "bedrock/ap-south-1/mistral.mistral-7b-instruct-v0:2": {
@@ -110142,6 +110157,7 @@
         "supports_native_structured_output": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "bedrock/ap-south-1/mistral.mixtral-8x7b-instruct-v0:1": {
@@ -112511,6 +112527,7 @@
         "supports_native_structured_output": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "bedrock/eu-south-1/mistral.ministral-3-3b-instruct": {
@@ -112530,6 +112547,7 @@
         "supports_native_structured_output": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "bedrock/eu-south-1/mistral.ministral-3-8b-instruct": {
@@ -112549,6 +112567,7 @@
         "supports_native_structured_output": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "bedrock/eu-south-1/mistral.voxtral-mini-3b-2507": {
@@ -113443,6 +113462,7 @@
         "supports_native_structured_output": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "bedrock/eu-west-1/mistral.ministral-3-3b-instruct": {
@@ -113462,6 +113482,7 @@
         "supports_native_structured_output": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "bedrock/eu-west-1/mistral.ministral-3-8b-instruct": {
@@ -113481,6 +113502,7 @@
         "supports_native_structured_output": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "bedrock/eu-west-1/mistral.mistral-7b-instruct-v0:2": {
@@ -114100,6 +114122,7 @@
         "supports_native_structured_output": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "bedrock/eu-west-2/mistral.ministral-3-3b-instruct": {
@@ -114119,6 +114142,7 @@
         "supports_native_structured_output": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "bedrock/eu-west-2/mistral.ministral-3-8b-instruct": {
@@ -114138,6 +114162,7 @@
         "supports_native_structured_output": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "bedrock/eu-west-2/mistral.mistral-7b-instruct-v0:2": {
@@ -115018,6 +115043,7 @@
         "supports_native_structured_output": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "bedrock/sa-east-1/mistral.ministral-3-3b-instruct": {
@@ -115037,6 +115063,7 @@
         "supports_native_structured_output": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "bedrock/sa-east-1/mistral.ministral-3-8b-instruct": {
@@ -115056,6 +115083,7 @@
         "supports_native_structured_output": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "bedrock/sa-east-1/mistral.mistral-7b-instruct-v0:2": {
@@ -115098,6 +115126,7 @@
         "supports_native_structured_output": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "bedrock/sa-east-1/mistral.mixtral-8x7b-instruct-v0:1": {
