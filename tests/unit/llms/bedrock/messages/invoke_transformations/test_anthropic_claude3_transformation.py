@@ -2338,6 +2338,74 @@ def test_bedrock_invoke_transform_forwards_per_turn_control_beta_with_message_ou
     assert result["anthropic_beta"].count("per-turn-control-2026-07-01") == 1
 
 
+SERVER_SIDE_FALLBACK_BETA: Final = "server-side-fallback-2026-06-01"
+BEDROCK_OPUS_4_1: Final = "us.anthropic.claude-opus-4-1-20250805-v1:0"
+BEDROCK_HAIKU_4_5: Final = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+
+
+@pytest.mark.parametrize(
+    ("model", "litellm_params", "global_drop_params", "expected_betas"),
+    [
+        pytest.param(BEDROCK_OPUS_4_1, {"drop_params": True}, False, [], id="opus_4_1_under_drop_params"),
+        pytest.param(BEDROCK_OPUS_4_1, {}, True, [], id="opus_4_1_under_global_drop_params"),
+        pytest.param(BEDROCK_OPUS_4_1, {}, False, [SERVER_SIDE_FALLBACK_BETA], id="opus_4_1_without_drop_params"),
+        pytest.param(
+            f"invoke/{BEDROCK_OPUS_4_1}",
+            {"drop_params": True},
+            False,
+            [],
+            id="invoke_routed_opus_4_1_under_drop_params",
+        ),
+        pytest.param(BEDROCK_HAIKU_4_5, {"drop_params": True}, False, [SERVER_SIDE_FALLBACK_BETA], id="haiku_4_5"),
+        pytest.param(
+            "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            {"drop_params": True},
+            False,
+            [SERVER_SIDE_FALLBACK_BETA],
+            id="sonnet_4_5",
+        ),
+        pytest.param(
+            BEDROCK_HAIKU_4_5,
+            {"drop_params": True, "model_info": {"supports_server_side_fallback": False}},
+            False,
+            [],
+            id="deployment_turns_it_off",
+        ),
+        pytest.param(
+            BEDROCK_OPUS_4_1,
+            {"drop_params": True, "model_info": {"supports_server_side_fallback": True}},
+            False,
+            [SERVER_SIDE_FALLBACK_BETA],
+            id="deployment_turns_it_on",
+        ),
+    ],
+)
+def test_bedrock_invoke_drops_the_server_side_fallback_beta_under_drop_params_where_the_model_lacks_it(
+    local_model_cost_map: None,
+    local_beta_headers_config: None,
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    litellm_params: Mapping[str, object],
+    global_drop_params: bool,
+    expected_betas: list[str],
+) -> None:
+    """Bedrock Invoke answers 400 invalid beta flag to server-side-fallback-2026-06-01 on Opus 4.1 and takes it on
+    Haiku 4.5, Sonnet 4.5 and newer Claude, so drop_params drops it only where the model lacks it."""
+    from litellm.types.router import GenericLiteLLMParams
+
+    monkeypatch.setattr(litellm, "drop_params", global_drop_params)
+
+    result: Final = AmazonAnthropicClaudeMessagesConfig().transform_anthropic_messages_request(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        anthropic_messages_optional_request_params={"max_tokens": 256, "stream": False},
+        litellm_params=GenericLiteLLMParams(**litellm_params),
+        headers={"anthropic-beta": SERVER_SIDE_FALLBACK_BETA},
+    )
+
+    assert result.get("anthropic_beta", []) == expected_betas
+
+
 def test_bedrock_invoke_transform_converts_mid_conversation_system_for_older_claude(local_model_cost_map):
     """Invoke rejects ``role: "system"`` in every position on Opus 4.7, Sonnet
     4.6, Haiku 4.5, etc. ("role 'system' is not supported on this model"), but

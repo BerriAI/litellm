@@ -23,6 +23,7 @@ from litellm.llms.anthropic.common_utils import (
     AnthropicModelInfo,
     carried_thinking_keys,
     validated_object_mapping,
+    without_unsupported_server_side_fallback_beta,
 )
 from litellm.llms.anthropic.pass_through.messages.transformation import (
     AnthropicMessagesConfig,
@@ -644,7 +645,15 @@ class AmazonAnthropicClaudeMessagesConfig(
                 dropped_user_betas,
             )
 
-        return filtered_betas
+        return list(
+            without_unsupported_server_side_fallback_beta(
+                filtered_betas,
+                model=model,
+                custom_llm_provider="bedrock",
+                model_info=_MODEL_INFO.validate_python(getattr(litellm_params, "model_info", None)),
+                drop_params=getattr(litellm_params, "drop_params", None),
+            )
+        )
 
     @staticmethod
     def _reject_unsupported_web_search_tools(anthropic_messages_request: dict[str, object], model: str) -> None:
