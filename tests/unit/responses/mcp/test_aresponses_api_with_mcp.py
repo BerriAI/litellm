@@ -4096,6 +4096,55 @@ async def test_an_allowed_tools_choice_decides_whether_the_gateway_runs_an_allow
 
 @pytest.mark.asyncio
 @respx.mock
+async def test_a_streamed_call_an_allowed_tools_choice_excludes_comes_back_as_a_function_call(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    _gateway_runs_hosted_mcp(monkeypatch, ("mcp.deepwiki.com",))
+    provider: Final = _serve_responses(
+        respx.mock, monkeypatch, (_streamed_tool_call_round(), _streamed_answer_round()), _DEEPSEEK_URL
+    )
+    server: Final = _ScriptedMCPServer()
+
+    stream: Final = await _gateway_hosted_mcp_request(
+        _DEEPSEEK_MODEL,
+        server,
+        beside=(_LOOKUP_FUNCTION,),
+        drop_params=True,
+        stream=True,
+        tool_choice={"type": "allowed_tools", "mode": "auto", "tools": [{"type": "function", "name": "lookup"}]},
+    )
+    events: Final = await _drain(stream)
+
+    assert server.calls == ()
+    assert provider.call_count == 1
+    deltas: Final = tuple(event for event in events if _event_type(event) == "response.function_call_arguments.delta")
+    assert tuple(item for item in _stream_items(events) if item[0] != "response.function_call_arguments.delta") == (
+        ("response.created", None, None),
+        ("response.in_progress", None, None),
+        ("response.output_item.added", 0, "mcp_list_tools"),
+        ("response.mcp_list_tools.in_progress", 0, None),
+        ("response.mcp_list_tools.completed", 0, None),
+        ("response.output_item.done", 0, "mcp_list_tools"),
+        ("response.output_item.added", 1, "function_call"),
+        ("response.function_call_arguments.done", 1, None),
+        ("response.output_item.done", 1, "function_call"),
+        ("response.completed", None, None),
+    )
+    assert {event.output_index for event in deltas} == {1}
+    assert json.loads("".join(event.delta for event in deltas)) == _ASK_ARGUMENTS
+    assert [event.sequence_number for event in events] == list(range(len(events)))
+    streamed_call: Final = _item(events[-2].item)
+    final_output: Final = events[-1].response.output
+    assert _output_types(final_output) == ("mcp_list_tools", "function_call")
+    assert (streamed_call["call_id"], streamed_call["name"], json.loads(streamed_call["arguments"])) == (
+        _item(final_output[1])["call_id"],
+        _item(final_output[1])["name"],
+        _ASK_ARGUMENTS,
+    )
+
+
+@pytest.mark.asyncio
+@respx.mock
 async def test_an_allowlisted_server_receives_the_arguments_a_pre_call_guardrail_rewrote(
     monkeypatch: pytest.MonkeyPatch,
 ):

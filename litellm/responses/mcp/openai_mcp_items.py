@@ -1,5 +1,6 @@
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
+from functools import reduce
 from itertools import chain, groupby
 from types import MappingProxyType
 from typing import Final
@@ -308,12 +309,9 @@ def _openai_mcp_call(names: Mapping[str, GatewayToolName], item: object) -> Mapp
 
 
 def openai_output(items: OpenAIMCPItems, output: Sequence[object]) -> tuple[object, ...]:
-    """A response's output as OpenAI lists it: the mcp_list_tools items first, then every item the model produced
-    with each tool call the gateway ran shown as its mcp_call."""
-    return (
-        *items.list_items,
-        *(_reshaped_item(items.names, item) for item in output if not _is_gateway_function_call(items.names, item)),
-    )
+    """A response's output as OpenAI lists it: the mcp_list_tools items first, then every item the model produced.
+    Each call the gateway ran is already an mcp_call here, so a gateway function_call left in it was handed back."""
+    return (*items.list_items, *(_reshaped_item(items.names, item) for item in output))
 
 
 def _response_item(item: Mapping[str, object]) -> BaseLiteLLMOpenAIResponseObject:
@@ -366,13 +364,14 @@ def _failed(held: ResponsesAPIStreamingResponse) -> ResponsesAPIStreamingRespons
 @dataclass(frozen=True, slots=True)
 class OpenAIStreamShaper:
     """Rewrites the gateway's MCP stream into OpenAI's event order. The mcp_list_tools items open the output, the
-    function_call events of a gateway-run tool are dropped since its mcp_call events stand for it, output indexes are
-    renumbered densely, and every event gets the next sequence number."""
+    function_call events of a gateway tool are withheld since its mcp_call events stand for it once it runs, and are
+    released before the final event when the response hands that call back unrun. Output indexes are renumbered
+    densely, and every event gets the next sequence number."""
 
     items: OpenAIMCPItems
     listed: bool = False
     indexes: Mapping[int, int] = MappingProxyType({})
-    dropped: frozenset[int] = frozenset()
+    withheld: Mapping[int, tuple[ResponsesAPIStreamingResponse, ...]] = MappingProxyType({})
     held: ResponsesAPIStreamingResponse | None = None
     sequence: int = 0
 
@@ -413,15 +412,16 @@ class OpenAIStreamShaper:
         index: Final = _field(event, "output_index")
         item: Final = _field(event, "item")
         if event_type in _TERMINAL_EVENTS:
-            return self, (self._terminal(event),)
+            final_state, handed_back_events = self._released(event)
+            return final_state, (*handed_back_events, self._terminal(event))
         if not isinstance(index, int):
             return self, (event,)
-        if index in self.dropped:
-            return self, ()
+        if index in self.withheld:
+            return self._withholding(index, (*self.withheld[index], event)), ()
         if event_type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED and _is_gateway_function_call(
             self.items.names, item
         ):
-            return replace(self, dropped=self.dropped | {index}), ()
+            return self._withholding(index, (event,)), ()
         indexed_state, public = self._public_index(index)
         moved: Final = _copied(event, {"output_index": public})
         if event_type == ResponsesAPIStreamEvents.MCP_CALL_COMPLETED:
@@ -439,6 +439,30 @@ class OpenAIStreamShaper:
         released: Final = () if held is None else ((_failed(held) if _text(item, "error") else held),)
         return replace(indexed_state, held=None), (*released, item_event)
 
+    def _withholding(self, index: int, events: tuple[ResponsesAPIStreamingResponse, ...]) -> "OpenAIStreamShaper":
+        return replace(self, withheld=MappingProxyType({**self.withheld, index: events}))
+
+    def _released(
+        self, terminal: ResponsesAPIStreamingResponse
+    ) -> tuple["OpenAIStreamShaper", tuple[ResponsesAPIStreamingResponse, ...]]:
+        response: Final = _field(terminal, "response")
+        handed_back: Final = frozenset(
+            _call_id(item)
+            for item in (output_items(response) if isinstance(response, ResponsesAPIResponse) else ())
+            if _is_gateway_function_call(self.items.names, item)
+        )
+        indexes: Final = tuple(
+            index for index in sorted(self.withheld) if _call_id(_field(self.withheld[index][0], "item")) in handed_back
+        )
+        start: Final[tuple[OpenAIStreamShaper, tuple[ResponsesAPIStreamingResponse, ...]]] = (self, ())
+        return reduce(lambda released, index: released[0]._release(released[1], index), indexes, start)
+
+    def _release(
+        self, events: tuple[ResponsesAPIStreamingResponse, ...], index: int
+    ) -> tuple["OpenAIStreamShaper", tuple[ResponsesAPIStreamingResponse, ...]]:
+        indexed_state, public = self._public_index(index)
+        return indexed_state, (*events, *(_copied(each, {"output_index": public}) for each in self.withheld[index]))
+
     def _terminal(self, event: ResponsesAPIStreamingResponse) -> ResponsesAPIStreamingResponse:
         response: Final = _field(event, "response")
         if not isinstance(response, ResponsesAPIResponse):
@@ -453,6 +477,10 @@ class OpenAIStreamShaper:
         )
 
 
+def _call_id(item: object) -> str | None:
+    return _text(item, "call_id") or _text(item, "id")
+
+
 def _is_empty_message(item: object) -> bool:
     if _field(item, "type") != "message":
         return False
@@ -464,7 +492,7 @@ def _is_empty_message(item: object) -> bool:
 
 
 def _is_ran_call(item: object, ran_calls: Mapping[str, Mapping[str, object]]) -> bool:
-    return _field(item, "type") == "function_call" and (_text(item, "call_id") or _text(item, "id")) in ran_calls
+    return _field(item, "type") == "function_call" and _call_id(item) in ran_calls
 
 
 def ran_round_output(output: Sequence[object], ran_calls: Mapping[str, Mapping[str, object]]) -> tuple[object, ...]:
