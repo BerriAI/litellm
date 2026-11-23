@@ -1,5 +1,6 @@
 import json
 from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
@@ -154,17 +155,21 @@ OPENROUTER_RERANK_BODY: Final = {
 UNREPORTED_COST_BODY: Final = {**OPENROUTER_RERANK_BODY, "usage": {"search_units": 1}}
 
 
-async def _rerank_unmapped_model(
-    sync_mode: bool, body: Mapping[str, object], respx_mock: respx.MockRouter
+async def _rerank_via_router(
+    sync_mode: bool,
+    body: Mapping[str, object],
+    respx_mock: respx.MockRouter,
+    model: str = UNMAPPED_RERANK_MODEL,
+    pricing: Mapping[str, float] = MappingProxyType({}),
 ) -> RerankResponse:
-    assert UNMAPPED_RERANK_MODEL not in litellm.model_cost
     rerank_args: Final = {
-        "model": UNMAPPED_RERANK_MODEL,
+        "model": model,
         "query": "q",
         "documents": DOCUMENTS,
         "top_n": 2,
         "api_key": "router-key",
         "api_base": "https://router.example/api/v1",
+        **pricing,
     }
     if sync_mode:
         respx_mock.post("https://router.example/api/v1/rerank").return_value = httpx.Response(200, json=body)
@@ -183,7 +188,8 @@ async def _rerank_unmapped_model(
 async def test_scaleway_rerank_bills_and_returns_the_provider_reported_usage(
     sync_mode: bool, respx_mock: respx.MockRouter
 ) -> None:
-    response: Final = await _rerank_unmapped_model(sync_mode, OPENROUTER_RERANK_BODY, respx_mock)
+    assert UNMAPPED_RERANK_MODEL not in litellm.model_cost
+    response: Final = await _rerank_via_router(sync_mode, OPENROUTER_RERANK_BODY, respx_mock)
 
     assert response._hidden_params["response_cost"] == pytest.approx(REPORTED_USAGE["cost"])
     assert response.model_dump(by_alias=True)["usage"] == REPORTED_USAGE
@@ -195,7 +201,8 @@ async def test_scaleway_rerank_bills_and_returns_the_provider_reported_usage(
 async def test_scaleway_rerank_without_a_reported_or_mapped_cost_reports_no_cost(
     sync_mode: bool, respx_mock: respx.MockRouter
 ) -> None:
-    response: Final = await _rerank_unmapped_model(sync_mode, UNREPORTED_COST_BODY, respx_mock)
+    assert UNMAPPED_RERANK_MODEL not in litellm.model_cost
+    response: Final = await _rerank_via_router(sync_mode, UNREPORTED_COST_BODY, respx_mock)
 
     assert response._hidden_params["response_cost"] is None
     assert response.model_dump(by_alias=True)["usage"] == {"search_units": 1}
@@ -224,3 +231,66 @@ def test_scaleway_rerank_cache_hit_costs_nothing_and_keeps_the_provider_usage(
     assert first._hidden_params["response_cost"] == pytest.approx(REPORTED_USAGE["cost"])
     assert second._hidden_params["response_cost"] == 0.0
     assert second.model_dump(by_alias=True)["usage"] == REPORTED_USAGE
+
+
+REGISTERED_RERANK_MODEL: Final = "scaleway/test-registered-reranker"
+TOKEN_REPORTED_BODY: Final = {**OPENROUTER_RERANK_BODY, "usage": {"total_tokens": 24, "cost": 4.8e-07}}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize(
+    ("input_cost_per_token", "adjustment", "expected"),
+    [
+        (1e-06, {}, 24 * 1e-06),
+        (0.0, {}, 0.0),
+        (1e-06, {"cost_discount_config": {"scaleway": 0.5}}, 24 * 1e-06 * 0.5),
+        (1e-06, {"cost_margin_config": {"scaleway": 0.1}}, 24 * 1e-06 * 1.1),
+    ],
+)
+@pytest.mark.parametrize("persist", [True, False])
+@pytest.mark.parametrize("prefixed", [True, False])
+async def test_scaleway_rerank_bills_a_registered_price_over_the_reported_cost(
+    sync_mode: bool,
+    persist: bool,
+    prefixed: bool,
+    input_cost_per_token: float,
+    adjustment: Mapping[str, object],
+    expected: float,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for setting, value in adjustment.items():
+        monkeypatch.setattr(litellm, setting, value)
+    registered_name: Final = REGISTERED_RERANK_MODEL if prefixed else REGISTERED_RERANK_MODEL.removeprefix("scaleway/")
+    litellm.register_model(
+        {
+            registered_name: {
+                "litellm_provider": "scaleway",
+                "mode": "rerank",
+                "input_cost_per_token": input_cost_per_token,
+            }
+        },
+        persist_across_reloads=persist,
+    )
+
+    response: Final = await _rerank_via_router(
+        sync_mode, TOKEN_REPORTED_BODY, respx_mock, model=REGISTERED_RERANK_MODEL
+    )
+
+    assert response._hidden_params["response_cost"] == pytest.approx(expected)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize(
+    "pricing",
+    [{"input_cost_per_token": 1e-06}, {"input_cost_per_token": 0.0}, {"input_cost_per_query": 0.005}],
+)
+async def test_scaleway_rerank_with_per_call_prices_keeps_the_zero_cost(
+    sync_mode: bool, pricing: Mapping[str, float], respx_mock: respx.MockRouter
+) -> None:
+    assert UNMAPPED_RERANK_MODEL not in litellm.model_cost
+    response: Final = await _rerank_via_router(sync_mode, OPENROUTER_RERANK_BODY, respx_mock, pricing=pricing)
+
+    assert response._hidden_params["response_cost"] == 0.0
