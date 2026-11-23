@@ -72,11 +72,11 @@ class SagemakerEmbeddingConfig(BaseEmbeddingConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: dict[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         return optional_params
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | Headers) -> BaseLLMException:
@@ -86,9 +86,9 @@ class SagemakerEmbeddingConfig(BaseEmbeddingConfig):
         self,
         model: str,
         input: "AllEmbeddingInputValues",
-        optional_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: dict[str, object],
+        headers: dict[str, object],
+    ) -> dict[str, object]:
         """
         Transform embedding request for Hugging Face models on SageMaker
         """
@@ -103,8 +103,8 @@ class SagemakerEmbeddingConfig(BaseEmbeddingConfig):
         logging_obj: "LiteLLMLoggingObj",
         api_key: str | None = None,
         request_data: dict = {},
-        optional_params: dict = {},
-        litellm_params: dict = {},
+        optional_params: dict[str, object] = {},
+        litellm_params: dict[str, object] = {},
     ) -> "EmbeddingResponse":
         """
         Transform embedding response for Hugging Face models on SageMaker
@@ -160,14 +160,14 @@ class SagemakerEmbeddingConfig(BaseEmbeddingConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         messages: Sequence[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, str]:
         """
         Validate environment for SageMaker embeddings
         """

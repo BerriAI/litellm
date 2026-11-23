@@ -22,7 +22,7 @@ from litellm.types.utils import ImageResponse
 from litellm.utils import convert_to_model_response_object
 
 if TYPE_CHECKING:
-    from litellm.litellm_core_utils.logging import Logging as LiteLLMLoggingObj
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 _DECODED_JSON: Final = TypeAdapter(object)
 
@@ -30,17 +30,17 @@ _DECODED_JSON: Final = TypeAdapter(object)
 class AzureFoundryMAIImageEditConfig(OpenAIImageEditConfig):
     """Azure AI Foundry MAI image editing (e.g. MAI-Image-2.5)."""
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         return ["prompt", "image", "model", "n"]
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         api_key: str | None = None,
-        litellm_params: dict | None = None,
+        litellm_params: dict[str, object] | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         headers.update(
             get_azure_ai_auth_headers(
                 api_key=AzureFoundryModelInfo.get_api_key(api_key),
@@ -75,10 +75,10 @@ class AzureFoundryMAIImageEditConfig(OpenAIImageEditConfig):
         model: str,
         prompt: str | None,
         image: FileTypes | Sequence[FileTypes | None] | None,
-        image_edit_optional_request_params: dict,
+        image_edit_optional_request_params: dict[str, object],
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[dict, RequestFiles]:
+        headers: dict[str, object],
+    ) -> tuple[dict[str, object], RequestFiles]:
         request_params: Final = {
             "model": model,
             **image_edit_optional_request_params,
@@ -122,7 +122,7 @@ class AzureFoundryMAIImageEditConfig(OpenAIImageEditConfig):
             input="",
             api_key="",
             additional_args={"complete_input_dict": {}},
-            original_response=response,
+            original_response=_DECODED_JSON.validate_python(response),
         )
 
         return convert_to_model_response_object(

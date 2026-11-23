@@ -79,7 +79,7 @@ async def asearch(
     api_base: str | None = None,
     timeout: float | httpx.Timeout | None = None,
     extra_headers: dict[str, object] | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> SearchResponse:
     """
     Async Search function.
