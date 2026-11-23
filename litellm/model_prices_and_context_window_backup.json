@@ -109618,6 +109618,22 @@
         "output_cost_per_token": 0.0,
         "source": "https://prices.azure.com/api/retail/prices?$filter=contains(productName,'Decision')"
     },
+    "azure_ai/eu/Microsoft-Decision-1.1": {
+        "input_cost_per_token": 5e-08,
+        "litellm_provider": "azure_ai",
+        "max_input_tokens": 32768,
+        "mode": "decisions",
+        "output_cost_per_token": 0.0,
+        "source": "https://commandline.microsoft.com/microsoft-decision-model-ga/#pricing"
+    },
+    "azure_ai/us/Microsoft-Decision-1.1": {
+        "input_cost_per_token": 4.6e-08,
+        "litellm_provider": "azure_ai",
+        "max_input_tokens": 32768,
+        "mode": "decisions",
+        "output_cost_per_token": 0.0,
+        "source": "https://commandline.microsoft.com/microsoft-decision-model-ga/#pricing"
+    },
     "fal_ai/kling/v4/text-to-image": {
         "litellm_provider": "fal_ai",
         "metadata": {"comment":"fal reports the charge for each request in the x-fal-billable-units response header, priced at output_cost_per_billable_unit dollars per unit. One image is 1.0 unit at the default 2K resolution, 1.4921 units at 4K and 2.4921 units at 8K ($0.157), measured 2026-11-17. The per-image prices are used when the header is absent"},
