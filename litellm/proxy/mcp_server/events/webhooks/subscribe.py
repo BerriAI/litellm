@@ -1,7 +1,10 @@
+import asyncio
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Final
+
+import anyio
 
 from litellm.proxy.mcp_server.contracts import OperationContext
 from litellm.proxy.mcp_server.events.access import holds_webhooks, principal_of, stored_key_hash
@@ -24,7 +27,7 @@ from litellm.proxy.mcp_server.events.errors import (
     unsupported,
 )
 from litellm.proxy.mcp_server.events.runtime import EventsRuntime
-from litellm.proxy.mcp_server.events.webhooks.delivery import is_https_callback
+from litellm.proxy.mcp_server.events.webhooks.delivery import CALLBACK_DEADLINE_SECONDS, is_https_callback
 from litellm.proxy.mcp_server.events.webhooks.policy import (
     subscription_id,
 )
@@ -38,11 +41,9 @@ from litellm.proxy.mcp_server.events.webhooks.termination import end_upstream
 from litellm.proxy.mcp_server.events.webhooks.verification import Poster, verify_callback
 from litellm.proxy.mcp_server.outbound_credentials.result import Error, Ok, Result
 from litellm.types.mcp_server.events import (
-    EventsErrorCode,
     SubscribeEventsParams,
 )
 
-_KNOWN_CODES: Final = frozenset(member.value for member in EventsErrorCode)
 _BEING_CREATED: Final = internal_error("Another request is creating this subscription; retry")
 
 
@@ -177,9 +178,21 @@ async def reserve_subscription(
     if subscription.existing is not None and subscription.existing.status != "terminated":
         return Ok(subscription)
     store: Final = subscription.request.store
-    if not await store.reserve(subscription.base):
-        return Error(_BEING_CREATED)
-    if await store.count_live(subscription.request.principal) > settings.max_subscriptions_per_key:
-        await store.discard_pending(subscription.base.id)
-        return Error(exhausted("subscriptions", settings.max_subscriptions_per_key))
+    claiming: Final = asyncio.create_task(store.reserve(subscription.base))
+    try:
+        try:
+            if not await asyncio.shield(claiming):
+                return Error(_BEING_CREATED)
+        finally:
+            # Prisma can finish an insert after caller cancellation. Order the delete after its write outcome.
+            if not claiming.done():
+                with anyio.move_on_after(CALLBACK_DEADLINE_SECONDS, shield=True):
+                    await claiming
+        if await store.count_live(subscription.request.principal) > settings.max_subscriptions_per_key:
+            await store.discard_pending(subscription.base.id, subscription.base.generation)
+            return Error(exhausted("subscriptions", settings.max_subscriptions_per_key))
+    except BaseException:
+        with anyio.move_on_after(CALLBACK_DEADLINE_SECONDS, shield=True):
+            await store.discard_pending(subscription.base.id, subscription.base.generation)
+        raise
     return Ok(replace(subscription, reserved=True))

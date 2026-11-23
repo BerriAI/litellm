@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import json
 from collections.abc import Mapping
@@ -117,3 +118,21 @@ def test_a_request_scoped_authority_cannot_open_a_durable_subscription(field: st
     caller: Final = CALLER.model_copy(update={field: "request-id"})
     result: Final = validate_subscription(context(caller), _params(), SETTINGS, MemoryStore())
     assert isinstance(result, Error) and result.error.code is EventsErrorCode.FORBIDDEN
+
+
+@pytest.mark.asyncio
+async def test_interrupting_the_post_reservation_quota_check_allows_an_immediate_retry() -> None:
+    class InterruptedQuota(MemoryStore):
+        async def count_live(self, principal: str) -> int:
+            if SID in self.rows:
+                raise asyncio.CancelledError
+            return await super().count_live(principal)
+
+    store: Final = InterruptedQuota()
+    prepared: Final = await prepare_subscription(
+        context(), _params(), None, SETTINGS, runtime((server(),)), _request(store), _Client()
+    )
+    assert isinstance(prepared, Ok)
+    with pytest.raises(asyncio.CancelledError):
+        await reserve_subscription(prepared.ok, SETTINGS)
+    assert await store.reserve(prepared.ok.base)
