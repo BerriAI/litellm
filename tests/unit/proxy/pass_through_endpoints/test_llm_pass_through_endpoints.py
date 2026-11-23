@@ -10250,6 +10250,33 @@ class TestVertexPassthroughAuthenticatesOncePerRequest:
         assert not google.called
 
 
+TYPESAFE_IMAGE_BYTES: Final = b"\x89PNG\r\n\x1a\n\xff\xfe\x00 not utf-8"
+TYPESAFE_ALLOWED_MODEL: Final = "jev-1.14.0"
+
+
+def _typesafe_decision(model: str) -> bytes:
+    return json.dumps(
+        {
+            "model": model,
+            "state": {"photo": "photo"},
+            "questions": {"is_red": {"type": "noul", "instructions": "Is the photo mostly red?"}},
+            "assets": {"photo": {"type": "image", "part": "asset-0"}},
+        }
+    ).encode()
+
+
+def _typesafe_upload(request_parts: Sequence[tuple[str | None, bytes]]) -> tuple[bytes, str]:
+    built: Final = httpx.Request(
+        "POST",
+        "https://typesafe.example",
+        files=[
+            *(("request", (filename, content, "application/json")) for filename, content in request_parts),
+            ("asset-0", ("asset-0", TYPESAFE_IMAGE_BYTES, "image/png")),
+        ],
+    )
+    return built.read(), built.headers["content-type"]
+
+
 class TestTypeSafePassthroughRoute:
     @staticmethod
     def _request(body: object, query_params: Mapping[str, str] | None = None) -> MagicMock:
@@ -10308,6 +10335,31 @@ class TestTypeSafePassthroughRoute:
 
             sent: Final = route.calls.last.request.headers
             assert (sent.get("typesafe-danger-zone-images"), sent.get("x-unrelated")) == ("true", None)
+
+    def test_a_multipart_image_upload_reaches_typesafe_byte_for_byte_and_hooks_see_its_model(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        recorder: Final = _RecordsPreCallModel()
+        monkeypatch.setattr(litellm, "callbacks", [recorder])
+        body, content_type = _typesafe_upload(((None, _typesafe_decision("jev-latest")),))
+        with respx.mock(assert_all_called=True) as upstream:
+            route = upstream.post("https://typesafe.example/base/v1/systemone").mock(
+                return_value=httpx.Response(200, json={"answers": {}})
+            )
+            response = client.post(
+                "/typesafe/v1/systemone",
+                content=body,
+                headers={"Content-Type": content_type, "TypeSafe-Danger-Zone-Images": "true"},
+            )
+
+        assert response.status_code == 200, response.text
+        sent: Final = route.calls.last.request
+        assert (sent.content, sent.headers["content-type"], sent.headers["typesafe-danger-zone-images"]) == (
+            body,
+            content_type,
+            "true",
+        )
+        assert recorder.models == ["jev-latest"]
 
     @pytest.mark.parametrize(
         "provider, endpoint, is_decision_request",
@@ -10430,6 +10482,92 @@ class TestTypeSafePassthroughRoute:
             custom_llm_provider="typesafe",
             is_streaming_request=False,
         )
+
+
+class TestTypeSafeMultipartThroughRealAuth:
+    KEY: Final = "sk-typesafe-jev-1-14-only"
+
+    @pytest.fixture
+    def client(self, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+        from litellm.proxy import proxy_server
+
+        monkeypatch.delitem(proxy_server.app.dependency_overrides, user_api_key_auth, raising=False)
+        monkeypatch.setenv("TYPESAFE_API_KEY", "typesafe-test-key")
+        monkeypatch.setenv("TYPESAFE_API_BASE", "https://typesafe.example/base")
+        monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        litellm.in_memory_llm_clients_cache.flush_cache()
+        cache: Final = UserApiKeyCache()
+        cache.set_cache(
+            AuthObject.virtual_key(hash_token(self.KEY)),
+            UserAPIKeyAuth(token=hash_token(self.KEY), models=[TYPESAFE_ALLOWED_MODEL]),
+        )
+        monkeypatch.setattr(proxy_server, "master_key", SHARED_MASTER_KEY)
+        monkeypatch.setattr(proxy_server, "prisma_client", prisma_with_empty_config())
+        monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+        yield TestClient(proxy_server.app)
+
+    def _post_upload(self, client: TestClient, body: bytes, content_type: str) -> httpx.Response:
+        return client.post(
+            "/typesafe/v1/systemone",
+            content=body,
+            headers={"Content-Type": content_type, "Authorization": f"Bearer {self.KEY}"},
+        )
+
+    @pytest.mark.parametrize("request_part_filename", [None, "request.json"], ids=["field", "file"])
+    def test_an_allowed_model_uploads_its_images_to_typesafe_byte_for_byte(
+        self, client: TestClient, request_part_filename: str | None
+    ) -> None:
+        body, content_type = _typesafe_upload(((request_part_filename, _typesafe_decision(TYPESAFE_ALLOWED_MODEL)),))
+        with respx.mock(assert_all_called=True) as upstream:
+            route = upstream.post("https://typesafe.example/base/v1/systemone").respond(200, json={"answers": {}})
+            response = self._post_upload(client, body, content_type)
+
+        assert response.status_code == 200, response.text
+        sent: Final = route.calls.last.request
+        assert (sent.content, sent.headers["content-type"]) == (body, content_type)
+
+    @pytest.mark.parametrize("encoding", ["json", "multipart-field", "multipart-file"])
+    def test_a_model_outside_the_key_allowlist_never_reaches_typesafe(
+        self, client: TestClient, encoding: Literal["json", "multipart-field", "multipart-file"]
+    ) -> None:
+        decision: Final = _typesafe_decision("jev-latest")
+        body, content_type = (
+            (decision, "application/json")
+            if encoding == "json"
+            else _typesafe_upload((("request.json" if encoding == "multipart-file" else None, decision),))
+        )
+        with respx.mock(assert_all_called=False) as upstream:
+            route = upstream.post("https://typesafe.example/base/v1/systemone").respond(200, json={"answers": {}})
+            response = self._post_upload(client, body, content_type)
+
+        assert (response.status_code, response.json()["error"]["type"], route.called) == (
+            403,
+            "key_model_access_denied",
+            False,
+        ), response.text
+
+    @pytest.mark.parametrize(
+        "request_parts",
+        [
+            pytest.param((), id="missing"),
+            pytest.param(
+                ((None, _typesafe_decision(TYPESAFE_ALLOWED_MODEL)), (None, _typesafe_decision("jev-latest"))),
+                id="duplicate",
+            ),
+            pytest.param(((None, b"not json"),), id="not-json"),
+            pytest.param(((None, b'["jev-1.14.0"]'),), id="not-an-object"),
+        ],
+    )
+    def test_an_upload_without_one_json_object_request_part_is_rejected_with_400(
+        self, client: TestClient, request_parts: tuple[tuple[str | None, bytes], ...]
+    ) -> None:
+        body, content_type = _typesafe_upload(request_parts)
+        with respx.mock(assert_all_called=False) as upstream:
+            route = upstream.post("https://typesafe.example/base/v1/systemone").respond(200, json={"answers": {}})
+            response = self._post_upload(client, body, content_type)
+
+        assert (response.status_code, response.json()["error"]["param"], route.called) == (400, "request", False)
 
 
 class _RecordsPreCallModel(CustomLogger):

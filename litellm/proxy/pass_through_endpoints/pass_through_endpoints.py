@@ -1717,7 +1717,7 @@ async def pass_through_request(
 
         if custom_body:
             _parsed_body = dict(custom_body)
-        elif is_multipart:
+        elif is_multipart and state_raw_body is None:
             # Don't parse multipart body here - it will be handled by make_multipart_http_request
             _parsed_body = {}
         else:

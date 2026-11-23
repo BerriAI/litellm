@@ -138,6 +138,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
     get_form_data,
     get_request_body,
     is_json_content_type,
+    is_typesafe_multipart_upload,
     read_request_body,
     safe_get_request_headers,
     safe_set_request_parsed_body,
@@ -886,17 +887,20 @@ async def typesafe_proxy_route(
         for name, value in request.headers.items()
         if name.lower().startswith(TYPESAFE_DANGER_ZONE_HEADER_PREFIX)
     }
+    is_multipart_upload: Final = is_typesafe_multipart_upload(request)
     endpoint_func: Final = create_pass_through_route(
         endpoint=endpoint,
         target=str(updated_url),
         custom_headers={
             **danger_zone_headers,
             "Authorization": f"Bearer {typesafe_api_key}",
-            "Content-Type": "application/json",
+            "Content-Type": request.headers["content-type"] if is_multipart_upload else "application/json",
         },
         custom_llm_provider="typesafe",
         is_streaming_request=False,
     )
+    if is_multipart_upload:
+        setattr(request.state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY, await request.body())
     return await endpoint_func(request, fastapi_response, user_api_key_dict)
 
 

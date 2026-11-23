@@ -1802,6 +1802,8 @@ ALLOWED_VERTEX_AI_PASSTHROUGH_HEADERS: Final = {
 # Works for all LLM pass-through endpoints (Vertex AI, Anthropic, Bedrock, etc.)
 PASS_THROUGH_HEADER_PREFIX: Final = "x-pass-"
 TYPESAFE_DANGER_ZONE_HEADER_PREFIX: Final = "typesafe-danger-zone-"
+TYPESAFE_PASS_THROUGH_ROUTE_PREFIX: Final = "/typesafe"
+TYPESAFE_MULTIPART_REQUEST_PART: Final = "request"
 INTERNAL_KWARG_PREFIX: Final = "_litellm_"
 CONTROL_OPTIONS_KEY: Final = f"{INTERNAL_KWARG_PREFIX}control"
 SESSION_ID_FROM_TRACE_ID_PARAM_KEY: Final = f"{INTERNAL_KWARG_PREFIX}session_id_from_trace_id"

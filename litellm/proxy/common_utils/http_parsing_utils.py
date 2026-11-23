@@ -9,6 +9,7 @@ from fastapi import HTTPException, Request, UploadFile, status
 from pydantic import TypeAdapter, ValidationError
 from starlette._utils import get_route_path
 from starlette.datastructures import FormData
+from starlette.datastructures import UploadFile as StarletteUploadFile
 from starlette.requests import ClientDisconnect, HTTPConnection
 from typing_extensions import NotRequired, ReadOnly, Required, assert_never
 
@@ -21,6 +22,8 @@ from litellm.constants import (
     LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED,
     MAX_REQUEST_BODY_SIZE_TO_REPAIR_MB,
     OPENSEARCH_PASS_THROUGH_ROUTE_PREFIX,
+    TYPESAFE_MULTIPART_REQUEST_PART,
+    TYPESAFE_PASS_THROUGH_ROUTE_PREFIX,
 )
 from litellm.integrations.otel.runtime import phase_event
 from litellm.litellm_core_utils.core_helpers import as_object_list, has_attributes, require_attributes
@@ -298,6 +301,55 @@ async def _read_form_data(request: Request) -> FormData:
     return form_data
 
 
+def is_typesafe_multipart_upload(request: Request) -> bool:
+    from litellm.proxy.auth.auth_utils import get_request_route  # noqa: PLC0415  # auth_utils imports this module
+
+    content_type: Final[str] = request.headers.get("content-type", "")
+    return _normalize_media_type(content_type) == "multipart/form-data" and get_request_route(request).startswith(
+        f"{TYPESAFE_PASS_THROUGH_ROUTE_PREFIX}/"
+    )
+
+
+def _invalid_typesafe_request_part(detail: str) -> ProxyException:
+    return ProxyException(
+        message=f"Invalid TypeSafe multipart upload: {detail}",
+        type="invalid_request_error",
+        param=TYPESAFE_MULTIPART_REQUEST_PART,
+        code=status.HTTP_400_BAD_REQUEST,
+    )
+
+
+async def _read_typesafe_request_part(request: Request) -> Mapping[str, object]:
+    _ = await request.body()
+    parts: Final = (await _read_form_data(request)).getlist(TYPESAFE_MULTIPART_REQUEST_PART)
+    match parts:
+        case [str() as text]:
+            return _parse_typesafe_request_json(text)
+        case [StarletteUploadFile() as upload]:
+            return _parse_typesafe_request_json(await upload.read())
+        case _:
+            raise _invalid_typesafe_request_part(
+                f"expected exactly one '{TYPESAFE_MULTIPART_REQUEST_PART}' part, got {len(parts)}"
+            )
+
+
+def _parse_typesafe_request_json(raw_json: str | bytes) -> Mapping[str, object]:
+    try:
+        return _JSON_REQUEST_BODY.validate_json(raw_json)
+    except ValidationError as e:
+        raise _invalid_typesafe_request_part(
+            f"the '{TYPESAFE_MULTIPART_REQUEST_PART}' part must be a JSON object"
+        ) from e
+
+
+async def _read_form_body(request: Request) -> Mapping[str, object]:
+    if is_typesafe_multipart_upload(request):
+        return await _read_typesafe_request_part(request)
+    form_body: Final = dict(await _read_form_data(request))
+    raw_metadata: Final = form_body.get("metadata")
+    return {**form_body, "metadata": _parse_form_metadata(raw_metadata)} if isinstance(raw_metadata, str) else form_body
+
+
 async def read_request_body(request: Request | None) -> dict:
     """
     Safely read the request body and parse it as JSON.
@@ -326,13 +378,7 @@ async def read_request_body(request: Request | None) -> dict:
             binary_body: Final = await _receive_body(request)
             parsed_body = _parse_binary_body(binary_body)
         elif _is_form_content_type(content_type):
-            form_body: Final = dict(await _read_form_data(request))
-            raw_metadata: Final = form_body.get("metadata")
-            parsed_body = (
-                {**form_body, "metadata": _parse_form_metadata(raw_metadata)}
-                if isinstance(raw_metadata, str)
-                else form_body
-            )
+            parsed_body = dict(await _read_form_body(request))
         else:
             # Read the request body
             body: Final = await _receive_body(request)
