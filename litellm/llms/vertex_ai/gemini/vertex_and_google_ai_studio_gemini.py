@@ -33,6 +33,7 @@ from litellm.constants import (
     PROVIDER_FINISH_REASONS_HIDDEN_PARAM,
 )
 from litellm.exceptions import UnsupportedParamsError
+from litellm.litellm_core_utils.allowed_tools_tool_choice import HostedMcpToolHandling
 from litellm.litellm_core_utils.core_helpers import (
     as_object_list,
     as_str_mapping,
@@ -712,6 +713,34 @@ def unsupported_gemini_tts_audio_format(
     )
 
 
+def gemini_image_candidate_count(
+    model: str,
+    request_params: Mapping[str, object],
+    drop_params: bool,
+    allowed_openai_params: Sequence[str],
+    llm_provider: str,
+) -> Literal["forward", "drop"] | UnsupportedParamsError:
+    n: Final = request_params.get("n")
+    modalities: Final = request_params.get("modalities")
+    asks_for_several_candidates: Final = isinstance(n, int) and n > 1
+    asks_for_image_output: Final = isinstance(modalities, list) and "image" in modalities
+    if not (asks_for_several_candidates and asks_for_image_output):
+        return "forward"
+    if "n" in allowed_openai_params:
+        return "forward"
+    if drops_unsupported_params(drop_params):
+        return "drop"
+    return UnsupportedParamsError(
+        message=(
+            f"n={n} with image output in modalities is not supported for {model}. Gemini returns one candidate "
+            "per request when modalities asks for image output, so send n=1 or separate requests, or set "
+            "drop_params to drop n."
+        ),
+        model=model,
+        llm_provider=llm_provider,
+    )
+
+
 def normalize_gemini_speech_config(
     value: Mapping[str, object], drop_unknown_fields: bool = False
 ) -> dict[str, object]:  # mutable-ok: provider request serialization requires a concrete dict
@@ -760,9 +789,15 @@ class _ToolChoiceParam(TypedDict, total=False):
     tool_choice: ReadOnly[object]
 
 
+class _CandidateCountParams(TypedDict, total=False):
+    n: ReadOnly[object]
+    modalities: ReadOnly[object]
+
+
 _CALLER_TOOL: Final = TypeAdapter(_CallerTool)
 _CALLER_TOOLS: Final = TypeAdapter(tuple[object, ...])
 _TOOL_CHOICE_PARAM: Final = TypeAdapter(_ToolChoiceParam)
+_CANDIDATE_COUNT_PARAMS: Final = TypeAdapter(_CandidateCountParams)
 
 
 def _caller_parameters(tool: object) -> Mapping[str, object] | None:
@@ -2248,6 +2283,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         )
         return {"includeThoughts": VertexGeminiConfig._include_thoughts(thinking_config.get("includeThoughts"))}
 
+    def hosted_mcp_tool_handling(self, model: str) -> HostedMcpToolHandling:
+        return "drops"
+
     def _tools_builder(
         self,
         param: str,
@@ -2316,9 +2354,14 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         allow_parameters_json_schema: bool = True,
         *,
         allowed_openai_params: Sequence[str] = (),
+        allow_unsupported_n: bool = False,
     ) -> dict:
         request_params: Final = tool_params_without_hosted_mcp(
-            non_default_params, model=model, route=self._route, drop_params=drop_params
+            non_default_params,
+            model=model,
+            route=self._route,
+            drop_params=drop_params,
+            handling=self.hosted_mcp_tool_handling(model),
         )
         self._apply_include_server_side_tool_invocations(request_params, optional_params)
         keeps_search_tools_with_functions: Final = self._keeps_search_tools_with_functions(
@@ -2329,6 +2372,12 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         supports_sampling_params: Final = self.supports_sampling_params(model)
         drops_logprobs: Final = self._drops_logprobs(model, drop_params, allowed_openai_params)
         typed_request_params: Final = _REQUEST_PARAMS.validate_python(request_params)
+        candidate_params: Final = _CANDIDATE_COUNT_PARAMS.validate_python(typed_request_params)
+        candidate_count: Final = gemini_image_candidate_count(
+            model, candidate_params, drop_params, allowed_openai_params, self._route
+        )
+        if isinstance(candidate_count, UnsupportedParamsError) and not allow_unsupported_n:
+            raise candidate_count
         pins_fit: Final = self._schema_pins_fit(
             typed_request_params,
             model,
@@ -2362,6 +2411,13 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 param == "stream" and value is True
             ):  # sending stream = False, can cause it to get passed unchecked and raise issues
                 optional_params["stream"] = value
+            elif param == "n" and candidate_count == "drop":
+                verbose_logger.warning(
+                    "Dropping n=%s for %s because Gemini returns one candidate per request when modalities asks "
+                    "for image output",
+                    candidate_params.get("n"),
+                    model,
+                )
             elif param == "n":
                 optional_params["candidate_count"] = value
             elif param == "audio" and isinstance(value, dict):

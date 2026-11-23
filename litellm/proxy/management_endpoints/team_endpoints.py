@@ -379,6 +379,12 @@ class _TeamListBudgetRow(Protocol):
     def temp_budget_expiry(self) -> datetime | None: ...
 
     @property
+    def rollover_max_budget(self) -> float | None: ...
+
+    @property
+    def budget_duration(self) -> str | None: ...
+
+    @property
     def temp_budget_increase(self) -> float | None: ...
 
 
@@ -391,6 +397,9 @@ class _TeamListMembershipRow(Protocol):
 
     @property
     def litellm_budget_table(self) -> _TeamListBudgetRow | None: ...
+
+    @property
+    def rollover_credit(self) -> float | None: ...
 
 
 class _CacheableTeamRow(_TeamIdRow, _ModelDumpRow, Protocol): ...
@@ -6423,11 +6432,11 @@ def _team_list_caller_membership(
     rollover_credit: Final = (
         active_rollover_credit(
             member_budget_row.max_budget,
-            getattr(member_budget_row, "rollover_max_budget", None),
-            getattr(member_budget_row, "budget_duration", None),
-            getattr(membership_row, "rollover_credit", None),
+            member_budget_row.rollover_max_budget,
+            member_budget_row.budget_duration,
+            membership_row.rollover_credit,
         )
-        if member_budget_row is not None
+        if membership_row is not None and member_budget_row is not None
         else None
     )
     return TeamListCallerMembership(
