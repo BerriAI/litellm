@@ -11720,6 +11720,34 @@ async def test_configured_pass_through_with_a_pre_call_guardrail_forwards_no_cli
 
 
 @pytest.mark.asyncio
+async def test_configured_pass_through_forwards_no_client_value_a_pre_call_hook_changed_or_removed(
+    tmp_path, monkeypatch
+):
+    class RedactingHook(CustomLogger):
+        async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+            data.pop("id", None)
+            return {**data, "tags": ["[redacted]"]}
+
+    proxy: Final = await _boot_db_backed_proxy(
+        tmp_path,
+        monkeypatch,
+        config_pass_through_endpoints=[{"path": "/cfg-rpc", "target": "http://upstream.test/mcp", "auth": False}],
+        db_pass_through_endpoints=[],
+    )
+    await _run_db_sync_cycle(proxy)
+    monkeypatch.setattr(litellm, "callbacks", [RedactingHook()])
+
+    response, upstream_requests = await _send_through_proxy(
+        "/cfg-rpc", {}, body={"jsonrpc": "2.0", "id": "secret-id", "method": "m", "tags": ["secret"], "user": "u1"}
+    )
+
+    assert response.status_code == 200
+    assert [json.loads(request.content) for request in upstream_requests] == [
+        {"jsonrpc": "2.0", "method": "m", "user": "u1"}
+    ]
+
+
+@pytest.mark.asyncio
 async def test_configured_pass_through_with_a_pre_call_guardrail_logs_no_hook_written_auth_metadata(
     tmp_path, monkeypatch
 ):

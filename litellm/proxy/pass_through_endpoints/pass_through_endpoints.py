@@ -1258,13 +1258,12 @@ def _client_fields_safe_to_forward(
     hooked_body: Mapping[str, object],
     has_pre_call_guardrails: Callable[[Mapping[str, object]], bool],
 ) -> Mapping[str, object] | None:
-    if (
-        client_fields is None
-        or not any(map(skipped_by_full_payload_scan, client_fields))
-        or not has_pre_call_guardrails(hooked_body)
-    ):
-        return client_fields
-    return {k: v for k, v in client_fields.items() if not skipped_by_full_payload_scan(k)}
+    if client_fields is None:
+        return None
+    unchanged_by_hooks: Final = {k: v for k, v in client_fields.items() if hooked_body.get(k) == v}
+    if not any(map(skipped_by_full_payload_scan, unchanged_by_hooks)) or not has_pre_call_guardrails(hooked_body):
+        return unchanged_by_hooks
+    return {k: v for k, v in unchanged_by_hooks.items() if not skipped_by_full_payload_scan(k)}
 
 
 def _with_client_litellm_fields(
