@@ -265,9 +265,7 @@ class PrismaEventStore:
         return True
 
     async def discard_pending(self, subscription_id: str, generation: str | None = None) -> None:
-        await self._subscriptions.delete_many(
-            where={"id": subscription_id, "status": "pending", **({"generation": generation} if generation else {})}
-        )
+        await self.delete_held(subscription_id, None, generation)
 
     async def activate(
         self,
