@@ -147,6 +147,9 @@ class ModelRateLimitingCheck(CustomLogger):
         # so the warning is logged once per deployment rather than per request.
         self._io_token_conflict_warned_ids: set[str] = set()
 
+    def filters_deployments_for(self, request_kwargs: Mapping[str, object]) -> bool:
+        return "first_message" in request_kwargs and not request_kwargs.get("previous_response_id")
+
     async def async_filter_deployments(
         self,
         model: str,
@@ -155,7 +158,7 @@ class ModelRateLimitingCheck(CustomLogger):
         request_kwargs: dict[str, object] | None = None,  # mutable-ok: CustomLogger deployment-list contract
         parent_otel_span: Span | None = None,
     ) -> list[dict[str, object]]:  # mutable-ok: CustomLogger deployment-list contract
-        if not request_kwargs or "first_message" not in request_kwargs or request_kwargs.get("previous_response_id"):
+        if not request_kwargs or not self.filters_deployments_for(request_kwargs):
             return healthy_deployments
         now: Final = self.clock()
         misses: Final = await asyncio.gather(

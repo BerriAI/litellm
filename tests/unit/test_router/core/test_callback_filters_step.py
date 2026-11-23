@@ -10,7 +10,10 @@ from typing import Final
 import pytest
 
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.router_rust.steps.callbacks import filtered_ids, filters_deployments
+from litellm.redis.stores.connection import connect
+from litellm.redis.stores.router_usage import RouterUsageStore
+from litellm.router_rust.steps.callbacks import OptionalChecks, filtered_ids, filters_deployments
+from litellm.router_utils.pre_call_checks.model_rate_limit_check import ModelRateLimitingCheck
 from tests.unit.test_router.core.registry_helpers import MakeCore
 from tests.unit.test_router.core.scripted_host import ScriptedHost, deployment
 
@@ -80,5 +83,39 @@ async def test_a_pick_with_a_filter_reads_the_candidates_and_honours_it(
     core: Final = make_core(model_list=list(GROUP))
 
     picked: Final = {(await core.select("g"))["model_info"]["id"] for _ in range(30)}  # pyright: ignore[reportIndexIssue]
+
+    assert picked == {"a", "c"}
+
+
+def _rate_limit_check() -> ModelRateLimitingCheck:
+    return ModelRateLimitingCheck(usage=RouterUsageStore(connect(None).router_usage()))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("request_kwargs", "filters"),
+    [
+        ({"messages": []}, False),
+        ({"first_message": "{}"}, True),
+        ({"first_message": "{}", "previous_response_id": "resp_1"}, False),
+    ],
+)
+async def test_the_model_rate_limit_check_filters_only_a_new_socket_turn(
+    make_core: MakeCore, host: ScriptedHost, request_kwargs: Mapping[str, object], filters: bool
+) -> None:
+    host.lists["callbacks"].append(_rate_limit_check())
+    checks: Final[OptionalChecks] = make_core(model_list=list(GROUP)).__dict__["_checks"]  # pyright: ignore[reportAny]  # RustCore's own attribute
+
+    assert checks.has_filters(request_kwargs) is filters
+
+
+@pytest.mark.asyncio
+async def test_a_plain_request_still_runs_a_filter_beside_the_model_rate_limit_check(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    host.lists["callbacks"].extend((_rate_limit_check(), Narrow(dropped="b")))
+    core: Final = make_core(model_list=list(GROUP))
+
+    picked: Final = {(await core.select("g", {"messages": []}))["model_info"]["id"] for _ in range(30)}  # pyright: ignore[reportIndexIssue]
 
     assert picked == {"a", "c"}
