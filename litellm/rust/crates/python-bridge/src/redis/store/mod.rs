@@ -1,4 +1,6 @@
+pub(crate) mod active_teams;
 pub(crate) mod auth_cache;
+pub(crate) mod cache_invalidation;
 pub(crate) mod deployment_health;
 mod policy;
 pub(crate) mod rate_limits;
@@ -8,18 +10,19 @@ pub(crate) mod router_session_pins;
 pub(crate) mod router_usage;
 pub(crate) mod sensitive_route_pins;
 pub(crate) mod spend_counters;
-mod value;
+pub(crate) mod value;
 
 use value::PyValue;
 
 use std::{
     pin::Pin,
-    sync::{Mutex, PoisonError},
+    sync::{Arc, Mutex, PoisonError},
     time::Duration,
 };
 
 use litellm_python_compat::number::{SecondsError, seconds};
-use litellm_redis_store::{Error, FromValue, IntoValue, Number, Pending, Remote};
+use litellm_redis_client::CallTag;
+use litellm_redis_store::{Clock, Error, FromValue, IntoValue, Number, Pending, Remote};
 use pyo3::{
     IntoPyObjectExt,
     exceptions::{PyOverflowError, PyRuntimeError, PyTypeError, PyValueError},
@@ -41,6 +44,32 @@ fn call(py: Python<'_>, call_type: &'static str) -> PyResult<RedisCall> {
         event_loop: EventLoop::running(py),
         call_type,
     })
+}
+
+pub(crate) fn targeted_call(
+    py: Python<'_>,
+    target: &Bound<'_, PyAny>,
+    call_type: &'static str,
+) -> PyResult<RedisCall> {
+    let scope = py
+        .import("litellm._internal_context")?
+        .call_method1("service_target", (target,))?;
+    scope.call_method0("__enter__")?;
+    let captured = call(py, call_type);
+    scope.call_method1("__exit__", (py.None(), py.None(), py.None()))?;
+    captured
+}
+
+pub(crate) fn relabel(tag: &CallTag, call_type: &'static str) -> CallTag {
+    match tag.downcast_ref::<RedisCall>() {
+        Some(call) => RedisCall {
+            context: call.context.clone(),
+            event_loop: call.event_loop.clone(),
+            call_type,
+        }
+        .tag(),
+        None => Arc::clone(tag),
+    }
 }
 
 /// Runs one Redis operation as a Python awaitable, reported to `ServiceLogging` as `call_type`.
@@ -87,6 +116,16 @@ fn duration(value: f64) -> PyResult<Duration> {
 
 fn ttl(value: Option<f64>) -> PyResult<Option<Duration>> {
     value.map(duration).transpose()
+}
+
+/// A store's clock from Python: a callable returning epoch seconds, which tests use to move time.
+fn python_clock(clock: Py<PyAny>) -> Clock {
+    Arc::new(move || {
+        Python::attach(|py| clock.call0(py)?.extract::<f64>(py))
+            .ok()
+            .and_then(|seconds| Duration::try_from_secs_f64(seconds).ok())
+            .unwrap_or_default()
+    })
 }
 
 fn remote(client: &NativeRedisClient) -> Remote {
@@ -148,8 +187,13 @@ pyo3::create_exception!(
 
 /// What every native store raises, its kind telling a caller which failures it may drop.
 fn kind_error(error: Error) -> PyErr {
+    store_error(&error)
+}
+
+/// [`kind_error`] for an error the caller keeps.
+pub(crate) fn store_error(error: &Error) -> PyErr {
     let kind: &'static str = error.kind().into();
-    NativeRedisStoreError::new_err((kind, litellm_error::Report::new(&error).to_string()))
+    NativeRedisStoreError::new_err((kind, litellm_error::Report::new(error).to_string()))
 }
 
 /// A store op declared on the batch the caller's `NativeSend` picked, answered as `reply` shapes it.

@@ -8,6 +8,8 @@ import { CircleHelp } from "lucide-react";
 import React from "react";
 import { useTranslation } from "react-i18next";
 import { useMyTeamMember } from "./useMyTeamMember";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { navAccountDisplayName } from "@/components/Navbar/navDisplayName";
 
 const DEFAULT_TEAM_ROLE = "user";
 
@@ -42,6 +44,7 @@ function describePeriodLine(t: TFunction, schedule: BudgetResetSchedule): string
 
 export default function MyUserTab({ teamId }: MyUserTabProps) {
   const { t } = useTranslation();
+  const { userAlias, userId } = useAuthorized();
   const { data, isLoading, error } = useMyTeamMember(teamId);
 
   if (isLoading) {
@@ -86,7 +89,13 @@ export default function MyUserTab({ teamId }: MyUserTabProps) {
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3">
             <div>
               <span className="text-muted-foreground">{t("teams.myUserTab.user")}</span>
-              <div className="mt-1 font-semibold">{data.user_email || data.user_id}</div>
+              <div className="mt-1 font-semibold">
+                {navAccountDisplayName(
+                  data.user_email ?? null,
+                  data.user_id,
+                  userId === data.user_id ? userAlias : null,
+                )}
+              </div>
               <span className="font-mono text-xs text-muted-foreground">{data.user_id}</span>
             </div>
             <div>

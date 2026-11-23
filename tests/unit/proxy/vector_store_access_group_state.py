@@ -15,7 +15,9 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.auth_checks import cache_access_object
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
+from tests.unit.proxy._prisma import prisma_with_empty_config
 
 TOKEN: Final = "hashed-key"
 TEAM_ID: Final = "team-t"
@@ -36,13 +38,10 @@ class ProxyState:
     ) -> None:
         self.cache: Final = cache if cache is not None else UserApiKeyCache()
         self.group_reads: Final = group_reads if group_reads is not None else AsyncMock(return_value=None)
-        self.prisma: Final = MagicMock(
-            db=MagicMock(
-                litellm_accessgrouptable=MagicMock(find_unique=self.group_reads),
-                litellm_teamtable=MagicMock(find_unique=team_reads or AsyncMock(return_value=None)),
-                litellm_managedvectorstorestable=MagicMock(find_unique=store_reads or AsyncMock(return_value=None)),
-            )
-        )
+        self.prisma: Final = prisma_with_empty_config()
+        self.prisma.db.litellm_accessgrouptable.find_unique = self.group_reads
+        self.prisma.db.litellm_teamtable.find_unique = team_reads or AsyncMock(return_value=None)
+        self.prisma.db.litellm_managedvectorstorestable.find_unique = store_reads or AsyncMock(return_value=None)
         monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", self.prisma)
         monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", self.cache)
 
@@ -69,7 +68,7 @@ class ProxyState:
         )
 
     async def add_team(self, team: LiteLLM_TeamTableCachedObj) -> None:
-        await self.cache.async_set_cache(key=f"team_id:{team.team_id}", value=team)
+        await self.cache.async_set_cache(key=AuthObject.team(team.team_id), value=team)
 
 
 def own_permission(stores: Sequence[str] | None) -> LiteLLM_ObjectPermissionTable | None:

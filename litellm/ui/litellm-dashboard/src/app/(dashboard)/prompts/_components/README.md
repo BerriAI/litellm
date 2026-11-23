@@ -64,7 +64,7 @@ interface PromptItem {
 
 The component is fully integrated into the main application:
 
-1. **Left Navigation**: Added to `leftnav.tsx` with `FileTextOutlined` icon
+1. **Left Navigation**: Added to `LeftNav.tsx` with `FileTextOutlined` icon
 2. **Main Routing**: Added to `page.tsx` with proper routing logic
 3. **Permissions**: Restricted to admin roles (same as guardrails)
 

@@ -148,6 +148,27 @@ class SpendUpdateQueue(BaseUpdateQueue):
             customer_org_list_transactions={},
             customer_team_list_transactions={},
             customer_member_list_transactions={},
+            **(
+                {
+                    "app_list_transactions": dict[str, float](),
+                    "app_group_list_transactions": dict[str, float](),
+                    "app_group_customer_org_list_transactions": dict[str, float](),
+                    "app_customer_org_list_transactions": dict[str, float](),
+                    "app_customer_member_list_transactions": dict[str, float](),
+                }
+                if any(
+                    update.get("entity_type")
+                    in (
+                        Litellm_EntityType.APP,
+                        Litellm_EntityType.APP_GROUP,
+                        Litellm_EntityType.APP_GROUP_CUSTOMER_ORG,
+                        Litellm_EntityType.APP_CUSTOMER_ORG,
+                        Litellm_EntityType.APP_CUSTOMER_MEMBER,
+                    )
+                    for update in updates
+                )
+                else {}
+            ),
         )
 
         # Map entity types to their corresponding transaction dictionary keys
@@ -166,6 +187,11 @@ class SpendUpdateQueue(BaseUpdateQueue):
             Litellm_EntityType.CUSTOMER_ORG: "customer_org_list_transactions",
             Litellm_EntityType.CUSTOMER_TEAM: "customer_team_list_transactions",
             Litellm_EntityType.CUSTOMER_MEMBER: "customer_member_list_transactions",
+            Litellm_EntityType.APP: "app_list_transactions",
+            Litellm_EntityType.APP_GROUP: "app_group_list_transactions",
+            Litellm_EntityType.APP_GROUP_CUSTOMER_ORG: "app_group_customer_org_list_transactions",
+            Litellm_EntityType.APP_CUSTOMER_ORG: "app_customer_org_list_transactions",
+            Litellm_EntityType.APP_CUSTOMER_MEMBER: "app_customer_member_list_transactions",
         }
 
         for update in updates:
@@ -217,6 +243,16 @@ class SpendUpdateQueue(BaseUpdateQueue):
                 transactions_dict = db_spend_update_transactions["customer_team_list_transactions"]
             elif dict_key == "customer_member_list_transactions":
                 transactions_dict = db_spend_update_transactions["customer_member_list_transactions"]
+            elif dict_key == "app_group_list_transactions":
+                transactions_dict = db_spend_update_transactions.get("app_group_list_transactions")
+            elif dict_key == "app_group_customer_org_list_transactions":
+                transactions_dict = db_spend_update_transactions.get("app_group_customer_org_list_transactions")
+            elif dict_key == "app_list_transactions":
+                transactions_dict = db_spend_update_transactions.get("app_list_transactions")
+            elif dict_key == "app_customer_org_list_transactions":
+                transactions_dict = db_spend_update_transactions.get("app_customer_org_list_transactions")
+            elif dict_key == "app_customer_member_list_transactions":
+                transactions_dict = db_spend_update_transactions.get("app_customer_member_list_transactions")
             else:
                 continue
 

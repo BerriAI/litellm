@@ -2,6 +2,7 @@ mod machine;
 
 pub(crate) use machine::LoggedMachine;
 
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 
 use litellm_host_python::{Pythonized, release_gil};
@@ -17,7 +18,14 @@ type NativeDiagnosticOutput = (String, Option<String>, Option<String>, Vec<Strin
 
 #[pyclass]
 pub(crate) struct NativeTokenRedactor {
-    inner: TokenRedactor,
+    inner: Arc<TokenRedactor>,
+}
+
+impl NativeTokenRedactor {
+    /// The compiled redactor, for Rust code that redacts with the same instance.
+    pub(crate) fn shared(&self) -> Arc<TokenRedactor> {
+        Arc::clone(&self.inner)
+    }
 }
 
 #[pymethods]
@@ -25,7 +33,7 @@ impl NativeTokenRedactor {
     #[new]
     fn new(minimum_custom_key_length: usize, word_ranges: Vec<(u32, u32)>) -> Self {
         Self {
-            inner: TokenRedactor::new(minimum_custom_key_length, word_ranges),
+            inner: Arc::new(TokenRedactor::new(minimum_custom_key_length, word_ranges)),
         }
     }
 
@@ -124,15 +132,16 @@ struct PythonSink {
 }
 
 #[derive(Default)]
-struct Levels([AtomicU8; 4]);
+struct Levels([AtomicU8; 8]);
 
 const UNKNOWN: u8 = 0;
 const DISABLED: u8 = 1;
 const ENABLED: u8 = 2;
 
 impl Levels {
-    fn enabled(&self, level: u8, query: impl FnOnce() -> bool) -> bool {
-        let slot = &self.0[usize::from(level / 10 - 1)];
+    /// Python routes proxy targets to its proxy logger, which has its own level, so each logger gets its own slots.
+    fn enabled(&self, level: u8, proxy: bool, query: impl FnOnce() -> bool) -> bool {
+        let slot = &self.0[usize::from(level / 10 - 1) + if proxy { 4 } else { 0 }];
         match slot.load(Ordering::Relaxed) {
             UNKNOWN => {
                 let enabled = query();
@@ -144,12 +153,21 @@ impl Levels {
     }
 }
 
-fn python_enabled(level: u8) -> bool {
+/// The targets `litellm.rust_bridge.host.logger` logs on the `LiteLLM Proxy` logger.
+const PROXY_TARGETS: [&str; 1] = ["litellm_callbacks_parallel_request_limiter"];
+
+fn proxy_target(target: &str) -> bool {
+    PROXY_TARGETS
+        .iter()
+        .any(|prefix| target.starts_with(prefix))
+}
+
+fn python_enabled(level: u8, target: &str) -> bool {
     Python::try_attach(|py| {
         report(
             py,
             py.import(MODULE)
-                .and_then(|module| module.call_method1("enabled", (level,)))
+                .and_then(|module| module.call_method1("enabled", (level, target)))
                 .and_then(|enabled| enabled.extract()),
         )
     })
@@ -182,9 +200,12 @@ impl Sink for PythonSink {
             return false;
         }
         let level = level(metadata.level());
+        let target = metadata.target();
         match &self.levels {
-            Some(levels) => levels.enabled(level, || python_enabled(level)),
-            None => python_enabled(level),
+            Some(levels) => levels.enabled(level, proxy_target(target), || {
+                python_enabled(level, target)
+            }),
+            None => python_enabled(level, target),
         }
     }
 

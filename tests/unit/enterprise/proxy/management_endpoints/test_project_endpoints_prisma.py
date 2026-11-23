@@ -1,6 +1,4 @@
 import asyncio
-import os
-import traceback
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -15,15 +13,11 @@ from litellm.constants import PROXY_DB_LOOKUP_STALL_WINDOW_SECONDS
 from litellm.proxy.db.db_lookup_gate import db_lookup_stall_tracker
 
 load_dotenv()
-import time
 
 
 import pytest
 
 import litellm
-from litellm.proxy.management_endpoints.team_endpoints import (
-    new_team,
-)
 from litellm_enterprise.proxy.management_endpoints.project_endpoints import (
     new_project,
     update_project,
@@ -35,17 +29,15 @@ from litellm.proxy.proxy_server import (
     LitellmUserRoles,
 )
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
-from litellm.proxy.utils import PrismaClient, ProxyLogging
+from litellm.proxy.utils import ProxyLogging
 
 
-
-from litellm.caching.caching import DualCache
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.proxy._types import (
     LiteLLM_ProjectTable,
     NewProjectRequest,
     UpdateProjectRequest,
     DeleteProjectRequest,
-    NewTeamRequest,
     UserAPIKeyAuth,
     LiteLLM_OrganizationMembershipTable,
     LiteLLM_TeamTable,
@@ -56,387 +48,9 @@ from litellm.proxy._types import (
 from litellm.proxy.management.teams.authz import TeamAccess
 from litellm.proxy.management.users.service import PrismaOrgRoles
 from tests._master_key import MASTER_KEY
+from tests.unit.proxy.rust_auth_stores import install_rust_auth_stores
 
-proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
-
-
-@pytest.fixture
-def prisma_client():
-    from litellm.proxy.proxy_cli import append_query_params
-
-    ### add connection pool + pool timeout args
-    params = {"connection_limit": 100, "pool_timeout": 60}
-    database_url = os.getenv("DATABASE_URL")
-    modified_url = append_query_params(database_url, params)
-    os.environ["DATABASE_URL"] = modified_url
-
-    # Assuming PrismaClient is a class that needs to be instantiated
-    prisma_client = PrismaClient(
-        database_url=os.environ["DATABASE_URL"], proxy_logging_obj=proxy_logging_obj
-    )
-
-    # Reset litellm.proxy.proxy_server.prisma_client to None
-    litellm.proxy.proxy_server.litellm_proxy_budget_name = (
-        f"litellm-proxy-budget-{time.time()}"
-    )
-    litellm.proxy.proxy_server.user_custom_key_generate = None
-
-    # Enable premium_user for project management tests
-    setattr(litellm.proxy.proxy_server, "premium_user", True)
-
-    return prisma_client
-
-
-@pytest.mark.skip(reason="Requires reliable external DB connection (prisma).")
-@pytest.mark.asyncio
-async def test_new_project(prisma_client):
-    """
-    Test creating a new project with budget, models, and metadata.
-    """
-    try:
-        print("prisma client=", prisma_client)
-
-        setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-        setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
-
-        await litellm.proxy.proxy_server.prisma_client.connect()
-
-        # Create a team first
-        _team_id = f"project-test-team_{uuid.uuid4()}"
-        await new_team(
-            NewTeamRequest(
-                team_id=_team_id,
-            ),
-            http_request=Request(scope={"type": "http"}),
-            user_api_key_dict=UserAPIKeyAuth(
-                user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key=MASTER_KEY,
-                user_id="1234",
-            ),
-        )
-
-        # Create a project
-        project_data = NewProjectRequest(
-            project_alias="test-project",
-            description="Test project for unit testing",
-            team_id=_team_id,
-            metadata={"use_case_id": "TEST-001", "responsible_ai_id": "RAI-001"},
-            models=["gpt-5.5", "gpt-5-mini"],
-            max_budget=100.0,
-            model_rpm_limit={"gpt-5.5": 100},
-            model_tpm_limit={"gpt-5.5": 1000},
-        )
-
-        response = await new_project(
-            data=project_data,
-            http_request=Request(scope={"type": "http"}),
-            user_api_key_dict=UserAPIKeyAuth(
-                user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key=MASTER_KEY,
-                user_id="1234",
-            ),
-        )
-
-        print("New project response:", response)
-
-        # Assertions
-        assert response.project_id is not None
-        assert response.project_alias == "test-project"
-        assert response.description == "Test project for unit testing"
-        assert response.team_id == _team_id
-        assert response.models == ["gpt-5.5", "gpt-5-mini"]
-        # model_rpm_limit and model_tpm_limit are stored in metadata
-        assert response.metadata["use_case_id"] == "TEST-001"
-        assert response.metadata["responsible_ai_id"] == "RAI-001"
-        assert response.metadata["model_rpm_limit"] == {"gpt-5.5": 100}
-        assert response.metadata["model_tpm_limit"] == {"gpt-5.5": 1000}
-        assert response.litellm_budget_table is not None
-        assert response.litellm_budget_table.max_budget == 100.0
-
-    except Exception as e:
-        print("Got Exception", e)
-        traceback.print_exc()
-        pytest.fail(f"Got exception {e}")
-
-
-@pytest.mark.skip(reason="Requires reliable external DB connection (prisma).")
-@pytest.mark.asyncio
-async def test_update_project(prisma_client):
-    """
-    Test updating an existing project's budget, models, and metadata.
-    """
-    try:
-        print("prisma client=", prisma_client)
-
-        setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-        setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
-
-        await litellm.proxy.proxy_server.prisma_client.connect()
-
-        # Create a team first
-        _team_id = f"project-test-team_{uuid.uuid4()}"
-        await new_team(
-            NewTeamRequest(
-                team_id=_team_id,
-            ),
-            http_request=Request(scope={"type": "http"}),
-            user_api_key_dict=UserAPIKeyAuth(
-                user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key=MASTER_KEY,
-                user_id="1234",
-            ),
-        )
-
-        # Create a project
-        project_data = NewProjectRequest(
-            project_alias="test-project-update",
-            description="Original description",
-            team_id=_team_id,
-            metadata={
-                "use_case_id": "TEST-002",
-            },
-            models=["gpt-5.5"],
-            max_budget=50.0,
-        )
-
-        create_response = await new_project(
-            data=project_data,
-            http_request=Request(scope={"type": "http"}),
-            user_api_key_dict=UserAPIKeyAuth(
-                user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key=MASTER_KEY,
-                user_id="1234",
-            ),
-        )
-
-        print("Created project:", create_response)
-        project_id = create_response.project_id
-
-        # Update the project
-        update_data = UpdateProjectRequest(
-            project_id=project_id,
-            project_alias="test-project-updated",
-            description="Updated description",
-            metadata={
-                "use_case_id": "TEST-002-UPDATED",
-                "additional_field": "new_value",
-            },
-            models=["gpt-5.5", "gpt-5-mini", "claude-3"],
-            max_budget=200.0,
-            model_rpm_limit={"gpt-5.5": 200, "claude-3": 50},
-            model_tpm_limit={"gpt-5.5": 2000, "claude-3": 500},
-        )
-
-        update_response = await update_project(
-            data=update_data,
-            http_request=Request(scope={"type": "http"}),
-            user_api_key_dict=UserAPIKeyAuth(
-                user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key=MASTER_KEY,
-                user_id="1234",
-            ),
-        )
-
-        print("Updated project response:", update_response)
-
-        # Assertions
-        assert update_response.project_id == project_id
-        assert update_response.project_alias == "test-project-updated"
-        assert update_response.description == "Updated description"
-        assert update_response.models == ["gpt-5.5", "gpt-5-mini", "claude-3"]
-        # model_rpm_limit and model_tpm_limit are stored in metadata
-        assert update_response.metadata["use_case_id"] == "TEST-002-UPDATED"
-        assert update_response.metadata["additional_field"] == "new_value"
-        assert update_response.metadata["model_rpm_limit"] == {
-            "gpt-5.5": 200,
-            "claude-3": 50,
-        }
-        assert update_response.metadata["model_tpm_limit"] == {
-            "gpt-5.5": 2000,
-            "claude-3": 500,
-        }
-        assert update_response.litellm_budget_table is not None
-        assert update_response.litellm_budget_table.max_budget == 200.0
-
-    except Exception as e:
-        print("Got Exception", e)
-        traceback.print_exc()
-        pytest.fail(f"Got exception {e}")
-
-
-@pytest.mark.skip(reason="Requires reliable external DB connection (prisma).")
-@pytest.mark.asyncio
-async def test_delete_project(prisma_client):
-    """
-    Test deleting a project.
-    """
-    try:
-        print("prisma client=", prisma_client)
-
-        setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-        setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
-
-        await litellm.proxy.proxy_server.prisma_client.connect()
-
-        # Create a team first
-        _team_id = f"project-test-team_{uuid.uuid4()}"
-        await new_team(
-            NewTeamRequest(
-                team_id=_team_id,
-            ),
-            http_request=Request(scope={"type": "http"}),
-            user_api_key_dict=UserAPIKeyAuth(
-                user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key=MASTER_KEY,
-                user_id="1234",
-            ),
-        )
-
-        # Create a project
-        project_data = NewProjectRequest(
-            project_alias="test-project-delete",
-            team_id=_team_id,
-            models=["gpt-5.5"],
-            max_budget=50.0,
-        )
-
-        create_response = await new_project(
-            data=project_data,
-            http_request=Request(scope={"type": "http"}),
-            user_api_key_dict=UserAPIKeyAuth(
-                user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key=MASTER_KEY,
-                user_id="1234",
-            ),
-        )
-
-        print("Created project:", create_response)
-        project_id = create_response.project_id
-
-        # Delete the project
-        delete_data = DeleteProjectRequest(project_ids=[project_id])
-
-        delete_response = await delete_project(
-            data=delete_data,
-            http_request=Request(scope={"type": "http"}),
-            user_api_key_dict=UserAPIKeyAuth(
-                user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key=MASTER_KEY,
-                user_id="1234",
-            ),
-        )
-
-        print("Delete project response:", delete_response)
-
-        # Assertions - delete_project returns a list of deleted project objects
-        assert isinstance(delete_response, list)
-        assert len(delete_response) == 1
-        assert delete_response[0].project_id == project_id
-
-        # Try to get info on the deleted project - should fail or return None
-        try:
-            await project_info(
-                project_id=project_id,
-                user_api_key_dict=UserAPIKeyAuth(
-                    user_role=LitellmUserRoles.PROXY_ADMIN,
-                    api_key=MASTER_KEY,
-                    user_id="1234",
-                ),
-            )
-            pytest.fail("Expected to fail when fetching deleted project")
-        except Exception as e:
-            print("Expected error when fetching deleted project:", e)
-            # This is expected behavior
-
-    except Exception as e:
-        print("Got Exception", e)
-        traceback.print_exc()
-        pytest.fail(f"Got exception {e}")
-
-
-@pytest.mark.skip(reason="Requires reliable external DB connection (prisma).")
-@pytest.mark.asyncio
-async def test_project_info(prisma_client):
-    """
-    Test getting project info.
-    """
-    try:
-        print("prisma client=", prisma_client)
-
-        setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-        setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
-
-        await litellm.proxy.proxy_server.prisma_client.connect()
-
-        # Create a team first
-        _team_id = f"project-test-team_{uuid.uuid4()}"
-        await new_team(
-            NewTeamRequest(
-                team_id=_team_id,
-            ),
-            http_request=Request(scope={"type": "http"}),
-            user_api_key_dict=UserAPIKeyAuth(
-                user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key=MASTER_KEY,
-                user_id="1234",
-            ),
-        )
-
-        # Create a project
-        project_data = NewProjectRequest(
-            project_alias="test-project-info",
-            description="Test project info endpoint",
-            team_id=_team_id,
-            metadata={"use_case_id": "TEST-003", "cost_center": "engineering"},
-            models=["gpt-5.5", "claude-3"],
-            max_budget=150.0,
-            model_rpm_limit={"gpt-5.5": 150},
-            model_tpm_limit={"gpt-5.5": 1500},
-        )
-
-        create_response = await new_project(
-            data=project_data,
-            http_request=Request(scope={"type": "http"}),
-            user_api_key_dict=UserAPIKeyAuth(
-                user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key=MASTER_KEY,
-                user_id="1234",
-            ),
-        )
-
-        print("Created project:", create_response)
-        project_id = create_response.project_id
-
-        # Get project info
-        info_response = await project_info(
-            project_id=project_id,
-            user_api_key_dict=UserAPIKeyAuth(
-                user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key=MASTER_KEY,
-                user_id="1234",
-            ),
-        )
-
-        print("Project info response:", info_response)
-
-        # Assertions - project_info returns the project object directly
-        assert info_response.project_id == project_id
-        assert info_response.project_alias == "test-project-info"
-        assert info_response.description == "Test project info endpoint"
-        assert info_response.team_id == _team_id
-        assert info_response.models == ["gpt-5.5", "claude-3"]
-        # model_rpm_limit and model_tpm_limit are stored in metadata
-        assert info_response.metadata["use_case_id"] == "TEST-003"
-        assert info_response.metadata["cost_center"] == "engineering"
-        assert info_response.metadata["model_rpm_limit"] == {"gpt-5.5": 150}
-        assert info_response.metadata["model_tpm_limit"] == {"gpt-5.5": 1500}
-        assert info_response.litellm_budget_table is not None
-        assert info_response.litellm_budget_table.max_budget == 150.0
-
-    except Exception as e:
-        print("Got Exception", e)
-        traceback.print_exc()
-        pytest.fail(f"Got exception {e}")
+proxy_logging_obj = ProxyLogging(user_api_key_cache=UserApiKeyCache())
 
 
 ### VALIDATION TESTS ###
@@ -895,12 +509,11 @@ async def test_update_project_invalidates_cached_project_object(monkeypatch):
     project_id = f"project-{uuid.uuid4()}"
     cache = UserApiKeyCache()
 
-    stale_row = MagicMock()
-    stale_row.model_dump = lambda: {"project_id": project_id, "team_id": None, "models": []}
+    stores = install_rust_auth_stores(monkeypatch)
+    stores.project.seed(project_id, LiteLLM_ProjectTable(project_id=project_id, team_id=None, models=[]))
 
     mock_prisma = MagicMock()
     mock_prisma.jsonify_object = lambda data: data
-    mock_prisma.db.litellm_projecttable.find_unique = AsyncMock(return_value=stale_row)
 
     seeded = await get_project_object(
         project_id=project_id, prisma_client=mock_prisma, user_api_key_cache=cache
@@ -933,7 +546,7 @@ async def test_update_project_invalidates_cached_project_object(monkeypatch):
         ),
     )
 
-    mock_prisma.db.litellm_projecttable.find_unique = AsyncMock(return_value=updated_row)
+    stores.project.seed(project_id, LiteLLM_ProjectTable(project_id=project_id, team_id=None, models=updated_models))
     refreshed = await get_project_object(
         project_id=project_id, prisma_client=mock_prisma, user_api_key_cache=cache
     )
@@ -955,6 +568,8 @@ async def test_delete_project_invalidates_cached_project_object(monkeypatch):
     project_id = f"project-{uuid.uuid4()}"
     cache = UserApiKeyCache()
 
+    stores = install_rust_auth_stores(monkeypatch)
+    stores.project.seed(project_id, LiteLLM_ProjectTable(project_id=project_id, team_id=None, models=["gpt-5.5"]))
     row = MagicMock()
     row.model_dump = lambda: {"project_id": project_id, "team_id": None, "models": ["gpt-5.5"]}
 
@@ -983,7 +598,8 @@ async def test_delete_project_invalidates_cached_project_object(monkeypatch):
         ),
     )
 
-    mock_prisma.db.litellm_projecttable.find_unique = AsyncMock(return_value=None)
+    stores.project.reader.pop(project_id)
+    stores.project.writer.pop(project_id)
     assert (
         await get_project_object(
             project_id=project_id, prisma_client=mock_prisma, user_api_key_cache=cache
@@ -1028,7 +644,10 @@ async def test_update_project_succeeds_when_cache_eviction_fails(monkeypatch):
     )
 
     assert response is updated_row
-    failing_cache.async_delete_cache.assert_awaited_once()
+    assert failing_cache.async_delete_cache.await_args_list == [
+        mock.call(key=f"project_id:{project_id}"),
+        mock.call(key=f'customer_app:["project", "{project_id}"]'),
+    ]
 
 
 @pytest.mark.asyncio
@@ -1045,14 +664,17 @@ async def test_project_eviction_publishes_cross_worker_invalidation(monkeypatch)
 
     project_id = f"project-{uuid.uuid4()}"
     with patch(
-        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.publish_auth_cache_invalidation",
+        "litellm.proxy.common_utils.cache_invalidation_pubsub.publish_cache_invalidation",
         new=AsyncMock(),
     ) as mock_publish:
         await delete_cached_project_object(
             project_id=project_id, user_api_key_cache=UserApiKeyCache()
         )
 
-    mock_publish.assert_awaited_once_with(cache_key=f"project_id:{project_id}")
+    assert mock_publish.await_args_list == [
+        mock.call(cache_key=AuthObject.project(project_id).key),
+        mock.call(cache_key=AuthObject.customer_app("project", project_id).key),
+    ]
 
 
 def test_enforce_project_model_quota_missing_both_raises():
@@ -2269,7 +1891,7 @@ def project_access_db(monkeypatch):
 async def _team_access_over_cached_users() -> TeamAccess:
     cache = UserApiKeyCache()
     for user in _USERS.values():
-        await cache.async_set_cache(key=user.user_id, value=user)
+        await cache.async_set_cache(key=AuthObject.user(user.user_id), value=user)
     return TeamAccess(org_roles=PrismaOrgRoles(None, cache, proxy_logging_obj))
 
 

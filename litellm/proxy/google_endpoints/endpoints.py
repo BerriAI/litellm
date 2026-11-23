@@ -27,6 +27,9 @@ from litellm.proxy.common_utils.token_count_log import answered_with_litellm_cal
 from litellm.proxy.common_utils.token_count_settings import count_source_fields
 from litellm.types.llms.vertex_ai import TokenCountDetailsResponse
 
+_DECODED_JSON: Final = TypeAdapter(object)
+_REQUEST_BODY: Final = TypeAdapter(Mapping[str, object])
+
 
 def _google_repeated_field(value: JsonValue) -> JsonValue:
     match value:
@@ -126,6 +129,7 @@ def _input_schema(declaration: _GoogleCountTokensFunctionDeclaration) -> object:
     return {"type": "object", "properties": {}}
 
 
+_COUNT_REQUEST_FIELDS: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 _GOOGLE_RPC_STATUS: Final = MappingProxyType(
     {
         400: "INVALID_ARGUMENT",
@@ -157,13 +161,21 @@ def _google_error_response(request: Request, error: ProxyException) -> JSONRespo
     )
 
 
+def _google_count_tokens_model(model_name: str, data: object) -> str:
+    if model_name:
+        return model_name
+    body_model: Final = _REQUEST_BODY.validate_python(data).get("model")
+    return body_model if isinstance(body_model, str) else ""
+
+
 def _google_count_tokens_request(model_name: str, data: object) -> TokenCountRequest:
     from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
 
     validated_data: Final = TypeAdapter(_GoogleCountTokensRequest).validate_python(data)
+    counted_model: Final = _google_count_tokens_model(model_name, data)
     contents: Final = [dict(content) for content in validated_data.contents]
-    messages: Final = (
-        GoogleGenAIAdapter().translate_generate_content_to_completion(model_name, contents).get("messages", [])
+    messages: Final = _DECODED_JSON.validate_python(
+        GoogleGenAIAdapter().translate_generate_content_to_completion(counted_model, contents).get("messages", [])
     )
     system: Final = (
         [
@@ -183,12 +195,14 @@ def _google_count_tokens_request(model_name: str, data: object) -> TokenCountReq
         }
         for declaration in declarations
     ]
-    return TokenCountRequest(
-        model=model_name,
-        contents=contents,
-        messages=messages,
-        system=system,
-        tools=tools or None,
+    return TokenCountRequest.model_validate(
+        {
+            "model": counted_model,
+            "contents": contents,
+            "messages": messages,
+            "system": system,
+            "tools": tools or None,
+        }
     )
 
 
@@ -328,7 +342,12 @@ async def google_stream_generate_content(
     dependencies=[Depends(user_api_key_auth)],
     response_model=TokenCountDetailsResponse,
 )
-async def google_count_tokens(request: Request, model_name: str, fastapi_response: Response):
+async def google_count_tokens(
+    request: Request,
+    model_name: str,
+    fastapi_response: Response,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+):
     """
     ```json
     return {
@@ -345,14 +364,18 @@ async def google_count_tokens(request: Request, model_name: str, fastapi_respons
     """
     litellm_call_id: Final = resolve_litellm_call_id(request.headers.get(LITELLM_CALL_ID_HEADER))
     return await answered_with_litellm_call_id(
-        _google_count_tokens(request, model_name, litellm_call_id), litellm_call_id, request, fastapi_response
+        _google_count_tokens(request, model_name, litellm_call_id, user_api_key_dict),
+        litellm_call_id,
+        request,
+        fastapi_response,
     )
 
 
 async def _google_count_tokens(
-    request: Request, model_name: str, litellm_call_id: str
+    request: Request, model_name: str, litellm_call_id: str, caller: UserAPIKeyAuth
 ) -> JSONResponse | TokenCountDetailsResponse:
     from litellm.proxy.common_utils.http_parsing_utils import read_request_body
+    from litellm.proxy.litellm_pre_call_utils import request_routing_metadata
     from litellm.proxy.proxy_server import count_request_tokens
 
     data: Final = await read_request_body(request=request)
@@ -375,7 +398,11 @@ async def _google_count_tokens(
 
     try:
         token_response: Final = await count_request_tokens(
-            request=token_request, call_endpoint=True, litellm_call_id=litellm_call_id
+            request=token_request,
+            call_endpoint=True,
+            litellm_call_id=litellm_call_id,
+            caller=caller,
+            request_routing=request_routing_metadata(request, _COUNT_REQUEST_FIELDS.validate_python(data), caller),
         )
     except ProxyException as error:
         return _google_error_response(request, error)

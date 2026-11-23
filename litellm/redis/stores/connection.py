@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
 
 from litellm.rust_bridge._native import (
+    NativeActiveTeams,
     NativeAuthCache,
     NativeDeploymentHealth,
     NativeRateLimits,
@@ -51,6 +53,9 @@ class RedisStores:
 
     def router_session_pins(self) -> NativeRouterSessionPins:
         return NativeRouterSessionPins(self.client)
+
+    def active_teams(self, clock: Callable[[], float] | None = None) -> NativeActiveTeams:
+        return NativeActiveTeams(self.client, clock)
 
 
 def connect(redis_cache: RedisCache | None) -> RedisStores:

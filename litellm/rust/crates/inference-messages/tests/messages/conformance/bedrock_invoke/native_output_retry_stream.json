@@ -1,0 +1,104 @@
+{
+  "requests": [
+    {
+      "method": "POST",
+      "target": "/model/anthropic.claude-sonnet-4-5-20250929-v1:0/invoke-with-response-stream",
+      "headers": {
+        "accept": [
+          "*/*"
+        ],
+        "accept-encoding": [
+          "gzip,deflate"
+        ],
+        "authorization": [
+          "AWS4-HMAC-SHA256 Credential=<aws-access-key-id>/<date>/us-west-2/bedrock/aws4_request, SignedHeaders=content-type;host;x-amz-date, Signature=<signature>"
+        ],
+        "content-length": [
+          "250"
+        ],
+        "content-type": [
+          "application/json"
+        ],
+        "host": [
+          "<upstream-address>"
+        ],
+        "x-amz-date": [
+          "<x-amz-date>"
+        ]
+      },
+      "body": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "hi"
+          }
+        ],
+        "max_tokens": 16,
+        "output_config": {
+          "format": {
+            "type": "json_schema",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "answer": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        },
+        "anthropic_version": "bedrock-2023-05-31"
+      }
+    },
+    {
+      "method": "POST",
+      "target": "/model/anthropic.claude-sonnet-4-5-20250929-v1:0/invoke-with-response-stream",
+      "headers": {
+        "accept": [
+          "*/*"
+        ],
+        "accept-encoding": [
+          "gzip,deflate"
+        ],
+        "authorization": [
+          "AWS4-HMAC-SHA256 Credential=<aws-access-key-id>/<date>/us-west-2/bedrock/aws4_request, SignedHeaders=content-type;host;x-amz-date, Signature=<signature>"
+        ],
+        "content-length": [
+          "229"
+        ],
+        "content-type": [
+          "application/json"
+        ],
+        "host": [
+          "<upstream-address>"
+        ],
+        "x-amz-date": [
+          "<x-amz-date>"
+        ]
+      },
+      "body": {
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hi"
+              },
+              {
+                "type": "text",
+                "text": "{\"type\": \"object\", \"properties\": {\"answer\": {\"type\": \"string\"}}}"
+              }
+            ]
+          }
+        ],
+        "max_tokens": 16,
+        "anthropic_version": "bedrock-2023-05-31"
+      }
+    }
+  ],
+  "outcome": {
+    "stream": "event: message_start\ndata: {\"type\": \"message_start\", \"message\": {\"id\": \"msg_1\", \"type\": \"message\", \"role\": \"assistant\", \"content\": [], \"model\": \"claude-sonnet-4-5\", \"stop_reason\": null, \"stop_sequence\": null, \"usage\": {\"input_tokens\": 3, \"output_tokens\": 1}}}\n\nevent: content_block_start\ndata: {\"type\": \"content_block_start\", \"index\": 0, \"content_block\": {\"type\": \"text\", \"text\": \"\"}}\n\nevent: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"text_delta\", \"text\": \"hi\"}}\n\nevent: content_block_stop\ndata: {\"type\": \"content_block_stop\", \"index\": 0}\n\nevent: message_delta\ndata: {\"type\": \"message_delta\", \"delta\": {\"stop_reason\": \"end_turn\", \"stop_sequence\": null}, \"usage\": {\"output_tokens\": 2}}\n\nevent: message_stop\ndata: {\"type\": \"message_stop\"}\n\n"
+  }
+}

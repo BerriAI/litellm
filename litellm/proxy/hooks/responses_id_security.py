@@ -97,7 +97,7 @@ _AddressedResult: TypeAlias = (
     | DeleteInteractionResult
     | CancelInteractionResult
 )
-_AddressedResultT: Final = TypeVar("_AddressedResultT", bound=_AddressedResult)
+_AddressedResultT = TypeVar("_AddressedResultT", bound=_AddressedResult)
 
 
 def _response_payload(response_obj: object) -> Mapping[str, object] | None:

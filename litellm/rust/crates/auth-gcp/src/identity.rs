@@ -8,7 +8,23 @@ use litellm_secret_value::SecretValue;
 use moka::future::Cache;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::{future::Future, pin::Pin, sync::Arc};
+use std::{
+    future::Future,
+    pin::Pin,
+    sync::Arc,
+    time::{Duration, UNIX_EPOCH},
+};
+
+use google_cloud_auth::{
+    build_errors::Error as BuildError,
+    credentials::{
+        AccessTokenCredentials, CacheableResource, Credentials, external_account, impersonated,
+        mds, service_account, user_account,
+    },
+    errors::CredentialsError,
+};
+use http::Extensions;
+use serde_json::Map;
 
 #[derive(Clone)]
 pub struct GcpAuth {
@@ -38,10 +54,38 @@ impl GcpAuth {
         &self,
         source: CredentialSource,
     ) -> Result<Arc<dyn GcpTokenSource>, Error> {
+        self.load_keyed(source.cache_key(), self.loader.load(source))
+            .await
+    }
+
+    /// The token source cached under `key`, loaded by `load` when there is none. A caller that
+    /// parses its own credentials into [`SdkCredentials`] loads them through this.
+    pub(crate) async fn load_keyed(
+        &self,
+        key: CredentialCacheKey,
+        load: impl Future<Output = Result<Arc<dyn GcpTokenSource>, Error>>,
+    ) -> Result<Arc<dyn GcpTokenSource>, Error> {
         self.providers
-            .try_get_with(source.cache_key(), self.loader.load(source))
+            .try_get_with(key, load)
             .await
             .map_err(|error| (*error).clone())
+    }
+
+    /// `source`'s token. Google's Rust SDK stops refreshing credentials for good after a failure
+    /// that is not transient, so such a failure drops `key` and the next call loads them anew.
+    pub(crate) async fn token_evicting(
+        &self,
+        key: &CredentialCacheKey,
+        source: &dyn GcpTokenSource,
+    ) -> Result<SecretValue, Error> {
+        let token = source.token().await;
+        if token.as_ref().is_err_and(|error| {
+            !litellm_error::find::<CredentialsError>(error)
+                .is_some_and(CredentialsError::is_transient)
+        }) {
+            self.providers.invalidate(key).await;
+        }
+        token
     }
 }
 
@@ -56,7 +100,7 @@ pub trait GcpProviderLoader: Send + Sync {
 
 pub type GcpAuthFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, Error>> + Send + 'a>>;
 
-struct ServiceAccountTokenSource(Arc<dyn TokenProvider>);
+pub(crate) struct ServiceAccountTokenSource(pub(crate) Arc<dyn TokenProvider>);
 
 impl GcpTokenSource for ServiceAccountTokenSource {
     fn project_id(&self) -> GcpAuthFuture<'_, String> {
@@ -80,9 +124,9 @@ impl GcpTokenSource for ServiceAccountTokenSource {
     }
 }
 
-struct SdkTokenSource {
-    credentials: google_cloud_auth::credentials::AccessTokenCredentials,
-    project_id: Option<String>,
+pub(crate) struct SdkTokenSource {
+    pub(crate) credentials: google_cloud_auth::credentials::AccessTokenCredentials,
+    pub(crate) project_id: Option<String>,
 }
 
 impl GcpTokenSource for SdkTokenSource {
@@ -105,6 +149,174 @@ impl GcpTokenSource for SdkTokenSource {
                 .map_err(auth_acquisition_error)
         })
     }
+}
+
+/// Credentials read by Google's Rust SDK from the headers it would send, for builders that only
+/// build [`Credentials`].
+struct HeaderTokenSource(Credentials);
+
+impl GcpTokenSource for HeaderTokenSource {
+    fn project_id(&self) -> GcpAuthFuture<'_, String> {
+        Box::pin(async {
+            Err(Error::CredentialAcquisition(ErrorDetail::Unresolved {
+                subject: "GCP resource project",
+            }))
+        })
+    }
+
+    fn token(&self) -> GcpAuthFuture<'_, SecretValue> {
+        Box::pin(async {
+            let CacheableResource::New { data, .. } = self
+                .0
+                .headers(Extensions::new())
+                .await
+                .map_err(auth_acquisition_error)?
+            else {
+                return Err(unresolved_token());
+            };
+            data.get(http::header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.strip_prefix("Bearer "))
+                .map(SecretValue::new)
+                .ok_or_else(unresolved_token)
+        })
+    }
+}
+
+fn unresolved_token() -> Error {
+    Error::CredentialAcquisition(ErrorDetail::Unresolved {
+        subject: "Google access token",
+    })
+}
+
+/// A credentials JSON object kept whole for the builders of Google's Rust SDK, which read it
+/// themselves.
+#[derive(Clone, Default, PartialEq, veil::Redact)]
+pub(crate) struct SdkJson(#[redact(with = "[REDACTED]")] pub(crate) Map<String, Value>);
+
+impl SdkJson {
+    /// The object without `quota_project_id`, which google-auth keeps whatever its JSON type and
+    /// a login that only takes the token never needs.
+    fn without_quota_project(self) -> Value {
+        Value::Object(
+            self.0
+                .into_iter()
+                .filter(|(field, _)| field != "quota_project_id")
+                .collect(),
+        )
+    }
+
+    /// The object with an empty string for each of `fields` that is absent or null.
+    fn with_empty(self, fields: &[&str]) -> Value {
+        let missing = fields
+            .iter()
+            .filter(|field| self.0.get(**field).is_none_or(Value::is_null))
+            .map(|field| ((*field).to_owned(), Value::String(String::new())));
+        Value::Object(self.0.clone().into_iter().chain(missing).collect())
+    }
+}
+
+/// Google credentials a caller has already parsed, which the shared loader builds with Google's
+/// Rust SDK scoped to `cloud-platform`.
+pub(crate) enum SdkCredentials {
+    /// A service account key, which signs its own JWT as the token. The SDK requires a
+    /// `private_key_id` and a `project_id`, which google-auth does not, so either may be empty.
+    ServiceAccount(SdkJson),
+    /// An authorized user, refreshed at `token_uri` whatever endpoint its file names.
+    AuthorizedUser {
+        json: SdkJson,
+        token_uri: String,
+    },
+    ExternalAccount(SdkJson),
+    Impersonated(SdkJson),
+    /// An external account whose subject token the caller supplies.
+    Programmatic(external_account::ProgrammaticBuilder),
+    /// Credentials of the caller's own impersonating a service account.
+    ImpersonatedFrom(impersonated::Builder),
+    /// The GCE metadata server.
+    Metadata,
+}
+
+impl SdkCredentials {
+    pub(crate) fn build(self) -> Result<Arc<dyn GcpTokenSource>, BuildError> {
+        let access = |credentials: AccessTokenCredentials| {
+            Arc::new(SdkTokenSource {
+                credentials,
+                project_id: None,
+            }) as Arc<dyn GcpTokenSource>
+        };
+        let scopes = [CLOUD_PLATFORM_SCOPE];
+        match self {
+            Self::ServiceAccount(json) => {
+                service_account::Builder::new(json.with_empty(&["private_key_id", "project_id"]))
+                    .build_access_token_credentials()
+                    .map(access)
+            }
+            Self::AuthorizedUser { json, token_uri } => {
+                user_account::Builder::new(json.without_quota_project())
+                    .with_token_uri(token_uri)
+                    .with_scopes(scopes)
+                    .build_access_token_credentials()
+                    .map(access)
+            }
+            Self::ExternalAccount(json) => {
+                external_account::Builder::new(json.without_quota_project())
+                    .with_scopes(scopes)
+                    .build_access_token_credentials()
+                    .map(access)
+            }
+            Self::Impersonated(json) => impersonated::Builder::new(json.without_quota_project())
+                .with_scopes(scopes)
+                .build_access_token_credentials()
+                .map(access),
+            Self::Programmatic(builder) => builder
+                .with_scopes(scopes)
+                .build()
+                .map(|credentials| Arc::new(HeaderTokenSource(credentials)) as _),
+            Self::ImpersonatedFrom(builder) => builder
+                .with_scopes(scopes)
+                .build_access_token_credentials()
+                .map(access),
+            Self::Metadata => mds::Builder::default()
+                .with_scopes(scopes)
+                .build_access_token_credentials()
+                .map(access),
+        }
+    }
+}
+
+/// A key file as it is on disk: `os.stat`'s inode (unix only), modification time and size, which
+/// change when the file is rewritten or replaced.
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+pub(crate) struct FileVersion {
+    inode: Option<u64>,
+    modified: Duration,
+    size: u64,
+}
+
+impl FileVersion {
+    fn of(path: &str) -> Option<Self> {
+        let metadata = std::fs::metadata(path).ok()?;
+        Some(Self {
+            inode: inode(&metadata),
+            modified: metadata
+                .modified()
+                .ok()
+                .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+                .unwrap_or_default(),
+            size: metadata.len(),
+        })
+    }
+}
+
+#[cfg(unix)]
+fn inode(metadata: &std::fs::Metadata) -> Option<u64> {
+    Some(std::os::unix::fs::MetadataExt::ino(metadata))
+}
+
+#[cfg(not(unix))]
+fn inode(_: &std::fs::Metadata) -> Option<u64> {
+    None
 }
 
 async fn load_application_credentials(path: &str) -> Result<Arc<dyn GcpTokenSource>, Error> {
@@ -219,11 +431,34 @@ impl CredentialSource {
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
-enum CredentialCacheKey {
+pub(crate) enum CredentialCacheKey {
     Inline([u8; 32]),
     Trusted([u8; 32]),
     ApplicationCredentials(String),
     Adc,
+    /// A key file known by its version on disk, so a rotated file loads anew.
+    KeyFile {
+        path: String,
+        version: FileVersion,
+    },
+}
+
+impl CredentialCacheKey {
+    /// Trusted credentials text, keyed by the version of the file it names when it names one.
+    pub(crate) fn versioned(configured: &str) -> Self {
+        match FileVersion::of(configured) {
+            Some(version) => Self::KeyFile {
+                path: configured.to_owned(),
+                version,
+            },
+            None => Self::Trusted(Sha256::digest(configured).into()),
+        }
+    }
+
+    /// The GCE metadata server's credentials.
+    pub(crate) fn metadata() -> Self {
+        Self::Adc
+    }
 }
 
 async fn load_trusted_credentials(configured: &str) -> Result<Arc<dyn GcpTokenSource>, Error> {
@@ -433,6 +668,80 @@ mod tests {
                 .to_string()
                 .contains("credential-value")
         );
+    }
+
+    #[rstest::rstest]
+    fn a_key_file_s_cache_key_changes_when_the_file_is_rewritten() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(file.path(), "{}").unwrap();
+        let path = file.path().to_str().unwrap();
+        let before = CredentialCacheKey::versioned(path);
+        std::fs::write(file.path(), r#"{"rotated": true}"#).unwrap();
+        assert!(matches!(before, CredentialCacheKey::KeyFile { .. }));
+        assert_ne!(before, CredentialCacheKey::versioned(path));
+    }
+
+    #[rstest::rstest]
+    fn a_key_file_s_cache_key_changes_when_only_its_modification_time_does() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(file.path(), "{}").unwrap();
+        let path = file.path().to_str().unwrap();
+        file.as_file()
+            .set_modified(UNIX_EPOCH + Duration::from_secs(1_700_000_000))
+            .unwrap();
+        let before = CredentialCacheKey::versioned(path);
+        file.as_file()
+            .set_modified(UNIX_EPOCH + Duration::from_secs(1_700_000_060))
+            .unwrap();
+        assert!(matches!(before, CredentialCacheKey::KeyFile { .. }));
+        assert_ne!(before, CredentialCacheKey::versioned(path));
+    }
+
+    #[rstest::rstest]
+    fn credentials_text_that_names_no_file_is_keyed_by_its_text() {
+        assert_eq!(
+            CredentialCacheKey::versioned(r#"{"type":"service_account"}"#),
+            CredentialCacheKey::Trusted(Sha256::digest(r#"{"type":"service_account"}"#).into())
+        );
+    }
+
+    struct Refusing(bool);
+
+    impl GcpTokenSource for Refusing {
+        fn project_id(&self) -> GcpAuthFuture<'_, String> {
+            Box::pin(async { Err(unresolved_token()) })
+        }
+
+        fn token(&self) -> GcpAuthFuture<'_, SecretValue> {
+            Box::pin(async {
+                Err(auth_acquisition_error(CredentialsError::from_msg(
+                    self.0, "refused",
+                )))
+            })
+        }
+    }
+
+    #[rstest::rstest]
+    #[case::permanent(false, 2)]
+    #[case::transient(true, 1)]
+    #[tokio::test]
+    async fn only_a_permanent_token_failure_drops_the_cached_source(
+        #[case] transient: bool,
+        #[case] loads: usize,
+    ) {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let auth = GcpAuth::default();
+        let loaded = AtomicUsize::new(0);
+        let load = || async {
+            loaded.fetch_add(1, Ordering::SeqCst);
+            Ok(Arc::new(Refusing(transient)) as Arc<dyn GcpTokenSource>)
+        };
+        let key = CredentialCacheKey::metadata();
+        let source = auth.load_keyed(key.clone(), load()).await.unwrap();
+        assert!(auth.token_evicting(&key, &*source).await.is_err());
+        auth.load_keyed(key, load()).await.unwrap();
+        assert_eq!(loaded.load(Ordering::SeqCst), loads);
     }
 
     #[rstest::rstest]
