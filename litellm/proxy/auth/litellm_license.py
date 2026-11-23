@@ -193,7 +193,7 @@ class LicenseCheck:
             return None
         return 1
 
-    def verify_license_without_api_request(self, public_key, license_key):
+    def verify_license_without_api_request(self, public_key, license_key: str):
         try:
             from cryptography.hazmat.primitives import hashes
             from cryptography.hazmat.primitives.asymmetric import padding
