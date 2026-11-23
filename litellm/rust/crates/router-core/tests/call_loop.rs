@@ -2152,6 +2152,7 @@ fn a_fallback_chain_target_that_sets_params_would_override_the_requests(
     assert_eq!(policy.overrides_params, overrides);
 }
 
+#[rstest]
 #[tokio::test]
 async fn a_dict_fallbacks_stream_would_override_the_requests_params_on_its_next_fallback() {
     let host = Arc::new(ScriptedHost::failing("primary", vec![server_error()]));
@@ -2613,6 +2614,7 @@ async fn a_failed_stream_fails_over_to_another_deployment_of_its_group() {
     assert_eq!(served.output.response, "a2");
 }
 
+#[rstest]
 #[tokio::test]
 async fn a_failed_failover_stream_falls_back_instead_of_failing_back_to_the_deployment_it_left() {
     let host = Arc::new(ScriptedHost::default());
