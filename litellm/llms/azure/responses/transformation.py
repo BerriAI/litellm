@@ -16,6 +16,7 @@ from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils i
 )
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.azure.chat.gpt_reasoning_transformation import AzureOpenAIGPT5Config
+from litellm.llms.azure.chat.o_series_transformation import AzureOpenAIO1Config
 from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.llms.azure.ptu_capacity import is_str_keyed_mapping
 from litellm.llms.base_llm.responses.transformation import SUMMARY_ONLY_REASONING_FIELD_VALUES, ReasoningFieldValues
@@ -165,7 +166,7 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def get_stripped_model_name(self, model: str) -> str:
         return (
             model.replace("responses/", "")
-            .replace("o_series/", "")
+            .replace(AzureOpenAIO1Config.O_SERIES_ROUTE, "")
             .replace("azure_ai/", "")
             .replace(AzureOpenAIGPT5Config.GPT5_SERIES_ROUTE, "")
         )

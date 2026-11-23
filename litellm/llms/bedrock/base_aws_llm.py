@@ -643,21 +643,11 @@ class BaseAWSLLM(SignsRequestsWithAWS):
                 model_id = BaseAWSLLM.encode_model_id(model_id=model_id)
                 return model_id
 
+        from litellm.llms.bedrock.common_utils import BEDROCK_MODEL_ID_SPECS
+
         model_id = model_id.replace("invoke/", "", 1)
-        if provider == "llama" and "llama/" in model_id:
-            model_id = BaseAWSLLM._get_model_id_from_model_with_spec(model_id, spec="llama")
-        elif provider == "deepseek_r1" and "deepseek_r1/" in model_id:
-            model_id = BaseAWSLLM._get_model_id_from_model_with_spec(model_id, spec="deepseek_r1")
-        elif provider == "openai" and "openai/" in model_id:
-            model_id = BaseAWSLLM._get_model_id_from_model_with_spec(model_id, spec="openai")
-        elif provider == "qwen2" and "qwen2/" in model_id:
-            model_id = BaseAWSLLM._get_model_id_from_model_with_spec(model_id, spec="qwen2")
-        elif provider == "qwen3" and "qwen3/" in model_id:
-            model_id = BaseAWSLLM._get_model_id_from_model_with_spec(model_id, spec="qwen3")
-        elif provider == "stability" and "stability/" in model_id:
-            model_id = BaseAWSLLM._get_model_id_from_model_with_spec(model_id, spec="stability")
-        elif provider == "moonshot" and "moonshot/" in model_id:
-            model_id = BaseAWSLLM._get_model_id_from_model_with_spec(model_id, spec="moonshot")
+        if provider in BEDROCK_MODEL_ID_SPECS and f"{provider}/" in model_id:
+            model_id = BaseAWSLLM._get_model_id_from_model_with_spec(model_id, spec=provider)
         elif "nova-2/" in model_id:
             model_id = BaseAWSLLM._get_model_id_from_model_with_spec(model_id, spec="nova-2")
         elif "nova/" in model_id:

@@ -85,13 +85,13 @@ BEDROCK_RUNTIME_OPENAI_CHAT_ROUTE_SUFFIXES: Final = (
     "/chat/completions",
 )
 BEDROCK_RUNTIME_OPENAI_RESPONSES_ROUTE_SUFFIXES: Final = ("/openai/v1/responses", "/v1/responses", "/responses")
+BedrockAgentRoute: TypeAlias = Literal["agent", "agentcore"]
 BedrockRoute = Literal[
     "converse",
     "invoke",
     "claude_platform",
     "converse_like",
-    "agent",
-    "agentcore",
+    BedrockAgentRoute,
     "async_invoke",
     "openai",
     "mantle",
@@ -1241,9 +1241,22 @@ def bedrock_capability_model(model: str, base_model: object) -> str:
     return model
 
 
+BEDROCK_ROUTING_PREFIXES: Final = (
+    "bedrock/",
+    "chat_completions/",
+    "converse/",
+    "invoke/",
+    "openai/",
+    "mantle/",
+    "nova-2/",
+    "nova/",
+)
+BEDROCK_MODEL_ID_SPECS: Final = frozenset(("llama", "deepseek_r1", "openai", "qwen2", "qwen3", "stability", "moonshot"))
+
+
 def strip_bedrock_routing_prefix(model: str) -> str:
     """Strip LiteLLM routing prefixes from model name."""
-    for prefix in ["bedrock/", "chat_completions/", "converse/", "invoke/", "openai/", "mantle/", "nova-2/", "nova/"]:
+    for prefix in BEDROCK_ROUTING_PREFIXES:
         if model.startswith(prefix):
             model = model.split("/", 1)[1]
     return model

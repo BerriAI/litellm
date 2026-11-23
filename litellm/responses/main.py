@@ -1424,13 +1424,13 @@ def _pop_use_chat_completions_api_kw(kwargs: dict[str, object]) -> bool:
     return bool(use_cc)
 
 
-_RESPONSES_ROUTING_PREFIX: Final = "responses/"
+RESPONSES_ROUTING_PREFIX: Final = "responses/"
 
 
 def strip_responses_routing_prefix(model: str) -> str:
-    if not model.startswith(_RESPONSES_ROUTING_PREFIX):
+    if not model.startswith(RESPONSES_ROUTING_PREFIX):
         return model
-    return model[len(_RESPONSES_ROUTING_PREFIX) :]
+    return model[len(RESPONSES_ROUTING_PREFIX) :]
 
 
 def _resolve_model_provider_for_responses(

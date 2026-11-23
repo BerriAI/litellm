@@ -1278,7 +1278,7 @@ def test_regional_pricing_rows_do_not_narrow_bedrock_wildcard_discovery(provider
 
     assert canonical in bare
     assert regional not in bare
-    assert sorted(routed) == sorted(bare)
+    assert sorted(routed) == _without_latest_aliases("bedrock", bare)
 
 
 def test_wildcard_lists_a_model_once_when_registered_both_bare_and_provider_prefixed():
@@ -1981,6 +1981,13 @@ def _registered_chat_models(provider_by_model: Mapping[str, str]) -> Generator[N
         litellm.add_known_models(model_cost_map={})
 
 
+def _without_latest_aliases(provider: str, listing: list[str]) -> list[str]:
+    from litellm.litellm_core_utils.model_latest_aliases import get_model_latest_aliases
+
+    aliases: Final = frozenset(f"{provider}/{alias}" for alias in get_model_latest_aliases().get(provider, {}))
+    return sorted(listed_id for listed_id in listing if listed_id not in aliases)
+
+
 @pytest.mark.parametrize(
     ("wildcard", "deployment_model", "catalog", "expected"),
     [
@@ -2031,10 +2038,31 @@ def test_partial_wildcard_lists_catalog_ids_stored_with_the_provider_prefix(
         ("bedrock", "converse"),
         ("bedrock", "us-east-1"),
         ("bedrock", "deepseek_r1"),
+        ("bedrock", "invoke"),
+        ("bedrock", "llama"),
+        ("bedrock", "qwen3"),
+        ("bedrock", "moonshot"),
+        ("bedrock", "converse_like"),
+        ("bedrock", "async_invoke"),
+        ("bedrock", "claude_platform"),
+        ("bedrock", "mantle"),
+        ("bedrock", "openai"),
+        ("bedrock", "chat_completions"),
+        ("bedrock", "nova"),
+        ("bedrock", "us-east-1/converse"),
+        ("bedrock", "us-east-1/nova-2"),
+        ("bedrock", "invoke/us-east-1"),
+        ("bedrock", "converse/us-east-1"),
         ("openai", "responses"),
         ("openai", "chat_completions"),
         ("azure", "o_series"),
-        ("vertex_ai", "gemini"),
+        ("azure", "gpt5_series"),
+        ("azure", "responses"),
+        ("azure", "responses/o_series"),
+        ("huggingface", "together"),
+        ("huggingface", "hf-inference"),
+        ("huggingface", "novita"),
+        ("huggingface", "fireworks-ai"),
         ("cohere", "v1"),
         ("cohere", "v2"),
         ("cohere_chat", "v1"),
@@ -2063,7 +2091,7 @@ def test_routing_segment_lists_the_same_catalog_ids_as_the_bare_provider_wildcar
     )
 
     assert bare_listing
-    assert sorted(routed_listing) == sorted(bare_listing)
+    assert sorted(routed_listing) == _without_latest_aliases(provider, bare_listing)
 
 
 @pytest.mark.parametrize(
@@ -2084,6 +2112,7 @@ def test_routing_segment_lists_the_same_catalog_ids_as_the_bare_provider_wildcar
         "openai",
         "cohere",
         "cohere_chat",
+        "vertex_ai",
     ],
 )
 def test_wildcard_over_an_org_the_catalog_lacks_lists_no_catalog_id(provider: str) -> None:
@@ -2100,6 +2129,129 @@ def test_wildcard_over_an_org_the_catalog_lacks_lists_no_catalog_id(provider: st
 
     assert listed_under_known_org == [f"{provider}/model-u"]
     assert listed_under_unknown_org == []
+
+
+@pytest.mark.parametrize(
+    ("provider", "route"),
+    [
+        ("bedrock", "unknown-org-route-missing-org"),
+        ("bedrock", "us-east-1/unknown-org-route-missing-org"),
+        ("bedrock", "converse/unknown-org-route-missing-org"),
+        ("bedrock", "anthropic"),
+        ("bedrock", "amazon"),
+        ("bedrock", "agent"),
+        ("bedrock", "agentcore"),
+        ("vertex_ai", "agent_engine"),
+        ("vertex_ai", "bge"),
+        ("vertex_ai", "gemma"),
+        ("vertex_ai", "partner_models"),
+        ("vertex_ai", "model_garden"),
+        ("vertex_ai", "us-central1"),
+        ("azure", "unknown-org-route-missing-org"),
+    ],
+)
+@pytest.mark.parametrize("api_base", [None, "https://tenant-resource.example.test"])
+def test_wildcard_over_a_segment_the_provider_sends_inside_the_model_id_lists_no_catalog_id(
+    provider: str, route: str, api_base: str | None
+) -> None:
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    bare_listing: Final = get_known_models_from_wildcard(
+        f"{provider}/*", LiteLLM_Params(model=f"{provider}/*", api_base=api_base)
+    )
+    routed_listing: Final = get_known_models_from_wildcard(
+        f"{provider}/*", LiteLLM_Params(model=f"{provider}/{route}/*", api_base=api_base)
+    )
+
+    assert bare_listing
+    assert routed_listing == []
+
+
+@pytest.mark.parametrize("route", ["gemini", "gemini/unknown-org-route-missing-org"])
+@pytest.mark.parametrize("api_base", [None, "https://tenant-resource.example.test"])
+def test_vertex_gemini_route_lists_only_the_catalog_ids_the_gemini_api_serves(route: str, api_base: str | None) -> None:
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    with _registered_chat_models(
+        {
+            "vertex_ai/gemini-route-model-g": "vertex_ai-language-models",
+            "vertex_ai/claude-route-model-c": "vertex_ai-anthropic_models",
+            "vertex_ai/route-publisher/route-model-p": "vertex_ai-llama_models",
+        }
+    ):
+        listed: Final = get_known_models_from_wildcard(
+            "vertex_ai/*", LiteLLM_Params(model=f"vertex_ai/{route}/*", api_base=api_base)
+        )
+
+    assert "vertex_ai/gemini-route-model-g" in listed
+    assert "vertex_ai/claude-route-model-c" not in listed
+    assert "vertex_ai/route-publisher/route-model-p" not in listed
+
+
+@pytest.mark.parametrize(
+    ("provider", "route"),
+    [("vertex_ai", "gemini"), ("bedrock", "us-west-2"), ("bedrock", "converse"), ("bedrock", "invoke")],
+)
+def test_wildcard_behind_a_routing_prefix_lists_no_latest_alias_since_the_routed_call_cannot_resolve_it(
+    provider: str, route: str
+) -> None:
+    from litellm.litellm_core_utils.model_latest_aliases import get_model_latest_aliases
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    aliases: Final = frozenset(f"{provider}/{alias}" for alias in get_model_latest_aliases()[provider])
+    bare_listing: Final = frozenset(
+        get_known_models_from_wildcard(f"{provider}/*", LiteLLM_Params(model=f"{provider}/*"))
+    )
+    routed_listing: Final = frozenset(
+        get_known_models_from_wildcard(f"{provider}/*", LiteLLM_Params(model=f"{provider}/{route}/*"))
+    )
+
+    assert aliases & bare_listing
+    assert routed_listing - aliases
+    assert not aliases & routed_listing
+
+
+@pytest.mark.parametrize(
+    ("arn_route", "expected"),
+    [
+        (
+            "arn:aws:bedrock:us-east-1:123456789012:inference-profile",
+            ["bedrock/in.arn-route-vendor.model-p", "bedrock/us.arn-route-vendor.model-p"],
+        ),
+        (
+            "converse/arn:aws:bedrock:ap-south-1:123456789012:inference-profile",
+            ["bedrock/in.arn-route-vendor.model-p", "bedrock/us.arn-route-vendor.model-p"],
+        ),
+        (
+            "arn:aws-us-gov:bedrock:us-gov-west-1:123456789012:inference-profile",
+            ["bedrock/us-gov.arn-route-vendor.model-p"],
+        ),
+        ("arn:aws:bedrock:us-east-1::foundation-model", ["bedrock/arn-route-vendor.model-f"]),
+        ("arn:aws:bedrock:us-east-1:123456789012:application-inference-profile", []),
+        ("llama/arn:aws:bedrock:us-east-1:123456789012:imported-model", []),
+    ],
+)
+def test_bedrock_arn_wildcard_lists_only_the_catalog_ids_its_resource_type_can_name(
+    arn_route: str, expected: list[str]
+) -> None:
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    catalog: Final = (
+        "bedrock/us.arn-route-vendor.model-p",
+        "bedrock/in.arn-route-vendor.model-p",
+        "bedrock/us-gov.arn-route-vendor.model-p",
+        "bedrock/arn-route-vendor.model-f",
+        "bedrock/arn-route-alias-model",
+        "bedrock/arn-route-size/arn-route-vendor.model-f",
+    )
+    with _registered_chat_models(dict.fromkeys(catalog, "bedrock")):
+        listed: Final = get_known_models_from_wildcard("bedrock/*", LiteLLM_Params(model=f"bedrock/{arn_route}/*"))
+
+    assert sorted(listed_id for listed_id in listed if listed_id in catalog) == expected
 
 
 @pytest.mark.parametrize("provider", ["openai", "anthropic", "gemini", "fireworks_ai", "deepseek"])
@@ -2185,7 +2337,7 @@ def test_wildcard_over_a_namespace_behind_the_global_api_base_lists_the_bare_wil
     assert sorted(behind_a_gateway) == sorted(bare_listing)
 
 
-@pytest.mark.parametrize("provider", ["together_ai", "azure_ai", "watsonx"])
+@pytest.mark.parametrize("provider", ["together_ai", "azure_ai", "watsonx", "vertex_ai"])
 def test_wildcard_over_an_unknown_org_behind_the_providers_own_api_base_lists_no_catalog_id(
     provider: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2204,6 +2356,34 @@ def test_wildcard_over_an_unknown_org_behind_the_providers_own_api_base_lists_no
 
     assert listed_under_known_org == [f"{provider}/model-t"]
     assert listed_under_unknown_org == []
+
+
+@pytest.mark.parametrize(
+    ("provider", "routing_segment"),
+    [
+        ("azure", "o_series"),
+        ("azure", "gpt5_series"),
+        ("azure", "responses"),
+        ("bedrock", "converse"),
+        ("bedrock", "us-east-1"),
+    ],
+)
+def test_routing_segment_behind_the_providers_own_api_base_lists_the_bare_wildcard_ids(
+    provider: str, routing_segment: str
+) -> None:
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    api_base: Final = "https://tenant-resource.example.test"
+    bare_listing: Final = get_known_models_from_wildcard(
+        f"{provider}/*", LiteLLM_Params(model=f"{provider}/*", api_base=api_base)
+    )
+    routed_listing: Final = get_known_models_from_wildcard(
+        f"{provider}/*", LiteLLM_Params(model=f"{provider}/{routing_segment}/*", api_base=api_base)
+    )
+
+    assert bare_listing
+    assert sorted(routed_listing) == _without_latest_aliases(provider, bare_listing)
 
 
 @pytest.mark.parametrize(
@@ -2244,8 +2424,8 @@ def test_fireworks_router_wildcard_lists_the_bare_wildcard_ids_except_full_resou
         )
 
     assert {resource_path_id, short_id} <= set(bare_listing)
-    assert sorted(router_listing) == sorted(
-        listed_id for listed_id in bare_listing if not listed_id.startswith("fireworks_ai/accounts/")
+    assert sorted(router_listing) == _without_latest_aliases(
+        "fireworks_ai", [listed_id for listed_id in bare_listing if not listed_id.startswith("fireworks_ai/accounts/")]
     )
 
 

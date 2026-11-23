@@ -12,21 +12,35 @@ from collections.abc import Set as AbstractSet
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from types import MappingProxyType
-from typing import Final, TypeAlias, TypeVar
+from typing import Final, TypeAlias, TypeVar, get_args
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.aws_partition import get_aws_partition, is_bedrock_arn
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.get_llm_provider_logic import inferred_provider
 from litellm.litellm_core_utils.litellm_logging import use_custom_pricing_for_model
+from litellm.litellm_core_utils.model_latest_aliases import is_model_latest_alias
 from litellm.litellm_core_utils.pattern_match_deployments import PatternMatchRouter, PatternUtils
+from litellm.llms.azure.chat.gpt_reasoning_transformation import AzureOpenAIGPT5Config
+from litellm.llms.azure.chat.o_series_transformation import AzureOpenAIO1Config
 from litellm.llms.azure.ptu_capacity import is_str_keyed_mapping
+from litellm.llms.bedrock.common_utils import (
+    BEDROCK_MODEL_ID_SPECS,
+    BEDROCK_ROUTING_PREFIXES,
+    BedrockAgentRoute,
+    BedrockRoute,
+    get_all_bedrock_regions,
+    get_bedrock_cross_region_inference_regions,
+)
 from litellm.llms.fireworks_ai.common_utils import FIREROUTER
+from litellm.llms.vertex_ai.common_utils import uses_vertex_gemini_api
+from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
 from litellm.proxy._types import SpecialModelNames, UserAPIKeyAuth
 from litellm.proxy.common_utils.model_listing_utils import CallerAliases, alias_map, dispatched_model
 from litellm.proxy.common_utils.token_count_settings import cost_map_entry
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
-from litellm.responses.main import strip_responses_routing_prefix
+from litellm.responses.main import RESPONSES_ROUTING_PREFIX, strip_responses_routing_prefix
 from litellm.router import Router
 from litellm.router_api import RouterRegistry, fallback_chain
 from litellm.router_rust.surface.registry import cost_map_backend_model
@@ -43,9 +57,6 @@ LLM_PROVIDER_PREFIXES: Final = frozenset(llm_provider.value for llm_provider in 
 _PROVIDERS_WITH_ROUTES_THE_CATALOG_LOOKUP_CANNOT_PARSE: Final = frozenset(
     provider.value
     for provider in (
-        LlmProviders.AZURE,
-        LlmProviders.BEDROCK,
-        LlmProviders.VERTEX_AI,
         LlmProviders.HUGGINGFACE,
         LlmProviders.AWS_POLLY,
         LlmProviders.BLACK_FOREST_LABS,
@@ -94,7 +105,15 @@ _PROVIDER_BASE_URL_ENV_VARS_NOT_NAMED_AFTER_THE_PROVIDER: Final = MappingProxyTy
     }
 )
 _PROVIDERS_CHECKED_AGAINST_THE_CATALOG_BEHIND_AN_API_BASE: Final = frozenset(
-    provider.value for provider in (LlmProviders.TOGETHER_AI, LlmProviders.AZURE_AI, LlmProviders.WATSONX)
+    provider.value
+    for provider in (
+        LlmProviders.TOGETHER_AI,
+        LlmProviders.AZURE_AI,
+        LlmProviders.WATSONX,
+        LlmProviders.AZURE,
+        LlmProviders.BEDROCK,
+        LlmProviders.VERTEX_AI,
+    )
 )
 
 _CREDENTIAL_LITELLM_PARAM_FIELDS = set(CredentialLiteLLMParams.model_fields)
@@ -445,18 +464,115 @@ def _endpoint_serves_the_provider_catalog(provider: str, litellm_params: LiteLLM
     return not (deployment_api_base or litellm.api_base or _provider_base_url_is_set_in_env(provider))
 
 
+def _bedrock_routing_segments() -> Iterable[str]:
+    routes: Final[tuple[BedrockRoute, ...]] = get_args(BedrockRoute)
+    agent_routes: Final[tuple[BedrockAgentRoute, ...]] = get_args(BedrockAgentRoute)
+    return itertools.chain(
+        frozenset(routes).difference(agent_routes),
+        BEDROCK_MODEL_ID_SPECS,
+        (prefix.removesuffix("/") for prefix in BEDROCK_ROUTING_PREFIXES),
+        get_all_bedrock_regions(),
+    )
+
+
+def _azure_routing_segments() -> Iterable[str]:
+    return (
+        route.removesuffix("/")
+        for route in (
+            AzureOpenAIO1Config.O_SERIES_ROUTE,
+            AzureOpenAIGPT5Config.GPT5_SERIES_ROUTE,
+            RESPONSES_ROUTING_PREFIX,
+        )
+    )
+
+
+_ROUTING_SEGMENTS_BY_PROVIDER: Final[Mapping[str, Callable[[], Iterable[str]]]] = MappingProxyType(
+    {
+        LlmProviders.BEDROCK.value: _bedrock_routing_segments,
+        LlmProviders.AZURE.value: _azure_routing_segments,
+    }
+)
+
+
+@functools.cache
+def _known_routing_segments(provider: str) -> frozenset[str]:
+    routing_segments: Final = _ROUTING_SEGMENTS_BY_PROVIDER.get(provider)
+    return frozenset(routing_segments()) if routing_segments is not None else frozenset()
+
+
+def _call_strips_routing_prefix(provider: str, routing_prefix: str) -> bool:
+    if provider == LlmProviders.VERTEX_AI.value:
+        return VertexGeminiConfig.is_model_gemini_spec_model(routing_prefix)
+    return frozenset(routing_prefix.removesuffix("/").split("/")) <= _known_routing_segments(provider)
+
+
 def _catalog_lookup_parses_route(provider: str, routing_prefix: str) -> bool:
     route: Final = f"{provider}/{routing_prefix}"
     return (
         provider not in _PROVIDERS_WITH_ROUTES_THE_CATALOG_LOOKUP_CANNOT_PARSE
+        and not _call_strips_routing_prefix(provider, routing_prefix)
         and route not in _ROUTES_THE_CATALOG_LOOKUP_CANNOT_PARSE
         and not route.startswith(_ROUTE_PREFIXES_THE_CATALOG_LOOKUP_CANNOT_PARSE)
     )
 
 
+_CROSS_REGION_GEOS_THE_SHARED_LIST_LACKS: Final = ("in",)
+
+
+def _cross_region_profile_geo(model_id: str) -> str | None:
+    geo: Final = model_id.partition(".")[0]
+    known_geos: Final = (*get_bedrock_cross_region_inference_regions(), *_CROSS_REGION_GEOS_THE_SHARED_LIST_LACKS)
+    return geo if geo in known_geos else None
+
+
+def _partition_serving_geo(geo: str) -> str:
+    return get_aws_partition(f"{geo}-").partition
+
+
+def _names_a_cross_region_inference_profile_in(partition: str) -> Callable[[str], bool]:
+    def names_one(model_id: str) -> bool:
+        geo: Final = _cross_region_profile_geo(model_id)
+        return geo is not None and _partition_serving_geo(geo) == partition
+
+    return names_one
+
+
+def _names_a_foundation_model(model_id: str) -> bool:
+    return _cross_region_profile_geo(model_id) is None and "." in model_id and "/" not in model_id
+
+
+def _bedrock_ids_an_arn_route_can_reach(routing_prefix: str, provider_model_ids: tuple[str, ...]) -> tuple[str, ...]:
+    arn: Final = routing_prefix.removesuffix("/").rpartition("/")[2]
+    if not is_bedrock_arn(arn):
+        return provider_model_ids
+    match arn.rpartition(":")[2]:
+        case "inference-profile":
+            return tuple(filter(_names_a_cross_region_inference_profile_in(arn.split(":")[1]), provider_model_ids))
+        case "foundation-model":
+            return tuple(filter(_names_a_foundation_model, provider_model_ids))
+        case _:
+            return ()
+
+
+def _names_a_gemini_api_model(model_id: str) -> bool:
+    return "/" not in model_id and uses_vertex_gemini_api(model_id)
+
+
+def _ids_a_routed_call_resolves(
+    provider: str, routing_prefix: str, provider_model_ids: tuple[str, ...], endpoint_serves_the_catalog: bool
+) -> tuple[str, ...]:
+    if not routing_prefix or not endpoint_serves_the_catalog:
+        return provider_model_ids
+    return tuple(model_id for model_id in provider_model_ids if not is_model_latest_alias(model_id, provider))
+
+
 def _model_ids_a_route_can_reach(
     provider: str, routing_prefix: str, provider_model_ids: tuple[str, ...]
 ) -> tuple[str, ...]:
+    if provider == LlmProviders.BEDROCK.value:
+        return _bedrock_ids_an_arn_route_can_reach(routing_prefix, provider_model_ids)
+    if provider == LlmProviders.VERTEX_AI.value and VertexGeminiConfig.is_model_gemini_spec_model(routing_prefix):
+        return tuple(filter(_names_a_gemini_api_model, provider_model_ids))
     if not f"{provider}/{routing_prefix}".startswith(_FIREWORKS_ROUTER_ROUTES):
         return provider_model_ids
     return tuple(
@@ -505,7 +621,11 @@ def _ids_routing_to_catalog_models(
     name_regex: Final = re.compile(PatternMatchRouter().pattern_to_regex(name_pattern))
     catalog_matches: Final = (
         deployment_regex.fullmatch(f"{provider_id_prefix}{model_id}")
-        for model_id in _model_ids_a_route_can_reach(provider, routing_prefix, provider_model_ids)
+        for model_id in _model_ids_a_route_can_reach(
+            provider,
+            routing_prefix,
+            _ids_a_routed_call_resolves(provider, routing_prefix, provider_model_ids, endpoint_serves_the_catalog),
+        )
     )
     listed_ids: Final = (
         (
