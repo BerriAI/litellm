@@ -15,8 +15,9 @@ import itertools
 import json
 import math
 import traceback
-from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import AsyncGenerator, Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
 from collections.abc import Set as AbstractSet
+from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from itertools import chain
@@ -261,6 +262,7 @@ from litellm.repositories.table_repositories import (
     DeletedTeamRepository,
     ModelTableRepository,
     OrganizationMembershipRepository,
+    RepositoryTransaction,
 )
 from litellm.repositories.team_membership_repository import TeamMembershipRepository
 from litellm.repositories.team_repository import TeamRepository
@@ -450,7 +452,13 @@ class _BudgetIdRow(Protocol):
 
 
 class _BudgetWriteCall(Protocol):
-    async def __call__(self, budget_obj: BudgetNewRequest, user_api_key_dict: UserAPIKeyAuth) -> _BudgetIdRow: ...
+    async def __call__(
+        self,
+        budget_obj: BudgetNewRequest,
+        user_api_key_dict: UserAPIKeyAuth,
+        *,
+        transaction: RepositoryTransaction | None = None,
+    ) -> _BudgetIdRow: ...
 
 
 def _as_budget_write(fn: "_BudgetWriteCall") -> "_BudgetWriteCall":
@@ -573,7 +581,9 @@ class DeletedTeams:
 _INCLUDE_MODEL_TABLE: Final = MappingProxyType({"litellm_model_table": True})
 
 
-def _team_db(prisma_client: PrismaClient | None) -> "TableActions[prisma_models.LiteLLM_TeamTable]":
+def _team_db(
+    prisma_client: PrismaClient | RepositoryTransaction | None,
+) -> "TableActions[prisma_models.LiteLLM_TeamTable]":
     return TeamRepository(prisma_client).table
 
 
@@ -591,7 +601,9 @@ def _team_tx_db(tx: "Prisma") -> "TableActions[prisma_models.LiteLLM_TeamTable]"
     )
 
 
-def _team_membership_db(prisma_client: PrismaClient | None) -> "TableActions[prisma_models.LiteLLM_TeamMembership]":
+def _team_membership_db(
+    prisma_client: PrismaClient | RepositoryTransaction | None,
+) -> "TableActions[prisma_models.LiteLLM_TeamMembership]":
     return TeamMembershipRepository(prisma_client).table
 
 
@@ -599,7 +611,9 @@ def _user_db(prisma_client: PrismaClient | None) -> "TableActions[prisma_models.
     return UserRepository(prisma_client).table
 
 
-def _model_db(prisma_client: PrismaClient | None) -> "TableActions[prisma_models.LiteLLM_ModelTable]":
+def _model_db(
+    prisma_client: PrismaClient | RepositoryTransaction | None,
+) -> "TableActions[prisma_models.LiteLLM_ModelTable]":
     return ModelTableRepository(prisma_client).table
 
 
@@ -613,7 +627,9 @@ def _org_membership_db(
     return OrganizationMembershipRepository(prisma_client).table
 
 
-def _budget_db(prisma_client: PrismaClient | None) -> "TableActions[prisma_models.LiteLLM_BudgetTable]":
+def _budget_db(
+    prisma_client: PrismaClient | RepositoryTransaction | None,
+) -> "TableActions[prisma_models.LiteLLM_BudgetTable]":
     return BudgetRepository(prisma_client).table
 
 
@@ -770,6 +786,7 @@ class TeamMemberBudgetHandler:
         team_member_model_max_budget: GenericBudgetConfigType | None = None,
         user_api_key_cache: UserApiKeyCache | None = None,
         explicitly_set_fields: AbstractSet[str] = frozenset(),
+        transaction: RepositoryTransaction | None = None,
     ) -> dict:
         """Create team member budget table with provided limits.
 
@@ -813,6 +830,7 @@ class TeamMemberBudgetHandler:
         team_member_budget_table: Final = await _as_budget_write(new_budget)(
             budget_obj=budget_request,
             user_api_key_dict=user_api_key_dict,
+            transaction=transaction,
         )
         await TeamMemberBudgetHandler._evict_default_budget_cache(
             budget_id=team_member_budget_table.budget_id,
@@ -875,6 +893,7 @@ class TeamMemberBudgetHandler:
         team_member_model_max_budget: GenericBudgetConfigType | None = None,
         user_api_key_cache: UserApiKeyCache | None = None,
         explicitly_set_fields: AbstractSet[str] = frozenset(),
+        transaction: RepositoryTransaction | None = None,
     ) -> dict:
         """Upsert team member budget table with provided limits.
 
@@ -903,6 +922,7 @@ class TeamMemberBudgetHandler:
             budget_row: Final = await _as_budget_write(update_budget)(
                 budget_obj=budget_request,
                 user_api_key_dict=user_api_key_dict,
+                transaction=transaction,
             )
             await TeamMemberBudgetHandler._evict_default_budget_cache(
                 budget_id=team_member_budget_id,
@@ -924,6 +944,7 @@ class TeamMemberBudgetHandler:
                 data=team_table,
                 new_team_data_json=updated_kv,
                 user_api_key_dict=user_api_key_dict,
+                transaction=transaction,
                 team_member_budget=team_member_budget,
                 team_member_rpm_limit=team_member_rpm_limit,
                 team_member_tpm_limit=team_member_tpm_limit,
@@ -957,6 +978,7 @@ class TeamMemberBudgetHandler:
         updated_kv: dict,
         explicitly_set_fields: AbstractSet[str],
         user_api_key_cache: UserApiKeyCache | None = None,
+        transaction: RepositoryTransaction | None = None,
     ) -> dict:
         """Clear explicitly-nulled fields on the team member budget row."""
         from litellm.proxy.management_endpoints.budget_management_endpoints import (
@@ -971,6 +993,7 @@ class TeamMemberBudgetHandler:
             await update_budget(
                 budget_obj=TeamMemberBudgetHandler._member_budget_patch(team_member_budget_id, explicitly_set_fields),
                 user_api_key_dict=user_api_key_dict,
+                transaction=transaction,
             )
             await TeamMemberBudgetHandler._evict_default_budget_cache(
                 budget_id=team_member_budget_id,
@@ -982,7 +1005,7 @@ class TeamMemberBudgetHandler:
 
     @staticmethod
     async def member_budgets_on_team_reset_window(
-        team_id: str, team_member_budget_id: str | None, prisma_client: PrismaClient
+        team_id: str, team_member_budget_id: str | None, prisma_client: PrismaClient | RepositoryTransaction
     ) -> tuple["prisma_models.LiteLLM_BudgetTable | None", tuple[str, ...]]:
         """The team default's reset window, and the budgets of members who take their cap from it and reset on a copy."""
         team_default: Final = (
@@ -1008,7 +1031,7 @@ class TeamMemberBudgetHandler:
         team_id: str,
         team_member_budget_id: str | None,
         budget_duration: str | None,
-        prisma_client: PrismaClient,
+        prisma_client: PrismaClient | RepositoryTransaction,
         *,
         rollover_patch: Mapping[str, object] = MappingProxyType({}),
     ) -> None:
@@ -1045,7 +1068,7 @@ class TeamMemberBudgetHandler:
         team_id: str,
         members_with_roles: Sequence[Member | dict[str, object]],
         team_member_budget_id: str,
-        prisma_client: PrismaClient,
+        prisma_client: PrismaClient | RepositoryTransaction,
     ) -> None:
         """
         Ensure every team member has a TeamMembership row linked to the
@@ -1585,7 +1608,7 @@ _TEAM_UPDATE_INCLUDE: Final = MappingProxyType(
 
 
 async def _write_team_update(
-    prisma_client: PrismaClient | None,
+    prisma_client: PrismaClient | RepositoryTransaction | None,
     team_id: str,
     team_update_data: Mapping[str, object],
     max_budget_guard: _MaxBudgetGuard | None,
@@ -2329,7 +2352,7 @@ async def _create_team_update_audit_log(
 async def _update_model_table(
     data: UpdateTeamRequest,
     model_id: int | None,
-    prisma_client: PrismaClient,
+    prisma_client: PrismaClient | RepositoryTransaction,
     user_api_key_dict: UserAPIKeyAuth,
     litellm_proxy_admin_name: str,
 ) -> int | None:
@@ -2593,6 +2616,16 @@ async def evict_created_membership_caches(
 _evict_created_membership_caches: Final = evict_created_membership_caches
 
 
+@asynccontextmanager
+async def _team_update_writes() -> AsyncGenerator[AsyncExitStack, None]:
+    """Roll back enlisted writes before translating failures to the management API error contract."""
+    try:
+        async with AsyncExitStack() as writes:
+            yield writes
+    except Exception as e:
+        raise handle_exception_on_proxy(e)
+
+
 @router.post("/team/update", tags=["team management"], dependencies=[Depends(user_api_key_auth)])
 @management_endpoint_wrapper
 async def update_team(
@@ -2677,7 +2710,7 @@ async def update_team(
     }'
     ```
     """
-    try:
+    async with _team_update_writes() as writes:
         from litellm.proxy.management_helpers.audit_logs import is_audit_logging_enabled
         from litellm.proxy.proxy_server import (
             litellm_proxy_admin_name,
@@ -3022,13 +3055,29 @@ async def update_team(
             )
             updated_kv.pop("object_permission", None)
 
+        tx: Final = await writes.enter_async_context(prisma_client.tx()) if prepared_permission is not None else None
+        transaction: Final = RepositoryTransaction(tx) if tx is not None else None
+        writer: Final = transaction or prisma_client
+        if tx is not None:
+            current: Final = await tx.query_raw(
+                'SELECT 1 FROM "LiteLLM_TeamTable" WHERE team_id = $1 '
+                "AND object_permission_id IS NOT DISTINCT FROM $2::text "
+                "AND (metadata->>'team_member_budget_id') IS NOT DISTINCT FROM $3::text FOR UPDATE",
+                data.team_id,
+                existing_team_row.object_permission_id,
+                (existing_team_row.metadata or {}).get("team_member_budget_id"),
+            )
+            if not current:
+                raise HTTPException(
+                    status_code=409, detail="Team permissions or budget changed concurrently. Retry the update."
+                )
         _current_member_budget_id: Final = (existing_team_row.metadata or {}).get("team_member_budget_id")
         if "team_member_budget_duration" in _team_member_fields_in_request:
             await TeamMemberBudgetHandler.move_members_to_team_reset_window(
                 team_id=data.team_id,
                 team_member_budget_id=_current_member_budget_id if isinstance(_current_member_budget_id, str) else None,
                 budget_duration=data.team_member_budget_duration,
-                prisma_client=prisma_client,
+                prisma_client=writer,
                 rollover_patch={
                     "budget_duration": data.team_member_budget_duration,
                     **(
@@ -3062,7 +3111,8 @@ async def update_team(
                 team_member_budget_duration=data.team_member_budget_duration,
                 team_member_rollover_max_budget=data.team_member_rollover_max_budget,
                 team_member_model_max_budget=data.team_member_model_max_budget,
-                user_api_key_cache=user_api_key_cache,
+                user_api_key_cache=user_api_key_cache if transaction is None else None,
+                transaction=transaction,
                 explicitly_set_fields=_team_member_fields_in_request,
             )
             # Backfill team_memberships for members who joined before the
@@ -3073,26 +3123,29 @@ async def update_team(
                     team_id=data.team_id,
                     members_with_roles=existing_team_row.members_with_roles,
                     team_member_budget_id=_backfill_budget_id,
-                    prisma_client=prisma_client,
+                    prisma_client=writer,
                 )
-                await _evict_created_membership_caches(
-                    user_ids=_member_user_ids(existing_team_row.members_with_roles),
-                    team_id=data.team_id,
-                    user_api_key_cache=user_api_key_cache,
-                )
+                if transaction is None:
+                    await _evict_created_membership_caches(
+                        user_ids=_member_user_ids(existing_team_row.members_with_roles),
+                        team_id=data.team_id,
+                        user_api_key_cache=user_api_key_cache,
+                    )
         elif _team_member_fields_in_request:
             updated_kv = await TeamMemberBudgetHandler.clear_team_member_budget_fields(
                 team_table=existing_team_row,
                 user_api_key_dict=user_api_key_dict,
                 updated_kv=updated_kv,
                 explicitly_set_fields=_team_member_fields_in_request,
-                user_api_key_cache=user_api_key_cache,
+                user_api_key_cache=user_api_key_cache if transaction is None else None,
+                transaction=transaction,
             )
         else:
             TeamMemberBudgetHandler.clean_team_member_fields(updated_kv)
 
         if (
-            _team_member_fields_in_request
+            transaction is None
+            and _team_member_fields_in_request
             & {
                 "team_member_rollover_max_budget",
                 "team_member_budget",
@@ -3107,7 +3160,7 @@ async def update_team(
             )
 
         if prepared_permission is not None:
-            updated_kv["object_permission_id"] = await prepared_permission.write(prisma_client)
+            updated_kv["object_permission_id"] = await prepared_permission.write(writer)
 
         # update team metadata fields
         update_metadata_fields(updated_kv=updated_kv)
@@ -3120,7 +3173,7 @@ async def update_team(
             _model_id: Final = await _update_model_table(
                 data=data,
                 model_id=existing_team_row.model_id,
-                prisma_client=prisma_client,
+                prisma_client=writer,
                 user_api_key_dict=user_api_key_dict,
                 litellm_proxy_admin_name=litellm_proxy_admin_name,
             )
@@ -3134,7 +3187,7 @@ async def update_team(
         updated_kv = prisma_client.jsonify_team_object(db_data=updated_kv)
         team_update_data: Final[Mapping[str, object]] = updated_kv
         team_row: Final = await _write_team_update(
-            prisma_client, data.team_id, team_update_data, max_budget_guard, existing_team.budget_limits
+            writer, data.team_id, team_update_data, max_budget_guard, existing_team.budget_limits
         )
 
         if team_row is None or team_row.team_id is None:
@@ -3142,6 +3195,20 @@ async def update_team(
                 status_code=400,
                 detail={"error": f"Team doesn't exist. Got={team_row}"},
             )
+
+        # Commit before any reader can repopulate caches from the previous owner or budget.
+        await writes.aclose()
+        if _team_member_fields_in_request and transaction is not None:
+            if isinstance(_current_member_budget_id, str):
+                from litellm.proxy.management_endpoints.budget_management_endpoints import invalidate_budget_caches
+
+                await invalidate_budget_caches(prisma_client, _current_member_budget_id, user_api_key_cache)
+            if existing_team_row.members_with_roles:
+                await _evict_created_membership_caches(
+                    user_ids=_member_user_ids(existing_team_row.members_with_roles),
+                    team_id=data.team_id,
+                    user_api_key_cache=user_api_key_cache,
+                )
 
         verbose_proxy_logger.info("Successfully updated team - %s, info", team_row.team_id)
         await sync_team_access_group_membership(prisma_client=prisma_client, team_id=team_row.team_id)
@@ -3166,8 +3233,6 @@ async def update_team(
             )
 
         return {"team_id": team_row.team_id, "data": team_row}
-    except Exception as e:
-        raise handle_exception_on_proxy(e)
 
 
 @router.patch(
