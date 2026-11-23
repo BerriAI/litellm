@@ -401,6 +401,10 @@ class KeyPersistenceError(HTTPException):
     pass
 
 
+class KeyAliasConflictError(ProxyException):
+    pass
+
+
 def _deleted_verification_token_table(
     prisma_client: PrismaClient,
 ) -> "TableActions[prisma_models.LiteLLM_DeletedVerificationToken]":
@@ -1907,11 +1911,6 @@ async def _common_key_generation_helper(
 
     _validate_key_alias_format(key_alias=data_json.get("key_alias", None))
 
-    await _enforce_unique_key_alias(
-        key_alias=data_json.get("key_alias", None),
-        prisma_client=prisma_client,
-    )
-
     # Reject custom key values if disabled by admin
     await _check_custom_key_allowed(data.key)
 
@@ -1972,6 +1971,10 @@ async def _common_key_generation_helper(
             )
 
     try:
+        await _enforce_unique_key_alias(
+            key_alias=data_json.get("key_alias", None),
+            prisma_client=prisma_client,
+        )
         response = await generate_key_helper_fn(
             request_type="key",
             **data_json,
@@ -1980,7 +1983,7 @@ async def _common_key_generation_helper(
             actor=user_api_key_dict,
             key_writer=key_writer,
         )
-    except (KeyProjectBindingError, KeyPersistenceError):
+    except (KeyProjectBindingError, KeyPersistenceError, KeyAliasConflictError):
         if prisma_client is not None:
             if created_object_permission_id is not None:
                 await ObjectPermissionRepository(prisma_client).table.delete(
@@ -5829,7 +5832,10 @@ async def generate_key_helper_fn(
                 if key_writer is None
                 else partial(prisma_client.insert_data, key_writer=key_writer)
             )
-            create_key_response: Final = await insert_key(data=key_data, table_name="key")
+            insert_data: Final = cast(  # cast-ok: key_data is constructed locally with string keys
+                Mapping[str, object], key_data
+            )
+            create_key_response: Final = await insert_key(data=insert_data, table_name="key")
 
             key_data["token_id"] = getattr(create_key_response, "token", None)
             created_token_hash: Final = getattr(create_key_response, "token", None)
@@ -8850,7 +8856,7 @@ async def _enforce_unique_key_alias(
 
         existing_key = await _prisma_table(VerificationTokenRepository(prisma_client)).find_first(where=where_clause)
         if existing_key is not None:
-            raise ProxyException(
+            raise KeyAliasConflictError(
                 message=f"Key with alias '{key_alias}' already exists. Unique key aliases across all keys are required.",
                 type=ProxyErrorTypes.bad_request_error,
                 param="key_alias",

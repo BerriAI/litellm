@@ -6843,18 +6843,20 @@ class PrismaClient:
                 # Strip them so the DB stores NULL via the column's nullable constraint.
                 if db_data.get("budget_limits") is None:
                     db_data.pop("budget_limits", None)
-                if key_writer is not None:
-                    return await key_writer(db_data)
                 print_verbose("PrismaClient: Before upsert into litellm_verificationtoken")
-                new_verification_token: Final = await VerificationTokenRepository(self).table.upsert(
-                    where={
-                        "token": hashed_token,
-                    },
-                    data={
-                        "create": {**db_data},
-                        "update": {},  # don't do anything if it already exists
-                    },
-                    include={"litellm_budget_table": True},
+                new_verification_token: Final = (
+                    await key_writer(db_data)
+                    if key_writer is not None
+                    else await VerificationTokenRepository(self).table.upsert(
+                        where={
+                            "token": hashed_token,
+                        },
+                        data={
+                            "create": {**db_data},
+                            "update": {},  # don't do anything if it already exists
+                        },
+                        include={"litellm_budget_table": True},
+                    )
                 )
                 verbose_proxy_logger.info("Data Inserted into Keys Table")
                 return new_verification_token

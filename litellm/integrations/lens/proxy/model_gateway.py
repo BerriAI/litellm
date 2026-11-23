@@ -5,10 +5,10 @@ from collections.abc import Awaitable, Callable, Mapping
 from datetime import timedelta
 from enum import Enum
 from functools import partial
-from typing import (  # noqa: TID251  # generated Prisma cursor type needs the typed repository interface
+from typing import (
     TYPE_CHECKING,
     Final,
-    cast,
+    cast,  # noqa: TID251  # generated Prisma cursor type needs the typed repository interface
 )
 
 import httpx

@@ -20494,6 +20494,7 @@ async def _generate_onboarding_ui_session_token(user_obj: _UserTableRow) -> str:
         llm_router=llm_router,
         request_type="key",
         actor=None,
+        key_writer=None,
         **{
             "user_role": user_obj.user_role,
             "duration": LITELLM_UI_SESSION_DURATION,

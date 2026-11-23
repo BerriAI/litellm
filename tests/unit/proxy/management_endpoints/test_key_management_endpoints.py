@@ -1991,7 +1991,7 @@ def _key_generation_prisma_client(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("rejection", ("project_binding", "persistence"))
+@pytest.mark.parametrize("rejection", ("project_binding", "persistence", "alias_conflict"))
 async def test_rejected_key_generation_deletes_created_budget_and_default_permission(
     monkeypatch: pytest.MonkeyPatch,
     rejection: str,
@@ -2001,6 +2001,10 @@ async def test_rejected_key_generation_deletes_created_budget_and_default_permis
     )
     if rejection == "persistence":
         prisma_client.insert_data.side_effect = KeyPersistenceError(status_code=409, detail="Key was retired")
+    if rejection == "alias_conflict":
+        prisma_client.db.litellm_verificationtoken.find_first = AsyncMock(
+            return_value=LiteLLM_VerificationToken(token="existing-token", key_alias="lens-models-race")
+        )
     monkeypatch.setattr(litellm, "key_generation_settings", None)
     monkeypatch.setattr(
         litellm,
@@ -2011,11 +2015,12 @@ async def test_rejected_key_generation_deletes_created_budget_and_default_permis
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
     monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", False)
 
-    with pytest.raises((KeyProjectBindingError, KeyPersistenceError)) as exc:
+    with pytest.raises((HTTPException, ProxyException)) as exc:
         await _common_key_generation_helper(
             data=GenerateKeyRequest(
                 budget_id="caller-budget-id",
                 project_id="project-b",
+                key_alias="lens-models-race" if rejection == "alias_conflict" else None,
                 soft_budget=3.5,
                 team_id="team-b" if rejection == "persistence" else "team-a",
             ),
@@ -2028,14 +2033,17 @@ async def test_rejected_key_generation_deletes_created_budget_and_default_permis
             team_table=None,
         )
 
-    assert exc.value.status_code == (409 if rejection == "persistence" else 400)
+    if isinstance(exc.value, ProxyException):
+        assert exc.value.code == "400"
+    else:
+        assert exc.value.status_code == (409 if rejection == "persistence" else 400)
     budget_table.create.assert_awaited_once()
     budget_table.delete.assert_awaited_once_with(where={"budget_id": "created-budget-id"})
     object_permission_table.create.assert_awaited_once_with(data={"vector_stores": ["default-vector-store"]})
     object_permission_table.delete.assert_awaited_once_with(
         where={"object_permission_id": "created-object-permission-id"}
     )
-    if rejection == "project_binding":
+    if rejection != "persistence":
         prisma_client.insert_data.assert_not_awaited()
     else:
         prisma_client.insert_data.assert_awaited_once()

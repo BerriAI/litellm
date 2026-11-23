@@ -704,6 +704,7 @@ async def new_user(
             **data_json,
             llm_router=None,
             actor=actor,
+            key_writer=None,
         )
         created_user_id: Final = cast(str | None, response.get("user_id", None))
         if created_user_id is not None:
