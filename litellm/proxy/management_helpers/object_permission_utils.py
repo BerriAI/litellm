@@ -130,7 +130,7 @@ async def prepare_object_permission_upsert(
             *new_object_permission.items(),
             ("object_permission_id", object_permission_id),
         )
-        if can_grant_apps or key != "apps"
+        if (can_grant_apps or key != "apps") and (key != "mcp_event_permissions" or key in new_object_permission)
     }
     record: Final[dict[str, object]] = {
         **merged,
