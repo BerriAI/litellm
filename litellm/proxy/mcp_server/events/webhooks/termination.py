@@ -70,9 +70,10 @@ async def terminate(
     *,
     notify: bool = True,
 ) -> None:
-    if row.status == "terminated" or not await store.end_if_current(row.id, row.upstream_subscription_id):
+    if row.status == "terminated" or not await store.end_if_current(
+        row.id, row.upstream_subscription_id, row.generation
+    ):
         return
-    await store.drop_deliveries(row.id)
     secret: Final = parse_secret(row.client_secret)
     if notify and secret is not None and row.status != "pending":
         body: Final = terminated_body(failure)
