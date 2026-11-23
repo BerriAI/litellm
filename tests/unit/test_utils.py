@@ -11061,7 +11061,7 @@ def test_usage_object_null_tokens():
     assert usage_obj.completion_tokens == 0
 
 
-@mock.patch("httpx.AsyncClient")
+@mock.patch("litellm.llms.custom_httpx.http_handler._ManagedAsyncClient")
 @mock.patch.dict(
     os.environ,
     {"SSL_VERIFY": "/certificate.pem", "SSL_CERTIFICATE": "/client.pem"},
@@ -11091,7 +11091,7 @@ def test_async_http_handler(mock_async_client):
         assert call_args["follow_redirects"] is True
 
 
-@mock.patch("httpx.AsyncClient")
+@mock.patch("litellm.llms.custom_httpx.http_handler._ManagedAsyncClient")
 @mock.patch.dict(os.environ, {}, clear=True)
 def test_async_http_handler_force_ipv4(mock_async_client):
     """

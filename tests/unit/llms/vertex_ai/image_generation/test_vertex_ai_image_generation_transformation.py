@@ -7,13 +7,15 @@ from typing import Final
 
 import httpx
 import pytest
+import respx
 from google.oauth2.credentials import Credentials
 from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm.exceptions import UnprocessableEntityError
 from litellm.litellm_core_utils.litellm_logging import Logging
-from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.gemini.image_generation.transformation import GoogleImageGenConfig
 from litellm.llms.vertex_ai.image_generation import (
     get_vertex_ai_image_generation_config,
@@ -730,7 +732,6 @@ class TestGetVertexAIImageGenerationConfig:
 class TestVertexAIImageGenerationIntegration:
     """Integration tests for Vertex AI image generation"""
 
-
     def test_gemini_get_complete_url(self):
         """Test Gemini config URL generation"""
         config = VertexAIGeminiImageGenerationConfig()
@@ -1325,3 +1326,66 @@ def test_vertex_gemini_generation_accepts_the_snake_case_image_config() -> None:
     }
     with pytest.raises(litellm.UnsupportedParamsError, match="`image_config`"):
         _sent_gemini_generation_request(image_config="banana")
+
+
+@pytest.mark.parametrize("asynchronous", (False, True))
+@pytest.mark.parametrize(
+    ("client_encoding", "request_encoding", "expected"),
+    ((None, None, "identity"), ("gzip, identity;q=0", None, "gzip, identity;q=0"), ("gzip", "br", "br")),
+)
+async def test_vertex_gemini_generation_accept_encoding_on_the_wire(
+    asynchronous: bool, client_encoding: str | None, request_encoding: str | None, expected: str
+) -> None:
+    with httpx.Client(headers={"Accept-Encoding": client_encoding} if client_encoding is not None else {}) as client:
+        with respx.mock(using="httpx") as upstream:
+            route: Final = upstream.post("https://vertex.test/generate").respond(json=_GEMINI_IMAGE_REPLY)
+            params: Final = dict(
+                model="vertex_ai/gemini-3.1-flash-image",
+                prompt="a lighthouse",
+                api_base="https://vertex.test/generate",
+                extra_headers={"accept-encoding": request_encoding} if request_encoding is not None else {},
+                client=HTTPHandler(client=client) if client_encoding is not None else None,
+            )
+            if asynchronous:
+                await litellm.aimage_generation(**params)
+            else:
+                litellm.image_generation(**params)
+            assert route.calls.last.request.headers.get_list("accept-encoding") == [expected]
+
+
+@pytest.mark.parametrize("remove_client_encoding", (False, True))
+async def test_native_async_vertex_gemini_generation_defaults_to_identity_encoding(
+    remove_client_encoding: bool,
+) -> None:
+    model: Final = "gemini-3.1-flash-image"
+    url: Final = "https://vertex.test/generate"
+    handler: Final = AsyncHTTPHandler()
+    if remove_client_encoding:
+        del handler.client.headers["accept-encoding"]
+    original_headers: Final = handler.client.headers.raw
+    try:
+        with respx.mock(using="httpx") as upstream:
+            route: Final = upstream.post(url).respond(json=_GEMINI_IMAGE_REPLY)
+            await BaseLLMHTTPHandler().async_image_generation_handler(
+                model=model,
+                prompt="a lighthouse",
+                image_generation_provider_config=VertexAIGeminiImageGenerationConfig(),
+                image_generation_optional_request_params={},
+                custom_llm_provider="vertex_ai",
+                litellm_params={"api_base": url},
+                logging_obj=Logging(
+                    model=model,
+                    messages=[],
+                    stream=False,
+                    call_type="aimage_generation",
+                    start_time=datetime.datetime(2024, 1, 1),
+                    litellm_call_id="encoding",
+                    function_id="encoding",
+                ),
+                timeout=30,
+                client=handler,
+            )
+            assert route.calls.last.request.headers.get_list("accept-encoding") == ["identity"]
+            assert handler.client.headers.raw == original_headers
+    finally:
+        await handler.close()
