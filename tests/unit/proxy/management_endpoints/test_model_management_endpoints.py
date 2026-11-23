@@ -5401,8 +5401,10 @@ def test_prompt_cache_key_null_clear_preserves_other_settings(clear: bool) -> No
     )
     result: Final = update_db_model(stored, updateDeployment(litellm_params=patch_params))
     expected: Final = {
-        key: value for key, value in stored.litellm_params.model_dump(exclude_none=True).items()
-        if not (clear and key == "prompt_cache_key")
+        "model": "openai/test-model",
+        "api_key": "stored-credential",
+        "tpm": 100,
+        **({} if clear else {"prompt_cache_key": "old-pin"}),
     }
     assert json.loads(result["litellm_params"]) == expected
     info: Final = json.loads(result["model_info"])
