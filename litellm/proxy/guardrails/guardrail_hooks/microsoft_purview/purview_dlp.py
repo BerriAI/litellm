@@ -22,7 +22,8 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
-from litellm.llms.base_llm.guardrail_translation.utils import claude_hosted_web_tool_arguments
+from litellm.llms.base_llm.guardrail_translation.utils import hosted_web_tool_arguments
+from litellm.responses.litellm_completion_transformation.compaction_items import output_compaction_summary
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import (
     Choices,
@@ -228,7 +229,7 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
         if not output:
             return args
         for item in output:
-            hosted_arguments = claude_hosted_web_tool_arguments(item)
+            hosted_arguments = hosted_web_tool_arguments(item)
             if hosted_arguments:
                 args.append(hosted_arguments)
             if isinstance(item, dict):
@@ -241,6 +242,11 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
                 if arguments.strip():
                     args.append(arguments)
         return args
+
+    @staticmethod
+    def _responses_api_compaction_summaries(result: object) -> tuple[str, ...]:
+        output: Final[Sequence[object]] = getattr(result, "output", None) or ()
+        return tuple(summary for item in output if (summary := output_compaction_summary(item)) is not None)
 
     def _completion_response_text_parts(self, result: object) -> list[str]:
         """Collect non-empty text segments from chat, text completions, or responses API.
@@ -264,6 +270,7 @@ class MicrosoftPurviewDLPGuardrail(PurviewGuardrailBase, CustomGuardrail):
             # Include tool-call arguments from ``function_call`` output items
             # (``output_text`` ignores them).
             parts.extend(self._extract_responses_api_function_call_args(result))
+            parts.extend(self._responses_api_compaction_summaries(result))
         elif isinstance(result, ModelResponse) and result.choices:
             for chat_choice in result.choices:
                 if not isinstance(chat_choice, Choices):

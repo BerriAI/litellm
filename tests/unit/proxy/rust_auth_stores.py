@@ -25,6 +25,7 @@ from litellm.proxy._types import (
 )
 from litellm.repositories import rust_database
 from litellm.rust_bridge._native import (
+    NativeDatabaseFailure,
     RustAccessGroupRepository,
     RustAgentIdentityRepository,
     RustAuditLogRepository,
@@ -42,6 +43,14 @@ from litellm.rust_bridge._native import (
     RustTeamRepository,
     RustUserRepository,
 )
+
+
+def native_database_failure(kind: Literal["unreachable", "capacity", "other"]) -> NativeDatabaseFailure:
+    failure: Final = NativeDatabaseFailure(f"database query failed: {kind}")
+    failure.kind = kind
+    failure.unavailable = kind != "other"
+    failure.requeue_safe = False
+    return failure
 
 
 @dataclass

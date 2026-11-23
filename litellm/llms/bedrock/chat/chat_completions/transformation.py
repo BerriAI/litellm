@@ -486,6 +486,12 @@ class AmazonBedrockRuntimeChatCompletionsConfig(OpenAILikeChatConfig):
             )
         )
 
+    def _keeps_content_part_prompt_cache_breakpoints(self, model: str, litellm_params: Mapping[str, object]) -> bool:
+        """Keep native content-part breakpoints when the deployment or catalog declares support."""
+        from litellm.integrations.anthropic_cache_control_hook import deployment_prompt_cache_breakpoint_support
+
+        return deployment_prompt_cache_breakpoint_support(model, "bedrock", litellm_params) is True
+
     def _inference_params(
         self, optional_params: Mapping[str, object]
     ) -> dict[str, object]:  # mutable-ok: BaseConfig signature of transform_request

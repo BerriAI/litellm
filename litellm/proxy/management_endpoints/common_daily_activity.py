@@ -58,7 +58,7 @@ from litellm.types.repositories.daily_activity import (
     SpendLogsWindow,
 )
 
-_T: Final = TypeVar("_T")
+_T = TypeVar("_T")
 
 
 @dataclass(frozen=True, slots=True)
@@ -992,6 +992,7 @@ async def get_daily_activity(
     | None = None,
     team_ids: tuple[str, ...] | None = None,
     app_id: str | None = None,
+    app_group_id: str | None = None,
 ) -> SpendAnalyticsPaginatedResponse:
     if prisma_client is None:
         raise HTTPException(status_code=500, detail={"error": CommonProxyErrors.db_not_connected_error.value})
@@ -1018,7 +1019,7 @@ async def get_daily_activity(
             timezone_offset_minutes,
             include_current_utc_day,
         )
-        scope: Final = replace(base_scope, team_ids=team_ids, app_id=app_id)
+        scope: Final = replace(base_scope, team_ids=team_ids, app_id=app_id, app_group_id=app_group_id)
         repository: Final = daily_activity_repository(prisma_client)
         page_data: Final = await repository.daily_rows(scope, page=page, page_size=page_size)
         daily_spend_data: Final = page_data.rows

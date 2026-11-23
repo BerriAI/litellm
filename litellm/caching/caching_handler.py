@@ -1011,8 +1011,12 @@ class LLMCachingHandler:
             dispatch_success_logging(logging_obj, cached_result, start_time, end_time, False, False)
             return
 
+        if not logging_obj.claim_async_success_log():
+            return
+
         from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 
+        logging_obj.mark_async_success_log_enqueued()
         GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
             async_coroutine=logging_obj.async_success_handler(
                 result=cached_result,

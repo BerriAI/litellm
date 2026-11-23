@@ -24,6 +24,7 @@ from litellm.proxy.management_helpers.customer_hierarchy import (
     CustomerHierarchyStore,
     PrismaRecord,
     budget_group_ids,
+    default_budget_group_id,
     effective_member_budget,
     organization_budget_group_ids,
     override_expiry,
@@ -36,6 +37,7 @@ from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import PrismaTableRepository
 from litellm.types.proxy.auth.customer_hierarchy import CustomerScopeKey
+from litellm.types.proxy.management_endpoints.app_groups import AppGroup, AppGroupBudgetPut, AppGroupOrganization
 from litellm.types.proxy.management_endpoints.apps import (
     App,
     AppCreate,
@@ -102,9 +104,9 @@ class _SharedProfiles(BaseModel):
 _DEFINITION_PARAM: Final = "customer_app_definition"
 _DEFINITION: Final = AuthObject.customer_app_definition()
 _PARENT_ORG_ID: Final = TypeAdapter(str)
-AppEntity: Final = TypeVar("AppEntity", App, AppOrganization, AppMember)
-AppAssociation: Final = TypeVar("AppAssociation", AppOrganization, AppMember)
-CachedModel: Final = TypeVar("CachedModel", bound=BaseModel)
+AppEntity = TypeVar("AppEntity", App, AppOrganization, AppMember, AppGroup, AppGroupOrganization)
+AppAssociation = TypeVar("AppAssociation", AppOrganization, AppMember)
+CachedModel = TypeVar("CachedModel", bound=BaseModel)
 
 
 class AppRepository(PrismaTableRepository[PrismaRecord]):
@@ -174,8 +176,8 @@ class _AssociationBudget:
     effective: Budget | None
 
 
-def _budget_selection(
-    data: AppCreate | AppPatch | AppOrganizationPut | AppMemberPut,
+def app_budget_selection(
+    data: AppCreate | AppPatch | AppOrganizationPut | AppMemberPut | AppGroupBudgetPut,
     field: Literal["budget", "default_customer_member_budget", "customer_member_budget"] = "budget",
 ) -> MemberPatch:
     return MemberPatch.model_validate(
@@ -206,10 +208,16 @@ def _association_base(current: AppAssociation | None, data: AppOrganizationPut |
 
 
 def _app_budget_identity(
-    entity: App | AppOrganization | AppMember,
+    entity: App | AppOrganization | AppMember | AppGroup | AppGroupOrganization,
 ) -> _AppBudgetIdentity:
     if isinstance(entity, App):
         return _AppBudgetIdentity("app", entity.app_id, entity.budget)
+    if isinstance(entity, AppGroup):
+        return _AppBudgetIdentity("app_group", entity.app_group_id, entity.budget)
+    if isinstance(entity, AppGroupOrganization):
+        return _AppBudgetIdentity(
+            "app_group_customer_org", app_scope_id(entity.app_group_id, entity.customer_org_id), entity.budget
+        )
     if isinstance(entity, AppOrganization):
         return _AppBudgetIdentity(
             "app_customer_org",
@@ -499,7 +507,12 @@ class AppStore:
         return None
 
     async def validate_settings(self, data: AppPatch | AppCreate) -> AppFailure | None:
-        if data.budget_id is not None or data.default_tier_budget_id is not None:
+        if data.app_group_id is not None:
+            from litellm.proxy.management_helpers.app_groups import AppGroupRepository
+
+            if await AppGroupRepository(self).table.find_unique(where={"app_group_id": data.app_group_id}) is None:
+                return AppFailure(404, "App group not found.")
+        if isinstance(data, AppCreate) or data.budget_id is not None or data.default_tier_budget_id is not None:
             await self.customers.lock_customer_identities()
         if not await self.valid_profile(data.default_tier_budget_id):
             return AppFailure(422, "The default profile must be an existing customer budget group.")
@@ -631,11 +644,15 @@ class AppStore:
         actor: str,
         scope: BudgetGroupScope,
         inherited_id: str | None = None,
+        *,
+        apply_default: bool = False,
     ) -> str | None:
         if data.budget_id is not None:
             return data.budget_id
         if "budget" not in data.model_fields_set:
-            return data.budget_id if "budget_id" in data.model_fields_set else current_id
+            if "budget_id" in data.model_fields_set:
+                return data.budget_id
+            return await default_budget_group_id(self.config, scope) if apply_default else current_id
         return await self.customers.private_budget_patch(
             current_id,
             data,
@@ -649,16 +666,20 @@ class AppStore:
 
     async def fields(self, data: AppPatch | AppCreate, actor: str, current: App | None = None) -> Mapping[str, object]:
         budget_id: Final = await self.linked_budget_id(
-            current.budget_id if current else None, _budget_selection(data), actor, BudgetGroupScope.APP
+            current.budget_id if current else None,
+            app_budget_selection(data),
+            actor,
+            BudgetGroupScope.APP,
+            apply_default=current is None,
         )
         member_id: Final = await self.linked_budget_id(
             current.default_customer_member_budget_id if current else None,
-            _budget_selection(data, "default_customer_member_budget"),
+            app_budget_selection(data, "default_customer_member_budget"),
             actor,
             BudgetGroupScope.APP_MEMBER,
         )
         return {
-            **({"budget_id": budget_id} if {"budget", "budget_id"} & data.model_fields_set else {}),
+            **({"budget_id": budget_id} if current is None or {"budget", "budget_id"} & data.model_fields_set else {}),
             **(
                 {"default_tier_budget_id": data.default_tier_budget_id}
                 if "default_tier_budget_id" in data.model_fields_set
@@ -669,6 +690,7 @@ class AppStore:
                 if {"default_customer_member_budget", "default_customer_member_budget_id"} & data.model_fields_set
                 else {}
             ),
+            **({"app_group_id": data.app_group_id} if "app_group_id" in data.model_fields_set else {}),
             **({"auto_create_customers": data.auto_create_customers} if data.auto_create_customers is not None else {}),
             **({"customer_margin": data.customer_margin} if "customer_margin" in data.model_fields_set else {}),
             "updated_by": actor,
@@ -830,7 +852,7 @@ class AppStore:
         override: Final = await self.association_override(current, data, actor)
         member: Final = await self.linked_budget_id(
             current.customer_member_budget_id if current else None,
-            _budget_selection(data, "customer_member_budget"),
+            app_budget_selection(data, "customer_member_budget"),
             actor,
             BudgetGroupScope.APP_MEMBER,
             app.default_customer_member_budget_id,
@@ -965,7 +987,7 @@ class AppStore:
         inherited_id: Final = organization.customer_member_budget_id or app.default_customer_member_budget_id
         base_id: Final = await self.linked_budget_id(
             current.budget_id if current else None,
-            _budget_selection(data),
+            app_budget_selection(data),
             actor,
             BudgetGroupScope.APP_MEMBER,
             inherited_id,

@@ -636,6 +636,7 @@ class DecisionsIRRequest:
     assets: Mapping[str, DecisionsAsset] = field(default_factory=lambda: _NO_ASSETS)
     audio: tuple[DecisionsAudio, ...] = ()
     videos: tuple[DecisionsVideo, ...] = ()
+    drop_params: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -711,6 +712,7 @@ class DecisionsIRResponse:
     answers: tuple[DecisionsIRAnswer, ...]
     usage: DecisionsIRUsage | None
     extra: Mapping[str, object] = field(default_factory=lambda: _NO_EXTRA)
+    reported_cost: float | None = None
 
 
 @dataclass(frozen=True, slots=True)

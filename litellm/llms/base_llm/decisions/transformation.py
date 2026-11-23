@@ -672,6 +672,9 @@ class BaseDecisionsConfig(ABC):
     def provider_reported_cost(self, response: DecisionsIRResponse) -> float | None:
         return None
 
+    def systemone_config(self) -> "BaseDecisionsConfig":
+        return self
+
     def get_input_limits(
         self, model: str, custom_llm_provider: str, headers: Mapping[str, str]
     ) -> DecisionsInputLimits:
@@ -687,6 +690,9 @@ class BaseDecisionsConfig(ABC):
 
     def missing_api_base_message(self, custom_llm_provider: str) -> str:
         return f"api_base is required for Decisions provider '{custom_llm_provider}'"
+
+    def missing_api_key_message(self, custom_llm_provider: str) -> str:
+        return f"Missing API key for Decisions provider '{custom_llm_provider}'"
 
     def resolve_api_base(self, api_base: str | None) -> str | None:
         return api_base or self._first_secret(self.api_base_env) or self.get_default_api_base()

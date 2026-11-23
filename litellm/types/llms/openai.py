@@ -133,6 +133,15 @@ class BinaryResponseSummary(TypedDict):
 _ResponseT = TypeVar("_ResponseT", bound=httpx.Response | SDKResponse, default=httpx.Response)
 
 
+class BatchInputFormat(str, Enum):
+    """Expected layout of batch input retrieved from a file reader."""
+
+    OPENAI = "openai"
+    VERTEX = "vertex"
+    BEDROCK = "bedrock"
+    UNKNOWN = "unknown"
+
+
 def _header_value(headers: Mapping[str, str], name: str) -> str | None:
     return headers.get(name)
 
@@ -150,10 +159,17 @@ class HttpxBinaryResponseContent(_HttpxBinaryResponseContent, Generic[_ResponseT
     def hidden_params(self, hidden_params: dict[str, builtins.object]) -> None:  # mutable-ok: API requires mutation
         self._hidden_params = hidden_params
 
-    def __init__(self, response: _ResponseT, usage: "Usage | None" = None) -> None:
+    def __init__(
+        self,
+        response: _ResponseT,
+        usage: "Usage | None" = None,
+        *,
+        batch_input_format: BatchInputFormat = BatchInputFormat.UNKNOWN,
+    ) -> None:
         super().__init__(response)  # pyright: ignore[reportArgumentType]  # SDK accepts both backends at runtime
         self._hidden_params = {}
         self.usage = usage
+        self.batch_input_format = batch_input_format
 
     @property
     def content_type(self) -> str | None:
@@ -2492,6 +2508,21 @@ class OpenAIRealtimeDoneEvent(TypedDict):
     type: Literal["response.done"]
 
 
+class OpenAIRealtimeOutputVideoDelta(TypedDict):
+    """A fragmented-MP4 chunk of a Gemini Live avatar stream; the video counterpart of
+    response.output_audio.delta. The ids are those of the open response, or None when
+    the video flows outside a turn."""
+
+    type: ReadOnly[Literal["response.output_video.delta"]]
+    event_id: ReadOnly[str]
+    response_id: ReadOnly[str | None]
+    item_id: ReadOnly[str | None]
+    output_index: ReadOnly[int]
+    content_index: ReadOnly[int]
+    mime_type: ReadOnly[str | None]
+    delta: ReadOnly[str]
+
+
 class OpenAIRealtimeInputAudioBufferSpeechEvent(TypedDict):
     type: ReadOnly[Literal["input_audio_buffer.speech_started", "input_audio_buffer.speech_stopped"]]
     event_id: ReadOnly[str]
@@ -2633,6 +2664,7 @@ OpenAIRealtimeEvents = (
     | OpenAIRealtimeFunctionCallArgumentsDone
     | OpenAIRealtimeDoneEvent
     | OpenAIRealtimeInputAudioBufferSpeechEvent
+    | OpenAIRealtimeOutputVideoDelta
     | OpenAIRealtimeInputAudioTranscriptionDelta
     | OpenAIRealtimeInputAudioTranscriptionCompleted
     | OpenAIRealtimeTranscriptionSessionCreated

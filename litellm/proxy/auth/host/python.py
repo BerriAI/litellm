@@ -342,6 +342,7 @@ class PythonAuthHost:
                             **key.model_dump(exclude_none=True),
                             **team_grants(team, membership, user.user_id),
                             "user_role": get_user_role(user),
+                            "user_email": user.user_email,
                             "models": () if team is not None else user_models(user),
                         }
                     )

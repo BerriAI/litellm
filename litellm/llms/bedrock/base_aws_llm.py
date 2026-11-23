@@ -144,7 +144,7 @@ class _WebIdentityTokenClaims(LiteLLMBaseModel):
 
 
 class AwsAuthError(Exception):
-    def __init__(self, status_code, message):
+    def __init__(self, status_code: int, message: str) -> None:
         self.status_code = status_code
         self.message = message
         self.request = httpx.Request(method="POST", url="https://us-west-2.console.aws.amazon.com/bedrock")

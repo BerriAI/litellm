@@ -24,6 +24,7 @@ from litellm.proxy._types import LiteLLM_JWTAuth, LiteLLM_TeamTable
 from litellm.proxy.auth import core
 from litellm.proxy.auth import denial as auth_denial
 from litellm.proxy.auth import jwt as proxy_jwt
+from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
 from litellm.proxy.auth.host.facts import AliasMissing, EndUserRow, RegisteredAgentFacts, TeamMissing
 from litellm.proxy.auth.host.python import AgentLookup, HttpCall, NoRegisteredAgents, PythonAuthHost, SharedFetches
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -117,6 +118,23 @@ async def test_a_role_change_is_stored_and_the_stored_user_is_cached_and_returne
     assert rust_auth_stores.user.rows["u1"]["user_role"] == "proxy_admin"
     assert (updated.user_role, updated.user_email) == ("proxy_admin", "stored@example.com")
     assert cached == updated
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("user_role", ["proxy_admin", "internal_user"])
+async def test_a_session_token_carries_the_email_on_its_user_row(
+    rust_auth_stores: RustAuthStores, monkeypatch: pytest.MonkeyPatch, user_role: str
+) -> None:
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-salt-session-email")
+    rust_auth_stores.user.rows["u1"] = {"user_id": "u1", "user_role": user_role, "user_email": "stored@example.com"}
+    minted: Final = ExperimentalUIJWTToken.get_cli_jwt_auth_token(
+        user_info=LiteLLM_UserTable(user_id="u1", user_role=user_role)
+    )
+
+    key: Final = await _host(prisma_client=MagicMock(spec=PrismaClient)).ui_key(minted)
+
+    assert key is not None
+    assert (key.user_id, key.user_role, key.user_email) == ("u1", user_role, "stored@example.com")
 
 
 @pytest.mark.asyncio

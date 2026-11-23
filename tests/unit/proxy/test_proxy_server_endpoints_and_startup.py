@@ -702,15 +702,52 @@ def test_sso_key_generate_without_sso_opens_the_dashboard_login_page_and_keeps_r
     assert "litellm_cp_return_to=" in response.headers["set-cookie"]
 
 
-def test_sso_key_generate_without_sso_resumes_a_signed_in_browser_without_a_login_page(client_no_auth, monkeypatch):
+def _dashboard_session_cookie(monkeypatch, session_key: str) -> str:
     import jwt
 
-    _without_sso(monkeypatch)
-    session = jwt.encode(
-        {"user_id": "u-1", "key": "sk-ui-key", "login_method": "username_password", "exp": 4102444800},
+    from litellm.proxy import proxy_server
+
+    if proxy_server.prisma_client is None:
+        monkeypatch.setattr(proxy_server, "prisma_client", object())
+    return jwt.encode(
+        {"user_id": "u-1", "key": session_key, "login_method": "username_password", "exp": 4102444800},
         "sk-test-master",
         algorithm="HS256",
     )
+
+
+def _stored_session_key(monkeypatch, session_key_expires: datetime | None) -> str:
+    from litellm.proxy._types import UserAPIKeyAuth, hash_token
+
+    session_key: Final = "sk-ui-session-key"
+
+    async def stored_key(hashed_token: str, *args: object, **kwargs: object) -> UserAPIKeyAuth:
+        if session_key_expires is None or hashed_token != hash_token(session_key):
+            raise ValueError("key not found")
+        return UserAPIKeyAuth(user_id="u-1", expires=session_key_expires)
+
+    monkeypatch.setattr("litellm.proxy.auth.auth_checks.get_key_object", stored_key)
+    return session_key
+
+
+def _experimental_ui_session_key(session_key_expires: datetime) -> str:
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth.auth_checks import LITELLM_SESSION_TOKEN_PREFIX
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_bearer_token
+
+    return encrypt_bearer_token(
+        UserAPIKeyAuth(user_id="u-1", expires=session_key_expires).model_dump_json(exclude_none=True),
+        LITELLM_SESSION_TOKEN_PREFIX,
+    )
+
+
+_LIVE: Final = datetime(2099, 1, 1, tzinfo=timezone.utc)
+_EXPIRED: Final = datetime(2000, 1, 1, tzinfo=timezone.utc)
+
+
+def test_sso_key_generate_without_sso_resumes_a_signed_in_browser_without_a_login_page(client_no_auth, monkeypatch):
+    _without_sso(monkeypatch)
+    session: Final = _dashboard_session_cookie(monkeypatch, _stored_session_key(monkeypatch, _LIVE))
     client_no_auth.cookies.clear()
 
     response = client_no_auth.get(
@@ -723,7 +760,41 @@ def test_sso_key_generate_without_sso_resumes_a_signed_in_browser_without_a_logi
 
     assert response.status_code == 303
     assert response.headers["location"].endswith("/login/resume")
-    assert "litellm_cp_return_to=" in response.headers["set-cookie"]
+    set_cookies: Final = response.headers.get_list("set-cookie")
+    assert [cookie.split("=")[0] for cookie in set_cookies] == ["litellm_cp_return_to"], set_cookies
+
+
+@pytest.mark.parametrize("dead_session_key", ["deleted", "expired", "expired_experimental_ui_session"])
+def test_sso_key_generate_without_sso_sends_an_unexpired_cookie_with_a_dead_session_key_to_the_login_page(
+    client_no_auth, monkeypatch, dead_session_key
+):
+    _without_sso(monkeypatch)
+    session: Final = _dashboard_session_cookie(
+        monkeypatch,
+        _experimental_ui_session_key(_EXPIRED)
+        if dead_session_key == "expired_experimental_ui_session"
+        else _stored_session_key(monkeypatch, None if dead_session_key == "deleted" else _EXPIRED),
+    )
+    client_no_auth.cookies.clear()
+
+    response = client_no_auth.get(
+        "/sso/key/generate",
+        params={"return_to": "/mcp/authorize?client_id=abc"},
+        headers={"cookie": f"token={session}"},
+        follow_redirects=False,
+    )
+    client_no_auth.cookies.clear()
+
+    assert response.status_code == 303
+    assert response.headers["location"].endswith("/ui/login")
+    set_cookies: Final = response.headers.get_list("set-cookie")
+    cleared_token_paths: Final = sorted(
+        cookie.split("Path=")[1].split(";")[0]
+        for cookie in set_cookies
+        if cookie.startswith('token="";') and "Max-Age=0" in cookie
+    )
+    assert cleared_token_paths == ["/", "/ui"], set_cookies
+    assert any(cookie.startswith("litellm_cp_return_to=return_to.") for cookie in set_cookies), set_cookies
 
 
 def test_restructure_ui_html_files_handles_nested_routes(tmp_path):
@@ -16422,6 +16493,27 @@ async def test_initialize_jwt_auth_leaves_the_declared_jwtauth_mapping_unresolve
 
     assert declared["team_id_jwt_field"] == "os.environ/JWT_TEAM_FIELD"
     assert proxy_server_module.litellm_jwtauth.team_id_jwt_field == "resolved-team-field"
+
+
+@pytest.mark.parametrize("field", ["audience", "public_key_url"])
+def test_initialize_jwt_auth_refuses_a_global_audience_or_jwks_url_naming_an_unset_variable(
+    monkeypatch: pytest.MonkeyPatch, field: str
+) -> None:
+    from pydantic import ValidationError
+
+    from litellm.proxy.proxy_server import ProxyConfig, ProxyStartupEvent
+
+    for name in ("JWT_AUDIENCE", "JWT_PUBLIC_KEY_URL", "UNSET_GATEWAY_JWT_SETTING"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(proxy_server_module, "litellm_jwtauth", proxy_server_module.litellm_jwtauth)
+    general_settings: Final = ProxyConfig()._check_for_os_environ_vars(
+        config={"enable_jwt_auth": True, "litellm_jwtauth": {field: "os.environ/UNSET_GATEWAY_JWT_SETTING"}}
+    )
+
+    with pytest.raises(ValidationError, match=field):
+        ProxyStartupEvent.initialize_jwt_auth(
+            general_settings=general_settings, prisma_client=None, user_api_key_cache=DualCache()
+        )
 
 
 def test_spend_capture_rate_check_job_validates_the_boot_settings_and_reads_them_again_on_every_run(monkeypatch):

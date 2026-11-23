@@ -19,7 +19,8 @@ def _segment_matches(route_segment: str, pattern_segment: str) -> bool:
     Match one concrete path segment against one pattern segment.
     A bare placeholder ({param}) matches any segment; a placeholder with a
     literal suffix ({model}:generateContent) requires the segment to end with
-    that suffix and have a non-empty value before it.
+    that suffix, and the value before it may be empty, as the router's path
+    converter allows.
     """
     if not pattern_segment.startswith("{"):
         return route_segment == pattern_segment
@@ -29,7 +30,7 @@ def _segment_matches(route_segment: str, pattern_segment: str) -> bool:
     literal_suffix: Final = pattern_segment[placeholder_end + 1 :]
     if not literal_suffix:
         return True
-    return route_segment.endswith(literal_suffix) and len(route_segment) > len(literal_suffix)
+    return route_segment.endswith(literal_suffix)
 
 
 def _pattern_tail_spans_segments(pattern_tail: str) -> bool:

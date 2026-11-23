@@ -1,3 +1,6 @@
+import { LensControls, LensTabTrigger } from "@/components/lens/LensControls";
+import { readLensPolicy, type LensPolicy } from "@/components/lens/lensPolicy";
+import { lensEntityHref } from "@/components/lens/entityLinks";
 import { useUrlTab } from "@/hooks/useUrlTab";
 import ResourceActivity from "@/components/UsagePage/ResourceActivity";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
@@ -31,7 +34,7 @@ import { StatusBadge, type StatusTone } from "@/components/shared/table_cells/st
 import { BadgeLink } from "@/components/shared/BadgeLink";
 import { Badge } from "@/components/ui/badge";
 import { modelGroupHref, modelOrAccessGroupHref } from "@/utils/entityLinks";
-import { Card } from "@/components/ui/card";
+import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Input as UIInput } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -61,6 +64,7 @@ import {
   parseTeamEditAccess,
   teamAdminDeclaredFields,
   teamAdminMetadataPairs,
+  TEAM_ADMIN_SETTINGS_FIELDS,
   type TeamAdminSettingsChanges,
 } from "./teamAdminEditAccess";
 import TeamAdminSettingsForm from "./TeamAdminSettingsForm";
@@ -161,6 +165,7 @@ const UI_MANAGED_METADATA_KEYS: ReadonlySet<string> = new Set([
   "default_estimated_output_tokens_per_model",
   "allowed_passthrough_routes",
   "guardrails",
+  "policies",
   "opted_out_global_guardrails",
   "disable_global_guardrails",
   "require_trace_id",
@@ -295,6 +300,8 @@ export interface TeamMembership {
   budget_source: TeamMemberBudgetSource;
   spend: number;
   total_spend: number | null;
+  rollover_credit?: number | null;
+  effective_max_budget?: number | null;
   litellm_budget_table: {
     budget_id: string;
     soft_budget: number | null;
@@ -355,6 +362,7 @@ export interface TeamData {
     caller_edit_access?: CallerEditAccess;
     team_member_budget_table: {
       max_budget: number | null;
+      rollover_max_budget?: number | null;
       budget_duration: string | null;
       tpm_limit: number | null;
       rpm_limit: number | null;
@@ -381,6 +389,24 @@ const SUPPRESSED_BY_DESCRIPTION = "";
 
 const numericInputSchema = z.union([z.string(), z.number()]).nullish();
 
+const buildMemberDefaultsSchema = (t: TFunction) => {
+  const fields = {
+    default_team_member_models: z.array(z.string()).optional(),
+    team_member_budget: numericInputSchema,
+    team_member_rollover_max_budget: numericInputSchema,
+    team_member_budget_duration: z.string().nullish(),
+    team_member_key_duration: z.string().optional(),
+    team_member_tpm_limit: numericInputSchema,
+    team_member_rpm_limit: numericInputSchema,
+    team_member_max_budget_alert_emails: budgetAlertRowsSchema((issue) =>
+      issue === "thresholdRange"
+        ? t("teams.teamInfo.validation.thresholdRange")
+        : t("teams.teamInfo.validation.duplicateThreshold"),
+    ).optional(),
+  };
+  return z.object(fields);
+};
+
 const buildTeamUpdateFieldsSchema = (t: TFunction) => {
   const fields = z.object({
     team_alias: z.string().min(1, t("teams.teamInfo.validation.teamNameRequired")),
@@ -405,17 +431,6 @@ const buildTeamUpdateFieldsSchema = (t: TFunction) => {
       })
       .optional(),
     soft_budget_alerting_emails: z.union([z.string(), z.array(z.string())]).optional(),
-    default_team_member_models: z.array(z.string()).optional(),
-    team_member_budget: numericInputSchema,
-    team_member_budget_duration: z.string().nullish(),
-    team_member_key_duration: z.string().optional(),
-    team_member_tpm_limit: numericInputSchema,
-    team_member_rpm_limit: numericInputSchema,
-    team_member_max_budget_alert_emails: budgetAlertRowsSchema((issue) =>
-      issue === "thresholdRange"
-        ? t("teams.teamInfo.validation.thresholdRange")
-        : t("teams.teamInfo.validation.duplicateThreshold"),
-    ).optional(),
     budget_duration: z.string().nullish(),
     tpm_limit: numericInputSchema,
     rpm_limit: numericInputSchema,
@@ -493,18 +508,10 @@ const buildTeamUpdateFieldsSchema = (t: TFunction) => {
 };
 
 type TeamUpdateFormValues = z.infer<ReturnType<typeof buildTeamUpdateFieldsSchema>>;
+type MemberDefaultsValues = z.infer<ReturnType<typeof buildMemberDefaultsSchema>>;
 
 type TeamInfoRecord = TeamData["team_info"] & { team_member_key_duration?: string };
 
-const TEAM_MEMBER_SETTINGS_FIELDS = [
-  "default_team_member_models",
-  "team_member_budget",
-  "team_member_budget_duration",
-  "team_member_key_duration",
-  "team_member_tpm_limit",
-  "team_member_rpm_limit",
-  "team_member_max_budget_alert_emails",
-] as const;
 const SEARCH_TOOL_SETTINGS_FIELDS = ["object_permission_search_tools"] as const;
 
 const EMPTY_TEAM_UPDATE_VALUES: TeamUpdateFormValues = {
@@ -514,13 +521,6 @@ const EMPTY_TEAM_UPDATE_VALUES: TeamUpdateFormValues = {
   soft_budget: undefined,
   max_budget_alert_emails: [],
   soft_budget_alerting_emails: "",
-  default_team_member_models: [],
-  team_member_budget: undefined,
-  team_member_budget_duration: undefined,
-  team_member_key_duration: undefined,
-  team_member_tpm_limit: undefined,
-  team_member_rpm_limit: undefined,
-  team_member_max_budget_alert_emails: [],
   budget_duration: undefined,
   tpm_limit: undefined,
   rpm_limit: undefined,
@@ -558,15 +558,10 @@ const computeEffectiveGuardrails = (info: TeamInfoRecord, globalGuardrailNames: 
     : [...Array.from(globalGuardrailNames).filter((name) => !optedOutGlobals.has(name)), ...nonGlobalOptIns];
 };
 
-const toTeamFormValues = (info: TeamInfoRecord, effectiveGuardrails: string[]): TeamUpdateFormValues => ({
-  team_alias: info.team_alias,
-  models: info.models.length === 0 ? [ALL_PROXY_MODELS] : info.models,
-  max_budget: info.max_budget,
-  soft_budget: info.soft_budget,
-  max_budget_alert_emails: [...budgetAlertRowsFromMetadata(info.metadata, KEY_MAX_BUDGET_ALERT_EMAILS_KEY)],
-  soft_budget_alerting_emails: legacySoftBudgetRecipientsText(info.metadata?.soft_budget_alerting_emails),
+const toMemberDefaultsValues = (info: TeamInfoRecord): MemberDefaultsValues => ({
   default_team_member_models: info.default_team_member_models || [],
   team_member_budget: info.team_member_budget_table?.max_budget,
+  team_member_rollover_max_budget: info.team_member_budget_table?.rollover_max_budget,
   team_member_budget_duration: info.team_member_budget_table?.budget_duration,
   team_member_key_duration: info.metadata?.team_member_key_duration,
   team_member_tpm_limit: info.team_member_budget_table?.tpm_limit,
@@ -574,6 +569,19 @@ const toTeamFormValues = (info: TeamInfoRecord, effectiveGuardrails: string[]): 
   team_member_max_budget_alert_emails: [
     ...budgetAlertRowsFromMetadata(info.metadata, TEAM_MEMBER_MAX_BUDGET_ALERT_EMAILS_KEY),
   ],
+});
+
+const toTeamFormValues = (
+  info: TeamInfoRecord,
+  effectiveGuardrails: string[],
+  policies: string[],
+): TeamUpdateFormValues => ({
+  team_alias: info.team_alias,
+  models: info.models.length === 0 ? [ALL_PROXY_MODELS] : info.models,
+  max_budget: info.max_budget,
+  soft_budget: info.soft_budget,
+  max_budget_alert_emails: [...budgetAlertRowsFromMetadata(info.metadata, KEY_MAX_BUDGET_ALERT_EMAILS_KEY)],
+  soft_budget_alerting_emails: legacySoftBudgetRecipientsText(info.metadata?.soft_budget_alerting_emails),
   budget_duration: info.budget_duration,
   tpm_limit: info.tpm_limit,
   rpm_limit: info.rpm_limit,
@@ -595,7 +603,7 @@ const toTeamFormValues = (info: TeamInfoRecord, effectiveGuardrails: string[]): 
   guardrails: effectiveGuardrails,
   disable_global_guardrails: info.metadata?.disable_global_guardrails || false,
   require_trace_id: info.metadata?.require_trace_id === true,
-  policies: info.policies || [],
+  policies,
   access_group_ids: info.access_group_ids || [],
   vector_stores: info.object_permission?.vector_stores || [],
   allowed_passthrough_routes: info.metadata?.allowed_passthrough_routes || [],
@@ -656,21 +664,34 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const [loading, setLoading] = useState(true);
   const [isAddMemberModalVisible, setIsAddMemberModalVisible] = useState(false);
   const form = useZodForm(teamUpdateSchema, { defaultValues: EMPTY_TEAM_UPDATE_VALUES });
+  const memberDefaultsSchema = useMemo(() => buildMemberDefaultsSchema(t), [t]);
+  const memberDefaultsForm = useZodForm(memberDefaultsSchema);
   const {
     fields: modelLimitRows,
     append: appendModelLimit,
     remove: removeModelLimit,
   } = useFieldArray({ control: form.control, name: "modelLimits" });
-  const [teamMemberSettingsOpen, setTeamMemberSettingsOpen] = useState(false);
   const [searchToolSettingsOpen, setSearchToolSettingsOpen] = useState(false);
   const [isEditMemberModalVisible, setIsEditMemberModalVisible] = useState(false);
   const [selectedEditMember, setSelectedEditMember] = useState<Member | null>(null);
+  const [keyOwnerFilter, setKeyOwnerFilter] = useState<string>();
   const [isEditing, setIsEditing] = useState(false);
+  const [memberDefaultsEditorTeamId, setMemberDefaultsEditorTeamId] = useState<string | null>(null);
+  const isEditingMemberDefaults = memberDefaultsEditorTeamId === teamId;
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
   const { data: guardrailsData, isLoading: isGuardrailsLoading } = useGuardrails();
   const globalGuardrailNames = guardrailsData?.globalGuardrailNames ?? new Set<string>();
   const canViewPolicies = useCan("viewPolicies");
   const [policiesList, setPoliciesList] = useState<string[]>([]);
+  const storedTeamPolicies: unknown = teamData?.team_info?.metadata?.policies;
+  const legacyTeamPolicies = teamData?.team_info?.policies;
+  const teamPolicies = useMemo(
+    () =>
+      Array.isArray(storedTeamPolicies)
+        ? storedTeamPolicies.filter((policy): policy is string => typeof policy === "string")
+        : legacyTeamPolicies ?? [],
+    [storedTeamPolicies, legacyTeamPolicies],
+  );
   const [policyGuardrails, setPolicyGuardrails] = useState<Record<string, string[]>>({});
   const [loadingPolicies, setLoadingPolicies] = useState(false);
   const [memberToDelete, setMemberToDelete] = useState<Member | null>(null);
@@ -735,20 +756,29 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   );
   const { onTabChange, hasVisited } = useVisitedTabs(activeTab);
 
+  const handleTabChange = (value: string) => {
+    if (value !== TEAM_INFO_TAB_KEYS.VIRTUAL_KEYS) setKeyOwnerFilter(undefined);
+    setActiveTab(String(value));
+    onTabChange(value);
+  };
+
+  const viewMemberKeys = () => {
+    setKeyOwnerFilter(selectedEditMember?.user_id ?? undefined);
+    setIsEditMemberModalVisible(false);
+    setActiveTab(TEAM_INFO_TAB_KEYS.VIRTUAL_KEYS);
+    onTabChange(TEAM_INFO_TAB_KEYS.VIRTUAL_KEYS);
+  };
+
   const teamFormValues = (): TeamUpdateFormValues => {
     const info = teamData?.team_info;
     return info
-      ? toTeamFormValues(info, computeEffectiveGuardrails(info, globalGuardrailNames))
+      ? toTeamFormValues(info, computeEffectiveGuardrails(info, globalGuardrailNames), teamPolicies)
       : EMPTY_TEAM_UPDATE_VALUES;
   };
 
   const startEditing = () => {
     form.reset(teamFormValues());
     setTeamModelMaxBudget((teamData?.team_info?.model_max_budget ?? {}) as ModelMaxBudget);
-    setTeamMemberModelMaxBudget(
-      (teamData?.team_info?.team_member_budget_table?.model_max_budget ?? {}) as ModelMaxBudget,
-    );
-    setTeamMemberSettingsOpen(false);
     setSearchToolSettingsOpen(false);
     setIsEditing(true);
   };
@@ -772,7 +802,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
   const mountedUpdateValues = (values: TeamUpdateFormValues): Record<string, unknown> => {
     const unmounted = new Set<string>([
-      ...(teamMemberSettingsOpen ? [] : TEAM_MEMBER_SETTINGS_FIELDS),
       ...(canViewPolicies ? [] : ["policies"]),
       ...(searchToolSettingsOpen ? [] : SEARCH_TOOL_SETTINGS_FIELDS),
     ]);
@@ -848,7 +877,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   // Fetch resolved guardrails for all policies
   useEffect(() => {
     const fetchPolicyGuardrails = async () => {
-      if (!accessToken || !teamData?.team_info?.policies || teamData.team_info.policies.length === 0) {
+      if (!accessToken || teamPolicies.length === 0) {
         return;
       }
 
@@ -857,7 +886,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
       try {
         await Promise.all(
-          teamData.team_info.policies.map(async (policyName: string) => {
+          teamPolicies.map(async (policyName) => {
             try {
               const policyInfo = await getPolicyInfoWithGuardrails(accessToken, policyName);
               guardrailsMap[policyName] = policyInfo.resolved_guardrails || [];
@@ -876,7 +905,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
     };
 
     fetchPolicyGuardrails();
-  }, [accessToken, teamData?.team_info?.policies]);
+  }, [accessToken, teamPolicies]);
 
   const handleMemberCreate = async (values: any) => {
     try {
@@ -1004,7 +1033,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
     await teamUpdateCall(token, updateData);
     void queryClient.invalidateQueries({ queryKey: organizationKeys.all });
     void invalidateTeamQueries(queryClient);
-    setIsEditing(false);
   };
 
   const memberBudgetReset = useMemberBudgetReset({
@@ -1013,6 +1041,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       setIsTeamSaving(true);
       try {
         await persistTeamUpdate(accessToken, updateData);
+        setMemberDefaultsEditorTeamId(null);
       } finally {
         setIsTeamSaving(false);
       }
@@ -1032,15 +1061,76 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
     dismissMemberBudgetReset();
   }, [teamId, dismissMemberBudgetReset]);
 
-  const saveTeamAdminSettings = async (changes: TeamAdminSettingsChanges) => {
+  const saveTeamAdminSettings = async (changes: TeamAdminSettingsChanges, closeEditor: () => void) => {
     if (!accessToken) return;
     setIsTeamSaving(true);
     try {
       await persistTeamUpdate(accessToken, { team_id: teamId, ...changes });
+      closeEditor();
       toast.success(t("teams.teamInfo.toasts.settingsUpdated"));
       await fetchTeamInfo();
     } catch (error) {
       console.error("Error updating team:", error);
+    } finally {
+      setIsTeamSaving(false);
+    }
+  };
+
+  const saveMemberDefaults = async (values: MemberDefaultsValues) => {
+    if (!accessToken) return;
+
+    const budget = values.team_member_budget === undefined ? undefined : numberOrNull(values.team_member_budget);
+    const modelBudgets = modelMaxBudgetUpdate(
+      teamMemberModelMaxBudget,
+      info.team_member_budget_table?.model_max_budget,
+    );
+    const alertEmails = budgetAlertEmailsFromRows(values.team_member_max_budget_alert_emails ?? []);
+    const memberAlertMetadata = Object.keys(alertEmails).length > 0 ? alertEmails : undefined;
+    const storedAlertEmails = info.metadata?.[TEAM_MEMBER_MAX_BUDGET_ALERT_EMAILS_KEY];
+    const updateData = {
+      team_id: teamId,
+      default_team_member_models: values.default_team_member_models,
+      team_member_budget: budget,
+      team_member_budget_duration: values.team_member_budget_duration,
+      ...(memberDefaultsForm.getFieldState("team_member_rollover_max_budget").isDirty
+        ? { team_member_rollover_max_budget: numberOrNull(values.team_member_rollover_max_budget) }
+        : {}),
+      team_member_key_duration: values.team_member_key_duration,
+      ...(values.team_member_tpm_limit !== undefined || values.team_member_rpm_limit !== undefined
+        ? {
+            team_member_tpm_limit: numberOrNull(values.team_member_tpm_limit),
+            team_member_rpm_limit: numberOrNull(values.team_member_rpm_limit),
+          }
+        : {}),
+      ...(modelBudgets !== undefined ? { team_member_model_max_budget: modelBudgets } : {}),
+      ...(memberAlertMetadata !== undefined || storedAlertEmails !== undefined
+        ? {
+            metadata: {
+              ...info.metadata,
+              [TEAM_MEMBER_MAX_BUDGET_ALERT_EMAILS_KEY]: memberAlertMetadata,
+            },
+          }
+        : {}),
+    };
+
+    const customBudgetUserIds = customBudgetMemberUserIds(teamData?.team_memberships ?? []);
+    if (
+      typeof budget === "number" &&
+      shouldPromptMemberBudgetReset(budget, info.team_member_budget_table?.max_budget, customBudgetUserIds)
+    ) {
+      const pendingBudgetReset = { teamId, updateData, userIds: customBudgetUserIds, newBudget: budget };
+      memberBudgetReset.prompt(pendingBudgetReset);
+      return;
+    }
+
+    setIsTeamSaving(true);
+    try {
+      await persistTeamUpdate(accessToken, updateData);
+      setMemberDefaultsEditorTeamId(null);
+      toast.success(t("teams.teamInfo.toasts.settingsUpdated"));
+      await fetchTeamInfo();
+    } catch (error) {
+      console.error("Error updating member defaults:", error);
     } finally {
       setIsTeamSaving(false);
     }
@@ -1103,10 +1193,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
           ? { allowed_passthrough_routes: info.metadata.allowed_passthrough_routes }
           : {};
 
-      const memberBudgetAlertEmails =
-        values.team_member_max_budget_alert_emails !== undefined
-          ? budgetAlertEmailsFromRows(values.team_member_max_budget_alert_emails)
-          : info.metadata?.[TEAM_MEMBER_MAX_BUDGET_ALERT_EMAILS_KEY];
+      const memberBudgetAlertEmails = info.metadata?.[TEAM_MEMBER_MAX_BUDGET_ALERT_EMAILS_KEY];
       const memberBudgetAlertEmailsMetadata =
         memberBudgetAlertEmails !== undefined && Object.keys(memberBudgetAlertEmails).length > 0
           ? { [TEAM_MEMBER_MAX_BUDGET_ALERT_EMAILS_KEY]: memberBudgetAlertEmails }
@@ -1137,6 +1224,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         budget_duration: values.budget_duration ?? null,
         metadata: {
           ...parsedMetadata,
+          ...(storedTeamPolicies !== undefined ? { policies: storedTeamPolicies } : {}),
           ...passthroughRoutesMetadata,
           guardrails: (values.guardrails || []).filter((n: string) => !globalGuardrailNames.has(n)),
           opted_out_global_guardrails: optedOutGlobalGuardrails,
@@ -1158,26 +1246,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
           ...maxBudgetAlertEmailsMetadata,
           ...memberBudgetAlertEmailsMetadata,
         },
-        ...(values.policies?.length > 0 ? { policies: values.policies } : {}),
+        ...(values.policies !== undefined && form.getFieldState("policies").isDirty
+          ? { policies: values.policies }
+          : {}),
         ...(values.organization_id !== info.organization_id ? { organization_id: values.organization_id ?? null } : {}),
       };
-
-      updateData.team_member_budget_duration = values.team_member_budget_duration;
-
-      const newTeamMemberBudget =
-        values.team_member_budget !== undefined ? numberOrNull(values.team_member_budget) : undefined;
-      if (newTeamMemberBudget !== undefined) {
-        updateData.team_member_budget = newTeamMemberBudget;
-      }
-
-      if (values.team_member_key_duration !== undefined) {
-        updateData.team_member_key_duration = values.team_member_key_duration;
-      }
-
-      if (values.team_member_tpm_limit !== undefined || values.team_member_rpm_limit !== undefined) {
-        updateData.team_member_tpm_limit = numberOrNull(values.team_member_tpm_limit);
-        updateData.team_member_rpm_limit = numberOrNull(values.team_member_rpm_limit);
-      }
 
       // Handle object_permission updates
       const { servers, accessGroups, toolsets } = values.mcp_servers_and_groups || {
@@ -1279,11 +1352,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         updateData.access_group_ids = values.access_group_ids;
       }
 
-      // Pass default_team_member_models to the update request
-      if (values.default_team_member_models !== undefined) {
-        updateData.default_team_member_models = values.default_team_member_models;
-      }
-
       const previousModelAliases = info.litellm_model_table?.model_aliases ?? {};
       if (Object.keys(teamModelAliases).length > 0 || Object.keys(previousModelAliases).length > 0) {
         updateData.model_aliases = teamModelAliases;
@@ -1292,14 +1360,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       const modelBudgets = modelMaxBudgetUpdate(teamModelMaxBudget, info.model_max_budget);
       if (modelBudgets !== undefined) {
         updateData.model_max_budget = modelBudgets;
-      }
-
-      const teamMemberModelBudgets = modelMaxBudgetUpdate(
-        teamMemberModelMaxBudget,
-        info.team_member_budget_table?.model_max_budget,
-      );
-      if (teamMemberModelBudgets !== undefined) {
-        updateData.team_member_model_max_budget = teamMemberModelBudgets;
       }
 
       // Handle router_settings - read fresh values from DOM at save time.
@@ -1321,26 +1381,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         }
       }
 
-      const customBudgetUserIds = customBudgetMemberUserIds(teamData?.team_memberships ?? []);
-      if (
-        typeof newTeamMemberBudget === "number" &&
-        shouldPromptMemberBudgetReset(
-          newTeamMemberBudget,
-          info.team_member_budget_table?.max_budget,
-          customBudgetUserIds,
-        )
-      ) {
-        const pendingReset = {
-          teamId,
-          updateData,
-          userIds: customBudgetUserIds,
-          newBudget: newTeamMemberBudget,
-        };
-        memberBudgetReset.prompt(pendingReset);
-        return;
-      }
-
       await persistTeamUpdate(accessToken, updateData);
+      setIsEditing(false);
       toast.success(t("teams.teamInfo.toasts.settingsUpdated"));
       await fetchTeamInfo();
     } catch (error) {
@@ -1360,12 +1402,76 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
   const { team_info: info } = teamData;
 
+  const updateLensPolicy = async (policy: LensPolicy): Promise<void> => {
+    if (!accessToken || !canEditAsProxyAdmin) return;
+    const metadata = { ...info.metadata, lens_enabled: policy };
+    await fetchClient.PATCH("/team/{team_id}", {
+      params: { path: { team_id: teamId } },
+      body: { metadata: { lens_enabled: policy } },
+    });
+    const updatedTeam = { ...teamData, team_info: { ...info, metadata } };
+    setTeamData(updatedTeam);
+    onUpdate(updatedTeam);
+    void invalidateTeamQueries(queryClient);
+  };
+  const customMetadata = metadataObjectToPairs(
+    info.metadata,
+    teamEditAccess.kind === "team_admin"
+      ? new Set([...UI_MANAGED_METADATA_KEYS, ...teamEditAccess.proxyControlledMetadataKeys])
+      : UI_MANAGED_METADATA_KEYS,
+  );
+
+  const memberDefaultsEditableFields = new Set(
+    TEAM_ADMIN_SETTINGS_FIELDS.filter(
+      (field) =>
+        field.startsWith("team_member_") &&
+        teamEditAccess.kind === "team_admin" &&
+        teamEditAccess.editableFields.has(field),
+    ),
+  );
+  const canEditMemberDefaults =
+    canEditTeam &&
+    teamEditAccess.kind !== "team_admin_disabled" &&
+    (teamEditAccess.kind !== "team_admin" || memberDefaultsEditableFields.size > 0);
+  const openMemberDefaultsEditor = () => {
+    memberDefaultsForm.reset(toMemberDefaultsValues(info));
+    setTeamMemberModelMaxBudget((info.team_member_budget_table?.model_max_budget ?? {}) as ModelMaxBudget);
+    setMemberDefaultsEditorTeamId(teamId);
+  };
+  const memberBudget = info.team_member_budget_table;
+  const noLimit = t("teams.teamInfo.settingsView.noLimit");
+  const memberDefaultSummary = [
+    [t("teams.teamInfo.editForm.teamMemberSettings.defaultBudget"), memberBudget?.max_budget ?? noLimit],
+    [t("teams.teamInfo.editForm.teamMemberSettings.rolloverCap"), memberBudget?.rollover_max_budget ?? noLimit],
+    [
+      t("teams.teamInfo.editForm.teamMemberSettings.defaultBudgetDuration"),
+      memberBudget?.budget_duration ??
+        (memberBudget
+          ? t("teams.teamInfo.editForm.resetBudgetPlaceholder")
+          : t("teams.teamInfo.editForm.teamMemberSettings.inheritResetPeriod")),
+    ],
+    [
+      t("teams.teamInfo.editForm.teamMemberSettings.defaultKeyDuration"),
+      info.metadata?.team_member_key_duration || noLimit,
+    ],
+    [t("teams.teamInfo.editForm.teamMemberSettings.defaultTpmLimit"), memberBudget?.tpm_limit ?? noLimit],
+    [t("teams.teamInfo.editForm.teamMemberSettings.defaultRpmLimit"), memberBudget?.rpm_limit ?? noLimit],
+    [
+      t("teams.teamInfo.editForm.teamMemberSettings.budgetAlertThresholds"),
+      teamMemberBudgetAlertSummary(info.metadata).join("; ") ||
+        t("teams.teamInfo.settingsView.teamMemberSettings.none"),
+    ],
+  ] as const;
+  const memberModelBudgetEntries = modelMaxBudgetToEntries(
+    memberBudget?.model_max_budget as ModelMaxBudget | undefined,
+  );
+
   const teamAdminSchemaFields =
     teamEditAccess.kind === "team_admin"
       ? teamAdminDeclaredFields(teamMetadataSchemaFields, teamEditAccess.proxyControlledMetadataKeys)
       : [];
   const teamAdminDeclaredKeys = teamAdminSchemaFields.map((field) => field.key);
-  const teamAdminSettingsEditor =
+  const renderTeamAdminSettings = (editableFields: ReadonlySet<string>, closeEditor: () => void) =>
     teamEditAccess.kind === "team_admin" ? (
       <TeamAdminSettingsForm
         initialValues={{
@@ -1392,13 +1498,20 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
           schemaFields: teamAdminSchemaFields,
           schemaLoading: isTeamMetadataSchemaLoading,
         }}
-        editableFields={teamEditAccess.editableFields}
+        editableFields={editableFields}
         mayRaiseMaxBudget={teamEditAccess.mayRaiseMaxBudget}
         isSaving={isTeamSaving}
-        onCancel={() => setIsEditing(false)}
-        onSave={saveTeamAdminSettings}
+        onCancel={closeEditor}
+        onSave={(changes) => saveTeamAdminSettings(changes, closeEditor)}
       />
     ) : null;
+  const teamAdminSettingsEditor =
+    teamEditAccess.kind === "team_admin"
+      ? renderTeamAdminSettings(
+          new Set([...teamEditAccess.editableFields].filter((field) => !field.startsWith("team_member_"))),
+          () => setIsEditing(false),
+        )
+      : null;
 
   const inheritedMcpServers = computeInheritedGrants(
     info.access_group_mcp_server_ids,
@@ -1436,6 +1549,169 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       }, 2000);
     }
   };
+
+  const closeMemberDefaultsEditor = () => setMemberDefaultsEditorTeamId(null);
+  const memberDefaultsEditor =
+    teamEditAccess.kind === "team_admin" ? (
+      renderTeamAdminSettings(memberDefaultsEditableFields, closeMemberDefaultsEditor)
+    ) : (
+      <TooltipProvider>
+        <form onSubmit={(event) => void memberDefaultsForm.handleSubmit(saveMemberDefaults)(event)}>
+          <FieldGroup className="grid max-w-3xl sm:grid-cols-2">
+            <FormField
+              control={memberDefaultsForm.control}
+              name="default_team_member_models"
+              className="sm:col-span-2"
+              label={labelWithHint(
+                t("teams.teamInfo.editForm.teamMemberSettings.defaultModelAccess"),
+                t("teams.teamInfo.editForm.teamMemberSettings.defaultModelAccessHint"),
+              )}
+            >
+              {({ id, value, onChange }) => (
+                <MultiSelect
+                  id={id}
+                  value={value ?? []}
+                  onValueChange={onChange}
+                  options={(info.models.length > 0 ? info.models : [ALL_PROXY_MODELS]).map((model) => ({
+                    label: model,
+                    value: model,
+                  }))}
+                  placeholder={t("teams.teamInfo.editForm.teamMemberSettings.defaultModelAccessPlaceholder")}
+                />
+              )}
+            </FormField>
+            <FormField
+              control={memberDefaultsForm.control}
+              name="team_member_budget"
+              label={labelWithHint(
+                t("teams.teamInfo.editForm.teamMemberSettings.defaultBudget"),
+                t("teams.teamInfo.editForm.teamMemberSettings.defaultBudgetHint"),
+              )}
+            >
+              {({ ref, value, ...field }) => (
+                <NumericalInput {...field} ref={ref} value={value ?? ""} step={0.01} precision={2} />
+              )}
+            </FormField>
+            <FormField
+              control={memberDefaultsForm.control}
+              name="team_member_rollover_max_budget"
+              label={labelWithHint(
+                t("teams.teamInfo.editForm.teamMemberSettings.rolloverCap"),
+                t("teams.teamInfo.editForm.teamMemberSettings.rolloverCapHint"),
+              )}
+            >
+              {({ ref, value, ...field }) => (
+                <NumericalInput {...field} ref={ref} value={value ?? ""} step={0.01} precision={2} />
+              )}
+            </FormField>
+            <FormField
+              control={memberDefaultsForm.control}
+              name="team_member_budget_duration"
+              label={t("teams.teamInfo.editForm.teamMemberSettings.defaultBudgetDuration")}
+            >
+              {({ id, value, onChange }) => (
+                <BudgetDurationDropdown
+                  id={id}
+                  showNeverResets
+                  placeholder={t("teams.teamInfo.editForm.teamMemberSettings.inheritResetPeriod")}
+                  value={value === null ? NEVER_RESETS_BUDGET_DURATION : value}
+                  onChange={(next) => onChange(next === NEVER_RESETS_BUDGET_DURATION ? null : next ?? undefined)}
+                />
+              )}
+            </FormField>
+            <div className="sm:col-span-2">
+              <ModelMaxBudgetField
+                label={t("teams.teamInfo.editForm.teamMemberSettings.defaultPerModelBudget")}
+                premiumUser={premiumUser}
+                value={teamMemberModelMaxBudget}
+                onChange={setTeamMemberModelMaxBudget}
+                availableModels={teamPerModelLimitOptions(info.models, info.access_group_models ?? [], userModels)}
+                hint={t("teams.teamInfo.editForm.teamMemberSettings.defaultPerModelBudgetHint")}
+              />
+            </div>
+            <FormField
+              control={memberDefaultsForm.control}
+              name="team_member_key_duration"
+              className="sm:col-span-2"
+              label={labelWithHint(
+                t("teams.teamInfo.editForm.teamMemberSettings.defaultKeyDuration"),
+                t("teams.teamInfo.editForm.teamMemberSettings.defaultKeyDurationHint"),
+              )}
+            >
+              {({ ref, value, ...field }) => (
+                <UIInput
+                  {...field}
+                  ref={ref}
+                  value={value ?? ""}
+                  placeholder={t("teams.teamInfo.editForm.teamMemberSettings.defaultKeyDurationPlaceholder")}
+                />
+              )}
+            </FormField>
+            <FormField
+              control={memberDefaultsForm.control}
+              name="team_member_tpm_limit"
+              label={labelWithHint(
+                t("teams.teamInfo.editForm.teamMemberSettings.defaultTpmLimit"),
+                t("teams.teamInfo.editForm.teamMemberSettings.defaultTpmLimitHint"),
+              )}
+            >
+              {({ ref, value, ...field }) => (
+                <NumericalInput
+                  {...field}
+                  ref={ref}
+                  value={value ?? ""}
+                  step={1}
+                  placeholder={t("teams.teamInfo.editForm.teamMemberSettings.defaultTpmLimitPlaceholder")}
+                />
+              )}
+            </FormField>
+            <FormField
+              control={memberDefaultsForm.control}
+              name="team_member_rpm_limit"
+              label={labelWithHint(
+                t("teams.teamInfo.editForm.teamMemberSettings.defaultRpmLimit"),
+                t("teams.teamInfo.editForm.teamMemberSettings.defaultRpmLimitHint"),
+              )}
+            >
+              {({ ref, value, ...field }) => (
+                <NumericalInput
+                  {...field}
+                  ref={ref}
+                  value={value ?? ""}
+                  step={1}
+                  placeholder={t("teams.teamInfo.editForm.teamMemberSettings.defaultRpmLimitPlaceholder")}
+                />
+              )}
+            </FormField>
+            <div className="sm:col-span-2">
+              <BudgetAlertEmailsEditor
+                control={memberDefaultsForm.control}
+                name="team_member_max_budget_alert_emails"
+                label={labelWithHint(
+                  t("teams.teamInfo.editForm.teamMemberSettings.budgetAlertThresholds"),
+                  t("teams.teamInfo.editForm.teamMemberSettings.budgetAlertThresholdsHint"),
+                )}
+                text={{
+                  thresholdPlaceholder: t("teams.teamInfo.editForm.teamMemberSettings.thresholdPlaceholder"),
+                  recipientsPlaceholder: t("teams.teamInfo.editForm.teamMemberSettings.recipientsPlaceholder"),
+                  removeThreshold: t("teams.teamInfo.editForm.teamMemberSettings.removeThreshold"),
+                  addThreshold: t("teams.teamInfo.editForm.teamMemberSettings.addThreshold"),
+                }}
+              />
+            </div>
+          </FieldGroup>
+          <div className="mt-6 flex justify-end gap-2 border-t pt-4">
+            <Button type="button" variant="outline" disabled={isTeamSaving} onClick={closeMemberDefaultsEditor}>
+              {t("teams.teamInfo.editForm.cancel")}
+            </Button>
+            <Button type="submit" disabled={isTeamSaving}>
+              {isTeamSaving ? <UiLoadingSpinner className="size-4" /> : <Save className="size-4" />}
+              {t("teams.teamInfo.editForm.save")}
+            </Button>
+          </div>
+        </form>
+      </TooltipProvider>
+    );
 
   const tabItems = [
     {
@@ -1610,9 +1886,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
           <Card className="block p-6">
             <p className="font-semibold text-foreground mb-3">{t("teams.teamInfo.overview.policiesTitle")}</p>
-            {info.policies && info.policies.length > 0 ? (
+            {teamPolicies.length > 0 ? (
               <div className="space-y-4">
-                {info.policies.map((policy: string, index: number) => (
+                {teamPolicies.map((policy, index) => (
                   <div key={index} className="space-y-2">
                     <div className="flex items-center gap-2">
                       <Badge variant="secondary">{policy}</Badge>
@@ -1644,7 +1920,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
             )}
           </Card>
 
-          <LoggingSettingsView loggingConfigs={info.metadata?.logging || []} disabledCallbacks={[]} variant="card" />
+          <LoggingSettingsView loggingConfigs={info.metadata?.logging || []} variant="card" />
         </div>
       ),
     },
@@ -1654,6 +1930,19 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       children: <ResourceActivity scope="team" id={teamId} />,
     },
     {
+      key: TEAM_INFO_TAB_KEYS.LENS,
+      label: t(TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.LENS]),
+      children: (
+        <LensControls
+          kind="team"
+          policy={readLensPolicy(info.metadata)}
+          canEdit={canEditAsProxyAdmin}
+          href={lensEntityHref({ kind: "team", teamId })}
+          onPolicyChange={updateLensPolicy}
+        />
+      ),
+    },
+    {
       key: TEAM_INFO_TAB_KEYS.MY_USER,
       label: t(TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.MY_USER]),
       children: <MyUserTab teamId={teamId} />,
@@ -1661,7 +1950,15 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
     {
       key: TEAM_INFO_TAB_KEYS.VIRTUAL_KEYS,
       label: t(TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.VIRTUAL_KEYS]),
-      children: <TeamVirtualKeysTable teamId={teamId} teamAlias={info.team_alias} organization={organization} />,
+      children: (
+        <TeamVirtualKeysTable
+          key={keyOwnerFilter}
+          teamId={teamId}
+          teamAlias={info.team_alias}
+          organization={organization}
+          initialOwnerFilter={keyOwnerFilter}
+        />
+      ),
     },
     {
       key: TEAM_INFO_TAB_KEYS.MEMBERS,
@@ -1677,6 +1974,72 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
           setIsEditMemberModalVisible={setIsEditMemberModalVisible}
           setIsAddMemberModalVisible={setIsAddMemberModalVisible}
         />
+      ),
+    },
+    {
+      key: TEAM_INFO_TAB_KEYS.MEMBER_DEFAULTS,
+      label: t(TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.MEMBER_DEFAULTS]),
+      children: (
+        <Card>
+          <CardHeader>
+            <CardTitle role="heading" aria-level={2}>
+              {t("teams.teamInfo.tabs.memberDefaults")}
+            </CardTitle>
+            <CardDescription>{t("teams.teamInfo.editForm.teamMemberSettings.description")}</CardDescription>
+            {canEditMemberDefaults && !isEditingMemberDefaults && (
+              <CardAction>
+                <Button variant="outline" onClick={openMemberDefaultsEditor}>
+                  <Pencil />
+                  {t("teams.teamInfo.editForm.teamMemberSettings.edit")}
+                </Button>
+              </CardAction>
+            )}
+          </CardHeader>
+          <CardContent>
+            {isEditingMemberDefaults && canEditMemberDefaults ? (
+              memberDefaultsEditor
+            ) : (
+              <dl className="grid gap-x-8 gap-y-5 sm:grid-cols-2 lg:grid-cols-3">
+                <div className="space-y-1">
+                  <dt className="font-medium">{t("teams.teamInfo.editForm.teamMemberSettings.defaultModelAccess")}</dt>
+                  <dd className="flex flex-wrap gap-2 text-muted-foreground">
+                    {info.default_team_member_models?.length
+                      ? info.default_team_member_models.map((model) => (
+                          <BadgeLink key={model} href={modelOrAccessGroupHref(model, accessGroupNames)}>
+                            {model}
+                          </BadgeLink>
+                        ))
+                      : t("teams.teamInfo.editForm.teamMemberSettings.allTeamModels")}
+                  </dd>
+                </div>
+                {memberDefaultSummary.map(([label, value]) => (
+                  <div key={label} className="space-y-1">
+                    <dt className="font-medium">{label}</dt>
+                    <dd className="text-muted-foreground">{value}</dd>
+                  </div>
+                ))}
+                {memberModelBudgetEntries.length > 0 && (
+                  <div className="space-y-1 sm:col-span-2">
+                    <dt className="font-medium">
+                      {t("teams.teamInfo.editForm.teamMemberSettings.defaultPerModelBudget")}
+                    </dt>
+                    <dd className="text-muted-foreground">
+                      {memberModelBudgetEntries.map(({ model, budgetLimit, timePeriod }) => (
+                        <div key={model}>
+                          {t("teams.teamInfo.settingsView.teamMemberSettings.defaultPerModelBudget", {
+                            model,
+                            limit: budgetLimit !== null ? `$${formatNumberWithCommas(budgetLimit, 4)}` : noLimit,
+                            period: timePeriod,
+                          })}
+                        </div>
+                      ))}
+                    </dd>
+                  </div>
+                )}
+              </dl>
+            )}
+          </CardContent>
+        </Card>
       ),
     },
     {
@@ -1814,155 +2177,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       )}
                     </FormField>
                   </fieldset>
-
-                  <Collapsible
-                    open={teamMemberSettingsOpen}
-                    onOpenChange={setTeamMemberSettingsOpen}
-                    className="mt-4 mb-4 overflow-hidden rounded-lg border"
-                  >
-                    <CollapsibleTrigger className="group/section flex w-full items-center justify-between px-4 py-3 text-left">
-                      <b>{t("teams.teamInfo.editForm.teamMemberSettings.title")}</b>
-                      <ChevronDown className="size-5 shrink-0 text-muted-foreground transition-transform group-data-[panel-open]/section:rotate-180" />
-                    </CollapsibleTrigger>
-                    <CollapsibleContent className="px-4 pb-3">
-                      <p className="mb-4 text-xs text-muted-foreground">
-                        {t("teams.teamInfo.editForm.teamMemberSettings.description")}
-                      </p>
-                      <FieldGroup>
-                        <FormField
-                          control={form.control}
-                          name="default_team_member_models"
-                          label={labelWithHint(
-                            t("teams.teamInfo.editForm.teamMemberSettings.defaultModelAccess"),
-                            t("teams.teamInfo.editForm.teamMemberSettings.defaultModelAccessHint"),
-                          )}
-                        >
-                          {({ id, value, onChange }) => (
-                            <MultiSelect
-                              id={id}
-                              value={value ?? []}
-                              onValueChange={onChange}
-                              options={(watchedModels ?? info.models ?? []).map((model) => ({
-                                label: model,
-                                value: model,
-                              }))}
-                              placeholder={t(
-                                "teams.teamInfo.editForm.teamMemberSettings.defaultModelAccessPlaceholder",
-                              )}
-                            />
-                          )}
-                        </FormField>
-                        <FormField
-                          control={form.control}
-                          name="team_member_budget"
-                          label={labelWithHint(
-                            t("teams.teamInfo.editForm.teamMemberSettings.defaultBudget"),
-                            t("teams.teamInfo.editForm.teamMemberSettings.defaultBudgetHint"),
-                          )}
-                        >
-                          {({ ref, value, ...field }) => (
-                            <NumericalInput {...field} ref={ref} value={value ?? ""} step={0.01} precision={2} />
-                          )}
-                        </FormField>
-                        <FormField
-                          control={form.control}
-                          name="team_member_budget_duration"
-                          label={t("teams.teamInfo.editForm.teamMemberSettings.defaultBudgetDuration")}
-                        >
-                          {({ id, value, onChange }) => (
-                            <BudgetDurationDropdown
-                              id={id}
-                              showNeverResets
-                              placeholder={t("teams.teamInfo.editForm.teamMemberSettings.inheritResetPeriod")}
-                              value={value === null ? NEVER_RESETS_BUDGET_DURATION : value}
-                              onChange={(next) =>
-                                onChange(next === NEVER_RESETS_BUDGET_DURATION ? null : next ?? undefined)
-                              }
-                            />
-                          )}
-                        </FormField>
-                        <ModelMaxBudgetField
-                          label={t("teams.teamInfo.editForm.teamMemberSettings.defaultPerModelBudget")}
-                          premiumUser={premiumUser}
-                          value={teamMemberModelMaxBudget}
-                          onChange={setTeamMemberModelMaxBudget}
-                          availableModels={perModelLimitModels}
-                          hint={t("teams.teamInfo.editForm.teamMemberSettings.defaultPerModelBudgetHint")}
-                        />
-                        <FormField
-                          control={form.control}
-                          name="team_member_key_duration"
-                          label={labelWithHint(
-                            t("teams.teamInfo.editForm.teamMemberSettings.defaultKeyDuration"),
-                            t("teams.teamInfo.editForm.teamMemberSettings.defaultKeyDurationHint"),
-                          )}
-                        >
-                          {({ ref, value, ...field }) => (
-                            <UIInput
-                              {...field}
-                              ref={ref}
-                              value={value ?? ""}
-                              placeholder={t(
-                                "teams.teamInfo.editForm.teamMemberSettings.defaultKeyDurationPlaceholder",
-                              )}
-                            />
-                          )}
-                        </FormField>
-                        <FormField
-                          control={form.control}
-                          name="team_member_tpm_limit"
-                          label={labelWithHint(
-                            t("teams.teamInfo.editForm.teamMemberSettings.defaultTpmLimit"),
-                            t("teams.teamInfo.editForm.teamMemberSettings.defaultTpmLimitHint"),
-                          )}
-                        >
-                          {({ ref, value, ...field }) => (
-                            <NumericalInput
-                              {...field}
-                              ref={ref}
-                              value={value ?? ""}
-                              step={1}
-                              placeholder={t("teams.teamInfo.editForm.teamMemberSettings.defaultTpmLimitPlaceholder")}
-                            />
-                          )}
-                        </FormField>
-                        <FormField
-                          control={form.control}
-                          name="team_member_rpm_limit"
-                          label={labelWithHint(
-                            t("teams.teamInfo.editForm.teamMemberSettings.defaultRpmLimit"),
-                            t("teams.teamInfo.editForm.teamMemberSettings.defaultRpmLimitHint"),
-                          )}
-                        >
-                          {({ ref, value, ...field }) => (
-                            <NumericalInput
-                              {...field}
-                              ref={ref}
-                              value={value ?? ""}
-                              step={1}
-                              placeholder={t("teams.teamInfo.editForm.teamMemberSettings.defaultRpmLimitPlaceholder")}
-                            />
-                          )}
-                        </FormField>
-                        <BudgetAlertEmailsEditor
-                          control={form.control}
-                          name="team_member_max_budget_alert_emails"
-                          label={labelWithHint(
-                            t("teams.teamInfo.editForm.teamMemberSettings.budgetAlertThresholds"),
-                            t("teams.teamInfo.editForm.teamMemberSettings.budgetAlertThresholdsHint"),
-                          )}
-                          text={{
-                            thresholdPlaceholder: t("teams.teamInfo.editForm.teamMemberSettings.thresholdPlaceholder"),
-                            recipientsPlaceholder: t(
-                              "teams.teamInfo.editForm.teamMemberSettings.recipientsPlaceholder",
-                            ),
-                            removeThreshold: t("teams.teamInfo.editForm.teamMemberSettings.removeThreshold"),
-                            addThreshold: t("teams.teamInfo.editForm.teamMemberSettings.addThreshold"),
-                          }}
-                        />
-                      </FieldGroup>
-                    </CollapsibleContent>
-                  </Collapsible>
 
                   <FormField
                     control={form.control}
@@ -2474,6 +2688,24 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 <div>{new Date(info.created_at).toLocaleString()}</div>
               </div>
               <div>
+                <h4 className="font-medium">{t("teams.teamInfo.editForm.metadata")}</h4>
+                {customMetadata.length > 0 ? (
+                  <dl className="mt-2 divide-y rounded-md border text-sm">
+                    {customMetadata.map(({ key, value }) => (
+                      <div
+                        key={key}
+                        className="grid gap-1 px-3 py-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,2fr)] sm:gap-4"
+                      >
+                        <dt className="wrap-anywhere font-mono text-muted-foreground">{key}</dt>
+                        <dd className="whitespace-pre-wrap wrap-anywhere font-mono">{value || '""'}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                ) : (
+                  <p className="text-muted-foreground">{t("teams.teamInfo.settingsView.noMetadata")}</p>
+                )}
+              </div>
+              <div>
                 <p className="font-medium">{t("teams.teamInfo.settingsView.models")}</p>
                 <div className="flex flex-wrap gap-2 mt-1">
                   {info.models.map((model, index) => (
@@ -2483,18 +2715,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   ))}
                 </div>
               </div>
-              {info.default_team_member_models && info.default_team_member_models.length > 0 && (
-                <div>
-                  <p className="font-medium">{t("teams.teamInfo.settingsView.defaultMemberModels")}</p>
-                  <div className="flex flex-wrap gap-2 mt-1">
-                    {info.default_team_member_models.map((model, index) => (
-                      <BadgeLink key={index} href={modelOrAccessGroupHref(model, accessGroupNames)}>
-                        {model}
-                      </BadgeLink>
-                    ))}
-                  </div>
-                </div>
-              )}
               <div>
                 <p className="font-medium">{t("teams.teamInfo.settingsView.modelAliases")}</p>
                 {(() => {
@@ -2606,53 +2826,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 )}
               </div>
               <div>
-                <p className="font-medium">
-                  {t("teams.teamInfo.settingsView.teamMemberSettings.title")}{" "}
-                  <SimpleTooltip content={t("teams.teamInfo.settingsView.teamMemberSettings.tooltip")}>
-                    <Info className="ml-1 inline size-3.5 align-text-bottom" />
-                  </SimpleTooltip>
-                </p>
-                <div>
-                  {t("teams.teamInfo.settingsView.maxBudget")}
-                  {info.team_member_budget_table?.max_budget ?? t("teams.teamInfo.settingsView.noLimit")}
-                </div>
-                <div>
-                  {t("teams.teamInfo.settingsView.teamMemberSettings.budgetDuration")}
-                  {info.team_member_budget_table?.budget_duration || t("teams.teamInfo.settingsView.noLimit")}
-                </div>
-                {modelMaxBudgetToEntries(
-                  info.team_member_budget_table?.model_max_budget as ModelMaxBudget | null | undefined,
-                ).map(({ model, budgetLimit, timePeriod }) => (
-                  <div key={model}>
-                    {t("teams.teamInfo.settingsView.teamMemberSettings.defaultPerModelBudget", {
-                      model,
-                      limit:
-                        budgetLimit !== null
-                          ? `$${formatNumberWithCommas(budgetLimit, 4)}`
-                          : t("teams.teamInfo.settingsView.noLimit"),
-                      period: timePeriod,
-                    })}
-                  </div>
-                ))}
-                <div>
-                  {t("teams.teamInfo.settingsView.teamMemberSettings.keyDuration")}
-                  {info.metadata?.team_member_key_duration || t("teams.teamInfo.settingsView.noLimit")}
-                </div>
-                <div>
-                  {t("teams.teamInfo.settingsView.teamMemberSettings.tpmLimit")}
-                  {info.team_member_budget_table?.tpm_limit ?? t("teams.teamInfo.settingsView.noLimit")}
-                </div>
-                <div>
-                  {t("teams.teamInfo.settingsView.teamMemberSettings.rpmLimit")}
-                  {info.team_member_budget_table?.rpm_limit ?? t("teams.teamInfo.settingsView.noLimit")}
-                </div>
-                <div>
-                  {t("teams.teamInfo.settingsView.teamMemberSettings.budgetAlertThresholds")}
-                  {teamMemberBudgetAlertSummary(info.metadata).join("; ") ||
-                    t("teams.teamInfo.settingsView.teamMemberSettings.none")}
-                </div>
-              </div>
-              <div>
                 <p className="font-medium">{t("teams.teamInfo.settingsView.routerSettings")}</p>
                 {info.router_settings &&
                 Object.values(info.router_settings).some(
@@ -2752,7 +2925,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
               <LoggingSettingsView
                 loggingConfigs={info.metadata?.logging || []}
-                disabledCallbacks={[]}
                 variant="inline"
                 className="pt-4 border-t border-border"
               />
@@ -2799,20 +2971,17 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         </div>
       </div>
 
-      <Tabs
-        value={activeTab}
-        className="mb-4"
-        onValueChange={(value) => {
-          setActiveTab(String(value));
-          onTabChange(value);
-        }}
-      >
-        <TabsList variant="line" className="mb-4 h-auto w-full justify-start rounded-none border-b p-0">
-          {tabItems.map(({ key, label }) => (
-            <TabsTrigger key={key} value={key} className="flex-none rounded-none px-4 py-2">
-              {label}
-            </TabsTrigger>
-          ))}
+      <Tabs value={activeTab} className="mb-4" onValueChange={handleTabChange}>
+        <TabsList variant="line" className="mb-4 h-auto w-full flex-wrap justify-start rounded-none border-b p-0">
+          {tabItems.map(({ key, label }) =>
+            key === TEAM_INFO_TAB_KEYS.LENS ? (
+              <LensTabTrigger key={key} />
+            ) : (
+              <TabsTrigger key={key} value={key} className="flex-none rounded-none px-4 py-2">
+                {label}
+              </TabsTrigger>
+            ),
+          )}
         </TabsList>
         {tabItems.map(({ key, children }) => (
           <TabsContent key={key} value={key} keepMounted={hasVisited(key)}>
@@ -2947,6 +3116,15 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
               type: "multi-select" as const,
               options: (info.models || []).map((m: string) => ({ label: m, value: m })),
               placeholder: t("teams.teamInfo.editMember.allowedModelsPlaceholder"),
+              description:
+                canEditAsProxyAdmin && selectedEditMember?.user_id && !selectedEditMember.allowed_models?.length ? (
+                  <>
+                    {t("teams.teamInfo.editMember.addModelsOnKey")}{" "}
+                    <Button type="button" variant="link" className="h-auto p-0 text-sm" onClick={viewMemberKeys}>
+                      {t("teams.teamInfo.editMember.viewMemberKeys")}
+                    </Button>
+                  </>
+                ) : undefined,
             },
           ],
         }}

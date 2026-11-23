@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TraceAgentsRequest",
+  "type": "object",
+  "properties": {
+    "team_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 256,
+      "default": null
+    },
+    "api_key_hash": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 256,
+      "default": null
+    },
+    "start_ms": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "int64",
+      "default": null
+    },
+    "end_ms": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "int64",
+      "default": null
+    }
+  }
+}
