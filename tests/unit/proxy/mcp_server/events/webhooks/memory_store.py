@@ -38,9 +38,9 @@ class MemoryStore:
         self.rows[row.id] = pending_row(row)
         return True
 
-    async def discard_pending(self, subscription_id: str) -> None:
+    async def discard_pending(self, subscription_id: str, generation: str | None = None) -> None:
         current: Final = self.rows.get(subscription_id)
-        if current is not None and current.status == "pending":
+        if current is not None and current.status == "pending" and generation in (None, current.generation):
             self.rows.pop(subscription_id)
 
     def _update_live(self, subscription_id: str, **fields: object) -> bool:  # noqa: ANN003  # test double mirrors a guarded UPDATE
@@ -54,9 +54,18 @@ class MemoryStore:
         self, subscription_id: str, activation: Activation, from_statuses: tuple[str, ...] = LIVE_STATUSES
     ) -> bool:
         current: Final = self.rows.get(subscription_id)
-        if current is None or current.status not in from_statuses:
+        if (
+            current is None
+            or current.status not in from_statuses
+            or activation.expected_generation not in (None, current.generation)
+        ):
             return False
-        return self._update_live(subscription_id, status="active", consecutive_failures=0, **activation.model_dump())
+        return self._update_live(
+            subscription_id,
+            status="active",
+            consecutive_failures=0,
+            **activation.model_dump(exclude={"expected_generation"}),
+        )
 
     async def mark_delivered(self, subscription_id: str, at: datetime) -> None:
         self._update_live(
