@@ -549,6 +549,15 @@ class ClassifierLLMConfig(LiteLLMBaseModel):
         default=3000,
         description="Timeout budget for the classification call, in milliseconds",
     )
+    max_output_tokens: int | None = Field(
+        default=None,
+        ge=1,
+        description=(
+            "Optional output token limit for LLM classifier calls. Leave unset to keep the classifier "
+            "deployment or provider default. When set, overrides the deployment limit. "
+            "Leave room for reasoning tokens when reasoning_effort is set."
+        ),
+    )
     circuit_breaker_enabled: bool = Field(
         default=True,
         description=(

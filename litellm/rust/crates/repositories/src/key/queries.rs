@@ -13,7 +13,7 @@ use crate::{RawJson, utc_timestamp};
 /// leaves unset, and the team, membership, project and organization values it is checked against.
 #[macro_rules_attribute::apply(crate::db_row)]
 #[derive(Serialize)]
-pub(super) struct KeyView {
+pub struct KeyView {
     pub token: String,
     pub key_name: Option<String>,
     pub key_alias: Option<String>,

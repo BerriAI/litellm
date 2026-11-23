@@ -3,7 +3,9 @@ from typing import Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict
 
-AppBudgetScope: TypeAlias = Literal["app", "app_customer_org", "app_customer_member"]
+AppBudgetScope: TypeAlias = Literal[
+    "app", "app_customer_org", "app_customer_member", "app_group", "app_group_customer_org"
+]
 CustomerBudgetScope: TypeAlias = Literal["customer_org", "customer_team", "customer_member"] | AppBudgetScope
 CustomerBudgetEventType: TypeAlias = Literal["soft_budget_crossed", "budget_crossed"]
 
@@ -15,6 +17,8 @@ class CustomerBudgetEvent(BaseModel):
     scope: CustomerBudgetScope
     entity_id: str
     app_id: str | None = None
+    app_group_id: str | None = None
+    app_group_name: str | None = None
     app_alias: str | None = None
     budget_duration: str | None = None
     customer_org_id: str | None = None

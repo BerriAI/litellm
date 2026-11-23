@@ -62,8 +62,8 @@ if TYPE_CHECKING:
     )
     from litellm.types.utils import ModelInfo as ModelMapInfo
 
-_T: Final = TypeVar("_T")
-_P: Final = ParamSpec("_P")
+_T = TypeVar("_T")
+_P = ParamSpec("_P")
 
 DEPRECATED_ROUTER_MEMBER_USES: Final[Counter[str]] = Counter()  # mutable-ok: the live tally _note increments
 
@@ -836,7 +836,7 @@ class DeprecatedRouterMembers:
 # Router-family functions and classes that took the Router (``litellm_router_instance=``,
 # ``router=``, ...) take its RoutingContext now. These keep the old spellings working.
 
-_RoutingCallable: Final = TypeVar("_RoutingCallable", bound=Callable[..., object])
+_RoutingCallable = TypeVar("_RoutingCallable", bound=Callable[..., object])
 
 
 @functools.cache

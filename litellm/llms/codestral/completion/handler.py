@@ -75,8 +75,8 @@ class _CodestralHTTPResponse(Protocol):
 class TextCompletionCodestralError(Exception):
     def __init__(
         self,
-        status_code,
-        message,
+        status_code: int,
+        message: str,
         request: httpx.Request | None = None,
         response: httpx.Response | None = None,
     ):
@@ -103,7 +103,7 @@ async def make_call(
     data: str,
     model: str,
     messages: list,
-    logging_obj,
+    logging_obj: LiteLLMLogging,
 ):
     response: Final = await client.post(api_base, headers=headers, data=data, stream=True)
 
@@ -380,14 +380,14 @@ class CodestralTextCompletion:
         model_response: TextCompletionResponse,
         print_verbose: Callable,
         encoding,
-        api_key,
-        logging_obj,
+        api_key: str,
+        logging_obj: LiteLLMLogging,
         stream,
         data: dict,
         optional_params: dict,
         timeout: float | httpx.Timeout,
-        litellm_params=None,
-        logger_fn=None,
+        litellm_params: object = None,
+        logger_fn: object = None,
         headers={},
     ) -> TextCompletionResponse:
         async_handler: Final = get_async_httpx_client(
@@ -428,13 +428,13 @@ class CodestralTextCompletion:
         model_response: TextCompletionResponse,
         print_verbose: Callable,
         encoding,
-        api_key,
+        api_key: str,
         logging_obj: LiteLLMLogging,
         data: dict,
         timeout: float | httpx.Timeout,
-        optional_params=None,
-        litellm_params=None,
-        logger_fn=None,
+        optional_params: object = None,
+        litellm_params: object = None,
+        logger_fn: object = None,
         headers={},
     ) -> CustomStreamWrapper:
         data["stream"] = True
@@ -456,5 +456,5 @@ class CodestralTextCompletion:
         )
         return streamwrapper
 
-    def embedding(self, *args, **kwargs):
+    def embedding(self, *args: object, **kwargs: object):
         pass

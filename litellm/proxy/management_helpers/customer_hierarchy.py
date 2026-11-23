@@ -4,21 +4,41 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
 from itertools import chain
-from typing import TYPE_CHECKING, Final, Generic, Literal, Protocol, TypeAlias, TypeVar
+from types import MappingProxyType
+from typing import (
+    TYPE_CHECKING,
+    Final,
+    Generic,
+    Literal,
+    Protocol,
+    TypeAlias,
+    TypeVar,
+    cast,  # noqa: TID251  # generated Prisma raw-query signatures need a structural protocol boundary
+)
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
-from litellm.models.budget import BudgetLimit, BudgetLimits, LiteLLM_BudgetTable, initialize_budget_limits
+from litellm.models.budget import (
+    BudgetLimit,
+    BudgetLimits,
+    LiteLLM_BudgetTable,
+    carry_budget_limit_resets,
+    initialize_budget_limits,
+)
+from litellm.proxy.common_utils.cache_invalidation_pubsub import broadcast_evictions, evict_local, evict_shared
 from litellm.proxy.common_utils.timezone_utils import (
     BudgetResetSettings,
     get_budget_reset_settings,
     get_budget_reset_time,
 )
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.db.db_span import db_span
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.list_api.common import escape_like
 from litellm.proxy.management_helpers.customer_budget_usage import customer_budget_usage
+from litellm.redis.stores.auth_cache import AuthObject
+from litellm.repositories.budget_limits_repository import BudgetLimitsTransaction, lock_budget_limits
 from litellm.repositories.budget_repository import create_budget_row, update_budget_row
 from litellm.repositories.chunked_in import IN_LIST_CHUNK_SIZE, count_in, delete_many_in, find_many_in
 from litellm.repositories.prisma_protocols import TableActions
@@ -73,7 +93,7 @@ def customer_budget_limit(budget: Budget | None) -> float | None:
             for limit in limits
             if limit.budget_duration.strip().lower() in ("12mo", "12month", "12months")
         ),
-        None,
+        limits[0].max_budget if limits else None,
     )
 
 
@@ -180,7 +200,7 @@ class TransactionSource(Protocol):
     def tx(self) -> AbstractAsyncContextManager["Prisma"]: ...
 
 
-T: Final = TypeVar("T")
+T = TypeVar("T")
 
 
 @dataclass(frozen=True, slots=True)
@@ -229,6 +249,7 @@ class _StoredWindow(BaseModel):
 
     budget_duration: str | None = None
     budget_reset_at: datetime | None = None
+    budget_limits: BudgetLimits | None = None
 
 
 def budget_window_values(
@@ -253,14 +274,10 @@ def group_budget_patch(group: BudgetGroupChange, current: OrganizationBudget | N
     patch: Final = Budget.model_validate(group.model_dump(exclude_unset=True, exclude={"budget_id", "name"}))
     if patch.budget_limits is None:
         return patch
-    resets: Final = (
-        {limit.budget_duration: limit.reset_at for limit in (current.budget_limits or ())} if current else {}
-    )
     return patch.model_copy(
         update={
-            "budget_limits": tuple(
-                limit.model_copy(update={"reset_at": resets.get(limit.budget_duration, limit.reset_at)})
-                for limit in patch.budget_limits
+            "budget_limits": carry_budget_limit_resets(
+                patch.budget_limits, (current.budget_limits or ()) if current is not None else ()
             )
         }
     )
@@ -283,6 +300,7 @@ def budget_limit_json(value: object) -> "Json":
                 "budget_duration": limit.budget_duration,
                 "max_budget": limit.max_budget,
                 "reset_at": limit.reset_at.isoformat() if limit.reset_at is not None else None,
+                **({"window_start": limit.window_start.isoformat()} if limit.window_start is not None else {}),
             }
             for limit in limits
         ]
@@ -353,11 +371,18 @@ class BudgetGroupScope(str, Enum):
     ORGANIZATION = "customer_organization_budget_group_ids"
     APP_ORGANIZATION = "app_customer_organization_budget_group_ids"
     APP = "app_budget_group_ids"
+    APP_GROUP = "app_group_budget_group_ids"
     APP_MEMBER = "app_customer_member_budget_group_ids"
 
 
 _BUDGET_IDS: Final = TypeAdapter(tuple[str, ...])
-_ORGANIZATION_DEFAULT_GROUP: Final = "customer_organization_default_budget_group"
+_DEFAULT_GROUP_KEYS: Final = MappingProxyType(
+    {
+        BudgetGroupScope.ORGANIZATION: "customer_organization_default_budget_group",
+        BudgetGroupScope.APP: "app_default_budget_group",
+        BudgetGroupScope.APP_GROUP: "app_group_default_budget_group",
+    }
+)
 
 
 class _BudgetGroupDefault(BaseModel):
@@ -366,8 +391,11 @@ class _BudgetGroupDefault(BaseModel):
     budget_id: str | None = None
 
 
-async def organization_default_budget_group_id(config: TableActions[PrismaRecord]) -> str | None:
-    row: Final = await config.find_unique(where={"param_name": _ORGANIZATION_DEFAULT_GROUP})
+async def default_budget_group_id(config: TableActions[PrismaRecord], scope: BudgetGroupScope) -> str | None:
+    key: Final = _DEFAULT_GROUP_KEYS.get(scope)
+    if key is None:
+        return None
+    row: Final = await config.find_unique(where={"param_name": key})
     if row is None:
         return None
     value: Final = row.model_dump()["param_value"]
@@ -403,6 +431,7 @@ class _MemberDeletionRow(BaseModel):
 class _AssociationDeletionRow(BaseModel):
     model_config = ConfigDict(frozen=True, from_attributes=True)
 
+    app_id: str | None = None
     budget_id: str | None = None
     budget_override_id: str | None = None
     customer_member_budget_id: str | None = None
@@ -420,6 +449,13 @@ class _AssociationDeletionRow(BaseModel):
             if budget_id is not None
         )
 
+    def cache_keys(self, scope: str, customer_id: str) -> tuple[str, ...]:
+        return (
+            (AuthObject.customer_app_association(scope, self.app_id, customer_id).key,)
+            if self.app_id is not None
+            else ()
+        )
+
 
 class _TeamDeletionRow(BaseModel):
     model_config = ConfigDict(frozen=True, from_attributes=True)
@@ -431,6 +467,8 @@ class _TeamDeletionRow(BaseModel):
 
 _DELETE_BATCH_SIZE: Final = 100
 _BUDGET_REFERENCE_FIELDS: Final = (
+    "app_groups",
+    "app_group_org_budgets",
     "customer_organization_defaults",
     "customer_organizations",
     "customer_member_overrides",
@@ -655,6 +693,7 @@ class CustomerHierarchyStore:
         self.premium_user = premium_user
         self.now = now
         self.settings = settings if settings is not None else get_budget_reset_settings()
+        self.auth_cache_keys: tuple[str, ...] = ()
         self.organizations: TableActions[PrismaRecord] = db.litellm_customerorganizationtable  # pyright: ignore[reportAttributeAccessIssue]  # protocol accepts immutable query mappings
         self.teams: TableActions[PrismaRecord] = db.litellm_customerteamtable  # pyright: ignore[reportAttributeAccessIssue]  # protocol accepts immutable query mappings
         self.members: TableActions[PrismaRecord] = db.litellm_customermembertable  # pyright: ignore[reportAttributeAccessIssue]  # protocol accepts immutable query mappings
@@ -770,7 +809,9 @@ class CustomerHierarchyStore:
         )
         return responses[0]
 
-    async def create_budget(self, budget: Budget, actor: str, name: str | None = None) -> str:
+    async def create_budget(
+        self, budget: Budget, actor: str, name: str | None = None, *, previous: tuple[BudgetLimit, ...] = ()
+    ) -> str:
         budget_id: Final = str(uuid4())
         await create_budget_row(
             self.budgets,
@@ -779,7 +820,11 @@ class CustomerHierarchyStore:
                     **budget_values(budget),
                     **budget_window_values(budget, budget.model_fields_set),
                     **(
-                        {"budget_limits": initialize_budget_limits(budget.budget_limits, self.settings, self.now)}
+                        {
+                            "budget_limits": initialize_budget_limits(
+                                carry_budget_limit_resets(budget.budget_limits, previous), self.settings, self.now
+                            )
+                        }
                         if budget.budget_limits is not None
                         else {}
                     ),
@@ -792,14 +837,22 @@ class CustomerHierarchyStore:
         )
         return budget_id
 
-    async def update_budget(self, budget_id: str | None, budget: Budget, actor: str) -> str:
+    async def update_budget(
+        self, budget_id: str | None, budget: Budget, actor: str, *, previous: tuple[BudgetLimit, ...] | None = None
+    ) -> str:
         if budget_id is None:
-            return await self.create_budget(budget, actor)
+            return await self.create_budget(budget, actor, previous=previous or ())
         if budget.budget_limits:
             from litellm.proxy.management_helpers.utils import validate_budget_windows_update
 
             await validate_budget_windows_update(self.db, budget_id)
         patch: Final = _VALUES.validate_python(budget.model_dump(exclude_unset=True))
+        if "budget_limits" in patch:
+            await lock_budget_limits(
+                cast("BudgetLimitsTransaction", self.db),  # cast-ok: Prisma transaction implements raw queries
+                "LiteLLM_BudgetTable",
+                budget_id,
+            )
         stored: Final = await self.budgets.find_unique(where={"budget_id": budget_id})
         current: Final = _StoredWindow.model_validate(stored, from_attributes=True) if stored is not None else None
         await update_budget_row(
@@ -810,7 +863,20 @@ class CustomerHierarchyStore:
                     **patch,
                     **budget_window_values(budget, patch, current),
                     **(
-                        {"budget_limits": initialize_budget_limits(budget.budget_limits, self.settings, self.now)}
+                        {
+                            "budget_limits": initialize_budget_limits(
+                                carry_budget_limit_resets(
+                                    budget.budget_limits,
+                                    previous
+                                    if previous is not None
+                                    else (current.budget_limits or ())
+                                    if current is not None
+                                    else (),
+                                ),
+                                self.settings,
+                                self.now,
+                            )
+                        }
                         if budget.budget_limits is not None
                         else {}
                     ),
@@ -819,6 +885,7 @@ class CustomerHierarchyStore:
             ),
             actor,
         )
+        self.auth_cache_keys += (AuthObject.customer_app_budget(budget_id).key,)
         return budget_id
 
     async def write_template_metadata(
@@ -874,7 +941,7 @@ class CustomerHierarchyStore:
             return Failure(ErrorCode.INVALID_TEMPLATE_NAMES)
         organization_id: Final = payload.customer_org_id or str(uuid4())
         default_overall_id: Final = (
-            await organization_default_budget_group_id(self.config)
+            await default_budget_group_id(self.config, BudgetGroupScope.ORGANIZATION)
             if not {"budget", "budget_id"}.intersection(payload.model_fields_set)
             else None
         )
@@ -1065,7 +1132,7 @@ class CustomerHierarchyStore:
         names: Final = tuple(group.name for group in payload.default_budgets)
         if len(set(names)) != len(names):
             return Failure(ErrorCode.INVALID_TEMPLATE_NAMES)
-        supports_default: Final = organization_id is not None or scope == BudgetGroupScope.ORGANIZATION
+        supports_default: Final = organization_id is not None or scope in _DEFAULT_GROUP_KEYS
         if payload.default_budget_template is not None and (
             not supports_default or payload.default_budget_template not in names
         ):
@@ -1101,12 +1168,13 @@ class CustomerHierarchyStore:
                     "update": {"param_value": Json(list(ids))},
                 },
             )
-            if scope == BudgetGroupScope.ORGANIZATION:
+            self.auth_cache_keys += (AuthObject.customer_app_shared_profiles().key,)
+            if (default_key := _DEFAULT_GROUP_KEYS.get(scope)) is not None:
                 default_value: Final = Json({"budget_id": default_id})
                 await self.config.upsert(
-                    where={"param_name": _ORGANIZATION_DEFAULT_GROUP},
+                    where={"param_name": default_key},
                     data={
-                        "create": {"param_name": _ORGANIZATION_DEFAULT_GROUP, "param_value": default_value},
+                        "create": {"param_name": default_key, "param_value": default_value},
                         "update": {"param_value": default_value},
                     },
                 )
@@ -1122,9 +1190,7 @@ class CustomerHierarchyStore:
             return await self.get_organization(organization_id)
         rows: Final = await find_many_in(self.budgets, "budget_id", await budget_group_ids(self.config, scope))
         budgets: Final = tuple(OrganizationBudget.model_validate(row, from_attributes=True) for row in rows)
-        default_id: Final = (
-            await organization_default_budget_group_id(self.config) if scope == BudgetGroupScope.ORGANIZATION else None
-        )
+        default_id: Final = await default_budget_group_id(self.config, scope)
         return BudgetGroups(
             default_budget_template_id=default_id,
             default_budgets=tuple(sorted(budgets, key=lambda budget: budget.budget_id)),
@@ -1339,7 +1405,9 @@ class CustomerHierarchyStore:
         custom: Final = Budget.model_validate(
             {**(budget_values(source) if source is not None else {}), **patch.model_dump(exclude_unset=True)}
         )
-        budget_id: Final = await self.create_budget(custom, actor)
+        budget_id: Final = await self.create_budget(
+            custom, actor, previous=(source.budget_limits or ()) if source is not None else ()
+        )
         if original is not None and source is not None and custom.budget_duration == source.budget_duration:
             reset_at: Final = window_reset_at(original.model_dump())
             if reset_at is not None:
@@ -1350,7 +1418,9 @@ class CustomerHierarchyStore:
         if member.budget_override_id is None or member.budget_override_expires_at is not None:
             return member
         permanent: Final = effective_member_budget(member.budget, member.budget_override, None, self.now)
-        base_id: Final = await self.update_budget(member.budget_override_id, permanent, actor)
+        base_id: Final = await self.update_budget(
+            member.budget_override_id, permanent, actor, previous=permanent.budget_limits or ()
+        )
         await update_budget_row(self.budgets, base_id, {"budget_reset_at": member.budget_reset_at}, actor)
         await self.members.update(
             where={"customer_member_id": member.customer_member_id},
@@ -1572,6 +1642,7 @@ class CustomerHierarchyStore:
             where=where,
             chunk_size=_DELETE_BATCH_SIZE,
         )
+        self.auth_cache_keys += tuple(AuthObject.customer_app_budget(budget_id).key for budget_id in budget_ids)
 
     async def _delete_member_batch(self, where: Mapping[str, object]) -> bool:
         rows: Final = await self.members.find_many(
@@ -1585,6 +1656,9 @@ class CustomerHierarchyStore:
         member_ids: Final = tuple(member.customer_member_id for member in members)
         budget_ids: Final = self._member_deletion_budget_ids(members)
         await delete_many_in(self.members, "customer_member_id", member_ids, atomicity="caller_transaction")
+        for member in members:
+            for association in member.apps or ():
+                self.auth_cache_keys += association.cache_keys("member", member.customer_member_id)
         await self._delete_unused_budgets(budget_ids)
         return True
 
@@ -1627,6 +1701,8 @@ class CustomerHierarchyStore:
             return Failure(ErrorCode.NOT_FOUND)
         member: Final = _MemberDeletionRow.model_validate(row)
         await self.members.delete(where={"customer_member_id": member_id})
+        for association in member.apps or ():
+            self.auth_cache_keys += association.cache_keys("member", member_id)
         await self._delete_unused_budgets(self._member_deletion_budget_ids((member,)))
         return None
 
@@ -1664,6 +1740,8 @@ class CustomerHierarchyStore:
             row.model_dump().get("apps") or () if row is not None else ()
         )
         await self.organizations.delete(where={"customer_org_id": organization_id})
+        for association in associations:
+            self.auth_cache_keys += association.cache_keys("organization", organization_id)
         budget_ids: Final = (
             tuple(template.budget_id for template in organization.default_budgets)
             + ((organization.budget_id,) if organization.budget_id is not None else ())
@@ -1673,9 +1751,7 @@ class CustomerHierarchyStore:
         return None
 
 
-async def delete_unattached_customer_budget(
-    budgets: TableActions[PrismaRecord], budget_id: str
-) -> PrismaRecord | Failure | None:
+async def delete_unattached_customer_budget(budgets: TableActions[T], budget_id: str) -> T | Failure | None:
     row: Final = await budgets.find_unique(where={"budget_id": budget_id})
     if row is None:
         return await budgets.delete(where={"budget_id": budget_id})
@@ -1689,10 +1765,18 @@ async def delete_unattached_customer_budget(
 
 
 class CustomerHierarchy:
-    def __init__(self, db: TransactionSource, *, premium_user: bool, clock: Callable[[], datetime] = utc_now) -> None:
+    def __init__(
+        self,
+        db: TransactionSource,
+        *,
+        premium_user: bool,
+        clock: Callable[[], datetime] = utc_now,
+        cache: UserApiKeyCache | None = None,
+    ) -> None:
         self.db = db
         self.clock = clock
         self.premium_user = premium_user
+        self.cache: Final = cache
 
     async def portal_limits(self) -> CustomerPortalLimits | Failure:
         return await self.transaction(lambda store: store.portal_limits())
@@ -1713,7 +1797,8 @@ class CustomerHierarchy:
 
         try:
             async with self.db.tx() as tx:
-                return await operation(CustomerHierarchyStore(tx, self.clock(), premium_user=self.premium_user))
+                store: Final = CustomerHierarchyStore(tx, self.clock(), premium_user=self.premium_user)
+                result: Final = await operation(store)
         except UniqueViolationError:
             return Failure(ErrorCode.ALREADY_EXISTS)
         except RecordNotFoundError:
@@ -1728,6 +1813,12 @@ class CustomerHierarchy:
             if PrismaDBExceptionHandler.is_lock_timeout_error(error):
                 return Failure(ErrorCode.CAPACITY_BUSY)
             raise
+        if self.cache is not None:
+            keys: Final = tuple(dict.fromkeys(store.auth_cache_keys))
+            evict_local(keys, self.cache)
+            await evict_shared(keys, self.cache)
+            await broadcast_evictions(keys)
+        return result
 
     async def create_organization(self, payload: OrganizationCreate, actor: str) -> Organization | Failure:
         return await self.transaction(lambda store: store.create_organization(payload, actor))

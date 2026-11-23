@@ -1,6 +1,8 @@
 import { isAdminRole, isProxyAdminRole, isProxyAdminTierRole } from "@/utils/roles";
+import { PageContent } from "@/components/shared/Page";
+import { PageHeader, PageHeaderTitle, PageHeaderDescription, PageHeaderControls } from "@/components/shared/PageHeader";
 import type { ParseKeys } from "i18next";
-import { CircleHelp, Plug, Search } from "lucide-react";
+import { CircleHelp, Plug, Search, Server } from "lucide-react";
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -483,7 +485,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
 
   return (
     <TooltipProvider>
-      <div className="h-full w-full p-6">
+      <PageContent>
         <DeleteServerDialog
           open={isDeleteModalOpen}
           onOpenChange={(open) => !open && cancelDelete()}
@@ -508,15 +510,14 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
             setDiscoveryVisible(true);
           }}
         />
-        <div className="flex items-center justify-between">
-          <div>
-            <div className="flex items-center gap-3">
-              <h1 className="text-xl font-semibold">{t("mcpServers.servers.header.title")}</h1>
-              {filteredServers.length > 0 && <Badge variant="secondary">{filteredServers.length}</Badge>}
-            </div>
-            <p className="mt-1 text-sm text-muted-foreground">{t("mcpServers.servers.header.subtitle")}</p>
-          </div>
-          <div className="flex flex-wrap items-center justify-end gap-2">
+        <PageHeader>
+          <PageHeaderTitle>
+            <Server />
+            {t("mcpServers.servers.header.title")}
+            {filteredServers.length > 0 && <Badge variant="secondary">{filteredServers.length}</Badge>}
+          </PageHeaderTitle>
+          <PageHeaderDescription>{t("mcpServers.servers.header.subtitle")}</PageHeaderDescription>
+          <PageHeaderControls className="flex-wrap">
             <Link href={uiHref("connect")} className={cn(buttonVariants({ variant: "outline" }), "shrink-0")}>
               <Plug />
               {t("mcpServers.servers.header.myConnections")}
@@ -542,8 +543,8 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
                 {t("mcpServers.servers.header.submitServer")}
               </Button>
             )}
-          </div>
-        </div>
+          </PageHeaderControls>
+        </PageHeader>
         <ImportMCPServers
           accessToken={accessToken}
           open={isImportVisible}
@@ -565,8 +566,8 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
           }}
           accessToken={accessToken}
         />
-        <Tabs defaultValue="servers" className="mt-2 w-full">
-          <TabsList variant="line" className="h-auto w-full justify-start rounded-none border-b p-0">
+        <Tabs defaultValue="servers" className="w-full gap-6">
+          <TabsList variant="line" className="h-auto w-full justify-start overflow-x-auto rounded-none border-b p-0">
             <TabsTrigger value="servers" className="flex-none rounded-none px-4 py-2">
               {t("mcpServers.servers.tabs.allServers")}
             </TabsTrigger>
@@ -833,7 +834,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
             refetchEnvVarStatus();
           }}
         />
-      </div>
+      </PageContent>
     </TooltipProvider>
   );
 };
