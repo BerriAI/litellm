@@ -10,6 +10,7 @@ from litellm.litellm_core_utils.get_llm_provider_logic import (
     get_llm_provider,
     resolve_model_and_provider_for_metadata,
 )
+from litellm.litellm_core_utils.get_supported_openai_params import get_supported_openai_params
 from litellm.litellm_core_utils.reasoning_effort_capability import deployment_reasoning_effort_levels
 from litellm.llms.azure_ai.chat.transformation import AzureAIGPT5Config
 from litellm.llms.azure_ai.common_utils import (
@@ -111,7 +112,11 @@ def str_keyed_mapping(value: object) -> Mapping[str, object] | None:
 
 
 def bridge_reasoning_effort(
-    reasoning_effort: str | Mapping[str, object] | None, extra_body: object
+    reasoning_effort: str | Mapping[str, object] | None,
+    extra_body: object,
+    *,
+    custom_llm_provider: str,
+    api_base: str | None,
 ) -> str | Mapping[str, object] | None:
     nested_body: Final = str_keyed_mapping(extra_body)
     if reasoning_effort is not None or nested_body is None:
@@ -120,7 +125,9 @@ def bridge_reasoning_effort(
     if isinstance(nested_effort, str):
         return nested_effort
     nested_object: Final = str_keyed_mapping(nested_effort)
-    return nested_object if nested_object is not None else str_keyed_mapping(nested_body.get("reasoning"))
+    if nested_object is not None or not _reaches_openai(custom_llm_provider, api_base):
+        return nested_object
+    return str_keyed_mapping(nested_body.get("reasoning"))
 
 
 def _targets_openai_api(api_base: str | None) -> bool:
@@ -133,6 +140,8 @@ def _reaches_openai(custom_llm_provider: str, api_base: str | None) -> bool:
 
 
 def _chat_refuses_effort_level(model: str, level: str) -> bool:
+    if "reasoning_effort" not in (get_supported_openai_params(model=model, custom_llm_provider="openai") or ()):
+        return True
     return OpenAIGPT5Config.is_model_gpt_5_model(model) and OpenAIGPT5Config.refuses_reasoning_effort_level(
         model, level
     )
@@ -288,6 +297,11 @@ def _with_chat_extra_body_effort(
     }
 
 
+def _collapse_loses_fields(sent: object) -> bool:
+    sent_object: Final = str_keyed_mapping(sent)
+    return sent_object is not None and any(key != "effort" and value is not None for key, value in sent_object.items())
+
+
 def settle_chat_reasoning_effort(
     optional_params: dict[str, object],  # mutable-ok: the provider handlers write to this dict and logging shares it
     *,
@@ -331,7 +345,7 @@ def settle_chat_reasoning_effort(
     )
     if isinstance(effort, RefusedReasoningFields):
         raise_refused_reasoning_fields(effort, model, custom_llm_provider)
-    if effort is not None:
+    if effort is not None and (drop_params or not _collapse_loses_fields(chat_params["reasoning_effort"])):
         return {**chat_params, "reasoning_effort": effort}
     if not drop_params:
         return chat_params

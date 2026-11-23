@@ -6599,7 +6599,12 @@ def completion(
                 custom_llm_provider=custom_llm_provider,
                 web_search_options=web_search_options,
                 tools=tools,
-                reasoning_effort=bridge_reasoning_effort(resolved_reasoning_effort, optional_params.get("extra_body")),
+                reasoning_effort=bridge_reasoning_effort(
+                    resolved_reasoning_effort,
+                    optional_params.get("extra_body"),
+                    custom_llm_provider=custom_llm_provider,
+                    api_base=api_base,
+                ),
                 reasoning_summary=_reasoning_summary_for_bridge,
                 api_base=api_base,
                 deployment_model_info=typed_deployment_model_info,
