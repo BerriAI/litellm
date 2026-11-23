@@ -138,6 +138,7 @@ def job_for(
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("rust_auth_stores")
 async def test_job_updates_existing_roster_and_revokes_only_removed_members_team_keys():
     prisma: Final = _FakePrisma(
         users=[_user("alice"), _user("bob", TEAM)],
@@ -365,6 +366,7 @@ async def test_group_resolving_to_no_users_keeps_a_populated_team_by_default(
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("rust_auth_stores")
 async def test_allow_empty_groups_removes_every_member_of_an_emptied_group():
     prisma: Final = _FakePrisma(
         users=[_user("bob", TEAM)],

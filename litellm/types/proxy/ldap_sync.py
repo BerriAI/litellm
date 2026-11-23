@@ -35,7 +35,9 @@ class LDAPSyncSettings(BaseModel):
         parsed: Final = urlsplit(value)
         if parsed.scheme not in {"ldap", "ldaps"} or not parsed.hostname:
             raise ValueError("server_url must be an ldap:// or ldaps:// server URL")
-        if parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path not in {"", "/"}:
+        has_userinfo: Final = parsed.username or parsed.password
+        has_query_or_fragment: Final = parsed.query or parsed.fragment
+        if has_userinfo or has_query_or_fragment or parsed.path not in {"", "/"}:
             raise ValueError("server_url must contain only the LDAP host and optional port")
         _ = parsed.port
         return value
@@ -63,6 +65,7 @@ class LDAPSyncSettings(BaseModel):
             )
         if bool(self.bind_dn) != bool(self.bind_password):
             raise ValueError("bind_dn and bind_password must be configured together")
-        if (self.enabled or self.bind_dn) and urlsplit(self.server_url).scheme == "ldap" and not self.start_tls:
+        requires_tls: Final = self.enabled or bool(self.bind_dn)
+        if requires_tls and urlsplit(self.server_url).scheme == "ldap" and not self.start_tls:
             raise ValueError("LDAP sync and service-account binds require TLS: use ldaps:// or start_tls: true")
         return self
