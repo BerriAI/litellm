@@ -7,12 +7,16 @@ use serde_json::Value;
 use crate::{
     Error, ErrorDetail,
     anthropic::beta_headers::{BetaPolicy, on_loaded_config},
-    base_llm::{auth::Headers, messages::context::MessagesModelCapabilities},
+    base_llm::{
+        auth::Headers,
+        messages::context::{MessagesModelCapabilities, MessagesTransformContext},
+    },
 };
 
 use super::request::{Body, InvokeRequestSettings};
 
 const PER_TURN_CONTROL: &str = "per-turn-control-2026-07-01";
+const SERVER_SIDE_FALLBACK: &str = "server-side-fallback-2026-06-01";
 const DANGEROUS_TOOL_USE: &str = "dangerous-tool-use-2026-09-03";
 const TOOL_SEARCH_TOOL: &str = "tool-search-tool-2025-10-19";
 const ADVANCED_TOOL_USE: &str = "advanced-tool-use-2025-11-20";
@@ -343,10 +347,11 @@ pub(super) fn get_bedrock_invoke_anthropic_beta_headers(
     params: &Body,
     headers: Headers,
     model: &str,
-    capabilities: &MessagesModelCapabilities,
+    context: &MessagesTransformContext,
     injected_thinking: bool,
     settings: &InvokeRequestSettings,
 ) -> Result<(Vec<String>, Headers), Error> {
+    let capabilities = &context.thinking.capabilities;
     let keep = model_specific_anthropic_betas(capabilities);
     let headers = if settings.filters_caller_betas {
         update_headers_with_filtered_beta(headers, &keep)
@@ -416,7 +421,36 @@ pub(super) fn get_bedrock_invoke_anthropic_beta_headers(
             "Bedrock Invoke: dropping unsupported anthropic-beta values from client headers: {dropped:?}. Bedrock has no mapping entry for these; forwarding them would cause a 400."
         );
     }
-    Ok((filtered.into_iter().collect(), headers))
+    Ok((
+        without_unsupported_server_side_fallback(filtered, model, context)
+            .into_iter()
+            .collect(),
+        headers,
+    ))
+}
+
+fn without_unsupported_server_side_fallback(
+    betas: BTreeSet<String>,
+    model: &str,
+    context: &MessagesTransformContext,
+) -> BTreeSet<String> {
+    if !betas.contains(SERVER_SIDE_FALLBACK)
+        || !context.drops_unsupported_params
+        || context
+            .thinking
+            .capabilities
+            .bedrock
+            .supports_server_side_fallback
+    {
+        return betas;
+    }
+    litellm_tracing::warn!(
+        "Dropping the {SERVER_SIDE_FALLBACK} beta for model={model} (drop_params=True): the model does not support server-side fallback and the provider answers the beta with 400 invalid beta flag."
+    );
+    betas
+        .into_iter()
+        .filter(|beta| beta != SERVER_SIDE_FALLBACK)
+        .collect()
 }
 
 #[cfg(test)]
@@ -545,6 +579,30 @@ mod tests {
                 .find(|(name, _)| name == "anthropic-beta")
                 .map(|(_, value)| value.as_str()),
             header
+        );
+    }
+
+    #[rstest]
+    #[case::unsupported_under_drop_params(false, true, Value::Null)]
+    #[case::unsupported_without_drop_params(false, false, json!(["server-side-fallback-2026-06-01"]))]
+    #[case::supported_under_drop_params(true, true, json!(["server-side-fallback-2026-06-01"]))]
+    fn server_side_fallback_beta_is_dropped_under_drop_params_only_where_the_model_lacks_it(
+        #[case] supports_server_side_fallback: bool,
+        #[case] drop_params: bool,
+        #[case] expected: Value,
+    ) {
+        let (body, _) = sent(
+            json!({}),
+            bedrock(BedrockCapabilities {
+                supports_server_side_fallback,
+                ..BedrockCapabilities::default()
+            }),
+            Some("server-side-fallback-2026-06-01"),
+            drop_params,
+        );
+        assert_eq!(
+            body.get("anthropic_beta").cloned().unwrap_or(Value::Null),
+            expected
         );
     }
 

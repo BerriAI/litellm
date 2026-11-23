@@ -8,6 +8,7 @@ from pydantic import TypeAdapter
 import litellm
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, iter_items
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.anthropic.common_utils import without_unsupported_server_side_fallback_beta
 from litellm.llms.anthropic.messages.native.transformation import (
     AnthropicMessagesConfig,
 )
@@ -64,6 +65,19 @@ def _without_invocation_metrics(sse_line: bytes) -> bytes:
         return sse_line
     kept_fields: Final = {key: value for key, value in event.items() if key != BEDROCK_INVOCATION_METRICS_FIELD}
     return b"data: " + json.dumps(kept_fields, separators=(",", ":")).encode()
+
+
+def _kept_anthropic_beta(sent: str | None, model: str, litellm_params: Mapping[str, object]) -> str | None:
+    if sent is None:
+        return None
+    kept_betas: Final = without_unsupported_server_side_fallback_beta(
+        tuple(beta.strip() for beta in sent.split(",") if beta.strip()),
+        model=model,
+        custom_llm_provider="databricks",
+        model_info=as_str_mapping(litellm_params.get("model_info")),
+        drop_params=litellm_params.get("drop_params"),
+    )
+    return ",".join(kept_betas) or None
 
 
 async def _strip_invocation_metrics(sse_stream: AsyncIterator[bytes]) -> AsyncIterator[bytes]:
@@ -149,7 +163,11 @@ class DatabricksAnthropicMessagesConfig(DatabricksBase, AnthropicMessagesConfig)
             optional_params=optional_params,
             messages=messages,
         )
-        return finalized_headers, workspace_api_base
+        kept_beta: Final = _kept_anthropic_beta(finalized_headers.get("anthropic-beta"), model, litellm_params)
+        return {
+            **{key: value for key, value in finalized_headers.items() if key != "anthropic-beta"},
+            **({} if kept_beta is None else {"anthropic-beta": kept_beta}),
+        }, workspace_api_base
 
     def get_complete_url(
         self,

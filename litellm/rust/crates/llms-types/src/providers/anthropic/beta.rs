@@ -306,9 +306,7 @@ impl AnthropicBeta {
 
     fn rejected_by(&self) -> &'static [BetaProvider] {
         match self {
-            Self::AdvancedToolUse20251120
-            | Self::ServerSideFallback20260601
-            | Self::ToolSearchTool20251019 => {
+            Self::AdvancedToolUse20251120 | Self::ToolSearchTool20251019 => {
                 &[BetaProvider::BedrockConverse, BetaProvider::Databricks]
             }
             Self::AdvisorTool20260301 => &[
@@ -391,7 +389,8 @@ impl AnthropicBeta {
             ],
             Self::Compact20260112
             | Self::ContextManagement20250627
-            | Self::DangerousToolUse20260903 => &[BetaProvider::BedrockConverse],
+            | Self::DangerousToolUse20260903
+            | Self::ServerSideFallback20260601 => &[BetaProvider::BedrockConverse],
             Self::ComputerUse20250124
             | Self::ComputerUse20251124
             | Self::Context1m20250807
