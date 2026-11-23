@@ -1995,9 +1995,9 @@ def get_bedrock_chat_config(model: str):
 _BOTOCORE_SERVICE_DESCRIPTION: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
-def _load_bedrock_response_stream_shape():
+def _load_bedrock_response_stream_shape(service_name: str = "bedrock-runtime"):
     """
-    Load the ResponseStream shape from botocore's bundled bedrock-runtime schema.
+    Load the ResponseStream shape from botocore's bundled schema for ``service_name``.
 
     Returns ``None`` if botocore is unavailable or the service model cannot be
     loaded.
@@ -2008,13 +2008,14 @@ def _load_bedrock_response_stream_shape():
 
         loader: Final = Loader()
         service_dict: Final = _BOTOCORE_SERVICE_DESCRIPTION.validate_python(
-            loader.load_service_model("bedrock-runtime", "service-2")
+            loader.load_service_model(service_name, "service-2")
         )
         return ServiceModel(service_dict).shape_for("ResponseStream")
     except Exception as e:
         verbose_logger.warning(
-            "litellm: could not load bedrock-runtime response stream shape "
-            "— Bedrock event-stream decoding will be unavailable. Error: %s",
+            "litellm: could not load %s response stream shape, "
+            "so its event-stream decoding will be unavailable. Error: %s",
+            service_name,
             e,
         )
         return None
@@ -2029,6 +2030,11 @@ def get_bedrock_response_stream_shape():
     decoding is actually needed.
     """
     return _load_bedrock_response_stream_shape()
+
+
+@functools.lru_cache(maxsize=1)
+def get_bedrock_agent_response_stream_shape() -> Shape | None:
+    return _load_bedrock_response_stream_shape("bedrock-agent-runtime")
 
 
 _BEDROCK_STREAM_OUTPUT_SHAPES: Final = ("ConverseStreamOutput", "ResponseStream")

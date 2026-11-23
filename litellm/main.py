@@ -25,7 +25,7 @@ from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from copy import deepcopy
 from functools import partial
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, TypeAlias, Union, cast, get_args
+from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, Optional, Protocol, TypeAlias, Union, cast, get_args
 
 from litellm._internal_context import is_resent_failure
 from litellm._logging import redact_string
@@ -124,7 +124,7 @@ from litellm.llms.base_llm.base_model_iterator import (
     MockResponseIterator,
     convert_model_response_to_streaming,
 )
-from litellm.llms.base_llm.chat.transformation import with_attribution_headers
+from litellm.llms.base_llm.chat.transformation import BaseLLMException, with_attribution_headers
 from litellm.llms.bedrock.common_utils import (
     BedrockModelInfo,
     NativeOutputFallback,
@@ -8293,6 +8293,12 @@ async def atranscription(*args, **kwargs) -> TranscriptionResponse:
         )
 
 
+def _raise_transcription_error(exc: BaseLLMException, model: str, custom_llm_provider: str) -> NoReturn:
+    if custom_llm_provider != "gnani":
+        raise exc
+    raise exception_type(model=model, custom_llm_provider=custom_llm_provider, original_exception=exc)
+
+
 @client
 def transcription(
     model: str,
@@ -8337,8 +8343,7 @@ def transcription(
     if litellm_logging_obj:
         litellm_logging_obj.model_call_details["client"] = str(client)
 
-    if max_retries is None:
-        max_retries = openai.DEFAULT_MAX_RETRIES
+    resolved_max_retries: Final = openai.DEFAULT_MAX_RETRIES if max_retries is None else max_retries
 
     model_response: Final = litellm.utils.TranscriptionResponse()
 
@@ -8416,7 +8421,7 @@ def transcription(
             api_key=api_key,
             api_version=api_version,
             azure_ad_token=azure_ad_token,
-            max_retries=max_retries,
+            max_retries=resolved_max_retries,
             litellm_params=litellm_params_dict,
             custom_llm_provider=custom_llm_provider,
         )
@@ -8449,7 +8454,7 @@ def transcription(
             client=client,
             timeout=timeout,
             logging_obj=litellm_logging_obj,
-            max_retries=max_retries,
+            max_retries=resolved_max_retries,
             api_base=api_base,
             api_key=static_api_key,
             provider_config=provider_config,
@@ -8493,7 +8498,7 @@ def transcription(
                 else None
             ),
             timeout=timeout,
-            max_retries=max_retries,
+            max_retries=resolved_max_retries,
             logging_obj=litellm_logging_obj,
             api_base=api_base,
             api_key=api_key,
@@ -8527,28 +8532,31 @@ def transcription(
                 timeout=timeout,
             )
     elif provider_config is not None:
-        response = base_llm_http_handler.audio_transcriptions(
-            model=model,
-            audio_file=file,
-            optional_params=optional_params,
-            litellm_params=litellm_params_dict,
-            model_response=model_response,
-            atranscription=atranscription,
-            client=(
-                client
-                if client is not None and (isinstance(client, HTTPHandler) or isinstance(client, AsyncHTTPHandler))
-                else None
-            ),
-            timeout=timeout,
-            max_retries=max_retries,
-            logging_obj=litellm_logging_obj,
-            api_base=api_base,
-            api_key=api_key,
-            custom_llm_provider=custom_llm_provider,
-            headers={},
-            provider_config=provider_config,
-            shared_session=shared_session,
-        )
+        try:
+            response = base_llm_http_handler.audio_transcriptions(
+                model=model,
+                audio_file=file,
+                optional_params=optional_params,
+                litellm_params=litellm_params_dict,
+                model_response=model_response,
+                atranscription=atranscription,
+                client=(
+                    client
+                    if client is not None and (isinstance(client, HTTPHandler) or isinstance(client, AsyncHTTPHandler))
+                    else None
+                ),
+                timeout=timeout,
+                max_retries=resolved_max_retries,
+                logging_obj=litellm_logging_obj,
+                api_base=api_base,
+                api_key=api_key,
+                custom_llm_provider=custom_llm_provider,
+                headers={},
+                provider_config=provider_config,
+                shared_session=shared_session,
+            )
+        except BaseLLMException as exc:
+            _raise_transcription_error(exc, model=model, custom_llm_provider=custom_llm_provider)
 
     # Store duration in _hidden_params for cost calculation without
     # exposing it in the response body (see sync path comment above).

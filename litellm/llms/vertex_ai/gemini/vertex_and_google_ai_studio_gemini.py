@@ -39,6 +39,7 @@ from litellm.litellm_core_utils.json_fragment_accumulator import JSONFragmentAcc
 from litellm.litellm_core_utils.prompt_templates.factory import (
     encode_tool_call_id_with_signature,
 )
+from litellm.litellm_core_utils.service_tier_utils import GEMINI_TRAFFIC_TYPE_SERVICE_TIERS
 from litellm.litellm_core_utils.tool_fields import tool_params_without_hosted_mcp
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.custom_httpx.http_handler import (
@@ -71,6 +72,8 @@ from litellm.types.llms.vertex_ai import (
     FunctionCallingConfig,
     FunctionDeclaration,
     GeminiFinishReason,
+    GeminiImageProviderSpecificFields,
+    GeminiImageURLListItem,
     GeminiThinkingConfig,
     GenerateContentResponseBody,
     HttpxPartType,
@@ -137,6 +140,10 @@ from .long_decode import (
     with_initial_prompt_tokens,
     with_spans_shifted,
 )
+from .rejected_thought_signature_retry import (
+    post_with_accepted_thought_signatures_async,
+    post_with_accepted_thought_signatures_sync,
+)
 from .transformation import (
     async_transform_request_body,
     gemini_convert_messages_with_history,
@@ -190,6 +197,37 @@ OPENAI_TO_GEMINI_TTS_VOICES: Final[Mapping[str, str]] = MappingProxyType(
         "verse": "Puck",
     }
 )
+
+
+SENT_SERVICE_TIERS: Final = frozenset({"priority", "flex", "standard"})
+PROVIDER_DEFAULT_SERVICE_TIERS: Final = frozenset({"auto", "default", "unspecified"})
+VERTEX_SHARED_REQUEST_TIERS: Final = frozenset({"priority", "flex"})
+SERVICE_TIER_ALIASES: Final[Mapping[str, str]] = MappingProxyType({"standard_only": "standard"})
+GEMINI_SERVICE_TIER_ALIASES: Final[Mapping[str, str]] = MappingProxyType(
+    {**SERVICE_TIER_ALIASES, "auto": "priority", "default": "standard"}
+)
+
+
+def _response_service_tier(header_tier: str | None, traffic_type: object) -> str | None:
+    if header_tier:
+        lowered: Final = header_tier.lower()
+        return "default" if lowered == "standard" else lowered
+    if isinstance(traffic_type, str) and traffic_type:
+        return GEMINI_TRAFFIC_TYPE_SERVICE_TIERS.get(traffic_type.upper(), "default")
+    return None
+
+
+def _unsupported_service_tier(service_tier: str) -> UnsupportedParamsError:
+    known_tiers: Final = sorted(SENT_SERVICE_TIERS | PROVIDER_DEFAULT_SERVICE_TIERS | frozenset(SERVICE_TIER_ALIASES))
+    return UnsupportedParamsError(
+        message=(
+            f"Invalid `service_tier`: {service_tier!r}. "
+            f"Must be one of: {', '.join(repr(tier) for tier in known_tiers)}. "
+            "To drop this param, set `litellm.drop_params = True` or pass in `(.., drop_params=True)` "
+            "in the request - https://docs.litellm.ai/docs/completion/drop_params"
+        ),
+        status_code=400,
+    )
 
 
 def _unsupported_reasoning_effort(reasoning_effort: str) -> UnsupportedParamsError:
@@ -246,16 +284,24 @@ def _content_parts(candidate: Candidates) -> Sequence[HttpxPartType]:
     return content.get("parts", ()) if content is not None else ()
 
 
+def _generated_image_item(data_uri: str, thought_signature: str | None) -> ImageURLListItem:
+    image_url: Final = ImageURLObject(url=data_uri, detail="auto")
+    if thought_signature is None:
+        return ImageURLListItem(image_url=image_url, index=0, type="image_url")
+    return GeminiImageURLListItem(
+        image_url=image_url,
+        index=0,
+        type="image_url",
+        provider_specific_fields=GeminiImageProviderSpecificFields(thought_signature=thought_signature),
+    )
+
+
 def _inline_image(part: HttpxPartType) -> ImageURLListItem | None:
     inline_data: Final = part.get("inlineData", {})
     mime_type: Final = inline_data.get("mimeType", "")
     if not mime_type.startswith("image/"):
         return None
-    return ImageURLListItem(
-        image_url=ImageURLObject(url=f"data:{mime_type};base64,{inline_data.get('data', '')}", detail="auto"),
-        index=0,
-        type="image_url",
-    )
+    return _generated_image_item(f"data:{mime_type};base64,{inline_data.get('data', '')}", part.get("thoughtSignature"))
 
 
 def _images_in(parts: Sequence[HttpxPartType]) -> tuple[ImageURLListItem, ...]:
@@ -390,6 +436,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     """
 
     _route: ClassVar[str] = "vertex_ai"
+    _service_tier_aliases: ClassVar[Mapping[str, str]] = SERVICE_TIER_ALIASES
 
     temperature: float | None = None
     max_output_tokens: int | None = None
@@ -701,16 +748,15 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     ) -> None:
         return cls._drop_search_tools_mixed_with_functions(optional_params)
 
-    def _map_service_tier_param(self, value: str, optional_params: dict) -> None:
-        """
-        Map OpenAI service_tier (string) to Gemini serviceTier.
-        'auto' maps to 'priority'.
-        Other values are passed lowercased.
-        """
-        if value.lower() == "auto":
-            optional_params["service_tier"] = "priority"
-        else:
-            optional_params["service_tier"] = value.lower()
+    def _map_service_tier_param(self, value: str, optional_params: dict, drop_params: bool) -> None:
+        unprefixed: Final = value.lower().removeprefix("service_tier_")
+        normalized: Final = self._service_tier_aliases.get(unprefixed, unprefixed)
+        if normalized in SENT_SERVICE_TIERS:
+            optional_params["service_tier"] = normalized
+            return
+        if normalized in PROVIDER_DEFAULT_SERVICE_TIERS or drops_unsupported_params(drop_params):
+            return
+        raise _unsupported_service_tier(value)
 
     def _transform_computer_use_config(self, computer_use_config: dict) -> dict:
         """
@@ -1633,7 +1679,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 _tools = self._map_web_search_options(value)
                 optional_params = self._add_tools_to_optional_params(optional_params, [_tools])
             elif param == "service_tier" and isinstance(value, str):
-                self._map_service_tier_param(value, optional_params)
+                self._map_service_tier_param(value, optional_params, drop_params)
             elif param == "include_server_side_tool_invocations" and value is True:
                 optional_params["include_server_side_tool_invocations"] = True
         if litellm.vertex_ai_safety_settings is not None:
@@ -2988,13 +3034,13 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 model_response.hidden_params.setdefault("provider_specific_fields", {})["traffic_type"] = traffic_type
 
             ## ADD SERVICE TIER ##
-            if getattr(raw_response, "headers", None):
-                service_tier: Final = _response_header(raw_response.headers, "x-gemini-service-tier")
-                if service_tier:
-                    if service_tier.lower() == "standard":
-                        setattr(model_response, "service_tier", "default")
-                    else:
-                        setattr(model_response, "service_tier", service_tier.lower())
+            response_headers: Final = getattr(raw_response, "headers", None)
+            service_tier: Final = _response_service_tier(
+                _response_header(response_headers, "x-gemini-service-tier") if response_headers else None,
+                traffic_type,
+            )
+            if service_tier:
+                setattr(model_response, "service_tier", service_tier)
 
         except Exception as e:
             raise VertexAIError(
@@ -3068,10 +3114,33 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             default_headers.update(api_key)
         elif api_key is not None:
             default_headers["Authorization"] = f"Bearer {api_key}"
-        if headers is not None:
-            default_headers.update(headers)
 
+        optional_fields: Final[Mapping[str, object]] = cast(Mapping[str, object], optional_params)  # cast-ok: bare dict
+        litellm_fields: Final[Mapping[str, object]] = cast(Mapping[str, object], litellm_params)  # cast-ok: bare dict
+        caller_headers: Final[Mapping[str, str]] = cast(Mapping[str, str], headers or {})  # cast-ok: bare dict
+        service_tier: Final = optional_fields.get("service_tier")
+        is_vertex: Final = litellm_fields.get("custom_llm_provider") != litellm.LlmProviders.GEMINI
+        if is_vertex and isinstance(service_tier, str) and service_tier in VERTEX_SHARED_REQUEST_TIERS:
+            caller_header_names: Final = frozenset(name.lower() for name in caller_headers)
+            if "x-vertex-ai-llm-shared-request-type" not in caller_header_names:
+                default_headers["X-Vertex-AI-LLM-Shared-Request-Type"] = service_tier
+
+        default_headers.update(caller_headers)
         return default_headers
+
+
+def _log_generate_request(
+    logging_obj: LoggingClass,
+    messages: Sequence[AllMessageValues],
+    api_base: str,
+    headers: Mapping[str, str],
+    body: RequestBody,
+) -> None:
+    logging_obj.pre_call(
+        input=messages,
+        api_key="",
+        additional_args={"complete_input_dict": body, "api_base": api_base, "headers": headers},
+    )
 
 
 async def make_call(
@@ -3315,39 +3384,37 @@ class VertexLLM(VertexBase):
         )
 
         ## LOGGING
-        logging_obj.pre_call(
-            input=messages,
-            api_key="",
-            additional_args={
-                "complete_input_dict": request_body,
-                "api_base": api_base,
-                "headers": headers,
-            },
+        log_request: Final = partial(_log_generate_request, logging_obj, messages, api_base, headers)
+        log_request(request_body)
+
+        open_stream: Final = partial(
+            make_call,
+            gemini_client=(client if client is not None and isinstance(client, AsyncHTTPHandler) else None),
+            api_base=api_base,
+            headers=headers,
+            model=model,
+            messages=messages,
+            logging_obj=logging_obj,
+            hop_headers=partial(
+                self._fresh_headers_async,
+                headers,
+                extra_headers,
+                vertex_credentials,
+                vertex_project,
+                custom_llm_provider,
+            ),
+            timeout=timeout,
         )
 
-        request_body_str: Final = json.dumps(request_body)
+        async def open_with_accepted_signatures(client: AsyncHTTPHandler | None) -> ModelResponseIterator:
+            async def post(body: RequestBody) -> ModelResponseIterator:
+                return await open_stream(client=client, data=json.dumps(body), request_body=body)
+
+            return (await post_with_accepted_thought_signatures_async(request_body, post, log_request))[1]
+
         streaming_response: Final = CustomStreamWrapper(
             completion_stream=None,
-            make_call=partial(
-                make_call,
-                gemini_client=(client if client is not None and isinstance(client, AsyncHTTPHandler) else None),
-                api_base=api_base,
-                headers=headers,
-                data=request_body_str,
-                model=model,
-                messages=messages,
-                logging_obj=logging_obj,
-                request_body=request_body,
-                hop_headers=partial(
-                    self._fresh_headers_async,
-                    headers,
-                    extra_headers,
-                    vertex_credentials,
-                    vertex_project,
-                    custom_llm_provider,
-                ),
-                timeout=timeout,
-            ),
+            make_call=open_with_accepted_signatures,
             model=model,
             custom_llm_provider="vertex_ai_beta",
             logging_obj=logging_obj,
@@ -3425,15 +3492,8 @@ class VertexLLM(VertexBase):
         else:
             client = client
         ## LOGGING
-        logging_obj.pre_call(
-            input=messages,
-            api_key="",
-            additional_args={
-                "complete_input_dict": request_body,
-                "api_base": api_base,
-                "headers": headers,
-            },
-        )
+        log_request: Final = partial(_log_generate_request, logging_obj, messages, api_base, headers)
+        log_request(request_body)
 
         fresh_headers: Final = partial(
             self._fresh_headers_async, headers, extra_headers, vertex_credentials, vertex_project, custom_llm_provider
@@ -3462,14 +3522,14 @@ class VertexLLM(VertexBase):
                 )
             return response
 
-        first_response: Final = await post(request_body)
+        sent_body, first_response = await post_with_accepted_thought_signatures_async(request_body, post, log_request)
         return _transform_long_decode_hops(
             model=model,
-            hops=await collect_hops_async(parse_body(first_response), request_body, post),
+            hops=await collect_hops_async(parse_body(first_response), sent_body, post),
             first_response=first_response,
             model_response=model_response,
             logging_obj=logging_obj,
-            request_body=request_body,
+            request_body=sent_body,
             messages=messages,
         )
 
@@ -3607,15 +3667,8 @@ class VertexLLM(VertexBase):
         )
 
         ## LOGGING
-        logging_obj.pre_call(
-            input=messages,
-            api_key="",
-            additional_args={
-                "complete_input_dict": data,
-                "api_base": url,
-                "headers": headers,
-            },
-        )
+        log_request: Final = partial(_log_generate_request, logging_obj, messages, url, headers)
+        log_request(data)
 
         fresh_headers: Final = partial(
             self._fresh_headers, headers, caller_headers, vertex_credentials, vertex_project, custom_llm_provider
@@ -3623,22 +3676,27 @@ class VertexLLM(VertexBase):
 
         ## SYNC STREAMING CALL ##
         if stream is True:
-            request_data_str: Final = json.dumps(data)
+            open_stream: Final = partial(
+                make_sync_call,
+                gemini_client=(client if client is not None and isinstance(client, HTTPHandler) else None),
+                api_base=url,
+                model=model,
+                messages=messages,
+                logging_obj=logging_obj,
+                headers=headers,
+                hop_headers=fresh_headers,
+                timeout=timeout,
+            )
+
+            def open_with_accepted_signatures(client: HTTPHandler | None) -> ModelResponseIterator:
+                def post(body: RequestBody) -> ModelResponseIterator:
+                    return open_stream(client=client, data=json.dumps(body), request_body=body)
+
+                return post_with_accepted_thought_signatures_sync(data, post, log_request)[1]
+
             streaming_response: Final = CustomStreamWrapper(
                 completion_stream=None,
-                make_call=partial(
-                    make_sync_call,
-                    gemini_client=(client if client is not None and isinstance(client, HTTPHandler) else None),
-                    api_base=url,
-                    data=request_data_str,
-                    model=model,
-                    messages=messages,
-                    logging_obj=logging_obj,
-                    headers=headers,
-                    request_body=data,
-                    hop_headers=fresh_headers,
-                    timeout=timeout,
-                ),
+                make_call=open_with_accepted_signatures,
                 model=model,
                 custom_llm_provider="vertex_ai_beta",
                 logging_obj=logging_obj,
@@ -3677,14 +3735,14 @@ class VertexLLM(VertexBase):
                 )
             return response
 
-        first_response: Final = post(data)
+        sent_body, first_response = post_with_accepted_thought_signatures_sync(data, post, log_request)
         return _transform_long_decode_hops(
             model=model,
-            hops=collect_hops_sync(parse_body(first_response), data, post),
+            hops=collect_hops_sync(parse_body(first_response), sent_body, post),
             first_response=first_response,
             model_response=model_response,
             logging_obj=logging_obj,
-            request_body=data,
+            request_body=sent_body,
             messages=messages,
         )
 
@@ -3908,12 +3966,9 @@ class ModelResponseIterator:
         if traffic_type:
             model_response.hidden_params.setdefault("provider_specific_fields", {})["traffic_type"] = traffic_type
 
-        service_tier: Final = self.response_headers.get("x-gemini-service-tier")
+        service_tier: Final = _response_service_tier(self.response_headers.get("x-gemini-service-tier"), traffic_type)
         if service_tier:
-            if service_tier.lower() == "standard":
-                setattr(model_response, "service_tier", "default")
-            else:
-                setattr(model_response, "service_tier", service_tier.lower())
+            setattr(model_response, "service_tier", service_tier)
 
         return usage
 
