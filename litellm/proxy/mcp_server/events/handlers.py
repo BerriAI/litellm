@@ -16,6 +16,7 @@ from litellm.proxy.mcp_server.events.errors import invalid_params
 from litellm.proxy.mcp_server.events.poll import poll
 from litellm.proxy.mcp_server.events.push import push
 from litellm.proxy.mcp_server.events.runtime import DEFAULT_RUNTIME, EventsRuntime
+from litellm.proxy.mcp_server.events.webhooks.store import default_store
 from litellm.proxy.mcp_server.outbound_credentials.result import Error
 from litellm.types.mcp_server.events import (
     EVENTS_EXTENSION,
@@ -150,7 +151,9 @@ def register_event_handlers(
             current: Final = served(ctx, context)
             if params.cursor is not None:
                 raise invalid_params("Invalid pagination cursor").to_mcp()
-            return ListEventsResult(events=await list_events(context, current, runtime))
+            return ListEventsResult(
+                events=await list_events(context, current, runtime, store_available=default_store() is not None)
+            )
 
     async def poll_handler(ctx: ServerRequestContext[object, object], params: PollEventsParams) -> PollEventsResult:
         async with operation_scope(ctx) as context:
