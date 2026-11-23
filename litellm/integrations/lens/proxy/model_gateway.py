@@ -1,7 +1,7 @@
 import hashlib
 import hmac
 import time
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable
 from enum import Enum
 from typing import Final
 
@@ -11,7 +11,7 @@ from starlette.exceptions import HTTPException
 
 from litellm.integrations.lens.proxy.adapter import Connection, Identity
 from litellm.integrations.lens.remote import bounded_response
-from litellm.proxy._types import GenerateKeyRequest, LitellmUserRoles, ProxyException, UserAPIKeyAuth
+from litellm.proxy._types import GenerateKeyRequest, LitellmUserRoles, ProxyException, SpecialModelNames, UserAPIKeyAuth
 from litellm.proxy.auth.route_checks import RouteChecks
 
 MODEL_ROUTES: Final = (
@@ -46,7 +46,6 @@ class SetupFailure(Enum):
     FORBIDDEN = "Only gateway administrators can connect models to Lens"
     UNAVAILABLE = "Lens could not be reached. Check the connection and try again"
     UNSUPPORTED = "Update Lens to connect this gateway automatically"
-    NO_MODELS = "Add a model to this LiteLLM gateway before connecting Lens"
     KEY_POLICY = (
         "The gateway could not create the Lens key. "
         "Check key-generation permissions, policy, and whether the Lens key was revoked"
@@ -63,12 +62,12 @@ def model_key(connection: Connection) -> str:
     return f"sk-lens-{digest}"
 
 
-def key_request(key: str, models: Sequence[str]) -> GenerateKeyRequest:
+def key_request(key: str) -> GenerateKeyRequest:
     return GenerateKeyRequest.model_validate(
         {
             "key": key,
             "key_alias": f"lens-models-{hashlib.sha256(key.encode()).hexdigest()[:12]}",
-            "models": sorted(set(models)),
+            "models": [SpecialModelNames.all_proxy_models.value],
             "allowed_routes": MODEL_ROUTES,
             "metadata": {"purpose": "lens-model-gateway"},
         }
@@ -79,9 +78,8 @@ async def connect_models(
     connection: Connection,
     identity: Identity,
     gateway_url: str,
-    models: Sequence[str],
     client: httpx.AsyncClient,
-    ensure_key: Callable[[str, Sequence[str]], Awaitable[bool]],
+    ensure_key: Callable[[str], Awaitable[bool]],
     now: int,
 ) -> GatewayStatus | SetupFailure:
     if identity.user_role != LitellmUserRoles.PROXY_ADMIN:
@@ -101,10 +99,8 @@ async def connect_models(
             return status
         if not status.supports_gateway_connect:
             return SetupFailure.UNSUPPORTED
-        if not models:
-            return SetupFailure.NO_MODELS
         key: Final = model_key(connection)
-        if not await ensure_key(key, models):
+        if not await ensure_key(key):
             return SetupFailure.KEY_POLICY
         async with client.stream(
             "POST",
@@ -135,10 +131,8 @@ async def setup(
     except HTTPException:
         return SetupFailure.KEY_POLICY
     database: Final = proxy_server.prisma_client
-    router: Final = proxy_server.llm_router
     if database is None:
         return SetupFailure.DATABASE
-    models: Final = tuple(router.registry().names()) if router else ()
     repository: Final = VerificationTokenRepository(database)
 
     async def active(hashed: str) -> bool:
@@ -151,17 +145,16 @@ async def setup(
     async def generate(request: GenerateKeyRequest) -> None:
         await generate_key_fn(data=request, user_api_key_dict=auth, litellm_changed_by=None)
 
-    async def ensure_key(key: str, models: Sequence[str]) -> bool:
-        return await ensure_model_key(key, models, active, retired, generate)
+    async def ensure_key(key: str) -> bool:
+        return await ensure_model_key(key, active, retired, generate)
 
     return await connect_models(
-        connection, identity, gateway_url, models, connection.remote.control_client(), ensure_key, int(time.time())
+        connection, identity, gateway_url, connection.remote.control_client(), ensure_key, int(time.time())
     )
 
 
 async def ensure_model_key(
     key: str,
-    models: Sequence[str],
     active: Callable[[str], Awaitable[bool]],
     retired: Callable[[str, str], Awaitable[bool]],
     generate: Callable[[GenerateKeyRequest], Awaitable[None]],
@@ -169,7 +162,7 @@ async def ensure_model_key(
     hashed: Final = hashlib.sha256(key.encode()).hexdigest()
     if await active(hashed):
         return True
-    request: Final = key_request(key, models)
+    request: Final = key_request(key)
     if await retired(hashed, request.key_alias or ""):
         return False
     try:

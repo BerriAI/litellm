@@ -18,6 +18,7 @@ from litellm.integrations.lens.proxy.model_gateway import (
 )
 from litellm.integrations.lens.remote import LensConnection
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy.auth.auth_checks import check_model_access_helper
 
 CONNECTION: Final = Connection(
     LensConnection("https://lens.test", "lens-service-fixture-32-characters"),
@@ -61,11 +62,11 @@ async def test_connects_the_gateway_server_side_and_returns_only_public_status()
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
         result: Final = await connect_models(
-            CONNECTION, ADMIN, CONNECTED.api_base or "", ("analysis",), client, ensure_key, 1_700_000_000
+            CONNECTION, ADMIN, CONNECTED.api_base or "", client, ensure_key, 1_700_000_000
         )
     assert result == CONNECTED
     assert key not in result.model_dump_json()
-    ensure_key.assert_awaited_once_with(key, ("analysis",))
+    ensure_key.assert_awaited_once_with(key)
 
 
 @pytest.mark.asyncio
@@ -82,7 +83,6 @@ async def test_non_admins_cannot_send_credentials_or_create_keys(role: LitellmUs
             CONNECTION,
             ADMIN.model_copy(update={"user_role": role}),
             "https://gateway.test",
-            ("analysis",),
             client,
             ensure_key,
             1_700_000_000,
@@ -107,30 +107,24 @@ async def test_existing_connections_and_older_lens_versions_do_not_create_keys(
     ensure_key: Final = AsyncMock(return_value=True)
     async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
         result: Final = await connect_models(
-            CONNECTION, ADMIN, "https://gateway.test", ("analysis",), client, ensure_key, 1_700_000_000
+            CONNECTION, ADMIN, "https://gateway.test", client, ensure_key, 1_700_000_000
         )
     assert result == expected
     ensure_key.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("models", "key_allowed", "expected"),
-    (((), True, SetupFailure.NO_MODELS), (("analysis",), False, SetupFailure.KEY_POLICY)),
-)
-async def test_empty_models_and_key_policy_fail_before_sending_credentials(
-    models: tuple[str, ...], key_allowed: bool, expected: SetupFailure
-) -> None:
+async def test_key_policy_failure_prevents_sending_credentials() -> None:
     def transport(request: httpx.Request) -> httpx.Response:
         assert request.method == "GET"
         return httpx.Response(200, json=EMPTY.model_dump())
 
-    ensure_key: Final = AsyncMock(return_value=key_allowed)
+    ensure_key: Final = AsyncMock(return_value=False)
     async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
         result: Final = await connect_models(
-            CONNECTION, ADMIN, "https://gateway.test", models, client, ensure_key, 1_700_000_000
+            CONNECTION, ADMIN, "https://gateway.test", client, ensure_key, 1_700_000_000
         )
-    assert result == expected
+    assert result is SetupFailure.KEY_POLICY
 
 
 @pytest.mark.asyncio
@@ -142,15 +136,14 @@ async def test_upstream_errors_never_return_private_response_details(status: int
     ensure_key: Final = AsyncMock(return_value=True)
     async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
         result: Final = await connect_models(
-            CONNECTION, ADMIN, "https://gateway.test", ("analysis",), client, ensure_key, 1_700_000_000
+            CONNECTION, ADMIN, "https://gateway.test", client, ensure_key, 1_700_000_000
         )
     assert result is SetupFailure.UNAVAILABLE
     ensure_key.assert_not_awaited()
 
 
-def test_dedicated_key_preserves_model_and_route_restrictions() -> None:
-    request: Final = key_request(model_key(CONNECTION), ("analysis", "embed", "analysis"))
-    assert request.models == ["analysis", "embed"]
+def test_dedicated_key_preserves_route_restrictions() -> None:
+    request: Final = key_request(model_key(CONNECTION))
     assert request.allowed_routes == [
         "/model_group/info",
         "/chat/completions",
@@ -162,6 +155,11 @@ def test_dedicated_key_preserves_model_and_route_restrictions() -> None:
     ]
     assert request.user_id is None
     assert request.team_id is None
+
+
+def test_dedicated_key_allows_models_added_after_setup() -> None:
+    request: Final = key_request(model_key(CONNECTION))
+    assert check_model_access_helper("added-after-setup", None, request.models)
 
 
 def test_separate_lens_services_do_not_share_model_keys() -> None:
@@ -181,7 +179,7 @@ async def test_a_retired_model_key_is_never_reissued_on_reconnection() -> None:
     retired: Final = AsyncMock(return_value=True)
     generate: Final = AsyncMock()
     key: Final = model_key(CONNECTION)
-    assert not await ensure_model_key(key, ("analysis",), active, retired, generate)
+    assert not await ensure_model_key(key, active, retired, generate)
     generate.assert_not_awaited()
 
 
@@ -190,7 +188,7 @@ async def test_retries_reuse_an_active_key_without_creating_another() -> None:
     active: Final = AsyncMock(return_value=True)
     retired: Final = AsyncMock(return_value=False)
     generate: Final = AsyncMock()
-    assert await ensure_model_key(model_key(CONNECTION), ("analysis",), active, retired, generate)
+    assert await ensure_model_key(model_key(CONNECTION), active, retired, generate)
     generate.assert_not_awaited()
 
 
@@ -200,5 +198,5 @@ async def test_first_provisioning_creates_the_restricted_key() -> None:
     retired: Final = AsyncMock(return_value=False)
     generate: Final = AsyncMock()
     key: Final = model_key(CONNECTION)
-    assert await ensure_model_key(key, ("analysis",), active, retired, generate)
-    generate.assert_awaited_once_with(key_request(key, ("analysis",)))
+    assert await ensure_model_key(key, active, retired, generate)
+    generate.assert_awaited_once_with(key_request(key))
