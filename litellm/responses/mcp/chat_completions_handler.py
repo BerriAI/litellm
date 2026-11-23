@@ -236,19 +236,19 @@ async def acompletion_with_mcp(
 
             def __init__(
                 self,
-                stream_wrapper,
+                stream_wrapper: CustomStreamWrapper,
                 messages,
                 tool_server_map,
-                user_api_key_auth,
-                mcp_auth_header,
-                mcp_server_auth_headers,
-                oauth2_headers,
-                raw_headers,
-                litellm_call_id,
-                litellm_trace_id,
+                user_api_key_auth: "UserAPIKeyAuth | None",
+                mcp_auth_header: str | None,
+                mcp_server_auth_headers: dict[str, dict[str, str]] | None,
+                oauth2_headers: dict[str, str] | None,
+                raw_headers: dict[str, str] | None,
+                litellm_call_id: str | None,
+                litellm_trace_id: str | None,
                 openai_tools,
                 base_call_args,
-                request_tags,
+                request_tags: list[str] | None,
             ):
                 self.stream_wrapper = stream_wrapper
                 self.messages = messages

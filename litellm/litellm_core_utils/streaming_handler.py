@@ -469,6 +469,7 @@ class _VllmCompletionOutputLike(Protocol):
 class _ParsedChunkHiddenParams(LiteLLMBaseModel):
     provider_specific_fields: Mapping[str, object] | None = None
     upstream_provider: str | None = None
+    anthropic_message_start: bool = False
 
 
 _DECODED_JSON: Final = TypeAdapter(object)
@@ -515,6 +516,7 @@ def _provider_hidden_params(
                     "upstream_provider",
                     parsed.upstream_provider if parsed is not None and parsed.upstream_provider else upstream_provider,
                 ),
+                ("anthropic_message_start", True if parsed is not None and parsed.anthropic_message_start else None),
             )
             if value is not None
         }
@@ -557,6 +559,7 @@ class CustomStreamWrapper:
         self.logging_obj: LiteLLMLoggingObject = logging_obj
         self.completion_stream = completion_stream
         self.sent_first_chunk = False
+        self._choice_indexes_given_role: frozenset[int] = frozenset()
         self.sent_last_chunk = False
         self._openai_handler_receives_chunk_objects = False
         self._failure_logging: asyncio.Task[None] | None = None
@@ -1259,7 +1262,7 @@ class CustomStreamWrapper:
                 and model_response.choices[0].delta.annotations is not None
             )
             or (
-                not self.sent_first_chunk
+                _response_choice_index(response_obj) not in self._choice_indexes_given_role
                 and hasattr(model_response.choices[0].delta, "role")
                 and model_response.choices[0].delta.role is not None
             )
@@ -1274,10 +1277,9 @@ class CustomStreamWrapper:
         """
         Strip the role from the delta.
         """
-        if self.sent_first_chunk is False:
+        if self._claim_role_for_choice(model_response.choices[0].index):
             model_response.choices[0].delta["role"] = "assistant"
-            self.sent_first_chunk = True
-        elif self.sent_first_chunk is True and hasattr(model_response.choices[0].delta, "role"):
+        elif hasattr(model_response.choices[0].delta, "role"):
             _initial_delta: Final = without(model_response.choices[0].delta.model_dump(), "role")
             set_extra_attribute(model_response.choices[0], "delta", Delta(**_keyword_fields(_initial_delta)))
         return model_response
@@ -1302,11 +1304,23 @@ class CustomStreamWrapper:
             return None
         return _delta_from_upstream(upstream_delta)
 
+    def _claim_role_for_choice(self, choice_index: int | None) -> bool:
+        index: Final = 0 if choice_index is None else choice_index
+        if index in self._choice_indexes_given_role:
+            return False
+        self._choice_indexes_given_role = self._choice_indexes_given_role | {index}
+        self.sent_first_chunk = True
+        return True
+
     def _set_role_on_fresh_delta(self, model_response: ModelResponseStream) -> None:
+        first_choice_claimed: Final = self._claim_role_for_choice(model_response.choices[0].index)
+        for choice in model_response.choices[1:]:
+            set_extra_attribute(
+                choice.delta, "role", "assistant" if self._claim_role_for_choice(choice.index) else None
+            )
         delta: Final = model_response.choices[0].delta
-        if self.sent_first_chunk is False:
+        if first_choice_claimed:
             set_extra_attribute(delta, "role", "assistant")
-            self.sent_first_chunk = True
             return
         if not _holds_only_scalars(delta):
             self.strip_role_from_delta(model_response)
@@ -1483,13 +1497,12 @@ class CustomStreamWrapper:
                 else:
                     ## else
                     completion_obj["content"] = model_response_str
-                    if self.sent_first_chunk is False:
+                    _index: Final = _delta_choice_index(completion_obj, response_obj)
+                    if self._claim_role_for_choice(_index if isinstance(_index, int) else 0):
                         completion_obj["role"] = "assistant"
-                        self.sent_first_chunk = True
                     if response_obj.get("provider_specific_fields") is not None:
                         completion_obj["provider_specific_fields"] = response_obj["provider_specific_fields"]
                     model_response.choices[0].delta = Delta(**_keyword_fields(completion_obj))
-                    _index: Final = _delta_choice_index(completion_obj, response_obj)
                     if _index is not None:
                         set_extra_attribute(model_response.choices[0], "index", _index)
 

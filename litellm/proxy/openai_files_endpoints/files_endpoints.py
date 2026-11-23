@@ -216,7 +216,7 @@ class UploadedFileInfo(TypedDict):
 files_config = None
 
 
-def set_files_config(config):
+def set_files_config(config: object):
     global files_config
     if config is None:
         return
@@ -389,7 +389,7 @@ def get_first_json_object(file_source: bytes | BinaryIO) -> dict | None:
         return None
 
 
-def get_model_from_json_obj(json_object: dict) -> str | None:
+def get_model_from_json_obj(json_object: Mapping[str, object]) -> str | None:
     """
     The model a record names, or None when it does not name one readably.
 

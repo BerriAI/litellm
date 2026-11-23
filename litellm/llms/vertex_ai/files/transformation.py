@@ -85,6 +85,7 @@ from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation im
 from litellm.types.files import StreamingMediaUploadConfig
 from litellm.types.llms.openai import (
     AllMessageValues,
+    BatchInputFormat,
     CreateFileRequest,
     FileContent,
     FileTypes,
@@ -1766,9 +1767,9 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             # Allow users to opt out of automatic Vertex batch output -> OpenAI
             # transformation, e.g. if they consume raw `predictions.jsonl` directly.
             if getattr(litellm, "disable_vertex_batch_output_transformation", False):
-                return HttpxBinaryResponseContent(response=raw_response)
+                return HttpxBinaryResponseContent(response=raw_response, batch_input_format=BatchInputFormat.VERTEX)
             if is_passthrough_managed_gcs_url(str(raw_response.request.url)):
-                return HttpxBinaryResponseContent(response=raw_response)
+                return HttpxBinaryResponseContent(response=raw_response, batch_input_format=BatchInputFormat.VERTEX)
 
             # Try to transform batch output if it's a JSONL file
             content: Final = raw_response.content
@@ -1795,7 +1796,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             # If transformation fails, return as-is
             pass
 
-        return HttpxBinaryResponseContent(response=raw_response)
+        return HttpxBinaryResponseContent(response=raw_response, batch_input_format=BatchInputFormat.VERTEX)
 
     async def transform_file_content_stream(
         self,

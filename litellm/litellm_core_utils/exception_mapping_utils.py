@@ -2,7 +2,7 @@ import inspect
 import json
 import re
 import traceback
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final, Protocol, cast
@@ -154,7 +154,7 @@ class ExceptionCheckers:
         return False
 
 
-def get_error_message(error_obj) -> str | None:
+def get_error_message(error_obj: object) -> str | None:
     """
     OpenAI Returns Error message that is nested, this extract the message
 
@@ -3124,12 +3124,12 @@ def exception_type(
 
 
 def exception_logging(
-    additional_args={},
-    logger_fn=None,
-    exception=None,
+    additional_args: Mapping[str, object] = {},
+    logger_fn: Callable[[dict[str, object]], object] | None = None,
+    exception: Exception | None = None,
 ):
     try:
-        model_call_details: Final = {}
+        model_call_details: Final[dict[str, object]] = {}
         if exception:
             model_call_details["exception"] = exception
         model_call_details["additional_args"] = additional_args
