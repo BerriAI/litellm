@@ -1994,3 +1994,166 @@ async def test_authenticated_browser_identity_checks_embedded_session(
     )
     request: Final = Request({"type": "http", "headers": [(b"cookie", ("token=" + cookie).encode())]})
     assert await get_authenticated_browser_user_id(request) == expected
+
+
+# ---------------------------------------------------------------------------
+# Authorization codes shared across workers
+# ---------------------------------------------------------------------------
+
+
+class _SharedStore:
+    """Stands in for redis_usage_cache: one store every worker sees."""
+
+    def __init__(self, fail_increment: bool = False) -> None:
+        self.values: dict[str, Any] = {}
+        self.counts: dict[str, int] = {}
+        self.fail_increment = fail_increment
+
+    async def async_set_cache(self, key: str, value: Any, **_: Any) -> None:
+        self.values[key] = value
+
+    async def async_get_cache(self, key: str, **_: Any) -> Any:
+        return self.values.get(key)
+
+    async def async_delete_cache(self, key: str) -> None:
+        self.values.pop(key, None)
+
+    async def async_increment(self, key: str, value: int, **_: Any) -> int:
+        if self.fail_increment and key.startswith("mcp_byok_auth_code_claim:"):
+            raise ConnectionError("redis down")
+        self.counts[key] = self.counts.get(key, 0) + value
+        return self.counts[key]
+
+
+def _authorize(client, challenge: str) -> str:
+    from urllib.parse import parse_qs, urlparse
+
+    resp = client.post(
+        "/v1/mcp/oauth/authorize",
+        data={
+            "client_id": "user-123",
+            "redirect_uri": "http://127.0.0.1:3000/callback",
+            "code_challenge": challenge,
+            "code_challenge_method": "S256",
+            "state": "st",
+            "server_id": "server-xyz",
+            "api_key": "sk-supersecretkey",
+        },
+        follow_redirects=False,
+    )
+    assert resp.status_code == 302
+    return parse_qs(urlparse(resp.headers["location"]).query)["code"][0]
+
+
+async def _redeem(code: str, verifier: str, store_credential: AsyncMock):
+    from litellm.proxy.mcp_server.byok_oauth_endpoints import byok_token
+
+    with (
+        patch("litellm.proxy.mcp_server.byok_oauth_endpoints.store_user_credential", store_credential),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.master_key", "test_master_key_value"),
+        patch("litellm.proxy.mcp_server.server._invalidate_byok_cred_cache", AsyncMock(), create=True),
+    ):
+        return await byok_token(
+            request=MagicMock(),
+            grant_type="authorization_code",
+            code=code,
+            redirect_uri="http://127.0.0.1:3000/callback",
+            code_verifier=verifier,
+            client_id="user-123",
+        )
+
+
+@pytest.mark.asyncio
+async def test_a_code_issued_on_one_worker_is_redeemed_on_another_through_the_shared_store(client, monkeypatch):
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-test-salt-key")
+    shared = _SharedStore()
+    verifier = "a_code_verifier_that_is_long_enough_for_pkce_43"
+    with patch("litellm.proxy.proxy_server.redis_usage_cache", shared):
+        code = _authorize(client, _make_challenge(verifier))
+        assert code not in _byok_auth_codes
+        (sealed,) = shared.values.values()
+        assert "sk-supersecretkey" not in json.dumps(sealed)
+
+        store_credential = AsyncMock()
+        result = await _redeem(code, verifier, store_credential)
+    assert result.status_code == 200
+    assert json.loads(result.body)["access_token"]
+    store_credential.assert_awaited_once()
+    assert store_credential.await_args.kwargs["credential"] == "sk-supersecretkey"
+    assert shared.values == {}
+
+
+@pytest.mark.asyncio
+async def test_a_shared_code_is_redeemed_only_once(client, monkeypatch):
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-test-salt-key")
+    shared = _SharedStore()
+    verifier = "a_code_verifier_that_is_long_enough_for_pkce_43"
+    with patch("litellm.proxy.proxy_server.redis_usage_cache", shared):
+        code = _authorize(client, _make_challenge(verifier))
+        sealed = dict(shared.values)
+        first = await _redeem(code, verifier, AsyncMock())
+        # a concurrent redemption that read the record before the first one deleted it
+        shared.values.update(sealed)
+        store_credential = AsyncMock()
+        second = await _redeem(code, verifier, store_credential)
+    assert first.status_code == 200
+    assert second.status_code == 400
+    assert json.loads(second.body)["error"] == "invalid_grant"
+    store_credential.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_shared_code_is_not_redeemed_when_the_single_use_claim_cannot_be_recorded(client, monkeypatch):
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-test-salt-key")
+    shared = _SharedStore(fail_increment=True)
+    verifier = "a_code_verifier_that_is_long_enough_for_pkce_43"
+    with patch("litellm.proxy.proxy_server.redis_usage_cache", shared):
+        code = _authorize(client, _make_challenge(verifier))
+        store_credential = AsyncMock()
+        result = await _redeem(code, verifier, store_credential)
+    assert result.status_code == 400
+    store_credential.assert_not_awaited()
+
+
+def test_the_pending_code_cap_holds_with_the_shared_store(client, monkeypatch):
+    from litellm.proxy.mcp_server.byok_oauth_endpoints import _AUTH_CODE_WINDOW_KEY, _AUTH_CODES_MAX_SIZE
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-test-salt-key")
+    shared = _SharedStore()
+    shared.counts[_AUTH_CODE_WINDOW_KEY] = _AUTH_CODES_MAX_SIZE
+    with patch("litellm.proxy.proxy_server.redis_usage_cache", shared):
+        resp = client.post(
+            "/v1/mcp/oauth/authorize",
+            data={
+                "client_id": "user-123",
+                "redirect_uri": "http://127.0.0.1:3000/callback",
+                "code_challenge": _make_challenge("a_code_verifier_that_is_long_enough_for_pkce_43"),
+                "code_challenge_method": "S256",
+                "state": "st",
+                "server_id": "server-xyz",
+                "api_key": "sk-supersecretkey",
+            },
+            follow_redirects=False,
+        )
+    assert resp.status_code == 503
+    assert shared.values == {}
+
+
+def test_an_oversized_api_key_is_rejected_before_a_code_is_issued(client):
+    from litellm.proxy.mcp_server.byok_oauth_endpoints import _MAX_API_KEY_LENGTH
+
+    resp = client.post(
+        "/v1/mcp/oauth/authorize",
+        data={
+            "client_id": "user-123",
+            "redirect_uri": "http://127.0.0.1:3000/callback",
+            "code_challenge": _make_challenge("a_code_verifier_that_is_long_enough_for_pkce_43"),
+            "code_challenge_method": "S256",
+            "state": "st",
+            "server_id": "server-xyz",
+            "api_key": "k" * (_MAX_API_KEY_LENGTH + 1),
+        },
+        follow_redirects=False,
+    )
+    assert resp.status_code == 400
