@@ -26,6 +26,7 @@ litellm-python-compat.workspace = true
 litellm-router-types.workspace = true
 litellm-model-catalog.workspace = true
 litellm-tracing.workspace = true
+tracing.workspace = true
 base64.workspace = true
 bytes.workspace = true
 crc32fast = "1.5"

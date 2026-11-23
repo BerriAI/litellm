@@ -27,7 +27,7 @@ use crate::{
     prerouting::{PreRoute, PreRouted},
     registry::{ResolveKind, ResolveScope},
     retry::{RetryContext, RetryState, RetryStep, resolve_retry_policy, retry_step},
-    select::{Candidates, SelectInputs},
+    select::{Candidates, SelectInputs, skips_batch_only},
 };
 
 mod stream;
@@ -715,14 +715,19 @@ impl<H: RouterHost> Call<'_, H> {
             excluded.push(failed_id.to_owned());
         }
         let listing_team = request.listing_team_id.as_deref();
-        let ids: Vec<String> = group_members(snapshot, &target.group, listing_team)
-            .iter()
+        let members: Vec<_> = group_members(snapshot, &target.group, listing_team)
+            .into_iter()
             .filter(|d| d.listed_for_team(listing_team))
+            .collect();
+        let skip_batch_only = skips_batch_only(request, &members);
+        let ids: Vec<String> = members
+            .iter()
+            .filter(|d| !skip_batch_only || !d.serves_only_batches())
             .map(|d| d.id.clone())
             .collect();
         let cooling = self
             .health()
-            .active_cooldowns(&ids)
+            .cooling(&ids, !skip_batch_only)
             .await
             .unwrap_or_default();
         let remaining = ids
@@ -817,9 +822,11 @@ impl<H: RouterHost> Call<'_, H> {
                 .collect();
             let batch_levels_only =
                 request.batch_create && members.iter().any(|d| d.is_batch_capable());
+            let skips_batch_only = skips_batch_only(request, &members);
             let mut orders: Vec<i64> = members
                 .iter()
                 .filter(|d| !batch_levels_only || !d.cannot_run_batches())
+                .filter(|d| !skips_batch_only || !d.serves_only_batches())
                 .filter_map(|d| d.order())
                 .collect();
             orders.sort_unstable();
@@ -876,8 +883,14 @@ impl<H: RouterHost> Call<'_, H> {
             .snapshot
             .registry
             .group(&level.target.group)
-            .filter(|group| group.len() == 1)
-            .and_then(|group| group[0].raw_params.get("num_retries")?.as_u64())
+            .and_then(|group| {
+                let skips_batch_only = skips_batch_only(level.request, &group);
+                let mut usable = group
+                    .into_iter()
+                    .filter(|d| !skips_batch_only || !d.serves_only_batches());
+                usable.next().filter(|_| usable.next().is_none())
+            })
+            .and_then(|deployment| deployment.raw_params.get("num_retries")?.as_u64())
             .and_then(|retries| u32::try_from(retries).ok());
         Err(self.mock_failed(MockFailure::RateLimit, level, lone).into())
     }
@@ -936,7 +949,7 @@ impl<H: RouterHost> Call<'_, H> {
         let all = self
             .candidates(snapshot, op, request, &target.group, &counting)
             .await
-            .map(|c| counted(&c, c.all.len()))
+            .map(|c| counted(&c, c.routable()))
             .unwrap_or(0);
 
         for retry in 0..=num_retries {
@@ -1360,6 +1373,7 @@ impl<H: RouterHost> Call<'_, H> {
                     kind: ResolveKind::Group,
                     all: vec![deployment.clone()],
                     healthy: vec![deployment.clone()],
+                    skips_batch_only: skips_batch_only(request, std::slice::from_ref(&deployment)),
                     wildcard_request: None,
                     served_as: None,
                 };
@@ -1501,24 +1515,28 @@ impl<H: RouterHost> Call<'_, H> {
         } else {
             deployment
         };
-        let shape = GroupShape {
+        let has_fallback_group = snapshot
+            .settings
+            .dynamic
+            .fallback_targets(&[candidates.model_group.as_str()])
+            .is_some();
+        let batch_call = !candidates.skips_batch_only;
+        let shape = GroupShape::of_failure(batch_call, has_fallback_group, |batch_call| {
             // The deployment's own group decides, also when the call named the deployment by id.
-            single_deployment: snapshot
+            snapshot
                 .registry
                 .group(&deployment.model_name)
-                .map_or(candidates.all.len() == 1, |group| group.len() == 1)
+                .map_or(deployment.peers_in(&candidates.all, batch_call) == 1, |group| {
+                    deployment.peers_in(&group, batch_call) == 1
+                })
                 // A routing group call with alternatives cools its member down so selection
                 // moves on (`routing_group_alternatives`).
-                && !(candidates.kind == ResolveKind::RoutingGroup && candidates.all.len() > 1)
+                && !(candidates.kind == ResolveKind::RoutingGroup
+                    && deployment.peers_in(&candidates.all, batch_call) > 1)
                 // As does a team deployment with a sibling under its public name
                 // (`team_model_alternatives`).
-                && !team_model_has_alternatives(&snapshot.registry, deployment),
-            has_fallback_group: snapshot
-                .settings
-                .dynamic
-                .fallback_targets(&[candidates.model_group.as_str()])
-                .is_some(),
-        };
+                && !team_model_has_alternatives(&snapshot.registry, deployment, batch_call)
+        });
         self.count_failed_request(deployment, failure).await;
         match self
             .health()

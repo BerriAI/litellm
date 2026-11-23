@@ -139,7 +139,7 @@ fn log_beta_gated_strips(gated: &BTreeSet<GatedField>, model: &str, provider: im
     if gated.is_empty() {
         return;
     }
-    litellm_tracing::warn!(
+    tracing::warn!(
         "Dropped {} for model={model} provider={provider} because drop_params is on and the provider would reject them on this request, either since this provider leg does not send that anthropic-beta (see anthropic_beta_headers_config.json) or since the model turns mid-conversation system messages into user messages.",
         gated
             .iter()

@@ -1,8 +1,12 @@
 import base64
 import copy
+import logging
+import os
+import sys
 from collections.abc import Mapping
 from itertools import chain
 from copy import deepcopy
+from pathlib import Path
 from typing import Final
 
 import httpx
@@ -10,6 +14,7 @@ import pytest
 from pydantic import JsonValue, TypeAdapter
 
 import litellm
+from litellm._logging import LevelRoutingStreamHandler
 from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude_transformation import (
     AmazonAnthropicClaudeConfig,
 )
@@ -182,6 +187,56 @@ async def test_other_bedrock_runtime_failures_are_not_retried_on_mantle(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("messages", "runtime", "stream"),
+    (
+        (MESSAGES, (400, UNSUPPORTED), "stdout"),
+        (MESSAGES, (429, {"message": "Too many requests, please wait before trying again."}), "stdout"),
+        ([{"role": "user"}], (200, {"inputTokens": 12}), "stdout"),
+        (MESSAGES, (400, {"message": "The provided model identifier is invalid."}), "stderr"),
+        (MESSAGES, (403, {"message": "The security token included in the request is invalid."}), "stderr"),
+        (MESSAGES, (500, {"message": "The count failed."}), "stderr"),
+    ),
+)
+async def test_bedrock_count_failure_warning_goes_to_stdout_only_when_the_caller_caused_it(
+    caplog: pytest.LogCaptureFixture,
+    capsys: pytest.CaptureFixture[str],
+    messages: list[dict[str, str]],
+    runtime: tuple[int, Mapping[str, object]],
+    stream: str,
+) -> None:
+    bedrock: Final = _Bedrock(runtime=runtime, mantle=(200, {"input_tokens": 2177}))
+
+    with caplog.at_level(logging.WARNING):
+        result: Final = await _counter(bedrock).count_tokens(
+            model_to_use="amazon.nova-pro-v1:0",
+            messages=messages,
+            contents=None,
+            deployment=DEPLOYMENT,
+            request_model="amazon.nova-pro-v1:0",
+        )
+
+    assert result is not None and result.error is True
+    warnings: Final = _count_failure_warnings(caplog)
+    assert [(record.name, record.levelno) for record in warnings] == [("LiteLLM", logging.WARNING)]
+    assert _default_handler_stream(warnings[0], capsys) == stream
+
+
+def _count_failure_warnings(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
+    return [record for record in caplog.records if "CountTokens API error" in record.getMessage()]
+
+
+def _default_handler_stream(record: logging.LogRecord, capsys: pytest.CaptureFixture[str]) -> str:
+    _ = capsys.readouterr()
+    routing: Final = LevelRoutingStreamHandler()
+    routing.setFormatter(logging.Formatter("%(message)s"))
+    routing.emit(record)
+    written: Final = capsys.readouterr()
+    line: Final = f"{record.getMessage()}\n"
+    return {(line, ""): "stdout", ("", line): "stderr"}.get((written.out, written.err), "both or neither")
+
+
+@pytest.mark.asyncio
 async def test_mantle_failure_is_reported_with_its_status() -> None:
     bedrock: Final = _Bedrock(
         runtime=(404, UNSUPPORTED),
@@ -202,6 +257,225 @@ async def test_mantle_failure_is_reported_with_its_status() -> None:
     assert result.tokenizer_type == "bedrock_mantle_api"
     assert "does not exist" in (result.error_message or "")
     assert bedrock.posted_hosts() == (RUNTIME_HOST, MANTLE_HOST)
+
+
+@pytest.fixture
+def _no_aws_credentials(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    config: Final = tmp_path / "aws-config"
+    config.write_text(
+        "[profile litellm-test-sso-never-logged-in]\n"
+        "sso_start_url = https://litellm-test-never-logged-in.awsapps.com/start\n"
+        "sso_region = us-east-1\n"
+        "sso_account_id = 123456789012\n"
+        "sso_role_name = litellm-test\n"
+        "[profile litellm-test-failing-credential-process]\n"
+        f"credential_process = {sys.executable} -c \"import sys; sys.exit('credential helper timed out')\"\n"
+    )
+    credentials: Final = tmp_path / "aws-credentials"
+    credentials.write_text("")
+    for name in tuple(name for name in os.environ if name.startswith("AWS_")):
+        monkeypatch.delenv(name)
+    monkeypatch.setenv("AWS_CONFIG_FILE", str(config))
+    monkeypatch.setenv("AWS_SHARED_CREDENTIALS_FILE", str(credentials))
+    monkeypatch.setenv("AWS_EC2_METADATA_DISABLED", "true")
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_no_aws_credentials")
+@pytest.mark.parametrize(
+    ("credentials", "environment", "fix"),
+    (
+        ({}, {}, "On EC2, check that the instance has a role"),
+        ({"aws_profile_name": "litellm-test-missing-profile"}, {}, "set aws_profile_name to one that exists"),
+        ({}, {"AWS_ACCESS_KEY_ID": "AKIATESTACCESSKEY"}, "Give the deployment aws_access_key_id and aws_secret"),
+        ({"aws_profile_name": "litellm-test-sso-never-logged-in"}, {}, "Run `aws sso login`"),
+        (
+            {"aws_role_name": "arn:aws:iam::123456789012:role/litellm-test", "aws_session_name": "litellm-test"},
+            {},
+            "aws_role_name needs one of these to assume the role from",
+        ),
+    ),
+    ids=(
+        "none",
+        "unknown-profile",
+        "access-key-without-secret",
+        "sso-never-logged-in",
+        "role-without-base-credentials",
+    ),
+)
+@pytest.mark.parametrize(
+    "model_to_use",
+    ("global.anthropic.claude-sonnet-5-5", "bedrock_mantle/anthropic.claude-opus-5-5"),
+    ids=("runtime", "mantle"),
+)
+async def test_count_without_usable_aws_credentials_is_a_401_rejected_before_calling_bedrock(
+    monkeypatch: pytest.MonkeyPatch,
+    model_to_use: str,
+    credentials: dict[str, str],
+    environment: dict[str, str],
+    fix: str,
+) -> None:
+    for name, value in environment.items():
+        monkeypatch.setenv(name, value)
+    bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 1353}), mantle=(200, {"input_tokens": 1336}))
+
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use=model_to_use,
+        messages=MESSAGES,
+        contents=None,
+        deployment={"litellm_params": {"aws_region_name": "us-east-1", **credentials}},
+        request_model="claude-sonnet-5-5",
+    )
+
+    assert result is not None
+    assert (result.error, result.status_code, result.rejected_before_provider_call) == (True, 401, True)
+    assert (result.error_message or "").startswith(
+        "No usable AWS credentials are set, so Bedrock can't count tokens"
+    ), result.error_message
+    assert fix in (result.error_message or ""), result.error_message
+    assert bedrock.posted_hosts() == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_no_aws_credentials")
+@pytest.mark.parametrize(
+    "model_to_use",
+    ("global.anthropic.claude-sonnet-5-5", "bedrock_mantle/anthropic.claude-opus-5-5"),
+    ids=("runtime", "mantle"),
+)
+async def test_count_without_usable_aws_credentials_warns_on_stderr_as_an_operator_fault(
+    caplog: pytest.LogCaptureFixture,
+    capsys: pytest.CaptureFixture[str],
+    model_to_use: str,
+) -> None:
+    bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 1353}), mantle=(200, {"input_tokens": 1336}))
+
+    with caplog.at_level(logging.WARNING):
+        result: Final = await _counter(bedrock).count_tokens(
+            model_to_use=model_to_use,
+            messages=MESSAGES,
+            contents=None,
+            deployment={"litellm_params": {"aws_region_name": "us-east-1"}},
+            request_model="claude-sonnet-5-5",
+        )
+
+    assert result is not None and (result.status_code, result.rejected_before_provider_call) == (401, True)
+    warnings: Final = _count_failure_warnings(caplog)
+    assert [(record.name, record.levelno) for record in warnings] == [("LiteLLM", logging.WARNING)]
+    assert _default_handler_stream(warnings[0], capsys) == "stderr"
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_no_aws_credentials")
+@pytest.mark.parametrize(
+    "model_to_use",
+    ("global.anthropic.claude-sonnet-5-5", "bedrock_mantle/anthropic.claude-opus-5-5"),
+    ids=("runtime", "mantle"),
+)
+async def test_count_whose_web_identity_token_cannot_be_read_is_a_401_rejected_before_calling_bedrock(
+    model_to_use: str,
+) -> None:
+    bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 1353}), mantle=(200, {"input_tokens": 1336}))
+
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use=model_to_use,
+        messages=MESSAGES,
+        contents=None,
+        deployment={
+            "litellm_params": {
+                "aws_region_name": "us-east-1",
+                "aws_role_name": "arn:aws:iam::123456789012:role/litellm-test",
+                "aws_session_name": "litellm-test",
+                "aws_web_identity_token": "litellm-test-unset-oidc-token",
+            }
+        },
+        request_model="claude-sonnet-5-5",
+    )
+
+    assert result is not None
+    assert (result.error, result.status_code, result.rejected_before_provider_call) == (True, 401, True)
+    assert result.error_message == "OIDC token could not be retrieved from secret manager."
+    assert bedrock.posted_hosts() == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_no_aws_credentials")
+@pytest.mark.parametrize(
+    ("credentials", "status_code", "message", "rejected_before_provider_call"),
+    (
+        (
+            {"aws_profile_name": "litellm-test-failing-credential-process"},
+            500,
+            "credential helper timed out",
+            False,
+        ),
+        (
+            {
+                "aws_role_name": "arn:aws:iam::123456789012:role/litellm-test",
+                "aws_session_name": "litellm-test",
+                "aws_web_identity_token": "os.environ/LITELLM_TEST_OIDC_TOKEN",
+            },
+            400,
+            "Invalid web identity token reference.",
+            True,
+        ),
+    ),
+    ids=("credential-process-failed", "web-identity-token-names-an-env-var"),
+)
+@pytest.mark.parametrize(
+    "model_to_use",
+    ("global.anthropic.claude-sonnet-5-5", "bedrock_mantle/anthropic.claude-opus-5-5"),
+    ids=("runtime", "mantle"),
+)
+async def test_count_whose_credentials_fail_for_another_reason_keeps_that_failures_status(
+    model_to_use: str,
+    credentials: dict[str, str],
+    status_code: int,
+    message: str,
+    rejected_before_provider_call: bool,
+) -> None:
+    bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 1353}), mantle=(200, {"input_tokens": 1336}))
+
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use=model_to_use,
+        messages=MESSAGES,
+        contents=None,
+        deployment={"litellm_params": {"aws_region_name": "us-east-1", **credentials}},
+        request_model="claude-sonnet-5-5",
+    )
+
+    assert result is not None
+    assert (result.error, result.status_code, result.rejected_before_provider_call) == (
+        True,
+        status_code,
+        rejected_before_provider_call,
+    )
+    assert message in (result.error_message or ""), result.error_message
+    assert "No usable AWS credentials" not in (result.error_message or ""), result.error_message
+    assert bedrock.posted_hosts() == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model_to_use", ("amazon.nova-pro-v1:0", "bedrock_mantle/anthropic.claude-opus-5-5"), ids=("runtime", "mantle")
+)
+async def test_count_that_cannot_reach_bedrock_is_not_reported_as_missing_credentials(model_to_use: str) -> None:
+    def unreachable(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused", request=request)
+
+    counter: Final = BedrockTokenCounter(client=AsyncHTTPHandler(transport=httpx.MockTransport(unreachable)))
+
+    result: Final = await counter.count_tokens(
+        model_to_use=model_to_use,
+        messages=MESSAGES,
+        contents=None,
+        deployment=DEPLOYMENT,
+        request_model=model_to_use,
+    )
+
+    assert result is not None
+    assert (result.error, result.status_code, result.rejected_before_provider_call) == (True, 500, False)
+    assert "AWS credentials" not in (result.error_message or ""), result.error_message
 
 
 @pytest.mark.asyncio
@@ -352,7 +626,10 @@ def _invoke_body(request: httpx.Request) -> dict[str, JsonValue]:
         {
             "response_format": {
                 "type": "json_schema",
-                "json_schema": {"name": "city", "schema": {"type": "object", "properties": {"city": {"type": "string"}}}},
+                "json_schema": {
+                    "name": "city",
+                    "schema": {"type": "object", "properties": {"city": {"type": "string"}}},
+                },
             }
         },
         {"reasoning_effort": "low"},
@@ -478,7 +755,6 @@ async def test_claude_count_rejects_a_lone_responses_tool_without_calling_bedroc
     assert result is not None
     assert (result.error, result.status_code, result.rejected_before_provider_call) == (True, 400, True)
     assert bedrock.posted_hosts() == ()
-
 
 
 def _deployment(model: str) -> dict[str, JsonValue]:
@@ -623,6 +899,7 @@ async def test_claude_count_sends_a_chat_tool_call_turn_sent_without_a_content_k
     assert result is not None
     assert (result.error, result.total_tokens) == (False, 412)
     assert bedrock.posted_hosts() == (RUNTIME_HOST,)
+
 
 _CLAUDE_REPLY: Final = {
     "id": "msg_1",
@@ -1129,7 +1406,9 @@ async def test_claude_converse_count_sends_system_messages_where_converse_infere
 
 
 @pytest.mark.asyncio
-async def test_claude_converse_count_keeps_tool_history_when_neutralizing_is_off(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_claude_converse_count_keeps_tool_history_when_neutralizing_is_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(litellm, "modify_params", True)
     monkeypatch.setattr(litellm, "bedrock_neutralize_orphaned_tool_blocks", False)
 
@@ -1425,7 +1704,9 @@ async def test_claude_converse_count_of_a_message_without_a_role_answers_bedrock
         model_to_use="us.anthropic.claude-haiku-5-5",
         messages=[{"content": "What is 2+2?"}],
         contents=None,
-        deployment={"litellm_params": {**DEPLOYMENT["litellm_params"], "model": "bedrock/us.anthropic.claude-haiku-5-5"}},
+        deployment={
+            "litellm_params": {**DEPLOYMENT["litellm_params"], "model": "bedrock/us.anthropic.claude-haiku-5-5"}
+        },
         request_model="claude-haiku-5-5",
         messages_format="openai",
     )

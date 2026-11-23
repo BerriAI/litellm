@@ -1,7 +1,9 @@
 """Tests for the v2 OAuth token cache and refresh (CachedOAuthTokenStore, RefreshingTokenStore)."""
 
 import asyncio
-from typing import Dict, List, Optional, Tuple
+from types import SimpleNamespace
+from typing import Dict, Final, List, Optional, Tuple
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -211,6 +213,15 @@ async def test_refreshing_returns_none_when_it_cannot_refresh():
     store = RefreshingTokenStore(src, src, expiry_skew_seconds=30, clock=_Clock(1000.0))
     # expired and unrefreshable -> None (the arm challenges), never a stale bearer
     assert await store.fetch("u", "s") is None
+
+
+@pytest.mark.parametrize("replacement", [None, OAuthToken(access_token="new-consent", expires_at=9999.0)])
+async def test_rejected_refresh_returns_only_a_fresh_replacement(replacement: OAuthToken | None) -> None:
+    expired: Final = OAuthToken(access_token="old", expires_at=900.0)
+    inner: Final = SimpleNamespace(fetch=AsyncMock(side_effect=[expired, expired, replacement]))
+    refresher: Final = SimpleNamespace(refresh=AsyncMock(return_value=None))
+    store: Final = RefreshingTokenStore(inner, refresher, clock=_Clock(1000.0))
+    assert await store.fetch("u", "s") == replacement
 
 
 async def test_refreshing_is_single_flight_under_concurrency():

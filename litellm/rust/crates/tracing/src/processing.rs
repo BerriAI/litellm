@@ -1,7 +1,7 @@
 use fancy_regex::Result;
 use percent_encoding::percent_decode_str;
 
-use crate::{REDACTED, SecretRedactor};
+use litellm_redaction::{REDACTED, SecretRedactor};
 
 #[derive(Clone, Copy, Debug)]
 pub struct Policy {

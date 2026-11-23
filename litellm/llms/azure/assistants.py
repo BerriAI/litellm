@@ -160,7 +160,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
         timeout: float | httpx.Timeout,
         max_retries: int | None,
         client=None,
-        aget_assistants=None,
+        aget_assistants: bool | None = None,
         litellm_params: dict | None = None,
     ):
         if aget_assistants is not None and aget_assistants is True:
@@ -390,7 +390,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
         timeout: float | httpx.Timeout,
         max_retries: int | None,
         client=None,
-        aget_messages=None,
+        aget_messages: bool | None = None,
         litellm_params: dict | None = None,
     ):
         if aget_messages is not None and aget_messages is True:
@@ -505,7 +505,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
         max_retries: int | None,
         messages: Iterable[OpenAICreateThreadParamsMessage] | None,
         client=None,
-        acreate_thread=None,
+        acreate_thread: bool | None = None,
         litellm_params: dict | None = None,
     ):
         """
@@ -625,7 +625,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
         timeout: float | httpx.Timeout,
         max_retries: int | None,
         client=None,
-        aget_thread=None,
+        aget_thread: bool | None = None,
         litellm_params: dict | None = None,
     ):
         if aget_thread is not None and aget_thread is True:
@@ -821,7 +821,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
         timeout: float | httpx.Timeout,
         max_retries: int | None,
         client=None,
-        arun_thread=None,
+        arun_thread: bool | None = None,
         event_handler: AssistantEventHandler | None = None,
         litellm_params: dict | None = None,
     ):
@@ -941,7 +941,7 @@ class AzureAssistantsAPI(BaseAzureLLM):
         max_retries: int | None,
         create_assistant_data: dict,
         client=None,
-        async_create_assistants=None,
+        async_create_assistants: bool | None = None,
         litellm_params: dict | None = None,
     ):
         if async_create_assistants is not None and async_create_assistants is True:
