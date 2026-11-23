@@ -11704,6 +11704,15 @@ class ProviderConfigManager:
             from litellm.llms.meta.realtime.transformation import MetaRealtimeConfig
 
             return MetaRealtimeConfig(drop_params=drop_params)
+        if LlmProviders.GNANI == provider:
+            from litellm.llms.gnani.realtime.transformation import GnaniRealtimeConfig
+
+            gnani_info: Final = lookup_model_info_for_registration(model, provider.value)
+            if isinstance(gnani_info, ModelInfoLookupMiss) or "/v1/realtime" not in (
+                gnani_info.get("supported_endpoints") or ()
+            ):
+                return None
+            return GnaniRealtimeConfig()
         if LlmProviders.SONIOX == provider:
             from litellm.llms.soniox.realtime.transformation import SonioxRealtimeConfig
 

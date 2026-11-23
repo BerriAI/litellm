@@ -1,0 +1,202 @@
+import json
+from collections.abc import Mapping
+from typing import Final, Literal
+from urllib.parse import urlsplit, urlunsplit
+
+from pydantic import BaseModel, ConfigDict
+from typing_extensions import NotRequired, ReadOnly
+
+from litellm.litellm_core_utils.url_utils import ensure_api_route
+from litellm.llms.base_llm.realtime.transcription_protocol import (
+    SESSION_UPDATE_EVENT_TYPES,
+    RealtimeTranscriptionProtocolError,
+    completed_event,
+    decode_pcm16_append,
+    error_event,
+    json_object,
+    new_event_id,
+    parse_transcription_session_update,
+    transcription_session,
+    transcription_session_created_event,
+)
+from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
+from litellm.llms.gnani.common_utils import normalize_language
+from litellm.llms.gnani.realtime.audio import WIRE_RATE, GnaniAudioStream
+from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.openai import (
+    OpenAIRealtimeErrorEvent,
+    OpenAIRealtimeEvents,
+    OpenAIRealtimeInputAudioBufferCommitted,
+    OpenAIRealtimeInputAudioTranscriptionCompleted,
+    OpenAIRealtimeTranscriptionSessionUpdated,
+)
+from litellm.types.realtime import RealtimeResponseTransformInput, RealtimeResponseTypedDict
+
+_MANAGED_HEADERS: Final = frozenset(
+    ("x-api-key-id", "authorization", "model", "x-model", "x-sample-rate", "language_code", "lang_code")
+)
+_DEFAULT_LANGUAGE: Final = "indic-auto"
+
+
+class _ActiveSettings(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    language_code: str | None = None
+    sample_rate: int | None = None
+
+
+class _ProviderEvent(BaseModel):
+    model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
+    type: str
+    message: str | None = None
+    config: _ActiveSettings | None = None
+    request_id: str | None = None
+    segment_id: str | None = None
+    utterance_id: str | None = None
+    text: str | None = None
+    detected_language_code: str | None = None
+
+
+class _Transcript(OpenAIRealtimeInputAudioTranscriptionCompleted):
+    detected_language_code: NotRequired[ReadOnly[str]]
+
+
+class _ErrorEvent(OpenAIRealtimeErrorEvent):
+    event_id: ReadOnly[str]
+
+
+def _language(value: str) -> str:
+    hint: Final = value.strip()
+    if not hint or "," in hint:
+        raise RealtimeTranscriptionProtocolError("Gnani realtime requires a single language or indic-auto")
+    return normalize_language(hint)
+
+
+class GnaniRealtimeConfig(BaseRealtimeConfig):
+    def __init__(self) -> None:
+        self._audio: Final = GnaniAudioStream()
+        self._language: str = _DEFAULT_LANGUAGE
+        self._session_id: str = new_event_id()
+        self._previous_item: str | None = None
+
+    def get_complete_url(self, api_base: str | None, model: str, api_key: str | None = None) -> str:
+        base: Final = urlsplit(api_base or get_secret_str("GNANI_API_BASE") or "https://api.vachana.ai")
+        if base.scheme not in ("http", "https", "ws", "wss"):
+            raise ValueError("Gnani realtime requires an HTTP or WebSocket URL")
+        path: Final = ensure_api_route(base.path, "stt/v3/stream")
+        return urlunsplit(("wss" if base.scheme in ("https", "wss") else "ws", base.netloc, path, base.query, ""))
+
+    def validate_environment(
+        self, headers: Mapping[str, str], model: str, api_key: str | None = None
+    ) -> dict[str, str]:  # mutable-ok: BaseRealtimeConfig requires returning a header dict
+        key: Final = api_key or get_secret_str("GNANI_API_KEY")
+        if not key:
+            raise ValueError("Set GNANI_API_KEY or pass api_key for Gnani realtime transcription")
+        lower: Final = {name.lower(): value for name, value in headers.items()}
+        hints: Final = lower.get("language_code") or lower.get("lang_code") or _DEFAULT_LANGUAGE
+        self._language = ",".join(_language(hint) for hint in hints.split(","))
+        return {
+            **{name: value for name, value in lower.items() if name not in _MANAGED_HEADERS},
+            "x-api-key-id": key,
+            "model": model,
+            "language_code": self._language,
+            "x-sample-rate": str(WIRE_RATE),
+        }
+
+    def transform_realtime_request(
+        self, message: str, model: str, session_configuration_request: str | None = None
+    ) -> tuple[str | bytes, ...]:
+        request: Final = json_object(message)
+        kind: Final = request.get("type")
+        if isinstance(kind, str) and kind in SESSION_UPDATE_EVENT_TYPES:
+            return (self._update(message),)
+        if kind == "input_audio_buffer.append":
+            return self._audio.append(decode_pcm16_append(request.get("audio")))
+        if kind == "input_audio_buffer.commit":
+            return self._audio.commit()
+        raise RealtimeTranscriptionProtocolError(f"Gnani transcription does not support client event {kind!r}")
+
+    def _update(self, message: str) -> str:
+        update: Final = parse_transcription_session_update(message)
+        if update.session_type not in (None, "transcription"):
+            raise RealtimeTranscriptionProtocolError("Gnani realtime supports transcription sessions only")
+        if update.turn_detection_disabled or (
+            update.turn_detection is not None and update.turn_detection != {"type": "server_vad"}
+        ):
+            raise RealtimeTranscriptionProtocolError("Gnani realtime requires server_vad")
+        if update.unsupported_transcription_keys:
+            raise RealtimeTranscriptionProtocolError(
+                f"Unsupported Gnani transcription settings: {', '.join(update.unsupported_transcription_keys)}"
+            )
+        language: Final = _language(update.language) if update.language is not None else None
+        fmt: Final = update.audio_format
+        if fmt is not None:
+            if not fmt.is_pcm16 or fmt.channels not in (None, 1):
+                raise RealtimeTranscriptionProtocolError("Gnani realtime requires mono PCM16 audio")
+            self._audio.set_rate(24_000 if fmt.rate is None else fmt.rate)
+        return json.dumps({"type": "update_settings", **({"language_code": language} if language else {})})
+
+    async def pace_backend_send(self, message: bytes) -> None:
+        await self._audio.pace()
+
+    def _session(
+        self, event: _ProviderEvent, model: str, kind: Literal["session.created", "session.updated"]
+    ) -> OpenAIRealtimeEvents:
+        if event.config is not None:
+            if event.config.sample_rate not in (None, WIRE_RATE):
+                raise ValueError("Gnani negotiated an unexpected audio rate")
+            self._language = event.config.language_code or self._language
+        session: Final = transcription_session(
+            session_id=self._session_id,
+            model=model,
+            sample_rate=self._audio.rate,
+            language=self._language,
+            server_vad=True,
+        )
+        if kind == "session.created":
+            return transcription_session_created_event(session)
+        updated: Final[OpenAIRealtimeTranscriptionSessionUpdated] = {
+            "type": kind,
+            "event_id": new_event_id(),
+            "session": session,
+        }
+        return updated
+
+    def _events(self, event: _ProviderEvent, model: str) -> tuple[OpenAIRealtimeEvents, ...]:
+        if event.type == "connected":
+            self._session_id = event.request_id or self._session_id
+            return (self._session(event, model, "session.created"),)
+        if event.type == "settings_updated":
+            return (self._session(event, model, "session.updated"),)
+        if event.type == "error":
+            error: Final[_ErrorEvent] = {
+                **error_event(event.message or "Gnani transcription failed"),
+                "event_id": new_event_id(),
+            }
+            return (error,)
+        if event.type != "transcript":
+            return ()
+        if event.text is None:
+            raise ValueError("Gnani returned a transcript without text")
+        item: Final = event.segment_id or event.utterance_id or new_event_id()
+        committed: Final[OpenAIRealtimeInputAudioBufferCommitted] = {
+            "type": "input_audio_buffer.committed",
+            "event_id": new_event_id(),
+            "item_id": item,
+            "previous_item_id": self._previous_item,
+        }
+        self._previous_item = item
+        transcript: Final = completed_event(item, event.text, None)
+        if event.detected_language_code is None:
+            return committed, transcript
+        detected: Final[_Transcript] = {**transcript, "detected_language_code": event.detected_language_code}
+        return committed, detected
+
+    def transform_realtime_response(
+        self,
+        message: str | bytes,
+        model: str,
+        logging_obj: object,
+        realtime_response_transform_input: RealtimeResponseTransformInput,
+    ) -> RealtimeResponseTypedDict:
+        events: Final = self._events(_ProviderEvent.model_validate_json(message), model)
+        return {**realtime_response_transform_input, "response": list(events)}

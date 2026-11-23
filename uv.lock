@@ -5116,6 +5116,7 @@ mlflow = [
 proxy = [
     { name = "alembic" },
     { name = "apscheduler" },
+    { name = "audioop-lts", marker = "python_full_version >= '3.13'" },
     { name = "azure-identity" },
     { name = "azure-storage-blob" },
     { name = "backoff" },
@@ -5340,6 +5341,7 @@ requires-dist = [
     { name = "anyio", specifier = ">=4.14.0,<5.0" },
     { name = "apscheduler", marker = "extra == 'proxy'", specifier = ">=3.11.2,<4.0" },
     { name = "async-timeout", marker = "python_full_version < '3.11'", specifier = ">=4.0.3,<6.0" },
+    { name = "audioop-lts", marker = "python_full_version >= '3.13' and extra == 'proxy'", specifier = ">=0.2.2,<1" },
     { name = "audioread", marker = "extra == 'stt-nvidia-riva'", specifier = ">=3.0.1" },
     { name = "aurelio-sdk", marker = "python_full_version < '3.14' and extra == 'semantic-router'", specifier = ">=0.0.19,<1.0" },
     { name = "aws-sdk-bedrock-runtime", extras = ["awscrt"], marker = "python_full_version >= '3.12' and extra == 'bedrock-realtime'", specifier = ">=0.10.0,<0.12.0" },

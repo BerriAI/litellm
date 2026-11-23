@@ -1,5 +1,4 @@
 import json
-import re
 import unicodedata
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -21,6 +20,7 @@ from litellm.llms.base_llm.audio_transcription.transformation import (
     BaseAudioTranscriptionConfig,
 )
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.gnani.common_utils import normalize_language
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues, OpenAIAudioTranscriptionOptionalParams
 from litellm.types.utils import FileTypes, TranscriptionResponse
@@ -41,7 +41,6 @@ _NOT_FORWARDED: Final = frozenset(
         "additional_drop_params",
     )
 )
-_REGION_CODE: Final = re.compile(r"([A-Za-z]{2})-([A-Za-z]{2})")
 _STRING_LIST: Final = TypeAdapter(list[str])
 _V25_RECOMMENDED_BIAS_SCORE: Final = 1.0
 _KEY_HEADER: Final = "X-API-Key-ID"
@@ -65,15 +64,6 @@ def _is_v25(model: str) -> bool:
     return name == _V25_MODEL if flags is None else flags.get(_V25_FIELDS_FLAG) == 1
 
 
-def _normalized_hint(hint: str) -> str:
-    if hint.lower() == "indic-auto":
-        return "indic-auto"
-    if len(hint) == 2:
-        return f"{hint.lower()}-IN"
-    region: Final = _REGION_CODE.fullmatch(hint)
-    return f"{region[1].lower()}-{region[2].upper()}" if region else hint
-
-
 def _language_code(model: str, language: object) -> str:
     if language is not None and not isinstance(language, str):
         raise UnsupportedParamsError(message="language must be a string", model=model, llm_provider="gnani")
@@ -86,7 +76,7 @@ def _language_code(model: str, language: object) -> str:
             model=model,
             llm_provider="gnani",
         )
-    return ",".join(_normalized_hint(hint) for hint in hints)
+    return ",".join(normalize_language(hint) for hint in hints)
 
 
 def _is_blank(value: object) -> bool:
