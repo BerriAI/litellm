@@ -155,6 +155,8 @@ class FakeAuditLogStore:
 
     rows: list[Mapping[str, object]] = field(default_factory=list)
     error: Exception | None = None
+    next_errors: list[Exception] = field(default_factory=list)
+    attempts: int = 0
 
     @staticmethod
     def _prisma_table() -> object | None:
@@ -163,9 +165,15 @@ class FakeAuditLogStore:
         client: Final = proxy_server.prisma_client
         return None if client is None else client.db.litellm_auditlog
 
-    async def insert(self, row: AuditLogRow) -> None:
+    def _fail_if_scripted(self) -> None:
+        self.attempts += 1
+        if self.next_errors:
+            raise self.next_errors.pop(0)
         if self.error is not None:
             raise self.error
+
+    async def insert(self, row: AuditLogRow) -> None:
+        self._fail_if_scripted()
         data: Final = audit_log_data(row)
         self.rows.append(data)
         table: Final = self._prisma_table()
@@ -173,8 +181,7 @@ class FakeAuditLogStore:
             await table.create(data=data)
 
     async def insert_many(self, rows: Sequence[AuditLogRow]) -> None:
-        if self.error is not None:
-            raise self.error
+        self._fail_if_scripted()
         data: Final = tuple(audit_log_data(row) for row in rows)
         self.rows.extend(data)
         table: Final = self._prisma_table()

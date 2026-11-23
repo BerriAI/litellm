@@ -4,7 +4,8 @@ Functions to create audit logs for LiteLLM Proxy
 
 import asyncio
 import json
-from collections.abc import Awaitable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Final, TypeVar
 
@@ -21,6 +22,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.repositories.table_repositories import AuditLogRepository, NewAuditLog
+from litellm.rust_bridge._native import NativeDatabaseFailure
 from litellm.types.utils import StandardAuditLogPayload
 
 if TYPE_CHECKING:
@@ -29,6 +31,9 @@ if TYPE_CHECKING:
 _audit_log_callback_cache: Final[dict[str, "CustomLogger | S3Logger"]] = {}
 ALLOW_LITELLM_CHANGED_BY_HEADER_METADATA_KEY: Final = "allow_litellm_changed_by_header"
 _AUDIT_JSON: Final = TypeAdapter(JsonValue)
+_AUDIT_WRITE_RETRY_DELAYS_SECONDS: Final = (0.5, 1.0, 2.0, 4.0)
+_AUDIT_DATABASE_CALLBACK_NAME: Final = "audit_log_database"
+_AUDIT_LOG_PRIMARY_KEY: Final = "LiteLLM_AuditLog_pkey"
 
 
 class _AuditValues(BaseModel):
@@ -213,8 +218,12 @@ async def drain_audit_tasks(timeout: float = 5.0) -> None:
     await _audit_task_registry.drain(timeout=timeout)
 
 
+def _audit_row_label(request_data: LiteLLM_AuditLogs) -> str:
+    return f"{request_data.action} {request_data.table_name.value} {request_data.object_id}"
+
+
 def _audit_task_name(request_data: LiteLLM_AuditLogs, destination: str) -> str:
-    return f"{request_data.action} {request_data.table_name.value} {request_data.object_id} to {destination}"
+    return f"{_audit_row_label(request_data)} to {destination}"
 
 
 async def _dispatch_audit_log_to_callbacks(
@@ -294,12 +303,60 @@ async def create_object_audit_log(
     )
 
 
-async def _insert_audit_logs(insert: Awaitable[object], description: str) -> None:
+@dataclass(frozen=True, slots=True)
+class _AuditWrite:
+    insert: Callable[[], Awaitable[object]]
+    description: str
+    row_count: int
+
+
+async def _attempt_audit_write(write: _AuditWrite) -> Exception | None:
     try:
-        await insert
+        await write.insert()
     except Exception as e:
-        # [Non-Blocking Exception. Do not allow blocking LLM API call]
-        verbose_proxy_logger.error("Failed Creating %s %s", description, e)
+        return e
+    return None
+
+
+def _is_retryable_audit_failure(failure: Exception) -> bool:
+    return isinstance(failure, NativeDatabaseFailure) and (failure.unavailable or failure.requeue_safe)
+
+
+def _is_stored_by_an_earlier_attempt(failure: Exception) -> bool:
+    return isinstance(failure, NativeDatabaseFailure) and _AUDIT_LOG_PRIMARY_KEY in str(failure)
+
+
+def _report_failed_audit_write(write: _AuditWrite, failure: Exception) -> None:
+    verbose_proxy_logger.error("Failed Creating audit log for %s: %s", write.description, failure)
+    reporter: Final = CustomLogger()
+    for _ in range(write.row_count):
+        reporter.handle_callback_failure(callback_name=_AUDIT_DATABASE_CALLBACK_NAME)
+
+
+async def _retry_audit_write(write: _AuditWrite, failure: Exception, delays: tuple[float, ...]) -> None:
+    if not delays or not _is_retryable_audit_failure(failure):
+        _report_failed_audit_write(write, failure)
+        return
+    await asyncio.sleep(delays[0])
+    next_failure: Final = await _attempt_audit_write(write)
+    if next_failure is None or _is_stored_by_an_earlier_attempt(next_failure):
+        return
+    await _retry_audit_write(write, next_failure, delays[1:])
+
+
+async def _insert_audit_logs(write: _AuditWrite) -> None:
+    failure: Final = await _attempt_audit_write(write)
+    if failure is None:
+        return
+    if not _is_retryable_audit_failure(failure):
+        _report_failed_audit_write(write, failure)
+        return
+    track_audit_task(
+        asyncio.create_task(
+            _retry_audit_write(write, failure, _AUDIT_WRITE_RETRY_DELAYS_SECONDS),
+            name=f"retry of {write.description} to the database",
+        )
+    )
 
 
 def _json_encoded(request_data: LiteLLM_AuditLogs) -> LiteLLM_AuditLogs:
@@ -380,8 +437,11 @@ async def create_audit_log_for_update(request_data: LiteLLM_AuditLogs):
     await track_audit_task(
         asyncio.create_task(
             _insert_audit_logs(
-                _insert_audit_log(prisma_client, encoded),
-                "audit log",
+                _AuditWrite(
+                    insert=lambda: _insert_audit_log(prisma_client, encoded),
+                    description=_audit_row_label(encoded),
+                    row_count=1,
+                )
             ),
             name=_audit_task_name(encoded, "the database"),
         )
@@ -409,8 +469,11 @@ async def create_audit_logs_for_updates(rows: Sequence[LiteLLM_AuditLogs]) -> No
     await track_audit_task(
         asyncio.create_task(
             _insert_audit_logs(
-                _insert_audit_log_batch(prisma_client, encoded),
-                f"{len(encoded)} audit logs",
+                _AuditWrite(
+                    insert=lambda: _insert_audit_log_batch(prisma_client, encoded),
+                    description=", ".join(_audit_row_label(row) for row in encoded),
+                    row_count=len(encoded),
+                )
             ),
             name=f"{len(encoded)} audit logs to the database",
         )

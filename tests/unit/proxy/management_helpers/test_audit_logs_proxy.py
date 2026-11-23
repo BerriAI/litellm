@@ -1,8 +1,9 @@
 import os
 import traceback
 from litellm._uuid import uuid
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from collections.abc import Coroutine
+from collections.abc import Callable, Coroutine, Iterator
 from typing import Any, Final
 
 from dotenv import load_dotenv
@@ -42,6 +43,7 @@ from starlette.datastructures import URL
 
 from litellm.proxy.management_helpers.audit_logs import (
     create_audit_log_for_update,
+    create_audit_logs_for_updates,
     create_object_audit_log,
     drain_audit_tasks,
     get_audit_log_changed_by,
@@ -51,6 +53,7 @@ from litellm.proxy._types import LiteLLM_AuditLogs, LitellmTableNames, UserAPIKe
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.rust_bridge._native import NativeDatabaseFailure
 from litellm.types.utils import StandardAuditLogPayload
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -837,3 +840,145 @@ async def test_an_audit_log_whose_value_is_not_json_text_is_not_inserted_and_doe
         await drain_audit_tasks()
 
     assert audit_log_store.rows == []
+
+
+@dataclass
+class _RecordedFailureMetric:
+    callback_names: list[str] = field(default_factory=list)
+
+    def increment_callback_logging_failure(self, callback_name: str) -> None:
+        self.callback_names.append(callback_name)
+
+
+def _database_failure(
+    message: str = "database query failed", unavailable: bool = False, requeue_safe: bool = False
+) -> NativeDatabaseFailure:
+    failure: Final = NativeDatabaseFailure(message)
+    failure.kind = "other"
+    failure.unavailable = unavailable
+    failure.requeue_safe = requeue_safe
+    return failure
+
+
+def _duplicate_id_failure() -> NativeDatabaseFailure:
+    return _database_failure('duplicate key value violates unique constraint "LiteLLM_AuditLog_pkey"')
+
+
+@pytest.fixture
+def audit_failure_metric() -> Iterator[_RecordedFailureMetric]:
+    metric: Final = _RecordedFailureMetric()
+    with (
+        patch("litellm.callbacks", [metric]),
+        patch("litellm.store_audit_logs", True),
+        patch("litellm.proxy.proxy_server.premium_user", True),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock(db=MagicMock(litellm_auditlog=AsyncMock()))),
+        patch("litellm.proxy.management_helpers.audit_logs._AUDIT_WRITE_RETRY_DELAYS_SECONDS", (0.0, 0.0)),
+    ):
+        yield metric
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("unavailable", "requeue_safe"), [(True, False), (False, True)])
+async def test_an_audit_write_that_fails_temporarily_is_stored_by_a_retry(
+    audit_log_store: FakeAuditLogStore,
+    audit_failure_metric: _RecordedFailureMetric,
+    unavailable: bool,
+    requeue_safe: bool,
+) -> None:
+    audit_log_store.next_errors.extend(
+        _database_failure(unavailable=unavailable, requeue_safe=requeue_safe) for _ in range(2)
+    )
+
+    await create_audit_log_for_update(_audit_log(datetime.now(timezone.utc), {"members": ["u1"]}))
+    await drain_audit_tasks()
+
+    assert [row["id"] for row in audit_log_store.rows] == ["audit-1"]
+    assert audit_failure_metric.callback_names == []
+
+
+@pytest.mark.asyncio
+async def test_a_caller_returns_after_the_first_failed_attempt_and_the_shutdown_drain_waits_for_the_retry(
+    audit_log_store: FakeAuditLogStore,
+    audit_failure_metric: _RecordedFailureMetric,
+) -> None:
+    audit_log_store.next_errors.append(_database_failure(unavailable=True))
+
+    with patch("litellm.proxy.management_helpers.audit_logs._AUDIT_WRITE_RETRY_DELAYS_SECONDS", (0.05,)):
+        await create_audit_log_for_update(_audit_log(datetime.now(timezone.utc), {"members": ["u1"]}))
+        assert (audit_log_store.attempts, audit_log_store.rows) == (1, [])
+        await drain_audit_tasks()
+
+    assert [row["id"] for row in audit_log_store.rows] == ["audit-1"]
+    assert audit_failure_metric.callback_names == []
+
+
+@pytest.mark.asyncio
+async def test_a_batch_whose_retries_run_out_is_logged_by_row_and_counted_once_per_lost_row(
+    audit_log_store: FakeAuditLogStore,
+    audit_failure_metric: _RecordedFailureMetric,
+) -> None:
+    audit_log_store.error = _database_failure(unavailable=True)
+    first: Final = _audit_log(datetime.now(timezone.utc), {"members": ["u1"]})
+    second: Final = first.model_copy(update={"id": "audit-2", "object_id": "team-b"})
+
+    with patch.object(verbose_proxy_logger, "error") as logged_error:
+        await create_audit_logs_for_updates((first, second))
+        await drain_audit_tasks()
+
+    assert audit_log_store.rows == []
+    assert audit_log_store.attempts == 3
+    assert audit_failure_metric.callback_names == ["audit_log_database", "audit_log_database"]
+    logged_error.assert_called_once()
+    assert "team-a" in logged_error.call_args.args[1]
+    assert "team-b" in logged_error.call_args.args[1]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "build_failure",
+    [_database_failure, _duplicate_id_failure, lambda: ValueError("not a database failure")],
+    ids=["rejected_by_the_database", "duplicate_id_on_the_first_attempt", "not_a_database_failure"],
+)
+async def test_an_audit_write_that_cannot_succeed_is_tried_once_and_counted(
+    audit_log_store: FakeAuditLogStore,
+    audit_failure_metric: _RecordedFailureMetric,
+    build_failure: Callable[[], Exception],
+) -> None:
+    audit_log_store.error = build_failure()
+
+    await create_audit_log_for_update(_audit_log(datetime.now(timezone.utc), {"members": ["u1"]}))
+    await drain_audit_tasks()
+
+    assert audit_log_store.attempts == 1
+    assert audit_failure_metric.callback_names == ["audit_log_database"]
+
+
+@pytest.mark.asyncio
+async def test_a_retry_stops_and_is_counted_when_the_database_rejects_the_row(
+    audit_log_store: FakeAuditLogStore,
+    audit_failure_metric: _RecordedFailureMetric,
+) -> None:
+    audit_log_store.next_errors.extend((_database_failure(unavailable=True), _database_failure()))
+
+    await create_audit_log_for_update(_audit_log(datetime.now(timezone.utc), {"members": ["u1"]}))
+    await drain_audit_tasks()
+
+    assert audit_log_store.attempts == 2
+    assert audit_log_store.rows == []
+    assert audit_failure_metric.callback_names == ["audit_log_database"]
+
+
+@pytest.mark.asyncio
+async def test_a_duplicate_id_on_a_retry_counts_as_stored_by_the_earlier_attempt(
+    audit_log_store: FakeAuditLogStore,
+    audit_failure_metric: _RecordedFailureMetric,
+) -> None:
+    audit_log_store.next_errors.extend((_database_failure(unavailable=True), _duplicate_id_failure()))
+
+    with patch.object(verbose_proxy_logger, "error") as logged_error:
+        await create_audit_log_for_update(_audit_log(datetime.now(timezone.utc), {"members": ["u1"]}))
+        await drain_audit_tasks()
+
+    assert audit_log_store.attempts == 2
+    assert audit_failure_metric.callback_names == []
+    logged_error.assert_not_called()
