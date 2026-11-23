@@ -5144,6 +5144,35 @@ def test_batch_cost_calculator_halves_only_uncached_audio_in_a_mixed_modality_pr
     assert prompt_cost == pytest.approx(text_cost + uncached_audio_cost + image_and_video_cost + cached_audio_cost)
 
 
+@pytest.mark.parametrize(
+    ("audio_batch_price", "prompt_tokens", "expected_audio_rate"),
+    [
+        pytest.param(None, 199_999, 5e-7, id="below-threshold-halves-base-standard-audio"),
+        pytest.param(None, 200_000, 2e-6, id="at-inclusive-threshold-halves-tiered-standard-audio"),
+        pytest.param(None, 200_001, 2e-6, id="above-threshold-halves-tiered-standard-audio"),
+        pytest.param(4e-7, 200_000, 4e-7, id="at-inclusive-threshold-explicit-audio-batch-price-wins"),
+    ],
+)
+def test_batch_cost_calculator_uncached_audio_fallback_uses_the_providers_inclusive_audio_threshold(
+    audio_batch_price: float | None, prompt_tokens: int, expected_audio_rate: float
+) -> None:
+    model_info: Final[ModelInfo] = {
+        **_text_batch_prices(),
+        "input_cost_per_audio_token": 1e-6,
+        "input_cost_per_audio_token_above_200k_tokens": 4e-6,
+        "input_cost_per_audio_token_batches": audio_batch_price,
+    }
+
+    prompt_cost, _ = batch_cost_calculator(
+        usage=_uncached_audio_batch_usage(prompt_tokens),
+        model="grok-4",
+        custom_llm_provider="xai",
+        model_info=model_info,
+    )
+
+    assert prompt_cost == pytest.approx((prompt_tokens - 1000) * 1.5e-7 + 1000 * expected_audio_rate)
+
+
 def test_batch_cost_calculator_without_a_text_batch_price_keeps_halving_the_text_price_for_audio() -> None:
     model_info: Final[ModelInfo] = {"input_cost_per_token": 3e-7, "input_cost_per_audio_token": 1e-6}
 

@@ -50,6 +50,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     _SERVICE_TIER_TO_COST_KEY_SUFFIX,
     BilledTokenRates,
     CostCalculatorUtils,
+    _uses_inclusive_token_thresholds,
     calculate_cache_writing_cost,
     generic_cost_per_character,
     generic_cost_per_token,
@@ -3474,6 +3475,7 @@ def batch_cost_calculator(
             batch_rates.cache_read_image,
             batch_rates.cache_creation,
             batch_rates.cache_creation_rates_by_ttl,
+            threshold_is_inclusive=_uses_inclusive_token_thresholds(custom_llm_provider),
         )
     elif input_cost_per_token is not None:
         total_prompt_cost = _half_price_prompt_cost(
@@ -3500,8 +3502,13 @@ def batch_cost_calculator(
     return total_prompt_cost * vertex_uplift, total_completion_cost * vertex_uplift
 
 
-def _standard_rate(model_info: ModelInfo, key: str, prompt_tokens: int) -> float | None:
-    return get_cost_per_unit(model_info, get_modality_token_cost_key(model_info, key, prompt_tokens), None)
+def _standard_rate(
+    model_info: ModelInfo, key: str, prompt_tokens: int, *, threshold_is_inclusive: bool = False
+) -> float | None:
+    cost_key: Final = get_modality_token_cost_key(
+        model_info, key, prompt_tokens, threshold_is_inclusive=threshold_is_inclusive
+    )
+    return get_cost_per_unit(model_info, cost_key, None)
 
 
 def _cached_modality_rate(
@@ -3562,6 +3569,8 @@ def _batch_prompt_cost(
     batch_cache_read_image_rate: float | None,
     cache_creation_rate: float | None,
     cache_creation_rates_by_ttl: Mapping[str, float],
+    *,
+    threshold_is_inclusive: bool = False,
 ) -> float:
     details: Final = parse_prompt_tokens_details(usage)
     cache_read_rate: Final = (
@@ -3608,7 +3617,12 @@ def _batch_prompt_cost(
         + audio_tokens
         * _batch_or_half(
             _optional_batch_rate(model_info, "input_cost_per_audio_token_batches", usage.prompt_tokens),
-            _standard_rate(model_info, "input_cost_per_audio_token", usage.prompt_tokens),
+            _standard_rate(
+                model_info,
+                "input_cost_per_audio_token",
+                usage.prompt_tokens,
+                threshold_is_inclusive=threshold_is_inclusive,
+            ),
             default=input_rate,
         )
         + image_tokens * _batch_rate(model_info, "input_cost_per_image_token_batches", input_rate)
