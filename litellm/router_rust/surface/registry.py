@@ -472,7 +472,11 @@ def _bedrock_profile_pricing(backend_model: str, priced: Mapping[str, object]) -
 
 def _backend_cost_map_keys(model: str, custom_llm_provider: str | None) -> tuple[str, ...]:
     """The ``litellm.model_cost`` keys a deployment's shared backend info is registered under."""
-    backend_key: Final = model if custom_llm_provider is None else f"{custom_llm_provider}/{model}"
+    backend_key: Final = (
+        model
+        if custom_llm_provider is None or model.startswith(f"{custom_llm_provider}/")
+        else f"{custom_llm_provider}/{model}"
+    )
     if "responses/" in backend_key:
         return (backend_key, backend_key.replace("responses/", ""))
     return (backend_key,)

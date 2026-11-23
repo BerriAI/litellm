@@ -5237,3 +5237,55 @@ def test_pricing_provider_fills_unset_rates_from_that_providers_catalog_row() ->
     finally:
         _restore_model_cost_entries(model_cost_entries)
         litellm.get_model_info.cache_clear()
+
+
+def test_custom_provider_prefixed_model_cost_keys_and_fallback() -> None:
+    """A deployment whose model string already includes its custom_llm_provider prefix registers
+    under that key without prepending the provider again, and resolves during fallback."""
+    backend_key: Final = "azure/custom-deepseek-fallback"
+    model_cost_entries: Final = {
+        backend_key: copy.deepcopy(litellm.model_cost.get(backend_key)),
+        f"azure/{backend_key}": copy.deepcopy(litellm.model_cost.get(f"azure/{backend_key}")),
+    }
+    try:
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": "primary-model",
+                    "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake"},
+                },
+                {
+                    "model_name": backend_key,
+                    "litellm_params": {
+                        "model": backend_key,
+                        "custom_llm_provider": "azure",
+                        "api_key": "fake",
+                        "api_base": "https://fake.openai.azure.com",
+                        "input_cost_per_token": 0.0001,
+                        "output_cost_per_token": 0.0002,
+                    },
+                },
+            ],
+            fallbacks=[{"primary-model": [backend_key]}],
+        )
+
+        assert f"azure/{backend_key}" not in litellm.model_cost
+        assert backend_key in litellm.model_cost
+
+        deployments: Final = router.registry().deployments(backend_key)
+        assert len(deployments) == 1
+        info: Final = router.registry().router_model_info(deployment=deployments[0], received_model_name=backend_key)
+        assert info["input_cost_per_token"] == 0.0001
+        assert info["output_cost_per_token"] == 0.0002
+
+        def mock_completion(*args, **kwargs):
+            if kwargs.get("model") in ("openai/gpt-4o", "gpt-4o"):
+                raise litellm.RateLimitError("Rate limited", model="gpt-4o", llm_provider="openai")
+            return litellm.ModelResponse()
+
+        with patch("litellm.completion", side_effect=mock_completion):
+            response: Final = router.completion(model="primary-model", messages=[{"role": "user", "content": "hi"}])
+            assert response is not None
+    finally:
+        _restore_model_cost_entries(model_cost_entries)
+        litellm.get_model_info.cache_clear()
