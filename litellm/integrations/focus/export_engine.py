@@ -24,7 +24,7 @@ class FocusExportEngine:
         provider: str,
         export_format: str,
         prefix: str,
-        destination_config: Mapping[str, object] | None = None,
+        destination_config: Mapping[str, str | None] | None = None,
     ) -> None:
         self.provider = provider
         self.export_format = export_format

@@ -1,9 +1,12 @@
 import type { components } from "@/lib/http/schema";
+import type { ModelMaxBudget } from "@/components/key_team_helpers/ModelMaxBudgetEditor";
 import type { TeamMembership } from "./TeamInfo";
 
 export const MAX_BULK_TEAM_MEMBER_BUDGET_UPDATES = 500;
 
-export type TeamUpdatePayload = components["schemas"]["UpdateTeamRequest"];
+export type TeamUpdatePayload = Omit<components["schemas"]["UpdateTeamRequest"], "team_member_model_max_budget"> & {
+  team_member_model_max_budget?: ModelMaxBudget;
+};
 
 export interface MemberBudgetResetPending {
   readonly teamId: string;

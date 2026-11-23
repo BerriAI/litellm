@@ -43,6 +43,7 @@ interface TeamVirtualKeysTableProps {
   teamId: string;
   teamAlias?: string;
   organization: Organization | null;
+  initialOwnerFilter?: string;
 }
 
 /**
@@ -51,7 +52,12 @@ interface TeamVirtualKeysTableProps {
  */
 const DEFAULT_SORTING: SortingState = [{ id: "created_at", desc: true }];
 
-export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVirtualKeysTableProps) {
+export function TeamVirtualKeysTable({
+  teamId,
+  teamAlias,
+  organization,
+  initialOwnerFilter,
+}: TeamVirtualKeysTableProps) {
   const { t } = useTranslation();
   const resetKeyDetailState = useResetDetailState("key_tab");
   const [selectedKey, setSelectedKey] = useState<KeyResponse | null>(null);
@@ -60,7 +66,9 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
     pageIndex: 0,
     pageSize: 50,
   });
-  const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
+  const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>(
+    initialOwnerFilter ? [{ id: "user_id", value: initialOwnerFilter }] : [],
+  );
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [searchInput, setSearchInput] = useState("");
   const [searchQuery] = useDebouncedValue(searchInput, { wait: DEBOUNCE_WAIT_MS });
@@ -84,25 +92,37 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
   const pageIndex = tablePagination.pageIndex;
   const pageSize = tablePagination.pageSize;
 
+  const userFilter = getFilterValue("user_id");
+  const ownerFilter = userFilter === initialOwnerFilter ? initialOwnerFilter : undefined;
   const keyListOptions = {
     teamID: teamId,
     search: searchQuery.trim() || undefined,
-    userID: getFilterValue("user_id"),
+    userID: ownerFilter ? undefined : userFilter,
+    ownerUserID: ownerFilter,
     keyHash: getFilterValue("key_hash"),
     sortBy: sortBy || undefined,
     sortOrder: sortOrder || undefined,
     expand: "user",
   };
 
-  const { data: keys, isPending: isLoading, isFetching, refetch } = useKeys(pageIndex + 1, pageSize, keyListOptions);
+  const {
+    data: keys,
+    isPending: isLoading,
+    isFetching,
+    isPlaceholderData,
+    refetch,
+  } = useKeys(pageIndex + 1, pageSize, keyListOptions);
 
-  const displayKeys = useMemo(() => keys?.keys ?? [], [keys?.keys]);
-
-  const teamMemberBudgetTeamIds = useMemo(
-    () => (displayKeys.some((key) => key.max_budget == null && Boolean(key.user_id)) ? [teamId] : []),
-    [displayKeys, teamId],
+  const displayKeys = useMemo(
+    () => (ownerFilter && isPlaceholderData ? [] : keys?.keys ?? []),
+    [isPlaceholderData, keys?.keys, ownerFilter],
   );
-  const teamMemberBudgets = useTeamMemberBudgets(teamMemberBudgetTeamIds);
+
+  const memberBudgetUserIds = useMemo((): Record<string, string[]> => {
+    const userIds = displayKeys.flatMap((key) => (key.max_budget == null && key.user_id ? [key.user_id] : []));
+    return userIds.length > 0 ? { [teamId]: userIds } : {};
+  }, [displayKeys, teamId]);
+  const teamMemberBudgets = useTeamMemberBudgets(memberBudgetUserIds);
 
   const rowCount = keys?.total_count ?? 0;
   const [expandedAccordions, setExpandedAccordions] = useState<Record<string, boolean>>({});

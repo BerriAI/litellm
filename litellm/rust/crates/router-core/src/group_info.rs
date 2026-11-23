@@ -4,7 +4,7 @@
 //! The rules are the Python router core's (`_set_model_group_info`, `get_model_listing_info`,
 //! `get_configured_token_limits`, `get_configured_mode`, `get_configured_display_name`,
 //! `get_configured_service_tiers`). The host picks the deployments (the registry lookups) and
-//! answers what needs its objects as [`Host::model_info`] lookups asked while the query runs: a
+//! answers what needs its objects as [`RegistryHost::model_info`] lookups asked while the query runs: a
 //! deployment's validated params, its merged model info and provider, its capabilities, and the
 //! group's first entry as its model validates it. The core decides which deployments count and
 //! how their values combine.
@@ -13,7 +13,7 @@ use serde_json::{Map, Number, Value};
 
 use crate::{
     error::Error,
-    host::{Host, ModelInfoLookup},
+    host::{ModelInfoLookup, RegistryHost},
     model_info::{
         discovered, is_opaque, lookup, malformed, python_float, python_int, raised, truthy,
         without_digit_underscores,
@@ -230,7 +230,7 @@ fn union(current: &Value, added: &[Value]) -> Value {
 
 /// `_set_model_group_info`: the group's info merged across the deployments that serve it.
 pub async fn model_group_info(
-    host: &dyn Host,
+    host: &impl RegistryHost,
     query: &GroupInfoQuery,
 ) -> Result<Option<GroupInfo>, Error> {
     let mut merged: Option<Merged> = None;
@@ -486,7 +486,7 @@ pub fn coerce_token_limit(value: Option<&Value>) -> Option<i64> {
 
 /// The deployment's discovered limits under its configured `model_info` values that are set.
 async fn effective_model_info(
-    host: &dyn Host,
+    host: &impl RegistryHost,
     id: Value,
     configured: &Map<String, Value>,
 ) -> Result<Map<String, Value>, Error> {
@@ -503,7 +503,7 @@ async fn effective_model_info(
 /// `get_configured_token_limits`: the (max input, max output) tokens a concrete deployment
 /// configures, or its refresh discovered, from its `model_info` (`exclude_none` dump) and id.
 pub async fn configured_token_limits(
-    host: &dyn Host,
+    host: &impl RegistryHost,
     id: Value,
     configured: &Map<String, Value>,
 ) -> Result<(Option<i64>, Option<i64>), Error> {
@@ -567,7 +567,7 @@ fn pricing_key(deployment: &Value) -> Option<String> {
 /// `get_model_listing_info` over the deployments a listed name names: the cost-map keys of their
 /// models, deduplicated, and the widest token limits they configure or discovered.
 pub async fn model_listing_info(
-    host: &dyn Host,
+    host: &impl RegistryHost,
     deployments: &[Value],
 ) -> Result<ListingInfo, Error> {
     let mut listing = ListingInfo::default();
