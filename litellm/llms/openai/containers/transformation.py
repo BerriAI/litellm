@@ -119,7 +119,7 @@ class OpenAIContainerConfig(BaseContainerConfig):
     def get_complete_url(
         self,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> str:
         """Get the complete URL for OpenAI container API."""
         api_base = (
