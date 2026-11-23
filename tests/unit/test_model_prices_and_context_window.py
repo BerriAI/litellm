@@ -1439,3 +1439,34 @@ def test_azure_ai_rows_price_like_their_azure_twins(path: Path, model: str) -> N
     assert azure_ai_row.get("litellm_provider") == "azure_ai"
     assert azure_ai_row.get("mode") == azure_row.get("mode")
     assert _priced_fields(azure_ai_row) == _priced_fields(azure_row)
+
+
+AZURE_AI_MAI_ROWS: Final = MappingProxyType(
+    {
+        "MAI-Image-2.7": (
+            "image_generation",
+            ("input_cost_per_token", "input_cost_per_image_token", "output_cost_per_image_token"),
+        ),
+        "MAI-Image-2.7-Flash": (
+            "image_generation",
+            ("input_cost_per_token", "input_cost_per_image_token", "output_cost_per_image_token"),
+        ),
+        "MAI-Code-2-Flash": ("chat", ("input_cost_per_token", "output_cost_per_token", "cache_read_input_token_cost")),
+    }
+)
+
+
+def _positive_cost(row: Mapping[str, JsonValue], name: str) -> bool:
+    value: Final = row.get(name)
+    return isinstance(value, (int, float)) and value > 0
+
+
+@pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
+@pytest.mark.parametrize("model", sorted(AZURE_AI_MAI_ROWS))
+def test_azure_ai_mai_rows_are_priced_for_their_mode(path: Path, model: str) -> None:
+    prices: Final[dict[str, JsonValue]] = TypeAdapter(dict[str, JsonValue]).validate_json(path.read_bytes())
+    row: Final = prices[f"azure_ai/{model}"]
+    mode, cost_fields = AZURE_AI_MAI_ROWS[model]
+    assert isinstance(row, dict)
+    assert row.get("mode") == mode
+    assert [name for name in cost_fields if not _positive_cost(row, name)] == []
