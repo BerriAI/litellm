@@ -69,7 +69,7 @@ def turn_token_usage(event: Mapping[str, object]) -> Usage | None:
     return converted if converted.total_tokens or converted.prompt_tokens or converted.completion_tokens else None
 
 
-def _response_id(event: Mapping[str, object]) -> str | None:
+def realtime_response_id(event: Mapping[str, object]) -> str | None:
     response: Final = as_str_mapping(event.get("response"))
     response_id: Final = None if response is None else response.get("id")
     return response_id if isinstance(response_id, str) and response_id else None
@@ -112,7 +112,7 @@ class RealtimeTurnLimits:
         usage: Final = turn_token_usage(event)
         if usage is None:
             return
-        response_id: Final = _response_id(event)
+        response_id: Final = realtime_response_id(event)
         if response_id in self._charged_response_ids:
             return
         if response_id is not None:

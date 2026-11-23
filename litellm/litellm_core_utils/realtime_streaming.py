@@ -71,6 +71,7 @@ from .realtime_guardrails import (
 from .realtime_turn_limits import (
     RealtimeTurnLimiterSource,
     RealtimeTurnLimits,
+    realtime_response_id,
     realtime_turn_limits,
     registered_realtime_turn_limiters,
     turn_token_usage,
@@ -1600,10 +1601,11 @@ class RealTimeStreaming:
         """Return a session.update that disables VAD auto-response."""
         return json.dumps(self._make_turn_detection_update(self._gate_turn_detection(None)))
 
-    async def _send_guardrail_cancel(self) -> bool:
+    async def _send_guardrail_cancel(self, response_id: str | None = None) -> bool:
         event_id: Final = _guardrail_event_id()
         self._guardrail_cancel_event_ids = self._guardrail_cancel_event_ids | {event_id}
-        return await self._send_to_backend(json.dumps({"type": "response.cancel", "event_id": event_id}))
+        target: Final = {} if response_id is None else {"response_id": response_id}
+        return await self._send_to_backend(json.dumps({"type": "response.cancel", "event_id": event_id, **target}))
 
     async def _refuses_turn_over_token_limit(self) -> bool:
         if self._turn_limits is None:
@@ -1660,7 +1662,7 @@ class RealTimeStreaming:
         refusal: Final = await self._turn_limits.refusal()
         if refusal is None:
             return False
-        if await self._send_guardrail_cancel():
+        if await self._send_guardrail_cancel(realtime_response_id(event)):
             await self.websocket.send_text(refusal)
             return False
         await self._end_session_over_token_limit(refusal)

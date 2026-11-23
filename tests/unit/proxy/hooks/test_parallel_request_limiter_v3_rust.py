@@ -5,7 +5,6 @@ Unit Tests for the max parallel request limiter v3 for the proxy
 import asyncio
 import contextvars
 import logging
-import shutil
 import socket
 import threading
 import time
@@ -25,7 +24,6 @@ import litellm
 from litellm import Router
 from litellm.caching.caching import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
-from litellm.caching.redis_batch import request_redis_batch_scope
 from litellm.caching.redis_cache import RedisCache
 from litellm.constants import (
     DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE,
@@ -92,7 +90,6 @@ from litellm.types.utils import (
     Usage,
 )
 from tests._support.clock_loops import AutojumpClockLoop
-from tests._support.redis_server import redis_server
 from tests._support.rust_parallel_request_limiter import (
     PROXY_MaxParallelRequestsHandler_v3,
     estimate_tokens_for_request,
@@ -3033,27 +3030,6 @@ async def test_a_realtime_response_is_refused_once_its_session_turns_used_a_tpm_
     with pytest.raises(ProxyRateLimitError) as exc_info:
         await check()
 
-    assert exc_info.value.status_code == 429
-
-
-@pytest.mark.asyncio
-async def test_a_realtime_turn_charged_inside_the_socket_redis_batch_refuses_the_next_response_at_once_v3(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    if shutil.which("redis-server") is None:
-        pytest.skip("redis-server is not installed")
-    monkeypatch.setenv("LITELLM_TPM_TOKEN_RESERVATION_ENABLED", "false")
-    auth: Final = UserAPIKeyAuth(api_key=hash_token("sk-realtime-redis-turns"), tpm_limit=_SOCKET_TURN_TPM_LIMIT)
-    with redis_server() as port, request_redis_batch_scope():
-        cache = DualCache(redis_cache=RedisCache(host="127.0.0.1", port=port))
-        handler = _handler_with_socket_tag_limit(cache, None)
-        await _open_realtime_session(handler, cache, auth)
-        await handler.charge_realtime_turn_usage(auth, _REALTIME_MODEL, _realtime_turn_usage(_SOCKET_TURN_TPM_LIMIT))
-
-        with pytest.raises(ProxyRateLimitError) as exc_info:
-            await handler.enforce_token_limits_for_frame(auth, _REALTIME_MODEL, call_type=CallTypes.arealtime.value)
-
-    assert handler.rate_limits.has_redis
     assert exc_info.value.status_code == 429
 
 

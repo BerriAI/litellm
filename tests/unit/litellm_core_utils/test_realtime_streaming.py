@@ -8,7 +8,8 @@ from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from typing_extensions import ReadOnly, TypedDict
+from pydantic import TypeAdapter
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 from websockets.exceptions import ConnectionClosed
 from websockets.frames import Close
 
@@ -6520,6 +6521,19 @@ def _response_created(response_id: str) -> str:
     return json.dumps({"type": "response.created", "response": {"id": response_id, "status": "in_progress"}})
 
 
+class _SentError(TypedDict):
+    type: ReadOnly[str]
+
+
+class _SentFrame(TypedDict):
+    type: ReadOnly[str]
+    error: ReadOnly[NotRequired[_SentError]]
+    response_id: ReadOnly[NotRequired[str]]
+
+
+_SENT_FRAME: Final = TypeAdapter(_SentFrame)
+
+
 @dataclass(frozen=True, slots=True)
 class _TurnLimitedSession:
     limiter: PROXY_MaxParallelRequestsHandler_v3
@@ -6532,11 +6546,14 @@ class _TurnLimitedSession:
         counter: Final = RateLimitScope(scope, value).counter("tokens")
         return int(self.limiter.rate_limits.local((counter,))[0] or 0)
 
-    def sent_upstream(self) -> list[dict]:
-        return [json.loads(call.args[0]) for call in self.backend_ws.send.await_args_list]
+    def sent_upstream(self) -> list[_SentFrame]:
+        return [_SENT_FRAME.validate_json(call.args[0]) for call in self.backend_ws.send.await_args_list]
 
-    def sent_to_client(self) -> list[dict]:
-        return [json.loads(call.args[0]) for call in self.client_ws.send_text.await_args_list]
+    def sent_to_client(self) -> list[_SentFrame]:
+        return [_SENT_FRAME.validate_json(call.args[0]) for call in self.client_ws.send_text.await_args_list]
+
+    def error_types_sent_to_client(self) -> list[str]:
+        return [error["type"] for frame in self.sent_to_client() if (error := frame.get("error")) is not None]
 
 
 async def _turn_limited_session(
@@ -6675,10 +6692,10 @@ async def test_a_backend_started_response_over_the_tpm_limit_is_cancelled_upstre
 
     await session.streaming.backend_to_client_send_messages()
 
-    assert [event["type"] for event in session.sent_upstream()] == ["response.cancel"]
-    assert [event["error"]["type"] for event in session.sent_to_client() if event["type"] == "error"] == [
-        "rate_limit_exceeded"
+    assert [(event["type"], event.get("response_id")) for event in session.sent_upstream()] == [
+        ("response.cancel", "resp_vad")
     ]
+    assert session.error_types_sent_to_client() == ["rate_limit_exceeded"]
     session.backend_ws.close.assert_not_awaited()
 
 
@@ -6752,10 +6769,7 @@ async def test_a_response_create_the_provider_rejected_does_not_exempt_the_next_
     await session.streaming.backend_to_client_send_messages()
 
     assert [event["type"] for event in session.sent_upstream()] == ["response.create", "response.cancel"]
-    assert [event["error"]["type"] for event in session.sent_to_client() if event["type"] == "error"] == [
-        "invalid_request_error",
-        "rate_limit_exceeded",
-    ]
+    assert session.error_types_sent_to_client() == ["invalid_request_error", "rate_limit_exceeded"]
 
 
 @pytest.mark.asyncio
@@ -6771,7 +6785,8 @@ async def test_a_proxy_started_response_over_the_tpm_limit_is_not_sent_upstream(
     await session.streaming._send_proxy_response_create((_CLIENT_ITEM_CREATE, _CLIENT_RESPONSE_CREATE))
 
     assert session.sent_upstream() == []
-    assert [event["error"]["type"] for event in session.sent_to_client()] == ["rate_limit_exceeded"]
+    assert [event["type"] for event in session.sent_to_client()] == ["error"]
+    assert session.error_types_sent_to_client() == ["rate_limit_exceeded"]
 
 
 @dataclass(slots=True)
