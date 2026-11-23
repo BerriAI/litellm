@@ -7,7 +7,7 @@ import pytest
 from fastapi import HTTPException
 from prisma.models import LiteLLM_VerifiedSubject
 
-from litellm.proxy.agent_endpoints.identity_store import AgentIdentityStore, resolve_managed_agent
+from litellm.proxy.agent_endpoints.identity_store import AgentIdentityStore, forget_bindings, resolve_managed_agent
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.repositories.table_repositories import (
     AgentIdentityRepository,
@@ -101,6 +101,22 @@ async def test_shared_binding_lookup_cache_keeps_policy_reads_authoritative() ->
     assert isinstance(await other.resolve_verified_claims(CLAIMS), ManagedAgentContext)
     identities.find_unique.assert_awaited_once()
     assert agents.find_unique.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_a_binding_read_that_overlaps_eviction_cannot_refill_the_cache() -> None:
+    cache: Final = UserApiKeyCache()
+    store, _, identities, _ = setup_store(cache=cache)
+
+    async def previous_binding(*, where: object) -> AgentIdentityBinding:
+        await forget_bindings(cache, [("microsoft_entra", TENANT, CLIENT)])
+        return BINDING
+
+    identities.find_unique.side_effect = previous_binding
+    await store.resolve_verified_claims(CLAIMS)
+    identities.find_unique.side_effect = None
+    identities.find_unique.return_value = None
+    assert await store.resolve_verified_claims(CLAIMS) is None
 
 
 @pytest.mark.asyncio

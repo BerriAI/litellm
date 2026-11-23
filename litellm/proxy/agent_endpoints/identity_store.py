@@ -1,8 +1,9 @@
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Final
 
 from litellm._internal_context import with_service_target
 from litellm.proxy.agent_endpoints.managed_identity import classify_agent_subject
+from litellm.proxy.common_utils.cache_invalidation_pubsub import evict_and_broadcast
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, get_management_object_ttl
 from litellm.redis.stores.auth_cache import AuthObject
 from litellm.repositories.table_repositories import (
@@ -21,6 +22,12 @@ from litellm.types.proxy.agent_identity import (
 )
 
 _AGENT_IDENTITIES_TARGET: Final = "agent_identities"
+
+
+async def forget_bindings(cache: UserApiKeyCache, keys: Iterable[tuple[str, str, str]]) -> None:
+    wire_keys: Final = tuple(AuthObject.agent_identity(*identity).key for identity in keys)
+    await evict_and_broadcast(wire_keys, cache)
+
 
 if TYPE_CHECKING:
     from prisma.models import LiteLLM_VerifiedSubject
@@ -91,14 +98,15 @@ class AgentIdentityStore:
         return None
 
     @with_service_target(_AGENT_IDENTITIES_TARGET)
-    async def _bound_agent_id(self, tenant_id: str, client_id: str) -> str | AgentIdentityFailure | None:
-        cache_key: Final = AuthObject.agent_identity(tenant_id, client_id)
+    async def _bound_agent_id(self, provider: str, tenant_id: str, client_id: str) -> str | AgentIdentityFailure | None:
+        cache_key: Final = AuthObject.agent_identity(provider, tenant_id, client_id)
         cached: Final[object] = await self.cache.async_get_cache(key=cache_key) if self.cache is not None else None
         if isinstance(cached, str):
             return cached
+        lease: Final = await self.cache.lease(cache_key) if self.cache is not None else None
         where: Final[LiteLLM_AgentIdentityWhereUniqueInput] = {
             "provider_tenant_id_client_id": {
-                "provider": "microsoft_entra",
+                "provider": provider,
                 "tenant_id": tenant_id,
                 "client_id": client_id,
             }
@@ -109,10 +117,8 @@ class AgentIdentityStore:
             return AgentIdentityFailure(code="policy_unavailable", message="Agent identity could not be loaded")
         if row is None:
             return await self.unbound_client(where)
-        if self.cache is not None:
-            await self.cache.async_set_cache(
-                key=cache_key, value=row.agent_id, ttl=get_management_object_ttl(self.cache)
-            )
+        if self.cache is not None and lease is not None:
+            _ = await self.cache.async_set_leased(lease, row.agent_id, get_management_object_ttl(self.cache))
         return row.agent_id
 
     async def resolve_verified_claims(
@@ -123,7 +129,7 @@ class AgentIdentityStore:
         client: Final = claims.get("azp")
         if not isinstance(issuer, str) or not isinstance(tenant, str) or not isinstance(client, str):
             return None
-        agent_id: Final = await self._bound_agent_id(tenant, client)
+        agent_id: Final = await self._bound_agent_id("microsoft_entra", tenant, client)
         if agent_id is None or isinstance(agent_id, AgentIdentityFailure):
             return agent_id
         agent: Final = await self.agent(agent_id)
