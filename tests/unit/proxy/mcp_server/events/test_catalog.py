@@ -62,14 +62,17 @@ def test_resolution_picks_the_longest_matching_prefix() -> None:
 def test_webhook_is_offered_only_with_a_public_url_and_an_authenticated_caller(
     settings: EventsSettings, caller: UserAPIKeyAuth, modes: tuple[str, ...]
 ) -> None:
-    assert offered_modes(BUILD_FAILED, server(), settings, context(caller)) == modes
+    assert offered_modes(BUILD_FAILED, server(), settings.public_base_url is not None, context(caller)) == modes
 
 
 @pytest.mark.asyncio
 async def test_listing_prefixes_names_and_drops_events_the_server_or_caller_cannot_use() -> None:
     servers: Final = (server("srv", "ci", MCPServerEventsConfig(enabled=True, allowed_events=("build.*", "bad.*"))),)
     events: Final = await list_events(
-        context(), SETTINGS, runtime(servers, (BUILD_FAILED, DEPLOY, BAD_HEADER), grant=(frozenset({"build.failed"}),))
+        context(),
+        SETTINGS,
+        runtime(servers, (BUILD_FAILED, DEPLOY, BAD_HEADER), grant=(frozenset({"build.failed"}),)),
+        store_available=True,
     )
     assert [(item.name, item.delivery) for item in events] == [("ci-build.failed", ("poll", "push", "webhook"))]
     assert events[0].input_schema == BUILD_FAILED.input_schema
@@ -172,5 +175,14 @@ async def test_catalog_omits_webhook_when_subscription_authority_cannot_be_reloa
     caller: Final = CALLER.model_copy(update={"end_user_id": "request-user"}) if scoped else CALLER
     upstream: Final = server().model_copy(update={"available_on_public_internet": scoped})
     webhook_only: Final = EventType(name="webhook.only", delivery=("webhook",))
-    events: Final = await list_events(context(caller), SETTINGS, runtime((upstream,), (BUILD_FAILED, webhook_only)))
+    events: Final = await list_events(
+        context(caller), SETTINGS, runtime((upstream,), (BUILD_FAILED, webhook_only)), store_available=True
+    )
+    assert [(item.name, item.delivery) for item in events] == [("ci-build.failed", ("poll", "push"))]
+
+
+@pytest.mark.asyncio
+async def test_no_store_strips_webhook_and_omits_webhook_only_descriptors() -> None:
+    webhook_only: Final = EventType(name="webhook.only", delivery=("webhook",))
+    events: Final = await list_events(context(), SETTINGS, runtime((server(),), (BUILD_FAILED, webhook_only)))
     assert [(item.name, item.delivery) for item in events] == [("ci-build.failed", ("poll", "push"))]
