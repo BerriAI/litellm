@@ -249,6 +249,7 @@ from litellm.types.utils import (
     EmbeddingResponse,
     GuardrailStatus,
     ImageResponse,
+    ImageUsage,
     LiteLLMBatch,
     LiteLLMLoggingBaseClass,
     LiteLLMRealtimeStreamLoggingObject,
@@ -3823,6 +3824,7 @@ class Logging(LiteLLMLoggingBaseClass):
     ) -> StandardLoggingPayload | None:
         """Resolve hidden params, compute response cost, and emit the standard logging payload."""
         self._surface_response_headers_from_result(logging_result)
+        image_usage: Final = _image_usage(logging_result.usage) if isinstance(logging_result, ImageResponse) else None
         hidden_params: Final = getattr(logging_result, HIDDEN_PARAMS_ATTR, {})
         if hidden_params:
             if self.model_call_details.get("litellm_params") is not None:
@@ -3839,12 +3841,12 @@ class Logging(LiteLLMLoggingBaseClass):
             self.model_call_details["response_cost"] = self.finalized_cost.amount
         elif self.model_call_details.get("cache_hit") is True:
             self.model_call_details["response_cost"] = 0.0
-            self._add_failed_attempts_spend(get_usage_object(completion_response=logging_result))
+            self._add_failed_attempts_spend(image_usage or get_usage_object(completion_response=logging_result))
         elif "response_cost" in hidden_params:
             hidden_response_cost: Final = subscript(hidden_params, "response_cost")
             self.model_call_details["response_cost"] = hidden_response_cost
             self._record_zero_cost_diagnostic(logging_result, hidden_response_cost)
-            self._add_failed_attempts_spend(get_usage_object(completion_response=logging_result))
+            self._add_failed_attempts_spend(image_usage or get_usage_object(completion_response=logging_result))
         elif (existing_cost := self.model_call_details.get("response_cost")) is not None and (
             existing_cost != 0 or self.call_type == CallTypes.pass_through.value  # pyright: ignore[reportUnknownMemberType]  # Logging.call_type is untyped
         ):
@@ -3854,7 +3856,7 @@ class Logging(LiteLLMLoggingBaseClass):
             pass
         else:
             self.model_call_details["response_cost"] = self.response_cost_calculator(result=logging_result)
-            self._add_failed_attempts_spend(get_usage_object(completion_response=logging_result))
+            self._add_failed_attempts_spend(image_usage or get_usage_object(completion_response=logging_result))
 
         if not build_logging_payload:
             return None
@@ -8937,6 +8939,12 @@ def _cache_hit_cost_breakdown(served: CostBreakdown | None) -> CostBreakdown:
         (_CACHE_HIT_ZEROED_AMOUNTS[key] for key in served if key in _CACHE_HIT_ZEROED_AMOUNTS),
         served | zero_costs | zeroed_additional_costs,
     )
+
+
+def _image_usage(usage: object) -> Usage | None:
+    if not isinstance(usage, ImageUsage):
+        return None
+    return ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(usage.model_dump())
 
 
 def _with_failed_attempts_cost(breakdown: CostBreakdown, own_cost: float, failed_attempts_cost: float) -> CostBreakdown:

@@ -60,6 +60,7 @@ from litellm import _custom_logger_compatible_callbacks_literal
 from litellm.constants import (
     DEFAULT_MODEL_CREATED_AT_TIME,
     FILE_USAGE_MAX_TRACKED_COUNTERS,
+    IMAGE_CALL_TYPES,
     LITELLM_CONFIG_CACHE_TTL_SECONDS,
     LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED,
     LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL,
@@ -82,6 +83,7 @@ from litellm.litellm_core_utils.bug_report import (
     should_report_bug,
     strip_bug_report_notice,
 )
+from litellm.llms.gemini.empty_image_response import ImageRefusalError, UnservedImageError
 from litellm.proxy._types import (
     CommonProxyErrors,
     ProxyErrorTypes,
@@ -703,7 +705,7 @@ class _BudgetAlertEmailer(Protocol):
 
 
 def _is_client_error_exception(exc: Exception) -> bool:
-    if isinstance(exc, MissingMessageRoleError):
+    if isinstance(exc, (MissingMessageRoleError, ImageRefusalError, UnservedImageError)):
         return True
     if isinstance(exc, HTTPException):
         return exc.status_code < 500
@@ -1717,16 +1719,19 @@ def _failure_usage_to_lift(
     base_model: str | None = None,
     dispatched_call_type: str | None = None,
 ) -> tuple[object, object] | None:
+    failed_attempts: Final = _FAILED_ATTEMPTS_USAGE.validate_python(model_call_details.get("failed_attempts_usage", ()))
+    unbilled_after_billed_image: Final = (
+        bool(failed_attempts) and not provider_billed and model_call_details.get("call_type") in IMAGE_CALL_TYPES
+    )
     current_attempt: Final = _current_failure_usage_to_lift(
         model_call_details,
         request_body,
-        dispatched,
+        dispatched and not unbilled_after_billed_image,
         provider_billed,
         deployment_id,
         base_model,
         dispatched_call_type=dispatched_call_type,
     )
-    failed_attempts: Final = _FAILED_ATTEMPTS_USAGE.validate_python(model_call_details.get("failed_attempts_usage", ()))
     if not failed_attempts:
         return current_attempt
     current_usage, current_cost = current_attempt if current_attempt is not None else (None, None)

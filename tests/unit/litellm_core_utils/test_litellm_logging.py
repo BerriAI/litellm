@@ -102,6 +102,8 @@ from litellm.types.utils import (
     CallTypes,
     CostBreakdown,
     ImageResponse,
+    ImageUsage,
+    ImageUsageInputTokensDetails,
     LiteLLMRealtimeStreamLoggingObject,
     ModelResponse,
     StandardCallbackDynamicParams,
@@ -16478,6 +16480,42 @@ async def test_a_recovered_attempt_bills_a_failed_agentic_follow_up_but_not_a_fa
     assert own_cost > 0
     assert after_a_dropped_stream == pytest.approx(own_cost)
     assert after_a_failed_follow_up == pytest.approx(own_cost + _FAILED_ATTEMPT[1])
+
+
+@pytest.mark.asyncio
+async def test_an_image_served_after_a_billed_failure_sums_the_tokens_of_both_attempts() -> None:
+    logging_obj: Final = LitellmLogging(
+        model="gpt-image-2",
+        messages=[],
+        stream=False,
+        call_type="aimage_edit",
+        start_time=time.time(),
+        litellm_call_id="recovered-image",
+        function_id="recovered-image",
+    )
+    logging_obj.update_environment_variables(
+        model="gpt-image-2", user="", optional_params={}, litellm_params={"metadata": {}}, custom_llm_provider="openai"
+    )
+    logging_obj.record_served_rounds_for_failure((_FAILED_ATTEMPT,))
+    logging_obj.carry_failed_attempt_usage()
+    now: Final = datetime.datetime.now()
+    await logging_obj.async_success_handler(
+        ImageResponse(
+            created=1,
+            data=[],
+            usage=ImageUsage(
+                input_tokens=9,
+                input_tokens_details=ImageUsageInputTokensDetails(image_tokens=0, text_tokens=9),
+                output_tokens=14,
+                total_tokens=23,
+            ),
+        ),
+        now,
+        now,
+    )
+
+    combined: Final = logging_obj.model_call_details["combined_usage_object"]
+    assert (combined.prompt_tokens, combined.completion_tokens, combined.total_tokens) == (1009, 514, 1523)
 
 
 def test_standard_logging_payload_reports_the_per_call_prices_the_request_was_billed_from() -> None:

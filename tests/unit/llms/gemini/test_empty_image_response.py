@@ -90,7 +90,8 @@ def test_refused_image_is_a_400_carrying_the_finish_reason_and_message(
         provider,
         {"finish_reason": finish_reason, "finish_message": _NOT_CHARGED},
     )
-    assert f"finishReason={finish_reason}: {_NOT_CHARGED}" in str(refused.value)
+    assert f"finishReason={finish_reason}" in str(refused.value)
+    assert _NOT_CHARGED not in str(refused.value)
 
 
 @pytest.mark.parametrize(("route", "model", "provider"), _ROUTES)
@@ -107,6 +108,8 @@ def test_blocked_prompt_is_a_400_carrying_the_block_reason(route: str, model: st
         provider,
         {"block_reason": "PROHIBITED_CONTENT", "block_reason_message": "prompt not allowed"},
     )
+    assert "blockReason=PROHIBITED_CONTENT" in str(blocked.value)
+    assert "prompt not allowed" not in str(blocked.value)
 
 
 @pytest.mark.parametrize(("route", "model", "provider"), _ROUTES)
@@ -307,6 +310,95 @@ def test_router_does_not_retry_an_answer_without_an_image(reply: Mapping[str, ob
 
 
 
+@pytest.mark.parametrize(
+    "reply",
+    (
+        pytest.param({"candidates": [{"finishReason": "IMAGE_SAFETY", "content": {"role": "model"}}]}, id="refused"),
+        pytest.param(
+            {"candidates": [{"finishReason": "NO_IMAGE", "content": {"parts": [{"text": "no"}]}}]}, id="no-image"
+        ),
+    ),
+)
+def test_answer_without_an_image_keeps_its_deployment_in_service_and_names_no_other_group(
+    reply: Mapping[str, object],
+):
+    calls: Final[list[httpx.Request]] = []  # mutable-ok: MockTransport hands each request to a callback
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(200, json=reply)
+
+    gemini: Final = {
+        "model": "gemini/gemini-3.1-flash-image",
+        "api_key": "test-key",
+        "api_base": "https://google.invalid/v1",
+    }
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "image-group",
+                "litellm_params": gemini,
+                "model_info": {
+                    "id": "image-deployment",
+                    "allowed_fails_policy": {
+                        "ContentPolicyViolationErrorAllowedFails": 0,
+                        "BadRequestErrorAllowedFails": 0,
+                    },
+                },
+            },
+            {"model_name": "unrelated-group", "litellm_params": gemini},
+            {"model_name": "unrelated-backup", "litellm_params": gemini},
+        ],
+        fallbacks=[{"unrelated-group": ["unrelated-backup"]}],
+        num_retries=0,
+    )
+
+    for _ in range(3):
+        with pytest.raises(openai.APIStatusError) as failed:
+            router.image_generation(
+                model="image-group",
+                prompt="a single small red dot",
+                client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(answer))),
+            )
+        assert "unrelated" not in str(failed.value)
+
+    assert len(calls) == 3
+
+
+@pytest.mark.asyncio
+async def test_refusal_after_a_failed_fallback_names_no_model_group(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": group,
+                "litellm_params": {
+                    "model": "gemini/gemini-3.1-flash-image",
+                    "api_key": "test-key",
+                    "api_base": f"https://{host}.invalid/v1",
+                },
+            }
+            for group, host in (("image-group", "first"), ("backup-group", "second"))
+        ],
+        fallbacks=[{"image-group": ["backup-group"]}],
+        num_retries=0,
+    )
+
+    with respx.mock(assert_all_called=True) as upstream:
+        upstream.post(url__startswith="https://first.invalid/").mock(
+            side_effect=lambda request: httpx.Response(
+                200, json={"candidates": [{"finishReason": "IMAGE_SAFETY", "content": {"role": "model"}}]}
+            )
+        )
+        upstream.post(url__startswith="https://second.invalid/").mock(
+            side_effect=lambda request: httpx.Response(503, json={"error": {"code": 503}})
+        )
+        with pytest.raises(litellm.ContentPolicyViolationError) as refused:
+            await router.aimage_generation(model="image-group", prompt="a single small red dot")
+
+    assert "backup-group" not in str(refused.value)
+
+
 _USAGE: Final = {"promptTokenCount": 9, "candidatesTokenCount": 7, "totalTokenCount": 16}
 _SERVED: Final = {
     "candidates": [{"finishReason": "STOP", "content": {"parts": [{"inlineData": {"mimeType": "image/png", "data": "aW1n"}}]}}],
@@ -484,6 +576,25 @@ def test_an_unreadable_answer_beside_a_served_image_still_fails_the_request(
         _request_two_images(route, model, httpx.MockTransport(lambda request: next(replies)), spend)
 
 
+@pytest.mark.parametrize(("route", "model", "provider"), _TWO_IMAGE_CALLS)
+@pytest.mark.parametrize(
+    "answers",
+    ((_CHARGED_REFUSAL, _UNANSWERED), (_UNANSWERED, _CHARGED_REFUSAL)),
+    ids=("refusal-first", "refusal-last"),
+)
+def test_refusal_beside_an_answer_without_an_image_always_fails_as_the_refusal(
+    monkeypatch: pytest.MonkeyPatch,
+    route: str,
+    model: str,
+    provider: str,
+    answers: tuple[Mapping[str, object], Mapping[str, object]],
+):
+    spend: Final = _spend_log(monkeypatch)
+
+    with pytest.raises(litellm.ContentPolicyViolationError):
+        _request_two_images(route, model, _replying(*((200, answer) for answer in answers)), spend)
+
+
 class _ServedSpend(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
@@ -499,7 +610,7 @@ class _ServedSpend(CustomLogger):
 
 
 async def _cost_of_image_served_after(
-    monkeypatch: pytest.MonkeyPatch, primary_answer: Mapping[str, object]
+    monkeypatch: pytest.MonkeyPatch, *primary_answers: tuple[int, Mapping[str, object]], n: int = 1
 ) -> float | None:
     spend: Final = _ServedSpend()
     monkeypatch.setattr(litellm, "callbacks", [spend])
@@ -527,13 +638,16 @@ async def _cost_of_image_served_after(
         start_time=datetime.now(),
         model="primary",
         prompt="a single small red dot",
+        n=n,
         litellm_call_id="image-fallback",
     )
     with respx.mock(assert_all_called=False) as upstream:
         upstream.post(url__startswith="https://primary.invalid/").mock(
-            return_value=httpx.Response(200, json=primary_answer)
+            side_effect=[httpx.Response(status_code, json=body) for status_code, body in primary_answers]
         )
-        upstream.post(url__startswith="https://backup.invalid/").mock(return_value=httpx.Response(200, json=_SERVED))
+        upstream.post(url__startswith="https://backup.invalid/").mock(
+            side_effect=lambda request: httpx.Response(200, json=_SERVED)
+        )
         await router.aimage_generation(**request, litellm_logging_obj=logging_obj)
         await asyncio.wait_for(spend.logged.wait(), 10)
     return spend.cost
@@ -561,9 +675,18 @@ async def test_fallback_that_serves_the_image_also_bills_the_answer_it_replaced(
         "usageMetadata": _NINE_IN_SEVEN_OUT,
     }
     replaced: Final = _failure_log(monkeypatch, "generation", "gemini/gemini-3.1-flash-image", answer, error).cost
-    served_alone: Final = await _cost_of_image_served_after(monkeypatch, _SERVED)
-    through_fallback: Final = await _cost_of_image_served_after(monkeypatch, answer)
+    served_alone: Final = await _cost_of_image_served_after(monkeypatch, (200, _SERVED))
+    through_fallback: Final = await _cost_of_image_served_after(monkeypatch, (200, answer))
 
     assert served_alone is not None and served_alone > 0
     assert replaced is not None
     assert through_fallback == pytest.approx(served_alone + replaced)
+
+
+@pytest.mark.asyncio
+async def test_fallback_after_a_provider_failure_bills_only_the_images_it_served(monkeypatch: pytest.MonkeyPatch):
+    two_served: Final = await _cost_of_image_served_after(monkeypatch, (200, _SERVED), (200, _SERVED), n=2)
+    after_a_partial_failure: Final = await _cost_of_image_served_after(monkeypatch, (200, _SERVED), _UNAVAILABLE, n=2)
+
+    assert two_served is not None and two_served > 0
+    assert after_a_partial_failure == pytest.approx(two_served)

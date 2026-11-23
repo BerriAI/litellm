@@ -82,10 +82,6 @@ def _is_refusal(candidate: _Candidate) -> bool:
     )
 
 
-def _with_detail(summary: str, detail: str | None) -> str:
-    return f"{summary}: {detail}" if detail else summary
-
-
 def _answered_as(status_code: int, raw_response: httpx.Response) -> httpx.Response:
     return error_response_without_credentials(status_code, raw_response, _ERROR_DOCS_URL)
 
@@ -129,9 +125,7 @@ def empty_image_response_error(
     if feedback is not None and feedback.block_reason:
         return _refusal_error(
             feedback.block_reason,
-            _with_detail(
-                f"Gemini blocked the image prompt, blockReason={feedback.block_reason}", feedback.block_reason_message
-            ),
+            f"Gemini blocked the image prompt, blockReason={feedback.block_reason}",
             {"block_reason": feedback.block_reason, "block_reason_message": feedback.block_reason_message},
             model,
             llm_provider,
@@ -143,9 +137,7 @@ def empty_image_response_error(
     if refusal is not None and refusal.finish_reason is not None:
         return _refusal_error(
             refusal.finish_reason,
-            _with_detail(
-                f"Gemini refused to return an image, finishReason={refusal.finish_reason}", refusal.finish_message
-            ),
+            f"Gemini refused to return an image, finishReason={refusal.finish_reason}",
             {"finish_reason": refusal.finish_reason, "finish_message": refusal.finish_message},
             model,
             llm_provider,

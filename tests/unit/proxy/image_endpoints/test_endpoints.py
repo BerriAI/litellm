@@ -433,6 +433,7 @@ class _ImageRouterHandler(litellm.CustomLLM):
         self.billed_before_failure: tuple[litellm.Usage, float] | None = None
         self.owed_after_failure: tuple[litellm.Usage, float] | None = None
         self.served_cost: float | None = None
+        self.refusal: litellm.ContentPolicyViolationError | None = None
 
     async def aimage_generation(
         self,
@@ -450,6 +451,8 @@ class _ImageRouterHandler(litellm.CustomLLM):
         if isinstance(logging_obj, LiteLLMLoggingObj):
             logging_obj.pre_call(input=prompt, api_key=api_key)
         if model.endswith("failing"):
+            if self.refusal is not None:
+                raise self.refusal
             if self.billed_before_failure is not None and isinstance(logging_obj, LiteLLMLoggingObj):
                 logging_obj.record_partial_usage_for_failure(*self.billed_before_failure)
             if self.owed_after_failure is not None and isinstance(logging_obj, LiteLLMLoggingObj):
@@ -825,6 +828,36 @@ def test_failed_image_request_bills_what_the_provider_served_in_its_spend_row_an
         2240,
         2256,
     )
+
+
+@pytest.mark.parametrize(
+    "send",
+    (pytest.param(_send_generation, id="generations"), pytest.param(_send_edit, id="edits")),
+)
+def test_refused_image_request_returns_the_refusal_details_to_the_client(
+    monkeypatch: pytest.MonkeyPatch, send: Callable[[TestClient], httpx.Response]
+) -> None:
+    from litellm.llms.gemini.empty_image_response import ImageRefusalError
+
+    details: Final = {"finish_reason": "IMAGE_SAFETY", "finish_message": "try another prompt"}
+    monkeypatch.setattr(litellm, "callbacks", [])
+    client, handler = _image_generation_client(monkeypatch, UserAPIKeyAuth(api_key="sk-test"))
+    handler.refusal = ImageRefusalError(
+        message="Gemini refused to return an image, finishReason=IMAGE_SAFETY",
+        model="image-regression/failing",
+        llm_provider="gemini",
+        response=httpx.Response(400, request=httpx.Request("POST", "https://google.invalid")),
+        provider_specific_fields=details,
+        billed_answer=None,
+    )
+    try:
+        with client:
+            response: Final = send(client)
+    finally:
+        ProxyLogging._callback_capabilities_cache.clear()
+
+    assert response.status_code == 400, response.text
+    assert response.json()["error"]["provider_specific_fields"] == details
 
 
 def test_failed_image_generation_that_billed_nothing_sends_no_cost_header(monkeypatch: pytest.MonkeyPatch) -> None:

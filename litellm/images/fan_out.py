@@ -7,10 +7,10 @@ import httpx
 from pydantic import TypeAdapter
 
 from litellm.constants import MAX_IMAGE_FAN_OUT_REQUESTS
-from litellm.exceptions import BadRequestError
+from litellm.exceptions import BadRequestError, ContentPolicyViolationError
 from litellm.litellm_core_utils.agentic_followup_failure import ServedRound
 from litellm.responses.utils import ResponseAPILoggingUtils
-from litellm.types.utils import ImageResponse, ImageUsage
+from litellm.types.utils import ImageResponse, ImageUsage, Usage
 
 _T = TypeVar("_T")
 _REQUEST_COUNT: Final = TypeAdapter(int)
@@ -32,6 +32,8 @@ class _SpendLog(Protocol):
     def uncached_price(self, result: object) -> _Price: ...
 
     def record_served_rounds_for_failure(self, served_rounds: tuple[ServedRound, ...]) -> None: ...
+
+    def record_partial_usage_for_failure(self, usage: Usage, response_cost: float) -> None: ...
 
 
 def image_request_count(requested_images: object, *, model: str, llm_provider: str) -> int:
@@ -145,29 +147,43 @@ def merge_billed_image_responses(logging_obj: _SpendLog, responses: Sequence[Ima
     return merged
 
 
+def _raise_order(failure: Exception) -> int:
+    if not isinstance(failure, _AnswerWithoutAnImage):
+        return 0
+    return 1 if isinstance(failure, ContentPolicyViolationError) else 2
+
+
 def settle_image_answers(
     logging_obj: _SpendLog, served: Sequence[ImageResponse], unserved: Sequence[Exception]
 ) -> ImageResponse:
     """Answers without an image fail the request only when no answer served one, as candidates of one call do."""
     billed: Final = billed_answers(served, unserved)
-    if served and all(isinstance(failure, _AnswerWithoutAnImage) for failure in unserved):
+    only_answers: Final = all(isinstance(failure, _AnswerWithoutAnImage) for failure in unserved)
+    if served and only_answers:
         return merge_billed_image_responses(logging_obj, billed)
-    record_partial_image_spend(logging_obj, billed)
-    raise unserved[0]
+    if only_answers:
+        _carry_discarded_answers(logging_obj, billed)
+    else:
+        record_partial_image_spend(logging_obj, billed)
+    raise min(unserved, key=_raise_order)
+
+
+def _billed_round(logging_obj: _SpendLog, responses: Sequence[ImageResponse]) -> ServedRound:
+    usage: Final = merge_image_responses(responses).usage
+    return (
+        ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(usage.model_dump() if usage else None),
+        _summed_cost(logging_obj, responses) or 0.0,
+    )
+
+
+def _carry_discarded_answers(logging_obj: _SpendLog, responses: Sequence[ImageResponse]) -> None:
+    if responses:
+        logging_obj.record_served_rounds_for_failure((_billed_round(logging_obj, responses),))
 
 
 def record_partial_image_spend(logging_obj: _SpendLog, responses: Sequence[ImageResponse]) -> None:
     """Bill the images the provider did return when another request of the same fan-out failed."""
     if not responses:
         return
-    usage: Final = merge_image_responses(responses).usage
-    logging_obj.record_served_rounds_for_failure(
-        (
-            (
-                ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(
-                    usage.model_dump() if usage else None
-                ),
-                _summed_cost(logging_obj, responses) or 0.0,
-            ),
-        )
-    )
+    usage, cost = _billed_round(logging_obj, responses)
+    logging_obj.record_partial_usage_for_failure(usage, cost)

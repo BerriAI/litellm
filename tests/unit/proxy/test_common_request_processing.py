@@ -5826,6 +5826,40 @@ class TestStreamCloseOnDisconnect:
         assert closed.is_set()
 
 
+_BILLED_FAILURE: Final = {
+    "response_cost": 0.25,
+    "combined_usage_object": litellm.Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+}
+
+
+@pytest.mark.parametrize(
+    ("request_fields", "expected_cost_header"),
+    (
+        pytest.param({"call_type": "aimage_generation"}, "0", id="unbilled_image"),
+        pytest.param({"call_type": "aimage_generation", **_BILLED_FAILURE}, "0.25", id="billed_image"),
+        pytest.param({"call_type": "aimage_edit", **_BILLED_FAILURE}, "0.25", id="billed_edit"),
+        pytest.param({"call_type": "acompletion", **_BILLED_FAILURE}, "0", id="billed_chat_timeout"),
+    ),
+)
+async def test_failed_request_reports_its_billed_cost_in_the_cost_header(
+    request_fields: Mapping[str, object], expected_cost_header: str
+) -> None:
+    from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+
+    proxy_logging_obj: Final = MagicMock()
+    proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+    proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={})
+
+    with pytest.raises(ProxyException) as raised:
+        await ProxyBaseLLMRequestProcessing(data=dict(request_fields))._handle_llm_api_exception(
+            e=ValueError("upstream failure"),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    assert raised.value.headers["x-litellm-response-cost"] == expected_cost_header
+
+
 class TestHandleLLMApiExceptionRetryAfter:
     """RouterRateLimitError cooldown_time must surface as a retry-after header."""
 

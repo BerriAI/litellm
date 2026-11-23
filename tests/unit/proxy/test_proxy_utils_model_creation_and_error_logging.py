@@ -3960,6 +3960,40 @@ def test_a_litellm_params_key_in_the_request_body_cannot_zero_the_timeout_price(
     assert response_cost > 0
 
 
+@pytest.mark.parametrize(
+    ("call_type", "provider_billed", "adds_an_estimate"),
+    (
+        pytest.param("aimage_generation", False, False, id="unbilled_image"),
+        pytest.param("aimage_edit", False, False, id="unbilled_edit"),
+        pytest.param("aimage_generation", True, True, id="provider_billed_image"),
+        pytest.param("acompletion", False, True, id="chat"),
+    ),
+)
+def test_failed_image_attempt_after_a_billed_one_adds_no_estimated_tokens(
+    call_type: str, provider_billed: bool, adds_an_estimate: bool
+) -> None:
+    from litellm.proxy.utils import _failure_usage_to_lift
+
+    lifted: Final = _failure_usage_to_lift(
+        model_call_details={
+            "call_type": call_type,
+            "model": FAILURE_USAGE_MODEL,
+            "messages": ONE_USER_MESSAGE,
+            "prompt": "draw a tree",
+            "failed_attempts_usage": ((Usage(prompt_tokens=777, completion_tokens=333, total_tokens=1110), 0.5),),
+        },
+        request_body={},
+        dispatched=True,
+        provider_billed=provider_billed,
+    )
+
+    assert lifted is not None
+    usage, _ = lifted
+    assert isinstance(usage, Usage)
+    assert usage.completion_tokens == 333
+    assert (usage.prompt_tokens > 777) is adds_an_estimate
+
+
 def test_a_request_that_timed_out_at_a_provider_bills_its_input_at_the_input_rate():
     from litellm.proxy.utils import _failure_usage_to_lift
 
@@ -4709,6 +4743,32 @@ def test_is_client_error_exception_existing_behaviour_unchanged() -> None:
     assert _is_client_error_exception(HTTPException(status_code=500, detail="x")) is False
     assert _is_client_error_exception(ProxyException(message="x", type="x", param=None, code="429")) is True
     assert _is_client_error_exception(ValueError("x")) is False
+
+
+def test_image_answers_without_an_image_are_client_errors() -> None:
+    from litellm.llms.gemini.empty_image_response import ImageRefusalError, UnservedImageError
+    from litellm.proxy.utils import _is_client_error_exception
+    from litellm.types.utils import ImageResponse
+
+    reply: Final = httpx.Response(400, request=httpx.Request("POST", "https://google.invalid"))
+    refused: Final = ImageRefusalError(
+        message="refused",
+        model="gemini/image-model",
+        llm_provider="gemini",
+        response=reply,
+        provider_specific_fields={},
+        billed_answer=None,
+    )
+    unserved: Final = UnservedImageError(
+        message="no image",
+        model="gemini/image-model",
+        llm_provider="gemini",
+        response=reply,
+        billed_answer=ImageResponse(created=1, data=[]),
+    )
+
+    assert _is_client_error_exception(refused) is True
+    assert _is_client_error_exception(unserved) is True
 
 
 class _NativeHookMCPGuardrail(_RecordingMCPGuardrail):

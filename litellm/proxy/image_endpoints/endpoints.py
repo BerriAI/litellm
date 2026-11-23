@@ -17,6 +17,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_str_from_messages,
 )
+from litellm.llms.gemini.empty_image_response import ImageRefusalError
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import (
@@ -276,6 +277,7 @@ async def image_generation(
                 headers=failure_headers,
                 openai_code=getattr(e, "code", None),
                 code=error_status_code(e, 500),
+                provider_specific_fields=e.provider_specific_fields if isinstance(e, ImageRefusalError) else None,
             )
 
 

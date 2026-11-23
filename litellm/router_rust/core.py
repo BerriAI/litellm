@@ -328,7 +328,10 @@ _FAILURE_KINDS: Final = (
     "CallerCredentialAuthenticationError",
     "CallerCredentialRateLimitError",
 )
-_DECLINED: Final = frozenset({"MalformedRequestFieldError", "UnsupportedEndpointError"})
+_IMAGE_ANSWERS_WITHOUT_AN_IMAGE: Final = frozenset({"ImageRefusalError", "UnservedImageError"})
+_DECLINED: Final = frozenset(
+    {"MalformedRequestFieldError", "UnsupportedEndpointError", *_IMAGE_ANSWERS_WITHOUT_AN_IMAGE}
+)
 _BATCH_API_KINDS: Final = frozenset({"batch", "cancel_batch", "create_file"})
 _BATCH_API_HANDLERS: Final = frozenset(
     {
@@ -547,6 +550,10 @@ class RustCoreUnsupported(AttributeError):
 
 
 # --- failures -----------------------------------------------------------------------------------
+
+
+def _answered_without_an_image(error: BaseException) -> bool:
+    return not _IMAGE_ANSWERS_WITHOUT_AN_IMAGE.isdisjoint(cls.__name__ for cls in type(error).__mro__)
 
 
 def failure_kind(error: BaseException) -> str:
@@ -5896,6 +5903,8 @@ class _Driver:
 
     def _kind_hint(self, error: BaseException, model: str, fallbacks: object) -> str:
         """The hint a context-window or content-policy error gets when its own list is unset."""
+        if _answered_without_an_image(error):
+            return ""
         import litellm.exceptions as litellm_exceptions
 
         walked: Final = self._core._walked_fallbacks  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
@@ -5915,6 +5924,8 @@ class _Driver:
     def _explanation(self, primary: BaseException, model: str, failed_hop: BaseException | None = None) -> str:
         """What ``async_function_with_fallbacks_common_utils`` appends to the error it re-raises
         under ``expose_router_debug_in_errors``, from the resolved settings and what the call did."""
+        if _answered_without_an_image(primary):
+            return ""
         import litellm.exceptions as litellm_exceptions
         from litellm.router_utils.fallback_event_handlers import (
             check_non_standard_fallback_format,

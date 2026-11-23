@@ -55,6 +55,7 @@ from litellm.anthropic_interface.exceptions import AnthropicErrorSseFrame, anthr
 from litellm.constants import (
     DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE,
     DEFAULT_MAX_RECURSE_DEPTH,
+    IMAGE_CALL_TYPES,
     LITELLM_CLIENT_DISCONNECT_DETAIL,
     LITELLM_DETAILED_TIMING,
     LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED,
@@ -2352,6 +2353,18 @@ def response_cost_with_failed_attempts(response_cost: object, logging_obj: objec
     if not isinstance(logging_obj, LiteLLMLoggingObj):
         return own_cost or ""
     return logging_obj.with_failed_attempts_owed(own_cost) or ""
+
+
+def _failed_request_response_cost(
+    request_data: Mapping[str, object],
+    logging_obj: LiteLLMLoggingObj | None,
+    failed_in_agentic_follow_up: bool,
+) -> float:
+    if failed_in_agentic_follow_up:
+        return failure_row_response_cost(request_data)
+    if logging_obj is not None and logging_obj.finalized_cost is not None:
+        return logging_obj.finalized_cost.amount
+    return (failure_row_response_cost(request_data) or 0) if request_data.get("call_type") in IMAGE_CALL_TYPES else 0
 
 
 def cost_headers(
@@ -5369,12 +5382,8 @@ class ProxyBaseLLMRequestProcessing:
             call_id=self.litellm_call_id,
             model_id=model_id,
             version=version,
-            response_cost=(
-                _litellm_logging_obj.finalized_cost.amount
-                if not failed_in_agentic_follow_up
-                and isinstance(_litellm_logging_obj, LiteLLMLoggingObj)
-                and _litellm_logging_obj.finalized_cost is not None
-                else failure_row_response_cost(_REQUEST_FIELDS.validate_python(self.data))
+            response_cost=_failed_request_response_cost(
+                _REQUEST_FIELDS.validate_python(self.data), _litellm_logging_obj, failed_in_agentic_follow_up
             ),
             model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
             request_data=self.data,
