@@ -2827,14 +2827,17 @@ def _svg_author_model_info(
         return None
     params: Final = _LOGGED_LITELLM_PARAMS.validate_python(logged_params)
     stamps: Final = (
-        metadata.get(SVG_AUTHOR_DEPLOYMENT_METADATA_KEY)
+        _metadata_bucket(params.get(metadata_key)).get(SVG_AUTHOR_DEPLOYMENT_METADATA_KEY)
         for metadata_key in ("metadata", "litellm_metadata")
-        if isinstance(metadata := params.get(metadata_key), Mapping)
     )
     author: Final = next((_SVG_AUTHOR_DEPLOYMENT.validate_python(stamp) for stamp in stamps if stamp is not None), None)
     if author is None or not _is_snapshot_of(svg_usage.model, author.provider_model):
         return None
     return deployment_pricing_model_info(author.deployment_id, svg_usage.model)
+
+
+def _metadata_bucket(value: object) -> Mapping[str, object]:
+    return _LOGGED_LITELLM_PARAMS.validate_python(value) if isinstance(value, Mapping) else {}
 
 
 def _is_snapshot_of(reported_model: str, provider_model: str) -> bool:

@@ -1613,7 +1613,7 @@ async def common_checks(
         _model
         and team_object is None
         and user_object is not None
-        and not (_is_dashboard_session(valid_token) and personal_key_team_model_access_applies(valid_token))
+        and not dashboard_uses_personal_key_team_access(valid_token)
     ):
         with tracer.trace("litellm.proxy.auth.common_checks.can_user_call_model"):
             await can_user_call_model(
@@ -5633,7 +5633,7 @@ async def can_key_call_model(
     Raises:
         - Exception: If token not allowed to call model
     """
-    if _is_dashboard_session(valid_token) and personal_key_team_model_access_applies(valid_token):
+    if dashboard_uses_personal_key_team_access(valid_token):
         from litellm.proxy.proxy_server import (
             prisma_client as dashboard_prisma_client,
         )
@@ -6798,6 +6798,10 @@ def _search_tool_deny_by_default(general_settings: Mapping[str, object]) -> bool
         ).search_tool_deny_by_default
     except ValidationError:
         return True
+
+
+def dashboard_uses_personal_key_team_access(valid_token: UserAPIKeyAuth | None) -> bool:
+    return _is_dashboard_session(valid_token) and personal_key_team_model_access_applies(valid_token)
 
 
 def _is_dashboard_session(valid_token: UserAPIKeyAuth | None) -> bool:

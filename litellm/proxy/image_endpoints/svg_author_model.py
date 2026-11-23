@@ -1,5 +1,5 @@
 import json
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from itertools import chain
 from typing import TYPE_CHECKING, Final
 
@@ -10,13 +10,12 @@ import litellm
 from litellm.constants import SVG_AUTHOR_DEPLOYMENT_METADATA_KEY
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import (
-    _is_dashboard_session,
     can_agent_call_model,
     can_key_call_resolved_model,
     can_user_call_model,
+    dashboard_uses_personal_key_team_access,
     get_user_object,
     key_model_aliases_for_auth_check,
-    personal_key_team_model_access_applies,
 )
 from litellm.proxy.litellm_pre_call_utils import customer_request_auth, pre_call_served_model
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
@@ -100,7 +99,9 @@ def _rewritten_svg_fields(container: Mapping[str, object], upstream: str) -> Map
 def _rewritten_body_fields(body: Mapping[str, object], upstream: str) -> Mapping[str, object]:
     extra_body: Final = body.get(_EXTRA_BODY_FIELD)
     parsed_extra_body: Final = _as_object(extra_body)
-    extra_body_fields: Final = {} if parsed_extra_body is None else _rewritten_svg_fields(parsed_extra_body, upstream)
+    extra_body_fields: Final[Mapping[str, object]] = (
+        {} if parsed_extra_body is None else _rewritten_svg_fields(parsed_extra_body, upstream)
+    )
     return {
         **_rewritten_svg_fields(body, upstream),
         **(
@@ -112,7 +113,9 @@ def _rewritten_body_fields(body: Mapping[str, object], upstream: str) -> Mapping
 
 
 def _author_deployment(author: str, team_id: str | None, llm_router: "Router | None") -> _AuthorDeployment | None:
-    deployments: Final = (llm_router.registry().deployments(author, team_id=team_id) or ()) if llm_router else ()
+    deployments: Final[Sequence[object]] = (
+        (llm_router.registry().deployments(author, team_id=team_id) or ()) if llm_router else ()
+    )
     return _AuthorDeployment.model_validate(deployments[0]) if deployments else None
 
 
@@ -136,9 +139,7 @@ async def _check_key_owner_access(model: str, user_api_key_dict: UserAPIKeyAuth,
     )
     if user_api_key_dict.team_id is not None or user_api_key_dict.user_id is None:
         return
-    if prisma_client is None or (
-        _is_dashboard_session(user_api_key_dict) and personal_key_team_model_access_applies(user_api_key_dict)
-    ):
+    if prisma_client is None or dashboard_uses_personal_key_team_access(user_api_key_dict):
         return
     try:
         user_object: Final = await get_user_object(
@@ -166,18 +167,28 @@ async def svg_author_model_updates(
     metadata_variable_name: str,
 ) -> Mapping[str, object]:
     """The request fields to replace so ``svg.model`` is authorized, sent by its provider name, and billed by its deployment."""
-    authors: Final = _svg_author_models(body)
-    if not authors:
-        return {}
-    if len(authors) > 1:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"svg.model is set more than once with different values: {', '.join(authors)}",
-        )
-    author: Final = authors[0]
+    match _svg_author_models(body):
+        case ():
+            return {}
+        case (author,):
+            return await _authorized_author_updates(author, body, user_api_key_dict, llm_router, metadata_variable_name)
+        case conflicting:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"svg.model is set more than once with different values: {', '.join(conflicting)}",
+            )
+
+
+async def _authorized_author_updates(
+    author: str,
+    body: Mapping[str, object],
+    user_api_key_dict: UserAPIKeyAuth,
+    llm_router: "Router | None",
+    metadata_variable_name: str,
+) -> Mapping[str, object]:
     router_settings: Final = _as_object(body.get(_ROUTER_SETTINGS_FIELD)) or {}
     served_author: Final = pre_call_served_model(author, user_api_key_dict, router_settings.get("model_group_alias"))
-    auth: Final = customer_request_auth(body) or user_api_key_dict
+    auth: Final[UserAPIKeyAuth] = customer_request_auth(body) or user_api_key_dict
     deployment: Final = _author_deployment(served_author, user_api_key_dict.team_id, llm_router)
     sent_names: Final = (served_author,) if deployment is not None else tuple(dict.fromkeys((author, served_author)))
     for name in sent_names:
