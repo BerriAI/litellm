@@ -54,9 +54,37 @@ Every price in a row lowers to one `Price { meter, channel, when }` and its `Uni
   - Entry order is latest-registration order. `landed_on` records which registered keys landed on each row key
 - `write_pass` stops at the first `place` that returns `None` and reports `Pass::Swapped`. Retrying is the host's job
 
-`resolve/` and `model_info.rs` hold types only. The functions over them land with their first caller
-
 Catalog errors use one opaque `Error` with typed causes and JSON Pointer accessors (`path`, `key`, `field`). `Error::rejects` alone decides whether an error fails the document, rejects its row or neither, and `ErrorKind` is the stable name hosts report it by
+
+`model_info.rs` holds types only. The functions over it land with its first caller
+
+`resolve/` holds the catalog's general lookups. Each file is a port of named Python functions and says which. Which rows a call bills, and in which order, is completion_cost's rule and lives in litellm-cost's `candidates`, never here
+
+- `names.rs` builds the seven names `get_model_info` tries for a known provider (`Candidates::potential`)
+- `mod.rs` has `lookup`, the `get_model_info` walk over a `CatalogView`: the first name whose row's provider matches, else a capability rule when no name is a key
+- `bedrock.rs` reads Bedrock model id spellings (region paths, ARNs, base model). The routing prefix and cross-region profile spellings the billing walk needs live in `litellm_cost::candidates::bedrock`, and this file re-exports them. `litellm-llms` re-exports it, so the routes and the lookups share one copy
+- `tests/candidate_walk.rs` tests litellm-cost's walk over this catalog against `cost_candidates.json`. The walk cannot see a catalog from litellm-cost, so its parity tests run here
+- `tests/cost_candidates.json` (marked generated) is main's answer for each test case, captured once from `completion_cost` with `NativePrices` spied. Recapture it when main's selection changes on purpose, never to make a Rust change pass
+
+`view.rs` is everything resolving and pricing read from a host. `CostLookup` is the table and the context of one call, and it implements litellm-cost's `CandidateTable` with row facts only (which key a name finds, whether a row declares a rate, what `register_model` wrote)
+
+- `CatalogView` is the whole table interface: exact key, folded key, a row's fields, its `registered_fields`, and `lowered`, whose default lowers the row each time it is asked. A host that keeps lowerings overrides it
+- `PricingContext` is the immutable rest: the capability rules and `KnownNames`, the two lists only Python has, every provider name and the model names `get_model_info` renames
+- Nothing here versions, caches or swaps a table. A host whose table can change under it (python-bridge over `litellm.model_cost`) does that itself and hands in one view per call
+- `Catalog` is a `CatalogView` with no registrations, which is how the Rust host prices through the same path
+- A row is lowered with `litellm_provider` replaced by the billed provider, as `NativePrices` does
+
+## Copied from main, fix later
+
+Each line is main's behavior kept on purpose. Fixing one is a separate behavior change
+
+- A deployment's price lives in at least seven places that disagree (`costmap/family_config.md` I1 to I7). Only the row the router registered under the deployment id, as stored, is exposed (`RowProvenance::Registered`, I3). Chat bills a direction the deployment did not declare at 0, while batch, the failure estimate and the model group display carry the published rate (I4, `deployment_pricing_model_info` in `litellm_logging.py`) and `per_call_model_info` (I7, `per_call_pricing.py`) rebuilds the row from the catalog whenever any per-call price is set. The I4 and I7 views land with their first callers
+- A served model wins over a dated or `@version` request row: Vertex `claude-opus-4-5@20251101` bills `vertex_ai/claude-opus-4-5` when the response names `claude-opus-4-5-20251101` (`_served_or_priced_requested_model`, `cost_calculator.py`)
+- A model only a capability rule knows bills from the rule, which prices nothing, so main charges 0 (`get_model_info_helper` generalization). Here it is `RustRefusal::Generalization`
+- A Bedrock Mantle row without token or tier prices bills 0 instead of trying the next candidate (the `else` branch of `cost_per_token`)
+- `stripped_model_name` keeps a Mantle region path, `us-gov-west-1/anthropic.claude-x` (`get_potential_model_names`)
+- A region path is any `<letters-digits-dashes>/` segment (`is_bedrock_region`), where Python checks a fixed region list (`get_all_bedrock_regions`)
+- A geo or speed multiplier below 1 is dropped, since `Multiplier` refuses it, where Python applies any number
 
 ## Prices
 
@@ -73,6 +101,8 @@ A new `N`, image size or resolution in an existing key shape parses with no Rust
 - Result tiers are left out, since the search calculator prices them
 - A modality input token price that does not parse is 0, where a missing one borrows the text rate
 - Any other contradiction keeps the price read first
+
+`Adjustments::from` also lowers `provider_specific_entry`. `fast` is the `speed: fast` uplift and every other numeric key is a geo uplift, except `global` and `not_available`, which main never uplifts. Applying them only for Anthropic and Bedrock is the pricing core's rule, not the row's
 
 `wire/blocks.rs` reports a malformed off-peak window or weekday and keeps the well-formed ones, so billing skips only what Python skipped while the catalog checks still reject the row
 

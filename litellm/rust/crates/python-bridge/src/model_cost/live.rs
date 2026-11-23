@@ -1,9 +1,12 @@
 use std::borrow::Cow;
+use std::collections::BTreeSet;
 
+use litellm_host_python::json_from_py;
 use litellm_model_catalog::Rows;
+use litellm_model_catalog::wire::Fields;
 use pyo3::intern;
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::types::{PyDict, PyMapping, PyString};
 
 /// The dict Python last handed in as `litellm.model_cost`, read under the GIL on every query
 pub(crate) struct LiveDict(Py<PyDict>);
@@ -15,6 +18,52 @@ impl Clone for LiveRow {
     fn clone(&self) -> Self {
         Python::attach(|py| Self(self.0.clone_ref(py)))
     }
+}
+
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the cost bridge stacked on this change prices through it"
+    )
+)]
+impl LiveRow {
+    /// A row that is not a mapping reads as empty
+    pub(crate) fn fields(&self) -> Fields {
+        Python::attach(|py| {
+            self.0
+                .bind(py)
+                .cast::<PyMapping>()
+                .ok()
+                .and_then(|row| row_fields(row).ok())
+                .unwrap_or_default()
+        })
+    }
+
+    /// `AliasedCostEntry.registered_fields`
+    pub(crate) fn registered_fields(&self) -> BTreeSet<String> {
+        Python::attach(|py| {
+            self.0
+                .bind(py)
+                .getattr(intern!(py, "registered_fields"))
+                .and_then(|fields| fields.extract())
+                .unwrap_or_default()
+        })
+    }
+}
+
+/// A row's string keys and the values JSON can hold. Other keys are left out, as values main could not price
+pub(crate) fn row_fields(row: &Bound<'_, PyMapping>) -> PyResult<Fields> {
+    Ok(row
+        .items()?
+        .iter()
+        .filter_map(|item| {
+            let (key, value) = item
+                .extract::<(Bound<'_, PyString>, Bound<'_, PyAny>)>()
+                .ok()?;
+            Some((key.to_str().ok()?.to_owned(), json_from_py(&value).ok()?))
+        })
+        .collect())
 }
 
 impl LiveDict {
@@ -171,6 +220,28 @@ mod tests {
                 ),
             );
             assert_eq!(Store::new(LiveDict::new(&rows)).keys_in("p"), ["a"]);
+        });
+    }
+
+    #[rstest]
+    #[case::registered_row(
+        c_str!("type('Row', (dict,), {'registered_fields': frozenset({'input_cost_per_token'})})(input_cost_per_token=1e-6, mode='chat')"),
+        &["input_cost_per_token"]
+    )]
+    #[case::installed_row(c_str!("{'input_cost_per_token': 1e-6, 'mode': 'chat'}"), &[])]
+    fn registered_fields_are_the_ones_register_model_wrote(
+        #[case] source: &std::ffi::CStr,
+        #[case] expected: &[&str],
+    ) {
+        Python::initialize();
+        Python::attach(|py| {
+            let row = LiveRow(py.eval(source, None, None).unwrap().unbind());
+
+            assert_eq!(
+                row.registered_fields(),
+                expected.iter().map(|field| (*field).to_owned()).collect()
+            );
+            assert_eq!(row.fields()["mode"], "chat");
         });
     }
 }
