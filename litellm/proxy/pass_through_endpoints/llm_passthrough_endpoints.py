@@ -1433,6 +1433,7 @@ def is_bedrock_count_tokens_endpoint(endpoint: str) -> bool:
 
 
 _COUNT_TOKENS_CALLER_ERROR_STATUSES: Final = frozenset({400, 429})
+_BEDROCK_INVALID_MODEL_ID_MESSAGE: Final = "model identifier is invalid"
 
 
 def extract_model_from_bedrock_endpoint(endpoint: str) -> str:
@@ -1766,7 +1767,9 @@ async def _bedrock_count_tokens(
 
     except BedrockError as e:
         # Convert BedrockError to HTTPException for FastAPI
-        is_caller_error: Final = e.status_code in _COUNT_TOKENS_CALLER_ERROR_STATUSES
+        is_caller_error: Final = (
+            e.status_code in _COUNT_TOKENS_CALLER_ERROR_STATUSES and _BEDROCK_INVALID_MODEL_ID_MESSAGE not in e.message
+        )
         (verbose_proxy_stdout_logger if is_caller_error else verbose_proxy_logger).log(
             logging.WARNING if is_caller_error else logging.ERROR,
             "BedrockError in handle_bedrock_count_tokens: %s",

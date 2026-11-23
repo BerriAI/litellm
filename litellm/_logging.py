@@ -943,8 +943,6 @@ class WarningLogger(Protocol):
 
 
 verbose_proxy_logger = logging.getLogger("LiteLLM Proxy")
-# Caller-error warnings (malformed virtual keys, refused token counts) log through this child;
-# LevelRoutingStreamHandler writes its WARNING records to stdout. It has no handler or level of its own.
 verbose_proxy_stdout_logger: Final = verbose_proxy_logger.getChild("stdout")
 verbose_router_logger = logging.getLogger("LiteLLM Router")
 verbose_logger = logging.getLogger("LiteLLM")

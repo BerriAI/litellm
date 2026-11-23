@@ -8609,13 +8609,15 @@ async def test_bedrock_native_count_tokens_logs_the_provider_status_when_the_cou
 
 
 @pytest.mark.parametrize(
-    ("aws_status", "log_level", "stream"),
+    ("aws_status", "aws_message", "log_level", "stream"),
     [
-        (400, logging.WARNING, "stdout"),
-        (429, logging.WARNING, "stdout"),
-        (403, logging.ERROR, "stderr"),
-        (404, logging.ERROR, "stderr"),
-        (500, logging.ERROR, "stderr"),
+        (400, "The provided model doesn't support counting tokens.", logging.WARNING, "stdout"),
+        (429, "Too many requests, please wait before trying again.", logging.WARNING, "stdout"),
+        # Bedrock us-east-1 answered a nonexistent deployment model id this way on 2026-11-22
+        (400, "The provided model identifier is invalid.", logging.ERROR, "stderr"),
+        (403, "The security token included in the request is invalid.", logging.ERROR, "stderr"),
+        (404, "The count failed.", logging.ERROR, "stderr"),
+        (500, "The count failed.", logging.ERROR, "stderr"),
     ],
 )
 @pytest.mark.asyncio
@@ -8626,10 +8628,11 @@ async def test_bedrock_native_count_tokens_logs_caller_errors_as_stdout_warnings
     caplog: pytest.LogCaptureFixture,
     capsys: pytest.CaptureFixture[str],
     aws_status: int,
+    aws_message: str,
     log_level: int,
     stream: Literal["stdout", "stderr"],
 ) -> None:
-    aws_reply: Final = httpx.Response(aws_status, json={"message": "The count failed."})
+    aws_reply: Final = httpx.Response(aws_status, json={"message": aws_message})
     with caplog.at_level(logging.INFO, logger="LiteLLM Proxy"), pytest.raises(HTTPException) as exc_info:
         await _bedrock_native_count(monkeypatch, respx_mock, aws_reply, Response())
 
