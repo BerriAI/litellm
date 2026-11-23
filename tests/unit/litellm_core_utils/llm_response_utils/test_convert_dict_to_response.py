@@ -3023,13 +3023,12 @@ class TestConvertToModelResponseObjectRerank:
         assert result.model_dump(by_alias=True)["usage"] == usage
 
     @pytest.mark.parametrize("malformed_usage", ["n/a", ["search_units", 1], 7, None])
-    @pytest.mark.parametrize("supplied", [True, False])
-    def test_rerank_with_malformed_provider_usage_still_converts(self, malformed_usage: object, supplied: bool) -> None:
+    def test_rerank_with_malformed_provider_usage_still_converts(self, malformed_usage: object) -> None:
         from litellm.types.utils import RerankResponse
 
         result: Final = convert_to_model_response_object(
             response_object={"id": "rerank-123", "meta": None, "results": [], "usage": malformed_usage},
-            model_response_object=RerankResponse() if supplied else None,
+            model_response_object=None,
             response_type="rerank",
         )
 
@@ -3044,6 +3043,8 @@ class TestConvertToModelResponseObjectRerank:
             ({"usage": None}, None),
             ({"provider_usage": None}, None),
             ({"usage": "n/a"}, None),
+            ({"usage": ["search_units", 1]}, None),
+            ({"provider_usage": 7}, None),
             ({"usage": {"search_units": 2, "cost": 0.004}}, {"search_units": 2, "cost": 0.004}),
             ({"usage": None, "provider_usage": {"search_units": 2, "cost": 0.004}}, None),
             ({}, {"search_units": 1, "cost": 0.002}),

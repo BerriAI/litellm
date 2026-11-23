@@ -2339,11 +2339,14 @@ def _rerank_cost(response: RerankResponse, model: str = _PRICED_RERANKER, **pric
     )
 
 
-@pytest.mark.parametrize("reported", [0.004, 0.0, 0])
+@pytest.mark.parametrize(
+    ("model", "reported"),
+    [(_PRICED_RERANKER, 0.004), (_PRICED_RERANKER, 0.0), (_PRICED_RERANKER, 0), (_UNMAPPED_RERANKER, 0.004)],
+)
 def test_rerank_cost_bills_the_provider_reported_cost_over_the_cost_map(
-    reported: float, _priced_test_reranker: None
+    model: str, reported: float, _priced_test_reranker: None
 ) -> None:
-    cost: Final = _rerank_cost(_provider_usage_rerank({"search_units": _SEARCH_UNITS, "cost": reported}))
+    cost: Final = _rerank_cost(_provider_usage_rerank({"search_units": _SEARCH_UNITS, "cost": reported}), model)
 
     assert cost == pytest.approx(reported)
     assert cost != pytest.approx(_MAP_PRICED_RERANK_COST)
@@ -2419,10 +2422,6 @@ def test_rerank_cost_prefers_caller_set_prices_over_the_reported_cost(
     assert _rerank_cost(_provider_usage_rerank({"cost": 0.5}), model, **pricing) == pytest.approx(expected)
 
 
-def test_unmapped_rerank_cost_uses_the_reported_cost(_priced_test_reranker: None) -> None:
-    assert _rerank_cost(_provider_usage_rerank({"cost": 0.004}), _UNMAPPED_RERANKER) == pytest.approx(0.004)
-
-
 @pytest.mark.parametrize("usage", [None, {"search_units": _SEARCH_UNITS}, {"cost": "n/a"}])
 def test_unmapped_rerank_cost_without_a_reported_cost_is_unavailable_instead_of_zero(
     usage: Mapping[str, object] | None, _priced_test_reranker: None
@@ -2439,26 +2438,20 @@ _SHARED_RERANKER: Final = "test-shared-reranker"
 
 
 @pytest.mark.parametrize("persist_across_reloads", [True, False])
-def test_rerank_cost_bills_the_reported_cost_when_a_bare_name_is_registered_for_another_provider(
-    persist_across_reloads: bool, _priced_test_reranker: None
-) -> None:
-    litellm.register_model(
-        {_SHARED_RERANKER: {"input_cost_per_query": 0.001, "litellm_provider": "jina_ai", "mode": "rerank"}},
-        persist_across_reloads=persist_across_reloads,
-    )
-
-    cost: Final = _rerank_cost(_provider_usage_rerank({"cost": 0.004}), f"cohere/{_SHARED_RERANKER}")
-
-    assert cost == pytest.approx(0.004)
-
-
-@pytest.mark.parametrize("persist_across_reloads", [True, False])
 @pytest.mark.parametrize(
-    "provider_metadata",
-    [{"litellm_provider": "cohere"}, {}, {"litellm_provider": None}],
+    ("provider_metadata", "expected"),
+    [
+        ({"litellm_provider": "jina_ai"}, 0.5),
+        ({"litellm_provider": "cohere"}, _SEARCH_UNITS * 0.001),
+        ({}, _SEARCH_UNITS * 0.001),
+        ({"litellm_provider": None}, _SEARCH_UNITS * 0.001),
+    ],
 )
-def test_rerank_cost_bills_a_bare_name_registration_that_matches_the_provider(
-    persist_across_reloads: bool, provider_metadata: Mapping[str, str | None], _priced_test_reranker: None
+def test_rerank_cost_bills_a_bare_name_registration_only_for_its_provider(
+    persist_across_reloads: bool,
+    provider_metadata: Mapping[str, str | None],
+    expected: float,
+    _priced_test_reranker: None,
 ) -> None:
     litellm.register_model(
         {_SHARED_RERANKER: {"input_cost_per_query": 0.001, "mode": "rerank", **provider_metadata}},
@@ -2467,60 +2460,53 @@ def test_rerank_cost_bills_a_bare_name_registration_that_matches_the_provider(
 
     cost: Final = _rerank_cost(_provider_usage_rerank({"cost": 0.5}), f"cohere/{_SHARED_RERANKER}")
 
-    assert cost == pytest.approx(_SEARCH_UNITS * 0.001)
-
-
-@pytest.mark.parametrize(
-    ("rates", "expected"),
-    [
-        ({"input_cost_per_query": 0.001}, _SEARCH_UNITS * 0.001),
-        ({"input_cost_per_query": 0.0}, 0.0),
-        ({"input_cost_per_token": 0.0}, 0.0),
-    ],
-)
-def test_rerank_cost_prefers_a_registered_price_over_the_reported_cost(
-    rates: dict[str, float], expected: float, _priced_test_reranker: None
-) -> None:
-    _register_reranker("cohere/test-registered-reranker", rates)
-
-    cost: Final = _rerank_cost(_provider_usage_rerank({"cost": 0.5}), "cohere/test-registered-reranker")
-
     assert cost == pytest.approx(expected)
 
 
 @pytest.mark.parametrize(
     ("setting", "adjustment", "expected"),
     [
+        (None, {}, _SEARCH_UNITS * 0.001),
         ("cost_discount_config", {"cohere": 0.5}, 0.001),
         ("cost_margin_config", {"cohere": {"percentage": 0.1}}, 0.0022),
     ],
 )
-def test_rerank_cost_adjusts_the_registered_price_instead_of_the_reported_cost(
-    setting: str,
+def test_rerank_cost_bills_and_adjusts_a_registered_price_instead_of_the_reported_cost(
+    setting: str | None,
     adjustment: dict[str, object],
     expected: float,
     _priced_test_reranker: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _register_reranker("cohere/test-registered-reranker", {"input_cost_per_query": 0.001})
-    monkeypatch.setattr(litellm, setting, adjustment)
+    if setting is not None:
+        monkeypatch.setattr(litellm, setting, adjustment)
 
     cost: Final = _rerank_cost(_provider_usage_rerank({"cost": 0.5}), "cohere/test-registered-reranker")
 
     assert cost == pytest.approx(expected)
 
 
+_FIXED_MARGIN: Final = {"cohere": {"fixed_amount": 0.001}}
+
+
 @pytest.mark.parametrize("usage", [None, {"cost": 0.5}])
-@pytest.mark.parametrize(
-    "pricing",
-    [{"custom_pricing": True}, {"base_model": _UNMAPPED_RERANKER}],
-)
-def test_caller_priced_rerank_without_a_resolvable_price_keeps_zero(
-    usage: Mapping[str, object] | None, pricing: dict[str, object], _priced_test_reranker: None
+@pytest.mark.parametrize("pricing", [{"custom_pricing": True}, {"base_model": _UNMAPPED_RERANKER}])
+@pytest.mark.parametrize(("margin", "expected"), [({}, 0.0), (_FIXED_MARGIN, 0.001)])
+def test_caller_priced_rerank_without_a_resolvable_price_bills_only_the_configured_margin(
+    usage: Mapping[str, object] | None,
+    pricing: dict[str, object],
+    margin: dict[str, object],
+    expected: float,
+    _priced_test_reranker: None,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    assert _rerank_cost(_provider_usage_rerank(usage), _UNMAPPED_RERANKER, **pricing) == 0.0
+    monkeypatch.setattr(litellm, "cost_margin_config", margin)
+
+    assert _rerank_cost(_provider_usage_rerank(usage), _UNMAPPED_RERANKER, **pricing) == pytest.approx(expected)
 
 
+@pytest.mark.parametrize("usage", [None, {"cost": 0.5}])
 @pytest.mark.parametrize(
     "rates",
     [
@@ -2529,10 +2515,12 @@ def test_caller_priced_rerank_without_a_resolvable_price_keeps_zero(
         {"input_cost_per_query": 0.0, "input_cost_per_token": 5e-08},
     ],
 )
-def test_rerank_cost_keeps_a_configured_zero_price(rates: dict[str, float], _priced_test_reranker: None) -> None:
+def test_rerank_cost_keeps_a_configured_zero_price(
+    rates: dict[str, float], usage: Mapping[str, object] | None, _priced_test_reranker: None
+) -> None:
     _register_reranker("cohere/test-free-reranker", rates)
 
-    assert _rerank_cost(_provider_usage_rerank(None), "cohere/test-free-reranker") == 0.0
+    assert _rerank_cost(_provider_usage_rerank(usage), "cohere/test-free-reranker") == 0.0
 
 
 def test_rerank_cost_without_the_rate_the_provider_prices_by_is_unavailable_instead_of_zero(
@@ -2550,12 +2538,18 @@ def test_rerank_cost_without_the_rate_the_provider_prices_by_is_unavailable_inst
 
 
 @pytest.mark.parametrize("usage", [{"search_units": _SEARCH_UNITS}, {"search_units": _SEARCH_UNITS, "cost": 0.5}])
-def test_registered_rerank_price_without_the_rate_the_provider_prices_by_stays_zero(
-    usage: Mapping[str, object], _priced_test_reranker: None
+@pytest.mark.parametrize(("margin", "expected"), [({}, 0.0), (_FIXED_MARGIN, 0.001)])
+def test_registered_rerank_without_the_rate_the_provider_prices_by_bills_only_the_configured_margin(
+    usage: Mapping[str, object],
+    margin: dict[str, object],
+    expected: float,
+    _priced_test_reranker: None,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(litellm, "cost_margin_config", margin)
     _register_reranker("cohere/test-token-priced-reranker", {"input_cost_per_token": 5e-08})
 
-    assert _rerank_cost(_provider_usage_rerank(usage), "cohere/test-token-priced-reranker") == 0.0
+    assert _rerank_cost(_provider_usage_rerank(usage), "cohere/test-token-priced-reranker") == pytest.approx(expected)
 
 
 @pytest.mark.parametrize("billed_units", [{}, {"search_units": None}])

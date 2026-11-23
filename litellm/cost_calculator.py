@@ -3,9 +3,9 @@
 import logging
 import math
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime
-from functools import lru_cache, partial
+from functools import lru_cache
 from itertools import accumulate
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeAlias, cast
@@ -2453,14 +2453,11 @@ def completion_cost(
                 if litellm_logging_obj is not None:
                     request_model_for_cost = litellm_logging_obj.model
 
-                (
-                    prompt_tokens_cost_usd_dollar,
-                    completion_tokens_cost_usd_dollar,
-                ) = _rerank_cost_or_configured_zero(
-                    caller_set_prices,
-                    partial(_has_registered_rerank_price, call_type, model, custom_llm_provider),
-                    partial(
-                        cost_per_token,
+                try:
+                    (
+                        prompt_tokens_cost_usd_dollar,
+                        completion_tokens_cost_usd_dollar,
+                    ) = cost_per_token(
                         model=model,
                         prompt_tokens=prompt_tokens or 0,
                         completion_tokens=completion_tokens or 0,
@@ -2488,8 +2485,11 @@ def completion_cost(
                         response=completion_response,
                         custom_model_info=_ocr_model_info(litellm_logging_obj, custom_pricing, router_model_id),
                         bedrock_model_info=bedrock_model_info,
-                    ),
-                )
+                    )
+                except RerankPriceUnavailableError:
+                    if not (caller_set_prices or _has_registered_rerank_price(call_type, model, custom_llm_provider)):
+                        raise
+                    prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar = 0.0, 0.0
 
                 # Get additional costs from provider (e.g., routing fees, infrastructure costs)
                 if custom_llm_provider in ("azure_ai", "azure") and not azure_ai_is_model_router_name(model):
@@ -3199,17 +3199,6 @@ def vector_store_search_cost(
 
 class RerankPriceUnavailableError(ValueError):
     """Neither a cost map entry nor a rate the rerank provider prices by exists for the model."""
-
-
-def _rerank_cost_or_configured_zero(
-    caller_set_prices: bool, has_registered_price: Callable[[], bool], price: Callable[[], tuple[float, float]]
-) -> tuple[float, float]:
-    try:
-        return price()
-    except RerankPriceUnavailableError:
-        if caller_set_prices or has_registered_price():
-            return 0.0, 0.0
-        raise
 
 
 def _has_registered_rerank_price(call_type: str | None, model: str | None, custom_llm_provider: str | None) -> bool:

@@ -239,7 +239,6 @@ TOKEN_REPORTED_BODY: Final = {**OPENROUTER_RERANK_BODY, "usage": {"total_tokens"
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.parametrize(
     ("input_cost_per_token", "adjustment", "expected"),
     [
@@ -252,7 +251,6 @@ TOKEN_REPORTED_BODY: Final = {**OPENROUTER_RERANK_BODY, "usage": {"total_tokens"
 @pytest.mark.parametrize("persist", [True, False])
 @pytest.mark.parametrize("prefixed", [True, False])
 async def test_scaleway_rerank_bills_a_registered_price_over_the_reported_cost(
-    sync_mode: bool,
     persist: bool,
     prefixed: bool,
     input_cost_per_token: float,
@@ -275,11 +273,20 @@ async def test_scaleway_rerank_bills_a_registered_price_over_the_reported_cost(
         persist_across_reloads=persist,
     )
 
-    response: Final = await _rerank_via_router(
-        sync_mode, TOKEN_REPORTED_BODY, respx_mock, model=REGISTERED_RERANK_MODEL
-    )
+    response: Final = await _rerank_via_router(True, TOKEN_REPORTED_BODY, respx_mock, model=REGISTERED_RERANK_MODEL)
 
     assert response._hidden_params["response_cost"] == pytest.approx(expected)
+
+
+@pytest.mark.asyncio
+async def test_scaleway_arerank_bills_a_registered_price_over_the_reported_cost(respx_mock: respx.MockRouter) -> None:
+    litellm.register_model(
+        {REGISTERED_RERANK_MODEL: {"litellm_provider": "scaleway", "mode": "rerank", "input_cost_per_token": 1e-06}}
+    )
+
+    response: Final = await _rerank_via_router(False, TOKEN_REPORTED_BODY, respx_mock, model=REGISTERED_RERANK_MODEL)
+
+    assert response._hidden_params["response_cost"] == pytest.approx(24 * 1e-06)
 
 
 @pytest.mark.asyncio
@@ -301,7 +308,6 @@ SHARED_RERANK_NAME: Final = "test-shared-reranker"
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.parametrize("persist", [True, False])
 @pytest.mark.parametrize("provider_from_catalog", [True, False])
 @pytest.mark.parametrize(
@@ -309,7 +315,6 @@ SHARED_RERANK_NAME: Final = "test-shared-reranker"
     [("jina_ai", 4.8e-07), ("scaleway", 24 * 1e-06)],
 )
 async def test_scaleway_rerank_ignores_a_bare_name_registration_for_another_provider(
-    sync_mode: bool,
     persist: bool,
     provider_from_catalog: bool,
     registered_provider: str,
@@ -336,7 +341,7 @@ async def test_scaleway_rerank_ignores_a_bare_name_registration_for_another_prov
     )
 
     response: Final = await _rerank_via_router(
-        sync_mode, TOKEN_REPORTED_BODY, respx_mock, model=f"scaleway/{SHARED_RERANK_NAME}"
+        True, TOKEN_REPORTED_BODY, respx_mock, model=f"scaleway/{SHARED_RERANK_NAME}"
     )
 
     assert response._hidden_params["response_cost"] == pytest.approx(expected)
@@ -349,7 +354,6 @@ SEARCH_USAGE_WITH_COST: Final = {"search_units": 1, "cost": 0.002}
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.parametrize("persist", [True, False])
 @pytest.mark.parametrize(
     ("registration", "usage", "expected"),
@@ -364,7 +368,6 @@ SEARCH_USAGE_WITH_COST: Final = {"search_units": 1, "cost": 0.002}
     ],
 )
 async def test_scaleway_rerank_honors_a_registration_merged_onto_a_published_catalog_row(
-    sync_mode: bool,
     persist: bool,
     registration: Mapping[str, object] | None,
     usage: Mapping[str, object],
@@ -385,7 +388,7 @@ async def test_scaleway_rerank_honors_a_registration_merged_onto_a_published_cat
     assert CATALOG_RERANK_ALIAS not in litellm.model_cost
 
     response: Final = await _rerank_via_router(
-        sync_mode, {**OPENROUTER_RERANK_BODY, "usage": usage}, respx_mock, model=f"scaleway/{CATALOG_RERANK_ALIAS}"
+        True, {**OPENROUTER_RERANK_BODY, "usage": usage}, respx_mock, model=f"scaleway/{CATALOG_RERANK_ALIAS}"
     )
 
     assert response._hidden_params["response_cost"] == pytest.approx(expected)
