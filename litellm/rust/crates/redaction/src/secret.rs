@@ -30,11 +30,11 @@ fn secret_patterns(minimum_custom_key_length: usize) -> String {
             r"(?:master_key|xai_key|database_url|db_url|connection_string|",
             r"aws_secret_access_key|aws_session_token|aws_access_key_id|s3_secret_access_key|s3_access_key_id|",
             r"signing_key|encryption_key|",
-            r"auth_token|access_token|refresh_token|",
+            r"auth_token|access_token|refresh_token|authorization_token|",
             r"slack_webhook_url|webhook_url|",
             r"database_connection_string|",
             r"huggingface_token|jwt_secret)",
-            r#"['"]?\s*[:=]\s*['"]?[^\s,'"})\]{}>]+"#,
+            r#"['"]?\s*[:=]\s*['"]?(?:(?:Bearer|Basic)\s+)?[^\s,'"})\]{}>]+"#,
         ),
         r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*",
         r"(?<=[?&])sig=[A-Za-z0-9%+/=]+",
@@ -124,6 +124,14 @@ mod tests {
     #[case::sas_signature("https://x.blob/a?sv=1&sig=abc%2B=", "https://x.blob/a?sv=1&REDACTED")]
     #[case::password_needs_word_boundary("db_password=hunter2", "REDACTED")]
     #[case::plain_text_is_kept(r#"{"message": "rejected"}"#, r#"{"message": "rejected"}"#)]
+    #[case::mcp_authorization_token(
+        r#"{"name": "docs", "authorization_token": "opaque-mcp-credential"}"#,
+        r#"{"name": "docs", "REDACTED"}"#
+    )]
+    #[case::auth_scheme_under_a_key_name(
+        r#""authorization_token": "Bearer opaque-mcp-credential", "name": "docs""#,
+        r#""REDACTED", "name": "docs""#
+    )]
     fn redacts_the_same_spans_as_the_python_patterns(#[case] input: &str, #[case] expected: &str) {
         assert_eq!(
             SecretRedactor::new(DEFAULT_MINIMUM_CUSTOM_KEY_LENGTH).redact(input),
