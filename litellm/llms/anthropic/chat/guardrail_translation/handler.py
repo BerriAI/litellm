@@ -32,6 +32,7 @@ from litellm.litellm_core_utils.core_helpers import (
     iter_items,
     loads_json_object,
 )
+from litellm.litellm_core_utils.routing_common_utils import get_request_team_id
 from litellm.litellm_core_utils.tool_fields import OPENAI_MAX_TOOL_NAME_LENGTH, truncate_tool_name
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.common_utils import anthropic_server_tool_calls
@@ -90,7 +91,6 @@ from litellm.types.utils import (
 if TYPE_CHECKING:
     from fastapi import HTTPException
 
-    from litellm import Router
     from litellm.integrations.custom_guardrail import (
         CustomGuardrail,
         ModifyResponseException,
@@ -147,17 +147,17 @@ InputWriteBackTarget = SystemStringTarget | SystemBlockTextTarget | MessageTextT
 
 
 class DeploymentLookup(Protocol):
-    def get_model_list(
-        self, model_name: str | None = None, team_id: str | None = None
+    def deployments(
+        self, model_name: str | None = None, *, team_id: str | None = None
     ) -> Sequence[Mapping[str, object]] | None: ...
 
 
-def _proxy_router() -> "Router | None":
+def _proxy_deployments() -> DeploymentLookup | None:
     if "litellm.proxy.proxy_server" not in sys.modules:
         return None
     from litellm.proxy.proxy_server import llm_router
 
-    return llm_router
+    return llm_router.registry() if llm_router is not None else None
 
 
 def _deployment_consumes_cache_control(deployment: Mapping[str, object]) -> bool:
@@ -672,7 +672,7 @@ class AnthropicMessagesHandler(BaseTranslation):
     delivers_ended_stream_rewrites = True
     assembles_streamed_response = True
 
-    def __init__(self, deployment_lookup: Callable[[], DeploymentLookup | None] = _proxy_router):
+    def __init__(self, deployment_lookup: Callable[[], DeploymentLookup | None] = _proxy_deployments):
         super().__init__()
         self.adapter = LiteLLMAnthropicMessagesAdapter()
         self._deployment_lookup: Final = deployment_lookup
@@ -977,7 +977,9 @@ class AnthropicMessagesHandler(BaseTranslation):
             else (request_model if isinstance(request_model, str) else "")
         )
         translation_source: Final = {**{key: value for key, value in data.items() if key != "system"}, "model": model}
-        keeps_cache_control: Final = keep_cache_control or self._serves_cache_control(model)
+        request_fields: Final = _as_str_mapping(data)
+        team_id: Final = get_request_team_id(request_data if request_data is not None else request_fields)
+        keeps_cache_control: Final = keep_cache_control or self._serves_cache_control(model, team_id)
         chat_completion_compatible_request: Final = self._translate_to_openai(
             translation_source, keep_cache_control=keeps_cache_control
         )
@@ -990,7 +992,7 @@ class AnthropicMessagesHandler(BaseTranslation):
             str(message.get("role") or "").lower() == "system" for message in full_structured_messages
         )
         hoisted_system_message: Final = (
-            None if skip_system else self._hoisted_top_level_system_message(data, model, keeps_cache_control)
+            None if skip_system else self._hoisted_top_level_system_message(request_fields, model, keeps_cache_control)
         )
         if hoisted_system_message is not None:
             full_structured_messages.insert(0, hoisted_system_message)
@@ -1139,11 +1141,11 @@ class AnthropicMessagesHandler(BaseTranslation):
 
         return data
 
-    def _serves_cache_control(self, model: str) -> bool:
+    def _serves_cache_control(self, model: str, team_id: str | None) -> bool:
         if LiteLLMAnthropicMessagesAdapter.target_consumes_cache_control(model):
             return True
-        router: Final = self._deployment_lookup() if model else None
-        deployments: Final = router.get_model_list(model_name=model) if router is not None else None
+        registry: Final = self._deployment_lookup() if model else None
+        deployments: Final = registry.deployments(model, team_id=team_id) if registry is not None else None
         return any(map(_deployment_consumes_cache_control, deployments or ()))
 
     def _hoisted_top_level_system_message(

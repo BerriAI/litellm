@@ -23,8 +23,6 @@ Tests cover:
 
 import datetime
 import json
-from collections.abc import Mapping
-from dataclasses import dataclass
 from typing import Final, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1021,24 +1019,28 @@ async def test_anthropic_assistant_history_never_reaches_compression_service(gua
     assert result["messages"][1]["content"] == [{"type": "text", "text": table}]
 
 
-@dataclass(frozen=True, slots=True)
-class _ModelGroups:
-    deployment_models: Mapping[str, str]
-
-    def get_model_list(
-        self, model_name: str | None = None, team_id: str | None = None
-    ) -> tuple[Mapping[str, object], ...]:
-        deployment_model: Final = self.deployment_models.get(model_name or "")
-        return () if deployment_model is None else ({"litellm_params": {"model": deployment_model}},)
-
-
-MODEL_GROUPS: Final = _ModelGroups({"best-sonnet": "bedrock/us.anthropic.claude-sonnet-5-5", "best-gpt": "openai/gpt-5.6"})
 CLAUDE_CODE_TICKETS: Final = json.dumps([{"id": i, "title": f"Ticket {i}", "status": "open"} for i in range(500)])
 
 
-def _claude_code_request(model: str) -> dict[str, object]:
+@pytest.fixture
+def model_groups() -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {"model_name": "best-sonnet", "litellm_params": {"model": "bedrock/us.anthropic.claude-sonnet-5-5"}},
+            {"model_name": "best-gpt", "litellm_params": {"model": "openai/gpt-5.6"}},
+            {
+                "model_name": "model_name_team-1_sonnet",
+                "litellm_params": {"model": "bedrock/us.anthropic.claude-sonnet-5-5"},
+                "model_info": {"id": "team-sonnet", "team_id": "team-1", "team_public_model_name": "team-sonnet"},
+            },
+        ]
+    )
+
+
+def _claude_code_request(model: str, team_id: str | None = None) -> dict[str, object]:
     return {
         "model": model,
+        "metadata": {"user_api_key_team_id": team_id},
         "system": [{"type": "text", "text": "You are a coding agent.", "cache_control": {"type": "ephemeral"}}],
         "tools": [
             {
@@ -1069,17 +1071,22 @@ def _claude_code_request(model: str) -> dict[str, object]:
 
 
 @pytest.mark.asyncio
-async def test_claude_code_cached_prefix_is_never_compressed_on_a_claude_alias(guardrail: HeadroomGuardrail):
+@pytest.mark.parametrize(
+    ("model", "team_id"), [pytest.param("best-sonnet", None, id="alias"), pytest.param("team-sonnet", "team-1", id="team")]
+)
+async def test_claude_code_cached_prefix_is_never_compressed_on_a_claude_alias(
+    guardrail: HeadroomGuardrail, model_groups: litellm.Router, model: str, team_id: str | None
+):
     from litellm.llms.anthropic.chat.guardrail_translation.handler import AnthropicMessagesHandler
 
-    data: Final = _claude_code_request("best-sonnet")
+    data: Final = _claude_code_request(model, team_id)
     client_request: Final = json.loads(json.dumps(data))
     reached_compression_service: Final = AssertionError("the cached prefix was sent to the compression service")
 
     with patch.object(
         guardrail.async_handler, "post", new_callable=AsyncMock, side_effect=reached_compression_service
     ) as mock_post:
-        result = await AnthropicMessagesHandler(deployment_lookup=lambda: MODEL_GROUPS).process_input_messages(
+        result = await AnthropicMessagesHandler(deployment_lookup=model_groups.registry).process_input_messages(
             data=data, guardrail_to_apply=guardrail
         )
 
@@ -1088,7 +1095,9 @@ async def test_claude_code_cached_prefix_is_never_compressed_on_a_claude_alias(g
 
 
 @pytest.mark.asyncio
-async def test_claude_code_history_is_compressed_on_an_alias_that_ignores_cache_control(guardrail: HeadroomGuardrail):
+async def test_claude_code_history_is_compressed_on_an_alias_that_ignores_cache_control(
+    guardrail: HeadroomGuardrail, model_groups: litellm.Router
+):
     from litellm.llms.anthropic.chat.guardrail_translation.handler import AnthropicMessagesHandler
 
     sent: Final[dict[str, object]] = {}
@@ -1098,7 +1107,7 @@ async def test_claude_code_history_is_compressed_on_an_alias_that_ignores_cache_
         return _make_compress_response(json.loads(json.dumps(sent["messages"])))
 
     with patch.object(guardrail.async_handler, "post", new_callable=AsyncMock, side_effect=_echo):
-        await AnthropicMessagesHandler(deployment_lookup=lambda: MODEL_GROUPS).process_input_messages(
+        await AnthropicMessagesHandler(deployment_lookup=model_groups.registry).process_input_messages(
             data=_claude_code_request("best-gpt"), guardrail_to_apply=guardrail
         )
 
