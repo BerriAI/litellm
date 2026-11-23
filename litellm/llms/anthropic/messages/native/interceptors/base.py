@@ -31,11 +31,11 @@ class MessagesInterceptor(ABC):
         self,
         *,
         model: str,
-        messages: list[dict],
-        tools: list[dict] | None,
+        messages: list[dict[str, object]],
+        tools: list[dict[str, object]] | None,
         stream: bool | None,
         max_tokens: int,
         custom_llm_provider: str | None,
         **kwargs,
-    ) -> AnthropicMessagesResponse | AsyncIterator:
+    ) -> AnthropicMessagesResponse | AsyncIterator[object]:
         """Execute the interception and return the response."""
