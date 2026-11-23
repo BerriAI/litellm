@@ -1,10 +1,10 @@
 """
 Gemini Developer API batch jobs. Reference: https://ai.google.dev/gemini-api/docs/batch-api
 
-A file-backed job runs the uploaded JSONL unchanged. Gemini accepts OpenAI-shaped rows
-(``{custom_id, method, url, body}``) and then writes the output file OpenAI-shaped too
-(``{custom_id, response: {status_code, body}}``), so ``/v1/files purpose=batch`` uploads and the
-shared batch cost accounting need no provider branch. The model is set on the job URL.
+A file-backed job runs the uploaded JSONL. ``/v1/files purpose=batch`` uploads convert each OpenAI
+``/v1/chat/completions`` row (``{custom_id, method, url, body}``) into a native ``{key, request}`` row with the
+chat completion translation, and the file content download converts each native output row back into an OpenAI
+row (``{custom_id, response: {status_code, body}}``). The model is set on the job URL.
 Ids cross the LiteLLM boundary bare: Gemini's ``batches/<id>`` is the batch id ``<id>`` and its
 ``files/<id>`` output file is the file id ``<id>``.
 """
@@ -134,12 +134,6 @@ class _GeminiBatchOutputUsage(LiteLLMBaseModel):
     prompt_tokens: int = Field(default=0, alias="promptTokens")
     completion_tokens: int = Field(default=0, alias="completionTokens")
     total_tokens: int = Field(default=0, alias="totalTokens")
-
-
-def is_native_gemini_batch_output_row(row: Mapping[str, object]) -> bool:
-    """Native rows carry Gemini's ``key`` (and a ``response`` or an error ``status``) where OpenAI-shaped rows
-    carry ``custom_id``, so the shape is known even when the first row failed."""
-    return "key" in row and "custom_id" not in row
 
 
 def is_gemini_batch_usage_shape(usage_object: Mapping[str, object]) -> bool:

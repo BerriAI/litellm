@@ -198,7 +198,7 @@ class _OpenAIBatchOutputResponse(TypedDict):
     body: ReadOnly[Mapping[str, object]]
 
 
-class _OpenAIBatchOutputRow(TypedDict):
+class OpenAIBatchOutputRow(TypedDict):
     id: ReadOnly[str]
     custom_id: ReadOnly[str]
     response: ReadOnly[_OpenAIBatchOutputResponse | None]
@@ -412,13 +412,13 @@ def _headers_without_content_length(headers: Mapping[str, str]) -> Mapping[str, 
 
 
 @dataclass(frozen=True, slots=True)
-class _VertexBatchOutputRowTransformContext:
+class BatchOutputRowTransformContext:
     vertex_gemini_config: VertexGeminiConfig
     logging_obj: Logging
     mock_httpx_response: httpx.Response
 
 
-def _new_vertex_batch_output_row_transform_context() -> _VertexBatchOutputRowTransformContext:
+def new_batch_output_row_transform_context() -> BatchOutputRowTransformContext:
     batch_transform_logging_obj: Final = Logging(
         model="",
         messages=[],
@@ -429,7 +429,7 @@ def _new_vertex_batch_output_row_transform_context() -> _VertexBatchOutputRowTra
         function_id="",
     )
     batch_transform_logging_obj.optional_params = {}
-    return _VertexBatchOutputRowTransformContext(
+    return BatchOutputRowTransformContext(
         vertex_gemini_config=VertexGeminiConfig(),
         logging_obj=batch_transform_logging_obj,
         mock_httpx_response=httpx.Response(
@@ -440,12 +440,12 @@ def _new_vertex_batch_output_row_transform_context() -> _VertexBatchOutputRowTra
     )
 
 
-def _openai_batch_output_row(
+def openai_batch_output_row(
     custom_id: str,
     body: Mapping[str, object] | None = None,
     error_code: str | None = None,
     error_message: str = "",
-) -> _OpenAIBatchOutputRow:
+) -> OpenAIBatchOutputRow:
     """
     One row of an OpenAI batch output file. Per the OpenAI Batch spec, failed rows set
     `response` to null and populate `error` instead.
@@ -468,13 +468,13 @@ def _vertex_anthropic_batch_output_row_to_openai(
     custom_id: str,
     response: object,
     mock_httpx_response: httpx.Response,
-) -> _OpenAIBatchOutputRow:
+) -> OpenAIBatchOutputRow:
     """
     One OpenAI batch output row from a Vertex Claude row's Anthropic `message` response
     """
     anthropic_response: Final = as_json_object(response)
     if anthropic_response is None or not is_vertex_anthropic_batch_output_response(anthropic_response):
-        return _openai_batch_output_row(
+        return openai_batch_output_row(
             custom_id=custom_id,
             error_code="vertex_ai_error",
             error_message="Claude batch row has no message response",
@@ -487,12 +487,12 @@ def _vertex_anthropic_batch_output_row_to_openai(
             json_mode=True,
         )
     except Exception as e:  # noqa: BLE001  # one malformed row must fail alone, not the whole output file
-        return _openai_batch_output_row(
+        return openai_batch_output_row(
             custom_id=custom_id,
             error_code="transformation_error",
             error_message=f"Failed to transform response: {e}",
         )
-    return _openai_batch_output_row(custom_id=custom_id, body=model_response.model_dump())
+    return openai_batch_output_row(custom_id=custom_id, body=model_response.model_dump())
 
 
 def _split_vertex_batch_key(vertex_output_row: Mapping[str, object]) -> tuple[str, int, int]:
@@ -529,7 +529,7 @@ def _vertex_embeddings_rows_to_openai_batch_output_row(
     element_indices: tuple[int, ...],
     element_count: int,
     model: str | None,
-) -> _OpenAIBatchOutputRow:
+) -> OpenAIBatchOutputRow:
     """
     Transforms the Vertex Gemini Embedding batch output rows belonging to one OpenAI
     batch entry into an OpenAI batch output row holding an `/v1/embeddings` response.
@@ -546,14 +546,14 @@ def _vertex_embeddings_rows_to_openai_batch_output_row(
     """
     status = next((row["status"] for row in vertex_output_rows if row.get("status")), "")
     if status:
-        return _openai_batch_output_row(
+        return openai_batch_output_row(
             custom_id=custom_id,
             error_code="vertex_ai_error",
             error_message=status,
         )
 
     if element_indices != tuple(range(element_count)):
-        return _openai_batch_output_row(
+        return openai_batch_output_row(
             custom_id=custom_id,
             error_code="vertex_ai_error",
             error_message=(
@@ -576,13 +576,13 @@ def _vertex_embeddings_rows_to_openai_batch_output_row(
         ],
         usage=Usage(prompt_tokens=token_count, total_tokens=token_count),
     ).model_dump()
-    return _openai_batch_output_row(custom_id=custom_id, body=body)
+    return openai_batch_output_row(custom_id=custom_id, body=body)
 
 
 def _transform_vertex_embeddings_batch_output_to_openai(
     vertex_output_rows: Iterable[_VertexEmbeddingBatchRow],
     model: str | None,
-) -> tuple[_OpenAIBatchOutputRow, ...]:
+) -> tuple[OpenAIBatchOutputRow, ...]:
     """
     Transforms a whole Vertex Gemini Embedding batch output into OpenAI batch output
     rows, one per OpenAI batch entry, in the order the entries first appear.
@@ -1848,7 +1848,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         )
 
     async def _aiter_openai_batch_output_rows(self, lines: AsyncGenerator[bytes, None]) -> AsyncGenerator[bytes, None]:
-        context: Final = _new_vertex_batch_output_row_transform_context()
+        context: Final = new_batch_output_row_transform_context()
         async with aclosing(lines):
             first_line: Final = await anext(lines, None)
             if first_line is None:
@@ -1861,7 +1861,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         self,
         line: bytes,
         *,
-        context: _VertexBatchOutputRowTransformContext,
+        context: BatchOutputRowTransformContext,
     ) -> bytes:
         vertex_output: Final = _try_parse_vertex_batch_output_row(line)
         if vertex_output is None:
@@ -1926,7 +1926,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             if not (_is_vertex_embeddings_batch_output_row(first_row) or _is_vertex_chat_batch_output_row(first_row)):
                 return content
 
-            context: Final = _new_vertex_batch_output_row_transform_context()
+            context: Final = new_batch_output_row_transform_context()
 
             all_lines = itertools.chain((first_line,), lines)
 
@@ -1970,7 +1970,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         vertex_gemini_config: VertexGeminiConfig,
         logging_obj: Logging,
         mock_httpx_response: httpx.Response,
-    ) -> _OpenAIBatchOutputRow:
+    ) -> OpenAIBatchOutputRow:
         """
         Transform a single Vertex AI batch output line to OpenAI format.
         Uses the existing VertexGeminiConfig transformation for the response.
@@ -1982,7 +1982,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         has_error: Final = bool(status)
 
         if has_error:
-            return _openai_batch_output_row(
+            return openai_batch_output_row(
                 custom_id=custom_id,
                 error_code="vertex_ai_error",
                 error_message=status,
@@ -2019,10 +2019,10 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             response_dict: Final = transformed_response.model_dump()
 
             # Return in OpenAI batch format
-            return _openai_batch_output_row(custom_id=custom_id, body=response_dict)
+            return openai_batch_output_row(custom_id=custom_id, body=response_dict)
 
         except Exception as e:
-            return _openai_batch_output_row(
+            return openai_batch_output_row(
                 custom_id=custom_id,
                 error_code="transformation_error",
                 error_message=f"Failed to transform response: {e}",

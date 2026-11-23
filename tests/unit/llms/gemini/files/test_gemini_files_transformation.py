@@ -2,11 +2,15 @@
 Test Google AI Studio (Gemini) files transformation functionality
 """
 
+import json
+import re
 from unittest.mock import Mock, patch
 
 import httpx
 import pytest
 
+from litellm.batches.batch_utils import batch_cost_and_usage
+from litellm.llms.gemini.common_utils import GeminiError
 from litellm.llms.gemini.files.transformation import GoogleAIStudioFilesHandler
 from litellm.types.llms.openai import OpenAIFileObject
 
@@ -383,6 +387,259 @@ def test_file_content_response_passes_the_jsonl_bytes_through():
     assert (
         handler.transform_file_content_response(raw_response=raw, logging_obj=Mock(), litellm_params={}).content == body
     )
+
+
+_CAPITAL_SCHEMA = {
+    "type": "object",
+    "properties": {"capital": {"type": "string"}},
+    "required": ["capital"],
+    "additionalProperties": False,
+}
+
+
+def _chat_row(custom_id: str, **body) -> dict:
+    return {
+        "custom_id": custom_id,
+        "method": "POST",
+        "url": "/v1/chat/completions",
+        "body": {
+            "model": "gemini-2.5-flash",
+            "messages": [{"role": "user", "content": "Capital of France?"}],
+            **body,
+        },
+    }
+
+
+def _upload_data(lines: list[bytes], purpose: str = "batch", litellm_params: dict | None = None) -> bytes:
+    request = GoogleAIStudioFilesHandler().transform_create_file_request(
+        model="",
+        create_file_data={"file": ("batch.jsonl", b"\n".join(lines), "application/jsonl"), "purpose": purpose},
+        optional_params={},
+        litellm_params=litellm_params or {},
+    )
+    data = request["upload_request"]["data"]
+    assert request["initial_request"]["headers"]["X-Goog-Upload-Header-Content-Length"] == str(len(data))
+    return data
+
+
+def _uploaded_rows(rows: list[dict], litellm_params: dict | None = None) -> list[dict]:
+    data = _upload_data([json.dumps(row).encode() for row in rows], litellm_params=litellm_params)
+    return [json.loads(line) for line in data.splitlines()]
+
+
+def test_batch_upload_turns_an_openai_chat_row_into_a_gemini_row():
+    row = _chat_row(
+        "row-1",
+        messages=[
+            {"role": "developer", "content": "Answer in JSON."},
+            {"role": "user", "content": "Capital of France?"},
+        ],
+        response_format={
+            "type": "json_schema",
+            "json_schema": {"name": "c", "strict": True, "schema": _CAPITAL_SCHEMA},
+        },
+        seed=7,
+        metadata={"run": "1"},
+    )
+
+    [uploaded] = _uploaded_rows([row])
+
+    request = uploaded["request"]
+    assert (uploaded["key"], request["system_instruction"], request["contents"]) == (
+        "row-1",
+        {"parts": [{"text": "Answer in JSON."}]},
+        [{"role": "user", "parts": [{"text": "Capital of France?"}]}],
+    )
+    assert (request["generationConfig"]["response_json_schema"], request["generationConfig"]["seed"]) == (
+        _CAPITAL_SCHEMA,
+        7,
+    )
+    assert "metadata" not in json.dumps(request)
+
+
+@pytest.mark.parametrize("unsupported", [{"logit_bias": {"1": 2}}, {"prompt_cache_key": "k"}, {"store": False}])
+def test_batch_upload_rejects_a_param_gemini_chat_rejects(unsupported):
+    with pytest.raises(GeminiError, match=f"line 1 .*{next(iter(unsupported))}"):
+        _uploaded_rows([_chat_row("row-1", **unsupported)])
+
+
+@pytest.mark.parametrize(
+    "row_drop_params,deployment_params",
+    [(True, {}), (None, {"drop_params": True})],
+)
+def test_batch_upload_drops_unsupported_params_when_asked(row_drop_params, deployment_params):
+    flags = {} if row_drop_params is None else {"drop_params": row_drop_params}
+    with_unsupported = _chat_row("row-1", logit_bias={"1": 2}, prompt_cache_key="k", **flags)
+
+    assert _uploaded_rows([with_unsupported], litellm_params=deployment_params) == _uploaded_rows([_chat_row("row-1")])
+
+
+def test_batch_upload_maps_tools_to_function_declarations():
+    parameters = {"type": "object", "properties": {"country": {"type": "string"}}, "required": ["country"]}
+    tool = {"type": "function", "function": {"name": "lookup", "parameters": parameters}}
+
+    [uploaded] = _uploaded_rows([_chat_row("row-1", tools=[tool], tool_choice="required")])
+
+    assert (uploaded["request"]["tools"], uploaded["request"]["toolConfig"]) == (
+        [{"function_declarations": [{"name": "lookup", "parameters": parameters}]}],
+        {"functionCallingConfig": {"mode": "ANY"}},
+    )
+
+
+def test_batch_upload_runs_each_row_on_the_deployment_model():
+    on_deployment = _uploaded_rows(
+        [_chat_row("row-1", model="gemini-2.5-flash", reasoning_effort="low")],
+        litellm_params={"model": "gemini/gemini-3-pro-preview"},
+    )
+    on_body = _uploaded_rows([_chat_row("row-1", model="gemini-3-pro-preview", reasoning_effort="low")])
+    on_other_model = _uploaded_rows([_chat_row("row-1", model="gemini-2.5-flash", reasoning_effort="low")])
+
+    assert on_deployment == on_body
+    assert on_deployment != on_other_model
+
+
+def test_batch_upload_keeps_rows_it_does_not_convert():
+    native_row = {"key": "row-1", "request": {"contents": [{"role": "user", "parts": [{"text": "hi"}]}]}}
+    embeddings_row = {"custom_id": "row-2", "method": "POST", "url": "/v1/embeddings", "body": {"input": "hi"}}
+
+    assert _uploaded_rows([native_row, embeddings_row]) == [native_row, embeddings_row]
+
+
+def test_batch_upload_reports_the_line_that_cannot_be_converted():
+    lines = [json.dumps(_chat_row("row-1")).encode(), b"", json.dumps(_chat_row("row-2") | {"body": "text"}).encode()]
+
+    with pytest.raises(GeminiError, match="Batch input file line 3 ") as raised:
+        _upload_data(lines)
+    assert raised.value.status_code == 400
+
+
+def test_non_batch_upload_is_sent_unchanged():
+    content = json.dumps(_chat_row("row-1")).encode()
+    assert _upload_data([content], purpose="user_data") == content
+
+
+_NATIVE_OUTPUT_ROWS = [
+    {
+        "key": "row-1",
+        "response": {
+            "candidates": [
+                {
+                    "content": {"role": "model", "parts": [{"text": '{"capital": "Paris"}'}]},
+                    "finishReason": "STOP",
+                    "index": 0,
+                }
+            ],
+            "usageMetadata": {
+                "promptTokenCount": 27,
+                "candidatesTokenCount": 6,
+                "thoughtsTokenCount": 89,
+                "totalTokenCount": 122,
+            },
+            "modelVersion": "gemini-2.5-flash",
+            "responseId": "resp-1",
+        },
+    },
+    {
+        "key": "row-2",
+        "response": {
+            "candidates": [
+                {
+                    "content": {
+                        "role": "model",
+                        "parts": [
+                            {"text": "Look it up.", "thought": True},
+                            {"functionCall": {"name": "lookup", "args": {"country": "France"}}},
+                        ],
+                    },
+                    "finishReason": "STOP",
+                    "index": 0,
+                }
+            ],
+            "usageMetadata": {
+                "promptTokenCount": 20,
+                "candidatesTokenCount": 5,
+                "thoughtsTokenCount": 15,
+                "totalTokenCount": 40,
+            },
+            "modelVersion": "gemini-2.5-flash",
+            "responseId": "resp-2",
+        },
+    },
+    {"key": "row-3", "error": {"code": 3, "message": "Request contains an invalid argument."}},
+]
+_NATIVE_OUTPUT = b"\n".join(json.dumps(row).encode() for row in _NATIVE_OUTPUT_ROWS)
+
+
+def _downloaded_rows(content: bytes) -> list[dict]:
+    raw = httpx.Response(
+        200, content=content, request=httpx.Request("GET", "https://generativelanguage.googleapis.com/x")
+    )
+    response = GoogleAIStudioFilesHandler().transform_file_content_response(
+        raw_response=raw, logging_obj=Mock(), litellm_params={}
+    )
+    assert response.response.headers["content-length"] == str(len(response.content))
+    return [json.loads(line) for line in response.content.splitlines()]
+
+
+def test_file_content_turns_native_output_rows_into_openai_rows():
+    text_row, tool_row, failed_row = _downloaded_rows(_NATIVE_OUTPUT)
+
+    text_body = text_row["response"]["body"]
+    assert (text_row["custom_id"], text_body["choices"][0]["message"]["content"]) == ("row-1", '{"capital": "Paris"}')
+    assert text_body["usage"]["completion_tokens"] == 6 + 89
+
+    tool_message = tool_row["response"]["body"]["choices"][0]["message"]
+    [tool_call] = tool_message["tool_calls"]
+    assert (tool_row["response"]["body"]["choices"][0]["finish_reason"], tool_message["reasoning_content"]) == (
+        "tool_calls",
+        "Look it up.",
+    )
+    assert (tool_call["function"]["name"], json.loads(tool_call["function"]["arguments"])) == (
+        "lookup",
+        {"country": "France"},
+    )
+
+    assert (failed_row["custom_id"], failed_row["response"], failed_row["error"]) == (
+        "row-3",
+        None,
+        {"code": "3", "message": "Request contains an invalid argument."},
+    )
+
+
+def test_converted_output_rows_cost_what_the_native_rows_cost():
+    native = batch_cost_and_usage(_NATIVE_OUTPUT_ROWS, "gemini", "gemini-2.5-flash")
+    converted = batch_cost_and_usage(_downloaded_rows(_NATIVE_OUTPUT), "gemini", "gemini-2.5-flash")
+
+    assert (converted.cost, converted.usage.total_tokens, converted.failed_requests) == (
+        native.cost,
+        native.usage.total_tokens,
+        native.failed_requests,
+    )
+
+
+def _without_generated_values(content: bytes) -> list[bytes]:
+    return re.sub(rb'"(batch_req|call)_[0-9a-f-]+"|"created": \d+', b"<generated>", content).splitlines()
+
+
+async def _chunks(content: bytes, size: int):
+    for offset in range(0, len(content), size):
+        yield content[offset : offset + size]
+
+
+@pytest.mark.parametrize("chunk_size", [1, 37, len(_NATIVE_OUTPUT)])
+async def test_streamed_file_content_matches_the_buffered_conversion(chunk_size):
+    result = await GoogleAIStudioFilesHandler().transform_file_content_stream(
+        stream_iterator=_chunks(_NATIVE_OUTPUT, chunk_size),
+        headers={"content-type": "application/jsonl", "content-length": str(len(_NATIVE_OUTPUT))},
+        request_url="https://generativelanguage.googleapis.com/x",
+        logging_obj=Mock(),
+        litellm_params={},
+    )
+    streamed = b"".join([chunk async for chunk in result.stream_iterator])
+    buffered = b"\n".join(json.dumps(row).encode() for row in _downloaded_rows(_NATIVE_OUTPUT))
+
+    assert "content-length" not in result.headers
+    assert _without_generated_values(streamed) == _without_generated_values(buffered)
 
 
 def test_retrieve_file_response_accepts_nanosecond_create_time():
