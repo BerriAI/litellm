@@ -62,7 +62,7 @@ class BaseTextToSpeechConfig(ABC):
         }
 
     @abstractmethod
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         """
         Get list of OpenAI TTS parameters supported by this provider
         """

@@ -20,15 +20,11 @@ def _schema_properties(schema: Mapping[str, object]) -> Mapping[str, object]:
 
 
 def _schema_branches(schema: Mapping[str, object], combinator: str) -> tuple[object, ...]:
-    branches: Final = schema.get(combinator)
-    return tuple(branches) if isinstance(branches, list) else ()
+    return _list_at(schema, combinator)
 
 
 def _schema_required_names(schema: Mapping[str, object]) -> frozenset[str]:
-    required: Final = schema.get("required")
-    if not isinstance(required, list):
-        return frozenset()
-    return frozenset(name for name in required if isinstance(name, str))
+    return frozenset(name for name in _list_at(schema, "required") if isinstance(name, str))
 
 
 def _combinator_required_names(combinator: str, branches: tuple[Mapping[str, object], ...]) -> frozenset[str]:
@@ -422,8 +418,9 @@ def _keyword_value_rebuilt(
         }
         return value if len(kept) == len(value) and all(kept[name] is value[name] for name in kept) else kept
     if key in _SUBSCHEMA_LIST_KEYWORDS and isinstance(value, list):
-        items: Final = [rebuilt.get(id(sub), sub) for sub in value]
-        return value if all(new is old for new, old in zip(items, value, strict=True)) else items
+        olds: Final = _SCHEMA_LIST.validate_python(value)
+        items: Final = [rebuilt.get(id(sub), sub) for sub in olds]
+        return value if all(new is old for new, old in zip(items, olds, strict=True)) else items
     if key in _SUBSCHEMA_KEYWORDS and isinstance(value, dict):
         return rebuilt.get(id(value), value)
     return value
