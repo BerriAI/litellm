@@ -502,6 +502,7 @@ from litellm.proxy.auth.master_key_boot_check import (
     master_key_boot_verdict,
     with_stored_secrets_counted,
 )
+from litellm.proxy.model_listing_cache import ModelListingCache, listing_cache_scope
 from litellm.proxy.auth.model_checks import (
     GLOBAL_ALIASES_ONLY,
     OtherDeploymentsBill,
@@ -3317,6 +3318,16 @@ spend_counter_cache: Final = DualCache(default_in_memory_ttl=UserAPIKeyCacheTTLE
 spend_counter_store: Final = SpendCounterStore(connect(None).spend_counters())
 cli_sso_session_cache: Final = DualCache(default_in_memory_ttl=CLI_SSO_SESSION_TTL_SECONDS)
 saml_sso_cache: Final = DualCache(default_in_memory_ttl=SAML_AUTHN_REQUEST_TTL_SECONDS)
+model_info_listing_cache: Final = ModelListingCache[tuple[Mapping[str, object], ...]]()
+model_group_listing_cache: Final = ModelListingCache[dict[str, list[ModelGroupInfoProxy]]]()
+
+
+def invalidate_model_listings() -> None:
+    """Forget every listing: a reload built a new router, whose registry versions start over."""
+    model_info_listing_cache.clear()
+    model_group_listing_cache.clear()
+
+
 model_max_budget_limiter: Final = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=spend_counter_cache)
 litellm.logging_callback_manager.add_litellm_callback(model_max_budget_limiter)
 redis_usage_cache: RedisCache | None = None  # redis cache used for tracking spend, tpm/rpm limits
@@ -8005,6 +8016,7 @@ class ProxyConfig:
 
         if llm_router is not None:
             llm_model_list = llm_router.registry().deployments()
+        invalidate_model_listings()
 
         if config_data is not None:
             self._add_callbacks_from_db_config(config_data)
@@ -19130,6 +19142,19 @@ async def model_info_v1(
                 )
         return _model_info_json_response(single_model_list)
 
+    listing_scope: Final = listing_cache_scope(
+        current_general_settings(),
+        "model_info_v1",
+        user_api_key_dict,
+        {"include_team_models": include_team_models, "teamId": teamId, "healthy_only": healthy_only},
+    )
+    registry_version: Final = llm_router.registry().version
+    cached_listing: Final = (
+        model_info_listing_cache.get(listing_scope.key, registry_version) if listing_scope else None
+    )
+    if cached_listing is not None:
+        return _model_info_json_response(cached_listing)
+
     # Return router deployments (same source as /v2/model/info), not wildcard-
     # expanded model names from get_complete_model_list(). Team-scoped rows
     # use internal routing keys (model_name_{team_id}_{uuid}) and were omitted
@@ -19221,6 +19246,8 @@ async def model_info_v1(
     )
 
     verbose_proxy_logger.debug("all_models: %s", visible_models)
+    if listing_scope:
+        model_info_listing_cache.put(listing_scope.key, visible_models, registry_version, listing_scope.ttl_seconds)
     return _model_info_json_response(visible_models)
 
 
@@ -19497,6 +19524,16 @@ async def model_group_info(
     if llm_model_list is None or llm_router is None or not llm_model_list:
         return {"data": []}
 
+    listing_scope: Final = listing_cache_scope(
+        current_general_settings(), "model_group_info", user_api_key_dict, {"model_group": model_group}
+    )
+    registry_version: Final = llm_router.registry().version
+    cached_listing: Final = (
+        model_group_listing_cache.get(listing_scope.key, registry_version) if listing_scope else None
+    )
+    if cached_listing is not None:
+        return cached_listing
+
     from litellm.proxy.utils import get_available_models_for_user
 
     # Get available models for the user
@@ -19603,7 +19640,7 @@ async def model_group_info(
         )
     )
 
-    return {
+    listing: Final = {
         "data": [
             *(
                 _model_group_row_listed_as(groups_by_lookup_id[lookup_id], listed_name, lookup_id)
@@ -19612,6 +19649,9 @@ async def model_group_info(
             *(group for group in agent_groups if group.model_group not in verdict.hidden),
         ]
     }
+    if listing_scope:
+        model_group_listing_cache.put(listing_scope.key, listing, registry_version, listing_scope.ttl_seconds)
+    return listing
 
 
 def _names_a_model_group_row_reads(model_group: str, aliases: CallerAliases, router_aliases: object) -> frozenset[str]:
