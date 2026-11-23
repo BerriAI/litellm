@@ -410,12 +410,8 @@ def _resolve_param_list(
     raw: Sequence[_OpenAPIParameter], component_params: Mapping[str, _OpenAPIParameter]
 ) -> list[_OpenAPIParameter]:
     """Resolve $refs in a parameter list, dropping any unresolvable entries."""
-    result: Final = []
-    for p in raw:
-        resolved = _resolve_ref(p, component_params)
-        if resolved is not None and resolved.get("name"):
-            result.append(resolved)
-    return result
+    candidates: Final = (_resolve_ref(p, component_params) for p in raw)
+    return [resolved for resolved in candidates if resolved is not None and resolved.get("name")]
 
 
 def resolve_operation_params(
@@ -448,26 +444,14 @@ def resolve_operation_params(
 
 def extract_parameters(operation: _OpenAPIOperation) -> tuple[Sequence[str], Sequence[str], Sequence[str]]:
     """Extract parameter names from OpenAPI operation."""
-    path_params: Final = []
-    query_params: Final = []
-    body_params: Final = []
-
     # OpenAPI 3.x and 2.x parameters
-    if "parameters" in operation:
-        for param in operation["parameters"]:
-            if "name" not in param:
-                continue
-            param_name = param["name"]
-            if param.get("in") == "path":
-                path_params.append(param_name)
-            elif param.get("in") == "query":
-                query_params.append(param_name)
-            elif param.get("in") == "body":
-                body_params.append(param_name)
+    named: Final = tuple(param for param in operation.get("parameters", ()) if "name" in param)
+    path_params: Final = [param["name"] for param in named if param.get("in") == "path"]
+    query_params: Final = [param["name"] for param in named if param.get("in") == "query"]
+    declared_body_params: Final = [param["name"] for param in named if param.get("in") == "body"]
 
     # OpenAPI 3.x requestBody
-    if "requestBody" in operation:
-        body_params.append("body")
+    body_params: Final = [*declared_body_params, "body"] if "requestBody" in operation else declared_body_params
 
     return path_params, query_params, body_params
 
