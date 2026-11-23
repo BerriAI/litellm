@@ -45,6 +45,7 @@ from litellm.llms.openai.responses.guardrail_translation.handler import (
 from litellm.llms.openai.responses.guardrail_translation.tool_merge import merge_guardrailed_tools
 from litellm.litellm_core_utils.tool_fields import chat_member_name
 from litellm.llms.base_llm.guardrail_translation.utils import UnappliableRequestRewrite
+from litellm.llms.vertex_ai.gemini.web_search_calls import gemini_web_search_calls
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import GenericGuardrailAPI
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
@@ -1908,6 +1909,26 @@ class TestOpenAIResponsesHandlerToolCallExtraction:
         assert _web_call_actions(result.output) == _MASKED_WEB_CALL_ACTIONS
 
     @pytest.mark.asyncio
+    async def test_process_output_response_blocks_a_gemini_web_search_query_with_a_blocked_word(self):
+        content_filter: Final = ContentFilterGuardrail(
+            guardrail_name="block-persimmon",
+            blocked_words=[BlockedWord(keyword="persimmon", action=ContentFilterAction.BLOCK)],
+        )
+        response: Final = ResponsesAPIResponse(
+            id="resp_1",
+            created_at=1,
+            model="gemini-3-pro-preview",
+            object="response",
+            status="completed",
+            output=[*gemini_web_search_calls("resp_1", ["persimmon tree"]), _message_item("a fig")],
+        )
+
+        with pytest.raises(HTTPException) as blocked:
+            await OpenAIResponsesHandler().process_output_response(response, content_filter, request_data={})
+
+        assert blocked.value.status_code == 400
+
+    @pytest.mark.asyncio
     async def test_process_output_response_never_returns_original_search_arguments_after_a_non_json_rewrite(self):
         response = ResponsesAPIResponse(
             id="resp_1",
@@ -2942,6 +2963,27 @@ class TestOpenAIResponsesHandlerStreamingOutputProcessing:
             item=BaseLiteLLMOpenAIResponseObject(
                 **build_web_search_call("srvtoolu_1", {"query": "persimmon"}, None, "completed").model_dump()
             ),
+        )
+        guardrail: Final = RecordingPersimmonMaskingGuardrail(guardrail_name="mask")
+
+        await OpenAIResponsesHandler().process_output_streaming_response(
+            responses_so_far=[done],
+            guardrail_to_apply=guardrail,
+            litellm_logging_obj=None,
+        )
+
+        assert guardrail.seen_tool_calls == [("web_search", '{"query": "persimmon"}')]
+
+    @pytest.mark.asyncio
+    async def test_streaming_output_item_done_reports_a_gemini_web_search_call(self):
+        from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
+        from litellm.types.llms.openai import OutputItemDoneEvent, ResponsesAPIStreamEvents
+
+        done: Final = OutputItemDoneEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+            output_index=0,
+            sequence_number=1,
+            item=BaseLiteLLMOpenAIResponseObject(**gemini_web_search_calls("resp_1", ["persimmon"])[0].model_dump()),
         )
         guardrail: Final = RecordingPersimmonMaskingGuardrail(guardrail_name="mask")
 

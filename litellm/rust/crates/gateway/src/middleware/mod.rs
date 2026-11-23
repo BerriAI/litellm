@@ -9,6 +9,7 @@ pub mod cors;
 pub mod decompression;
 mod in_flight;
 mod panic;
+mod rate_limit;
 mod request_log;
 pub mod root_path;
 pub mod security_headers;
@@ -21,6 +22,8 @@ use axum::{
     middleware::{from_fn, from_fn_with_state},
 };
 use litellm_license::Entitlements;
+
+use crate::callbacks::parallel_request_limiter::KeyLimiter;
 use tower::ServiceBuilder;
 
 pub use in_flight::InFlight;
@@ -72,6 +75,13 @@ pub fn global(
                 decompression::decompress,
             )),
     )
+}
+
+/// The limit check the proxy's authentication runs before the body, as a route layer the
+/// caller's authentication wraps, so it runs only for a matched route and after the caller is
+/// known.
+pub(crate) fn rate_limited(router: Router, limiter: Arc<KeyLimiter>) -> Router {
+    router.route_layer(from_fn_with_state(limiter, rate_limit::before_body))
 }
 
 /// Request logging skips UI routes because their bodies carry credentials, and Python resolves the

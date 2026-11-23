@@ -791,21 +791,21 @@ class PromptSecurityGuardrail(CustomGuardrail):
 
         return filtered_messages
 
-    def _build_headers(self, user_api_key_alias: str | None = None) -> dict:
+    def _build_headers(self, user_api_key_alias: str | None = None) -> dict[str, str | None]:
         headers: Final = {"APP-ID": self.api_key, "Content-Type": "application/json"}
         if user_api_key_alias:
             headers["X-LiteLLM-Key-Alias"] = user_api_key_alias
         return headers
 
     @staticmethod
-    def _redact_headers(headers: dict) -> dict:
+    def _redact_headers(headers: Mapping[str, str | None]) -> dict[str, str | None]:
         return {name: ("REDACTED" if name.lower() == "app-id" else value) for name, value in headers.items()}
 
     def _log_api_request(
         self,
         method: str,
         url: str,
-        headers: dict,
+        headers: Mapping[str, str | None],
         payload: object,
     ) -> None:
         verbose_proxy_logger.debug(

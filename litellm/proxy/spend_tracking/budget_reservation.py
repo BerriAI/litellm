@@ -4,11 +4,11 @@ import asyncio
 import json
 import math
 import time
-from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache, partial
-from itertools import chain
+from itertools import chain, product
 from types import MappingProxyType
 from typing import Final, Literal, NoReturn, SupportsFloat, SupportsIndex, SupportsInt, TypeAlias, cast
 
@@ -19,7 +19,9 @@ import litellm
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import BadRequestError
+from litellm.google_genai.adapters.transformation import GOOGLE_GENAI_CONFIG_FIELDS
 from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.duration_parser import (
     duration_in_seconds,
     is_annual_budget_duration,
@@ -30,6 +32,7 @@ from litellm.litellm_core_utils.duration_parser import (
     get_budget_window_start as calendar_budget_window_start,
 )
 from litellm.litellm_core_utils.llm_cost_calc.tiered_pricing import select_tier_for_input, tier_rate
+from litellm.litellm_core_utils.llm_cost_calc.utils import get_modality_token_cost_key
 from litellm.litellm_core_utils.tool_fields import drop_policy
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.openai.responses.transformation import OPENAI_RESPONSES_API_MIN_MAX_OUTPUT_TOKENS
@@ -55,10 +58,13 @@ from litellm.proxy.spend_tracking.customer_cost_margin import (
     key_customer_cost_margin,
 )
 from litellm.proxy.spend_tracking.input_tokens import (
+    REQUEST_BODY_FIELDS,
     count_input_tokens,
     count_input_tokens_for_model,
+    gemini_body_has_inline_audio,
     inline_pdf_file_count,
     models_counted_for,
+    models_served_for,
     openai_chat_pdf_file_tokens,
 )
 from litellm.proxy.spend_tracking.native_budgets import (
@@ -92,7 +98,7 @@ from litellm.types.proxy.auth.customer_hierarchy import (
     CustomerScopeKey,
 )
 from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
-from litellm.types.router import DeploymentTypedDict
+from litellm.types.router import DeploymentPricing, DeploymentTypedDict
 from litellm.types.utils import CallTypes, LlmProviders
 from litellm.utils import ProviderConfigManager
 
@@ -302,24 +308,23 @@ async def reserve_budget_for_request(
     if not counters:
         return None
 
-    input_token_counts: Final = await count_request_input_tokens(
-        request_body=request_body,
-        route=route,
-        llm_router=llm_router,
-        team_id=valid_token.team_id,
-        raw_body=raw_body,
-        path_params=path_params,
+    sent_bodies: Final = _sent_generate_content_bodies(_WINDOW_OBJECT.validate_python(request_body), route)
+    estimates: Final = await asyncio.gather(
+        *(
+            _estimate_hold(
+                sent_body=sent_body,
+                route=route,
+                llm_router=llm_router,
+                team_id=valid_token.team_id,
+                raw_body=raw_body if len(sent_bodies) == 1 else None,
+                path_params=path_params,
+            )
+            for sent_body in sent_bodies
+        )
     )
-
+    hold: Final = _largest_hold(estimates)
     reservation_cost: Final = apply_customer_cost_margin_to_estimate(
-        estimate_request_max_cost(
-            request_body=request_body,
-            route=route,
-            llm_router=llm_router,
-            input_token_counts=input_token_counts,
-            path_params=path_params,
-        ),
-        key_customer_cost_margin(valid_token, valid_token.customer_hierarchy),
+        hold.reservation_cost, key_customer_cost_margin(valid_token, valid_token.customer_hierarchy)
     )
     # estimate_request_max_cost still returns None when the model is unknown
     # to the cost map (no token-priced cost fields, e.g. image/audio routes).
@@ -330,18 +335,81 @@ async def reserve_budget_for_request(
         counters=counters,
         valid_token=valid_token,
         reservation_cost=reservation_cost,
-        input_token_counts=input_token_counts,
+        input_token_counts=hold.input_token_counts,
         input_cost=apply_customer_cost_margin_to_estimate(
-            estimate_request_input_cost(
-                request_body=request_body,
-                route=route,
-                llm_router=llm_router,
-                input_token_counts=input_token_counts,
-                path_params=path_params,
-            ),
-            key_customer_cost_margin(valid_token, valid_token.customer_hierarchy),
+            hold.input_cost, key_customer_cost_margin(valid_token, valid_token.customer_hierarchy)
         ),
         fail_closed_budget_enforcement=fail_closed_budget_enforcement,
+    )
+
+
+def _sent_generate_content_bodies(request_body: Mapping[str, object], route: str) -> tuple[Mapping[str, object], ...]:
+    """Every body a generateContent request with `extra_body` can reach the provider as. A Gemini deployment merges
+    it over the top-level fields it names, a config under any of its names included, while the completion adapter
+    other providers go through drops it."""
+    extra_body: Final = as_str_mapping(request_body.get("extra_body"))
+    if extra_body is None or not route.endswith(_GENERATE_CONTENT_ROUTE_SUFFIXES):
+        return (request_body,)
+    replaces_config: Final = any(field in extra_body for field in GOOGLE_GENAI_CONFIG_FIELDS)
+    replaced: Final = frozenset(("extra_body", *(GOOGLE_GENAI_CONFIG_FIELDS if replaces_config else ())))
+    return (
+        {key: value for key, value in request_body.items() if key != "extra_body"},
+        {**{key: value for key, value in request_body.items() if key not in replaced}, **extra_body},
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _HoldEstimate:
+    input_token_counts: Mapping[str, int | None]
+    reservation_cost: float | None
+    input_cost: float | None
+
+
+async def _estimate_hold(
+    sent_body: Mapping[str, object],
+    route: str,
+    llm_router: Router | None,
+    team_id: str | None,
+    raw_body: bytes | None,
+    path_params: Mapping[str, object] | None,
+) -> _HoldEstimate:
+    request_body: Final = dict(sent_body)
+    input_token_counts: Final = await count_request_input_tokens(
+        request_body=request_body,
+        route=route,
+        llm_router=llm_router,
+        team_id=team_id,
+        raw_body=raw_body,
+        path_params=path_params,
+    )
+    return _HoldEstimate(
+        input_token_counts=input_token_counts,
+        reservation_cost=estimate_request_max_cost(
+            request_body=request_body,
+            route=route,
+            llm_router=llm_router,
+            input_token_counts=input_token_counts,
+            path_params=path_params,
+        ),
+        input_cost=estimate_request_input_cost(
+            request_body=request_body,
+            route=route,
+            llm_router=llm_router,
+            input_token_counts=input_token_counts,
+            path_params=path_params,
+        ),
+    )
+
+
+def _largest_hold(estimates: Sequence[_HoldEstimate]) -> _HoldEstimate:
+    """The costliest body's hold with the highest cancel floor any body has, since the hold cannot tell which
+    deployment the request reaches."""
+    largest: Final = max(estimates, key=lambda estimate: estimate.reservation_cost or 0.0)
+    input_costs: Final = tuple(estimate.input_cost for estimate in estimates if estimate.input_cost is not None)
+    return _HoldEstimate(
+        input_token_counts=largest.input_token_counts,
+        reservation_cost=largest.reservation_cost,
+        input_cost=max(input_costs, default=None),
     )
 
 
@@ -431,7 +499,7 @@ async def _native_budget_plan(
     counters: Sequence[_BudgetCounter],
     valid_token: UserAPIKeyAuth,
     reservation_cost: float,
-    input_token_counts: Mapping[str, int],
+    input_token_counts: Mapping[str, int | None],
     input_cost: float | None,
     fail_closed_budget_enforcement: bool,
 ) -> dict[str, object] | None:  # mutable-ok: settlement stamps finalized on the reservation it returns
@@ -442,7 +510,7 @@ async def _native_budget_plan(
         )
     if not reservable:
         return None
-    input_tokens: Final = max(input_token_counts.values(), default=None)
+    input_tokens: Final = max((tokens for tokens in input_token_counts.values() if tokens is not None), default=None)
     return await reserve_native(
         {
             "counters": [
@@ -1211,7 +1279,7 @@ def estimate_request_max_cost(
     request_body: dict,
     route: str,
     llm_router: Router | None,
-    input_token_counts: Mapping[str, int] | None = None,
+    input_token_counts: Mapping[str, int | None] | None = None,
     path_params: Mapping[str, object] | None = None,
 ) -> float | None:
     estimates = [
@@ -1220,7 +1288,7 @@ def estimate_request_max_cost(
             route=route,
             model=model_name,
             llm_router=llm_router,
-            input_tokens=(input_token_counts or {}).get(model_name),
+            input_tokens=_model_input_tokens(request_body, model_name, input_token_counts),
         )
         for model_name in _get_request_models(
             request_body=request_body, route=route, llm_router=llm_router, path_params=path_params
@@ -1236,7 +1304,7 @@ def estimate_request_input_cost(
     request_body: dict,
     route: str,
     llm_router: Router | None,
-    input_token_counts: Mapping[str, int] | None = None,
+    input_token_counts: Mapping[str, int | None] | None = None,
     path_params: Mapping[str, object] | None = None,
 ) -> float | None:
     """Cost of the request's input tokens alone.
@@ -1252,7 +1320,7 @@ def estimate_request_input_cost(
             route=route,
             model=model_name,
             llm_router=llm_router,
-            input_tokens=(input_token_counts or {}).get(model_name),
+            input_tokens=_model_input_tokens(request_body, model_name, input_token_counts),
         )
         for model_name in _get_request_models(
             request_body=request_body, route=route, llm_router=llm_router, path_params=path_params
@@ -1269,13 +1337,12 @@ def _estimate_request_input_cost_for_model(
     route: str,
     model: str,
     llm_router: Router | None,
-    input_tokens: int | None = None,
+    input_tokens: int | None,
 ) -> float | None:
     estimates: Final = [
         _input_cost_for_cost_info(
             request_body=request_body,
             route=route,
-            model=model,
             model_info=model_info,
             input_tokens=input_tokens,
         )
@@ -1288,28 +1355,21 @@ def _estimate_request_input_cost_for_model(
 def _input_cost_for_cost_info(
     request_body: dict,
     route: str,
-    model: str,
     model_info: Mapping[str, object],
-    input_tokens: int | None = None,
+    input_tokens: int | None,
 ) -> float | None:
-    estimated_input_tokens: Final = _estimate_input_tokens(
-        request_body=request_body,
-        route=route,
-        model=model,
-        model_info=model_info,
-        input_tokens=input_tokens,
-    )
+    estimated_input_tokens: Final = _estimate_input_tokens(model_info, input_tokens)
     if estimated_input_tokens is None:
         return None
-    tiered_pricing: Final = model_info.get("tiered_pricing")
-    if isinstance(tiered_pricing, list) and tiered_pricing:
-        tier: Final = select_tier_for_input(tiered_pricing=tiered_pricing, input_tokens=estimated_input_tokens)
-        if tier is not None:
-            return estimated_input_tokens * tier_rate(tier, "input_cost_per_token")
-    input_cost_per_token: Final = _to_float(model_info.get("input_cost_per_token"))
-    if input_cost_per_token is None:
-        return None
-    return estimated_input_tokens * input_cost_per_token
+    body: Final = REQUEST_BODY_FIELDS.validate_python(request_body)
+    cached_tokens: Final = _cached_content_tokens(body, model_info, estimated_input_tokens)
+    rates: Final = _hold_rates(
+        body,
+        model_info,
+        prompt_tokens=estimated_input_tokens + cached_tokens,
+        prompt_counted=input_tokens is not None,
+    )
+    return _prompt_cost(rates, input_tokens=estimated_input_tokens, cached_tokens=cached_tokens)
 
 
 def _estimate_request_max_cost_for_model(
@@ -1317,7 +1377,7 @@ def _estimate_request_max_cost_for_model(
     route: str,
     model: str,
     llm_router: Router | None,
-    input_tokens: int | None = None,
+    input_tokens: int | None,
 ) -> float | None:
     pricing: Final = _get_model_pricing(model=model, llm_router=llm_router)
     body: Final = _WINDOW_OBJECT.validate_python(request_body)
@@ -1336,7 +1396,6 @@ def _estimate_request_max_cost_for_model(
         _max_cost_for_cost_info(
             request_body=request_body,
             route=route,
-            model=model,
             model_info=model_info,
             requested_output_tokens=requested_output_tokens,
             output_multiplier=output_multiplier,
@@ -1351,11 +1410,10 @@ def _estimate_request_max_cost_for_model(
 def _max_cost_for_cost_info(
     request_body: dict,
     route: str,
-    model: str,
     model_info: Mapping[str, object],
     requested_output_tokens: int,
     output_multiplier: int,
-    input_tokens: int | None = None,
+    input_tokens: int | None,
 ) -> float | None:
     image_cost: Final = _estimate_image_generation_cost(
         request_body=request_body,
@@ -1364,13 +1422,7 @@ def _max_cost_for_cost_info(
     if image_cost is not None:
         return image_cost
 
-    estimated_input_tokens: Final = _estimate_input_tokens(
-        request_body=request_body,
-        route=route,
-        model=model,
-        model_info=model_info,
-        input_tokens=input_tokens,
-    )
+    estimated_input_tokens: Final = _estimate_input_tokens(model_info, input_tokens)
     output_tokens: Final = _estimate_output_tokens(
         route=route,
         model_info=model_info,
@@ -1379,37 +1431,75 @@ def _max_cost_for_cost_info(
     if estimated_input_tokens is None or output_tokens is None:
         return None
 
+    body: Final = REQUEST_BODY_FIELDS.validate_python(request_body)
+    cached_tokens: Final = _cached_content_tokens(body, model_info, estimated_input_tokens)
+    rates: Final = _hold_rates(
+        body,
+        model_info,
+        prompt_tokens=estimated_input_tokens + cached_tokens,
+        prompt_counted=input_tokens is not None,
+    )
+    prompt_cost: Final = _prompt_cost(rates, input_tokens=estimated_input_tokens, cached_tokens=cached_tokens)
+    if prompt_cost is None or (rates.output is None and output_tokens > 0):
+        return None
+    return prompt_cost + output_tokens * output_multiplier * (rates.output or 0.0)
+
+
+@dataclass(frozen=True, slots=True)
+class _HoldRates:
+    input: float | None
+    cached: float | None
+    output: float | None
+
+
+def _hold_rates(
+    body: Mapping[str, object], model_info: Mapping[str, object], *, prompt_tokens: int, prompt_counted: bool
+) -> _HoldRates:
+    """Per-token rates for a prompt of `prompt_tokens`, cached tokens included, since its size picks the tier or,
+    once the prompt was counted, the `_above_<n>_tokens` prices. A prompt held at the whole window because it could
+    not be counted keeps the base prices. Output is held at the higher of the standard and reasoning rates because
+    the reasoning share is unknown before the request runs."""
+    holds_audio: Final = gemini_body_has_inline_audio(body)
     tiered_pricing: Final = model_info.get("tiered_pricing")
-    if isinstance(tiered_pricing, list) and tiered_pricing:
-        tier: Final = select_tier_for_input(tiered_pricing=tiered_pricing, input_tokens=estimated_input_tokens)
-        if tier is not None:
-            output_rate = max(
-                tier_rate(tier, "output_cost_per_token"),
-                tier_rate(tier, "output_cost_per_reasoning_token"),
-            )
-            return (estimated_input_tokens * tier_rate(tier, "input_cost_per_token")) + (
-                output_tokens * output_multiplier * output_rate
-            )
+    tier: Final = (
+        select_tier_for_input(tiered_pricing=tiered_pricing, input_tokens=prompt_tokens)
+        if isinstance(tiered_pricing, list) and tiered_pricing
+        else None
+    )
+    if tier is not None:
+        return _HoldRates(
+            input=_tier_input_rate(tier, holds_audio=holds_audio),
+            cached=tier_rate(tier, "cache_read_input_token_cost", "input_cost_per_token"),
+            output=max(tier_rate(tier, "output_cost_per_token"), tier_rate(tier, "output_cost_per_reasoning_token")),
+        )
+    prompt_rate: Final = partial(
+        _prompt_size_rate, model_info, prompt_tokens if prompt_counted and "contents" in body else None
+    )
+    output_rates: Final = tuple(
+        rate
+        for rate in (
+            prompt_rate(_to_float(model_info.get("output_cost_per_token")), ("output_cost_per_token",)),
+            prompt_rate(
+                _to_float(model_info.get("output_cost_per_reasoning_token")), ("output_cost_per_reasoning_token",)
+            ),
+        )
+        if rate is not None
+    )
+    return _HoldRates(
+        input=prompt_rate(
+            _input_rate(model_info, holds_audio=holds_audio),
+            ("input_cost_per_token", "input_cost_per_audio_token") if holds_audio else ("input_cost_per_token",),
+        ),
+        cached=prompt_rate(_cache_read_rate(model_info), _CACHE_READ_COST_KEYS),
+        output=max(output_rates, default=None),
+    )
 
-    input_cost_per_token: Final = _to_float(model_info.get("input_cost_per_token"))
-    output_cost_per_token: Final = _to_float(model_info.get("output_cost_per_token"))
-    output_cost_per_reasoning_token: Final = _to_float(model_info.get("output_cost_per_reasoning_token"))
-    cost = 0.0
-    if input_cost_per_token is not None:
-        cost += estimated_input_tokens * input_cost_per_token
-    elif estimated_input_tokens > 0:
+
+def _prompt_cost(rates: _HoldRates, *, input_tokens: int, cached_tokens: int) -> float | None:
+    priced: Final = ((input_tokens, rates.input), (cached_tokens, rates.cached))
+    if any(rate is None and tokens > 0 for tokens, rate in priced):
         return None
-
-    # The reasoning-token share is unknown before the request runs, so reserve every
-    # output token at the higher of the standard and reasoning rates to avoid
-    # under-reserving reasoning-heavy requests.
-    output_rate = max(output_cost_per_token or 0.0, output_cost_per_reasoning_token or 0.0)
-    if output_cost_per_token is not None or output_cost_per_reasoning_token is not None:
-        cost += output_tokens * output_multiplier * output_rate
-    elif output_tokens > 0:
-        return None
-
-    return cost
+    return sum(tokens * (rate or 0.0) for tokens, rate in priced)
 
 
 def _estimate_image_generation_cost(
@@ -1565,7 +1655,7 @@ async def count_request_input_tokens(
     team_id: str | None,
     raw_body: bytes | None = None,
     path_params: Mapping[str, object] | None = None,
-) -> Mapping[str, int]:
+) -> Mapping[str, int | None]:
     """Input-token count per candidate model, counted once per request.
 
     The counts are reused by both the max-cost and the input-cost estimate."""
@@ -1577,10 +1667,16 @@ async def count_request_input_tokens(
     counted_models: Final = MappingProxyType(
         {model: models_counted_for(model, llm_router, team_id) for model in models}
     )
+    served_models: Final = (
+        tuple(dict.fromkeys(chain.from_iterable(models_served_for(model, llm_router, team_id) for model in models)))
+        if "contents" in request_body
+        else ()
+    )
     counts: Final = await count_input_tokens(
         request_body=request_body,
         raw_body=raw_body,
         models=tuple(dict.fromkeys(chain.from_iterable(counted_models.values()))),
+        served_models=served_models,
     )
     chat_pdf_files: Final = (
         inline_pdf_file_count(request_body.get("messages"))
@@ -1588,11 +1684,7 @@ async def count_request_input_tokens(
         else 0
     )
     return MappingProxyType(
-        {
-            model: largest
-            for model, names in counted_models.items()
-            if (largest := _largest_count(counts, names, chat_pdf_files)) is not None
-        }
+        {model: _largest_count(counts, names, chat_pdf_files) for model, names in counted_models.items()}
     )
 
 
@@ -1603,26 +1695,18 @@ def _largest_count(counts: Mapping[str, int], names: Sequence[str], chat_pdf_fil
     )
 
 
-def _estimate_input_tokens(
-    request_body: dict,
-    route: str,
-    model: str,
-    model_info: Mapping[str, object],
-    input_tokens: int | None = None,
+def _model_input_tokens(
+    request_body: dict, model: str, input_token_counts: Mapping[str, int | None] | None
 ) -> int | None:
-    counted: Final = (
-        input_tokens
-        if input_tokens is not None
-        else count_input_tokens_for_model(request_body=request_body, model=model)
-    )
-    if counted is not None:
-        return counted
+    if input_token_counts is not None and model in input_token_counts:
+        return input_token_counts[model]
+    return count_input_tokens_for_model(request_body=request_body, model=model)
 
-    max_input_tokens: Final = _to_int(model_info.get("max_input_tokens"))
-    if max_input_tokens is not None:
-        return max_input_tokens
 
-    return None
+def _estimate_input_tokens(model_info: Mapping[str, object], counted_input_tokens: int | None) -> int | None:
+    if counted_input_tokens is not None:
+        return counted_input_tokens
+    return _to_int(model_info.get("max_input_tokens"))
 
 
 DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK: Final = 16384
@@ -1653,12 +1737,125 @@ def _estimate_output_tokens(
     return min(requested_output_tokens, model_ceiling)
 
 
+_GEMINI_OUTPUT_TOKEN_FIELDS: Final = ("maxOutputTokens", "max_output_tokens")
+_GEMINI_CANDIDATE_COUNT_FIELDS: Final = ("candidateCount", "candidate_count")
+_CACHED_CONTENT_FIELDS: Final = ("cachedContent", "cached_content")
+
+
+def _gemini_config_values(request_body: Mapping[str, object], fields: Sequence[str]) -> tuple[object, ...]:
+    """What a Gemini body's generation config sets for `fields` under every name the config is sent as, since the
+    SDK route honors the first name present and Vertex the last one in the JSON."""
+    return tuple(config.get(field) for config, field in product(_gemini_generation_configs(request_body), fields))
+
+
+def _gemini_generation_configs(request_body: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+    if "contents" not in request_body:
+        return ()
+    return tuple(config for field in GOOGLE_GENAI_CONFIG_FIELDS if (config := as_str_mapping(request_body.get(field))))
+
+
+def _gemini_output_token_cap(request_body: Mapping[str, object]) -> int | None:
+    caps: Final = tuple(
+        _largest_int(config.get(field) for field in _GEMINI_OUTPUT_TOKEN_FIELDS)
+        for config in _gemini_generation_configs(request_body)
+    )
+    explicit_caps: Final = tuple(cap for cap in caps if cap is not None)
+    if not explicit_caps:
+        return None
+    uncapped_floor: Final = (DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK,) if None in caps else ()
+    return max((*explicit_caps, *uncapped_floor))
+
+
+def _largest_int(values: Iterable[object]) -> int | None:
+    return max((value for value in map(_to_int, values) if value is not None), default=None)
+
+
+def _cached_content_tokens(
+    request_body: Mapping[str, object], model_info: Mapping[str, object], counted_input_tokens: int
+) -> int:
+    names: Final = (
+        *(request_body.get(field) for field in _CACHED_CONTENT_FIELDS),
+        *_gemini_config_values(request_body, _CACHED_CONTENT_FIELDS),
+    )
+    max_input_tokens: Final = _to_int(model_info.get("max_input_tokens"))
+    if max_input_tokens is None or "contents" not in request_body or not any(names):
+        return 0
+    return max(0, max_input_tokens - counted_input_tokens)
+
+
+_DEPLOYMENT_PRICES: Final = TypeAdapter(tuple[DeploymentPricing, ...])
+
+
+def _input_rate(model_info: Mapping[str, object], *, holds_audio: bool) -> float | None:
+    text_rate: Final = _to_float(model_info.get("input_cost_per_token"))
+    audio_rate: Final = _highest_deployment_rate(model_info, "input_cost_per_audio_token") if holds_audio else None
+    return text_rate if text_rate is None or audio_rate is None else max(text_rate, audio_rate)
+
+
+_CACHE_READ_COST_KEYS: Final = ("cache_read_input_token_cost", "cache_read_input_audio_token_cost")
+
+
+def _cache_read_rate(model_info: Mapping[str, object]) -> float | None:
+    """The highest cache-read price any deployment lists for text or audio, since the hold cannot see what the
+    cache holds."""
+    text_rate: Final = _highest_deployment_rate(model_info, "cache_read_input_token_cost")
+    if text_rate is None:
+        return None
+    return max((text_rate, *_listed_rates(model_info, "cache_read_input_audio_token_cost")))
+
+
+def _price_tables(model_info: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+    deployments: Final = _DEPLOYMENT_PRICES.validate_python(model_info.get("deployment_pricing") or ())
+    return (model_info, *(pricing.costs for pricing in deployments))
+
+
+def _listed_rates(model_info: Mapping[str, object], cost_key: str) -> tuple[float, ...]:
+    return tuple(rate for prices in _price_tables(model_info) if (rate := _to_float(prices.get(cost_key))) is not None)
+
+
+def _prompt_size_rate(
+    model_info: Mapping[str, object], prompt_tokens: int | None, rate: float | None, cost_keys: Sequence[str]
+) -> float | None:
+    """`rate`, raised to the highest of `cost_keys`' `_above_<n>_tokens` prices a prompt of `prompt_tokens` bills at,
+    read from each deployment too, since a router model group's own prices leave them out."""
+    if rate is None or prompt_tokens is None:
+        return rate
+    above_rates: Final = tuple(
+        above_rate
+        for prices, cost_key in product(_price_tables(model_info), cost_keys)
+        if (above_rate := _above_threshold_rate(prices, cost_key, prompt_tokens)) is not None
+    )
+    return max((rate, *above_rates))
+
+
+def _above_threshold_rate(prices: Mapping[str, object], cost_key: str, prompt_tokens: int) -> float | None:
+    above_key: Final = get_modality_token_cost_key(prices, cost_key, prompt_tokens, threshold_is_inclusive=True)
+    return None if above_key == cost_key else _to_float(prices.get(above_key))
+
+
+def _tier_input_rate(tier: Mapping[str, object], *, holds_audio: bool) -> float:
+    text_rate: Final = tier_rate(tier, "input_cost_per_token")
+    return max(text_rate, tier_rate(tier, "input_cost_per_audio_token")) if holds_audio else text_rate
+
+
+def _highest_deployment_rate(model_info: Mapping[str, object], cost_key: str) -> float | None:
+    input_rate: Final = _to_float(model_info.get("input_cost_per_token"))
+    group_rate: Final = _to_float(model_info.get(cost_key))
+    deployments: Final = _DEPLOYMENT_PRICES.validate_python(model_info.get("deployment_pricing") or ())
+    rates: Final = tuple(
+        pricing.costs.get(cost_key, pricing.costs.get("input_cost_per_token", input_rate)) for pricing in deployments
+    ) or (input_rate if group_rate is None else group_rate,)
+    known_rates: Final = tuple(rate for rate in rates if rate is not None)
+    return max(known_rates) if len(known_rates) == len(rates) else None
+
+
 _RESPONSES_CALL_TYPES: Final = frozenset({CallTypes.aresponses, CallTypes.responses})
 _ANTHROPIC_MESSAGES_CALL_TYPES: Final = frozenset({CallTypes.anthropic_messages, CallTypes.aanthropic_messages})
 _COMPLETION_CALL_TYPES: Final = frozenset(
     {CallTypes.acompletion, CallTypes.completion, CallTypes.atext_completion, CallTypes.text_completion}
 )
 _INFERENCE_CONFIG_MAX_TOKENS: Final = "inferenceConfig.maxTokens"
+_GENERATION_CONFIG_MAX_OUTPUT_TOKENS: Final = "generationConfig.maxOutputTokens"
 _TOP_LEVEL_OUTPUT_TOKEN_FIELDS: Final = ("max_completion_tokens", "max_tokens", "max_output_tokens", "maxTokens")
 _COMPLETION_OUTPUT_TOKEN_FIELDS: Final = ("max_completion_tokens", "max_tokens")
 _PASS_THROUGH_OUTPUT_TOKEN_FIELDS: Final = (
@@ -1669,7 +1866,9 @@ _PASS_THROUGH_OUTPUT_TOKEN_FIELDS: Final = (
 )
 
 
-_OutputCapSurface: TypeAlias = Literal["completion", "responses", "messages", "pass_through", "uncapped"]
+_OutputCapSurface: TypeAlias = Literal[
+    "completion", "responses", "messages", "generate_content", "pass_through", "uncapped"
+]
 _CLAUDE_CODE_GATEWAY_PREFIX: Final = "/claude_code_gateway"
 _INTERACTIONS_ROUTES: Final = frozenset({"/interactions", "/v1beta/interactions"})
 _GENERATE_CONTENT_ROUTE_SUFFIXES: Final = (":generateContent", ":streamGenerateContent")
@@ -1678,8 +1877,10 @@ _GENERATE_CONTENT_ROUTE_SUFFIXES: Final = (":generateContent", ":streamGenerateC
 def _output_cap_surface(route: str, request_body: Mapping[str, object]) -> _OutputCapSurface:
     if CURSOR_CHAT_COMPLETIONS_ROUTE in route:
         return "completion" if is_chat_completions_body(request_body) else "responses"
-    if route in _INTERACTIONS_ROUTES or route.endswith(_GENERATE_CONTENT_ROUTE_SUFFIXES):
+    if route in _INTERACTIONS_ROUTES:
         return "uncapped"
+    if route.endswith(_GENERATE_CONTENT_ROUTE_SUFFIXES):
+        return "generate_content"
     call_types: Final = frozenset(get_call_types_for_route(route.removeprefix(_CLAUDE_CODE_GATEWAY_PREFIX)) or ())
     if call_types & _RESPONSES_CALL_TYPES:
         return "responses"
@@ -1700,7 +1901,13 @@ def _request_output_token_caps(request_body: Mapping[str, object]) -> Mapping[st
     top_level_caps: Final = tuple(
         (field, request_body[field]) for field in _TOP_LEVEL_OUTPUT_TOKEN_FIELDS if field in request_body
     )
-    return MappingProxyType(dict((*top_level_caps, *nested_cap)))
+    generation_config_max_tokens: Final = _gemini_output_token_cap(request_body)
+    generation_config_cap: Final = (
+        ((_GENERATION_CONFIG_MAX_OUTPUT_TOKENS, generation_config_max_tokens),)
+        if generation_config_max_tokens is not None
+        else ()
+    )
+    return MappingProxyType(dict((*top_level_caps, *nested_cap, *generation_config_cap)))
 
 
 def _valid_output_token_caps(request_body: Mapping[str, object]) -> Mapping[str, int]:
@@ -1767,6 +1974,10 @@ def _deployment_honors(field: str, surface: _OutputCapSurface, deployment: _Serv
             )
         case "messages":
             return field == "max_tokens"
+        case "generate_content":
+            return field == _GENERATION_CONFIG_MAX_OUTPUT_TOKENS and _reads_chat_output_cap(
+                deployment.model_info, "max_tokens"
+            )
         case "pass_through":
             return field in _PASS_THROUGH_OUTPUT_TOKEN_FIELDS
         case "uncapped":
@@ -1871,7 +2082,14 @@ def _output_multiplier(
     router_defaults: Final[Mapping[str, object]] = (
         RoutingContext(llm_router).default_litellm_params() if llm_router is not None else {}
     )
-    return max((1, *(_output_count(key, request_body, router_defaults, serving) for key in ("n", "best_of"))))
+    candidate_count: Final = _largest_int(_gemini_config_values(request_body, _GEMINI_CANDIDATE_COUNT_FIELDS))
+    return max(
+        (
+            1,
+            candidate_count or 1,
+            *(_output_count(key, request_body, router_defaults, serving) for key in ("n", "best_of")),
+        )
+    )
 
 
 def _output_count(
