@@ -22,6 +22,7 @@ from litellm.llms.base_llm.videos.async_task_utils import (
     input_reference_url,
     polled_video_models,
     routed_video_models,
+    unsupported_video_fields,
 )
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
 from litellm.llms.custom_httpx.http_handler import (
@@ -558,6 +559,13 @@ class DashScopeVideoConfig(BaseVideoConfig):
         model: str,
         drop_params: bool,
     ) -> dict[str, object]:  # mutable-ok: BaseVideoConfig contract
+        excluded_openrouter: Final = unsupported_video_fields(
+            video_create_optional_params,
+            model,
+            "dashscope",
+            drop_params,
+            frozenset({"duration", "seed", "aspect_ratio", "generate_audio"}),
+        )
         unsupported: Final = next(
             (
                 key
@@ -578,7 +586,7 @@ class DashScopeVideoConfig(BaseVideoConfig):
             {
                 key: value
                 for key, value in video_create_optional_params.items()
-                if value is not None and key not in _MAPPED_ELSEWHERE
+                if value is not None and key not in _MAPPED_ELSEWHERE and key not in excluded_openrouter
             }
         )
         mapped_params: Final[dict[str, object]] = {  # mutable-ok: BaseVideoConfig contract; extra_body merges into it

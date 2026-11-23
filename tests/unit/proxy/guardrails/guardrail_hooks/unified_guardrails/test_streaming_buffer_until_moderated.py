@@ -16,6 +16,7 @@ from typing import Any, AsyncGenerator, List, Literal, Optional
 import pytest
 
 import litellm
+from litellm.exceptions import GuardrailRaisedException
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     ModifyResponseException,
@@ -548,6 +549,57 @@ async def test_windowed_responses_incomplete_stream_scans_tool_call_before_relea
     assert '"hi "' in raw
     assert TOOL_ARGUMENTS_MARKER not in raw, f"unscanned tool call leaked: {raw!r}"
     assert BLOCK_MESSAGE in raw
+
+
+def _undecodable_text_event(text: str) -> bytes:
+    return (
+        b'event: content_block_delta\ndata: {"type": "content_block_delta", "index": 0, "delta": '
+        + json.dumps({"type": "text_delta", "text": text}).encode()
+        + b', "padding": '
+        + b"9" * 5000
+        + b"}\n\n"
+    )
+
+
+async def _anthropic_stream_hiding_the_marker_in_an_undecodable_event(after_message_stop: bool):
+    original = [chunk async for chunk in _anthropic_stream()]
+    hidden = _undecodable_text_event(ORIGINAL_MARKER)
+    chunks = (*original[:4], *original[-3:], hidden) if after_message_stop else (*original[:4], hidden, *original[-3:])
+    for chunk in chunks:
+        yield chunk
+
+
+async def _drain_into(collected: List[Any], stream: AsyncGenerator[Any, None]) -> None:
+    async for chunk in stream:
+        collected.append(chunk)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("sampling_rate", "after_message_stop"), [(2, False), (1, True)], ids=["mid-stream", "after-message-stop"]
+)
+async def test_windowed_buffer_refuses_an_undecodable_text_event_after_a_clean_scan(sampling_rate: int, after_message_stop: bool):
+    guardrail = _CountingPassingGuardrail(guardrail_name="windowed-undecodable", event_hook="post_call")
+    guardrail.streaming_buffer_until_moderated = True
+    guardrail.streaming_buffer_release_on_scan = True
+    guardrail.streaming_sampling_rate = sampling_rate
+    collected: List[Any] = []
+    hooked_stream = UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="test", request_route="/v1/messages"),
+        response=_anthropic_stream_hiding_the_marker_in_an_undecodable_event(after_message_stop),
+        request_data={
+            "messages": [{"role": "user", "content": "hi"}],
+            "guardrail_to_apply": guardrail,
+            "metadata": {"guardrails": [guardrail.guardrail_name]},
+        },
+    )
+
+    with pytest.raises(GuardrailRaisedException):
+        await _drain_into(collected, hooked_stream)
+
+    raw = _decode(collected)
+    assert '"text": "the "' in raw
+    assert ORIGINAL_MARKER not in raw, f"unchecked text event leaked: {raw!r}"
 
 
 @pytest.mark.asyncio

@@ -19,9 +19,10 @@ byte-identical prefix and preserved thinking blocks keep their binding.
 
 Models without the flag reject the role inside ``messages``. Their system messages
 become user turns in place, prefixed with an operator note so the model can tell
-the instruction apart from the user's own words. A run caught between a tool call
-and its result moves to just after the result so the ``tool_result`` block stays
-first in the merged user turn.
+the instruction apart from the user's own words. A run caught among one tool call
+turn's results moves to just after the last of them, so every ``tool_result``
+block stays ahead of it in the merged user turn and Gemini gets all of the turn's
+function responses in one content.
 
 Every transformation here is a pure function of the message sequence: turn N's
 output stays a prefix of turn N+1's output, which is what keeps the provider-side
@@ -35,11 +36,15 @@ from operator import itemgetter
 from types import MappingProxyType
 from typing import Final, Literal, TypeAlias, TypeVar
 
+from pydantic import ValidationError
+
+from litellm.litellm_core_utils.core_helpers import spread
 from litellm.types.llms.anthropic import (
     ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX,
     ANTHROPIC_TOOL_SEARCH_TOOL_NAMES,
     AnthropicMessagesSystemMessageParam,
     AnthropicSystemMessageContent,
+    AnthropicToolSearchToolResultBlock,
 )
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -57,13 +62,14 @@ CONVERTED_SYSTEM_NOTE: Final = (
 
 _USER_TYPE_ROLES: Final = frozenset({"user", "tool", "function"})
 _TOOL_ROLES: Final = frozenset({"tool", "function"})
+_TOOL_RESULT_SEGMENT_KINDS: Final = frozenset({"system", "tool"})
 _NO_IDS: Final[frozenset[str]] = frozenset()
 _RENDERED_PART_TYPES: Final = frozenset({"text", "image_url", "document", "file"})
 _RENDERED_ASSISTANT_PART_TYPES: Final = frozenset({"text", "server_tool_use"})
 _THINKING_BLOCK_TYPES: Final = frozenset({"thinking", "redacted_thinking"})
 
 _MessageKind: TypeAlias = Literal["system", "tool", "user", "other"]
-_Message: Final = TypeVar("_Message")
+_Message = TypeVar("_Message")
 _TextPart: TypeAlias = tuple[str, ChatCompletionCachedContent | None]
 
 
@@ -83,6 +89,11 @@ def message_field(message: object, key: str) -> object:
     """
     mapping: Final = _as_mapping(message)
     return mapping.get(key) if mapping is not None else getattr(message, key, None)
+
+
+def string_field(message: object, key: str) -> str | None:
+    value: Final = message_field(message, key)
+    return value if isinstance(value, str) else None
 
 
 def is_system_message(message: object) -> bool:
@@ -214,28 +225,23 @@ def _converted_user_turns(run: Sequence[object]) -> tuple[ChatCompletionUserMess
     return tuple(system_message_as_user(message) for message in run if _text_parts(message))
 
 
-def _runs(messages: Sequence[AllMessageValues]) -> tuple[tuple[_MessageKind, tuple[AllMessageValues, ...]], ...]:
-    return tuple((kind, tuple(group)) for kind, group in groupby(messages, key=_kind))
+def _in_tool_result_segment(message: object) -> bool:
+    return _kind(message) in _TOOL_RESULT_SEGMENT_KINDS
+
+
+def _tool_results_first(segment: Sequence[AllMessageValues]) -> tuple[AllMessageValues, ...]:
+    reminders: Final = tuple(message for message in segment if is_system_message(message))
+    return (*(message for message in segment if not is_system_message(message)), *_converted_user_turns(reminders))
 
 
 def _converted_for_unflagged_model(messages: Sequence[AllMessageValues]) -> tuple[AllMessageValues, ...]:
     """Convert every system message to a user turn in place.
 
-    A system run whose follower is a tool message is emitted after that tool run:
-    ``tool_result`` blocks have to open the merged user turn.
+    System messages mixed into one tool call turn's results are emitted after the last of those
+    results: every ``tool_result`` block has to open the merged user turn.
     """
-    runs: Final = _runs(messages)
-
-    def emit(index: int) -> tuple[AllMessageValues, ...]:
-        kind, run = runs[index]
-        follower: Final = runs[index + 1][0] if index + 1 < len(runs) else None
-        if kind == "system":
-            return () if follower == "tool" else _converted_user_turns(run)
-        if kind == "tool" and index > 0 and runs[index - 1][0] == "system":
-            return (*run, *_converted_user_turns(runs[index - 1][1]))
-        return run
-
-    return tuple(chain.from_iterable(emit(index) for index in range(len(runs))))
+    segments: Final = (tuple(group) for _, group in groupby(messages, key=_in_tool_result_segment))
+    return tuple(chain.from_iterable(map(_tool_results_first, segments)))
 
 
 def _user_type_blocks(messages: Sequence[AllMessageValues]) -> tuple[tuple[bool, tuple[int, ...]], ...]:
@@ -286,18 +292,31 @@ def _separate_thinking_blocks_render(message: object) -> bool:
     return any(_thinking_block_renders(block) for block in parts_of(message_field(message, "thinking_blocks")))
 
 
+def is_anthropic_server_tool_use(tool_id: str) -> bool:
+    return tool_id.startswith(ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX)
+
+
 def is_anthropic_tool_search_use(tool_id: str, tool_name: str) -> bool:
     return tool_id.startswith(ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX) and tool_name in ANTHROPIC_TOOL_SEARCH_TOOL_NAMES
 
 
+def anthropic_tool_search_result(block: object) -> AnthropicToolSearchToolResultBlock | None:
+    if message_field(block, "type") != "tool_search_tool_result":
+        return None
+    try:
+        return AnthropicToolSearchToolResultBlock.model_validate(block)
+    except ValidationError:
+        return None
+
+
 def find_anthropic_server_tool_result(
     tool_id: str,
-    web_search_results: Sequence[object] | None,
-    tool_results: Sequence[object] | None,
+    web_search_results: object,
+    tool_results: object,
 ) -> dict[str, object] | None:
     if not tool_id.startswith(ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX):
         return None
-    candidates: Final = (*(web_search_results or ()), *(tool_results or ()))
+    candidates: Final = (*spread(web_search_results or ()), *spread(tool_results or ()))
     return next(
         (result for result in candidates if isinstance(result, dict) and result.get("tool_use_id") == tool_id),
         None,

@@ -3,6 +3,9 @@ from typing import Final
 from unittest.mock import MagicMock
 
 import pytest
+
+from litellm.redis.stores.connection import connect
+from litellm.redis.stores.spend_counters import SpendCounterStore
 from pydantic import BaseModel
 
 import litellm.proxy.proxy_server as proxy_server
@@ -14,13 +17,9 @@ from litellm.proxy._types import (
     LiteLLM_TeamTableCachedObj,
     LiteLLM_UserTable,
 )
-from litellm.proxy.common_utils.user_api_key_cache import (
-    UserApiKeyCache,
-    end_user_cache_key,
-    project_cache_key,
-    team_membership_reservation_cache_key,
-)
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.utils import ProxyLogging
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.router import Router
 
 _ProxyObject = (
@@ -32,18 +31,18 @@ _ProxyObject = (
 )
 
 
-def _cache_key(row: _ProxyObject) -> str:
+def _cache_key(row: _ProxyObject) -> AuthObject:
     match row:
         case LiteLLM_TeamTableCachedObj():
-            return f"team_id:{row.team_id}"
+            return AuthObject.team(row.team_id)
         case LiteLLM_UserTable():
-            return row.user_id
+            return AuthObject.user(row.user_id)
         case LiteLLM_EndUserTable():
-            return end_user_cache_key(row.user_id)
+            return AuthObject.end_user(row.user_id)
         case LiteLLM_ProjectTableCachedObj():
-            return project_cache_key(row.project_id)
+            return AuthObject.project(row.project_id)
         case LiteLLM_TeamMembership():
-            return team_membership_reservation_cache_key(user_id=row.user_id, team_id=row.team_id)
+            return AuthObject.team_membership_reservation(user_id=row.user_id, team_id=row.team_id)
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,6 +69,7 @@ def proxy_auth_state(monkeypatch: pytest.MonkeyPatch) -> ProxyAuthState:
         "prisma_client": MagicMock(),
         "user_api_key_cache": cache,
         "spend_counter_cache": DualCache(),
+        "spend_counter_store": SpendCounterStore(connect(None).spend_counters()),
         "proxy_logging_obj": ProxyLogging(user_api_key_cache=cache),
         "general_settings": {},
         "user_custom_auth": None,

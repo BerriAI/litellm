@@ -1,4 +1,5 @@
-from typing import Literal
+from collections.abc import Mapping
+from typing import Literal, TypeAlias
 
 from typing_extensions import ReadOnly, TypedDict
 
@@ -7,16 +8,16 @@ class BedrockKBLocation(TypedDict, total=False):
     """Location information for a retrieved document."""
 
     type: ReadOnly[str]
-    s3Location: ReadOnly[dict[str, str] | None]
-    webLocation: ReadOnly[dict[str, str] | None]
-    kendraDocumentLocation: ReadOnly[dict[str, str] | None]
-    salesforceLocation: ReadOnly[dict[str, str] | None]
-    sharePointLocation: ReadOnly[dict[str, str] | None]
-    confluenceLocation: ReadOnly[dict[str, str] | None]
-    googleDriveLocation: ReadOnly[dict[str, str] | None]
-    oneDriveLocation: ReadOnly[dict[str, str] | None]
-    customDocumentLocation: ReadOnly[dict[str, str] | None]
-    sqlLocation: ReadOnly[dict[str, str] | None]
+    s3Location: ReadOnly[Mapping[str, str] | None]
+    webLocation: ReadOnly[Mapping[str, str] | None]
+    kendraDocumentLocation: ReadOnly[Mapping[str, str] | None]
+    salesforceLocation: ReadOnly[Mapping[str, str] | None]
+    sharePointLocation: ReadOnly[Mapping[str, str] | None]
+    confluenceLocation: ReadOnly[Mapping[str, str] | None]
+    googleDriveLocation: ReadOnly[Mapping[str, str] | None]
+    oneDriveLocation: ReadOnly[Mapping[str, str] | None]
+    customDocumentLocation: ReadOnly[Mapping[str, str] | None]
+    sqlLocation: ReadOnly[Mapping[str, str] | None]
 
 
 class BedrockKBRowValue(TypedDict):
@@ -116,10 +117,20 @@ class BedrockKBRetrievalConfiguration(TypedDict, total=False):
     vectorSearchConfiguration: BedrockKBVectorSearchConfiguration | None
 
 
+BedrockKBImageFormat: TypeAlias = Literal["png", "jpeg", "gif", "webp"]
+
+
+class BedrockKBInputImage(TypedDict):
+    format: ReadOnly[BedrockKBImageFormat]
+    inlineContent: ReadOnly[str]
+
+
 class BedrockKBRetrievalQuery(TypedDict, total=False):
     """Query structure for retrieval."""
 
     text: str | None
+    type: ReadOnly[Literal["TEXT", "IMAGE"]]
+    image: ReadOnly[BedrockKBInputImage]
 
 
 class BedrockKBGuardrailConfiguration(TypedDict, total=False):

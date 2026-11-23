@@ -1,11 +1,14 @@
 import builtins
-from typing import Any, Literal
+from collections.abc import Mapping, Sequence
+from typing import Final, Literal
 
 from openai.types.audio.transcription_create_params import FileTypes
-from pydantic import Field, PrivateAttr
+from pydantic import Field, PrivateAttr, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm.types.llms.base import LiteLLMBaseModel
+
+_ATTRIBUTE_VALUE: Final = TypeAdapter(builtins.object)
 
 
 class VideoObject(LiteLLMBaseModel):
@@ -23,7 +26,7 @@ class VideoObject(LiteLLMBaseModel):
     seconds: str | None = None
     size: str | None = None
     model: str | None = None
-    usage: dict[str, Any] | None = None
+    usage: Mapping[str, builtins.object] | None = None
     _hidden_params: dict[str, builtins.object] = PrivateAttr(default={})
 
     @property
@@ -44,7 +47,7 @@ class VideoObject(LiteLLMBaseModel):
 
     def __getitem__(self, key) -> builtins.object:
         # Allow dictionary-style access to attributes
-        return getattr(self, key)
+        return _ATTRIBUTE_VALUE.validate_python(getattr(self, key))
 
     def json(self, **kwargs):
         try:
@@ -67,13 +70,26 @@ class VideoResponse(LiteLLMBaseModel):
         return getattr(self, key, default)
 
     def __getitem__(self, key) -> object:
-        return getattr(self, key)
+        return _ATTRIBUTE_VALUE.validate_python(getattr(self, key))
 
     def json(self, **kwargs):
         try:
             return self.model_dump(**kwargs)
         except Exception:
             return self.dict()
+
+
+class VideoImageURL(TypedDict):
+    url: ReadOnly[str]
+
+
+class VideoInputReference(TypedDict):
+    type: ReadOnly[Literal["image_url"]]
+    image_url: ReadOnly[VideoImageURL]
+
+
+class VideoFrameImage(VideoInputReference):
+    frame_type: ReadOnly[Literal["first_frame", "last_frame"]]
 
 
 class VideoCreateOptionalRequestParams(TypedDict, total=False):
@@ -88,6 +104,12 @@ class VideoCreateOptionalRequestParams(TypedDict, total=False):
     parameters: dict[str, object] | None  # Provider-specific parameters block passed directly to the API
     model: str | None
     resolution: ReadOnly[str | None]
+    duration: ReadOnly[int]
+    aspect_ratio: ReadOnly[str]
+    frame_images: ReadOnly[Sequence[VideoFrameImage]]
+    input_references: ReadOnly[Sequence[VideoInputReference]]
+    generate_audio: ReadOnly[bool]
+    seed: ReadOnly[int]
     seconds: str | None
     size: str | None
     characters: list[dict[str, str]] | None
@@ -141,7 +163,7 @@ class CharacterObject(LiteLLMBaseModel):
         return getattr(self, key, default)
 
     def __getitem__(self, key) -> builtins.object:
-        return getattr(self, key)
+        return _ATTRIBUTE_VALUE.validate_python(getattr(self, key))
 
     def json(self, **kwargs):
         try:
