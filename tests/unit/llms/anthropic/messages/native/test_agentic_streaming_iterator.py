@@ -6,7 +6,7 @@ import asyncio
 import functools
 import json
 import selectors
-from typing import Any, Callable, Coroutine, Dict, List, Optional, ParamSpec, Tuple, TypeVar
+from typing import Any, Callable, Coroutine, Dict, Final, List, Optional, ParamSpec, Tuple, TypeVar
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -281,8 +281,12 @@ _T = TypeVar("_T")
 def _on_virtual_clock(test: Callable[_P, Coroutine[object, object, _T]]) -> Callable[_P, _T]:
     @functools.wraps(test)
     def run(*args: _P.args, **kwargs: _P.kwargs) -> _T:
-        with asyncio.Runner(loop_factory=_VirtualClockLoop) as runner:
-            return runner.run(test(*args, **kwargs))
+        loop: Final = _VirtualClockLoop()
+        try:
+            return loop.run_until_complete(test(*args, **kwargs))
+        finally:
+            loop.run_until_complete(loop.shutdown_asyncgens())
+            loop.close()
 
     return run
 
@@ -1162,6 +1166,28 @@ class TestAgenticStreamingIteratorHoldBack:
         assert [data["message"]["id"] for event, data in events if event == "message_start"] == ["msg_live"]
         assert _block_starts(events) == [(0, "text"), (1, "text")]
         assert [event for event, _ in events][-2:] == ["message_delta", "message_stop"]
+
+    @pytest.mark.asyncio
+    async def test_a_hook_that_resends_the_live_message_does_not_repeat_what_the_client_already_has(self):
+        resent = {
+            "id": "msg_live",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-4-20250514",
+            "content": [{"type": "text", "text": "Let me look that up."}],
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "usage": {"input_tokens": 30, "output_tokens": 9},
+        }
+        iterator = _build_hold_back_iterator(MockAsyncStream(_text_then_tool_use_stream()), _hooks_returning(resent))
+
+        events = _wire_events(await _drain_without_pings(iterator))
+
+        assert _block_starts(events) == [(0, "text")]
+        assert [data["delta"]["text"] for event, data in events if event == "content_block_delta"] == [
+            "Let me look that up."
+        ]
+        assert [data["delta"]["stop_reason"] for event, data in events if event == "message_delta"] == ["end_turn"]
 
     @pytest.mark.asyncio
     async def test_a_server_tool_use_the_hooks_left_in_place_fails_the_turn_after_the_live_text(self):

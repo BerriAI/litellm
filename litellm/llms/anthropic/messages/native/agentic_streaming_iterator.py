@@ -54,6 +54,7 @@ AGENTIC_LOOP_LIMIT_ERROR_SSE_BYTES: Final = (
     b'Raise max_agentic_loops to allow more loops."}}\n\n'
 )
 _AGENTIC_HOOK_RESULT: Final = TypeAdapter(object)
+_CONTENT_BLOCKS: Final = TypeAdapter(list[object])
 _HOLD_START_EVENTS: Final = frozenset(("message_delta", "message_stop"))
 _CONTENT_BLOCK_EVENTS: Final = frozenset(("content_block_start", "content_block_delta", "content_block_stop"))
 
@@ -118,6 +119,15 @@ async def _continuing_message(follow_up: AsyncIterator[bytes], block_offset: int
                 yield frame
             elif event.get("type") != "message_start":
                 yield _block_shifted(frame, event, block_offset)
+
+
+def _without_blocks_the_client_has(
+    response: Mapping[str, object], live_message_id: object, live_block_count: int
+) -> Mapping[str, object]:
+    content: Final = response.get("content")
+    if response.get("id") != live_message_id or not isinstance(content, list):
+        return response
+    return {**response, "content": _CONTENT_BLOCKS.validate_python(content)[live_block_count:]}
 
 
 async def _replayed(frames: Sequence[bytes]) -> AsyncGenerator[bytes, None]:
@@ -300,7 +310,7 @@ class AgenticAnthropicStreamingIterator:
 
     @property
     def has_buffered_provider_output(self) -> bool:
-        """Whether provider output was received but withheld from the client behind keepalive pings."""
+        """Whether a held-back stream received provider output, sent live or still held behind keepalive pings."""
         return self._hold_back and bool(self._collected_bytes)
 
     def __aiter__(self):
@@ -372,9 +382,7 @@ class AgenticAnthropicStreamingIterator:
 
     def _ending_frames(self) -> AsyncIterator[bytes]:
         if self._follow_up_iterator is not None:
-            live_frames: Final = self._collected_bytes[: self._live_frame_count]
-            live_block_count: Final = sum(1 for frame in live_frames if _is_content_block_start(frame))
-            return _continuing_message(self._follow_up_iterator, live_block_count)
+            return _continuing_message(self._follow_up_iterator, self._live_block_count())
         if self._buffer_holds_server_fulfilled_tool_use():
             verbose_logger.error(
                 "AgenticStreamingIterator: hooks did not replace a message containing a server-fulfilled "
@@ -385,6 +393,9 @@ class AgenticAnthropicStreamingIterator:
                 return _replayed((AGENTIC_LOOP_LIMIT_ERROR_SSE_BYTES,))
             return _replayed((SERVER_FULFILLED_TOOL_LEAK_ERROR_SSE_BYTES,))
         return _replayed(tuple(self._collected_bytes[self._live_frame_count :]))
+
+    def _live_block_count(self) -> int:
+        return sum(1 for frame in self._collected_bytes[: self._live_frame_count] if _is_content_block_start(frame))
 
     def _buffer_holds_server_fulfilled_tool_use(self) -> bool:
         if not self._server_fulfilled_tool_names:
@@ -455,7 +466,7 @@ class AgenticAnthropicStreamingIterator:
 
             if has_attributes(result, AsyncIterable[object], "__aiter__"):
                 self._follow_up_iterator = result.__aiter__()
-            elif isinstance(result, dict):
+            elif (whole_message := object_mapping(result)) is not None:
                 from litellm.llms.anthropic.messages.native.fake_stream_iterator import (
                     FakeAnthropicMessagesStreamIterator,
                 )
@@ -463,7 +474,10 @@ class AgenticAnthropicStreamingIterator:
                     AnthropicMessagesResponse,
                 )
 
-                fake: Final = FakeAnthropicMessagesStreamIterator(response=cast(AnthropicMessagesResponse, result))
+                unseen: Final = _without_blocks_the_client_has(
+                    whole_message, rebuilt.get("id"), self._live_block_count()
+                )
+                fake: Final = FakeAnthropicMessagesStreamIterator(response=cast(AnthropicMessagesResponse, unseen))
                 self._follow_up_iterator = fake.__aiter__()
             else:
                 verbose_logger.warning(
