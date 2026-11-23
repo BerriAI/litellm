@@ -366,6 +366,7 @@ impl BaseOcrConfig for AzureDocumentIntelligenceOcrConfig {
                 model,
                 response,
                 OcrSettings::default().document_intelligence_dpi,
+                OCR_RESPONSE_MAX_BYTES,
             )
         })
     }
@@ -392,6 +393,7 @@ impl BaseOcrConfig for AzureDocumentIntelligenceOcrConfig {
                 model,
                 decoded.data,
                 context.connection.settings.document_intelligence_dpi,
+                context.connection.max_response_bytes,
             )?
         })
     }
@@ -691,6 +693,7 @@ fn transform_completed_response(
     model: &str,
     response: AzureDocumentIntelligenceOperation,
     dpi: i64,
+    page_text_limit: usize,
 ) -> Result<LiteLLMOcrResponse, Error> {
     if response.status != Some(OperationStatus::Succeeded) {
         return Err(Error::OperationStatus(
@@ -723,23 +726,8 @@ fn transform_completed_response(
                     .iter()
                     .flat_map(|page| page.spans.iter().flatten()),
             )
-        });
-    let page_markdown_bytes = markdown_content
-        .as_ref()
-        .map(|content| {
-            result
-                .pages
-                .iter()
-                .flat_map(|page| page.spans.iter().flatten())
-                .map(|span| content.slice(span).len())
-                .fold(0, usize::saturating_add)
         })
-        .unwrap_or_default();
-    if page_markdown_bytes > OCR_RESPONSE_MAX_BYTES {
-        return Err(Error::TooLarge {
-            limit: OCR_RESPONSE_MAX_BYTES,
-        });
-    }
+        .filter(|content| span_text_bytes(content, &result.pages) <= page_text_limit);
     let pages = result
         .pages
         .into_iter()
@@ -761,6 +749,14 @@ fn transform_completed_response(
             .unwrap_or_default(),
         ..LiteLLMOcrResponse::new(model, pages)
     })
+}
+
+fn span_text_bytes(content: &IndexedText<'_>, pages: &[AzureDocumentIntelligencePage]) -> usize {
+    pages
+        .iter()
+        .flat_map(|page| page.spans.iter().flatten())
+        .map(|span| content.slice(span).len())
+        .fold(0, usize::saturating_add)
 }
 
 fn transform_azure_page(
@@ -1813,27 +1809,20 @@ mod tests {
     }
 
     #[rstest]
-    fn repeated_spans_past_the_response_cap_are_rejected_before_copying() {
+    fn repeated_spans_past_the_response_cap_keep_line_joined_pages() {
         let content = "a".repeat(1024 * 1024);
         let repeats = OCR_RESPONSE_MAX_BYTES / content.len() + 1;
-        let raw = serde_json::to_vec(&json!({"status": "succeeded", "analyzeResult": {
+        let pages = markdown_pages(json!({
             "content": content,
             "contentFormat": "markdown",
             "stringIndexType": "unicodeCodePoint",
-            "pages": [{"spans": vec![json!({"offset": 0, "length": content.len()}); repeats]}]
-        }}))
-        .unwrap();
+            "pages": [{
+                "spans": vec![json!({"offset": 0, "length": content.len()}); repeats],
+                "lines": [{"content": "first"}, {"content": "second"}]
+            }]
+        }));
 
-        let error = AzureDocumentIntelligenceOcrConfig
-            .transform_ocr_response("model", &raw, OcrResponseFormat::Litellm)
-            .unwrap_err();
-
-        assert!(matches!(
-            error,
-            Error::TooLarge {
-                limit: OCR_RESPONSE_MAX_BYTES
-            }
-        ));
+        assert_eq!(pages, ["first\nsecond"]);
     }
 
     #[rstest]
