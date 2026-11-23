@@ -330,6 +330,33 @@ async def test_losing_the_claim_or_subscription_generation_blocks_all_settlement
                 for d in await first_worker.claim(later, later + timedelta(minutes=1), 100)
                 if d.subscription_id == row.id
             ]
-            assert [d.body for d in due] == (['{"type":"gap","cursor":"previous-safe"}'] if outcome == "timeout" else [])
+            assert [d.body for d in due] == (
+                ['{"type":"gap","cursor":"previous-safe"}'] if outcome == "timeout" else []
+            )
         finally:
             await first_worker.delete(row.id)
+
+
+@pytest.mark.asyncio
+async def test_late_activation_and_cleanup_leave_the_new_reservation_intact() -> None:
+    async with _connected() as first, _connected() as second:
+        old: Final = _row()
+        replacement: Final = _row().model_copy(update={"id": old.id})
+        assert await first.reserve(old)
+        try:
+            await second.terminate(old.id)
+            assert await second.reserve(replacement)
+            activation: Final = Activation(
+                client_secret=SECRET,
+                upstream_subscription_id="old",
+                upstream_refresh_before=None,
+                refresh_before=None,
+                cursor="old",
+                expected_generation=old.generation,
+            )
+            assert not await first.activate(old.id, activation, ("pending",))
+            await first.discard_pending(old.id, old.generation)
+            current: Final = await second.get(old.id)
+            assert current is not None and (current.status, current.generation) == ("pending", replacement.generation)
+        finally:
+            await second.delete(old.id)

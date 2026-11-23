@@ -62,6 +62,8 @@ class QueuedDelivery(BaseModel):
 class Activation(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
+    expected_generation: str | None = None
+
     client_secret: str
     upstream_subscription_id: str | None
     upstream_refresh_before: datetime | None
@@ -88,7 +90,7 @@ class EventStore(Protocol):
         """Insert ``row`` as pending unless a live row with its id exists; False when one does."""
         ...
 
-    async def discard_pending(self, subscription_id: str) -> None: ...
+    async def discard_pending(self, subscription_id: str, generation: str | None = None) -> None: ...
 
     async def activate(
         self,
@@ -245,8 +247,10 @@ class PrismaEventStore:
             return False
         return True
 
-    async def discard_pending(self, subscription_id: str) -> None:
-        await self._subscriptions.delete_many(where={"id": subscription_id, "status": "pending"})
+    async def discard_pending(self, subscription_id: str, generation: str | None = None) -> None:
+        await self._subscriptions.delete_many(
+            where={"id": subscription_id, "status": "pending", **({"generation": generation} if generation else {})}
+        )
 
     async def activate(
         self,
@@ -256,7 +260,13 @@ class PrismaEventStore:
     ) -> bool:
         eligible: Final = [state for state in LIVE_STATUSES if state in from_statuses]
         updated: Final = await self._subscriptions.update_many(
-            where={"id": subscription_id, "status": {"in": eligible}},  # bounded-ok: at most the three live states
+            where={
+                "id": subscription_id,
+                "status": {"in": eligible},  # bounded-ok: at most the three live states
+                **(
+                    {"generation": activation.expected_generation} if activation.expected_generation is not None else {}
+                ),
+            },
             data={
                 "status": "active",
                 "generation": uuid.uuid4().hex,
