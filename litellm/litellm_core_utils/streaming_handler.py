@@ -1298,12 +1298,13 @@ class CustomStreamWrapper:
         return True
 
     def _set_role_on_fresh_delta(self, model_response: ModelResponseStream) -> None:
+        first_choice_claimed: Final = self._claim_role_for_choice(model_response.choices[0].index)
         for choice in model_response.choices[1:]:
             set_extra_attribute(
                 choice.delta, "role", "assistant" if self._claim_role_for_choice(choice.index) else None
             )
         delta: Final = model_response.choices[0].delta
-        if self._claim_role_for_choice(model_response.choices[0].index):
+        if first_choice_claimed:
             set_extra_attribute(delta, "role", "assistant")
             return
         if not _holds_only_scalars(delta):
