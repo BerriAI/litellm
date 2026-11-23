@@ -64,6 +64,7 @@ from litellm.images.fan_out import (
     run_concurrently,
     split_outcomes,
 )
+from litellm.images.streaming import ImageStreamingResponse, image_event_stream, image_stream_requested
 from litellm.integrations.custom_logger_v2.enums import Hook
 from litellm.integrations.custom_logger_v2.legacy import Admit, hook_subscribers
 from litellm.integrations.custom_logger_v2.logger import CustomLoggerV2
@@ -7718,7 +7719,7 @@ class BaseLLMHTTPHandler:
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         fake_stream: bool = False,
         litellm_metadata: dict[str, object] | None = None,
-    ) -> ImageResponse:
+    ) -> ImageResponse | ImageStreamingResponse:
         """
         Async version of the image edit handler.
         Uses async HTTP client to make requests.
@@ -7770,7 +7771,7 @@ class BaseLLMHTTPHandler:
             },
         )
 
-        async def send() -> httpx.Response:
+        async def send(stream: bool = False) -> httpx.Response:
             if image_edit_provider_config.use_multipart_form_data():
                 return await async_httpx_client.post(
                     url=api_base,
@@ -7778,21 +7779,33 @@ class BaseLLMHTTPHandler:
                     data=data,
                     files=files,
                     timeout=timeout,
+                    stream=stream,
                 )
             return await async_httpx_client.post(
                 url=api_base,
                 headers=headers,
                 json=data,
                 timeout=timeout,
+                stream=stream,
             )
 
-        request_count: Final = image_edit_provider_config.get_request_count(
-            model,
-            image_edit_optional_request_params,  # pyright: ignore[reportUnknownArgumentType]  # legacy handler params are untyped dicts
-        )
-        responses, failure = split_outcomes(
-            await asyncio.gather(*(send() for _ in range(request_count)), return_exceptions=True)
-        )
+        if image_stream_requested(data.get("stream")):
+            stream_response: Final = await send(stream=True)
+            if "text/event-stream" in stream_response.headers.get("content-type", ""):
+                return ImageStreamingResponse(
+                    stream_iterator=image_event_stream(stream_response),
+                    logging_obj=logging_obj,
+                )
+            await stream_response.aread()
+            responses, failure = [stream_response], None
+        else:
+            request_count: Final = image_edit_provider_config.get_request_count(
+                model,
+                image_edit_optional_request_params,  # pyright: ignore[reportUnknownArgumentType]  # legacy handler params are untyped dicts
+            )
+            responses, failure = split_outcomes(
+                await asyncio.gather(*(send() for _ in range(request_count)), return_exceptions=True)
+            )
         served: Final = [
             image_edit_provider_config.transform_image_edit_response(
                 model=model,
