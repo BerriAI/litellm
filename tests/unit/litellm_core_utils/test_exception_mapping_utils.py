@@ -3931,6 +3931,35 @@ def test_mapped_anthropic_529_reports_one_status_beside_the_provider_reply(quiet
     assert caught.value.response.json() == wire_body
 
 
+@pytest.mark.parametrize(
+    ("provider", "wire_status", "mapped_error"),
+    [("replicate", 402, litellm.APIError), ("nlp_cloud", 522, litellm.Timeout)],
+)
+def test_an_error_mapped_to_another_status_reports_that_status_on_the_provider_reply(
+    provider: str, wire_status: int, mapped_error: type[litellm.APIError | litellm.Timeout], quiet_exception_mapping: None
+) -> None:
+    request: Final = httpx.Request("POST", "https://provider.example/v1/predictions")
+    original: Final = BaseLLMException(
+        status_code=wire_status,
+        message=json.dumps(_PROVIDER_WIRE_BODY),
+        request=request,
+        response=httpx.Response(wire_status, json=_PROVIDER_WIRE_BODY, request=request),
+    )
+
+    with pytest.raises(mapped_error) as caught:
+        exception_type(
+            model="provider-model",
+            original_exception=original,
+            custom_llm_provider=provider,
+            completion_kwargs={},
+            extra_kwargs={},
+        )
+
+    assert caught.value.status_code != wire_status
+    assert caught.value.response.status_code == caught.value.status_code
+    assert caught.value.response.json() == _PROVIDER_WIRE_BODY
+
+
 def test_a_streamed_groq_error_with_a_text_code_still_maps_to_an_api_error(quiet_exception_mapping: None) -> None:
     with pytest.raises(OpenAIError) as streamed_failure:
         GroqChatCompletionStreamingHandler(streaming_response=iter(()), sync_stream=True).chunk_parser(

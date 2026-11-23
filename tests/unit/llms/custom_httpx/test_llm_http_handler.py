@@ -132,6 +132,7 @@ async def test_get_search_raises_provider_http_errors(is_async: bool, status_cod
             assert "rejected request" in error.value.message
             assert error.value.headers is not None
             assert error.value.headers["retry-after"] == "7"
+            assert error.value.response.json() == {"error": "rejected request"}
 
 
 @pytest.mark.asyncio
