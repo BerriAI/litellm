@@ -1755,7 +1755,10 @@ def test_get_model_from_request_checks_the_url_model_on_routes_served_from_the_u
 
 @pytest.mark.parametrize(
     "route, url_model",
-    [("/v1beta/models/premium-model:countTokens", "premium-model"), ("/models/premium-model:7b:countTokens", "premium-model:7b")],
+    [
+        ("/v1beta/models/premium-model:countTokens", "premium-model"),
+        ("/models/premium-model:7b:countTokens", "premium-model:7b"),
+    ],
 )
 def test_get_model_from_request_checks_count_tokens_on_the_url_model_over_proxy_wide_models(
     monkeypatch: pytest.MonkeyPatch, route: str, url_model: str
@@ -1994,6 +1997,36 @@ def _azure_relay_router():
 )
 def test_get_model_from_request_azure_relay_routes_use_the_model_group_in_the_path(route, request_data, expected):
     assert get_model_from_request(request_data=request_data, route=route, llm_router=_azure_relay_router()) == expected
+
+
+def _azure_route_router_with_an_openai_group_named_like_a_path_segment():
+    from litellm.router import Router
+
+    return Router(
+        model_list=[
+            {"model_name": "openai", "litellm_params": {"model": "openai/gpt-4o", "api_key": "k"}},
+            {
+                "model_name": "private-azure",
+                "litellm_params": {"model": "azure/gpt-5.4", "api_base": "https://b.openai.azure.com", "api_key": "k"},
+            },
+        ]
+    )
+
+
+@pytest.mark.parametrize(
+    "route, request_data, expected",
+    [
+        ("/azure/openai/deployments/private-azure/chat/completions", {}, "private-azure"),
+        ("/azure/openai/deployments/private-azure/chat/completions", {"model": "openai"}, "private-azure"),
+        ("/azure/openai/v1/responses", {"model": "private-azure"}, "private-azure"),
+        ("/azure/openai/v1/responses", {"model": "openai"}, "openai"),
+    ],
+)
+def test_get_model_from_request_azure_routes_authorize_the_group_the_request_is_relayed_to(
+    route, request_data, expected
+):
+    router = _azure_route_router_with_an_openai_group_named_like_a_path_segment()
+    assert get_model_from_request(request_data=request_data, route=route, llm_router=router) == expected
 
 
 def _nvidia_nim_relay_router():

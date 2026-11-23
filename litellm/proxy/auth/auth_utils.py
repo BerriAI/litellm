@@ -2959,8 +2959,12 @@ def _model_from_route_path(route: str) -> str | None:
 def _router_model_from_azure_route(route: str, llm_router: Router | None) -> str | None:
     if llm_router is None:
         return None
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import is_azure_router_model_group
+
     endpoint: Final = re.sub(r"^/azure(?:_ai)?/", "", route, flags=re.IGNORECASE)
-    return azure_router_model_in_endpoint(endpoint, frozenset(llm_router.registry().names()))
+    return azure_router_model_in_endpoint(
+        endpoint, frozenset(part for part in endpoint.split("/") if is_azure_router_model_group(llm_router, part))
+    )
 
 
 def _model_from_bedrock_route(route: str) -> str | None:

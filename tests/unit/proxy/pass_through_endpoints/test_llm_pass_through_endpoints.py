@@ -9606,7 +9606,6 @@ class TestAzureBodyModelGroupRelay:
         [
             pytest.param((("gpt-5.4", "openai/gpt-4o"),), id="openai_group"),
             pytest.param((("gpt-5.4", "bedrock/anthropic.claude-sonnet-4-5"),), id="bedrock_group"),
-            pytest.param((("gpt-5.4", "azure/gpt-5.4-primary"), ("gpt-5.4", "openai/gpt-4o")), id="mixed_group"),
         ],
     )
     @pytest.mark.parametrize(
@@ -9642,12 +9641,15 @@ class TestAzureBodyModelGroupRelay:
         assert route["target"] == f"https://operator.openai.azure.com/{endpoint}"
 
     @pytest.mark.asyncio
-    async def test_azure_ai_model_group_is_relayed_through_the_router(self, monkeypatch):
-        captured = self._install(
-            monkeypatch,
-            {"model": "gpt-5.4", "input": "ping"},
-            group_models=(("gpt-5.4", "azure_ai/gpt-5.4"),),
-        )
+    @pytest.mark.parametrize(
+        "group_models",
+        [
+            pytest.param((("gpt-5.4", "azure_ai/gpt-5.4"),), id="azure_ai_group"),
+            pytest.param((("gpt-5.4", "openai/gpt-4o"), ("gpt-5.4", "azure/gpt-5.4-primary")), id="mixed_group"),
+        ],
+    )
+    async def test_model_group_with_an_azure_deployment_is_relayed_through_the_router(self, monkeypatch, group_models):
+        captured = self._install(monkeypatch, {"model": "gpt-5.4", "input": "ping"}, group_models=group_models)
 
         result = await azure_proxy_route(
             endpoint="openai/v1/responses",

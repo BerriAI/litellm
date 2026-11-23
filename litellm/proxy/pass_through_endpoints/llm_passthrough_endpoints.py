@@ -71,6 +71,7 @@ from litellm.litellm_core_utils.core_helpers import (
     require_get,
 )
 from litellm.litellm_core_utils.fallback_generalizations import match_routing_generalization
+from litellm.litellm_core_utils.get_llm_provider_logic import resolve_model_and_provider_for_metadata
 from litellm.llms.anthropic.common_utils import (
     AnthropicModelInfo,
     anthropic_pass_through_api_base,
@@ -288,32 +289,41 @@ class RelayRejection(TypedDict):
     error: ReadOnly[str]
 
 
-def _deployment_model_and_provider(litellm_params: LiteLLMParamsTypedDict) -> tuple[str, str | None]:
-    model: Final = litellm_params.get("model", "")
+def _declared_model_and_provider(litellm_params: LiteLLMParamsTypedDict) -> tuple[str, str | None]:
+    return litellm_params.get("model", ""), litellm_params.get("custom_llm_provider")
+
+
+def _deployment_model_name(litellm_params: LiteLLMParamsTypedDict) -> str:
+    model, custom_llm_provider = _declared_model_and_provider(litellm_params)
     try:
-        return get_llm_provider(model=model, custom_llm_provider=litellm_params.get("custom_llm_provider"))[:2]
+        return get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)[0]
     except litellm.BadRequestError:
-        return model, None
+        return model
 
 
 def _models_served_by_group(llm_router: litellm.Router, model_group: str) -> frozenset[str]:
     return frozenset(
-        _deployment_model_and_provider(row["litellm_params"])[0]
-        for row in llm_router.registry().deployments(model_group) or ()
+        _deployment_model_name(row["litellm_params"]) for row in llm_router.registry().deployments(model_group) or ()
     )
 
 
 _AZURE_PASSTHROUGH_PROVIDERS: Final = frozenset((LlmProviders.AZURE.value, LlmProviders.AZURE_AI.value))
 
 
+def _is_azure_deployment(litellm_params: LiteLLMParamsTypedDict) -> bool:
+    model, custom_llm_provider = _declared_model_and_provider(litellm_params)
+    try:
+        return resolve_model_and_provider_for_metadata(model, custom_llm_provider)[1] in _AZURE_PASSTHROUGH_PROVIDERS
+    except litellm.BadRequestError:
+        return False
+
+
 def is_azure_router_model_group(llm_router: litellm.Router | None, model_group: str) -> bool:
     if llm_router is None or not is_known_model(model_group, llm_router):
         return False
-    providers: Final = frozenset(
-        _deployment_model_and_provider(row["litellm_params"])[1]
-        for row in llm_router.registry().deployments(model_group) or ()
+    return any(
+        _is_azure_deployment(row["litellm_params"]) for row in llm_router.registry().deployments(model_group) or ()
     )
-    return bool(providers) and providers <= _AZURE_PASSTHROUGH_PROVIDERS
 
 
 _OBJECT_MAPPING: Final = TypeAdapter(Mapping[str, object])
