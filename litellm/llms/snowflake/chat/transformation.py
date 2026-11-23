@@ -460,13 +460,13 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         optional_params: dict,
         stream: bool,
         extra_body: dict,
-    ) -> dict:
+    ) -> dict[str, object]:
         """OpenAI format for /chat/completions endpoint."""
         max_tokens: Final = optional_params.pop("max_tokens", None)
         max_completion_tokens: Final = optional_params.pop("max_completion_tokens", None)
         resolved_max: Final = max_completion_tokens or max_tokens
 
-        body: Final[dict] = {
+        body: Final[dict[str, object]] = {
             "model": model.removeprefix("snowflake/"),
             "messages": messages,
             "stream": stream,
@@ -508,7 +508,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         optional_params: dict,
         stream: bool,
         extra_body: dict,
-    ) -> dict:
+    ) -> dict[str, object]:
         """Anthropic Messages format for /messages endpoint."""
         passthrough_system: Final = optional_params.pop("system", None)
         extracted_system, conversation = self._extract_system_and_messages(messages)

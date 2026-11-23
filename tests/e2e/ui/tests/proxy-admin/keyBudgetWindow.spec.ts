@@ -98,10 +98,11 @@ test.describe("Proxy Admin - Key budget window", () => {
     expect(resetAt.getUTCDate(), "a monthly window resets on the 1st, a daily one would not").toBe(1);
 
     await page.reload();
+    await page.getByRole("tab", { name: "Overview", exact: true }).click();
     await expect(
-      page.getByRole("paragraph").filter({ hasText: "of $12.50" }),
+      page.getByTestId("applied-budgets"),
       "the reloaded key detail does not render the $12.50 cap",
-    ).toBeVisible({ timeout: 15_000 });
+    ).toContainText("of $12.50", { timeout: 15_000 });
 
     await page.getByRole("tab", { name: "Settings" }).click();
     await expect(

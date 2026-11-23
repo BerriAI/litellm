@@ -5295,7 +5295,8 @@ class TestTenantHostSsrfGuard:
 
         assert destination_for("langfuse_otel", self._langfuse("https://collector.example.com@10.0.0.5")) is None
 
-    def test_a_malformed_host_does_not_take_the_other_backends_with_it(self, monkeypatch):
+    @pytest.mark.parametrize("malformed_host", ["https://lf.corp:99999", "http://[::1"])
+    def test_a_malformed_host_does_not_take_the_other_backends_with_it(self, monkeypatch, malformed_host: str):
         """``urlparse(...).port`` raises a bare ValueError, which would escape
         ``destination_for`` and kill the whole resolution."""
         monkeypatch.setenv("LITELLM_OTEL_V2", "true")
@@ -5306,7 +5307,7 @@ class TestTenantHostSsrfGuard:
             token="hashed",
             team_metadata={
                 "logging": [
-                    {"callback_name": "langfuse_otel", "callback_vars": self._langfuse("https://lf.corp:99999")},
+                    {"callback_name": "langfuse_otel", "callback_vars": self._langfuse(malformed_host)},
                     {"callback_name": "newrelic", "callback_vars": {"newrelic_api_key": "nr"}},
                 ]
             },

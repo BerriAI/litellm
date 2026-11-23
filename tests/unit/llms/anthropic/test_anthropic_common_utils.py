@@ -1774,9 +1774,8 @@ class TestAnthropicThinkingSignatureSelfHeal:
         from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
             encrypted_reasoning_signature,
         )
-        from litellm.litellm_core_utils.prompt_templates.reasoning_utils import is_encrypted_reasoning_block
         from litellm.llms.anthropic.common_utils import (
-            strip_unreplayable_blocks_from_anthropic_messages,
+            strip_encrypted_reasoning_blocks_from_anthropic_messages,
         )
 
         msgs = [
@@ -1798,7 +1797,7 @@ class TestAnthropicThinkingSignatureSelfHeal:
                 ],
             },
         ]
-        out = strip_unreplayable_blocks_from_anthropic_messages(msgs, is_encrypted_reasoning_block)
+        out = strip_encrypted_reasoning_blocks_from_anthropic_messages(msgs)
         assert [m["role"] for m in out] == ["user", "assistant"]
         assert [b["type"] for b in out[1]["content"]] == ["thinking", "redacted_thinking", "text"]
         assert out[1]["content"][0]["signature"] == "EqQBCkYIAxgCIkA_anthropic_signed"
@@ -1810,9 +1809,8 @@ class TestAnthropicThinkingSignatureSelfHeal:
         Anthropic API and Bedrock Invoke reject with "Invalid `data` in `redacted_thinking` block"."""
         import base64
 
-        from litellm.litellm_core_utils.prompt_templates.reasoning_utils import is_encrypted_reasoning_block
         from litellm.llms.anthropic.common_utils import (
-            strip_unreplayable_blocks_from_anthropic_messages,
+            strip_encrypted_reasoning_blocks_from_anthropic_messages,
         )
 
         native = "EmwKAhgBEgy3va3pzix/LafPsn4aDFIT2Xlxh0L5L8rLVyIwxtE3rAFBa8cr3qpP"
@@ -1829,7 +1827,7 @@ class TestAnthropicThinkingSignatureSelfHeal:
             untouched,
         ]
 
-        out = strip_unreplayable_blocks_from_anthropic_messages(msgs, is_encrypted_reasoning_block)
+        out = strip_encrypted_reasoning_blocks_from_anthropic_messages(msgs)
 
         assert out[1] == {
             "role": "assistant",
@@ -1839,13 +1837,12 @@ class TestAnthropicThinkingSignatureSelfHeal:
 
     def test_strip_encrypted_reasoning_leaves_malformed_messages_for_the_provider_to_reject(self):
         """A bare string in messages must reach Anthropic as a 400, not die in the stripper as a 500."""
-        from litellm.litellm_core_utils.prompt_templates.reasoning_utils import is_encrypted_reasoning_block
         from litellm.llms.anthropic.common_utils import (
-            strip_unreplayable_blocks_from_anthropic_messages,
+            strip_encrypted_reasoning_blocks_from_anthropic_messages,
         )
 
         msgs = ["hi", {"role": "user", "content": "hello"}]
-        assert strip_unreplayable_blocks_from_anthropic_messages(msgs, is_encrypted_reasoning_block) == msgs
+        assert strip_encrypted_reasoning_blocks_from_anthropic_messages(msgs) == msgs
 
     def test_strip_empty_text_blocks_treats_null_text_as_empty(self):
         from litellm.llms.anthropic.common_utils import (

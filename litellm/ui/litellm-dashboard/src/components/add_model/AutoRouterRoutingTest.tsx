@@ -6,7 +6,11 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import RoutingDecisionCard from "@/components/logs/detail/RoutingDecisionCard";
 import { AutoRouterRoutingTestResult, testAutoRouterRouting } from "../networking";
-import { ComplexityRouterConfigPayload, getHeuristicV2SuccessThresholdError } from "./build_complexity_router_config";
+import {
+  ComplexityRouterConfigPayload,
+  getHeuristicV2SuccessThresholdError,
+  getHeuristicFirstContextLimitError,
+} from "./build_complexity_router_config";
 import { buildAutoRouterRoutingTestRequest } from "./build_auto_router_routing_test_request";
 
 interface AutoRouterRoutingTestProps {
@@ -33,7 +37,9 @@ const AutoRouterRoutingTest: React.FC<AutoRouterRoutingTestProps> = ({
   const { t } = useTranslation();
   const [prompt, setPrompt] = React.useState<string>("");
   const [state, setState] = React.useState<TestState>({ status: "idle" });
-  const configError = getHeuristicV2SuccessThresholdError(config.heuristic_v2_success_threshold);
+  const configError =
+    getHeuristicV2SuccessThresholdError(config.heuristic_v2_success_threshold) ??
+    getHeuristicFirstContextLimitError(config.heuristic_first_max_context_tokens);
 
   const send = async () => {
     if (configError) return;

@@ -35,6 +35,8 @@ class BulkUpdateKeyRequestItem(LiteLLMBaseModel):
     key: str  # Key identifier (token)
     budget_id: str | None = None  # Budget ID associated with the key
     max_budget: float | None = None  # Max budget for key
+    budget_duration: str | None = None
+    user_id: str | None = None
     team_id: str | None = None  # Team ID associated with key
     tags: list[str] | None = None  # Tags for organizing keys
     object_permission: LiteLLM_ObjectPermissionBase | None = None

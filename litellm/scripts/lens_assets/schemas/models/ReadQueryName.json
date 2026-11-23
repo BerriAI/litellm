@@ -1,5 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ReadQueryName",
+  "type": "string",
   "enum": [
     "trace_agents",
     "availability",
@@ -10,7 +12,5 @@
     "feedback_target",
     "feedback",
     "feedback_summary"
-  ],
-  "title": "ReadQueryName",
-  "type": "string"
+  ]
 }

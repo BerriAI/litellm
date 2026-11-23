@@ -21,6 +21,7 @@ import httpx
 from pydantic import ConfigDict, TypeAdapter, with_config
 from typing_extensions import ReadOnly, TypedDict
 
+from litellm.litellm_core_utils.core_helpers import provider_reported_usage_cost
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -31,6 +32,7 @@ from litellm.types.utils import EmbeddingResponse, Usage
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 _INT: Final = TypeAdapter(int)
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 @with_config(ConfigDict(extra="allow", strict=True))
@@ -75,8 +77,8 @@ class PerplexityEmbeddingConfig(BaseEmbeddingConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         if api_base:
@@ -86,7 +88,7 @@ class PerplexityEmbeddingConfig(BaseEmbeddingConfig):
             return clean_api_base
         return "https://api.perplexity.ai/v1/embeddings"
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         return [
             "dimensions",
             "encoding_format",
@@ -94,7 +96,7 @@ class PerplexityEmbeddingConfig(BaseEmbeddingConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
+        non_default_params: Mapping[str, object],
         optional_params: dict,
         model: str,
         drop_params: bool,
@@ -108,14 +110,14 @@ class PerplexityEmbeddingConfig(BaseEmbeddingConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: Mapping[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, str]:
         if api_key is None:
             api_key = get_secret_str("PERPLEXITYAI_API_KEY") or get_secret_str("PERPLEXITY_API_KEY")
         return {
@@ -127,9 +129,9 @@ class PerplexityEmbeddingConfig(BaseEmbeddingConfig):
         self,
         model: str,
         input: AllEmbeddingInputValues,
-        optional_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: Mapping[str, object],
+        headers: Mapping[str, object],
+    ) -> dict[str, object]:
         return {
             "model": model,
             "input": input,
@@ -161,12 +163,12 @@ class PerplexityEmbeddingConfig(BaseEmbeddingConfig):
         model_response: EmbeddingResponse,
         logging_obj: LiteLLMLoggingObj,
         api_key: str | None = None,
-        request_data: dict = {},
-        optional_params: dict = {},
-        litellm_params: dict = {},
+        request_data: Mapping[str, object] = {},
+        optional_params: Mapping[str, object] = {},
+        litellm_params: Mapping[str, object] = {},
     ) -> EmbeddingResponse:
         try:
-            raw_response_json: Final[object] = raw_response.json()
+            raw_response_json: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception:
             raise PerplexityEmbeddingError(message=raw_response.text, status_code=raw_response.status_code)
 
@@ -191,6 +193,7 @@ class PerplexityEmbeddingConfig(BaseEmbeddingConfig):
                 usage_data.get("prompt_tokens", 0) or usage_data.get("total_tokens", 0) or 0
             ),
             total_tokens=_INT.validate_python(usage_data.get("total_tokens", 0) or 0),
+            cost=provider_reported_usage_cost(usage_data, "perplexity"),
         )
         model_response.usage = usage
         return model_response

@@ -1,17 +1,31 @@
+import os
 import threading
 from collections.abc import Mapping
 from typing import Final
 
 from litellm.llms.custom_httpx.http_handler import exclude_rsa_key_exchange_and_chacha20
+from litellm.proxy.auth.master_key_boot_check import SALT_KEY_ENV_VAR
 from litellm.secret_managers.main import str_to_bool
 
 FIPS_MODE_SETTING: Final = "fips_mode"
+_KEY_DERIVATION_KEY_MIN_BYTES: Final = 14
+KEY_DERIVATION_KEY_RULE: Final = (
+    f"at least {_KEY_DERIVATION_KEY_MIN_BYTES * 8} bits ({_KEY_DERIVATION_KEY_MIN_BYTES} bytes)"
+)
 _SETTING: Final = f"general_settings.{FIPS_MODE_SETTING}"
+_NEW_SALT_KEY: Final = f"{SALT_KEY_ENV_VAR}=sk-$(openssl rand -hex 32)"
 _FIPS_MODE_ACTIVE: Final = threading.Event()
 
 
 class FipsModeError(Exception):
     pass
+
+
+def key_derivation_key(salt_key: str) -> bytes | None:
+    """The key fips_mode derives its keys from, the UTF-8 bytes of salt_key as given (bytes an environment variable
+    could not decode are kept as they were). None when that is under 112 bits (14 bytes)."""
+    key: Final = salt_key.encode("utf-8", "surrogateescape")
+    return key if len(key) >= _KEY_DERIVATION_KEY_MIN_BYTES else None
 
 
 def fips_mode_setting(general_settings: Mapping[str, object]) -> bool | None:
@@ -60,7 +74,8 @@ def cryptography_enforces_fips() -> bool:
 
 def fips_mode_refusal(general_settings: Mapping[str, object]) -> str | None:
     """Why the proxy must not start: general_settings.fips_mode is not a boolean, or is on but Python's or the
-    cryptography library's OpenSSL does not enforce FIPS. None when it may start."""
+    cryptography library's OpenSSL does not enforce FIPS, or LITELLM_SALT_KEY is not set or gives a key_derivation_key
+    under 112 bits. None when it may start."""
     setting: Final = fips_mode_setting(general_settings)
     if setting is None:
         value: Final = general_settings.get(FIPS_MODE_SETTING)
@@ -82,6 +97,17 @@ def fips_mode_refusal(general_settings: Mapping[str, object]) -> str | None:
             f"{_SETTING} is on but the cryptography library's OpenSSL has no working FIPS provider. Build it "
             "against the system OpenSSL (pip install --no-binary cryptography cryptography), or turn "
             f"{_SETTING} off."
+        )
+    salt_key: Final = os.getenv(SALT_KEY_ENV_VAR)
+    if salt_key is None:
+        return (
+            f"{_SETTING} is on but {SALT_KEY_ENV_VAR} is not set. fips_mode derives its encryption keys from it and "
+            f"never from the master key, which also signs tokens. Set {_NEW_SALT_KEY}, or turn {_SETTING} off."
+        )
+    if key_derivation_key(salt_key) is None:
+        return (
+            f"{_SETTING} is on but {SALT_KEY_ENV_VAR} is too short. fips_mode derives its encryption keys from it, "
+            f"so it must be {KEY_DERIVATION_KEY_RULE}. Set {_NEW_SALT_KEY}, or turn {_SETTING} off."
         )
     return None
 

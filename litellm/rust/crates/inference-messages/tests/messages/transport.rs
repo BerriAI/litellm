@@ -237,6 +237,7 @@ async fn a_recoverable_rejection_is_retried_through_the_host_transport(call: Mes
 
 #[rstest]
 #[case::anthropic("https://api.anthropic.com", false)]
+#[case::foundry("https://team.services.ai.azure.com/anthropic", false)]
 #[case::anthropic_compatible_host("https://api.deepseek.com/anthropic", true)]
 #[tokio::test]
 async fn unsigned_thinking_is_sent_only_to_a_host_that_does_not_check_claude_signatures(

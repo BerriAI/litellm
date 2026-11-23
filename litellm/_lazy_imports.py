@@ -6,6 +6,8 @@ from collections.abc import Callable, Mapping
 from types import MappingProxyType, ModuleType
 from typing import TYPE_CHECKING, Final
 
+from pydantic import TypeAdapter
+
 from ._lazy_imports_registry import LITELLM_ATTRIBUTES, UTILS_ATTRIBUTES
 
 if TYPE_CHECKING:
@@ -48,10 +50,12 @@ _get_messages_reach_token_count = get_messages_reach_token_count
 
 
 _NOT_LOADED: Final = object()
+_LAZY_ATTRIBUTE: Final = TypeAdapter(object)
 
 
 def _cached(namespace: str, name: str) -> object:
-    return vars(sys.modules[namespace]).get(name, _NOT_LOADED)
+    namespace_attributes: Final[Mapping[str, object]] = MappingProxyType(vars(sys.modules[namespace]))
+    return namespace_attributes.get(name, _NOT_LOADED)
 
 
 def _cache(namespace: str, name: str, value: object) -> object:
@@ -65,7 +69,7 @@ def _import(namespace: str, name: str, location: tuple[str, str]) -> object:
         return cached
     module_path, attr_name = location
     module: Final[ModuleType] = importlib.import_module(module_path, package="litellm")
-    attribute: Final[object] = getattr(module, attr_name)
+    attribute: Final = _LAZY_ATTRIBUTE.validate_python(getattr(module, attr_name))
     return _cache(namespace, name, attribute)
 
 
@@ -73,7 +77,8 @@ def _instance_of(class_name: str) -> Callable[[], object]:
     def create() -> object:
         cls: Final = resolve_lazy_attribute("litellm", class_name)
         assert isinstance(cls, type)
-        return cls()
+        klass: Final[type[object]] = cls
+        return klass()
 
     return create
 

@@ -51,6 +51,8 @@ export const transitionClassifierType = (
       classifierType === "heuristic_first"
         ? value.heuristic_first_max_tier ?? DEFAULT_HEURISTIC_FIRST_MAX_TIER
         : undefined,
+    heuristic_first_max_context_tokens:
+      classifierType === "heuristic_first" ? value.heuristic_first_max_context_tokens : undefined,
     hybrid_boundary_margin:
       classifierType === "hybrid" ? value.hybrid_boundary_margin ?? DEFAULT_HYBRID_BOUNDARY_MARGIN : undefined,
     ...nonReasoningTierFields(classifierType, value),

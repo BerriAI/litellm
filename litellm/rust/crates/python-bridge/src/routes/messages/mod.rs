@@ -10,17 +10,32 @@ mod transport;
 pub(crate) mod workload_identity;
 
 use host::MessagesPythonHost;
-use litellm_callbacks_legacy_python::LoggingOperation;
+use litellm_callbacks_legacy_python::{LoggedCallParam, LoggingOperation};
+use litellm_core_utils::get_llm_provider_logic::LlmProviders;
+use litellm_llms::vertex_ai::common_utils::EXPLICIT_LOCATION_PARAMS;
+use litellm_llms_types::formats::messages::MessagesOptionalParams;
 use modify_params::ModifyParams;
 use pyo3::prelude::*;
 
 use super::NativeCall;
 
+/// Python's Vertex AI Messages handler logs the explicitly configured location, which cost
+/// tracking prices the regional uplift from.
+fn vertex_explicit_location() -> LoggedCallParam {
+    LoggedCallParam {
+        provider: LlmProviders::VertexAi.into(),
+        read_from: &EXPLICIT_LOCATION_PARAMS,
+        logged_as: EXPLICIT_LOCATION_PARAMS[0],
+    }
+}
+
 fn run_messages(py: Python<'_>, call: NativeCall<'_>, asynchronous: bool) -> PyResult<Py<PyAny>> {
     let (arguments, logging) =
         crate::routes::call_hooks(py, LoggingOperation::Messages, &call, asynchronous)?;
     let host_client = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let hooks = logging.with_host_client(std::sync::Arc::clone(&host_client));
+    let hooks = logging
+        .with_host_client(std::sync::Arc::clone(&host_client))
+        .with_logged_call_param(vertex_explicit_location());
     let hooked_request = agentic::HookedRequest::default();
     let hooks = litellm_host_python::HookChain::new()
         .with(agentic::AgenticLoop::new(
@@ -145,4 +160,9 @@ pub(crate) fn messages(py: Python<'_>, call: NativeCall<'_>) -> PyResult<Py<PyAn
 #[pyfunction]
 pub(crate) fn amessages(py: Python<'_>, call: NativeCall<'_>) -> PyResult<Py<PyAny>> {
     run_messages(py, call, true)
+}
+
+#[pyfunction]
+pub(crate) fn messages_optional_params() -> Vec<&'static str> {
+    MessagesOptionalParams::fields().collect()
 }

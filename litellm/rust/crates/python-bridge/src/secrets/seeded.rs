@@ -4,7 +4,7 @@ use std::{
 };
 
 use futures_util::future::{BoxFuture, FutureExt};
-use litellm_core_utils::settings::Lookup;
+use litellm_env::Lookup;
 use litellm_secret_value::SecretValue;
 use litellm_secrets::{
     Error,

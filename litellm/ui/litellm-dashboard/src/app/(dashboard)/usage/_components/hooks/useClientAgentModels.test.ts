@@ -61,12 +61,9 @@ describe("useClientAgentModels", () => {
       entityIds: null,
     };
 
-    expect(dailyActivityExportCall).toHaveBeenCalledExactlyOnceWith(
-      "tag",
-      expectedRequest,
-      "daily_with_models",
-      "json",
-    );
+    expect(dailyActivityExportCall).toHaveBeenCalledExactlyOnceWith("tag", expectedRequest, "daily_with_models", {
+      format: "json",
+    });
     expect(result.current.error).toBeNull();
     expect(result.current.results[0].metrics.spend).toBe(1);
   });

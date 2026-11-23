@@ -3,6 +3,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use aws_credential_types::provider::{SharedCredentialsProvider, error::CredentialsError};
 use aws_smithy_runtime_api::client::http::SharedHttpClient;
+use aws_types::os_shim_internal::{Env, Fs};
 use litellm_secret_value::SecretValue;
 use moka::{Expiry, future::Cache};
 use std::{future::Future, pin::Pin, sync::Arc};
@@ -221,6 +222,7 @@ pub struct AwsAuthConfig {
     pub external_id: Option<SecretValue>,
     pub session_tags: Option<Vec<AwsSessionTag>>,
     pub session_policy: Option<&'static str>,
+    pub require_session_attribution: bool,
 }
 
 impl AwsAuthConfig {
@@ -248,6 +250,7 @@ impl AwsAuthConfig {
                 .or_else(|| env_lookup(AWS_EXTERNAL_ID).map(SecretValue::new)),
             session_tags: self.session_tags,
             session_policy: self.session_policy,
+            require_session_attribution: self.require_session_attribution,
         }
     }
 
@@ -274,6 +277,7 @@ pub enum AwsAuthFlow {
         role: String,
         session_name: Option<String>,
         web_identity_role: Option<String>,
+        web_identity_token_file: Option<String>,
         sts_region: Option<String>,
     },
     Profile {
@@ -320,9 +324,10 @@ pub fn classify_auth(
     config: AwsAuthConfig,
     env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
 ) -> AwsAuthFlow {
-    let web_identity_role = env_lookup(AWS_WEB_IDENTITY_TOKEN_FILE)
+    let web_identity = env_lookup(AWS_WEB_IDENTITY_TOKEN_FILE)
         .filter(|token_file| !token_file.is_empty())
-        .and_then(|_| env_lookup(AWS_ROLE_ARN));
+        .and_then(|token_file| Some((env_lookup(AWS_ROLE_ARN)?, token_file)));
+    let (web_identity_role, web_identity_token_file) = web_identity.unzip();
     let config = config.with_environment(env_lookup);
     let sts_region = config.sts_region(env_lookup);
     if let (Some(token), Some(role), Some(session_name)) = (
@@ -342,6 +347,7 @@ pub fn classify_auth(
             role,
             session_name: config.session_name.clone(),
             web_identity_role,
+            web_identity_token_file,
             sts_region,
         };
     }
@@ -410,7 +416,20 @@ impl AwsAuthService {
         {
             return Err(Error::WebIdentityTokenReference);
         }
-        self.fresh_credentials(&resolved, &flow).await
+        match (self.fresh_credentials(&resolved, &flow).await, &flow) {
+            (
+                Err(Error::Credentials {
+                    flow: CredentialFlow::Profile,
+                    ..
+                }),
+                AwsAuthFlow::Profile { name },
+            ) if !profile_defined(name, &Fs::real(), &Env::real()).await => {
+                Err(Error::ProfileNotFound {
+                    profile: name.clone(),
+                })
+            }
+            (credentials, _) => credentials,
+        }
     }
 
     pub async fn invalidate_credentials(
@@ -475,6 +494,19 @@ impl AwsAuthService {
             .await
             .map_err(|error| (*error).clone())
     }
+}
+
+/// Whether the AWS config or credentials file names the profile. A file that does not parse
+/// counts as naming it, so its own failure stands.
+async fn profile_defined(name: &str, fs: &Fs, env: &Env) -> bool {
+    aws_config::profile::load(
+        fs,
+        env,
+        &aws_runtime::env_config::file::EnvConfigFiles::default(),
+        None,
+    )
+    .await
+    .map_or(true, |profiles| profiles.get_profile(name).is_some())
 }
 
 fn names_the_environment(
@@ -553,6 +585,7 @@ async fn build_provider(
             role,
             session_name,
             web_identity_role,
+            web_identity_token_file,
             sts_region,
         } => {
             let running_as = RunningAs {
@@ -561,10 +594,31 @@ async fn build_provider(
                 sts_region: sts_region.clone(),
                 loader: loader.clone(),
             };
-            if running_as.is_target(web_identity_role.as_deref()).await {
+            let attributed = resolved.require_session_attribution
+                || resolved
+                    .session_tags
+                    .as_ref()
+                    .is_some_and(|tags| !tags.is_empty());
+            if !attributed && running_as.is_target(web_identity_role.as_deref()).await {
                 return Ok(loader.ambient().await);
             }
             let sdk_config = loader.sts_config(&resolved, sts_region).await;
+            if let (Some(irsa_role), Some(token_file), None, None) = (
+                &web_identity_role,
+                web_identity_token_file,
+                &resolved.access_key_id,
+                &resolved.secret_access_key,
+            ) {
+                return Ok(SharedCredentialsProvider::new(IrsaCrossAccount {
+                    sdk_config,
+                    token_file,
+                    irsa_role: irsa_role.clone(),
+                    role,
+                    session_name,
+                    external_id: resolved.external_id,
+                    session_tags: resolved.session_tags,
+                }));
+            }
             let builder = aws_config::sts::AssumeRoleProvider::builder(role)
                 .session_name(session_name.unwrap_or_else(default_session_name));
             let builder = match resolved.external_id {
@@ -577,7 +631,7 @@ async fn build_provider(
             };
             Ok(SharedCredentialsProvider::new(AssumedRole {
                 provider: builder.configure(&sdk_config).build().await,
-                fallback: web_identity_role.is_none().then_some(running_as),
+                fallback: (web_identity_role.is_none() && !attributed).then_some(running_as),
             }))
         }
         AwsAuthFlow::WebIdentity {
@@ -742,6 +796,100 @@ impl ProvideCredentials for WebIdentityProvider {
                 "litellm-web-identity",
             ))
         })
+    }
+}
+
+#[derive(Debug)]
+struct IrsaCrossAccount {
+    sdk_config: aws_types::SdkConfig,
+    token_file: String,
+    irsa_role: String,
+    role: String,
+    session_name: Option<String>,
+    external_id: Option<SecretValue>,
+    session_tags: Option<Vec<AwsSessionTag>>,
+}
+
+impl IrsaCrossAccount {
+    async fn credentials(&self) -> Result<Credentials, CredentialsError> {
+        let session_name = self
+            .session_name
+            .clone()
+            .unwrap_or_else(default_session_name);
+        let token = std::fs::read_to_string(&self.token_file).map_err(|error| {
+            CredentialsError::provider_error(Error::WebIdentityToken(litellm_error::Source::new(
+                error,
+            )))
+        })?;
+        let irsa = aws_sdk_sts::Client::new(&self.sdk_config)
+            .assume_role_with_web_identity()
+            .role_arn(&self.irsa_role)
+            .role_session_name(&session_name)
+            .web_identity_token(token.trim())
+            .send()
+            .await
+            .map_err(CredentialsError::provider_error)?;
+        let irsa = irsa.credentials().ok_or_else(|| {
+            CredentialsError::provider_error(Error::MissingWebIdentityCredentials)
+        })?;
+        let client = aws_sdk_sts::Client::new(
+            &self
+                .sdk_config
+                .to_builder()
+                .credentials_provider(SharedCredentialsProvider::new(Credentials::new(
+                    irsa.access_key_id(),
+                    irsa.secret_access_key(),
+                    Some(irsa.session_token().to_owned()),
+                    None,
+                    "litellm-irsa",
+                )))
+                .build(),
+        );
+        let _ = client.get_caller_identity().send().await;
+        let tags = self
+            .session_tags
+            .iter()
+            .flatten()
+            .map(|tag| {
+                aws_sdk_sts::types::Tag::builder()
+                    .key(&tag.key)
+                    .value(&tag.value)
+                    .build()
+                    .map_err(CredentialsError::invalid_configuration)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let response = client
+            .assume_role()
+            .role_arn(&self.role)
+            .role_session_name(&session_name)
+            .set_external_id(self.external_id.as_ref().map(|id| id.expose().to_owned()))
+            .set_tags((!tags.is_empty()).then_some(tags))
+            .send()
+            .await
+            .map_err(CredentialsError::provider_error)?;
+        let credentials = response.credentials().ok_or_else(|| {
+            CredentialsError::provider_error("AWS AssumeRole response had no credentials")
+        })?;
+        let expiration = SystemTime::try_from(*credentials.expiration())
+            .map_err(CredentialsError::provider_error)?;
+        Ok(Credentials::new(
+            credentials.access_key_id(),
+            credentials.secret_access_key(),
+            Some(credentials.session_token().to_owned()),
+            Some(expiration),
+            "litellm-irsa-assumed-role",
+        ))
+    }
+}
+
+impl ProvideCredentials for IrsaCrossAccount {
+    fn provide_credentials<'a>(
+        &'a self,
+    ) -> aws_credential_types::provider::future::ProvideCredentials<'a>
+    where
+        Self: 'a,
+    {
+        aws_credential_types::provider::future::ProvideCredentials::new(self.credentials())
     }
 }
 
@@ -1015,6 +1163,7 @@ pub fn aws_auth_config(
             tags
         }),
         session_policy: None,
+        require_session_attribution: false,
     }
 }
 
@@ -1035,6 +1184,13 @@ pub enum AwsCredentialSource {
 }
 
 impl AwsCredentialSource {
+    pub fn with_session_attribution(mut self, required: bool) -> Self {
+        if let Self::Chain(config) = &mut self {
+            config.require_session_attribution = required;
+        }
+        self
+    }
+
     pub fn from_params(params: &AwsParams, env_lookup: &dyn Fn(&str) -> Option<String>) -> Self {
         match host_supplied_credentials(params) {
             Some(credentials) if names_only_static_keys(params) => Self::HostSupplied(credentials),
@@ -1123,6 +1279,7 @@ pub fn host_supplied_credentials(params: &AwsParams) -> Option<Credentials> {
 mod tests {
     use super::*;
     use crate::constants::{AWS_REGION, BEDROCK_SERVICE};
+    use crate::error::StsFailure;
     use reqwest::header::CONTENT_TYPE;
 
     #[cfg(unix)]
@@ -1228,6 +1385,47 @@ mod tests {
 
     fn no_env(_: &str) -> Option<String> {
         None
+    }
+
+    #[rstest::rstest]
+    #[case::config_profile("present", true)]
+    #[case::credentials_profile("keys", true)]
+    #[case::absent("absent", false)]
+    #[case::absent_default("default", false)]
+    #[tokio::test]
+    async fn a_profile_is_defined_only_when_a_profile_file_names_it(
+        #[case] name: &str,
+        #[case] defined: bool,
+    ) {
+        let env = Env::from_slice(&[
+            ("AWS_CONFIG_FILE", "/aws/config"),
+            ("AWS_SHARED_CREDENTIALS_FILE", "/aws/credentials"),
+        ]);
+        let fs = Fs::from_slice(&[
+            ("/aws/config", "[profile present]\nregion = us-west-2\n"),
+            ("/aws/credentials", "[keys]\naws_access_key_id = a\n"),
+        ]);
+        assert_eq!(profile_defined(name, &fs, &env).await, defined);
+    }
+
+    #[tokio::test]
+    async fn a_profile_no_profile_file_names_is_not_found() {
+        let profile = "litellm-auth-aws-test-profile-that-is-never-configured";
+        let config = AwsAuthConfig {
+            profile_name: Some(profile.into()),
+            region_name: Some("us-east-1".into()),
+            ..Default::default()
+        };
+        let error = AwsAuthService::default()
+            .resolve_credentials(config, &no_env)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error,
+            Error::ProfileNotFound {
+                profile: profile.into()
+            }
+        );
     }
 
     #[rstest::rstest]
@@ -1917,6 +2115,8 @@ mod tests {
     struct Sts {
         requests: Arc<std::sync::Mutex<Vec<StsRequest>>>,
         deny_assume_role: bool,
+        reject_web_identity: Option<&'static str>,
+        unreachable: bool,
         caller_arns: Arc<std::sync::Mutex<Vec<Option<&'static str>>>>,
     }
 
@@ -1949,6 +2149,9 @@ mod tests {
             };
             match request.action() {
                 "AssumeRole" if self.deny_assume_role => (403, error("AccessDenied")),
+                "AssumeRoleWithWebIdentity" if self.reject_web_identity.is_some() => {
+                    (400, error(self.reject_web_identity.unwrap_or_default()))
+                }
                 "AssumeRole" => (
                     200,
                     format!(
@@ -1999,7 +2202,13 @@ mod tests {
             };
             let (status, body) = self.response(&recorded);
             self.requests.lock().unwrap().push(recorded);
+            let unreachable = self.unreachable;
             aws_smithy_runtime_api::client::http::HttpConnectorFuture::new(async move {
+                if unreachable {
+                    return Err(aws_smithy_runtime_api::client::result::ConnectorError::io(
+                        std::io::Error::from(std::io::ErrorKind::ConnectionRefused).into(),
+                    ));
+                }
                 Ok(
                     aws_smithy_runtime_api::client::orchestrator::HttpResponse::new(
                         status.try_into().unwrap(),
@@ -2176,6 +2385,144 @@ mod tests {
         );
     }
 
+    #[rstest::rstest]
+    #[case::session_name(true)]
+    #[case::session_tags(false)]
+    #[tokio::test]
+    async fn attributed_sessions_cannot_fall_back_to_the_gateway_role(
+        #[case] named: bool,
+        #[values(false, true)] denied: bool,
+    ) {
+        let sts = Sts {
+            deny_assume_role: denied,
+            caller_arns: Arc::new(std::sync::Mutex::new(vec![Some(
+                "arn:aws:sts::123456789012:assumed-role/target/gateway",
+            )])),
+            ..Sts::default()
+        };
+        let source = AwsCredentialSource::Chain(Box::new(AwsAuthConfig {
+            role_name: Some(TARGET_ROLE.into()),
+            session_name: named.then(|| "attributed".into()),
+            require_session_attribution: named,
+            session_tags: (!named).then(|| {
+                vec![AwsSessionTag {
+                    key: "team".into(),
+                    value: "genai".into(),
+                }]
+            }),
+            ..AwsAuthConfig::default()
+        }));
+        let result = source
+            .resolve(
+                &sts_service(&sts, None),
+                "us-east-1",
+                BEDROCK_SERVICE,
+                &no_env,
+            )
+            .await;
+        assert_eq!(result.is_err(), denied);
+        assert_eq!(
+            sts.sent()
+                .iter()
+                .map(StsRequest::action)
+                .collect::<Vec<_>>(),
+            ["AssumeRole"]
+        );
+    }
+
+    #[rstest::rstest]
+    #[case::named_session(
+        Some("attributed"),
+        Some("arn:aws:sts::123456789012:assumed-role/irsa/attributed")
+    )]
+    #[case::default_session_and_a_failed_caller_probe(None, None)]
+    #[tokio::test]
+    async fn irsa_cross_account_assumes_the_irsa_role_with_the_session_name_before_the_target(
+        #[case] session_name: Option<&str>,
+        #[case] caller_arn: Option<&'static str>,
+    ) {
+        const IRSA_ROLE: &str = "arn:aws:iam::210987654321:role/irsa";
+        let token_file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(token_file.path(), " irsa.jwt.value\n").unwrap();
+        let token_path = token_file.path().to_str().unwrap().to_owned();
+        let sts = Sts {
+            caller_arns: Arc::new(std::sync::Mutex::new(vec![caller_arn])),
+            ..Sts::default()
+        };
+        let source = AwsCredentialSource::Chain(Box::new(AwsAuthConfig {
+            role_name: Some(TARGET_ROLE.into()),
+            session_name: session_name.map(str::to_owned),
+            external_id: Some("external".into()),
+            sts_endpoint: Some("https://sts.eu-west-1.amazonaws.com".into()),
+            ..AwsAuthConfig::default()
+        }));
+
+        let credentials = source
+            .resolve(
+                &sts_service(&sts, None),
+                "us-east-1",
+                BEDROCK_SERVICE,
+                &|name: &str| match name {
+                    AWS_WEB_IDENTITY_TOKEN_FILE => Some(token_path.clone()),
+                    AWS_ROLE_ARN => Some(IRSA_ROLE.to_owned()),
+                    _ => None,
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(credentials.access_key_id(), "role-access");
+        let [web, caller, assume] = sts.sent().try_into().unwrap();
+        assert_eq!(
+            [web.action(), caller.action(), assume.action()],
+            [
+                "AssumeRoleWithWebIdentity",
+                "GetCallerIdentity",
+                "AssumeRole"
+            ]
+        );
+        let session = web.form["RoleSessionName"].clone();
+        match session_name {
+            Some(name) => assert_eq!(session, name),
+            None => assert!(session.starts_with("litellm-session-"), "{session}"),
+        }
+        assert_eq!(
+            web.form,
+            std::collections::BTreeMap::from([
+                ("Action".to_owned(), "AssumeRoleWithWebIdentity".to_owned()),
+                ("RoleArn".to_owned(), IRSA_ROLE.to_owned()),
+                ("RoleSessionName".to_owned(), session.clone()),
+                ("Version".to_owned(), "2011-06-15".to_owned()),
+                ("WebIdentityToken".to_owned(), "irsa.jwt.value".to_owned()),
+            ])
+        );
+        assert_eq!(web.authorization, None);
+        assert_eq!(
+            assume.form,
+            std::collections::BTreeMap::from([
+                ("Action".to_owned(), "AssumeRole".to_owned()),
+                ("ExternalId".to_owned(), "external".to_owned()),
+                ("RoleArn".to_owned(), TARGET_ROLE.to_owned()),
+                ("RoleSessionName".to_owned(), session),
+                ("Version".to_owned(), "2011-06-15".to_owned()),
+            ])
+        );
+        for signed in [&caller, &assume] {
+            let authorization = signed.authorization.as_deref().unwrap();
+            assert!(
+                authorization.contains("Credential=web-access/"),
+                "{authorization}"
+            );
+            assert!(
+                authorization.contains("/eu-west-1/sts/aws4_request"),
+                "{authorization}"
+            );
+        }
+        for request in [&web, &caller, &assume] {
+            assert_eq!(request.host, "sts.eu-west-1.amazonaws.com");
+        }
+    }
+
     fn web_identity_source(token: &str) -> AwsCredentialSource {
         AwsCredentialSource::from_params(
             &AwsParams {
@@ -2218,6 +2565,73 @@ mod tests {
         assert_eq!(request.form["RoleSessionName"], "oidc-session");
         assert_eq!(request.form["DurationSeconds"], "3600");
         assert_eq!(request.form.get("Policy").map(String::as_str), policy);
+    }
+
+    #[rstest::rstest]
+    #[case::invalid_web_identity_token(
+        Sts { reject_web_identity: Some("InvalidIdentityToken"), ..Sts::default() },
+        StsFailure::InvalidWebIdentityToken { message: "denied".into() }
+    )]
+    #[case::expired_web_identity_token(
+        Sts { reject_web_identity: Some("ExpiredTokenException"), ..Sts::default() },
+        StsFailure::Rejected {
+            operation: "AssumeRoleWithWebIdentity",
+            code: "ExpiredTokenException".into(),
+            message: "denied".into(),
+        }
+    )]
+    #[case::unreachable(Sts { unreachable: true, ..Sts::default() }, StsFailure::Unreachable)]
+    #[tokio::test]
+    async fn a_failed_web_identity_exchange_names_why_sts_failed(
+        #[case] sts: Sts,
+        #[case] expected: StsFailure,
+    ) {
+        let error = web_identity_source("oidc/file/var/run/secrets/token")
+            .resolve(
+                &sts_service(&sts, Some(Arc::new(Tokens(Some("resolved.jwt.value"))))),
+                "us-east-1",
+                BEDROCK_SERVICE,
+                &no_env,
+            )
+            .await
+            .unwrap_err();
+
+        assert_eq!(
+            litellm_error::find::<Error>(&error).and_then(Error::sts_failure),
+            Some(expected)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_denied_assume_role_names_the_sts_code() {
+        let sts = Sts {
+            deny_assume_role: true,
+            caller_arns: Arc::new(std::sync::Mutex::new(vec![None, None])),
+            ..Sts::default()
+        };
+        let source = AwsCredentialSource::Chain(Box::new(AwsAuthConfig {
+            role_name: Some(TARGET_ROLE.into()),
+            ..AwsAuthConfig::default()
+        }));
+
+        let error = source
+            .resolve(
+                &sts_service(&sts, None),
+                "us-east-1",
+                BEDROCK_SERVICE,
+                &no_env,
+            )
+            .await
+            .unwrap_err();
+
+        assert_eq!(
+            litellm_error::find::<Error>(&error).and_then(Error::sts_failure),
+            Some(StsFailure::Rejected {
+                operation: "AssumeRole",
+                code: "AccessDenied".into(),
+                message: "denied".into(),
+            })
+        );
     }
 
     #[rstest::rstest]
@@ -2310,12 +2724,12 @@ mod tests {
     #[case::keys_with_a_role_assume_it(
         params_keys(AwsParams { aws_role_name: Some(TARGET_ROLE.into()), ..AwsParams::default() }),
         &[],
-        AwsAuthFlow::AssumeRole { role: TARGET_ROLE.into(), session_name: None, web_identity_role: None, sts_region: Some("eu-central-1".into()) }
+        AwsAuthFlow::AssumeRole { role: TARGET_ROLE.into(), session_name: None, web_identity_role: None, web_identity_token_file: None, sts_region: Some("eu-central-1".into()) }
     )]
     #[case::keys_under_an_ambient_role_assume_it(
         params_keys(AwsParams::default()),
         &[(AWS_ROLE_NAME, TARGET_ROLE)],
-        AwsAuthFlow::AssumeRole { role: TARGET_ROLE.into(), session_name: None, web_identity_role: None, sts_region: Some("eu-central-1".into()) }
+        AwsAuthFlow::AssumeRole { role: TARGET_ROLE.into(), session_name: None, web_identity_role: None, web_identity_token_file: None, sts_region: Some("eu-central-1".into()) }
     )]
     #[case::keys_with_a_profile_use_the_profile(
         params_keys(AwsParams { aws_profile_name: Some("work".into()), ..AwsParams::default() }),
@@ -2325,7 +2739,7 @@ mod tests {
     #[case::a_blank_role_is_still_a_role(
         params_keys(AwsParams { aws_role_name: Some(String::new()), ..AwsParams::default() }),
         &[],
-        AwsAuthFlow::AssumeRole { role: String::new(), session_name: None, web_identity_role: None, sts_region: Some("eu-central-1".into()) }
+        AwsAuthFlow::AssumeRole { role: String::new(), session_name: None, web_identity_role: None, web_identity_token_file: None, sts_region: Some("eu-central-1".into()) }
     )]
     fn params_keys_follow_python_credential_precedence(
         #[case] params: AwsParams,

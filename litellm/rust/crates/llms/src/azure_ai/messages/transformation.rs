@@ -1,4 +1,3 @@
-use crate::anthropic::messages::transformation::retry_anthropic_messages_after_http_error;
 use litellm_auth::{InputSource, Sourced};
 use litellm_auth_azure::{
     AzureAuthInputs, AzureTokenRetry, ConfigValue, DEFAULT_AZURE_SCOPE, TokenTransport,
@@ -7,7 +6,7 @@ use litellm_host::interceptors::RetriedRequest;
 use litellm_http::request::{has_bearer_auth, has_header};
 use litellm_llms_types::{
     formats::messages::{MessagesOptionalParams, MessagesRequest},
-    providers::anthropic::{BetaProvider, DEFAULT_HEADERS, MESSAGES_PATH},
+    providers::anthropic::{BetaProvider, MESSAGES_PATH},
 };
 use litellm_router_types::LitellmParams;
 use litellm_secret_value::SecretValue;
@@ -18,15 +17,10 @@ use crate::{
     anthropic::{
         beta_gated_fields::strip_beta_gated_request,
         beta_headers::BetaPolicy,
-        common_utils::{
-            API_KEY_PLACEMENT, existing_betas, map_messages, strip_raw_unsignable_thinking_blocks,
-            strip_trailing_slashes, strip_unsignable_thinking_blocks,
-        },
-        messages::{
-            handler::shape_anthropic_messages_request,
-            transformation::{
-                is_claude_model, transform_messages_request, update_headers_with_safeguards_beta,
-            },
+        common_utils::{API_KEY_PLACEMENT, existing_betas, strip_trailing_slashes},
+        messages::transformation::{
+            ANTHROPIC_MESSAGES_CONFIG, drop_sampling_params_removed_by_requested_version,
+            update_headers_with_safeguards_beta,
         },
     },
     azure_ai::common_utils::{
@@ -41,7 +35,8 @@ use crate::{
         messages::{
             context::{MessagesShapeOptions, MessagesTransformContext},
             normalization::{normalize_system_role_messages, strip_cache_control_scope},
-            transformation::BaseMessagesConfig,
+            tools::ToolCustomField,
+            transformation::{MessagesAuth, MessagesDialect, MessagesEndpoint, MessagesReply},
         },
     },
 };
@@ -52,50 +47,11 @@ const AZURE_API_KEY_HEADER: &str = "api-key";
 const OIDC_PREFIX: &str = "oidc/";
 const ENVIRONMENT_REFERENCE_PREFIX: &str = "os.environ/";
 
-pub struct AzureAnthropicMessagesConfig;
+pub struct AzureAiMessagesConfig;
 
-pub const AZURE_ANTHROPIC_MESSAGES_CONFIG: AzureAnthropicMessagesConfig =
-    AzureAnthropicMessagesConfig;
+pub const AZURE_AI_MESSAGES_CONFIG: AzureAiMessagesConfig = AzureAiMessagesConfig;
 
-impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
-    fn tool_custom_field(&self, model: &str) -> crate::base_llm::messages::tools::ToolCustomField {
-        crate::base_llm::messages::tools::ToolCustomField::Rewrite {
-            hoist_defer_loading: is_claude_model(model),
-        }
-    }
-
-    fn retry_after_http_error(
-        &self,
-        status: u16,
-        error_text: &str,
-        request_body: &Value,
-        context: &MessagesTransformContext,
-    ) -> Option<RetriedRequest> {
-        retry_anthropic_messages_after_http_error(status, error_text, request_body, context)
-    }
-
-    fn shape_request(
-        &self,
-        request: MessagesRequest,
-        options: MessagesShapeOptions,
-    ) -> Result<MessagesRequest, Error> {
-        shape_anthropic_messages_request(request, options)
-    }
-
-    fn request_for_url(&self, request: MessagesRequest, _url: &str) -> MessagesRequest {
-        if !is_claude_model(&request.model) {
-            return request;
-        }
-        MessagesRequest {
-            messages: map_messages(
-                request.messages,
-                strip_unsignable_thinking_blocks,
-                strip_raw_unsignable_thinking_blocks,
-            ),
-            ..request
-        }
-    }
-
+impl MessagesEndpoint for AzureAiMessagesConfig {
     fn get_complete_url(
         &self,
         api_base: Option<&str>,
@@ -106,15 +62,9 @@ impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
     ) -> Result<String, Error> {
         complete_azure_anthropic_url(api_base, env_lookup)
     }
+}
 
-    fn transform_anthropic_messages_request(
-        &self,
-        request: MessagesRequest,
-        context: &MessagesTransformContext,
-    ) -> Result<MessagesRequest, Error> {
-        transform_messages_request(request, &context.keeping_display_updates())
-    }
-
+impl MessagesAuth for AzureAiMessagesConfig {
     fn secret_names(&self) -> &'static [&'static str] {
         &[AZURE_OPENAI_API_KEY_ENV, AZURE_API_KEY_ENV]
     }
@@ -208,9 +158,41 @@ impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
         };
         Ok(ValidatedEnvironment { headers, auth })
     }
+}
+
+impl MessagesDialect for AzureAiMessagesConfig {
+    fn shape_request(
+        &self,
+        request: MessagesRequest,
+        options: MessagesShapeOptions,
+    ) -> Result<MessagesRequest, Error> {
+        ANTHROPIC_MESSAGES_CONFIG.shape_request(request, options)
+    }
+
+    fn tool_custom_field(&self, model: &str) -> ToolCustomField {
+        ANTHROPIC_MESSAGES_CONFIG.tool_custom_field(model)
+    }
+
+    fn transform_anthropic_messages_request(
+        &self,
+        request: MessagesRequest,
+        context: &MessagesTransformContext,
+    ) -> Result<MessagesRequest, Error> {
+        ANTHROPIC_MESSAGES_CONFIG.transform_anthropic_messages_request(request, context)
+    }
+
+    fn request_body(
+        &self,
+        request: MessagesRequest,
+        headers: &Headers,
+        _url: &str,
+        drop_params: bool,
+    ) -> Result<MessagesRequest, Error> {
+        drop_sampling_params_removed_by_requested_version(request, headers, drop_params)
+    }
 
     fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
-        DEFAULT_HEADERS
+        ANTHROPIC_MESSAGES_CONFIG.default_headers()
     }
 
     /// Python's `_update_headers_with_anthropic_beta`, then the handler's
@@ -233,22 +215,34 @@ impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
         headers: Headers,
         context: &MessagesTransformContext,
     ) -> Result<(MessagesRequest, Headers), Error> {
-        let stripped = strip_beta_gated_request(
+        let request = strip_beta_gated_request(
             request,
             &existing_betas(&headers),
             context.drops_unsupported_params,
             BetaProvider::AzureAi,
         );
-        let normalized = strip_cache_control_scope(normalize_system_role_messages(
-            stripped,
+        let request = normalize_system_role_messages(
+            request,
             context
                 .thinking
                 .capabilities
                 .supports_mid_conversation_system,
             context.drops_unsupported_params,
             BetaProvider::AzureAi,
-        ));
-        Ok((normalized, headers))
+        );
+        Ok((strip_cache_control_scope(request), headers))
+    }
+}
+
+impl MessagesReply for AzureAiMessagesConfig {
+    fn retry_after_http_error(
+        &self,
+        status: u16,
+        error_text: &str,
+        request_body: &Value,
+        context: &MessagesTransformContext,
+    ) -> Option<RetriedRequest> {
+        ANTHROPIC_MESSAGES_CONFIG.retry_after_http_error(status, error_text, request_body, context)
     }
 }
 
@@ -427,45 +421,6 @@ mod tests {
         serde_json::to_value(request).expect("serializable request")
     }
 
-    #[rstest]
-    #[case::claude("claude-sonnet-5-5", false)]
-    #[case::non_claude("kimi-k3", true)]
-    fn unsigned_thinking_is_dropped_only_for_a_claude_deployment(
-        #[case] model: &str,
-        #[case] kept: bool,
-    ) {
-        let unsigned = json!({"type": "thinking", "thinking": "Read it first.", "signature": ""});
-        let tool_use = json!({
-            "type": "tool_use", "id": "toolu_1", "name": "Read", "input": {"file_path": "numbers.txt"}
-        });
-        let non_string_signature =
-            json!({"type": "thinking", "thinking": "Add them.", "signature": 5});
-        let unparsed_text = json!({"type": "text", "text": "22", "cache_control": "ephemeral"});
-        let messages = json!([
-            {"role": "user", "content": "Read numbers.txt."},
-            {"role": "assistant", "content": [unsigned, tool_use]},
-            {"role": "user", "content": [
-                {"type": "tool_result", "tool_use_id": "toolu_1", "content": "3 7 12"}
-            ]},
-            {"role": "assistant", "content": [non_string_signature, unparsed_text]},
-            {"role": "user", "content": "And the product?"}
-        ]);
-        let sent = to_value(AZURE_ANTHROPIC_MESSAGES_CONFIG.request_for_url(
-            request_from(json!({"model": model, "max_tokens": 64, "messages": messages})),
-            "https://team.services.ai.azure.com/anthropic/v1/messages",
-        ));
-        let (tool_turn, unparsed_turn) = if kept {
-            (
-                json!([unsigned, tool_use]),
-                json!([non_string_signature, unparsed_text]),
-            )
-        } else {
-            (json!([tool_use]), json!([unparsed_text]))
-        };
-        assert_eq!(sent["messages"][1]["content"], tool_turn);
-        assert_eq!(sent["messages"][3]["content"], unparsed_turn);
-    }
-
     fn finalized(
         request: MessagesRequest,
         headers: &[(&str, &str)],
@@ -476,7 +431,7 @@ mod tests {
             .map(|(name, value)| (name.to_string(), value.to_string()))
             .collect();
         to_value(
-            AZURE_ANTHROPIC_MESSAGES_CONFIG
+            AZURE_AI_MESSAGES_CONFIG
                 .finalize_request(request, headers, context)
                 .expect("finalized request")
                 .0,
@@ -632,7 +587,7 @@ mod tests {
         api_key: Option<&str>,
         params: serde_json::Value,
     ) -> ValidatedEnvironment {
-        AZURE_ANTHROPIC_MESSAGES_CONFIG
+        AZURE_AI_MESSAGES_CONFIG
             .validate_environment(
                 forwarded
                     .iter()
@@ -1099,7 +1054,7 @@ mod tests {
             &|_: &str| None,
         );
         let transformed = to_value(
-            AZURE_ANTHROPIC_MESSAGES_CONFIG
+            AZURE_AI_MESSAGES_CONFIG
                 .transform_anthropic_messages_request(request_from(body.clone()), &context)
                 .expect("request transforms"),
         );
@@ -1330,7 +1285,7 @@ mod tests {
             &|_: &str| None,
         );
         let transformed = to_value(
-            AZURE_ANTHROPIC_MESSAGES_CONFIG
+            AZURE_AI_MESSAGES_CONFIG
                 .transform_anthropic_messages_request(request_from(body.clone()), &context)
                 .expect("request transforms"),
         );
@@ -1420,7 +1375,7 @@ mod tests {
             .collect(),
         ));
         assert_eq!(
-            AZURE_ANTHROPIC_MESSAGES_CONFIG.request_headers(
+            AZURE_AI_MESSAGES_CONFIG.request_headers(
                 pairs(&[("x-api-key", "k")])
                     .into_iter()
                     .chain(pairs(forwarded))
@@ -1444,7 +1399,7 @@ mod tests {
             "usage": {"input_tokens": 1, "output_tokens": 2}
         }))
         .expect("valid response");
-        let transformed = AZURE_ANTHROPIC_MESSAGES_CONFIG
+        let transformed = AZURE_AI_MESSAGES_CONFIG
             .transform_anthropic_messages_response("claude-sonnet-4-5", response)
             .expect("response transforms");
         let value = serde_json::to_value(transformed).expect("serializable");
@@ -1460,7 +1415,7 @@ mod tests {
             requested.borrow_mut().push(name.to_string());
             None
         };
-        let _ = AZURE_ANTHROPIC_MESSAGES_CONFIG.validate_environment(
+        let _ = AZURE_AI_MESSAGES_CONFIG.validate_environment(
             Vec::new(),
             None,
             "claude",
@@ -1468,7 +1423,7 @@ mod tests {
             &LitellmParams::default(),
             &record,
         );
-        let _ = AZURE_ANTHROPIC_MESSAGES_CONFIG.get_complete_url(
+        let _ = AZURE_AI_MESSAGES_CONFIG.get_complete_url(
             None,
             "claude",
             &LitellmParams::default(),
@@ -1477,7 +1432,7 @@ mod tests {
         );
         let requested = requested.into_inner();
         assert!(!requested.is_empty());
-        let deferred = AZURE_ANTHROPIC_MESSAGES_CONFIG.deferred_secret_names(
+        let deferred = AZURE_AI_MESSAGES_CONFIG.deferred_secret_names(
             true,
             &Vec::new(),
             None,
@@ -1488,7 +1443,7 @@ mod tests {
         let undeclared: Vec<&String> = requested
             .iter()
             .filter(|name| {
-                !AZURE_ANTHROPIC_MESSAGES_CONFIG
+                !AZURE_AI_MESSAGES_CONFIG
                     .secret_names()
                     .contains(&name.as_str())
                     && !deferred.contains(&name.as_str())
@@ -1520,7 +1475,7 @@ mod tests {
             .map(|(name, value)| (name.to_string(), value.to_string()))
             .collect();
         assert_eq!(
-            AZURE_ANTHROPIC_MESSAGES_CONFIG.deferred_secret_names(
+            AZURE_AI_MESSAGES_CONFIG.deferred_secret_names(
                 true,
                 &headers,
                 api_key,
@@ -1542,7 +1497,7 @@ mod tests {
         #[case] expected: &[&str],
     ) {
         assert_eq!(
-            AZURE_ANTHROPIC_MESSAGES_CONFIG.deferred_secret_names(
+            AZURE_AI_MESSAGES_CONFIG.deferred_secret_names(
                 true,
                 &Vec::new(),
                 Some("sk-azure"),
@@ -1557,7 +1512,7 @@ mod tests {
     #[test]
     fn without_a_key_or_a_call_base_both_deferred_secrets_are_read() {
         assert_eq!(
-            AZURE_ANTHROPIC_MESSAGES_CONFIG.deferred_secret_names(
+            AZURE_AI_MESSAGES_CONFIG.deferred_secret_names(
                 true,
                 &Vec::new(),
                 None,
@@ -1566,6 +1521,36 @@ mod tests {
                 &|_| None
             ),
             ["AZURE_AD_TOKEN", "AZURE_API_BASE"]
+        );
+    }
+
+    #[rstest]
+    #[case::sdk_2("2026-10-21", None)]
+    #[case::sdk_1("2023-06-01", Some(1.0))]
+    fn temperature_follows_the_forwarded_api_version(
+        #[case] version: &str,
+        #[case] temperature: Option<f64>,
+    ) {
+        let body = AZURE_AI_MESSAGES_CONFIG
+            .request_body(
+                request_from(json!({
+                    "model": "claude-test",
+                    "max_tokens": 16,
+                    "temperature": 1.0,
+                    "messages": [{"role": "user", "content": "hi"}]
+                })),
+                &vec![("anthropic-version".to_string(), version.to_string())],
+                "https://team.services.ai.azure.com/anthropic/v1/messages",
+                true,
+            )
+            .unwrap();
+        assert_eq!(
+            body.params
+                .temperature
+                .as_ref()
+                .and_then(litellm_llms_types::recognized::Recognized::known)
+                .copied(),
+            temperature
         );
     }
 }

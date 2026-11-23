@@ -16,8 +16,8 @@ const ROUTING_PREFIXES: [&str; 8] = [
     "nova-2/",
     "nova/",
 ];
-const CROSS_REGION_INFERENCE_PREFIXES: [&str; 7] =
-    ["global", "us", "eu", "apac", "jp", "au", "us-gov"];
+const CROSS_REGION_INFERENCE_PREFIXES: [&str; 8] =
+    ["global", "us", "eu", "apac", "jp", "au", "ca", "us-gov"];
 
 pub fn bedrock_base_model(model: &str) -> &str {
     let unrouted = ROUTE_PREFIXES
@@ -51,6 +51,14 @@ pub fn strip_bedrock_routing_prefix(model: &str) -> &str {
     ROUTING_PREFIXES.into_iter().fold(model, |model, prefix| {
         model.strip_prefix(prefix).unwrap_or(model)
     })
+}
+
+pub fn split_bedrock_region_path(model: &str) -> (Option<&str>, &str) {
+    let stripped = strip_bedrock_routing_prefix(model);
+    match stripped.split_once('/') {
+        Some((region, model_id)) if is_bedrock_region(region) => (Some(region), model_id),
+        _ => (None, stripped),
+    }
 }
 
 fn model_name_from_arn(model: &str) -> &str {
@@ -138,7 +146,7 @@ pub(crate) fn strip_unsupported_bedrock_invoke_output_config_keys(
     if output_config.keys().all(|key| key == "format") || accepts_output_config {
         return;
     }
-    litellm_tracing::warn!(
+    tracing::warn!(
         "Bedrock Invoke: stripping unsupported `output_config` keys for model={model}: neither `supports_output_config` nor any `supports_*_reasoning_effort` flag is set in model_prices_and_context_window.json. Add the capability flag to the model JSON entry if this model accepts `output_config`."
     );
     match output_config
@@ -262,12 +270,15 @@ pub(crate) fn tools_without_eager_input_streaming(request_body: &mut Map<String,
         });
 }
 
-pub(crate) fn validated_region(region: String) -> Result<String, Error> {
-    if !region.is_empty()
+pub(crate) fn is_valid_region(region: &str) -> bool {
+    !region.is_empty()
         && region
             .bytes()
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
-    {
+}
+
+pub(crate) fn validated_region(region: String) -> Result<String, Error> {
+    if is_valid_region(&region) {
         return Ok(region);
     }
     Err(Error::InvalidRequest(ErrorDetail::InvalidValue {
@@ -319,6 +330,7 @@ mod tests {
 
     #[rstest]
     #[case::cross_region("us.anthropic.claude-x-v1:0", "anthropic.claude-x-v1:0")]
+    #[case::canada_cross_region("ca.anthropic.claude-x-v1:0", "anthropic.claude-x-v1:0")]
     #[case::converse_route("bedrock/converse/anthropic.claude-x", "anthropic.claude-x")]
     #[case::mantle_route(
         "bedrock/mantle/anthropic.claude-sonnet-5",

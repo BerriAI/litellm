@@ -70,7 +70,9 @@ def cost_per_token(model: str, usage: Usage, current_time: datetime | None = Non
 
     ## CALCULATE INPUT COST
     prompt_tokens: Final = usage.prompt_tokens or 0
-    reported_cached_tokens: Final = getattr(usage.prompt_tokens_details, "cached_tokens", 0) or 0
+    reported_cached_tokens: Final = (
+        usage.prompt_tokens_details.cached_tokens or 0 if usage.prompt_tokens_details is not None else 0
+    )
     cached_tokens: Final = min(prompt_tokens, reported_cached_tokens)
     cache_read_cost_per_token: Final = (
         input_cost_per_token if math.isnan(rates.cache_read_rate) else rates.cache_read_rate

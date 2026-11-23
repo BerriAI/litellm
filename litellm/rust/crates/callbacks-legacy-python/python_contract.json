@@ -160,6 +160,7 @@
     "request_body",
     "chunks",
     "error",
-    "head"
+    "head",
+    "detached"
   ]
 }

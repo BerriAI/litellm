@@ -1,12 +1,11 @@
-use crate::anthropic::messages::transformation::retry_anthropic_messages_after_http_error;
 use litellm_auth::CredentialPlacement;
 use litellm_host::interceptors::RetriedRequest;
 use litellm_secret_value::SecretValue;
 
-use litellm_core_utils::settings::resolve_non_empty;
+use litellm_env::resolve_non_empty;
 use litellm_llms_types::{
     formats::messages::{MessagesOptionalParams, MessagesRequest, MessagesTool},
-    providers::anthropic::{DEFAULT_HEADERS, MESSAGES_PATH},
+    providers::anthropic::MESSAGES_PATH,
     recognized::Recognized,
 };
 use litellm_router_types::LitellmParams;
@@ -16,16 +15,17 @@ use crate::{
     Error,
     anthropic::{
         common_utils::{has_anthropic_credential, strip_billing_metadata_from_system},
-        messages::{
-            handler::shape_anthropic_messages_request,
-            transformation::{transform_messages_request, update_headers_with_anthropic_beta},
+        messages::transformation::{
+            ANTHROPIC_MESSAGES_CONFIG, transform_messages_request,
+            update_headers_with_anthropic_beta,
         },
     },
     base_llm::{
         auth::{AuthScheme, Headers, ValidatedEnvironment},
         messages::{
             context::{MessagesShapeOptions, MessagesTransformContext},
-            transformation::BaseMessagesConfig,
+            tools::ToolCustomField,
+            transformation::{MessagesAuth, MessagesDialect, MessagesEndpoint, MessagesReply},
         },
     },
 };
@@ -41,36 +41,11 @@ const CUSTOM_TOOL_TYPE: &str = "custom";
 /// DeepSeek's Anthropic-compatible Messages API: the Anthropic payload shaping, a key in
 /// `x-api-key`, and a host that rejects the explicit `custom` tool discriminator and the
 /// first-party billing system blocks.
-pub struct DeepSeekAnthropicMessagesConfig;
+pub struct DeepSeekMessagesConfig;
 
-pub const DEEPSEEK_ANTHROPIC_MESSAGES_CONFIG: DeepSeekAnthropicMessagesConfig =
-    DeepSeekAnthropicMessagesConfig;
+pub const DEEPSEEK_MESSAGES_CONFIG: DeepSeekMessagesConfig = DeepSeekMessagesConfig;
 
-impl BaseMessagesConfig for DeepSeekAnthropicMessagesConfig {
-    fn tool_custom_field(&self, _model: &str) -> crate::base_llm::messages::tools::ToolCustomField {
-        crate::base_llm::messages::tools::ToolCustomField::Rewrite {
-            hoist_defer_loading: false,
-        }
-    }
-
-    fn retry_after_http_error(
-        &self,
-        status: u16,
-        error_text: &str,
-        request_body: &Value,
-        context: &MessagesTransformContext,
-    ) -> Option<RetriedRequest> {
-        retry_anthropic_messages_after_http_error(status, error_text, request_body, context)
-    }
-
-    fn shape_request(
-        &self,
-        request: MessagesRequest,
-        options: MessagesShapeOptions,
-    ) -> Result<MessagesRequest, Error> {
-        shape_anthropic_messages_request(request, options)
-    }
-
+impl MessagesEndpoint for DeepSeekMessagesConfig {
     fn get_complete_url(
         &self,
         api_base: Option<&str>,
@@ -81,37 +56,16 @@ impl BaseMessagesConfig for DeepSeekAnthropicMessagesConfig {
     ) -> Result<String, Error> {
         Ok(complete_deepseek_anthropic_url(api_base, env_lookup))
     }
-
-    fn transform_anthropic_messages_request(
+    fn checks_claude_signatures(
         &self,
-        request: MessagesRequest,
-        context: &MessagesTransformContext,
-    ) -> Result<MessagesRequest, Error> {
-        let request = transform_messages_request(
-            MessagesRequest {
-                params: MessagesOptionalParams {
-                    system: request
-                        .params
-                        .system
-                        .and_then(strip_billing_metadata_from_system),
-                    ..request.params
-                },
-                ..request
-            },
-            context,
-        )?;
-        Ok(MessagesRequest {
-            params: MessagesOptionalParams {
-                tools: request
-                    .params
-                    .tools
-                    .map(|tools| tools.into_iter().map(sanitize_tool).collect()),
-                ..request.params
-            },
-            ..request
-        })
+        _api_base: Option<&str>,
+        _env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> bool {
+        false
     }
+}
 
+impl MessagesAuth for DeepSeekMessagesConfig {
     fn secret_names(&self) -> &'static [&'static str] {
         &[
             DEEPSEEK_API_KEY_ENV,
@@ -151,13 +105,50 @@ impl BaseMessagesConfig for DeepSeekAnthropicMessagesConfig {
             },
         })
     }
+}
+
+impl MessagesDialect for DeepSeekMessagesConfig {
+    fn shape_request(
+        &self,
+        request: MessagesRequest,
+        options: MessagesShapeOptions,
+    ) -> Result<MessagesRequest, Error> {
+        ANTHROPIC_MESSAGES_CONFIG.shape_request(request, options)
+    }
+
+    fn tool_custom_field(&self, _model: &str) -> ToolCustomField {
+        ToolCustomField::Rewrite {
+            hoist_defer_loading: false,
+        }
+    }
+
+    fn transform_anthropic_messages_request(
+        &self,
+        request: MessagesRequest,
+        context: &MessagesTransformContext,
+    ) -> Result<MessagesRequest, Error> {
+        let request = transform_messages_request(without_billing_system_blocks(request), context)?;
+        Ok(without_custom_tool_type(request))
+    }
 
     fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
-        DEFAULT_HEADERS
+        ANTHROPIC_MESSAGES_CONFIG.default_headers()
     }
 
     fn request_headers(&self, headers: Headers, request: &MessagesRequest) -> Headers {
         update_headers_with_anthropic_beta(headers, request)
+    }
+}
+
+impl MessagesReply for DeepSeekMessagesConfig {
+    fn retry_after_http_error(
+        &self,
+        status: u16,
+        error_text: &str,
+        request_body: &Value,
+        context: &MessagesTransformContext,
+    ) -> Option<RetriedRequest> {
+        ANTHROPIC_MESSAGES_CONFIG.retry_after_http_error(status, error_text, request_body, context)
     }
 }
 
@@ -200,6 +191,32 @@ pub fn complete_deepseek_anthropic_url(
     format!("{api_base}{ANTHROPIC_PATH_SEGMENT}{MESSAGES_PATH}")
 }
 
+fn without_billing_system_blocks(request: MessagesRequest) -> MessagesRequest {
+    MessagesRequest {
+        params: MessagesOptionalParams {
+            system: request
+                .params
+                .system
+                .and_then(strip_billing_metadata_from_system),
+            ..request.params
+        },
+        ..request
+    }
+}
+
+fn without_custom_tool_type(request: MessagesRequest) -> MessagesRequest {
+    MessagesRequest {
+        params: MessagesOptionalParams {
+            tools: request
+                .params
+                .tools
+                .map(|tools| tools.into_iter().map(sanitize_tool).collect()),
+            ..request.params
+        },
+        ..request
+    }
+}
+
 /// DeepSeek rejects Anthropic's explicit `{"type": "custom"}` tool discriminator, so it is
 /// dropped; every other tool is sent as given.
 fn sanitize_tool(tool: Recognized<MessagesTool>) -> Recognized<MessagesTool> {
@@ -236,7 +253,7 @@ mod tests {
 
     fn transformed(value: Value) -> Value {
         serde_json::to_value(
-            DEEPSEEK_ANTHROPIC_MESSAGES_CONFIG
+            DEEPSEEK_MESSAGES_CONFIG
                 .transform_anthropic_messages_request(
                     request_from(value),
                     &MessagesTransformContext::default(),
@@ -315,7 +332,7 @@ mod tests {
         api_key: Option<&str>,
         env: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error> {
-        DEEPSEEK_ANTHROPIC_MESSAGES_CONFIG.validate_environment(
+        DEEPSEEK_MESSAGES_CONFIG.validate_environment(
             forwarded
                 .iter()
                 .map(|(name, value)| (name.to_string(), value.to_string()))
@@ -379,7 +396,7 @@ mod tests {
     #[rstest]
     fn secret_names_cover_the_key_and_both_bases() {
         assert_eq!(
-            DEEPSEEK_ANTHROPIC_MESSAGES_CONFIG.secret_names(),
+            DEEPSEEK_MESSAGES_CONFIG.secret_names(),
             &[
                 "DEEPSEEK_API_KEY",
                 "DEEPSEEK_ANTHROPIC_API_BASE",
@@ -391,7 +408,7 @@ mod tests {
     #[rstest]
     fn default_headers_are_anthropic_version_and_json() {
         assert_eq!(
-            DEEPSEEK_ANTHROPIC_MESSAGES_CONFIG.default_headers(),
+            DEEPSEEK_MESSAGES_CONFIG.default_headers(),
             &[
                 ("anthropic-version", "2023-06-01"),
                 ("content-type", "application/json"),
@@ -496,8 +513,7 @@ mod tests {
             .map(|(name, value)| (name.to_string(), value.to_string()))
             .collect();
         assert_eq!(
-            DEEPSEEK_ANTHROPIC_MESSAGES_CONFIG
-                .request_headers(headers.clone(), &request_from(body.clone())),
+            DEEPSEEK_MESSAGES_CONFIG.request_headers(headers.clone(), &request_from(body.clone())),
             headers
         );
         assert_eq!(transformed(body)["safeguards"], safeguards);

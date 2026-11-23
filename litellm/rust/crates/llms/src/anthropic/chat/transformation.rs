@@ -30,9 +30,10 @@ use crate::{
         chat::{
             streaming::StreamShape,
             transformation::{
-                BaseConfig, Headers, ProviderChatRequestData, ProviderChatResponseData,
-                ValidatedEnvironment, unsupported_message, unsupported_message_content,
-                unsupported_message_fields, unsupported_param,
+                BaseConfig, DropParams, Headers, ProviderChatRequestData, ProviderChatResponseData,
+                ValidatedEnvironment, map_openai_param_names, map_openai_stop, unsupported_message,
+                unsupported_message_content, unsupported_message_fields, unsupported_param,
+                without_rejected_sampling_params,
             },
         },
     },
@@ -42,18 +43,23 @@ use crate::{
 /// place verbatim in the Messages body.
 ///
 /// `top_k` is deliberately absent even though the Messages API takes it.
-/// `temperature` and `top_p` reach this gate already resolved, because
-/// `map_openai_params` runs first and applies `_apply_sampling_param` to them.
-/// `top_k` bypasses `map_openai_params` entirely, so Python applies that same
+/// On the Python bridge path `temperature` and `top_p` reach this gate already
+/// resolved by `_apply_sampling_param`, and the gateway forwards them as sent.
+/// `top_k` bypasses Python's `map_openai_params` entirely, so Python applies that same
 /// per-model gate inside `transform_request`, the function this route replaces.
 /// Forwarding it would send `top_k` to a model that removed sampling params and
 /// take a 400 after the call, where Python drops it and succeeds.
 const SUPPORTED_PARAMS: &[(&str, &str)] = &[
-    ("max_tokens", "max_tokens"),
+    (MAX_TOKENS, MAX_TOKENS),
+    ("max_completion_tokens", MAX_TOKENS),
     ("temperature", "temperature"),
     ("top_p", "top_p"),
-    ("stop", "stop_sequences"),
+    ("stop", STOP_SEQUENCES),
 ];
+
+const MAX_TOKENS: &str = "max_tokens";
+
+const STOP_SEQUENCES: &str = "stop_sequences";
 
 /// Python never reads `reasoning_content` back for Anthropic, so a client
 /// echoing it changes nothing. `thinking_blocks` is replayed.
@@ -149,6 +155,27 @@ impl BaseConfig for AnthropicConfig {
 
     fn supported_openai_param_mappings(&self) -> &'static [(&'static str, &'static str)] {
         SUPPORTED_PARAMS
+    }
+
+    fn map_openai_params(
+        &self,
+        _model: &str,
+        params: Map<String, Value>,
+        drop_params: DropParams,
+    ) -> Result<Map<String, Value>, Decline> {
+        let to_stop_sequences: fn(Value) -> Option<Value> = match drop_params {
+            DropParams::Off => stop_sequences,
+            DropParams::On { .. } => non_whitespace_stop_sequences,
+        };
+        map_openai_param_names(
+            SUPPORTED_PARAMS,
+            self.caller_config_params(),
+            map_openai_stop(
+                without_rejected_sampling_params(params, drop_params),
+                to_stop_sequences,
+            ),
+        )
+        .map(round_max_tokens)
     }
 
     fn get_complete_url(
@@ -276,6 +303,44 @@ impl BaseConfig for AnthropicConfig {
                     .then_some(Decline::new("conversation does not open on a user turn"))
             })
     }
+}
+
+fn round_max_tokens(params: Map<String, Value>) -> Map<String, Value> {
+    params
+        .into_iter()
+        .map(|(name, value)| {
+            let rounded = (name == MAX_TOKENS)
+                .then(|| value.as_f64().filter(|_| value.is_f64()))
+                .flatten()
+                .map(|limit| json!((limit.round_ties_even() as i64).max(1)));
+            (name, rounded.unwrap_or(value))
+        })
+        .collect()
+}
+
+fn stop_sequences(stop: Value) -> Option<Value> {
+    match stop {
+        Value::String(stop) => Some(json!([stop])),
+        Value::Array(stops) if stops.is_empty() => None,
+        stop => Some(stop),
+    }
+}
+
+fn non_whitespace_stop_sequences(stop: Value) -> Option<Value> {
+    match stop {
+        Value::String(stop) if is_whitespace(&stop) => None,
+        Value::Array(stops) => stop_sequences(Value::Array(
+            stops
+                .into_iter()
+                .filter(|stop| !stop.as_str().is_some_and(is_whitespace))
+                .collect(),
+        )),
+        stop => stop_sequences(stop),
+    }
+}
+
+fn is_whitespace(text: &str) -> bool {
+    !text.is_empty() && text.chars().all(char::is_whitespace)
 }
 
 fn unsupported_anthropic_message(message: &ChatMessage) -> Option<Decline> {
@@ -461,7 +526,7 @@ mod tests {
         anthropic::chat::transformation::ANTHROPIC_CHAT_COMPLETIONS_CONFIG,
         base_llm::{
             auth::AuthScheme,
-            chat::transformation::{BaseConfig, ProviderChatResponseData},
+            chat::transformation::{BaseConfig, DropParams, ProviderChatResponseData},
         },
     };
     use litellm_core_utils::decline::Decline;
@@ -494,6 +559,102 @@ mod tests {
 
     fn reason(msgs: Value, opts: Value) -> Option<Decline> {
         ANTHROPIC_CHAT_COMPLETIONS_CONFIG.unsupported_reason(&messages(msgs), &params(opts))
+    }
+
+    fn map(opts: Value) -> Result<Map<String, Value>, Decline> {
+        map_dropping(opts, DropParams::Off)
+    }
+
+    fn map_dropping(opts: Value, drop_params: DropParams) -> Result<Map<String, Value>, Decline> {
+        ANTHROPIC_CHAT_COMPLETIONS_CONFIG.map_openai_params(
+            "claude-sonnet-4-5",
+            params(opts),
+            drop_params,
+        )
+    }
+
+    #[rstest]
+    #[case::stop_string(json!({"stop": "5"}), json!({"stop_sequences": ["5"]}))]
+    #[case::empty_stop_list(json!({"stop": []}), json!({}))]
+    #[case::stop_list(json!({"stop": ["a", "b"]}), json!({"stop_sequences": ["a", "b"]}))]
+    #[case::max_completion_tokens(json!({"max_completion_tokens": 32}), json!({"max_tokens": 32}))]
+    #[case::max_completion_tokens_wins_when_sent_first(
+        json!({"max_completion_tokens": 32, "max_tokens": 16}),
+        json!({"max_tokens": 32})
+    )]
+    #[case::max_completion_tokens_wins_when_sent_last(
+        json!({"max_tokens": 16, "max_completion_tokens": 32}),
+        json!({"max_tokens": 32})
+    )]
+    #[case::anthropic_name_unchanged(
+        json!({"stop_sequences": ["5"]}),
+        json!({"stop_sequences": ["5"]})
+    )]
+    #[case::malformed_stop_reaches_anthropic(json!({"stop": 5}), json!({"stop_sequences": 5}))]
+    #[case::anthropic_stop_wins_when_sent_first(
+        json!({"stop_sequences": ["b"], "stop": "a"}),
+        json!({"stop_sequences": ["b"]})
+    )]
+    #[case::anthropic_stop_wins_when_sent_last(
+        json!({"stop": "a", "stop_sequences": ["b"]}),
+        json!({"stop_sequences": ["b"]})
+    )]
+    #[case::fractional_limit_rounds_half_to_even(json!({"max_tokens": 10.5}), json!({"max_tokens": 10}))]
+    #[case::fractional_limit_rounds_up(json!({"max_completion_tokens": 11.5}), json!({"max_tokens": 12}))]
+    #[case::fractional_limit_has_a_floor_of_one(json!({"max_tokens": 0.2}), json!({"max_tokens": 1}))]
+    #[case::whole_float_limit_becomes_an_integer(json!({"max_tokens": 16.0}), json!({"max_tokens": 16}))]
+    fn maps_openai_params_to_anthropic_names(#[case] openai: Value, #[case] anthropic: Value) {
+        assert_eq!(map(openai), Ok(params(anthropic)));
+    }
+
+    #[rstest]
+    #[case::whitespace_stop(DropParams::On { model_rejects_sampling: false }, json!({"stop": "\n"}), json!({}))]
+    #[case::whitespace_stops_in_a_list(
+        DropParams::On { model_rejects_sampling: false },
+        json!({"stop": ["\n", "END", " "]}),
+        json!({"stop_sequences": ["END"]})
+    )]
+    #[case::only_whitespace_stops(
+        DropParams::On { model_rejects_sampling: false },
+        json!({"stop": [" ", "\t"]}),
+        json!({})
+    )]
+    #[case::empty_stop_is_not_whitespace(
+        DropParams::On { model_rejects_sampling: false },
+        json!({"stop": ""}),
+        json!({"stop_sequences": [""]})
+    )]
+    #[case::whitespace_stop_without_drop_params(
+        DropParams::Off,
+        json!({"stop": "\n"}),
+        json!({"stop_sequences": ["\n"]})
+    )]
+    #[case::sampling_on_a_model_that_rejects_it(
+        DropParams::On { model_rejects_sampling: true },
+        json!({"temperature": 0.5, "top_p": 0.9, "max_tokens": 8}),
+        json!({"max_tokens": 8})
+    )]
+    #[case::sampling_on_a_model_that_takes_it(
+        DropParams::On { model_rejects_sampling: false },
+        json!({"temperature": 0.5, "top_p": 0.9}),
+        json!({"temperature": 0.5, "top_p": 0.9})
+    )]
+    fn drop_params_drops_what_python_drops_on_anthropic(
+        #[case] drop_params: DropParams,
+        #[case] openai: Value,
+        #[case] anthropic: Value,
+    ) {
+        assert_eq!(map_dropping(openai, drop_params), Ok(params(anthropic)));
+    }
+
+    #[rstest]
+    #[case::unknown(json!({"top_k": 40}))]
+    #[case::bedrock_region(json!({"aws_region_name": "us-west-2"}))]
+    fn declines_an_openai_param_it_has_no_anthropic_name_for(#[case] openai: Value) {
+        assert_eq!(
+            map(openai),
+            Err(Decline::new("unrecognized request parameter"))
+        );
     }
 
     #[test]
@@ -589,9 +750,9 @@ mod tests {
 
     #[test]
     fn declines_top_k_because_python_gates_it_by_model_below_this_point() {
-        // `temperature` and `top_p` arrive already resolved, because
-        // `map_openai_params` applies `_apply_sampling_param` to them before the
-        // gate runs. `top_k` bypasses that and is gated inside `transform_request`,
+        // On the Python bridge path `temperature` and `top_p` arrive already
+        // resolved by `_apply_sampling_param`, and the gateway forwards them as
+        // sent. `top_k` bypasses that and is gated inside `transform_request`,
         // the function this route replaces, so forwarding it would send `top_k` to
         // a model that removed sampling params and take a 400 after the call, where
         // Python drops it and succeeds.
