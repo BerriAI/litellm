@@ -1,9 +1,10 @@
 import asyncio
 import base64
+import io
 import json
 from datetime import datetime
 from pathlib import Path
-from collections.abc import Generator, Sequence
+from collections.abc import Awaitable, Callable, Generator, Sequence
 from queue import SimpleQueue
 from typing import Final, Literal, TypedDict
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -13,7 +14,7 @@ import pytest
 import respx
 from openai import AsyncOpenAI, OpenAI
 from openai.types.image import Image
-from pydantic import JsonValue, TypeAdapter
+from pydantic import BaseModel, JsonValue, TypeAdapter
 from typing_extensions import ReadOnly
 
 import litellm
@@ -867,3 +868,124 @@ def test_custom_image_handler_is_not_handed_additional_drop_params(
         litellm.image_generation(**request)
 
     assert _caller_params(custom_image_params.get_nowait()) == {"n": 2, "size": "1024x1536", "quality": "low"}
+
+_STREAM_USAGE: Final = {
+    "total_tokens": 220,
+    "input_tokens": 20,
+    "output_tokens": 200,
+    "input_tokens_details": {"text_tokens": 20, "image_tokens": 0},
+}
+
+_STREAM_PNG: Final = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
+
+
+def _stream_event(event_type: str, **fields: object) -> bytes:
+    payload: Final = {
+        "type": event_type,
+        "created_at": 1700000000,
+        "size": "1024x1024",
+        "quality": "low",
+        **fields,
+    }
+    return f"event: {event_type}\ndata: {json.dumps(payload)}\n\n".encode()
+
+
+@pytest.fixture
+def fake_openai_image_stream(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def send(client: httpx.AsyncClient, request: httpx.Request, **kwargs: object) -> httpx.Response:
+        body: Final = await request.aread()
+        prefix: Final = "image_generation" if request.url.path.endswith("/generations") else "image_edit"
+        streamed: Final = (
+            b'"stream": true' in body or b'"stream":true' in body or b'name="stream"\r\n\r\ntrue' in body
+        )
+        if streamed:
+            events: Final = _stream_event(
+                f"{prefix}.partial_image", b64_json="UA==", partial_image_index=0
+            ) + _stream_event(f"{prefix}.completed", b64_json="RklOQUw=", usage=_STREAM_USAGE)
+            return httpx.Response(
+                200, request=request, headers={"content-type": "text/event-stream"}, content=events
+            )
+        return httpx.Response(
+            200,
+            request=request,
+            json={"created": 1700000000, "data": [{"b64_json": "RklOQUw="}], "usage": _STREAM_USAGE},
+        )
+
+    monkeypatch.setattr(httpx.AsyncClient, "send", send)
+
+
+class _StreamCosts(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.costs: list[float | None] = []
+
+    async def async_log_success_event(
+        self, kwargs: dict, response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        self.costs.append(kwargs.get("response_cost"))
+
+
+@pytest.fixture
+def stream_costs() -> Generator[_StreamCosts, None, None]:
+    logger: Final = _StreamCosts()
+    litellm.logging_callback_manager._reset_all_callbacks()
+    litellm.callbacks = [logger]
+    yield logger
+    litellm.logging_callback_manager._reset_all_callbacks()
+
+
+def _chunk_text(chunk: object) -> str:
+    if isinstance(chunk, bytes):
+        return chunk.decode()
+    if isinstance(chunk, BaseModel):
+        return chunk.model_dump_json()
+    return json.dumps(chunk) if isinstance(chunk, dict) else str(chunk)
+
+
+async def _await_logged_costs(costs: _StreamCosts, start: int, count: int) -> list[float | None]:
+    for _ in range(1000):
+        if len(costs.costs) >= start + count:
+            return costs.costs[start:]
+        await asyncio.sleep(0.01)
+    raise AssertionError(f"expected {count} logged call(s), got {costs.costs[start:]}")
+
+
+async def _streamed_generate(**kwargs: object) -> object:
+    return await litellm.aimage_generation(
+        model="openai/gpt-image-1",
+        prompt="A red circle",
+        api_key="<redacted>",
+        api_base="https://openai.test/v1",
+        **kwargs,
+    )
+
+
+async def _streamed_edit(**kwargs: object) -> object:
+    return await litellm.aimage_edit(
+        model="openai/gpt-image-1",
+        image=io.BytesIO(_STREAM_PNG),
+        prompt="Make it blue",
+        api_key="<redacted>",
+        api_base="https://openai.test/v1",
+        **kwargs,
+    )
+
+
+@pytest.mark.asyncio(scope="module")
+@pytest.mark.parametrize("call", [_streamed_generate, _streamed_edit], ids=["generation", "edit"])
+async def test_stream_true_yields_the_events_and_bills_like_a_non_streamed_call(
+    fake_openai_image_stream: None,
+    stream_costs: _StreamCosts,
+    call: Callable[..., Awaitable[object]],
+) -> None:
+    start: Final = len(stream_costs.costs)
+    await call()
+    (non_streamed,) = await _await_logged_costs(stream_costs, start, 1)
+    stream: Final = await call(stream=True)
+    received: Final = "".join([_chunk_text(chunk) async for chunk in stream])
+    logged: Final = await _await_logged_costs(stream_costs, start, 2)
+    assert ".partial_image" in received
+    assert ".completed" in received and "RklOQUw=" in received
+    assert len(logged) == 2
+    assert non_streamed is not None and non_streamed > 0
+    assert logged[1] == pytest.approx(non_streamed)
