@@ -41,6 +41,7 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.repositories.table_repositories import InvitationLinkRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
+from litellm.router_utils.deployment_pricing import base_model_for_pricing
 from litellm.types.integrations.slack_alerting import *
 from litellm.types.integrations.slack_alerting import (
     AlertType,
@@ -1046,7 +1047,7 @@ class SlackAlerting(CustomBatchLogger):
         model_info = {}
         base_model = ""
         if base_model_from_user is not None:
-            model_info = litellm.model_cost.get(base_model_from_user, {})
+            model_info = litellm.model_cost.get(base_model_for_pricing(base_model_from_user) or litellm_model_name, {})
             base_model = f"Base Model: `{base_model_from_user}`\n"
         else:
             model_info = litellm.model_cost.get(litellm_model_name, {})

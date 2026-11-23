@@ -6,6 +6,7 @@ import httpx
 import pytest
 from pydantic import ValidationError
 
+import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_passthrough_logging_handler import (
@@ -166,3 +167,49 @@ def test_build_complete_streaming_response_skips_a_claude_data_line_that_is_not_
     assert response.choices[0].message.content == "Paris"
     assert (response.usage.prompt_tokens, response.usage.completion_tokens) == (5, 1)
 
+
+def test_gemini_batch_embed_contents_passthrough_bills_image_tokens_from_usage_metadata():
+    logging_obj: Final = Logging(
+        model="unknown",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="pass_through_endpoint",
+        start_time=datetime(2026, 1, 1),
+        litellm_call_id="call-1",
+        function_id="fn-1",
+    )
+    logging_obj.optional_params = {}
+    response: Final = httpx.Response(
+        200,
+        json={
+            "embeddings": [{"values": [0.1, 0.2]}],
+            "usageMetadata": {
+                "promptTokenCount": 258,
+                "promptTokenDetails": [{"modality": "IMAGE", "tokenCount": 258}],
+            },
+        },
+    )
+
+    result: Final = VertexPassthroughLoggingHandler.vertex_passthrough_handler(
+        httpx_response=response,
+        logging_obj=logging_obj,
+        url_route="https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2:batchEmbedContents",
+        result=response.text,
+        start_time=datetime(2026, 1, 1),
+        end_time=datetime(2026, 1, 1),
+        cache_hit=False,
+        request_body={
+            "requests": [
+                {
+                    "model": "models/gemini-embedding-2",
+                    "content": {"parts": [{"inlineData": {"mimeType": "image/png", "data": "iVBORw0KGgo="}}]},
+                }
+            ]
+        },
+    )
+
+    assert result["result"].usage.prompt_tokens == 258
+    assert result["result"].usage.prompt_tokens_details.image_tokens == 258
+    assert result["kwargs"]["response_cost"] == pytest.approx(
+        258 * litellm.model_cost["gemini/gemini-embedding-2"]["input_cost_per_image_token"]
+    )

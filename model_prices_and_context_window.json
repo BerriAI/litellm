@@ -13252,6 +13252,7 @@
         "input_cost_per_token": 2e-07,
         "output_cost_per_token": 5e-07,
         "litellm_provider": "azure_ai",
+        "token_count_framing": 161,
         "max_input_tokens": 128000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
@@ -25003,6 +25004,25 @@
         "metadata": {
             "notes": "Nimble Search API pay-as-you-go list price: $5 per 1,000 searches, up to 100 results per search. Volume plans price differently."
         }
+    },
+    "gnani/prisma-v2.5": {
+        "litellm_provider": "gnani",
+        "mode": "audio_transcription",
+        "provider_specific_entry": {
+            "gnani_v25_request_fields": 1
+        },
+        "source": "https://docs.gnani.ai/api/STT/models/prisma-v2-5",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ]
+    },
+    "gnani/prisma-v3.0": {
+        "litellm_provider": "gnani",
+        "mode": "audio_transcription",
+        "source": "https://docs.gnani.ai/api/STT/models/prisma-v3",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ]
     },
     "elevenlabs/scribe_v1": {
         "input_cost_per_second": 6.11e-05,
@@ -39522,6 +39542,48 @@
         "max_input_tokens": 200000,
         "max_output_tokens": 100000
     },
+    "gradium/default": {
+        "input_cost_per_character": 7e-05,
+        "litellm_provider": "gradium",
+        "metadata": {
+            "calculation": "1 credit per character synthesized; $7 per 100k add-on credits (XS plan) = $0.00007/char. Larger plans are cheaper (down to $3.8/100k on L), and Pro Voice Clone voices bill 1.2 credits per character.",
+            "notes": "Gradium TTS bills per character of input text, not per second of audio."
+        },
+        "mode": "audio_speech",
+        "output_cost_per_character": 0.0,
+        "source": "https://gradium.ai/pricing",
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ]
+    },
+    "gradium/gradium-tts-202602": {
+        "input_cost_per_character": 7e-05,
+        "litellm_provider": "gradium",
+        "metadata": {
+            "calculation": "1 credit per character synthesized; $7 per 100k add-on credits (XS plan) = $0.00007/char. Larger plans are cheaper (down to $3.8/100k on L), and Pro Voice Clone voices bill 1.2 credits per character.",
+            "notes": "Gradium TTS bills per character of input text, not per second of audio."
+        },
+        "mode": "audio_speech",
+        "output_cost_per_character": 0.0,
+        "source": "https://gradium.ai/pricing",
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ]
+    },
+    "gradium/gradium-tts-beta": {
+        "input_cost_per_character": 7e-05,
+        "litellm_provider": "gradium",
+        "metadata": {
+            "calculation": "1 credit per character synthesized; $7 per 100k add-on credits (XS plan) = $0.00007/char. Larger plans are cheaper (down to $3.8/100k on L), and Pro Voice Clone voices bill 1.2 credits per character.",
+            "notes": "Gradium TTS bills per character of input text, not per second of audio."
+        },
+        "mode": "audio_speech",
+        "output_cost_per_character": 0.0,
+        "source": "https://gradium.ai/pricing",
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ]
+    },
     "lemonade/Qwen3-Coder-30B-A3B-Instruct-GGUF": {
         "input_cost_per_token": 0,
         "litellm_provider": "lemonade",
@@ -42365,6 +42427,7 @@
         "supports_system_messages": true,
         "supports_native_structured_output": true,
         "supports_response_schema": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "mistral.ministral-3-3b-instruct": {
@@ -42387,6 +42450,7 @@
         "supports_system_messages": true,
         "supports_native_structured_output": true,
         "supports_response_schema": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "mistral.ministral-3-8b-instruct": {
@@ -42409,6 +42473,7 @@
         "supports_system_messages": true,
         "supports_native_structured_output": true,
         "supports_response_schema": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "mistral.mistral-7b-instruct-v0:2": {
@@ -42466,6 +42531,7 @@
         "supports_system_messages": true,
         "supports_native_structured_output": true,
         "supports_response_schema": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "mistral.mistral-small-2402-v1:0": {
@@ -47664,6 +47730,85 @@
         "max_tokens": 8192,
         "supports_reasoning": true,
         "supports_system_messages": true
+    },
+    "resetdata/deepseek/deepseek-v4-flash": {
+        "cache_read_input_token_cost": 1.351e-08,
+        "input_cost_per_token": 7.432e-08,
+        "litellm_provider": "resetdata",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 65536,
+        "mode": "chat",
+        "output_cost_per_token": 1.486e-07,
+        "source": "https://docs.resetdata.ai/models/overview",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true
+    },
+    "resetdata/google/gemma-4-26b-a4b-it": {
+        "input_cost_per_token": 6.054e-08,
+        "litellm_provider": "resetdata",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 3.328e-07,
+        "source": "https://docs.resetdata.ai/models/overview",
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "resetdata/openai/whisper-large-v3-turbo": {
+        "input_cost_per_second": 3.378e-06,
+        "litellm_provider": "resetdata",
+        "mode": "audio_transcription",
+        "output_cost_per_second": 0.0,
+        "source": "https://docs.resetdata.ai/guides/audio/",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ]
+    },
+    "resetdata/qwen/qwen3-coder-30b-a3b-instruct": {
+        "input_cost_per_token": 7.061e-08,
+        "litellm_provider": "resetdata",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 65536,
+        "mode": "chat",
+        "output_cost_per_token": 2.723e-07,
+        "source": "https://docs.resetdata.ai/models/overview",
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true
+    },
+    "resetdata/qwen/qwen3.8-27b": {
+        "input_cost_per_token": 2.905e-07,
+        "litellm_provider": "resetdata",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 32768,
+        "mode": "chat",
+        "output_cost_per_token": 2.453e-06,
+        "source": "https://docs.resetdata.ai/models/overview",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "resetdata/zai/glm-5.3": {
+        "cache_read_input_token_cost": 1.757e-07,
+        "input_cost_per_token": 1.189e-06,
+        "litellm_provider": "resetdata",
+        "max_input_tokens": 524288,
+        "max_output_tokens": 32768,
+        "mode": "chat",
+        "output_cost_per_token": 3.736e-06,
+        "source": "https://docs.resetdata.ai/models/overview",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true
     },
     "rerank-english-v3.0": {
         "input_cost_per_query": 0.002,
@@ -53844,6 +53989,7 @@
         "input_cost_per_token": 1.25e-06,
         "input_cost_per_token_above_200k_tokens": 2.5e-06,
         "litellm_provider": "vertex_ai",
+        "token_count_framing": 328,
         "max_input_tokens": 200000,
         "max_output_tokens": 200000,
         "max_tokens": 200000,
@@ -54847,6 +54993,7 @@
         "input_cost_per_token_above_200k_tokens_batches": 2e-06,
         "input_cost_per_token_batches": 1e-06,
         "litellm_provider": "xai",
+        "token_count_framing": 185,
         "max_input_tokens": 1000000,
         "max_output_tokens": 1000000,
         "max_tokens": 1000000,
@@ -61666,6 +61813,7 @@
         "input_cost_per_token_flex": 6.25e-07,
         "input_cost_per_token_priority": 2.1875e-06,
         "litellm_provider": "bedrock_mantle",
+        "token_count_framing": 23,
         "max_input_tokens": 1048576,
         "max_output_tokens": 16384,
         "max_tokens": 16384,
@@ -69091,6 +69239,7 @@
     "bedrock_mantle/us-gov-west-1/xai.grok-4.3": {
         "use_openai_responses_path": true,
         "litellm_provider": "bedrock_mantle",
+        "token_count_framing": 23,
         "max_input_tokens": 1048576,
         "max_output_tokens": 16384,
         "max_tokens": 16384,
@@ -70008,6 +70157,7 @@
     },
     "perplexity/xai/grok-4.3": {
         "litellm_provider": "perplexity",
+        "token_count_framing": 204,
         "mode": "responses",
         "supports_web_search": true,
         "supports_function_calling": true,
