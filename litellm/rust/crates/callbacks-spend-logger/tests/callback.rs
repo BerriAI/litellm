@@ -17,6 +17,7 @@ use litellm_callbacks::{
 use litellm_callbacks_budgets::Budgets;
 use litellm_callbacks_spend_logger::{SpendLogCallback, SpendLogParts};
 use litellm_coroutine::CoroutineState;
+use litellm_redaction::TokenRedactor;
 use litellm_redis_store::{
     Number,
     spend_counters::{SpendCounter, SpendCounters},
@@ -25,7 +26,6 @@ use litellm_repositories::SpendLogWrite;
 use litellm_spend_log_writer::{
     LedgerStore, QueuedSpendLog, SpendLogFlusher, SpendLogWriter, WriterSettings,
 };
-use litellm_tracing::TokenRedactor;
 use rstest::{fixture, rstest};
 use serde_json::{Value as Json, json};
 

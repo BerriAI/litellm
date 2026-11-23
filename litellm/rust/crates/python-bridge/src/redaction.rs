@@ -4,7 +4,8 @@
 use std::sync::Arc;
 
 use litellm_host_python::release_gil;
-use litellm_tracing::{DiagnosticInput, Policy, Processor, TokenRedactor};
+use litellm_redaction::TokenRedactor;
+use litellm_tracing::{DiagnosticInput, Policy, Processor};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::pybacked::PyBackedStr;

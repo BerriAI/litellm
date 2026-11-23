@@ -24,6 +24,7 @@ litellm-llms-types.workspace = true
 litellm-python-compat.workspace = true
 litellm-router-types.workspace = true
 litellm-secrets.workspace = true
+litellm-redaction.workspace = true
 litellm-tracing.workspace = true
 reqwest.workspace = true
 serde.workspace = true
