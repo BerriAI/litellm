@@ -49,7 +49,7 @@ async def append_agents_to_model_group(
 
 
 async def append_agents_to_model_info(
-    models: list[dict[str, object]],
+    models: list[dict],
     user_api_key_dict: UserAPIKeyAuth,
 ) -> list[dict[str, object]]:
     """
