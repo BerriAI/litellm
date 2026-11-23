@@ -9,6 +9,7 @@ from fastapi import HTTPException, Request
 from prisma.engine.errors import BinaryNotFoundError
 from prisma.errors import DataError
 
+from litellm.caching.dual_cache import DualCache
 from litellm.proxy import proxy_server
 from litellm.proxy._types import (
     JWTIssuerConfig,
@@ -31,6 +32,7 @@ from litellm.proxy.mcp_server.idp_token_exchange import (
     identity_from_subject_token,
     token_exchange_available,
 )
+from litellm.redis.stores.auth_cache import AuthObject
 
 IDP_JWT = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1MSJ9.idp-signature"
 REQUEST_HEADERS = {"x-litellm-team-id": "team-b", "user-agent": "lite/0.1"}
@@ -279,23 +281,25 @@ async def test_subject_exchange_applies_team_admission_before_returning_an_ident
     )
     signing_key: Final = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     jwks_url: Final = "https://identity.invalid/exchange/jwks"
-    cache.set_cache(
+    jwks_cache: Final = DualCache()
+    jwks_cache.set_cache(
         f"litellm_jwt_auth_keys_{jwks_url}",
         [json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(signing_key.public_key()))],
     )
+    monkeypatch.setattr(proxy_server, "jwks_cache", jwks_cache)
     cache.set_cache(
-        "exchange-user",
+        AuthObject.user("exchange-user"),
         LiteLLM_UserTable(user_id="exchange-user", user_role="internal_user", teams=[team_id] if team_id else []),
         model_type=LiteLLM_UserTable,
     )
     if team_id is not None:
         cache.set_cache(
-            f"team_id:{team_id}",
+            AuthObject.team(team_id),
             LiteLLM_TeamTable(team_id=team_id, members_with_roles=[Member(user_id="exchange-user", role="user")]),
             model_type=LiteLLM_TeamTable,
         )
         cache.set_cache(
-            f"team_membership:exchange-user:{team_id}",
+            AuthObject.team_membership_reservation(user_id="exchange-user", team_id=team_id),
             LiteLLM_TeamMembership(user_id="exchange-user", team_id=team_id),
             model_type=LiteLLM_TeamMembership,
         )

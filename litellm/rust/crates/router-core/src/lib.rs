@@ -50,14 +50,16 @@
 //! is the host's business:
 //! - `PythonHost` (inside a Python process) builds the request for the picked deployment and calls
 //!   `litellm.<op>`. It never calls back into a Python router.
+//! - The gateway's host (`litellm-gateway-inference`) runs the request's own inference route
+//!   against the picked deployment.
 //!
 //! A host is handed to each call, never kept by the router, so it may hold what one request owns:
 //! the caller, the typed request. Its response and its own error are associated types the core
 //! carries and hands back unread ([`RouterResponse`], [`CallError`]).
 //!
-//! What a host cannot serve is [`HostFacts`], given when the router is built: an op, a provider
-//! or a setting it does not answer fails the build or the change, never partway through a
-//! request.
+//! The core trusts its config: it asks the host for whatever a setting needs, and a host that
+//! does not answer a step fails the request that reached it. Whoever builds the router decides
+//! which settings its host serves.
 //!
 //! The core builds its deployments and answers model-info queries through a [`RegistryHost`],
 //! which has no request behind it ([`build`]): for each configured entry it finds the secret
@@ -81,6 +83,7 @@
 //! - [`cache`] / [`health`]: the shared routing cache, cooldowns and usage.
 //! - [`select`]: resolve, filter chain, simple-shuffle.
 //! - [`call`]: retries and fallbacks.
+//! - [`reach`]: the groups a name can be served by and the host steps each one asks for.
 //! - [`eligibility`]: the endpoints a deployment refuses to serve.
 //! - [`precall`]: the `enable_pre_call_checks` filter.
 //! - [`model_info`]: model info merged from the cost map, asked of the host at query time.
@@ -106,6 +109,7 @@ pub mod outcome;
 pub mod precall;
 pub mod prerouting;
 pub mod ptu;
+pub mod reach;
 pub mod registry;
 pub mod resolve;
 pub mod retry;
@@ -131,23 +135,23 @@ use parking_lot::Mutex;
 pub use crate::{
     cache::{HealthState, InMemoryRouterCache, Outcomes, RouterCache, UsageCounts, UsageWindow},
     call::RouterResponse,
-    config::{Op, RouterConfig, RouterDynamicConfig, RoutingStrategy},
-    error::{AttemptError, ConfigError, Error, FailureKind, RaisedAt, Unsupported},
+    config::{Op, RouterConfig, RouterDynamicConfig},
+    error::{AttemptError, ConfigError, Error, FailureKind, RaisedAt},
     health::{Clock, Health, Outcome, SystemClock},
     host::{
         Attempt, AttemptFailure, Blocked, BuildAsk, BuildPath, Built, CallError, CallbackFiltered,
-        Capability, HostFacts, Provided, RegistryHost, RetryCause, RouterEvent, RouterHost,
-        RouterRequest, RoutingContext, SecretAt, SecretRef, SelectStage, Served,
+        Provided, Raised, RegistryHost, RetryCause, RouterEvent, RouterHost, RouterRequest,
+        RoutingContext, SecretAt, SecretRef, SelectStage, Served,
     },
     outcome::{OutcomeCallbacks, OutcomeWrite},
     prerouting::{PreRoute, PreRouted},
+    reach::{HostStep, Reached},
     registry::{ChangeSet, Deployment, DeploymentSpec, Registry, RegistryVersion},
     select::{Randomness, SeededRandomness, ThreadRandomness},
     settings::Settings,
 };
 use crate::{
     health::{GroupShape, routing_group_has_alternatives, team_model_has_alternatives},
-    registry::DeploymentFilter,
     select::SelectInputs,
 };
 
@@ -178,7 +182,6 @@ impl RouterStateSnapshot {
 }
 
 pub(crate) struct Core {
-    facts: HostFacts,
     rng: Arc<dyn Randomness>,
     clock: Arc<dyn Clock>,
     config: RouterConfig,
@@ -187,53 +190,12 @@ pub(crate) struct Core {
     retired: AtomicBool,
 }
 
-impl Core {
-    /// Reject what this host cannot serve, before any request.
-    fn validate(&self, registry: &Registry, settings: &Settings) -> Result<(), ConfigError> {
-        let selects = self.facts.can(Capability::Select);
-        let strategies = std::iter::once(&settings.routing_strategy).chain(
-            registry
-                .routing_groups()
-                .iter()
-                .map(|group| &group.routing_strategy),
-        );
-        for strategy in strategies {
-            if !strategy.is_native() && !selects {
-                return Err(Unsupported::Strategy(strategy.clone()).into());
-            }
-        }
-        if let Some(plugin) = settings.plugins.first()
-            && !selects
-        {
-            return Err(Unsupported::Plugin(plugin.name.clone()).into());
-        }
-        for deployment in registry.deployments(&DeploymentFilter::default()) {
-            self.validate_deployment(&deployment)?;
-        }
-        Ok(())
-    }
-
-    /// Reject a deployment whose provider this host cannot run a served op on.
-    fn validate_deployment(&self, deployment: &Deployment) -> Result<(), ConfigError> {
-        for op in &self.config.served_ops {
-            if !(self.facts.supports)(op, deployment.provider()) {
-                return Err(Unsupported::Op {
-                    op: op.clone(),
-                    provider: deployment.provider().to_owned(),
-                }
-                .into());
-            }
-        }
-        Ok(())
-    }
-}
-
 /// One call into the router: the core's state, the host this call runs on, and the host's own
 /// errors behind the attempts that failed so far.
 pub(crate) struct Call<'a, H: RouterHost> {
     core: &'a Core,
     pub(crate) host: &'a H,
-    raised: Mutex<Vec<Option<H::Failure>>>,
+    raised: Mutex<Vec<Option<Raised<H::Failure>>>>,
 }
 
 impl<'a, H: RouterHost> Call<'a, H> {
@@ -249,27 +211,34 @@ impl<'a, H: RouterHost> Call<'a, H> {
         Health::new(self.host.cache(), self.core.clock.clone())
     }
 
-    /// The error a failed attempt stands for, naming the slot its host error is kept in.
-    pub(crate) fn failed(&self, failure: AttemptFailure<H::Failure>) -> Error {
+    /// The error a failed attempt stands for, naming the slot its host error is kept in with the
+    /// deployment the attempt ran on.
+    pub(crate) fn failed(
+        &self,
+        failure: AttemptFailure<H::Failure>,
+        deployment_id: Option<&str>,
+    ) -> Error {
         let mut raised = self.raised.lock();
         let slot = RaisedAt(raised.len());
-        match failure {
-            AttemptFailure::Failed { facts, raised: own } => {
-                raised.push(Some(own));
+        let (failure, error) = match failure {
+            AttemptFailure::Failed { facts, raised: own } => (
+                own,
                 Error::Attempt {
                     failure: facts,
                     raised_at: Some(slot),
-                }
-            }
-            AttemptFailure::Refused(own) => {
-                raised.push(Some(own));
-                Error::Refused(slot)
-            }
-        }
+                },
+            ),
+            AttemptFailure::Refused(own) => (own, Error::Refused(slot)),
+        };
+        raised.push(Some(Raised {
+            failure,
+            deployment_id: deployment_id.map(str::to_owned),
+        }));
+        error
     }
 
     /// The error the call ends on, with the host error behind it when an attempt raised it.
-    pub(crate) fn ended(&self, error: Error) -> CallError<H::Failure> {
+    pub(crate) fn ended(&self, error: Error) -> Box<CallError<H::Failure>> {
         let slot = match &error {
             Error::Attempt { raised_at, .. } => *raised_at,
             Error::Refused(slot) => Some(*slot),
@@ -277,7 +246,7 @@ impl<'a, H: RouterHost> Call<'a, H> {
         };
         let raised =
             slot.and_then(|RaisedAt(slot)| self.raised.lock().get_mut(slot).and_then(Option::take));
-        CallError { error, raised }
+        Box::new(CallError { error, raised })
     }
 }
 
@@ -302,6 +271,10 @@ pub struct FailureReport {
     pub count_only: bool,
     /// The model group the request was for, whose fallbacks keep a lone deployment cooling.
     pub requested_group: Option<String>,
+    /// The failed call was a batch, file, fine-tuning, vector store, or container call
+    /// ([`RouterRequest::batch_api`]), which the group's deployments serving only batches could
+    /// also have taken.
+    pub batch_api: bool,
     /// Cool down without counting the failure (`set_cooldown_deployments` alone).
     pub uncounted: bool,
     /// Also count the failed request against the deployment's per-minute requests
@@ -329,7 +302,6 @@ pub struct SuccessReport {
 pub struct RouterBuilder {
     config: RouterConfig,
     dynamic: RouterDynamicConfig,
-    facts: HostFacts,
     rng: Arc<dyn Randomness>,
     clock: Arc<dyn Clock>,
 }
@@ -354,7 +326,6 @@ impl RouterBuilder {
         .with_member_groups(self.config.routing_group_members.clone());
         let settings = Settings::new(&self.config, Arc::new(self.dynamic));
         let core = Core {
-            facts: self.facts,
             clock: self.clock,
             rng: self.rng,
             config: self.config,
@@ -365,7 +336,6 @@ impl RouterBuilder {
             writer: Mutex::new(()),
             retired: AtomicBool::new(false),
         };
-        core.validate(&registry, &settings)?;
         core.snapshot.store(Arc::new(RouterStateSnapshot {
             registry: Arc::new(registry),
             settings: Arc::new(settings),
@@ -383,23 +353,14 @@ pub struct Router {
 }
 
 impl Router {
-    pub fn new(
-        config: RouterConfig,
-        dynamic: RouterDynamicConfig,
-        facts: HostFacts,
-    ) -> Result<Self, ConfigError> {
-        Self::builder(config, dynamic, facts).build()
+    pub fn new(config: RouterConfig, dynamic: RouterDynamicConfig) -> Result<Self, ConfigError> {
+        Self::builder(config, dynamic).build()
     }
 
-    pub fn builder(
-        config: RouterConfig,
-        dynamic: RouterDynamicConfig,
-        facts: HostFacts,
-    ) -> RouterBuilder {
+    pub fn builder(config: RouterConfig, dynamic: RouterDynamicConfig) -> RouterBuilder {
         RouterBuilder {
             config,
             dynamic,
-            facts,
             rng: Arc::new(ThreadRandomness),
             clock: Arc::new(SystemClock),
         }
@@ -419,7 +380,7 @@ impl Router {
         host: &H,
         op: Op,
         request: RouterRequest,
-    ) -> Result<RouterResponse<H::Response>, CallError<H::Failure>> {
+    ) -> Result<RouterResponse<H::Response>, Box<CallError<H::Failure>>> {
         self.live()?;
         let call = Call::new(&self.core, host);
         call.call(op, Arc::new(request))
@@ -659,25 +620,29 @@ impl Router {
         } else {
             snapshot.settings.cooldown_time
         };
-        let shape = GroupShape {
-            single_deployment: snapshot
+        let has_fallback_group = snapshot
+            .settings
+            .dynamic
+            .fallback_targets(&[report
+                .requested_group
+                .as_deref()
+                .unwrap_or(&deployment.model_name)])
+            .is_some();
+        let shape = GroupShape::of_failure(report.batch_api, has_fallback_group, |batch_call| {
+            snapshot
                 .registry
                 .group(&deployment.model_name)
-                .is_some_and(|group| group.len() == 1)
-                && !report
-                    .requested_group
-                    .as_deref()
-                    .is_some_and(|group| routing_group_has_alternatives(&snapshot.registry, group))
-                && !team_model_has_alternatives(&snapshot.registry, &deployment),
-            has_fallback_group: snapshot
-                .settings
-                .dynamic
-                .fallback_targets(&[report
-                    .requested_group
-                    .as_deref()
-                    .unwrap_or(&deployment.model_name)])
-                .is_some(),
-        };
+                .is_some_and(|group| deployment.peers_in(&group, batch_call) == 1)
+                && !report.requested_group.as_deref().is_some_and(|group| {
+                    routing_group_has_alternatives(
+                        &snapshot.registry,
+                        group,
+                        &deployment,
+                        batch_call,
+                    )
+                })
+                && !team_model_has_alternatives(&snapshot.registry, &deployment, batch_call)
+        });
         health
             .cool_down_after(&snapshot.settings, &deployment, shape, failure, cooldown)
             .await
@@ -696,7 +661,6 @@ impl Router {
             Some(dynamic) => Settings::new(&self.core.config, Arc::new(dynamic)),
             None => Settings::clone(&current.settings),
         };
-        self.core.validate(&registry, &settings)?;
         let version = registry.version();
         self.core.snapshot.store(Arc::new(RouterStateSnapshot {
             registry: Arc::new(registry),
@@ -788,12 +752,10 @@ impl Router {
         };
         let mut installed: Vec<DeploymentSpec> = Vec::new();
         let add = path == BuildPath::Add;
-        let core = &self.core;
         let built = build::build(host, path, entries, resolve_secrets, |deployment| {
             working.install_built(deployment.spec.clone(), add, install)?;
             installed.push(deployment.spec.clone());
-            core.validate_deployment(working.last().expect("just installed"))
-                .map_err(Error::from)
+            Ok(())
         })
         .await;
         if built.is_ok() && replace && path == BuildPath::Create {

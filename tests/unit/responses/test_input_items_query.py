@@ -1,0 +1,163 @@
+import queue
+from collections.abc import Mapping
+from typing import Final, Literal
+
+import httpx
+import pytest
+import respx
+
+import litellm
+from litellm.integrations.custom_logger import CustomLogger
+from tests.unit.proxy.conftest import httpx_transport
+
+pytestmark: Final = pytest.mark.usefixtures(httpx_transport.__name__)
+_API_BASE: Final = "https://api.openai.com/v1"
+_ITEMS_URL: Final = f"{_API_BASE}/responses/resp_sdk/input_items"
+_EMPTY_PAGE: Final = {"object": "list", "data": [], "has_more": False}
+
+
+def _list_items(
+    extra_query: object, drop_params: bool, order: Literal["asc", "desc"] = "desc"
+) -> tuple[tuple[tuple[str, str], ...], int]:
+    with respx.mock() as mock_router:
+        route: Final = mock_router.get(_ITEMS_URL).mock(return_value=httpx.Response(200, json=_EMPTY_PAGE))
+        litellm.list_input_items(
+            response_id="resp_sdk",
+            custom_llm_provider="openai",
+            api_key="sk-test",
+            api_base=_API_BASE,
+            order=order,
+            extra_query=extra_query,
+            drop_params=drop_params,
+        )
+    return tuple(sorted(route.calls.last.request.url.params.multi_items())), route.call_count
+
+
+def test_sdk_extra_query_takes_typed_values_and_forwards_them() -> None:
+    forwarded: Final = _list_items({"limit": 5, "order": "desc", "include": ("message.output_text.logprobs",)}, False)
+
+    assert forwarded == (
+        (("include[]", "message.output_text.logprobs"), ("limit", "5"), ("order", "desc")),
+        1,
+    )
+
+
+def test_sdk_extra_query_under_drop_params_falls_back_to_the_callers_own_arguments() -> None:
+    forwarded: Final = _list_items(
+        {"after": ["item_a", "item_b"], "order": "sideways", "include": [1], "limit": 3},
+        True,
+        order="asc",
+    )
+
+    assert forwarded == ((("limit", "3"), ("order", "asc")), 1)
+
+
+@pytest.mark.parametrize("extra_query", ("limit=2", [("limit", 2)]))
+def test_sdk_a_non_object_extra_query_under_drop_params_asks_for_the_default_page(extra_query: object) -> None:
+    assert _list_items(extra_query, True) == ((("limit", "20"), ("order", "desc")), 1)
+
+
+@pytest.mark.parametrize(("limit", "order"), ((None, "desc"), (20, None)))
+def test_sdk_none_limit_or_order_asks_for_the_default_page(
+    limit: int | None, order: Literal["asc", "desc"] | None
+) -> None:
+    with respx.mock() as mock_router:
+        route: Final = mock_router.get(_ITEMS_URL).mock(return_value=httpx.Response(200, json=_EMPTY_PAGE))
+        litellm.list_input_items(
+            response_id="resp_sdk",
+            custom_llm_provider="openai",
+            api_key="sk-test",
+            api_base=_API_BASE,
+            limit=limit,
+            order=order,
+        )
+
+    assert sorted(route.calls.last.request.url.params.multi_items()) == [("limit", "20"), ("order", "desc")]
+
+
+@pytest.mark.parametrize(
+    ("extra_query", "param"),
+    (
+        ({"include": ["message.output_text.logprobs", 1]}, "include"),
+        ({"include[]": {"name": "x"}}, "include"),
+        ({"limit": True}, "limit"),
+        ({"limit": -1}, "limit"),
+        ("limit=2", "extra_query"),
+        ([("limit", 2)], "extra_query"),
+    ),
+)
+def test_sdk_extra_query_with_a_malformed_value_is_a_400_before_any_upstream_call(
+    extra_query: object, param: str
+) -> None:
+    with respx.mock(assert_all_called=False) as mock_router:
+        route: Final = mock_router.get(_ITEMS_URL).mock(return_value=httpx.Response(200, json=_EMPTY_PAGE))
+        with pytest.raises(litellm.BadRequestError) as exc_info:
+            litellm.list_input_items(
+                response_id="resp_sdk",
+                custom_llm_provider="openai",
+                api_key="sk-test",
+                api_base=_API_BASE,
+                extra_query=extra_query,
+            )
+
+    assert exc_info.value.status_code == 400
+    assert f"Invalid '{param}'" in str(exc_info.value)
+    assert route.call_count == 0
+
+
+def test_sdk_positional_arguments_keep_their_pre_extra_query_meaning() -> None:
+    with respx.mock() as mock_router:
+        route: Final = mock_router.get(_ITEMS_URL).mock(return_value=httpx.Response(200, json=_EMPTY_PAGE))
+        litellm.list_input_items(
+            "resp_sdk", "item_a", None, None, 7, "asc", None, 5.0, "openai", api_key="sk-test", api_base=_API_BASE
+        )
+
+    assert sorted(route.calls.last.request.url.params.multi_items()) == [
+        ("after", "item_a"),
+        ("limit", "7"),
+        ("order", "asc"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_async_sdk_positional_arguments_keep_their_pre_extra_query_meaning() -> None:
+    with respx.mock() as mock_router:
+        route: Final = mock_router.get(_ITEMS_URL).mock(return_value=httpx.Response(200, json=_EMPTY_PAGE))
+        await litellm.alist_input_items(
+            "resp_sdk", "item_a", None, None, 7, "asc", None, 5.0, "openai", api_key="sk-test", api_base=_API_BASE
+        )
+
+    assert sorted(route.calls.last.request.url.params.multi_items()) == [
+        ("after", "item_a"),
+        ("limit", "7"),
+        ("order", "asc"),
+    ]
+
+
+class _FailureLog(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.logged: queue.Queue[Mapping[str, object]] = queue.Queue()
+
+    def log_failure_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.logged.put(kwargs)
+
+
+def test_sdk_a_malformed_query_logs_its_failure_with_the_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    failure_log: Final = _FailureLog()
+    monkeypatch.setattr(litellm, "callbacks", [failure_log])
+    with pytest.raises(litellm.BadRequestError):
+        litellm.list_input_items(
+            response_id="resp_sdk",
+            custom_llm_provider="openai",
+            api_key="sk-test",
+            api_base=_API_BASE,
+            extra_query={"limit": "abc"},
+        )
+
+    logged: Final = failure_log.logged.get(timeout=10)["standard_logging_object"]
+
+    assert isinstance(logged, Mapping)
+    assert logged["custom_llm_provider"] == "openai"

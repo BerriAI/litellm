@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Iterator, Mapping
+from itertools import chain
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final
@@ -13,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 import litellm
 from litellm.litellm_core_utils.fallback_generalizations import match_capability_generalizations
 from litellm.litellm_core_utils.reasoning_effort_capability import resolve_supported_reasoning_efforts
+from litellm.llms.bedrock.common_utils import BedrockModelInfo
 from litellm.llms.openai.chat.gpt_reasoning_transformation import is_gpt_reasoning_series_name
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.types.utils import CompletionTokensDetailsWrapper, PromptTokensDetailsWrapper, SearchFreeRequests, Usage
@@ -21,6 +23,8 @@ from litellm.utils import ProviderConfigManager
 REPO_ROOT = Path(__file__).parents[2]
 PRICES_PATH = REPO_ROOT / "model_prices_and_context_window.json"
 BACKUP_PRICES_PATH = REPO_ROOT / "litellm" / "model_prices_and_context_window_backup.json"
+
+CostMap = Mapping[str, Mapping[str, JsonValue]]
 
 
 @pytest.fixture(scope="module")
@@ -517,9 +521,9 @@ def test_gemini_deep_research_previews_accept_the_documented_input_window(prices
     assert prices[model]["max_output_tokens"] == 65_536
 
 
-# https://cloud.google.com/vertex-ai/generative-ai/docs/learn/model-versions
+# https://cloud.google.com/vertex-ai/generative-ai/docs/learn/model-versions, checked 2026-11-21
 VERTEX_GEMINI_FLASH_RETIREMENT_DATES: Final = MappingProxyType(
-    {"gemini-3.6-flash": "2026-11-19", "gemini-3.7-flash": "2027-01-28"}
+    {"gemini-3.6-flash": "2027-01-28", "gemini-3.7-flash": "2027-01-28"}
 )
 
 
@@ -1068,6 +1072,45 @@ def test_model_prices_backup_is_synchronized(prices: dict):
     assert backup == prices
 
 
+@pytest.mark.parametrize(
+    "alias,snapshot",
+    (
+        ("gpt-realtime-translate", "gpt-realtime-translate-2026-05-06"),
+        ("gpt-realtime-whisper", "gpt-realtime-whisper-2026-05-06"),
+        ("gpt-realtime-2.1", "gpt-realtime-2.1-2026-07-07"),
+        ("gpt-realtime-2.1-mini", "gpt-realtime-2.1-mini-2026-07-07"),
+        ("gpt-6.1-terra", "us/gpt-6.1-terra"),
+        ("gpt-6.1-terra", "eu/gpt-6.1-terra"),
+        ("gpt-6.1-terra", "apac/gpt-6.1-terra"),
+    ),
+)
+def test_azure_aliases_and_model_variants_retire_together(prices: CostMap, alias: str, snapshot: str) -> None:
+    assert prices[f"azure/{alias}"]["deprecation_date"] == prices[f"azure/{snapshot}"]["deprecation_date"]
+
+
+def test_gmi_gemini_hydrogen_bills_at_its_hosted_rates(prices: CostMap, local_model_cost_map: None) -> None:
+    model: Final = "gmi/google/gemini-4-hydrogen"
+    row: Final = prices[model]
+
+    prompt_cost, completion_cost = litellm.cost_per_token(
+        model=model,
+        usage_object=Usage(
+            prompt_tokens=100,
+            completion_tokens=20,
+            total_tokens=120,
+            prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=40, cache_write_tokens=10),
+        ),
+    )
+
+    expected_input: Final = (
+        50 * TypeAdapter(float).validate_python(row["input_cost_per_token"])
+        + 10 * TypeAdapter(float).validate_python(row["cache_creation_input_token_cost"])
+        + 40 * TypeAdapter(float).validate_python(row["cache_read_input_token_cost"])
+    )
+    expected_output: Final = 20 * TypeAdapter(float).validate_python(row["output_cost_per_token"])
+    assert (prompt_cost, completion_cost) == pytest.approx((expected_input, expected_output))
+
+
 def _search_free_requests_rows(path: Path) -> Mapping[str, dict[str, JsonValue]]:
     prices: Final[dict[str, JsonValue]] = TypeAdapter(dict[str, JsonValue]).validate_json(path.read_bytes())
     return MappingProxyType(
@@ -1303,3 +1346,71 @@ def test_deepinfra_new_catalog_models_resolve_pricing_and_capabilities(
     assert litellm.supports_video_input(model=model) is supports_video_input
     assert litellm.supports_audio_input(model=model) is supports_audio_input
     assert "reasoning_effort" in DeepInfraConfig().get_supported_openai_params(model=model)
+
+
+# Probed against Bedrock Converse in us-east-1 on 2026-11-19: each id takes toolChoice auto, any, and a named tool
+BEDROCK_CONVERSE_MISTRAL_TOOL_CHOICE_MODELS: Final = (
+    "mistral.mistral-large-3-675b-instruct",
+    "mistral.ministral-3-14b-instruct",
+    "mistral.ministral-3-8b-instruct",
+    "mistral.ministral-3-3b-instruct",
+)
+WEATHER_TOOL: Final = MappingProxyType(
+    {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+        },
+    }
+)
+
+
+@pytest.mark.parametrize("route", ("", "converse/"))
+@pytest.mark.parametrize("model", BEDROCK_CONVERSE_MISTRAL_TOOL_CHOICE_MODELS)
+@pytest.mark.parametrize(
+    ("tool_choice", "converse_tool_choice"),
+    (
+        ("auto", {"auto": {}}),
+        ("required", {"any": {}}),
+        ({"type": "function", "function": {"name": "get_weather"}}, {"tool": {"name": "get_weather"}}),
+    ),
+)
+def test_bedrock_converse_mistral_rows_send_tool_choice_to_bedrock(
+    local_model_cost_map: None,
+    route: str,
+    model: str,
+    tool_choice: str | dict[str, JsonValue],
+    converse_tool_choice: dict[str, JsonValue],
+) -> None:
+    optional_params: Final = litellm.get_optional_params(
+        model=f"{route}{model}", custom_llm_provider="bedrock", tools=[dict(WEATHER_TOOL)], tool_choice=tool_choice
+    )
+
+    assert optional_params["tool_choice"] == converse_tool_choice
+
+
+def _region_pinned_bedrock_converse_rows(prices: CostMap) -> Iterator[tuple[str, str]]:
+    return (
+        (key, base)
+        for key, row in prices.items()
+        if key.startswith("bedrock/")
+        and row.get("litellm_provider") == "bedrock_converse"
+        and (base := BedrockModelInfo.get_base_model(key)) in prices
+    )
+
+
+def _capabilities_missing_from_one_side(prices: CostMap, key: str, base: str) -> Iterator[str]:
+    capabilities: Final = sorted({name for name in (*prices[key], *prices[base]) if name.startswith("supports_")})
+    return (
+        f"{key} {name}={prices[key].get(name)} but {base} {name}={prices[base].get(name)}"
+        for name in capabilities
+        if bool(prices[key].get(name)) != bool(prices[base].get(name))
+    )
+
+
+def test_region_pinned_bedrock_converse_rows_carry_their_base_rows_capabilities(prices: CostMap) -> None:
+    rows: Final = tuple(_region_pinned_bedrock_converse_rows(prices))
+    assert {base for _, base in rows} >= set(BEDROCK_CONVERSE_MISTRAL_TOOL_CHOICE_MODELS)
+
+    assert list(chain.from_iterable(_capabilities_missing_from_one_side(prices, key, base) for key, base in rows)) == []

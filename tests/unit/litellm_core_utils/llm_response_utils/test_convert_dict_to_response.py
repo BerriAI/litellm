@@ -16,6 +16,32 @@ from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outco
 FIXED_TIME: Final[datetime] = datetime(2025, 1, 1, 12, 0, 0)
 
 
+@pytest.mark.parametrize("cached_fields", [{}, {"cached_tokens": None}, {"cached_tokens": 0}, {"cached_tokens": 6}])
+@pytest.mark.parametrize("convert", [False, True])
+def test_image_response_null_cached_tokens_match_absent(cached_fields: dict[str, int | None], convert: bool) -> None:
+    payload: Final = {
+        "created": 1700000000,
+        "data": [{"b64_json": "AA=="}],
+        "usage": {
+            "input_tokens": 10,
+            "output_tokens": 20,
+            "total_tokens": 30,
+            "input_tokens_details": {"text_tokens": 4, "image_tokens": 6, **cached_fields},
+        },
+    }
+    response: Final = (
+        LiteLLMResponseObjectHandler.convert_to_image_response(payload) if convert else ImageResponse(**payload)
+    )
+    assert response.usage is not None
+    assert response.usage.input_tokens_details.model_dump() == {
+        "text_tokens": 4,
+        "image_tokens": 6,
+        "cached_tokens": cached_fields.get("cached_tokens") or 0,
+        "cached_tokens_details": None,
+    }
+    assert response.data[0].b64_json == "AA=="
+
+
 def test_reused_ollama_ids_have_distinct_response_and_spend_ids() -> None:
     from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 
@@ -2330,6 +2356,35 @@ class TestNormalizeImagesForMessage:
         result = _normalize_images_for_message(images)
         assert result[0]["index"] == 5
 
+@pytest.mark.parametrize(
+    "image_fields",
+    [{}, {"upstream_id": "img-1"}, {"thought_signature": 42}],
+    ids=["empty", "without-signature", "non-string-signature"],
+)
+def test_chat_response_keeps_image_provider_fields_as_sent(image_fields: dict[str, object]) -> None:
+    image: Final = {
+        "type": "image_url",
+        "image_url": {"url": "data:image/png;base64,QQ=="},
+        "index": 0,
+        "provider_specific_fields": image_fields,
+    }
+    response: Final = convert_to_model_response_object(
+        response_object={
+            "id": "chatcmpl-1",
+            "object": "chat.completion",
+            "created": 1700000000,
+            "model": "image-model",
+            "choices": [
+                {"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": None, "images": [image]}}
+            ],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        },
+        model_response_object=ModelResponse(),
+    )
+
+    assert response.choices[0].message.images == [image]
+
+
 class TestSafeConvertCreatedField:
     def test_none_returns_current_time(self):
         import time
@@ -2890,6 +2945,26 @@ class TestConvertToModelResponseObjectAudioTranscription:
         assert result.usage.input_tokens == 10
         assert result.usage.output_tokens == 5
         assert result.usage.input_token_details.audio_tokens == 4
+
+    @pytest.mark.parametrize(
+        ("hidden_params", "expected"),
+        [
+            (None, {"text": "Hello"}),
+            ({"cache_hit": True}, {"text": "Hello", "request_id": "rid-1", "truncated": True}),
+        ],
+    )
+    def test_request_id_and_truncation_come_back_only_from_the_cache(
+        self, hidden_params: dict[str, object] | None, expected: dict[str, object]
+    ) -> None:
+        from litellm.types.utils import TranscriptionResponse
+
+        result: Final = convert_to_model_response_object(
+            response_object={"text": "Hello", "request_id": "rid-1", "truncated": True},
+            model_response_object=TranscriptionResponse(),
+            response_type="audio_transcription",
+            hidden_params=hidden_params,
+        )
+        assert result.model_dump(exclude_none=True) == expected
 
     def test_parse_error_keeps_the_transcript_out_of_the_exception(self):
         import traceback

@@ -49,6 +49,7 @@ import {
   House,
   KeyRound,
   LayoutGrid,
+  Layers,
   Network,
   Palette,
   PiggyBank,
@@ -90,6 +91,7 @@ import {
   rolesWithWriteAccess,
   proxyAdminTierRoles,
 } from "../utils/roles";
+import { useGrantedApps } from "@/app/(dashboard)/apps/_components/useGrantedApps";
 import BetaBadge from "./BetaBadge";
 import SidebarAccountMenu from "./SidebarAccountMenu/SidebarAccountMenu";
 import SidebarUsageCard from "./SidebarUsageCard";
@@ -127,6 +129,7 @@ export interface MenuVisibilityContext {
   isViewOnly: boolean;
   isOrgAdmin: boolean;
   isTeamAdmin: boolean;
+  hasAppGrant?: boolean;
   enabledPagesInternalUsers?: string[] | null;
   disableAgentsForInternalUsers?: boolean;
   allowAgentsForTeamAdmins?: boolean;
@@ -174,8 +177,18 @@ const pageIsEnabledForInternalUser = (item: MenuItem, context: MenuVisibilityCon
   return enabledPages.includes(item.page);
 };
 
+const CUSTOMER_PORTAL_ADMIN_KEYS: ReadonlySet<string> = new Set([
+  "customers",
+  "apps",
+  "app-groups",
+  "customer-access",
+  "customer-settings",
+]);
+
 const menuItemIsVisible = (item: MenuItem, context: MenuVisibilityContext, isAdmin: boolean): boolean => {
   if (item.children && item.children.length === 0) return false;
+  if (item.key === "apps" && context.hasAppGrant) return true;
+  if (context.isViewOnly && CUSTOMER_PORTAL_ADMIN_KEYS.has(item.key)) return false;
   if (item.key === "llm-playground" && context.isViewOnly) return false;
   const adminVisibility = adminPageVisibility(item, context, isAdmin);
   if (adminVisibility !== null) return adminVisibility;
@@ -222,9 +235,23 @@ const customerPortalGroups: MenuGroup[] = [
         roles: all_admin_roles.filter(isProxyAdminRole),
       },
       {
+        key: "app-groups",
+        page: "app-groups",
+        label: "apps.groups.title",
+        icon: <Layers {...ICON} />,
+        roles: all_admin_roles.filter(isProxyAdminRole),
+      },
+      {
+        key: "customer-access",
+        page: "customers/access",
+        label: "apps.internalAccess.title",
+        icon: <ShieldCheck {...ICON} />,
+        roles: all_admin_roles.filter(isProxyAdminRole),
+      },
+      {
         key: "customer-settings",
         page: "customers/settings",
-        label: "customerPortal.hierarchy.settings",
+        label: "customerPortal.budgetGroups.title",
         icon: <SettingsIcon {...ICON} />,
         roles: all_admin_roles.filter(isProxyAdminRole),
       },
@@ -525,10 +552,11 @@ const LENS_ROUTE = "lens";
 
 export const routeOf = (item: MenuItem): string => item.route ?? item.page;
 
+const CUSTOMER_SUBPAGES = ["customers/settings", "customers/access"] as const;
+
 const routeForPathname = (pathname: string): string =>
-  pathname.replace(/\/$/, "").endsWith("/customers/settings")
-    ? "customers/settings"
-    : routeSegmentForPathname(pathname) || HOME_ROUTE;
+  CUSTOMER_SUBPAGES.find((page) => pathname.replace(/\/$/, "").endsWith(`/${page}`)) ??
+  (routeSegmentForPathname(pathname) || HOME_ROUTE);
 
 const findParentKey = (route: string): string | null => {
   for (const group of menuGroups) {
@@ -643,6 +671,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
   }
 
   const isTeamAdmin = useMemo(() => isUserTeamAdminForAnyTeam(teams ?? null, userId ?? ""), [teams, userId]);
+  const { hasGrant: hasAppGrant } = useGrantedApps();
 
   const visibleGroups = useMemo(() => {
     const context: MenuVisibilityContext = {
@@ -650,6 +679,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
       isViewOnly,
       isOrgAdmin,
       isTeamAdmin,
+      hasAppGrant,
       enabledPagesInternalUsers,
       disableAgentsForInternalUsers,
       allowAgentsForTeamAdmins,
@@ -664,6 +694,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
     disableAgentsForInternalUsers,
     disableVectorStoresForInternalUsers,
     enabledPagesInternalUsers,
+    hasAppGrant,
     isOrgAdmin,
     isTeamAdmin,
     isViewOnly,

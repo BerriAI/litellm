@@ -160,11 +160,11 @@ test.describe("Proxy Admin - Keys", () => {
 
     await expect(page.getByText("Back to Keys")).toBeVisible({ timeout: 10_000 });
 
-    await page.getByRole("button", { name: "Regenerate Key" }).click();
+    await page.getByRole("button", { name: "Regenerate key" }).click();
 
     // Scope to the modal — the Regenerate button has an icon whose aria-label
     // ("sync") is concatenated into the button's accessible name, and the
-    // "Regenerate Key" button is still in the DOM behind the modal.
+    // "Regenerate key" button is still in the DOM behind the modal.
     const modal = page.getByRole("dialog", { name: "Regenerate Virtual Key" });
     await modal.getByRole("button", { name: /Regenerate/ }).click();
 
@@ -211,6 +211,11 @@ test.describe("Proxy Admin - Keys", () => {
     await expect(page.getByRole("paragraph").filter({ hasText: "TPM: 123" })).toBeVisible({ timeout: 10_000 });
     await expect(page.getByRole("paragraph").filter({ hasText: "RPM: 456" })).toBeVisible({ timeout: 10_000 });
 
+    await page.getByRole("tab", { name: "Overview", exact: true }).click();
+    const rateLimits = page.getByRole("region", { name: "Rate limits" });
+    await expect(rateLimits).toContainText(/Requests per minute\s*456/, { timeout: 10_000 });
+    await expect(rateLimits).toContainText(/Tokens per minute\s*123/);
+
     // Read the key back; the rendering above comes from a response the UI already holds.
     const after = await findKeyByAlias(page, E2E_UPDATE_LIMITS_KEY_ALIAS);
     expect(after, "key still readable after update").toBeTruthy();
@@ -237,7 +242,7 @@ test.describe("Proxy Admin - Keys", () => {
     await expect(page.getByText("Back to Keys")).toBeVisible({ timeout: 10_000 });
 
     await page.getByRole("button", { name: "More key actions" }).click();
-    await page.getByRole("menuitem", { name: "Delete Key" }).click();
+    await page.getByRole("menuitem", { name: "Delete key" }).click();
 
     const modal = page.getByRole("dialog", { name: "Delete Key" });
     await expect(modal).toBeVisible({ timeout: 5_000 });
