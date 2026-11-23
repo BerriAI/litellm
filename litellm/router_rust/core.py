@@ -36,7 +36,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError,
 from typing_extensions import assert_never
 
 from litellm._internal_context import request_parent_otel_span, service_target
-from litellm.constants import DEFAULT_COOLDOWN_TIME_SECONDS
+from litellm.constants import DEFAULT_COOLDOWN_TIME_SECONDS, SEMANTIC_CACHE_POLICY_KEY
 from litellm.integrations.custom_guardrail import is_guardrail_intervention
 from litellm.litellm_core_utils.add_retry_fallback_headers import (
     add_fallback_headers_to_response,
@@ -55,7 +55,7 @@ from litellm.litellm_core_utils.attempt_settlement import (
     released,
     routed_attempt,
 )
-from litellm.litellm_core_utils.batch_utils import is_batch_retrieve_call_type
+from litellm.litellm_core_utils.batch_utils import VECTOR_STORE_AND_CONTAINER_CALLS, is_batch_retrieve_call_type
 from litellm.litellm_core_utils.core_helpers import (
     as_str_mapping,
     get_parent_otel_span_from_kwargs,
@@ -281,6 +281,7 @@ from litellm.types.router import (
     RoutingGroup,
     RoutingStrategy,
 )
+from litellm.types.semantic_cache import semantic_cache_policy
 from litellm.types.utils import CooldownDeploymentInfo, LlmProviders
 
 if TYPE_CHECKING:
@@ -329,6 +330,18 @@ _FAILURE_KINDS: Final = (
     "CallerCredentialRateLimitError",
 )
 _DECLINED: Final = frozenset({"MalformedRequestFieldError", "UnsupportedEndpointError"})
+_BATCH_API_KINDS: Final = frozenset({"batch", "cancel_batch", "create_file"})
+_BATCH_API_HANDLERS: Final = frozenset(
+    {
+        "afile_content",
+        "afile_delete",
+        "afile_list",
+        "acreate_fine_tuning_job",
+        "acancel_fine_tuning_job",
+        "alist_fine_tuning_jobs",
+        "aretrieve_fine_tuning_job",
+    }
+)
 _PROVIDERS: Final = tuple(provider.value for provider in LlmProviders)
 _DEFAULT_COOLDOWN_SECONDS: Final = 5.0
 # Past this a retry-after no longer fits the Rust core's durations; it cools down as good as forever.
@@ -493,6 +506,7 @@ _DELETABLE_ATTRIBUTES: Final = frozenset({"model_group_alias", "num_retries", "s
 # Calls whose pick least-busy does not hold (`picks_reserve(False)`): a batch cancel makes no
 # call that logs a start.
 _UNRESERVED_OPS: Final = frozenset({"acancel_batch"})
+_IN_PASS_THROUGH_CALL: Final[ContextVar[bool]] = ContextVar("router_in_pass_through_call", default=False)
 
 
 # Settings converted by `Resolved._selection_setting`.
@@ -1468,6 +1482,10 @@ class _EndpointPort:
     def group_members(self, model_name: str) -> Sequence[tuple[object, object]] | None:
         return self._core._hosted._group_members(model_name)  # pyright: ignore[reportPrivateUsage]  # see the class docstring
 
+    def served_deployments(self) -> tuple[Mapping[str, object], ...]:
+        records: Final = self._core._handle.deployments()  # pyright: ignore[reportPrivateUsage]  # see the class docstring
+        return tuple(_with_live_params(self._core, as_str_mapping(record) or {}) for record in records)
+
     def routed_name(self, model: object) -> str:
         return self._core.routed_name(model)
 
@@ -1494,6 +1512,7 @@ class _EndpointPort:
         specific_deployment: bool | None = None,
         messages: object = None,
         batch_upload: bool = False,
+        batch_api: bool = False,
     ) -> Mapping[str, object] | Sequence[Mapping[str, object]]:
         return await self._core.select(
             model,
@@ -1502,6 +1521,7 @@ class _EndpointPort:
             specific_deployment=specific_deployment,
             messages=messages,
             batch_upload=batch_upload,
+            batch_api=batch_api,
         )
 
     async def acompletion(self, *args: object, **kwargs: object) -> object:  # kwargs-ok: endpoint payload
@@ -2579,6 +2599,8 @@ class RustCore(
         input: object = None,
         health_check_probe: bool = False,
         batch_upload: bool = False,
+        batch_api: bool = False,
+        override_pre_call_check: bool = True,
         **_: object,  # kwargs-ok: the RouterCore select options this core ignores
     ) -> Mapping[str, object] | Sequence[Mapping[str, object]]:
         """Pick a deployment for ``model`` without calling it (``pick``), list the deployments a
@@ -2598,12 +2620,26 @@ class RustCore(
             input,
             probe=kind == "healthy" and health_check_probe,
             batch_upload=batch_upload,
+            batch_api=batch_api,
+            override_pre_call_check=override_pre_call_check,
         )
+        if kind == "pass_through":
+            with picks_reserve(_IN_PASS_THROUGH_CALL.get()):
+                return selection.run_sync()
         # A pick that makes no call holds no least-busy reservation (`select` on the Python core).
         with picks_reserve(False):
-            if kind == "pass_through":
-                return selection.run_sync()
             return await selection.run()
+
+    @contextlib.contextmanager
+    def reserving_picks(self, call_id: str) -> Generator[None, None, None]:
+        """A pass-through call's scope: only its ``select(kind="pass_through")`` picks hold a least-busy
+        reservation until the call starts, and a pick it never started is freed on exit."""
+        with owning_picks(self._selectors.reservations, call_id):
+            token: Final = _IN_PASS_THROUGH_CALL.set(True)
+            try:
+                yield
+            finally:
+                _IN_PASS_THROUGH_CALL.reset(token)
 
     async def async_get_available_deployment_for_pass_through(
         self,
@@ -2907,6 +2943,7 @@ class RustCore(
             # `batch_create_routing`: a batch create and its file upload keep to the deployments that can run batches.
             **({"batch_create": True} if _routes_as_batch_create(plan, request) else {}),
             **({"batch_upload": True} if plan.kind == "create_file" and is_batch_upload(request) else {}),
+            **({"batch_api": True} if _is_batch_api_call(plan) else {}),
             # `deployments_admitting_embedding_batch`: an embedding keeps to the deployments admitting its input.
             **({"embedding_batch": True} if plan.kind == "embedding" else {}),
         }
@@ -3593,6 +3630,7 @@ class RustCore(
         input: object,
         *,
         pass_through: bool = False,
+        override_pre_call_check: bool = True,
     ) -> object:
         if step.get("stage") == "pre_call":
             return await self._pre_call_facts(step, request, messages, input).answer_async()
@@ -3611,7 +3649,7 @@ class RustCore(
         if step.get("stage") == "embedding_batch":
             return self._embedding_batch(step, request, input, tags=True)
         if step.get("stage") == "override_check":
-            selector = self._override_selector(step, request)
+            selector = self._override_selector(step, request) if override_pre_call_check else None
             if selector is not None:
                 for record in self._records_of(step.get("candidates")):
                     await selector.async_pre_call_check(dict(record), None)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # every selector is a CustomLogger
@@ -3654,8 +3692,13 @@ class RustCore(
                 ),
             )
         )
-        if picked is not None and selector is not None and self._selectors.is_override(strategy, selector):
-            await selector.async_pre_call_check(dict(as_str_mapping(picked) or {}), None)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # every selector is a CustomLogger
+        override_selector: Final = (
+            selector
+            if override_pre_call_check and selector is not None and self._selectors.is_override(strategy, selector)
+            else None
+        )
+        if picked is not None and override_selector is not None:
+            await override_selector.async_pre_call_check(dict(as_str_mapping(picked) or {}), None)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # every selector is a CustomLogger
         if picked is not None and timed:
             self.service_logged("<routing_strategy>.async_get_available_deployments", start_time, clock(), request)
         return _pick_answer(step, candidates, picked)
@@ -3838,7 +3881,7 @@ class RustCore(
             return frozenset()
         tag_request: Final = {**request, field: {**metadata}} if isinstance(metadata, Mapping) else dict(request)
         found = frozenset[str]()  # rebind-ok: gains each pass's tag routing picks
-        remaining = [  # rebind-ok: each pass drops what tag routing just picked
+        remaining: list[Mapping[str, object]] = [  # rebind-ok: each pass drops what tag routing just picked
             record for record in routable if picked_id(record) in among
         ]
         while remaining:
@@ -4184,8 +4227,11 @@ class _Selection:
         *,
         probe: bool = False,
         batch_upload: bool = False,
+        batch_api: bool = False,
+        override_pre_call_check: bool = True,
     ) -> None:
         self._core: Final = core
+        self._override_pre_call_check: Final = override_pre_call_check
         # `_async_get_available_deployment` reads the alias map first, every other pick its names.
         self._model: Final = (
             model if isinstance(model, str) else core.routed_name(model, read_as_member=kind in _MEMBER_READ_PICKS)
@@ -4218,6 +4264,8 @@ class _Selection:
         if batch_upload:
             fields["batch_create"] = True
             fields["batch_upload"] = True
+        if batch_api:
+            fields["batch_api"] = True
         if kind in ("pick", "async_pass_through") or (kind == "sync_pick" and core._custom_strategy is not None):  # pyright: ignore[reportPrivateUsage]  # the selection serves its own core
             fields["pre_routes"] = True
         self._specific_deployment: Final = specific_deployment
@@ -4294,6 +4342,7 @@ class _Selection:
                         self._messages,
                         self._input,
                         pass_through=self._kind == "async_pass_through",
+                        override_pre_call_check=self._override_pre_call_check,
                     )
                 case "pre_route":
                     outcome = await core._pre_route(  # pyright: ignore[reportPrivateUsage]  # see above
@@ -4447,6 +4496,14 @@ def _narrowing_fields(request: dict[str, object], kind: str) -> Mapping[str, obj
 
 def _routes_as_batch_create(plan: Plan, request: Mapping[str, object]) -> bool:
     return plan.kind == "batch" or (plan.kind == "create_file" and is_batch_upload(request))
+
+
+def _is_batch_api_call(plan: Plan) -> bool:
+    return (
+        plan.kind in _BATCH_API_KINDS
+        or plan.handler in _BATCH_API_HANDLERS
+        or plan.endpoint in VECTOR_STORE_AND_CONTAINER_CALLS
+    )
 
 
 def _request_narrowing(request: Mapping[str, object]) -> Mapping[str, object]:
@@ -5277,7 +5334,9 @@ class _Driver:
             deployment_id: Final = (as_str_mapping(deployment.get("model_info")) or {}).get("id")
             if isinstance(deployment_id, str):
                 failure: Final = {**attempt_failure(error), "caller_scoped": core.per_user_deployment(deployment_id)}
-                report: Final = core._handle.report_failure(deployment_id, failure, uncounted=True)  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
+                report: Final = core._handle.report_failure(  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
+                    deployment_id, failure, uncounted=True, batch_api=_is_batch_api_call(self._plan)
+                )
                 done: Final = await core._drive_cache_steps(report)  # pyright: ignore[reportPrivateUsage]  # see above
                 _ = core.cooled_down(done, deployment_id, error.status_code)
         return {**self._failed(step, deployment, call, error), "recorded": True}
@@ -5398,7 +5457,13 @@ class _Driver:
     def _attempt_request(self, step: Mapping[str, object]) -> Mapping[str, object]:
         """The request as the attempt sends it: with the params a fallback's dict target sets (``kwargs.update``)."""
         params: Final = as_str_mapping(step.get("params"))
-        return self._request if params is None else {**self._request, **params}
+        if params is None:
+            return self._request
+        policy: Final = semantic_cache_policy(self._request) if "cache" in params else None
+        if policy is None:
+            return {**self._request, **params}
+        cache: Final = {**(as_str_mapping(params["cache"]) or {}), SEMANTIC_CACHE_POLICY_KEY: policy}
+        return {**self._request, **params, "cache": cache}
 
     async def _slot_or_turn_back(
         self, port: "_EndpointPort", deployment: Mapping[str, object], call: "AttemptCall", admission: Admission | None

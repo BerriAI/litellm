@@ -16,6 +16,7 @@ from litellm.constants import PTU_SENTINEL_API_KEY, SUBSCRIPTION_BACKED_PROVIDER
 from litellm.proxy._types import CommonProxyErrors
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.spend_tracking.key_metadata_recovery import (
+    KeyMetadataDict,
     attach_user_details,
     recover_cli_session_key_metadata,
     recover_double_hashed_key_metadata,
@@ -58,7 +59,7 @@ from litellm.types.repositories.daily_activity import (
     SpendLogsWindow,
 )
 
-_T: Final = TypeVar("_T")
+_T = TypeVar("_T")
 
 
 @dataclass(frozen=True, slots=True)
@@ -541,14 +542,14 @@ class _ProxyDailyActivityReads:
             self.prisma_client, api_keys - frozenset(result)
         )
         still_missing: Final = api_keys - frozenset(result) - frozenset(from_session_keys)
-        from_reverse_hash: Final = (
+        from_reverse_hash: Final[Mapping[str, KeyMetadataDict]] = (
             await recover_double_hashed_key_metadata(self.prisma_client, still_missing)
             if still_missing
             else MappingProxyType({})
         )
         after_token_recovery: Final = MappingProxyType({**result, **from_session_keys, **from_reverse_hash})
         unresolved: Final = api_keys - frozenset(after_token_recovery)
-        from_spend_logs: Final = (
+        from_spend_logs: Final[Mapping[str, KeyMetadataDict]] = (
             await recover_key_metadata_from_spend_logs(self.prisma_client, unresolved, window)
             if unresolved and window is not None
             else MappingProxyType({})

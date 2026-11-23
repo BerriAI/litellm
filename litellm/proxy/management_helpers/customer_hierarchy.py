@@ -200,7 +200,7 @@ class TransactionSource(Protocol):
     def tx(self) -> AbstractAsyncContextManager["Prisma"]: ...
 
 
-T: Final = TypeVar("T")
+T = TypeVar("T")
 
 
 @dataclass(frozen=True, slots=True)

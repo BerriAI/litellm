@@ -28,6 +28,7 @@ from litellm.constants import (
     RESPONSE_FORMAT_TOOL_NAME,
     RESPONSE_FORMAT_UNFORCED_TOOL_DESCRIPTION,
 )
+from litellm.litellm_core_utils.allowed_tools_tool_choice import HostedMcpToolHandling
 from litellm.litellm_core_utils.asyncify import is_event_loop_running
 from litellm.litellm_core_utils.core_helpers import (
     as_object_list,
@@ -1519,6 +1520,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             self._resolved_provider
         )
 
+    def hosted_mcp_tool_handling(self, model: str) -> HostedMcpToolHandling:
+        return "runs" if self.runs_hosted_mcp() else "drops"
+
     def _tools_param_with_openai_tool_search_mapped(
         self, non_default_params: Mapping[str, object], model: str, drop_params: bool
     ) -> Mapping[str, object]:
@@ -2115,7 +2119,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             model=model,
             route=self._resolved_provider,
             drop_params=drop_params,
-            runs_hosted_mcp=self.runs_hosted_mcp,
+            handling=self.hosted_mcp_tool_handling(model),
         )
         response_format_tool_is_forced: Final = (
             "response_format" in request_params

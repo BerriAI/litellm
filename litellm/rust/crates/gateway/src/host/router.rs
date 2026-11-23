@@ -1,6 +1,6 @@
 use std::{sync::Arc, time::Duration};
 
-use litellm_gateway_auth::AuthenticatedRequest;
+use litellm_gateway_auth::Authenticated;
 use litellm_gateway_inference::{
     Error, RoutingCache,
     routing::{self, RouteAttempt},
@@ -11,7 +11,7 @@ use litellm_router_core::{
     RoutingContext, SelectStage, Served,
 };
 
-use crate::Gateway;
+use crate::{Gateway, host::NativeRows};
 
 /// Whether [`NativeRouterHost`] answers `step` as the proxy does. `admit` leaves to Python every
 /// call that would make a step it does not.
@@ -28,7 +28,7 @@ pub fn answers(step: &HostStep) -> bool {
 /// rest is answered from the gateway's own state.
 pub struct NativeRouterHost<'a, A> {
     pub(super) gateway: &'a Gateway,
-    pub(super) identity: &'a AuthenticatedRequest,
+    pub(super) identity: &'a Authenticated<NativeRows>,
     pub(super) route: &'a A,
 }
 
@@ -57,7 +57,7 @@ impl<A: RouteAttempt> RouterHost for NativeRouterHost<'_, A> {
     }
 
     async fn allow_fallback(&self, target: &str) -> Result<bool, AttemptError> {
-        Ok(routing::allows(self.gateway, self.identity, target).await)
+        Ok(routing::allows(self.gateway, self.identity, target))
     }
 
     fn cache(&self) -> &RoutingCache {

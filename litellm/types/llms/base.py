@@ -1,11 +1,19 @@
-from typing import Final
+from enum import Enum
+from typing import Annotated, Final, TypeAlias
 
 from openai._models import BaseModel as OpenAIObject
-from pydantic import ConfigDict, TypeAdapter
+from pydantic import ConfigDict, TypeAdapter, ValidatorFunctionWrapHandler, WrapValidator
 
 from litellm.types.llms.base_model import LiteLLMBaseModel
 
 _ATTRIBUTE_VALUE: Final = TypeAdapter(object)
+
+
+def _str_as_given(value: object, handler: ValidatorFunctionWrapHandler) -> object:
+    return value if isinstance(value, str) and not isinstance(value, Enum) else handler(value)
+
+
+StrAsGiven: TypeAlias = Annotated[str, WrapValidator(_str_as_given)]
 
 
 class LiteLLMPydanticObjectBase(LiteLLMBaseModel):
