@@ -113,7 +113,7 @@ async def test_no_writer_revives_a_terminated_subscription() -> None:
             refresh_before=None,
             cursor="c2",
         )
-        assert await store.activate(row.id, refreshed) is False
+        assert await store.activate(row.id, refreshed) is None
         await store.mark_delivered(row.id, NOW)
         await store.mark_failed(row.id, "timeout", NOW, 1)
         after: Final = await store.get(row.id)
@@ -141,7 +141,7 @@ async def test_a_gap_insert_failure_rolls_back_the_activation() -> None:
                 upstream_refresh_before=None,
                 refresh_before=None,
                 cursor="advanced",
-                reactivation_gap=gap,
+                reactivation_gap_id=gap.delivery_id,
             )
             assert await store.enqueue(gap)
             with pytest.raises(RawQueryError):
@@ -271,7 +271,7 @@ async def test_an_unsubscribe_holds_only_the_upstream_subscription_it_read_and_d
             refresh_before=None,
             cursor="c9",
         )
-        assert await store.activate(row.id, renewal, ("active", "suspended")) is False
+        assert await store.activate(row.id, renewal, ("active", "suspended")) is None
         await store.delete_held(row.id, "up_other")
         assert await store.get(row.id) is not None
         await store.delete_held(row.id, "up_1")
@@ -334,7 +334,7 @@ async def test_losing_the_claim_or_subscription_generation_blocks_all_settlement
                     upstream_subscription_id="up_1",
                     upstream_refresh_before=None,
                     refresh_before=None,
-                    cursor="previous-safe",
+                    cursor="upstream-ahead",
                 ),
             )
             assert not await second_worker.settle(winner, active.generation, later, outcome, gap=True)
@@ -355,8 +355,6 @@ async def test_losing_the_claim_or_subscription_generation_blocks_all_settlement
                 for d in await first_worker.claim(later, later + timedelta(minutes=1), 100)
                 if d.subscription_id == row.id
             ]
-            assert [d.body for d in due] == (
-                ['{"type":"gap","cursor":"previous-safe"}'] if outcome == "timeout" else []
-            )
+            assert [d.body for d in due] == (['{"type":"gap","cursor":"c1"}'] if outcome == "timeout" else [])
         finally:
             await first_worker.delete(row.id)
