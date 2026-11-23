@@ -1599,6 +1599,25 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                             )
                 kwargs["system"] = masked_system
 
+            litellm_params: Final = kwargs.get("litellm_params")
+            if isinstance(litellm_params, dict):
+                proxy_server_request: Final = litellm_params.get("proxy_server_request")
+                if isinstance(proxy_server_request, dict):
+                    request_body: Final = proxy_server_request.get("body")
+                    if isinstance(request_body, dict) and ("messages" in request_body or "system" in request_body):
+                        masked_body: dict = {**request_body}
+                        if "messages" in masked_body:
+                            masked_body["messages"] = copy.deepcopy(messages)
+                        if "system" in masked_body and "system" in kwargs:
+                            masked_body["system"] = copy.deepcopy(kwargs["system"])
+                        kwargs["litellm_params"] = {
+                            **litellm_params,
+                            "proxy_server_request": {
+                                **proxy_server_request,
+                                "body": masked_body,
+                            },
+                        }
+
             standard_logging_object: Final = kwargs.get("standard_logging_object")
             if isinstance(standard_logging_object, dict) and "messages" in standard_logging_object:
                 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
