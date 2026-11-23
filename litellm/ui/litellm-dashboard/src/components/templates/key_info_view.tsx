@@ -1,4 +1,4 @@
-import { LensControls, LensTabTrigger } from "@/components/lens/LensControls";
+import { LensControls } from "@/components/lens/LensControls";
 import { readLensPolicy, type LensPolicy } from "@/components/lens/lensPolicy";
 import { useTeam } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { lensEntityHref } from "@/components/lens/entityLinks";
