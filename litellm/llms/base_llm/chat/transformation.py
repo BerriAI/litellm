@@ -199,13 +199,14 @@ class BaseConfig(ABC):
     def translate_developer_role_to_system_role(
         self,
         messages: list[AllMessageValues],
+        other_request_fields: Mapping[str, object] | None = None,
     ) -> list[AllMessageValues]:
         """
         Translate `developer` role to `system` role for non-OpenAI providers.
 
         Overriden by OpenAI/Azure
         """
-        return map_developer_role_to_system_role(messages=messages)
+        return map_developer_role_to_system_role(messages=messages, other_request_fields=other_request_fields)
 
     def should_retry_llm_api_inside_llm_translation_on_http_error(
         self, e: httpx.HTTPStatusError, litellm_params: dict

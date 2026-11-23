@@ -14,6 +14,7 @@ import itertools
 import os
 import re
 from collections.abc import Callable, Container, Iterable, Mapping, Sequence
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, cast
 from urllib.parse import urlparse
 
@@ -23,6 +24,7 @@ from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
 from litellm.integrations.prompt_management_base import PromptManagementClient
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     cache_control_as_prompt_cache_breakpoint,
     with_prompt_cache_breakpoint,
@@ -35,6 +37,7 @@ from litellm.llms.anthropic.common_utils import (
     is_claude_code_one_shot_subagent_request,
     supports_anthropic_cache_control,
     tool_call_is_rebuilt_as_server_tool_use,
+    tool_config_point_control,
 )
 from litellm.types.integrations.anthropic_cache_control_hook import (
     GATEWAY_INJECTED_CACHE_METADATA_KEY,
@@ -234,6 +237,134 @@ def _as_object_list(value: object | None) -> list[object] | None:
     return _validated_object_list(value)
 
 
+def _own_cache_control(value: object) -> tuple[object, ...]:
+    fields: Final = as_str_mapping(value)
+    return () if fields is None or fields.get("cache_control") is None else (fields["cache_control"],)
+
+
+def _each_cache_control(
+    cache_controls_of: Callable[[object], tuple[object, ...]], values: object
+) -> tuple[object, ...]:
+    return tuple(itertools.chain.from_iterable(map(cache_controls_of, _as_object_list(values) or ())))
+
+
+def _message_cache_controls(message: object) -> tuple[object, ...]:
+    fields: Final = as_str_mapping(message)
+    if fields is None:
+        return ()
+    provider_fields: Final = as_str_mapping(fields.get("provider_specific_fields")) or MappingProxyType({})
+    return (
+        _own_cache_control(fields)
+        + _each_cache_control(_own_cache_control, fields.get("content"))
+        + _each_cache_control(_own_cache_control, fields.get("tool_calls"))
+        + _each_cache_control(_own_cache_control, provider_fields.get("web_search_results"))
+        + _each_cache_control(_own_cache_control, provider_fields.get("tool_results"))
+    )
+
+
+def _tool_cache_controls(tool: object) -> tuple[object, ...]:
+    fields: Final = as_str_mapping(tool)
+    return () if fields is None else _own_cache_control(fields) + _own_cache_control(fields.get("function"))
+
+
+def _request_cache_controls(fields: Mapping[str, object]) -> tuple[object, ...]:
+    extra_body: Final = as_str_mapping(fields.get("extra_body")) or MappingProxyType({})
+    top_level: Final = extra_body.get("cache_control", fields.get("cache_control"))
+    return (
+        (() if top_level is None else (top_level,))
+        + _each_cache_control(
+            _tool_cache_controls, extra_body["tools"] if "tools" in extra_body else fields.get("tools")
+        )
+        + _each_cache_control(_message_cache_controls, extra_body.get("messages"))
+    )
+
+
+def _cache_control_ttl(cache_control: object) -> object:
+    fields: Final = as_str_mapping(cache_control)
+    return None if fields is None else fields.get("ttl") or "5m"
+
+
+def messages_cache_control_ttls(messages: object) -> tuple[object, ...]:
+    return tuple(map(_cache_control_ttl, _each_cache_control(_message_cache_controls, messages)))
+
+
+def request_cache_control_ttls(fields: Mapping[str, object]) -> tuple[object, ...]:
+    return tuple(map(_cache_control_ttl, _request_cache_controls(fields)))
+
+
+def tool_config_point_ttls(points: object) -> tuple[object, ...]:
+    control: Final = tool_config_point_control(points)
+    return () if control is None else (_cache_control_ttl(control),)
+
+
+def keeps_one_ttl_within_the_cap(ttls: Sequence[object]) -> bool:
+    return len(ttls) <= MAX_CACHE_CONTROL_BLOCKS and all(ttl == ttls[0] for ttl in ttls)
+
+
+def request_keeps_developer_cache_control(
+    messages: Sequence[AllMessageValues], other_request_fields: Mapping[str, object]
+) -> bool:
+    """Anthropic and Bedrock send the system prompt after the tools and reject a 1h mark after a 5m
+    one, so a developer mark is kept only while every mark, a ``tool_config`` point's included,
+    shares one TTL within the cap."""
+    return keeps_one_ttl_within_the_cap(
+        (
+            *messages_cache_control_ttls(messages),
+            *request_cache_control_ttls(other_request_fields),
+            *tool_config_point_ttls(other_request_fields.get("cache_control_injection_points")),
+        )
+    )
+
+
+def declared_prompt_caching(model_info: object) -> bool | None:
+    fields: Final = as_str_mapping(model_info)
+    declared: Final = None if fields is None else fields.get("supports_prompt_caching")
+    return declared if isinstance(declared, bool) else None
+
+
+def _without_developer_cache_control(message: AllMessageValues) -> AllMessageValues:
+    if message["role"] != "developer" or "cache_control" not in message:
+        return message
+    return cast(  # cast-ok: the same developer message without its cache marker
+        AllMessageValues, {key: value for key, value in message.items() if key != "cache_control"}
+    )
+
+
+def _cost_map_caches_prompts(models: Iterable[str], custom_llm_provider: str | None) -> bool:
+    from litellm.utils import supports_factory
+
+    return any(
+        supports_factory(
+            model=name, custom_llm_provider=custom_llm_provider, key="supports_prompt_caching", catalog_only=True
+        )
+        for name in models
+    )
+
+
+def _caches_prompts(model: str, custom_llm_provider: str | None, model_info: object, base_model: object) -> bool:
+    declared: Final = declared_prompt_caching(model_info)
+    if declared is not None:
+        return declared
+    return _cost_map_caches_prompts(
+        dict.fromkeys(name for name in (base_model, model) if isinstance(name, str) and name), custom_llm_provider
+    )
+
+
+def developer_messages_for_a_prompt_caching_model(
+    messages: Sequence[AllMessageValues],
+    *,
+    model: str,
+    custom_llm_provider: str | None,
+    model_info: object,
+    base_model: object,
+) -> Sequence[AllMessageValues]:
+    if not any(message["role"] == "developer" and "cache_control" in message for message in messages):
+        return messages
+    if _caches_prompts(model, custom_llm_provider, model_info, base_model):
+        return messages
+    return [_without_developer_cache_control(message) for message in messages]
+
+
 def _tool_call_carries_cache_breakpoint(tool_call: object, message: object, answered_tool_ids: Container[str]) -> bool:
     if _attribute_or_key(tool_call, "cache_control") is None:
         return False
@@ -278,6 +409,38 @@ def _builds_anthropic_messages(model: str, custom_llm_provider: str | None) -> b
     except (BadRequestError, ValueError):
         return True
     return isinstance(chat_config, AnthropicConfig) and not isinstance(chat_config, OpenAIGPTConfig)
+
+
+def _serves_gemini(model: str, custom_llm_provider: str | None) -> bool:
+    from litellm.exceptions import BadRequestError
+    from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider, get_llm_provider
+    from litellm.llms.vertex_ai.common_utils import uses_vertex_gemini_api
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+    from litellm.types.utils import LlmProviders
+    from litellm.utils import ProviderConfigManager
+
+    if "gemini" in model.lower():
+        return True
+    if declared_authenticating_provider(model, custom_llm_provider) is not None:
+        return False
+    try:
+        served_model, provider, _, _ = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)
+        chat_config: Final = ProviderConfigManager.get_provider_chat_config(
+            model=served_model, provider=LlmProviders(provider)
+        )
+    except (BadRequestError, ValueError):
+        return False
+    if provider in (LlmProviders.VERTEX_AI.value, LlmProviders.VERTEX_AI_BETA.value):
+        return uses_vertex_gemini_api(served_model)
+    return isinstance(chat_config, VertexGeminiConfig)
+
+
+def _serves_gemini_or_names_a_gemini_base_model(
+    model: str, custom_llm_provider: str | None, base_model: object
+) -> bool:
+    return _serves_gemini(model, custom_llm_provider) or (
+        isinstance(base_model, str) and bool(base_model) and _serves_gemini(base_model, None)
+    )
 
 
 def _custom_llm_provider(non_default_params: Mapping[str, object], point: Mapping[str, object]) -> str | None:
@@ -332,6 +495,34 @@ def _may_carry_prompt_cache_breakpoint(message: Mapping[str, object]) -> bool:
     return message.get("role") != "assistant"
 
 
+def _offers_a_cache_slot(message: Mapping[str, object], openai_dialect: bool) -> bool:
+    if openai_dialect and not _may_carry_prompt_cache_breakpoint(message):
+        return False
+    content: Final = message.get("content")
+    if isinstance(content, str):
+        return True
+    parts: Final = _as_object_list(content)
+    if parts is None:
+        return False
+    if openai_dialect:
+        return any(map(_accepts_prompt_cache_breakpoint, parts))
+    return bool(parts) and isinstance(parts[-1], dict)
+
+
+def _points_with_their_target_roles(
+    points: Sequence[CacheControlMessageInjectionPoint], covers_developer: bool
+) -> tuple[tuple[CacheControlMessageInjectionPoint, str | None], ...]:
+    """A developer message is the system prompt in the OpenAI shapes, so a ``role: system`` point
+    covers it too, but only with the breakpoints left after every configured point is placed. Gemini
+    is left out, since a mark there opens a context cache that bills storage by the hour."""
+    developer_points: Final = (
+        tuple((point, "developer") for point in points if point.get("role") == "system" and point.get("index") is None)
+        if covers_developer
+        else ()
+    )
+    return (*((point, point.get("role")) for point in points), *developer_points)
+
+
 # Set by a caller whose message list is not the one that goes upstream -- today the
 # Responses API layer, whose `instructions` only becomes a system message further down.
 # Tells this hook to hand role-targeted points to the pass holding the final messages
@@ -339,7 +530,10 @@ def _may_carry_prompt_cache_breakpoint(message: Mapping[str, object]) -> bool:
 CARRY_UNMATCHED_MESSAGE_POINTS: Final = "_litellm_carry_unmatched_cache_control_points"
 
 EXTERNAL_BREAKPOINTS_STAMP: Final = "_litellm_external_breakpoints"
+OUTSIDE_MESSAGES_TTLS_STAMP: Final = "_litellm_outside_messages_cache_control_ttls"
 CUSTOM_LLM_PROVIDER_STAMP: Final = "_litellm_custom_llm_provider"
+PROMPT_CACHING_STAMP: Final = "_litellm_caches_prompts"
+BASE_MODEL_STAMP: Final = "_litellm_base_model"
 
 
 class AnthropicCacheControlHook(CustomPromptManagement):
@@ -455,6 +649,14 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             max_blocks=MAX_CACHE_CONTROL_BLOCKS - reserved_blocks,
             openai_dialect=openai_dialect,
             answered_tool_ids=answered_tool_ids,
+            covers_developer=injection_points[0].get(PROMPT_CACHING_STAMP) is not False
+            and not _serves_gemini_or_names_a_gemini_base_model(
+                model, custom_llm_provider, injection_points[0].get(BASE_MODEL_STAMP)
+            ),
+            outside_ttls=(
+                *(_validated_object_list(injection_points[0].get(OUTSIDE_MESSAGES_TTLS_STAMP)) or ()),
+                *tool_config_point_ttls(remaining_points),
+            ),
         )
         if (
             openai_dialect
@@ -601,6 +803,8 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         max_blocks: int,
         openai_dialect: bool = False,
         answered_tool_ids: frozenset[str] | None = None,
+        covers_developer: bool = True,
+        outside_ttls: Sequence[object] = (),
     ) -> list[AllMessageValues]:
         """Apply message-level cache control injection points in order.
 
@@ -621,7 +825,9 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         )
 
         limit_reached = False
-        for point in points:
+        for point, targeted_role in _points_with_their_target_roles(
+            points, covers_developer and any(message["role"] == "developer" for message in messages)
+        ):
             if used_blocks >= max_blocks:
                 limit_reached = True
                 break
@@ -630,7 +836,9 @@ class AnthropicCacheControlHook(CustomPromptManagement):
                 type="ephemeral"
             )
 
-            for target_index in AnthropicCacheControlHook._resolve_target_indices(point=point, messages=messages):
+            for target_index in AnthropicCacheControlHook._resolve_target_indices(
+                point=point, messages=messages, targeted_role=targeted_role
+            ):
                 if used_blocks >= max_blocks:
                     limit_reached = True
                     break
@@ -638,6 +846,14 @@ class AnthropicCacheControlHook(CustomPromptManagement):
                 if AnthropicCacheControlHook._message_has_cache_control(messages[target_index], client_answers):
                     # Client already marked this message; don't overwrite it.
                     continue
+
+                if targeted_role == "developer" and not _offers_a_cache_slot(messages[target_index], openai_dialect):
+                    continue
+
+                if targeted_role == "developer" and not keeps_one_ttl_within_the_cap(
+                    (*messages_cache_control_ttls(messages), *outside_ttls, _cache_control_ttl(control))
+                ):
+                    break
 
                 messages[target_index] = AnthropicCacheControlHook._safe_insert_cache_control_in_message(
                     messages[target_index], control, openai_dialect
@@ -658,7 +874,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
 
     @staticmethod
     def _resolve_target_indices(
-        point: CacheControlMessageInjectionPoint, messages: list[AllMessageValues]
+        point: CacheControlMessageInjectionPoint, messages: list[AllMessageValues], targeted_role: str | None
     ) -> list[int]:
         """Resolve which message indices an injection point targets."""
         _targetted_index: Final[int | str | None] = point.get("index", None)
@@ -689,9 +905,8 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             return []
 
         # Case 2: Target by role
-        targetted_role: Final = point.get("role", None)
-        if targetted_role is not None:
-            return [idx for idx, msg in enumerate(messages) if msg.get("role") == targetted_role]
+        if targeted_role is not None:
+            return [idx for idx, msg in enumerate(messages) if msg.get("role") == targeted_role]
 
         return []
 
@@ -1094,6 +1309,8 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         tools: list | None = None,
         enable_prompt_caching: bool | None = None,
         api_base: object = None,
+        model_info: object = None,
+        base_model: object = None,
     ) -> None:
         """For /chat/completions: resolve the injection points the request should carry.
 
@@ -1121,10 +1338,42 @@ class AnthropicCacheControlHook(CustomPromptManagement):
                 api_base,
                 non_default_params.get("prompt_cache_options"),
             )
-            non_default_params["cache_control_injection_points"] = (
-                AnthropicCacheControlHook._stamped(stamped, CUSTOM_LLM_PROVIDER_STAMP, custom_llm_provider)
-                if custom_llm_provider is not None and _marks_a_server_tool_call(messages)
+            outside_ttls: Final = (
+                request_cache_control_ttls(
+                    MappingProxyType(
+                        {
+                            "tools": cast(list[object] | None, tools),  # cast-ok: the seed types tools as a bare list
+                            "cache_control": non_default_params.get("cache_control"),
+                            "extra_body": non_default_params.get("extra_body"),
+                        }
+                    )
+                )
+                if any(message["role"] == "developer" for message in messages)
+                else ()
+            )
+            with_outside_ttls: Final = (
+                AnthropicCacheControlHook._stamped(stamped, OUTSIDE_MESSAGES_TTLS_STAMP, outside_ttls)
+                if outside_ttls
                 else stamped
+            )
+            with_base_model: Final = (
+                AnthropicCacheControlHook._stamped(with_outside_ttls, BASE_MODEL_STAMP, base_model)
+                if isinstance(base_model, str) and base_model
+                else with_outside_ttls
+            )
+            with_prompt_caching: Final = (
+                AnthropicCacheControlHook._stamped(
+                    with_base_model,
+                    PROMPT_CACHING_STAMP,
+                    _caches_prompts(model, custom_llm_provider, model_info, base_model),
+                )
+                if any(message["role"] == "developer" for message in messages)
+                else with_base_model
+            )
+            non_default_params["cache_control_injection_points"] = (
+                AnthropicCacheControlHook._stamped(with_prompt_caching, CUSTOM_LLM_PROVIDER_STAMP, custom_llm_provider)
+                if custom_llm_provider is not None and _marks_a_server_tool_call(messages)
+                else with_prompt_caching
             )
             return
         points: Final = AnthropicCacheControlHook.get_default_injection_points(
