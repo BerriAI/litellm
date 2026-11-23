@@ -15,6 +15,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 
+import litellm
 from litellm.exceptions import GuardrailRaisedException
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -3947,3 +3948,38 @@ def test_request_sent_to_a_model_never_carries_tool_failure_marker() -> None:
         anthropic_message_request=FAILED_TOOL_RESULT_REQUEST  # pyright: ignore[reportArgumentType]  # a JSON request in the Anthropic shape
     )
     assert "is_error" not in json.dumps(request["messages"], default=str)
+
+
+@pytest.mark.asyncio
+async def test_structured_rewrite_keeps_client_cache_control_on_a_claude_alias() -> None:
+    ephemeral: Final = {"type": "ephemeral"}
+    data: Final = {
+        "model": "best-sonnet",
+        "system": [{"type": "text", "text": "Triage POISON tickets.", "cache_control": dict(ephemeral)}],
+        "tools": [
+            {
+                "name": "search_tickets",
+                "description": "Search the ticket tracker",
+                "input_schema": {"type": "object", "properties": {"query": {"type": "string"}}},
+                "cache_control": dict(ephemeral),
+            }
+        ],
+        "messages": [
+            {"role": "user", "content": [{"type": "text", "text": "Find POISON tickets"}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "Found 3."}]},
+            {"role": "user", "content": [{"type": "text", "text": "Which are P1?", "cache_control": dict(ephemeral)}]},
+        ],
+    }
+
+    claude_alias: Final = litellm.Router(
+        model_list=[{"model_name": "best-sonnet", "litellm_params": {"model": "bedrock/us.anthropic.claude-sonnet-5-5"}}]
+    )
+
+    await AnthropicMessagesHandler(deployment_lookup=claude_alias.registry).process_input_messages(
+        data=data, guardrail_to_apply=StructuredMessagesRewritingGuardrail()
+    )
+
+    assert data["messages"][0]["content"] == [{"type": "text", "text": "Find [BLOCKED] tickets"}]
+    assert data["system"] == [{"type": "text", "text": "Triage [BLOCKED] tickets.", "cache_control": ephemeral}]
+    assert data["tools"][0]["cache_control"] == ephemeral
+    assert data["messages"][-1]["content"] == [{"type": "text", "text": "Which are P1?", "cache_control": ephemeral}]

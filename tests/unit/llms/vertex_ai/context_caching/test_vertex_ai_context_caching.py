@@ -2922,3 +2922,78 @@ async def test_a_model_without_system_messages_takes_a_video_in_a_later_system_m
     await complete({"model": "gemini/gemma-3-27b-it", "messages": uncached, "api_key": "test-key"}, uncached_calls)
 
     assert _last_generated_contents(cached_calls)[-1] == _last_generated_contents(uncached_calls)[-1]
+
+
+_GET_WEATHER_TOOL: Final = {
+    "type": "function",
+    "function": {
+        "name": "get_weather",
+        "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+    },
+}
+
+
+@pytest.fixture
+def search_with_functions_model(local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch) -> str:
+    monkeypatch.setitem(
+        litellm.model_cost, "gemini-3-search-next-to-functions", {"supports_search_tools_with_functions": True}
+    )
+    return "gemini/gemini-3-search-next-to-functions"
+
+
+def _cached_request_with_search_and_functions(model: str) -> dict[str, object]:
+    return {
+        "model": model,
+        "messages": [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "cached prefix " * 3000, "cache_control": {"type": "ephemeral"}}],
+            },
+            {"role": "user", "content": "Search the web, then reply with OK only."},
+        ],
+        "tools": [{"type": "web_search"}, _GET_WEATHER_TOOL],
+        "api_key": "test-key",
+    }
+
+
+def _created_and_generated_bodies(calls: list[httpx.Request]) -> tuple[dict, dict]:
+    created: Final = next(
+        json.loads(call.content) for call in calls if call.method == "POST" and call.url.path.endswith("/cachedContents")
+    )
+    generated: Final = next(json.loads(call.content) for call in calls if call.url.path.endswith(":generateContent"))
+    return created, generated
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("complete", [_complete_sync, _complete_async])
+async def test_search_kept_next_to_functions_goes_into_the_gemini_cache_with_its_server_side_tool_flag(
+    search_with_functions_model: str,
+    complete: Callable[[Mapping[str, object], list[httpx.Request]], Awaitable[None]],
+) -> None:
+    calls: Final[list[httpx.Request]] = []
+    await complete(_cached_request_with_search_and_functions(search_with_functions_model), calls)
+
+    created, generated = _created_and_generated_bodies(calls)
+    assert {key for tool in created["tools"] for key in tool} == {"function_declarations", "googleSearch"}
+    assert created["toolConfig"] == {"includeServerSideToolInvocations": True}
+    assert generated["cachedContent"] == "cachedContents/created"
+    assert "toolConfig" not in generated
+    assert "tools" not in generated
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("complete", [_complete_sync, _complete_async])
+async def test_a_caller_who_turns_server_side_tools_off_caches_functions_without_search(
+    search_with_functions_model: str,
+    complete: Callable[[Mapping[str, object], list[httpx.Request]], Awaitable[None]],
+) -> None:
+    calls: Final[list[httpx.Request]] = []
+    await complete(
+        {**_cached_request_with_search_and_functions(search_with_functions_model), "includeServerSideToolInvocations": False},
+        calls,
+    )
+
+    created, generated = _created_and_generated_bodies(calls)
+    assert {key for tool in created["tools"] for key in tool} == {"function_declarations"}
+    assert "toolConfig" not in created
+    assert "toolConfig" not in generated

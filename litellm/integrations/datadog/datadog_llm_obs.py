@@ -528,13 +528,13 @@ class DataDogLLMObsLogger(CustomBatchLogger):
 
         self.intake_url = f"https://api.{self.DD_SITE}/api/intake/llm-obs/v1/trace/spans"
 
-    def _get_datadog_llm_obs_params(self) -> dict:
+    def _get_datadog_llm_obs_params(self) -> dict[str, object]:
         """
         Get the datadog_llm_observability_params from litellm.datadog_llm_observability_params
 
         These are params specific to initializing the DataDogLLMObsLogger e.g. turn_off_message_logging
         """
-        dict_datadog_llm_obs_params: dict = {}
+        dict_datadog_llm_obs_params: dict[str, object] = {}
         if litellm.datadog_llm_observability_params is not None:
             if isinstance(litellm.datadog_llm_observability_params, DatadogLLMObsInitParams):
                 dict_datadog_llm_obs_params = litellm.datadog_llm_observability_params.model_dump(exclude_unset=True)
@@ -545,7 +545,7 @@ class DataDogLLMObsLogger(CustomBatchLogger):
                 ).model_dump(exclude_unset=True)
         return dict_datadog_llm_obs_params
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(self, kwargs, response_obj: object, start_time: datetime, end_time: datetime):
         try:
             verbose_logger.debug("DataDogLLMObs: Logging success event for model %s", kwargs.get("model", "unknown"))
             payload: Final = self.create_llm_obs_payload(kwargs, start_time, end_time)
@@ -557,7 +557,7 @@ class DataDogLLMObsLogger(CustomBatchLogger):
         except Exception as e:
             verbose_logger.exception("DataDogLLMObs: Error logging success event - %s", e)
 
-    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_failure_event(self, kwargs, response_obj: object, start_time: datetime, end_time: datetime):
         try:
             verbose_logger.debug("DataDogLLMObs: Logging failure event for model %s", kwargs.get("model", "unknown"))
             payload: Final = self.create_llm_obs_payload(kwargs, start_time, end_time)

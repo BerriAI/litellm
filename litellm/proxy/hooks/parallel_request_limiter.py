@@ -11,6 +11,7 @@ import litellm
 from litellm import DualCache, EmbeddingResponse, ModelResponse, TextCompletionResponse
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import USAGE_ONLY_SETTLEMENT_KEY
 from litellm.exceptions import RateLimitType
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, get_parent_otel_span_from_kwargs
@@ -61,10 +62,19 @@ def _is_websocket_passthrough_row(kwargs: Mapping[str, object]) -> bool:
 
 
 def _slots_released(kwargs: Mapping[str, object]) -> int:
-    """A websocket turn callback releases nothing; the socket's slot is released once at disconnect."""
-    if kwargs.get("call_type") in _CONNECTION_SCOPED_CALL_TYPES or _is_websocket_passthrough_row(kwargs):
+    """A websocket turn callback releases nothing; the socket's slot is released once at disconnect.
+    A background usage settlement releases nothing either, since its request released its slot when it returned."""
+    if (
+        kwargs.get("call_type") in _CONNECTION_SCOPED_CALL_TYPES
+        or _is_websocket_passthrough_row(kwargs)
+        or kwargs.get(USAGE_ONLY_SETTLEMENT_KEY) is True
+    ):
         return 0
     return 1
+
+
+def _request_count_for_an_uncounted_minute(kwargs: Mapping[str, object]) -> int:
+    return 0 if kwargs.get(USAGE_ONLY_SETTLEMENT_KEY) is True else 1
 
 
 class CacheObject(TypedDict):
@@ -531,6 +541,9 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         try:
             self.print_verbose("INSIDE parallel request limiter ASYNC SUCCESS LOGGING")
             released: Final = _slots_released(kwargs)  # pyright: ignore[reportUnknownArgumentType]  # legacy callback kwargs are untyped
+            uncounted_minute_requests: Final = _request_count_for_an_uncounted_minute(
+                kwargs  # pyright: ignore[reportUnknownArgumentType]  # legacy callback kwargs are untyped
+            )
 
             global_max_parallel_requests: Final = kwargs["litellm_params"]["metadata"].get(
                 "global_max_parallel_requests", None
@@ -587,7 +600,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     key=request_count_api_key,
                     litellm_parent_otel_span=litellm_parent_otel_span,
                 ) or {
-                    "current_requests": 1,
+                    "current_requests": uncounted_minute_requests,
                     "current_tpm": 0,
                     "current_rpm": 0,
                 }
@@ -628,7 +641,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     key=request_count_api_key,
                     litellm_parent_otel_span=litellm_parent_otel_span,
                 ) or {
-                    "current_requests": 1,
+                    "current_requests": uncounted_minute_requests,
                     "current_tpm": 0,
                     "current_rpm": 0,
                 }
@@ -652,9 +665,9 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     key=request_count_api_key,
                     litellm_parent_otel_span=litellm_parent_otel_span,
                 ) or {
-                    "current_requests": 1,
+                    "current_requests": uncounted_minute_requests,
                     "current_tpm": 0,
-                    "current_rpm": 1,
+                    "current_rpm": uncounted_minute_requests,
                 }
 
                 new_val = {
@@ -676,9 +689,9 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     key=request_count_api_key,
                     litellm_parent_otel_span=litellm_parent_otel_span,
                 ) or {
-                    "current_requests": 1,
+                    "current_requests": uncounted_minute_requests,
                     "current_tpm": 0,
-                    "current_rpm": 1,
+                    "current_rpm": uncounted_minute_requests,
                 }
 
                 new_val = {
@@ -700,9 +713,9 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     key=request_count_api_key,
                     litellm_parent_otel_span=litellm_parent_otel_span,
                 ) or {
-                    "current_requests": 1,
+                    "current_requests": uncounted_minute_requests,
                     "current_tpm": 0,
-                    "current_rpm": 1,
+                    "current_rpm": uncounted_minute_requests,
                 }
 
                 new_val = {

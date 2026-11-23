@@ -34,6 +34,7 @@ import { Page } from "@/components/shared/Page";
 import { CommandPaletteProvider } from "@/components/CommandPalette/CommandPaletteProvider";
 import { recordUiEvent } from "@/lib/telemetry/uiEvents";
 import TelemetryEnvBanner from "@/app/(dashboard)/telemetry/_components/TelemetryEnvBanner";
+import { GatewayLensNavigationProvider } from "@/components/lens/GatewayLensNavigation";
 
 const pluginApiClient = createApiClient({ getBaseUrl: () => getProxyBaseUrl() ?? "" });
 
@@ -126,6 +127,7 @@ const PAGE_FRAME_CLASS_NAMES = {
 const FRAMED_SEGMENTS: ReadonlyMap<string, keyof typeof PAGE_FRAME_CLASS_NAMES> = new Map([
   ["admin-panel", "default"],
   ["agents", "default"],
+  ["alerts", "default"],
   ["api-keys", "fill"],
   ["budgets", "fill"],
   ["caching", "default"],
@@ -137,12 +139,18 @@ const FRAMED_SEGMENTS: ReadonlyMap<string, keyof typeof PAGE_FRAME_CLASS_NAMES> 
   ["logs", "fill"],
   ["mcp-servers", "fill"],
   ["memory", "default"],
+  ["models-and-endpoints", "default"],
+  ["organizations", "default"],
   ["playground", "fixed"],
+  ["projects", "default"],
   ["prompts", "default"],
   ["router-settings", "default"],
   ["search-tools", "fill"],
+  ["skills", "default"],
   ["tag-management", "fill"],
+  ["tool-policies", "default"],
   ["ui-theme", "default"],
+  ["usage", "default"],
   ["vector-stores", "default"],
   ["workflows", "default"],
 ]);
@@ -288,7 +296,9 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
 
   return (
     <ThemeProvider accessToken={accessToken}>
-      <DashboardShell>{children}</DashboardShell>
+      <GatewayLensNavigationProvider>
+        <DashboardShell>{children}</DashboardShell>
+      </GatewayLensNavigationProvider>
     </ThemeProvider>
   );
 }

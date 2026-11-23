@@ -125,6 +125,12 @@ def _tool_call_objects(tool_calls: object) -> tuple[object, ...]:
     return tuple(tool_calls) if isinstance(tool_calls, list) else ()
 
 
+def _tool_call_id_of(tool_call: object) -> str:
+    mapping: Final = as_str_mapping(tool_call)
+    call_id: Final = mapping.get("id") if mapping is not None else getattr(tool_call, "id", None)
+    return str(call_id) if call_id else ""
+
+
 def _tool_call_provider_specific_fields(tool_call: object) -> Mapping[str, object]:
     mapping: Final = as_str_mapping(tool_call)
     fields: Final[object] = (
@@ -149,6 +155,14 @@ def _delta_has_signed_thinking_block(delta: object) -> bool:
     return any(_is_signed_thinking_block(block) for block in attribute_items(delta, "thinking_blocks"))
 
 
+def _delta_opens_reasoning(delta: object) -> bool:
+    return bool(getattr(delta, "reasoning_content", None)) or _delta_has_signed_thinking_block(delta)
+
+
+def _first_delta(chunk: ModelResponseStream) -> ChatCompletionDelta | None:
+    return chunk.choices[0].delta if chunk.choices else None
+
+
 def _delta_carries_output(delta: ChatCompletionDelta) -> bool:
     fields: Final = (
         delta.content,
@@ -164,8 +178,7 @@ def _delta_carries_output(delta: ChatCompletionDelta) -> bool:
 
 
 def _delta_carries_reasoning_and_answer(delta: ChatCompletionDelta) -> bool:
-    has_reasoning: Final = bool(getattr(delta, "reasoning_content", None)) or _delta_has_signed_thinking_block(delta)
-    return has_reasoning and bool(delta.content or delta.tool_calls)
+    return _delta_opens_reasoning(delta) and bool(delta.content or delta.tool_calls)
 
 
 _WEB_SEARCH_PROGRESS_EVENTS: Final = (
@@ -256,6 +269,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         )
         self._web_search_calls: dict[str, object] = {}  # mutable-ok: latest call by provider id
         self._queued_web_search_call_ids: set[str] = set()  # mutable-ok: emitted call ids
+        self._arrived_web_search_call_ids: tuple[str, ...] = ()
         self._tool_search = tool_search_routing(request_tools)
         self._tool_search_executions: Mapping[str, ToolSearchExecution] = MappingProxyType({})
         self._tool_search_output_index_by_call_id: Mapping[str, int] = MappingProxyType({})
@@ -489,6 +503,8 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 status = item.get("status") if isinstance(item, dict) else None
             if call_id:
                 output_index = self._get_or_assign_tool_output_index(call_id)
+                if isinstance(call_id, str) and call_id not in self._web_search_calls and status != "in_progress":
+                    self._arrived_web_search_call_ids = (*self._arrived_web_search_call_ids, call_id)
                 self._web_search_calls[call_id] = item
                 if status == "in_progress":
                     self._pending_tool_events = [
@@ -681,6 +697,38 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             self._pending_tool_events.append(item_done_event)
 
     def _queue_web_search_events(self, call_id: str, web_search_call: object) -> None:
+        self._pending_tool_events.extend(self._web_search_events(call_id, web_search_call))
+
+    def _reserve_the_reasoning_index_opening_the_output(self, chunk: ModelResponseStream) -> None:
+        if not self.sent_output_item_added_event and _delta_opens_reasoning(_first_delta(chunk)):
+            self._reasoning_index()
+
+    def _queue_web_search_calls_opening_the_output(self, chunk: ModelResponseStream) -> None:
+        if not self.sent_output_item_added_event and not _delta_opens_reasoning(_first_delta(chunk)):
+            self._queue_arrived_web_search_calls(chunk)
+
+    def _queue_arrived_web_search_calls(self, chunk: ModelResponseStream) -> None:
+        if self._reasoning_active and not self._reasoning_done_emitted:
+            return
+        arrived: Final = self._arrived_web_search_call_ids
+        self._arrived_web_search_call_ids = ()
+        claimed: Final = self._claimed_tool_call_ids(chunk)
+        for call_id in arrived:
+            if call_id in claimed or call_id in self._queued_web_search_call_ids:
+                continue
+            self._pending_response_events.extend(self._web_search_events(call_id, self._web_search_calls[call_id]))
+            self._queued_web_search_call_ids.add(call_id)
+
+    def _claimed_tool_call_ids(self, chunk: ModelResponseStream) -> frozenset[str]:
+        delta: Final = _first_delta(chunk)
+        delta_tool_calls: Final = (
+            (*anthropic_server_tool_calls(delta), *_tool_call_objects(getattr(delta, "tool_calls", None)))
+            if delta is not None
+            else ()
+        )
+        return frozenset((*self._tool_call_id_by_index.values(), *map(_tool_call_id_of, delta_tool_calls)))
+
+    def _web_search_events(self, call_id: str, web_search_call: object) -> tuple[BaseLiteLLMOpenAIResponseObject, ...]:
         from openai.types.responses import ResponseFunctionWebSearch
 
         item: Final = (
@@ -689,28 +737,30 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             else ResponseFunctionWebSearch.model_validate(web_search_call)
         )
         output_index: Final = self._get_or_assign_tool_output_index(call_id)
-        self._queue_output_item_added(
-            output_index,
-            BaseLiteLLMOpenAIResponseObject(
-                **{
-                    "id": item.id,
-                    "type": item.type,
-                    "status": "in_progress",
-                    "action": None,
-                }
-            ),
-        )
         progress_events: Final = (
             _WEB_SEARCH_PROGRESS_EVENTS[:1] if item.status == "in_progress" else _WEB_SEARCH_PROGRESS_EVENTS
         )
-        for event_type, event_class in progress_events:
-            self._pending_tool_events.append(event_class(type=event_type, output_index=output_index, item_id=item.id))
-        self._pending_tool_events.append(
+        return (
+            self._next_output_item_added(
+                output_index,
+                BaseLiteLLMOpenAIResponseObject(
+                    **{
+                        "id": item.id,
+                        "type": item.type,
+                        "status": "in_progress",
+                        "action": None,
+                    }
+                ),
+            ),
+            *(
+                event_class(type=event_type, output_index=output_index, item_id=item.id)
+                for event_type, event_class in progress_events
+            ),
             OutputItemDoneEvent(
                 type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
                 output_index=output_index,
                 item=BaseLiteLLMOpenAIResponseObject(**item.model_dump()),
-            )
+            ),
         )
 
     def _adopt_response_id_from_chunk(self, chunk: ModelResponseStream) -> None:
@@ -1287,7 +1337,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self.sent_output_item_added_event = True
 
         # Reasoning-first
-        if (hasattr(delta, "reasoning_content") and delta.reasoning_content) or _delta_has_signed_thinking_block(delta):
+        if _delta_opens_reasoning(delta):
             self._reasoning_active = True
             if self._cached_reasoning_item_id is None:
                 self._cached_reasoning_item_id = mint_reasoning_item_id()
@@ -1397,6 +1447,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                         chunk = await self.litellm_custom_stream_wrapper.__anext__()
                     if chunk is not None:
                         received, chunk = self._received_and_client_chunks(cast(ModelResponseStream, chunk))
+                        self._reserve_the_reasoning_index_opening_the_output(chunk)
                         for src in (
                             getattr(chunk, "provider_specific_fields", None),
                             getattr(
@@ -1409,12 +1460,14 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                                 self._merge_provider_specific_fields(src)
                                 self._reserve_web_search_indexes(src)
                                 self._queue_arrived_tool_search_outputs()
+                        self._queue_web_search_calls_opening_the_output(chunk)
                         self._ensure_output_item_for_chunk(chunk)
                         # Proceed to transformation
                         self.collected_chat_completion_chunks.append(
                             self._snapshot_chunk_for_stream_chunk_builder(received)
                         )
                         self._queue_reasoning_done_events_on_reasoning_end(chunk)
+                        self._queue_arrived_web_search_calls(chunk)
                         self._queue_chunk_events(chunk)
 
                     if self._pending_response_events:
@@ -1460,6 +1513,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                     received, chunk = self._received_and_client_chunks(
                         self.litellm_custom_stream_wrapper.__next__() if buffered_chunk is None else buffered_chunk
                     )
+                    self._reserve_the_reasoning_index_opening_the_output(chunk)
                     for src in (
                         getattr(chunk, "provider_specific_fields", None),
                         getattr(
@@ -1472,6 +1526,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                             self._merge_provider_specific_fields(src)
                             self._reserve_web_search_indexes(src)
                             self._queue_arrived_tool_search_outputs()
+                    self._queue_web_search_calls_opening_the_output(chunk)
                     self._ensure_output_item_for_chunk(chunk)
                     # Always snapshot before returning any pending events so that
                     # finish_reason (e.g. content_filter) is captured even when
@@ -1481,6 +1536,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                         self._snapshot_chunk_for_stream_chunk_builder(received)
                     )
                     self._queue_reasoning_done_events_on_reasoning_end(chunk)
+                    self._queue_arrived_web_search_calls(chunk)
                     self._queue_chunk_events(chunk)
                     if self._pending_response_events:
                         return self._pending_response_events.pop(0)

@@ -138,6 +138,11 @@ from litellm.proxy.common_utils.cache_invalidation_pubsub import (
     evict_shared,
     publish_cache_invalidation,
 )
+from litellm.proxy.common_utils.callback_config_validation import (
+    InvalidLoggingMetadata,
+    normalize_logging_entries,
+    string_keyed,
+)
 from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
 from litellm.proxy.common_utils.json_merge_patch import apply_json_merge_patch
 from litellm.proxy.common_utils.openai_error_payload import proxy_exception_for
@@ -311,6 +316,12 @@ class _TeamIdGroupRow(TypedDict):
     _count: _TeamIdKeyCount
 
 
+def raise_on_invalid_team_logging_shape(metadata: object) -> None:
+    entries: Final = normalize_logging_entries(string_keyed(metadata).get("logging"))
+    if isinstance(entries, InvalidLoggingMetadata):
+        raise HTTPException(status_code=400, detail={"error": entries.message})
+
+
 def _as_object(value: object) -> object:
     return value
 
@@ -379,6 +390,12 @@ class _TeamListBudgetRow(Protocol):
     def temp_budget_expiry(self) -> datetime | None: ...
 
     @property
+    def rollover_max_budget(self) -> float | None: ...
+
+    @property
+    def budget_duration(self) -> str | None: ...
+
+    @property
     def temp_budget_increase(self) -> float | None: ...
 
 
@@ -391,6 +408,9 @@ class _TeamListMembershipRow(Protocol):
 
     @property
     def litellm_budget_table(self) -> _TeamListBudgetRow | None: ...
+
+    @property
+    def rollover_credit(self) -> float | None: ...
 
 
 class _CacheableTeamRow(_TeamIdRow, _ModelDumpRow, Protocol): ...
@@ -2083,6 +2103,7 @@ async def new_team(
         if isinstance(data.metadata, dict):
             TeamMemberBudgetHandler.strip_system_managed_metadata_keys(data.metadata)
 
+        raise_on_invalid_team_logging_shape(data.metadata)
         await validate_team_metadata_if_configured(
             operation="create",
             metadata=data.metadata,
@@ -2950,6 +2971,7 @@ async def update_team(
             TeamMemberBudgetHandler.strip_system_managed_metadata_keys(metadata_update)
 
         if "metadata" in updated_kv:
+            raise_on_invalid_team_logging_shape(updated_kv.get("metadata"))
             stored_metadata: Final[Mapping[str, JsonValue] | None] = (
                 {
                     key: value
@@ -6423,11 +6445,11 @@ def _team_list_caller_membership(
     rollover_credit: Final = (
         active_rollover_credit(
             member_budget_row.max_budget,
-            getattr(member_budget_row, "rollover_max_budget", None),
-            getattr(member_budget_row, "budget_duration", None),
-            getattr(membership_row, "rollover_credit", None),
+            member_budget_row.rollover_max_budget,
+            member_budget_row.budget_duration,
+            membership_row.rollover_credit,
         )
-        if member_budget_row is not None
+        if membership_row is not None and member_budget_row is not None
         else None
     )
     return TeamListCallerMembership(

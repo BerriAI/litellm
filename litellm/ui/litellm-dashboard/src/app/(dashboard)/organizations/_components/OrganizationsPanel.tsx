@@ -13,7 +13,7 @@ import { OrgCreateDialog } from "@/components/organization/org-create/OrgCreateD
 import OrganizationInfoView from "@/components/organization/organization_view";
 import { ORGANIZATION_TAB_URL_KEY, ORGANIZATION_TABS } from "@/components/organization/organizationTabs";
 import { Button } from "@/components/ui/button";
-import { Page, PageContent } from "@/components/shared/Page";
+import { PageContent } from "@/components/shared/Page";
 import { PageHeader, PageHeaderControls, PageHeaderDescription, PageHeaderTitle } from "@/components/shared/PageHeader";
 
 import OrganizationsTable from "./OrganizationsTable";
@@ -102,36 +102,34 @@ const OrganizationsPanel: React.FC<OrganizationsPanelProps> = ({ userRole, acces
 
   if (!premiumUser) {
     return (
-      <Page>
-        <PageContent>
-          <PageHeader>
-            <PageHeaderTitle>
-              <Building2 />
-              {t("shell.nav.items.organizations")}
-            </PageHeaderTitle>
-            <PageHeaderDescription>
-              <Trans
-                i18nKey="organizations.panel.enterpriseNotice"
-                components={{
-                  pricing: (
-                    <a
-                      href="https://www.litellm.ai/#pricing"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-primary underline-offset-4 hover:underline"
-                    />
-                  ),
-                }}
-              />
-            </PageHeaderDescription>
-          </PageHeader>
-        </PageContent>
-      </Page>
+      <PageContent>
+        <PageHeader>
+          <PageHeaderTitle>
+            <Building2 />
+            {t("shell.nav.items.organizations")}
+          </PageHeaderTitle>
+          <PageHeaderDescription>
+            <Trans
+              i18nKey="organizations.panel.enterpriseNotice"
+              components={{
+                pricing: (
+                  <a
+                    href="https://www.litellm.ai/#pricing"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-primary underline-offset-4 hover:underline"
+                  />
+                ),
+              }}
+            />
+          </PageHeaderDescription>
+        </PageHeader>
+      </PageContent>
     );
   }
 
   return (
-    <Page>
+    <>
       <PageContent>
         <PageHeader>
           <PageHeaderTitle>
@@ -188,7 +186,7 @@ const OrganizationsPanel: React.FC<OrganizationsPanelProps> = ({ userRole, acces
         onOk={confirmDelete}
         confirmLoading={isDeleting}
       />
-    </Page>
+    </>
   );
 };
 

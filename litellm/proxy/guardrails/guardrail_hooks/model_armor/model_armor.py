@@ -36,8 +36,11 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.anthropic_sse import (
+    anthropic_sse_assembles_every_tool_input,
+    anthropic_sse_chunks_as_scanned,
     anthropic_sse_chunks_from_response,
     anthropic_sse_error_frames,
+    anthropic_sse_reads_alike,
     assemble_anthropic_sse_stream,
     is_anthropic_sse_stream,
     is_raw_sse_stream,
@@ -186,9 +189,6 @@ class ModelArmorAPIError(Exception):
 
 
 _SCANNED_CONTENT_KEYS: Final = frozenset({"text", "sanitizedText", "findings", "maliciousUriMatchedItems"})
-
-
-RedactablePayload = dict | list | str | int | float | bool | None
 
 
 def _redact_scanned_content(payload: object, depth: int = 0) -> object:
@@ -1177,14 +1177,35 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
     def _assemble_stream(
         self, all_chunks: Sequence[object], surface: _StreamSurface
     ) -> ModelResponse | TextCompletionResponse | ResponsesAPIResponse | None:
-        """Assemble the buffered stream into the scannable response its surface produces."""
+        """Assemble the buffered stream into the scannable response its surface produces.
+
+        A ``/v1/messages`` stream some client reads differently from assembly cannot be scanned in full,
+        since that client could read text the scan never saw. Failing open still scans what it can.
+        """
         if surface is _StreamSurface.ANTHROPIC_MESSAGES:
-            return assemble_anthropic_sse_stream(all_chunks, restore_identity=True)
+            scans_every_text: Final = anthropic_sse_reads_alike(
+                all_chunks
+            ) and anthropic_sse_assembles_every_tool_input(all_chunks)
+            return (
+                assemble_anthropic_sse_stream(all_chunks, restore_identity=True)
+                if scans_every_text or not self.optional_params.get("fail_on_error", True)
+                else None
+            )
         if surface is _StreamSurface.RESPONSES:
             return self._final_responses_api_response(all_chunks)
         if surface is _StreamSurface.OPAQUE_SSE:
             return None
         return self._assemble_chat_completion_stream(list(all_chunks))
+
+    @staticmethod
+    def _unsanitized_stream(
+        all_chunks: Sequence[object],
+        assembled_response: ModelResponse | TextCompletionResponse | ResponsesAPIResponse,
+        surface: _StreamSurface,
+    ) -> Sequence[object]:
+        if surface is _StreamSurface.ANTHROPIC_MESSAGES and isinstance(assembled_response, ModelResponse):
+            return anthropic_sse_chunks_as_scanned(assembled_response, all_chunks)
+        return all_chunks
 
     @staticmethod
     def _error_payload(exc: HTTPException) -> Mapping[str, object]:
@@ -1281,7 +1302,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
 
         if not content:
             verbose_proxy_logger.debug("Model Armor: No text content in streaming response, skipping guardrail")
-            for chunk in all_chunks:
+            for chunk in self._unsanitized_stream(all_chunks, assembled_response, surface):
                 yield chunk
             return
 
@@ -1354,7 +1375,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                 raise
 
         # Return original chunks if no sanitization needed
-        for chunk in all_chunks:
+        for chunk in self._unsanitized_stream(all_chunks, assembled_response, surface):
             yield chunk
 
     @log_guardrail_information

@@ -252,7 +252,7 @@ pub fn vertex_connection_params(
 /// `get_vertex_region`'s warning when it overrides a configured location the model does not
 /// support.
 fn warn_unsupported_region(model: &str, configured: &str, supported: &[String], routed: &str) {
-    litellm_tracing::warn!(
+    tracing::warn!(
         "Vertex AI model {model} is not served in {configured}, so the call goes to {routed} (served in {}).",
         supported.join(", ")
     );
