@@ -1,6 +1,6 @@
 import json
 import time
-from collections.abc import AsyncIterator, Iterator, Mapping
+from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol, cast
 
@@ -184,7 +184,7 @@ class OllamaChatConfig(BaseConfig):
         repeat_penalty: float | None = None,
         temperature: float | None = None,
         seed: int | None = None,
-        stop: list | None = None,
+        stop: Sequence[object] | None = None,
         tfs_z: float | None = None,
         num_predict: int | None = None,
         top_k: int | None = None,
@@ -201,7 +201,7 @@ class OllamaChatConfig(BaseConfig):
     def get_config(cls) -> dict[str, object]:
         return super().get_config()
 
-    def get_supported_openai_params(self, model: str):
+    def get_supported_openai_params(self, model: str) -> list[str]:
         return [
             "max_tokens",
             "max_completion_tokens",
@@ -271,8 +271,8 @@ class OllamaChatConfig(BaseConfig):
         headers: dict,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
@@ -285,8 +285,8 @@ class OllamaChatConfig(BaseConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         """
@@ -304,8 +304,8 @@ class OllamaChatConfig(BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        headers: Mapping[str, object],
+    ) -> dict[str, object]:
         stream: Final = optional_params.pop("stream", False)
         format: Final = optional_params.pop("format", None)
         keep_alive: Final = optional_params.pop("keep_alive", None)
@@ -322,7 +322,7 @@ class OllamaChatConfig(BaseConfig):
             )
             return ollama_tool_call
 
-        new_messages: Final = []
+        new_messages: Final[list[OllamaChatCompletionMessage]] = []
         for m in messages:
             if isinstance(
                 m, BaseModel
@@ -363,7 +363,7 @@ class OllamaChatConfig(BaseConfig):
             if k not in optional_params:
                 optional_params[k] = v
 
-        data: Final = {
+        data: Final[dict[str, object]] = {
             "model": model,
             "messages": new_messages,
             "options": optional_params,
@@ -386,10 +386,10 @@ class OllamaChatConfig(BaseConfig):
         raw_response: Response,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
+        request_data: Mapping[str, object],
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
@@ -517,7 +517,7 @@ class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
     seen_tool_calls: bool = False
     _next_tool_call_index: int = 0
 
-    def _is_function_call_complete(self, function_args: str | dict) -> bool:
+    def _is_function_call_complete(self, function_args: str | dict[str, object]) -> bool:
         if isinstance(function_args, dict):
             return True
         try:
