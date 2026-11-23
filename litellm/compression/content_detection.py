@@ -7,7 +7,7 @@ import re
 from typing import Final
 
 _CODE_KEYWORDS: Final = re.compile(
-    r"\b(?:def |function |class |import |from |require\(|#include|fn |func |const |let |var |public |private |static )\b"
+    r"\b(?:def|function|class|import|from|fn|func|const|let|var|public|private|static)\b|require\(|#include"
 )
 
 
