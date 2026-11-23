@@ -26,6 +26,7 @@ _MALFORMED_THINKING: Final = (
 _OTHER_UNSUPPORTED_FIELD: Final = (
     r'{"message":"The model returned the following errors: \"top_k\" is not supported for this model."}'
 )
+_REQUEST_ID: Final = "8f1c2a7e-request-id"
 _ANSWER: Final = (
     '{"output":{"message":{"role":"assistant","content":[{"text":"hello"}]}},"stopReason":"end_turn",'
     '"usage":{"inputTokens":10,"outputTokens":5,"totalTokens":15},"metrics":{"latencyMs":1}}'
@@ -33,7 +34,9 @@ _ANSWER: Final = (
 
 
 def _bedrock_answering(body: str, status: int = 400) -> httpx.MockTransport:
-    return httpx.MockTransport(lambda request: httpx.Response(status, content=body, request=request))
+    return httpx.MockTransport(
+        lambda request: httpx.Response(status, content=body, headers={"x-amzn-requestid": _REQUEST_ID}, request=request)
+    )
 
 
 def _answer_only_adaptive_thinking(request: httpx.Request) -> httpx.Response:
@@ -85,6 +88,7 @@ def test_profile_arn_without_base_model_names_base_model_when_bedrock_rejects_en
     assert error.message.endswith(f"\n\n{UNRESOLVED_ARN_THINKING_HINT}")
     assert "Set `model_info.base_model` on the deployment" in error.message
     assert "Model Info JSON in the Admin UI" in error.message
+    assert error.litellm_response_headers["x-amzn-requestid"] == _REQUEST_ID
 
 
 @pytest.mark.parametrize(
@@ -133,17 +137,39 @@ def test_bedrock_server_error_with_the_same_wording_keeps_its_message_without_th
     assert UNRESOLVED_ARN_THINKING_HINT not in raised.value.message
 
 
-def test_model_id_the_hint_suggests_is_priced_and_gets_adaptive_thinking_as_base_model() -> None:
+@pytest.mark.parametrize(
+    "base_model",
+    [
+        UNRESOLVED_ARN_BASE_MODEL_EXAMPLE,
+        f"arn:aws:bedrock:us-east-1:123456789012:inference-profile/{UNRESOLVED_ARN_BASE_MODEL_EXAMPLE}",
+        f"arn:aws:bedrock:us-east-1::foundation-model/{UNRESOLVED_ARN_BASE_MODEL_EXAMPLE.removeprefix('us.')}",
+    ],
+    ids=["model_id", "system_inference_profile_arn", "foundation_model_arn"],
+)
+def test_every_base_model_form_the_hint_names_is_priced_and_gets_adaptive_thinking(base_model: str) -> None:
     error: Final = _raised(_PROFILE_ARN, _ENABLED_THINKING_REJECTION, asynchronous=False, stream=False)
     response: Final = _send(
         _PROFILE_ARN,
         httpx.MockTransport(_answer_only_adaptive_thinking),
         asynchronous=False,
         stream=False,
-        base_model=UNRESOLVED_ARN_BASE_MODEL_EXAMPLE,
+        base_model=base_model,
     )
 
     assert f"`{UNRESOLVED_ARN_BASE_MODEL_EXAMPLE}`" in error.message
+    assert "system inference profile or foundation model" in error.message
     assert isinstance(response, litellm.ModelResponse)
     assert response.choices[0].message.content == "hello"
     assert (response._hidden_params.get("response_cost") or 0) > 0
+
+
+def test_profile_arn_set_as_its_own_base_model_still_names_base_model() -> None:
+    error: Final = _raised(
+        _PROFILE_ARN,
+        _ENABLED_THINKING_REJECTION,
+        asynchronous=False,
+        stream=False,
+        base_model=_PROFILE_ARN.removeprefix("bedrock/"),
+    )
+
+    assert error.message.endswith(f"\n\n{UNRESOLVED_ARN_THINKING_HINT}")
