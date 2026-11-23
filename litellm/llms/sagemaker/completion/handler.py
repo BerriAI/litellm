@@ -149,8 +149,8 @@ class SagemakerLLM(BaseAWSLLM):
         litellm_params: dict,
         timeout: float | httpx.Timeout | None = None,
         custom_prompt_dict={},
-        hf_model_name=None,
-        logger_fn=None,
+        hf_model_name: str | None = None,
+        logger_fn: object = None,
         acompletion: bool = False,
         headers: dict = {},
     ):
@@ -332,7 +332,7 @@ class SagemakerLLM(BaseAWSLLM):
         api_base: str,
         headers: dict,
         data: str,
-        logging_obj,
+        logging_obj: LiteLLMLoggingObj,
         client: HTTPHandler | None = None,
     ):
         if client is None:
@@ -355,7 +355,7 @@ class SagemakerLLM(BaseAWSLLM):
         api_base: str,
         headers: dict,
         data: str,
-        logging_obj,
+        logging_obj: LiteLLMLoggingObj,
         client: AsyncHTTPHandler | None = None,
     ):
         try:
@@ -553,11 +553,11 @@ class SagemakerLLM(BaseAWSLLM):
         model_response: EmbeddingResponse,
         print_verbose: Callable,
         encoding,
-        logging_obj,
+        logging_obj: LiteLLMLoggingObj,
         optional_params: dict,
-        custom_prompt_dict={},
+        custom_prompt_dict: object = {},
         litellm_params=None,
-        logger_fn=None,
+        logger_fn: object = None,
     ):
         """
         Supports Hugging Face (TGI), Voyage, and Cohere embedding endpoints

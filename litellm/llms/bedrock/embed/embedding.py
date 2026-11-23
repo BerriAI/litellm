@@ -308,8 +308,8 @@ class BedrockEmbedding(BaseAWSLLM):
         client: HTTPHandler | None,
         timeout: float | httpx.Timeout | None,
         api_base: str,
-        headers: dict,
-        data: dict,
+        headers: dict[str, str],
+        data: Mapping[str, object],
     ) -> _InvokeResult:
         if client is None or not isinstance(client, HTTPHandler):
             _params: Final = {}
@@ -341,8 +341,8 @@ class BedrockEmbedding(BaseAWSLLM):
         client: AsyncHTTPHandler | None,
         timeout: float | httpx.Timeout | None,
         api_base: str,
-        headers: dict,
-        data: dict,
+        headers: dict[str, str],
+        data: Mapping[str, object],
     ) -> _InvokeResult:
         if client is None or not isinstance(client, AsyncHTTPHandler):
             _params: Final = {}
@@ -372,11 +372,11 @@ class BedrockEmbedding(BaseAWSLLM):
 
     def _transform_response(
         self,
-        response_list: list[dict],
+        response_list: list[dict[str, object]],
         model: str,
         provider: BEDROCK_EMBEDDING_PROVIDERS_LITERAL,
         is_async_invoke: bool | None = False,
-        batch_data: list[dict] | None = None,
+        batch_data: list[dict[str, object]] | None = None,
         aws_region_name: str | None = None,
         metered_input_tokens: Sequence[int | None] = (),
         base64_embeddings: bool = False,
@@ -615,7 +615,7 @@ class BedrockEmbedding(BaseAWSLLM):
         model_response: EmbeddingResponse,
         print_verbose: Callable,
         encoding,
-        logging_obj,
+        logging_obj: "LiteLLMLoggingObj",
         client: HTTPHandler | AsyncHTTPHandler | None,
         timeout: float | httpx.Timeout | None,
         aembedding: bool | None,

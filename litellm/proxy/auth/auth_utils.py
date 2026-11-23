@@ -2303,7 +2303,7 @@ def is_sso_provider_fully_configured() -> bool:
     return _is_google_ready() or _is_microsoft_ready() or _is_generic_oauth_ready() or _is_saml_ready()
 
 
-def get_customer_user_header_from_mapping(user_id_mapping) -> list | None:
+def get_customer_user_header_from_mapping(user_id_mapping: object) -> list | None:
     """Return the header_name mapped to CUSTOMER role, if any (dict-based)."""
     if not user_id_mapping:
         return None
@@ -2438,7 +2438,7 @@ def get_end_user_id_from_request_body(
         if user_id_str:
             return user_id_str
 
-    def _as_dict(value: object) -> dict:
+    def _as_dict(value: object) -> Mapping[str, object]:
         # metadata / litellm_metadata can arrive as JSON strings from
         # multipart/form-data or extra_body; coerce so string-encoded
         # payloads can't evade end-user attribution.
