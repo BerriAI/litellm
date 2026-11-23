@@ -1,3 +1,5 @@
+SET LOCAL lock_timeout = '10s';
+
 ALTER TABLE "LiteLLM_ObjectPermissionTable"
     ADD COLUMN IF NOT EXISTS mcp_event_scope_inherited BOOLEAN NOT NULL DEFAULT FALSE;
 
