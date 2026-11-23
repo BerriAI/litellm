@@ -1844,10 +1844,13 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             for text in texts:
                 new_texts.append(self._unmask_pii_text(text, pii_tokens))
         else:
+            # Response scans mask without tokenising. Numbered tokens are
+            # minted only for request text, so the restore step can never
+            # unmask PII that first appeared in the response.
             for text in texts:
                 modified_text = await self.check_pii(
                     text=text,
-                    output_parse_pii=self.output_parse_pii,
+                    output_parse_pii=self.output_parse_pii and input_type == "request",
                     presidio_config=None,
                     request_data=request_data,
                 )

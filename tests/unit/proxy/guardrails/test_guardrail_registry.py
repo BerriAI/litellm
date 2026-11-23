@@ -905,7 +905,7 @@ def _presidio_callbacks_in(cb_list: Iterable[object]) -> list[CustomGuardrail]:
 def test_presidio_siblings_are_tracked_and_deleted_together():
     """
     A presidio guardrail scoped to both stages registers the pre_call primary plus
-    the post_call unmask and mask-output siblings. Deleting the guardrail must remove
+    the post_call mask-output and unmask siblings. Deleting the guardrail must remove
     all three from every callback list, not just the primary.
     """
     import litellm
