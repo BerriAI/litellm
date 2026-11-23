@@ -9,6 +9,7 @@ import json
 import logging
 import re
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any, Literal, Optional, Final, cast
 from unittest.mock import MagicMock, patch
 
@@ -3949,8 +3950,19 @@ def test_request_sent_to_a_model_never_carries_tool_failure_marker() -> None:
     assert "is_error" not in json.dumps(request["messages"], default=str)
 
 
+@dataclass(frozen=True, slots=True)
+class _ModelGroups:
+    deployment_models: Mapping[str, str]
+
+    def get_model_list(
+        self, model_name: str | None = None, team_id: str | None = None
+    ) -> tuple[Mapping[str, object], ...]:
+        deployment_model: Final = self.deployment_models.get(model_name or "")
+        return () if deployment_model is None else ({"litellm_params": {"model": deployment_model}},)
+
+
 @pytest.mark.asyncio
-async def test_structured_rewrite_keeps_client_cache_control_on_a_model_alias() -> None:
+async def test_structured_rewrite_keeps_client_cache_control_on_a_claude_alias() -> None:
     ephemeral: Final = {"type": "ephemeral"}
     data: Final = {
         "model": "best-sonnet",
@@ -3970,7 +3982,9 @@ async def test_structured_rewrite_keeps_client_cache_control_on_a_model_alias() 
         ],
     }
 
-    await AnthropicMessagesHandler().process_input_messages(
+    claude_alias: Final = _ModelGroups({"best-sonnet": "bedrock/us.anthropic.claude-sonnet-5-5"})
+
+    await AnthropicMessagesHandler(deployment_lookup=lambda: claude_alias).process_input_messages(
         data=data, guardrail_to_apply=StructuredMessagesRewritingGuardrail()
     )
 

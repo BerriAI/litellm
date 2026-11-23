@@ -23,6 +23,8 @@ Tests cover:
 
 import datetime
 import json
+from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Final, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1019,13 +1021,24 @@ async def test_anthropic_assistant_history_never_reaches_compression_service(gua
     assert result["messages"][1]["content"] == [{"type": "text", "text": table}]
 
 
-@pytest.mark.asyncio
-async def test_claude_code_cached_prefix_is_never_compressed_on_a_model_alias(guardrail: HeadroomGuardrail):
-    from litellm.llms.anthropic.chat.guardrail_translation.handler import AnthropicMessagesHandler
+@dataclass(frozen=True, slots=True)
+class _ModelGroups:
+    deployment_models: Mapping[str, str]
 
-    tickets: Final = json.dumps([{"id": i, "title": f"Ticket {i}", "status": "open"} for i in range(500)])
-    data: Final = {
-        "model": "best-sonnet",
+    def get_model_list(
+        self, model_name: str | None = None, team_id: str | None = None
+    ) -> tuple[Mapping[str, object], ...]:
+        deployment_model: Final = self.deployment_models.get(model_name or "")
+        return () if deployment_model is None else ({"litellm_params": {"model": deployment_model}},)
+
+
+MODEL_GROUPS: Final = _ModelGroups({"best-sonnet": "bedrock/us.anthropic.claude-sonnet-5-5", "best-gpt": "openai/gpt-5.6"})
+CLAUDE_CODE_TICKETS: Final = json.dumps([{"id": i, "title": f"Ticket {i}", "status": "open"} for i in range(500)])
+
+
+def _claude_code_request(model: str) -> dict[str, object]:
+    return {
+        "model": model,
         "system": [{"type": "text", "text": "You are a coding agent.", "cache_control": {"type": "ephemeral"}}],
         "tools": [
             {
@@ -1042,7 +1055,10 @@ async def test_claude_code_cached_prefix_is_never_compressed_on_a_model_alias(gu
                     {"type": "tool_use", "id": "tu_1", "name": "search_tickets", "input": {"query": "status:open"}}
                 ],
             },
-            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "tu_1", "content": tickets}]},
+            {
+                "role": "user",
+                "content": [{"type": "tool_result", "tool_use_id": "tu_1", "content": CLAUDE_CODE_TICKETS}],
+            },
             {"role": "assistant", "content": [{"type": "text", "text": "There are 500 open tickets."}]},
             {
                 "role": "user",
@@ -1050,16 +1066,43 @@ async def test_claude_code_cached_prefix_is_never_compressed_on_a_model_alias(gu
             },
         ],
     }
+
+
+@pytest.mark.asyncio
+async def test_claude_code_cached_prefix_is_never_compressed_on_a_claude_alias(guardrail: HeadroomGuardrail):
+    from litellm.llms.anthropic.chat.guardrail_translation.handler import AnthropicMessagesHandler
+
+    data: Final = _claude_code_request("best-sonnet")
     client_request: Final = json.loads(json.dumps(data))
     reached_compression_service: Final = AssertionError("the cached prefix was sent to the compression service")
 
     with patch.object(
         guardrail.async_handler, "post", new_callable=AsyncMock, side_effect=reached_compression_service
     ) as mock_post:
-        result = await AnthropicMessagesHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+        result = await AnthropicMessagesHandler(deployment_lookup=lambda: MODEL_GROUPS).process_input_messages(
+            data=data, guardrail_to_apply=guardrail
+        )
 
     mock_post.assert_not_awaited()
     assert result["messages"] == client_request["messages"]
+
+
+@pytest.mark.asyncio
+async def test_claude_code_history_is_compressed_on_an_alias_that_ignores_cache_control(guardrail: HeadroomGuardrail):
+    from litellm.llms.anthropic.chat.guardrail_translation.handler import AnthropicMessagesHandler
+
+    sent: Final[dict[str, object]] = {}
+
+    def _echo(**kwargs):
+        sent["messages"] = kwargs["json"]["messages"]
+        return _make_compress_response(json.loads(json.dumps(sent["messages"])))
+
+    with patch.object(guardrail.async_handler, "post", new_callable=AsyncMock, side_effect=_echo):
+        await AnthropicMessagesHandler(deployment_lookup=lambda: MODEL_GROUPS).process_input_messages(
+            data=_claude_code_request("best-gpt"), guardrail_to_apply=guardrail
+        )
+
+    assert {"role": "tool", "tool_call_id": "tu_1", "content": CLAUDE_CODE_TICKETS} in sent["messages"]
 
 
 @pytest.mark.asyncio
