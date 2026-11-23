@@ -1618,8 +1618,43 @@ def test_get_response_for_spend_logs_payload_keeps_a_long_compaction_summary_who
     assert LITELLM_TRUNCATED_PAYLOAD_FIELD in message["content"]
 
 
+def _stored_by_the_legacy_row_builder(
+    request_body: Mapping[str, object], response: Mapping[str, object]
+) -> tuple[str, str]:
+    return (
+        _stored_request_json(request_body),
+        _get_response_for_spend_logs_payload(cast(StandardLoggingPayload, {"response": response})),
+    )
+
+
+def _stored_by_the_default_row_builder(
+    request_body: Mapping[str, object], response: Mapping[str, object]
+) -> tuple[str, str]:
+    kwargs: Final[dict[str, object]] = {
+        "model": "claude-sonnet-5-5",
+        "litellm_params": {"proxy_server_request": {"body": request_body}, "metadata": {}},
+        "standard_logging_object": {
+            "call_type": "aresponses",
+            "model_map_information": None,
+            "metadata": {},
+            "response": response,
+        },
+    }
+    now: Final = datetime.datetime(2026, 1, 1, tzinfo=timezone.utc)
+    row: Final = get_logging_payload(kwargs, litellm.ModelResponse(choices=[]), now, now)
+    return row["proxy_server_request"], row["response"]
+
+
+@pytest.mark.parametrize(
+    "stored_request_and_response",
+    [
+        pytest.param(_stored_by_the_legacy_row_builder, id="legacy_row_builder"),
+        pytest.param(_stored_by_the_default_row_builder, id="default_row_builder"),
+    ],
+)
 def test_stored_response_keeps_an_anthropic_web_search_ciphertext_whole_for_previous_response_id_replay(
     monkeypatch: pytest.MonkeyPatch,
+    stored_request_and_response: Callable[[Mapping[str, object], Mapping[str, object]], tuple[str, str]],
 ) -> None:
     from litellm.constants import MAX_STRING_LENGTH_PROMPT_IN_DB
     from litellm.proxy import proxy_server
@@ -1631,46 +1666,42 @@ def test_stored_response_keeps_an_anthropic_web_search_ciphertext_whole_for_prev
     ciphertext: Final = f"{ciphertext_half}/{token_shaped}+{ciphertext_half}=="
     title: Final = f"{token_shaped} " + "Weather in Paris " * (MAX_STRING_LENGTH_PROMPT_IN_DB // 17)
     filler: Final = "detail " * (MAX_STRING_LENGTH_PROMPT_IN_DB // 7)
-    payload: Final = cast(
-        StandardLoggingPayload,
-        {
-            "response": {
-                "choices": [
-                    {
-                        "message": {
-                            "role": "assistant",
-                            "content": f"{filler}Paris is sunny today.{filler}",
-                            "provider_specific_fields": {
-                                "web_search_results": [
-                                    {
-                                        "type": "web_search_tool_result",
-                                        "tool_use_id": "srvtoolu_01",
-                                        "content": [
-                                            {
-                                                "type": "web_search_result",
-                                                "url": "https://example.com/paris-weather",
-                                                "title": title,
-                                                "encrypted_content": ciphertext,
-                                                "page_age": "2 days ago",
-                                            }
-                                        ],
-                                    }
-                                ]
-                            },
-                        }
-                    }
-                ]
+    search_result_block: Final = {
+        "type": "web_search_tool_result",
+        "tool_use_id": "srvtoolu_01",
+        "content": [
+            {
+                "type": "web_search_result",
+                "url": "https://example.com/paris-weather",
+                "title": title,
+                "encrypted_content": ciphertext,
+                "page_age": "2 days ago",
             }
-        },
-    )
+        ],
+    }
+    request_body: Final = {"messages": [{"role": "assistant", "content": [search_result_block]}]}
+    response: Final = {
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": f"{filler}Paris is sunny today.{filler}",
+                    "provider_specific_fields": {"web_search_results": [search_result_block]},
+                }
+            }
+        ]
+    }
 
-    message: Final = json.loads(_get_response_for_spend_logs_payload(payload))["choices"][0]["message"]
+    stored_request, stored_response = stored_request_and_response(request_body, response)
+    message: Final = json.loads(stored_response)["choices"][0]["message"]
     stored_result: Final = message["provider_specific_fields"]["web_search_results"][0]["content"][0]
+    stored_request_result: Final = json.loads(stored_request)["messages"][0]["content"][0]["content"][0]
 
     assert stored_result["encrypted_content"] == ciphertext
     assert stored_result["title"].startswith(f"{REDACTED_BY_LITELM_STRING} Weather in Paris")
     assert LITELLM_TRUNCATED_PAYLOAD_FIELD in stored_result["title"]
     assert LITELLM_TRUNCATED_PAYLOAD_FIELD in message["content"]
+    assert LITELLM_TRUNCATED_PAYLOAD_FIELD in stored_request_result["encrypted_content"], "the request keeps its cap"
 
 
 def test_stored_request_keeps_only_the_summary_of_a_long_claude_compaction_input_item(monkeypatch: pytest.MonkeyPatch):
