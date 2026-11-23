@@ -7053,6 +7053,7 @@ def test_root_redirect_when_docs_url_not_root_and_redirect_url_set(monkeypatch):
 
     docs_url = get_docs_url()
     root_redirect_url = os.getenv("ROOT_REDIRECT_URL")
+    monkeypatch.setattr(app.router, "routes", list(app.routes))
 
     # Remove any existing "/" route that might interfere
     routes_to_remove = []
@@ -15850,81 +15851,84 @@ async def test_load_config_rejects_a_non_positive_user_api_key_cache_max_size(tm
     assert cache.get_cache(key=AuthObject.virtual_key("key-0"), local_only=True) == {"token": "key-0"}
 
 
-def test_docs_redoc_openapi_are_reachable_by_default():
+def test_scalar_swagger_and_openapi_are_reachable_by_default():
     """
     LIT-6745: the interactive/machine-readable docs surfaces are on by
     default (the customer-facing production toggle is opt-in, not opt-out).
     """
     client = TestClient(app)
 
-    assert client.get("/redoc").status_code == 200
+    scalar = client.get("/")
+    assert scalar.status_code == 200
+    assert 'src="/scalar/scalar-1.81.0.js"' in scalar.text
+    assert 'data-openapi-url="/openapi.json"' in scalar.text
+    swagger = client.get("/swagger")
+    assert swagger.status_code == 200
+    assert 'src="/swagger/swagger-ui-bundle.js"' in swagger.text
+    assert "url: '/openapi.json'" in swagger.text
+    assert client.get("/docs/oauth2-redirect").status_code == 200
+    assert client.get("/redoc").status_code == 404
     openapi_response = client.get("/openapi.json")
     assert openapi_response.status_code == 200
     assert "paths" in openapi_response.json()
 
 
 def test_production_app_docs_urls_are_wired_to_the_real_env_helpers():
-    """
-    LIT-6745: pins the actual `FastAPI(docs_url=..., redoc_url=..., openapi_url=...)`
-    construction in proxy_server.py to _get_docs_url/_get_redoc_url/_get_openapi_url,
-    so a hardcoded or drifted value at that call site fails this test even though
-    the helpers themselves are covered separately.
-    """
     from litellm.proxy import utils as proxy_utils
 
-    assert app.docs_url == proxy_utils._get_docs_url()
-    assert app.redoc_url == proxy_utils._get_redoc_url()
+    routes = {route.name: route.path for route in app.routes}
+    assert routes.get("scalar_reference") == proxy_utils._get_docs_url()
+    assert routes.get("swagger_ui_html") == proxy_utils.get_swagger_url()
     assert app.openapi_url == proxy_utils._get_openapi_url()
 
 
-def _build_app_with_docs_env(monkeypatch, *, disabled: bool) -> FastAPI:
+def _build_app_with_docs_env(monkeypatch, *, disabled: bool, overrides=None) -> FastAPI:
     from litellm.proxy import utils as proxy_utils
     from litellm.proxy.health_endpoints._health_endpoints import router as health_router
+    from litellm.proxy.scalar_reference import mount_api_references
 
-    for flag in ("DOCS_URL", "REDOC_URL", "OPENAPI_URL"):
+    for flag in ("DOCS_URL", "SWAGGER_URL", "OPENAPI_URL"):
         monkeypatch.delenv(flag, raising=False)
-    for flag in ("NO_DOCS", "NO_REDOC", "NO_OPENAPI"):
+    for flag in ("NO_DOCS", "NO_SWAGGER", "NO_OPENAPI"):
         if disabled:
             monkeypatch.setenv(flag, "True")
         else:
             monkeypatch.delenv(flag, raising=False)
 
-    # Mirrors the exact FastAPI() construction in proxy_server.py, so this
-    # exercises the real gating mechanism rather than a reimplementation of it.
+    for key, value in (overrides or {}).items():
+        monkeypatch.setenv(key, value)
     app_under_test = FastAPI(
-        docs_url=proxy_utils._get_docs_url(),
-        redoc_url=proxy_utils._get_redoc_url(),
+        docs_url=None,
+        redoc_url=None,
         openapi_url=proxy_utils._get_openapi_url(),
     )
+    mount_api_references(app_under_test, proxy_utils._get_docs_url(), proxy_utils.get_swagger_url(), lazy_features=True)
     app_under_test.include_router(health_router)
     return app_under_test
 
 
 def test_docs_endpoints_enabled_when_env_unset(monkeypatch):
     app_under_test = _build_app_with_docs_env(monkeypatch, disabled=False)
-    assert app_under_test.docs_url == "/"
-    assert app_under_test.redoc_url == "/redoc"
     assert app_under_test.openapi_url == "/openapi.json"
 
     client = TestClient(app_under_test)
-    assert client.get(app_under_test.docs_url).status_code == 200
-    assert client.get(app_under_test.redoc_url).status_code == 200
+    assert client.get("/").status_code == 200
+    assert client.get("/swagger").status_code == 200
     assert client.get(app_under_test.openapi_url).status_code == 200
 
 
-def test_no_docs_no_redoc_no_openapi_disable_every_documentation_surface(monkeypatch):
+def test_doc_flags_disable_every_documentation_surface(monkeypatch):
     """
-    LIT-6745: NO_DOCS, NO_REDOC and NO_OPENAPI must each 404 their surface
+    LIT-6745: NO_DOCS, NO_SWAGGER and NO_OPENAPI must each 404 their surface
     with no schema in the body, so a production/air-gapped deployment can
     restrict every doc route consistently.
     """
     app_under_test = _build_app_with_docs_env(monkeypatch, disabled=True)
     assert app_under_test.docs_url is None
-    assert app_under_test.redoc_url is None
     assert app_under_test.openapi_url is None
 
     client = TestClient(app_under_test)
-    for route in ("/", "/redoc", "/openapi.json"):
+    for route in ("/", "/swagger", "/redoc", "/openapi.json"):
         response = client.get(route)
         assert response.status_code == 404
         assert "openapi" not in response.text.lower()
@@ -15934,14 +15938,69 @@ def test_no_docs_no_redoc_no_openapi_disable_every_documentation_surface(monkeyp
 def test_disabling_docs_does_not_disable_other_routes(monkeypatch):
     """
     LIT-6745: disabling the doc surfaces must not affect inference/management
-    routes, since NO_DOCS/NO_REDOC/NO_OPENAPI only remove the routes FastAPI
-    itself auto-registers for docs_url/redoc_url/openapi_url.
+    routes, since the documentation flags only remove documentation routes.
     """
     app_under_test = _build_app_with_docs_env(monkeypatch, disabled=True)
     client = TestClient(app_under_test)
 
-    assert client.get("/redoc").status_code == 404
+    assert client.get("/openapi.json").status_code == 404
     assert client.get("/health/liveliness").status_code == 200
+
+
+@pytest.mark.parametrize(
+    ("docs_url", "swagger_url"),
+    (
+        ("/reference", "/interactive"),
+        ("/scalar/docs", "/scalar/interactive"),
+        ("/reference", "/scalar/interactive"),
+        ("/swagger/docs", "/swagger/interactive"),
+    ),
+)
+def test_documentation_uses_custom_urls_under_proxy_prefix(
+    monkeypatch: pytest.MonkeyPatch, docs_url: str, swagger_url: str
+) -> None:
+    docs_app = _build_app_with_docs_env(
+        monkeypatch,
+        disabled=False,
+        overrides={
+            "DOCS_URL": docs_url,
+            "SWAGGER_URL": swagger_url,
+            "OPENAPI_URL": "/schema.json",
+        },
+    )
+    client = TestClient(docs_app, root_path="/gateway")
+
+    scalar = client.get(f"/gateway{docs_url}")
+    assert scalar.status_code == 200
+    assert 'src="/gateway/scalar/scalar-1.81.0.js"' in scalar.text
+    assert 'data-openapi-url="/gateway/schema.json"' in scalar.text
+    assert 'data-server-url="/gateway"' in scalar.text
+    swagger = client.get(f"/gateway{swagger_url}")
+    assert swagger.status_code == 200
+    assert 'src="/gateway/swagger/swagger-ui-bundle.js"' in swagger.text
+    assert "url: '/gateway/schema.json'" in swagger.text
+    assert '"/gateway/lazy/warm/"' in swagger.text
+    assert "/gateway/docs/oauth2-redirect" in swagger.text
+    assert client.get("/gateway/schema.json").status_code == 200
+    assert client.get("/gateway/scalar/scalar-1.81.0.js").status_code == 200
+    assert client.get("/gateway/swagger/swagger-ui-bundle.js").status_code == 200
+    assert client.get("/gateway/swagger", follow_redirects=False).status_code == 307
+
+
+@pytest.mark.parametrize(
+    ("flags", "available"),
+    (
+        ({"NO_DOCS": "True"}, {"/openapi.json"}),
+        ({"NO_SWAGGER": "True"}, {"/", "/openapi.json"}),
+        ({"NO_OPENAPI": "True"}, set()),
+        ({"NO_SWAGGER": "True", "SWAGGER_URL": "/interactive"}, {"/", "/interactive", "/openapi.json"}),
+        ({"DOCS_URL": "/swagger"}, {"/swagger", "/swagger/ui", "/openapi.json"}),
+    ),
+)
+def test_documentation_respects_enable_flags_and_path_overrides(monkeypatch, flags, available):
+    client = TestClient(_build_app_with_docs_env(monkeypatch, disabled=False, overrides=flags))
+    paths = ("/", "/swagger", "/swagger/ui", "/interactive", "/redoc", "/openapi.json")
+    assert {path for path in paths if client.get(path, follow_redirects=False).status_code == 200} == available
 
 
 @pytest.mark.asyncio

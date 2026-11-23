@@ -29,6 +29,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.llms.base import HiddenParams
 from litellm.types.utils import (
     LIST_BATCHES_SUPPORTED_PROVIDERS,
+    AdminApiKeySecretReference,
     TextChoices,
     TextCompletionResponse,
     Usage,
@@ -1970,6 +1971,60 @@ async def test_ahealth_check_probes_extraction_models_through_the_extraction_api
     sent: Final = json.loads(upstream.calls[0].request.content)
     assert sent["state"] == "health check"
     assert sent["fields"]["reachable"]["type"] == "text"
+
+
+
+@pytest.mark.parametrize(
+    ("mode", "model", "upstream_url", "answer"),
+    (
+        (
+            "decisions",
+            "perplexity/pplx-decider-v1-27b",
+            "https://api.perplexity.ai/v1/decisions",
+            {
+                "model": "perplexity/pplx-decider-v1-27b",
+                "answers": {"reachable": {"type": "noul", "noul": 1.0}},
+                "usage": {"input_tokens": 12, "output_tokens": 1},
+            },
+        ),
+        (
+            "extraction",
+            "cloudflare/clairic",
+            "https://api.cloudflare.com/client/v4/accounts/acct-1/ai/run/@cf/cloudflare/clairic",
+            {
+                "result": {
+                    "model": "clairic",
+                    "answers": {"reachable": {"type": "text", "value": "health"}},
+                    "truncated": False,
+                    "usage": {"input_tokens": 20, "output_tokens": 0},
+                },
+                "success": True,
+                "errors": [],
+                "messages": [],
+            },
+        ),
+    ),
+)
+async def test_ahealth_check_sends_the_secret_an_admin_oidc_reference_points_to(
+    mode: str,
+    model: str,
+    upstream_url: str,
+    answer: dict[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", "acct-1")
+    monkeypatch.delenv("CLOUDFLARE_API_BASE", raising=False)
+    monkeypatch.setenv("QA_HEALTH_OIDC_KEY", "resolved-health-key")
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    upstream: Final = respx_mock.post(upstream_url).respond(json=answer)
+    reference: Final = AdminApiKeySecretReference("oidc/env/QA_HEALTH_OIDC_KEY", frozenset())
+
+    result: Final = await ahealth_check({"model": model, "api_key": reference}, mode=mode)
+
+    assert "error" not in result, result
+    assert upstream.calls[0].request.headers["authorization"] == "Bearer resolved-health-key"
 
 
 VERTEX_AUTHORIZED_USER: Final = json.dumps(

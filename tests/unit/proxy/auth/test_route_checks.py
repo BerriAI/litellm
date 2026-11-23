@@ -4728,6 +4728,7 @@ def test_legacy_sse_respects_virtual_key_route_permissions(route: str, route_gro
     (
         "/v1/traces",
         "/v1/traces/trace-id",
+        "/v1/traces/trace-id/conversation",
         "/v1/traces/trace-id/spans/span-id",
         "/v1/traces/trace-id/spans/span-id/error",
     ),

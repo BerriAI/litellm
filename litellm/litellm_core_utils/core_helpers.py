@@ -1223,7 +1223,7 @@ def redact_nested_match_and_regex_keys(payload: object, keys: Collection[str] = 
 
     # Iterative traversal; `seen` guards against cyclic refs preserved by deepcopy.
     try:
-        seen: Final[set] = set()
+        seen: Final[set[int]] = set()
         stack: Final[list[object]] = [redacted]
         while stack:
             node = stack.pop()

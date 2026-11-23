@@ -972,7 +972,7 @@ from starlette.background import BackgroundTask
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.websockets import WebSocketState
 
-from litellm.integrations.lens.config import is_lens_tracing_enabled
+from litellm.integrations.lens.config import LensController
 from litellm.integrations.lens.proxy import tracing_endpoints
 from litellm.integrations.lens.proxy.tracing_runtime import manage_tracing
 from litellm.litellm_core_utils.on_end_byte_stream import OnEndAsyncByteStream
@@ -1081,7 +1081,6 @@ from litellm.proxy.utils import (  # noqa: F401, RUF100  # legacy module exports
     _get_docs_url,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _get_openapi_url,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _get_projected_spend_over_limit,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
-    _get_redoc_url,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _is_projected_spend_over_limit,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _is_valid_team_configs,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     cache_user_row,
@@ -1092,8 +1091,8 @@ from litellm.proxy.utils import (  # noqa: F401, RUF100  # legacy module exports
     get_error_message_str,
     get_openapi_url,
     get_projected_spend_over_limit,
-    get_redoc_url,
     get_server_root_path,
+    get_swagger_url,
     handle_exception_on_proxy,
     hash_password,
     hash_token,
@@ -1219,19 +1218,18 @@ from fastapi import (
     UploadFile,
     WebSocket,
     WebSocketDisconnect,
-    applications,
     status,
 )
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import (
     FileResponse,
     HTMLResponse,
     JSONResponse,
     ORJSONResponse,
+    PlainTextResponse,
     RedirectResponse,
     StreamingResponse,
 )
@@ -1239,6 +1237,8 @@ from fastapi.routing import APIRouter
 from fastapi.security import OAuth2PasswordBearer
 from fastapi.security.api_key import APIKeyHeader
 from fastapi.staticfiles import StaticFiles
+
+from litellm.proxy.scalar_reference import mount_api_references
 
 # import enterprise folder
 enterprise_router = APIRouter()
@@ -1350,10 +1350,6 @@ ui_message += "\n\n💸 [```LiteLLM Model Cost Map```](https://models.litellm.ai
 
 ui_message += f"\n\n🔎 [```LiteLLM Model Hub```]({model_hub_link}). See available models on the proxy. [**Docs**](https://docs.litellm.ai/docs/proxy/ai_hub)"
 
-custom_swagger_message: Final = (
-    "[**Customize Swagger Docs**](https://docs.litellm.ai/docs/enterprise#operations--branding)"
-)
-
 ### CUSTOM BRANDING [ENTERPRISE FEATURE] ###
 title: Final = os.getenv("DOCS_TITLE", "LiteLLM API") if premium_user else "LiteLLM API"
 
@@ -1361,10 +1357,10 @@ _title: Final = title
 _description: Final = (
     os.getenv(
         "DOCS_DESCRIPTION",
-        f"Enterprise Edition \n\nProxy Server to call 100+ LLMs in the OpenAI format. {custom_swagger_message}\n\n{ui_message}",
+        f"Enterprise Edition \n\nProxy Server to call 100+ LLMs in the OpenAI format.\n\n{ui_message}",
     )
     if premium_user
-    else f"Proxy Server to call 100+ LLMs in the OpenAI format. {custom_swagger_message}\n\n{ui_message}"
+    else f"Proxy Server to call 100+ LLMs in the OpenAI format.\n\n{ui_message}"
 )
 
 
@@ -2125,7 +2121,7 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
         dict[str, object] | None,
         TypeAdapter(dict[str, object] | None).validate_python(general_settings.get("tracing")),
     )
-    tracing_enabled: Final = is_lens_tracing_enabled(tracing_settings)
+    tracing_enabled: Final = LensController.is_lens_setup(tracing_settings)
     async with manage_tracing(
         enabled=tracing_enabled,
         settings=tracing_settings,
@@ -2306,9 +2302,11 @@ def ensure_unique_openapi_operation_ids(
     return openapi_schema
 
 
+docs_url: Final = get_docs_url()
 app = FastAPI(
-    docs_url=get_docs_url(),
-    redoc_url=get_redoc_url(),
+    # FastAPI registers its Swagger handler during construction, before Scalar can claim the docs URL.
+    docs_url=None,
+    redoc_url=None,
     openapi_url=get_openapi_url(),
     title=title,
     description=_description,
@@ -2318,6 +2316,8 @@ app = FastAPI(
     generate_unique_id_function=_generate_stable_operation_id,
     strict_content_type=False,
 )
+
+mount_api_references(app, docs_url, get_swagger_url(), lazy_features=True)
 
 ## V2 OTEL: instrument the FastAPI app for server spans (gated by
 ## LITELLM_OTEL_V2). This MUST run at app-creation time — once the lifespan runs,
@@ -3214,93 +3214,6 @@ app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(GZipBufferedResponseMiddleware)
 
 
-def mount_swagger_ui():
-    swagger_directory: Final = os.path.join(current_dir, "swagger")
-    swagger_path = "/" if server_root_path is None else server_root_path
-    if not swagger_path.endswith("/"):
-        swagger_path = swagger_path + "/"
-    custom_root_path_swagger_path: Final = swagger_path + "swagger"
-
-    app.mount("/swagger", StaticFiles(directory=swagger_directory), name="swagger")
-
-    # On dropdown expand: one-time fetch to the prefix (triggers lazy load),
-    # then spec re-download so real routes replace the stub. Raw JS (no
-    # <script> tag) since it's injected inside the existing inline script.
-    from fastapi.responses import HTMLResponse
-
-    from litellm.proxy._lazy_features import lazy_tag_to_prefix
-
-    _lazy_plugin_js: Final = (
-        "const TAG_TO_PREFIX = " + json.dumps(lazy_tag_to_prefix()) + ";"
-        "const warmedTags = new Set();"
-        "const LAZY_TAGS = new Set(Object.keys(TAG_TO_PREFIX));"
-        "const hideStubRows = () => {"
-        "document.querySelectorAll('.opblock').forEach(op => {"
-        "const d = op.querySelector('.opblock-summary-description');"
-        "if (d && LAZY_TAGS.has(d.textContent.trim())) op.style.display = 'none';"
-        "});};"
-        "const annotateLazyHeaders = () => {"
-        "document.querySelectorAll('.opblock-tag').forEach(tagEl => {"
-        "const m = (tagEl.id || '').match(/^operations-tag-(.+)$/);"
-        "if (!m || !LAZY_TAGS.has(m[1])) return;"
-        "const existing = tagEl.querySelector('.lazy-load-hint');"
-        "if (warmedTags.has(m[1])) { if (existing) existing.remove(); return; }"
-        "if (existing) return;"
-        "const hint = document.createElement('small');"
-        "hint.className = 'lazy-load-hint';"
-        "hint.textContent = ' (expand to load routes)';"
-        "hint.style.opacity = '0.6';"
-        "hint.style.marginLeft = '6px';"
-        "const target = tagEl.querySelector('a span') || tagEl.querySelector('span') || tagEl;"
-        "target.appendChild(hint);"
-        "});};"
-        "setInterval(() => { hideStubRows(); annotateLazyHeaders(); }, 200);"
-        "const LazyLoadPlugin = () => ({"
-        "afterLoad:function(system){setTimeout(()=>{"
-        "for(const tag of LAZY_TAGS)system.layoutActions.show(['operations-tag',tag],false);"
-        "},200);},"
-        "statePlugins:{layout:{wrapActions:{show:(ori,sys)=>(...args)=>{"
-        "const thing=args[0];const shown=args[1];let tag=null;"
-        "if(Array.isArray(thing)){for(const t of thing)if(TAG_TO_PREFIX[t])tag=t;}"
-        "if(shown!==false&&tag&&!warmedTags.has(tag)){warmedTags.add(tag);"
-        "fetch('/lazy/warm/'+tag,{method:'POST',credentials:'include'}).then(r=>r.json()).then(d=>{"
-        "if(!d.paths||Object.keys(d.paths).length===0)return;"
-        "const cur=sys.specSelectors.specJson().toJS();"
-        "const merged={};let inserted=false;"
-        "for(const k in (cur.paths||{})){"
-        "if(k===d.stub_path){for(const nk in d.paths)merged[nk]=d.paths[nk];inserted=true;}"
-        "else{merged[k]=cur.paths[k];}}"
-        "if(!inserted)Object.assign(merged,d.paths);"
-        "cur.paths=merged;"
-        "cur.components=cur.components||{};"
-        "cur.components.schemas=Object.assign(cur.components.schemas||{},(d.components||{}).schemas||{});"
-        "sys.specActions.updateSpec(JSON.stringify(cur));"
-        "}).catch(()=>{});}"
-        "return ori(...args);}}}}});"
-    )
-
-    def swagger_monkey_patch(*args, **kwargs):
-        response: Final = get_swagger_ui_html(
-            *args,
-            **kwargs,
-            swagger_js_url=f"{custom_root_path_swagger_path}/swagger-ui-bundle.js",
-            swagger_css_url=f"{custom_root_path_swagger_path}/swagger-ui.css",
-            swagger_favicon_url=f"{custom_root_path_swagger_path}/favicon.png",
-        )
-        body = response.body.decode("utf-8")
-        body = body.replace(
-            "const ui = SwaggerUIBundle({",
-            _lazy_plugin_js + 'const ui = SwaggerUIBundle({plugins:[LazyLoadPlugin],tagsSorter:"alpha",',
-            1,
-        )
-        return HTMLResponse(content=body)
-
-    applications.get_swagger_ui_html = swagger_monkey_patch
-
-
-mount_swagger_ui()
-
-docs_url: Final = get_docs_url()
 root_redirect_url: Final[str | None] = os.getenv("ROOT_REDIRECT_URL")
 if docs_url != "/" and root_redirect_url is not None:
 
@@ -13987,6 +13900,9 @@ def _form_fields_without_file(form_data: Mapping[str, object]) -> Mapping[str, o
     return {key: value for key, value in form_data.items() if key != "file"}
 
 
+PLAIN_TEXT_TRANSCRIPTION_FORMATS: Final = frozenset({"text", "srt", "vtt"})
+
+
 @router.post(
     "/v1/audio/transcriptions",
     dependencies=[Depends(user_api_key_auth)],
@@ -13994,7 +13910,10 @@ def _form_fields_without_file(form_data: Mapping[str, object]) -> Mapping[str, o
     responses={
         200: {
             "model": TranscriptionResponse,
-            "content": {"text/event-stream": {"schema": {"type": "string"}}},
+            "content": {
+                "text/event-stream": {"schema": {"type": "string"}},
+                "text/plain": {"schema": {"type": "string"}},
+            },
         }
     },
 )
@@ -14005,7 +13924,10 @@ def _form_fields_without_file(form_data: Mapping[str, object]) -> Mapping[str, o
     responses={
         200: {
             "model": TranscriptionResponse,
-            "content": {"text/event-stream": {"schema": {"type": "string"}}},
+            "content": {
+                "text/event-stream": {"schema": {"type": "string"}},
+                "text/plain": {"schema": {"type": "string"}},
+            },
         }
     },
 )
@@ -14026,6 +13948,7 @@ async def audio_transcriptions(
     try:
         # Use orjson to parse JSON data, orjson speeds up requests significantly
         form_data: Final = await get_form_data(request)
+        requested_response_format: Final = form_data.get("response_format")
         data = {**_form_fields_without_file(form_data), **data}
 
         # Include original request and headers in the data
@@ -14159,6 +14082,11 @@ async def audio_transcriptions(
                 media_type="text/event-stream",
                 headers=response_headers,
             )
+
+        if requested_response_format in PLAIN_TEXT_TRANSCRIPTION_FORMATS and isinstance(
+            response, TranscriptionResponse
+        ):
+            return PlainTextResponse(content=response.text or "", headers=response_headers)
 
         fastapi_response.headers.update(response_headers)
 
