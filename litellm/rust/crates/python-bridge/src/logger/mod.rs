@@ -1,19 +1,17 @@
 //! Delivers Rust `tracing` events to Python's `logging`, so Rust diagnostics go through the same loggers, filters
 //! and handlers as Python's own.
 //!
-//! `host` holds every call into Python, and `route` picks the Python logger for a Rust target. `sink` is the sink a
-//! call scopes its Rust work to, and it logs with that call's request correlation. `machine` scopes a route's
-//! execution to that sink. `unscoped` is the process-wide sink for threads no call scoped, and `background` is the
-//! queue it delivers through.
+//! `process` is the one sink every event goes through, and it gives each call the logger that carries its request
+//! ids. `host` holds every call into Python, `route` picks the Python logger for a Rust target, and `levels` keeps
+//! the level each of those loggers takes. `background` is the queue that keeps Python handlers off the async
+//! workers, and `machine` runs a route's execution inside its call's logger.
 
 mod background;
 mod host;
 mod levels;
 mod machine;
+mod process;
 mod route;
-mod sink;
-mod unscoped;
 
 pub(crate) use machine::LoggedMachine;
-pub(crate) use sink::{capture, capture_call};
-pub(crate) use unscoped::unscoped;
+pub(crate) use process::{capture, process};

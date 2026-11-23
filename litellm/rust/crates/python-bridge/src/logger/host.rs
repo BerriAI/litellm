@@ -5,6 +5,7 @@ use litellm_host_python::Pythonized;
 use litellm_tracing::{Level, Record};
 use pyo3::prelude::*;
 use serde_json::{Map, Value};
+use strum::{EnumCount, VariantArray};
 
 use super::route::PythonLogger;
 
@@ -30,28 +31,31 @@ fn report<T: Default>(py: Python<'_>, result: PyResult<T>) -> T {
     }
 }
 
-/// The session and trace ids of the request the calling thread is serving.
-pub(super) fn context(py: Python<'_>) -> Option<(String, String)> {
+/// What a call reads from Python when it starts.
+pub(super) struct Context {
+    /// The session and trace ids of the request the calling thread is serving.
+    pub(super) correlation: (String, String),
+    /// The lowest level each Python logger takes, in `PythonLogger` order.
+    pub(super) floors: [u8; PythonLogger::COUNT],
+}
+
+pub(super) fn context(py: Python<'_>) -> Option<Context> {
+    let loggers: Vec<&str> = PythonLogger::VARIANTS
+        .iter()
+        .map(|logger| <&str>::from(*logger))
+        .collect();
     report(
         py,
         py.import(MODULE)
-            .and_then(|module| module.call_method0("context"))
+            .and_then(|module| module.call_method1("context", (loggers,)))
             .and_then(|value| value.extract())
-            .map(Some),
+            .map(|(correlation, floors)| {
+                Some(Context {
+                    correlation,
+                    floors,
+                })
+            }),
     )
-}
-
-/// Whether `logger` takes records at `level`.
-pub(super) fn enabled(logger: PythonLogger, level: u8) -> bool {
-    Python::try_attach(|py| {
-        report(
-            py,
-            py.import(MODULE)
-                .and_then(|module| module.call_method1("enabled", (<&str>::from(logger), level)))
-                .and_then(|enabled| enabled.extract()),
-        )
-    })
-    .unwrap_or(false)
 }
 
 /// One log line as Python's `emit` takes it.
