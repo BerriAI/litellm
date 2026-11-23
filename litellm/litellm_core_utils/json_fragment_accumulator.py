@@ -2,6 +2,20 @@ import json
 from json.scanner import NUMBER_RE
 from typing import Final, cast  # noqa: TID251  # raw_decode returns tuple[Any, int]; no cast-free unpack
 
+_NUMBER_CONTINUATION_CHARS: Final = frozenset("0123456789+-.eE")
+
+
+def _number_is_still_growing(buffer: str, decoded: object, end_index: int) -> bool:
+    """Whether the number raw_decode stopped at is still arriving.
+
+    "-4.5" split as "-4." and "5" decodes as -4 at index 2, and consuming that would report
+    -4 and leave ".5" behind undecodable. A digit, sign, dot or exponent marker right after
+    the decoded number means the value continues in a later fragment, so it is not complete.
+    """
+    if isinstance(decoded, bool) or not isinstance(decoded, (int, float)):
+        return False
+    return end_index < len(buffer) and buffer[end_index] in _NUMBER_CONTINUATION_CHARS
+
 
 class JSONFragmentAccumulator:
     """
@@ -81,6 +95,8 @@ class JSONFragmentAccumulator:
         except (ValueError, RecursionError):
             return self._step_over_unconvertible_number(start)
         decoded, end_index = cast("tuple[object, int]", raw_value)  # cast-ok: raw_decode returns tuple[Any, int]
+        if _number_is_still_growing(self._buffer, decoded, end_index):
+            return False, None
         self._advance_to(end_index)
         return True, decoded
 

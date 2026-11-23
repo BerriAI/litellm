@@ -225,3 +225,25 @@ def test_could_close_json_after_many_blank_fragments_is_not_quadratic():
         f"20000 blank-fragment could_close_json() calls took {elapsed_ms:.1f} ms "
         "(expected < 300 ms); quadratic rescan regression?"
     )
+
+
+def test_number_split_across_fragments_is_decoded_only_once_it_finishes():
+    """raw_decode stops at a valid number prefix, so "-4." decodes as -4 and the rest of the
+    number is stranded. A value that a continuation character follows has not finished
+    arriving, so the buffer stays untouched until the rest of it lands."""
+    for first, second, expected in (("-4.", "5", -4.5), ("1.", "5", 1.5), ("2e", "3", 2000.0)):
+        accumulator = _streamed((first,))
+
+        assert accumulator.pop_next_value() == (False, None), f"{first!r} was reported as a complete number"
+        assert accumulator.snapshot() == first
+
+        accumulator.append(second)
+
+        assert accumulator.pop_next_value() == (True, expected)
+
+
+def test_concatenated_values_after_a_split_number_stay_reachable():
+    accumulator = _streamed(("-4.", '5 {"after": 1}'))
+
+    assert tuple(_popped_values(accumulator)) == (-4.5, {"after": 1})
+    assert not accumulator
