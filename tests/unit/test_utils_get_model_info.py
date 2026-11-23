@@ -43,6 +43,19 @@ def test_get_model_info_custom_llm_with_model_name():
     litellm.get_model_info(model)
 
 
+@pytest.mark.parametrize("model", ["jamba-1.5-large", "ai21/jamba-1.5-large"])
+def test_jamba_completion_is_priced_from_its_ai21_row(local_model_cost_map: None, model: str) -> None:
+    response: Final = litellm.completion(
+        model=model, messages=[{"role": "user", "content": "hi"}], mock_response="hello there"
+    )
+    row: Final = litellm.model_cost["jamba-1.5-large"]
+    expected: Final = (
+        response.usage.prompt_tokens * row["input_cost_per_token"]
+        + response.usage.completion_tokens * row["output_cost_per_token"]
+    )
+    assert response._hidden_params["response_cost"] == pytest.approx(expected)
+
+
 def test_get_model_info_custom_llm_with_same_name_vllm(monkeypatch):
     """
     Tests if {custom_llm_provider}/{model_name} name given, and model exists in model info, the object is returned

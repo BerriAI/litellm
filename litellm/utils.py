@@ -7147,6 +7147,8 @@ def _check_provider_match(model_info: dict, custom_llm_provider: str | None) -> 
             and model_info["litellm_provider"].startswith("fireworks_ai")
             or custom_llm_provider.startswith("bedrock")
             and model_info["litellm_provider"].startswith("bedrock")
+            or custom_llm_provider == "ai21_chat"
+            and model_info["litellm_provider"] == "ai21"
         ):
             return True
         elif (
