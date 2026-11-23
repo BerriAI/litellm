@@ -2633,6 +2633,24 @@ class TestRecordPartialUsageForFailure:
         assert usage.prompt_tokens == 52
         assert logging_obj.model_call_details["response_cost"] == 0.0
 
+    @pytest.mark.parametrize("events_before_failure", [1, 3], ids=["after-message-start", "after-content"])
+    def test_upstream_error_frame_stashes_the_same_usage_as_a_dropped_connection(self, events_before_failure: int):
+        received = self._interrupted_chunks()[:events_before_failure]
+        error_frame = self._sse("error", {"type": "error", "error": {"type": "api_error", "message": "upstream"}})
+        dropped, errored = self._make_logging_obj(), self._make_logging_obj()
+
+        for logging_obj, chunks in ((dropped, received), (errored, [*received, error_frame])):
+            AnthropicPassthroughLoggingHandler.record_partial_usage_for_failure(
+                litellm_logging_obj=logging_obj,
+                request_body={"model": "claude-sonnet-5", "stream": True},
+                all_chunks=chunks,
+            )
+
+        assert (
+            errored.model_call_details["combined_usage_object"] == dropped.model_call_details["combined_usage_object"]
+        )
+        assert errored.model_call_details["response_cost"] == dropped.model_call_details["response_cost"]
+
     def test_leaves_logging_obj_untouched_when_nothing_streamed(self):
         logging_obj = self._make_logging_obj()
 
@@ -2728,7 +2746,6 @@ def test_streamed_messages_are_logged_when_an_undecodable_data_line_surrounds_th
     assert handled["kwargs"]["response_cost"] > 0
 
 
-
 def test_stream_was_interrupted_reads_a_message_delta_whose_json_holds_unicode_line_separators() -> None:
     message_delta: Final = {
         "type": "message_delta",
@@ -2754,6 +2771,7 @@ def test_extract_model_reads_a_message_start_whose_json_holds_unicode_line_separ
     chunk: Final = f"event: message_start\ndata: {json.dumps(message_start, ensure_ascii=False)}\n\n"
 
     assert AnthropicPassthroughLoggingHandler._extract_model_from_anthropic_chunks([chunk]) == "claude-sonnet-5"
+
 
 @pytest.mark.asyncio
 async def test_anthropic_passthrough_handler(mock_httpx_response, mock_response, mock_logging_obj):
