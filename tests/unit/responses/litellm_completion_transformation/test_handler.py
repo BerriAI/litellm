@@ -344,15 +344,18 @@ async def _bridged_follow_up(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
 @pytest.mark.parametrize(
-    "prisma_client",
+    ("asynchronous", "prisma_client"),
     [
-        None,
-        SimpleNamespace(db=_StoredTurns(())),
-        SimpleNamespace(db=_StoredTurns((_turn_stored_without_prompts(_TURN_ONE_ID),))),
+        pytest.param(False, None, id="sync-no_database"),
+        pytest.param(True, None, id="async-no_database"),
+        pytest.param(True, SimpleNamespace(db=_StoredTurns(())), id="async-unknown_id"),
+        pytest.param(
+            True,
+            SimpleNamespace(db=_StoredTurns((_turn_stored_without_prompts(_TURN_ONE_ID),))),
+            id="async-prompts_not_stored",
+        ),
     ],
-    ids=["no_database", "unknown_id", "prompts_not_stored"],
 )
 async def test_bridged_follow_up_without_a_replayable_previous_turn_is_refused_before_the_provider_call(
     asynchronous: bool, prisma_client: SimpleNamespace | None
@@ -390,12 +393,11 @@ async def test_an_sdk_install_without_the_proxy_extras_gets_the_400_for_a_follow
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
-async def test_a_refused_proxy_follow_up_names_the_id_the_client_sent(asynchronous: bool):
+async def test_a_refused_proxy_follow_up_names_the_id_the_client_sent():
     with patch("litellm.proxy.proxy_server.prisma_client", SimpleNamespace(db=_StoredTurns(()))):
         with pytest.raises(litellm.BadRequestError) as refused:
             await _bridged_follow_up(
-                asynchronous,
+                True,
                 _RecordingAnthropicHandler(_ANTHROPIC_MESSAGE_PAYLOAD),
                 {ADDRESSED_RESPONSE_ID_FIELD: "resp_the_client_held"},
             )
@@ -403,15 +405,33 @@ async def test_a_refused_proxy_follow_up_names_the_id_the_client_sent(asynchrono
     assert "Previous response with id 'resp_the_client_held' not found." in refused.value.message
 
 
+class _DatabaseOnTheProxyLoop:
+    async def query_raw(self, query: str, request_ids: Sequence[str]) -> list[dict[str, object]]:
+        raise AssertionError("a synchronous call queried the proxy's database off the proxy's event loop")
+
+
 @pytest.mark.asyncio
-@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
-async def test_bridged_follow_up_replays_the_stored_previous_turn(asynchronous: bool):
+async def test_a_sync_follow_up_beside_the_proxy_database_asks_for_aresponses_without_querying_it():
+    provider: Final = _RecordingAnthropicHandler(_ANTHROPIC_MESSAGE_PAYLOAD)
+
+    with patch("litellm.proxy.proxy_server.prisma_client", SimpleNamespace(db=_DatabaseOnTheProxyLoop())):
+        with pytest.raises(litellm.BadRequestError) as refused:
+            await _bridged_follow_up(False, provider, {ADDRESSED_RESPONSE_ID_FIELD: "resp_the_client_held"})
+
+    assert provider.request_body is None, "the follow-up reached the provider with no conversation history"
+    assert (refused.value.status_code, refused.value.param) == (400, "previous_response_id")
+    assert "'resp_the_client_held'" in refused.value.message
+    assert "litellm.aresponses()" in refused.value.message
+
+
+@pytest.mark.asyncio
+async def test_bridged_follow_up_replays_the_stored_previous_turn():
     provider: Final = _RecordingAnthropicHandler(_ANTHROPIC_MESSAGE_PAYLOAD)
 
     with patch(
         "litellm.proxy.proxy_server.prisma_client", SimpleNamespace(db=_StoredTurns((_stored_mcp_turn(_TURN_ONE_ID),)))
     ):
-        await _bridged_follow_up(asynchronous, provider)
+        await _bridged_follow_up(True, provider)
 
     assert provider.request_body is not None, "the bridged turn never reached the provider"
     assert [(message["role"], json.dumps(message["content"])) for message in provider.request_body["messages"]] == [

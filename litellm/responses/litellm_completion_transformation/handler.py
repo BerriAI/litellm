@@ -2,6 +2,7 @@
 Handler for transforming responses api requests to litellm.completion requests
 """
 
+import sys
 from collections.abc import Coroutine, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
@@ -10,9 +11,10 @@ from typing import Final
 from pydantic import TypeAdapter
 
 import litellm
+from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.allowed_tools_tool_choice import unenforced_allowed_tools_tool_choice
 from litellm.litellm_core_utils.asyncify import run_async_function
-from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
+from litellm.litellm_core_utils.core_helpers import attribute_or_none, drops_unsupported_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.model_param_helper import embeds_thought_signature_in_tool_call_id
 from litellm.responses.additional_tools import HoistedAdditionalTools, hoist_additional_tools
@@ -58,6 +60,24 @@ def _chat_verbosity(responses_api_request: Mapping[str, object]) -> Mapping[str,
             return {"verbosity": verbosity}
         case _:
             return {}
+
+
+def _proxy_database_connected() -> bool:
+    return attribute_or_none(sys.modules.get("litellm.proxy.proxy_server"), "prisma_client") is not None
+
+
+def _stored_turns_need_aresponses(client_response_id: str, model: str, provider: str | None) -> BadRequestError:
+    message: Final = (
+        f"Previous response with id '{client_response_id}' can only be continued with `litellm.aresponses()` in "
+        "this process. Its conversation is rebuilt from the LiteLLM proxy's database, which only the proxy's event "
+        "loop can query."
+    )
+    return BadRequestError(
+        message=message,
+        model=model,
+        llm_provider=provider,
+        body={"message": message, "type": "invalid_request_error", "param": "previous_response_id", "code": None},
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -240,6 +260,12 @@ class LiteLLMCompletionTransformationHandler:
                 **kwargs,
             )
 
+        if previous_response_id and _proxy_database_connected():
+            raise _stored_turns_need_aresponses(
+                previous_response_client_ids[-1] if previous_response_client_ids else previous_response_id,
+                model,
+                custom_llm_provider,
+            )
         completion_request: Final[Mapping[str, object]] = (
             _REQUEST_KWARGS_ADAPTER.validate_python(
                 run_async_function(
