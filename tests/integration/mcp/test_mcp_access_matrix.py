@@ -420,6 +420,40 @@ def test_rest_listing_selects_the_same_scope_for_every_server_spelling(gateway: 
             assert _tool_entries(listed) == by_uuid, (params, listed.text)
 
 
+@pytest.mark.parametrize("owner", ["unscoped-admin", "team-member", "ordinary-user"])
+def test_first_event_save_preserves_inherited_tools(gateway: Gateway, owner: str) -> None:
+    with peer_of("http") as peer, gateway.scenario() as scenario:
+        identity = register_mcp(
+            scenario,
+            peer,
+            "events" + uuid.uuid4().hex[:8],
+            allowed_tools=["add"],
+            allow_all_keys=owner == "ordinary-user",
+        )
+        if owner == "team-member":
+            team = scenario.team(object_permission={"mcp_servers": [identity]})
+            key = scenario.key(user_id=scenario.member(team), team_id=team)
+        else:
+            role = "proxy_admin" if owner == "unscoped-admin" else "internal_user"
+            key = scenario.key(user_id=scenario.user(user_role=role))
+
+        def names() -> list[str]:
+            entries = _tool_entries(_rest_listing(gateway, key, {"server_id": identity}))
+            return [string_value(tool["name"]) for tool in entries]
+
+        assert names() == ["add"]
+        gateway.post(
+            "/key/update", {"key": key, "object_permission": {"mcp_event_permissions": {identity: ["build.*"]}}}
+        )
+        assert names() == ["add"]
+        scoped = gateway.post("/key/update", {"key": key, "object_permission": {"mcp_servers": [identity]}})
+        assert object_value(scoped["object_permission"])["mcp_servers"] == [identity]
+        assert names() == ["add"]
+        if owner == "unscoped-admin":
+            gateway.post("/key/update", {"key": key, "object_permission": {"mcp_servers": []}})
+            assert _rest_listing(gateway, key, {"server_id": identity}).status_code == 403
+
+
 def test_include_disabled_tools_widens_the_listing_only_for_an_admin(gateway: Gateway) -> None:
     with peer_of("http") as peer, gateway.scenario() as scenario:
         alias: Final = "disabled" + uuid.uuid4().hex[:8]
