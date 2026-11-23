@@ -10,6 +10,7 @@ from mcp.types import Tool as MCPTool
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 from litellm.exceptions import APIError
+from litellm.litellm_core_utils.allowed_tools_tool_choice import GatewayTool, GatewayTools
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.tool_fields import hosted_mcp_approval_error
 from litellm.litellm_core_utils.url_utils import is_url_destination_allowed_by_host
@@ -87,6 +88,23 @@ class DirectListing:
     tools: tuple[MCPTool, ...]
     by_name: Mapping[str, DirectTool]
     server_tools: Mapping[str, tuple[MCPTool, ...]]
+
+
+def gateway_tools_with_direct(gateway: GatewayTools, listing: DirectListing) -> GatewayTools:
+    if not listing.by_name:
+        return gateway
+    direct: Final = MappingProxyType(
+        {
+            name: GatewayTool(
+                names=frozenset((name, tool.tool.name)), server_labels=frozenset((tool.server.server_label,))
+            )
+            for name, tool in listing.by_name.items()
+        }
+    )
+    return GatewayTools(
+        server_labels=gateway.server_labels.union(*(tool.server_labels for tool in direct.values())),
+        tools=MappingProxyType({**gateway.tools, **direct}),
+    )
 
 
 @dataclass(frozen=True, slots=True)

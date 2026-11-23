@@ -3931,6 +3931,7 @@ async def _gateway_hosted_mcp_request(
     drop_params: bool | None = None,
     stream: bool = False,
     caller: object = None,
+    tool_choice: object = None,
 ) -> object:
     with using_responses_dependencies(ResponsesDependencies(direct_client_factory=server.client_for)):
         return await litellm.aresponses(
@@ -3940,6 +3941,7 @@ async def _gateway_hosted_mcp_request(
             drop_params=drop_params,
             stream=stream,
             litellm_metadata={"user_api_key_auth": caller},
+            tool_choice=tool_choice,
             **_ROUTE_KWARGS[model],
         )
 
@@ -4049,6 +4051,47 @@ async def test_an_allowlisted_hosted_mcp_url_runs_on_the_gateway_and_answers_in_
     assert [(call.name, call.arguments) for call in server.calls] == [("ask_question", _ASK_ARGUMENTS)]
     assert _sent_tool_names(_sent_body(provider, 0)) == ("deepwiki-ask_question",)
     assert _ASK_OUTPUT in json.dumps(_sent_body(provider, 1))
+
+
+_LOOKUP_FUNCTION: Final = MappingProxyType(
+    {"type": "function", "name": "lookup", "parameters": {"type": "object", "properties": {}}}
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", [_BEDROCK_MODEL, _DEEPSEEK_MODEL])
+@pytest.mark.parametrize(
+    ("allowed", "runs"),
+    [({"type": "mcp", "server_label": "deepwiki"}, True), ({"type": "function", "name": "lookup"}, False)],
+    ids=["choice_allows_the_server", "choice_excludes_the_server"],
+)
+@respx.mock
+async def test_an_allowed_tools_choice_decides_whether_the_gateway_runs_an_allowlisted_url_call(
+    monkeypatch: pytest.MonkeyPatch, model: str, allowed: Mapping[str, object], runs: bool
+):
+    _gateway_runs_hosted_mcp(monkeypatch, ("mcp.deepwiki.com",))
+    provider: Final = _serve_responses(
+        respx.mock,
+        monkeypatch,
+        (_tool_call_round(model, "deepwiki-ask_question"), _answer_round(model)),
+        _ROUTE_URLS[model],
+    )
+    server: Final = _ScriptedMCPServer()
+
+    response: Final = await _gateway_hosted_mcp_request(
+        model,
+        server,
+        beside=(_LOOKUP_FUNCTION,),
+        drop_params=True,
+        tool_choice={"type": "allowed_tools", "mode": "auto", "tools": [allowed]},
+    )
+
+    assert isinstance(response, ResponsesAPIResponse)
+    assert [call.name for call in server.calls] == (["ask_question"] if runs else [])
+    assert provider.call_count == (2 if runs else 1)
+    assert _output_types(response.output)[0] == "mcp_list_tools"
+    assert _output_types(response.output)[-1] == ("message" if runs else "function_call")
+    assert ("mcp_call" in _output_types(response.output)) == runs
 
 
 @pytest.mark.asyncio

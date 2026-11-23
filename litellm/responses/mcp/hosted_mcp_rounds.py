@@ -4,6 +4,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, TypeAlias
 
 from litellm._uuid import uuid
+from litellm.litellm_core_utils.allowed_tools_tool_choice import GatewayTools
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.responses.mcp.mcp_streaming_iterator import output_items
 from litellm.responses.mcp.openai_mcp_items import OpenAIMCPItems, openai_output, ran_round_output
@@ -37,6 +38,8 @@ class ClaimedRounds:
     record_breakdown: BreakdownRecorder
     logging_obj: object
     max_rounds: int
+    tool_choice: object
+    gateway: GatewayTools
 
 
 def _call_details(tool_call: object) -> tuple[str, str, str]:
@@ -74,6 +77,12 @@ def _answer(
     return response.model_copy(update={"output": list(openai_output(rounds.items, (*composed, *round_output)))})
 
 
+def _handed_back(
+    rounds: ClaimedRounds, response: ResponsesAPIResponse, composed: tuple[object, ...]
+) -> ResponsesAPIResponse:
+    return response.model_copy(update={"output": [*openai_output(rounds.items, composed), *output_items(response)]})
+
+
 async def _held_round_output(
     rounds: ClaimedRounds, response: ResponsesAPIResponse, claimed_calls: Sequence[object]
 ) -> tuple[object, ...]:
@@ -96,7 +105,10 @@ async def _next_round(
 ) -> ResponsesAPIResponse | BaseResponsesAPIStreamingIterator:
     from litellm.responses.mcp.litellm_proxy_mcp_handler import LiteLLM_Proxy_MCP_Handler
 
-    tool_calls: Final = LiteLLM_Proxy_MCP_Handler.extract_tool_calls_from_response(response)
+    requested_calls: Final = LiteLLM_Proxy_MCP_Handler.extract_tool_calls_from_response(response)
+    tool_calls: Final = LiteLLM_Proxy_MCP_Handler.tool_calls_to_run(requested_calls, rounds.tool_choice, rounds.gateway)
+    if requested_calls and not tool_calls:
+        return _handed_back(rounds, response, composed)
     claimed_calls: Final = tuple(call for call in tool_calls if _call_details(call)[0] in rounds.items.names)
     if not claimed_calls:
         return _answer(rounds, response, composed, output_items(response))

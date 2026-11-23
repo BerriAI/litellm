@@ -365,6 +365,7 @@ async def _aresponses_api_with_mcp(
     3. Call the standard responses API
     4. If require_approval="never" and tool calls are returned, automatically execute them
     """
+    from litellm.responses.mcp.direct_url_claims import gateway_tools_with_direct
     from litellm.responses.mcp.litellm_proxy_mcp_handler import (
         LiteLLM_Proxy_MCP_Handler,
     )
@@ -431,8 +432,11 @@ async def _aresponses_api_with_mcp(
     openai_tools: Final = LiteLLM_Proxy_MCP_Handler.transform_mcp_tools_to_openai(
         [*original_mcp_tools, *direct_listing.tools]
     )
-    gateway: Final = await LiteLLM_Proxy_MCP_Handler.gateway_tools(
-        tool_choice_in_effect, tool_server_map, mcp_tools_with_litellm_proxy, user_api_key_auth
+    gateway: Final = gateway_tools_with_direct(
+        await LiteLLM_Proxy_MCP_Handler.gateway_tools(
+            tool_choice_in_effect, tool_server_map, mcp_tools_with_litellm_proxy, user_api_key_auth
+        ),
+        direct_listing,
     )
     claimed_items: Final = (
         None
@@ -605,6 +609,8 @@ async def _aresponses_api_with_mcp(
                 record_breakdown=record_claimed_breakdown,
                 logging_obj=logging_obj,
                 max_rounds=_max_tool_call_rounds(request_kwargs),
+                tool_choice=tool_choice_in_effect,
+                gateway=gateway,
             ),
             first=response,
             first_breakdown=first_round_breakdown,
