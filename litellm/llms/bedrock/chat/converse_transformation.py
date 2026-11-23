@@ -39,6 +39,7 @@ from litellm.litellm_core_utils.core_helpers import (
     safe_deep_copy,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.prompt_templates.common_utils import invalid_type_message
 from litellm.litellm_core_utils.prompt_templates.factory import (
     BedrockConverseMessagesProcessor,
     _bedrock_converse_messages_pt,
@@ -70,6 +71,7 @@ from litellm.llms.anthropic.chat.transformation import (
     REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT,
     AnthropicConfig,
     tools_without_unsupported_tool_search,
+    without_malformed_thinking_blocks,
 )
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.base_llm.chat.transformation import REQUEST_PARAMS, BaseConfig, BaseLLMException
@@ -358,6 +360,36 @@ def _with_guarded_text_as_text(message: AllMessageValues) -> AllMessageValues:
 
 def _leading_system_count(messages: Sequence[AllMessageValues]) -> int:
     return next((index for index, message in enumerate(messages) if not is_system_message(message)), len(messages))
+
+
+def _has_numeric_thinking_blocks(message: object) -> bool:
+    thinking_blocks: Final = message_field(message, "thinking_blocks")
+    return (
+        message_field(message, "role") == "assistant"
+        and isinstance(thinking_blocks, (int, float))
+        and bool(thinking_blocks)
+    )
+
+
+def _numeric_thinking_blocks_error(messages: Sequence[object]) -> BedrockError | None:
+    index: Final = next(
+        (position for position, message in enumerate(messages) if _has_numeric_thinking_blocks(message)), None
+    )
+    if index is None:
+        return None
+    return BedrockError(
+        status_code=400,
+        message=invalid_type_message(
+            f"messages[{index}].thinking_blocks", message_field(messages[index], "thinking_blocks"), "a list"
+        ),
+    )
+
+
+def _without_numeric_thinking_blocks(messages: Sequence[AllMessageValues]) -> Sequence[AllMessageValues]:
+    return [
+        without_malformed_thinking_blocks(message) if _has_numeric_thinking_blocks(message) else message
+        for message in messages
+    ]
 
 
 def _guarded_text_as_text_past_the_system_prompt(messages: Sequence[AllMessageValues]) -> Sequence[AllMessageValues]:
@@ -2657,12 +2689,19 @@ class AmazonConverseConfig(BaseConfig):
         capability_model: Final = bedrock_capability_model(model, base_model)
         model_info: Final = routed_model_info(litellm_params.get("model_info"))
         json_optional_params: Final = _JSON_OBJECT.validate_python(optional_params)
+        requested_messages: Final = (
+            _without_numeric_thinking_blocks(messages)
+            if drops_unsupported_params(litellm_params.get("drop_params"))
+            else messages
+        )
         guards_user_input: Final = self._guards_user_input(messages, json_optional_params)
         keeps_full_input_check: Final = self._keeps_the_full_input_check(
             messages, json_optional_params, guards_user_input=guards_user_input
         )
         marked_messages: Final = self._messages_with_cache_marks(
-            _guarded_text_as_text_past_the_system_prompt(messages) if keeps_full_input_check else messages,
+            _guarded_text_as_text_past_the_system_prompt(requested_messages)
+            if keeps_full_input_check
+            else requested_messages,
             capability_model,
             model,
             drops_unsupported_params(litellm_params.get("drop_params")),
@@ -2715,21 +2754,27 @@ class AmazonConverseConfig(BaseConfig):
             litellm_params=litellm_params,
         )
 
-        bedrock_messages: Final = list(
-            place_tool_result_images(
-                await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
-                    messages=messages,
-                    model=capability_model,
-                    deployment_model=model,
-                    model_info=model_info,
-                    llm_provider="bedrock_converse",
-                    user_continue_message=litellm_params.pop("user_continue_message", None),
-                    base_model=self._deployment_base_model(_DEPLOYMENT_PARAMS.validate_python(litellm_params)),
-                    drop_params=litellm.drop_params is True or litellm_params.get("drop_params") is True,
-                ),
-                capability_model,
+        try:
+            bedrock_messages: Final = list(
+                place_tool_result_images(
+                    await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+                        messages=messages,
+                        model=capability_model,
+                        deployment_model=model,
+                        model_info=model_info,
+                        llm_provider="bedrock_converse",
+                        user_continue_message=litellm_params.pop("user_continue_message", None),
+                        base_model=self._deployment_base_model(_DEPLOYMENT_PARAMS.validate_python(litellm_params)),
+                        drop_params=litellm.drop_params is True or litellm_params.get("drop_params") is True,
+                    ),
+                    capability_model,
+                )
             )
-        )
+        except TypeError as error:
+            thinking_blocks_error: Final = _numeric_thinking_blocks_error(requested_messages)
+            if thinking_blocks_error is None:
+                raise
+            raise thinking_blocks_error from error
 
         request_metadata: Final = resolve_bedrock_request_metadata(
             litellm_params=litellm_params, caller_metadata=_data.get("requestMetadata")
@@ -2781,12 +2826,19 @@ class AmazonConverseConfig(BaseConfig):
         capability_model: Final = bedrock_capability_model(model, base_model)
         model_info: Final = routed_model_info(litellm_params.get("model_info"))
         json_optional_params: Final = _JSON_OBJECT.validate_python(optional_params)
+        requested_messages: Final = (
+            _without_numeric_thinking_blocks(messages)
+            if drops_unsupported_params(litellm_params.get("drop_params"))
+            else messages
+        )
         guards_user_input: Final = self._guards_user_input(messages, json_optional_params)
         keeps_full_input_check: Final = self._keeps_the_full_input_check(
             messages, json_optional_params, guards_user_input=guards_user_input
         )
         marked_messages: Final = self._messages_with_cache_marks(
-            _guarded_text_as_text_past_the_system_prompt(messages) if keeps_full_input_check else messages,
+            _guarded_text_as_text_past_the_system_prompt(requested_messages)
+            if keeps_full_input_check
+            else requested_messages,
             capability_model,
             model,
             drops_unsupported_params(litellm_params.get("drop_params")),
@@ -2839,21 +2891,27 @@ class AmazonConverseConfig(BaseConfig):
         )
 
         ## TRANSFORMATION ##
-        bedrock_messages: Final[list[MessageBlock]] = list(
-            place_tool_result_images(
-                _bedrock_converse_messages_pt(
-                    messages=messages,
-                    model=capability_model,
-                    deployment_model=model,
-                    model_info=model_info,
-                    llm_provider="bedrock_converse",
-                    user_continue_message=litellm_params.pop("user_continue_message", None),
-                    base_model=self._deployment_base_model(_DEPLOYMENT_PARAMS.validate_python(litellm_params)),
-                    drop_params=litellm.drop_params is True or litellm_params.get("drop_params") is True,
-                ),
-                capability_model,
+        try:
+            bedrock_messages: Final[list[MessageBlock]] = list(
+                place_tool_result_images(
+                    _bedrock_converse_messages_pt(
+                        messages=messages,
+                        model=capability_model,
+                        deployment_model=model,
+                        model_info=model_info,
+                        llm_provider="bedrock_converse",
+                        user_continue_message=litellm_params.pop("user_continue_message", None),
+                        base_model=self._deployment_base_model(_DEPLOYMENT_PARAMS.validate_python(litellm_params)),
+                        drop_params=litellm.drop_params is True or litellm_params.get("drop_params") is True,
+                    ),
+                    capability_model,
+                )
             )
-        )
+        except TypeError as error:
+            thinking_blocks_error: Final = _numeric_thinking_blocks_error(requested_messages)
+            if thinking_blocks_error is None:
+                raise
+            raise thinking_blocks_error from error
 
         request_metadata: Final = resolve_bedrock_request_metadata(
             litellm_params=litellm_params, caller_metadata=_data.get("requestMetadata")

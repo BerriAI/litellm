@@ -11461,9 +11461,18 @@ _MALFORMED_THINKING_BLOCKS: Final = (
     pytest.param(0, "messages[1].thinking_blocks", "a list", "int", id="zero"),
     pytest.param(b"abc", "messages[1].thinking_blocks", "a list", "bytes", id="bytes"),
     pytest.param(bytearray(b"abc"), "messages[1].thinking_blocks", "a list", "bytearray", id="bytearray"),
+    pytest.param({"abc"}, "messages[1].thinking_blocks", "a list", "set", id="set"),
     pytest.param(["abc"], "messages[1].thinking_blocks[0]", "an object", "str", id="string_block"),
     pytest.param(
         [_REPLAYED_THINKING, 5], "messages[1].thinking_blocks[1]", "an object", "int", id="number_after_a_block"
+    ),
+    pytest.param([["index"]], "messages[1].thinking_blocks[0]", "an object", "list", id="list_holding_a_stream_key"),
+    pytest.param(
+        [_REPLAYED_THINKING, ["index"]],
+        "messages[1].thinking_blocks[1]",
+        "an object",
+        "list",
+        id="stream_key_list_after_a_block",
     ),
 )
 
@@ -11509,6 +11518,13 @@ def test_chat_transform_request_answers_400_naming_a_malformed_thinking_blocks(
             _two_replayed_turns([_REPLAYED_THINKING], None),
             id="second_assistant_turn",
         ),
+        pytest.param(_replayed_turn([["index"]]), _replayed_turn(None), id="list_holding_a_stream_key"),
+        pytest.param(_replayed_turn([["cache_control"]]), _replayed_turn(None), id="list_holding_a_cache_key"),
+        pytest.param(
+            _replayed_turn([_REPLAYED_THINKING, ["index"]]),
+            _replayed_turn([_REPLAYED_THINKING]),
+            id="stream_key_list_after_a_block",
+        ),
     ],
 )
 def test_chat_transform_request_drops_a_malformed_thinking_blocks_under_drop_params(
@@ -11524,6 +11540,91 @@ def test_chat_transform_request_drops_a_malformed_thinking_blocks_under_drop_par
         )["messages"]
 
     assert converted(malformed) == converted(well_formed)
+
+
+_ENABLED_THINKING: Final = {"type": "enabled", "budget_tokens": 1024}
+
+
+def _replayed_tool_turn(assistant_fields: dict[str, object]) -> list[dict[str, object]]:
+    return [
+        {"role": "user", "content": "Weather?"},
+        {**_WEATHER_CALL, **assistant_fields},
+        {"role": "tool", "tool_call_id": "toolu_01", "content": "rain"},
+    ]
+
+
+def _dropped_request(messages: list[dict[str, object]]) -> dict:
+    return AnthropicConfig().transform_request(
+        model=UNFLAGGED_CLAUDE,
+        messages=messages,
+        optional_params={"thinking": dict(_ENABLED_THINKING)},
+        litellm_params={"drop_params": True},
+        headers={},
+    )
+
+
+@pytest.mark.parametrize(
+    "thinking_blocks",
+    [
+        pytest.param("abc", id="string"),
+        pytest.param(["abc"], id="string_block"),
+        pytest.param([["index"]], id="list_holding_a_stream_key"),
+    ],
+)
+def test_chat_transform_request_drops_thinking_when_cleanup_leaves_a_tool_turn_without_blocks(
+    local_model_cost_map, monkeypatch: pytest.MonkeyPatch, thinking_blocks: object
+):
+    monkeypatch.setattr(litellm, "modify_params", True)
+
+    assert "thinking" not in _dropped_request(_replayed_tool_turn({"thinking_blocks": thinking_blocks}))
+
+
+def test_chat_transform_request_keeps_thinking_when_cleanup_leaves_a_block_on_the_tool_turn(
+    local_model_cost_map, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "modify_params", True)
+
+    converted: Final = _dropped_request(_replayed_tool_turn({"thinking_blocks": [_REPLAYED_THINKING, "abc"]}))
+
+    assert converted["thinking"] == _ENABLED_THINKING
+    assert _replayed_signatures(converted) == ["sig-1"]
+
+
+@pytest.mark.parametrize(
+    "inline_block",
+    [
+        pytest.param(_REPLAYED_THINKING, id="thinking"),
+        pytest.param({"type": "redacted_thinking", "data": "opaque"}, id="redacted_thinking"),
+    ],
+)
+def test_chat_transform_request_keeps_thinking_when_cleanup_leaves_inline_thinking(
+    local_model_cost_map, monkeypatch: pytest.MonkeyPatch, inline_block: dict[str, str]
+):
+    monkeypatch.setattr(litellm, "modify_params", True)
+    inline_tool_turn: Final = _replayed_tool_turn({"content": [inline_block]})
+
+    converted: Final = _dropped_request(
+        [*inline_tool_turn, {"role": "assistant", "content": "Rainy", "thinking_blocks": "abc"}, _ASK]
+    )
+
+    assert converted["thinking"] == _ENABLED_THINKING
+    assert inline_block["type"] in [block["type"] for block in converted["messages"][1]["content"]]
+
+
+def test_chat_transform_request_keeps_thinking_when_cleanup_leaves_no_tool_turn(
+    local_model_cost_map, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "modify_params", True)
+
+    assert _dropped_request(_replayed_turn("abc"))["thinking"] == _ENABLED_THINKING
+
+
+def test_chat_transform_request_keeps_thinking_after_cleanup_without_modify_params(
+    local_model_cost_map, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "modify_params", False)
+
+    assert _dropped_request(_replayed_tool_turn({"thinking_blocks": "abc"}))["thinking"] == _ENABLED_THINKING
 
 
 def test_chat_transform_request_ignores_thinking_blocks_on_a_turn_it_never_replays(local_model_cost_map):
@@ -11666,6 +11767,79 @@ def test_chat_transform_request_keeps_a_turn_whose_inline_thinking_replaces_malf
     }
 
     assert converted({**inline, "thinking_blocks": thinking_blocks}) == converted(inline)
+
+
+def test_chat_transform_request_keeps_the_real_field_error_behind_ignored_thinking_blocks(local_model_cost_map):
+    with pytest.raises(AnthropicError) as raised:
+        _chat_request(
+            AnthropicConfig(),
+            UNFLAGGED_CLAUDE,
+            [
+                {"role": "user", "content": "Hi"},
+                {
+                    "role": "assistant",
+                    "content": [_REPLAYED_THINKING, {"type": "text", "text": "Hello"}],
+                    "thinking_blocks": "abc",
+                },
+                {"role": "user", "content": "Go on"},
+                {**_WEATHER_CALL, "tool_calls": [{**_WEATHER_CALL["tool_calls"][0], "id": ["toolu_01"]}]},
+                {"role": "tool", "tool_call_id": "toolu_01", "content": "rain"},
+            ],
+        )
+
+    assert raised.value.message == "Invalid type for 'messages[3].tool_calls[0].id': expected a string, got list"
+
+
+@pytest.mark.parametrize(
+    "make_blocks",
+    [
+        pytest.param(lambda: iter([_REPLAYED_THINKING]), id="iterator"),
+        pytest.param(lambda: _OneShotBlocks(iter((_REPLAYED_THINKING,)), 1), id="one_shot"),
+    ],
+)
+def test_chat_transform_request_keeps_one_shot_blocks_when_dropping_a_later_malformed_turn(
+    local_model_cost_map, make_blocks: Callable[[], Iterable[object]]
+):
+    def converted(messages: list[dict[str, object]]) -> object:
+        return AnthropicConfig().transform_request(
+            model=UNFLAGGED_CLAUDE,
+            messages=messages,
+            optional_params={},
+            litellm_params={"drop_params": True},
+            headers={},
+        )["messages"]
+
+    assert converted(_two_replayed_turns(make_blocks(), "abc")) == converted(
+        _two_replayed_turns([_REPLAYED_THINKING], None)
+    )
+
+
+def _replayed_response_turn(thinking_blocks: object) -> list[object]:
+    return [
+        {"role": "user", "content": "Hi"},
+        Message(role="assistant", content="Hello").model_copy(update={"thinking_blocks": thinking_blocks}),
+        {"role": "user", "content": "Go on"},
+    ]
+
+
+def test_chat_transform_request_names_malformed_thinking_blocks_on_a_response_message(local_model_cost_map):
+    with pytest.raises(AnthropicError) as raised:
+        _chat_request(AnthropicConfig(), UNFLAGGED_CLAUDE, _replayed_response_turn("abc"))
+
+    assert raised.value.message == "Invalid type for 'messages[1].thinking_blocks': expected a list, got str"
+
+
+def test_chat_transform_request_drops_malformed_thinking_blocks_on_a_response_message(local_model_cost_map):
+    def converted(messages: list[object]) -> object:
+        return AnthropicConfig().transform_request(
+            model=UNFLAGGED_CLAUDE,
+            messages=messages,
+            optional_params={},
+            litellm_params={"drop_params": True},
+            headers={},
+        )["messages"]
+
+    assert converted(_replayed_response_turn("abc")) == converted(_replayed_response_turn(None))
 
 
 def test_chat_transform_request_names_a_malformed_thinking_blocks_past_the_first_assistant_turn(local_model_cost_map):

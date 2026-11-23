@@ -1,7 +1,8 @@
 import json
 import re
 import time
-from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence, Set
+from dataclasses import dataclass
 from functools import partial
 from itertools import chain
 from types import MappingProxyType
@@ -280,10 +281,12 @@ def _is_json_object(value: object) -> bool:
     return isinstance(value, Mapping)
 
 
+def _is_non_list_collection(value: object) -> bool:
+    return isinstance(value, (str, bytes, bytearray, Set, Mapping))
+
+
 def _is_non_list_thinking_blocks(value: object) -> bool:
-    return isinstance(value, (int, float)) or (
-        (isinstance(value, (str, bytes, bytearray)) or _is_json_object(value)) and bool(value)
-    )
+    return isinstance(value, (int, float)) or (_is_non_list_collection(value) and bool(value))
 
 
 def _thinking_blocks_faults(index: int, thinking_blocks: object) -> tuple[tuple[str, object, str], ...]:
@@ -312,18 +315,31 @@ def malformed_thinking_blocks_error(messages: Sequence[object]) -> AnthropicErro
     return AnthropicError(status_code=400, message=invalid_type_message(*fault))
 
 
+def _with_thinking_blocks(message: AllMessageValues, thinking_blocks: Sequence[object] | None) -> AllMessageValues:
+    if isinstance(message, BaseModel):
+        return cast(  # cast-ok: a replayed response Message reads like a message dict
+            AllMessageValues, message.model_copy(update={"thinking_blocks": thinking_blocks})
+        )
+    return cast(  # cast-ok: dict spread keeps message shape
+        AllMessageValues, {**message, "thinking_blocks": thinking_blocks}
+    )
+
+
 def without_malformed_thinking_blocks(message: AllMessageValues) -> AllMessageValues:
     thinking_blocks: Final = message_field(message, "thinking_blocks")
     if not _thinking_blocks_faults(0, thinking_blocks):
         return message
     if _is_non_list_thinking_blocks(thinking_blocks):
-        return cast(  # cast-ok: dropping one key keeps message shape
-            AllMessageValues, {key: value for key, value in message.items() if key != "thinking_blocks"}
-        )
-    kept: Final = tuple(block for block in parts_of(thinking_blocks) if _is_json_object(block))
-    return cast(  # cast-ok: dict spread keeps message shape
-        AllMessageValues, {**message, "thinking_blocks": kept}
-    )
+        return _with_thinking_blocks(message, None)
+    return _with_thinking_blocks(message, tuple(block for block in parts_of(thinking_blocks) if _is_json_object(block)))
+
+
+def _with_repeatable_thinking_blocks(message: AllMessageValues) -> AllMessageValues:
+    thinking_blocks: Final = message_field(message, "thinking_blocks")
+    if not isinstance(thinking_blocks, Iterable) or isinstance(thinking_blocks, (Sequence, Mapping, Set)):
+        return message
+    blocks: Final = cast(Iterable[object], thinking_blocks)  # cast-ok: isinstance above proved it is iterable
+    return _with_thinking_blocks(message, tuple(blocks))
 
 
 def _has_unreadable_content_block(messages: Sequence[object]) -> bool:
@@ -334,11 +350,39 @@ def _has_unreadable_content_block(messages: Sequence[object]) -> bool:
 def _translation_or_error(
     translate: Callable[[Sequence[AllMessageValues]], Sequence[AllAnthropicPassThroughMessageValues]],
     conversation: Sequence[AllMessageValues],
-) -> Sequence[AllAnthropicPassThroughMessageValues] | TypeError:
+) -> Sequence[AllAnthropicPassThroughMessageValues] | TypeError | AttributeError:
     try:
         return translate(conversation)
-    except TypeError as error:
+    except (TypeError, AttributeError) as error:
         return error
+
+
+@dataclass(frozen=True, slots=True)
+class _ThinkingBlocksTranslation:
+    messages: Sequence[AllAnthropicPassThroughMessageValues]
+    cleaned_conversation: Sequence[AllMessageValues] | None = None
+
+
+def _replays_thinking(messages: Sequence[object]) -> bool:
+    blocks: Final = chain.from_iterable(parts_of(message_field(message, "content")) for message in messages)
+    return any(message_field(block, "type") in ("thinking", "redacted_thinking") for block in blocks)
+
+
+def _thinking_param_lacks_replayed_blocks(thinking: object, messages: Sequence[AllMessageValues]) -> bool:
+    if not litellm.modify_params or not thinking_param_needs_replayed_thinking_blocks(thinking):
+        return False
+    turns: Final = list(messages)
+    return last_assistant_with_tool_calls_has_no_thinking_blocks(
+        turns
+    ) and not any_assistant_message_has_thinking_blocks(turns)
+
+
+def _original_outcome(
+    translation: Sequence[AllAnthropicPassThroughMessageValues] | TypeError | AttributeError,
+) -> _ThinkingBlocksTranslation:
+    if isinstance(translation, Exception):
+        raise translation
+    return _ThinkingBlocksTranslation(translation)
 
 
 def translated_without_malformed_thinking_blocks(
@@ -346,18 +390,27 @@ def translated_without_malformed_thinking_blocks(
     conversation: Sequence[AllMessageValues],
     messages: Sequence[object],
     drop_params: bool,
-) -> Sequence[AllAnthropicPassThroughMessageValues] | AnthropicError:
-    translation: Final = _translation_or_error(translate, conversation)
-    if not isinstance(translation, TypeError) and not _has_unreadable_content_block(translation):
-        return translation
+) -> _ThinkingBlocksTranslation | AnthropicError:
+    repeatable_conversation: Final = (
+        tuple(_with_repeatable_thinking_blocks(message) for message in conversation)
+        if drop_params and malformed_thinking_blocks_error(messages) is not None
+        else conversation
+    )
+    translation: Final = _translation_or_error(translate, repeatable_conversation)
+    if not isinstance(translation, Exception) and not _has_unreadable_content_block(translation):
+        return _ThinkingBlocksTranslation(translation)
     thinking_blocks_error: Final = malformed_thinking_blocks_error(messages)
     if thinking_blocks_error is None:
-        if isinstance(translation, TypeError):
-            raise translation
-        return translation
+        return _original_outcome(translation)
+    cleaned_conversation: Final = tuple(
+        without_malformed_thinking_blocks(message) for message in repeatable_conversation
+    )
+    cleaned_translation: Final = _translation_or_error(translate, cleaned_conversation)
+    if isinstance(cleaned_translation, Exception):
+        return _original_outcome(translation)
     if not drop_params:
         return thinking_blocks_error
-    return translate(tuple(without_malformed_thinking_blocks(message) for message in conversation))
+    return _ThinkingBlocksTranslation(cleaned_translation, cleaned_conversation)
 
 
 def _tool_type(tool: object) -> str | None:
@@ -2656,19 +2709,16 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         # If any message has thinking_blocks, we must keep thinking enabled, otherwise
         # Anthropic errors with: "When thinking is disabled, an assistant message cannot contain thinking"
         # Related issue: https://github.com/BerriAI/litellm/issues/18926
-        if (
-            thinking_param_needs_replayed_thinking_blocks(
-                optional_params.get("thinking")  # pyright: ignore[reportUnknownArgumentType]  # optional_params is a bare dict
-            )
-            and last_assistant_with_tool_calls_has_no_thinking_blocks(capped_messages)
-            and not any_assistant_message_has_thinking_blocks(capped_messages)
-        ):
-            if litellm.modify_params:
+        def drop_thinking_without_replayed_blocks(turns: Sequence[AllMessageValues]) -> None:
+            thinking: Final = cast(object, optional_params.get("thinking"))  # cast-ok: optional_params is untyped
+            if _thinking_param_lacks_replayed_blocks(thinking, turns):
                 optional_params.pop("thinking", None)
                 litellm.verbose_logger.warning(
                     "Dropping 'thinking' param because the last assistant message with tool_calls "
                     "has no thinking_blocks. The model won't use extended thinking for this turn."
                 )
+
+        drop_thinking_without_replayed_blocks(capped_messages)
 
         AnthropicConfig._maybe_drop_speed_param(
             model=model,
@@ -2755,7 +2805,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             )  # don't use verbose_logger.exception, if exception is raised
         if isinstance(translation, AnthropicError):
             raise translation
-        anthropic_messages = list(translation)
+        if translation.cleaned_conversation is not None and not _replays_thinking(translation.messages):
+            drop_thinking_without_replayed_blocks(translation.cleaned_conversation)
+        anthropic_messages = list(translation.messages)
 
         self.update_headers_with_optional_anthropic_beta(
             headers=headers, optional_params=optional_params, messages=anthropic_messages
