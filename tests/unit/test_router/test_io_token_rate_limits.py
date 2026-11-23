@@ -2010,6 +2010,39 @@ async def test_a_small_item_list_input_is_admitted_on_http_and_on_a_socket_turn_
     assert item_list_count == chat_count
 
 
+_REMOTE_IMAGE_URL: Final = "https://93.184.216.34/cat.png"
+_ONE_PIXEL_PNG_HEADER: Final = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+
+
+@pytest.mark.asyncio
+@pytest.mark.respx(assert_all_called=False)
+@pytest.mark.usefixtures("settled_on_the_turn_s_minute")
+async def test_an_item_list_image_url_counts_on_http_and_a_socket_turn_without_being_downloaded(
+    respx_mock: respx.MockRouter,
+) -> None:
+    download: Final = respx_mock.get(_REMOTE_IMAGE_URL).mock(
+        return_value=httpx.Response(200, content=_ONE_PIXEL_PNG_HEADER)
+    )
+    usage: Final = _memory_usage()
+    usage.increment_local(CounterIncrement(_ITPM_350_KEY, 310, 60))
+    request: Final = {
+        "input": [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_image", "image_url": _REMOTE_IMAGE_URL, "detail": "high"}],
+            }
+        ]
+    }
+
+    http_refusal: Final = await _itpm_350_refusal(usage, request, opens_responses_socket=False)
+    with pytest.raises(litellm.RateLimitError) as turn_refusal:
+        await async_admit_io_token_turn(usage, _ITPM_350_DEPLOYMENT, _TURN_AT, request)
+
+    assert str(turn_refusal.value) == http_refusal
+    assert not download.called
+
+
 _TURN_WITH_A_LARGE_INPUT_AND_OUTPUT_CAP: Final[Mapping[str, object]] = MappingProxyType(
     {"input": _INPUT_PAST_40_TOKENS * 10, "max_output_tokens": 1000}
 )

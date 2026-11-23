@@ -232,7 +232,7 @@ def _estimate_input_tokens(request_kwargs: Mapping[str, Any] | None, model: str 
     with contextlib.suppress(Exception):
         input_messages: Final = _responses_input_messages(input_text)
         if input_messages:
-            return max(0, int(token_counter(model=model, messages=input_messages)))
+            return max(0, int(token_counter(model=model, messages=input_messages, use_default_image_token_count=True)))
         return max(0, int(token_counter(model=model, messages=messages, text=prompt or input_text)))
     return 0
 
