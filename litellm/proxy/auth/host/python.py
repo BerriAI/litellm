@@ -60,14 +60,13 @@ from litellm.proxy.auth.auth_checks import (
     resolve_and_validate_end_user_id,
 )
 from litellm.proxy.auth.auth_object_prefetch import prefetch_identity_keys
-from litellm.proxy.auth.grants import with_project
+from litellm.proxy.auth.grants import end_user_grants, with_project
 from litellm.proxy.auth.host.facts import (
     AliasMissing,
     EndUserRow,
     FoundTeam,
     RegisteredAgentFacts,
     TeamMissing,
-    end_user_params,
     team_facts,
 )
 from litellm.proxy.auth.host.identity import auto_registered_key
@@ -282,7 +281,7 @@ class PythonAuthHost:
             verbose_proxy_logger.debug("Unable to find user in db. Error - %s", e)
             return EndUserRow(end_user_id=end_user_id, end_user=None, params={"end_user_id": end_user_id})
         return EndUserRow(
-            end_user_id=end_user_id, end_user=end_user, params=end_user_params(end_user_id, end_user, budget)
+            end_user_id=end_user_id, end_user=end_user, params=end_user_grants(end_user_id, end_user, budget)
         )
 
     async def _end_user_and_budget(

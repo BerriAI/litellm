@@ -3,16 +3,11 @@ from typing import Final
 
 import pytest
 
-from litellm.models.budget import LiteLLM_BudgetTable
-from litellm.models.end_user import LiteLLM_EndUserTable
 from litellm.models.team import LiteLLM_TeamTable, Member
 from litellm.proxy.auth.host.facts import (
     TeamFacts,
-    budget_params,
-    end_user_params,
     key_facts,
     team_facts,
-    with_end_user,
 )
 from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.types.proxy.auth.user_roles import LitellmUserRoles
@@ -108,45 +103,3 @@ def test_a_team_lists_the_user_ids_of_its_members() -> None:
     )
 
     assert team_facts(team).facts.members == ("u1",)
-
-
-def test_a_budget_sets_only_the_limits_it_has() -> None:
-    budget: Final = LiteLLM_BudgetTable(tpm_limit=7, max_budget=1.5, model_rpm_limit={"gpt-a": 2})
-
-    assert budget_params(budget) == {
-        "end_user_tpm_limit": 7,
-        "end_user_max_budget": 1.5,
-        "end_user_model_rpm_limit": {"gpt-a": 2},
-    }
-
-
-def test_a_known_end_user_sets_its_region_even_when_it_has_none() -> None:
-    end_user: Final = LiteLLM_EndUserTable(user_id="eu", blocked=False)
-
-    assert end_user_params("eu", end_user, None) == {"end_user_id": "eu", "allowed_model_region": None}
-
-
-def test_an_unknown_end_user_takes_the_default_budget_and_sets_no_region() -> None:
-    assert end_user_params("eu", None, LiteLLM_BudgetTable(rpm_limit=3)) == {
-        "end_user_id": "eu",
-        "end_user_rpm_limit": 3,
-    }
-
-
-def test_end_user_limits_replace_the_keys_while_an_unset_limit_and_the_max_budget_do_not() -> None:
-    key: Final = UserAPIKeyAuth(
-        token="hashed", end_user_id="stale", end_user_tpm_limit=1, end_user_rpm_limit=3, allowed_model_region="eu"
-    )
-
-    stamped: Final = with_end_user(
-        key, {"end_user_tpm_limit": 7, "end_user_max_budget": 1.5, "allowed_model_region": None}
-    )
-
-    assert (
-        stamped.end_user_id,
-        stamped.end_user_tpm_limit,
-        stamped.end_user_rpm_limit,
-        stamped.end_user_max_budget,
-        stamped.allowed_model_region,
-    ) == (None, 7, 3, None, "eu")
-    assert (key.end_user_id, key.end_user_tpm_limit) == ("stale", 1)

@@ -4030,7 +4030,7 @@ def _end_user_budget_row(budget_id: str, max_budget: float) -> MagicMock:
 async def _run_centralized_checks_with_key_end_user_budget(
     token: UserAPIKeyAuth,
     end_user_row: MagicMock | None,
-    budgets: Mapping[str, float],
+    budgets: Mapping[str, float | Mapping[str, object]],
     request_user: str | None = None,
     user_api_key_cache: UserApiKeyCache | None = None,
     custom_auth: bool = False,
@@ -4045,7 +4045,10 @@ async def _run_centralized_checks_with_key_end_user_budget(
 
     stores = RustAuthStores()
     stores.budget.rows.update(
-        {budget_id: _end_user_budget_row(budget_id, cap).dict() for budget_id, cap in budgets.items()}
+        {
+            budget_id: dict(cap) if isinstance(cap, Mapping) else _end_user_budget_row(budget_id, cap).dict()
+            for budget_id, cap in budgets.items()
+        }
     )
     if end_user_row is not None:
         row = end_user_row.dict()
@@ -4201,6 +4204,96 @@ async def test_centralized_common_checks_fills_a_custom_auth_token_without_a_cap
     )
 
     assert reserved_token.end_user_max_budget == 0.5
+
+
+_EVERY_END_USER_LIMIT: Final[Mapping[str, object]] = MappingProxyType(
+    {
+        "budget_id": "svc-a-budget",
+        "max_budget": 0.5,
+        "tpm_limit": 100,
+        "rpm_limit": 10,
+        "tpd_limit": 1000,
+        "model_max_budget": {"gpt-5.4-mini": {"max_budget": 0.2, "budget_duration": "1d"}},
+        "model_tpm_limit": {"gpt-5.4-mini": 50},
+        "model_rpm_limit": {"gpt-5.4-mini": 5},
+    }
+)
+
+
+@pytest.mark.asyncio
+async def test_centralized_common_checks_give_a_key_every_limit_of_its_default_end_user_budget(monkeypatch):
+    monkeypatch.setattr(litellm, "max_end_user_budget_id", None)
+    token = UserAPIKeyAuth(
+        api_key="sk-test",
+        token="hashed",
+        end_user_id="cust-new",
+        end_user_tpd_limit=7,
+        metadata={"end_user_budget_id": "svc-a-budget"},
+    )
+
+    reserved_token = await _run_centralized_checks_with_key_end_user_budget(
+        token, end_user_row=None, budgets={"svc-a-budget": _EVERY_END_USER_LIMIT}
+    )
+
+    assert (
+        reserved_token.end_user_max_budget,
+        reserved_token.end_user_tpm_limit,
+        reserved_token.end_user_rpm_limit,
+        reserved_token.end_user_tpd_limit,
+        reserved_token.end_user_model_max_budget,
+        reserved_token.end_user_model_tpm_limit,
+        reserved_token.end_user_model_rpm_limit,
+    ) == (
+        0.5,
+        100,
+        10,
+        1000,
+        {"gpt-5.4-mini": {"max_budget": 0.2, "budget_duration": "1d"}},
+        {"gpt-5.4-mini": 50},
+        {"gpt-5.4-mini": 5},
+    )
+
+
+@pytest.mark.asyncio
+async def test_centralized_common_checks_clear_a_keys_limit_its_default_end_user_budget_lacks(monkeypatch):
+    monkeypatch.setattr(litellm, "max_end_user_budget_id", None)
+    token = UserAPIKeyAuth(
+        api_key="sk-test",
+        token="hashed",
+        end_user_id="cust-new",
+        end_user_rpm_limit=9,
+        metadata={"end_user_budget_id": "svc-a-budget"},
+    )
+
+    reserved_token = await _run_centralized_checks_with_key_end_user_budget(
+        token, end_user_row=None, budgets={"svc-a-budget": 0.5}
+    )
+
+    assert (reserved_token.end_user_max_budget, reserved_token.end_user_rpm_limit) == (0.5, None)
+
+
+@pytest.mark.asyncio
+async def test_centralized_common_checks_fill_only_the_limits_custom_auth_left_unset(monkeypatch):
+    monkeypatch.setattr(litellm, "max_end_user_budget_id", None)
+    token = UserAPIKeyAuth(
+        api_key="sk-test",
+        token="hashed",
+        end_user_id="cust-new",
+        end_user_rpm_limit=3,
+        end_user_model_rpm_limit={"gpt-5.4-mini": 1},
+        metadata={"end_user_budget_id": "svc-a-budget"},
+    )
+
+    reserved_token = await _run_centralized_checks_with_key_end_user_budget(
+        token, end_user_row=None, budgets={"svc-a-budget": _EVERY_END_USER_LIMIT}, custom_auth=True
+    )
+
+    assert (reserved_token.end_user_rpm_limit, reserved_token.end_user_model_rpm_limit) == (3, {"gpt-5.4-mini": 1})
+    assert (
+        reserved_token.end_user_tpm_limit,
+        reserved_token.end_user_tpd_limit,
+        reserved_token.end_user_model_tpm_limit,
+    ) == (100, 1000, {"gpt-5.4-mini": 50})
 
 
 class _RecordingTeamModelBudgetLimiter:

@@ -1,12 +1,18 @@
+from typing import Final
+
 from litellm.models.budget import LiteLLM_BudgetTable
+from litellm.models.end_user import LiteLLM_EndUserTable
 from litellm.models.organization import LiteLLM_OrganizationTable
 from litellm.models.project import LiteLLM_ProjectTable
 from litellm.models.user import LiteLLM_UserTable
 from litellm.proxy.auth.grants import (
+    end_user_budget_grants,
+    end_user_grants,
     organization_grants,
     owner_grants,
     project_grants,
     stamp,
+    with_end_user,
     with_owner_model_budget,
     with_project,
 )
@@ -108,3 +114,67 @@ def test_grants_are_written_onto_the_token_the_caller_keeps():
     stamp(token, project_grants(project))
 
     assert (token.project_alias, token.project_metadata) == ("Project One", {"tags": ["a"]})
+
+
+def test_a_budget_sets_only_the_limits_it_has() -> None:
+    budget: Final = LiteLLM_BudgetTable(tpm_limit=7, max_budget=1.5, model_rpm_limit={"gpt-a": 2})
+
+    assert end_user_budget_grants(budget) == {
+        "end_user_tpm_limit": 7,
+        "end_user_max_budget": 1.5,
+        "end_user_model_rpm_limit": {"gpt-a": 2},
+    }
+
+
+def test_a_budget_sets_every_limit_it_has() -> None:
+    budget: Final = LiteLLM_BudgetTable(
+        max_budget=1.5,
+        tpm_limit=7,
+        rpm_limit=3,
+        tpd_limit=900,
+        model_max_budget={"gpt-a": {"max_budget": 0.2, "budget_duration": "1d"}},
+        model_tpm_limit={"gpt-a": 4},
+        model_rpm_limit={"gpt-a": 2},
+    )
+
+    assert end_user_budget_grants(budget) == {
+        "end_user_max_budget": 1.5,
+        "end_user_tpm_limit": 7,
+        "end_user_rpm_limit": 3,
+        "end_user_tpd_limit": 900,
+        "end_user_model_max_budget": {"gpt-a": {"max_budget": 0.2, "budget_duration": "1d"}},
+        "end_user_model_tpm_limit": {"gpt-a": 4},
+        "end_user_model_rpm_limit": {"gpt-a": 2},
+    }
+
+
+def test_a_known_end_user_sets_its_region_even_when_it_has_none() -> None:
+    end_user: Final = LiteLLM_EndUserTable(user_id="eu", blocked=False)
+
+    assert end_user_grants("eu", end_user, None) == {"end_user_id": "eu", "allowed_model_region": None}
+
+
+def test_an_unknown_end_user_takes_the_default_budget_and_sets_no_region() -> None:
+    assert end_user_grants("eu", None, LiteLLM_BudgetTable(rpm_limit=3)) == {
+        "end_user_id": "eu",
+        "end_user_rpm_limit": 3,
+    }
+
+
+def test_end_user_limits_replace_the_keys_while_an_unset_limit_and_the_max_budget_do_not() -> None:
+    key: Final = UserAPIKeyAuth(
+        token="hashed", end_user_id="stale", end_user_tpm_limit=1, end_user_rpm_limit=3, allowed_model_region="eu"
+    )
+
+    stamped: Final = with_end_user(
+        key, {"end_user_tpm_limit": 7, "end_user_max_budget": 1.5, "allowed_model_region": None}
+    )
+
+    assert (
+        stamped.end_user_id,
+        stamped.end_user_tpm_limit,
+        stamped.end_user_rpm_limit,
+        stamped.end_user_max_budget,
+        stamped.allowed_model_region,
+    ) == (None, 7, 3, None, "eu")
+    assert (key.end_user_id, key.end_user_tpm_limit) == ("stale", 1)
