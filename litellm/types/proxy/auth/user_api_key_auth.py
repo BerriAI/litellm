@@ -147,6 +147,25 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
     _dashboard_session_origin: "UserAPIKeyAuth | None" = PrivateAttr(default=None)
     _dashboard_session_billing_team_id: str | None = PrivateAttr(default=None)
     _dashboard_session_model: str | None = PrivateAttr(default=None)
+    _catalog_key_permission: LiteLLM_ObjectPermissionTable | None = PrivateAttr(default=None)
+    _catalog_key_agent_changed: bool = PrivateAttr(default=False)
+
+    def attach_catalog_key(self, key: "UserAPIKeyAuth") -> None:
+        self.object_permission_id = key.object_permission_id
+        self.object_permission = key.object_permission
+        self._catalog_key_permission = key.object_permission
+        self._catalog_key_agent_changed = key.agent_id != self.agent_id
+
+    @property
+    def catalog_key_agent_changed(self) -> bool:
+        return self._catalog_key_agent_changed
+
+    def take_catalog_key_permission(self) -> "UserAPIKeyAuth":
+        if not self.requires_fresh_policy:
+            return self
+        permission: Final = self._catalog_key_permission
+        self._catalog_key_permission = None
+        return self.model_copy(update={"object_permission": permission})
 
     @property
     def dashboard_session_origin(self) -> "UserAPIKeyAuth | None":
