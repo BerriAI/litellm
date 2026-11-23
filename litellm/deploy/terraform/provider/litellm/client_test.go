@@ -84,10 +84,10 @@ func TestRedactSensitiveDataNestedCredentialValues(t *testing.T) {
 func TestRedactSensitiveDataDeeplyNestedSensitiveKeys(t *testing.T) {
 	c := NewClient("http://localhost:4000", "sk-test", false)
 
-	input := `{"data":[{"litellm_params":{"model":"gpt-4","api_key":"sk-deep-456","aws_secret_access_key":"aws-secret"}}]}`
+	input := `{"data":[{"litellm_params":{"model":"gpt-4","api_key":"sk-deep-456","aws_secret_access_key":"aws-secret"}},{"credentials":{"client_private_key":"private-key-fixture","client_secret":"oauth-secret-fixture","id_jag_resource_client_secret":"id-jag-fixture"}}]}`
 	got := c.redactSensitiveData(input)
 
-	for _, leaked := range []string{"sk-deep-456", "aws-secret"} {
+	for _, leaked := range []string{"sk-deep-456", "aws-secret", "private-key-fixture", "oauth-secret-fixture", "id-jag-fixture"} {
 		if strings.Contains(got, leaked) {
 			t.Errorf("redacted output leaked %q: %s", leaked, got)
 		}
