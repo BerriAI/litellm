@@ -4,6 +4,9 @@
 //! Python. The table is reached only through `CandidateTable`, which a catalog implements
 
 pub mod bedrock;
+mod pricing;
+
+pub use pricing::*;
 
 use std::str::FromStr;
 
@@ -36,6 +39,7 @@ pub enum CostProvider {
 /// The facts of a finished call that pick its row, as `Logging.response_cost_calculator` hands them to
 /// `completion_cost`
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize), serde(default))]
 pub struct CallIdentity {
     pub provider: String,
     pub request_model: Option<String>,
@@ -56,8 +60,15 @@ pub struct CallIdentity {
 /// The rows to try in order, each tried only when the one before it could not be priced, then what is left
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CandidateRows {
-    pub rows: Vec<RowRef>,
+    pub rows: Vec<Tried>,
     pub then: AfterRows,
+}
+
+/// A row main tries, with the model name it hands `cost_per_token` for it, which keys the discount
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Tried {
+    pub model: String,
+    pub row: RowRef,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -172,6 +183,17 @@ pub fn deployment_row<T: CandidateTable + ?Sized>(
     })
 }
 
+/// The row `cost_per_token(model, custom_llm_provider=provider, region_name=region)` prices with, for a caller that
+/// names one model. `Err` when main prices it by another path
+pub fn priced_row<T: CandidateTable + ?Sized>(
+    table: &T,
+    model: &str,
+    provider: &str,
+    region: Option<&str>,
+) -> Result<Option<RowRef>, RustRefusal> {
+    Walk { table }.priced_row(model, provider, region)
+}
+
 struct Walk<'a, T: ?Sized> {
     table: &'a T,
 }
@@ -245,38 +267,66 @@ impl<T: CandidateTable + ?Sized> Walk<'_, T> {
             }
         };
         let region = call.region.as_deref().filter(|_| !explicit);
-        let steps = ordered
-            .into_iter()
-            .map(|model| match &bedrock_registration {
-                Some(key) => Step::Row(key.clone(), RowProvenance::Registered),
-                None => self.priced_key(model, provider, region),
-            });
-        let mut rows: Vec<RowRef> = Vec::new();
-        for step in steps {
-            match step {
-                Step::Row(key, provenance) => rows.push(RowRef {
-                    provenance: match call.custom_pricing
-                        && call.deployment_id.as_deref() == Some(&key)
-                    {
-                        true => RowProvenance::Registered,
-                        false => provenance,
-                    },
-                    key,
-                    provider: call.provider.clone(),
-                }),
-                Step::Skip => {}
-                Step::Defer(deferral) => {
-                    return Ok(CandidateRows {
-                        rows,
-                        then: AfterRows::Deferred(deferral),
-                    });
-                }
-            }
-        }
-        Ok(CandidateRows {
-            rows,
-            then: AfterRows::Exhausted,
+        let step = |model| match &bedrock_registration {
+            Some(key) => Step::Row(key.clone(), RowProvenance::Registered),
+            None => self.priced_key(model, provider, region),
+        };
+        let tried = |model: &str, key: String, provenance: RowProvenance| Tried {
+            model: model.to_owned(),
+            row: RowRef {
+                provenance: match call.custom_pricing && call.deployment_id.as_deref() == Some(&key)
+                {
+                    true => RowProvenance::Registered,
+                    false => provenance,
+                },
+                key,
+                provider: call.provider.clone(),
+            },
+        };
+        let walked =
+            ordered
+                .into_iter()
+                .try_fold(Vec::new(), |rows: Vec<Tried>, model| match step(model) {
+                    Step::Row(key, provenance) => Ok(rows
+                        .into_iter()
+                        .chain([tried(model, key, provenance)])
+                        .collect()),
+                    Step::Skip => Ok(rows),
+                    Step::Defer(deferral) => Err((rows, deferral)),
+                });
+        Ok(match walked {
+            Ok(rows) => CandidateRows {
+                rows,
+                then: AfterRows::Exhausted,
+            },
+            Err((rows, deferral)) => CandidateRows {
+                rows,
+                then: AfterRows::Deferred(deferral),
+            },
         })
+    }
+
+    /// The row `cost_per_token(model, custom_llm_provider=provider, region_name=region)` prices with, for a caller that
+    /// names one model. `Err` when main prices it by another path
+    fn priced_row(
+        &self,
+        model: &str,
+        provider: &str,
+        region: Option<&str>,
+    ) -> Result<Option<RowRef>, RustRefusal> {
+        let cost_provider = CostProvider::from_str(provider).map_err(|_| RustRefusal::Provider)?;
+        if self.priced_elsewhere(model) {
+            return Err(RustRefusal::ModelName);
+        }
+        match self.priced_key(model, cost_provider, region) {
+            Step::Row(key, provenance) => Ok(Some(RowRef {
+                key,
+                provider: provider.to_owned(),
+                provenance,
+            })),
+            Step::Skip => Ok(None),
+            Step::Defer(deferral) => Err(deferral),
+        }
     }
 
     /// Port of `select_model_name_for_cost_calc` for a call with no hidden response facts. `bedrock_registration` is

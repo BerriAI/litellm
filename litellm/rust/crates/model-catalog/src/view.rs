@@ -5,12 +5,15 @@
 use std::collections::{BTreeSet, HashSet};
 use std::sync::Arc;
 
+use litellm_cost::adjust::CostConfig;
 use litellm_cost::candidates::{self, CandidateTable, NameForms, Registration, RowRef};
 use litellm_cost::price::Adjustments;
+use litellm_cost::row::RowFacts;
 use serde_json::Value;
 
 use crate::fallback::CapabilityRules;
 use crate::lower::{BilledPrices, billed_prices};
+use crate::pricing::row_facts;
 use crate::resolve::{Candidates, ModelInfoLookup, lookup};
 use crate::wire::{EntryWire, Fields};
 
@@ -46,11 +49,13 @@ pub struct KnownNames {
     pub renamed_models: HashSet<String>,
 }
 
-/// What resolving a call reads besides the table: the host's capability rules and the names only it knows
+/// What resolving and pricing a call read besides the table: the host's capability rules, the names only it knows,
+/// and the discount and margin config
 #[derive(Clone, Debug, Default)]
 pub struct PricingContext {
     pub rules: CapabilityRules,
     pub names: KnownNames,
+    pub config: Arc<CostConfig>,
 }
 
 /// One row read and lowered the way main bills it, with `litellm_provider` replaced by the billed provider
@@ -59,6 +64,7 @@ pub struct LoweredRow {
     pub fields: Arc<Fields>,
     pub prices: BilledPrices,
     pub adjustments: Adjustments,
+    pub facts: RowFacts,
 }
 
 /// A row ready for pricing, with the key and provenance it was found by
@@ -90,6 +96,7 @@ impl LoweredRow {
         Self {
             prices: billed_prices(&wire),
             adjustments: Adjustments::from(&wire),
+            facts: row_facts(&fields),
             fields,
         }
     }

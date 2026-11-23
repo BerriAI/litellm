@@ -16,7 +16,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 use litellm_cost::candidates::{
-    AfterRows, CallIdentity, CandidateRows, RowProvenance, RowRef, RustRefusal, candidates,
+    AfterRows, CallIdentity, CandidateRows, RowProvenance, RustRefusal, Tried, candidates,
 };
 use serde_json::Value;
 
@@ -136,8 +136,8 @@ fn call(provider: &str, request: &str, response: &str) -> CallIdentity {
 
 const REGISTERED: &str = "us.anthropic.claude-opus-5-5";
 
-fn keys(rows: &[RowRef]) -> Vec<&str> {
-    rows.iter().map(|row| row.key.as_str()).collect()
+fn keys(rows: &[Tried]) -> Vec<&str> {
+    rows.iter().map(|tried| tried.row.key.as_str()).collect()
 }
 
 #[rstest]
@@ -219,7 +219,7 @@ fn candidates_are_the_rows_main_tries_in_its_order(#[case] name: &str) {
         found
             .rows
             .first()
-            .map(|row| (row.key.as_str(), row.provider.as_str())),
+            .map(|tried| (tried.row.key.as_str(), tried.row.provider.as_str())),
         main_billed
     );
 }
@@ -287,7 +287,7 @@ fn a_bedrock_registration_on_a_stripped_name_is_billed_like_main(
         found
             .rows
             .iter()
-            .map(|row| (row.key.as_str(), row.provenance))
+            .map(|tried| (tried.row.key.as_str(), tried.row.provenance))
             .collect::<Vec<_>>(),
         case.tried
             .iter()
@@ -311,7 +311,7 @@ fn a_custom_priced_deployment_row_comes_first_as_registered() {
         found
             .rows
             .iter()
-            .map(|row| (row.key.as_str(), row.provenance))
+            .map(|tried| (tried.row.key.as_str(), tried.row.provenance))
             .collect::<Vec<_>>(),
         [
             ("dep-claude-custom", RowProvenance::Registered),
@@ -423,7 +423,7 @@ fn a_bedrock_register_model_price_is_billed_like_main(
         found
             .rows
             .iter()
-            .map(|row| (row.key.as_str(), row.provenance))
+            .map(|tried| (tried.row.key.as_str(), tried.row.provenance))
             .collect::<Vec<_>>(),
         expected
     );

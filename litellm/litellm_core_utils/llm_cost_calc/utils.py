@@ -905,11 +905,47 @@ def billed_cache_read_rate(quote: NativeQuote, usage: Usage) -> float:
     return quote.explicit_cache_read if _reads_explicit_cache(usage) else quote.cache_read
 
 
-def billed_quantities(usage: Usage) -> NativeTokenUsage:
+class ModalityCounts(TypedDict):
+    text: ReadOnly[int]
+    audio: ReadOnly[int]
+    image: ReadOnly[int]
+    video: ReadOnly[int]
+
+
+class CacheReadCounts(TypedDict):
+    text: ReadOnly[int]
+    audio: ReadOnly[int]
+    image: ReadOnly[int]
+    explicit: ReadOnly[bool]
+
+
+class CacheWriteCounts(TypedDict):
+    default: ReadOnly[int]
+    one_hour: ReadOnly[int]
+    twelve_hours: ReadOnly[int]
+
+
+class BilledUsage(TypedDict):
+    """The quantities one call bills on each meter, the pricing core's ``TokenUsage`` document."""
+
+    prompt_tokens: ReadOnly[int]
+    input: ReadOnly[ModalityCounts]
+    cache_read: ReadOnly[CacheReadCounts]
+    cache_write: ReadOnly[CacheWriteCounts]
+    output: ReadOnly[ModalityCounts]
+    reasoning: ReadOnly[int]
+    input_characters: ReadOnly[int]
+    input_images: ReadOnly[int]
+    input_audio_seconds: ReadOnly[float]
+    input_video_seconds: ReadOnly[float]
+    queries: ReadOnly[int]
+
+
+def billed_usage(usage: Usage) -> BilledUsage:
     """How much of each type of token ``usage`` used, with the overlap between them factored out.
 
-    See ``NativeTokenUsage`` in ``litellm/rust_bridge/_native.pyi`` and ``Meter`` in
-    ``litellm/rust/crates/cost/src/price/meter.rs`` for the types that exist.
+    See ``BilledUsage`` above, and ``Meter`` in ``litellm/rust/crates/cost/src/price/meter.rs``,
+    for the types that exist.
     """
     prompt: Final = _billed_prompt_tokens(usage)
     completion: Final = _billed_completion_tokens(usage)
@@ -928,32 +964,42 @@ def billed_quantities(usage: Usage) -> NativeTokenUsage:
     unattributed_writes: Final = max(
         prompt["cache_creation_tokens"] - short_lived_writes - one_hour_writes - twelve_hour_writes, 0
     )
-    return NativeTokenUsage(
+    return BilledUsage(
         prompt_tokens=_count(usage.prompt_tokens),
-        input_text_tokens=_count(prompt["text_tokens"]),
-        input_audio_tokens=_count(prompt["audio_tokens"]),
-        input_image_tokens=_count(prompt["image_tokens"]),
-        input_video_tokens=_count(prompt["video_tokens"]),
-        cached_text_tokens=_count(
-            prompt["cached_text_tokens"] + max(prompt["cache_hit_tokens"] - classified_cached_tokens, 0)
+        input=ModalityCounts(
+            text=_count(prompt["text_tokens"]),
+            audio=_count(prompt["audio_tokens"]),
+            image=_count(prompt["image_tokens"]),
+            video=_count(prompt["video_tokens"]),
         ),
-        cached_audio_tokens=_count(prompt["cached_audio_tokens"]),
-        cached_image_tokens=_count(prompt["cached_image_tokens"]),
-        explicit_cache_read=_reads_explicit_cache(usage),
-        cache_write_tokens=_count(unattributed_writes + short_lived_writes),
-        cache_write_1h_tokens=one_hour_writes,
-        cache_write_12h_tokens=twelve_hour_writes,
+        cache_read=CacheReadCounts(
+            text=_count(prompt["cached_text_tokens"] + max(prompt["cache_hit_tokens"] - classified_cached_tokens, 0)),
+            audio=_count(prompt["cached_audio_tokens"]),
+            image=_count(prompt["cached_image_tokens"]),
+            explicit=_reads_explicit_cache(usage),
+        ),
+        cache_write=CacheWriteCounts(
+            default=_count(unattributed_writes + short_lived_writes),
+            one_hour=one_hour_writes,
+            twelve_hours=twelve_hour_writes,
+        ),
+        output=ModalityCounts(
+            text=_count(completion["text_tokens"]),
+            audio=_count(completion["audio_tokens"]),
+            image=_count(completion["image_tokens"]),
+            video=_count(completion["video_tokens"]),
+        ),
+        reasoning=_count(completion["reasoning_tokens"]),
         input_characters=_count(prompt["character_count"]),
         input_images=_count(prompt["image_count"]),
         input_audio_seconds=max(float(prompt["audio_length_seconds"]), 0.0),
         input_video_seconds=max(float(prompt["video_length_seconds"]), 0.0),
         queries=_count(prompt["query_count"]),
-        output_text_tokens=_count(completion["text_tokens"]),
-        output_audio_tokens=_count(completion["audio_tokens"]),
-        output_image_tokens=_count(completion["image_tokens"]),
-        output_video_tokens=_count(completion["video_tokens"]),
-        reasoning_tokens=_count(completion["reasoning_tokens"]),
     )
+
+
+def billed_quantities(usage: Usage) -> NativeTokenUsage:
+    return NativeTokenUsage(billed_usage(usage))
 
 
 def call_context(

@@ -20,13 +20,6 @@ impl Clone for LiveRow {
     }
 }
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the cost bridge stacked on this change prices through it"
-    )
-)]
 impl LiveRow {
     /// A row that is not a mapping reads as empty
     pub(crate) fn fields(&self) -> Fields {

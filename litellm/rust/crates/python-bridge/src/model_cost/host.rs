@@ -74,19 +74,36 @@ pub(crate) fn kept<'py>(
     Ok(call(registration.py(), "kept", (previous, registration))?.cast_into::<PyDict>()?)
 }
 
-/// The published table and the generation a pricing snapshot of it is keyed on
-pub(crate) fn generation(py: Python<'_>) -> PyResult<(Bound<'_, PyDict>, Generation)> {
-    let (rows, table, size, writes, discount, margin) = call(py, "generation", ())?.extract()?;
-    Ok((
+/// The published table, the generation a pricing snapshot of it is keyed on, and the Python-held state it reads
+pub(crate) fn generation(py: Python<'_>) -> PyResult<GenerationRead<'_>> {
+    let (rows, version, configs): (
+        Bound<'_, PyDict>,
+        (usize, usize, u64, u64),
+        Bound<'_, PyTuple>,
+    ) = call(py, "generation", ())?.extract()?;
+    let (table, size, writes, rules) = version;
+    let (discounts, margins, rule_list) = configs.extract()?;
+    Ok(GenerationRead {
         rows,
-        Generation {
+        generation: Generation {
             table,
             size,
             writes,
-            discount,
-            margin,
+            rules,
         },
-    ))
+        discounts,
+        margins,
+        rules: rule_list,
+    })
+}
+
+/// The table, its generation, `cost_discount_config`, `cost_margin_config` and the `fallback_generalizations` rules
+pub(crate) struct GenerationRead<'py> {
+    pub(crate) rows: Bound<'py, PyDict>,
+    pub(crate) generation: Generation,
+    pub(crate) discounts: Bound<'py, PyAny>,
+    pub(crate) margins: Bound<'py, PyAny>,
+    pub(crate) rules: Bound<'py, PyAny>,
 }
 
 pub(crate) fn known_names(py: Python<'_>) -> PyResult<KnownNames> {

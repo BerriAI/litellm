@@ -57,7 +57,8 @@ mod _native {
     use crate::callbacks_model_capacity::{NativeModelCapacity, NativeModelCapacityState};
     #[pymodule_export]
     use crate::cost::{
-        NativeCallContext, NativePriced, NativePrices, NativeQuote, NativeTokenUsage,
+        NativeBilledRates, NativeCallContext, NativePriced, NativePrices, NativeQuote,
+        NativeRateCard, NativeReceipt, NativeTokenUsage,
     };
     #[pymodule_export]
     use crate::db::{DatabaseEndpoint, NativeDatabase, NativeDatabaseFailure};
@@ -171,6 +172,10 @@ mod _native {
             "JWT_ID_JAG_TYP",
             litellm_gateway_auth_core::authn::jwt::ID_JAG_TYP,
         )?;
+        module.add(
+            "BOUND_DEFAULT_MAX_OUTPUT_TOKENS",
+            litellm_cost::bound::DEFAULT_MAX_OUTPUT_TOKENS,
+        )?;
         let py = module.py();
         let dict = module.dict();
         dict.set_item(
@@ -281,6 +286,9 @@ mod tests {
                 "NativeCallContext",
                 "NativePriced",
                 "NativeQuote",
+                "NativeReceipt",
+                "NativeBilledRates",
+                "NativeRateCard",
                 "NativeModelCostMapState",
                 "NativeInstalled",
                 "NativeRejected",
@@ -316,6 +324,7 @@ mod tests {
                 "auth_route_matches_prefix",
                 "auth_route_matches_wildcard",
                 "JWT_ID_JAG_TYP",
+                "BOUND_DEFAULT_MAX_OUTPUT_TOKENS",
                 "RustAuth",
                 "RustAuthOutcome",
                 "RustAuthSettings",
