@@ -31,6 +31,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     model_less_team_deployment,
     prepare_data_with_credentials,
     provider_file_id_spellings,
+    router_default_drop_params,
     team_deployment_the_caller_may_use,
 )
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
@@ -1179,6 +1180,21 @@ def test_an_upload_with_a_null_drop_params_takes_its_deployments_drop_params(mod
     )
 
     assert configured_drop_params(llm_router, model_id, {"drop_params": None}) == {"drop_params": expected}
+
+
+def test_an_upload_with_a_null_drop_params_takes_the_router_default_over_its_deployment() -> None:
+    llm_router: Final = Router(
+        model_list=[
+            {
+                "model_name": "vertex-batch-keep",
+                "litellm_params": {"model": "vertex_ai/gemini-2.5-flash", "drop_params": False},
+            }
+        ],
+        default_litellm_params={"drop_params": True},
+    )
+
+    assert configured_drop_params(llm_router, "vertex-batch-keep", {"drop_params": None}) == {"drop_params": True}
+    assert router_default_drop_params(llm_router, {"drop_params": None}) == {"drop_params": True}
 
 
 @pytest.mark.parametrize("field", ["s3_bucket_name", "s3_output_bucket_name"])
