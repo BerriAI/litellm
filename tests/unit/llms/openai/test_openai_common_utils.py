@@ -713,3 +713,20 @@ def test_reasoning_drop_warning_caps_a_large_caller_value(caplog: pytest.LogCapt
     assert len(drop_warnings) == 1
     assert len(drop_warnings[0]) < 300
     assert all(fragment in drop_warnings[0] for fragment in ("reasoning_effort='xxx", "'gpt-6.1-sol'", "422"))
+
+
+def test_422_detail_list_mixing_dicts_and_strings_drops_only_the_named_param() -> None:
+    detail: Final = [
+        {"loc": ["body", "temperature"], "msg": "not a float"},
+        "upstream appended a plain string entry",
+    ]
+    error: Final = httpx.HTTPStatusError(
+        message="422",
+        request=httpx.Request("POST", "https://example.invalid/v1/chat/completions"),
+        response=httpx.Response(422, json={"error": {"message": json.dumps({"detail": detail})}}),
+    )
+    data: Final[dict[str, object]] = {"model": "gpt-4o", "messages": [], "temperature": 0.1, "top_p": 0.9}
+
+    retried: Final = drop_params_from_unprocessable_entity_error(error, data, model="gpt-4o", drop_params_gated=True)
+
+    assert retried == {"model": "gpt-4o", "messages": [], "top_p": 0.9}
