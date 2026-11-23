@@ -370,15 +370,21 @@ describe("PlaygroundChat", () => {
     expect(screen.queryByText("late reply")).not.toBeInTheDocument();
   });
 
-  it("continues the session with only the new message and offers the answered turns for a resend", async () => {
+  it("resends the answered turns once the session is lost and keeps sending them on later turns", async () => {
     const user = userEvent.setup();
+    const resentHistories: unknown[] = [];
     responsesRequest
       .mockImplementationOnce(async (...args: ResponsesArgs) => {
         args[15]?.("resp-first");
         args[1]("assistant", "Hi Ada", args[2]);
       })
       .mockImplementationOnce(async (...args: ResponsesArgs) => {
+        resentHistories.push(args[29]?.());
+        args[15]?.("resp-second");
         args[1]("assistant", "You are Ada", args[2]);
+      })
+      .mockImplementationOnce(async (...args: ResponsesArgs) => {
+        args[1]("assistant", "Still Ada", args[2]);
       });
     preload({ endpointType: "responses", selectedModel: "gpt-fast", useApiSessionManagement: "true" });
     renderChat();
@@ -386,15 +392,28 @@ describe("PlaygroundChat", () => {
     await send(user, "I am Ada");
     expect(await screen.findByText("Hi Ada")).toBeInTheDocument();
     await send(user, "Who am I?");
+    expect(await screen.findByText("You are Ada")).toBeInTheDocument();
+    await send(user, "And now?");
 
-    await waitFor(() => expect(responsesRequest).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(responsesRequest).toHaveBeenCalledTimes(3));
     const followUp = responsesRequest.mock.calls[1] as ResponsesArgs;
     expect(followUp[14]).toBe("resp-first");
     expect(followUp[0]).toEqual([{ role: "user", content: "Who am I?" }]);
-    expect(followUp[29]?.()).toEqual([
+    expect(resentHistories).toEqual([
+      [
+        { role: "user", content: "I am Ada" },
+        { role: "assistant", content: "Hi Ada" },
+        { role: "user", content: "Who am I?" },
+      ],
+    ]);
+    const afterResend = responsesRequest.mock.calls[2] as ResponsesArgs;
+    expect(afterResend[14]).toBeNull();
+    expect(afterResend[0]).toEqual([
       { role: "user", content: "I am Ada" },
       { role: "assistant", content: "Hi Ada" },
       { role: "user", content: "Who am I?" },
+      { role: "assistant", content: "You are Ada" },
+      { role: "user", content: "And now?" },
     ]);
   });
 

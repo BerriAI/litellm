@@ -657,5 +657,35 @@ describe("useChatHistory", () => {
       expect(result.current.useApiSessionManagement).toBe(false);
       expect(result.current.responsesSessionId).toBeNull();
     });
+
+    it.each([
+      ["clearing the chat", (hook: ReturnType<typeof useChatHistory>) => hook.clearChatHistory()],
+      [
+        "switching session management back on",
+        (hook: ReturnType<typeof useChatHistory>) => hook.handleToggleSessionManagement(true),
+      ],
+    ])("continues from response ids again after %s, once a resend stopped it", (_, reset) => {
+      const { result } = renderHook(() => useChatHistory({ simplified: false }));
+
+      act(() => {
+        result.current.handleResponseId("resp-first");
+      });
+      expect(result.current.previousResponseId).toBe("resp-first");
+      act(() => {
+        result.current.handleHistoryResent();
+      });
+      act(() => {
+        result.current.handleResponseId("resp-resent");
+      });
+      expect(result.current.previousResponseId).toBeNull();
+
+      act(() => {
+        reset(result.current);
+      });
+      act(() => {
+        result.current.handleResponseId("resp-next");
+      });
+      expect(result.current.previousResponseId).toBe("resp-next");
+    });
   });
 });

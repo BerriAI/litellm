@@ -83,7 +83,7 @@ describe("runChatRequest", () => {
     );
     vi.mocked(makeOpenAIResponsesRequest).mockResolvedValue(undefined);
 
-    await runChatRequest(requestOptions({ fullHistory }));
+    await runChatRequest(requestOptions({ resendHistory: () => fullHistory }));
 
     const replayHistory = vi.mocked(makeOpenAIResponsesRequest).mock.calls[0][29];
     expect(replayHistory?.()).toEqual([
