@@ -12980,6 +12980,48 @@ class TestLIT1884KeyGenerateValidation:
             )
             assert result is True
 
+    @pytest.mark.parametrize("spend", [-9999.0, 5.0])
+    def test_key_generation_check_non_admin_cannot_set_spend(self, spend: float) -> None:
+        data: Final = GenerateKeyRequest(spend=spend)
+        user_api_key_dict: Final = UserAPIKeyAuth(
+            user_id="internal-user",
+            user_role=LitellmUserRoles.INTERNAL_USER,
+        )
+
+        with patch.object(litellm, "key_generation_settings", None):
+            with pytest.raises(HTTPException) as exc_info:
+                key_generation_check(
+                    team_table=None,
+                    user_api_key_dict=user_api_key_dict,
+                    data=data,
+                    route="key_generate",
+                )
+        assert exc_info.value.status_code == 403
+        assert "Only proxy admins can set spend" in str(exc_info.value.detail)
+
+    @pytest.mark.parametrize(
+        "user_role, spend",
+        [
+            (LitellmUserRoles.INTERNAL_USER, 0.0),
+            (LitellmUserRoles.INTERNAL_USER, None),
+            (LitellmUserRoles.PROXY_ADMIN, -5.0),
+        ],
+    )
+    def test_key_generation_check_spend_allowed(self, user_role: LitellmUserRoles, spend: float | None) -> None:
+        data: Final = GenerateKeyRequest(spend=spend)
+        user_api_key_dict: Final = UserAPIKeyAuth(user_id="some-user", user_role=user_role)
+
+        with patch.object(litellm, "key_generation_settings", None):
+            assert (
+                key_generation_check(
+                    team_table=None,
+                    user_api_key_dict=user_api_key_dict,
+                    data=data,
+                    route="key_generate",
+                )
+                is True
+            )
+
 
 class TestLIT1884KeyUpdateValidation:
     """Tests for LIT-1884: internal users should not be able to update keys to remove user_id or set invalid team."""

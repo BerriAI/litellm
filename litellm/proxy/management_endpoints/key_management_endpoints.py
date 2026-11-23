@@ -931,6 +931,11 @@ def key_generation_check(
     _is_admin: Final = (
         user_api_key_dict.user_role is not None and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
     )
+    if data.spend and not _is_admin:
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "Only proxy admins can set spend when creating a key."},
+        )
     if is_team_key:
         if team_table is None and litellm.key_generation_settings is not None:
             raise HTTPException(
