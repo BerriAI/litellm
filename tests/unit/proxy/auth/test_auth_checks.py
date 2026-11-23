@@ -66,7 +66,7 @@ from litellm.proxy.auth.auth_checks import (
     virtual_key_soft_budget_check,
 )
 from litellm.proxy.utils import CallInfo, InternalUsageCache, ProxyLogging
-from litellm.router_api import ChangeSet
+from litellm.router_api import ChangeSet, RoutingContext
 from litellm.types.passthrough_endpoints.pass_through_endpoints import LITELLM_PASS_THROUGH_ENDPOINT_MARKER
 from litellm.types.router import RouterGeneralSettings
 
@@ -2951,7 +2951,7 @@ def _namesake_router(*extra: Mapping[str, object], pass_through: bool = False) -
 
 
 def _can_call(
-    router: litellm.Router,
+    router: litellm.Router | RoutingContext,
     models: list[str],
     requested: str,
     team_id: str | None = None,
@@ -2998,6 +2998,11 @@ def test_a_restricted_caller_reaches_a_litellm_model_name_only_when_every_deploy
     models: list[str], requested: str, team_id: str | None, allowed: bool
 ) -> None:
     assert _can_call(_namesake_router(), models, requested, team_id=team_id) is allowed
+
+
+@pytest.mark.parametrize("requested,allowed", [("openai/granted-raw", True), ("openai/shared-raw", False)])
+def test_a_routing_context_reaches_the_same_litellm_model_verdict_as_its_router(requested: str, allowed: bool) -> None:
+    assert _can_call(RoutingContext(_namesake_router()), ["group-a"], requested) is allowed
 
 
 _TEAM_PUBLIC_NAMESAKE: Final = _namesake_deployment(

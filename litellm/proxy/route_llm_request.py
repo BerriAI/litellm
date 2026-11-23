@@ -57,6 +57,7 @@ MOCK_TESTING_CONFIG_KEY: Final = "dangerously_allow_mock_testing_request_params"
 
 if TYPE_CHECKING:
     from litellm.router import Router as _Router
+    from litellm.router_api import RoutingContext
 
     LitellmRouter = _Router
 else:
@@ -809,7 +810,7 @@ ModelRoute: TypeAlias = TeamModelRoute | RouterModelRoute
 
 def model_route(
     model: str | None,
-    llm_router: LitellmRouter,
+    llm_router: "LitellmRouter | RoutingContext",
     team_id: str | None,
     *,
     proxy_admin_without_team: bool = False,

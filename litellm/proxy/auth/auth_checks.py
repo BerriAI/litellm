@@ -182,7 +182,7 @@ from litellm.repositories.user_repository import NewUserDefaults, UserRepository
 from litellm.repositories.verification_token_repository import VerificationTokenRepository
 from litellm.responses.additional_tools import additional_tools_in_input
 from litellm.router import Router
-from litellm.router_api import RegistryReader
+from litellm.router_api import RegistryReader, RoutingContext
 from litellm.rust_bridge._native import NativeDatabaseFailure
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
@@ -5080,7 +5080,9 @@ def _owning_team_names_for_team_deployment(
     return (*((public_name,) if public_name else ()), *legacy_aliases)
 
 
-def _routes_to_deployments_by_litellm_model(model: str, llm_router: Router, team_id: str | None) -> bool:
+def _routes_to_deployments_by_litellm_model(
+    model: str, llm_router: Router | RoutingContext, team_id: str | None
+) -> bool:
     from litellm.proxy.route_llm_request import RouterModelRoute, model_route
 
     if model in litellm.model_alias_map:
@@ -5119,7 +5121,7 @@ def deployment_access_groups(deployment: object) -> frozenset[str]:
 
 def _deployment_granted(
     deployment: DeploymentTypedDict,
-    llm_router: Router,
+    llm_router: Router | RoutingContext,
     models: Sequence[str],
     team_model_aliases: Mapping[str, str] | None,
     team_id: str | None,
@@ -5139,7 +5141,7 @@ def _deployment_granted(
 
 
 def deployments_routed_by_litellm_model(
-    model: str, llm_router: Router, team_id: str | None
+    model: str, llm_router: Router | RoutingContext, team_id: str | None
 ) -> tuple[DeploymentTypedDict, ...]:
     if not _routes_to_deployments_by_litellm_model(model, llm_router, team_id):
         return ()
@@ -5152,7 +5154,7 @@ def deployments_routed_by_litellm_model(
 
 
 def access_groups_of_deployments_routed_by_litellm_model(
-    model: str, llm_router: Router, team_id: str | None
+    model: str, llm_router: Router | RoutingContext, team_id: str | None
 ) -> frozenset[str]:
     return frozenset[str]().union(
         *(
@@ -5163,7 +5165,7 @@ def access_groups_of_deployments_routed_by_litellm_model(
 
 
 def public_model_names_of_deployments_routed_by_litellm_model(
-    model: str, llm_router: Router, team_id: str | None
+    model: str, llm_router: Router | RoutingContext, team_id: str | None
 ) -> tuple[str, ...]:
     return tuple(
         dict.fromkeys(map(_public_model_name, deployments_routed_by_litellm_model(model, llm_router, team_id)))
@@ -5185,7 +5187,7 @@ def _every_deployment_with_litellm_model_granted(
     team_model_aliases: Mapping[str, str] | None,
     team_id: str | None,
 ) -> bool:
-    if not isinstance(llm_router, Router):
+    if not isinstance(llm_router, Router | RoutingContext):
         return False
     namesakes: Final = deployments_routed_by_litellm_model(model, llm_router, team_id)
     return bool(namesakes) and all(
