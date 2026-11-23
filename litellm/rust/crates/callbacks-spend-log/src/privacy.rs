@@ -27,9 +27,7 @@ pub(crate) const TRUNCATED_FIELD: &str = "litellm_truncated";
 pub(crate) const TRUNCATION_NOTE: &str = "Truncation is a DB storage safeguard. Full, untruncated data is logged to logging callbacks (OTEL, Datadog, etc.). To increase the truncation limit, set `MAX_STRING_LENGTH_PROMPT_IN_DB` in your env.";
 const MINIMUM_TOKEN_LENGTH: usize = 15;
 const MAX_STRING_LENGTH_COMPACTION_SUMMARY_IN_DB: i64 = 64 * 1024;
-const MAX_STRING_LENGTH_PROVIDER_SIGNED_IN_DB: i64 = 1024 * 1024;
 
-/// Which replayed state a stored body keeps past the usual string cut.
 #[derive(Clone, Copy)]
 pub(crate) struct Keep {
     pub(crate) compaction_blocks: bool,
@@ -75,13 +73,12 @@ impl SpendLogRowBuilder {
         )
     }
 
-    /// `_provider_signed_for_db(value, max_string_length_prompt_in_db)`.
     fn provider_signed_for_db(&self, value: &str) -> String {
         truncated(
             &self.without_tokens(value),
             self.config
                 .max_string_length_prompt_in_db
-                .max(MAX_STRING_LENGTH_PROVIDER_SIGNED_IN_DB),
+                .max(self.config.max_string_length_provider_signed_in_db),
         )
     }
 
@@ -141,7 +138,6 @@ impl SpendLogRowBuilder {
         Value::Dict(result)
     }
 
-    /// A provider-signed value: its tokens redacted, its strings cut only past the signed-field cap.
     fn stored_whole(&self, value: &Value, mask_credentials: bool, keep: Keep) -> Value {
         match value {
             Value::Str(content) => Value::Str(self.provider_signed_for_db(content)),
@@ -457,10 +453,10 @@ mod tests {
     use litellm_python_compat::Value;
     use rstest::rstest;
 
-    use super::{Keep, MAX_STRING_LENGTH_PROVIDER_SIGNED_IN_DB, TRUNCATED_FIELD};
+    use super::{Keep, TRUNCATED_FIELD};
     use crate::py::{entries, get, get_or_none, text};
     use crate::test_support::{argument, case, field, helper_records, token_redactor};
-    use crate::{RowConfig, SpendLogRowBuilder};
+    use crate::{DEFAULT_MAX_STRING_LENGTH_PROVIDER_SIGNED_IN_DB, RowConfig, SpendLogRowBuilder};
 
     fn flag(record: &Value, name: &str, default: bool) -> bool {
         match get(field(record, "kwargs"), name) {
@@ -469,13 +465,18 @@ mod tests {
         }
     }
 
-    fn max_length(record: &Value) -> i64 {
-        let recorded = get(field(record, "kwargs"), "max_string_length_prompt_in_db")
-            .unwrap_or_else(|| field(record, "max_string_length_prompt_in_db"));
+    fn length(recorded: &Value) -> i64 {
         match recorded {
             Value::Int(length) => i64::try_from(length).expect("length fits"),
             other => panic!("{other:?} is not a length"),
         }
+    }
+
+    fn max_length(record: &Value) -> i64 {
+        length(
+            get(field(record, "kwargs"), "max_string_length_prompt_in_db")
+                .unwrap_or_else(|| field(record, "max_string_length_prompt_in_db")),
+        )
     }
 
     // `_sanitize_request_body_for_spend_logs_payload` calls recorded by `scripts/record_goldens.py`
@@ -489,6 +490,10 @@ mod tests {
                 RowConfig {
                     redact_tokens: matches!(field(&record, "redact_tokens"), Value::Bool(true)),
                     max_string_length_prompt_in_db: max_length(&record),
+                    max_string_length_provider_signed_in_db: length(field(
+                        &record,
+                        "max_string_length_provider_signed_in_db",
+                    )),
                     ..RowConfig::default()
                 },
                 tokens.clone(),
@@ -522,15 +527,24 @@ mod tests {
     }
 
     #[rstest]
-    #[case::at_the_cap(0, 2048, false)]
-    #[case::past_the_cap(1, 2048, true)]
-    #[case::past_the_cap_under_a_larger_prompt_limit(1, 2 * MAX_STRING_LENGTH_PROVIDER_SIGNED_IN_DB, false)]
+    #[case::at_the_default_cap(0, 2048, DEFAULT_MAX_STRING_LENGTH_PROVIDER_SIGNED_IN_DB, false)]
+    #[case::past_the_default_cap(1, 2048, DEFAULT_MAX_STRING_LENGTH_PROVIDER_SIGNED_IN_DB, true)]
+    #[case::past_the_cap_under_a_larger_prompt_limit(
+        1,
+        2 * DEFAULT_MAX_STRING_LENGTH_PROVIDER_SIGNED_IN_DB,
+        DEFAULT_MAX_STRING_LENGTH_PROVIDER_SIGNED_IN_DB,
+        false
+    )]
+    #[case::at_a_lowered_cap(0, 2048, 4096, false)]
+    #[case::past_a_lowered_cap(1, 2048, 4096, true)]
+    #[case::past_a_cap_lowered_under_the_prompt_limit(1, 2048, 1024, false)]
     fn sanitize_body_cuts_a_signed_value_only_past_the_signed_field_cap(
         #[case] extra: usize,
         #[case] prompt_limit: i64,
+        #[case] signed_limit: i64,
         #[case] cut: bool,
     ) {
-        let cap = usize::try_from(MAX_STRING_LENGTH_PROVIDER_SIGNED_IN_DB).expect("the cap fits");
+        let cap = usize::try_from(signed_limit).expect("the cap fits");
         let signature = text(&"s".repeat(cap + extra));
         let block = Value::Dict(vec![
             (text("type"), text("thinking")),
@@ -544,6 +558,7 @@ mod tests {
         let builder = SpendLogRowBuilder::new(
             RowConfig {
                 max_string_length_prompt_in_db: prompt_limit,
+                max_string_length_provider_signed_in_db: signed_limit,
                 ..RowConfig::default()
             },
             token_redactor(),

@@ -26,12 +26,14 @@ from litellm.constants import (
     LITTELM_CLI_SERVICE_ACCOUNT_NAME,
     LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
     MAX_STRING_LENGTH_COMPACTION_SUMMARY_IN_DB,
-    MAX_STRING_LENGTH_PROVIDER_SIGNED_IN_DB,
     REDACTED_BY_LITELM_STRING,
     ROUTE_CALL_TYPE_METADATA_KEY,
 )
 from litellm.constants import (
     MAX_STRING_LENGTH_PROMPT_IN_DB as DEFAULT_MAX_STRING_LENGTH_PROMPT_IN_DB,
+)
+from litellm.constants import (
+    MAX_STRING_LENGTH_PROVIDER_SIGNED_IN_DB as DEFAULT_MAX_STRING_LENGTH_PROVIDER_SIGNED_IN_DB,
 )
 from litellm.integrations.otel.model.metadata import caller_session_id
 from litellm.integrations.otel.model.trace_controls import TraceControls, caller_trace_controls
@@ -108,18 +110,28 @@ _SPEND_LOGS_PRIVACY_METADATA_ADAPTER: Final[TypeAdapter[Mapping[str, object] | N
 )
 
 
-def _get_max_string_length_prompt_in_db() -> int:
+def _max_string_length_in_db(env_var: str, default: int) -> int:
     """
-    Resolve prompt truncation threshold at runtime so values loaded later via
+    Resolve a truncation threshold at runtime so values loaded later via
     proxy config environment_variables are honored.
     """
-    max_length_str: Final = os.getenv("MAX_STRING_LENGTH_PROMPT_IN_DB")
+    max_length_str: Final = os.getenv(env_var)
     if max_length_str is None:
-        return DEFAULT_MAX_STRING_LENGTH_PROMPT_IN_DB
+        return default
     try:
         return int(max_length_str)
     except (TypeError, ValueError):
-        return DEFAULT_MAX_STRING_LENGTH_PROMPT_IN_DB
+        return default
+
+
+def _get_max_string_length_prompt_in_db() -> int:
+    return _max_string_length_in_db("MAX_STRING_LENGTH_PROMPT_IN_DB", DEFAULT_MAX_STRING_LENGTH_PROMPT_IN_DB)
+
+
+def _get_max_string_length_provider_signed_in_db() -> int:
+    return _max_string_length_in_db(
+        "MAX_STRING_LENGTH_PROVIDER_SIGNED_IN_DB", DEFAULT_MAX_STRING_LENGTH_PROVIDER_SIGNED_IN_DB
+    )
 
 
 def is_master_key(api_key: str | None, _master_key: str | None) -> bool:
@@ -872,7 +884,6 @@ _TOOL_INPUT_BLOCK_TYPES: Final = frozenset({"tool_use", "server_tool_use", "mcp_
 _TOOL_OUTPUT_BLOCK_TYPES: Final = frozenset({"tool_result", "mcp_tool_result", "function_call_output"})
 _LATEST_TURN_STORAGE: Final = "latest_turn"
 _RESPONSES_CALL_TYPES: Final = frozenset({"responses", "aresponses"})
-_REPLAYED_RESPONSE_CALL_TYPES: Final = _RESPONSES_CALL_TYPES | {"_aresponses_websocket"}
 _REQUEST_BODY_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 _TEXT_BLOCK_TYPES: Final = frozenset({"text", "input_text"})
 _OMITTED_BLOCK_PLACEHOLDERS: Final = MappingProxyType(
@@ -949,7 +960,7 @@ def _compaction_summary_for_db(summary: str) -> str:
 
 def _provider_signed_for_db(value: str, max_string_length_prompt_in_db: int) -> str:
     return truncated_for_db(
-        _without_tokens(value), max(max_string_length_prompt_in_db, MAX_STRING_LENGTH_PROVIDER_SIGNED_IN_DB)
+        _without_tokens(value), max(max_string_length_prompt_in_db, _get_max_string_length_provider_signed_in_db())
     )
 
 

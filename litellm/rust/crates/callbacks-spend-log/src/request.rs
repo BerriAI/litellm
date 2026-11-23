@@ -16,8 +16,6 @@ use crate::text::masked_ip_text;
 use crate::{RowError, SpendLogRowBuilder};
 
 const RESPONSES_CALL_TYPES: [&str; 2] = ["responses", "aresponses"];
-const REPLAYED_RESPONSE_CALL_TYPES: [&str; 3] =
-    ["responses", "aresponses", "_aresponses_websocket"];
 const STATEFUL_REQUEST_KEYS: [&str; 2] = ["previous_response_id", "conversation"];
 const TURNS_KEYS: [&str; 2] = ["messages", "input"];
 const TEXT_BLOCK_TYPES: [&str; 2] = ["text", "input_text"];
@@ -271,8 +269,7 @@ impl SpendLogRowBuilder {
         };
         let keep = Keep {
             compaction_blocks: true,
-            provider_signed_fields: !redacted
-                && matches!(payload.get("call_type"), Value::Str(kind) if REPLAYED_RESPONSE_CALL_TYPES.contains(&kind.as_str())),
+            provider_signed_fields: !redacted && replayed_by_responses_bridge(Some(payload)),
         };
         let wrapper = self.sanitize_body(&[(text("response"), response)], true, keep);
         match get_or_none(&wrapper, "response") {
@@ -364,5 +361,92 @@ impl SpendLogRowBuilder {
         let mut with_input = Dict::from_entries(entries(&sanitized).unwrap_or_default());
         with_input.set("input", Value::List(input));
         with_input.into_value()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+    use serde_json::{Value as Json, json};
+
+    use crate::privacy::truncated;
+    use crate::test_support::token_redactor;
+    use crate::{DEFAULT_MAX_STRING_LENGTH_PROMPT_IN_DB, RowConfig, RowInput, SpendLogRowBuilder};
+
+    fn responses_reasoning(signed: &str) -> Json {
+        json!({"object": "response", "output": [{"type": "reasoning", "encrypted_content": signed}]})
+    }
+
+    fn chat_thinking(signed: &str) -> Json {
+        json!({"choices": [{"message": {
+            "role": "assistant",
+            "content": "954",
+            "thinking_blocks": [{"type": "thinking", "thinking": "Count", "signature": signed}],
+        }}]})
+    }
+
+    fn stored_response(call_type: &str, response: Json) -> Json {
+        let time = json!({"raw": "2026-01-01T00:00:00+00:00", "utc": "2026-01-01T00:00:00+00:00"});
+        let input = RowInput::from_json(
+            &json!({
+                "now": 0.0,
+                "fallback_session_id": "session",
+                "stores_prompts": true,
+                "call_type": call_type,
+                "start_time": time.clone(),
+                "end_time": time,
+                "kwargs": {},
+                "standard_logging_object": {"call_type": call_type, "response": response},
+            })
+            .to_string(),
+        )
+        .expect("the row input parses");
+        let builder = SpendLogRowBuilder::new(RowConfig::default(), token_redactor());
+        serde_json::from_str(&builder.response_json(&input).expect("the response dumps"))
+            .expect("the stored response is JSON")
+    }
+
+    #[rstest]
+    #[case::native_responses_row(
+        "aresponses",
+        responses_reasoning,
+        "/output/0/encrypted_content",
+        false
+    )]
+    #[case::bridged_responses_row(
+        "aresponses",
+        chat_thinking,
+        "/choices/0/message/thinking_blocks/0/signature",
+        true
+    )]
+    #[case::bridged_sync_responses_row(
+        "responses",
+        chat_thinking,
+        "/choices/0/message/thinking_blocks/0/signature",
+        true
+    )]
+    #[case::chat_completion_row(
+        "acompletion",
+        chat_thinking,
+        "/choices/0/message/thinking_blocks/0/signature",
+        false
+    )]
+    fn response_keeps_a_signed_field_whole_only_on_a_row_the_chat_bridge_replays(
+        #[case] call_type: &str,
+        #[case] response: fn(&str) -> Json,
+        #[case] pointer: &str,
+        #[case] kept_whole: bool,
+    ) {
+        let signed = "Eq0BCkYICxgCKkB".repeat(300);
+        let expected = if kept_whole {
+            signed.clone()
+        } else {
+            truncated(&signed, DEFAULT_MAX_STRING_LENGTH_PROMPT_IN_DB)
+        };
+
+        assert_eq!(
+            stored_response(call_type, response(&signed)).pointer(pointer),
+            Some(&Json::String(expected))
+        );
     }
 }

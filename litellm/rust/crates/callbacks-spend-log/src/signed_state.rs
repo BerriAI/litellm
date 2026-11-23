@@ -10,7 +10,6 @@ use crate::consts::{
 };
 use crate::py::{as_str, lookup, truthy};
 
-/// The signed fields of one stored mapping, by its block type.
 pub(crate) struct SignedParent {
     fields: &'static [&'static str],
 }
@@ -26,7 +25,6 @@ impl SignedParent {
         Self { fields }
     }
 
-    /// `is_provider_signed(parent, key, value)`.
     pub(crate) fn signs(&self, key: &str, value: &Value) -> bool {
         if SIGNED_TOOL_CALL_ID_KEYS.contains(&key) {
             return as_str(value).is_some_and(|id| id.contains(THOUGHT_SIGNATURE_SEPARATOR));

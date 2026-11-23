@@ -219,6 +219,9 @@ def _install() -> None:
                         **(
                             {
                                 "max_string_length_prompt_in_db": spend_tracking_utils._get_max_string_length_prompt_in_db(),
+                                "max_string_length_provider_signed_in_db": (
+                                    spend_tracking_utils._get_max_string_length_provider_signed_in_db()
+                                ),
                                 "redact_tokens": _general_settings().get("redact_tokens_in_spend_logs") is True,
                             }
                             if name == "_sanitize_request_body_for_spend_logs_payload"

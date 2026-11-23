@@ -268,6 +268,17 @@ def _scenario_kwargs(
     }
 
 
+_SIGNATURE_PAST_THE_PROMPT_CAP: Final = "Eq0BCkYICxgCKkB" * 300
+_SIGNED_THINKING_BLOCK: Final = {"type": "thinking", "thinking": "Count", "signature": _SIGNATURE_PAST_THE_PROMPT_CAP}
+_SIGNED_REASONING_RESPONSE: Final = {
+    "id": "resp_signed",
+    "output": [{"type": "reasoning", "id": "rs_1", "encrypted_content": json.dumps([_SIGNED_THINKING_BLOCK])}],
+}
+_SIGNED_THINKING_CHAT_RESPONSE: Final = {
+    "id": "chatcmpl_signed",
+    "choices": [{"message": {"role": "assistant", "content": "954", "thinking_blocks": [_SIGNED_THINKING_BLOCK]}}],
+}
+
 _SECRET_ERROR: Final = (
     "Error code: 400 - {'error': 'bad request', 'messages': [{'role': 'user', 'content': 'my secret prompt'}],"
     " 'input': 'secret input', 'model': 'gpt-4o'} from 10.20.30.40 and fe80::1ff:fe23:4567:890a"
@@ -365,6 +376,21 @@ _EXTRA_SCENARIOS: Final[dict[str, tuple[dict[str, object], dict[str, object], di
                 "realtime_tool_calls": [{"name": "lookup", "arguments": "{}"}],
             },
         ),
+    ),
+    "responses_reasoning_logged_natively": (
+        {"store_prompts_in_spend_logs": True},
+        {},
+        _scenario_kwargs(call_type="aresponses", payload={"response": _SIGNED_REASONING_RESPONSE}),
+    ),
+    "responses_thinking_replayed_by_the_chat_bridge": (
+        {"store_prompts_in_spend_logs": True},
+        {},
+        _scenario_kwargs(call_type="aresponses", payload={"response": _SIGNED_THINKING_CHAT_RESPONSE}),
+    ),
+    "chat_completion_thinking": (
+        {"store_prompts_in_spend_logs": True},
+        {},
+        _scenario_kwargs(call_type="acompletion", payload={"response": _SIGNED_THINKING_CHAT_RESPONSE}),
     ),
     "classifier_audit_fields": (
         {"store_prompts_in_spend_logs": True},
