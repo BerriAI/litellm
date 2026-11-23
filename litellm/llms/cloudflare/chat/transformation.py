@@ -1,4 +1,3 @@
-from collections.abc import Mapping
 from typing import Final
 
 import httpx
@@ -15,7 +14,7 @@ from litellm.types.llms.openai import AllMessageValues
 
 
 class CloudflareError(BaseLLMException):
-    def __init__(self, status_code: int, message: str) -> None:
+    def __init__(self, status_code, message):
         self.status_code = status_code
         self.message = message
         self.request = httpx.Request(method="POST", url="https://api.cloudflare.com")
@@ -34,8 +33,8 @@ class CloudflareChatConfig(OpenAIGPTConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict[str, object],
-        litellm_params: dict[str, object],
+        optional_params: dict,
+        litellm_params: dict,
         stream: bool | None = None,
     ) -> str:
         return super().get_complete_url(
@@ -66,11 +65,11 @@ class CloudflareChatConfig(OpenAIGPTConfig):
 
     def validate_environment(
         self,
-        headers: dict[str, object],
+        headers: dict,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict[str, object],
-        litellm_params: dict[str, object],
+        optional_params: dict,
+        litellm_params: dict,
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
@@ -88,9 +87,7 @@ class CloudflareChatConfig(OpenAIGPTConfig):
             api_base=api_base,
         )
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Mapping[str, object] | httpx.Headers
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return CloudflareError(
             status_code=status_code,
             message=error_message,
