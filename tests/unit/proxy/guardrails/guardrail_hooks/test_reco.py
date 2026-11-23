@@ -354,7 +354,8 @@ class TestRecoGuardrailApiKey:
         litellm_params: Final = LitellmParams(
             guardrail="reco",
             mode="pre_call",
-            optional_params={"api_key": "os.environ/RECO_TEST_API_KEY", "api_base": "https://edge1.us.reco.ai"},
+            api_key="os.environ/RECO_TEST_API_KEY",
+            optional_params={"api_base": "https://edge1.us.reco.ai"},
         )
 
         headers: Final = await _headers_sent_to_reco(initialize_guardrail(litellm_params, {"guardrail_name": "r"}))
@@ -362,32 +363,48 @@ class TestRecoGuardrailApiKey:
         assert headers["x-api-key"] == _TOKEN
         assert "X-Reco-Tenant-Id" not in headers
 
-    def test_initialize_guardrail_unresolvable_api_key_env_var_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    @pytest.mark.asyncio
+    async def test_initialize_guardrail_unset_api_key_env_var_keeps_tenant_auth(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.delenv("RECO_TEST_MISSING_API_KEY", raising=False)
         litellm_params: Final = LitellmParams(
             guardrail="reco",
             mode="pre_call",
-            optional_params={
-                "api_key": "os.environ/RECO_TEST_MISSING_API_KEY",
-                "reco_tenant_id": _TENANT_ID,
-                "api_base": "https://edge1.us.reco.ai",
-            },
-        )
-
-        with pytest.raises(ValueError, match="RECO_TEST_MISSING_API_KEY"):
-            initialize_guardrail(litellm_params, {"guardrail_name": "prod-reco"})
-
-    @pytest.mark.asyncio
-    async def test_initialize_guardrail_reads_api_key_from_plain_dict_optional_params(self) -> None:
-        litellm_params: Final = LitellmParams.model_construct(
-            guardrail="reco",
-            mode="pre_call",
-            optional_params={"api_key": _TOKEN, "api_base": "https://edge1.us.reco.ai"},
+            api_key="os.environ/RECO_TEST_MISSING_API_KEY",
+            optional_params={"reco_tenant_id": _TENANT_ID, "api_base": "https://edge1.us.reco.ai"},
         )
 
         headers: Final = await _headers_sent_to_reco(initialize_guardrail(litellm_params, {"guardrail_name": "r"}))
 
-        assert headers["x-api-key"] == _TOKEN
+        assert headers["X-Reco-Tenant-Id"] == _TENANT_ID
+        assert "x-api-key" not in headers
+
+    def test_initialize_guardrail_unset_api_key_env_var_without_tenant_raises(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("RECO_TEST_MISSING_API_KEY", raising=False)
+        litellm_params: Final = LitellmParams(
+            guardrail="reco",
+            mode="pre_call",
+            api_key="os.environ/RECO_TEST_MISSING_API_KEY",
+            optional_params={"api_base": "https://edge1.us.reco.ai"},
+        )
+
+        with pytest.raises(ValueError, match="reco_tenant_id or api_key"):
+            initialize_guardrail(litellm_params, {"guardrail_name": "prod-reco"})
+
+    @pytest.mark.asyncio
+    async def test_token_under_optional_params_is_never_sent(self) -> None:
+        litellm_params: Final = LitellmParams.model_construct(
+            guardrail="reco",
+            mode="pre_call",
+            optional_params={"api_key": _TOKEN, "reco_tenant_id": _TENANT_ID, "api_base": "https://edge1.us.reco.ai"},
+        )
+
+        headers: Final = await _headers_sent_to_reco(initialize_guardrail(litellm_params, {"guardrail_name": "r"}))
+
+        assert "x-api-key" not in headers
 
     @pytest.mark.asyncio
     async def test_initialize_guardrail_reads_top_level_api_key(self) -> None:

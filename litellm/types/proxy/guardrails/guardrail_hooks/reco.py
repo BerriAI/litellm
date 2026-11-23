@@ -19,10 +19,6 @@ class RecoOptionalParams(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    api_key: str | None = Field(
-        default=None,
-        description="Registration token generated in the Reco console. Sent as the x-api-key header; Reco derives the tenant from it. Either api_key or reco_tenant_id is required.",
-    )
     reco_tenant_id: str | None = Field(
         default=None,
         description="Legacy tenant identifier for the Reco account, as a UUID. Sent as the X-Reco-Tenant-Id header when set. Either api_key or reco_tenant_id is required.",
@@ -47,6 +43,11 @@ class RecoOptionalParams(BaseModel):
 
 class RecoConfigModel(GuardrailConfigModel[RecoOptionalParams]):
     """Configuration parameters for the Reco guardrail"""
+
+    api_key: str | None = Field(
+        default=None,
+        description="Registration token generated in the Reco console. Sent as the x-api-key header; Reco derives the tenant from it. Either api_key or reco_tenant_id is required.",
+    )
 
     @staticmethod
     def ui_friendly_name() -> str:
