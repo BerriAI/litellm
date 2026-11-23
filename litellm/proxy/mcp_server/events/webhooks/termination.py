@@ -46,7 +46,7 @@ async def end_upstream(
             {
                 "name": row.event_name,
                 "arguments": dict(row.arguments),
-                "delivery": {"url": callback_url(settings, row.id)},
+                "delivery": {"url": callback_url(settings, row.id, row.upstream_secret)},
             },
             routing_headers(row.event_name, row.arguments, descriptor),
         )
@@ -70,9 +70,10 @@ async def terminate(
     *,
     notify: bool = True,
 ) -> None:
-    if row.status == "terminated" or not await store.end_if_current(row.id, row.upstream_subscription_id):
+    if row.status == "terminated" or not await store.end_if_current(
+        row.id, row.upstream_subscription_id, row.generation
+    ):
         return
-    await store.drop_deliveries(row.id)
     await notify_termination(row, failure, settings, runtime, post, lookup, notify=notify)
 
 
