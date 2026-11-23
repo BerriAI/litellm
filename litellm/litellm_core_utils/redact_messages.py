@@ -11,9 +11,9 @@ import asyncio
 import copy
 import inspect
 import json
-from collections.abc import Iterable, Iterator, Mapping, Sequence
+from collections.abc import Awaitable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Any, Final, Protocol
+from typing import TYPE_CHECKING, Any, Final, Protocol, TypeVar
 
 from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
 from pydantic_core import to_jsonable_python
@@ -376,27 +376,46 @@ def _logprobs_key(logprobs: object) -> tuple[object, ...]:
     return values if values or logprobs in (None, []) else (logprobs,)
 
 
-def _token_data(holder: object) -> tuple[str, ...]:
-    components: Final = (
+def _comparable_key(part: tuple[object, ...]) -> str:
+    return json.dumps(to_jsonable_python(part, serialize_unknown=True)) if part else ""
+
+
+@dataclass(frozen=True, slots=True)
+class _TokenData:
+    token_ids: tuple[str, ...]
+    logprobs: str
+
+    def pairs_with(self, served: "_TokenData") -> bool:
+        if any(served.token_ids):
+            return any(
+                ids and ids == served_ids for ids, served_ids in zip(self.token_ids, served.token_ids, strict=True)
+            )
+        return bool(served.logprobs) and self.logprobs == served.logprobs
+
+
+def _token_data(holder: object) -> _TokenData:
+    token_ids: Final = (
         stream_item_items(holder, "token_ids"),
         *(
             stream_item_items(stream_item_field(field_holder, "provider_specific_fields"), "token_ids")
             for field_holder in (holder, stream_item_field(holder, "message"))
         ),
-        _logprobs_key(stream_item_field(holder, "logprobs")),
     )
-    return tuple(json.dumps(to_jsonable_python(part, serialize_unknown=True)) if part else "" for part in components)
+    return _TokenData(
+        token_ids=tuple(_comparable_key(ids) for ids in token_ids),
+        logprobs=_comparable_key(_logprobs_key(stream_item_field(holder, "logprobs"))),
+    )
 
 
 @dataclass(frozen=True, slots=True)
-class TokenDataOutput:
-    token_data: tuple[str, ...]
+class _TokenDataOutput:
+    token_data: _TokenData
     output: tuple[object, ...]
 
 
-def token_data_outputs(response: object) -> tuple[TokenDataOutput, ...]:
+def _token_data_outputs(response: object) -> tuple[_TokenDataOutput, ...]:
     return tuple(
-        TokenDataOutput(_token_data(holder), _holder_output(holder))
+        _TokenDataOutput(_token_data(holder), _holder_output(holder))
         for holder in _token_data_holders(response)
         if _carries_token_data(holder)
     )
@@ -408,27 +427,31 @@ def _drop_token_data(holder: object) -> None:
         _set_field(holder, "logprobs", None)
 
 
-def _shares_token_data(original: tuple[str, ...], served: tuple[str, ...]) -> bool:
-    return any(part and part == served_part for part, served_part in zip(original, served, strict=True))
-
-
 def _keeps_every_field(original: tuple[object, ...], served: tuple[object, ...]) -> bool:
     return all(keeps_original_output(before, after) for before, after in zip(original, served, strict=True))
 
 
-def _hides_original_output(holder: object, outputs_before: tuple[TokenDataOutput, ...]) -> bool:
+def _hides_original_output(holder: object, outputs_before: tuple[_TokenDataOutput, ...]) -> bool:
     token_data: Final = _token_data(holder)
     output: Final = _holder_output(holder)
-    originals: Final = tuple(
-        before.output for before in outputs_before if _shares_token_data(before.token_data, token_data)
-    )
+    originals: Final = tuple(before.output for before in outputs_before if before.token_data.pairs_with(token_data))
     return bool(originals) and not any(_keeps_every_field(original, output) for original in originals)
 
 
-def drop_token_data_of_rewritten_outputs(response: object, outputs_before: tuple[TokenDataOutput, ...]) -> None:
+def _drop_token_data_of_rewritten_outputs(response: object, outputs_before: tuple[_TokenDataOutput, ...]) -> None:
     for holder in _token_data_holders(response):
         if _carries_token_data(holder) and _hides_original_output(holder, outputs_before):
             _drop_token_data(holder)
+
+
+_Hooked = TypeVar("_Hooked")
+
+
+async def without_hidden_token_data(response: object, hooked: Awaitable[_Hooked]) -> _Hooked:
+    outputs_before: Final = _token_data_outputs(response)
+    result: Final = await hooked
+    _drop_token_data_of_rewritten_outputs(response if result is None else result, outputs_before)
+    return result
 
 
 def _redact_provider_specific_fields_dict(choice: Mapping[str, object]) -> None:

@@ -210,11 +210,7 @@ from litellm.litellm_core_utils.litellm_logging import (
     deployment_pricing_model_info,
 )
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
-from litellm.litellm_core_utils.redact_messages import (
-    drop_token_data_of_rewritten_outputs,
-    drop_token_ids,
-    token_data_outputs,
-)
+from litellm.litellm_core_utils.redact_messages import drop_token_ids, without_hidden_token_data
 from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
@@ -4829,10 +4825,9 @@ class ProxyLogging:
         3. /image/generation
         4. /files
         """
-        outputs_before: Final = token_data_outputs(response)
-        served: Final = await self._post_call_success_response(data, response, user_api_key_dict)
-        drop_token_data_of_rewritten_outputs(served, outputs_before)
-        return served
+        return await without_hidden_token_data(
+            response, self._post_call_success_response(data, response, user_api_key_dict)
+        )
 
     async def _post_call_success_response(
         self,
@@ -4942,7 +4937,9 @@ class ProxyLogging:
             return
         if callback.post_call_already_checked(guardrails.request_view, run.response) is True:
             return
-        run.adopt(await self._post_call_guardrail(guardrails, callback, run.response))
+        run.adopt(
+            await without_hidden_token_data(run.response, self._post_call_guardrail(guardrails, callback, run.response))
+        )
 
     async def _post_call_parallel_guardrail(
         self,
@@ -4960,7 +4957,9 @@ class ProxyLogging:
                 return
             if callback.post_call_already_checked(request_view, run.response) is True:
                 return
-            _ = await self._post_call_guardrail(guardrails, callback, run.response)
+            _ = await without_hidden_token_data(
+                run.response, self._post_call_guardrail(guardrails, callback, run.response)
+            )
         except BaseException as e:
             if not _exception_changes_request_flow(e):
                 raise
@@ -5004,8 +5003,11 @@ class ProxyLogging:
         if not isinstance(callback, CustomLogger):
             return
         run.adopt(
-            await callback.async_post_call_success_hook(
-                user_api_key_dict=user_api_key_dict, data=data, response=run.response
+            await without_hidden_token_data(
+                run.response,
+                callback.async_post_call_success_hook(
+                    user_api_key_dict=user_api_key_dict, data=data, response=run.response
+                ),
             )
         )
 

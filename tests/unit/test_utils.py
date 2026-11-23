@@ -6190,6 +6190,96 @@ async def test_deployment_hook_that_only_attaches_search_results_keeps_vllm_toke
     assert getattr(response.choices[0], "logprobs", None) is not None
 
 
+_VLLM_ROME_TOKEN_IDS: Final = [785, 6722, 315, 15344, 374, 21718, 13]
+
+
+class _ReaskingDeploymentHook(CustomLogger):
+    async def async_post_call_success_deployment_hook(
+        self, request_data: dict[str, object], response: object, call_type: CallTypes | None
+    ) -> ModelResponse | None:
+        if not isinstance(response, ModelResponse):
+            return None
+        choice: Final = response.choices[0]
+        if not isinstance(choice, Choices):
+            return None
+        rome: Final = choice.model_copy(
+            update={
+                "message": choice.message.model_copy(update={"content": "The capital of Italy is Rome."}),
+                "token_ids": _VLLM_ROME_TOKEN_IDS,
+                "provider_specific_fields": {"token_ids": _VLLM_ROME_TOKEN_IDS},
+                "logprobs": None,
+            }
+        )
+        return response.model_copy(update={"choices": [rome]})
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_model_level_masking_guardrail_drops_token_data_of_a_new_answer_an_earlier_hook_returned(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
+        ContentFilterGuardrail,
+    )
+    from litellm.types.guardrails import BlockedWord, ContentFilterAction, GuardrailEventHooks
+
+    mask_rome: Final = ContentFilterGuardrail(
+        guardrail_name="mask-rome",
+        blocked_words=[BlockedWord(keyword="Rome", action=ContentFilterAction.MASK)],
+        event_hook=GuardrailEventHooks.post_call,
+    )
+    monkeypatch.setattr(litellm, "callbacks", [_ReaskingDeploymentHook(), mask_rome])
+    _mock_vllm_chat_answer(monkeypatch, "The capital of France is Paris.")
+
+    response: Final = await litellm.acompletion(
+        model="hosted_vllm/Qwen/Qwen3-0.6B",
+        api_base="http://vllm.invalid/v1",
+        messages=[{"role": "user", "content": "What is the capital of France?"}],
+        return_token_ids=True,
+        guardrails=["mask-rome"],
+        num_retries=0,
+    )
+
+    assert isinstance(response, ModelResponse)
+    assert response.choices[0].message.content == "The capital of Italy is [KEYWORD_REDACTED]."
+    assert response.choices[0].provider_specific_fields["token_ids"] is None
+
+
+class _ParisMaskingDeploymentV2(CustomLoggerV2):
+    @on(Hook.post_deployment_success, reads={Field.response}, writes={Field.response})
+    async def post_success(self, view: object, ctx: CallContext[object]) -> Patch | None:
+        response: Final = getattr(view, "response")  # noqa: B009  # the view's declared field
+        if not isinstance(response, ModelResponse):
+            return None
+        masked: Final = response.model_copy(deep=True)
+        choice: Final = masked.choices[0]
+        if not isinstance(choice, Choices) or choice.message.content is None:
+            return None
+        choice.message.content = choice.message.content.replace("Paris", "[MASKED]")
+        return Patch().set(Field.response, masked)
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_v2_deployment_callback_that_masks_the_answer_drops_vllm_token_data(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [_ParisMaskingDeploymentV2()])
+    _mock_vllm_chat_answer(monkeypatch, "The capital of France is Paris.")
+
+    response: Final = await litellm.acompletion(
+        model="hosted_vllm/Qwen/Qwen3-0.6B",
+        api_base="http://vllm.invalid/v1",
+        messages=[{"role": "user", "content": "What is the capital of France?"}],
+        return_token_ids=True,
+        num_retries=0,
+    )
+
+    assert isinstance(response, ModelResponse)
+    assert response.choices[0].message.content == "The capital of France is [MASKED]."
+    assert response.choices[0].provider_specific_fields["token_ids"] is None
+
+
 class _GuardrailBlocked(Exception):
     pass
 

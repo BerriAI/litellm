@@ -2059,17 +2059,11 @@ async def async_post_call_success_deployment_hook(
     """
     Allow modifying / reviewing the response just after it's received from the deployment.
     """
-    from litellm.litellm_core_utils.redact_messages import (
-        drop_token_data_of_rewritten_outputs,
-        token_data_outputs,
-    )
+    from litellm.litellm_core_utils.redact_messages import without_hidden_token_data
 
-    outputs_before: Final = token_data_outputs(response)
-    hooked: Final = await _post_call_success_deployment_response(
-        request_data, response, call_type, include_v2=include_v2
+    return await without_hidden_token_data(
+        response, _post_call_success_deployment_response(request_data, response, call_type, include_v2=include_v2)
     )
-    drop_token_data_of_rewritten_outputs(hooked, outputs_before)
-    return hooked
 
 
 async def _post_call_success_deployment_response(
@@ -2124,11 +2118,16 @@ async def _post_deployment_success_patch(
 async def _post_deployment_success(
     callback: CustomLogger, request_data: object, response: object, call_type: CallTypes | None
 ) -> object:
+    from litellm.litellm_core_utils.redact_messages import without_hidden_token_data
+
     try:
-        return await callback.async_post_call_success_deployment_hook(
-            request_data,  # pyright: ignore[reportArgumentType]  # the attempt's request dict
-            cast(LLMResponseTypes, response),
-            call_type,
+        return await without_hidden_token_data(
+            response,
+            callback.async_post_call_success_deployment_hook(
+                request_data,  # pyright: ignore[reportArgumentType]  # the attempt's request dict
+                cast(LLMResponseTypes, response),
+                call_type,
+            ),
         )
     except Exception:  # noqa: BLE001  # a broken callback must not fail a completed request
         if isinstance(callback, CustomGuardrail):

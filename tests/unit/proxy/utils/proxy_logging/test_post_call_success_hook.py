@@ -15,6 +15,7 @@ from openai.types.responses.response_output_text import Logprob
 import litellm
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.custom_logger_v2 import CallContext, CustomLoggerV2, Field, Hook, Patch, on
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.utils import ProxyLogging
 from litellm.types.guardrails import GuardrailEventHooks
@@ -453,6 +454,100 @@ async def test_post_call_success_hook_keeps_token_data_of_a_new_answer_a_callbac
     assert [entry["token"] for entry in choice["logprobs"]["content"]] == ["The capital of Italy is Rome."]
 
 
+class _InPlaceRomeMaskingLogger(CustomLogger):
+    async def async_post_call_success_hook(
+        self, data: dict[str, object], user_api_key_dict: UserAPIKeyAuth, response: object
+    ) -> None:
+        assert isinstance(response, litellm.ModelResponse)
+        choice = response.choices[0]
+        assert isinstance(choice, litellm.Choices)
+        choice.message.content = choice.message.content.replace("Rome", "[MASKED]")
+
+
+class _ReaskingGuardrail(CustomGuardrail):
+    async def async_post_call_success_hook(
+        self, data: dict[str, object], user_api_key_dict: UserAPIKeyAuth, response: object
+    ) -> litellm.ModelResponse:
+        return _vllm_chat_response("The capital of Italy is Rome.", token_ids=_ROME_TOKEN_IDS, logprob=-0.3)
+
+
+def _rome_mask(run_in_parallel: bool) -> CustomGuardrail:
+    from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
+        ContentFilterGuardrail,
+    )
+    from litellm.types.guardrails import BlockedWord, ContentFilterAction
+
+    return ContentFilterGuardrail(
+        guardrail_name="mask-rome",
+        blocked_words=[BlockedWord(keyword="Rome", action=ContentFilterAction.MASK)],
+        event_hook=GuardrailEventHooks.post_call,
+        default_on=True,
+        run_in_parallel=run_in_parallel,
+    )
+
+
+def _reasking_guardrail() -> CustomGuardrail:
+    return _ReaskingGuardrail(guardrail_name="reask", event_hook=GuardrailEventHooks.post_call, default_on=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("callbacks", "served_answer"),
+    [
+        (lambda: [_ReaskingLogger(), _InPlaceRomeMaskingLogger()], "The capital of Italy is [MASKED]."),
+        (lambda: [_reasking_guardrail(), _rome_mask(False)], "The capital of Italy is [KEYWORD_REDACTED]."),
+        (lambda: [_reasking_guardrail(), _rome_mask(True)], "The capital of Italy is [KEYWORD_REDACTED]."),
+    ],
+    ids=["callback", "guardrail", "parallel-guardrail"],
+)
+async def test_post_call_success_hook_drops_token_data_when_a_later_hook_masks_a_new_answer(
+    proxy_logging, make_user_api_key_auth, monkeypatch, callbacks, served_answer
+):
+    monkeypatch.setattr(litellm, "callbacks", callbacks())
+
+    served = await proxy_logging.post_call_success_hook(
+        data={"model": "m", "messages": [{"role": "user", "content": "capital of France?"}]},
+        response=_vllm_chat_response("The capital of France is Paris."),
+        user_api_key_dict=make_user_api_key_auth(),
+    )
+
+    choice = served.model_dump()["choices"][0]
+    assert choice["message"]["content"] == served_answer
+    assert choice["provider_specific_fields"]["token_ids"] is None
+    assert choice["logprobs"] is None
+
+
+class _AnswerCopyingLogger(CustomLogger):
+    async def async_post_call_success_hook(
+        self, data: dict[str, object], user_api_key_dict: UserAPIKeyAuth, response: object
+    ) -> None:
+        assert isinstance(response, dict)
+        first, second = response["choices"]
+        first["message"]["content"] = second["message"]["content"]
+
+
+@pytest.mark.asyncio
+async def test_post_call_success_hook_drops_token_data_of_a_choice_rewritten_to_a_sibling_with_equal_logprobs(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    monkeypatch.setattr(litellm, "callbacks", [_AnswerCopyingLogger()])
+    hidden = _vllm_chat_response("The capital of France is Paris.").model_dump()
+    sibling = _vllm_chat_response("Lyon is in France.", token_ids=(43, 44, 9625, 13)).model_dump()
+
+    served = await proxy_logging.post_call_success_hook(
+        data={"model": "m", "messages": [{"role": "user", "content": "a city in France?"}], "n": 2},
+        response={**hidden, "choices": [*hidden["choices"], {**sibling["choices"][0], "index": 1}]},
+        user_api_key_dict=make_user_api_key_auth(),
+    )
+
+    first, second = served["choices"]
+    assert first["message"]["content"] == second["message"]["content"] == "Lyon is in France."
+    assert first["provider_specific_fields"]["token_ids"] is None
+    assert first["logprobs"] is None
+    assert second["provider_specific_fields"]["token_ids"] == [43, 44, 9625, 13]
+    assert second["logprobs"] is not None
+
+
 class _FirstChoiceDroppingLogger(CustomLogger):
     async def async_post_call_success_hook(
         self, data: dict[str, object], user_api_key_dict: UserAPIKeyAuth, response: object
@@ -504,6 +599,30 @@ async def test_post_call_success_hook_drops_logprobs_when_a_callback_masks_the_s
 
     choice = served["choices"][0]
     assert choice["message"]["content"] == "The capital of France is [MASKED]."
+    assert choice["logprobs"] is None
+
+
+class _SerializedAnswerMaskingV2Callback(CustomLoggerV2):
+    @on(Hook.post_call_success, reads={Field.response}, writes={Field.response})
+    async def post_call_success(self, view: object, ctx: CallContext[object]) -> Patch:
+        return Patch().set(Field.response, json.loads(_masked(json.dumps(getattr(view, "response")))))  # noqa: B009  # the view's declared field
+
+
+@pytest.mark.asyncio
+async def test_post_call_success_hook_drops_token_data_when_a_v2_callback_masks_the_answer(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    monkeypatch.setattr(litellm, "callbacks", [_SerializedAnswerMaskingV2Callback()])
+
+    served = await proxy_logging.post_call_success_hook(
+        data={"model": "m", "messages": [{"role": "user", "content": "capital of France?"}]},
+        response=_vllm_chat_response("The capital of France is Paris.").model_dump(),
+        user_api_key_dict=make_user_api_key_auth(),
+    )
+
+    choice = served["choices"][0]
+    assert choice["message"]["content"] == "The capital of France is [MASKED]."
+    assert choice["provider_specific_fields"]["token_ids"] is None
     assert choice["logprobs"] is None
 
 
