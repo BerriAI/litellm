@@ -364,7 +364,7 @@ async def _execute_pre_request_hooks(
     tools: list[dict] | None,
     stream: bool | None,
     custom_llm_provider: str | None,
-    **kwargs,
+    **kwargs: object,
 ) -> dict:
     """
     Execute pre-request hooks from CustomLogger callbacks.
