@@ -2,13 +2,16 @@ import { parseAsString, useQueryState } from "nuqs";
 import { useResetDetailState } from "@/hooks/useUrlTab";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { User } from "lucide-react";
 
 import BulkEditUserModal from "./BulkEditUsers";
 import BulkCreateUsersButton from "@/components/bulk_create_users_button";
 import { CreateUserButton } from "@/components/CreateUserButton";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Page, PageContent, PageTabs, PageTabsList, PageTabsTrigger } from "@/components/shared/Page";
+import { PageHeader, PageHeaderControls, PageHeaderDescription, PageHeaderTitle } from "@/components/shared/PageHeader";
+import { TabsContent } from "@/components/ui/tabs";
 import {
   getPossibleUserRoles,
   getProxyBaseUrl,
@@ -19,7 +22,7 @@ import {
 import OnboardingModal, { InvitationLink } from "@/components/onboarding_link";
 
 import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
-import { all_admin_roles, isAdminRole, isProxyAdminRole } from "@/utils/roles";
+import { availableRoleDisplayLabel, all_admin_roles, isAdminRole, isProxyAdminRole } from "@/utils/roles";
 import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -323,89 +326,105 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   );
 
   return (
-    <div className="w-full overflow-hidden p-8">
-      <div className="mb-4 flex items-center justify-between">
-        <div className="flex space-x-3">
-          {userListQuery.isLoading && (
-            <>
-              <Skeleton className="h-9 w-28" />
-              <Skeleton className="h-9 w-36" />
-              <Skeleton className="h-9 w-28" />
-            </>
-          )}
-          {!userListQuery.isLoading && userID && accessToken && (
-            <>
-              {isProxyAdmin && (
-                <CreateUserButton userID={userID} accessToken={accessToken} possibleUIRoles={possibleUIRoles} />
-              )}
+    <Page>
+      <PageContent>
+        <PageTabs defaultValue="users">
+          <PageHeader>
+            <PageHeaderTitle>
+              <User />
+              {t("shell.nav.items.internalUsers")}
+            </PageHeaderTitle>
+            <PageHeaderDescription>{t("shell.pageDescriptions.users")}</PageHeaderDescription>
+            <PageHeaderControls className="flex-wrap">
+              <div className="flex flex-wrap gap-2">
+                {userListQuery.isLoading && (
+                  <>
+                    <Skeleton className="h-9 w-28" />
+                    <Skeleton className="h-9 w-36" />
+                    <Skeleton className="h-9 w-28" />
+                  </>
+                )}
+                {!userListQuery.isLoading && userID && accessToken && (
+                  <>
+                    {isProxyAdmin && (
+                      <CreateUserButton userID={userID} accessToken={accessToken} possibleUIRoles={possibleUIRoles} />
+                    )}
 
-              {isProxyAdmin && (
-                <BulkCreateUsersButton accessToken={accessToken} teams={teams} possibleUIRoles={possibleUIRoles} />
-              )}
+                    {isProxyAdmin && (
+                      <BulkCreateUsersButton
+                        accessToken={accessToken}
+                        teams={teams}
+                        possibleUIRoles={possibleUIRoles}
+                      />
+                    )}
 
-              {isProxyAdmin && (
-                <Button
-                  type="button"
-                  onClick={handleToggleSelectionMode}
-                  variant={selectionMode ? "default" : "outline"}
-                  data-testid="toggle-user-selection"
-                >
-                  {selectionMode ? t("users.page.selection.cancel") : t("users.page.selection.start")}
-                </Button>
-              )}
+                    {isProxyAdmin && (
+                      <Button
+                        type="button"
+                        onClick={handleToggleSelectionMode}
+                        variant={selectionMode ? "default" : "outline"}
+                        data-testid="toggle-user-selection"
+                      >
+                        {selectionMode ? t("users.page.selection.cancel") : t("users.page.selection.start")}
+                      </Button>
+                    )}
 
-              {isProxyAdmin && selectionMode && (
-                <Button
-                  type="button"
-                  onClick={() => setIsBulkEditModalVisible(true)}
-                  disabled={selectedUsers.length === 0}
-                  data-testid="bulk-edit-users"
-                >
-                  {t("users.page.selection.bulkEdit", { count: selectedUsers.length })}
-                </Button>
-              )}
-            </>
-          )}
-        </div>
-      </div>
-
-      {isProxyAdmin ? (
-        <Tabs defaultValue="users" className="gap-0">
-          <TabsList variant="line" className="mb-4">
-            <TabsTrigger value="users" className="flex-none data-active:text-primary after:bg-primary">
-              {t("users.page.tabs.users")}
-            </TabsTrigger>
-            <TabsTrigger value="default-settings" className="flex-none data-active:text-primary after:bg-primary">
-              {t("users.page.tabs.defaultSettings")}
-            </TabsTrigger>
-          </TabsList>
-
-          <TabsContent value="users" keepMounted>
-            {usersTable}
-          </TabsContent>
-
-          <TabsContent value="default-settings" keepMounted>
-            {!userID || !userRole || !accessToken ? (
-              <div
-                className="flex h-64 items-center justify-center"
-                role="status"
-                aria-label={t("users.page.defaultSettingsLoading")}
-              >
-                <div className="w-full max-w-lg space-y-3">
-                  <Skeleton className="h-5 w-1/3" />
-                  <Skeleton className="h-5 w-full" />
-                  <Skeleton className="h-5 w-full" />
-                  <Skeleton className="h-5 w-2/3" />
-                </div>
+                    {isProxyAdmin && selectionMode && (
+                      <Button
+                        type="button"
+                        onClick={() => setIsBulkEditModalVisible(true)}
+                        disabled={selectedUsers.length === 0}
+                        data-testid="bulk-edit-users"
+                      >
+                        {t("users.page.selection.bulkEdit", { count: selectedUsers.length })}
+                      </Button>
+                    )}
+                  </>
+                )}
               </div>
-            ) : (
-              <DefaultUserSettingsForm possibleUIRoles={possibleUIRoles} />
-            )}
-          </TabsContent>
-        </Tabs>
-      ) : (
-        usersTable
-      )}
+              {isProxyAdmin && (
+                <PageTabsList className="w-full flex-none sm:w-auto sm:flex-1">
+                  <PageTabsTrigger value="users" className="data-active:text-primary after:bg-primary">
+                    {t("users.page.tabs.users")}
+                  </PageTabsTrigger>
+                  <PageTabsTrigger value="default-settings" className="data-active:text-primary after:bg-primary">
+                    {t("users.page.tabs.defaultSettings")}
+                  </PageTabsTrigger>
+                </PageTabsList>
+              )}
+            </PageHeaderControls>
+          </PageHeader>
+
+          {isProxyAdmin ? (
+            <>
+              <TabsContent value="users" keepMounted>
+                {usersTable}
+              </TabsContent>
+
+              <TabsContent value="default-settings" keepMounted>
+                {!userID || !userRole || !accessToken ? (
+                  <div
+                    className="flex h-64 items-center justify-center"
+                    role="status"
+                    aria-label={t("users.page.defaultSettingsLoading")}
+                  >
+                    <div className="w-full max-w-lg space-y-3">
+                      <Skeleton className="h-5 w-1/3" />
+                      <Skeleton className="h-5 w-full" />
+                      <Skeleton className="h-5 w-full" />
+                      <Skeleton className="h-5 w-2/3" />
+                    </div>
+                  </div>
+                ) : (
+                  <DefaultUserSettingsForm possibleUIRoles={possibleUIRoles} />
+                )}
+              </TabsContent>
+            </>
+          ) : (
+            usersTable
+          )}
+        </PageTabs>
+      </PageContent>
 
       {/* Existing Modals */}
       <DeleteResourceModal
@@ -419,7 +438,11 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
           {
             label: t("users.page.deleteModal.globalProxyRole"),
             value:
-              (userToDelete?.user_role && possibleUIRoles?.[userToDelete.user_role]?.ui_label) ||
+              (userToDelete?.user_role &&
+                availableRoleDisplayLabel(
+                  userToDelete.user_role,
+                  possibleUIRoles?.[userToDelete.user_role]?.ui_label,
+                )) ||
               userToDelete?.user_role ||
               "-",
           },
@@ -450,7 +473,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
         userModels={userModels}
         allowAllUsers={userRole ? isAdminRole(userRole) : false}
       />
-    </div>
+    </Page>
   );
 };
 

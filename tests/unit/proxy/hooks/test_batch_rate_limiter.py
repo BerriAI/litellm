@@ -7,7 +7,6 @@ are charged against a 24h token window instead of their minute counters.
 """
 
 import base64
-import itertools
 import json
 import time
 from collections.abc import Callable, Iterator, Sequence
@@ -23,17 +22,20 @@ from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm import DualCache
+from litellm.batches.batch_utils import estimate_batch_entry_tokens
 from litellm.constants import BATCH_TPD_WINDOW_SECONDS
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.hooks.batch_rate_limiter import BatchFileUsage
+from litellm.proxy.hooks.batch_rate_limiter import BatchFileUsage, PROXY_BatchRateLimiter
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     PROJECT_ITPM_DESCRIPTOR_KEY,
     PROXY_MaxParallelRequestsHandler_v3,
+    get_batch_rate_limiter,
+    run_scoped,
 )
 from litellm.proxy.utils import InternalUsageCache, hash_token
 from litellm.redis.stores.rate_limits import RateLimitScope, RateLimitStore
 from litellm.types.llms.openai import ChatCompletionUserMessage, LiteLLMBatchCreateRequest
-from tests.unit.redis.stores.fake_rate_limits import FakeRateLimits, counter_key
+from tests._support.rust_parallel_request_limiter import RustParallelRequestLimiter
 
 
 class _Clock:
@@ -49,7 +51,7 @@ def _make_limiters(clock: _Clock | None = None, rate_limit_store: RateLimitStore
     rate_limiter = PROXY_MaxParallelRequestsHandler_v3(
         internal_usage_cache=internal_usage_cache, time_provider=clock, rate_limit_store=rate_limit_store
     )
-    batch_limiter = rate_limiter._get_batch_rate_limiter()
+    batch_limiter = get_batch_rate_limiter(rate_limiter)
     assert batch_limiter is not None
     return internal_usage_cache, rate_limiter, batch_limiter
 
@@ -103,16 +105,37 @@ async def test_cumulative_batch_tokens_over_tpd_returns_429_with_remaining_daily
     assert exc.value.headers["reset_at"] == "2026-09-14 08:00:00 UTC"
 
 
+def _make_native_limiter() -> tuple[InternalUsageCache, RustParallelRequestLimiter]:
+    internal_usage_cache: Final = InternalUsageCache(dual_cache=DualCache())
+    return internal_usage_cache, RustParallelRequestLimiter(internal_usage_cache=internal_usage_cache)
+
+
+async def _submit_counted_batch(
+    monkeypatch: pytest.MonkeyPatch,
+    rate_limiter: RustParallelRequestLimiter,
+    user_api_key_dict: UserAPIKeyAuth,
+    usage: BatchFileUsage,
+) -> None:
+    async def counted(*_: object, **__: object) -> BatchFileUsage:
+        return usage
+
+    monkeypatch.setattr(PROXY_BatchRateLimiter, "count_input_file_usage", counted)
+    await rate_limiter.async_pre_call_hook(
+        user_api_key_dict,
+        DualCache(),
+        {"model": _BATCH_MODEL, "input_file_id": "file-counted", "endpoint": "/v1/chat/completions"},
+        "acreate_batch",
+    )
+
+
 @pytest.mark.asyncio
-async def test_failed_batch_submission_refunds_tpd_tokens():
-    internal_usage_cache, rate_limiter, batch_limiter = _make_limiters()
+async def test_failed_batch_submission_refunds_tpd_tokens(monkeypatch: pytest.MonkeyPatch):
+    internal_usage_cache, rate_limiter = _make_native_limiter()
     api_key = hash_token("tpd-refund-key")
     user_api_key_dict = UserAPIKeyAuth(api_key=api_key, rpm_limit=1, tpd_limit=1000)
 
-    await batch_limiter._check_and_increment_batch_counters(
-        user_api_key_dict=user_api_key_dict,
-        data={},
-        batch_usage=BatchFileUsage(total_tokens=600, request_count=6),
+    await _submit_counted_batch(
+        monkeypatch, rate_limiter, user_api_key_dict, BatchFileUsage(total_tokens=600, request_count=6)
     )
     await rate_limiter.async_post_call_failure_hook(
         request_data={},
@@ -121,17 +144,15 @@ async def test_failed_batch_submission_refunds_tpd_tokens():
     )
 
     assert await _counter(internal_usage_cache, rate_limiter, "api_key_tpd", api_key, "tokens") == 0
-    await batch_limiter._check_and_increment_batch_counters(
-        user_api_key_dict=user_api_key_dict,
-        data={},
-        batch_usage=BatchFileUsage(total_tokens=1000, request_count=10),
+    await _submit_counted_batch(
+        monkeypatch, rate_limiter, user_api_key_dict, BatchFileUsage(total_tokens=1000, request_count=10)
     )
     assert await _counter(internal_usage_cache, rate_limiter, "api_key_tpd", api_key, "tokens") == 1000
 
 
 @pytest.mark.asyncio
-async def test_tpd_refund_applies_once_and_only_to_daily_counters():
-    internal_usage_cache, rate_limiter, batch_limiter = _make_limiters()
+async def test_tpd_refund_applies_once_and_only_to_daily_counters(monkeypatch: pytest.MonkeyPatch):
+    internal_usage_cache, rate_limiter = _make_native_limiter()
     team_key = UserAPIKeyAuth(
         api_key=hash_token("tpd-refund-team-key"),
         rpm_limit=100,
@@ -140,11 +161,7 @@ async def test_tpd_refund_applies_once_and_only_to_daily_counters():
         team_tpd_limit=5000,
     )
 
-    await batch_limiter._check_and_increment_batch_counters(
-        user_api_key_dict=team_key,
-        data={},
-        batch_usage=BatchFileUsage(total_tokens=800, request_count=8),
-    )
+    await _submit_counted_batch(monkeypatch, rate_limiter, team_key, BatchFileUsage(total_tokens=800, request_count=8))
     await rate_limiter.async_post_call_failure_hook(
         request_data={}, original_exception=RuntimeError("boom"), user_api_key_dict=team_key
     )
@@ -253,25 +270,28 @@ async def test_end_user_tpd_is_enforced_per_end_user():
     assert "end_user_tpd: customer-a" in str(exc.value.detail)
 
 
-def test_tpd_only_key_is_not_skipped_as_having_no_limits():
+@pytest.mark.asyncio
+async def test_tpd_only_key_is_not_skipped_as_having_no_limits():
     _internal_usage_cache, _rate_limiter, batch_limiter = _make_limiters()
-    descriptors = batch_limiter._create_batch_rate_limit_descriptors(
+    descriptors = await batch_limiter._create_batch_rate_limit_descriptors(
         user_api_key_dict=UserAPIKeyAuth(api_key=hash_token("tpd-only"), tpd_limit=100),
         data={},
     )
     assert batch_limiter._has_applicable_batch_rate_limits(descriptors) is True
 
 
-def test_online_descriptors_ignore_tpd_limit():
+@pytest.mark.asyncio
+async def test_online_descriptors_ignore_tpd_limit():
     _internal_usage_cache, rate_limiter, _batch_limiter = _make_limiters()
     api_key = hash_token("online-key")
-    descriptors = rate_limiter.create_rate_limit_descriptors(
-        user_api_key_dict=UserAPIKeyAuth(api_key=api_key, rpm_limit=5, tpd_limit=100, team_id="t", team_tpd_limit=9),
-        data={"model": "gpt-4o"},
-        rpm_limit_type=None,
-        tpm_limit_type=None,
-        model_has_failures=False,
+    scoped = await run_scoped(
+        rate_limiter,
+        UserAPIKeyAuth(api_key=api_key, rpm_limit=5, tpd_limit=100, team_id="t", team_tpd_limit=9),
+        {"model": "gpt-4o"},
+        {"kind": "request"},
+        {"kind": "build"},
     )
+    descriptors = scoped.descriptors
     assert [(d["key"], d["rate_limit"]["window_size"]) for d in descriptors] == [("api_key", rate_limiter.window_size)]
 
 
@@ -375,6 +395,20 @@ async def test_count_input_file_usage_matches_token_counter(openai_files: respx.
     assert content_route.call_count == 1
     assert usage.request_count == 3
     assert usage.total_tokens == _token_counter_total(rows)
+
+
+@pytest.mark.asyncio
+async def test_count_input_file_usage_estimates_whole_unsupported_native_row(openai_files: respx.MockRouter) -> None:
+    _, _, batch_limiter = _make_limiters()
+    row: Final = b'{"request":{"contents":[{"parts":[{"text":"hello"},{"fileData":{}}]}]}}'
+    openai_files.get("https://api.openai.com/v1/files/file-native/content").mock(
+        return_value=httpx.Response(200, content=row)
+    )
+
+    usage: Final = await batch_limiter.count_input_file_usage(file_id="file-native", custom_llm_provider="openai")
+
+    assert usage.request_count == 1
+    assert usage.total_tokens == estimate_batch_entry_tokens(row)
 
 
 @pytest.mark.asyncio
@@ -667,7 +701,9 @@ async def test_model_routed_batch_is_charged_to_the_project_cap_of_the_model_it_
         project_id="project-1",
         project_metadata={"model_batch_enqueued_token_limit": {"routed-batch-model": 1}},
     )
-    data, _ = await _model_routed_batch_data(openai_files, monkeypatch, query_string, routing_headers, user_api_key_dict)
+    data, _ = await _model_routed_batch_data(
+        openai_files, monkeypatch, query_string, routing_headers, user_api_key_dict
+    )
     _, _, batch_limiter = _make_limiters()
 
     with pytest.raises(HTTPException) as exc:
@@ -858,18 +894,6 @@ def _row_naming(model: str) -> _BatchLine:
     )
 
 
-def _redis_with_open_windows() -> tuple[FakeRateLimits, dict[str, float]]:
-    counters: Final[dict[str, float]] = {}
-
-    async def check_and_increment_by_n(keys: list[str], args: list[float]) -> list[float]:
-        counter_keys: Final = keys[1::2]
-        for key, increment in zip(counter_keys, args[1::4]):
-            counters[key] = counters.get(key, 0) + increment
-        return [0, *itertools.chain.from_iterable((counters[key], 0) for key in counter_keys)]
-
-    return FakeRateLimits(check_and_increment_by_n_script=check_and_increment_by_n), counters
-
-
 def _alias_router(model_group_alias: dict[str, str]) -> litellm.Router:
     return litellm.Router(
         model_list=[
@@ -960,8 +984,7 @@ async def test_alias_routed_row_is_charged_once_when_the_alias_and_deployment_mo
     openai_files.get(_ROUTED_FILE_URL).mock(
         side_effect=_serve_file_to_the_deployment_key((_row_naming(_DEPLOYMENT_MODEL),))
     )
-    redis, redis_counters = _redis_with_open_windows()
-    _, _, batch_limiter = _make_limiters(rate_limit_store=redis.store())
+    internal_usage_cache, rate_limiter, batch_limiter = _make_limiters()
     api_key: Final = hash_token("sk-batch")
 
     await batch_limiter.async_pre_call_hook(
@@ -977,10 +1000,10 @@ async def test_alias_routed_row_is_charged_once_when_the_alias_and_deployment_mo
         call_type="acreate_batch",
     )
 
-    key_tokens: Final = redis_counters[counter_key(RateLimitScope("api_key_tpd", api_key).counter("tokens"))]
-    project_tokens: Final = redis_counters[
-        counter_key(RateLimitScope(PROJECT_ITPM_DESCRIPTOR_KEY, f"project-1:{_BATCH_ALIAS}").counter("tokens"))
-    ]
+    key_tokens: Final = await _counter(internal_usage_cache, rate_limiter, "api_key_tpd", api_key, "tokens")
+    project_tokens: Final = await _counter(
+        internal_usage_cache, rate_limiter, PROJECT_ITPM_DESCRIPTOR_KEY, f"project-1:{_BATCH_ALIAS}", "tokens"
+    )
     assert key_tokens > 0
     assert project_tokens == key_tokens
 

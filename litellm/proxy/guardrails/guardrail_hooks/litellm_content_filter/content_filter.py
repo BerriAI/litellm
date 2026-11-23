@@ -18,7 +18,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 from functools import partial
 from re import Pattern
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypedDict, TypeVar, cast
+from typing import TYPE_CHECKING, Final, Literal, Optional, TypedDict, TypeVar, cast
 
 import yaml
 from fastapi import HTTPException
@@ -85,7 +85,7 @@ from .patterns import PATTERN_EXTRA_CONFIG, PATTERN_STREAMING_HOLDBACK_CHARS, ge
 
 MAX_KEYWORD_VALUE_GAP_WORDS: Final = 1
 _DECODED_ARGUMENTS: Final = TypeAdapter(object)
-_StreamItemT: Final = TypeVar("_StreamItemT")
+_StreamItemT = TypeVar("_StreamItemT")
 _JSON_ENTRIES: Final = TypeAdapter(list[object])
 GAP_WORD_TOKENIZER: Final = re.compile(r"\b\w+\b")
 SENTENCE_TERMINATORS: Final = re.compile(r"[.!?]+")
@@ -330,7 +330,7 @@ class CategoryConfig:
         self.inherit_from = inherit_from
         self.additional_block_words = [w.lower() for w in additional_block_words] if additional_block_words else []
         # Phrase patterns: regex patterns for catching paraphrases
-        self.phrase_patterns: list[tuple[str, Pattern]] = []
+        self.phrase_patterns: list[tuple[str, Pattern[str]]] = []
         for p in phrase_patterns or []:
             try:
                 self.phrase_patterns.append((p, re.compile(p, re.IGNORECASE)))
@@ -2239,9 +2239,9 @@ class ContentFilterGuardrail(CustomGuardrail):
     async def async_post_call_streaming_iterator_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
-        response: Any,
+        response: AsyncIterable[object],
         request_data: dict,
-    ) -> AsyncGenerator[ModelResponseStream, None]:
+    ) -> AsyncGenerator[object, None]:
         """
         Process streaming response chunks and check for blocked content.
 

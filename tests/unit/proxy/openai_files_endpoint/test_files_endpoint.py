@@ -5,7 +5,7 @@ import json
 import tempfile
 import tracemalloc
 from collections import Counter
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from email.parser import BytesParser
 from typing import IO, Final, List, Optional
 from urllib.parse import quote
@@ -22,6 +22,7 @@ import litellm
 from litellm import CreateFileRequest, Router
 from litellm.constants import ANTHROPIC_DEFAULT_FILE_LIST_LIMIT
 from litellm.files.types import FileContentStreamingResult
+from litellm.litellm_core_utils.batch_utils import rewrite_rows_naming_model
 from litellm.litellm_core_utils.prompt_templates.file_id_utils import extract_file_data
 from litellm.models.managed_files import LiteLLM_ManagedFileTable
 from litellm.proxy._types import LiteLLM_UserTableFiltered, LitellmUserRoles, UserAPIKeyAuth
@@ -1428,8 +1429,25 @@ async def test_route_create_file_rewrites_a_large_upload_on_disk_and_discards_it
     rows: Final = 4096
     rows_per_model: Final[list[Counter[str]]] = []
     uploaded_handles: Final[list[IO[bytes]]] = []
+    upload_allocations: Final[list[int]] = []
+    upload_filters: Final[list[tracemalloc.Filter]] = [
+        tracemalloc.Filter(True, function.__code__.co_filename, all_frames=True)
+        for function in (route_create_file, rewrite_rows_naming_model)
+    ]
+
+    def record_upload_allocations() -> None:
+        snapshot: Final = tracemalloc.take_snapshot().filter_traces(upload_filters)
+        upload_allocations.append(sum(trace.size for trace in snapshot.traces))
+
+    rollover: Final[Callable[[tempfile.SpooledTemporaryFile[bytes]], None]] = tempfile.SpooledTemporaryFile.rollover
+
+    def record_before_rollover(spool: tempfile.SpooledTemporaryFile[bytes]) -> None:
+        record_upload_allocations()
+        rollover(spool)
 
     async def stream_the_upload_like_a_provider(*, file: tuple[str, IO[bytes], str], **_: object) -> OpenAIFileObject:
+        if tracemalloc.is_tracing():
+            record_upload_allocations()
         uploaded_handles.append(file[1])
         rows_per_model.append(Counter(json.loads(line)["body"]["model"] for line in file[1]))
         return OpenAIFileObject(
@@ -1447,14 +1465,15 @@ async def test_route_create_file_rewrites_a_large_upload_on_disk_and_discards_it
     )
     llm_router: Final = _router_with_executed_batch_model()
     await _route_alias_upload(llm_router, ("warm-up.jsonl", io.BytesIO(row), "application/jsonl"))
+    mocker.patch.object(tempfile.SpooledTemporaryFile, "rollover", new=record_before_rollover)
     with tempfile.TemporaryFile() as upload:
         upload.write(b"\n".join(itertools.repeat(row, rows)))
         upload_size: Final = upload.tell()
         upload.seek(0)
-        tracemalloc.start()
+        tracemalloc.start(10)
         try:
             await _route_alias_upload(llm_router, ("batch.jsonl", upload, "application/jsonl"))
-            peak: Final = tracemalloc.get_traced_memory()[1]
+            peak: Final = max(upload_allocations)
         finally:
             tracemalloc.stop()
 

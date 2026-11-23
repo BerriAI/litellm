@@ -2,10 +2,10 @@
 //! context window the prompt exceeds, those outside the request's `allowed_model_region`, and
 //! those that cannot take a requested param, then decide which error a group with nothing left
 //! raises. The facts that need live model data (the prompt's token count, each deployment's
-//! context window, which params it takes) come from [`Host::pre_call_facts`]; every decision is
+//! context window, which params it takes) come from [`RouterHost::pre_call_facts`]; every decision is
 //! made here.
 //!
-//! [`Host::pre_call_facts`]: crate::host::Host::pre_call_facts
+//! [`RouterHost::pre_call_facts`]: crate::host::RouterHost::pre_call_facts
 
 use std::{collections::BTreeMap, sync::Arc};
 

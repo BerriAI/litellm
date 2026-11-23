@@ -35,7 +35,7 @@ from tests.integration._support.client import (
     string_value,
 )
 from tests.integration._support.database import read_rows, write_rows
-from tests.integration._support.process import graceful_stop_seconds, owned_proxy_process
+from tests.integration._support.process import graceful_stop_seconds, owned_proxy_process, pool_limit_for_prisma
 
 LARGE_ROSTER: Final = 250
 POOL_LIMIT: Final = 5
@@ -60,7 +60,7 @@ LOCK_TEAM_KEY_ROWS_SQL: Final = 'SELECT token FROM "LiteLLM_VerificationToken" W
 LOCK_BUDGET_ROW_SQL: Final = 'SELECT budget_id FROM "LiteLLM_BudgetTable" WHERE budget_id = %s FOR UPDATE'
 LOCK_HELD_PAST_DEFAULT_TRANSACTION_SECONDS: Final = 7
 POOL_HELD_PAST_DELETE_RETRIES_SECONDS: Final = 12
-SATURATED_POOL_LIMIT: Final = 2
+TWO_PRISMA_CONNECTIONS_POOL_LIMIT: Final = pool_limit_for_prisma(2)
 OLDEST_TRANSACTION_BLOCKED_BY_SQL: Final = """
 SELECT coalesce(max(extract(epoch FROM clock_timestamp() - xact_start)), 0)::float AS age
 FROM pg_stat_activity
@@ -515,7 +515,7 @@ def test_delete_waits_for_a_pooled_connection_when_every_one_is_busy(
             gateway,
             tmp_path,
             {"DATABASE_URL": database_url},
-            config=_config_with_pool_limit(tmp_path, SATURATED_POOL_LIMIT),
+            config=_config_with_pool_limit(tmp_path, TWO_PRISMA_CONNECTIONS_POOL_LIMIT),
             remove_environment=("DATABASE_URL_READ_REPLICA",),
         ) as owned,
         ThreadPoolExecutor(max_workers=3) as pool,
@@ -650,6 +650,7 @@ def test_two_deletes_racing_on_one_team_write_one_tombstone_and_one_audit_row(ga
             gateway,
             tmp_path,
             {"DATABASE_URL": os.environ["DATABASE_URL"], "LITELLM_STORE_AUDIT_LOGS": "true"},
+            config=_config_with_pool_limit(tmp_path, TWO_PRISMA_CONNECTIONS_POOL_LIMIT),
             remove_environment=("DATABASE_URL_READ_REPLICA",),
         ) as owned,
         owned.gateway.scenario() as scenario,
@@ -810,17 +811,26 @@ def test_recreating_the_same_team_id_after_delete_serves_the_fresh_team(gateway:
         assert revoked.status_code == 401, f"{revoked.status_code} {revoked.text}"
 
 
-def test_member_add_and_delete_released_together_leave_no_team_reference(gateway: Gateway) -> None:
-    with gateway.scenario() as scenario:
+def test_member_add_and_delete_released_together_leave_no_team_reference(gateway: Gateway, tmp_path: Path) -> None:
+    with (
+        owned_proxy_process(
+            gateway,
+            tmp_path,
+            {"DATABASE_URL": os.environ["DATABASE_URL"]},
+            config=_config_with_pool_limit(tmp_path, TWO_PRISMA_CONNECTIONS_POOL_LIMIT),
+            remove_environment=("DATABASE_URL_READ_REPLICA",),
+        ) as owned,
+        owned.gateway.scenario() as scenario,
+    ):
         newcomer: Final = scenario.user()
         team: Final = _create_team(scenario)
         with ThreadPoolExecutor(max_workers=2) as pool:
             with psycopg.connect(os.environ["DATABASE_URL"]) as holder:
                 holder.execute(TAKE_TEAM_LOCK_SQL, (team,))
-                pending_delete: Final = _post_in_background(pool, gateway, "/team/delete", {"team_ids": [team]})
+                pending_delete: Final = _post_in_background(pool, owned.gateway, "/team/delete", {"team_ids": [team]})
                 pending_add: Final = _post_in_background(
                     pool,
-                    gateway,
+                    owned.gateway,
                     "/team/member_add",
                     {"team_id": team, "member": {"role": "user", "user_id": newcomer}},
                 )

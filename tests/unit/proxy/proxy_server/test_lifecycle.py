@@ -121,7 +121,7 @@ async def test_database_lifespan_disconnects_prisma_after_proxy_shutdown(monkeyp
 
     fake_jwt = MagicMock()
     fake_jwt.close = AsyncMock()
-    monkeypatch.setattr(ps, "jwt_handler", fake_jwt, raising=False)
+    monkeypatch.setattr(ps, "jwt_http_handler", fake_jwt, raising=False)
     monkeypatch.setattr(ps, "db_writer_client", None, raising=False)
 
     import litellm
@@ -156,7 +156,7 @@ async def test_proxy_shutdown_flushes_every_langfuse_export_channel(monkeypatch)
     flushed = MagicMock(return_value=True)
     monkeypatch.setattr(langfuse_sdk, "flush_langfuse_tracing", flushed)
     monkeypatch.setattr(ps, "prisma_client", None, raising=False)
-    monkeypatch.setattr(ps, "jwt_handler", MagicMock(close=AsyncMock()), raising=False)
+    monkeypatch.setattr(ps, "jwt_http_handler", MagicMock(close=AsyncMock()), raising=False)
     monkeypatch.setattr(ps, "db_writer_client", None, raising=False)
 
     import litellm
@@ -186,7 +186,7 @@ async def test_proxy_shutdown_flushes_langfuse_off_the_event_loop_and_logs_a_tim
 
     monkeypatch.setattr(langfuse_sdk, "flush_langfuse_tracing", flushed)
     monkeypatch.setattr(ps, "prisma_client", None, raising=False)
-    monkeypatch.setattr(ps, "jwt_handler", MagicMock(close=AsyncMock()), raising=False)
+    monkeypatch.setattr(ps, "jwt_http_handler", MagicMock(close=AsyncMock()), raising=False)
     monkeypatch.setattr(ps, "db_writer_client", None, raising=False)
 
     import litellm
@@ -229,7 +229,7 @@ async def test_proxy_shutdown_drains_gateway_requests_before_disconnecting(monke
 
     fake_jwt = MagicMock()
     fake_jwt.close = AsyncMock()
-    monkeypatch.setattr(ps, "jwt_handler", fake_jwt, raising=False)
+    monkeypatch.setattr(ps, "jwt_http_handler", fake_jwt, raising=False)
     monkeypatch.setattr(ps, "db_writer_client", None, raising=False)
 
     import litellm
@@ -270,7 +270,7 @@ async def test_proxy_shutdown_drains_audit_writes_beside_the_gateway_flush_befor
 
     fake_jwt = MagicMock()
     fake_jwt.close = AsyncMock()
-    monkeypatch.setattr(ps, "jwt_handler", fake_jwt, raising=False)
+    monkeypatch.setattr(ps, "jwt_http_handler", fake_jwt, raising=False)
     monkeypatch.setattr(ps, "db_writer_client", None, raising=False)
 
     import litellm
@@ -294,7 +294,7 @@ async def test_proxy_shutdown_skips_gateway_flush_without_a_database(monkeypatch
 
     fake_jwt = MagicMock()
     fake_jwt.close = AsyncMock()
-    monkeypatch.setattr(ps, "jwt_handler", fake_jwt, raising=False)
+    monkeypatch.setattr(ps, "jwt_http_handler", fake_jwt, raising=False)
     monkeypatch.setattr(ps, "db_writer_client", None, raising=False)
 
     import litellm
@@ -317,7 +317,7 @@ async def test_proxy_shutdown_without_a_database_drains_audit_callbacks_before_t
 
     fake_jwt = MagicMock()
     fake_jwt.close = AsyncMock()
-    monkeypatch.setattr(ps, "jwt_handler", fake_jwt, raising=False)
+    monkeypatch.setattr(ps, "jwt_http_handler", fake_jwt, raising=False)
     monkeypatch.setattr(ps, "db_writer_client", None, raising=False)
 
     import litellm
@@ -344,7 +344,7 @@ async def test_database_lifespan_logs_disconnect_error_after_shutdown_instead_of
 
     fake_jwt = MagicMock()
     fake_jwt.close = AsyncMock()
-    monkeypatch.setattr(ps, "jwt_handler", fake_jwt, raising=False)
+    monkeypatch.setattr(ps, "jwt_http_handler", fake_jwt, raising=False)
 
     import litellm
 
@@ -1489,3 +1489,20 @@ async def test_prometheus_fallback_stats_job_runs_when_the_lock_is_free_or_absen
     await jobs["prometheus_fallback_stats_job"]()
 
     assert send_fallback_stats.await_count == 2
+
+
+@pytest.mark.parametrize("database_url", ["", "   "])
+@pytest.mark.asyncio
+async def test_a_blank_database_url_boots_the_proxy_as_one_with_no_database(
+    monkeypatch: pytest.MonkeyPatch, database_url: str
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "database_url_configured", True)
+    clean_env: Final = {k: v for k, v in os.environ.items() if k not in ("DIRECT_URL", "WORKER_CONFIG")} | {
+        "DATABASE_URL": database_url,
+        "LITELLM_MASTER_KEY": "sk-blank-database-url-Zx8mPq4LrT7v",
+    }
+    with patch.dict(os.environ, clean_env, clear=True):
+        async with proxy_startup_event(app=None):
+            assert (proxy_server.prisma_client, proxy_server.database_url_configured) == (None, False)

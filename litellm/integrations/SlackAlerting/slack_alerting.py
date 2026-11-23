@@ -6,9 +6,9 @@ import json
 import os
 import random
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import timedelta
-from typing import TYPE_CHECKING, Any, Final, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol
 
 from openai import APIError
 from pydantic import TypeAdapter
@@ -25,11 +25,13 @@ from litellm.constants import (
     SLACK_DAILY_REPORT_LOCK_ID,
     SLACK_MODEL_DEPRECATION_LOCK_ID,
 )
+from litellm.cost_calculator import base_model_for_pricing
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
 from litellm.integrations.SlackAlerting.budget_alert_types import get_budget_alert_type
 from litellm.integrations.SlackAlerting.hanging_request_check import (
     AlertingHangingRequestCheck,
 )
+from litellm.litellm_core_utils.core_helpers import attribute_or_none, require_attributes, subscript
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.exception_mapping_utils import (
     add_key_name_and_team_to_alert,
@@ -78,6 +80,10 @@ if TYPE_CHECKING:
     Router = _Router
 else:
     Router = Any
+
+
+class _SupportsLookup(Protocol):
+    def get(self, key: str, default: object, /) -> object: ...
 
 
 def _proxy_llm_router() -> Router | None:
@@ -184,7 +190,9 @@ class SlackAlerting(CustomBatchLogger):
         if llm_router is not None:
             self.llm_router = llm_router
 
-    def _prepare_outage_value_for_cache(self, outage_value: dict | ProviderRegionOutageModel | OutageModel) -> dict:
+    def _prepare_outage_value_for_cache(
+        self, outage_value: Mapping[str, object] | ProviderRegionOutageModel | OutageModel
+    ) -> dict[str, object]:
         """
         Helper method to prepare outage value for Redis caching.
         Converts set objects to lists for JSON serialization.
@@ -196,13 +204,16 @@ class SlackAlerting(CustomBatchLogger):
             cache_value["deployment_ids"] = list(cache_value["deployment_ids"])
         return cache_value
 
-    def _restore_outage_value_from_cache(self, outage_value: dict | None) -> dict | None:
+    def _restore_outage_value_from_cache(self, outage_value: dict[str, object] | None) -> dict[str, object] | None:
         """
         Helper method to restore outage value after retrieving from cache.
         Converts list objects back to sets for proper handling.
         """
-        if outage_value and isinstance(outage_value.get("deployment_ids"), list):
-            outage_value["deployment_ids"] = set(outage_value["deployment_ids"])
+        if not outage_value:
+            return outage_value
+        deployment_ids: Final = outage_value.get("deployment_ids")
+        if isinstance(deployment_ids, list):
+            outage_value["deployment_ids"] = set(deployment_ids)
         return outage_value
 
     async def deployment_in_cooldown(self):
@@ -277,7 +288,7 @@ class SlackAlerting(CustomBatchLogger):
     async def response_taking_too_long_callback(
         self,
         kwargs,  # kwargs to completion
-        completion_response,  # response from completion
+        completion_response: object,  # response from completion
         start_time,
         end_time,  # start/end time
     ):
@@ -298,7 +309,7 @@ class SlackAlerting(CustomBatchLogger):
             messages = "Message not logged. litellm.redact_messages_in_exceptions=True"
         request_info = f"\nRequest Model: `{model}`\nAPI Base: `{api_base}`\nMessages: `{messages}`"
         slow_message = f"`Responses are slow - {round(time_difference_float, 2)}s response time > Alerting threshold: {self.alerting_threshold}s`"
-        alerting_metadata: dict = {}
+        alerting_metadata: dict[str, object] = {}
         if time_difference_float > self.alerting_threshold:
             # add deployment latencies to alert
             if kwargs is not None and "litellm_params" in kwargs and "metadata" in kwargs["litellm_params"]:
@@ -442,7 +453,9 @@ class SlackAlerting(CustomBatchLogger):
             key = failed_request_keys[top_5_failed[i]].split(":")[0]
             _deployment = router.registry().deployment_dict(key)
             if isinstance(_deployment, dict):
-                deployment_name = _deployment["litellm_params"].get("model", "")
+                deployment_name = require_attributes(
+                    subscript(_deployment, "litellm_params"), _SupportsLookup, "get"
+                ).get("model", "")
             else:
                 return False
 
@@ -464,7 +477,9 @@ class SlackAlerting(CustomBatchLogger):
             key = latency_keys[top_5_slowest[i]].split(":")[0]
             _deployment = router.registry().deployment_dict(key)
             if _deployment is not None:
-                deployment_name = _deployment["litellm_params"].get("model", "")
+                deployment_name = require_attributes(
+                    subscript(_deployment, "litellm_params"), _SupportsLookup, "get"
+                ).get("model", "")
             else:
                 deployment_name = ""
             api_base = litellm.get_api_base(
@@ -1052,11 +1067,11 @@ class SlackAlerting(CustomBatchLogger):
             pass
 
     async def model_added_alert(self, model_name: str, litellm_model_name: str, passed_model_info: object):
-        base_model_from_user: Final = getattr(passed_model_info, "base_model", None)
+        base_model_from_user: Final = attribute_or_none(passed_model_info, "base_model")
         model_info = {}
         base_model = ""
         if base_model_from_user is not None:
-            model_info = litellm.model_cost.get(base_model_from_user, {})
+            model_info = litellm.model_cost.get(base_model_for_pricing(base_model_from_user) or litellm_model_name, {})
             base_model = f"Base Model: `{base_model_from_user}`\n"
         else:
             model_info = litellm.model_cost.get(litellm_model_name, {})
@@ -1466,11 +1481,11 @@ Model Info:
         message: str,
         level: Literal["Low", "Medium", "High"],
         alert_type: AlertType,
-        alerting_metadata: dict,
+        alerting_metadata: Mapping[str, object],
         user_info: WebhookEvent | None = None,
         request_model: str | None = None,
         api_base: str | None = None,
-        **kwargs,
+        **kwargs: object,
     ):
         """
         Alerting based on thresholds: - https://github.com/BerriAI/litellm/issues/1298
@@ -1716,7 +1731,7 @@ Model Info:
                 verbose_proxy_logger.debug("Error flushing digest buckets: %s", e)
             await self.flush_queue()
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(self, kwargs, response_obj: object, start_time, end_time):
         """Log deployment latency"""
         try:
             if "daily_reports" in self.alert_types:
@@ -1751,7 +1766,7 @@ Model Info:
                 "[Non-Blocking Error] Slack Alerting: Got error in logging LLM deployment latency: %s", e
             )
 
-    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_failure_event(self, kwargs, response_obj: object, start_time: object, end_time: object):
         """Log failure + deployment latency"""
         _litellm_params: Final = kwargs.get("litellm_params", {})
         _model_info: Final = _litellm_params.get("model_info", {}) or {}
@@ -2128,7 +2143,7 @@ Model Info:
         except Exception as e:
             verbose_proxy_logger.error("Error sending send_virtual_key_event_slack %s", e)
 
-    async def _request_is_completed(self, request_data: dict | None) -> bool:
+    async def _request_is_completed(self, request_data: Mapping[str, object] | None) -> bool:
         """
         Returns True if the request is completed - either as a success or failure
         """
