@@ -131,7 +131,7 @@ class VercelAIGatewayDecisionsConfig(OpenAIDecisionsConfig):
     def parse_response(self, payload: object, request: DecisionsIRRequest) -> DecisionsIRResponse:
         response: Final = super().parse_response(payload, request)
         metadata: Final = _validated(_GatewayDecisionResponse, payload)
-        if metadata is None:
+        if metadata is None or response.usage is None:
             return response
         return replace(response, usage=_gateway_usage(response.usage, metadata.provider_metadata))
 

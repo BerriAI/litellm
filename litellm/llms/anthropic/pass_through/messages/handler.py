@@ -15,6 +15,12 @@ from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
+from litellm.litellm_core_utils.bridged_audio_output import (
+    AudioOnlyModel,
+    AudioRequested,
+    bridged_audio_output_request,
+    raise_audio_output_refusal,
+)
 from litellm.litellm_core_utils.exception_mapping_utils import exception_type
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.anthropic.common_utils import (
@@ -646,6 +652,9 @@ def anthropic_messages_handler(
                 **kwargs,
             )
 
+        chat_kwargs: Final = bridged_audio_output_request(kwargs, model, custom_llm_provider)
+        if isinstance(chat_kwargs, AudioOnlyModel | AudioRequested):
+            raise_audio_output_refusal(chat_kwargs, "/v1/messages")
         # The in-gateway context_management polyfill runs inside
         # ``async_anthropic_messages_handler`` so it can ``await`` the
         # summarization model for ``compact_20260112``. ``context_management``
@@ -671,7 +680,7 @@ def anthropic_messages_handler(
             api_base=api_base,
             client=client,
             custom_llm_provider=custom_llm_provider,
-            **kwargs,
+            **chat_kwargs,  # pyright: ignore[reportArgumentType]  # output_format only arrives through untyped **kwargs
         )
 
     if custom_llm_provider is None:
