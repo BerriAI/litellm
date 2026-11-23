@@ -5,12 +5,15 @@ that exposes litellm_tooltable.upsert / find_many / find_unique.
 
 import json
 from datetime import datetime, timezone
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
 from prisma.errors import PrismaError, RawQueryError
 
 from litellm.constants import DB_SPEND_UPDATE_JOB_NAME, REDIS_TOOL_DISCOVERY_BUFFER_KEY, TOOL_DISCOVERY_COMMIT_JOB_NAME
+from litellm.proxy.db import tool_table_bulk_upsert
 from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
 from litellm.proxy.db.db_transaction_queue.redis_update_buffer import RedisUpdateBuffer
 from litellm.proxy.db.db_transaction_queue.tool_discovery_queue import ToolDiscoveryQueue
@@ -112,6 +115,30 @@ async def test_batch_upsert_tools_skips_empty_names():
     items = [{"tool_name": "", "origin": None}, {"tool_name": None}]  # type: ignore[list-item]
     await batch_upsert_tools(prisma, items)
     prisma.db.execute_raw.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_batch_upsert_tools_drops_oversized_names_but_writes_healthy_rows() -> None:
+    prisma = _make_prisma()
+    valid_name: Final = "é" * 256
+    await batch_upsert_tools(
+        prisma,
+        [{"tool_name": valid_name + "a", "key_alias": "customer"}, {"tool_name": valid_name}],
+    )
+
+    _, params = _statement(prisma)
+    assert params[1:] == (valid_name, "user_defined", 1, "system", "system", None, None, None, None)
+
+
+@pytest.mark.asyncio
+async def test_batch_upsert_tools_splits_batches_before_the_bind_limit() -> None:
+    prisma = _make_prisma()
+    names: Final = tuple(f"tool_{i}" for i in range(3277))
+    await batch_upsert_tools(prisma, [{"tool_name": name} for name in names])
+
+    params: Final = tuple(call.args[1:] for call in prisma.db.execute_raw.await_args_list)
+    assert tuple(map(len, params)) == (32_760, 10)
+    assert tuple(name for statement in params for name in statement[1::10]) == names
 
 
 @pytest.mark.asyncio
@@ -535,10 +562,12 @@ async def test_commit_without_redis_writes_only_this_workers_tools_in_one_statem
 @pytest.mark.parametrize(
     ("failure", "requeued"),
     [
-        (Exception("connection reset"), True),
+        (httpx.ConnectError("connection refused"), True),
+        (httpx.ReadTimeout("reply timed out"), False),
         (_postgres_rejection("23502"), False),
+        (_postgres_rejection("54000"), False),
     ],
-    ids=["connection_error_goes_back_to_redis", "rejected_row_is_dropped"],
+    ids=["connection_error_goes_back_to_redis", "ambiguous_write_drops", "rejected_row_drops", "limit_rejection_drops"],
 )
 async def test_failed_tool_table_write_requeues_the_rows_only_when_they_provably_did_not_apply(
     failure: Exception, requeued: bool
@@ -561,6 +590,31 @@ async def test_failed_tool_table_write_requeues_the_rows_only_when_they_provably
     left_in_redis = [json.loads(entry) for entry in redis.lists.get(REDIS_TOOL_DISCOVERY_BUFFER_KEY, [])]
     expected = [[{"tool_name": "get_weather", "origin": "user_defined", "call_count": 1}]] if requeued else []
     assert left_in_redis == expected, f"requeued={requeued} but redis holds {left_in_redis}"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failure", "retried"),
+    [(httpx.ConnectError("connection refused"), True), (_postgres_rejection("54000"), False)],
+    ids=["connection_failure_retries_only_failed_chunk", "limit_rejection_drops_only_failed_chunk"],
+)
+async def test_redis_drain_continues_after_a_failed_chunk_without_replaying_successful_chunks(
+    monkeypatch: pytest.MonkeyPatch, failure: Exception, retried: bool
+) -> None:
+    monkeypatch.setattr(tool_table_bulk_upsert, "_ROWS_PER_UPSERT", 1)
+    redis = _InMemoryRedis()
+    queue = ToolDiscoveryQueue()
+    for name in ("first", "middle", "last"):
+        queue.add_update({"tool_name": name})
+    prisma = _make_prisma()
+    prisma.db.execute_raw.side_effect = (1, failure, 1, 1)
+
+    for _ in range(2):
+        await commit_tool_discoveries(prisma, queue, RedisUpdateBuffer(redis_cache=redis), PodLockManager(redis), True)
+
+    attempted: Final = tuple(call.args[2] for call in prisma.db.execute_raw.await_args_list)
+    assert attempted == (("first", "middle", "last", "middle") if retried else ("first", "middle", "last"))
+    assert REDIS_TOOL_DISCOVERY_BUFFER_KEY not in redis.lists
 
 
 @pytest.mark.asyncio
