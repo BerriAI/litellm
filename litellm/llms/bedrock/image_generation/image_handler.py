@@ -49,7 +49,7 @@ class BedrockImagePreparedRequest(LiteLLMBaseModel):
     endpoint_url: str
     prepped: AWSPreparedRequest | BearerPreparedRequest
     body: bytes
-    data: dict
+    data: dict[str, object]
 
 
 BedrockImageConfigClass = (
@@ -190,7 +190,7 @@ class BedrockImageGeneration(BaseAWSLLM):
         )
         return model_response
 
-    def _extract_headers_from_optional_params(self, optional_params: dict) -> dict:
+    def _extract_headers_from_optional_params(self, optional_params: dict[str, object]) -> dict:
         """
         Extract guardrail parameters from optional_params and convert them to headers.
         """
@@ -208,9 +208,9 @@ class BedrockImageGeneration(BaseAWSLLM):
     def _prepare_request(
         self,
         model: str,
-        optional_params: dict,
+        optional_params: dict[str, object],
         api_base: str | None,
-        extra_headers: dict | None,
+        extra_headers: dict[str, str] | None,
         logging_obj: LitellmLogging,
         prompt: str,
         api_key: str | None,
@@ -301,8 +301,8 @@ class BedrockImageGeneration(BaseAWSLLM):
         self,
         model: str,
         prompt: str,
-        optional_params: dict,
-    ) -> dict:
+        optional_params: dict[str, object],
+    ) -> dict[str, object]:
         """
         Get the request body for the Bedrock Image Generation API
 
@@ -322,7 +322,7 @@ class BedrockImageGeneration(BaseAWSLLM):
         logging_obj: LitellmLogging,
         prompt: str,
         response: httpx.Response,
-        data: dict,
+        data: dict[str, object],
     ) -> ImageResponse:
         """
         Transforms the Image Generation response from Bedrock to OpenAI format
