@@ -49,6 +49,10 @@ _REFRESH_TOKEN_KEY: Final = "chatgpt_refresh_token"
 _SAVE_RETRY_DELAYS_SECONDS: Final = (1.0, 2.0)
 _REFRESH_LOCK_TIMEOUT: Final = timedelta(seconds=TOKEN_REFRESH_TIMEOUT_SECONDS + sum(_SAVE_RETRY_DELAYS_SECONDS) + 15)
 
+_SAVEPOINT_SQL: Final = "SAVEPOINT chatgpt_login_save"
+_ROLLBACK_TO_SAVEPOINT_SQL: Final = "ROLLBACK TO SAVEPOINT chatgpt_login_save"
+_RELEASE_SAVEPOINT_SQL: Final = "RELEASE SAVEPOINT chatgpt_login_save"
+
 _InMemoryLogin: TypeAlias = tuple[Mapping[str, object], Mapping[str, object]]
 
 
@@ -94,6 +98,31 @@ class RefreshLock(Protocol):
 
 
 @dataclass(frozen=True, slots=True)
+class _SavepointRows:
+    rows: CredentialRows
+    transaction: AdvisoryLockTransaction
+
+    async def find_by_name(self, credential_name: str) -> CredentialItem | None:
+        return await self.rows.find_by_name(credential_name)
+
+    async def update_if_value_unchanged(
+        self,
+        credential_name: str,
+        value_match: tuple[str, str],
+        info_match: tuple[str, str] | None,
+        data: Mapping[str, object],
+    ) -> bool:
+        await self.transaction.execute_raw(_SAVEPOINT_SQL)
+        try:
+            saved: Final = await self.rows.update_if_value_unchanged(credential_name, value_match, info_match, data)
+        except Exception:
+            await self.transaction.execute_raw(_ROLLBACK_TO_SAVEPOINT_SQL)
+            raise
+        await self.transaction.execute_raw(_RELEASE_SAVEPOINT_SQL)
+        return saved
+
+
+@dataclass(frozen=True, slots=True)
 class LockedRefresh:
     lock: RefreshLock
     rows_in: Callable[[AdvisoryLockTransaction], CredentialRows]
@@ -105,7 +134,9 @@ class LockedRefresh:
         reread: Callable[[], Awaitable[OAuthToken | None]],
     ) -> OAuthToken | None:
         key: Final = json.dumps([_COORDINATOR_NAMESPACE, flight])
-        match await self.lock.while_held(key, lambda transaction: refresh(self.rows_in(transaction))):
+        match await self.lock.while_held(
+            key, lambda transaction: refresh(_SavepointRows(self.rows_in(transaction), transaction))
+        ):
             case AdvisoryLockUnavailable():
                 return await reread()
             case token:

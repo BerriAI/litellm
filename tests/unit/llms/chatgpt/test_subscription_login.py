@@ -192,6 +192,7 @@ def test_requests_that_name_no_subscription_login_are_left_untouched(kwargs: dic
     [
         ("openai/gpt-5.4-mini", {"model": "openai/gpt-5.4-mini"}),
         ("gpt-5.4-mini", {"model": "gpt-5.4-mini", "custom_llm_provider": "openai"}),
+        ("chatgpt/gpt-5.5", {"custom_llm_provider": "gigachat", "gigachat_auth_url": "https://auth.example.com"}),
     ],
 )
 def test_a_subscription_login_is_never_sent_to_another_provider(model: str, overrides: dict[str, object]) -> None:

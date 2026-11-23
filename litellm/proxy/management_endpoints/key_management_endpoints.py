@@ -118,7 +118,10 @@ from litellm.proxy.common_utils.timezone_utils import (
     keeps_budget_reset,
 )
 from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET, UserApiKeyCache
-from litellm.proxy.credential_endpoints.chatgpt_subscription_logins import repoint_chatgpt_logins_to_key
+from litellm.proxy.credential_endpoints.chatgpt_subscription_logins import (
+    owned_chatgpt_subscription_logins,
+    repoint_chatgpt_logins_to_key,
+)
 from litellm.proxy.db.master_key_migration import reencrypt_stored_values
 from litellm.proxy.guardrails.guardrail_helpers import validate_guardrail_names
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
@@ -636,7 +639,7 @@ def _env_vars_param_value(param: _EnvVarsParam) -> Mapping[str, str] | None:
 
 
 async def _check_custom_key_allowed(custom_key_value: str | None) -> None:
-    """Raise 403 if custom API keys are disabled and a custom key was provided."""
+    """Raise 403 if custom API keys are disabled, and 409 if the value is a deleted key's that owns a ChatGPT login."""
     if custom_key_value is None:
         return
 
@@ -648,6 +651,14 @@ async def _check_custom_key_allowed(custom_key_value: str | None) -> None:
         raise HTTPException(
             status_code=403,
             detail={"error": "Custom API key values are disabled by your administrator. Keys must be auto-generated."},
+        )
+    if owned_chatgpt_subscription_logins(None, hash_token(custom_key_value)):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "This key value belonged to a deleted key that still owns a ChatGPT subscription login. "
+                "Delete that login under LLM Credentials, or use a different key value."
+            },
         )
 
 

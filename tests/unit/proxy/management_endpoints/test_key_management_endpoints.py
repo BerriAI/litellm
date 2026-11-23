@@ -1701,6 +1701,31 @@ async def test_check_custom_key_allowed_when_unset(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_a_deleted_keys_value_that_still_owns_a_chatgpt_login_cannot_be_reused(monkeypatch):
+    from litellm.proxy.management_endpoints.key_management_endpoints import _check_custom_key_allowed
+
+    deleted_key: Final = "sk-deleted-key-123456"
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="deleted-key-login",
+                credential_values={"chatgpt_refresh_token": "refresh-deleted-key-login"},
+                credential_info={"custom_llm_provider": "chatgpt", "chatgpt_owner_key_hash": hash_token(deleted_key)},
+            )
+        ],
+    )
+
+    with pytest.raises(HTTPException) as refused:
+        await _check_custom_key_allowed(deleted_key)
+
+    assert refused.value.status_code == 409
+    await _check_custom_key_allowed("sk-another-key-123456")
+
+
+@pytest.mark.asyncio
 async def test_check_custom_key_allowed_honours_the_config_file(monkeypatch):
     """A config-file general_settings.disable_custom_api_keys is enforced with no stored UI row."""
     from fastapi import HTTPException

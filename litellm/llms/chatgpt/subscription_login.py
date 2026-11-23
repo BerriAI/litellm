@@ -143,10 +143,14 @@ def _str_keyed(value: object) -> Mapping[str, object] | None:
 
 
 def _is_chatgpt_call(kwargs: Mapping[str, object], model: object) -> bool:
-    return kwargs.get("custom_llm_provider") == CHATGPT_PROVIDER or any(
-        isinstance(candidate, str) and candidate.startswith(f"{CHATGPT_PROVIDER}/")
-        for candidate in (model, kwargs.get("model"))
-    )
+    match kwargs.get("custom_llm_provider"):
+        case None | "":
+            return any(
+                isinstance(candidate, str) and candidate.startswith(f"{CHATGPT_PROVIDER}/")
+                for candidate in (model, kwargs.get("model"))
+            )
+        case provider:
+            return provider == CHATGPT_PROVIDER
 
 
 def _login_unavailable(credential_name: str) -> CallerCredentialAuthenticationError:

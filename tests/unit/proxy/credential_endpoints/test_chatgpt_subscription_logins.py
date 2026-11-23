@@ -271,8 +271,42 @@ class _SharedCoordinatorWithoutLock:
 
 
 class _LockTransaction:
+    def __init__(self) -> None:
+        self.aborted = False
+
     async def query_raw(self, query: str, *args: object) -> Sequence[Mapping[str, object]]:
         return [{"locked": 1}]
+
+    async def execute_raw(self, query: str, *args: object) -> int:
+        if query.startswith("ROLLBACK TO SAVEPOINT"):
+            self.aborted = False
+        elif self.aborted:
+            raise RuntimeError("current transaction is aborted, commands ignored until end of transaction block")
+        return 0
+
+
+class _RowsOnTransaction:
+    def __init__(self, rows: _CredentialRows, transaction: _LockTransaction) -> None:
+        self.rows = rows
+        self.transaction = transaction
+
+    async def find_by_name(self, credential_name: str) -> CredentialItem | None:
+        return await self.rows.find_by_name(credential_name)
+
+    async def update_if_value_unchanged(
+        self,
+        credential_name: str,
+        value_match: tuple[str, str],
+        info_match: tuple[str, str] | None,
+        data: Mapping[str, object],
+    ) -> bool:
+        if self.transaction.aborted:
+            raise RuntimeError("current transaction is aborted, commands ignored until end of transaction block")
+        try:
+            return await self.rows.update_if_value_unchanged(credential_name, value_match, info_match, data)
+        except ConnectionError:
+            self.transaction.aborted = True
+            raise
 
 
 class _DatabaseLock:
@@ -1086,6 +1120,27 @@ async def test_two_replicas_sharing_the_database_lock_redeem_a_stale_login_once_
     assert tokens == [new_access_token, new_access_token]
     assert len(oauth.posts) == 1
     assert (pooled_rows.reads, pooled_rows.updates) == ([], [])
+    assert _decrypted(transaction_rows.rows["login-a"].credential_values)["chatgpt_access_token"] == new_access_token
+
+
+async def test_a_failed_save_on_the_lock_transaction_is_retried_and_the_redeemed_login_is_stored(monkeypatch):
+    values: Final = _login_values(_access_token("old"), "rt-single-use", STALE_EXPIRES_AT)
+    held: Final = _login("login-a", values, team_id="team-a")
+    _serve(monkeypatch, held)
+    transaction_rows: Final = _CredentialRows(_stored(held), failing_writes=1)
+    oauth, new_access_token = _refreshed("new")
+    database_lock: Final = _DatabaseLock()
+    locked_refresh: Final = LockedRefresh(
+        database_lock, rows_in=lambda transaction: _RowsOnTransaction(transaction_rows, database_lock.transaction)
+    )
+    refresher: Final = _refresher(
+        _CredentialRows(reads_fail=True, failing_writes=99), oauth, shared_refresh=locked_refresh
+    )
+
+    token: Final = await refresher.access_token(held)
+
+    assert token == new_access_token
+    assert len(oauth.posts) == 1
     assert _decrypted(transaction_rows.rows["login-a"].credential_values)["chatgpt_access_token"] == new_access_token
 
 
