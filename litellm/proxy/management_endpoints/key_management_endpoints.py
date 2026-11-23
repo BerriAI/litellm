@@ -1680,6 +1680,11 @@ async def _common_key_generation_helper(
             if (
                 value is None
                 and (key != "budget_duration" or key not in data.model_fields_set)
+                and (
+                    key not in {"user_id", "team_id"}
+                    or key not in data.model_fields_set
+                    or user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
+                )
                 and key
                 in [
                     "max_budget",

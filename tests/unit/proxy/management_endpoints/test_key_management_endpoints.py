@@ -20902,6 +20902,25 @@ async def test_key_generate_omitted_budget_duration_still_takes_default_key_gene
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("explicit_null", (True, False))
+async def test_key_identity_defaults_respect_explicit_null_without_dropping_usage_limits(
+    monkeypatch: pytest.MonkeyPatch, explicit_null: bool
+) -> None:
+    monkeypatch.setattr(
+        litellm,
+        "default_key_generate_params",
+        {"user_id": "default-owner", "team_id": "default-team", "max_budget": 10, "rpm_limit": 60},
+    )
+    insert: Final = _wire_key_generation_prisma(monkeypatch)
+    request: Final = GenerateKeyRequest(user_id=None, team_id=None) if explicit_null else GenerateKeyRequest()
+    row: Final = await _generate_key_and_get_persisted_row(request, insert)
+    assert (row["user_id"], row["team_id"]) == (
+        (None, None) if explicit_null else ("default-owner", "default-team")
+    )
+    assert (row["max_budget"], row["rpm_limit"]) == (10, 60)
+
+
+@pytest.mark.asyncio
 async def test_key_generate_explicit_null_budget_duration_cannot_bypass_upperbound(
     monkeypatch,
 ):

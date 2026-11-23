@@ -36,6 +36,7 @@ from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.exception_mapping_utils import (
     add_key_name_and_team_to_alert,
 )
+from litellm.litellm_core_utils.secret_redaction import redact_string
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     get_async_httpx_client,
@@ -2134,7 +2135,7 @@ Model Info:
                 message += f"{key}: `{value}`\n"
 
             await self.send_alert(
-                message=message,
+                message=redact_string(message),
                 level="High",
                 alert_type=alert_type,
                 alerting_metadata={},

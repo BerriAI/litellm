@@ -2,8 +2,9 @@ import hashlib
 import hmac
 import time
 from collections.abc import Awaitable, Callable
+from datetime import timedelta
 from enum import Enum
-from typing import Final
+from typing import Final, cast  # noqa: TID251  # generated Prisma cursor type needs the typed repository interface
 
 import httpx
 from pydantic import BaseModel, ConfigDict, ValidationError
@@ -13,6 +14,7 @@ from litellm.integrations.lens.proxy.adapter import Connection, Identity
 from litellm.integrations.lens.remote import bounded_response
 from litellm.proxy._types import GenerateKeyRequest, LitellmUserRoles, ProxyException, SpecialModelNames, UserAPIKeyAuth
 from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.repositories.prisma_protocols import TableActions
 
 MODEL_ROUTES: Final = (
     "/model_group/info",
@@ -69,6 +71,8 @@ def key_request(key: str) -> GenerateKeyRequest:
             "key_alias": f"lens-models-{hashlib.sha256(key.encode()).hexdigest()[:12]}",
             "models": [SpecialModelNames.all_proxy_models.value],
             "allowed_routes": MODEL_ROUTES,
+            "user_id": None,
+            "team_id": None,
             "metadata": {"purpose": "lens-model-gateway"},
         }
     )
@@ -122,7 +126,6 @@ async def setup(
 ) -> GatewayStatus | SetupFailure:
     from litellm.proxy import proxy_server
     from litellm.proxy.management_endpoints.key_management_endpoints import generate_key_fn
-    from litellm.repositories.verification_token_repository import VerificationTokenRepository
 
     if auth.user_role != LitellmUserRoles.PROXY_ADMIN:
         return SetupFailure.FORBIDDEN
@@ -133,20 +136,32 @@ async def setup(
     database: Final = proxy_server.prisma_client
     if database is None:
         return SetupFailure.DATABASE
-    repository: Final = VerificationTokenRepository(database)
-
-    async def active(hashed: str) -> bool:
-        return await repository.find_for_auth(hashed, use_writer=True) is not None
-
-    async def retired(hashed: str, alias: str) -> bool:
-        deleted: Final = await repository.deleted_table.find_many(where={"token": hashed}, take=1)
-        return bool(deleted) or await repository.find_by_alias(alias) is not None
 
     async def generate(request: GenerateKeyRequest) -> None:
         await generate_key_fn(data=request, user_api_key_dict=auth, litellm_changed_by=None)
 
     async def ensure_key(key: str) -> bool:
-        return await ensure_model_key(key, active, retired, generate)
+        async with database.tx(timeout=timedelta(seconds=60)) as transaction:
+            await transaction.query_raw(
+                "SELECT 1 AS locked FROM pg_advisory_xact_lock(hashtext($1))",
+                f"lens-model-key:{hashlib.sha256(key.encode()).hexdigest()}",
+            )
+
+            async def active(hashed: str) -> bool:
+                return await transaction.litellm_verificationtoken.find_unique(where={"token": hashed}) is not None
+
+            async def retired(hashed: str, alias: str) -> bool:
+                deleted_table: Final = (
+                    cast(  # cast-ok: generated Prisma cursor type is absent; use the repository interface
+                        TableActions[object], transaction.litellm_deletedverificationtoken
+                    )
+                )
+                deleted: Final = await deleted_table.find_many(where={"token": hashed}, take=1)
+                return bool(deleted) or bool(
+                    await transaction.litellm_verificationtoken.find_many(where={"key_alias": alias}, take=1)
+                )
+
+            return await ensure_model_key(key, active, retired, generate)
 
     return await connect_models(
         connection, identity, gateway_url, connection.remote.control_client(), ensure_key, int(time.time())
