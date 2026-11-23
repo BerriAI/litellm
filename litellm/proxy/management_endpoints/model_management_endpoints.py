@@ -3593,11 +3593,9 @@ async def update_model(
             )
 
             ### MERGE WITH EXISTING DATA ###
-            _mp: Final[dict[str, object]] = model_params.litellm_params.dict()
             merged_dictionary: Final = {
-                key: _existing_litellm_params_dict[key] if value is None else encrypted_params[key]
-                for key, value in _mp.items()
-                if value is not None or _existing_litellm_params_dict.get(key) is not None
+                **{key: value for key, value in _existing_litellm_params_dict.items() if value is not None},
+                **encrypted_params,
             }
 
             base_update: Final[PrismaCompatibleUpdateDBModel] = {

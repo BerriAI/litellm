@@ -1724,6 +1724,7 @@ class TestUpdateModel:
         litellm_params: Mapping[str, object] = _AZURE_DEPLOYMENT_PARAMS,
         upstream_model_card: Mapping[str, object] | None = None,
         other_writers: tuple[Mapping[str, object], ...] = (),
+        incoming_params: Mapping[str, object] = MappingProxyType({}),
     ) -> "_ContendedModelDb":
         db: Final = _ContendedModelDb(
             LiteLLM_ProxyModelTable(
@@ -1753,7 +1754,9 @@ class TestUpdateModel:
             ),
         ):
             await update_model(
-                model_params=updateDeployment(litellm_params=updateLiteLLMParams(), model_info=model_info),
+                model_params=updateDeployment(
+                    litellm_params=updateLiteLLMParams(**incoming_params), model_info=model_info
+                ),
                 user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
             )
 
@@ -1995,6 +1998,51 @@ class TestUpdateModel:
         persisted: Final = db.row.model_info
         assert persisted is not None
         assert "max_tokens" not in persisted
+
+    @pytest.mark.asyncio
+    async def test_update_model_keeps_stored_undeclared_litellm_params_on_partial_update(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setenv("LITELLM_SALT_KEY", "sk-test-salt")
+        stored: Final = {
+            "model": "azure/my-deployment",
+            "api_key": encrypt_value_helper("sk-existing"),
+            "guardrails": ["my-guard"],
+            "request_timeout": 600,
+            "cooldown_time": 5,
+            "cache_control_injection_points": [{"location": "message", "role": "system"}],
+            "custom_flag": "keep-me",
+        }
+
+        db: Final = await self._update_model(
+            {"id": "m1"}, ModelInfo(id="m1"), litellm_params=stored, incoming_params={"max_budget": 80}
+        )
+
+        expected: Final = {**stored, "max_budget": 80}
+        assert {k: db.row.litellm_params.get(k) for k in expected} == expected
+
+    @pytest.mark.asyncio
+    async def test_update_model_replaces_stored_undeclared_litellm_params_that_are_sent(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setenv("LITELLM_SALT_KEY", "sk-test-salt")
+        stored: Final = {
+            "model": "azure/my-deployment",
+            "api_key": encrypt_value_helper("sk-existing"),
+            "guardrails": ["my-guard"],
+            "request_timeout": 600,
+            "cooldown_time": 5,
+        }
+
+        db: Final = await self._update_model(
+            {"id": "m1"},
+            ModelInfo(id="m1"),
+            litellm_params=stored,
+            incoming_params={"guardrails": ["new-guard"], "request_timeout": 30},
+        )
+
+        expected: Final = {**stored, "guardrails": ["new-guard"], "request_timeout": 30}
+        assert {k: db.row.litellm_params.get(k) for k in expected} == expected
 
     @pytest.mark.asyncio
     async def test_update_model_clears_cache_after_db_write(self):
