@@ -139,6 +139,10 @@ describe("AddAgentForm submit payload", () => {
     fireEvent.change(screen.getByLabelText("Enterprise Application Object ID"), {
       target: { value: "33333333-3333-4333-8333-333333333333" },
     });
+    await user.click(screen.getByRole("combobox", { name: "Execution Mode" }));
+    await user.click(await screen.findByRole("option", { name: "Both" }));
+    await user.click(screen.getByRole("combobox", { name: "Execution", exact: true }));
+    await user.click(await screen.findByRole("option", { name: "Disabled" }));
     await user.click(screen.getByRole("button", { name: /^Next/ }));
     await user.click(screen.getByRole("button", { name: /^Next/ }));
     await user.click(screen.getByRole("button", { name: /^Next/ }));
@@ -154,6 +158,8 @@ describe("AddAgentForm submit payload", () => {
       required_roles: [],
       required_scopes: ["user_impersonation"],
     };
+    expect(createdPayload().execution_mode).toBe("both");
+    expect(createdPayload().enabled).toBe(false);
     expect(createdPayload().identity).toEqual(expectedIdentity);
     expect(createdPayload()).not.toHaveProperty("litellm_params.identity");
     expect(networking.keyCreateForAgentCall).not.toHaveBeenCalled();
