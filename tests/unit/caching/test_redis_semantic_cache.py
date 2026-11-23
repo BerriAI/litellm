@@ -13,8 +13,8 @@ from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stub
 @contextmanager
 def _fake_redisvl_modules(semantic_cache_mock: MagicMock, custom_vectorizer_mock: MagicMock) -> Iterator[None]:
     with pytest.MonkeyPatch.context() as mp:
-        mp.setitem(sys.modules, "redisvl.extensions.llmcache", MagicMock(SemanticCache=semantic_cache_mock))
-        mp.setitem(sys.modules, "redisvl.utils.vectorize", MagicMock(CustomTextVectorizer=custom_vectorizer_mock))
+        mp.setitem(sys.modules, "redisvl.extensions.cache.llm", MagicMock(SemanticCache=semantic_cache_mock))
+        mp.setitem(sys.modules, "redisvl.utils.vectorize", MagicMock(CustomVectorizer=custom_vectorizer_mock))
         yield
 
 

@@ -136,7 +136,7 @@ class RedisSemanticCache(BaseCache):
         print_verbose(f"Redis semantic-cache redis_url: {redis_url}")
 
         # Defer redisvl index construction until first use. redisvl's
-        # CustomTextVectorizer eagerly embeds a probe string at construction;
+        # CustomVectorizer eagerly embeds a probe string at construction;
         # building lazily ensures that probe runs after llm_router is wired so
         # per-deployment auth (e.g. Bedrock aws_role_name) is applied.
         self._index_name = index_name
@@ -154,14 +154,14 @@ class RedisSemanticCache(BaseCache):
         self._llmcache = value
 
     def _build_llmcache(self) -> object:
-        # CustomTextVectorizer probes its embedding dimension at construction by
+        # CustomVectorizer probes its embedding dimension at construction by
         # embedding "dimension test", so the first cache request issues one extra
         # billable embedding on top of the request's own.
-        from redisvl.extensions.llmcache import SemanticCache
-        from redisvl.utils.vectorize import CustomTextVectorizer
+        from redisvl.extensions.cache.llm import SemanticCache
+        from redisvl.utils.vectorize import CustomVectorizer
 
         try:
-            cache_vectorizer: Final = CustomTextVectorizer(self._get_embedding)
+            cache_vectorizer: Final = CustomVectorizer(self._get_embedding)
             return self._init_semantic_cache(
                 semantic_cache_cls=SemanticCache,
                 index_name=self._index_name,
