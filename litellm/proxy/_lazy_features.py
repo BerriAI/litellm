@@ -58,6 +58,13 @@ def _include_skill_hub(app: "FastAPI", module: object) -> None:
     app.include_router(scan_router)
 
 
+def _include_live_sessions(app: "FastAPI", module: object) -> None:
+    from litellm.proxy.realtime_endpoints.live_session_controls import attach_router
+
+    _include_router()(app, module)
+    app.include_router(attach_router)
+
+
 @dataclass(frozen=True)
 class LazyFeature:
     name: str
@@ -228,6 +235,11 @@ LAZY_FEATURES: Final[tuple[LazyFeature, ...]] = (
         path_prefixes=("/cursor-cli/",),
     ),
     LazyFeature(
+        name="live_session_controls",
+        module_path="litellm.proxy.realtime_endpoints.live_session_controls",
+        path_prefixes=("/v1/live/sessions/", "/live/sessions/"),
+    ),
+    LazyFeature(
         name="llm_passthrough",
         module_path="litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints",
         path_prefixes=(
@@ -273,6 +285,7 @@ LAZY_FEATURES: Final[tuple[LazyFeature, ...]] = (
         name="live_sessions",
         module_path="litellm.proxy.realtime_endpoints.live_endpoints",
         path_prefixes=("/openai/v1/live", "/v1/live", "/live"),
+        register_fn=_include_live_sessions,
     ),
     LazyFeature(
         name="anthropic_passthrough",

@@ -23987,14 +23987,666 @@
       }
     }
   },
+  "live_session_controls": {
+    "components": {
+      "schemas": {
+        "HTTPValidationError": {
+          "properties": {
+            "detail": {
+              "items": {
+                "$ref": "#/components/schemas/ValidationError"
+              },
+              "title": "Detail",
+              "type": "array"
+            }
+          },
+          "title": "HTTPValidationError",
+          "type": "object"
+        },
+        "LiveForkTransport": {
+          "properties": {
+            "sdp": {
+              "title": "Sdp",
+              "type": "string"
+            },
+            "type": {
+              "const": "webrtc",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "sdp"
+          ],
+          "title": "LiveForkTransport",
+          "type": "object"
+        },
+        "LiveForkedSession": {
+          "properties": {
+            "id": {
+              "title": "Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "title": "LiveForkedSession",
+          "type": "object"
+        },
+        "LiveSessionForkResponse": {
+          "properties": {
+            "session": {
+              "$ref": "#/components/schemas/LiveForkedSession"
+            },
+            "transport": {
+              "$ref": "#/components/schemas/LiveForkTransport"
+            }
+          },
+          "required": [
+            "session",
+            "transport"
+          ],
+          "title": "LiveSessionForkResponse",
+          "type": "object"
+        },
+        "ValidationError": {
+          "properties": {
+            "ctx": {
+              "title": "Context",
+              "type": "object"
+            },
+            "input": {
+              "title": "Input"
+            },
+            "loc": {
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "integer"
+                  }
+                ]
+              },
+              "title": "Location",
+              "type": "array"
+            },
+            "msg": {
+              "title": "Message",
+              "type": "string"
+            },
+            "type": {
+              "title": "Error Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "loc",
+            "msg",
+            "type"
+          ],
+          "title": "ValidationError",
+          "type": "object"
+        }
+      }
+    },
+    "paths": {
+      "/v1/live/sessions/{session_id}/accept": {
+        "post": {
+          "description": "Accept an inbound call by its raw `live_...` id. Needs a proxy admin or a key granted inbound control.",
+          "operationId": "accept_live_session_v1_live_sessions__session_id__accept_post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "session_id",
+              "required": true,
+              "schema": {
+                "title": "Session Id",
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "session": {
+                    "model": "gpt-live-1.1",
+                    "type": "live"
+                  }
+                },
+                "schema": {
+                  "properties": {
+                    "session": {
+                      "additionalProperties": true,
+                      "properties": {
+                        "model": {
+                          "title": "Model",
+                          "type": "string"
+                        },
+                        "type": {
+                          "const": "live",
+                          "title": "Type",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "model"
+                      ],
+                      "title": "LiveAcceptedSession",
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "session"
+                  ],
+                  "title": "LiveSessionAcceptRequest",
+                  "type": "object"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "type": "object"
+                  }
+                }
+              },
+              "description": "The provider applied the action. OpenAI answers with an empty body."
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Accept Live Session",
+          "tags": [
+            "live_session_controls"
+          ]
+        }
+      },
+      "/v1/live/sessions/{session_id}/content": {
+        "get": {
+          "description": "Stream a stored session's recording from the provider.",
+          "operationId": "download_live_session_content_v1_live_sessions__session_id__content_get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "session_id",
+              "required": true,
+              "schema": {
+                "title": "Session Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Download Live Session Content",
+          "tags": [
+            "live_session_controls"
+          ]
+        }
+      },
+      "/v1/live/sessions/{session_id}/fork": {
+        "post": {
+          "description": "Start a new session from a stored one over WebRTC. The answer carries a new session token and is metered.",
+          "operationId": "fork_live_session_v1_live_sessions__session_id__fork_post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "session_id",
+              "required": true,
+              "schema": {
+                "title": "Session Id",
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "session": {},
+                  "transport": {
+                    "sdp": "v=0...",
+                    "type": "webrtc"
+                  }
+                },
+                "schema": {
+                  "properties": {
+                    "session": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": true,
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "title": "Session"
+                    },
+                    "transport": {
+                      "properties": {
+                        "sdp": {
+                          "title": "Sdp",
+                          "type": "string"
+                        },
+                        "type": {
+                          "const": "webrtc",
+                          "title": "Type",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "sdp"
+                      ],
+                      "title": "LiveForkTransport",
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "transport"
+                  ],
+                  "title": "LiveSessionForkRequest",
+                  "type": "object"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "201": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/LiveSessionForkResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Fork Live Session",
+          "tags": [
+            "live_session_controls"
+          ]
+        }
+      },
+      "/v1/live/sessions/{session_id}/hangup": {
+        "post": {
+          "description": "End a call. Takes the proxy session token, or a raw id with inbound control and `?model=`.",
+          "operationId": "hangup_live_session_v1_live_sessions__session_id__hangup_post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "session_id",
+              "required": true,
+              "schema": {
+                "title": "Session Id",
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "maxProperties": 0,
+                  "type": "object"
+                }
+              }
+            },
+            "required": false
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "type": "object"
+                  }
+                }
+              },
+              "description": "The provider applied the action. OpenAI answers with an empty body."
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Hangup Live Session",
+          "tags": [
+            "live_session_controls"
+          ]
+        }
+      },
+      "/v1/live/sessions/{session_id}/refer": {
+        "post": {
+          "description": "Transfer a SIP call. Takes the proxy session token, or a raw id with inbound control and `?model=`.",
+          "operationId": "refer_live_session_v1_live_sessions__session_id__refer_post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "session_id",
+              "required": true,
+              "schema": {
+                "title": "Session Id",
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "target_uri": "tel:+14155550123"
+                },
+                "schema": {
+                  "properties": {
+                    "target_uri": {
+                      "title": "Target Uri",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "target_uri"
+                  ],
+                  "title": "LiveSessionReferRequest",
+                  "type": "object"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "type": "object"
+                  }
+                }
+              },
+              "description": "The provider applied the action. OpenAI answers with an empty body."
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Refer Live Session",
+          "tags": [
+            "live_session_controls"
+          ]
+        }
+      },
+      "/v1/live/sessions/{session_id}/reject": {
+        "post": {
+          "description": "Reject an inbound call. A raw `live_...` id needs inbound control and a `?model=` query parameter.",
+          "operationId": "reject_live_session_v1_live_sessions__session_id__reject_post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "session_id",
+              "required": true,
+              "schema": {
+                "title": "Session Id",
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "status_code": 486
+                },
+                "schema": {
+                  "properties": {
+                    "status_code": {
+                      "maximum": 699,
+                      "minimum": 300,
+                      "title": "Status Code",
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "status_code"
+                  ],
+                  "title": "LiveSessionRejectRequest",
+                  "type": "object"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "type": "object"
+                  }
+                }
+              },
+              "description": "The provider applied the action. OpenAI answers with an empty body."
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Reject Live Session",
+          "tags": [
+            "live_session_controls"
+          ]
+        }
+      }
+    }
+  },
   "live_sessions": {
     "components": {
-      "schemas": {}
+      "schemas": {
+        "HTTPValidationError": {
+          "properties": {
+            "detail": {
+              "items": {
+                "$ref": "#/components/schemas/ValidationError"
+              },
+              "title": "Detail",
+              "type": "array"
+            }
+          },
+          "title": "HTTPValidationError",
+          "type": "object"
+        },
+        "LiveForkTransport": {
+          "properties": {
+            "sdp": {
+              "title": "Sdp",
+              "type": "string"
+            },
+            "type": {
+              "const": "webrtc",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "sdp"
+          ],
+          "title": "LiveForkTransport",
+          "type": "object"
+        },
+        "LiveForkedSession": {
+          "properties": {
+            "id": {
+              "title": "Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "title": "LiveForkedSession",
+          "type": "object"
+        },
+        "LiveSessionForkResponse": {
+          "properties": {
+            "session": {
+              "$ref": "#/components/schemas/LiveForkedSession"
+            },
+            "transport": {
+              "$ref": "#/components/schemas/LiveForkTransport"
+            }
+          },
+          "required": [
+            "session",
+            "transport"
+          ],
+          "title": "LiveSessionForkResponse",
+          "type": "object"
+        },
+        "ValidationError": {
+          "properties": {
+            "ctx": {
+              "title": "Context",
+              "type": "object"
+            },
+            "input": {
+              "title": "Input"
+            },
+            "loc": {
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "integer"
+                  }
+                ]
+              },
+              "title": "Location",
+              "type": "array"
+            },
+            "msg": {
+              "title": "Message",
+              "type": "string"
+            },
+            "type": {
+              "title": "Error Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "loc",
+            "msg",
+            "type"
+          ],
+          "title": "ValidationError",
+          "type": "object"
+        }
+      }
     },
     "paths": {
       "/v1/live/sessions": {
         "post": {
-          "description": "Create a GPT-Live session over WebRTC. The body carries the session and the browser's SDP offer,\nand the response carries the SDP answer. The returned `session.id` attaches a sideband on\n`/v1/live/sessions/{session_id}/attach`.",
+          "description": "Create a GPT-Live session over WebRTC or SIP. The body carries the session and the transport. A WebRTC\nanswer carries the SDP, and a SIP answer returns before the callee picks up. The returned `session.id`\nattaches a sideband on `/v1/live/sessions/{session_id}/attach` and controls the session.",
           "operationId": "create_live_session_v1_live_sessions_post",
           "responses": {
             "200": {
@@ -24012,6 +24664,447 @@
             }
           ],
           "summary": "Create Live Session",
+          "tags": [
+            "live_sessions"
+          ]
+        }
+      },
+      "/v1/live/sessions/{session_id}/accept": {
+        "post": {
+          "description": "Accept an inbound call by its raw `live_...` id. Needs a proxy admin or a key granted inbound control.",
+          "operationId": "accept_live_session_v1_live_sessions__session_id__accept_post_2",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "session_id",
+              "required": true,
+              "schema": {
+                "title": "Session Id",
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "session": {
+                    "model": "gpt-live-1.1",
+                    "type": "live"
+                  }
+                },
+                "schema": {
+                  "properties": {
+                    "session": {
+                      "additionalProperties": true,
+                      "properties": {
+                        "model": {
+                          "title": "Model",
+                          "type": "string"
+                        },
+                        "type": {
+                          "const": "live",
+                          "title": "Type",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "model"
+                      ],
+                      "title": "LiveAcceptedSession",
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "session"
+                  ],
+                  "title": "LiveSessionAcceptRequest",
+                  "type": "object"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "type": "object"
+                  }
+                }
+              },
+              "description": "The provider applied the action. OpenAI answers with an empty body."
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Accept Live Session",
+          "tags": [
+            "live_sessions"
+          ]
+        }
+      },
+      "/v1/live/sessions/{session_id}/content": {
+        "get": {
+          "description": "Stream a stored session's recording from the provider.",
+          "operationId": "download_live_session_content_v1_live_sessions__session_id__content_get_2",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "session_id",
+              "required": true,
+              "schema": {
+                "title": "Session Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Download Live Session Content",
+          "tags": [
+            "live_sessions"
+          ]
+        }
+      },
+      "/v1/live/sessions/{session_id}/fork": {
+        "post": {
+          "description": "Start a new session from a stored one over WebRTC. The answer carries a new session token and is metered.",
+          "operationId": "fork_live_session_v1_live_sessions__session_id__fork_post_2",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "session_id",
+              "required": true,
+              "schema": {
+                "title": "Session Id",
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "session": {},
+                  "transport": {
+                    "sdp": "v=0...",
+                    "type": "webrtc"
+                  }
+                },
+                "schema": {
+                  "properties": {
+                    "session": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": true,
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "title": "Session"
+                    },
+                    "transport": {
+                      "properties": {
+                        "sdp": {
+                          "title": "Sdp",
+                          "type": "string"
+                        },
+                        "type": {
+                          "const": "webrtc",
+                          "title": "Type",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "sdp"
+                      ],
+                      "title": "LiveForkTransport",
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "transport"
+                  ],
+                  "title": "LiveSessionForkRequest",
+                  "type": "object"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "201": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/LiveSessionForkResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Fork Live Session",
+          "tags": [
+            "live_sessions"
+          ]
+        }
+      },
+      "/v1/live/sessions/{session_id}/hangup": {
+        "post": {
+          "description": "End a call. Takes the proxy session token, or a raw id with inbound control and `?model=`.",
+          "operationId": "hangup_live_session_v1_live_sessions__session_id__hangup_post_2",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "session_id",
+              "required": true,
+              "schema": {
+                "title": "Session Id",
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "maxProperties": 0,
+                  "type": "object"
+                }
+              }
+            },
+            "required": false
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "type": "object"
+                  }
+                }
+              },
+              "description": "The provider applied the action. OpenAI answers with an empty body."
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Hangup Live Session",
+          "tags": [
+            "live_sessions"
+          ]
+        }
+      },
+      "/v1/live/sessions/{session_id}/refer": {
+        "post": {
+          "description": "Transfer a SIP call. Takes the proxy session token, or a raw id with inbound control and `?model=`.",
+          "operationId": "refer_live_session_v1_live_sessions__session_id__refer_post_2",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "session_id",
+              "required": true,
+              "schema": {
+                "title": "Session Id",
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "target_uri": "tel:+14155550123"
+                },
+                "schema": {
+                  "properties": {
+                    "target_uri": {
+                      "title": "Target Uri",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "target_uri"
+                  ],
+                  "title": "LiveSessionReferRequest",
+                  "type": "object"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "type": "object"
+                  }
+                }
+              },
+              "description": "The provider applied the action. OpenAI answers with an empty body."
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Refer Live Session",
+          "tags": [
+            "live_sessions"
+          ]
+        }
+      },
+      "/v1/live/sessions/{session_id}/reject": {
+        "post": {
+          "description": "Reject an inbound call. A raw `live_...` id needs inbound control and a `?model=` query parameter.",
+          "operationId": "reject_live_session_v1_live_sessions__session_id__reject_post_2",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "session_id",
+              "required": true,
+              "schema": {
+                "title": "Session Id",
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "status_code": 486
+                },
+                "schema": {
+                  "properties": {
+                    "status_code": {
+                      "maximum": 699,
+                      "minimum": 300,
+                      "title": "Status Code",
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "status_code"
+                  ],
+                  "title": "LiveSessionRejectRequest",
+                  "type": "object"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "type": "object"
+                  }
+                }
+              },
+              "description": "The provider applied the action. OpenAI answers with an empty body."
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Reject Live Session",
           "tags": [
             "live_sessions"
           ]

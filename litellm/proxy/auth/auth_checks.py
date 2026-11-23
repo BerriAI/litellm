@@ -1209,9 +1209,9 @@ def model_max_budget_of(holder: ModelMaxBudgetHolder) -> Mapping[str, object] | 
 
 
 def route_skips_budget_checks(route: str) -> bool:
-    if route in BUDGET_ENFORCED_SIDE_EFFECT_ROUTES:
+    if route in BUDGET_ENFORCED_SIDE_EFFECT_ROUTES or RouteChecks.is_live_session_accept_route(route):
         return False
-    if route in MODEL_DISCOVERY_ROUTES:
+    if route in MODEL_DISCOVERY_ROUTES or RouteChecks.is_unbilled_live_session_control(route):
         return True
     if RouteChecks.runs_inference_checks(route=route):
         return False

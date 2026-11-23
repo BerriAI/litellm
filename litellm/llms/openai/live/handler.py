@@ -9,7 +9,7 @@ from datetime import datetime
 from itertools import count
 from types import MappingProxyType
 from typing import Final, Protocol, TypeAlias
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import quote, urlsplit, urlunsplit
 
 from pydantic import TypeAdapter, ValidationError
 from typing_extensions import NotRequired, ReadOnly, TypedDict
@@ -296,6 +296,18 @@ def parse_live_session_start(first_message: str) -> LiveSessionStart | None:
     return LiveSessionStart(frame=MappingProxyType(frame), model=model)
 
 
+def _live_session_url(base_url: str, attach: LiveAttach | None, fork_of: str | None) -> str:
+    if attach is not None:
+        return f"{base_url}/{attach.session_id}/attach"
+    return base_url if fork_of is None else f"{base_url}/{quote(fork_of, safe='')}/fork"
+
+
+def _fork_start_frame(start_frame: str) -> str:
+    frame: Final = _LIVE_EVENT_FRAME_ADAPTER.validate_json(start_frame)
+    session: Final = as_str_mapping(frame.get("session")) or {}
+    return json.dumps({**frame, "session": {name: value for name, value in session.items() if name != "model"}})
+
+
 def _is_session_close_message(message: str) -> bool:
     return _live_event_type(message) == "session.close"
 
@@ -524,11 +536,12 @@ class OpenAILiveSessions(OpenAIRealtime):
         upstream: LiveUpstream | None = None,
         attach: LiveAttach | None = None,
         client_frame_gate: LiveClientFrameGate | None = None,
+        fork_of: str | None = None,
     ) -> None:
         resolved_upstream: Final = upstream if upstream is not None else self.openai_upstream(api_base, api_key)
         from websockets.exceptions import InvalidStatus
 
-        url: Final = resolved_upstream.url if attach is None else f"{resolved_upstream.url}/{attach.session_id}/attach"
+        url: Final = _live_session_url(resolved_upstream.url, attach, fork_of)
         headers: Final = resolved_upstream.headers
         ssl_config: Final = self._get_ssl_config(url)
         session: Final = as_str_mapping(session_start.get("session"))
@@ -542,7 +555,8 @@ class OpenAILiveSessions(OpenAIRealtime):
         if gated_start is not None and gated_start.denial is not None:
             await websocket.close(code=1008, reason="Session not allowed")
             return
-        upstream_start: Final = json.dumps(rewritten_start) if gated_start is None else gated_start.frame
+        gated_frame: Final = json.dumps(rewritten_start) if gated_start is None else gated_start.frame
+        upstream_start: Final = gated_frame if fork_of is None else _fork_start_frame(gated_frame)
         pre_call_args: Final[_LivePreCallArgs] = {
             "api_base": url,
             "headers": headers,

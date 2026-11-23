@@ -14371,6 +14371,7 @@ async def _route_realtime_websocket_session(
     live_attach: LiveAttach | None = None,
     pinned_deployment_id: str | None = None,
     live_client_frame_gate: LiveProviderFrameGate | None = None,
+    live_fork_of: str | None = None,
 ) -> None:
     # Only use explicit parameters, not all query params
     query_model: Final = route_model if is_translation else model
@@ -14399,6 +14400,7 @@ async def _route_realtime_websocket_session(
                 ("live_session_start", live_session_start),
                 ("live_attach", live_attach),
                 ("live_client_frame_gate", live_client_frame_gate),
+                ("live_fork_of", live_fork_of),
             )
             if value is not None
         }
@@ -14516,6 +14518,28 @@ async def _reject_invalid_live_session_start(
     )
 
 
+async def _receive_live_session_start(websocket: WebSocket, user_api_key_dict: UserAPIKeyAuth) -> str | None:
+    try:
+        return await asyncio.wait_for(
+            websocket.receive_text(),
+            timeout=OPENAI_LIVE_SESSION_START_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        await _reject_invalid_live_session_start(websocket, user_api_key_dict)
+        return None
+    except WebSocketDisconnect:
+        await _release_realtime_budget_reservation(user_api_key_dict)
+        await _release_realtime_max_parallel_slot(user_api_key_dict)
+        return None
+    except RuntimeError:
+        await _reject_invalid_live_session_start(websocket, user_api_key_dict)
+        return None
+    except BaseException:
+        await _release_realtime_budget_reservation(user_api_key_dict)
+        await _release_realtime_max_parallel_slot(user_api_key_dict)
+        raise
+
+
 LiveSessionModelAuthorizer: TypeAlias = Callable[[WebSocket, str], Awaitable[UserAPIKeyAuth]]
 
 
@@ -14577,25 +14601,9 @@ async def live_sessions_websocket_endpoint(
         await _release_realtime_max_parallel_slot(user_api_key_dict)
         raise
 
-    try:
-        first_message: Final = await asyncio.wait_for(
-            websocket.receive_text(),
-            timeout=OPENAI_LIVE_SESSION_START_TIMEOUT_SECONDS,
-        )
-    except asyncio.TimeoutError:
-        await _reject_invalid_live_session_start(websocket, user_api_key_dict)
+    first_message: Final = await _receive_live_session_start(websocket, user_api_key_dict)
+    if first_message is None:
         return
-    except WebSocketDisconnect:
-        await _release_realtime_budget_reservation(user_api_key_dict)
-        await _release_realtime_max_parallel_slot(user_api_key_dict)
-        return
-    except RuntimeError:
-        await _reject_invalid_live_session_start(websocket, user_api_key_dict)
-        return
-    except BaseException:
-        await _release_realtime_budget_reservation(user_api_key_dict)
-        await _release_realtime_max_parallel_slot(user_api_key_dict)
-        raise
 
     session_start: Final = parse_live_session_start(first_message)
     if session_start is None:
@@ -14626,8 +14634,11 @@ async def live_sessions_websocket_endpoint(
         await _release_realtime_max_parallel_slot(upgrade_auth)
         raise
 
+    from litellm.proxy.realtime_endpoints.live_session_controls import stored_session_relay
+
+    stored_relay: Final = await stored_session_relay(websocket, session_start.frame, session_start.model, session_auth)
     await _route_realtime_websocket_session(
-        websocket,
+        websocket if stored_relay is None else stored_relay.client,  # pyright: ignore[reportArgumentType]  # only the socket surface the session route reads
         session_auth,
         route_model=session_start.model,
         model=None,
@@ -14636,6 +14647,7 @@ async def live_sessions_websocket_endpoint(
         request_path=websocket.url.path,
         live_session_start=session_start.frame,
         live_client_frame_gate=lambda client_frame, provider: live_client_frame(client_frame, provider, session_auth),
+        pinned_deployment_id=None if stored_relay is None else stored_relay.deployment_id,
     )
 
 
@@ -23233,6 +23245,7 @@ app.include_router(credential_router)
 app.include_router(openai_passthrough_router)
 app.include_router(batches_router)
 app.include_router(openai_files_router)
+reserve_lazy_slot(app, "live_session_controls")
 reserve_lazy_slot(app, "llm_passthrough")
 app.include_router(pass_through_router)
 app.include_router(health_router)

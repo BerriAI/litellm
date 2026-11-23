@@ -1,30 +1,28 @@
-"""GPT-Live sessions over WebRTC: the HTTP route that creates one and the sideband that joins it."""
+"""GPT-Live sessions over WebRTC and SIP: the HTTP route that creates one and the sideband that joins it."""
 
 import json
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Annotated, Final
+from urllib.parse import quote
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, WebSocket
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi import status as http_status
 from fastapi.responses import JSONResponse
 
+from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # untyped dict params
 )
 from litellm.llms.openai.live.handler import LiveAttach, LiveUpstream
-from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import can_key_call_resolved_model
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth, user_api_key_auth_live_websocket
+from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper, encrypt_value_helper
-from litellm.proxy.realtime_endpoints.live_delegation import (
-    authorize_live_delegation,
-    deployment_delegation,
-    live_client_frame,
-)
+from litellm.proxy.realtime_endpoints.live_delegation import authorize_live_delegation, deployment_delegation
 from litellm.proxy.realtime_endpoints.sideband import join_sideband, webrtc_calls_are_metered
 from litellm.realtime_api.main import live_guardrails_configured, live_session_upstream
 from litellm.types.llms.custom_http import httpxSpecialProvider
@@ -33,8 +31,10 @@ router: Final = APIRouter()
 
 _LIVE_SESSION_TOKEN_VERSION: Final = "live_v1"
 _LIVE_SESSION_TOKEN_TTL_SECONDS: Final = 24 * 60 * 60
+_LIVE_SESSION_RETENTION_SECONDS: Final = 30 * 24 * 60 * 60
 _LIVE_SESSIONS_PATH: Final = "/v1/live/sessions"
 _HTTP_SCHEMES: Final[Mapping[str, str]] = {"wss": "https", "ws": "http"}
+_REDACTED_SECRET: Final = b"[REDACTED]"
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,7 +46,29 @@ class _LiveSession:
     deployment_id: str
 
 
-def _session_token(session: _LiveSession, user_api_key_dict: UserAPIKeyAuth) -> str:
+@dataclass(frozen=True, slots=True)
+class _OwnedSession:
+    session: _LiveSession
+    expires_at: int
+    retained_until: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class _ResolvedDeployment:
+    provider_model: str
+    upstream: LiveUpstream
+    litellm_params: Mapping[str, object]
+    deployment_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class _AdmittedSession:
+    deployment: _ResolvedDeployment
+    provider_session: Mapping[str, object]
+
+
+def _session_token(session: _LiveSession, user_api_key_dict: UserAPIKeyAuth, *, stored: bool = False) -> str:
+    now: Final = int(time.time())
     return encrypt_value_helper(
         json.dumps(
             {
@@ -55,15 +77,15 @@ def _session_token(session: _LiveSession, user_api_key_dict: UserAPIKeyAuth) -> 
                 "model": session.model,
                 "deployment_id": session.deployment_id,
                 "key": user_api_key_dict.token or "",
-                "expires_at": int(time.time()) + _LIVE_SESSION_TOKEN_TTL_SECONDS,
+                "expires_at": now + _LIVE_SESSION_TOKEN_TTL_SECONDS,
+                **({"retained_until": now + _LIVE_SESSION_RETENTION_SECONDS} if stored else {}),
             },
             separators=(",", ":"),
         )
     )
 
 
-def _attachable_session(session_token: str, user_api_key_dict: UserAPIKeyAuth) -> _LiveSession | None:
-    """The session behind a session token, when this caller may join it."""
+def _owned_session(session_token: str, user_api_key_dict: UserAPIKeyAuth) -> _OwnedSession | None:
     decrypted: Final = decrypt_value_helper(value=session_token, key="live_session_id", exception_type="debug")
     if decrypted is None:
         return None
@@ -77,15 +99,36 @@ def _attachable_session(session_token: str, user_api_key_dict: UserAPIKeyAuth) -
     model: Final = payload.get("model")
     deployment_id: Final = payload.get("deployment_id")
     expires_at: Final = payload.get("expires_at")
+    retained_until: Final = payload.get("retained_until")
     if not isinstance(session_id, str) or not isinstance(model, str) or not isinstance(expires_at, int):
         return None
     if not isinstance(deployment_id, str):
         return None
-    if expires_at < time.time():
+    if retained_until is not None and not isinstance(retained_until, int):
         return None
     if not payload.get("key") or payload.get("key") != user_api_key_dict.token:
         return None
-    return _LiveSession(session_id=session_id, model=model, deployment_id=deployment_id)
+    return _OwnedSession(
+        session=_LiveSession(session_id=session_id, model=model, deployment_id=deployment_id),
+        expires_at=expires_at,
+        retained_until=retained_until,
+    )
+
+
+def _usable_session(session_token: str, user_api_key_dict: UserAPIKeyAuth, *, retained: bool) -> _OwnedSession | None:
+    owned: Final = _owned_session(session_token, user_api_key_dict)
+    if owned is None:
+        return None
+    usable_until: Final = max(owned.expires_at, owned.retained_until or 0) if retained else owned.expires_at
+    return owned if usable_until >= time.time() else None
+
+
+def _attachable_session(  # pyright: ignore[reportUnusedFunction]  # the attach route in live_session_controls calls it
+    session_token: str, user_api_key_dict: UserAPIKeyAuth
+) -> _LiveSession | None:
+    """The session behind a session token, when this caller may join it."""
+    owned: Final = _usable_session(session_token, user_api_key_dict, retained=False)
+    return None if owned is None else owned.session
 
 
 async def _start_live_billing_sideband(session: _LiveSession, user_api_key_dict: UserAPIKeyAuth) -> bool:
@@ -143,61 +186,66 @@ def _created_session(response: httpx.Response) -> tuple[Mapping[str, object], Ma
     return (created, session, session_id) if isinstance(session_id, str) else None
 
 
-async def _post_session(upstream: LiveUpstream, body: Mapping[str, object]) -> httpx.Response:
-    """Create the session on the provider. A provider error comes back as its response, for the caller to read."""
+def _http_url(upstream: LiveUpstream, path: str = "") -> str:
     scheme, _, rest = upstream.url.partition("://")
+    return f"{_HTTP_SCHEMES.get(scheme, scheme)}://{rest}{path}"
+
+
+def _session_action_path(session_id: str, action: str) -> str:
+    return f"/{quote(session_id, safe='')}/{action}"
+
+
+async def _post_session(upstream: LiveUpstream, body: Mapping[str, object] | None, path: str = "") -> httpx.Response:
+    """POST to the provider's session API. A provider error comes back as its response, for the caller to read."""
     http_client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.PassThroughEndpoint)
     try:
         return await http_client.post(  # pyright: ignore[reportUnknownMemberType]  # untyped dict params
-            f"{_HTTP_SCHEMES.get(scheme, scheme)}://{rest}",
-            headers={**upstream.headers, "Content-Type": "application/json"},
-            json=dict(body),
+            _http_url(upstream, path),
+            headers={**upstream.headers, **({} if body is None else {"Content-Type": "application/json"})},
+            json=None if body is None else dict(body),
         )
     except httpx.HTTPStatusError as error:
         return error.response
 
 
-@router.post("/v1/live/sessions", tags=["realtime"])
-@router.post("/live/sessions", tags=["realtime"], include_in_schema=False)
-@router.post("/openai/v1/live/sessions", tags=["realtime"], include_in_schema=False)
-async def create_live_session(
-    request: Request,
-    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
-) -> Response:
-    """
-    Create a GPT-Live session over WebRTC. The body carries the session and the browser's SDP offer,
-    and the response carries the SDP answer. The returned `session.id` attaches a sideband on
-    `/v1/live/sessions/{session_id}/attach`.
-    """
+def _trunk_password(body: Mapping[str, object] | None) -> str | None:
+    transport: Final = None if body is None else as_str_mapping(body.get("transport"))
+    trunk: Final = None if transport is None else as_str_mapping(transport.get("trunk"))
+    trunk_auth: Final = None if trunk is None else as_str_mapping(trunk.get("auth"))
+    password: Final = None if trunk_auth is None else trunk_auth.get("password")
+    return password if isinstance(password, str) and password else None
+
+
+def _without_secret(content: bytes, secret: str | None) -> bytes:
+    if secret is None:
+        return content
+    return content.replace(secret.encode(), _REDACTED_SECRET).replace(
+        json.dumps(secret)[1:-1].encode(), _REDACTED_SECRET
+    )
+
+
+def _provider_content_type(headers: Mapping[str, str], default: str) -> str:
+    return headers.get("content-type", default)
+
+
+def _provider_answer(response: httpx.Response, sent_body: Mapping[str, object] | None) -> Response:
+    return Response(
+        content=_without_secret(response.content, _trunk_password(sent_body)),
+        status_code=response.status_code,
+        media_type=_provider_content_type(response.headers, "application/json"),
+    )
+
+
+async def _routing_data(request: Request, user_api_key_dict: UserAPIKeyAuth, model: str) -> Mapping[str, object]:
     from litellm.proxy.litellm_pre_call_utils import (
         add_litellm_data_to_request,  # pyright: ignore[reportUnknownVariableType]  # untyped dict params
     )
     from litellm.proxy.proxy_server import (
         general_settings,  # pyright: ignore[reportUnknownVariableType]  # untyped proxy settings dict
-        llm_model_list,  # pyright: ignore[reportUnknownVariableType]  # untyped proxy model list
-        llm_router,
         proxy_config,
         version,
     )
 
-    requested: Final = await _requested_session(request)
-    if requested is None:
-        raise HTTPException(status_code=http_status.HTTP_400_BAD_REQUEST, detail="session.model is required")
-    body, session, model = requested
-    transport: Final = as_str_mapping(body.get("transport"))
-    if transport is None or transport.get("type") != "webrtc":
-        raise HTTPException(
-            status_code=http_status.HTTP_400_BAD_REQUEST, detail="Only the webrtc transport is supported"
-        )
-    if llm_router is None:
-        raise HTTPException(status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR, detail="No router is configured")
-    await can_key_call_resolved_model(
-        model=model,
-        valid_token=user_api_key_dict,
-        llm_model_list=llm_model_list,  # pyright: ignore[reportUnknownArgumentType]  # untyped proxy model list
-        llm_router=llm_router,
-    )
-    await authorize_live_delegation(session, user_api_key_dict)
     request_data: Final = as_str_mapping(
         await add_litellm_data_to_request(  # pyright: ignore[reportUnknownArgumentType]  # returns an untyped dict
             data={"model": model},
@@ -208,111 +256,189 @@ async def create_live_session(
             proxy_config=proxy_config,
         )
     )
-    if request_data is None or live_guardrails_configured(request_data):
+    return {} if request_data is None else request_data
+
+
+async def _unguarded_routing_data(
+    request: Request, user_api_key_dict: UserAPIKeyAuth, model: str
+) -> Mapping[str, object]:
+    request_data: Final = await _routing_data(request, user_api_key_dict, model)
+    if not request_data or live_guardrails_configured(request_data):
         raise HTTPException(
             status_code=http_status.HTTP_400_BAD_REQUEST, detail="Guardrails are not supported on OpenAI Live sessions"
         )
+    return request_data
 
-    deployment: Final = as_str_mapping(await llm_router.select(model, dict(request_data)))
+
+async def _resolved_deployment(deployment: Mapping[str, object] | None) -> _ResolvedDeployment | None:
     litellm_params: Final = None if deployment is None else as_str_mapping(deployment.get("litellm_params"))
     resolved: Final = None if litellm_params is None else await live_session_upstream(litellm_params)
+    if deployment is None or litellm_params is None or resolved is None:
+        return None
+    model_info: Final = as_str_mapping(deployment.get("model_info"))
+    deployment_id: Final = None if model_info is None else model_info.get("id")
+    provider_model, upstream = resolved
+    return _ResolvedDeployment(
+        provider_model=provider_model,
+        upstream=upstream,
+        litellm_params=litellm_params,
+        deployment_id=deployment_id if isinstance(deployment_id, str) else "",
+    )
+
+
+async def _selected_deployment(model: str, request_data: Mapping[str, object]) -> _ResolvedDeployment:
+    from litellm.proxy.proxy_server import llm_router
+
+    if llm_router is None:
+        raise HTTPException(status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR, detail="No router is configured")
+    resolved: Final = await _resolved_deployment(as_str_mapping(await llm_router.select(model, dict(request_data))))
     if resolved is None:
         raise HTTPException(
             status_code=http_status.HTTP_400_BAD_REQUEST,
-            detail="Live sessions over WebRTC require an OpenAI or Azure deployment",
+            detail="Live sessions require an OpenAI or Azure deployment",
         )
-    provider_model, upstream = resolved
-    provider_session: Final = deployment_delegation(session, litellm_params or {}, user_api_key_dict)
-    upstream_response: Final = await _post_session(
-        upstream, {**body, "session": {**provider_session, "model": provider_model}}
+    return resolved
+
+
+async def _authorize_session_model(model: str, user_api_key_dict: UserAPIKeyAuth) -> None:
+    from litellm.proxy.proxy_server import (
+        llm_model_list,  # pyright: ignore[reportUnknownVariableType]  # untyped proxy model list
+        llm_router,
     )
-    created_parts: Final = _created_session(upstream_response) if upstream_response.is_success else None
-    if created_parts is None:
-        return Response(
-            content=upstream_response.content,
-            status_code=upstream_response.status_code,
-            media_type=upstream_response.headers.get("content-type", "application/json"),
-        )
-    created, created_session, upstream_session_id = created_parts
-    model_info: Final = None if deployment is None else as_str_mapping(deployment.get("model_info"))
-    deployment_id: Final = None if model_info is None else model_info.get("id")
-    live_session: Final = _LiveSession(
-        session_id=upstream_session_id,
+
+    if llm_router is None:
+        raise HTTPException(status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR, detail="No router is configured")
+    await can_key_call_resolved_model(
         model=model,
-        deployment_id=deployment_id if isinstance(deployment_id, str) else "",
+        valid_token=user_api_key_dict,
+        llm_model_list=llm_model_list,  # pyright: ignore[reportUnknownArgumentType]  # untyped proxy model list
+        llm_router=llm_router,
     )
-    metered: Final = webrtc_calls_are_metered(general_settings)  # pyright: ignore[reportUnknownArgumentType]  # untyped proxy settings dict
-    if metered and not await _start_live_billing_sideband(live_session, user_api_key_dict):
+
+
+async def _admit_session(
+    request: Request, user_api_key_dict: UserAPIKeyAuth, session: Mapping[str, object], model: str
+) -> _AdmittedSession:
+    await _authorize_session_model(model, user_api_key_dict)
+    await authorize_live_delegation(session, user_api_key_dict)
+    request_data: Final = await _unguarded_routing_data(request, user_api_key_dict, model)
+    deployment: Final = await _selected_deployment(model, request_data)
+    return _AdmittedSession(
+        deployment=deployment,
+        provider_session=deployment_delegation(session, deployment.litellm_params, user_api_key_dict),
+    )
+
+
+async def _ended_call(upstream: LiveUpstream, session_id: str) -> bool:
+    try:
+        response: Final = await _post_session(upstream, None, _session_action_path(session_id, "hangup"))
+    except Exception:  # noqa: BLE001  # any failure here must still reach the caller as a 503 that carries the token
+        return False
+    return response.is_success
+
+
+async def _refusal_unless_metered(
+    session: _LiveSession,
+    upstream: LiveUpstream,
+    user_api_key_dict: UserAPIKeyAuth,
+    *,
+    call_is_live: bool,
+    stored: bool,
+) -> Response | None:
+    from litellm.proxy.proxy_server import (
+        general_settings,  # pyright: ignore[reportUnknownVariableType]  # untyped proxy settings dict
+    )
+
+    if not webrtc_calls_are_metered(general_settings):  # pyright: ignore[reportUnknownArgumentType]  # untyped proxy settings dict
+        return None
+    if await _start_live_billing_sideband(session, user_api_key_dict):
+        return None
+    if not call_is_live:
         raise HTTPException(
             status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="The proxy could not join this session to meter it, so the session was not started",
         )
+    if await _ended_call(upstream, session.session_id):
+        raise HTTPException(
+            status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="The proxy could not join this call to meter it, so the call was ended",
+        )
+    verbose_proxy_logger.error(
+        "Live call on deployment %s has no billing and could not be ended", session.deployment_id
+    )
+    return JSONResponse(
+        status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
+        content={
+            "detail": "The proxy could not join this call to meter it or end it. End it with POST "
+            "/v1/live/sessions/{session.id}/hangup",
+            "session": {"id": _session_token(session, user_api_key_dict, stored=stored)},
+        },
+    )
+
+
+def _tokenized_answer(
+    upstream_response: httpx.Response,
+    created: Mapping[str, object],
+    created_session: Mapping[str, object],
+    session: _LiveSession,
+    user_api_key_dict: UserAPIKeyAuth,
+    *,
+    stored: bool,
+) -> Response:
     return JSONResponse(
         status_code=upstream_response.status_code,
         content={
             **created,
             "session": {
                 **created_session,
-                "id": _session_token(live_session, user_api_key_dict),
-                "model": model,
+                "id": _session_token(session, user_api_key_dict, stored=stored),
+                "model": session.model,
             },
         },
     )
 
 
-@router.websocket("/v1/live/sessions/{session_id}/attach")
-@router.websocket("/live/sessions/{session_id}/attach")
-@router.websocket("/openai/v1/live/sessions/{session_id}/attach")
-async def attach_live_session(
-    websocket: WebSocket,
-    session_id: str,
-    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth_live_websocket)],
-) -> None:
-    """Join a WebRTC session as a sideband. Usage is billed once, by the proxy's own sideband."""
-    from litellm.proxy.proxy_server import (
-        _authorize_live_session_model,  # pyright: ignore[reportPrivateUsage]  # the same model check a Live WebSocket session gets
-        _reject_realtime_session,  # pyright: ignore[reportPrivateUsage]  # closes the socket and releases its holds
-        _release_realtime_budget_reservation,  # pyright: ignore[reportPrivateUsage]  # the upgrade auth reserved budget for this socket
-        _release_realtime_max_parallel_slot,  # pyright: ignore[reportPrivateUsage]  # the upgrade auth took a parallel slot for this socket
-        _route_realtime_websocket_session,  # pyright: ignore[reportPrivateUsage]  # the WebSocket session route relays live sessions
-        live_session_model_authorizer,
+@router.post("/v1/live/sessions", tags=["realtime"])
+@router.post("/live/sessions", tags=["realtime"], include_in_schema=False)
+@router.post("/openai/v1/live/sessions", tags=["realtime"], include_in_schema=False)
+async def create_live_session(
+    request: Request,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+) -> Response:
+    """
+    Create a GPT-Live session over WebRTC or SIP. The body carries the session and the transport. A WebRTC
+    answer carries the SDP, and a SIP answer returns before the callee picks up. The returned `session.id`
+    attaches a sideband on `/v1/live/sessions/{session_id}/attach` and controls the session.
+    """
+    requested: Final = await _requested_session(request)
+    if requested is None:
+        raise HTTPException(status_code=http_status.HTTP_400_BAD_REQUEST, detail="session.model is required")
+    body, session, model = requested
+    transport: Final = as_str_mapping(body.get("transport"))
+    if transport is None:
+        raise HTTPException(status_code=http_status.HTTP_400_BAD_REQUEST, detail="transport must be an object")
+    admitted: Final = await _admit_session(request, user_api_key_dict, session, model)
+    deployment: Final = admitted.deployment
+    upstream_response: Final = await _post_session(
+        deployment.upstream, {**body, "session": {**admitted.provider_session, "model": deployment.provider_model}}
     )
-
-    attachable: Final = _attachable_session(session_id, user_api_key_dict)
-    try:
-        await websocket.accept()
-        if attachable is None:
-            await websocket.close(code=1008, reason="Unknown session")
-    except BaseException:
-        await _release_realtime_budget_reservation(user_api_key_dict)
-        await _release_realtime_max_parallel_slot(user_api_key_dict)
-        raise
-    if attachable is None:
-        await _release_realtime_budget_reservation(user_api_key_dict)
-        await _release_realtime_max_parallel_slot(user_api_key_dict)
-        return
-    upgrade_auth: Final = user_api_key_dict.model_copy()
-    await _release_realtime_budget_reservation(upgrade_auth)
-    try:
-        session_auth: Final = await _authorize_live_session_model(
-            live_session_model_authorizer(), websocket, attachable.model, None
-        )
-    except (ProxyException, HTTPException):
-        await _reject_realtime_session(websocket, upgrade_auth, code=1008, reason="Session not allowed")
-        return
-    except BaseException:
-        await _release_realtime_max_parallel_slot(upgrade_auth)
-        raise
-    await _route_realtime_websocket_session(
-        websocket,
-        session_auth,
-        route_model=attachable.model,
-        model=None,
-        intent=None,
-        guardrails=None,
-        request_path=websocket.url.path,
-        live_session_start={"type": "session.start", "session": {"model": attachable.model}},
-        live_attach=LiveAttach(session_id=attachable.session_id, metered=False),
-        live_client_frame_gate=lambda client_frame, provider: live_client_frame(client_frame, provider, session_auth),
-        pinned_deployment_id=attachable.deployment_id,
+    created_parts: Final = _created_session(upstream_response) if upstream_response.is_success else None
+    if created_parts is None:
+        return _provider_answer(upstream_response, body)
+    created, created_session, upstream_session_id = created_parts
+    live_session: Final = _LiveSession(
+        session_id=upstream_session_id, model=model, deployment_id=deployment.deployment_id
+    )
+    stored: Final = session.get("store") is True
+    refusal: Final = await _refusal_unless_metered(
+        live_session,
+        deployment.upstream,
+        user_api_key_dict,
+        call_is_live=transport.get("type") == "sip",
+        stored=stored,
+    )
+    if refusal is not None:
+        return refusal
+    return _tokenized_answer(
+        upstream_response, created, created_session, live_session, user_api_key_dict, stored=stored
     )

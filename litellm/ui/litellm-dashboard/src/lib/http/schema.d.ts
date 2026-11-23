@@ -22620,6 +22620,126 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/live/sessions/{session_id}/accept": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Accept Live Session
+         * @description Accept an inbound call by its raw `live_...` id. Needs a proxy admin or a key granted inbound control.
+         */
+        post: operations["accept_live_session_v1_live_sessions__session_id__accept_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/live/sessions/{session_id}/content": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Download Live Session Content
+         * @description Stream a stored session's recording from the provider.
+         */
+        get: operations["download_live_session_content_v1_live_sessions__session_id__content_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/live/sessions/{session_id}/fork": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fork Live Session
+         * @description Start a new session from a stored one over WebRTC. The answer carries a new session token and is metered.
+         */
+        post: operations["fork_live_session_v1_live_sessions__session_id__fork_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/live/sessions/{session_id}/hangup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Hangup Live Session
+         * @description End a call. Takes the proxy session token, or a raw id with inbound control and `?model=`.
+         */
+        post: operations["hangup_live_session_v1_live_sessions__session_id__hangup_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/live/sessions/{session_id}/refer": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Refer Live Session
+         * @description Transfer a SIP call. Takes the proxy session token, or a raw id with inbound control and `?model=`.
+         */
+        post: operations["refer_live_session_v1_live_sessions__session_id__refer_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/live/sessions/{session_id}/reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reject Live Session
+         * @description Reject an inbound call. A raw `live_...` id needs inbound control and a `?model=` query parameter.
+         */
+        post: operations["reject_live_session_v1_live_sessions__session_id__reject_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/logs": {
         parameters: {
             query?: never;
@@ -41108,6 +41228,26 @@ export interface components {
          * @enum {string}
          */
         LitellmUserRoles: "proxy_admin" | "proxy_admin_viewer" | "org_admin" | "internal_user" | "internal_user_viewer" | "team" | "customer";
+        /** LiveForkTransport */
+        LiveForkTransport: {
+            /** Sdp */
+            sdp: string;
+            /**
+             * Type
+             * @constant
+             */
+            type: "webrtc";
+        };
+        /** LiveForkedSession */
+        LiveForkedSession: {
+            /** Id */
+            id: string;
+        };
+        /** LiveSessionForkResponse */
+        LiveSessionForkResponse: {
+            session: components["schemas"]["LiveForkedSession"];
+            transport: components["schemas"]["LiveForkTransport"];
+        };
         /** LocalEnvironment */
         LocalEnvironment: {
             /** Skills */
@@ -89813,6 +89953,273 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    accept_live_session_v1_live_sessions__session_id__accept_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "session": {
+                 *         "model": "gpt-live-1.1",
+                 *         "type": "live"
+                 *       }
+                 *     }
+                 */
+                "application/json": {
+                    /** LiveAcceptedSession */
+                    session: {
+                        /** Model */
+                        model: string;
+                        /**
+                         * Type
+                         * @constant
+                         */
+                        type: "live";
+                    } & {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+        responses: {
+            /** @description The provider applied the action. OpenAI answers with an empty body. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    download_live_session_content_v1_live_sessions__session_id__content_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fork_live_session_v1_live_sessions__session_id__fork_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "session": {},
+                 *       "transport": {
+                 *         "sdp": "v=0...",
+                 *         "type": "webrtc"
+                 *       }
+                 *     }
+                 */
+                "application/json": {
+                    /** Session */
+                    session?: {
+                        [key: string]: unknown;
+                    } | null;
+                    /** LiveForkTransport */
+                    transport: {
+                        /** Sdp */
+                        sdp: string;
+                        /**
+                         * Type
+                         * @constant
+                         */
+                        type: "webrtc";
+                    };
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LiveSessionForkResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    hangup_live_session_v1_live_sessions__session_id__hangup_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": Record<string, never>;
+            };
+        };
+        responses: {
+            /** @description The provider applied the action. OpenAI answers with an empty body. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    refer_live_session_v1_live_sessions__session_id__refer_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "target_uri": "tel:+14155550123"
+                 *     }
+                 */
+                "application/json": {
+                    /** Target Uri */
+                    target_uri: string;
+                };
+            };
+        };
+        responses: {
+            /** @description The provider applied the action. OpenAI answers with an empty body. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reject_live_session_v1_live_sessions__session_id__reject_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "status_code": 486
+                 *     }
+                 */
+                "application/json": {
+                    /** Status Code */
+                    status_code: number;
+                };
+            };
+        };
+        responses: {
+            /** @description The provider applied the action. OpenAI answers with an empty body. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
             };
         };
     };

@@ -1,7 +1,7 @@
 from collections.abc import Mapping, Sequence
 from typing import Any, Literal
 
-from pydantic import ConfigDict
+from pydantic import ConfigDict, Field
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -153,6 +153,58 @@ class RealtimeClientSecretResponse(LiteLLMBaseModel):
     expires_at: int | None = None
     value: str
     session: dict[str, object] | None = None
+
+
+class LiveAcceptedSession(LiteLLMBaseModel):
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+    type: Literal["live"]
+    model: str
+
+
+class LiveSessionAcceptRequest(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    session: LiveAcceptedSession
+
+
+class LiveSessionRejectRequest(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    status_code: int = Field(ge=300, le=699)
+
+
+class LiveSessionReferRequest(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    target_uri: str
+
+
+class LiveForkTransport(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    type: Literal["webrtc"]
+    sdp: str
+
+
+class LiveSessionForkRequest(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    transport: LiveForkTransport
+    session: Mapping[str, object] | None = None
+
+
+class LiveForkedSession(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+
+
+class LiveSessionForkResponse(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    session: LiveForkedSession
+    transport: LiveForkTransport
 
 
 class RealtimeTranscriptionSessionRequest(LiteLLMBaseModel):

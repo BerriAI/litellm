@@ -23,7 +23,7 @@ from litellm.constants import (
     OPENSEARCH_PASS_THROUGH_ROUTE_PREFIX,
 )
 from litellm.integrations.otel.runtime import phase_event
-from litellm.litellm_core_utils.core_helpers import as_object_list, has_attributes, require_attributes
+from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping, has_attributes, require_attributes
 from litellm.proxy._types import ProxyException
 from litellm.proxy.common_utils.callback_utils import (
     get_metadata_variable_name_from_kwargs,
@@ -298,6 +298,30 @@ async def _read_form_data(request: Request) -> FormData:
     return form_data
 
 
+def _without_live_trunk_password(
+    request: Request, body: Mapping[str, object]
+) -> dict[str, object] | None:  # mutable-ok: the parsed-body cache hands out a dict
+    path: Final = request.scope.get("path")
+    forwards_parsed_body_upstream: Final = "endpoint" in request.path_params
+    if not isinstance(path, str) or "/live/sessions" not in path or forwards_parsed_body_upstream:
+        return None
+    transport: Final = as_str_mapping(body.get("transport"))
+    trunk: Final = None if transport is None else as_str_mapping(transport.get("trunk"))
+    trunk_auth: Final = None if trunk is None else as_str_mapping(trunk.get("auth"))
+    if trunk_auth is None or "password" not in trunk_auth:
+        return None
+    return {
+        **body,
+        "transport": {
+            **(transport or {}),
+            "trunk": {
+                **(trunk or {}),
+                "auth": {name: value for name, value in trunk_auth.items() if name != "password"},
+            },
+        },
+    }
+
+
 async def read_request_body(request: Request | None) -> dict:
     """
     Safely read the request body and parse it as JSON.
@@ -382,8 +406,9 @@ async def read_request_body(request: Request | None) -> dict:
                         )
 
         # Cache the parsed result
-        safe_set_request_parsed_body(request=request, parsed_body=parsed_body)
-        return parsed_body
+        readable_body: Final = _without_live_trunk_password(request, parsed_body) or parsed_body
+        safe_set_request_parsed_body(request=request, parsed_body=readable_body)
+        return readable_body
 
     except ValidationError as e:
         from fastapi.routing import APIRoute

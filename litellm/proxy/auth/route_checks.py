@@ -114,8 +114,18 @@ _UNBILLED_ROUTES: Final[frozenset[str]] = frozenset(
         "/openai/v1/responses/input_tokens",
     }
 )
+_LIVE_SESSION_ROUTE_PREFIXES: Final = ("/live/sessions/", "/v1/live/sessions/")
+_UNBILLED_LIVE_SESSION_ACTIONS: Final = frozenset({"hangup", "reject", "refer", "content"})
 _TOKEN_COUNTING_SEGMENTS: Final[frozenset[str]] = frozenset({"count_tokens", "count-tokens"})
 _TOKEN_COUNTING_ACTION: Final = "countTokens"
+
+
+def _live_session_action(route: str) -> str | None:
+    tail: Final = next(
+        (route.removeprefix(prefix) for prefix in _LIVE_SESSION_ROUTE_PREFIXES if route.startswith(prefix)), None
+    )
+    session_id, _, action = ("", "", "") if tail is None else tail.partition("/")
+    return action if session_id and action and "/" not in action else None
 
 
 def _allowed_passthrough_routes(metadata: Mapping[str, object] | None) -> object:
@@ -487,10 +497,19 @@ class RouteChecks:
         return route in general_settings["allowed_routes"]
 
     @staticmethod
+    def is_live_session_accept_route(route: str) -> bool:
+        return _live_session_action(route) == "accept"
+
+    @staticmethod
+    def is_unbilled_live_session_control(route: str) -> bool:
+        return _live_session_action(route) in _UNBILLED_LIVE_SESSION_ACTIONS
+
+    @staticmethod
     def is_unbilled_route(route: str) -> bool:
         segment: Final = route.rsplit("/", 1)[-1]
         return (
             route in _UNBILLED_ROUTES
+            or RouteChecks.is_unbilled_live_session_control(route)
             or segment.partition(":")[0] in _TOKEN_COUNTING_SEGMENTS
             or segment.endswith(f":{_TOKEN_COUNTING_ACTION}")
         )

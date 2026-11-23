@@ -5313,3 +5313,59 @@ def test_member_can_reach_skill_history_visibility_checks(route: str) -> None:
         )
     except HTTPException as exc:
         pytest.fail(f"History visibility could not run: {exc.detail}")
+
+
+def _live_request(route: str) -> Request:
+    return Request(scope={"type": "http", "method": "POST", "path": route, "headers": [], "query_string": b""})
+
+
+def _check_non_admin_route(route: str, key: UserAPIKeyAuth) -> None:
+    RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=None,
+        _user_role=LitellmUserRoles.INTERNAL_USER,
+        route=route,
+        request=_live_request(route),
+        valid_token=key,
+        request_data={},
+    )
+
+
+@pytest.mark.parametrize("action", ["accept", "reject"])
+def test_the_live_inbound_grant_wildcard_passes_both_route_checks(action: str) -> None:
+    route: Final = f"/v1/live/sessions/live_abc/{action}"
+    granted: Final = UserAPIKeyAuth(
+        token="operator", user_role=LitellmUserRoles.INTERNAL_USER, allowed_routes=["/v1/live/sessions/*"]
+    )
+
+    assert RouteChecks.assert_key_allowed_routes_grant(route=route, valid_token=granted) is True
+    assert _check_non_admin_route(route, granted) is None
+
+
+@pytest.mark.parametrize("action", ["accept", "reject"])
+@pytest.mark.parametrize("allowed_routes", [None, []], ids=["none", "empty"])
+def test_an_ordinary_key_is_refused_the_live_inbound_routes(action: str, allowed_routes: list[str] | None) -> None:
+    ordinary: Final = UserAPIKeyAuth(
+        token="ordinary", user_role=LitellmUserRoles.INTERNAL_USER, allowed_routes=allowed_routes
+    )
+
+    with pytest.raises(Exception, match=r"(?i)admin"):
+        _check_non_admin_route(f"/v1/live/sessions/live_abc/{action}", ordinary)
+
+
+@pytest.mark.parametrize("prefix", ["/live/sessions", "/v1/live/sessions"])
+@pytest.mark.parametrize("action", ["hangup", "refer", "fork", "content"])
+def test_an_ordinary_key_passes_the_route_check_for_owner_bound_live_controls(prefix: str, action: str) -> None:
+    ordinary: Final = UserAPIKeyAuth(token="ordinary", user_role=LitellmUserRoles.INTERNAL_USER)
+
+    assert _check_non_admin_route(f"{prefix}/live_abc/{action}", ordinary) is None
+
+
+@pytest.mark.parametrize("prefix", ["/live/sessions", "/v1/live/sessions"])
+@pytest.mark.parametrize(
+    ("action", "billed"),
+    [("hangup", False), ("refer", False), ("reject", False), ("content", False), ("accept", True), ("fork", True)],
+)
+def test_only_live_controls_that_start_a_session_are_subject_to_budget(prefix: str, action: str, billed: bool) -> None:
+    from litellm.proxy.auth.auth_checks import route_skips_budget_checks
+
+    assert route_skips_budget_checks(f"{prefix}/live_abc/{action}") is not billed

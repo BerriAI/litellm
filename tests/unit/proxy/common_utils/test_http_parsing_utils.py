@@ -184,6 +184,49 @@ async def test_null_body_respects_the_dispatched_body_requirement(optional: bool
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["/v1/live/sessions", "/openai/v1/live/sessions/live_abc/fork"])
+async def test_read_request_body_never_hands_out_a_live_trunk_password(path: str) -> None:
+    body: Final = json.dumps(
+        {"transport": {"type": "sip", "trunk": {"uri": "sip:t", "auth": {"username": "u", "password": "trunk-secret"}}}}
+    ).encode()
+
+    async def _receive() -> Message:
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    request: Final = Request(
+        scope={"type": "http", "method": "POST", "path": path, "headers": [(b"content-type", b"application/json")]},
+        receive=_receive,
+    )
+
+    parsed: Final = await read_request_body(request)
+
+    assert parsed["transport"]["trunk"] == {"uri": "sip:t", "auth": {"username": "u"}}
+    assert "trunk-secret" not in json.dumps(_safe_get_request_parsed_body(request))
+    assert json.loads(await request.body())["transport"]["trunk"]["auth"]["password"] == "trunk-secret"
+
+
+@pytest.mark.asyncio
+async def test_read_request_body_keeps_the_body_a_provider_pass_through_forwards() -> None:
+    body: Final = json.dumps({"transport": {"trunk": {"auth": {"password": "trunk-secret"}}}}).encode()
+
+    async def _receive() -> Message:
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    request: Final = Request(
+        scope={
+            "type": "http",
+            "method": "POST",
+            "path": "/openai/v1/live/sessions",
+            "path_params": {"endpoint": "v1/live/sessions"},
+            "headers": [(b"content-type", b"application/json")],
+        },
+        receive=_receive,
+    )
+
+    assert (await read_request_body(request))["transport"]["trunk"]["auth"]["password"] == "trunk-secret"
+
+
+@pytest.mark.asyncio
 async def test_read_request_body_marks_body_received_once_with_its_size(monkeypatch: pytest.MonkeyPatch):
     events: list[tuple[str, dict[str, str | int]]] = []  # mutable-ok: recorder for the injected phase_event double
 

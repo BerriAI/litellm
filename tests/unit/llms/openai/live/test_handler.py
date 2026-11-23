@@ -1354,6 +1354,40 @@ def _attached_upstream() -> _FakeUpstream:
     return upstream
 
 
+@pytest.mark.asyncio
+async def test_a_forked_live_session_opens_the_source_fork_path_and_starts_without_a_model() -> None:
+    upstream: Final = _FakeUpstream(
+        client_frames=(),
+        upstream_frames=(
+            '{"type":"session.started","session":{"id":"live_forked","model":"gpt-live-1"}}',
+            '{"type":"session.closed","usage":{"seconds":7}}',
+        ),
+    )
+    connector: Final = _FakeConnector(upstream)
+    client: Final = _FakeClientWebSocket(messages=(), disconnect_after_send_type="session.closed")
+    logger: Final = _FakeLogging()
+    worker: Final = _FakeLoggingWorker()
+
+    await OpenAILiveSessions(logging_worker=worker, websocket_connector=connector).async_live_session(
+        model="gpt-live-1",
+        websocket=client,
+        logging_obj=cast(Logging, logger),
+        session_start={"type": "session.start", "session": {"model": "live-group", "instructions": "Continue"}},
+        api_base="https://api.openai.com/",
+        api_key="live-test-key",
+        fork_of="live/source",
+    )
+    if worker.coroutine is not None:
+        await worker.coroutine
+
+    assert connector.url == "wss://api.openai.com/v1/live/sessions/live%2Fsource/fork"
+    assert json.loads(upstream.sent_text.get_nowait()) == {
+        "type": "session.start",
+        "session": {"instructions": "Continue"},
+    }
+    assert logger.dispatch_count == 1, "a fork is a new billed session"
+
+
 @pytest.mark.parametrize(("metered", "expected_dispatches"), [(True, 1), (False, 0)], ids=["proxy-meter", "caller"])
 @pytest.mark.asyncio
 async def test_attached_live_session_joins_without_starting_or_closing_it_and_bills_only_when_metered(

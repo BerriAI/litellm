@@ -869,6 +869,7 @@ async def _alive_session(
     litellm_params: Mapping[str, object],
     attach: LiveAttach | None = None,
     client_frame_gate: LiveProviderFrameGate | None = None,
+    fork_of: str | None = None,
 ) -> None:
     rejection: Final = _live_session_rejection(custom_llm_provider, litellm_metadata)
     if rejection is not None:
@@ -892,6 +893,7 @@ async def _alive_session(
             upstream=azure_upstream,
             attach=attach,
             client_frame_gate=None if provider_frame_gate is None else _gated,
+            fork_of=fork_of,
         )
         return
     resolved_api_base: Final = api_base or litellm.api_base or "https://api.openai.com/"
@@ -906,6 +908,7 @@ async def _alive_session(
         ),
         attach=attach,
         client_frame_gate=None if provider_frame_gate is None else _gated,
+        fork_of=fork_of,
     )
 
 
@@ -953,6 +956,7 @@ async def _arealtime(
     realtime_mode: str = "realtime",
     live_attach: LiveAttach | None = None,
     live_client_frame_gate: LiveProviderFrameGate | None = None,
+    live_fork_of: str | None = None,
     **kwargs,
 ) -> None:
     """
@@ -1027,6 +1031,7 @@ async def _arealtime(
             litellm_params=deployment_params,
             attach=live_attach,
             client_frame_gate=live_client_frame_gate,
+            fork_of=live_fork_of,
         )
         return
 

@@ -1,4 +1,5 @@
 import json
+import logging
 from typing import Final
 
 import httpx
@@ -197,13 +198,9 @@ def test_create_requires_the_session_model(
     assert started_sidebands == []
 
 
-@pytest.mark.parametrize(
-    "transport",
-    [None, {"type": "sip", "to": "sip:+15550100@example.com"}, {"sdp": "v=0 offer"}],
-    ids=["missing", "sip", "untyped"],
-)
-def test_create_refuses_a_transport_other_than_webrtc_without_calling_the_provider(
-    live_client: TestClient, started_sidebands: list[_LiveSession], transport: dict[str, object] | None
+@pytest.mark.parametrize("transport", [None, "sip", 7], ids=["missing", "string", "number"])
+def test_create_refuses_a_transport_that_is_not_an_object_without_calling_the_provider(
+    live_client: TestClient, started_sidebands: list[_LiveSession], transport: object
 ) -> None:
     body: Final = {"session": {"model": "live-group"}, **({} if transport is None else {"transport": transport})}
     with respx.mock(assert_all_called=False) as provider:
@@ -211,8 +208,137 @@ def test_create_refuses_a_transport_other_than_webrtc_without_calling_the_provid
         response: Final = live_client.post("/v1/live/sessions", json=body)
 
     assert response.status_code == 400, response.text
-    assert "Only the webrtc transport is supported" in response.text
+    assert "transport must be an object" in response.text
     assert not create.called
+    assert started_sidebands == []
+
+
+_TRUNK_PASSWORD: Final = "trunk-password-do-not-leak"
+_SIP_TRANSPORT: Final = {
+    "type": "sip",
+    "destination": "tel:+15550100",
+    "trunk": {"uri": "sip:trunk.example.com", "auth": {"username": "dialer", "password": _TRUNK_PASSWORD}},
+}
+_SIP_BODY: Final = {"session": {"model": "live-group"}, "transport": _SIP_TRANSPORT}
+_SIP_ANSWER: Final = {"session": {"id": "live_upstream"}, "transport": {"type": "sip"}}
+
+
+@pytest.mark.parametrize("status_code", [200, 201])
+def test_a_sip_create_forwards_the_body_once_returns_a_token_and_keeps_the_status(
+    live_client: TestClient, started_sidebands: list[_LiveSession], respx_mock: respx.MockRouter, status_code: int
+) -> None:
+    upstream: Final = respx_mock.post("https://api.openai.com/v1/live/sessions").mock(
+        return_value=httpx.Response(status_code, json=_SIP_ANSWER)
+    )
+
+    response: Final = live_client.post("/v1/live/sessions", json=_SIP_BODY)
+
+    expected_session: Final = _LiveSession(session_id="live_upstream", model="live-group", deployment_id="deployment-1")
+    assert response.status_code == status_code, response.text
+    assert upstream.call_count == 1
+    assert json.loads(upstream.calls.last.request.content) == {
+        "session": {"model": "gpt-live-1"},
+        "transport": _SIP_TRANSPORT,
+    }
+    assert response.json()["transport"] == {"type": "sip"}
+    assert _attachable_session(response.json()["session"]["id"], _OWNER) == expected_session
+    assert started_sidebands == [expected_session]
+
+
+@pytest.fixture
+def sideband_cannot_join(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _does_not_join(_session: _LiveSession, _auth: UserAPIKeyAuth) -> bool:
+        return False
+
+    monkeypatch.setattr(live_endpoints, "_start_live_billing_sideband", _does_not_join)
+
+
+@pytest.mark.usefixtures("sideband_cannot_join")
+def test_a_sip_call_whose_billing_cannot_join_is_hung_up_once_and_answers_503(
+    live_client: TestClient, respx_mock: respx.MockRouter
+) -> None:
+    create: Final = respx_mock.post("https://api.openai.com/v1/live/sessions").mock(
+        return_value=httpx.Response(201, json=_SIP_ANSWER)
+    )
+    hangup: Final = respx_mock.post("https://api.openai.com/v1/live/sessions/live_upstream/hangup").mock(
+        return_value=httpx.Response(200)
+    )
+
+    response: Final = live_client.post("/v1/live/sessions", json=_SIP_BODY)
+
+    assert response.status_code == 503, response.text
+    assert create.call_count == 1
+    assert hangup.call_count == 1
+    assert "session" not in response.json(), "a call that was ended leaves the caller nothing to control"
+
+
+@pytest.mark.usefixtures("sideband_cannot_join")
+@pytest.mark.parametrize(
+    "hangup_outcome",
+    [httpx.Response(500, json={"error": {"message": "failed"}}), httpx.ReadTimeout("timed out")],
+    ids=["provider-error", "timeout"],
+)
+def test_a_sip_call_that_cannot_be_hung_up_returns_its_token_in_the_503(
+    live_client: TestClient, respx_mock: respx.MockRouter, hangup_outcome: httpx.Response | Exception
+) -> None:
+    respx_mock.post("https://api.openai.com/v1/live/sessions").mock(return_value=httpx.Response(201, json=_SIP_ANSWER))
+    hangup: Final = respx_mock.post("https://api.openai.com/v1/live/sessions/live_upstream/hangup").mock(
+        side_effect=[hangup_outcome]
+    )
+
+    response: Final = live_client.post("/v1/live/sessions", json=_SIP_BODY)
+
+    assert response.status_code == 503, response.text
+    assert hangup.call_count == 1
+    assert _attachable_session(response.json()["session"]["id"], _OWNER) == _LiveSession(
+        session_id="live_upstream", model="live-group", deployment_id="deployment-1"
+    )
+
+
+@pytest.mark.usefixtures("sideband_cannot_join")
+def test_a_webrtc_session_whose_billing_cannot_join_is_not_hung_up(live_client: TestClient) -> None:
+    with respx.mock(assert_all_called=False) as provider:
+        provider.post("https://api.openai.com/v1/live/sessions").mock(
+            return_value=httpx.Response(
+                201, json={"session": {"id": "live_upstream"}, "transport": {"type": "webrtc", "sdp": "v=0 answer"}}
+            )
+        )
+        hangup: Final = provider.post("https://api.openai.com/v1/live/sessions/live_upstream/hangup").mock(
+            return_value=httpx.Response(200)
+        )
+        response: Final = live_client.post("/v1/live/sessions", json=_CREATE_BODY)
+
+    assert response.status_code == 503, response.text
+    assert not hangup.called
+
+
+@pytest.mark.parametrize("upstream_status", [400, 500])
+def test_the_trunk_password_reaches_the_provider_and_no_log_or_error_body(
+    live_client: TestClient,
+    started_sidebands: list[_LiveSession],
+    respx_mock: respx.MockRouter,
+    caplog: pytest.LogCaptureFixture,
+    upstream_status: int,
+) -> None:
+    upstream: Final = respx_mock.post("https://api.openai.com/v1/live/sessions").mock(
+        return_value=httpx.Response(upstream_status, json={"error": {"message": f"bad trunk {_TRUNK_PASSWORD}"}})
+    )
+    loggers: Final = tuple(logging.getLogger(name) for name in ("LiteLLM", "LiteLLM Proxy", "LiteLLM Router"))
+    propagated: Final = tuple(logger.propagate for logger in loggers)
+    for logger in loggers:
+        logger.propagate = True
+
+    try:
+        with caplog.at_level(logging.DEBUG):
+            response: Final = live_client.post("/v1/live/sessions", json=_SIP_BODY)
+    finally:
+        for logger, value in zip(loggers, propagated, strict=True):
+            logger.propagate = value
+
+    assert _TRUNK_PASSWORD in upstream.calls.last.request.content.decode()
+    assert response.status_code == upstream_status
+    assert _TRUNK_PASSWORD not in response.text
+    assert _TRUNK_PASSWORD not in caplog.text
     assert started_sidebands == []
 
 
