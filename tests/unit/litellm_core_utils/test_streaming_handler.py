@@ -1280,6 +1280,17 @@ async def test_bedrock_validation_error_raises_directly(logging_obj: Logging):
             ),
             id="choice_with_empty_answer",
         ),
+        pytest.param(
+            (
+                ({"index": None, "delta": {"role": "assistant", "content": ""}, "finish_reason": None},),
+                ({"index": 1, "delta": {"role": "assistant", "content": ""}, "finish_reason": None},),
+                ({"index": 0, "delta": {"content": "Hello"}, "finish_reason": None},),
+                ({"index": 1, "delta": {"content": "Hi"}, "finish_reason": None},),
+                ({"index": 0, "delta": {}, "finish_reason": "stop"},),
+                ({"index": 1, "delta": {}, "finish_reason": "stop"},),
+            ),
+            id="first_choice_opened_without_index",
+        ),
     ],
 )
 async def test_streamed_n_choices_each_open_with_one_assistant_role(
@@ -1339,10 +1350,13 @@ async def test_streamed_n_choices_each_open_with_one_assistant_role(
         else:
             client.close()
 
-    emitted_choices: Final = tuple(chain.from_iterable(chunk.choices for chunk in received))
-    role_indexes: Final = sorted(choice.index for choice in emitted_choices if choice.delta.role == "assistant")
+    emitted_choices: Final = tuple(
+        (0 if choice.index is None else choice.index, choice.delta.role)
+        for choice in chain.from_iterable(chunk.choices for chunk in received)
+    )
+    role_indexes: Final = sorted(index for index, role in emitted_choices if role == "assistant")
     opening_roles: Final = {
-        index: next(choice for choice in emitted_choices if choice.index == index).delta.role for index in (0, 1)
+        index: next(role for choice_index, role in emitted_choices if choice_index == index) for index in (0, 1)
     }
     assert role_indexes == [0, 1]
     assert opening_roles == {0: "assistant", 1: "assistant"}
