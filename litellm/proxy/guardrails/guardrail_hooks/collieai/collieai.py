@@ -82,6 +82,9 @@ class CollieAiGuardrail(_Base):
     def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:  # mutable-ok: CustomGuardrail's signature
         return [GuardrailEventHooks.pre_call, GuardrailEventHooks.post_call]
 
+    def scans_each_text_separately(self) -> bool:
+        return False
+
 
 __all__ = (
     "MISSING_PACKAGE_MESSAGE",

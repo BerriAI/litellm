@@ -149,7 +149,7 @@ describe("CreatedKeyDisplay", () => {
 
     const copiedInstructions = mockCopy.mock.calls.at(-1)?.[0] ?? "";
     expect(copiedInstructions).toContain("Gateway URL: http://gw.test:4000");
-    expect(copiedInstructions).toContain("Virtual key: sk-test-123");
+    expect(copiedInstructions).toContain("Virtual Key: sk-test-123");
     expect(copiedInstructions).toContain("POST http://gw.test:4000/v1/chat/completions");
     expect(copiedInstructions).toContain("POST http://gw.test:4000/v1/responses");
     expect(copiedInstructions).toContain("POST http://gw.test:4000/v1/messages");
@@ -189,9 +189,9 @@ describe("buildAgentInstructions", () => {
         "Use this LiteLLM AI gateway for model inference.",
         "",
         "Gateway URL: http://gw.test:4000",
-        "Virtual key: sk-test-123",
+        "Virtual Key: sk-test-123",
         "",
-        "LiteLLM is a gateway that exposes OpenAI and Anthropic compatible APIs. Send the virtual key as a Bearer token (Authorization: Bearer sk-test-123) to:",
+        "LiteLLM is a gateway that exposes OpenAI and Anthropic compatible APIs. Send the Virtual Key as a Bearer token (Authorization: Bearer sk-test-123) to:",
         "- POST http://gw.test:4000/v1/chat/completions (OpenAI Chat Completions)",
         "- POST http://gw.test:4000/v1/responses (OpenAI Responses)",
         "- POST http://gw.test:4000/v1/messages (Anthropic Messages)",

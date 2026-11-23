@@ -801,7 +801,7 @@ impl Request<'_> {
 }
 
 /// The descriptor keys a router fallback target reserves: every limit scoped to one model.
-pub const FALLBACK_TARGET_KEYS: [&str; 10] = [
+pub const FALLBACK_TARGET_KEYS: [&str; 15] = [
     "model_per_key",
     "model_per_team",
     "model_per_end_user",
@@ -812,6 +812,11 @@ pub const FALLBACK_TARGET_KEYS: [&str; 10] = [
     "model_per_customer_org",
     "model_per_customer_team",
     "model_per_customer_member",
+    "model_per_app",
+    "model_per_app_customer_org",
+    "model_per_app_customer_member",
+    "model_per_app_group",
+    "model_per_app_group_customer_org",
 ];
 const MODEL_SCOPED_PREFIX: &str = "model_per_";
 const SKILL_HUB_PUBLISH: &str = "skill_hub_publish";
@@ -1120,6 +1125,41 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+
+    #[rstest]
+    #[case::app("app")]
+    #[case::organization("app_customer_org")]
+    #[case::member("app_customer_member")]
+    fn app_limits_emit_scope_and_model_descriptors(#[case] owner: &str) {
+        let metadata = AuthMetadata {
+            customer_scopes: Some(vec![CustomerScope {
+                key: owner.into(),
+                entity_id: "identity".into(),
+                rpm_limit: json!(2),
+                tpm_limit: json!(20),
+                model_rpm_limit: json!({"model": 1}),
+                model_tpm_limit: json!({"model": 10}),
+                ..Default::default()
+            }]),
+            ..Default::default()
+        };
+        let lookups = lookups(&["model"]);
+        let descriptors = built(json!({}), metadata, &lookups, "model");
+        assert!(descriptors.contains(&descriptor(
+            owner,
+            json!("identity"),
+            json!(2),
+            json!(20),
+            60
+        )));
+        assert!(descriptors.contains(&descriptor(
+            &format!("model_per_{owner}"),
+            json!("identity:model"),
+            json!(1),
+            json!(10),
+            60,
+        )));
+    }
 
     fn lookups(candidates: &[&str]) -> Lookups {
         Lookups {

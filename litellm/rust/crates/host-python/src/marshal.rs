@@ -35,6 +35,15 @@ where
     Pythonized(value).into_pyobject(py).map(Bound::unbind)
 }
 
+/// Serializes `value` to JSON text for Python to validate, reporting failures as `ValueError`.
+pub fn json_dumps<T>(value: &T) -> PyResult<String>
+where
+    T: Serialize + ?Sized,
+{
+    serde_json::to_string(value)
+        .map_err(|error| PyValueError::new_err(litellm_error::Report::new(&error).to_string()))
+}
+
 pub fn json_object_field(py: Python<'_>, document: &str, name: &str) -> PyResult<Py<PyAny>> {
     py.import("json")?
         .call_method1("loads", (document,))?

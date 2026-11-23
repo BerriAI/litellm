@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol
 import httpx
 
 from litellm._uuid import uuid
-from litellm.types.llms.openai import OpenAIRealtimeStreamSessionEvents
+from litellm.types.llms.openai import OpenAIRealtimeDoneEvent, OpenAIRealtimeStreamSessionEvents
 from litellm.types.realtime import (
     RealtimeInputAudioTranscriptionUsage,
     RealtimeResponseTransformInput,
@@ -65,10 +65,10 @@ class BaseRealtimeConfig(ABC):
     @abstractmethod
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, str],
         model: str,
         api_key: str | None = None,
-    ) -> dict:
+    ) -> dict[str, str]:
         pass
 
     @abstractmethod
@@ -101,10 +101,10 @@ class BaseRealtimeConfig(ABC):
     async def pace_backend_send(self, message: bytes) -> None:
         return None
 
-    def is_setup_message(self, msg_obj: dict) -> bool:
+    def is_setup_message(self, msg_obj: dict[str, object]) -> bool:
         return False
 
-    def is_content_message(self, msg_obj: dict) -> bool:
+    def is_content_message(self, msg_obj: dict[str, object]) -> bool:
         return False
 
     def requires_session_configuration(
@@ -118,12 +118,18 @@ class BaseRealtimeConfig(ABC):
     def builds_setup_from_session_update(self) -> bool:
         return False
 
+    def setup_must_complete_before_content(self, setup_message: Mapping[str, object]) -> bool:
+        return False
+
     def setup_session_update_rejection(
         self, model: str, session: Mapping[str, object], *, setup_sent: bool
     ) -> RealtimeSessionUpdateRejection | None:
         return None
 
     def unbilled_usage_on_session_close(self, model: str) -> RealtimeInputAudioTranscriptionUsage | None:
+        return None
+
+    def unbilled_response_on_session_close(self, model: str) -> OpenAIRealtimeDoneEvent | None:
         return None
 
     def session_refusal(self) -> Exception | None:

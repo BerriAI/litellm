@@ -65,7 +65,7 @@ from litellm.constants import (
     MICROSOFT_USER_ID_ATTRIBUTE,
     MICROSOFT_USER_LAST_NAME_ATTRIBUTE,
 )
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object, require_attributes
 from litellm.litellm_core_utils.dot_notation_indexing import get_nested_value
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -107,12 +107,11 @@ from litellm.proxy.common_utils.admin_ui_utils import (
     is_admin_ui_disabled,
     show_missing_vars_in_env,
 )
-from litellm.proxy.common_utils.html_forms.default_credentials_hint import should_hide_default_credentials_hint
 from litellm.proxy.common_utils.html_forms.jwt_display_template import (
     jwt_display_template,
 )
 from litellm.proxy.common_utils.html_forms.native_client_consent import team_select_field
-from litellm.proxy.common_utils.html_forms.ui_login import build_ui_login_form
+from litellm.proxy.common_utils.state_cache import StateCache
 from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET, UserApiKeyCache
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.management_endpoints.internal_user_endpoints import (
@@ -155,6 +154,7 @@ from litellm.proxy.utils import (
     get_custom_url,
     get_server_root_path,
 )
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import SSOConfigRepository
@@ -310,6 +310,22 @@ class _ServicePrincipalPage(Protocol):
     def get(self, key: Literal["@odata.nextLink"]) -> str | None: ...
 
 
+class _GraphDirectoryObject(Protocol):
+    def get(self, key: str) -> str | None: ...
+
+
+class _GraphGroupsPage(Protocol):
+    @overload
+    def get(
+        self,
+        key: Literal["value"],
+        default: Sequence["_GraphDirectoryObject"],
+    ) -> Sequence["_GraphDirectoryObject"]: ...
+
+    @overload
+    def get(self, key: Literal["@odata.context", "@odata.nextLink"]) -> str | None: ...
+
+
 def _hash_cli_sso_secret(secret: str) -> str:
     return hashlib.sha256(secret.encode("utf-8")).hexdigest()
 
@@ -439,7 +455,7 @@ def _get_cli_sso_flow_or_raise(login_id: str | None, cache: DualCache) -> dict:
 
 
 @with_service_target(CLI_SSO_SESSIONS_TARGET)
-def _set_cli_sso_flow(login_id: str, cache: DualCache, flow: dict) -> None:
+def _set_cli_sso_flow(login_id: str, cache: DualCache, flow: Mapping[str, object]) -> None:
     cache_key: Final = _get_cli_sso_flow_cache_key(login_id)
     redis_cache: Final = cache.redis_cache
     if redis_cache is not None:
@@ -448,7 +464,7 @@ def _set_cli_sso_flow(login_id: str, cache: DualCache, flow: dict) -> None:
         cache.set_cache(key=cache_key, value=flow, ttl=CLI_SSO_SESSION_TTL_SECONDS)
 
 
-def _verify_cli_sso_poll_secret(flow: dict, poll_secret: str | None) -> bool:
+def _verify_cli_sso_poll_secret(flow: Mapping[str, object], poll_secret: str | None) -> bool:
     expected_poll_secret_hash: Final = flow.get("poll_secret_hash")
     if not isinstance(expected_poll_secret_hash, str) or not isinstance(poll_secret, str):
         return False
@@ -1139,6 +1155,10 @@ async def _verify_generic_sso_or_fall_back_to_id_token(
         )
 
 
+def _verified_generic_sso_tokens(generic_sso: _GenericSSOClient) -> tuple[str | None, SSOIdentityAssertion | None]:
+    return generic_sso.access_token, assertion_from_sso_login(generic_sso.id_token, generic_sso.refresh_token)
+
+
 class _SSOUserAdmissionError(ProxyException):
     pass
 
@@ -1159,7 +1179,6 @@ async def google_login(
     """
     from litellm.proxy.proxy_server import (
         cli_sso_session_cache,
-        general_settings,
         saml_sso_cache,
         user_custom_ui_sso_sign_in_handler,
     )
@@ -1248,22 +1267,22 @@ async def google_login(
     if admin_ui_is_disabled:
         return admin_ui_disabled()
 
-    from fastapi.responses import HTMLResponse
+    # No SSO: sign in on the dashboard login page. return_to is kept in the same one-shot cookie the
+    # SSO branch uses and honoured by /login/resume, which a browser that is already signed in goes
+    # to directly, since the login page would send it to the dashboard and drop the return_to.
+    from litellm.proxy.mcp_server.byok_oauth_endpoints import get_authenticated_browser_user_id
 
-    hide_default_credentials_hint: Final = should_hide_default_credentials_hint(general_settings)
-    form_response: Final = HTMLResponse(
-        content=build_ui_login_form(
-            show_deprecation_banner=True,
-            hide_default_credentials_hint=hide_default_credentials_hint,
-        ),
-        status_code=200,
+    base_url: Final = get_custom_url(str(request.base_url)).rstrip("/")
+    signed_in: Final = await get_authenticated_browser_user_id(request) is not None
+    login_response: Final = RedirectResponse(
+        url=f"{base_url}/login/resume" if signed_in and return_to is not None else f"{base_url}/ui/login",
+        status_code=303,
     )
-    # Preserve return_to across the username/password sign-in too, via the SAME shared, never-raising
-    # helper the SSO branch uses, so /login can resume the connect flow instead of dead-ending at the
-    # dashboard. One implementation → the two sign-in branches cannot diverge (and the login form always
-    # renders, since the helper never raises on a bad return_to).
-    _persist_return_to_cookie(form_response, return_to, request)
-    return form_response
+    if return_to is not None and not signed_in:
+        login_response.delete_cookie("token")
+        login_response.delete_cookie("token", path=f"{get_server_root_path().rstrip('/')}/ui")
+    _persist_return_to_cookie(login_response, return_to, request)
+    return login_response
 
 
 def generic_response_convertor(
@@ -1531,8 +1550,10 @@ async def _setup_role_mappings() -> Optional["RoleMappings"]:
         import ast
 
         try:
-            generic_user_role_mappings_data: dict[LitellmUserRoles, list[str]] = ast.literal_eval(generic_role_mappings)
-            if isinstance(generic_user_role_mappings_data, dict):
+            generic_user_role_mappings_data: Final = as_str_mapping(
+                _DECODED_JSON.validate_python(ast.literal_eval(generic_role_mappings))
+            )
+            if generic_user_role_mappings_data is not None:
                 role_mappings_data = {
                     "provider": "generic",
                     "group_claim": generic_role_mappings_group_claim,
@@ -1570,7 +1591,7 @@ def _handle_generic_sso_error(
     e: Exception,
     generic_authorization_endpoint: str | None,
     generic_token_endpoint: str | None,
-    additional_headers: dict,
+    additional_headers: object,
 ) -> NoReturn:
     """Handle errors from generic SSO verify_and_process. Always re-raises."""
     error_message: Final = str(e)
@@ -1800,8 +1821,7 @@ async def get_generic_sso_response(
                 userinfo_endpoint=generic_userinfo_endpoint,
                 response_convertor=response_convertor,
             )
-            access_token_str = generic_sso.access_token
-            sso_assertion = assertion_from_sso_login(generic_sso.id_token, generic_sso.refresh_token)
+            access_token_str, sso_assertion = _verified_generic_sso_tokens(generic_sso)
 
         access_token_payload = process_sso_jwt_access_token(
             access_token_str, sso_jwt_handler, result, role_mappings=role_mappings
@@ -2224,11 +2244,12 @@ async def _sync_user_role_from_jwt_role_map(
             data={"user_role": mapped_role.value},
         )
         user_info.user_role = mapped_role.value
-        await user_api_key_cache.async_set_cache(
-            key=user_info.user_id,
-            value=user_info,
-            model_type=LiteLLM_UserTable,
-        )
+        if user_info.user_id is not None:
+            await user_api_key_cache.async_set_cache(
+                key=AuthObject.user(user_info.user_id),
+                value=user_info,
+                model_type=LiteLLM_UserTable,
+            )
 
 
 def apply_user_info_values_to_sso_user_defined_values(
@@ -3158,7 +3179,7 @@ async def sso_return_to_redirect(
     return_to: str | None,
     jwt_token: str,
     redis_usage_cache: "RedisCache | None",
-    user_api_key_cache: UserApiKeyCache,
+    sso_flow_cache: StateCache,
     request: Request,
 ) -> RedirectResponse | None:
     """Resolve the post-SSO redirect for a ``return_to``, or None to fall through to the dashboard.
@@ -3189,7 +3210,7 @@ async def sso_return_to_redirect(
         if redis_usage_cache is not None:
             await redis_usage_cache.async_set_cache(key=cache_key, value=cache_value, ttl=60)
         else:
-            await user_api_key_cache.async_set_cache(key=cache_key, value=cache_value, ttl=60)
+            await sso_flow_cache.async_set_cache(key=cache_key, value=cache_value, ttl=60)
 
         separator: Final = "&" if "?" in return_to else "?"
         redirect_url: Final = return_to + separator + urlencode({"login": "success", "code": code})
@@ -3319,7 +3340,7 @@ class SSOAuthenticationHandler:
         if control_plane_url is None:
             return False
 
-        def _origin(url: str) -> tuple:
+        def _origin(url: str) -> tuple[str, str, int]:
             parsed: Final = urlparse(url)
             scheme: Final = (parsed.scheme or "").lower()
             hostname: Final = (parsed.hostname or "").lower()
@@ -3495,7 +3516,7 @@ class SSOAuthenticationHandler:
         """
         from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
-        from litellm.proxy.proxy_server import redis_usage_cache, user_api_key_cache
+        from litellm.proxy.proxy_server import redis_usage_cache, sso_flow_cache
 
         with generic_sso:
             # State is bound to the caller's browser via a ``litellm_oauth_state``
@@ -3534,7 +3555,7 @@ class SSOAuthenticationHandler:
                         ttl=600,
                     )
                 else:
-                    await user_api_key_cache.async_set_cache(
+                    await sso_flow_cache.async_set_cache(
                         key=cache_key,
                         value={"code_verifier": code_verifier},
                         ttl=600,
@@ -3981,6 +4002,7 @@ class SSOAuthenticationHandler:
             premium_user,
             proxy_logging_obj,
             redis_usage_cache,
+            sso_flow_cache,
             user_api_key_cache,
         )
         from litellm.proxy.utils import get_prisma_client_or_throw
@@ -4162,7 +4184,7 @@ class SSOAuthenticationHandler:
             return_to=return_to,
             jwt_token=jwt_token,
             redis_usage_cache=redis_usage_cache,
-            user_api_key_cache=user_api_key_cache,
+            sso_flow_cache=sso_flow_cache,
             request=request,
         )
         if return_to_redirect is not None:
@@ -4209,13 +4231,13 @@ class SSOAuthenticationHandler:
             )
 
         if state and use_pkce:
-            from litellm.proxy.proxy_server import redis_usage_cache, user_api_key_cache
+            from litellm.proxy.proxy_server import redis_usage_cache, sso_flow_cache
 
             cache_key: Final = f"pkce_verifier:{state}"
             if redis_usage_cache is not None:
                 cached_data = _DECODED_JSON.validate_python(await redis_usage_cache.async_get_cache(key=cache_key))
             else:
-                cached_data = _DECODED_JSON.validate_python(await user_api_key_cache.async_get_cache(key=cache_key))
+                cached_data = _DECODED_JSON.validate_python(await sso_flow_cache.async_get_cache(key=cache_key))
 
             code_verifier = None
             # Track why code_verifier is absent for accurate strict-mode diagnostics.
@@ -4267,7 +4289,7 @@ class SSOAuthenticationHandler:
                     cached_data=cached_data,
                     empty_value_in_dict=_empty_value_in_dict,
                     redis_usage_cache=redis_usage_cache,
-                    user_api_key_cache=user_api_key_cache,
+                    sso_flow_cache=sso_flow_cache,
                 )
         return token_params
 
@@ -4278,14 +4300,14 @@ class SSOAuthenticationHandler:
         cached_data: object,
         empty_value_in_dict: bool,
         redis_usage_cache: object,
-        user_api_key_cache: object,
+        sso_flow_cache: object,
     ) -> None:
         """Handle the case where PKCE verifier could not be extracted from cache.
 
         In strict mode (PKCE_STRICT_CACHE_MISS=true) raises ProxyException.
         Otherwise logs a warning and returns (token exchange proceeds without verifier).
         """
-        active_cache: Final = redis_usage_cache if redis_usage_cache is not None else user_api_key_cache
+        active_cache: Final = redis_usage_cache if redis_usage_cache is not None else sso_flow_cache
         strict_cache_miss: Final = os.getenv("PKCE_STRICT_CACHE_MISS", "false").lower() == "true"
         if strict_cache_miss:
             if empty_value_in_dict:
@@ -4361,13 +4383,13 @@ class SSOAuthenticationHandler:
         Failure is non-fatal: a leftover verifier is a minor security concern
         (unused key in cache) but not worth aborting an otherwise-successful login.
         """
-        from litellm.proxy.proxy_server import redis_usage_cache, user_api_key_cache
+        from litellm.proxy.proxy_server import redis_usage_cache, sso_flow_cache
 
         try:
             if redis_usage_cache is not None:
                 await redis_usage_cache.async_delete_cache(key=cache_key)
             else:
-                await user_api_key_cache.async_delete_cache(key=cache_key)
+                await sso_flow_cache.async_delete_cache(key=cache_key)
         except Exception as exc:
             verbose_proxy_logger.warning(
                 "PKCE: failed to delete verifier cache key '%s' (best-effort cleanup): %s",
@@ -4979,7 +5001,9 @@ class MicrosoftSSOHandler:
     ) -> tuple[list[str], str | None]:
         """Helper function to fetch and parse group data from a URL"""
         response: Final = await async_client.get(url, headers=headers)
-        response_json: Final[dict[str, object]] = response.json()
+        response_json: Final = require_attributes(
+            _DECODED_JSON.validate_python(response.json()), _GraphGroupsPage, "get"
+        )
         response_typed: Final = await MicrosoftSSOHandler._cast_graph_api_response_dict(response=response_json)
         group_ids: Final = MicrosoftSSOHandler._get_group_ids_from_graph_api_response(response=response_typed)
         return group_ids, response_typed.get("odata_nextLink")
@@ -4997,7 +5021,7 @@ class MicrosoftSSOHandler:
 
     @staticmethod
     async def _cast_graph_api_response_dict(
-        response: dict,
+        response: _GraphGroupsPage,
     ) -> MicrosoftGraphAPIUserGroupResponse:
         directory_objects: Final[list[MicrosoftGraphAPIUserGroupDirectoryObject]] = []
         for _object in response.get("value", []):
@@ -5046,8 +5070,9 @@ class MicrosoftSSOHandler:
 
         while next_link is not None and page_count < MicrosoftSSOHandler.MAX_GRAPH_API_PAGES:
             response = await async_client.get(next_link, headers=headers)
-            response_json: _ServicePrincipalPage = response.json()
-            verbose_proxy_logger.debug("Response from service principal app role assigned to: %s", response_json)
+            response_payload = _DECODED_JSON.validate_python(response.json())
+            verbose_proxy_logger.debug("Response from service principal app role assigned to: %s", response_payload)
+            response_json = require_attributes(response_payload, _ServicePrincipalPage, "get")
 
             for _object in response_json.get("value", []):
                 if _object.get("principalType") == "Group":

@@ -113,37 +113,48 @@ impl Protocol for DrainingProtocol {
 #[rstest]
 #[case::draining(
     Some(DetachedDrain { timeout: Duration::from_secs(5), limit: 4 }),
-    vec![0, 1, 2]
+    false, vec![0, 1], false
 )]
-#[case::no_drain(None, vec![0])]
-#[case::no_free_slot(Some(DetachedDrain { timeout: Duration::from_secs(5), limit: 0 }), vec![0])]
+#[case::upstream_failure(Some(DetachedDrain { timeout: Duration::from_secs(5), limit: 4 }), true, vec![0, 1], true)]
+#[case::no_drain(None, true, vec![0], false)]
+#[case::no_free_slot(Some(DetachedDrain { timeout: Duration::from_secs(5), limit: 0 }), true, vec![0], false)]
 #[tokio::test]
-async fn a_draining_stream_delivers_the_rest_after_the_caller_detaches(
+async fn a_detached_drain_preserves_remaining_chunks_and_the_upstream_outcome(
     #[case] drain: Option<DetachedDrain>,
+    #[case] upstream_fails: bool,
     #[case] expected: Vec<usize>,
+    #[case] expected_failure: bool,
 ) {
     let mut machine =
-        hosted_call::<DrainingProtocol, _, _>(3, None, move |count, _, _, _| async move {
+        hosted_call::<DrainingProtocol, _, _>(0, None, move |_, _, _, _| async move {
+            let failure = upstream_fails.then_some(Err(TestError));
             Ok(CallOutput::Stream {
                 head: drain,
-                chunks: stream::iter((0..count).map(Ok)).boxed(),
+                chunks: stream::iter([Ok(0), Ok(1)].into_iter().chain(failure)).boxed(),
             })
         });
     let mut delivered = Vec::new();
     let completed = loop {
-        match machine.resume().await.unwrap() {
-            MachineStep::Suspended(HostRequest::Stream(StreamDelivery::Open(_, reply))) => {
+        match machine.resume().await {
+            Ok(MachineStep::Suspended(HostRequest::Stream(StreamDelivery::Open(_, reply)))) => {
                 reply.send(ControlFlow::Continue(()));
             }
-            MachineStep::Suspended(HostRequest::Stream(StreamDelivery::Chunk(chunk, reply))) => {
+            Ok(MachineStep::Suspended(HostRequest::Stream(StreamDelivery::Chunk(
+                chunk,
+                reply,
+            )))) => {
                 delivered.push(chunk);
                 reply.send(ControlFlow::Break(()));
             }
-            MachineStep::Complete(result) => break result,
+            Ok(MachineStep::Complete(result)) => break Ok(result),
+            Err(error) => break Err(error),
             _ => panic!("unexpected operation"),
         }
     };
-    assert_eq!(completed, HostedCompletion::Detached);
+    assert_eq!(completed.is_err(), expected_failure);
+    if let Ok(result) = completed {
+        assert_eq!(result, HostedCompletion::Detached);
+    }
     assert_eq!(delivered, expected);
 }
 

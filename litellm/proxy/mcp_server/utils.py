@@ -10,10 +10,11 @@ import re
 import typing
 from collections.abc import Iterable, Iterator, Mapping, MutableMapping, MutableSequence, Sequence
 from collections.abc import Set as AbstractSet
-from typing import Any, Final, Literal, Protocol, overload
+from typing import Final, Literal, Protocol, overload
 from urllib.parse import quote
 
 from pydantic import TypeAdapter
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import has_attributes
@@ -718,9 +719,14 @@ class _ModelDumpable(Protocol):
     def model_dump(self) -> Mapping[str, object]: ...
 
 
+class AdminUserEnvVarSpec(TypedDict):
+    name: ReadOnly[str]
+    description: ReadOnly[object]
+
+
 def parse_admin_env_vars(
     env_vars: Iterable[object] | None,
-) -> tuple[dict[str, str], list[dict[str, Any]]]:
+) -> tuple[dict[str, str], Sequence[AdminUserEnvVarSpec]]:
     """Split admin-configured env var entries into globals and per-user specs.
 
     Accepts the raw value of ``MCPServer.env_vars`` (list of dicts or Pydantic
@@ -733,7 +739,7 @@ def parse_admin_env_vars(
     Unknown / malformed entries are skipped silently.
     """
     global_values: Final[dict[str, str]] = {}
-    user_specs: Final[list[dict[str, object]]] = []
+    user_specs: Final[list[AdminUserEnvVarSpec]] = []
     if not env_vars:
         return global_values, user_specs
     for raw in env_vars:

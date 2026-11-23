@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -17,9 +17,9 @@ describe("LoggingCallbacksTable", () => {
     vi.clearAllMocks();
   });
 
-  it("should render", () => {
+  it("should render the callbacks table", () => {
     render(<LoggingCallbacksTable callbacks={[]} availableCallbacks={{}} />);
-    expect(screen.getByText("Active Logging Callbacks")).toBeInTheDocument();
+    expect(screen.getByRole("table")).toBeInTheDocument();
   });
 
   it("should show the empty state when there are no callbacks", () => {
@@ -58,14 +58,6 @@ describe("LoggingCallbacksTable", () => {
       />,
     );
     expect(screen.getByText("custom_callback_x")).toBeInTheDocument();
-  });
-
-  it("should call onAdd when the Add Callback button is clicked", async () => {
-    const user = userEvent.setup();
-    const onAdd = vi.fn();
-    render(<LoggingCallbacksTable callbacks={[]} availableCallbacks={{}} onAdd={onAdd} />);
-    await user.click(screen.getByRole("button", { name: /add callback/i }));
-    expect(onAdd).toHaveBeenCalled();
   });
 
   it("should test, edit, and delete a callback through the actions menu", async () => {
@@ -113,6 +105,45 @@ describe("LoggingCallbacksTable", () => {
     expect(screen.getByTestId("callback-actions-langfuse-success")).toBeInTheDocument();
     expect(screen.queryByTestId("callback-actions-datadog-success")).not.toBeInTheDocument();
     expect(screen.getAllByText("Read only")).toHaveLength(1);
+    expect(screen.getAllByText("DB")).toHaveLength(1);
+  });
+
+  it("shows which rows config.yaml sets and blocks deleting them there", async () => {
+    const user = userEvent.setup();
+    const onTest = vi.fn();
+    const onDelete = vi.fn();
+    const fromConfig = { name: "langfuse", type: "success" as const, variables: baseVars, source: "config" as const };
+    const fromDatabase = { name: "langfuse", type: "failure" as const, variables: baseVars };
+    render(
+      <LoggingCallbacksTable
+        callbacks={[fromConfig, fromDatabase]}
+        availableCallbacks={{}}
+        onTest={onTest}
+        onEdit={vi.fn()}
+        onDelete={onDelete}
+      />,
+    );
+
+    const sourceColumn = screen.getAllByRole("columnheader").findIndex((header) => header.textContent === "Source");
+    const sourceCell = (mode: RegExp) =>
+      within(screen.getByRole("row", { name: mode })).getAllByRole("cell")[sourceColumn];
+    expect(sourceColumn).toBeGreaterThan(-1);
+    expect(sourceCell(/Success/)).toHaveTextContent(/^Config$/);
+    expect(sourceCell(/Failure/)).toHaveTextContent(/^DB$/);
+
+    await user.click(screen.getByTestId("callback-actions-langfuse-success"));
+    expect(await screen.findByTestId("callback-config-owned-hint")).toBeInTheDocument();
+    const remove = screen.getByTestId("callback-action-delete");
+    expect(remove).toHaveAttribute("data-disabled");
+    await user.click(remove);
+    expect(onDelete).not.toHaveBeenCalled();
+    await user.click(screen.getByTestId("callback-action-test"));
+    expect(onTest).toHaveBeenCalledWith(fromConfig);
+
+    await user.click(screen.getByTestId("callback-actions-langfuse-failure"));
+    expect(screen.queryByTestId("callback-config-owned-hint")).not.toBeInTheDocument();
+    await user.click(await screen.findByTestId("callback-action-delete"));
+    expect(onDelete).toHaveBeenCalledWith(fromDatabase);
   });
 
   // Regression: `/get_callbacks` returns the same `name` twice when a

@@ -104,16 +104,15 @@ fn typed_configured(configured: &EstimatedOutputTokens, model: Option<&str>) -> 
         .or(configured.team_default)
 }
 
-fn written(body: &mut Value, call_type: &str, cap: i64) {
+/// Writes `cap` into `body` where the route of `call_type` reads its output cap.
+pub fn write_output_cap(body: &mut Value, call_type: &str, cap: i64) {
     let Value::Object(request) = body else {
         return;
     };
     if GENAI_CALL_TYPES.contains(&call_type) {
-        let field = if request.contains_key("config") || !request.contains_key("generationConfig") {
-            "config"
-        } else {
-            "generationConfig"
-        };
+        let field = estimate::genai_config_field(request)
+            .unwrap_or_default()
+            .unwrap_or("config");
         let mut config = match request.get(field) {
             Some(Value::Object(config)) => config.clone(),
             _ => Map::new(),
@@ -183,7 +182,7 @@ impl Reservation<'_> {
         };
         let applied = self.host.call(WriteOutputCap { cap }).await?;
         if applied && let Some(body) = self.body.as_mut() {
-            written(body, self.call_type, cap);
+            write_output_cap(body, self.call_type, cap);
         }
         Ok(applied)
     }
@@ -346,13 +345,23 @@ mod tests {
         json!({"generationConfig": {"a": 1, "maxOutputTokens": 25}})
     )]
     #[case::genai_neither("generate_content", json!({}), json!({"config": {"maxOutputTokens": 25}}))]
+    #[case::genai_snake_case(
+        "agenerate_content",
+        json!({"generation_config": {"a": 1}}),
+        json!({"generation_config": {"a": 1, "maxOutputTokens": 25}})
+    )]
+    #[case::genai_empty_config_yields(
+        "generate_content",
+        json!({"config": {}, "generationConfig": {"a": 1}}),
+        json!({"config": {}, "generationConfig": {"a": 1, "maxOutputTokens": 25}})
+    )]
     fn an_applied_cap_lands_where_python_writes_it(
         #[case] call_type: &str,
         #[case] body: Value,
         #[case] expected: Value,
     ) {
         let mut body = body;
-        written(&mut body, call_type, 25);
+        write_output_cap(&mut body, call_type, 25);
         assert_eq!(body, expected);
     }
 

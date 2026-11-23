@@ -1489,3 +1489,20 @@ async def test_prometheus_fallback_stats_job_runs_when_the_lock_is_free_or_absen
     await jobs["prometheus_fallback_stats_job"]()
 
     assert send_fallback_stats.await_count == 2
+
+
+@pytest.mark.parametrize("database_url", ["", "   "])
+@pytest.mark.asyncio
+async def test_a_blank_database_url_boots_the_proxy_as_one_with_no_database(
+    monkeypatch: pytest.MonkeyPatch, database_url: str
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "database_url_configured", True)
+    clean_env: Final = {k: v for k, v in os.environ.items() if k not in ("DIRECT_URL", "WORKER_CONFIG")} | {
+        "DATABASE_URL": database_url,
+        "LITELLM_MASTER_KEY": "sk-blank-database-url-Zx8mPq4LrT7v",
+    }
+    with patch.dict(os.environ, clean_env, clear=True):
+        async with proxy_startup_event(app=None):
+            assert (proxy_server.prisma_client, proxy_server.database_url_configured) == (None, False)

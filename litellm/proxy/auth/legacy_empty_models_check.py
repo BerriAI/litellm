@@ -1,4 +1,3 @@
-import asyncio
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Final, Protocol
@@ -48,13 +47,13 @@ async def count_legacy_empty_models_rows(keys: CountTable, teams: CountTable) ->
         teams_empty,
         keys_with_groups_empty,
         teams_with_groups_empty,
-    ) = await asyncio.gather(
-        keys.count(
+    ) = (
+        await keys.count(
             where=_model_calling_keys(
                 {"team_id": None, "models": {"isEmpty": True}, "access_group_ids": {"isEmpty": True}}
             )
         ),
-        keys.count(
+        await keys.count(
             where=_model_calling_keys(
                 {
                     "team_id": None,
@@ -63,7 +62,7 @@ async def count_legacy_empty_models_rows(keys: CountTable, teams: CountTable) ->
                 }
             )
         ),
-        keys.count(
+        await keys.count(
             where=_model_calling_keys(
                 {
                     "AND": [{"team_id": {"not": None}}, {"team_id": {"not": UI_SESSION_TOKEN_TEAM_ID}}],
@@ -72,8 +71,8 @@ async def count_legacy_empty_models_rows(keys: CountTable, teams: CountTable) ->
                 }
             )
         ),
-        teams.count(where={"models": {"isEmpty": True}, "access_group_ids": {"isEmpty": True}}),
-        keys.count(
+        await teams.count(where={"models": {"isEmpty": True}, "access_group_ids": {"isEmpty": True}}),
+        await keys.count(
             where=_model_calling_keys(
                 {
                     "OR": [{"team_id": None}, {"team_id": {"not": UI_SESSION_TOKEN_TEAM_ID}}],
@@ -82,7 +81,7 @@ async def count_legacy_empty_models_rows(keys: CountTable, teams: CountTable) ->
                 }
             )
         ),
-        teams.count(where={"models": {"isEmpty": True}, "NOT": {"access_group_ids": {"isEmpty": True}}}),
+        await teams.count(where={"models": {"isEmpty": True}, "NOT": {"access_group_ids": {"isEmpty": True}}}),
     )
     return LegacyEmptyModelsCounts(
         teamless_keys_with_empty_models=teamless_empty,

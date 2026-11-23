@@ -24,7 +24,14 @@ from integration._support.client import (
     string_value,
 )
 from integration._support.database import read_rows, write_rows
-from integration._support.process import CONFIGURATION, OwnedProxy, group_members, owned_proxy, owned_proxy_process
+from integration._support.process import (
+    CONFIGURATION,
+    OwnedProxy,
+    group_members,
+    owned_proxy,
+    owned_proxy_process,
+    pool_limit_for_prisma,
+)
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue
 
@@ -34,7 +41,7 @@ from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
 pytestmark: Final = pytest.mark.shares_worker_state
 
 _OWNED_PROXY_SALT_KEY: Final = "sk-integration-salt"
-_OWNERSHIP_POOL_LIMIT: Final = 4
+_OWNERSHIP_PRISMA_CONNECTIONS: Final = 4
 _CONNECTION_BUDGET: Final = re.compile(
     r"Postgres connection budget per pod = \d+ worker\(s\) x \(?writer connection_limit (\d+)"
 )
@@ -47,7 +54,10 @@ def _ownership_config(directory: Path) -> Path:
     general: Final = CONFIGURATION.validate_python(settings["general_settings"])
     configured: Final = {
         **settings,
-        "general_settings": {**general, "database_connection_pool_limit": _OWNERSHIP_POOL_LIMIT},
+        "general_settings": {
+            **general,
+            "database_connection_pool_limit": pool_limit_for_prisma(_OWNERSHIP_PRISMA_CONNECTIONS),
+        },
     }
     destination: Final = directory / "ownership-proxy-config.yaml"
     destination.write_text(yaml.safe_dump(configured, sort_keys=False))
@@ -830,7 +840,7 @@ def test_ownership_checks_wait_for_row_locks_without_failing_readiness(
 ) -> None:
     budget: Final = _CONNECTION_BUDGET.search(ownership_proxy.log.read_text())
     assert budget is not None, ownership_proxy.log.read_text()
-    assert int(budget.group(1)) == _OWNERSHIP_POOL_LIMIT
+    assert int(budget.group(1)) == _OWNERSHIP_PRISMA_CONNECTIONS
     with ownership_gateway.scenario() as scenario:
         model: Final = scenario.model()
         team: Final = scenario.team(models=[model])

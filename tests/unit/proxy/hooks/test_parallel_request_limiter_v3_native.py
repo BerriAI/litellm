@@ -42,9 +42,6 @@ from litellm.proxy.common_request_processing import (
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.hooks import parallel_request_limiter_v3
-from litellm.proxy.hooks.dynamic_rate_limiter_v3 import (
-    _PROXY_DynamicRateLimitHandlerV3,  # pyright: ignore[reportPrivateUsage]  # the class has no public alias
-)
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     PARALLEL_REQUEST_SLOT_TTL_SECONDS,
     PROXY_MaxParallelRequestsHandler_v3,
@@ -75,6 +72,7 @@ from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth, C
 from litellm.types.utils import CallTypes, ModelResponse, Usage
 from tests._support.parallel_request_limiter_golden import Golden, Ttl
 from tests._support.rust_parallel_request_limiter import declared_reads
+from tests.unit.proxy.hooks.native_capacity_handler import NativeDynamicRateLimitHandler
 
 pytest.importorskip("litellm.rust_bridge._native")
 
@@ -144,7 +142,7 @@ class Side:
     datas: dict[int, dict[str, object]] = field(default_factory=dict)
     responses: dict[int, object] = field(default_factory=dict)
     states: dict[int, object] = field(default_factory=dict)
-    dynamic: _PROXY_DynamicRateLimitHandlerV3 | None = None
+    dynamic: NativeDynamicRateLimitHandler | None = None
     logged_payloads: dict[int, object] = field(default_factory=dict)
 
 
@@ -206,7 +204,7 @@ def _side(clock: Clock, port: int | None = None, ceiling: PTUTeamCeiling | None 
     )
 
 
-def _dynamic(monkeypatch: pytest.MonkeyPatch, clock: Clock, port: int | None) -> _PROXY_DynamicRateLimitHandlerV3:
+def _dynamic(monkeypatch: pytest.MonkeyPatch, clock: Clock, port: int | None) -> NativeDynamicRateLimitHandler:
     from litellm import Router
     from litellm.types.utils import PriorityReservationSettings
 
@@ -226,11 +224,11 @@ def _dynamic(monkeypatch: pytest.MonkeyPatch, clock: Clock, port: int | None) ->
     )
     monkeypatch.setattr("litellm.callbacks", ["dynamic_rate_limiter_v3"])
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
-    handler: Final = _PROXY_DynamicRateLimitHandlerV3(
+    handler: Final = NativeDynamicRateLimitHandler(
         DualCache() if port is None else DualCache(redis_cache=RedisCache(host="127.0.0.1", port=port)),
         time_provider=clock.now,
     )
-    assert handler.v3_limiter.native_companion is not None
+    assert handler.logger.delegate.post_call.native is not None
     handler.update_variables(llm_router=router)
     return handler
 
@@ -1033,7 +1031,7 @@ async def test_the_dynamic_limiters_private_limiter_runs_on_the_engine(
     )
 
     handler: Final = _PROXY_DynamicRateLimitHandlerV3(DualCache())
-    assert handler.v3_limiter.native_companion is not None
+    assert handler.delegate.post_call.native is not None
 
 
 def _with_dynamic(

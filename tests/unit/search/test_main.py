@@ -172,6 +172,63 @@ def test_search_cost_is_the_price_entry_of_the_requested_mode(
 
 
 @pytest.mark.usefixtures("_search_mode_prices")
+@pytest.mark.parametrize(
+    ("requested_depth", "reported_parameters", "priced_model"),
+    (
+        (None, {"search_depth": "advanced"}, "tavily/search-advanced"),
+        (None, {"search_depth": "basic"}, "tavily/search"),
+        (None, None, "tavily/search"),
+        (None, {"search_depth": ["advanced"]}, "tavily/search"),
+        ("basic", {"search_depth": "advanced"}, "tavily/search"),
+    ),
+)
+def test_tavily_search_bills_the_depth_selected_upstream_when_not_explicit(
+    respx_mock: respx.MockRouter,
+    requested_depth: str | None,
+    reported_parameters: Mapping[str, str | list[str]] | None,
+    priced_model: str,
+) -> None:
+    route: Final = respx_mock.post(TAVILY_SEARCH_URL).respond(
+        json={"results": [], "auto_parameters": reported_parameters},
+    )
+    depth: Final = {} if requested_depth is None else {"search_depth": requested_depth}
+
+    response: Final = litellm.search(
+        query="Compare battery storage technologies",
+        search_provider="tavily",
+        api_key="test-tavily-key",
+        auto_parameters=True,
+        **depth,
+    )
+
+    assert len(route.calls) == 1
+    assert json.loads(route.calls.last.request.content) == {
+        "query": "Compare battery storage technologies",
+        "auto_parameters": True,
+        **depth,
+    }
+    assert response.hidden_params["response_cost"] == pytest.approx(SEARCH_MODE_PRICES[priced_model])
+
+
+@pytest.mark.usefixtures("_search_mode_prices")
+def test_tavily_search_keeps_the_fixed_tool_price_when_depth_is_selected_upstream(
+    respx_mock: respx.MockRouter,
+) -> None:
+    respx_mock.post(TAVILY_SEARCH_URL).respond(json={"results": [], "auto_parameters": {"search_depth": "advanced"}})
+    configured_price: Final = 0.03
+
+    response: Final = litellm.search(
+        query="Compare battery storage technologies",
+        search_provider="tavily",
+        api_key="test-tavily-key",
+        auto_parameters=True,
+        input_cost_per_query=configured_price,
+    )
+
+    assert response.hidden_params["response_cost"] == pytest.approx(configured_price)
+
+
+@pytest.mark.usefixtures("_search_mode_prices")
 def test_a_registered_search_model_keeps_its_own_price_for_an_advanced_search() -> None:
     cost: Final = search_provider_cost_per_query(
         model="tavily/negotiated-search", custom_llm_provider="tavily", optional_params={"search_depth": "advanced"}

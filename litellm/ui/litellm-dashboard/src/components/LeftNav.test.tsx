@@ -213,7 +213,23 @@ describe("Sidebar (leftnav)", () => {
     );
     expect(screen.getByRole("link", { name: "Customer organizations" })).toHaveAttribute("href", "/ui/customers");
     expect(screen.getByRole("link", { name: "Customer organizations" })).toHaveAttribute("data-active");
+    expect(screen.getByRole("link", { name: "Budget groups" })).toHaveAttribute("href", "/ui/customers/settings");
+    expect(getBreadcrumb("/ui/customers/settings")).toEqual({ section: "Customer Management", title: "Budget groups" });
     expect(screen.queryByRole("link", { name: "End users" })).not.toBeInTheDocument();
+  });
+
+  it.each(["/ui/app-groups/", "/app-groups"])("opens app groups in Customer Management at %s", (pathname) => {
+    localStorage.setItem("litellm_plugin_mode", "customer-portal");
+    navState.pathname = pathname;
+    renderWithProviders(
+      <PluginModeProvider>
+        <Sidebar {...defaultProps} />
+      </PluginModeProvider>,
+    );
+    expect(screen.getByRole("link", { name: "App groups" })).toHaveAttribute("href", "/ui/app-groups");
+    expect(screen.getByRole("link", { name: "App groups" })).toHaveAttribute("data-active");
+    expect(screen.getByRole("link", { name: "Applications" })).not.toHaveAttribute("data-active", "true");
+    expect(getBreadcrumb(pathname)).toEqual({ section: "Customer Management", title: "App groups" });
   });
 
   it("pairs the logo with a dark-mode variant that swaps on the dark class", () => {
@@ -309,7 +325,7 @@ describe("Sidebar (leftnav)", () => {
       "Home",
       "Virtual Keys",
       "Playground",
-      "Models + Endpoints",
+      "Model Management",
       "Agentic",
       "MCP Servers",
       "Guardrails",
@@ -391,16 +407,30 @@ describe("Sidebar (leftnav)", () => {
       showSSOBanner: false,
     };
 
+    it("hides the admin-only Customer Management pages from an Admin Viewer with no app grant", () => {
+      mockUseAuthorized.mockReturnValue(adminViewerAuth);
+      localStorage.setItem("litellm_plugin_mode", "customer-portal");
+      renderWithProviders(
+        <PluginModeProvider>
+          <Sidebar {...defaultProps} />
+        </PluginModeProvider>,
+      );
+      expect(screen.queryByRole("link", { name: "Customer organizations" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("link", { name: "Applications" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("link", { name: "App groups" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("link", { name: "Settings" })).not.toBeInTheDocument();
+    });
+
     it("hides Playground from Admin Viewer (cost-incurring action)", () => {
       mockUseAuthorized.mockReturnValue(adminViewerAuth);
       renderWithProviders(<Sidebar {...defaultProps} />);
       expect(screen.queryByText("Playground")).not.toBeInTheDocument();
     });
 
-    it("shows Models + Endpoints to Admin Viewer (read-only)", () => {
+    it("shows Model Management to Admin Viewer (read-only)", () => {
       mockUseAuthorized.mockReturnValue(adminViewerAuth);
       renderWithProviders(<Sidebar {...defaultProps} />);
-      expect(screen.getByText("Models + Endpoints")).toBeInTheDocument();
+      expect(screen.getByText("Model Management")).toBeInTheDocument();
     });
 
     it("shows Agents (under Agentic) to Admin Viewer (read-only)", async () => {
@@ -629,32 +659,15 @@ describe("Sidebar (leftnav)", () => {
       error: null,
     });
 
-    renderWithProviders(<Sidebar {...defaultProps} enableProjectsUI />);
+    renderWithProviders(<Sidebar {...defaultProps} />);
 
     expect(screen.getByRole("link", { name: /Projects/ })).toBeInTheDocument();
-  });
-
-  it("hides Projects when the feature flag is disabled for a team admin", () => {
-    mockUseAuthorized.mockReturnValue(teamAdminAuthorization);
-    mockUseTeams.mockReturnValue({
-      data: [
-        {
-          members_with_roles: [{ user_id: "team-admin-user-id", role: "admin" }],
-        },
-      ],
-      isLoading: false,
-      error: null,
-    });
-
-    renderWithProviders(<Sidebar {...defaultProps} enableProjectsUI={false} />);
-
-    expect(screen.queryByRole("link", { name: /Projects/ })).not.toBeInTheDocument();
   });
 
   it("hides Projects from an internal user who is not a team admin", () => {
     mockUseAuthorized.mockReturnValue(teamMemberAuthorization);
 
-    renderWithProviders(<Sidebar {...defaultProps} enableProjectsUI />);
+    renderWithProviders(<Sidebar {...defaultProps} />);
 
     expect(screen.queryByRole("link", { name: /Projects/ })).not.toBeInTheDocument();
   });
@@ -682,7 +695,7 @@ describe("Sidebar (leftnav)", () => {
       error: null,
     });
 
-    renderWithProviders(<Sidebar {...defaultProps} enableProjectsUI enabledPagesInternalUsers={allowlist} />);
+    renderWithProviders(<Sidebar {...defaultProps} enabledPagesInternalUsers={allowlist} />);
 
     expect(screen.queryByRole("link", { name: /Projects/ }) !== null).toBe(visible);
   });
@@ -690,7 +703,7 @@ describe("Sidebar (leftnav)", () => {
   it("shows Projects to a user whose global role is org admin", () => {
     mockUseAuthorized.mockReturnValue({ ...teamMemberAuthorization, userRole: "Org Admin" });
 
-    renderWithProviders(<Sidebar {...defaultProps} enableProjectsUI />);
+    renderWithProviders(<Sidebar {...defaultProps} />);
 
     expect(screen.getByRole("link", { name: /Projects/ })).toHaveAttribute("href", "/ui/projects");
   });
@@ -771,6 +784,15 @@ describe("Sidebar (leftnav)", () => {
     expect(screen.getByRole("link", { name: "Home" })).not.toHaveAttribute("data-active");
   });
 
+  it.each(["/ui/lens", "/ui/lens/"])("shows only the workspace switcher, no gateway pages, at %s", (pathname) => {
+    navState.pathname = pathname;
+    renderWithProviders(<Sidebar {...defaultProps} />);
+    expect(screen.getByRole("button", { name: "Switch workspace, current: Lens" })).toBeVisible();
+    expect(screen.queryByRole("link", { name: "Virtual Keys" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Logs" })).not.toBeInTheDocument();
+    expect(screen.queryByText("AI Gateway")).not.toBeInTheDocument();
+  });
+
   it("expands the parent group of the current nested route and marks the child active", () => {
     navState.pathname = "/ui/search-tools";
     renderWithProviders(<Sidebar {...defaultProps} />);
@@ -788,13 +810,13 @@ describe("Sidebar (leftnav)", () => {
       expect(screen.getByRole("link", { name: label })).toHaveAttribute("href", href);
     expectHref("Virtual Keys", "/ui/api-keys");
     expectHref("Playground", "/ui/playground");
-    expectHref("Models + Endpoints", "/ui/models-and-endpoints");
+    expectHref("Model Management", "/ui/models-and-endpoints");
     expectHref("Usage", "/ui/usage");
     expectHref("Alerts", "/ui/alerts");
   });
 
   it("never links a leaf to the legacy ?page= switch", () => {
-    renderWithProviders(<Sidebar {...defaultProps} enableProjectsUI />);
+    renderWithProviders(<Sidebar {...defaultProps} />);
     for (const group of ["Agentic", "Tools", "Experimental", "Settings"]) {
       act(() => {
         fireEvent.click(screen.getByText(group));
@@ -824,27 +846,40 @@ describe("Sidebar (leftnav)", () => {
     expect(link.querySelector("svg")).not.toBeNull();
   });
 
-  it("shows Cost Optimization without a Beta badge and no feature-flag gate", () => {
-    const { container } = renderWithProviders(<Sidebar {...defaultProps} enableProjectsUI={false} />);
+  it("shows Projects without a Beta badge", () => {
+    renderWithProviders(<Sidebar {...defaultProps} />);
+    expect(screen.getByRole("link", { name: "Projects" })).toHaveAttribute("href", "/ui/projects");
+  });
+
+  it("shows Cost Optimization without a Beta badge", () => {
+    const { container } = renderWithProviders(<Sidebar {...defaultProps} />);
 
     const costOptimization = container.querySelector('a[href*="cost-optimization"]');
     expect(costOptimization).not.toBeNull();
     expect(costOptimization!).toHaveTextContent("Cost Optimization");
     expect(costOptimization!).not.toHaveTextContent("Beta");
+  });
 
-    expect(container.querySelector('a[href*="projects"]')).toBeNull();
+  it("shows Projects to an org admin without a Beta badge", () => {
+    mockUseAuthorized.mockReturnValue({ ...teamMemberAuthorization, userRole: "Org Admin" });
+
+    renderWithProviders(<Sidebar {...defaultProps} />);
+
+    const projects = screen.getByRole("link", { name: "Projects" });
+    expect(projects).toHaveAttribute("href", "/ui/projects");
+    expect(projects).not.toHaveTextContent("Beta");
   });
 
   it.each([
     ["Cost Optimization", "/ui/cost-optimization"],
     ["Projects", "/ui/projects"],
   ])("titles the collapsed-rail link for %s without its badge text", (name, href) => {
-    renderWithProviders(<Sidebar {...defaultProps} enableProjectsUI collapsed />);
+    renderWithProviders(<Sidebar {...defaultProps} collapsed />);
     expect(screen.getByTitle(name)).toHaveAttribute("href", href);
   });
 
   it("leaves expanded-rail links untitled", () => {
-    renderWithProviders(<Sidebar {...defaultProps} enableProjectsUI />);
+    renderWithProviders(<Sidebar {...defaultProps} />);
     expect(screen.queryByTitle("Cost Optimization")).not.toBeInTheDocument();
   });
 });
@@ -870,7 +905,7 @@ describe("getBreadcrumb", () => {
   });
 
   it("resolves routes whose segment differs from the sidebar page id", () => {
-    expect(getBreadcrumb("/ui/models-and-endpoints")).toEqual({ section: "AI Gateway", title: "Models + Endpoints" });
+    expect(getBreadcrumb("/ui/models-and-endpoints")).toEqual({ section: "AI Gateway", title: "Model Management" });
     expect(getBreadcrumb("/ui/usage")).toEqual({ section: "Observability", title: "Usage" });
   });
 

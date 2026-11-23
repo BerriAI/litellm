@@ -411,6 +411,44 @@ def test_async_log_failure_event_marks_error_status():
     assert span.attributes["error.type"] == "RateLimitError"
 
 
+@pytest.mark.parametrize("boundary", [True, False])
+def test_retried_call_emits_distinct_failure_spans_with_each_destination(boundary: bool) -> None:
+    logger, exporter = _logger()
+    root: Final = logger._emitter.start_span(SpanRole.PROXY_REQUEST, "test root")
+    for index in range(3):
+        start: Final = 100.0 + index
+        kwargs: Final = {
+            **_kwargs(
+                _payload(
+                    status="failure",
+                    api_base=f"https://region-{index}.example/v1",
+                    error_information={"error_class": "ServiceUnavailableError", "error_message": f"outage-{index}"},
+                )
+            ),
+            "api_call_start_time": start,
+        }
+        if boundary:
+            with trace.use_span(root, end_on_exit=False):
+                logger.log_pre_api_call("gpt-4o", [], kwargs)
+        asyncio.run(logger.async_log_failure_event(kwargs, None, start, start + 0.5))
+        asyncio.run(logger.async_log_failure_event(kwargs, None, start, start + 0.5))
+    spans: Final = exporter.get_finished_spans()
+    assert len(spans) == 3
+    assert len({s.context.span_id for s in spans}) == 3
+    assert [s.attributes["server.address"] for s in spans] == [f"region-{i}.example" for i in range(3)]
+    assert [s.attributes["error.message"] for s in spans] == [f"outage-{i}" for i in range(3)]
+    assert all(s.status.status_code is StatusCode.ERROR for s in spans)
+    success_start: Final = 104.0
+    success_kwargs: Final = {**_kwargs(), "api_call_start_time": success_start}
+    with trace.use_span(root, end_on_exit=False):
+        logger.log_pre_api_call("gpt-4o", [], success_kwargs)
+    asyncio.run(logger.async_log_success_event(success_kwargs, None, success_start, success_start + 0.5))
+    success: Final = exporter.get_finished_spans()[-1]
+    assert success.start_time == to_ns(success_start)
+    assert success.status.status_code is not StatusCode.ERROR
+    root.end()
+
+
 def _logger_with_events(enable_events):
     from opentelemetry.sdk._logs.export import InMemoryLogExporter
 

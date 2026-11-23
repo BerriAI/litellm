@@ -25,6 +25,7 @@ from litellm.proxy.bug_report_config import build_proxy_environment_report
 from litellm.proxy.common_utils.resource_ownership import is_proxy_admin
 
 if TYPE_CHECKING:
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
     from litellm.router import Router
 
 router: Final = APIRouter()
@@ -174,12 +175,8 @@ async def memory_usage_in_mem_cache(
     pin_entries, pin_expiries = _prompt_caching_pins(llm_router)
     num_items_in_prompt_caching_pin_cache: Final = len(pin_entries) + len(pin_expiries)
 
-    num_items_in_user_api_key_cache: Final = (
-        len(user_api_key_cache.in_memory_cache.cache_dict)
-        + len(user_api_key_cache.in_memory_cache.ttl_dict)
-        + len(user_api_key_cache.key_object_cache.in_memory_cache.cache_dict)
-        + len(user_api_key_cache.key_object_cache.in_memory_cache.ttl_dict)
-    )
+    user_api_key_cache_sizes: Final = user_api_key_cache.store.len_local()
+    num_items_in_user_api_key_cache: Final = user_api_key_cache_sizes.objects + user_api_key_cache_sizes.key_objects
 
     num_items_in_proxy_logging_obj_cache: Final = len(
         proxy_logging_obj.internal_usage_cache.dual_cache.in_memory_cache.cache_dict
@@ -212,12 +209,11 @@ async def memory_usage_in_mem_cache_items(
 
     router_entries, router_expiries = _router_store_entries(llm_router)
     pin_entries, pin_expiries = _prompt_caching_pins(llm_router)
+    user_api_key_cache_sizes: Final = user_api_key_cache.store.len_local()
 
     return {
-        "user_api_key_cache": user_api_key_cache.in_memory_cache.cache_dict,
-        "user_api_key_ttl": user_api_key_cache.in_memory_cache.ttl_dict,
-        "user_key_object_cache": user_api_key_cache.key_object_cache.in_memory_cache.cache_dict,
-        "user_key_object_ttl": user_api_key_cache.key_object_cache.in_memory_cache.ttl_dict,
+        "user_api_key_cache": user_api_key_cache_sizes.objects,
+        "user_key_object_cache": user_api_key_cache_sizes.key_objects,
         "llm_router_cache": router_entries,
         "llm_router_ttl": router_expiries,
         "prompt_caching_pin_cache": pin_entries,
@@ -372,9 +368,8 @@ async def get_memory_summary(
 
     try:
         # User API key cache
-        user_cache_items: Final = len(user_api_key_cache.in_memory_cache.cache_dict) + len(
-            user_api_key_cache.key_object_cache.in_memory_cache.cache_dict
-        )
+        user_cache_sizes: Final = user_api_key_cache.store.len_local()
+        user_cache_items: Final = user_cache_sizes.objects + user_cache_sizes.key_objects
         total_cache_items += user_cache_items
         caches["user_api_keys"] = {
             "count": user_cache_items,
@@ -510,25 +505,14 @@ def _get_uncollectable_objects_info() -> Mapping[str, object]:
 
 
 def _get_cache_memory_stats(
-    user_api_key_cache, llm_router: "Router | None", proxy_logging_obj, redis_usage_cache
+    user_api_key_cache: "UserApiKeyCache", llm_router: "Router | None", proxy_logging_obj, redis_usage_cache
 ) -> Mapping[str, object]:
     """Calculate memory usage for all caches."""
     cache_stats: Final[dict[str, object]] = {}
     try:
-        # User API key cache
-        key_object_in_memory_cache: Final = user_api_key_cache.key_object_cache.in_memory_cache
-        user_cache_size: Final = sys.getsizeof(user_api_key_cache.in_memory_cache.cache_dict) + sys.getsizeof(
-            key_object_in_memory_cache.cache_dict
-        )
-        user_ttl_size: Final = sys.getsizeof(user_api_key_cache.in_memory_cache.ttl_dict) + sys.getsizeof(
-            key_object_in_memory_cache.ttl_dict
-        )
+        user_cache_sizes: Final = user_api_key_cache.store.len_local()
         cache_stats["user_api_key_cache"] = {
-            "num_items": len(user_api_key_cache.in_memory_cache.cache_dict)
-            + len(key_object_in_memory_cache.cache_dict),
-            "cache_dict_size_bytes": user_cache_size,
-            "ttl_dict_size_bytes": user_ttl_size,
-            "total_size_mb": round((user_cache_size + user_ttl_size) / (1024 * 1024), 2),
+            "num_items": user_cache_sizes.objects + user_cache_sizes.key_objects,
         }
 
         # Router cache

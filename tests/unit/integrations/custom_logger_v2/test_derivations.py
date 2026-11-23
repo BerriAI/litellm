@@ -21,6 +21,7 @@ from litellm.proxy.common_utils.callback_utils import (
     get_model_group_from_litellm_kwargs,  # pyright: ignore[reportUnknownVariableType]  # the helper takes an untyped dict
 )
 from litellm.proxy.hooks import dynamic_rate_limiter_v3
+from litellm.types.llms.openai import ResponseAPIUsage
 from litellm.types.integrations.custom_logger_v2 import (
     AgentPolicy,
     AttemptTiming,
@@ -775,6 +776,15 @@ def test_usage_keeps_each_source_apart() -> None:
     )
 
 
+def test_usage_reads_a_responses_api_calls_tokens_like_the_cost_calculator() -> None:
+    result: Final = {"usage": ResponseAPIUsage(input_tokens=5, output_tokens=7, total_tokens=12)}
+
+    usage: Final = derivations.usage(HookArgs(request={}, result=result))
+
+    assert usage is not None
+    assert usage.response == UsageRecord(prompt_tokens=5, completion_tokens=7, total_tokens=12), usage
+
+
 def test_the_payload_copy_is_shallow_so_a_later_top_level_write_does_not_reach_it() -> None:
     nested: Final[dict[str, object]] = {"a": 1}
     payload: Final[dict[str, object]] = {"id": "log-1", "metadata": nested}
@@ -1111,7 +1121,7 @@ def test_prometheus_parity_values_cross_as_python_holds_them() -> None:
             hash_error="unhashable type: 'list'",
         ),
     )
-    assert cost == Cost(response_cost=0.5, zero_cost=ZeroCost(reason_present=False))
+    assert cost == Cost(response_cost=0.5, zero_cost=ZeroCost(reason_present=False), cost_finalized=False)
     assert timing is not None
     assert (timing.queue_seconds, timing.overhead_ms) == ("slow", "slow")
     assert state == RateLimitState(

@@ -2,6 +2,7 @@ import asyncio
 import functools
 import itertools
 import json
+import re
 import time
 from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
@@ -18,6 +19,7 @@ import litellm
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
+from litellm.cost_calculator import live_delegated_model_costs
 from litellm.integrations.custom_logger import Span
 from litellm.litellm_core_utils.batch_utils import (
     ChargeOnceJob,
@@ -25,9 +27,11 @@ from litellm.litellm_core_utils.batch_utils import (
     job_charged_once_marker_key,
     job_to_charge_once,
 )
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.litellm_core_utils.model_latest_aliases import expand_model_latest_alias
+from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias
 from litellm.llms.bedrock.common_utils import get_bedrock_base_model, get_bedrock_cross_region_inference_regions
 from litellm.proxy._types import Litellm_EntityType, UserAPIKeyAuth
 from litellm.proxy.hooks.model_budget_shared_windows import (
@@ -38,7 +42,7 @@ from litellm.proxy.hooks.model_budget_shared_windows import (
 )
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting, budget_window_seconds
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import BudgetConfig, LlmProviders, StandardLoggingPayload
+from litellm.types.utils import BudgetConfig, LiteLLMRealtimeStreamLoggingObject, LlmProviders, StandardLoggingPayload
 
 if TYPE_CHECKING:
     from litellm.router import Router
@@ -188,17 +192,17 @@ def routed_models_of(router: "Router", team_id: str | None = None) -> RoutedMode
         router.settings().default_deployment is not None
         or router.settings().router_general_settings.pass_through_all_models
     )
-    served_names: Final = frozenset(router.registry().names(kind="group_set")) | (
+    model_groups: Final = frozenset(router.registry().names(kind="group_set")) | (
         frozenset({_GLOB_WILDCARD}) if serves_every_name else frozenset()
     )
     team_members: Final = _team_public_names_by_group(router=router, team_id=team_id)
     return RoutedModels(
-        served_names=served_names,
+        served_names=model_groups | frozenset(router.registry().aliases()),
         group_members=MappingProxyType(
             {
                 group: frozenset(members) | team_members.get(group, frozenset())
                 for group, members in router.registry().access_groups().items()
-                if group not in served_names
+                if group not in model_groups
             }
         ),
     )
@@ -595,8 +599,23 @@ def _budget_model_candidates(model: str) -> tuple[str, ...]:
     the Bedrock base model (``anthropic.claude-opus-4-8`` governs the
     cross-region ``us.anthropic.claude-opus-4-8``), or on the bare family name
     that Bedrock id shares with its direct-provider twin (``claude-opus-4-8``).
+    A ``router_settings.model_group_alias`` name is also governed by every name
+    that budgets the model group it routes to, after the names of its own.
     """
-    return tuple(dict.fromkeys((model, model.split("/")[-1], *_bedrock_candidates(model))))
+    names: Final = (model, *_aliased_model_group(model))
+    return tuple(dict.fromkeys(itertools.chain.from_iterable(_own_name_candidates(name) for name in names)))
+
+
+def _own_name_candidates(model: str) -> tuple[str, ...]:
+    return (model, model.split("/")[-1], *_bedrock_candidates(model))
+
+
+def _aliased_model_group(model: str) -> tuple[str, ...]:
+    router: Final = _proxy_router()
+    if router is None:
+        return ()
+    target: Final = resolve_model_group_alias(router.registry().aliases(), model)
+    return () if target is None else (target,)
 
 
 def _bedrock_candidates(model: str) -> tuple[str, ...]:
@@ -842,6 +861,83 @@ def _resolve_entity_model_budgets(
             for entity_type, entity_id, resolved in entries
         }.values()
     )
+
+
+_EntityBudgets: TypeAlias = tuple[tuple[Litellm_EntityType, str | None, object], ...]
+
+
+def _entity_budgets_for(
+    budget_model: str,
+    request_model: str,
+    request_budgets: _EntityBudgets,
+    team_model_max_budget: object,
+    key_model_max_budget: object,
+) -> _EntityBudgets:
+    """The request's entity budgets as they apply to `budget_model`, whose team entries differ per model."""
+    team_budgets: Final = as_str_mapping(team_model_max_budget)
+    if budget_model == request_model or team_budgets is None:
+        return request_budgets
+    team_budget: Final = team_model_budget_entries(
+        model=budget_model,
+        team_model_max_budget=team_budgets,
+        key_model_max_budget=as_str_mapping(key_model_max_budget),
+    )
+    return tuple(
+        (entity_type, entity_id, team_budget if entity_type is Litellm_EntityType.TEAM else budget)
+        for entity_type, entity_id, budget in request_budgets
+    )
+
+
+def _live_delegated_costs(kwargs: Mapping[str, object], response_obj: object) -> tuple[tuple[str, float], ...]:
+    """What each model a GPT-Live session delegated to cost, which that model's budget pays, not the session's."""
+    if not isinstance(response_obj, LiteLLMRealtimeStreamLoggingObject):
+        return ()
+    custom_llm_provider: Final = kwargs.get("custom_llm_provider")
+    if not isinstance(custom_llm_provider, str):
+        return ()
+    data_residency: Final = (as_str_mapping(kwargs.get("litellm_params")) or {}).get("data_residency")
+    return live_delegated_model_costs(
+        tuple(result for result in response_obj.results if isinstance(result, Mapping)),  # pyright: ignore[reportUnknownVariableType, reportUnnecessaryIsInstance]  # realtime results are typed dicts
+        custom_llm_provider,
+        data_residency if isinstance(data_residency, str) else None,
+    )
+
+
+_DATED_SNAPSHOT: Final = re.compile(r"-\d{4}-\d{2}-\d{2}")
+
+
+def _names_provider_model(deployment_model: object, provider_model: str) -> bool:
+    if not isinstance(deployment_model, str):
+        return False
+    name: Final = deployment_model.rsplit("/", 1)[-1]
+    return provider_model == name or (
+        provider_model.startswith(f"{name}-") and _DATED_SNAPSHOT.fullmatch(provider_model[len(name) :]) is not None
+    )
+
+
+def budget_names_of(provider_model: str) -> tuple[str, ...]:
+    """Every name a budget can know a provider's model by. The provider reports only its own name for a delegated
+    response, so each budgeted name is charged, which can over-count but never lets a delegation skip its budget."""
+    router: Final = _proxy_router()
+    if router is None:
+        return (provider_model,)
+    deployments: Final = tuple(
+        deployment for raw in router.registry().deployments() or () if (deployment := as_str_mapping(raw)) is not None
+    )
+    serving: Final = tuple(
+        deployment
+        for deployment in deployments
+        if _names_provider_model((as_str_mapping(deployment.get("litellm_params")) or {}).get("model"), provider_model)
+    )
+    names: Final = itertools.chain.from_iterable(
+        (
+            deployment.get("model_name"),
+            (as_str_mapping(deployment.get("model_info")) or {}).get("team_public_model_name"),
+        )
+        for deployment in serving
+    )
+    serving_groups: Final = sorted({name for name in names if isinstance(name, str)})
+    return (*serving_groups, provider_model)
 
 
 def _requested_model_name(
@@ -1219,6 +1315,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             if team_member_user_id is not None and team_member_team_id is not None
             else None
         )
+
         entity_budgets: Final = (
             (
                 Litellm_EntityType.KEY,
@@ -1260,13 +1357,44 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             ),
         )
 
-        resolved_budgets: Final = _resolve_entity_model_budgets(
-            model=model,
-            entity_budgets=entity_budgets,
-            model_access_groups=self._model_access_groups,
-            team_id=team_member_team_id,
+        def _entity_budgets(budget_model: str) -> _EntityBudgets:
+            return _entity_budgets_for(
+                budget_model,
+                model,
+                entity_budgets,  # pyright: ignore[reportUnknownArgumentType]  # callback metadata is partially untyped
+                team_model_max_budget,
+                key_model_max_budget,  # pyright: ignore[reportUnknownArgumentType]  # callback metadata is partially untyped
+            )
+
+        delegated_costs: Final = _live_delegated_costs(
+            kwargs,  # pyright: ignore[reportUnknownArgumentType]  # untyped callback kwargs
+            response_obj,  # pyright: ignore[reportUnknownArgumentType]  # untyped callback response
         )
-        if not resolved_budgets:
+        charges: Final = (
+            ((model,), max(response_cost - sum(cost for _, cost in delegated_costs), 0.0)),
+            *((budget_names_of(delegated_model), cost) for delegated_model, cost in delegated_costs),
+        )
+
+        def _counters(budget_names: tuple[str, ...]) -> tuple[tuple[Litellm_EntityType, str, ResolvedModelBudget], ...]:
+            resolved_per_name: Final = itertools.chain.from_iterable(
+                _resolve_entity_model_budgets(
+                    model=budget_name,
+                    entity_budgets=_entity_budgets(budget_name),
+                    model_access_groups=self._model_access_groups,
+                    team_id=team_member_team_id,
+                )
+                for budget_name in budget_names
+            )
+            return tuple(
+                {
+                    (entity_type, entity_id, resolved.budget_model): (entity_type, entity_id, resolved)
+                    for entity_type, entity_id, resolved in resolved_per_name
+                }.values()
+            )
+
+        resolved_charges: Final = tuple((_counters(budget_names), cost) for budget_names, cost in charges)
+        budgeted_charges: Final = tuple(charge for charge in resolved_charges if charge[0])
+        if not budgeted_charges:
             verbose_proxy_logger.debug(
                 "Not running _PROXY_VirtualKeyModelMaxBudgetLimiter.async_log_success_event: "
                 "no key, team, user or end-user model_max_budget covers model=%s",
@@ -1278,14 +1406,15 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             return
 
         job: Final = job_to_charge_once(kwargs=kwargs, response_obj=response_obj, response_cost=response_cost)
-        for entity_type, entity_id, resolved in resolved_budgets:
-            await self._charge_entity(
-                entity_type=entity_type,
-                entity_id=entity_id,
-                resolved=resolved,
-                response_cost=response_cost,
-                job=job,
-            )
+        for resolved_budgets, cost in budgeted_charges:
+            for entity_type, entity_id, resolved in resolved_budgets:
+                await self._charge_entity(
+                    entity_type=entity_type,
+                    entity_id=entity_id,
+                    resolved=resolved,
+                    response_cost=cost,
+                    job=job,
+                )
 
         if self.dual_cache.redis_cache is not None:
             await self._push_in_memory_increments_to_redis()

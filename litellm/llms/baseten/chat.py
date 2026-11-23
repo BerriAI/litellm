@@ -1,11 +1,15 @@
 from collections.abc import Mapping
 from typing import Final
 
+from pydantic import TypeAdapter
+
 import litellm
+from litellm.litellm_core_utils.core_helpers import concatenated, iter_items, subscript
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.secret_managers.main import get_secret_str
 
 BASETEN_MODEL_API_BASE: Final = "https://inference.baseten.co/v1"
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class BasetenConfig(OpenAIGPTConfig):
@@ -125,7 +129,10 @@ class BasetenConfig(OpenAIGPTConfig):
             raise ValueError(
                 f"Failed to fetch models from Baseten. Status code: {response.status_code}, Response: {response.text}"
             )
-        return ["baseten/" + model["id"] for model in response.json()["data"]]
+        return [
+            concatenated("baseten/", subscript(model, "id"))
+            for model in iter_items(subscript(_DECODED_JSON.validate_python(response.json()), "data"))
+        ]
 
     @staticmethod
     def is_dedicated_deployment(model: str) -> bool:

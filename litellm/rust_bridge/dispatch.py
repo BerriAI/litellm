@@ -9,9 +9,9 @@ from litellm.rust_bridge import catalog, runtime
 from litellm.rust_bridge.bindings import NativeBinding
 from litellm.rust_bridge.catalog import Route, RouteContext, Rules
 
-RequestT: Final = TypeVar("RequestT")
-NativeT: Final = TypeVar("NativeT")
-ResultT: Final = TypeVar("ResultT")
+RequestT = TypeVar("RequestT")
+NativeT = TypeVar("NativeT")
+ResultT = TypeVar("ResultT")
 
 NativeHook: TypeAlias = Callable[[RequestT, tuple[object, ...], Mapping[str, object]], ResultT]
 

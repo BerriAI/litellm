@@ -56,6 +56,7 @@ def _serve_teams(monkeypatch: pytest.MonkeyPatch, *teams: LiteLLM_TeamTable) -> 
         return by_id.get(team_id)
 
     monkeypatch.setattr("litellm.proxy.auth.host.python.get_team_object", get_team_object)
+    monkeypatch.setattr("litellm.proxy.auth.host.python.read_team", get_team_object)
     monkeypatch.setattr("litellm.proxy.auth.auth_checks.get_team_object", get_team_object)
 
 
