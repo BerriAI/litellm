@@ -183,6 +183,7 @@ from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # l
     check_passthrough_routes_caller_permission,
     check_require_trace_id_caller_permission,
     member_budget_patch,
+    semantic_cache_metadata_changed,
     set_object_metadata_field,
     team_member_has_permission,
     update_metadata_fields,
@@ -190,6 +191,7 @@ from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # l
     user_api_key_has_admin_view,
     validate_budget_duration,
     validate_rollover_budget_patch,
+    validate_semantic_cache_metadata,
     validate_team_model_max_budget,
 )
 from litellm.proxy.management_endpoints.organization_endpoints import (
@@ -1902,6 +1904,7 @@ async def new_team(
         if prisma_client is None:
             raise HTTPException(status_code=500, detail={"error": "No db connected"})
 
+        validate_semantic_cache_metadata(attribute_or_none(data, "metadata"))
         validate_required_customer_headers_metadata(
             _TEAM_METADATA_ADAPTER.validate_python(getattr(data, "metadata", None) or {})
         )
@@ -2792,6 +2795,11 @@ async def update_team(
         )
 
         _existing_team_metadata: Final[object] = getattr(existing_team_row, "metadata", None)
+        requested_metadata: Final = attribute_or_none(data, "metadata")
+        if "metadata" in data.model_fields_set and semantic_cache_metadata_changed(
+            requested_metadata, _existing_team_metadata
+        ):
+            validate_semantic_cache_metadata(requested_metadata, _existing_team_metadata)
         validate_required_customer_headers_metadata(
             _TEAM_METADATA_ADAPTER.validate_python(getattr(data, "metadata", None) or {})
         )

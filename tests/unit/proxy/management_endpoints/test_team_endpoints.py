@@ -18991,6 +18991,20 @@ async def test_update_team_team_admin_cannot_change_a_proxy_controlled_metadata_
 
 
 @pytest.mark.asyncio
+async def test_team_admin_cannot_update_a_team_with_invalid_semantic_cache_metadata() -> None:
+    with ExitStack() as stack:
+        _wire_update_team(stack, {})
+        stack.enter_context(_team_admin_may_edit("metadata"))
+        with pytest.raises(ProxyException, match=r"metadata\.cache_params") as exc:
+            await update_team(
+                data=UpdateTeamRequest(team_id="test_team_id", metadata={"cache_params": {"ttl": -1}}),
+                http_request=_update_request_stub(),
+                user_api_key_dict=_TEAM_ADMIN_CALLER,
+            )
+    assert str(exc.value.code) == "400"
+
+
+@pytest.mark.asyncio
 async def test_update_team_team_admin_metadata_still_goes_through_the_configured_validator():
     import contextlib
 

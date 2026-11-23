@@ -62,6 +62,7 @@ from litellm.constants import (
     MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG,
     NON_INFERENCE_CALL_TYPES,
     RETURN_RAW_MODEL_NAME_METADATA_KEY,
+    SEMANTIC_CACHE_SCOPE_HEADER,
     STREAM_SSE_DATA_PREFIX,
     STREAM_SSE_KEEPALIVE_PING_BYTES,
     UNSAFE_PROXY_RESPONSE_HEADERS,
@@ -218,6 +219,7 @@ from litellm.types.extraction import ExtractionResponse
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.router import RouterRateLimitError
 from litellm.types.router_weights import RouterWeights, validate_router_weights
+from litellm.types.semantic_cache import semantic_cache_policy
 
 _LateResponseT = TypeVar("_LateResponseT")
 _LlmCallT = TypeVar("_LlmCallT")
@@ -3033,6 +3035,9 @@ class ProxyBaseLLMRequestProcessing:
             **{k: str(v) for k, v in kwargs.items()},
         }
         if request_data:
+            cache_policy: Final = semantic_cache_policy(request_data)
+            if cache_policy is not None:
+                headers[SEMANTIC_CACHE_SCOPE_HEADER] = cache_policy.scope
             remaining_tokens_header: Final = get_remaining_tokens_and_requests_from_request_data(dict(request_data))
             headers.update(remaining_tokens_header)
 
