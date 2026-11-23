@@ -1621,7 +1621,7 @@ class RealTimeStreaming:
         if event.get("type") == "response.done":
             await self._turn_limits.charge(event)
             return
-        if event.get("type") != "response.created":
+        if self._listens_only or event.get("type") != "response.created":
             return
         if self._admitted_response_creates > 0:
             self._admitted_response_creates -= 1

@@ -6546,6 +6546,7 @@ async def _turn_limited_session(
     auth_limits: Mapping[str, object] = MappingProxyType({}),
     tag_tpm_limit: int | None = None,
     logging_obj: object | None = None,
+    listens_only: bool = False,
 ) -> _TurnLimitedSession:
     tag_limits: Final = MappingProxyType(
         {} if tag_tpm_limit is None else {_TURN_TAG: TagRateLimit(rpm_limit=None, tpm_limit=tag_tpm_limit)}
@@ -6577,6 +6578,7 @@ async def _turn_limited_session(
         model=_TURN_LIMITED_MODEL,
         user_api_key_dict=auth,
         turn_limiters=lambda: (limiter,),
+        listens_only=listens_only,
     )
     return _TurnLimitedSession(limiter, auth, client_ws, backend_ws, streaming)
 
@@ -6678,6 +6680,26 @@ async def test_a_backend_started_response_over_the_tpm_limit_is_cancelled_upstre
         "rate_limit_exceeded"
     ]
     session.backend_ws.close.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_session_that_only_listens_to_a_call_counts_its_turns_and_sends_no_cancel_into_it_over_the_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LITELLM_TPM_TOKEN_RESERVATION_ENABLED", "false")
+    session: Final = await _turn_limited_session(
+        backend_frames=(_response_done(1200, "resp_1"), _response_created("resp_vad")),
+        auth_limits={"tpm_limit": _TURN_TPM_LIMIT},
+        listens_only=True,
+    )
+    key: Final = session.auth.api_key or ""
+    counted_at_open: Final = session.tokens_counted("api_key", key)
+
+    await session.streaming.backend_to_client_send_messages()
+
+    assert session.sent_upstream() == []
+    assert [event for event in session.sent_to_client() if event["type"] == "error"] == []
+    assert session.tokens_counted("api_key", key) - counted_at_open == 1200
 
 
 @pytest.mark.asyncio
