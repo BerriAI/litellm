@@ -7841,6 +7841,7 @@ def embedding(
                     model=model,
                     llm_provider="ollama",
                 )
+            logging.pre_call(input=input, api_key=api_key, additional_args={"api_base": api_base, "headers": headers})
             ollama_embeddings_fn: Final = ollama.ollama_aembeddings if aembedding is True else ollama.ollama_embeddings
             response = ollama_embeddings_fn(
                 api_base=api_base,

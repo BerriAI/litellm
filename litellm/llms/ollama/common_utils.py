@@ -1,6 +1,6 @@
 import base64
 import io
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from typing import Final, Protocol, overload
 
 import httpx
@@ -10,6 +10,7 @@ from pydantic import BaseModel, TypeAdapter
 from litellm import verbose_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.core_helpers import require_attributes
+from litellm.litellm_core_utils.model_cost_table import Uncached
 from litellm.litellm_core_utils.reasoning_effort_utils import warn_dropped_reasoning
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -235,7 +236,7 @@ class OllamaModelInfo(BaseLLMModelInfo):
         model: str,
         api_base: str | None = None,
         api_key: str | None = None,
-    ) -> dict[str, object]:
+    ) -> Mapping[str, object] | Uncached[Mapping[str, object]]:
         from litellm import module_level_client
 
         model = self._strip_ollama_model_prefix(model)
@@ -253,16 +254,18 @@ class OllamaModelInfo(BaseLLMModelInfo):
             response.raise_for_status()
         except Exception:
             verbose_logger.debug("OllamaError: Could not get model info.")
-            return {
-                "key": model,
-                "litellm_provider": "ollama",
-                "mode": "chat",
-                "input_cost_per_token": 0.0,
-                "output_cost_per_token": 0.0,
-                "max_tokens": None,
-                "max_input_tokens": None,
-                "max_output_tokens": None,
-            }
+            return Uncached(
+                {
+                    "key": model,
+                    "litellm_provider": "ollama",
+                    "mode": "chat",
+                    "input_cost_per_token": 0.0,
+                    "output_cost_per_token": 0.0,
+                    "max_tokens": None,
+                    "max_input_tokens": None,
+                    "max_output_tokens": None,
+                }
+            )
 
         model_info: Final = _DECODED_JSON.validate_python(response.json())
         max_tokens: Final = self._get_max_tokens(model_info)
@@ -284,7 +287,7 @@ class OllamaModelInfo(BaseLLMModelInfo):
         model: str,
         api_base: str | None = None,
         api_key: str | None = None,
-    ) -> dict[str, object] | None:
+    ) -> Mapping[str, object] | Uncached[Mapping[str, object]] | None:
         if self._is_static_ollama_model(model):
             return None
         return self.get_runtime_model_info(model=model, api_base=api_base, api_key=api_key)

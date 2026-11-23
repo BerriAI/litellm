@@ -447,6 +447,7 @@ _CLIENT_DISCONNECTED_ERROR_INFORMATION: Final[StandardLoggingPayloadErrorInforma
     "error_class": "ClientDisconnected",
 }
 _METADATA_MAPPING: Final = TypeAdapter(Mapping[str, object])
+_REQUEST_MAPPING: Final = TypeAdapter(Mapping[str, object])
 _RESPONSE_MAPPING: Final = TypeAdapter(Mapping[str, object])
 _MODEL_INFO_CUSTOM_PRICING_KEYS: Final[frozenset[str]] = _CUSTOM_PRICING_KEYS | DEPLOYMENT_SCOPED_PRICING_FIELDS
 _UNSERIALIZABLE_METADATA_KEYS: Final[frozenset[str]] = frozenset(
@@ -489,6 +490,19 @@ in_memory_dynamic_logger_cache: Final = DynamicLoggingCache()
 _ORIGINAL_RESPONSE_NOT_RETAINED: Final = '{"litellm_note":"raw response not retained"}'
 _ORIGINAL_RESPONSE_READER_CALLBACK_NAMES: Final = frozenset({"athina", "sentry", "wandb"})
 _FIRST_PARTY_PACKAGES: Final = frozenset({"litellm", "litellm_enterprise"})
+
+
+def _bearer_token(headers: object) -> str | None:
+    if not isinstance(headers, Mapping):
+        return None
+    authorization: Final = next(
+        (value for name, value in _REQUEST_MAPPING.validate_python(headers).items() if name.lower() == "authorization"),
+        None,
+    )
+    if not isinstance(authorization, str):
+        return None
+    scheme, _, token = authorization.partition(" ")
+    return token.strip() or None if scheme.lower() == "bearer" else None
 
 
 def _attribute_defined_on(owner: object, name: str) -> object:
@@ -2080,7 +2094,9 @@ class Logging(LiteLLMLoggingBaseClass):
         self.model_info_api_key = model_info_lookup_api_key(
             self.model,
             provider if isinstance(provider, str) else None,
-            api_key if isinstance(api_key, str) and api_key else None,
+            api_key
+            if isinstance(api_key, str) and api_key
+            else _bearer_token(_REQUEST_MAPPING.validate_python(additional_args).get("headers")),
         )
         self.model_call_details["additional_args"] = additional_args
         self.model_call_details["log_event_type"] = "pre_api_call"

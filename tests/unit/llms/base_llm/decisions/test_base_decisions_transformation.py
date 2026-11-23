@@ -1,11 +1,10 @@
 import json
-import threading
-from collections.abc import Iterator, Mapping
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from collections.abc import Mapping
 from typing import Final
 
 import httpx
 import pytest
+import respx
 from pydantic import TypeAdapter, ValidationError
 
 import litellm
@@ -77,41 +76,20 @@ def test_unmapped_decision_model_limits_remain_unknown(local_model_cost_map: Non
     assert BaseDecisionsConfig().get_input_limits("unmapped-input-limit", "databricks", {}) == DecisionsInputLimits()
 
 
-@pytest.fixture
-def ollama_server_paths(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[str]]:
-    paths: Final[list[str]] = []  # mutable-ok: the server thread records each request path it receives
-
-    class RecordingOllama(BaseHTTPRequestHandler):
-        def do_POST(self) -> None:
-            paths.append(self.path)
-            body: Final = json.dumps({"template": "", "model_info": {}}).encode()
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-
-        def log_message(self, format: str, *args: object) -> None:
-            pass
-
-    server: Final = ThreadingHTTPServer(("127.0.0.1", 0), RecordingOllama)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    monkeypatch.setenv("OLLAMA_API_BASE", f"http://127.0.0.1:{server.server_port}")
-    litellm.get_model_info.cache_clear()
-    try:
-        yield paths
-    finally:
-        litellm.get_model_info.cache_clear()
-        server.shutdown()
-        server.server_close()
-
-
+@pytest.mark.respx(assert_all_called=False)
 @pytest.mark.parametrize("provider", ("ollama", "ollama_chat"))
 def test_catalog_mode_of_an_unmapped_ollama_model_reads_only_the_catalog(
-    local_model_cost_map: None, ollama_server_paths: list[str], provider: str
+    local_model_cost_map: None, provider: str, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
 ) -> None:
-    assert catalog_mode("catalog-mode-probe", provider) is None
-    assert ollama_server_paths == []
+    monkeypatch.setenv("OLLAMA_API_BASE", "http://ollama.test:11434")
+    ollama: Final = respx_mock.route().respond(json={"template": "", "model_info": {}})
+    litellm.get_model_info.cache_clear()
+    try:
+        assert catalog_mode("catalog-mode-probe", provider) is None
+    finally:
+        litellm.get_model_info.cache_clear()
+
+    assert [str(call.request.url) for call in ollama.calls] == []
 
 
 @pytest.mark.parametrize(

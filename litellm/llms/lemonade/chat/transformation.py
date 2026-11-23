@@ -12,6 +12,7 @@ from pydantic import ConfigDict, TypeAdapter
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.model_cost_table import Uncached
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
@@ -169,7 +170,7 @@ class LemonadeChatConfig(OpenAILikeChatConfig):
                 return parsed
         return None
 
-    def _get_default_model_info(self, model: str) -> dict:
+    def _get_default_model_info(self, model: str) -> dict[str, object]:
         return {
             "key": "lemonade/" + model,
             "litellm_provider": "lemonade",
@@ -186,7 +187,7 @@ class LemonadeChatConfig(OpenAILikeChatConfig):
         model: str,
         api_base: str | None = None,
         api_key: str | None = None,
-    ) -> dict[str, object]:
+    ) -> Mapping[str, object] | Uncached[Mapping[str, object]]:
         if model.startswith("lemonade/"):
             model = model.split("/", 1)[1]
 
@@ -202,7 +203,7 @@ class LemonadeChatConfig(OpenAILikeChatConfig):
             model_info: Final = _json_body(response)
         except Exception:
             verbose_logger.debug("LemonadeError: Could not get model info.")
-            return self._get_default_model_info(model)
+            return Uncached(self._get_default_model_info(model))
 
         model_info_fields: Final = _JSON_DICT.validate_python(model_info)
         max_input_tokens: Final = self._get_context_window(model_info_fields)
@@ -240,7 +241,7 @@ class LemonadeChatConfig(OpenAILikeChatConfig):
     ) -> tuple[str | None, str | None]:
         return self._get_openai_compatible_provider_info(api_base, api_key)
 
-    def _get_auth_headers(self, api_key: str | None) -> dict:
+    def _get_auth_headers(self, api_key: str | None) -> dict[str, str]:
         if api_key is None or api_key == self._DEFAULT_API_KEY:
             return {}
         return {"Authorization": f"Bearer {api_key}"}

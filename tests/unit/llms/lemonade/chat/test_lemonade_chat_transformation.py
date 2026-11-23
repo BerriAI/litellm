@@ -1,7 +1,12 @@
+from typing import Final
+
+import httpx
 import pytest
 import respx
 from pydantic import ValidationError
 
+import litellm
+from litellm.litellm_core_utils.model_cost_table import Uncached
 from litellm.llms.lemonade.chat.transformation import LemonadeChatConfig
 
 LEMONADE_BASE = "http://lemonade.test/api/v1"
@@ -120,12 +125,33 @@ def test_get_model_info_raises_for_non_object_payload_instead_of_defaulting(
         LemonadeChatConfig().get_model_info(model=f"lemonade/{MODEL}", api_base=LEMONADE_BASE)
 
 
-def test_get_model_info_defaults_when_server_errors(respx_mock: respx.MockRouter) -> None:
+def test_get_model_info_defaults_without_caching_when_server_errors(respx_mock: respx.MockRouter) -> None:
     respx_mock.get(f"{LEMONADE_BASE}/models/{MODEL}").respond(503, json={"max_tokens": 5})
 
-    assert (
-        LemonadeChatConfig().get_model_info(model=f"lemonade/{MODEL}", api_base=LEMONADE_BASE) == _expected_model_info()
+    assert LemonadeChatConfig().get_model_info(model=f"lemonade/{MODEL}", api_base=LEMONADE_BASE) == Uncached(
+        _expected_model_info()
     )
+
+
+def test_litellm_get_model_info_retries_a_failed_lookup_at_the_call_api_base_with_its_key(
+    respx_mock: respx.MockRouter,
+) -> None:
+    lookups: Final = respx_mock.get(f"{LEMONADE_BASE}/models/{MODEL}").mock(
+        side_effect=[httpx.Response(503), httpx.Response(200, json={"max_input_tokens": 4096})]
+    )
+    litellm.get_model_info.cache_clear()
+    try:
+        limits: Final = tuple(
+            litellm.get_model_info(f"lemonade/{MODEL}", api_base=LEMONADE_BASE, api_key="lemonade-call-key")[
+                "max_input_tokens"
+            ]
+            for _ in range(3)
+        )
+    finally:
+        litellm.get_model_info.cache_clear()
+
+    assert limits == (None, 4096, 4096)
+    assert [call.request.headers.get("authorization") for call in lookups.calls] == ["Bearer lemonade-call-key"] * 2
 
 
 @pytest.mark.parametrize(

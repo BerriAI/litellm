@@ -1,5 +1,7 @@
 import os
 import sys
+from collections.abc import Mapping
+from typing import Final
 
 import pytest
 
@@ -18,8 +20,10 @@ if "httpx" not in sys.modules:
     sys.modules["httpx"] = httpx_mod
 
 import httpx
+import respx
 import litellm
 
+from litellm.litellm_core_utils.model_cost_table import Uncached
 from litellm.llms.ollama.common_utils import OllamaModelInfo
 
 
@@ -388,10 +392,12 @@ class TestOllamaGetModelInfo:
         assert model_info["max_input_tokens"] == 32768
         assert captured_headers[0] == {"Authorization": "Bearer explicit-api-key"}
 
-    def test_litellm_get_model_info_caches_ollama_lookups_per_api_key(self, monkeypatch):
-        captured_headers = []
+    def test_litellm_get_model_info_caches_ollama_lookups_per_api_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        captured_headers: Final[list[Mapping[str, str] | None]] = []  # mutable-ok: the stub records each lookup
 
-        def mock_post(url, json, headers=None):
+        def mock_post(
+            url: str, json: Mapping[str, str], headers: Mapping[str, str] | None = None
+        ) -> DummyResponse:
             captured_headers.append(headers)
             return DummyResponse(
                 {
@@ -418,8 +424,49 @@ class TestOllamaGetModelInfo:
         finally:
             litellm.get_model_info.cache_clear()
 
-    def test_litellm_get_model_info_shares_one_cache_entry_across_keys_when_the_lookup_sends_none(self):
-        openai_model = next(
+    @pytest.mark.parametrize("api_key", [None, "GATEKEY"], ids=["no-key", "keyed"])
+    @pytest.mark.parametrize("cost_path", [False, True], ids=["get_model_info", "cost-path"])
+    def test_a_failed_lookup_is_retried_and_a_successful_one_is_cached(
+        self, monkeypatch: pytest.MonkeyPatch, cost_path: bool, api_key: str | None
+    ) -> None:
+        from litellm.llms.custom_httpx.http_handler import HTTPHandler
+        from litellm.utils import cached_get_model_info_helper
+
+        statuses: Final = iter((500, 200))
+        lookups: Final[list[str | None]] = []  # mutable-ok: the transport records each lookup it serves
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            lookups.append(request.headers.get("authorization"))
+            return httpx.Response(next(statuses), json={"template": "", "model_info": {"llama.context_length": 8192}})
+
+        def max_input_tokens() -> object:
+            lookup: Final = (
+                cached_get_model_info_helper(
+                    "ollama/retry-probe", "ollama", api_base="http://ollama.test:11434", api_key=api_key
+                )
+                if cost_path
+                else litellm.get_model_info(
+                    "ollama/retry-probe", api_base="http://ollama.test:11434", api_key=api_key
+                )
+            )
+            return lookup["max_input_tokens"]
+
+        transport: Final = httpx.MockTransport(respond)
+        monkeypatch.setattr(litellm, "module_level_client", HTTPHandler(client=httpx.Client(transport=transport)))
+        monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
+        litellm.get_model_info.cache_clear()
+        cached_get_model_info_helper.cache_clear()
+        try:
+            limits: Final = (max_input_tokens(), max_input_tokens(), max_input_tokens())
+        finally:
+            litellm.get_model_info.cache_clear()
+            cached_get_model_info_helper.cache_clear()
+
+        assert limits == (None, 8192, 8192)
+        assert lookups == [f"Bearer {api_key}" if api_key else None] * 2
+
+    def test_litellm_get_model_info_shares_one_cache_entry_across_keys_when_the_lookup_sends_none(self) -> None:
+        openai_model: Final = next(
             name
             for name, entry in litellm.model_cost.items()
             if entry.get("litellm_provider") == "openai" and entry.get("mode") == "chat"
@@ -463,10 +510,12 @@ class TestOllamaGetModelInfo:
         monkeypatch.delenv("OLLAMA_API_BASE", raising=False)
 
         config = OllamaConfig()
-        result = config.get_model_info(
+        fallback = config.get_model_info(
             "my-custom-model", api_base="http://unreachable:11434"
         )
 
+        assert isinstance(fallback, Uncached)
+        result = fallback.value
         assert result["key"] == "my-custom-model"
         assert result["litellm_provider"] == "ollama"
         assert result["input_cost_per_token"] == 0.0
@@ -489,10 +538,12 @@ class TestOllamaGetModelInfo:
         monkeypatch.setattr("litellm.module_level_client.post", mock_post)
 
         config = OllamaConfig()
-        result = config.get_model_info(
+        fallback = config.get_model_info(
             "my-custom-model", api_base="http://localhost:11434"
         )
 
+        assert isinstance(fallback, Uncached)
+        result = fallback.value
         assert result["key"] == "my-custom-model"
         assert result["litellm_provider"] == "ollama"
         assert result["max_tokens"] is None
@@ -581,13 +632,14 @@ class TestOllamaGetModelInfo:
 
 
 @pytest.mark.parametrize(
-    ("api_key", "environment_key", "authorization"),
+    ("api_key", "extra_headers", "environment_key", "authorization"),
     [
-        (None, None, None),
-        ("call-key", "environment-key", "Bearer call-key"),
-        (None, "environment-key", "Bearer environment-key"),
+        (None, None, None, None),
+        ("call-key", None, "environment-key", "Bearer call-key"),
+        (None, None, "environment-key", "Bearer environment-key"),
+        (None, {"Authorization": "Bearer header-key"}, None, "Bearer header-key"),
     ],
-    ids=["no-key", "explicit-key", "environment-key"],
+    ids=["no-key", "explicit-key", "environment-key", "header-key"],
 )
 @pytest.mark.parametrize(
     ("model", "generation_path", "generation_body"),
@@ -597,17 +649,24 @@ class TestOllamaGetModelInfo:
     ],
 )
 def test_completion_sends_every_model_info_lookup_to_the_call_api_base_with_its_key(
-    monkeypatch, model, generation_path, generation_body, api_key, environment_key, authorization
-):
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    generation_path: str,
+    generation_body: Mapping[str, object],
+    api_key: str | None,
+    extra_headers: Mapping[str, str] | None,
+    environment_key: str | None,
+    authorization: str | None,
+) -> None:
     from concurrent.futures import ThreadPoolExecutor
 
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
     from litellm.utils import cached_get_model_info_helper
 
-    lookups = []
-    generation_authorizations = []
+    lookups: Final[list[tuple[str, str | None]]] = []  # mutable-ok: the transport records each lookup it serves
+    generation_authorizations: Final[list[str | None]] = []  # mutable-ok: the transport records each generation call
 
-    def respond(request):
+    def respond(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/api/show":
             lookups.append((request.url.host, request.headers.get("authorization")))
             return httpx.Response(200, json={"template": "", "model_info": {}})
@@ -628,7 +687,7 @@ def test_completion_sends_every_model_info_lookup_to_the_call_api_base_with_its_
         monkeypatch.setenv("OLLAMA_API_KEY", environment_key)
     client = HTTPHandler(client=httpx.Client(transport=transport))
 
-    def complete():
+    def complete() -> None:
         with ThreadPoolExecutor(max_workers=1) as success_logging:
             monkeypatch.setattr("litellm.utils.executor", success_logging)
             litellm.completion(
@@ -636,6 +695,7 @@ def test_completion_sends_every_model_info_lookup_to_the_call_api_base_with_its_
                 messages=[{"role": "user", "content": "hi"}],
                 api_base="http://ollama-call.test:11434",
                 api_key=api_key,
+                extra_headers=extra_headers,
                 client=client,
             )
 
@@ -654,7 +714,85 @@ def test_completion_sends_every_model_info_lookup_to_the_call_api_base_with_its_
     assert len(lookups) == lookups_after_first_call
 
 
-def test_model_info_lookup_for_a_decisions_endpoint_goes_to_the_server_root():
+@pytest.mark.respx(assert_all_called=False)
+def test_standalone_completion_cost_looks_up_the_model_at_the_response_api_base(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    from litellm.utils import cached_get_model_info_helper
+
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    monkeypatch.setenv("OLLAMA_API_BASE", "http://ollama-default.test:11434")
+    monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
+    default_lookups: Final = respx_mock.post("http://ollama-default.test:11434/api/show").respond(
+        200, json={"template": "", "model_info": {}}
+    )
+    call_lookups: Final = respx_mock.post("http://ollama-call.test:11434/api/show").respond(
+        200, json={"template": "", "model_info": {}}
+    )
+    respx_mock.post("http://ollama-call.test:11434/api/chat").respond(
+        200,
+        json={
+            "model": "cost-probe",
+            "done": True,
+            "prompt_eval_count": 3,
+            "eval_count": 2,
+            "message": {"role": "assistant", "content": "hi"},
+        },
+    )
+    with ThreadPoolExecutor(max_workers=1) as success_logging:
+        monkeypatch.setattr("litellm.utils.executor", success_logging)
+        response: Final = litellm.completion(
+            model="ollama_chat/cost-probe",
+            messages=[{"role": "user", "content": "hi"}],
+            api_base="http://ollama-call.test:11434",
+        )
+    litellm.get_model_info.cache_clear()
+    cached_get_model_info_helper.cache_clear()
+    lookups_before: Final = call_lookups.call_count
+    try:
+        litellm.completion_cost(completion_response=response)
+    finally:
+        litellm.get_model_info.cache_clear()
+        cached_get_model_info_helper.cache_clear()
+
+    assert call_lookups.call_count > lookups_before
+    assert not default_lookups.called
+
+
+@pytest.mark.respx(assert_all_called=False)
+def test_responses_never_looks_up_the_model_at_the_default_api_base(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    monkeypatch.setenv("OLLAMA_API_BASE", "http://ollama-default.test:11434")
+    monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
+    default_lookups: Final = respx_mock.post("http://ollama-default.test:11434/api/show").respond(
+        200, json={"template": "", "model_info": {}}
+    )
+    respx_mock.post("http://ollama-call.test:11434/api/show").respond(200, json={"template": "", "model_info": {}})
+    chat: Final = respx_mock.post("http://ollama-call.test:11434/api/chat").respond(
+        200,
+        json={
+            "model": "responses-probe",
+            "done": True,
+            "prompt_eval_count": 3,
+            "eval_count": 2,
+            "message": {"role": "assistant", "content": "hi"},
+        },
+    )
+    with ThreadPoolExecutor(max_workers=1) as success_logging:
+        monkeypatch.setattr("litellm.utils.executor", success_logging)
+        litellm.responses(model="ollama_chat/responses-probe", input="hi", api_base="http://ollama-call.test:11434")
+
+    assert chat.called
+    assert not default_lookups.called
+
+
+def test_model_info_lookup_for_a_decisions_endpoint_goes_to_the_server_root() -> None:
     assert (
         OllamaModelInfo.get_server_api_base("http://ollama.test:11434/prefix/v1/systemone")
         == "http://ollama.test:11434/prefix"

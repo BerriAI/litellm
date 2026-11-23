@@ -1958,6 +1958,7 @@ def completion_cost(
     or add it to model_prices_and_context_window.json.
     """
     try:
+        response_api_base: Final = _response_api_base(completion_response)
         call_type = infer_call_type(call_type, completion_response) or "completion"
         if isinstance(completion_response, DecisionsResponse) and completion_response.usage is None:
             raise ValueError("Cannot calculate Decisions cost: provider did not report usage")
@@ -2478,7 +2479,7 @@ def completion_cost(
                     response=completion_response,
                     custom_model_info=_ocr_model_info(litellm_logging_obj, custom_pricing, router_model_id),
                     bedrock_model_info=bedrock_model_info,
-                    api_base=_request_api_base(litellm_logging_obj),
+                    api_base=_request_api_base(litellm_logging_obj, response_api_base),
                     api_key=_request_api_key(litellm_logging_obj),
                 )
 
@@ -2572,7 +2573,7 @@ def completion_cost(
                             vertex_location=vertex_location,
                             custom_cost_per_token=custom_cost_per_token,
                             model_info=bedrock_model_info,
-                            api_base=_request_api_base(litellm_logging_obj),
+                            api_base=_request_api_base(litellm_logging_obj, response_api_base),
                             api_key=_request_api_key(litellm_logging_obj),
                         )
                         _reasoning_cost = _token_type_breakdown.reasoning_cost
@@ -2827,12 +2828,16 @@ def _configured_search_cost_per_query(litellm_logging_obj: LitellmLoggingObject 
     return float(cost_per_query) if isinstance(cost_per_query, (int, float)) else None
 
 
-def _request_api_base(litellm_logging_obj: LitellmLoggingObject | None) -> str | None:
+def _response_api_base(completion_response: object) -> str | None:
+    return _get_hidden_str_for_cost_calc(attribute_or_none(completion_response, "_hidden_params"), "api_base")
+
+
+def _request_api_base(litellm_logging_obj: LitellmLoggingObject | None, response_api_base: str | None) -> str | None:
     logged_params: Final = getattr(litellm_logging_obj, "litellm_params", None)
     if not isinstance(logged_params, Mapping):
-        return None
+        return response_api_base
     api_base: Final = _LOGGED_LITELLM_PARAMS.validate_python(logged_params).get("api_base")
-    return api_base if isinstance(api_base, str) and api_base else None
+    return api_base if isinstance(api_base, str) and api_base else response_api_base
 
 
 def _request_api_key(litellm_logging_obj: LitellmLoggingObject | None) -> str | None:
@@ -2969,7 +2974,7 @@ def pricing_entry_for_cost_calc(
         selected_entry: Final[Mapping[str, object]] = bedrock_model_info
         return key, MappingProxyType({name: value for name, value in selected_entry.items() if name in declared_keys})
     candidates: Final = (selected_model, _get_response_model(completion_response), model)
-    api_base: Final = _request_api_base(litellm_logging_obj)
+    api_base: Final = _request_api_base(litellm_logging_obj, _response_api_base(completion_response))
     api_key: Final = _request_api_key(litellm_logging_obj)
     lookups: Final = (_cost_map_model_info(name, custom_llm_provider, api_base, api_key) for name in candidates if name)
     resolved: Final = next(

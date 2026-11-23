@@ -75,27 +75,50 @@ def changed_in_place() -> None:
     _WRITES.record()
 
 
+@dataclass(frozen=True, slots=True)
+class Uncached(Generic[R]):
+    """A result ``VersionCached`` hands back without caching, so the next call computes it again."""
+
+    value: R
+
+
 class VersionCached(Generic[P, R]):
     """Decorates ``function`` with an ``lru_cache`` keyed on the ``litellm.model_cost`` version each call read, and
-    exposes that cache's ``cache_clear`` and ``cache_info``."""
+    exposes that cache's ``cache_clear`` and ``cache_info``. A result ``function`` wraps in ``Uncached`` is returned
+    unwrapped and left out of the cache."""
 
-    __slots__ = ("_at", "cache_clear", "cache_info")
+    __slots__ = ("_call", "cache_clear", "cache_info")
 
-    def __init__(self, function: Callable[P, R]) -> None:
+    def __init__(self, function: Callable[P, R | Uncached[R]]) -> None:
+        class NotCached(Exception):
+            def __init__(self, value: R) -> None:
+                super().__init__()
+                self.value: Final = value
+
         def at(
             _version: ModelCostVersion,
             *args: P.args,
             **kwargs: P.kwargs,  # kwargs-ok: forwards a ParamSpec unchanged
         ) -> R:
-            return function(*args, **kwargs)
+            result: Final = function(*args, **kwargs)
+            if isinstance(result, Uncached):
+                raise NotCached(result.value)
+            return result
 
         cached: Final = lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)(at)
-        self._at: Final = cached
+
+        def call(*args: P.args, **kwargs: P.kwargs) -> R:  # kwargs-ok: forwards a ParamSpec unchanged
+            try:
+                return cached(model_cost_version(), *args, **kwargs)
+            except NotCached as not_cached:
+                return not_cached.value
+
+        self._call: Final = call
         self.cache_clear: Final = cached.cache_clear
         self.cache_info: Final = cached.cache_info
 
     def __call__(self, *args: P.args, **kwargs: P.kwargs) -> R:  # kwargs-ok: forwards a ParamSpec unchanged
-        return self._at(model_cost_version(), *args, **kwargs)
+        return self._call(*args, **kwargs)
 
 
 @dataclass(frozen=True, slots=True)
