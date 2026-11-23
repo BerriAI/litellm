@@ -211,42 +211,41 @@ class TestCleanupRetries:
 
 
 class TestBatchCancellation:
-    def test_cancelling_batch_is_polled_until_terminal_without_cancelling_again(self) -> None:
+    @pytest.mark.parametrize("batch_id", ["batch-1", MANAGED_BATCH_ID])
+    def test_batch_already_cancelling_is_left_without_cancelling_again_or_waiting(self, batch_id: str) -> None:
         client: Final = CleanupClient(
-            calls=ExpectedCalls((f"retrieve None {MANAGED_BATCH_ID}",) * 3),
-            batches=(batch("cancelling"), batch("cancelling"), batch("cancelled")),
+            calls=ExpectedCalls((f"retrieve None {batch_id}",)), batches=(batch("cancelling"),)
         )
-        delays: Final = ExpectedCalls((10.0,))
-        cleanup_batch(client, MANAGED_BATCH_ID, key="test-key", wait=delays)
+        delays: Final = ExpectedCalls[float](())
+        cleanup_batch(client, batch_id, key="test-key", wait=delays)
         client.calls.assert_done()
         delays.assert_done()
 
-    def test_batch_still_cancelling_at_the_deadline_and_its_input_file_are_left_and_reported(self) -> None:
+    def test_managed_batch_left_cancelling_leaves_its_input_file_and_reports_it(self) -> None:
         client: Final = CleanupClient(
             calls=ExpectedCalls(
                 (
                     f"retrieve None {MANAGED_BATCH_ID}",
-                    f"retrieve None {MANAGED_BATCH_ID}",
+                    f"cancel None {MANAGED_BATCH_ID}",
                     f"delete None {MANAGED_FILE_ID}",
                     "delete key test-key",
                 )
             ),
-            batches=(batch("cancelling"), batch("cancelling")),
+            batches=(batch("in_progress"),),
+            cancellations=(batch("cancelling"),),
             files=(UnknownApiError(status_code=400, body=IN_USE_REFUSAL),),
         )
-        times: Final = (0.0, BATCH_CANCEL_TIMEOUT_SECONDS)
-        ticks: Final[Callable[[], float]] = Mock(side_effect=times)
+        delays: Final = ExpectedCalls[float](())
         manager: Final = ResourceManager(client=client, strict_cleanup=True)
         key: Final = manager.key()
         manager.defer(lambda: cleanup_file(client, MANAGED_FILE_ID, key=key))
-        manager.defer(lambda: cleanup_batch(client, MANAGED_BATCH_ID, key=key, clock=ticks))
+        manager.defer(lambda: cleanup_batch(client, MANAGED_BATCH_ID, key=key, wait=delays))
         with pytest.warns(UserWarning, match="^Left ") as leftovers:
             manager.teardown()
         client.calls.assert_done()
+        delays.assert_done()
         messages: Final = tuple(str(warning.message) for warning in leftovers)
-        assert len(messages) == 2
-        assert MANAGED_BATCH_ID in messages[0] and "cancelling" in messages[0]
-        assert MANAGED_FILE_ID in messages[1]
+        assert len(messages) == 1 and MANAGED_FILE_ID in messages[0], messages
 
     @pytest.mark.parametrize(
         "last, reported",
@@ -255,11 +254,19 @@ class TestBatchCancellation:
             (UnknownApiError(status_code=403, body="forbidden"), "after cancellation failed: HTTP 403"),
         ],
     )
-    def test_anything_but_still_cancelling_at_the_deadline_still_fails(
+    def test_cancellation_that_never_takes_effect_or_cannot_be_read_back_fails(
         self, last: Result[BatchObject], reported: str
     ) -> None:
         client: Final = CleanupClient(
-            calls=ExpectedCalls((f"retrieve None {MANAGED_BATCH_ID}",) * 2), batches=(batch("cancelling"), last)
+            calls=ExpectedCalls(
+                (
+                    f"retrieve None {MANAGED_BATCH_ID}",
+                    f"cancel None {MANAGED_BATCH_ID}",
+                    f"retrieve None {MANAGED_BATCH_ID}",
+                )
+            ),
+            batches=(batch("in_progress"), last),
+            cancellations=(batch("in_progress"),),
         )
         times: Final = (0.0, BATCH_CANCEL_TIMEOUT_SECONDS)
         ticks: Final[Callable[[], float]] = Mock(side_effect=times)

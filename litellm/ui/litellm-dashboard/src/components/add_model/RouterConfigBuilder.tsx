@@ -1,0 +1,355 @@
+import React, { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
+import { ChevronDown, CircleHelp, Plus, Trash2, X } from "lucide-react";
+
+import { ModelGroup } from "@/components/llm_calls/fetch_models";
+import { SearchSelect } from "@/components/shared/SearchSelect";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Separator } from "@/components/ui/separator";
+import { Textarea } from "@/components/ui/textarea";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+
+interface Route {
+  id: string;
+  model: string | null;
+  utterances: string[];
+  description: string;
+  score_threshold: number;
+}
+
+interface SavedRoute {
+  id?: string;
+  name?: string | null;
+  model?: string | null;
+  utterances?: string[];
+  description?: string;
+  score_threshold?: number;
+}
+
+export interface RouterConfig {
+  routes?: SavedRoute[];
+}
+
+export function serializeRouterConfig(config: RouterConfig | null): string {
+  if (config?.routes?.some((route) => !(route.name ?? route.model))) {
+    throw new Error("Please select a model for every route");
+  }
+  return JSON.stringify(config);
+}
+
+interface RouterConfigBuilderProps {
+  modelInfo: ModelGroup[];
+  value?: RouterConfig | null;
+  onChange?: (config: RouterConfig) => void;
+}
+
+interface UtteranceInputProps {
+  value: string[];
+  onChange: (utterances: string[]) => void;
+}
+
+const UtteranceInput = ({ value, onChange }: UtteranceInputProps) => {
+  const { t } = useTranslation();
+  const [draft, setDraft] = useState("");
+
+  const addUtterances = (input: string) => {
+    const normalizedUtterances = input
+      .split("\n")
+      .map((utterance) => utterance.trim())
+      .filter((utterance) => utterance !== "");
+    const updatedUtterances = Array.from(new Set([...value, ...normalizedUtterances]));
+
+    if (updatedUtterances.length > value.length) {
+      onChange(updatedUtterances);
+    }
+    setDraft("");
+  };
+
+  return (
+    <div className="flex min-h-9 w-full flex-wrap items-center gap-1.5 rounded-md border border-input bg-transparent px-2.5 py-1.5 shadow-xs transition-[color,box-shadow] focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/50 dark:bg-input/30">
+      {value.map((utterance) => (
+        <Badge key={utterance} variant="secondary" className="max-w-full gap-1 pr-1">
+          <span className="truncate">{utterance}</span>
+          <button
+            type="button"
+            aria-label={t("addModel.routerConfigBuilder.removeUtterance", { utterance })}
+            className="rounded-full p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+            onClick={() => onChange(value.filter((item) => item !== utterance))}
+          >
+            <X className="size-3" />
+          </button>
+        </Badge>
+      ))}
+      <input
+        aria-label={t("addModel.routerConfigBuilder.exampleUtterances")}
+        value={draft}
+        onChange={(event) => setDraft(event.target.value)}
+        onBlur={() => draft.trim() && addUtterances(draft)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" && draft.trim()) {
+            event.preventDefault();
+            addUtterances(draft);
+          } else if (event.key === "Backspace" && draft === "" && value.length > 0) {
+            onChange(value.slice(0, -1));
+          }
+        }}
+        onPaste={(event) => {
+          const pastedText = event.clipboardData.getData("text");
+          if (pastedText.includes("\n")) {
+            event.preventDefault();
+            addUtterances(pastedText);
+          }
+        }}
+        placeholder={value.length === 0 ? t("addModel.routerConfigBuilder.utterancePlaceholder") : undefined}
+        className="min-w-48 flex-1 bg-transparent py-0.5 text-sm outline-none placeholder:text-muted-foreground"
+      />
+    </div>
+  );
+};
+
+const HelpTooltip = ({ content }: { content: string }) => (
+  <Tooltip>
+    <TooltipTrigger
+      render={
+        <button
+          type="button"
+          aria-label={content}
+          className="inline-flex rounded-sm text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        />
+      }
+    >
+      <CircleHelp className="size-4" />
+    </TooltipTrigger>
+    <TooltipContent>{content}</TooltipContent>
+  </Tooltip>
+);
+
+const RouterConfigBuilder: React.FC<RouterConfigBuilderProps> = ({ modelInfo, value, onChange }) => {
+  const { t } = useTranslation();
+  const [routes, setRoutes] = useState<Route[]>([]);
+  const [showJsonPreview, setShowJsonPreview] = useState(false);
+  const [expandedRoutes, setExpandedRoutes] = useState<string[]>([]);
+
+  useEffect(() => {
+    const routesFromValue = value?.routes;
+    if (routesFromValue) {
+      const routeIds: string[] = [];
+      setRoutes((prevRoutes) =>
+        routesFromValue.map((route: SavedRoute, index: number) => {
+          const existingRoute = prevRoutes[index];
+          const id = existingRoute?.id || route.id || `route-${index}-${Date.now()}`;
+          routeIds.push(id);
+          return {
+            id,
+            model: route.name || route.model || null,
+            utterances: route.utterances || [],
+            description: route.description || "",
+            score_threshold: route.score_threshold ?? 0.5,
+          };
+        }),
+      );
+      setExpandedRoutes(routeIds);
+    } else {
+      setRoutes([]);
+      setExpandedRoutes([]);
+    }
+  }, [value]);
+
+  const updateConfig = (updatedRoutes: Route[]) => {
+    onChange?.({
+      routes: updatedRoutes.map((route) => ({
+        name: route.model,
+        utterances: route.utterances,
+        description: route.description,
+        score_threshold: route.score_threshold,
+      })),
+    });
+  };
+
+  const addRoute = () => {
+    const newRouteId = `route-${Date.now()}`;
+    const updatedRoutes = [
+      ...routes,
+      { id: newRouteId, model: null, utterances: [], description: "", score_threshold: 0.5 },
+    ];
+    setRoutes(updatedRoutes);
+    updateConfig(updatedRoutes);
+    setExpandedRoutes((previous) => [...previous, newRouteId]);
+  };
+
+  const removeRoute = (routeId: string) => {
+    const updatedRoutes = routes.filter((route) => route.id !== routeId);
+    setRoutes(updatedRoutes);
+    updateConfig(updatedRoutes);
+    setExpandedRoutes((previous) => previous.filter((id) => id !== routeId));
+  };
+
+  const updateRoute = (routeId: string, field: keyof Route, fieldValue: Route[keyof Route]) => {
+    const updatedRoutes = routes.map((route) => (route.id === routeId ? { ...route, [field]: fieldValue } : route));
+    setRoutes(updatedRoutes);
+    updateConfig(updatedRoutes);
+  };
+
+  const modelOptions = modelInfo.map((model) => ({ value: model.model_group, label: model.model_group }));
+  const generatedConfig = {
+    routes: routes.map((route) => ({
+      name: route.model,
+      utterances: route.utterances,
+      description: route.description,
+      score_threshold: route.score_threshold,
+    })),
+  };
+
+  return (
+    <TooltipProvider>
+      <div className="w-full space-y-6">
+        <div className="flex w-full flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <h3 className="text-lg font-semibold">{t("addModel.routerConfigBuilder.title")}</h3>
+            <HelpTooltip content={t("addModel.routerConfigBuilder.titleHint")} />
+          </div>
+          <Button type="button" onClick={addRoute}>
+            <Plus data-icon="inline-start" />
+            {t("addModel.routerConfigBuilder.addRoute")}
+          </Button>
+        </div>
+
+        {routes.length === 0 ? (
+          <Card>
+            <CardContent className="py-8 text-center text-muted-foreground">
+              {t("addModel.routerConfigBuilder.empty")}
+            </CardContent>
+          </Card>
+        ) : (
+          <div className="space-y-3">
+            {routes.map((route, index) => {
+              const isExpanded = expandedRoutes.includes(route.id);
+              return (
+                <Collapsible
+                  key={route.id}
+                  open={isExpanded}
+                  onOpenChange={(open) =>
+                    setExpandedRoutes((previous) =>
+                      open ? [...previous, route.id] : previous.filter((id) => id !== route.id),
+                    )
+                  }
+                  className="overflow-hidden rounded-xl border bg-card shadow-xs"
+                >
+                  <div className="flex items-center gap-2 px-4 py-3">
+                    <CollapsibleTrigger
+                      render={<button type="button" className="flex min-w-0 flex-1 items-center gap-2 text-left" />}
+                    >
+                      <ChevronDown
+                        className={`size-4 shrink-0 text-muted-foreground transition-transform ${isExpanded ? "rotate-180" : ""}`}
+                      />
+                      <span className="truncate text-base font-medium">
+                        {t("addModel.routerConfigBuilder.routeTitle", {
+                          number: index + 1,
+                          name: route.model || t("addModel.routerConfigBuilder.unnamed"),
+                        })}
+                      </span>
+                    </CollapsibleTrigger>
+                    <Button
+                      type="button"
+                      aria-label={t("addModel.routerConfigBuilder.deleteRoute")}
+                      variant="ghost"
+                      size="icon-sm"
+                      onClick={() => removeRoute(route.id)}
+                    >
+                      <Trash2 className="text-destructive" />
+                    </Button>
+                  </div>
+                  <CollapsibleContent>
+                    <Separator />
+                    <div className="space-y-4 p-4">
+                      <div className="space-y-2">
+                        <Label>{t("addModel.routerConfigBuilder.model")}</Label>
+                        <SearchSelect
+                          value={route.model}
+                          onValueChange={(model) => updateRoute(route.id, "model", model)}
+                          placeholder={t("addModel.routerConfigBuilder.selectModel")}
+                          options={modelOptions}
+                        />
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label htmlFor={`${route.id}-description`}>
+                          {t("addModel.routerConfigBuilder.description")}
+                        </Label>
+                        <Textarea
+                          id={`${route.id}-description`}
+                          value={route.description}
+                          onChange={(event) => updateRoute(route.id, "description", event.target.value)}
+                          placeholder={t("addModel.routerConfigBuilder.descriptionPlaceholder")}
+                          rows={2}
+                        />
+                      </div>
+
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-2">
+                          <Label htmlFor={`${route.id}-threshold`}>
+                            {t("addModel.routerConfigBuilder.scoreThreshold")}
+                          </Label>
+                          <HelpTooltip content={t("addModel.routerConfigBuilder.scoreThresholdHint")} />
+                        </div>
+                        <Input
+                          id={`${route.id}-threshold`}
+                          type="number"
+                          value={route.score_threshold}
+                          onChange={(event) =>
+                            updateRoute(route.id, "score_threshold", Number(event.target.value) || 0)
+                          }
+                          min={0}
+                          max={1}
+                          step={0.1}
+                          placeholder="0.5"
+                        />
+                      </div>
+
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-2">
+                          <Label>{t("addModel.routerConfigBuilder.exampleUtterances")}</Label>
+                          <HelpTooltip content={t("addModel.routerConfigBuilder.exampleUtterancesHint")} />
+                        </div>
+                        <p className="text-xs text-muted-foreground">
+                          {t("addModel.routerConfigBuilder.exampleUtterancesHelp")}
+                        </p>
+                        <UtteranceInput
+                          value={route.utterances}
+                          onChange={(utterances) => updateRoute(route.id, "utterances", utterances)}
+                        />
+                      </div>
+                    </div>
+                  </CollapsibleContent>
+                </Collapsible>
+              );
+            })}
+          </div>
+        )}
+
+        <Separator />
+        <div className="flex w-full items-center justify-between gap-3">
+          <h3 className="text-lg font-semibold">{t("addModel.routerConfigBuilder.jsonPreview")}</h3>
+          <Button type="button" variant="link" onClick={() => setShowJsonPreview((visible) => !visible)}>
+            {showJsonPreview ? t("addModel.routerConfigBuilder.hide") : t("addModel.routerConfigBuilder.show")}
+          </Button>
+        </div>
+
+        {showJsonPreview && (
+          <Card className="bg-muted/40">
+            <CardContent>
+              <pre className="max-h-64 w-full overflow-auto text-sm">{JSON.stringify(generatedConfig, null, 2)}</pre>
+            </CardContent>
+          </Card>
+        )}
+      </div>
+    </TooltipProvider>
+  );
+};
+
+export default RouterConfigBuilder;

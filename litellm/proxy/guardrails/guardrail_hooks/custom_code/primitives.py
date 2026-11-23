@@ -13,7 +13,7 @@ from typing import Final, Literal
 from urllib.parse import urlparse
 
 import httpx
-from pydantic import JsonValue
+from pydantic import JsonValue, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -21,6 +21,8 @@ from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.url_utils import SSRFError, async_safe_get, validate_url
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_async_httpx_client
 from litellm.types.llms.custom_http import httpxSpecialProvider
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 # =============================================================================
 # Result Types - Used by Starlark code to return guardrail decisions
@@ -200,7 +202,7 @@ class JsonSchemaNode(TypedDict, total=False):
     properties: ReadOnly[Mapping[str, "JsonSchemaNode"]]
 
 
-def json_parse(text: str) -> JsonValue:
+def json_parse(text: str) -> object:
     """
     Parse a JSON string into a Python object.
 
@@ -211,7 +213,7 @@ def json_parse(text: str) -> JsonValue:
         Parsed Python object, or None if parsing fails
     """
     try:
-        return json.loads(text)
+        return _DECODED_JSON.validate_python(json.loads(text))
     except (json.JSONDecodeError, TypeError) as e:
         verbose_proxy_logger.debug("Starlark json_parse error: %s", e)
         return None
@@ -403,7 +405,7 @@ class HttpResponseResult(TypedDict):
     """Outcome of an HTTP primitive call, as handed back to custom code."""
 
     status_code: ReadOnly[int]
-    body: ReadOnly[JsonValue]
+    body: ReadOnly[object]
     headers: ReadOnly[Mapping[str, str]]
     success: ReadOnly[bool]
     error: ReadOnly[str | None]
@@ -422,9 +424,9 @@ def _http_error_response(error: str) -> HttpResponseResult:
 
 def _http_success_response(response: httpx.Response) -> HttpResponseResult:
     """Create a standardized success response from an httpx Response."""
-    parsed_body: JsonValue
+    parsed_body: object
     try:
-        parsed_body = response.json()
+        parsed_body = _DECODED_JSON.validate_python(response.json())
     except (json.JSONDecodeError, ValueError):
         parsed_body = response.text
 
@@ -717,7 +719,7 @@ def detect_code_languages(text: str) -> list[str]:
     Returns:
         List of detected language names
     """
-    detected: Final = []
+    detected: Final[list[str]] = []
     for lang, patterns in _CODE_PATTERNS.items():
         for pattern in patterns:
             try:

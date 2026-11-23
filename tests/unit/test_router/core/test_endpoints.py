@@ -5,7 +5,10 @@ Every test builds its core through ``make_core`` on the ``host`` fixture, so it 
 """
 
 import datetime
+import gc
 import io
+import traceback
+import weakref
 from collections.abc import AsyncIterator, Callable, Coroutine, Mapping
 from typing import Final
 
@@ -22,6 +25,8 @@ from tests.unit.test_router.core.scripted_host import (
     completion_response,
     deployment,
     embedding_response,
+    rust_core,
+    server_error,
 )
 
 MESSAGES: Final = [{"role": "user", "content": "hi"}]
@@ -45,11 +50,16 @@ ENDPOINTS: Final[dict[str, tuple[str, EndpointCall]]] = {
         "anthropic_messages",
         lambda core: core.aanthropic_messages(model="g", messages=MESSAGES, max_tokens=5),
     ),
+    # The proxy's /v1/messages route calls the router by this name (route_request).
+    "anthropic_messages": (
+        "anthropic_messages",
+        lambda core: core.anthropic_messages(model="g", messages=MESSAGES, max_tokens=5),
+    ),
     "call-acompletion": ("acompletion", lambda core: core.call("acompletion", {"model": "g", "messages": MESSAGES})),
     "call-completion": ("completion", lambda core: core.call("completion", {"model": "g", "messages": MESSAGES})),
 }
 SYNC_ENDPOINTS: Final = frozenset({"completion", "embedding", "image_generation"})
-LITELLM_METADATA_ENDPOINTS: Final = frozenset({"aresponses", "aanthropic_messages"})
+LITELLM_METADATA_ENDPOINTS: Final = frozenset({"aresponses", "aanthropic_messages", "anthropic_messages"})
 EMBEDDING_ENDPOINTS: Final = frozenset({"aembedding", "embedding"})
 
 
@@ -273,20 +283,18 @@ async def test_request_level_api_key_replaces_the_deployment_key_on_the_host_cal
     )
 
 
-async def test_construction_registers_one_success_and_one_failure_callback_per_mode(
-    make_core: MakeCore, host: ScriptedHost
-):
-    _one_group(make_core)
-    registered: Final = {name: len(callbacks) for name, callbacks in host.lists.items()}
-    assert registered == {
+async def test_construction_registers_no_outcome_callbacks(make_core: MakeCore, host: ScriptedHost):
+    """The core records every attempt's outcome itself, so it registers no callbacks on its host."""
+    core: Final = _one_group(make_core)
+    assert core.registry() is not None
+    assert {name: len(callbacks) for name, callbacks in host.lists.items()} == {
         "callbacks": 0,
-        "success_callback": 1,
-        "_async_success_callback": 1,
-        "failure_callback": 1,
-        "_async_failure_callback": 1,
+        "success_callback": 0,
+        "_async_success_callback": 0,
+        "failure_callback": 0,
+        "_async_failure_callback": 0,
         "input_callback": 0,
     }
-    assert all(callable(callbacks[0]) for callbacks in host.lists.values() if callbacks)
 
 
 async def test_retire_removes_the_callbacks_the_core_registered(make_core: MakeCore, host: ScriptedHost):
@@ -414,6 +422,7 @@ def _scripted_stream(*texts: str) -> Callable[..., CustomStreamWrapper]:
         async def chunks() -> AsyncIterator[ModelResponseStream]:
             for text in texts:
                 yield ModelResponseStream(choices=[{"index": 0, "delta": {"role": "assistant", "content": text}}])
+            # A stream that ends without a finish reason fails since #47665.
             yield ModelResponseStream(choices=[{"index": 0, "delta": {}, "finish_reason": "stop"}])
 
         logging_obj: Final = LiteLLMLogging(
@@ -444,3 +453,127 @@ async def test_streaming_acompletion_yields_the_host_stream_chunks_with_routing_
     assert stream._hidden_params["model_id"] == "d1"
     assert stream._hidden_params["additional_headers"]["x-litellm-model-group"] == "g"
     assert (host.calls[0].op, host.calls[0].kwargs["stream"]) == ("acompletion", True)
+
+
+class _RequestState:
+    pass
+
+
+class _BackoffInterrupted(BaseException):
+    pass
+
+
+class _InterruptedBackoffHost(ScriptedHost):
+    async def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        raise _BackoffInterrupted("backoff interrupted")
+
+    def sleep_sync(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        raise _BackoffInterrupted("backoff interrupted")
+
+
+@pytest.mark.parametrize("endpoint", ["acompletion", "completion"])
+async def test_an_interrupted_retry_backoff_frees_its_request_without_a_gc_pass(endpoint: str) -> None:
+    host: Final = _InterruptedBackoffHost()
+    host.answer("openai/d1", _raise_server_error)
+    core: Final = rust_core(host, model_list=[deployment("g", "d1")], num_retries=1, retry_after=0)
+
+    async def interrupted_request() -> weakref.ReferenceType[_RequestState]:
+        state: Final = _RequestState()
+        with pytest.raises(_BackoffInterrupted, match="backoff interrupted"):
+            await core.call(endpoint, {"model": "g", "messages": MESSAGES, "metadata": {"state": state}})
+        assert host.deployments_called() == ["d1"]
+        assert len(host.sleeps) == 1
+        host.calls.clear()
+        host.raised.clear()
+        return weakref.ref(state)
+
+    gc.disable()
+    try:
+        assert (await interrupted_request())() is None
+    finally:
+        gc.enable()
+
+
+def _raise_server_error(**_kwargs: object) -> object:
+    raise server_error()
+
+
+async def _request_state_after_a_call(
+    core: RouterCore, host: ScriptedHost, endpoint: str, outcome: str
+) -> "weakref.ref[_RequestState]":
+    state: Final = _RequestState()
+    request: Final = {"model": "g", "messages": MESSAGES, "max_tokens": 5, "metadata": {"state": state}}
+    if outcome in ("failed", "all_fail"):
+        with pytest.raises(litellm.InternalServerError) as raised:
+            await core.call(endpoint, request)
+        origin: Final = "_answer_sync" if endpoint == "completion" else "_answer_async"
+        assert origin in {frame.name for frame in traceback.extract_tb(raised.value.__traceback__)}
+        del raised
+    else:
+        _ = await core.call(endpoint, request)
+    assert [call.deployment_id for call in host.calls] == {
+        "success": ["d1"],
+        "recovered": ["d1", "d1"],
+        "failed": ["d1", "d1", "d2", "d2"],
+        "retry_then_ok": ["d1", "d1"],
+        "all_fail": ["d1", "d1", "d2", "d2"],
+    }[outcome]
+    host.calls.clear()
+    host.raised.clear()
+    return weakref.ref(state)
+
+
+@pytest.mark.parametrize("endpoint", ["acompletion", "aanthropic_messages", "completion"])
+@pytest.mark.parametrize("outcome", ["success", "recovered", "failed", "retry_then_ok", "all_fail"])
+async def test_a_finished_call_frees_its_request_without_a_gc_pass(
+    make_core: MakeCore, host: ScriptedHost, endpoint: str, outcome: str
+):
+    core: Final = make_core(
+        model_list=[deployment("g", "d1"), deployment("fallback", "d2")],
+        num_retries=1,
+        retry_after=0,
+        allowed_fails=100,
+        fallbacks=[{"g": ["fallback"]}],
+    )
+    if outcome == "failed":
+        host.answer("*", _raise_server_error)
+    elif outcome == "recovered":
+        host.answer("*", _raise_server_error, None)
+    elif outcome == "retry_then_ok":
+        host.answer("openai/d1", server_error("d1"), completion_response())
+    elif outcome == "all_fail":
+        host.answer("openai/d1", server_error("d1"))
+        host.answer("openai/d2", server_error("d2"))
+    gc.disable()
+    try:
+        state: Final = await _request_state_after_a_call(core, host, endpoint, outcome)
+        assert state() is None, "the finished call's request stays in a reference cycle until the next gc pass"
+    finally:
+        gc.enable()
+
+
+@pytest.mark.parametrize("endpoint", ["acompletion", "aanthropic_messages", "completion"])
+async def test_a_failed_call_frees_its_request_without_a_gc_pass(
+    make_core: MakeCore, host: ScriptedHost, endpoint: str
+):
+    host.answer("openai/d1", bad_request(message="scripted bad input"))
+    core: Final = _one_group(make_core)
+    gc.disable()
+    try:
+        state: Final = await _request_state_after_a_failed_call(core, host, endpoint)
+        assert state() is None, "the failed call's request stays in a reference cycle until the next gc pass"
+    finally:
+        gc.enable()
+
+
+async def _request_state_after_a_failed_call(
+    core: RouterCore, host: ScriptedHost, endpoint: str
+) -> "weakref.ref[_RequestState]":
+    state: Final = _RequestState()
+    with pytest.raises(litellm.BadRequestError, match="scripted bad input"):
+        await core.call(endpoint, {"model": "g", "messages": MESSAGES, "max_tokens": 5, "metadata": {"state": state}})
+    host.calls.clear()
+    host.raised.clear()
+    return weakref.ref(state)

@@ -3,17 +3,29 @@
 
 import json
 import os
-from typing import Final
+from collections.abc import Mapping
+from typing import Final, Protocol
 
 import httpx
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, has_attributes, require_attributes
+from litellm.litellm_core_utils.internal_call_metadata import logged_event_key
 from litellm.llms.custom_httpx.http_handler import (
     HTTPHandler,
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+
+
+class _SupportsGet(Protocol):
+    def get(self, key: str, default: object = None, /) -> object: ...
+
+
+class _HasUsage(Protocol):
+    @property
+    def usage(self) -> object: ...
 
 
 def get_utc_datetime():
@@ -48,19 +60,20 @@ class OpenMeterLogger(CustomLogger):
         if len(missing_keys) > 0:
             raise Exception(f"Missing keys={missing_keys} in environment.")
 
-    def _common_logic(self, kwargs: dict, response_obj):
-        call_id: Final = response_obj.get("id", kwargs.get("litellm_call_id"))
+    def _common_logic(self, kwargs: Mapping[str, object], response_obj: object):
+        call_id: Final = require_attributes(response_obj, _SupportsGet, "get").get("id", kwargs.get("litellm_call_id"))
         dt: Final = get_utc_datetime().isoformat()
         cost: Final = kwargs.get("response_cost", None)
         model: Final = kwargs.get("model")
         usage = {}
         if (
             isinstance(response_obj, litellm.ModelResponse) or isinstance(response_obj, litellm.EmbeddingResponse)
-        ) and hasattr(response_obj, "usage"):
+        ) and has_attributes(response_obj, _HasUsage, "usage"):
+            response_usage: Final = require_attributes(response_obj.usage, _SupportsGet, "get")
             usage = {
-                "prompt_tokens": response_obj["usage"].get("prompt_tokens", 0),
-                "completion_tokens": response_obj["usage"].get("completion_tokens", 0),
-                "total_tokens": response_obj["usage"].get("total_tokens"),
+                "prompt_tokens": response_usage.get("prompt_tokens", 0),
+                "completion_tokens": response_usage.get("completion_tokens", 0),
+                "total_tokens": response_usage.get("total_tokens"),
             }
 
         # OPENMETER_TRUST_REQUEST_USER (default "true"): when set to "false",
@@ -74,8 +87,8 @@ class OpenMeterLogger(CustomLogger):
         # If no user provided directly, try to get it from token user_id
         if user_param is None:
             # Check if user_id is available from the API key metadata
-            litellm_params: Final = kwargs.get("litellm_params", {})
-            metadata: Final = litellm_params.get("metadata", {})
+            litellm_params: Final = as_str_mapping(kwargs.get("litellm_params")) or {}
+            metadata: Final = as_str_mapping(litellm_params.get("metadata")) or {}
             user_api_key_user_id: Final = metadata.get("user_api_key_user_id", None)
 
             if user_api_key_user_id is not None:
@@ -89,14 +102,16 @@ class OpenMeterLogger(CustomLogger):
         return {
             "specversion": "1.0",
             "type": os.getenv("OPENMETER_EVENT_TYPE", "litellm_tokens"),
-            "id": call_id,
+            "id": logged_event_key(kwargs, call_id) if isinstance(call_id, str) else call_id,
             "time": dt,
             "subject": subject,
             "source": "litellm-proxy",
             "data": {"model": model, "cost": cost, **usage},
         }
 
-    def log_success_event(self, kwargs, response_obj, start_time, end_time):
+    def log_success_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
+    ):
         _url = os.getenv("OPENMETER_API_ENDPOINT", "https://openmeter.cloud")
         if _url.endswith("/"):
             _url += "api/v1/events"
@@ -122,7 +137,9 @@ class OpenMeterLogger(CustomLogger):
         except Exception as e:
             raise e
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
+    ):
         _url = os.getenv("OPENMETER_API_ENDPOINT", "https://openmeter.cloud")
         if _url.endswith("/"):
             _url += "api/v1/events"

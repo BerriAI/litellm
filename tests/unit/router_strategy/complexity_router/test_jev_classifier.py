@@ -1206,6 +1206,50 @@ async def test_jev_budget_uses_effective_headers_and_every_deployment(
 
 
 @pytest.mark.asyncio
+async def test_jev_budget_keeps_known_limits_when_drop_params_drops_a_bad_header(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setitem(litellm.model_cost, "typesafe/jev-latest", deepcopy(litellm.model_cost["typesafe/jev-latest"]))
+    header: Final = "TypeSafe-Danger-Zone-Long-Context"
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "budget-model",
+                "litellm_params": {
+                    "model": "typesafe/jev-latest",
+                    "api_key": "test",
+                    "api_base": "https://budget.test",
+                    "drop_params": True,
+                    "extra_headers": {header: "false", "X-Bad": 1},
+                },
+            }
+        ],
+        num_retries=0,
+    )
+    classifier: Final = ComplexityRouter(
+        "bounded-classifier",
+        router,
+        {
+            "classifier_type": "oss_classifier",
+            "opensource_classifier_config": {"deployment_name": "budget-model"},
+            "tiers": {"SIMPLE": "cheap"},
+        },
+        derive_savings_baseline=False,
+    )
+    ask: Final = "Explain this code " + "word001 word002 word003 " * 12000
+    with respx.mock(assert_all_called=True) as upstream:
+        route: Final = upstream.route(method="POST").respond(json={"answers": {"tier": _answer().model_dump()}})
+        outcome: Final = await classifier.aclassify(ask)
+    assert outcome.cause == "jev_classifier"
+    telemetry: Final = outcome.classifier_input_telemetry
+    assert telemetry is not None and telemetry["classifier_input_budget_status"] == "truncated"
+    sent: Final = route.calls[0].request.headers
+    assert sent[header] == "false"
+    assert "x-bad" not in sent
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("oversized_field", "fallback"),
     [("instructions", "heuristic"), ("instructions", "default_model"), ("criteria", "custom")],
@@ -1316,3 +1360,24 @@ async def test_jev_open_breaker_preserves_input_budget_in_fallback_decision(fall
         transport.handle_async_request.assert_awaited_once()
     finally:
         await handler.client.aclose()
+
+
+def test_jev_input_targets_still_takes_a_router_with_a_deprecation_warning() -> None:
+    from litellm.router_strategy.complexity_router.jev_classifier import jev_input_targets
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "decision-deployment",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test"},
+                "model_info": {"id": "d1", "max_input_tokens": 1234},
+            }
+        ]
+    )
+    config = JevClassifierConfig.model_validate({"deployment_name": "decision-deployment"})
+
+    with pytest.warns(DeprecationWarning, match="pass context"):
+        old_way = jev_input_targets(router, config)
+
+    assert old_way == jev_input_targets(router._core_ctx, config)
+    assert [target.max_tokens for target in old_way] == [1234]

@@ -5,6 +5,7 @@ Unit tests for prometheus metric labels configuration
 from typing import Final, Literal
 
 import pytest
+from pydantic import JsonValue
 
 import litellm
 from litellm.types.integrations.prometheus import (
@@ -618,12 +619,12 @@ def test_prometheus_label_value_sanitization():
 
     # U+2028 must be stripped
     assert (
-        "\u2028" not in labels["requested_model"]
+        "\u2028" not in (labels["requested_model"] or "")
     ), f"U+2028 should be removed from label value, got: {repr(labels['requested_model'])}"
     assert labels["requested_model"] == "claude-haiku-4-5-20251001"
 
     # Newlines must be replaced with spaces, quotes must be escaped
-    assert "\n" not in labels["api_key_alias"]
+    assert "\n" not in (labels["api_key_alias"] or "")
     assert labels["api_key_alias"] == 'My Key \\"test\\" with newline'
 
     print("✅ Prometheus label values are properly sanitized")
@@ -798,6 +799,47 @@ async def test_failure_hook_emits_api_provider_value_on_failed_requests_metric()
             "collected failed-requests metric must carry api_provider=openai, got "
             f"{[s.labels.get('api_provider') for s in samples]}"
         )
+    finally:
+        _clear_prometheus_registry()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("metadata_id", "request_id", "logged_id", "expected"),
+    (
+        (None, None, "logged-deployment", "logged-deployment"),
+        ("", None, "logged-deployment", "logged-deployment"),
+        ("metadata-deployment", "request-deployment", "logged-deployment", "metadata-deployment"),
+        (None, "request-deployment", "logged-deployment", "request-deployment"),
+        (None, None, None, "None"),
+    ),
+)
+async def test_failure_counters_keep_logged_deployment_attribution(
+    metadata_id: str | None, request_id: str | None, logged_id: str | None, expected: str
+) -> None:
+    from fastapi import HTTPException
+
+    from litellm.integrations.prometheus import PrometheusLogger
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    request_data: Final[dict[str, JsonValue]] = {
+        "model": "metric-test-alias",
+        "metadata": {"model_info": {"id": metadata_id}},
+        "model_info": {"id": request_id},
+        "standard_logging_object": {"model_id": logged_id, "custom_llm_provider": "openai"},
+    }
+    _clear_prometheus_registry()
+    try:
+        await PrometheusLogger().async_post_call_failure_hook(
+            request_data=request_data,
+            original_exception=HTTPException(status_code=400, detail="guardrail rejected"),
+            user_api_key_dict=UserAPIKeyAuth(token="metric-test-token"),
+        )
+        for metric_name in ("litellm_proxy_failed_requests_metric_total", "litellm_proxy_total_requests_metric_total"):
+            samples: Final = _collected_samples(metric_name)
+            assert [(sample.labels["model_id"], sample.value) for sample in samples] == [
+                (expected, 1.0)
+            ]
     finally:
         _clear_prometheus_registry()
 

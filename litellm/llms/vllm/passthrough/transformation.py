@@ -53,7 +53,7 @@ class VLLMPassthroughConfig(VLLMModelInfo, BasePassthroughConfig):
     def upstream_auth_headers(self, api_key: str) -> Mapping[str, str]:
         return {"Authorization": f"Bearer {api_key}"}
 
-    def is_streaming_request(self, endpoint: str, request_data: dict) -> bool:
+    def is_streaming_request(self, endpoint: str, request_data: Mapping[str, object]) -> bool:
         return "stream" in request_data
 
     def get_complete_url(
@@ -62,13 +62,10 @@ class VLLMPassthroughConfig(VLLMModelInfo, BasePassthroughConfig):
         api_key: str | None,
         model: str,
         endpoint: str,
-        request_query_params: dict | None,
-        litellm_params: dict,
+        request_query_params: Mapping[str, object] | None,
+        litellm_params: Mapping[str, object],
     ) -> tuple["URL", str]:
         base_target_url: Final = self.get_api_base(api_base)
-
-        if base_target_url is None:
-            raise Exception("VLLM api base not found")
 
         return (
             self.format_url(endpoint_under_api_base(endpoint, base_target_url), base_target_url, request_query_params),

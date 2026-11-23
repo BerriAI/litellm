@@ -9,6 +9,7 @@ streams fall back to the price map.
 Docs: https://www.edenai.co/docs/api-reference/anthropic-messages/create-anthropic-message
 """
 
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Final
 
 import httpx
@@ -40,7 +41,7 @@ class EdenAIAnthropicMessagesConfig(JSONProviderAnthropicMessagesConfig):
         self,
         headers: dict[str, str],  # mutable-ok: inherited contract
         model: str,
-        messages: list[object],  # mutable-ok: inherited contract
+        messages: Sequence[object],
         optional_params: dict[str, object],  # mutable-ok: inherited contract
         litellm_params: dict[str, object],  # mutable-ok: inherited contract
         api_key: str | None = None,

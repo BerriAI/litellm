@@ -3,7 +3,10 @@ import json
 import re
 import time
 import traceback
-from collections.abc import Generator, Iterator, Mapping, Sequence
+from collections.abc import Generator, Iterable, Iterator, Mapping, Sequence
+from dataclasses import dataclass, field
+from itertools import chain
+from types import MappingProxyType
 from typing import Final, Literal, cast
 
 from pydantic import ConfigDict, TypeAdapter, ValidationError, with_config
@@ -11,9 +14,15 @@ from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
+from litellm.constants import (
+    RESPONSE_FORMAT_TOOL_NAME,
+    STREAM_CHUNK_CHOICE_FIELDS,
+    STREAM_FINISH_CHOICE_FIELDS,
+    VLLM_CHOICE_FIELDS,
+)
+from litellm.litellm_core_utils.core_helpers import iter_items, subscript
 from litellm.litellm_core_utils.hidden_params import get_hidden_params
-from litellm.litellm_core_utils.prompt_templates.common_utils import (
+from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
     extract_reasoning_content,
 )
 from litellm.llms.ollama.common_utils import OllamaResponseIdNormalizer
@@ -54,12 +63,20 @@ from litellm.types.utils import Logprobs as TextCompletionLogprobs
 
 from .get_headers import get_response_headers
 
-_MESSAGE_FIELDS: Final[frozenset] = frozenset(Message.model_fields.keys())
-_CHOICES_FIELDS: Final[frozenset] = frozenset(Choices.model_fields.keys())
-_MODEL_RESPONSE_FIELDS: Final[frozenset] = frozenset(ModelResponse.model_fields.keys()) | {"usage"}
+_MESSAGE_FIELDS: Final[frozenset[str]] = frozenset(Message.model_fields.keys())
+_CHOICES_FIELDS: Final[frozenset[str]] = frozenset(Choices.model_fields.keys())
+_MODEL_RESPONSE_FIELDS: Final[frozenset[str]] = frozenset(ModelResponse.model_fields.keys()) | {"usage"}
 
 
 _ANNOTATION_ENTRIES: Final = TypeAdapter(tuple[object, ...])
+
+
+class _ImageResponseFields(TypedDict, total=False, extra_items=object):
+    pass
+
+
+def _image_response_from_fields(fields: Mapping[str, object]) -> ImageResponse:
+    return ImageResponse(**_ImageResponseFields(**fields))
 
 
 def _is_provider_specific_annotation(annotation: object) -> bool:
@@ -170,6 +187,28 @@ def _split_assembled_content_for_replay(content: str | None) -> list[str]:
     return _REPLAY_CONTENT_SLICE_RE.findall(content)
 
 
+def _drop_choice_fields(choice: StreamingChoices, fields: Iterable[str]) -> None:
+    for name in fields:
+        if hasattr(choice, name):
+            delattr(choice, name)
+
+
+def _vllm_choice_fields(choice: Mapping[str, object]) -> Mapping[str, object]:
+    cached_fields: Final = _choice_provider_specific_fields(choice)
+    return MappingProxyType(
+        {
+            field: choice[field] if field in choice else cached_fields[field]
+            for field in VLLM_CHOICE_FIELDS
+            if field in choice or field in cached_fields
+        }
+    )
+
+
+def _choice_provider_specific_fields(choice: Mapping[str, object]) -> Mapping[str, object]:
+    fields: Final = choice.get("provider_specific_fields")
+    return _FIELD_MAP.validate_python(fields) if isinstance(fields, dict) else MappingProxyType({})
+
+
 _REPLAY_REASONING_FIELDS: Final = frozenset({"reasoning_content", "thinking_blocks", "reasoning_items"})
 _REPLAY_LEAD_FIELDS: Final = _REPLAY_REASONING_FIELDS | {"role", "provider_specific_fields"}
 _REPLAY_TOOL_FIELDS: Final = frozenset({"tool_calls", "function_call"})
@@ -180,48 +219,89 @@ def _fields_in(fields: Mapping[str, object], keys: frozenset[str]) -> dict[str, 
     return {key: value for key, value in fields.items() if key in keys}
 
 
-def _replay_deltas(delta: Delta) -> tuple[Delta, ...]:
+def _content_pieces(content: str | None) -> tuple[str, ...]:
+    return tuple(_split_assembled_content_for_replay(content)) or ((content,) if content else ())
+
+
+def _pieces_in_phase(text: str, phase: Mapping[str, object]) -> Iterator[tuple[str, Mapping[str, object]]]:
+    return ((piece, phase) for piece in _content_pieces(text))
+
+
+_NO_FIELDS: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+@dataclass(frozen=True, slots=True)
+class _ReplayChunk:
+    delta: Delta
+    provider_specific_fields: Mapping[str, object] = field(default_factory=lambda: _NO_FIELDS)
+
+
+def _replay_pieces(
+    content: str | None, provider_specific_fields: object
+) -> tuple[tuple[str, Mapping[str, object]], ...]:
+    from litellm.completion_extras.litellm_responses_transformation.history import PHASE_FIELD, phased_message_texts
+
+    messages: Final = phased_message_texts(provider_specific_fields, content) if content else ()
+    if not messages:
+        return tuple(_pieces_in_phase(content or "", _NO_FIELDS))
+    return tuple(
+        chain.from_iterable(
+            _pieces_in_phase(text, MappingProxyType({PHASE_FIELD: phase}) if phase is not None else _NO_FIELDS)
+            for text, phase in messages
+        )
+    )
+
+
+def _replay_chunks(delta: Delta) -> tuple[_ReplayChunk, ...]:
     fields: Final[dict[str, object]] = delta.model_dump(exclude_none=True)
     lead: Final = _fields_in(fields, _REPLAY_LEAD_FIELDS) if _REPLAY_REASONING_FIELDS.intersection(fields) else {}
-    pieces: Final = _split_assembled_content_for_replay(delta.content) or ([delta.content] if delta.content else [])
+    pieces: Final = _replay_pieces(delta.content, fields.get("provider_specific_fields"))
     if not pieces and not lead:
-        return (delta,)
+        return (_ReplayChunk(delta),)
     if not pieces:
         held_back: Final = lead.keys() | {"content"}
         rest: Final = {key: value for key, value in fields.items() if key not in held_back}
-        return (Delta.model_validate(lead),) + ((Delta.model_validate(rest),) if rest else ())
+        return (_ReplayChunk(Delta.model_validate(lead)),) + (
+            (_ReplayChunk(Delta.model_validate(rest)),) if rest else ()
+        )
     tools: Final = _fields_in(fields, _REPLAY_TOOL_FIELDS)
     annotations: Final = _fields_in(fields, frozenset({"annotations"}))
     moved: Final = lead.keys() | _REPLAY_TOOL_FIELDS | _REPLAY_TEXT_FIELDS
     first_slice: Final = {key: value for key, value in fields.items() if key not in moved}
     last_index: Final = len(pieces) - 1
     return (
-        ((Delta.model_validate(lead),) if lead else ())
+        ((_ReplayChunk(Delta.model_validate(lead)),) if lead else ())
         + tuple(
-            Delta.model_validate(
-                {
-                    **(first_slice if index == 0 else {}),
-                    "content": piece,
-                    **(annotations if index == last_index else {}),
-                }
+            _ReplayChunk(
+                Delta.model_validate(
+                    {
+                        **(first_slice if index == 0 else {}),
+                        "content": piece,
+                        **(annotations if index == last_index else {}),
+                    }
+                ),
+                phase,
             )
-            for index, piece in enumerate(pieces)
+            for index, (piece, phase) in enumerate(pieces)
         )
-        + ((Delta.model_validate(tools),) if tools else ())
+        + ((_ReplayChunk(Delta.model_validate(tools)),) if tools else ())
     )
 
 
 def _replay_frame(
-    response: ModelResponseStream, delta: Delta, finish_reason: str | None, keeps_choice_metadata: bool
+    response: ModelResponseStream, chunk: _ReplayChunk, finish_reason: str | None, keeps_choice_metadata: bool
 ) -> ModelResponseStream:
     frame: Final = response.model_copy(deep=True)
     choice: Final = frame.choices[0]
-    choice.delta = delta
+    choice.delta = chunk.delta
     choice.finish_reason = finish_reason
+    if chunk.provider_specific_fields:
+        frame.provider_specific_fields = {**(frame.provider_specific_fields or {}), **chunk.provider_specific_fields}
     if not keeps_choice_metadata:
         choice.logprobs = None
-        if hasattr(choice, "enhancements"):
-            del choice.enhancements
+        _drop_choice_fields(choice, ("enhancements", *STREAM_CHUNK_CHOICE_FIELDS))
+    if finish_reason is None:
+        _drop_choice_fields(choice, STREAM_FINISH_CHOICE_FIELDS)
     return frame
 
 
@@ -233,12 +313,12 @@ def _replay_frames(response: ModelResponseStream) -> Iterator[ModelResponseStrea
     if usage is not None:
         delattr(response, "usage")
     choice: Final = response.choices[0]
-    deltas: Final = _replay_deltas(choice.delta)
-    first_text: Final = next((index for index, delta in enumerate(deltas) if delta.content), 0)
-    for index, delta in enumerate(deltas):
-        yield _replay_frame(response, delta, finish_reason=None, keeps_choice_metadata=index == first_text)
+    chunks: Final = _replay_chunks(choice.delta)
+    first_text: Final = next((index for index, chunk in enumerate(chunks) if chunk.delta.content), 0)
+    for index, chunk in enumerate(chunks):
+        yield _replay_frame(response, chunk, finish_reason=None, keeps_choice_metadata=index == first_text)
     finish_frame: Final = _replay_frame(
-        response, Delta(), finish_reason=choice.finish_reason, keeps_choice_metadata=False
+        response, _ReplayChunk(Delta()), finish_reason=choice.finish_reason, keeps_choice_metadata=False
     )
     if usage is not None:
         setattr(finish_frame, "usage", usage)
@@ -325,7 +405,9 @@ async def convert_to_streaming_response_async(
 
         logprobs = choice.get("logprobs", None)
 
-        choice = StreamingChoices(finish_reason=finish_reason, index=idx, delta=delta, logprobs=logprobs)
+        choice = StreamingChoices(
+            finish_reason=finish_reason, index=idx, delta=delta, logprobs=logprobs, **_vllm_choice_fields(choice)
+        )
         choice_list.append(choice)
 
     model_response_object.choices = choice_list
@@ -388,6 +470,7 @@ def convert_to_streaming_response(
             delta=delta,
             logprobs=logprobs,
             enhancements=enhancements,
+            **_vllm_choice_fields(choice),
         )
 
         choice_list.append(choice)
@@ -607,7 +690,7 @@ class LiteLLMResponseObjectHandler:
             model_response_dict: Final = model_response_object.model_dump()
 
             model_response_dict.update(response_object)
-            model_response_object = ImageResponse(**model_response_dict)
+            model_response_object = _image_response_from_fields(model_response_dict)
             return model_response_object
 
     @staticmethod
@@ -651,12 +734,12 @@ class LiteLLMResponseObjectHandler:
         choices_list: Final[list[TextChoices]] = []
 
         # Convert each choice to TextChoices
-        for choice in response["choices"]:
+        for choice in iter_items(subscript(response, "choices")):
             text_choices = TextChoices()
-            text_choices["text"] = choice["message"]["content"]
-            text_choices["index"] = choice["index"]
+            text_choices["text"] = subscript(subscript(choice, "message"), "content")
+            text_choices["index"] = subscript(choice, "index")
             text_choices["logprobs"] = transformed_logprobs
-            text_choices["finish_reason"] = choice["finish_reason"]
+            text_choices["finish_reason"] = subscript(choice, "finish_reason")
             choices_list.append(text_choices)
 
         text_completion_response["choices"] = choices_list
@@ -715,6 +798,8 @@ def convert_to_model_response_object(
     hidden_params: dict | None = None,
     _response_headers: dict | None = None,
     convert_tool_call_to_json_mode: bool | None = None,  # used for supporting 'json_schema' on older models
+    *,
+    preserve_stored_finish_reason: bool = False,
 ):
     additional_headers = get_response_headers(_response_headers)
 
@@ -856,7 +941,9 @@ def convert_to_model_response_object(
                 if finish_reason is None:
                     # gpt-4 vision can return 'finish_reason' or 'finish_details'
                     finish_reason = choice.get("finish_details") or "stop"
-                if finish_reason == "stop" and message.tool_calls and len(message.tool_calls) > 0:
+                    if finish_reason == "stop" and message.tool_calls:
+                        finish_reason = "tool_calls"
+                elif not preserve_stored_finish_reason and finish_reason == "stop" and message.tool_calls:
                     finish_reason = "tool_calls"
 
                 ## PROVIDER SPECIFIC FIELDS ##
@@ -872,6 +959,7 @@ def convert_to_model_response_object(
                     logprobs=logprobs,
                     enhancements=enhancements,
                     provider_specific_fields=provider_specific_fields,
+                    **_vllm_choice_fields(choice),
                 )
                 if provider_sent_logprobs and logprobs is None:
                     choice.logprobs = None
@@ -937,9 +1025,11 @@ def convert_to_model_response_object(
             model_response_object.data = response_object["data"]
 
             if "usage" in response_object and response_object["usage"] is not None:
-                model_response_object.usage.completion_tokens = response_object["usage"].get("completion_tokens", 0)
-                model_response_object.usage.prompt_tokens = response_object["usage"].get("prompt_tokens", 0)
-                model_response_object.usage.total_tokens = response_object["usage"].get("total_tokens", 0)
+                embedding_usage: Final = model_response_object.usage or Usage()
+                embedding_usage.completion_tokens = response_object["usage"].get("completion_tokens", 0)
+                embedding_usage.prompt_tokens = response_object["usage"].get("prompt_tokens", 0)
+                embedding_usage.total_tokens = response_object["usage"].get("total_tokens", 0)
+                model_response_object.usage = embedding_usage
 
             if start_time is not None and end_time is not None:
                 model_response_object._response_ms = (
@@ -977,10 +1067,16 @@ def convert_to_model_response_object(
             if "text" in response_object:
                 model_response_object.text = response_object["text"]
 
-            optional_keys: Final = ["language", "task", "duration", "words", "segments"]
+            cache_hit: Final = _FIELD_MAP.validate_python(hidden_params).get("cache_hit") is True
+            cache_hit_keys: Final = ("request_id", "truncated") if cache_hit else ()
+            optional_keys: Final = ("language", "task", "duration", "words", "segments", *cache_hit_keys)
             for key in optional_keys:  # not guaranteed to be in response
                 if key in response_object:
                     setattr(model_response_object, key, response_object[key])
+
+            detected_languages: Final = TranscriptionResponse.detected_languages(response_object.get("languages"))
+            if detected_languages is not None:
+                model_response_object.languages = detected_languages
 
             if "usage" in response_object and response_object["usage"] is not None:
                 tr_usage_object: TranscriptionUsageDurationObject | TranscriptionUsageTokensObject | None = None
@@ -1033,13 +1129,18 @@ def convert_to_model_response_object(
         if isinstance(e, APIError):
             raise
 
+        hide_reply: Final = response_type == "audio_transcription"
         received_args: Final = dict(
-            response_object=response_object,
-            model_response_object=model_response_object,
+            response_object="<hidden>" if hide_reply else response_object,
+            model_response_object="<hidden>" if hide_reply else model_response_object,
             response_type=response_type,
             stream=stream,
             start_time=start_time,
             end_time=end_time,
             convert_tool_call_to_json_mode=convert_tool_call_to_json_mode,
         )
-        raise Exception(f"Invalid response object {traceback.format_exc()}\n\nreceived_args={received_args}")
+        # The conversion's own traceback, without the errors being handled when it ran: a router
+        # retry runs inside the handler of the attempt before it, and that attempt's error text
+        # (a rate limit) would otherwise decide how this one is classified.
+        own_traceback: Final = "".join(traceback.format_exception(type(e), e, e.__traceback__, chain=False))
+        raise Exception(f"Invalid response object {own_traceback}\n\nreceived_args={received_args}")

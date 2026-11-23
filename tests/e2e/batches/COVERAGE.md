@@ -11,8 +11,9 @@ cost write-back via a cross-run marker baton (design below).
 
 Only supported cells are tested. The capability table in `capabilities.py` holds one
 row per supported (provider, scenario) pair, so there are no skipped cells in the
-parametrized run. The batches suite never skips: missing provider creds or upstream
-failures are hard test failures (see `tests/e2e/AGENTS.md`).
+parametrized run. Missing provider creds or upstream failures are hard test failures
+(see `tests/e2e/AGENTS.md`). GovCloud is explicitly skipped until its infrastructure
+is provisioned and does not count as qualified coverage.
 
 | Provider  | create | retrieve | cancel | list | content download | file backing |
 |-----------|--------|----------|--------|------|------------------|--------------|
@@ -48,7 +49,7 @@ and batch id carry the shape that scenario must produce (`matches_id_shape`):
 | `encoded` | upload with `?model=` -> model-encoded file id -> create with just that id | model-encoded | model-encoded |
 | `unified` | upload with `target_model_names=` -> unified managed file id -> create with that id | managed | managed |
 | `model_param` | raw file (provider-fallback upload) -> create with `model` in the body | raw | model-encoded |
-| `provider_fallback` | raw file -> `POST /{provider}/v1/batches`, env creds, no model | raw | raw (native provider shape) |
+| `provider_fallback` | raw file -> `POST /{provider}/v1/batches`, no model, credentials of the key's deployment for that provider | raw | raw (native provider shape) |
 
 "managed" ids base64-decode to a `litellm_proxy` marker; "model-encoded" ids keep the
 provider prefix and base64-encode `litellm:<id>;model,<model>`; "raw" ids are the
@@ -57,6 +58,14 @@ should manage it, or vice versa. On top of the id shape, a misroute to the wrong
 provider also fails create (the file id / model do not belong there), and the
 `provider_fallback` raw batch id is additionally checked against the provider's native
 shape (`raw_id_matches_provider`).
+
+The `model_param` file calls and every `provider_fallback` call name a provider and no
+model. For those the proxy uses the credentials of the first deployment of that provider
+the key may use, and falls back to env credentials only when the key can reach none. So
+the lifecycle key belongs to a team that may only use the batch deployment under test
+(`key_in_team_limited_to`). An all-models key would resolve whichever deployment of that
+provider another suite registered first on the shared proxy, and the call would go out
+with that deployment's `api_base` and `api_version`.
 
 ## Key model restriction
 

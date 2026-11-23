@@ -1,4 +1,5 @@
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -14,19 +15,43 @@ import pytest
 from integration._support.client import Gateway, eventually
 from integration._support.database import scratch_database
 from integration._support.process import LEGACY_MIGRATE_DEPLOY, MIGRATE_DEPLOY, owned_proxy_process
+from litellm_proxy_extras.request_log_indexes import REQUEST_LOG_INDEXES
 from psycopg import sql
 from psycopg.rows import class_row
 
 pytestmark: Final = pytest.mark.timeout(240)
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[3]
-PRISMA_DIR: Final = REPO_ROOT / "litellm-proxy-extras" / "litellm_proxy_extras"
-PARTITION_SCRIPT: Final = REPO_ROOT / "db_scripts" / "partition_spend_logs.sql"
+PRISMA_DIR: Final = REPO_ROOT / "litellm" / "proxy-extras" / "litellm_proxy_extras"
+PARTITION_SCRIPT: Final = REPO_ROOT / "litellm/scripts" / "db" / "partition_spend_logs.sql"
 SHIPPED_MIGRATIONS: Final = tuple(sorted(path.name for path in (PRISMA_DIR / "migrations").iterdir() if path.is_dir()))
 API_KEY_INDEX_MIGRATION: Final = "20260823000000_add_spend_logs_api_key_starttime_index"
 CALL_ID_INDEX_MIGRATION: Final = "20260831120001_spend_logs_litellm_call_id_index"
 ORIGINAL_MIGRATION_SQL: Final = MappingProxyType(
     {
+        "20250510142544_add_session_id_index_spend_logs": (
+            'CREATE INDEX IF NOT EXISTS "LiteLLM_SpendLogs_session_id_idx" '
+            'ON "LiteLLM_SpendLogs"("session_id");\n'
+        ),
+        "20260226120000_add_spend_log_tool_index": (
+            'CREATE TABLE IF NOT EXISTS "LiteLLM_SpendLogToolIndex" (\n'
+            '    "request_id" TEXT NOT NULL,\n'
+            '    "tool_name" TEXT NOT NULL,\n'
+            '    "start_time" TIMESTAMP(3) NOT NULL,\n'
+            '\n'
+            '    CONSTRAINT "LiteLLM_SpendLogToolIndex_pkey" PRIMARY KEY ("request_id","tool_name")\n'
+            ');\n'
+            'CREATE INDEX IF NOT EXISTS "LiteLLM_SpendLogToolIndex_tool_name_start_time_idx" '
+            'ON "LiteLLM_SpendLogToolIndex"("tool_name", "start_time");\n'
+        ),
+        "20260228100000_add_spend_logs_composite_index": (
+            'CREATE INDEX IF NOT EXISTS "LiteLLM_SpendLogs_startTime_request_id_idx" '
+            'ON "LiteLLM_SpendLogs"("startTime", "request_id");\n'
+        ),
+        "20260724000000_add_spend_log_tool_index_start_time_idx": (
+            'CREATE INDEX IF NOT EXISTS "LiteLLM_SpendLogToolIndex_start_time_idx" '
+            'ON "LiteLLM_SpendLogToolIndex"("start_time");\n'
+        ),
         API_KEY_INDEX_MIGRATION: (
             "-- CreateIndex\n"
             'CREATE INDEX IF NOT EXISTS "LiteLLM_SpendLogs_api_key_startTime_idx" '
@@ -43,7 +68,17 @@ MIGRATION_JOB_SECONDS: Final = 300
 INDEXES_IN_PLACE: Final = "Request-log indexes are all in place"
 INDEX_BUILD_LINES: Final = ("Building index", "Attached index")
 BUILD_SECONDS: Final = 60
-SPEND_LOGS_INDEXES: Final = ("LiteLLM_SpendLogs_api_key_startTime_idx", "LiteLLM_SpendLogs_litellm_call_id_idx")
+SPEND_LOGS_INDEXES: Final = (
+    "LiteLLM_SpendLogs_api_key_startTime_idx",
+    "LiteLLM_SpendLogs_litellm_call_id_idx",
+    "LiteLLM_SpendLogs_session_id_idx",
+    "LiteLLM_SpendLogs_startTime_request_id_idx",
+)
+JOB_ONLY_INDEXES: Final = tuple(
+    index.name
+    for index in REQUEST_LOG_INDEXES
+    if not any(index.name in script for script in ORIGINAL_MIGRATION_SQL.values())
+)
 POPULATED_PARTITIONS: Final = MappingProxyType(
     {
         "LiteLLM_SpendLogs_p2026_08": ("2026-08-01", "2026-09-01"),
@@ -96,7 +131,7 @@ def migrate_deploy(database_url: str, schema: Path) -> subprocess.CompletedProce
 def migration_job(database_url: str, resolver: Resolver) -> subprocess.CompletedProcess[str]:
     """The migrations image entrypoint, as the helm migration Job runs it."""
     return subprocess.run(
-        [sys.executable, "-I", str(REPO_ROOT / "migrations" / "run.py")],
+        [sys.executable, "-I", str(REPO_ROOT / "litellm/runtime/migrations" / "run.py")],
         capture_output=True,
         text=True,
         timeout=MIGRATION_JOB_SECONDS,
@@ -254,9 +289,9 @@ def assert_ready(booted_gateway: Gateway) -> None:
     assert readiness.json()["db"] == "connected", readiness.text
 
 
-def assert_both_indexes_cover_every_partition(database_url: str) -> None:
-    """Every populated partition's index is attached and valid, both parents are valid, and
-    a partition created afterwards inherits both indexes."""
+def assert_all_indexes_cover_every_partition(database_url: str) -> None:
+    """Every populated partition's managed index is attached and valid, every parent is valid,
+    and a partition created afterwards inherits every index."""
     populated: Final = (*POPULATED_PARTITIONS, DEFAULT_PARTITION)
     assert ledger(database_url) == {name: True for name in SHIPPED_MIGRATIONS}
     assert attached_partition_indexes(database_url) == expected_attachments(populated)
@@ -285,7 +320,7 @@ def assert_the_serving_proxy_boots_and_finds_the_indexes_in_place(
 
 
 @RESOLVERS
-def test_the_migration_job_gives_a_partitioned_table_at_the_pre_index_schema_both_indexes_per_partition(
+def test_the_migration_job_gives_a_partitioned_table_at_the_pre_index_schema_all_indexes_per_partition(
     gateway: Gateway, tmp_path: Path, resolver: Resolver
 ) -> None:
     with scratch_database() as database_url:
@@ -294,7 +329,7 @@ def test_the_migration_job_gives_a_partitioned_table_at_the_pre_index_schema_bot
         job: Final = migration_job(database_url, resolver)
         assert job.returncode == 0, job.stdout + job.stderr
         assert INDEXES_IN_PLACE in job.stderr + job.stdout, job.stdout + job.stderr
-        assert_both_indexes_cover_every_partition(database_url)
+        assert_all_indexes_cover_every_partition(database_url)
         assert_the_serving_proxy_boots_and_finds_the_indexes_in_place(gateway, tmp_path, database_url, resolver)
 
 
@@ -308,7 +343,7 @@ def test_the_migration_job_heals_a_partitioned_table_left_with_the_failed_call_i
         fail_the_call_id_index_migration_like_the_shipped_release(database_url, tmp_path)
         job: Final = migration_job(database_url, resolver)
         assert job.returncode == 0, job.stdout + job.stderr
-        assert_both_indexes_cover_every_partition(database_url)
+        assert_all_indexes_cover_every_partition(database_url)
         assert_the_serving_proxy_boots_and_finds_the_indexes_in_place(gateway, tmp_path, database_url, resolver)
 
 
@@ -325,19 +360,20 @@ def test_the_migration_job_leaves_a_plain_table_that_applied_the_original_index_
         job: Final = migration_job(database_url, resolver)
         assert job.returncode == 0, job.stdout + job.stderr
         assert INDEXES_IN_PLACE in job.stderr + job.stdout, job.stdout + job.stderr
-        assert "Building index" not in job.stderr + job.stdout, job.stdout + job.stderr
+        built: Final = re.findall(r"Building index (\S+) on ", job.stderr + job.stdout)
+        assert built == list(JOB_ONLY_INDEXES), job.stdout + job.stderr
         assert ledger(database_url) == {name: True for name in SHIPPED_MIGRATIONS}
         assert index_oids(database_url) == before
         assert_the_serving_proxy_boots_and_finds_the_indexes_in_place(gateway, tmp_path, database_url, resolver)
 
 
 @RESOLVERS
-def test_a_serving_proxy_that_runs_the_migrations_itself_builds_both_indexes_after_it_is_ready(
+def test_a_serving_proxy_that_runs_the_migrations_itself_builds_all_indexes_after_it_is_ready(
     gateway: Gateway, tmp_path: Path, resolver: Resolver
 ) -> None:
     """A deployment that runs migrate deploy from the serving proxy and never runs the
     migration job answers readiness with the inert files applied, then its background build
-    puts both indexes on every partition."""
+    puts every index on each partition."""
     with scratch_database() as database_url:
         deploy_schema_before_the_index_migrations(database_url, tmp_path)
         partition_spend_logs(database_url)
@@ -353,13 +389,13 @@ def test_a_serving_proxy_that_runs_the_migrations_itself_builds_both_indexes_aft
                 seconds=BUILD_SECONDS,
             )
         assert "Building index" in log and "Attached index" in log, log[-4000:]
-        assert_both_indexes_cover_every_partition(database_url)
+        assert_all_indexes_cover_every_partition(database_url)
 
 
-def test_the_cli_run_as_a_migration_job_builds_both_indexes_before_it_exits(gateway: Gateway, tmp_path: Path) -> None:
+def test_the_cli_run_as_a_migration_job_builds_all_indexes_before_it_exits(gateway: Gateway, tmp_path: Path) -> None:
     with scratch_database() as database_url:
         deploy_schema_before_the_index_migrations(database_url, tmp_path)
         partition_spend_logs(database_url)
         job: Final = migration_cli(database_url, gateway, V2)
         assert job.returncode == 0, job.stdout + job.stderr
-        assert_both_indexes_cover_every_partition(database_url)
+        assert_all_indexes_cover_every_partition(database_url)

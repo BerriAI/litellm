@@ -1,4 +1,5 @@
 import contextlib
+import re
 from typing import Final
 from unittest.mock import AsyncMock, patch
 
@@ -16,6 +17,7 @@ from litellm.llms.gemini.common_utils import (
 )
 from litellm.llms.gemini.count_tokens import handler as gemini_count_tokens_handler
 from litellm.llms.gemini.count_tokens.handler import GoogleAIStudioTokenCounter as GeminiCountTokensHandler
+from tests.unit.conftest import in_operator_error
 
 _JSON_BODY: Final = TypeAdapter(dict[str, JsonValue])
 
@@ -76,6 +78,37 @@ async def test_google_ai_studio_count_tokens_forwards_system_and_tools() -> None
                     ]
                 }
             ],
+        }
+    }
+
+
+@pytest.mark.asyncio
+async def test_google_ai_studio_count_tokens_sends_a_union_root_tool_as_parameters_json_schema() -> None:
+    union_root: Final = {
+        "type": "object",
+        "properties": {"a": {"type": "string"}, "b": {"type": "string"}},
+        "anyOf": [{"required": ["a"]}, {"required": ["b"]}],
+    }
+    peer: Final = _GeminiCountTokensPeer()
+    client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(peer))
+
+    with patch.object(gemini_count_tokens_handler, "get_async_httpx_client", return_value=client):
+        result: Final = await GoogleAIStudioTokenCounter().count_tokens(
+            model_to_use="gemini-2.5-flash",
+            messages=None,
+            contents=[{"role": "user", "parts": [{"text": "Look up Atlas."}]}],
+            deployment={"litellm_params": {"api_key": "test-key", "api_base": "https://count-tokens.test"}},
+            request_model="gemini/gemini-2.5-flash",
+            tools=[{"name": "lookup", "input_schema": union_root}],
+        )
+
+    assert result is not None
+    assert result.total_tokens == 11
+    assert peer.request_body == {
+        "generateContentRequest": {
+            "model": "models/gemini-2.5-flash",
+            "contents": [{"role": "user", "parts": [{"text": "Look up Atlas."}]}],
+            "tools": [{"functionDeclarations": [{"name": "lookup", "parametersJsonSchema": union_root}]}],
         }
     }
 
@@ -497,6 +530,18 @@ class TestGoogleAIStudioTokenCounter:
 
         # Verify the contents are unchanged
         assert cleaned_contents == contents_without_function_response
+
+    @pytest.mark.parametrize(
+        ("part", "message"),
+        [
+            (7, in_operator_error(7)),
+            (frozenset({"functionResponse"}), "'frozenset' object is not subscriptable"),
+            ({"functionResponse": "done"}, "FunctionResponse() argument after ** must be a mapping, not str"),
+        ],
+    )
+    def test_clean_contents_for_gemini_api_rejects_a_malformed_part(self, part: object, message: str) -> None:
+        with pytest.raises(TypeError, match=re.escape(message)):
+            GeminiCountTokensHandler()._clean_contents_for_gemini_api([{"role": "user", "parts": [part]}])
 
 
 def _map_image_config(raw_image_config: str) -> dict[str, object]:

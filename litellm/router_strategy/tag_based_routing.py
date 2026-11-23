@@ -392,9 +392,11 @@ def _resolve_constraint_only_pool(
 
 def _all_deployments_or_fallback(
     ctx: "RoutingContext",
-    model: str,
+    model: str | None,
     fallback: _DeploymentPool,
 ) -> Sequence[_DeploymentLike | DeploymentTypedDict] | Mapping[_DeploymentLike, object]:
+    if model is None:  # a group of no name has no deployments, it is not a failed lookup
+        return ()
     try:
         return ctx.registry().deployments(model, source="all")
     except Exception:  # noqa: BLE001  # fail safe toward today's healthy-only behavior on lookup errors
@@ -770,7 +772,7 @@ def get_tags_from_request_kwargs(
     """
     if request_kwargs is None:
         return []
-    resolved_variable_name: Final = metadata_variable_name or get_metadata_variable_name_from_kwargs(request_kwargs)
+    resolved_variable_name: Final = metadata_variable_name or get_tag_metadata_variable_name_from_kwargs(request_kwargs)
     if resolved_variable_name in request_kwargs:
         return _tags_in_metadata(request_kwargs[resolved_variable_name])
     if "litellm_params" in request_kwargs:
@@ -785,8 +787,26 @@ def get_tags_from_request_kwargs(
 _get_tags_from_request_kwargs = get_tags_from_request_kwargs
 
 
-def _request_metadata(request_kwargs: Mapping[str, object]) -> object:
+def get_tag_metadata_variable_name_from_kwargs(
+    request_kwargs: Mapping[str, object],
+) -> Literal["metadata", "litellm_metadata"]:
     metadata_variable_name: Final = get_metadata_variable_name_from_kwargs(request_kwargs)
+    metadata: Final = request_kwargs.get("litellm_metadata")
+    legacy_metadata: Final = request_kwargs.get("metadata")
+    if (
+        metadata_variable_name == "litellm_metadata"
+        and isinstance(metadata, Mapping)
+        and "tags" not in metadata
+        and "inherited_tags" not in metadata
+        and isinstance(legacy_metadata, Mapping)
+        and "inherited_tags" in legacy_metadata
+    ):
+        return "metadata"
+    return metadata_variable_name
+
+
+def _request_metadata(request_kwargs: Mapping[str, object]) -> object:
+    metadata_variable_name: Final = get_tag_metadata_variable_name_from_kwargs(request_kwargs)
     if metadata_variable_name in request_kwargs:
         return request_kwargs[metadata_variable_name]
     litellm_params: Final = request_kwargs.get("litellm_params")
