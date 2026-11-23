@@ -2714,6 +2714,43 @@ def test_a_reminder_after_the_cached_block_stays_out_of_the_gemini_cache_and_rea
     ]
 
 
+def _uncached_conversation_with_a_reminder_after_each_user_turn(user_turns: int) -> list[AllMessageValues]:
+    later_turns: Final = tuple(chain.from_iterable(map(_later_turn_with_a_reminder, range(2, user_turns + 1))))
+    return [
+        {"role": "system", "content": "shared policy " * 3000},
+        {"role": "user", "content": "question 1"},
+        {"role": "system", "content": "1 of 8 turns used"},
+        *later_turns,
+    ]
+
+
+def test_a_cache_mark_on_the_last_reminder_keeps_one_gemini_cache_and_the_reminder_in_place(
+    local_model_cost_map,
+) -> None:
+    calls: Final[list[httpx.Request]] = []
+    for user_turns in (1, 2):
+        litellm.completion(
+            model="gemini/gemini-flash-latest",
+            messages=_uncached_conversation_with_a_reminder_after_each_user_turn(user_turns),
+            cache_control_injection_points=[{"location": "message", "index": -1}],
+            api_key="test-key",
+            client=_recording_gemini_client(calls),
+        )
+
+    created: Final = tuple(
+        json.loads(call.content) for call in calls if call.method == "POST" and call.url.path.endswith("/cachedContents")
+    )
+    generated: Final = tuple(json.loads(call.content) for call in calls if call.url.path.endswith(":generateContent"))
+    assert len(created) == 1
+    assert created[0]["system_instruction"] == {"parts": [{"text": "shared policy " * 3000}]}
+    assert generated[1]["cachedContent"] == "cachedContents/created"
+    assert generated[1]["contents"] == [
+        {"role": "user", "parts": [{"text": "question 1"}, {"text": CONVERTED_SYSTEM_NOTE}, {"text": "1 of 8 turns used"}]},
+        {"role": "model", "parts": [{"text": "answer 1"}]},
+        {"role": "user", "parts": [{"text": "question 2"}, {"text": CONVERTED_SYSTEM_NOTE}, {"text": "2 of 8 turns used"}]},
+    ]
+
+
 def test_a_video_in_a_system_message_after_the_cached_block_is_a_bad_request_before_any_cache_call(
     local_model_cost_map,
 ) -> None:

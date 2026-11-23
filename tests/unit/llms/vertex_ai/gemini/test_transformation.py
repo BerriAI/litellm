@@ -1142,6 +1142,13 @@ def test_a_mid_conversation_system_message_reaches_gemini_as_a_user_part_after_t
     assert messages == sent
 
 
+def test_a_leading_system_message_with_no_content_sends_only_the_rest_of_the_conversation():
+    body: Final = _gemini_request_body([{"role": "system"}, {"role": "user", "content": "question 1"}])
+
+    assert "system_instruction" not in body
+    assert body["contents"] == [{"role": "user", "parts": [{"text": "question 1"}]}]
+
+
 def test_a_system_message_between_a_tool_call_and_its_result_goes_after_the_function_response():
     body: Final = _gemini_request_body(
         [
