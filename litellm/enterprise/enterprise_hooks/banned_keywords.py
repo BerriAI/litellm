@@ -11,6 +11,7 @@ from typing import Literal
 import litellm
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.types.utils import LLMResponseTypes
 from litellm.proxy.guardrails._content_utils import (
     is_text_content_call_type,
     iter_message_text,
@@ -48,7 +49,7 @@ class ENTERPRISE_BannedKeywords(CustomLogger):
                     f"An error occurred: {str(e)}, banned_keywords_list={banned_keywords_list}"
                 )
 
-    def print_verbose(self, print_statement, level: Literal["INFO", "DEBUG"] = "DEBUG"):
+    def print_verbose(self, print_statement: object, level: Literal["INFO", "DEBUG"] = "DEBUG"):
         if level == "INFO":
             verbose_proxy_logger.info(print_statement)
         elif level == "DEBUG":
@@ -95,7 +96,7 @@ class ENTERPRISE_BannedKeywords(CustomLogger):
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        response,
+        response: LLMResponseTypes,
     ):
         if not isinstance(response, litellm.ModelResponse):
             return

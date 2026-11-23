@@ -133,7 +133,7 @@ class _ManagedFileCopy:
 _PROBE_ARGUMENTS: Final = frozenset(
     {"vector_store_id", "file_id", "extra_headers", "timeout", "custom_llm_provider", "no-log"}
 )
-_EXTRA_HEADERS: Final = TypeAdapter(dict[str, str] | None)
+_EXTRA_HEADERS: Final[TypeAdapter[dict[str, str] | None]] = TypeAdapter(dict[str, str] | None)
 
 
 async def _store_lacks_file(
