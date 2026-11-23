@@ -1108,6 +1108,13 @@ _LITELLM_PARAMS: Final = TypeAdapter(Mapping[str, object])
 
 
 _UPSTREAM_CREDENTIAL_HEADERS: Final = frozenset(("authorization", "x-api-key", "api-key"))
+_BODY_PROFILE_ID_FIELD: Final = "user_profile_id"
+
+
+def _with_body_profile_id(body: Mapping[str, object] | None, profile_id: str) -> Mapping[str, object] | None:
+    if body is None or _BODY_PROFILE_ID_FIELD not in body:
+        return body
+    return {**body, _BODY_PROFILE_ID_FIELD: profile_id}
 
 
 def _with_pinned_profile_id_where_taken_or_sent(
@@ -1118,7 +1125,9 @@ def _with_pinned_profile_id_where_taken_or_sent(
     body: Mapping[str, object] | None,
     litellm_params: Mapping[str, object],
 ) -> UpstreamRequest:
-    sends_profile_id: Final = any(name.lower() == ANTHROPIC_USER_PROFILE_ID_HEADER for name in headers)
+    sends_profile_id: Final = any(name.lower() == ANTHROPIC_USER_PROFILE_ID_HEADER for name in headers) or (
+        body is not None and _BODY_PROFILE_ID_FIELD in body
+    )
     sends_caller_credential: Final = any(
         caller_credentials.get(name.lower()) == value for name, value in headers.items()
     )
@@ -1126,7 +1135,10 @@ def _with_pinned_profile_id_where_taken_or_sent(
     takes_profile_id: Final = isinstance(model, str) and supports_anthropic_user_profile_id(model, custom_llm_provider)
     if pinned_profile_id is None or sends_caller_credential or not (sends_profile_id or takes_profile_id):
         return headers, body
-    return override_headers(headers, {ANTHROPIC_USER_PROFILE_ID_HEADER: pinned_profile_id}), body
+    return (
+        override_headers(headers, {ANTHROPIC_USER_PROFILE_ID_HEADER: pinned_profile_id}),
+        _with_body_profile_id(body, pinned_profile_id),
+    )
 
 
 def _upstream_request_filter_or_pin(
