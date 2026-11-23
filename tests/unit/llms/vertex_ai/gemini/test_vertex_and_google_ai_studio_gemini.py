@@ -5299,6 +5299,49 @@ def test_gemini_3_drops_search_next_to_functions_when_the_caller_turns_server_si
 
 
 @pytest.mark.parametrize(
+    "extra_body",
+    [
+        {"toolConfig": {"includeServerSideToolInvocations": False}},
+        {"tool_config": {"include_server_side_tool_invocations": False}},
+        {"toolConfig": {"functionCallingConfig": {"mode": "ANY"}}},
+        {"toolConfig": {"function_calling_config": {"mode": "NONE"}}},
+    ],
+    ids=["flag_off", "snake_case_flag_off", "mode_any", "mode_none"],
+)
+@pytest.mark.parametrize("route", ["vertex", "studio"])
+def test_gemini_3_drops_search_next_to_functions_when_the_extra_body_tool_config_opts_out(
+    route: Literal["vertex", "studio"], extra_body: Mapping[str, object], search_with_functions_model: str
+) -> None:
+    body: Final = _completion_request_body(
+        route, search_with_functions_model, {"tools": [{"type": "web_search"}, _EXEC_TOOL], "extra_body": extra_body}
+    )
+
+    assert _tool_keys(body) == {"function_declarations"}
+    assert {key: value for key, value in body.items() if key in extra_body} == extra_body
+
+
+@pytest.mark.parametrize(
+    "extra_body",
+    [
+        {"toolConfig": {"includeServerSideToolInvocations": True}},
+        {"toolConfig": {"functionCallingConfig": {"mode": "AUTO"}}},
+        {"toolConfig": {"functionCallingConfig": {"mode": ["ANY"]}}},
+        {"toolConfig": "ANY"},
+    ],
+    ids=["flag_on", "mode_auto", "unhashable_mode", "non_object_tool_config"],
+)
+@pytest.mark.parametrize("route", ["vertex", "studio"])
+def test_gemini_3_keeps_search_next_to_functions_beside_an_extra_body_tool_config_that_does_not_opt_out(
+    route: Literal["vertex", "studio"], extra_body: Mapping[str, object], search_with_functions_model: str
+) -> None:
+    body: Final = _completion_request_body(
+        route, search_with_functions_model, {"tools": [{"type": "web_search"}, _EXEC_TOOL], "extra_body": extra_body}
+    )
+
+    assert _tool_keys(body) == {"function_declarations", "googleSearch"}
+
+
+@pytest.mark.parametrize(
     ("tools", "kept_keys", "flagged"),
     [
         (

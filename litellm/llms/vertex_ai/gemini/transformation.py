@@ -12,7 +12,8 @@ from typing import TYPE_CHECKING, Any, Final, Literal, cast
 from urllib.parse import quote
 
 import httpx
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
@@ -1185,11 +1186,30 @@ def _pop_and_merge_extra_body(data: RequestBody, optional_params: dict) -> None:
                 data_dict[k] = v
 
 
+class _CallerToolConfig(TypedDict, total=False):
+    toolConfig: ReadOnly[JsonValue]
+    tool_config: ReadOnly[JsonValue]
+
+
+_CALLER_TOOL_CONFIG: Final = TypeAdapter(_CallerToolConfig)
+
+
 def _without_search_tools_next_to_functions(tools: Tools) -> Tools:
     from .vertex_and_google_ai_studio_gemini import VertexGeminiConfig
 
     kept: Final = VertexGeminiConfig.without_search_tools_next_to_functions(as_object_list(tools) or ())
     return cast(Tools, list(kept))  # cast-ok: a subset of the caller's tools list
+
+
+def _caller_tool_config(extra_body: object) -> JsonValue | None:
+    extra_body_fields: Final = as_str_mapping(extra_body)
+    if extra_body_fields is None:
+        return None
+    try:
+        caller: Final = _CALLER_TOOL_CONFIG.validate_python(extra_body_fields)
+    except ValidationError:
+        return None
+    return caller.get("toolConfig", caller.get("tool_config"))
 
 
 def _has_google_maps_tool(tools: object) -> bool:
@@ -1299,7 +1319,9 @@ def transform_request_body(
         tools: Final[Tools | None] = optional_params.pop("tools", None)
         tool_choice: Final[ToolConfig | None] = optional_params.pop("tool_choice", None)
         include_server_side_tool_invocations: bool = optional_params.pop("include_server_side_tool_invocations", False)
-        turns_server_side_tools_off: Final = optional_params.pop("includeServerSideToolInvocations", None) is False
+        caller_turns_server_side_tools_off: Final = (
+            optional_params.pop("includeServerSideToolInvocations", None) is False
+        )
         safety_settings: list[SafetSettingsConfig] | None = optional_params.pop("safety_settings", None)
         # Drop output_config as it's not supported by Vertex AI
         optional_params.pop("output_config", None)
@@ -1308,6 +1330,13 @@ def transform_request_body(
         # labels: optional explicit param and/or metadata.requester_metadata (OpenAI metadata)
         labels: Final = pop_vertex_caller_labels(optional_params, request_params)
 
+        caller_tool_config: Final = _caller_tool_config(
+            cast(Mapping[str, object], optional_params).get("extra_body")  # cast-ok: untyped shared signature
+        )
+        drops_search_next_to_functions: Final = (
+            caller_turns_server_side_tools_off
+            or litellm.VertexGeminiConfig.caller_tool_config_keeps_the_old_search_drop(caller_tool_config)
+        )
         filtered_params = {k: v for k, v in optional_params.items() if _get_equivalent_key(k, set(config_fields))}
 
         generation_config: Final[GenerationConfig | None] = GenerationConfig(**filtered_params)
@@ -1330,10 +1359,12 @@ def transform_request_body(
             if system_instructions is not None:
                 data["system_instruction"] = system_instructions
             if tools is not None:
-                data["tools"] = _without_search_tools_next_to_functions(tools) if turns_server_side_tools_off else tools
+                data["tools"] = (
+                    _without_search_tools_next_to_functions(tools) if drops_search_next_to_functions else tools
+                )
             if tool_choice is not None:
                 data["toolConfig"] = tool_choice
-            if include_server_side_tool_invocations and not turns_server_side_tools_off:
+            if include_server_side_tool_invocations and not drops_search_next_to_functions:
                 if "toolConfig" not in data:
                     data["toolConfig"] = {}
                 data["toolConfig"]["includeServerSideToolInvocations"] = True

@@ -219,6 +219,19 @@ def _pins_function_calling_mode(params: Mapping[str, object]) -> bool:
             return False
 
 
+_PINNED_FUNCTION_CALLING_MODES: Final = frozenset({"ANY", "NONE"})
+
+
+def _tool_config_keeps_the_old_search_drop(tool_config: Mapping[str, object]) -> bool:
+    calling: Final = as_str_mapping(
+        tool_config.get("functionCallingConfig", tool_config.get("function_calling_config"))
+    )
+    mode: Final = calling.get("mode") if calling is not None else None
+    return _turns_server_side_tools_off(tool_config) or (
+        isinstance(mode, str) and mode in _PINNED_FUNCTION_CALLING_MODES
+    )
+
+
 def _cache_creation_tokens(logging_obj: LoggingClass) -> int:
     recorded: Final[object] = getattr(logging_obj, "vertex_ai_cache_creation_input_tokens", 0)
     return recorded if isinstance(recorded, int) and recorded > 0 else 0
@@ -496,6 +509,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             for candidate in (f"{self._route}/{bare}", bare)
         )
         return next((flag for flag in flags if isinstance(flag, bool)), False)
+
+    @staticmethod
+    def caller_tool_config_keeps_the_old_search_drop(tool_config: JsonValue | None) -> bool:
+        fields: Final = as_str_mapping(tool_config)
+        return fields is not None and _tool_config_keeps_the_old_search_drop(fields)
 
     def _keeps_search_tools_with_functions(self, model: str, *param_sources: Mapping[str, object]) -> bool:
         keeps_the_old_drop: Final = any(
