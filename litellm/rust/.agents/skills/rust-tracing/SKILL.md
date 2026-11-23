@@ -15,6 +15,8 @@ The bridge alone decides which Python logger a Rust target logs on, in `python-b
 
 Secret scrubbing of free text lives in `crates/redaction` (`litellm-redaction`). `Processor` uses it for log records, and request logging callbacks such as spend logs depend on it directly, never through `litellm-tracing`
 
+A host whose output does no redaction of its own wraps its sink in `litellm_tracing::Scrubbed`, which scrubs the message and every text field before the sink sees the record. The gateway does. The Python bridge does not, because Python's logging filter scrubs each record with the user's settings
+
 Hosts configure subscribers. The Python bridge installs one process-wide subscriber when the extension loads, so a warning or error from a thread no call scoped, such as a detached task on the native runtime, still reaches the Python logger. Records from runtime threads go through a bounded queue and are delivered from the blocking pool, never on an async worker. Call execution stays scoped to its captured dispatch, which carries request correlation and the lower levels, so keep propagating both span context and dispatch across spawned work and returned streams. The target is that one subscriber for everything, with correlation carried in span fields and every record delivered through the queue, which removes the scoped dispatch
 
 In core, instrument execution shared by native calls and hosted machines. Use consistent route, model, provider, streaming, and outcome fields. Put status recording at shared provider boundaries instead of scattering basic logging through handlers. Keep upstream HTTP status separate from route success
