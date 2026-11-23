@@ -61,9 +61,13 @@ def _text_document_content(content: object, drop_citations: bool) -> object:
     items: Final = as_object_list(content)
     if items is None:
         return content
-    blocks, orphan = _with_breakpoints(
-        tuple(chain.from_iterable(_content_blocks(item, drop_citations) for item in items))
+    return _kept_or_placeholder(
+        items, tuple(chain.from_iterable(_content_blocks(item, drop_citations) for item in items))
     )
+
+
+def _kept_or_placeholder(items: Sequence[object], stream: Sequence[object]) -> Sequence[object]:
+    blocks, orphan = _with_breakpoints(stream)
     if blocks or not items:
         return list(blocks)
     return [_with_cache_control({"type": "text", "text": EMPTY_TEXT_PLACEHOLDER}, orphan)]
@@ -101,10 +105,8 @@ def _content_blocks(item: object, drop_citations: bool) -> tuple[object, ...]:
     )
     if block is None or nested is None:
         return _document_blocks(item, drop_citations)
-    blocks, orphan = _with_breakpoints(
-        tuple(chain.from_iterable(_document_blocks(inner, drop_citations) for inner in nested))
-    )
-    return (_with_cache_control({**block, "content": list(blocks)}, orphan),)
+    converted: Final = tuple(chain.from_iterable(_document_blocks(inner, drop_citations) for inner in nested))
+    return ({**block, "content": _kept_or_placeholder(nested, converted)},)
 
 
 def _document_blocks(item: object, drop_citations: bool) -> tuple[object, ...]:
