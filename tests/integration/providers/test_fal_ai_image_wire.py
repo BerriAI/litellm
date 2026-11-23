@@ -228,6 +228,35 @@ def test_fal_flux_dev_generation_targets_dev_endpoint_and_charges_per_image(gate
         assert [(request.method, request.target) for request in wire.drain()] == [("POST", "/fal-ai/flux/dev")]
 
 
+@pytest.mark.parametrize(
+    "fal_model",
+    [
+        "bytedance/seedream/v5.5/text-to-image",
+        "fal-ai/bytedance/seedream/v4.5/text-to-image",
+        "fal-ai/bytedance/seedream/v3/text-to-image",
+        "fal-ai/flux-pro/kontext/text-to-image",
+        "fal-ai/flux-pro/v1.1-ultra-finetuned",
+        "fal-ai/flux-pro/v1.1",
+    ],
+)
+def test_fal_versioned_image_model_posts_to_its_own_endpoint_and_charges_its_own_row(
+    gateway: Gateway, fal_model: str
+) -> None:
+    prompt: Final = f"{_PROMPT} {fal_model}"
+
+    def respond(request: Request) -> Reply:
+        assert _JSON_OBJECT.validate_json(request.body) == {"prompt": prompt}
+        return Reply(body=_image_response(((f"{wire_url}/files/versioned.png", 1024, 1024),), prompt))
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        wire_url: Final = wire.url
+        model: Final = scenario.model(model=f"fal_ai/{fal_model}", api_base=wire.url, api_key="synthetic-fal-key")
+        response: Final = gateway.request("POST", "/v1/images/generations", {"model": model, "prompt": prompt})
+        assert response.status_code == 200, response.text
+        assert [(request.method, request.target) for request in wire.drain()] == [("POST", f"/{fal_model}")]
+        assert _response_cost(response) == _approx(_catalog_cost(f"fal_ai/{fal_model}"))
+
+
 @pytest.mark.covers("other.provider_wire.fal_ai.image_edit_json_data_urls_and_keyed_pricing")
 def test_fal_gpt_image_25_edit_inlines_upload_as_data_url_and_charges_keyed_row(gateway: Gateway) -> None:
     def respond(request: Request) -> Reply:

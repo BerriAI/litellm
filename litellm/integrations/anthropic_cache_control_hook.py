@@ -26,18 +26,18 @@ from litellm.exceptions import UnsupportedParamsError
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
 from litellm.integrations.prompt_management_base import PromptManagementClient
-from litellm.litellm_core_utils.prompt_templates.common_utils import (
+from litellm.litellm_core_utils.prompt_templates.factory import (
+    tool_call_ids_answered_by_client,
+    tool_call_ids_answered_in,
+)
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import string_field
+from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils import (
     PROMPT_CACHE_BREAKPOINT_DROP_PARAMS_HINT,
     cache_control_as_prompt_cache_breakpoint,
     prompt_cache_breakpoint_as_cache_control,
     with_prompt_cache_breakpoint,
     without_prompt_cache_breakpoints,
 )
-from litellm.litellm_core_utils.prompt_templates.factory import (
-    tool_call_ids_answered_by_client,
-    tool_call_ids_answered_in,
-)
-from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import string_field
 from litellm.llms.anthropic.common_utils import (
     is_claude_code_one_shot_subagent_request,
     supports_anthropic_cache_control,
@@ -112,8 +112,13 @@ def _live_cost_map_unless(model_cost: CostMap | None) -> CostMap:
 
 
 def declared_prompt_cache_breakpoint(model_info: Mapping[str, object] | None) -> bool | None:
-    declared: Final = None if model_info is None else model_info.get("supports_prompt_cache_breakpoint")
+    declared: Final = None if model_info is None else _openai_breakpoint_flag(model_info)
     return declared if isinstance(declared, bool) else None
+
+
+def _openai_breakpoint_flag(entry: Mapping[str, object]) -> object:
+    dedicated: Final = entry.get("supports_openai_prompt_cache_breakpoint")
+    return entry.get("supports_prompt_cache_breakpoint") if dedicated is None else dedicated
 
 
 def routed_cost_map() -> CostMap:
@@ -140,7 +145,7 @@ def _validated_object_list(value: object) -> list[object] | None:
         return None
 
 
-_MessageT: Final = TypeVar("_MessageT")
+_MessageT = TypeVar("_MessageT")
 _CacheControlRewrite: TypeAlias = Callable[[object], ChatCompletionCachedContent | None]
 _MARK_CARRYING_MESSAGE_FIELDS: Final = ("content", "tool_calls")
 
@@ -327,7 +332,7 @@ def whole_messages_within_cache_control_limit(
 
 
 def _part_with_cache_control_renamed(part: object) -> object:
-    if not _accepts_prompt_cache_breakpoint(part):
+    if not _accepts_prompt_cache_breakpoint(part) or _attribute_or_key(part, "cache_control") is None:
         return part
     return cache_control_as_prompt_cache_breakpoint(_CONTENT_PART_ADAPTER.validate_python(part))
 
@@ -429,12 +434,12 @@ def _named_model_breakpoint_support(model: str) -> bool | None:
 def _model_map_prompt_cache_breakpoint_flag(model: str, model_cost: CostMap | None = None) -> bool | None:
     cost_map: Final = _live_cost_map_unless(model_cost)
     entries: Final = (cost_map.get(key) for key in (model, model.rsplit("/", 1)[-1]))
-    flags: Final = (entry.get("supports_prompt_cache_breakpoint") for entry in entries if isinstance(entry, Mapping))
+    flags: Final = (_openai_breakpoint_flag(entry) for entry in entries if isinstance(entry, Mapping))
     return next((flag is True for flag in flags if flag is not None), None)
 
 
 def _hosted_entry_flag(entry: Mapping[str, object], resolve_provider: Callable[[], str | None]) -> bool | None:
-    flag: Final = entry.get("supports_prompt_cache_breakpoint")
+    flag: Final = _openai_breakpoint_flag(entry)
     entry_provider: Final = entry.get("litellm_provider")
     if flag is None or entry_provider is None or entry_provider == "openai":
         return None
@@ -504,11 +509,10 @@ def _declared_hosted_flag(
     declared: bool, model: str, provider: str | None, model_cost: CostMap, deployment_provider: object
 ) -> bool | None:
     """
-    A deployment's own ``supports_prompt_cache_breakpoint`` picks OpenAI's breakpoint only where the
-    request goes out OpenAI-shaped. Bedrock reads the same flag on every route as whether Converse takes
-    a ``cachePoint``, and a provider building Anthropic messages takes ``cache_control``, so both keep
-    the Anthropic mark. A gateway or self-hosted server (OpenRouter, a LiteLLM proxy, vLLM) may pass
-    the request on to Anthropic, so there the flag only picks OpenAI's breakpoint for a model the cost
+    A deployment's own ``supports_openai_prompt_cache_breakpoint`` picks OpenAI's breakpoint only where the
+    request goes out OpenAI-shaped. Bedrock decides Converse ``cachePoint`` blocks on every route, and a
+    provider building Anthropic messages takes ``cache_control``, so both keep the Anthropic mark. A
+    gateway or self-hosted server (OpenRouter, a LiteLLM proxy, vLLM) may pass the request on to Anthropic, so there the flag only picks OpenAI's breakpoint for a model the cost
     map, or the deployment's own ``litellm_provider``, lists under that provider.
     """
     if provider is None or provider == "openai":

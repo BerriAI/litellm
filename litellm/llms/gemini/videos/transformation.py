@@ -1,15 +1,16 @@
 import base64
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, NoReturn
 
 import httpx
-from httpx._types import RequestFiles
+from httpx._types import FileContent, RequestFiles
 from pydantic import TypeAdapter
 
 import litellm
 from litellm.constants import DEFAULT_GOOGLE_VIDEO_DURATION_SECONDS
 from litellm.images.utils import ImageEditRequestUtils
 from litellm.litellm_core_utils.url_utils import join_api_base
+from litellm.llms.base_llm.videos.async_task_utils import unsupported_video_fields
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
 from litellm.llms.vertex_ai.videos.transformation import veo_video_count_from_parameters
 from litellm.secret_managers.main import get_secret_str
@@ -97,7 +98,7 @@ class GeminiVideoConfig(BaseVideoConfig):
     def __init__(self):
         super().__init__()
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         """
         Get the list of supported OpenAI parameters for Veo video generation.
         Veo supports minimal parameters compared to OpenAI.
@@ -123,6 +124,13 @@ class GeminiVideoConfig(BaseVideoConfig):
 
         All other params are passed through as-is to support Gemini-specific parameters.
         """
+        unsupported: Final = unsupported_video_fields(
+            video_create_optional_params,
+            model,
+            "gemini",
+            drop_params,
+            frozenset({"seed", "duration", "aspect_ratio", "generate_audio"}),
+        )
         mapped_params: Final[dict[str, object]] = {}
 
         # Get supported OpenAI params (exclude "model" and "prompt" which are handled separately)
@@ -158,7 +166,7 @@ class GeminiVideoConfig(BaseVideoConfig):
 
         # Pass through any other params that weren't mapped (Gemini-specific params)
         for key, value in video_create_optional_params.items():
-            if key not in openai_params_to_map and key not in mapped_params:
+            if key not in openai_params_to_map and key not in mapped_params and key not in unsupported:
                 mapped_params[key] = value
 
         return mapped_params
@@ -564,53 +572,63 @@ class GeminiVideoConfig(BaseVideoConfig):
         """Video delete is not supported."""
         raise NotImplementedError("Video delete is not supported by Google Veo.")
 
-    def transform_video_create_character_request(self, name, video: object, api_base, litellm_params, headers):
+    def transform_video_create_character_request(
+        self, name: str, video: object, api_base: str, litellm_params: GenericLiteLLMParams, headers: object
+    ) -> NoReturn:
         raise NotImplementedError("video create character is not supported for Gemini")
 
-    def transform_video_create_character_response(self, raw_response, logging_obj):
+    def transform_video_create_character_response(
+        self, raw_response: httpx.Response, logging_obj: LiteLLMLoggingObj
+    ) -> NoReturn:
         raise NotImplementedError("video create character is not supported for Gemini")
 
-    def transform_video_get_character_request(self, character_id, api_base, litellm_params, headers):
+    def transform_video_get_character_request(
+        self, character_id: str, api_base: str, litellm_params: GenericLiteLLMParams, headers: object
+    ) -> NoReturn:
         raise NotImplementedError("video get character is not supported for Gemini")
 
-    def transform_video_get_character_response(self, raw_response, logging_obj):
+    def transform_video_get_character_response(
+        self, raw_response: httpx.Response, logging_obj: LiteLLMLoggingObj
+    ) -> NoReturn:
         raise NotImplementedError("video get character is not supported for Gemini")
 
     def transform_video_edit_request(
         self,
-        prompt,
-        video_id,
-        api_base,
-        litellm_params,
-        headers,
-        video_file=None,
-        extra_body=None,
-        prefetched_source_data=None,
-    ):
+        prompt: str,
+        video_id: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: object,
+        video_file: FileContent | None = None,
+        extra_body: dict[str, object] | None = None,
+        prefetched_source_data: dict[str, object] | None = None,
+    ) -> NoReturn:
         raise NotImplementedError("video edit is not supported for Gemini")
 
     def transform_video_edit_response(
         self,
-        raw_response,
-        logging_obj,
-        custom_llm_provider=None,
-        request_data=None,
-    ):
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+        custom_llm_provider: str | None = None,
+        request_data: object = None,
+    ) -> NoReturn:
         raise NotImplementedError("video edit is not supported for Gemini")
 
     def transform_video_extension_request(
         self,
-        prompt,
-        video_id,
-        seconds,
-        api_base,
-        litellm_params,
-        headers,
-        extra_body=None,
-    ):
+        prompt: str,
+        video_id: str,
+        seconds: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: object,
+        extra_body: dict[str, object] | None = None,
+    ) -> NoReturn:
         raise NotImplementedError("video extension is not supported for Gemini")
 
-    def transform_video_extension_response(self, raw_response, logging_obj, custom_llm_provider=None):
+    def transform_video_extension_response(
+        self, raw_response: httpx.Response, logging_obj: LiteLLMLoggingObj, custom_llm_provider: str | None = None
+    ) -> NoReturn:
         raise NotImplementedError("video extension is not supported for Gemini")
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:

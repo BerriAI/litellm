@@ -3,9 +3,11 @@ from __future__ import annotations
 import json
 import os
 import tempfile
-from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from contextlib import AbstractContextManager
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
+from functools import lru_cache
 from pathlib import Path
 from threading import Lock
 from typing import Final, Protocol
@@ -16,6 +18,7 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object, iter_items, require_get
 from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, get_httpx_client
 
@@ -74,12 +77,12 @@ def _get_nested(d: object, path: Sequence[str]) -> object:
     return cur
 
 
-def _load_json_env(var_name: str) -> Mapping[str, Sequence[Mapping[str, object]]] | None:
+def _load_json_env(var_name: str) -> object:
     raw: Final = os.environ.get(var_name)
     if not raw:
         return None
     try:
-        return json.loads(raw)
+        return _DECODED_JSON.validate_python(json.loads(raw))
     except json.JSONDecodeError:
         return None
 
@@ -91,15 +94,23 @@ def _str_or_none(value: object) -> str | None:
         return None
 
 
-def _load_vcap() -> Mapping[str, Sequence[Mapping[str, object]]]:
+def _load_vcap() -> object:
     return _load_json_env(VCAP_SERVICES_ENV_VAR) or {}
 
 
+def _vcap_service_groups(vcap: object) -> Iterable[object]:
+    services_by_name: Final = as_str_mapping(vcap)
+    if services_by_name is not None:
+        return services_by_name.values()
+    raise AttributeError(f"'{type(vcap).__name__}' object has no attribute 'values'", name="values", obj=vcap)
+
+
 def _get_vcap_service(label: str) -> Mapping[str, object] | None:
-    for services in _load_vcap().values():
-        for svc in services:
-            if svc.get("label") == label:
-                return svc
+    for services in _vcap_service_groups(_load_vcap()):
+        for svc in iter_items(services):
+            service = decoded_json_object(svc)
+            if service.get("label") == label:
+                return service
     return None
 
 
@@ -144,7 +155,7 @@ CREDENTIAL_VALUES: Final[list[CredentialsValue]] = [
 ]
 
 
-def init_conf(profile: str | None = None) -> dict[str, object]:
+def init_conf(profile: str | None = None) -> object:
     """
     Loads config JSON from:
       1) $AICORE_CONFIG if set, otherwise
@@ -163,7 +174,7 @@ def init_conf(profile: str | None = None) -> dict[str, object]:
     if cfg_path and cfg_path.exists():
         try:
             with cfg_path.open(encoding="utf-8") as f:
-                return json.load(f)
+                return _DECODED_JSON.validate_python(json.load(f))
         except json.JSONDecodeError:
             raise KeyError(f"{cfg_path} is not valid JSON. Please fix or remove it!")
 
@@ -172,6 +183,12 @@ def init_conf(profile: str | None = None) -> dict[str, object]:
         raise FileNotFoundError(f"Unable to locate profile config file at '{cfg_path}' in AICORE_HOME '{home}'")
 
     return {}
+
+
+def _config_credential(config: object, name: str) -> str | None:
+    values: Final = require_get(config)
+    prefixed: Final = f"AICORE_{name.upper()}"
+    return _str_or_none(values.get(prefixed) if values.get(prefixed) is not None else values.get(name))
 
 
 def _env_name(name: str) -> str:
@@ -283,14 +300,7 @@ def fetch_credentials(
             "environment variables",
             lambda cv: _str_or_none(os.environ.get(f"AICORE_{cv.name.upper()}")),
         ),
-        Source(
-            "config file",
-            lambda cv: _str_or_none(
-                config.get(f"AICORE_{cv.name.upper()}")
-                if config.get(f"AICORE_{cv.name.upper()}") is not None
-                else config.get(cv.name)
-            ),
-        ),
+        Source("config file", lambda cv: _config_credential(config, cv.name)),
         Source(
             "VCAP service",
             lambda cv: (
@@ -383,12 +393,16 @@ class _TokenResponse(Protocol):
     def json(self) -> _TokenBody: ...
 
 
-def _bearer_token_and_expiry(response: _TokenResponse) -> tuple[str, datetime]:
-    """Read a token response into the Authorization header value and the token's absolute expiry."""
+def _bearer_token_and_lifetime(response: _TokenResponse) -> tuple[str, timedelta]:
+    """Read a token response into the Authorization header value and how long the token stays valid."""
     payload: Final = response.json()
     expires_in: Final = int(payload.get("expires_in", 3600))
     access_token: Final = payload["access_token"]
-    return f"Bearer {access_token}", datetime.now(timezone.utc) + timedelta(seconds=expires_in)
+    return f"Bearer {access_token}", timedelta(seconds=expires_in)
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 def _request_token(
@@ -397,7 +411,7 @@ def _request_token(
     timeout: float,
     cert_pair: tuple[str, str] | None = None,
     client_secret: str | None = None,
-) -> tuple[str, datetime]:
+) -> tuple[str, timedelta]:
     data: Final = {"grant_type": "client_credentials", "client_id": client_id}
     if client_secret:
         data["client_secret"] = client_secret
@@ -408,13 +422,84 @@ def _request_token(
             with httpx.Client(cert=cert_pair) as raw_client:
                 handler = HTTPHandler(client=raw_client)
                 resp = handler.post(auth_url, data=data, timeout=timeout)
-                return _bearer_token_and_expiry(resp)
+                return _bearer_token_and_lifetime(resp)
         handler = get_httpx_client()
         resp = handler.post(auth_url, data=data, timeout=timeout)
-        return _bearer_token_and_expiry(resp)
+        return _bearer_token_and_lifetime(resp)
     except Exception as e:
         msg: Final = resp.text if resp is not None else getattr(e, "text", str(e))
         raise RuntimeError(f"Token request failed: {msg}") from e
+
+
+@dataclass(frozen=True, slots=True)
+class _CachedToken:
+    value: str
+    refresh_at: datetime
+    expires_at: datetime
+
+
+class OAuthTokenCache:
+    """One OAuth token shared by every request made with the same credentials, refetched near expiry or after SAP rejects it."""
+
+    def __init__(
+        self,
+        fetch_token: Callable[[], tuple[str, timedelta]],
+        expiry_buffer: timedelta,
+        clock: Callable[[], datetime],
+        fetch_lock: AbstractContextManager[object],
+        state_lock: AbstractContextManager[object],
+    ) -> None:
+        self._fetch_token: Final = fetch_token
+        self._expiry_buffer: Final = expiry_buffer
+        self._clock: Final = clock
+        self._fetch_lock: Final = fetch_lock
+        self._state_lock: Final = state_lock
+        self._cached: _CachedToken | None = None
+        self._failed_fetches = 0
+        self._last_fetch_error: Exception | None = None
+
+    def __call__(self) -> str:
+        failed_fetches_before_waiting: Final = self._failed_fetches
+        with self._fetch_lock:
+            now: Final = self._clock()
+            cached: Final = self._cached
+            if cached is not None and now <= cached.refresh_at:
+                return cached.value
+            if self._last_fetch_error is not None and self._failed_fetches != failed_fetches_before_waiting:
+                raise RuntimeError(str(self._last_fetch_error)) from self._last_fetch_error
+            try:
+                token, lifetime = self._fetch_token()
+            except Exception as err:
+                self._failed_fetches += 1
+                self._last_fetch_error = err
+                still_valid_token: Final = self._back_off_refresh()
+                if still_valid_token is None:
+                    raise
+                verbose_logger.warning("SAP token refresh failed, reusing the cached token until it expires: %s", err)
+                return still_valid_token
+            self._last_fetch_error = None
+            with self._state_lock:
+                self._cached = _CachedToken(
+                    value=token,
+                    refresh_at=now + lifetime - min(self._expiry_buffer, lifetime / 2),
+                    expires_at=now + lifetime,
+                )
+            return token
+
+    def _back_off_refresh(self) -> str | None:
+        with self._state_lock:
+            cached: Final = self._cached
+            now: Final = self._clock()
+            if cached is None or now >= cached.expires_at:
+                return None
+            self._cached = replace(cached, refresh_at=now + (cached.expires_at - now) / 2)
+            return cached.value
+
+    def invalidate(self, rejected_token: str) -> None:
+        with self._state_lock:
+            cached: Final = self._cached
+            if cached is not None and cached.value == rejected_token:
+                self._cached = None
 
 
 def get_token_creator(
@@ -423,8 +508,9 @@ def get_token_creator(
     *,
     timeout: float = 30.0,
     expiry_buffer_minutes: int = 60,
+    clock: Callable[[], datetime] = _utc_now,
     **overrides,
-) -> tuple[Callable[[], str], str, str]:
+) -> tuple[OAuthTokenCache, str, str]:
     """
     Creates a callable that fetches and caches an OAuth2 bearer token
     using credentials from `fetch_credentials()`.
@@ -437,11 +523,11 @@ def get_token_creator(
     Args:
         profile: Optional AICore profile name
         timeout: Timeout for HTTP requests
-        expiry_buffer_minutes: Refresh the token this many minutes before expiry
+        expiry_buffer_minutes: Refresh the token this many minutes before expiry, or halfway through a shorter-lived token
         overrides: Any explicit credential overrides (client_id, client_secret, etc.)
 
     Returns:
-        Callable[[], str]: function returning a valid "Bearer <token>" string.
+        OAuthTokenCache: callable returning a valid "Bearer <token>" string.
     """
 
     # Resolve credentials using your helper
@@ -468,11 +554,35 @@ def get_token_creator(
         key_file_path,
     )
 
-    lock: Final = Lock()
-    token: str | None = None
-    token_expiry: datetime | None = None
+    token_getter: Final = _cached_token_getter(
+        auth_url,
+        client_id,
+        client_secret,
+        cert_str,
+        key_str,
+        cert_file_path,
+        key_file_path,
+        timeout,
+        expiry_buffer_minutes,
+        clock,
+    )
+    return token_getter, credentials["base_url"], credentials["resource_group"]
 
-    def _fetch_token() -> tuple[str, datetime]:
+
+@lru_cache(maxsize=64)
+def _cached_token_getter(
+    auth_url: str | None,
+    client_id: str | None,
+    client_secret: str | None,
+    cert_str: str | None,
+    key_str: str | None,
+    cert_file_path: str | None,
+    key_file_path: str | None,
+    timeout: float,
+    expiry_buffer_minutes: int,
+    clock: Callable[[], datetime],
+) -> OAuthTokenCache:
+    def _fetch_token() -> tuple[str, timedelta]:
         # Case 1: secret-based auth
         if client_secret:
             return _request_token(
@@ -509,12 +619,4 @@ def get_token_creator(
         # Defensive guard: should never reach here due to validate_credentials()
         raise ValueError("Invalid authentication configuration: no valid credentials found. ")
 
-    def get_token() -> str:
-        nonlocal token, token_expiry
-        with lock:
-            now: Final = datetime.now(timezone.utc)
-            if token is None or token_expiry is None or token_expiry - now < timedelta(minutes=expiry_buffer_minutes):
-                token, token_expiry = _fetch_token()
-            return token
-
-    return get_token, credentials["base_url"], credentials["resource_group"]
+    return OAuthTokenCache(_fetch_token, timedelta(minutes=expiry_buffer_minutes), clock, Lock(), Lock())

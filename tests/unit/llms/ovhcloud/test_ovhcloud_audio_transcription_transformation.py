@@ -3,6 +3,7 @@ import pytest
 from pydantic import ValidationError
 
 from litellm.llms.ovhcloud.audio_transcription.transformation import OVHCloudAudioTranscriptionConfig
+from litellm.llms.ovhcloud.utils import OVHCloudException
 from litellm.types.utils import TranscriptionResponse
 
 
@@ -96,5 +97,14 @@ def test_transform_audio_transcription_response_normalizes_text_and_duration(
 def test_transform_audio_transcription_response_rejects_non_object_bodies(payload: object):
     with pytest.raises(ValidationError) as exc_info:
         _transform(payload)
+
+    assert "spoken secret" not in str(exc_info.value)
+
+
+def test_transform_audio_transcription_response_keeps_a_non_json_body_out_of_the_error():
+    raw_response = httpx.Response(200, text='{"text": "spoken secret')
+
+    with pytest.raises(OVHCloudException, match="non-JSON") as exc_info:
+        OVHCloudAudioTranscriptionConfig().transform_audio_transcription_response(raw_response)
 
     assert "spoken secret" not in str(exc_info.value)

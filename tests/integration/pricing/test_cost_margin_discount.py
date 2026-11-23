@@ -7,7 +7,7 @@ import httpx
 import pytest
 from integration._support.client import Gateway, eventually, object_value, string_value
 from integration._support.database import read_rows
-from pydantic import BaseModel, JsonValue
+from pydantic import BaseModel, ConfigDict, JsonValue
 
 
 class CostEstimate(BaseModel):
@@ -108,6 +108,25 @@ def _assert_logged_spends(expectations: tuple[tuple[str, float], ...]) -> None:
     )
     actual: Final = {string_value(row["request_id"]): float(str(row["spend"])) for row in rows}
     assert actual == pytest.approx(dict(expectations)), rows
+
+
+class LoggedBreakdown(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    original_cost: float
+    discount_percent: float | None = None
+    discount_amount: float | None = None
+    margin_percent: float | None = None
+    margin_fixed_amount: float | None = None
+    margin_total_amount: float | None = None
+
+
+def _logged_breakdown(request_id: str) -> LoggedBreakdown:
+    rows: Final = read_rows('SELECT metadata FROM "LiteLLM_SpendLogs" WHERE request_id = %s', (request_id,))
+    assert len(rows) == 1, rows
+    metadata: Final = rows[0]["metadata"]
+    parsed: Final = object_value(json.loads(metadata) if isinstance(metadata, str) else metadata)
+    return LoggedBreakdown.model_validate(parsed["cost_breakdown"])
 
 
 def _estimated(gateway: Gateway, model: str) -> CostEstimate:
@@ -236,6 +255,17 @@ def test_discount_and_margin_reprice_a_request_and_survive_rejection(gateway: Ga
                 (streamed_global_request_id, 0.12),
             )
         )
+        discounted: Final = _logged_breakdown(discounted_request_id)
+        assert discounted.original_cost == pytest.approx(0.06), discounted
+        assert discounted.discount_percent == pytest.approx(0.05), discounted
+        assert discounted.discount_amount == pytest.approx(0.06 * 0.05), discounted
+        margined: Final = _logged_breakdown(provider_margin_request_id)
+        assert margined.original_cost == pytest.approx(0.06), margined
+        assert margined.discount_percent == pytest.approx(0.05), margined
+        assert margined.discount_amount == pytest.approx(0.06 * 0.05), margined
+        assert margined.margin_percent == pytest.approx(0.1), margined
+        assert margined.margin_fixed_amount == pytest.approx(0.001), margined
+        assert margined.margin_total_amount == pytest.approx(0.057 * 0.1 + 0.001), margined
 
         rejections: Final = (
             (

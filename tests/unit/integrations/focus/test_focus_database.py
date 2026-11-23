@@ -109,3 +109,19 @@ async def test_should_build_frame_from_rows_recovered_for_double_hashed_keys(mon
 
     assert result["api_key_alias"].to_list() == ["joined", "batch-worker"]
     assert result["team_id"].to_list() == ["team-0", "team-1"]
+
+
+@pytest.mark.asyncio
+async def test_table_info_returns_the_daily_user_spend_columns(monkeypatch: pytest.MonkeyPatch):
+    columns = [
+        {"column_name": "id", "data_type": "text", "is_nullable": "NO"},
+        {"column_name": "spend", "data_type": "double precision", "is_nullable": "YES"},
+    ]
+    db, query_mock = _setup_db(monkeypatch, columns)
+
+    info = await db.get_table_info()
+
+    assert info == {"columns": columns, "table_name": "LiteLLM_DailyUserSpend"}
+    query_text, *params = query_mock.await_args.args
+    assert "WHERE table_name = 'LiteLLM_DailyUserSpend'" in query_text
+    assert params == []

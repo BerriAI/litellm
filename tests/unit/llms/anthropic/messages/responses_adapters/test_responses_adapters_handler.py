@@ -2,25 +2,30 @@ import datetime
 import json
 import os
 import sys
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterable, AsyncIterator, Iterator, Mapping
+from contextlib import nullcontext
 from itertools import chain
-from typing import Final, cast
+from typing import Final, Protocol, cast, runtime_checkable
 from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
 import respx
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../../..")))
 
 import litellm
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     TOOL_RESULT_IMAGE_BOUNDARY,
     TOOL_RESULT_IMAGE_PLACEHOLDER,
 )
+from litellm.litellm_core_utils.prompt_templates.reasoning_utils import encrypted_reasoning_signature
 from litellm.llms.anthropic.messages.responses_adapters.handler import (
     LiteLLMMessagesToResponsesAPIHandler,
     _build_responses_kwargs,
 )
+from litellm.llms.openai.responses.count_tokens.token_counter import OpenAITokenCounter
 from litellm.router import Router
 from litellm.types.integrations.custom_logger import CONVERTED_STREAM_KEYS, converted_stream_requested
 
@@ -38,6 +43,242 @@ RESPONSES_SSE_BODY = (
     b'"parallel_tool_calls":true,"tool_choice":"auto","tools":[],'
     b'"usage":{"input_tokens":3,"output_tokens":4,"total_tokens":7}}}\n\n'
 )
+
+CHAT_COMPLETIONS_SSE_BODY = (
+    b'data: {"id":"chatcmpl-lit6825","object":"chat.completion.chunk","created":1,"model":"gpt-5.6-luna",'
+    b'"choices":[{"index":0,"delta":{"role":"assistant","content":"hi"},"finish_reason":null}]}\n\n'
+    b'data: {"id":"chatcmpl-lit6825","object":"chat.completion.chunk","created":1,"model":"gpt-5.6-luna",'
+    b'"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n'
+    b"data: [DONE]\n\n"
+)
+
+
+@pytest.mark.parametrize("nested", [False, True])
+def test_chained_turn_keeps_system_out_of_stored_input(nested: bool) -> None:
+    continuation: Final = {"conversation": "conv_prior"}
+    forwarded: Final = {"extra_body": continuation} if nested else continuation
+    kwargs: Final = _build_responses_kwargs(
+        max_tokens=1024,
+        messages=MESSAGES,
+        model="openai/gpt-6.2-sol",
+        system="Be brief.",
+        extra_kwargs={"custom_llm_provider": "openai", **forwarded},
+    )
+    assert kwargs["instructions"] == "Be brief."
+    assert kwargs["input"] == [
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hello"}]}
+    ]
+
+
+@pytest.mark.parametrize("nested", [False, True])
+def test_auto_truncation_keeps_system_prompt_in_instructions(nested: bool) -> None:
+    truncation: Final = {"truncation": "auto"}
+    forwarded: Final = {"extra_body": truncation} if nested else truncation
+    kwargs: Final = _build_responses_kwargs(
+        max_tokens=1024,
+        messages=MESSAGES,
+        model="openai/gpt-6.2-sol",
+        system="Be brief.",
+        extra_kwargs={"custom_llm_provider": "openai", **forwarded},
+    )
+    assert kwargs.get("instructions") == "Be brief."
+    assert kwargs["input"] == [
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hello"}]}
+    ]
+
+
+@pytest.mark.parametrize(
+    "request_params",
+    [{}, {"conversation": "conv_prior"}, {"truncation": "auto"}],
+)
+@pytest.mark.parametrize("nested", [False, True])
+def test_explicit_caller_instructions_are_combined_with_preserved_system_text(
+    request_params: dict[str, str], nested: bool
+) -> None:
+    caller: Final = {"instructions": "Caller instructions"}
+    forwarded: Final = {"extra_body": caller} if nested else caller
+    kwargs: Final = _build_responses_kwargs(
+        max_tokens=1024,
+        messages=MESSAGES,
+        model="openai/gpt-6.2-sol",
+        system="Be brief.",
+        extra_kwargs={"custom_llm_provider": "openai", "store": False, **forwarded, **request_params},
+    )
+    instructions: Final = kwargs["extra_body"]["instructions"] if nested else kwargs["instructions"]
+    assert instructions == ("Be brief.\nCaller instructions" if request_params else "Caller instructions")
+    assert kwargs["input"] == [
+        *(
+            []
+            if request_params
+            else [{"type": "message", "role": "developer", "content": [{"type": "input_text", "text": "Be brief."}]}]
+        ),
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hello"}]},
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_params,wire_controls,preserve_instructions",
+    [
+        ({}, {}, False),
+        ({"store": False, "drop_params": True}, {"store": False}, False),
+        ({"extra_body": {"store": False}, "drop_params": True}, {"store": False}, False),
+        ({"store": False, "additional_drop_params": ["store"]}, {}, False),
+        ({"extra_body": {"store": False}, "additional_drop_params": ["extra_body.store"]}, {"store": False}, False),
+        ({"extra_body": {"store": False}, "additional_drop_params": ["store"]}, {"store": False}, False),
+        ({"extra_body": {"store": False}, "additional_drop_params": ["extra_body"]}, {"store": False}, False),
+        ({"extra_body": {"store": None}}, {"store": None}, False),
+        (
+            {"store": False, "extra_body": {"conversation": "conv_prior"}},
+            {"store": False, "conversation": "conv_prior"},
+            True,
+        ),
+        ({"store": True}, {"store": True}, False),
+        ({"store": False}, {"store": False}, False),
+        ({"extra_body": {"store": False}}, {"store": False}, False),
+        ({"store": False, "extra_body": {"store": True}}, {"store": True}, False),
+        ({"store": True, "extra_body": {"store": False}}, {"store": False}, False),
+        ({"store": False, "conversation": "conv_prior"}, {"store": False}, True),
+        (
+            {"store": False, "previous_response_id": "resp_prior", "additional_drop_params": ["previous_response_id"]},
+            {"store": False},
+            False,
+        ),
+        (
+            {"store": False, "truncation": "auto", "additional_drop_params": ["truncation"]},
+            {"store": False},
+            False,
+        ),
+        ({"store": False, "truncation": "auto"}, {"store": False, "truncation": "auto"}, True),
+        (
+            {"store": False, "truncation": "auto", "extra_body": {"truncation": "disabled"}},
+            {"store": False, "truncation": "disabled"},
+            False,
+        ),
+        (
+            {"store": False, "truncation": "disabled", "extra_body": {"truncation": "auto"}},
+            {"store": False, "truncation": "auto"},
+            True,
+        ),
+        (
+            {"store": False, "previous_response_id": "resp_prior", "extra_body": {"previous_response_id": None}},
+            {"store": False, "previous_response_id": None},
+            False,
+        ),
+        (
+            {"store": False, "conversation": "conv_prior", "extra_body": {"conversation": None}},
+            {"store": False, "conversation": None},
+            False,
+        ),
+        (
+            {"store": False, "conversation": None, "extra_body": {"conversation": "conv_prior"}},
+            {"store": False, "conversation": "conv_prior"},
+            True,
+        ),
+    ],
+)
+async def test_messages_system_goes_in_input_unless_a_conversation_or_truncation_holds_it(
+    request_params: dict[str, object],
+    wire_controls: dict[str, object],
+    preserve_instructions: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    response_body: Final = {
+        "id": "resp_wire",
+        "object": "response",
+        "created_at": 1789788253,
+        "status": "completed",
+        "model": "gpt-6.2-sol",
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_wire",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+            }
+        ],
+        "usage": {"input_tokens": 10, "output_tokens": 1, "total_tokens": 11},
+    }
+    with respx.mock(assert_all_called=True) as router:
+        upstream: Final = router.post("https://api.openai.com/v1/responses").mock(
+            return_value=httpx.Response(200, json=response_body)
+        )
+        counted: Final = router.post("https://api.openai.com/v1/responses/input_tokens").mock(
+            return_value=httpx.Response(200, json={"input_tokens": 10})
+        )
+        await litellm.anthropic.messages.acreate(
+            model="openai/responses/gpt-6.2-sol",
+            max_tokens=16,
+            system="Stable prefix",
+            messages=[{"role": "user", "content": "hi"}],
+            api_key="sk-test",
+            cache={"no-cache": True},
+            **request_params,
+        )
+        await OpenAITokenCounter().count_tokens(
+            model_to_use="gpt-6.2-sol",
+            messages=[{"role": "user", "content": "hi"}],
+            contents=None,
+            system="Stable prefix",
+            messages_format="anthropic",
+            deployment={"litellm_params": {"api_key": "sk-test", **request_params}},
+        )
+    assert upstream.call_count == 1
+    request_body: Final = json.loads(upstream.calls[0].request.content)
+    count_body: Final = json.loads(counted.calls[0].request.content)
+    assert {key: count_body[key] for key in ("input", "instructions") if key in count_body} == {
+        key: request_body[key] for key in ("input", "instructions") if key in request_body
+    }
+    assert {
+        key: request_body[key]
+        for key in ("store", "conversation", "previous_response_id", "truncation")
+        if key in request_body
+    } == wire_controls
+    user_input: Final = {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]}
+    if preserve_instructions:
+        assert request_body["instructions"] == "Stable prefix"
+        assert request_body["input"] == [user_input]
+    else:
+        assert "instructions" not in request_body
+        assert request_body["input"] == [
+            {"type": "message", "role": "developer", "content": [{"type": "input_text", "text": "Stable prefix"}]},
+            user_input,
+        ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_params",
+    [
+        {"previous_response_id": "resp_prior"},
+        {"extra_body": {"previous_response_id": "resp_prior"}},
+        {"previous_response_id": "resp_prior", "drop_params": True},
+        {"extra_body": {"previous_response_id": "resp_prior"}, "additional_drop_params": ["previous_response_id"]},
+        {"previous_response_id": None, "extra_body": {"previous_response_id": "resp_prior"}},
+        {"previous_response_id": ""},
+    ],
+)
+async def test_messages_rejects_previous_response_id_before_calling_the_provider(
+    request_params: dict[str, object], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    with respx.mock(assert_all_called=False) as router:
+        upstream: Final = router.route().mock(return_value=httpx.Response(500))
+        with pytest.raises(litellm.UnsupportedParamsError) as rejected:
+            await litellm.anthropic.messages.acreate(
+                model="openai/responses/gpt-6.2-sol",
+                max_tokens=16,
+                system="Stable prefix",
+                messages=[{"role": "user", "content": "again"}],
+                api_key="sk-test",
+                cache={"no-cache": True},
+                **request_params,
+            )
+    assert not upstream.called
+    assert rejected.value.status_code == 400
+    assert "/v1/responses" in rejected.value.message
 
 
 def test_build_responses_kwargs_never_asks_the_nested_call_to_replay_a_stream():
@@ -562,7 +803,9 @@ def _gpt_5_6_input_for_a_cached_block(drop_params: bool, raw_mark: Mapping[str, 
         model="openai/gpt-5.6",
         extra_kwargs={**OPENAI_API, "drop_params": drop_params},
         max_tokens=1024,
-        messages=[{"role": "user", "content": [{"type": "text", "text": "look", "cache_control": EPHEMERAL, **raw_mark}]}],
+        messages=[
+            {"role": "user", "content": [{"type": "text", "text": "look", "cache_control": EPHEMERAL, **raw_mark}]}
+        ],
     )
     return responses_kwargs["input"]
 
@@ -1110,8 +1353,7 @@ async def test_input_tokens_trigger_counts_the_text_blocks_of_a_system_list_with
     assert _cleared_outputs(body) == expect_cleared
 
 
-@pytest.mark.asyncio
-async def test_the_sync_path_reports_its_edits_on_the_streamed_message_delta(
+def test_the_sync_path_reports_its_edits_on_the_streamed_message_delta(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "sk-clear-test")
@@ -1130,8 +1372,446 @@ async def test_the_sync_path_reports_its_edits_on_the_streamed_message_delta(
         custom_llm_provider="openai",
         context_management={"edits": [dict(CLEAR_EDIT)]},
     )
-    events: Final = [
-        json.loads(chunk.decode().split("data: ", 1)[1]) async for chunk in cast(AsyncIterator[bytes], sse)
-    ]
+    events: Final = [json.loads(chunk.decode().split("data: ", 1)[1]) for chunk in cast(Iterator[bytes], sse)]
     message_delta: Final = next(event for event in events if event["type"] == "message_delta")
     assert message_delta["context_management"]["applied_edits"][0]["cleared_tool_uses"] == 2
+
+
+class _RecordingSSEBody(httpx.SyncByteStream):
+    def __init__(self, sse_body: bytes = RESPONSES_SSE_BODY) -> None:
+        self.sse_body: Final = sse_body
+        self.closed = False
+
+    def __iter__(self) -> Iterator[bytes]:
+        yield self.sse_body
+
+    def close(self) -> None:
+        self.closed = True
+
+
+@runtime_checkable
+class _ClosableByteStream(Iterator[bytes], Protocol):
+    def close(self) -> None: ...
+
+
+@runtime_checkable
+class _AsyncClosableByteStream(AsyncIterable[bytes], Protocol):
+    async def aclose(self) -> None: ...
+
+
+def _sync_stream_from_create(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    body: _RecordingSSEBody,
+    model: str = "openai/gpt-5.6-luna",
+    upstream_url: str = "https://api.openai.com/v1/responses",
+) -> _ClosableByteStream:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-sync-stream-test")
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    respx_mock.post(upstream_url).mock(
+        return_value=httpx.Response(200, headers={"Content-Type": "text/event-stream"}, stream=body)
+    )
+    stream: Final = litellm.anthropic.messages.create(model=model, max_tokens=16, messages=MESSAGES, stream=True)
+    assert isinstance(stream, _ClosableByteStream)
+    return stream
+
+
+def test_a_sync_streamed_create_on_an_openai_model_is_read_with_a_plain_for_loop(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stream: Final = _sync_stream_from_create(respx_mock, monkeypatch, _RecordingSSEBody())
+
+    frames: Final = [frame.decode() for frame in stream]
+
+    assert [frame.split("\n", 1)[0] for frame in frames] == [
+        "event: message_start",
+        "event: message_delta",
+        "event: message_stop",
+    ]
+    assert json.loads(frames[1].split("data: ", 1)[1])["usage"] == {"input_tokens": 3, "output_tokens": 4}
+
+
+@pytest.mark.parametrize(
+    ("model", "upstream_url", "sse_body"),
+    [
+        ("openai/gpt-5.6-luna", "https://api.openai.com/v1/responses", RESPONSES_SSE_BODY),
+        (
+            "openai/chat_completions/gpt-5.6-luna",
+            "https://api.openai.com/v1/chat/completions",
+            CHAT_COMPLETIONS_SSE_BODY,
+        ),
+    ],
+    ids=["responses", "chat_completions"],
+)
+def test_closing_a_sync_stream_part_way_closes_the_upstream_response(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, model: str, upstream_url: str, sse_body: bytes
+) -> None:
+    body: Final = _RecordingSSEBody(sse_body)
+    stream: Final = _sync_stream_from_create(respx_mock, monkeypatch, body, model, upstream_url)
+
+    first: Final = next(stream)
+    assert not body.closed
+    stream.close()
+
+    assert first.startswith(b"event: message_start\n")
+    assert body.closed
+    assert list(stream) == []
+
+
+@pytest.mark.asyncio
+async def test_closing_a_sync_stream_also_ends_an_async_read_of_it(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    body: Final = _RecordingSSEBody()
+    stream: Final = _sync_stream_from_create(respx_mock, monkeypatch, body)
+    assert isinstance(stream, AsyncIterator)
+
+    stream.close()
+
+    assert [frame async for frame in stream] == []
+    assert body.closed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("read_mode", ["unread", "sync", "async"])
+@pytest.mark.parametrize(
+    ("model", "upstream_url", "sse_body"),
+    [
+        ("openai/gpt-5.6-luna", "https://api.openai.com/v1/responses", RESPONSES_SSE_BODY),
+        (
+            "openai/chat_completions/gpt-5.6-luna",
+            "https://api.openai.com/v1/chat/completions",
+            CHAT_COMPLETIONS_SSE_BODY,
+        ),
+    ],
+    ids=["responses", "chat_completions"],
+)
+async def test_aclose_closes_the_upstream_and_ends_both_read_modes(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    upstream_url: str,
+    sse_body: bytes,
+    read_mode: str,
+) -> None:
+    body: Final = _RecordingSSEBody(sse_body)
+    stream: Final = _sync_stream_from_create(respx_mock, monkeypatch, body, model, upstream_url)
+    assert isinstance(stream, _AsyncClosableByteStream)
+    if read_mode == "sync":
+        next(stream)
+    elif read_mode == "async":
+        await anext(aiter(stream))
+
+    await stream.aclose()
+
+    assert body.closed
+    assert list(stream) == []
+    assert [frame async for frame in stream] == []
+
+
+@pytest.mark.asyncio
+async def test_a_sync_streamed_create_on_an_openai_model_can_still_be_read_with_async_for(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stream: Final = _sync_stream_from_create(respx_mock, monkeypatch, _RecordingSSEBody())
+    assert isinstance(stream, AsyncIterator)
+
+    frames: Final = [frame.decode() async for frame in stream]
+
+    assert [frame.split("\n", 1)[0] for frame in frames] == [
+        "event: message_start",
+        "event: message_delta",
+        "event: message_stop",
+    ]
+
+
+REJECTED_REPLAYED_REASONING: Final = {
+    "error": {
+        "message": "The encrypted content gAAA_foreign could not be verified.",
+        "type": "invalid_request_error",
+        "param": None,
+        "code": "invalid_encrypted_content",
+    }
+}
+UNVERIFIED_ORGANIZATION: Final = {
+    "error": {"message": "The organization could not be verified.", "type": "invalid_request_error"}
+}
+
+
+def _history(*, replayed_reasoning: bool) -> list[dict[str, object]]:
+    reasoning: Final = (
+        ({"type": "redacted_thinking", "data": encrypted_reasoning_signature("gAAA_foreign")},)
+        if replayed_reasoning
+        else ()
+    )
+    return [
+        {"role": "user", "content": "List the logs."},
+        {
+            "role": "assistant",
+            "content": [*reasoning, {"type": "tool_use", "id": "call_1", "name": "Bash", "input": {}}],
+        },
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "call_1", "content": "app.log"}]},
+    ]
+
+
+def _replayed_reasoning_counts(upstream: respx.Route) -> list[int]:
+    return [
+        sum(item.get("type") == "reasoning" for item in json.loads(call.request.content)["input"])
+        for call in upstream.calls
+    ]
+
+
+def _upstream(respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, first: httpx.Response, stream: bool):
+    return _upstream_after(respx_mock, monkeypatch, (first,), stream)
+
+
+def _upstream_after(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, failures: tuple[httpx.Response, ...], stream: bool
+) -> respx.Route:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-replay-test")
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    served: Final = (
+        httpx.Response(200, headers={"Content-Type": "text/event-stream"}, content=RESPONSES_SSE_BODY)
+        if stream
+        else httpx.Response(200, json=TEXT_RESPONSE)
+    )
+    return respx_mock.post("https://api.openai.com/v1/responses").mock(side_effect=[*failures, served])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True])
+async def test_openai_turn_is_sent_again_once_without_replayed_reasoning_the_backend_cannot_decrypt(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, stream: bool
+) -> None:
+    upstream: Final = _upstream(respx_mock, monkeypatch, httpx.Response(400, json=REJECTED_REPLAYED_REASONING), stream)
+
+    response: Final = await LiteLLMMessagesToResponsesAPIHandler.async_anthropic_messages_handler(
+        max_tokens=64,
+        messages=_history(replayed_reasoning=True),
+        model="openai/gpt-5.6-luna",
+        tools=[dict(BASH_TOOL)],
+        stream=stream,
+        custom_llm_provider="openai",
+    )
+    events: Final = (
+        [json.loads(chunk.decode().split("data: ", 1)[1]) async for chunk in cast(AsyncIterator[bytes], response)]
+        if stream
+        else [cast(Mapping[str, object], response)]
+    )
+
+    assert _replayed_reasoning_counts(upstream) == [1, 0]
+    assert events[-1]["type"] in ("message", "message_stop")
+
+
+def test_sync_openai_turn_is_sent_again_once_without_replayed_reasoning_the_backend_cannot_decrypt(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    upstream: Final = _upstream(respx_mock, monkeypatch, httpx.Response(400, json=REJECTED_REPLAYED_REASONING), False)
+
+    response: Final = LiteLLMMessagesToResponsesAPIHandler.anthropic_messages_handler(
+        max_tokens=64,
+        messages=_history(replayed_reasoning=True),
+        model="openai/gpt-5.6-luna",
+        tools=[dict(BASH_TOOL)],
+        custom_llm_provider="openai",
+    )
+
+    assert _replayed_reasoning_counts(upstream) == [1, 0]
+    assert cast(Mapping[str, object], response)["content"] == [{"type": "text", "text": "done"}]
+
+
+@pytest.mark.asyncio
+async def test_openai_turn_with_num_retries_sends_the_rejected_reasoning_only_once(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    upstream: Final = _upstream(respx_mock, monkeypatch, httpx.Response(400, json=REJECTED_REPLAYED_REASONING), False)
+
+    await litellm.anthropic.messages.acreate(
+        max_tokens=64,
+        messages=_history(replayed_reasoning=True),
+        model="openai/gpt-5.6-luna",
+        tools=[dict(BASH_TOOL)],
+        num_retries=2,
+    )
+
+    assert _replayed_reasoning_counts(upstream) == [1, 0]
+
+
+def test_sync_openai_turn_with_global_num_retries_sends_the_rejected_reasoning_once_and_keeps_the_setting(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "num_retries", 2)
+    upstream: Final = _upstream(respx_mock, monkeypatch, httpx.Response(400, json=REJECTED_REPLAYED_REASONING), False)
+
+    litellm.anthropic.messages.create(
+        max_tokens=64,
+        messages=_history(replayed_reasoning=True),
+        model="openai/gpt-5.6-luna",
+        tools=[dict(BASH_TOOL)],
+    )
+
+    assert _replayed_reasoning_counts(upstream) == [1, 0]
+    assert litellm.num_retries == 2
+
+
+_SERVER_ERROR: Final = {
+    "error": {"message": "The server had an error while processing your request.", "type": "server_error"}
+}
+
+
+@pytest.mark.asyncio
+async def test_openai_turn_retries_a_server_error_with_the_reasoning_and_drops_it_only_once_rejected(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    upstream: Final = _upstream_after(
+        respx_mock,
+        monkeypatch,
+        (httpx.Response(500, json=_SERVER_ERROR), httpx.Response(400, json=REJECTED_REPLAYED_REASONING)),
+        False,
+    )
+
+    response: Final = await litellm.anthropic.messages.acreate(
+        max_tokens=64,
+        messages=_history(replayed_reasoning=True),
+        model="openai/gpt-5.6-luna",
+        tools=[dict(BASH_TOOL)],
+        num_retries=2,
+    )
+
+    assert _replayed_reasoning_counts(upstream) == [1, 1, 0]
+    assert cast(Mapping[str, object], response)["content"] == [{"type": "text", "text": "done"}]
+
+
+def test_sync_openai_turn_retries_a_server_error_with_the_reasoning_and_drops_it_only_once_rejected(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    upstream: Final = _upstream_after(
+        respx_mock,
+        monkeypatch,
+        (httpx.Response(500, json=_SERVER_ERROR), httpx.Response(400, json=REJECTED_REPLAYED_REASONING)),
+        False,
+    )
+
+    response: Final = litellm.anthropic.messages.create(
+        max_tokens=64,
+        messages=_history(replayed_reasoning=True),
+        model="openai/gpt-5.6-luna",
+        tools=[dict(BASH_TOOL)],
+        num_retries=2,
+    )
+
+    assert _replayed_reasoning_counts(upstream) == [1, 1, 0]
+    assert cast(Mapping[str, object], response)["content"] == [{"type": "text", "text": "done"}]
+
+
+class _FailureLog(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.rejections: tuple[str, ...] = ()
+
+    def _record(self, kwargs: Mapping[str, object]) -> None:
+        error: Final = str(kwargs.get("exception"))
+        self.rejections = (
+            *self.rejections,
+            next((phrase for phrase in ("encrypted content", "organization") if phrase in error), error),
+        )
+
+    def log_failure_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self._record(kwargs)
+
+    async def async_log_failure_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self._record(kwargs)
+
+
+_OUTCOMES_OF_THE_TURN_SENT_AGAIN: Final = (
+    pytest.param(httpx.Response(200, json=TEXT_RESPONSE), (), id="served"),
+    pytest.param(httpx.Response(400, json=UNVERIFIED_ORGANIZATION), ("organization",), id="rejected"),
+)
+
+
+def _rejected_then(respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, sent_again: httpx.Response) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-replay-test")
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    respx_mock.post("https://api.openai.com/v1/responses").mock(
+        side_effect=[httpx.Response(400, json=REJECTED_REPLAYED_REASONING), sent_again]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("sent_again", "logged_rejections"), _OUTCOMES_OF_THE_TURN_SENT_AGAIN)
+async def test_openai_turn_logs_only_the_outcome_of_the_turn_sent_again(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    sent_again: httpx.Response,
+    logged_rejections: tuple[str, ...],
+) -> None:
+    failure_log: Final = _FailureLog()
+    monkeypatch.setattr(litellm, "callbacks", [failure_log])
+    _rejected_then(respx_mock, monkeypatch, sent_again)
+
+    with pytest.raises(litellm.BadRequestError) if logged_rejections else nullcontext():
+        await litellm.anthropic.messages.acreate(
+            max_tokens=64,
+            messages=_history(replayed_reasoning=True),
+            model="openai/gpt-5.6-luna",
+            tools=[dict(BASH_TOOL)],
+        )
+
+    assert failure_log.rejections == logged_rejections
+
+
+@pytest.mark.parametrize(("sent_again", "logged_rejections"), _OUTCOMES_OF_THE_TURN_SENT_AGAIN)
+def test_sync_openai_turn_logs_only_the_outcome_of_the_turn_sent_again(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    sent_again: httpx.Response,
+    logged_rejections: tuple[str, ...],
+) -> None:
+    failure_log: Final = _FailureLog()
+    monkeypatch.setattr(litellm, "callbacks", [failure_log])
+    _rejected_then(respx_mock, monkeypatch, sent_again)
+
+    with pytest.raises(litellm.BadRequestError) if logged_rejections else nullcontext():
+        litellm.anthropic.messages.create(
+            max_tokens=64,
+            messages=_history(replayed_reasoning=True),
+            model="openai/gpt-5.6-luna",
+            tools=[dict(BASH_TOOL)],
+        )
+
+    assert failure_log.rejections == logged_rejections
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "replayed_reasoning, rejection",
+    [
+        pytest.param(False, REJECTED_REPLAYED_REASONING, id="no_replayed_reasoning"),
+        pytest.param(True, UNVERIFIED_ORGANIZATION, id="unrelated_rejection"),
+    ],
+)
+async def test_openai_turn_is_not_sent_again_for_other_rejections(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    replayed_reasoning: bool,
+    rejection: Mapping[str, object],
+) -> None:
+    upstream: Final = _upstream(respx_mock, monkeypatch, httpx.Response(400, json=rejection), False)
+
+    with pytest.raises(litellm.BadRequestError):
+        await LiteLLMMessagesToResponsesAPIHandler.async_anthropic_messages_handler(
+            max_tokens=64,
+            messages=_history(replayed_reasoning=replayed_reasoning),
+            model="openai/gpt-5.6-luna",
+            tools=[dict(BASH_TOOL)],
+            custom_llm_provider="openai",
+        )
+
+    assert upstream.call_count == 1

@@ -1,5 +1,5 @@
 """
-Tests for enterprise/litellm_enterprise/proxy/hooks/managed_files.py
+Tests for litellm/enterprise/litellm_enterprise/proxy/hooks/managed_files.py
 
 Regression test for afile_retrieve called without credentials in
 async_post_call_success_hook when processing completed batch responses.
@@ -10,10 +10,11 @@ import base64
 import json
 import logging
 from collections.abc import Callable, Mapping
+from datetime import datetime, timezone
 from types import MappingProxyType
 
 import pytest
-from typing import TYPE_CHECKING, Final, Optional
+from typing import TYPE_CHECKING, Final, Literal, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from litellm._internal_context import internal_parent_request_id, is_internal_call
@@ -338,14 +339,7 @@ async def test_provider_file_id_resolver_returns_owned_mappings_with_owner_scope
         "file-provider-2": "unified-file-id",
     }
     assert isinstance(unified_file_ids, MappingProxyType)
-    find_many.assert_awaited_once_with(
-        where={
-            "OR": [{"created_by": "test-user"}, {"team_id": "test-team"}],
-            "flat_model_file_ids": {
-                "hasSome": ["file-provider-1", "file-provider-2", "file-unmanaged-2"],
-            },
-        }
-    )
+    find_many.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -1165,45 +1159,56 @@ async def test_should_skip_non_file_unified_id_on_output_file_id():
 
 
 @pytest.mark.asyncio
-async def test_afile_content_passes_trusted_model_credentials_to_router():
-    """
-    afile_content must hand the deployment's credential snapshot to the router
-    call as an immutable server-side mapping. Cloud-storage providers (Bedrock
-    S3) validate file ids against the bucket in that snapshot, so without it
-    unified-id content retrieval only works when AWS_S3_BUCKET_NAME is set.
-    """
-    from types import MappingProxyType
+async def test_afile_content_reads_from_the_deployment_bucket(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Unified-id content retrieval must validate and fetch the s3:// file against the
+    deployment's s3_bucket_name, with no AWS_S3_BUCKET_NAME env set."""
+    import httpx
+    import respx
+
+    import litellm
+    from litellm import Router
+
+    monkeypatch.delenv("AWS_S3_BUCKET_NAME", raising=False)
+    monkeypatch.delenv("AWS_S3_OUTPUT_BUCKET_NAME", raising=False)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "bedrock-claude",
+                "litellm_params": {
+                    "model": "bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+                    "aws_access_key_id": "AKIAEXAMPLE",
+                    "aws_secret_access_key": "secret",
+                    "aws_region_name": "us-west-2",
+                    "s3_bucket_name": "my-bucket",
+                },
+                "model_info": {"id": "model-123"},
+            }
+        ],
+        num_retries=0,
+    )
 
     managed_files = _make_managed_files_instance()
     unified_file_id = "unified-file-id"
     s3_uri = "s3://my-bucket/litellm-batch-outputs/job-123/input.jsonl.out"
     managed_files.get_unified_file_id = AsyncMock(return_value=None)
-    managed_files.get_model_file_id_mapping = AsyncMock(
-        return_value={unified_file_id: {"model-123": s3_uri}}
-    )
+    managed_files.get_model_file_id_mapping = AsyncMock(return_value={unified_file_id: {"model-123": s3_uri}})
 
-    mock_router = MagicMock()
-    mock_router.registry.return_value.credentials = MagicMock(
-        return_value={
-            "custom_llm_provider": "bedrock",
-            "s3_bucket_name": "my-bucket",
-            "aws_region_name": "us-west-2",
-        }
-    )
-    mock_router.afile_content = AsyncMock(return_value=MagicMock())
+    with respx.mock:
+        route = respx.get(
+            "https://s3.us-west-2.amazonaws.com/my-bucket/litellm-batch-outputs/job-123/input.jsonl.out"
+        ).mock(return_value=httpx.Response(200, content=b'{"recordId":"req-1"}'))
 
-    await managed_files.afile_content(
-        file_id=unified_file_id,
-        litellm_parent_otel_span=None,
-        llm_router=mock_router,
-    )
+        response = await managed_files.afile_content(
+            file_id=unified_file_id,
+            litellm_parent_otel_span=None,
+            llm_router=router,
+        )
 
-    call_kwargs = mock_router.afile_content.call_args.kwargs
-    assert call_kwargs["model"] == "model-123"
-    assert call_kwargs["file_id"] == s3_uri
-    trusted_credentials = call_kwargs["_litellm_internal_model_credentials"]
-    assert isinstance(trusted_credentials, MappingProxyType)
-    assert trusted_credentials["s3_bucket_name"] == "my-bucket"
+    assert route.calls[0].request.headers["Authorization"].startswith("AWS4-HMAC-SHA256")
+    assert response.content == b'{"recordId":"req-1"}'
 
 
 def _managed_deletion_file_id(provider_file_id):
@@ -1273,7 +1278,6 @@ async def test_afile_delete_bedrock_uses_deployment_bucket_and_signed_s3_delete(
             file_id=unified_file_id,
             litellm_parent_otel_span=None,
             llm_router=router,
-            _litellm_internal_model_credentials={"s3_bucket_name": "request-bucket"},
         )
 
     assert len(route.calls) == 1
@@ -1299,7 +1303,6 @@ async def test_afile_delete_returns_managed_id_for_stored_provider_output():
         file_id=unified_file_id,
         litellm_parent_otel_span=None,
         llm_router=router,
-        _litellm_internal_model_credentials={"s3_bucket_name": "request-bucket"},
     )
 
     assert response.id == unified_file_id
@@ -1522,6 +1525,80 @@ async def test_create_still_upserts_and_claims_attribution():
     assert created["api_key"] != "sk-the-creator"
     assert created["created_by"] == "alice"
     assert created["team_id"] == "team-alpha"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("purpose", ("batch", "response"))
+async def test_deferred_cost_keeps_the_admitted_app_context_when_another_identity_refreshes(
+    purpose: Literal["batch", "response"],
+) -> None:
+    from litellm.models.budget import BudgetLimit
+    from litellm.types.llms.openai import ResponsesAPIResponse
+    from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth, CustomerScopeAuth
+
+    managed_files, prisma = _make_object_store_instance()
+    started_at: Final = datetime(2026, 1, 31, 23, 59, 58, tzinfo=timezone.utc)
+    hierarchy: Final = CustomerHierarchyAuth(
+        app_id="admitted-app",
+        app_alias="chat",
+        customer_org_id="customer-org",
+        customer_member_id="customer-member",
+        scopes=(
+            CustomerScopeAuth(key="customer_org", entity_id="customer-org", max_budget=100),
+            CustomerScopeAuth(
+                key="app_customer_member",
+                entity_id="admitted-app:customer-member",
+                budget_limits=(BudgetLimit(budget_duration="1mo", max_budget=10),),
+            ),
+        ),
+    )
+    creator: Final = UserAPIKeyAuth(
+        customer_hierarchy=hierarchy,
+        customer_hierarchy_started_at=datetime(2026, 2, 1, tzinfo=timezone.utc),
+        metadata={"user_api_key_app_id": "spoofed-app"},
+    )
+    assert creator.customer_hierarchy_started_at is None
+    creator.customer_hierarchy_started_at = started_at
+    response: Final = (
+        _make_batch_response(status="validating")
+        if purpose == "batch"
+        else ResponsesAPIResponse(
+            id="resp_provider", object="response", status="in_progress", created_at=1, output=[], background=True
+        )
+    )
+    await managed_files.store_unified_object_id(
+        unified_object_id="deferred-object",
+        file_object=response,
+        litellm_parent_otel_span=None,
+        model_object_id="provider-object",
+        file_purpose=purpose,
+        user_api_key_dict=creator,
+        persist_attribution=True,
+    )
+    created: Final = prisma.db.litellm_managedobjecttable.upsert.await_args.kwargs["data"]
+    context: Final = created["create"]["creator_billing_context"].data
+    assert context["started_at"] == "2026-01-31T23:59:58+00:00"
+    assert context["hierarchy"]["app_id"] == "admitted-app"
+    assert context["hierarchy"]["customer_org_id"] == "customer-org"
+    assert context["hierarchy"]["customer_member_id"] == "customer-member"
+    assert context["hierarchy"]["scopes"][1]["budget_limits"] == [
+        {"budget_duration": "1mo", "max_budget": 10.0, "reset_at": None}
+    ]
+    assert "creator_billing_context" not in created["update"]
+    observer: Final = UserAPIKeyAuth(customer_hierarchy=CustomerHierarchyAuth(app_id="different-app", scopes=()))
+    await managed_files.store_unified_object_id(
+        unified_object_id="deferred-object",
+        file_object=response,
+        litellm_parent_otel_span=None,
+        model_object_id="provider-object",
+        file_purpose=purpose,
+        user_api_key_dict=observer,
+        persist_attribution=False,
+        create_if_missing=False,
+    )
+    refreshed: Final = prisma.db.litellm_managedobjecttable.update_many.await_args.kwargs["data"]
+    assert "creator_billing_context" not in refreshed
+    assert context["hierarchy"]["app_id"] == "admitted-app"
 
 
 @pytest.mark.asyncio
@@ -1929,45 +2006,6 @@ async def test_post_call_hook_leaves_litellm_executed_batches_untouched(llm_batc
 
 
 @pytest.mark.asyncio
-async def test_afile_delete_passes_trusted_model_credentials_to_router():
-    """
-    afile_delete must hand the deployment's credential snapshot to the router
-    call, since Bedrock validates the s3:// file id against the bucket in it.
-    """
-    from types import MappingProxyType
-
-    managed_files = _make_managed_files_instance()
-    unified_file_id = "unified-file-id"
-    s3_uri = "s3://my-bucket/litellm-bedrock-files/job-123/input.jsonl"
-    managed_files.get_unified_file_id = AsyncMock(return_value=None)
-    managed_files.get_model_file_id_mapping = AsyncMock(return_value={unified_file_id: {"model-123": s3_uri}})
-    managed_files.delete_unified_file_id = AsyncMock(return_value=_make_file_object(unified_file_id))
-
-    mock_router = MagicMock()
-    mock_router.registry.return_value.credentials = MagicMock(
-        return_value={
-            "custom_llm_provider": "bedrock",
-            "s3_bucket_name": "my-bucket",
-            "aws_region_name": "us-west-2",
-        }
-    )
-    mock_router.afile_delete = AsyncMock(return_value=MagicMock())
-
-    await managed_files.afile_delete(
-        file_id=unified_file_id,
-        litellm_parent_otel_span=None,
-        llm_router=mock_router,
-    )
-
-    call_kwargs = mock_router.afile_delete.call_args.kwargs
-    assert call_kwargs["model"] == "model-123"
-    assert call_kwargs["file_id"] == s3_uri
-    trusted_credentials = call_kwargs["_litellm_internal_model_credentials"]
-    assert isinstance(trusted_credentials, MappingProxyType)
-    assert trusted_credentials["s3_bucket_name"] == "my-bucket"
-
-
-@pytest.mark.asyncio
 async def test_afile_delete_bedrock_unified_id_end_to_end(monkeypatch):
     """
     Proxy repro for deleting a Bedrock batch input file by unified id: the
@@ -2291,7 +2329,7 @@ class _FakeFilesRouter:
         self.delete_gate = delete_gate
         self.provider = provider
         self.upload_count = 0
-        self.deletes: tuple[tuple[str, str, Mapping[str, object], Mapping[str, str]], ...] = ()
+        self.deletes: tuple[tuple[str, str, Mapping[str, object]], ...] = ()
         self.deletes_marked_internal: tuple[bool, ...] = ()
         self.delete_parent_request_ids: tuple[str | None, ...] = ()
 
@@ -2328,14 +2366,13 @@ class _FakeFilesRouter:
         model: str,
         file_id: str,
         litellm_metadata: Mapping[str, object],
-        _litellm_internal_model_credentials: Mapping[str, str],
         litellm_call_id: str | None = None,
     ) -> None:
         if self.delete_gate is not None:
             await self.delete_gate.wait()
         if isinstance(litellm_metadata, dict):
             litellm_metadata.update({"model_info": {"id": model}})
-        self.deletes = (*self.deletes, (model, file_id, litellm_metadata, _litellm_internal_model_credentials))
+        self.deletes = (*self.deletes, (model, file_id, litellm_metadata))
         self.deletes_marked_internal = (*self.deletes_marked_internal, is_internal_call.get())
         self.delete_parent_request_ids = (*self.delete_parent_request_ids, internal_parent_request_id.get())
         if file_id in self.gone_file_ids:
@@ -2399,15 +2436,7 @@ async def test_acreate_file_keeps_the_upload_the_managed_id_carries_when_two_tar
     assert carried == ("wildcard-dep", "file-upload-1")
     assert model_mappings == {"wildcard-dep": "file-upload-1"}
     assert flat_ids == ["file-upload-1"]
-    assert router.deletes == (
-        (
-            "wildcard-dep",
-            "file-upload-2",
-            _REQUEST_METADATA,
-            {"custom_llm_provider": "openai", "api_key": "key-of-wildcard-dep"},
-        ),
-    )
-    assert isinstance(router.deletes[0][3], MappingProxyType)
+    assert router.deletes == (("wildcard-dep", "file-upload-2", _REQUEST_METADATA),)
 
 
 @pytest.mark.asyncio

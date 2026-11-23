@@ -1,4 +1,5 @@
 import json
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from functools import partial
@@ -6,8 +7,8 @@ from types import MappingProxyType
 from typing import Annotated, Final, Literal, TypeAlias
 
 import httpx
-from pydantic import BaseModel, BeforeValidator, ConfigDict, TypeAdapter, ValidationError
-from pydantic_core import to_jsonable_python
+from pydantic import AfterValidator, BaseModel, BeforeValidator, ConfigDict, Field, TypeAdapter, ValidationError
+from pydantic_core import ErrorDetails, InitErrorDetails, to_jsonable_python
 from typing_extensions import assert_never
 
 import litellm
@@ -17,6 +18,7 @@ from litellm.litellm_core_utils.decisions_pricing import QUERY_PRICED_DECISIONS_
 from litellm.litellm_core_utils.get_provider_specific_headers import ProviderSpecificHeaderUtils
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
+    async_convert_url_to_base64,
     async_convert_urls_to_base64,
     convert_url_to_base64,
 )
@@ -25,17 +27,27 @@ from litellm.llms.base_llm.decisions.transformation import (
     BaseDecisionsConfig,
     DecisionsResponseValidationError,
     catalog_mode,
+    has_json_input,
     image_media_type,
     image_param,
     input_images,
+    ir_to_systemone_request,
     ir_to_systemone_response,
     remote_image_urls,
     systemone_request_to_ir,
     with_images_where,
     with_inlined_images,
+    with_readable_raw_prompt_cache_breakpoints,
+    without_json_input,
+    without_prompt_cache_breakpoints,
+    without_raw_prompt_cache_breakpoints,
 )
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
-from litellm.llms.openai.decisions.transformation import ir_to_openai_response, openai_request_to_ir
+from litellm.llms.openai.decisions.transformation import (
+    ir_to_openai_response,
+    openai_input_to_ir,
+    openai_request_to_ir,
+)
 from litellm.types.decisions import (
     DecisionQuestion,
     DecisionsAsset,
@@ -57,12 +69,16 @@ from litellm.types.decisions import (
     DecisionsResponse,
     DecisionsVideo,
     OpenAIDecisionInput,
+    OpenAIDecisionInputMessage,
+    OpenAIDecisionPromptCacheOptions,
+    OpenAIDecisionPromptCacheOptionsFields,
     OpenAIDecisionQuestion,
     OpenAIDecisionRequestBody,
     OpenAIDecisionResponse,
     UnsupportedDecisionsRequest,
 )
 from litellm.types.llms.openai import ChatCompletionUserMessage
+from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders, ProviderSpecificHeader, is_decisions_model_mode
 from litellm.utils import ProviderConfigManager, get_model_cost_key
 
@@ -72,16 +88,40 @@ DecisionsImages: TypeAlias = Sequence[str | DecisionsBase64Image | Mapping[str, 
 DecisionsAssetEntries: TypeAlias = Mapping[str, DecisionsAsset | Mapping[str, object]]
 DecisionsAudioClips: TypeAlias = Sequence[DecisionsAudio | Mapping[str, object]]
 DecisionsVideoClips: TypeAlias = Sequence[DecisionsVideo | Mapping[str, object]]
+DecisionsPromptCacheOptions: TypeAlias = OpenAIDecisionPromptCacheOptions | Mapping[str, object]
 DecisionsRequestFormat: TypeAlias = DecisionsRequestBody | OpenAIDecisionRequestBody
 
 _SYSTEMONE_REQUEST_ADAPTER: Final[TypeAdapter[DecisionsRequestBody]] = TypeAdapter(DecisionsRequestBody)
 _OPENAI_REQUEST_ADAPTER: Final[TypeAdapter[OpenAIDecisionRequestBody]] = TypeAdapter(OpenAIDecisionRequestBody)
+_OPENAI_INPUT_ADAPTER: Final[TypeAdapter[OpenAIDecisionInput]] = TypeAdapter(OpenAIDecisionInput)
 _SAFETY_IDENTIFIER_ADAPTER: Final[TypeAdapter[str | None]] = TypeAdapter(
     str | None, config=ConfigDict(title="safety_identifier")
 )
+_OPENAI_PROMPT_CACHE_KEY_MAX_LENGTH: Final = 64
+_OpenAIPromptCacheKey: TypeAlias = Annotated[str, Field(max_length=_OPENAI_PROMPT_CACHE_KEY_MAX_LENGTH)]
+_PROMPT_CACHE_KEY_ADAPTER: Final[TypeAdapter[str | None]] = TypeAdapter(_OpenAIPromptCacheKey | None)
+_PROMPT_CACHE_OPTIONS_ADAPTER: Final[TypeAdapter[OpenAIDecisionPromptCacheOptionsFields]] = TypeAdapter(
+    OpenAIDecisionPromptCacheOptionsFields
+)
+_PROMPT_CACHE_OPTION_ENTRIES_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 _IMAGES_ADAPTER: Final[TypeAdapter[tuple[DecisionsImage, ...] | None]] = TypeAdapter(
     tuple[DecisionsImage, ...] | None, config=ConfigDict(title="images")
 )
+
+
+def _without_surrounding_whitespace(value: str) -> str:
+    return value.strip(" \t")
+
+
+_HeaderName: TypeAlias = Annotated[str, Field(pattern=r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")]
+_HeaderValue: TypeAlias = Annotated[
+    str, Field(pattern=r"^[\t\x20-\x7e]*$"), AfterValidator(_without_surrounding_whitespace)
+]
+_EXTRA_HEADERS_ADAPTER: Final[TypeAdapter[Mapping[str, str] | None]] = TypeAdapter(
+    Mapping[_HeaderName, _HeaderValue] | None,
+    config=ConfigDict(title="extra_headers", hide_input_in_errors=True),
+)
+_HEADER_ADAPTER: Final[TypeAdapter[tuple[str, str]]] = TypeAdapter(tuple[_HeaderName, _HeaderValue])
 _PROVIDER_SPECIFIC_HEADER_ADAPTER: Final[
     TypeAdapter[ProviderSpecificHeader | tuple[ProviderSpecificHeader, ...] | None]
 ] = TypeAdapter(ProviderSpecificHeader | tuple[ProviderSpecificHeader, ...] | None)
@@ -98,6 +138,7 @@ _ASSET_ENTRY_ADAPTER: Final[TypeAdapter[tuple[DecisionsAssetReference, Decisions
     tuple[DecisionsAssetReference, DecisionsAsset]
 )
 _ASSET_ENTRIES_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+_HEADER_ENTRIES_ADAPTER: Final[TypeAdapter[Mapping[object, object]]] = TypeAdapter(Mapping[object, object])
 
 
 def _valid_image(image: object) -> DecisionsImage | None:
@@ -105,6 +146,38 @@ def _valid_image(image: object) -> DecisionsImage | None:
         return _IMAGE_ADAPTER.validate_python(image)
     except ValidationError:
         return None
+
+
+def _valid_prompt_cache_key(prompt_cache_key: object) -> str | None:
+    try:
+        return _PROMPT_CACHE_KEY_ADAPTER.validate_python(prompt_cache_key)
+    except ValidationError:
+        return None
+
+
+def _prompt_cache_option_entries(prompt_cache_options: object) -> Mapping[str, object]:
+    if isinstance(prompt_cache_options, OpenAIDecisionPromptCacheOptions):
+        return prompt_cache_options.model_dump(exclude_none=True)
+    try:
+        return _PROMPT_CACHE_OPTION_ENTRIES_ADAPTER.validate_python(prompt_cache_options)
+    except ValidationError:
+        return {}
+
+
+def _is_valid_prompt_cache_option(name: str, value: object) -> bool:
+    try:
+        return name in _PROMPT_CACHE_OPTIONS_ADAPTER.validate_python({name: value})
+    except ValidationError:
+        return False
+
+
+def _valid_prompt_cache_options(prompt_cache_options: object) -> OpenAIDecisionPromptCacheOptionsFields | None:
+    valid: Final = {
+        name: value
+        for name, value in _prompt_cache_option_entries(prompt_cache_options).items()
+        if _is_valid_prompt_cache_option(name, value)
+    }
+    return _PROMPT_CACHE_OPTIONS_ADAPTER.validate_python(valid) if valid else None
 
 
 def _image_entries(images: object) -> tuple[object, ...]:
@@ -145,6 +218,14 @@ def _request_assets(assets: object, drops_params: bool) -> Mapping[str, Decision
     return valid or None
 
 
+def _request_input(decision_input: object, *, keeps_breakpoints: bool, drops_params: bool) -> object:
+    if not keeps_breakpoints:
+        return without_raw_prompt_cache_breakpoints(decision_input)
+    if drops_params:
+        return with_readable_raw_prompt_cache_breakpoints(decision_input)
+    return decision_input
+
+
 def _request_images(images: object, drops_params: bool) -> tuple[DecisionsImage, ...]:
     if not drops_params:
         return _IMAGES_ADAPTER.validate_python(images) or ()
@@ -179,15 +260,28 @@ class OpenAIDecisionRequestFields:
     questions: OpenAIDecisionQuestions | None
     audio: DecisionsAudioClips | None = None
     videos: DecisionsVideoClips | None = None
+    prompt_cache_key: str | None = None
+    prompt_cache_options: DecisionsPromptCacheOptions | None = None
+    keeps_prompt_cache_breakpoints: bool = True
 
     def validate(self, *, safety_identifier: str | None, drops_params: bool) -> OpenAIDecisionRequestBody:
         return _OPENAI_REQUEST_ADAPTER.validate_python(
             {
-                "input": self.input,
+                "input": _request_input(
+                    self.input, keeps_breakpoints=self.keeps_prompt_cache_breakpoints, drops_params=drops_params
+                ),
                 "questions": self.questions,
                 "safety_identifier": safety_identifier,
                 "audio": self.audio,
                 "videos": self.videos,
+                "prompt_cache_key": (
+                    _valid_prompt_cache_key(self.prompt_cache_key) if drops_params else self.prompt_cache_key
+                ),
+                "prompt_cache_options": (
+                    _valid_prompt_cache_options(self.prompt_cache_options)
+                    if drops_params
+                    else self.prompt_cache_options
+                ),
             }
         )
 
@@ -235,18 +329,38 @@ def get_decisions_provider_config(model: str, custom_llm_provider: str) -> BaseD
     return provider_config
 
 
-def _ir_request(request: DecisionsRequestFormat, safety_identifier: str | None) -> DecisionsIRRequest:
+def validate_router_connection(model: str, provider: str | None, request: Mapping[str, object]) -> None:
+    api_base: Final = request.get("api_base") or request.get("base_url")
+    if provider is None or not isinstance(api_base, str) or not api_base:
+        return
+    api_key: Final = request.get("api_key")
+    provider_config: Final = get_decisions_provider_config(model, provider)
+    try:
+        provider_config.validate_client_connection(api_base, api_key if isinstance(api_key, str) else None)
+    except ValueError as error:
+        raise litellm.BadRequestError(message=str(error), model=model, llm_provider=provider) from error
+
+
+def _ir_request(
+    request: DecisionsRequestFormat, safety_identifier: str | None, drop_params: bool
+) -> DecisionsIRRequest:
     match request:
         case DecisionsRequestBody():
-            return replace(systemone_request_to_ir(request), safety_identifier=safety_identifier)
+            return replace(
+                systemone_request_to_ir(request), safety_identifier=safety_identifier, drop_params=drop_params
+            )
         case OpenAIDecisionRequestBody():
-            return openai_request_to_ir(request)
+            return replace(openai_request_to_ir(request), drop_params=drop_params)
         case _:
             assert_never(request)
 
 
+def _caller_drops_params(kwargs: Mapping[str, object]) -> bool:
+    return normalize_drop_params(kwargs.get("drop_params")) is True
+
+
 def _drops_params(kwargs: Mapping[str, object]) -> bool:
-    return litellm.drop_params is True or normalize_drop_params(kwargs.get("drop_params")) is True
+    return litellm.drop_params is True or _caller_drops_params(kwargs)
 
 
 def _request_safety_identifier(
@@ -320,15 +434,34 @@ def deployment_refuses_media(
     *,
     audio: bool,
     videos: bool,
+    decision_input: DecisionsIRState | DecisionsIRMessages | None,
 ) -> bool:
-    if _drops_params(call_kwargs):
+    json_input: Final = decision_input is not None and has_json_input(decision_input)
+    drops_params: Final = _drops_params(call_kwargs)
+    if drops_params and not json_input:
         return False
     provider_config: Final = get_decisions_provider_config(model, custom_llm_provider)
+    if drops_params and decision_input is not None:
+        headers: Final = decisions_outbound_headers(call_kwargs.get("extra_headers"), custom_llm_provider, call_kwargs)
+        return _leaves_no_input(
+            _with_images_surely_kept(_supported_input(decision_input, provider_config, headers), provider_config)
+        )
     canonical_model: Final = provider_config.canonical_model(model)
     deployment: Final = _DeploymentCapabilities.model_validate(model_info)
-    return (audio and not _takes_audio(provider_config, canonical_model, custom_llm_provider, deployment)) or (
-        videos and not _takes_videos(provider_config, canonical_model, custom_llm_provider, deployment)
+    return (
+        (audio and not _takes_audio(provider_config, canonical_model, custom_llm_provider, deployment))
+        or (videos and not _takes_videos(provider_config, canonical_model, custom_llm_provider, deployment))
+        or (json_input and not provider_config.supports_json_input)
     )
+
+
+def routed_decision_input(request_input: object) -> DecisionsIRState | DecisionsIRMessages | None:
+    try:
+        return openai_input_to_ir(
+            _OPENAI_INPUT_ADAPTER.validate_python(without_raw_prompt_cache_breakpoints(request_input))
+        )
+    except ValidationError:
+        return None
 
 
 def _resolved_support(
@@ -359,6 +492,24 @@ def _fields_without_unsupported_media(
         audio=fields.audio if support.audio else None,
         videos=fields.videos if support.videos else None,
     )
+
+
+def _fields_without_unsupported_breakpoints(
+    fields: RequestFields, provider_config: BaseDecisionsConfig
+) -> RequestFields:
+    match fields:
+        case OpenAIDecisionRequestFields() if not provider_config.supports_prompt_cache:
+            return replace(fields, keeps_prompt_cache_breakpoints=False)
+        case _:
+            return fields
+
+
+def _without_unsupported_breakpoints(
+    ir_request: DecisionsIRRequest, provider_config: BaseDecisionsConfig
+) -> DecisionsIRRequest:
+    if provider_config.supports_prompt_cache:
+        return ir_request
+    return replace(ir_request, input=without_prompt_cache_breakpoints(ir_request.input))
 
 
 @dataclass(frozen=True, slots=True)
@@ -393,6 +544,17 @@ def _unsupported_params(
     refuses_box_questions: Final = _has_box_question(ir_request.questions) and not support.box_questions
     refuses_audio: Final = bool(ir_request.audio) and not support.audio
     refuses_videos: Final = bool(ir_request.videos) and not support.videos
+    refuses_developer_and_system_messages: Final = (
+        _has_developer_or_system_message(ir_request.input)
+        and not provider_config.supports_developer_and_system_messages
+    )
+    refuses_prompt_cache_key: Final = (
+        ir_request.prompt_cache_key is not None and not provider_config.supports_prompt_cache
+    )
+    refuses_prompt_cache_options: Final = (
+        ir_request.prompt_cache_options is not None and not provider_config.supports_prompt_cache
+    )
+    refuses_json_input: Final = has_json_input(ir_request.input) and not provider_config.supports_json_input
     return (
         *(("safety_identifier",) if refuses_safety_identifier else ()),
         *(() if refused_image_param is None else (refused_image_param,)),
@@ -400,6 +562,10 @@ def _unsupported_params(
         *(("box questions",) if refuses_box_questions else ()),
         *(("audio",) if refuses_audio else ()),
         *(("videos",) if refuses_videos else ()),
+        *(("developer and system messages",) if refuses_developer_and_system_messages else ()),
+        *(("prompt_cache_key",) if refuses_prompt_cache_key else ()),
+        *(("prompt_cache_options",) if refuses_prompt_cache_options else ()),
+        *(("input_json",) if refuses_json_input else ()),
     )
 
 
@@ -411,6 +577,36 @@ def _is_not_box_question(question: DecisionsIRQuestion) -> bool:
     return not isinstance(question, DecisionsIRBoxQuestion)
 
 
+def _is_user_message(message: OpenAIDecisionInputMessage) -> bool:
+    return message.role == "user"
+
+
+def _has_developer_or_system_message(decision_input: DecisionsIRState | DecisionsIRMessages) -> bool:
+    return isinstance(decision_input, DecisionsIRMessages) and not all(map(_is_user_message, decision_input.messages))
+
+
+def _supported_messages(
+    decision_input: DecisionsIRState | DecisionsIRMessages, provider_config: BaseDecisionsConfig
+) -> DecisionsIRState | DecisionsIRMessages:
+    if provider_config.supports_developer_and_system_messages or isinstance(decision_input, DecisionsIRState):
+        return decision_input
+    return DecisionsIRMessages(messages=tuple(filter(_is_user_message, decision_input.messages)))
+
+
+def _supported_input(
+    decision_input: DecisionsIRState | DecisionsIRMessages,
+    provider_config: BaseDecisionsConfig,
+    headers: Mapping[str, str],
+) -> DecisionsIRState | DecisionsIRMessages:
+    supported_messages: Final = _supported_messages(decision_input, provider_config)
+    supported_input: Final = (
+        supported_messages if provider_config.supports_json_input else without_json_input(supported_messages)
+    )
+    if provider_config.supports_images_in(supported_input, headers):
+        return supported_input
+    return with_images_where(supported_input, _no_image)
+
+
 def _without_unsupported_params(
     ir_request: DecisionsIRRequest,
     provider_config: BaseDecisionsConfig,
@@ -419,12 +615,10 @@ def _without_unsupported_params(
 ) -> DecisionsIRRequest:
     return replace(
         ir_request,
-        input=(
-            ir_request.input
-            if provider_config.supports_images_in(ir_request.input, headers)
-            else with_images_where(ir_request.input, _no_image)
-        ),
+        input=_supported_input(ir_request.input, provider_config, headers),
         safety_identifier=ir_request.safety_identifier if provider_config.supports_safety_identifier else None,
+        prompt_cache_key=ir_request.prompt_cache_key if provider_config.supports_prompt_cache else None,
+        prompt_cache_options=ir_request.prompt_cache_options if provider_config.supports_prompt_cache else None,
         assets=ir_request.assets if provider_config.supports_assets(headers) else MappingProxyType({}),
         questions=(
             ir_request.questions if support.box_questions else tuple(filter(_is_not_box_question, ir_request.questions))
@@ -469,8 +663,58 @@ def _provider_ir_request(
     return supported
 
 
+def _valid_header(entry: tuple[object, object]) -> tuple[str, str] | None:
+    try:
+        return _HEADER_ADAPTER.validate_python(entry)
+    except ValidationError:
+        return None
+
+
+def _header_entries(extra_headers: object) -> Mapping[object, object]:
+    try:
+        return _HEADER_ENTRIES_ADAPTER.validate_python(extra_headers)
+    except ValidationError:
+        return MappingProxyType({})
+
+
+_HEADER_LABEL_END: Final = re.compile(r"[\s:]")
+
+
+def _header_label(name: str | int) -> str:
+    return _HEADER_LABEL_END.split(str(name), maxsplit=1)[0]
+
+
+def _without_full_header_name(detail: ErrorDetails) -> InitErrorDetails:
+    loc: Final = detail["loc"]
+    return InitErrorDetails(
+        type=detail["type"],
+        loc=(_header_label(loc[0]), *loc[1:]) if loc else loc,
+        input=None,
+        ctx=detail.get("ctx", {}),
+    )
+
+
+def _strict_extra_headers(extra_headers: object) -> Mapping[str, str]:
+    try:
+        return _EXTRA_HEADERS_ADAPTER.validate_python(extra_headers) or MappingProxyType({})
+    except ValidationError as error:
+        raise ValidationError.from_exception_data(
+            error.title, [_without_full_header_name(detail) for detail in error.errors()], hide_input=True
+        ) from None
+
+
+def _request_extra_headers(extra_headers: object, drops_params: bool) -> Mapping[str, str]:
+    if not extra_headers:
+        return MappingProxyType({})
+    if not drops_params:
+        return _strict_extra_headers(extra_headers)
+    return MappingProxyType(
+        dict(header for header in map(_valid_header, _header_entries(extra_headers).items()) if header is not None)
+    )
+
+
 def decisions_outbound_headers(
-    extra_headers: Mapping[str, str] | None, custom_llm_provider: str, kwargs: Mapping[str, object]
+    extra_headers: object, custom_llm_provider: str, kwargs: Mapping[str, object]
 ) -> Mapping[str, str]:
     forwarded: Final = ProviderSpecificHeaderUtils.get_provider_specific_headers(
         provider_specific_header=_PROVIDER_SPECIFIC_HEADER_ADAPTER.validate_python(
@@ -478,7 +722,7 @@ def decisions_outbound_headers(
         ),
         custom_llm_provider=custom_llm_provider,
     )
-    return MappingProxyType({**(extra_headers or {}), **forwarded})
+    return MappingProxyType({**_request_extra_headers(extra_headers, _drops_params(kwargs)), **forwarded})
 
 
 _LOGGED_FIELDS_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
@@ -505,6 +749,16 @@ def log_caller_request(kwargs: Mapping[str, object], caller_request: object) -> 
         logging_obj.update_messages([_logged_request_message(caller_request)])
 
 
+def _config_for_shape(provider_config: BaseDecisionsConfig, fields: RequestFields) -> BaseDecisionsConfig:
+    match fields:
+        case SystemOneRequestFields():
+            return provider_config.systemone_config()
+        case OpenAIDecisionRequestFields():
+            return provider_config
+        case _:
+            assert_never(fields)
+
+
 def prepare_call(
     *,
     model: str,
@@ -526,8 +780,9 @@ def prepare_call(
         custom_llm_provider=custom_llm_provider,
         api_base=call_api_base,
         api_key=api_key,
+        litellm_params=GenericLiteLLMParams(use_litellm_proxy=kwargs.get("use_litellm_proxy") is True),
     )
-    provider_config: Final = get_decisions_provider_config(upstream_model, provider)
+    provider_config: Final = _config_for_shape(get_decisions_provider_config(upstream_model, provider), fields)
     if not upstream_model:
         raise litellm.BadRequestError(
             message="A model name is required for the Decisions API",
@@ -542,9 +797,9 @@ def prepare_call(
         headers: Final = decisions_outbound_headers(extra_headers, provider, kwargs)
         support: Final = _resolved_support(provider_config, canonical_model, provider, headers, kwargs, fields)
         request_safety_identifier: Final = _request_safety_identifier(safety_identifier, provider_config, kwargs)
-        request: Final = _fields_without_unsupported_media(fields, support, kwargs).validate(
-            safety_identifier=request_safety_identifier, drops_params=_drops_params(kwargs)
-        )
+        request: Final = _fields_without_unsupported_breakpoints(
+            _fields_without_unsupported_media(fields, support, kwargs), provider_config
+        ).validate(safety_identifier=request_safety_identifier, drops_params=_drops_params(kwargs))
     except ValidationError as error:
         raise litellm.BadRequestError(
             message=f"Invalid Decisions request: {error}",
@@ -567,13 +822,16 @@ def prepare_call(
     resolved_api_key: Final = provider_config.resolve_credential(static_api_key, resolved_api_base, kwargs)
     if resolved_api_key is None and provider_config.api_key_required:
         raise litellm.AuthenticationError(
-            message=f"Missing API key for Decisions provider '{provider}'",
+            message=provider_config.missing_api_key_message(provider),
             model=model,
             llm_provider=provider,
         )
 
     caller_ir_request: Final = _without_malformed_images(
-        _ir_request(request, request_safety_identifier), _drops_params(kwargs)
+        _without_unsupported_breakpoints(
+            _ir_request(request, request_safety_identifier, _caller_drops_params(kwargs)), provider_config
+        ),
+        _drops_params(kwargs),
     )
     if isinstance(caller_ir_request, _MalformedImages):
         raise litellm.BadRequestError(
@@ -649,10 +907,44 @@ def _with_data_urls(call: DecisionsCall, data_urls: Mapping[str, str]) -> Decisi
     )
 
 
+def _remaining_image_bytes(call: DecisionsCall) -> int | None:
+    total: Final = call.provider_config.max_total_image_bytes
+    if call.custom_llm_provider != "gemini" or total is None:
+        return None
+    _checked_image_sizes(call)
+    return total - sum(_decoded_image_bytes(image) for image in input_images(call.ir_request.input))
+
+
+def _bounded_remote_images(
+    urls: tuple[str, ...], remaining: int, timeout: float | httpx.Timeout | None
+) -> tuple[str, ...]:
+    state: tuple[int, tuple[str, ...]] = (remaining, ())  # rebind-ok: sequential budget without recursion
+    for url in urls:
+        available, images = state
+        image = convert_url_to_base64(url, timeout=timeout, max_bytes=available)
+        state = (available - _decoded_image_bytes(image), (*images, image))
+    return state[1]
+
+
+async def _async_bounded_remote_images(
+    urls: tuple[str, ...], remaining: int, timeout: float | httpx.Timeout | None
+) -> tuple[str, ...]:
+    state: tuple[int, tuple[str, ...]] = (remaining, ())  # rebind-ok: sequential budget without recursion
+    for url in urls:
+        available, images = state
+        image = await async_convert_url_to_base64(url, timeout=timeout, max_bytes=available)
+        state = (available - _decoded_image_bytes(image), (*images, image))
+    return state[1]
+
+
 def _with_remote_images_inlined(call: DecisionsCall) -> DecisionsCall:
     remote_urls: Final = _remote_image_urls(call)
     if not remote_urls:
         return call
+    remaining: Final = _remaining_image_bytes(call)
+    if remaining is not None:
+        images: Final = _bounded_remote_images(remote_urls, remaining, call.timeout)
+        return _with_data_urls(call, MappingProxyType(dict(zip(remote_urls, images, strict=True))))
     return _with_data_urls(
         call, MappingProxyType({url: convert_url_to_base64(url, timeout=call.timeout) for url in remote_urls})
     )
@@ -662,13 +954,33 @@ async def _async_with_remote_images_inlined(call: DecisionsCall) -> DecisionsCal
     remote_urls: Final = _remote_image_urls(call)
     if not remote_urls:
         return call
-    data_urls: Final = await async_convert_urls_to_base64(remote_urls, timeout=call.timeout)
+    remaining: Final = _remaining_image_bytes(call)
+    data_urls: Final = (
+        await async_convert_urls_to_base64(remote_urls, timeout=call.timeout)
+        if remaining is None
+        else await _async_bounded_remote_images(remote_urls, remaining, call.timeout)
+    )
     return _with_data_urls(call, MappingProxyType(dict(zip(remote_urls, data_urls, strict=True))))
 
 
 def _has_media_type_in(media_types: frozenset[str], image: DecisionsImage) -> bool:
     media_type: Final = image_media_type(image)
     return media_type is None or media_type in media_types
+
+
+def _is_surely_kept_image(media_types: frozenset[str] | None, image: DecisionsImage) -> bool:
+    if not _is_well_formed_image(image):
+        return False
+    if media_types is None:
+        return True
+    media_type: Final = image_media_type(image)
+    return media_type is not None and media_type in media_types
+
+
+def _with_images_surely_kept(
+    decision_input: DecisionsIRState | DecisionsIRMessages, provider_config: BaseDecisionsConfig
+) -> DecisionsIRState | DecisionsIRMessages:
+    return with_images_where(decision_input, partial(_is_surely_kept_image, provider_config.image_media_types))
 
 
 def _checked_image_types(call: DecisionsCall) -> DecisionsCall:
@@ -753,6 +1065,12 @@ def _request_body(call: DecisionsCall) -> Mapping[str, object]:
     return body
 
 
+def _logged_request_body(call: DecisionsCall) -> Mapping[str, object]:
+    if call.custom_llm_provider == "gemini":
+        return ir_to_systemone_request(call.model, call.ir_request)
+    return _request_body(call)
+
+
 def _pricing_model(response: DecisionsIRResponse, call: DecisionsCall) -> str:
     returned: Final = get_model_cost_key(f"{call.custom_llm_provider}/{response.model}")
     if returned is not None and cost_map_key_prices_anything(returned):
@@ -828,7 +1146,7 @@ async def asend(call: DecisionsCall) -> DecisionsResponse | OpenAIDecisionRespon
             provider_config=inlined.provider_config,
             request=inlined.ir_request,
             body=body,
-            logged_body=body if inlined is supported else _request_body(supported),
+            logged_body=body if inlined is supported else _logged_request_body(supported),
             api_base=inlined.api_base,
             api_key=inlined.api_key,
             headers=inlined.headers,
@@ -852,7 +1170,7 @@ def send(call: DecisionsCall) -> DecisionsResponse | OpenAIDecisionResponse:
             provider_config=inlined.provider_config,
             request=inlined.ir_request,
             body=body,
-            logged_body=body if inlined is supported else _request_body(supported),
+            logged_body=body if inlined is supported else _logged_request_body(supported),
             api_base=inlined.api_base,
             api_key=inlined.api_key,
             headers=inlined.headers,

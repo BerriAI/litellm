@@ -4,7 +4,7 @@ from typing import List, Tuple
 
 import pytest
 
-from litellm.router_strategy.adaptive_router.config import TOOL_CALL_HISTORY_MAX
+from litellm.router_strategy.adaptive_router.config import LOOP_REPEAT_THRESHOLD, TOOL_CALL_HISTORY_MAX
 from litellm.router_strategy.adaptive_router.signals import (
     SessionState,
     SignalDelta,
@@ -184,3 +184,33 @@ def test_apply_turn_is_o1_does_not_grow_history_unbounded():
             Turn(tool_calls=[{"name": f"tool_{i}", "arguments": {}}]),
         )
     assert len(state.tool_call_history) <= TOOL_CALL_HISTORY_MAX
+
+
+def _function_tool_call(name: str, arguments: str) -> dict[str, object]:
+    return {"id": "call", "type": "function", "function": {"name": name, "arguments": arguments}}
+
+
+@pytest.mark.parametrize(
+    ("names", "arguments", "expected_loops"),
+    [
+        (("read_file",) * LOOP_REPEAT_THRESHOLD, ('{"path": "/x"}',) * LOOP_REPEAT_THRESHOLD, 1),
+        (
+            tuple(f"tool_{i}" for i in range(LOOP_REPEAT_THRESHOLD)),
+            ('{"path": "/x"}',) * LOOP_REPEAT_THRESHOLD,
+            0,
+        ),
+        (
+            ("read_file",) * LOOP_REPEAT_THRESHOLD,
+            tuple(f'{{"path": "/{i}"}}' for i in range(LOOP_REPEAT_THRESHOLD)),
+            0,
+        ),
+    ],
+    ids=["same_call", "different_names", "different_arguments"],
+)
+def test_loop_detection_reads_name_and_arguments_of_function_tool_calls(
+    names: Tuple[str, ...], arguments: Tuple[str, ...], expected_loops: int
+):
+    state, _ = _replay(
+        [{"tool_calls": [_function_tool_call(name, args)]} for name, args in zip(names, arguments, strict=True)]
+    )
+    assert state.loop_count == expected_loops

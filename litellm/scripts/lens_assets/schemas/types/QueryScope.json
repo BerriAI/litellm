@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "QueryScope",
+  "oneOf": [
+    {
+      "title": "AllQueryScope",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "all"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "title": "OwnedQueryScope",
+      "type": "object",
+      "properties": {
+        "user_id": {
+          "type": "string"
+        },
+        "team_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "kind": {
+          "type": "string",
+          "const": "owned"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "user_id",
+        "team_ids"
+      ]
+    }
+  ]
+}

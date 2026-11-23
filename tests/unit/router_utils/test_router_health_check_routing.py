@@ -6,236 +6,70 @@ import time
 
 import pytest
 
-from litellm.caching.caching import DualCache
-from litellm.router_utils.health_state_cache import DeploymentHealthCache
+from litellm.router import Router
 
 
 def _make_deployment(model_id: str, model_name: str = "gpt-4") -> dict:
     """Helper to create a deployment dict for testing."""
     return {
         "model_name": model_name,
-        "litellm_params": {"model": model_name, "api_key": "fake"},
+        "litellm_params": {"model": "openai/gpt-4", "api_key": "fake"},
         "model_info": {"id": model_id},
     }
 
 
-def _make_health_cache(
-    unhealthy_ids: set = None, staleness_threshold: float = 60.0
-) -> DeploymentHealthCache:
-    """Create a health cache pre-populated with unhealthy deployment IDs."""
-    cache = DualCache()
-    health_cache = DeploymentHealthCache(
-        cache=cache, staleness_threshold=staleness_threshold
+def _health_routed_router(enable: bool, unhealthy_ids: set[str], model_groups: list[str] | None = None) -> Router:
+    router = Router(
+        model_list=[
+            _make_deployment("deploy-1", model_name="prod"),
+            _make_deployment("deploy-2", model_name="prod"),
+            _make_deployment("deploy-3", model_name="prod"),
+            _make_deployment("other-1", model_name="other"),
+            _make_deployment("other-2", model_name="other"),
+        ],
+        enable_health_check_routing=enable,
+        background_health_check_model_groups=model_groups,
     )
-    if unhealthy_ids:
-        now = time.time()
-        states = {}
-        for uid in unhealthy_ids:
-            states[uid] = {
-                "is_healthy": False,
-                "timestamp": now,
-                "reason": "test_unhealthy",
-            }
-        health_cache.set_deployment_health_states(states)
-    return health_cache
+    now = time.time()
+    router.health().health_checks.set_deployment_health_states(
+        {uid: {"is_healthy": False, "timestamp": now, "reason": "test_unhealthy"} for uid in unhealthy_ids}
+    )
+    return router
 
 
-class TestFilterHealthCheckUnhealthyDeployments:
-    """Test the sync filter method."""
+@pytest.mark.parametrize(
+    ("enable", "unhealthy_ids", "model_groups", "routable"),
+    [
+        (True, {"deploy-2"}, None, {"prod": ["deploy-1", "deploy-3"], "other": ["other-1", "other-2"]}),
+        (False, {"deploy-2"}, None, {"prod": ["deploy-1", "deploy-2", "deploy-3"], "other": ["other-1", "other-2"]}),
+        (True, set(), None, {"prod": ["deploy-1", "deploy-2", "deploy-3"], "other": ["other-1", "other-2"]}),
+        (
+            True,
+            {"deploy-1", "deploy-2", "deploy-3"},
+            None,
+            {"prod": ["deploy-1", "deploy-2", "deploy-3"], "other": ["other-1", "other-2"]},
+        ),
+        (True, {"deploy-2", "other-1"}, ["prod"], {"prod": ["deploy-1", "deploy-3"], "other": ["other-1", "other-2"]}),
+        (True, {"deploy-2", "other-1"}, None, {"prod": ["deploy-1", "deploy-3"], "other": ["other-2"]}),
+    ],
+    ids=[
+        "removes-unhealthy",
+        "noop-when-disabled",
+        "all-pass-when-cache-empty",
+        "safety-net-when-all-unhealthy",
+        "scoped-to-listed-model-groups",
+        "unscoped-when-model-groups-unset",
+    ],
+)
+@pytest.mark.asyncio
+async def test_health_check_routing_filters_unhealthy_deployments(
+    enable: bool, unhealthy_ids: set[str], model_groups: list[str] | None, routable: dict[str, list[str]]
+) -> None:
+    router = _health_routed_router(enable, unhealthy_ids, model_groups)
 
-    def _make_router_like(
-        self,
-        enable: bool,
-        health_cache: DeploymentHealthCache,
-        model_groups: frozenset[str] | None = None,
-    ):
-        """Create a minimal object that behaves like Router for filter testing."""
-
-        class FakeRouter:
-            def __init__(self):
-                self._core_enable_health_check_routing = enable
-                self._core_health_state_cache = health_cache
-                self._core_allowed_fails_policy = None
-                self._core_background_health_check_model_groups = model_groups
-
-        # Import the actual method and bind it
-        from litellm.router import Router
-
-        fake = FakeRouter()
-        # Use the unbound method
-        fake._filter_health_check_unhealthy_deployments = (
-            Router._filter_health_check_unhealthy_deployments.__get__(fake, FakeRouter)
-        )
-        return fake
-
-    def test_filter_removes_unhealthy_deployments(self):
-        """Unhealthy deployments should be removed from candidates."""
-        health_cache = _make_health_cache(unhealthy_ids={"deploy-2"})
-        router = self._make_router_like(enable=True, health_cache=health_cache)
-
-        deployments = [
-            _make_deployment("deploy-1"),
-            _make_deployment("deploy-2"),
-            _make_deployment("deploy-3"),
-        ]
-        result = router._filter_health_check_unhealthy_deployments(deployments)
-        assert len(result) == 2
-        assert all(d["model_info"]["id"] != "deploy-2" for d in result)
-
-    def test_filter_noop_when_disabled(self):
-        """When enable_health_check_routing=False, filter should be a no-op."""
-        health_cache = _make_health_cache(unhealthy_ids={"deploy-1"})
-        router = self._make_router_like(enable=False, health_cache=health_cache)
-
-        deployments = [
-            _make_deployment("deploy-1"),
-            _make_deployment("deploy-2"),
-        ]
-        result = router._filter_health_check_unhealthy_deployments(deployments)
-        assert len(result) == 2  # no filtering
-
-    def test_filter_returns_all_when_all_unhealthy(self):
-        """Safety net: if ALL deployments are unhealthy, return all (don't cause outage)."""
-        health_cache = _make_health_cache(
-            unhealthy_ids={"deploy-1", "deploy-2", "deploy-3"}
-        )
-        router = self._make_router_like(enable=True, health_cache=health_cache)
-
-        deployments = [
-            _make_deployment("deploy-1"),
-            _make_deployment("deploy-2"),
-            _make_deployment("deploy-3"),
-        ]
-        result = router._filter_health_check_unhealthy_deployments(deployments)
-        assert len(result) == 3  # all returned, safety net
-
-    def test_filter_returns_all_when_cache_empty(self):
-        """When cache is empty, all deployments should pass through."""
-        health_cache = _make_health_cache()  # empty
-        router = self._make_router_like(enable=True, health_cache=health_cache)
-
-        deployments = [
-            _make_deployment("deploy-1"),
-            _make_deployment("deploy-2"),
-        ]
-        result = router._filter_health_check_unhealthy_deployments(deployments)
-        assert len(result) == 2
-
-    def test_filter_scoped_to_listed_model_groups(self):
-        """With an allowlist, only deployments in listed groups are filtered on health."""
-        health_cache = _make_health_cache(unhealthy_ids={"bad-listed", "bad-unlisted"})
-        router = self._make_router_like(
-            enable=True, health_cache=health_cache, model_groups=frozenset({"prod"})
-        )
-
-        deployments = [
-            _make_deployment("bad-listed", model_name="prod"),
-            _make_deployment("ok-listed", model_name="prod"),
-            _make_deployment("bad-unlisted", model_name="other"),
-            _make_deployment("ok-unlisted", model_name="other"),
-        ]
-        result = router._filter_health_check_unhealthy_deployments(deployments)
-        assert [d["model_info"]["id"] for d in result] == [
-            "ok-listed",
-            "bad-unlisted",
-            "ok-unlisted",
-        ]
-
-    def test_filter_unscoped_when_model_groups_unset(self):
-        """Without an allowlist, unhealthy deployments in every group are filtered."""
-        health_cache = _make_health_cache(unhealthy_ids={"bad-listed", "bad-unlisted"})
-        router = self._make_router_like(enable=True, health_cache=health_cache)
-
-        deployments = [
-            _make_deployment("bad-listed", model_name="prod"),
-            _make_deployment("ok-listed", model_name="prod"),
-            _make_deployment("bad-unlisted", model_name="other"),
-            _make_deployment("ok-unlisted", model_name="other"),
-        ]
-        result = router._filter_health_check_unhealthy_deployments(deployments)
-        assert [d["model_info"]["id"] for d in result] == ["ok-listed", "ok-unlisted"]
-
-
-class TestAsyncFilterHealthCheckUnhealthyDeployments:
-    """Test the async filter method."""
-
-    def _make_router_like(
-        self,
-        enable: bool,
-        health_cache: DeploymentHealthCache,
-        model_groups: frozenset[str] | None = None,
-    ):
-        from litellm.router import Router
-
-        class FakeRouter:
-            def __init__(self):
-                self._core_enable_health_check_routing = enable
-                self._core_health_state_cache = health_cache
-                self._core_allowed_fails_policy = None
-                self._core_background_health_check_model_groups = model_groups
-
-        fake = FakeRouter()
-        fake._async_filter_health_check_unhealthy_deployments = (
-            Router._async_filter_health_check_unhealthy_deployments.__get__(
-                fake, FakeRouter
-            )
-        )
-        return fake
-
-    @pytest.mark.asyncio
-    async def test_async_filter_removes_unhealthy(self):
-        """Async version: unhealthy deployments removed."""
-        health_cache = _make_health_cache(unhealthy_ids={"deploy-2"})
-        router = self._make_router_like(enable=True, health_cache=health_cache)
-
-        deployments = [
-            _make_deployment("deploy-1"),
-            _make_deployment("deploy-2"),
-            _make_deployment("deploy-3"),
-        ]
-        result = await router._async_filter_health_check_unhealthy_deployments(
-            healthy_deployments=deployments
-        )
-        assert len(result) == 2
-        assert all(d["model_info"]["id"] != "deploy-2" for d in result)
-
-    @pytest.mark.asyncio
-    async def test_async_filter_safety_net(self):
-        """Async version: safety net when all unhealthy."""
-        health_cache = _make_health_cache(unhealthy_ids={"deploy-1", "deploy-2"})
-        router = self._make_router_like(enable=True, health_cache=health_cache)
-
-        deployments = [
-            _make_deployment("deploy-1"),
-            _make_deployment("deploy-2"),
-        ]
-        result = await router._async_filter_health_check_unhealthy_deployments(
-            healthy_deployments=deployments
-        )
-        assert len(result) == 2  # safety net
-
-    @pytest.mark.asyncio
-    async def test_async_filter_scoped_to_listed_model_groups(self):
-        """Async version: only deployments in listed groups are filtered on health."""
-        health_cache = _make_health_cache(unhealthy_ids={"bad-listed", "bad-unlisted"})
-        router = self._make_router_like(
-            enable=True, health_cache=health_cache, model_groups=frozenset({"prod"})
-        )
-
-        deployments = [
-            _make_deployment("bad-listed", model_name="prod"),
-            _make_deployment("ok-listed", model_name="prod"),
-            _make_deployment("bad-unlisted", model_name="other"),
-            _make_deployment("ok-unlisted", model_name="other"),
-        ]
-        result = await router._async_filter_health_check_unhealthy_deployments(
-            healthy_deployments=deployments
-        )
-        assert [d["model_info"]["id"] for d in result] == [
-            "ok-listed",
-            "bad-unlisted",
-            "ok-unlisted",
-        ]
+    for model_group, expected in routable.items():
+        healthy = await router.select(model_group, {}, kind="healthy")
+        assert sorted(d["model_info"]["id"] for d in healthy) == expected, model_group
 
 
 class TestBuildDeploymentHealthStates:

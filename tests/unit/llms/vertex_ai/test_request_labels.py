@@ -1,0 +1,405 @@
+import base64
+import json
+from collections.abc import Callable, Mapping
+from types import MappingProxyType
+from typing import Final
+
+import pytest
+from pydantic import JsonValue
+
+import litellm
+from litellm.llms.vertex_ai.gemini.transformation import transform_request_body
+from litellm.llms.vertex_ai.google_genai.transformation import VertexAIGoogleGenAIConfig
+from litellm.llms.vertex_ai.image_generation.vertex_gemini_transformation import VertexAIGeminiImageGenerationConfig
+from litellm.llms.vertex_ai.image_generation.vertex_imagen_transformation import VertexAIImagenImageGenerationConfig
+from litellm.llms.vertex_ai.multimodal_embeddings.transformation import VertexAIMultimodalEmbeddingConfig
+from litellm.llms.vertex_ai.rerank.transformation import VertexAIRerankConfig
+from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import VertexAIAnthropicConfig
+from litellm.llms.vertex_ai.vertex_embeddings.transformation import VertexAITextEmbeddingConfig
+from litellm.types.router import GenericLiteLLMParams
+
+FIELDS: Final = ["user_api_key_alias", "user_api_key_team_alias", "spend_logs_metadata"]
+IDENTITY: Final = {"user_api_key_alias": "chargeback-key", "user_api_key_team_alias": "ai-platform"}
+LABELS_HEADER: Final = "x-vertex-ai-labels"
+
+LabelSource = Callable[[dict[str, JsonValue], dict[str, JsonValue]], object]
+
+
+def gemini_labels(litellm_params: dict[str, JsonValue], optional_params: dict[str, JsonValue]) -> object:
+    body: Final = transform_request_body(
+        messages=[{"role": "user", "content": "hi"}],
+        model="gemini-3.8-flash",
+        optional_params=dict(optional_params),
+        custom_llm_provider="vertex_ai",
+        litellm_params=dict(litellm_params),
+        cached_content=None,
+    )
+    return body.get("labels")
+
+
+def embedding_labels(litellm_params: dict[str, JsonValue], optional_params: dict[str, JsonValue]) -> object:
+    request: Final = VertexAITextEmbeddingConfig().transform_openai_request_to_vertex_embedding_request(
+        input=["hi"], optional_params=dict(optional_params), model="text-embedding-005", litellm_params=litellm_params
+    )
+    return request.get("labels")
+
+
+def imagen_labels(litellm_params: dict[str, JsonValue], optional_params: dict[str, JsonValue]) -> object:
+    request: Final = VertexAIImagenImageGenerationConfig().transform_image_generation_request(
+        model="imagen-4.0-generate-001",
+        prompt="a cat",
+        optional_params=dict(optional_params),
+        litellm_params=dict(litellm_params),
+        headers={},
+    )
+    return request.get("labels")
+
+
+def gemini_image_labels(litellm_params: dict[str, JsonValue], optional_params: dict[str, JsonValue]) -> object:
+    request: Final = VertexAIGeminiImageGenerationConfig().transform_image_generation_request(
+        model="gemini-3.1-flash-image",
+        prompt="a cat",
+        optional_params=dict(optional_params),
+        litellm_params=dict(litellm_params),
+        headers={},
+    )
+    return request.get("labels")
+
+
+def multimodal_embedding_labels(
+    litellm_params: Mapping[str, JsonValue], optional_params: Mapping[str, JsonValue]
+) -> object:
+    request: Final = VertexAIMultimodalEmbeddingConfig().transform_embedding_request(
+        model="multimodalembedding@001",
+        input="a red apple",
+        optional_params=dict(optional_params),
+        headers={},
+        litellm_params=litellm_params,
+    )
+    return request.get("labels")
+
+
+def google_genai_labels(
+    litellm_params: Mapping[str, JsonValue], optional_params: Mapping[str, JsonValue]
+) -> object:
+    fields: Final = VertexAIGoogleGenAIConfig().transform_top_level_request_fields(
+        optional_params or None, GenericLiteLLMParams(**litellm_params)
+    )
+    return (fields or {}).get("labels")
+
+
+def rerank_labels(litellm_params: dict[str, JsonValue], _: dict[str, JsonValue]) -> object:
+    request: Final = VertexAIRerankConfig().transform_rerank_request(
+        model="semantic-ranker-default@latest",
+        optional_rerank_params={"query": "q", "documents": ["a", "b"]},
+        headers={},
+        litellm_params=dict(litellm_params),
+    )
+    return request.get("userLabels")
+
+
+def encoded(labels: Mapping[str, str]) -> str:
+    return base64.b64encode(json.dumps(dict(labels)).encode()).decode()
+
+
+def claude_headers(
+    litellm_params: dict[str, JsonValue],
+    optional_params: dict[str, JsonValue],
+    headers: Mapping[str, str] = MappingProxyType({}),
+) -> Mapping[str, str]:
+    outbound: Final = dict(headers)
+    VertexAIAnthropicConfig().transform_request(
+        model="claude-haiku-5-5",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params=dict(optional_params),
+        litellm_params=dict(litellm_params),
+        headers=outbound,
+    )
+    return outbound
+
+
+def labels_header_names(headers: Mapping[str, str]) -> list[str]:
+    return [name for name in headers if name.lower() == LABELS_HEADER]
+
+
+def decoded_labels(headers: Mapping[str, str]) -> object:
+    names: Final = labels_header_names(headers)
+    return json.loads(base64.b64decode(headers[names[0]])) if names else None
+
+
+def claude_labels(litellm_params: dict[str, JsonValue], optional_params: dict[str, JsonValue]) -> object:
+    return decoded_labels(claude_headers(litellm_params, optional_params))
+
+
+LABELLED_SURFACES: Final = [gemini_labels, embedding_labels, imagen_labels]
+REQUESTER_METADATA_SURFACES: Final = [*LABELLED_SURFACES, rerank_labels]
+SETTING_GATED_SURFACES: Final = [gemini_image_labels, multimodal_embedding_labels, google_genai_labels]
+ALL_SURFACES: Final = [*REQUESTER_METADATA_SURFACES, claude_labels, *SETTING_GATED_SURFACES]
+CALLER_LABEL_SURFACES: Final = [*LABELLED_SURFACES, claude_labels, *SETTING_GATED_SURFACES]
+BODY_SURFACES_ADDED_BY_THE_SETTING: Final = [gemini_image_labels, multimodal_embedding_labels]
+
+
+def metadata(key: str = "metadata", **fields: JsonValue) -> dict[str, JsonValue]:
+    return {key: dict(fields)}
+
+
+@pytest.mark.parametrize("setting", [None, []])
+@pytest.mark.parametrize("surface", REQUESTER_METADATA_SURFACES)
+def test_setting_off_sends_only_the_callers_labels(
+    setting: object, surface: LabelSource, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", setting)
+    params: Final = metadata(
+        spend_logs_metadata={"cost-center": "cc-1"},
+        requester_metadata={"user_api_key_team_alias": "caller-chosen"},
+        **IDENTITY,
+    )
+
+    assert surface(params, {}) == {"user_api_key_team_alias": "caller-chosen"}
+    assert surface(metadata(**IDENTITY), {}) is None
+
+
+@pytest.mark.parametrize("setting", [None, []])
+def test_setting_off_leaves_claude_labels_as_the_caller_sent_them(setting: object, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", setting)
+    params: Final = metadata(spend_logs_metadata={"cost-center": "cc-1"}, **IDENTITY)
+    caller_header: Final = {"X-Vertex-AI-Labels": encoded({"user_api_key_team_alias": "Caller Chosen"})}
+
+    assert claude_labels(params, {"labels": {"user_api_key_team_alias": "Caller Chosen"}}) == {
+        "user_api_key_team_alias": "Caller Chosen"
+    }
+    assert claude_labels(params, {}) is None
+    assert claude_headers(params, {"labels": {"app": "bot"}}, caller_header) == caller_header
+
+
+@pytest.mark.parametrize("setting", [None, []])
+@pytest.mark.parametrize("surface", BODY_SURFACES_ADDED_BY_THE_SETTING)
+def test_setting_off_sends_no_labels_where_none_were_sent_before(
+    setting: object, surface: LabelSource, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", setting)
+    params: Final = metadata(
+        spend_logs_metadata={"cost-center": "cc-1"}, requester_metadata={"team": "search"}, **IDENTITY
+    )
+
+    assert surface(params, {"labels": {"app": "bot"}}) is None
+
+
+@pytest.mark.parametrize("setting", [None, []])
+def test_setting_off_forwards_google_genai_fields_untouched(setting: object, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", setting)
+    params: Final = GenericLiteLLMParams(**metadata(spend_logs_metadata={"cost-center": "cc-1"}, **IDENTITY))
+    fields: Final = {"labels": {"user_api_key_team_alias": "Caller Chosen", "app": "bot"}, "cachedContent": "c-1"}
+
+    assert VertexAIGoogleGenAIConfig().transform_top_level_request_fields(fields, params) is fields
+    assert VertexAIGoogleGenAIConfig().transform_top_level_request_fields(None, params) is None
+
+
+def test_google_genai_keeps_the_other_top_level_fields_and_drops_an_empty_labels_key(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", FIELDS)
+    config: Final = VertexAIGoogleGenAIConfig()
+    fields: Final = {"labels": {"user_api_key_alias": "forged"}, "cachedContent": "c-1"}
+
+    assert config.transform_top_level_request_fields(fields, GenericLiteLLMParams()) == {"cachedContent": "c-1"}
+    assert config.transform_top_level_request_fields(fields, GenericLiteLLMParams(**metadata(**IDENTITY))) == {
+        "labels": IDENTITY,
+        "cachedContent": "c-1",
+    }
+
+
+@pytest.mark.parametrize("metadata_key", ["metadata", "litellm_metadata"])
+@pytest.mark.parametrize("surface", ALL_SURFACES)
+def test_identity_and_spend_logs_metadata_label_every_vertex_surface(
+    metadata_key: str, surface: LabelSource, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", FIELDS)
+    params: Final = metadata(metadata_key, spend_logs_metadata={"cost-center": "cc-1"}, **IDENTITY)
+
+    assert surface(params, {}) == {**IDENTITY, "cost-center": "cc-1"}
+
+
+@pytest.mark.parametrize("field_order", [FIELDS, list(reversed(FIELDS))])
+@pytest.mark.parametrize(
+    ("surface", "cap"),
+    [
+        (gemini_labels, 64),
+        (embedding_labels, 64),
+        (imagen_labels, 64),
+        (gemini_image_labels, 64),
+        (claude_labels, 32),
+        (multimodal_embedding_labels, 64),
+        (google_genai_labels, 64),
+    ],
+)
+def test_identity_survives_a_caller_filling_every_label_slot(
+    field_order: list[str], surface: LabelSource, cap: int, monkeypatch: pytest.MonkeyPatch
+):
+    """64 labels per call for Google models, 32 for partner models,
+    https://docs.cloud.google.com/vertex-ai/generative-ai/docs/multimodal/add-labels-to-api-calls (2026-10-28)"""
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", field_order)
+    caller_labels: Final = {f"caller-{index:02d}": "v" for index in range(cap)}
+
+    labels: Final = surface(metadata(**IDENTITY), {"labels": caller_labels})
+
+    assert isinstance(labels, dict)
+    assert len(labels) == cap
+    assert {key: labels[key] for key in IDENTITY} == IDENTITY
+    assert all(labels[key] == "v" for key in tuple(caller_labels)[: cap - len(IDENTITY)])
+
+
+@pytest.mark.parametrize("surface", CALLER_LABEL_SURFACES)
+def test_caller_cannot_write_or_override_the_identity_prefix_in_any_case(
+    surface: LabelSource, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", FIELDS)
+    forged: Final = {
+        "user_api_key_team_alias": "forged",
+        "User_API_Key_Team_Alias": "forged",
+        " user_api_key_user_id": "forged",
+        "app": "bot",
+    }
+
+    assert surface(metadata(**IDENTITY), {"labels": forged}) == {**IDENTITY, "app": "bot"}
+    assert surface(metadata(user_api_key_alias="chargeback-key"), {"labels": forged}) == {
+        "user_api_key_alias": "chargeback-key",
+        "app": "bot",
+    }
+    assert surface(metadata(spend_logs_metadata={"USER_API_KEY_TEAM_ALIAS": "forged"}), {}) is None
+
+
+@pytest.mark.parametrize("extra_labels", [{"user_api_key_team_alias": "forged", "app": "bot"}, None])
+def test_gemini_extra_body_labels_cannot_replace_or_drop_identity(
+    extra_labels: dict[str, JsonValue] | None, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", FIELDS)
+    expected: Final = {**IDENTITY, "app": "bot"} if extra_labels else IDENTITY
+
+    assert gemini_labels(metadata(**IDENTITY), {"extra_body": {"labels": extra_labels}}) == expected
+
+
+def test_gemini_extra_body_labels_outrank_spend_logs_metadata_at_the_cap(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", FIELDS)
+    spend_logs: Final = {f"spend-{index:02d}": "v" for index in range(64)}
+    caller_labels: Final = {"labels": {"env": "prod"}, "extra_body": {"labels": {"app": "bot"}}}
+
+    labels: Final = gemini_labels(metadata(**IDENTITY, spend_logs_metadata=spend_logs), caller_labels)
+
+    assert isinstance(labels, dict)
+    assert len(labels) == 64
+    assert {key: labels[key] for key in (*IDENTITY, "env", "app")} == {**IDENTITY, "env": "prod", "app": "bot"}
+
+
+@pytest.mark.parametrize("setting", [None, []])
+def test_setting_off_merges_gemini_extra_body_labels_as_sent(setting: object, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", setting)
+    optional_params: Final = {"labels": {"env": "prod"}, "extra_body": {"labels": {"user_api_key_team_alias": "x"}}}
+
+    assert gemini_labels(metadata(**IDENTITY), optional_params) == {"env": "prod", "user_api_key_team_alias": "x"}
+
+def test_a_caller_set_claude_labels_header_cannot_forge_identity_and_is_replaced(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", FIELDS)
+    caller_header: Final = {"x-Vertex-AI-labels": encoded({"user_api_key_team_alias": "forged", "app": "bot"})}
+
+    sent: Final = claude_headers(metadata(**IDENTITY), {"labels": {"ignored": "x"}}, caller_header)
+    undecodable: Final = claude_headers(metadata(**IDENTITY), {}, {LABELS_HEADER: "%%"})
+
+    assert len(labels_header_names(sent)) == 1
+    assert decoded_labels(sent) == {**IDENTITY, "app": "bot"}
+    assert len(labels_header_names(undecodable)) == 1
+    assert decoded_labels(undecodable) == IDENTITY
+
+
+def test_an_undecodable_claude_labels_header_keeps_the_callers_labels(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", FIELDS)
+
+    sent: Final = claude_headers(metadata(**IDENTITY), {"labels": {"app": "bot"}}, {LABELS_HEADER: "%%"})
+
+    assert decoded_labels(sent) == {**IDENTITY, "app": "bot"}
+
+
+@pytest.mark.parametrize(
+    ("setting", "expected"),
+    [("user_api_key_team_alias", {"user_api_key_team_alias": "ai-platform"}), ("", None)],
+    ids=["one-field", "empty"],
+)
+def test_a_single_field_written_as_text_turns_the_setting_on_for_that_field(
+    setting: str, expected: dict[str, str] | None, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", setting)
+
+    assert gemini_labels(metadata(**IDENTITY), {}) == expected
+
+
+@pytest.mark.parametrize("surface", ALL_SURFACES)
+def test_identity_and_spend_logs_text_is_rewritten_to_labels_google_accepts(
+    surface: LabelSource, monkeypatch: pytest.MonkeyPatch
+):
+    """Key and value rules from https://docs.cloud.google.com/vertex-ai/generative-ai/docs/multimodal/add-labels-to-api-calls (2026-10-28)"""
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", FIELDS)
+    spend_logs: Final = {
+        "Owner": "Platform Team",
+        "1st": "x",
+        "_private": "x",
+        "": "x",
+        "dotted": "a.b",
+        "too-long": "V" * 64,
+        "K" * 64: "",
+        "équipe": "Données-2",
+        "部門": "営業",
+        "numerals": "ⅻ½",
+    }
+    params: Final = metadata(
+        user_api_key_alias="Chargeback Key",
+        user_api_key_team_alias="AI Platform " + "x" * 60,
+        spend_logs_metadata=spend_logs,
+    )
+
+    assert surface(params, {}) == {
+        "user_api_key_alias": "chargeback_key",
+        "user_api_key_team_alias": ("ai_platform_" + "x" * 60)[:63],
+        "owner": "platform_team",
+        "dotted": "a_b",
+        "too-long": "v" * 63,
+        "k" * 63: "",
+        "équipe": "données-2",
+        "部門": "営業",
+        "numerals": "ⅻ½",
+    }
+
+
+@pytest.mark.parametrize("surface", CALLER_LABEL_SURFACES)
+def test_caller_labels_keep_todays_pass_through_and_win_over_spend_logs_metadata(
+    surface: LabelSource, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", FIELDS)
+    params: Final = metadata(spend_logs_metadata={"cost-center": "cc-admin", "env": "prod"}, **IDENTITY)
+
+    assert surface(params, {"labels": {"cost-center": "cc-caller", "Mixed": "Case", 1: "dropped"}}) == {
+        **IDENTITY,
+        "cost-center": "cc-caller",
+        "Mixed": "Case",
+        "env": "prod",
+    }
+
+
+@pytest.mark.parametrize("surface", ALL_SURFACES)
+def test_only_allow_listed_identity_fields_and_opted_in_spend_logs_metadata_become_labels(
+    surface: LabelSource, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", ["user_api_key_team_alias", "trace_id"])
+    params: Final = metadata(trace_id="t-1", spend_logs_metadata={"cost-center": "cc-1"}, **IDENTITY)
+
+    assert surface(params, {}) == {"user_api_key_team_alias": "ai-platform"}
+
+
+def test_metadata_wins_over_litellm_metadata_for_the_same_identity_field(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", FIELDS)
+    params: Final[Mapping[str, JsonValue]] = {
+        "metadata": {"user_api_key_team_alias": "from-metadata"},
+        "litellm_metadata": {"user_api_key_team_alias": "from-litellm-metadata", "user_api_key_alias": "key-a"},
+    }
+
+    assert gemini_labels(dict(params), {}) == {
+        "user_api_key_team_alias": "from-metadata",
+        "user_api_key_alias": "key-a",
+    }

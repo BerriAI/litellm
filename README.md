@@ -6,7 +6,7 @@
         </p>
         <p align="center">Open Source AI Gateway for 100+ LLMs. Self-hosted. Enterprise-ready. Call any LLM in OpenAI format.</p>
         <p align="center">
-        <a href="https://render.com/deploy?repo=https://github.com/BerriAI/litellm" target="_blank" rel="nofollow"><img src="https://render.com/images/deploy-to-render-button.svg" alt="Deploy to Render" height="40"></a>
+        <a href="https://render.com/deploy?repo=https://github.com/BerriAI/litellm&amp;blueprintPath=litellm/deploy/render/render.yaml" target="_blank" rel="nofollow"><img src="https://render.com/images/deploy-to-render-button.svg" alt="Deploy to Render" height="40"></a>
         <a href="https://railway.com/deploy/RhvhdC?referralCode=7mRv9K&utm_medium=integration&utm_source=template&utm_campaign=generic"><img src="https://railway.com/button.svg" alt="Deploy on Railway" height="40"></a>
         <a href="https://console.aws.amazon.com/cloudshell/home" target="_blank" rel="nofollow"><img src="./.github/deploy-on-aws.png" alt="Deploy on AWS" height="40"></a>
         <a href="https://ssh.cloud.google.com/cloudshell/editor?cloudshell_git_repo=https%3A%2F%2Fgithub.com%2FBerriAI%2Fterraform-google-litellm&cloudshell_git_branch=v1.105.0&cloudshell_workspace=examples%2Fdefault&cloudshell_tutorial=TUTORIAL.md&cloudshell_image=gcr.io/ds-artifacts-cloudshell/deploystack_custom_image&shellonly=true" target="_blank" rel="nofollow"><img src="./.github/deploy-on-gcp.png" alt="Deploy on GCP" height="40"></a>
@@ -99,7 +99,7 @@ proxy, CLI, and optional extras
 Build and install core from this checkout while its release integration is pending:
 
 ```shell
-python scripts/build_core_distribution.py --out-dir dist/core
+python litellm/scripts/build_core_distribution.py --out-dir dist/core
 python -m pip install dist/core/litellm_core-*.whl
 ```
 
@@ -116,7 +116,7 @@ os.environ["OPENAI_API_KEY"] = "your-openai-key"
 os.environ["ANTHROPIC_API_KEY"] = "your-anthropic-key"
 
 # OpenAI
-response = completion(model="openai/gpt-4o", messages=[{"role": "user", "content": "Hello!"}])
+response = completion(model="openai/gpt-6.1-sol", messages=[{"role": "user", "content": "Hello!"}])
 
 # Anthropic  
 response = completion(model="anthropic/claude-sonnet-4-20250514", messages=[{"role": "user", "content": "Hello!"}])
@@ -128,7 +128,7 @@ response = completion(model="anthropic/claude-sonnet-4-20250514", messages=[{"ro
 
 ```shell
 uv tool install 'litellm[proxy]'
-litellm --model gpt-4o
+litellm --model gpt-6.1-sol
 ```
 
 ```python
@@ -136,7 +136,7 @@ import openai
 
 client = openai.OpenAI(api_key="anything", base_url="http://0.0.0.0:4000")
 response = client.chat.completions.create(
-    model="gpt-4o",
+    model="gpt-6.1-sol",
     messages=[{"role": "user", "content": "Hello!"}]
 )
 ```
@@ -281,7 +281,7 @@ async with stdio_client(server_params) as (read, write):
 
         # Use with any LiteLLM model
         response = await litellm.acompletion(
-            model="gpt-4o",
+            model="gpt-6.1-sol",
             messages=[{"role": "user", "content": "What's 3 + 5?"}],
             tools=tools
         )
@@ -298,7 +298,7 @@ curl -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
   -H 'Authorization: Bearer <your-master-key>' \
   -H 'Content-Type: application/json' \
   -d '{
-    "model": "gpt-4o",
+    "model": "gpt-6.1-sol",
     "messages": [{"role": "user", "content": "Summarize the latest open PR"}],
     "tools": [{
       "type": "mcp",
@@ -353,6 +353,8 @@ Set `LITELLM_PROXY_API_BASE` and `LITELLM_PROXY_API_KEY` and every model call th
 
 [**Docs: Agent Harnesses**](https://docs.litellm.ai/docs/harness)
 
+Use `litellm.agent_eval(tasks, targets, trials=3)` to compare harness and model targets with typed tasks and success checks. If your runner already schedules cases, use `await litellm.aagent_eval_attempt(task, target, trial=trial, suite_id=run_id)` for each attempt. It returns the same `EvalRun` used by the suite, including the agent result, check, usage and costs. Both paths prepare a fresh workspace, run setup, execute the agent, grade its output and clean up. Your runner owns concurrency, progress, checkpoint storage and resuming unfinished attempts.
+
 </details>
 
 ### Supported Providers ([Website Supported Models](https://models.litellm.ai/) | [Docs](https://docs.litellm.ai/docs/providers))
@@ -398,6 +400,7 @@ Set `LITELLM_PROXY_API_BASE` and `LITELLM_PROXY_API_KEY` and every model call th
 | [Deepseek (`deepseek`)](https://docs.litellm.ai/docs/providers/deepseek) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
 | [Eden AI (`edenai`)](https://docs.litellm.ai/docs/providers/edenai) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |  |  |
 | [ElevenLabs (`elevenlabs`)](https://docs.litellm.ai/docs/providers/elevenlabs) | ✅ | ✅ | ✅ |  |  | ✅ | ✅ |  |  |  |
+| [EmpirioLabs AI (`empiriolabs`)](https://docs.litellm.ai/docs/providers/empiriolabs) | ✅ |  | ✅ |  |  |  |  |  |  |  |
 | [Empower (`empower`)](https://docs.litellm.ai/docs/providers/empower) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
 | [eu/jev Decisions API (`eu_jev`)](https://docs.litellm.ai/docs/pass_through/eu_jev) |  |  |  |  |  |  |  |  |  |  |
 | [Fal AI (`fal_ai`)](https://docs.litellm.ai/docs/providers/fal_ai) | ✅ | ✅ | ✅ |  | ✅ |  |  |  |  |  |
@@ -407,6 +410,7 @@ Set `LITELLM_PROXY_API_BASE` and `LITELLM_PROXY_API_KEY` and every model call th
 | [Galadriel (`galadriel`)](https://docs.litellm.ai/docs/providers/galadriel) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
 | [GitHub Copilot (`github_copilot`)](https://docs.litellm.ai/docs/providers/github_copilot) | ✅ | ✅ | ✅ | ✅ |  |  |  |  |  |  |
 | [GitHub Models (`github`)](https://docs.litellm.ai/docs/providers/github) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
+| [Gnani (`gnani`)](https://docs.litellm.ai/docs/providers/gnani) |  |  |  |  |  | ✅ |  |  |  |  |
 | [Google - PaLM](https://docs.litellm.ai/docs/providers/palm) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
 | [Google - Vertex AI (`vertex_ai`)](https://docs.litellm.ai/docs/providers/vertex) | ✅ | ✅ | ✅ | ✅ | ✅ |  |  |  |  |  |
 | [Google AI Studio - Gemini (`gemini`)](https://docs.litellm.ai/docs/providers/gemini) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
@@ -446,6 +450,7 @@ Set `LITELLM_PROXY_API_BASE` and `LITELLM_PROXY_API_KEY` and every model call th
 | [OVHCloud AI Endpoints (`ovhcloud`)](https://docs.litellm.ai/docs/providers/ovhcloud) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
 | [Parallel AI (`parallel_ai`)](https://docs.litellm.ai/docs/search/parallel_ai) |  |  |  |  |  |  |  |  |  |  |
 | [Perplexity AI (`perplexity`)](https://docs.litellm.ai/docs/providers/perplexity) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
+| [Perplexity Orchestrator (`perplexity_orchestrator`)](https://docs.litellm.ai/docs/providers/perplexity_orchestrator) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
 | [Petals (`petals`)](https://docs.litellm.ai/docs/providers/petals) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
 | [Pinstripes (`pinstripes`)](https://docs.litellm.ai/docs/providers/pinstripes) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
 | [Predibase (`predibase`)](https://docs.litellm.ai/docs/providers/predibase) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
@@ -525,7 +530,7 @@ Run the LiteLLM proxy as a production-ready componentized stack (gateway, backen
 
 ```bash
 git clone https://github.com/BerriAI/litellm.git
-cd litellm/terraform/litellm/aws/examples/default
+cd litellm/litellm/deploy/terraform/litellm/aws/examples/default
 cp terraform.tfvars.example terraform.tfvars   # edit region/tenant/env
 terraform init && terraform apply
 ```
@@ -578,7 +583,7 @@ Provider API keys live in AWS Secrets Manager; reference ARNs via `gateway_extra
 
 [![Open in Cloud Shell](https://gstatic.com/cloudssh/images/open-btn.png)](https://ssh.cloud.google.com/cloudshell/editor?cloudshell_git_repo=https%3A%2F%2Fgithub.com%2FBerriAI%2Fterraform-google-litellm&cloudshell_git_branch=v1.105.0&cloudshell_workspace=examples%2Fdefault&cloudshell_tutorial=TUTORIAL.md&cloudshell_image=gcr.io/ds-artifacts-cloudshell/deploystack_custom_image&shellonly=true)
 
-Real 1-click. Opens Cloud Shell, clones the [terraform-google-litellm](https://github.com/BerriAI/terraform-google-litellm) module mirror at the latest stable release (a small download instead of the full litellm repo), and walks you through `terraform apply` via a built-in [DeployStack tutorial](./terraform/litellm/gcp/examples/default/TUTORIAL.md). Pick the project, the tutorial sets up the Artifact Registry remote repo, writes `terraform.tfvars` from your answers, and runs apply
+Real 1-click. Opens Cloud Shell, clones the [terraform-google-litellm](https://github.com/BerriAI/terraform-google-litellm) module mirror at the latest stable release (a small download instead of the full litellm repo), and walks you through `terraform apply` via a built-in [DeployStack tutorial](./litellm/deploy/terraform/litellm/gcp/examples/default/TUTORIAL.md). Pick the project, the tutorial sets up the Artifact Registry remote repo, writes `terraform.tfvars` from your answers, and runs apply
 
 [Module page →](https://registry.terraform.io/modules/BerriAI/litellm/google/latest)
 
@@ -645,48 +650,35 @@ Provider API keys live in Secret Manager; reference resource IDs (e.g. `projects
 - Versioned object store for proxy state + file uploads
 - An auto-generated `LITELLM_MASTER_KEY` in your cloud's secret manager
 - A one-off migration job that runs `prisma migrate deploy` before the proxy starts
-- The same `proxy_config` surface as the [Helm chart](./helm/litellm/) — pass YAML as a typed map
+- The same `proxy_config` surface as the [Helm chart](./litellm/deploy/helm/litellm/) — pass YAML as a typed map
 
-The Terraform modules live at [`terraform/litellm/aws/`](./terraform/litellm/aws/) and [`terraform/litellm/gcp/`](./terraform/litellm/gcp/) in this repo; the registry entries are read-only mirrors updated on each release.
+The Terraform modules live at [`litellm/deploy/terraform/litellm/aws/`](./litellm/deploy/terraform/litellm/aws/) and [`litellm/deploy/terraform/litellm/gcp/`](./litellm/deploy/terraform/litellm/gcp/) in this repo; the registry entries are read-only mirrors updated on each release.
 
 ### Run in Developer Mode
 #### Services
 1. Setup .env file in root
-2. Run dependent services `docker-compose up db prometheus`
+2. Run dependent services `docker compose -f litellm/deploy/compose/docker-compose.yml up db prometheus`
 
 #### Backend
 1. Run `make bootstrap`
 2. Start proxy backend: `uv run python litellm/proxy/proxy_cli.py`
 
 #### Frontend
-1. Navigate to `ui/litellm-dashboard` (dependencies were already installed w/ `make bootstrap`)
+1. Navigate to `litellm/ui/litellm-dashboard` (dependencies were already installed w/ `make bootstrap`)
 2. Start dashboard: `npm run dev`
 
 ### Verify Docker Image Signatures
 
-All LiteLLM Docker images published to GHCR are signed with [cosign](https://docs.sigstore.dev/cosign/overview/). Releases are signed with the key introduced in [commit `e82a3c6`](https://github.com/BerriAI/litellm/commit/e82a3c646908ba0a6ee0beddc4310d7a6cac4065).
-
-**Verify using the pinned commit hash (recommended):**
-
-A commit hash is cryptographically immutable, so this is the strongest way to ensure you are using the published signing key:
+All LiteLLM Docker images published to GHCR are signed with [cosign](https://docs.sigstore.dev/cosign/overview/). Releases published since November 15, 2026 use keyless signing tied to our release workflow:
 
 ```bash
 cosign verify \
-  --key https://raw.githubusercontent.com/BerriAI/litellm/e82a3c646908ba0a6ee0beddc4310d7a6cac4065/cosign.pub \
+  --certificate-identity https://github.com/BerriAI/project-releaser/.github/workflows/release.yml@refs/heads/main \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   ghcr.io/berriai/litellm:<release-tag>
 ```
 
-**Verify using a release tag (convenience):**
-
-Tags are protected in this repository and resolve to the same key. This option is easier to read but relies on tag protection rules:
-
-```bash
-cosign verify \
-  --key https://raw.githubusercontent.com/BerriAI/litellm/<release-tag>/cosign.pub \
-  ghcr.io/berriai/litellm:<release-tag>
-```
-
-Replace `<release-tag>` with the version you are deploying (e.g. `v1.83.0-stable`).
+Replace `<release-tag>` with the version you are deploying. Older releases are signed with a key and verify with the `cosign.pub` from the commit that introduced it. See [Release Signing](.github/SECURITY.md#release-signing) for those commands.
 
 ---
 
@@ -724,7 +716,7 @@ make test-unit      # Run unit tests
 make format-check   # Check formatting only
 ```
 
-For detailed contributing guidelines, see [CONTRIBUTING.md](CONTRIBUTING.md).
+For detailed contributing guidelines, see [CONTRIBUTING.md](.github/CONTRIBUTING.md).
 
 > **📖 Contributing to documentation?** The LiteLLM docs have moved to a separate repository: [BerriAI/litellm-docs](https://github.com/BerriAI/litellm-docs). Please open doc PRs there. Docs are served at [docs.litellm.ai](https://docs.litellm.ai).
 

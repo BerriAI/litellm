@@ -8,10 +8,21 @@
 import asyncio
 import functools
 import itertools
+import tempfile
 import traceback
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, BinaryIO, Final, NoReturn, TypedDict, cast, get_args
+from typing import (
+    IO,
+    Any,
+    BinaryIO,
+    Final,
+    NoReturn,
+    Protocol,
+    TypedDict,
+    cast,
+    get_args,
+)
 
 import httpx
 from fastapi import (
@@ -32,14 +43,16 @@ import litellm
 from litellm import CreateFileRequest, get_secret_str
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import ANTHROPIC_DEFAULT_FILE_LIST_LIMIT
+from litellm.litellm_core_utils.batch_utils import rewrite_rows_naming_model, should_replace_model_in_jsonl
 from litellm.litellm_core_utils.cloud_storage_security import (
     is_managed_cloud_storage_uri,
 )
-from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket
+from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket, has_attributes, int_of
 from litellm.llms.base_llm.files.litellm_db_storage_backend import LITELLM_DB_STORAGE_BACKEND_NAME
 from litellm.llms.base_llm.files.transformation import BaseFileEndpoints, FileListModelScope
 from litellm.llms.base_llm.managed_resources.isolation import build_list_page
 from litellm.proxy._types import *
+from litellm.proxy.auth.auth_utils import enforce_team_s3_bucket_allowlist
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.batches_endpoints.litellm_executed_batches import (
     litellm_executed_provider_of,
@@ -69,6 +82,7 @@ from litellm.proxy.openai_files_endpoints.batch_file_validation import (
 )
 from litellm.proxy.openai_files_endpoints.batch_guardrails import (
     EMPTY_MAPPING,
+    REWRITE_SPOOL_BYTES,
     BatchScanResult,
     raise_nothing_to_submit,
     raise_public,
@@ -77,16 +91,17 @@ from litellm.proxy.openai_files_endpoints.batch_guardrails import (
 )
 from litellm.proxy.openai_files_endpoints.common_utils import (  # noqa: F401  # legacy module exports
     _is_base64_encoded_unified_file_id,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
-    add_internal_model_credentials,
     apply_team_provider_credentials,
     authorize_model_for_key,
-    deployment_drop_params,
+    batch_row_model_for_deployment,
+    configured_drop_params,
     encode_file_id_with_model,
     extract_file_creation_params,
     get_authorized_credentials_for_model,
     handle_model_based_routing,
     is_base64_encoded_unified_file_id,
     prepare_data_with_credentials,
+    router_default_drop_params,
     validate_file_list_limit,
     validate_managed_files_requirement,
     validate_managed_id_requirement,
@@ -113,6 +128,7 @@ from litellm.types.llms.openai import (
     CREATE_FILE_REQUESTS_PURPOSE,
     FileExpiresAfter,
     FileListPage,
+    FileTypes,
     OpenAIFileObject,
     OpenAIFilesPurpose,
 )
@@ -182,6 +198,13 @@ async def _litellm_executed_batch_input_model(
 
 _MAX_BATCH_FILE_SIZE_MB_ADAPTER: Final = TypeAdapter(int | None)
 _LISTED_FILES_ADAPTER: Final = TypeAdapter(list[OpenAIFileObject])
+_REQUEST_BODY_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_JSON_VALUE_ADAPTER: Final = TypeAdapter(object)
+
+
+class _CarriesPrismaClient(Protocol):
+    @property
+    def prisma_client(self) -> PrismaClient: ...
 
 
 class UploadedFileInfo(TypedDict):
@@ -193,7 +216,7 @@ class UploadedFileInfo(TypedDict):
 files_config = None
 
 
-def set_files_config(config):
+def set_files_config(config: object):
     global files_config
     if config is None:
         return
@@ -366,7 +389,7 @@ def get_first_json_object(file_source: bytes | BinaryIO) -> dict | None:
         return None
 
 
-def get_model_from_json_obj(json_object: dict) -> str | None:
+def get_model_from_json_obj(json_object: Mapping[str, object]) -> str | None:
     """
     The model a record names, or None when it does not name one readably.
 
@@ -376,6 +399,22 @@ def get_model_from_json_obj(json_object: dict) -> str | None:
     """
     body: Final = json_object.get("body")
     return body.get("model") if isinstance(body, dict) else None
+
+
+def _rewrite_alias_rows_to_deployment_model(
+    file: FileTypes, alias: str, deployment_model: str, provider: str, spool: IO[bytes]
+) -> FileTypes:
+    rewritten: Final = rewrite_rows_naming_model(
+        file_content=file,
+        model=alias,
+        new_model=batch_row_model_for_deployment(deployment_model, provider),
+        output_file=spool,
+    )
+    if rewritten is not spool:
+        return file
+    if isinstance(file, tuple):
+        return (file[0], spool, file[2] if len(file) > 2 else None)
+    return ("modified_file.jsonl", spool, "application/jsonl")
 
 
 async def _deprecated_loadbalanced_create_file(
@@ -434,7 +473,7 @@ async def route_create_file(
     )
     storage: Final = explicit_storage or (LITELLM_DB_STORAGE_BACKEND_NAME if executed_model is not None else None)
     if storage is not None:
-        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
             extract_file_data,
         )
         from litellm.proxy.openai_files_endpoints.storage_backend_service import (
@@ -443,7 +482,7 @@ async def route_create_file(
         from litellm.proxy.proxy_server import prisma_client
 
         return await StorageBackendFileService.upload_file_to_storage_backend(
-            file_data=extract_file_data(cast(Any, _create_file_request.get("file"))),
+            file_data=extract_file_data(_create_file_request["file"]),
             target_storage=storage,
             target_model_names=(executed_model,) if executed_model is not None else target_model_names_list,
             purpose=purpose,
@@ -465,14 +504,34 @@ async def route_create_file(
         # Merge credentials into the request
         prepare_data_with_credentials(
             data=_create_file_request,
-            credentials={**credentials, **deployment_drop_params(llm_router, model, _create_file_request)},
+            credentials={**credentials, **configured_drop_params(llm_router, model, _create_file_request)},
+            keep_request_buckets=True,
         )
 
-        # Create the file with model credentials
-        response = await litellm.acreate_file(
-            **_create_file_request,
-            custom_llm_provider=credentials["custom_llm_provider"],
-        )
+        with tempfile.SpooledTemporaryFile(max_size=REWRITE_SPOOL_BYTES) as rewrite_spool:
+            upload_request: Final[CreateFileRequest] = (
+                {
+                    **_create_file_request,
+                    "file": await asyncio.to_thread(
+                        _rewrite_alias_rows_to_deployment_model,
+                        _create_file_request["file"],
+                        model,
+                        credentials["model"],
+                        credentials["custom_llm_provider"],
+                        rewrite_spool,
+                    ),
+                }
+                if should_replace_model_in_jsonl(
+                    purpose=purpose, passthrough=_create_file_request.get("passthrough") is True
+                )
+                else _create_file_request
+            )
+
+            # Create the file with model credentials
+            response = await litellm.acreate_file(
+                **upload_request,
+                custom_llm_provider=credentials["custom_llm_provider"],
+            )
 
         # Encode the file ID with model information
         if response and hasattr(response, "id") and response.id:
@@ -524,11 +583,12 @@ async def route_create_file(
             _create_file_request=_create_file_request,
         )
     else:
-        apply_team_provider_credentials(
+        await apply_team_provider_credentials(
             data=cast(dict, _create_file_request),  # cast-ok: TypedDict is a plain dict at runtime; merged in place
             llm_router=llm_router,
             user_api_key_dict=user_api_key_dict,
             custom_llm_provider=custom_llm_provider,
+            keep_request_buckets=True,
         )
         # get configs for custom_llm_provider
         llm_provider_config: Final = get_files_provider_config(custom_llm_provider=custom_llm_provider)
@@ -537,7 +597,10 @@ async def route_create_file(
             _create_file_request.update(llm_provider_config)
         _create_file_request.pop("custom_llm_provider", None)
         # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
-        response = await litellm.acreate_file(**_create_file_request, custom_llm_provider=custom_llm_provider)
+        provider_upload_request: Final = cast(  # cast-ok: files_settings and router defaults add undeclared keys
+            CreateFileRequest, {**_create_file_request, **router_default_drop_params(llm_router, _create_file_request)}
+        )
+        response = await litellm.acreate_file(**provider_upload_request, custom_llm_provider=custom_llm_provider)
 
     return response
 
@@ -631,6 +694,13 @@ async def create_file(
 
         # Extract file creation parameters using utility function
         request_body: Final = await read_request_body(request=request) or {}
+        enforce_team_s3_bucket_allowlist(
+            request_body=_REQUEST_BODY_ADAPTER.validate_python(request_body),
+            general_settings=general_settings_view(),
+            llm_router=llm_router,
+            team_metadata=user_api_key_dict.team_metadata,
+            team_id=user_api_key_dict.team_id,
+        )
         file_params: Final = await extract_file_creation_params(
             request=request,
             request_body=request_body,
@@ -708,6 +778,8 @@ async def create_file(
         # Add litellm_metadata to data if provided (from form field)
         if extracted_litellm_metadata is not None:
             data["litellm_metadata"] = extracted_litellm_metadata
+        if isinstance(s3_bucket_name := form_data_raw.get("s3_bucket_name"), str) and s3_bucket_name:
+            data["s3_bucket_name"] = s3_bucket_name
 
         if expires_after_anchor is not None or expires_after_seconds_str is not None:
             if expires_after_anchor is None or expires_after_seconds_str is None:
@@ -859,7 +931,7 @@ async def create_file(
                 )
             expires_after = FileExpiresAfter(
                 anchor="created_at",
-                seconds=int(enforced_file_expiry["seconds"]),
+                seconds=int_of(_JSON_VALUE_ADAPTER.validate_python(enforced_file_expiry["seconds"])),
             )
 
         verbose_proxy_logger.debug("create_file expires_after: %s", expires_after)
@@ -1055,8 +1127,11 @@ async def get_file_content(
                 )
 
             # Check if file is stored in a storage backend (check DB)
-            if hasattr(managed_files_obj, "prisma_client") and getattr(managed_files_obj, "prisma_client", None):
-                prisma_client: Final[PrismaClient] = getattr(managed_files_obj, "prisma_client")
+            if (
+                has_attributes(managed_files_obj, _CarriesPrismaClient, "prisma_client")
+                and managed_files_obj.prisma_client
+            ):
+                prisma_client: Final = managed_files_obj.prisma_client
                 db_file: Final = await ManagedFileRepository(prisma_client).table.find_first(
                     where={"unified_file_id": file_id}
                 )
@@ -1091,7 +1166,6 @@ async def get_file_content(
 
             model: Final = cast(str | None, data.get("model"))
             if model:
-                add_internal_model_credentials(data=data, llm_router=llm_router, model_id=model)
                 response = await llm_router.afile_content(
                     **{
                         "model": model,
@@ -1131,7 +1205,7 @@ async def get_file_content(
             )
 
             if not should_route:
-                apply_team_provider_credentials(
+                await apply_team_provider_credentials(
                     data=data,
                     llm_router=llm_router,
                     user_api_key_dict=user_api_key_dict,
@@ -1180,7 +1254,6 @@ async def get_file_content(
                     data=data,
                     credentials=credentials,
                     file_id=original_file_id,  # Use decoded file ID if from encoded ID
-                    include_internal_credentials=True,
                 )
                 response = await litellm.afile_content(
                     custom_llm_provider=credentials["custom_llm_provider"],
@@ -1346,6 +1419,7 @@ async def get_file(
             data=data,
             user_api_key_dict=user_api_key_dict,
             check_file_id_encoding=True,
+            resolves_managed_file_ids=proxy_logging_obj.get_proxy_hook("managed_files") is not None,
         )
 
         if should_route and credentials is not None:
@@ -1354,7 +1428,6 @@ async def get_file(
                 data=data,
                 credentials=credentials,
                 file_id=original_file_id,
-                include_internal_credentials=True,
             )
 
             response = await litellm.afile_retrieve(
@@ -1397,7 +1470,7 @@ async def get_file(
             # Remove file_id from data to avoid "multiple values for keyword argument" error
             # data was initialized with {"file_id": file_id}
             data.pop("file_id", None)
-            apply_team_provider_credentials(
+            await apply_team_provider_credentials(
                 data=data,
                 llm_router=llm_router,
                 user_api_key_dict=user_api_key_dict,
@@ -1560,6 +1633,7 @@ async def delete_file(
             data=data,
             user_api_key_dict=user_api_key_dict,
             check_file_id_encoding=True,
+            resolves_managed_file_ids=proxy_logging_obj.get_proxy_hook("managed_files") is not None,
         )
 
         if should_route and credentials is not None:
@@ -1568,7 +1642,6 @@ async def delete_file(
                 data=data,
                 credentials=credentials,
                 file_id=original_file_id,
-                include_internal_credentials=True,
             )
 
             response = await litellm.afile_delete(
@@ -1616,7 +1689,7 @@ async def delete_file(
             )
         else:
             data.pop("file_id", None)
-            apply_team_provider_credentials(
+            await apply_team_provider_credentials(
                 data=data,
                 llm_router=llm_router,
                 user_api_key_dict=user_api_key_dict,
@@ -1973,14 +2046,15 @@ async def list_files(
             )
         elif should_route and credentials is not None:
             # Use model-based routing with credentials from config
-            prepare_data_with_credentials(data=data, credentials=credentials, include_internal_credentials=True)
-            response = await litellm.afile_list(
+            prepare_data_with_credentials(data=data, credentials=credentials)
+            routed_listing: Final = await litellm.afile_list(
                 custom_llm_provider=credentials["custom_llm_provider"],
                 purpose=purpose,
                 **data,
             )
 
             verbose_proxy_logger.debug("Listed files using model: %s", model_used)
+            response = _as_file_list_page(routed_listing)
 
         elif target_model_names and isinstance(target_model_names, str):
             target_model_name: Final = _single_target_model_name(target_model_names)
@@ -1997,11 +2071,13 @@ async def list_files(
                 user_api_key_dict=user_api_key_dict,
                 operation_context="file list",
             )
-            prepare_data_with_credentials(data=data, credentials=credentials, include_internal_credentials=True)
-            response = await litellm.afile_list(
-                custom_llm_provider=credentials["custom_llm_provider"],
-                purpose=purpose,
-                **data,
+            prepare_data_with_credentials(data=data, credentials=credentials)
+            response = _as_file_list_page(
+                await litellm.afile_list(
+                    custom_llm_provider=credentials["custom_llm_provider"],
+                    purpose=purpose,
+                    **data,
+                )
             )
         else:
             custom_llm_provider: Final = await _requested_custom_llm_provider(request=request, provider=provider)
@@ -2018,17 +2094,19 @@ async def list_files(
                 )
             else:
                 resolved_custom_llm_provider: Final = custom_llm_provider or "openai"
-                apply_team_provider_credentials(
+                await apply_team_provider_credentials(
                     data=data,
                     llm_router=llm_router,
                     user_api_key_dict=user_api_key_dict,
                     custom_llm_provider=resolved_custom_llm_provider,
                 )
 
-                response = await litellm.afile_list(
-                    custom_llm_provider=resolved_custom_llm_provider,
-                    purpose=purpose,
-                    **data,
+                response = _as_file_list_page(
+                    await litellm.afile_list(
+                        custom_llm_provider=resolved_custom_llm_provider,
+                        purpose=purpose,
+                        **data,
+                    )
                 )
 
         if response is None:
@@ -2036,7 +2114,6 @@ async def list_files(
                 status_code=500,
                 detail="Either 'provider' or 'target_model_names' must be provided e.g. `?target_model_names=gpt-4o`",
             )
-        response = _as_file_list_page(response)  # rebind-ok: each dispatch branch above binds response
 
         ## POST CALL HOOKS ###
         _response: Final = await proxy_logging_obj.post_call_success_hook(

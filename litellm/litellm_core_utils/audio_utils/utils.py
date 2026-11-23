@@ -9,8 +9,11 @@ import math
 import os
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Final
+from typing import Final, Protocol
 
+from pydantic import ConfigDict, TypeAdapter, ValidationError
+
+from litellm.litellm_core_utils.core_helpers import has_attributes
 from litellm.types.files import (
     AUDIO_FILE_TYPES,
     FILE_EXTENSIONS,
@@ -29,6 +32,9 @@ def normalized_audio_duration_seconds(value: object) -> float | None:
     except OverflowError:
         return None
     return seconds if math.isfinite(seconds) and seconds >= 0 else None
+
+
+LIBSNDFILE_UNKNOWN_FRAME_COUNT: Final = 2**63 - 1
 
 
 @dataclass
@@ -171,7 +177,38 @@ def normalize_transcription_language_to_bcp47(language: str) -> str:
     return BARE_ISO_639_1_TO_BCP47.get(language.lower(), language)
 
 
-def get_audio_file_name(file_obj: FileTypes) -> str:
+class _NamedFile(Protocol):
+    @property
+    def name(self) -> str: ...
+
+
+class _ReadableFile(Protocol):
+    def read(self) -> object: ...
+
+
+class _TellableFile(Protocol):
+    def tell(self) -> object: ...
+
+
+class _SeekableFile(Protocol):
+    def seek(self, offset: object, /) -> object: ...
+
+
+_FILE_TUPLE: Final = TypeAdapter(tuple[object, ...], config=ConfigDict(strict=True))
+
+
+def _file_tuple(file_obj: object) -> tuple[object, ...] | None:
+    try:
+        return _FILE_TUPLE.validate_python(file_obj)
+    except ValidationError:
+        return None
+
+
+def _is_path_like(value: object) -> bool:
+    return isinstance(value, os.PathLike)
+
+
+def get_audio_file_name(file_obj: object) -> str:
     """
     Safely get the name of a file-like object or return its string representation.
 
@@ -181,29 +218,30 @@ def get_audio_file_name(file_obj: FileTypes) -> str:
     Returns:
         str: The name of the file if available, otherwise a string representation of the object.
     """
-    if hasattr(file_obj, "name"):
-        return getattr(file_obj, "name")
+    if has_attributes(file_obj, _NamedFile, "name"):
+        return file_obj.name
     elif hasattr(file_obj, "__str__"):
         return str(file_obj)
     else:
         return repr(file_obj)
 
 
-def get_audio_file_content_hash(file_obj: FileTypes) -> str:
+def get_audio_file_content_hash(file_obj: object) -> str:
     """
     Compute SHA-256 hash of audio file content for cache keys.
     Falls back to filename hash if content extraction fails.
     """
-    file_content: bytes | None = None
+    file_content: object = None
     fallback_filename: str | None = None
 
-    if isinstance(file_obj, tuple):
-        if len(file_obj) < 2:
-            fallback_filename = str(file_obj[0]) if len(file_obj) > 0 else None
+    file_parts: Final = _file_tuple(file_obj)
+    if file_parts is not None:
+        if len(file_parts) < 2:
+            fallback_filename = str(file_parts[0]) if len(file_parts) > 0 else None
             file_content_obj = None
         else:
-            fallback_filename = str(file_obj[0]) if file_obj[0] is not None else None
-            file_content_obj = file_obj[1]
+            fallback_filename = str(file_parts[0]) if file_parts[0] is not None else None
+            file_content_obj = file_parts[1]
     else:
         file_content_obj = file_obj
         fallback_filename = get_audio_file_name(file_obj)
@@ -218,7 +256,7 @@ def get_audio_file_content_hash(file_obj: FileTypes) -> str:
             # itself rather than opening it.
             fallback_filename = file_content_obj
             file_content = None
-        elif isinstance(file_content_obj, os.PathLike):
+        elif _is_path_like(file_content_obj):
             try:
                 with open(str(file_content_obj), "rb") as f:
                     file_content = f.read()
@@ -227,13 +265,15 @@ def get_audio_file_content_hash(file_obj: FileTypes) -> str:
             except OSError:
                 fallback_filename = str(file_content_obj)
                 file_content = None
-        elif file_content_obj is not None and hasattr(file_content_obj, "read"):
+        elif file_content_obj is not None and has_attributes(file_content_obj, _ReadableFile, "read"):
             try:
-                current_position: Final = file_content_obj.tell() if hasattr(file_content_obj, "tell") else None
-                if hasattr(file_content_obj, "seek"):
+                current_position: Final = (
+                    file_content_obj.tell() if has_attributes(file_content_obj, _TellableFile, "tell") else None
+                )
+                if has_attributes(file_content_obj, _SeekableFile, "seek"):
                     file_content_obj.seek(0)
                 file_content = file_content_obj.read()
-                if current_position is not None and hasattr(file_content_obj, "seek"):
+                if current_position is not None and has_attributes(file_content_obj, _SeekableFile, "seek"):
                     file_content_obj.seek(current_position)
             except (OSError, AttributeError):
                 file_content = None
@@ -301,9 +341,12 @@ def calculate_request_duration(file: FileTypes) -> float | None:
                 "Pass bytes, an open file handle, a (filename, content) "
                 "tuple, or a pathlib.Path."
             )
-        elif isinstance(file, os.PathLike):
-            # File path (PathLike): SDK convenience.
-            with open(str(file), "rb") as f:
+        elif isinstance(file, os.PathLike) or (
+            isinstance(file, tuple) and len(file) >= 2 and isinstance(file[1], os.PathLike)
+        ):
+            # File path (PathLike), bare or as the content of a (filename, path) tuple: SDK convenience.
+            path: Final = file if isinstance(file, os.PathLike) else file[1]
+            with open(str(path), "rb") as f:
                 file_content = f.read()
         elif isinstance(file, tuple):
             # Tuple format: (filename, content, optional content_type)
@@ -313,7 +356,7 @@ def calculate_request_duration(file: FileTypes) -> float | None:
                     file_content = content
                 elif hasattr(content, "read") and not isinstance(content, (str, os.PathLike)):
                     # File-like object in tuple
-                    current_pos: Final = getattr(content, "tell", lambda: None)()
+                    current_pos: Final = content.tell() if hasattr(content, "tell") else None
                     # Seek to start to ensure we read the entire content
                     if hasattr(content, "seek"):
                         content.seek(0)
@@ -337,7 +380,10 @@ def calculate_request_duration(file: FileTypes) -> float | None:
         # Extract duration using soundfile
         file_object: Final = io.BytesIO(file_content)
         with sf.SoundFile(file_object) as audio:
-            duration: Final = len(audio) / audio.samplerate
+            frames: Final = len(audio)
+            if frames >= LIBSNDFILE_UNKNOWN_FRAME_COUNT:
+                return None
+            duration: Final = frames / audio.samplerate
             return duration
 
     except Exception:
@@ -366,16 +412,22 @@ def estimate_audio_tokens(data: str | None, models: Sequence[str] = (), fallback
     """Estimate audio tokens from container duration within a bounded decoding budget."""
     if not data:
         return DEFAULT_AUDIO_TOKEN_ESTIMATE
-    fallback_estimate: Final = max(len(data) * 3 // 4 // AUDIO_BYTES_PER_TOKEN, DEFAULT_AUDIO_TOKEN_ESTIMATE)
+    duration_tokens: Final = audio_duration_tokens(data, models, fallback_model)
+    if duration_tokens is None:
+        return max(len(data) * 3 // 4 // AUDIO_BYTES_PER_TOKEN, DEFAULT_AUDIO_TOKEN_ESTIMATE)
+    return duration_tokens
+
+
+def audio_duration_tokens(data: str, models: Sequence[str], fallback_model: str | None) -> int | None:
     padding: Final = 2 if data.endswith("==") else 1 if data.endswith("=") else 0
     if len(data) * 3 // 4 - padding > _MAX_AUDIO_ESTIMATE_BYTES:
-        return fallback_estimate
+        return None
     try:
         duration: Final = calculate_request_duration(base64.b64decode(data, validate=True))
     except (ValueError, binascii.Error):
-        return fallback_estimate
+        return None
     if duration is None or not math.isfinite(duration) or duration <= 0:
-        return fallback_estimate
+        return None
     fallback_rate: Final = _audio_token_rate(fallback_model) if fallback_model is not None else None
     rate: Final = max(
         (_audio_token_rate(model) or fallback_rate or AUDIO_TOKENS_PER_SECOND for model in models),

@@ -1,6 +1,9 @@
 import itertools
 import json
-from collections.abc import Callable, Iterator, Mapping
+import threading
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from dataclasses import dataclass
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Final
 
 import httpx
@@ -38,9 +41,7 @@ def offered_tool_names(body: Mapping[str, object]) -> list[str]:
     return [tool.get("function", {}).get("name") or tool.get("name") for tool in tools]
 
 
-def _searching_model(
-    reply: Callable[[dict, int, bool, str], dict],
-) -> Callable[[httpx.Request], httpx.Response]:
+def _searching_model_reply(reply: Callable[[dict, int, bool, str], dict]) -> Callable[[bytes], dict]:
     """
     Searches while the search tool is offered. Once it is not, answers only if the
     history says the search limit was reached, and otherwise ends the turn with no
@@ -48,14 +49,21 @@ def _searching_model(
     """
     counter: Final[Iterator[int]] = itertools.count(1)
 
-    def respond(request: httpx.Request) -> httpx.Response:
-        body: Final = json.loads(request.content)
+    def respond(content: bytes) -> dict:
+        body: Final = json.loads(content)
         call_number: Final = next(counter)
         searches: Final = LITELLM_WEB_SEARCH_TOOL_NAME in offered_tool_names(body) and call_number < RUNAWAY_LOOP_LIMIT
-        answer: Final = FINAL_ANSWER if SEARCH_LIMIT_ERROR_CODE in request.content.decode() else ""
-        return httpx.Response(200, json=reply(body, call_number, searches, answer))
+        answer: Final = FINAL_ANSWER if SEARCH_LIMIT_ERROR_CODE in content.decode() else ""
+        return reply(body, call_number, searches, answer)
 
     return respond
+
+
+def _searching_model(
+    reply: Callable[[dict, int, bool, str], dict],
+) -> Callable[[httpx.Request], httpx.Response]:
+    respond: Final = _searching_model_reply(reply)
+    return lambda request: httpx.Response(200, json=respond(request.content))
 
 
 def _anthropic_reply(body: dict, call_number: int, searches: bool, answer: str) -> dict:
@@ -159,6 +167,40 @@ def anthropic_model(
     monkeypatch.delenv("ANTHROPIC_API_BASE", raising=False)
     monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
     return respx_mock.post(ANTHROPIC_MESSAGES_URL).mock(side_effect=_searching_model(_anthropic_reply))
+
+
+@dataclass(frozen=True, slots=True)
+class RecordingUpstream:
+    api_base: str
+    bodies: Sequence[dict]
+
+
+@pytest.fixture
+def anthropic_messages_upstream(monkeypatch: pytest.MonkeyPatch, fresh_http_clients: None) -> Iterator[RecordingUpstream]:
+    respond: Final = _searching_model_reply(_anthropic_reply)
+    received: Final[list[dict]] = []  # mutable-ok: the server thread appends each request body as it arrives
+
+    class SearchingModel(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            content: Final = self.rfile.read(int(self.headers["Content-Length"]))
+            received.append(json.loads(content))
+            answer: Final = json.dumps(respond(content)).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(answer)))
+            self.end_headers()
+            self.wfile.write(answer)
+
+        def log_message(self, format: str, *args: object) -> None:
+            pass
+
+    server: Final = ThreadingHTTPServer(("127.0.0.1", 0), SearchingModel)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-anthropic-key")
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_BASE", f"http://127.0.0.1:{server.server_port}")
+    yield RecordingUpstream(api_base=f"http://127.0.0.1:{server.server_port}", bodies=received)
+    server.shutdown()
 
 
 @pytest.fixture

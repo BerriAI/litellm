@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import gzip
+import hashlib
 import json
 import math
 import random
@@ -59,6 +60,8 @@ def _client(max_decompressed_body_size_mb: float = CAP_MB, root_path: str = "", 
         routes=[
             Route("/v1/systemone", _echo_request, methods=["POST"]),
             Route("/claude-code/plugins/upload", _echo_request, methods=["POST"]),
+            Route("/skill-hub/skills/upload", _echo_request, methods=["POST"]),
+            Route("/skill-hub/skills/{name}/upload", _echo_request, methods=["PUT"]),
             Route("/plugin-proxy/{path:path}", _echo_request, methods=["POST"]),
             Route("/claude_code_gateway/v1/{signal}", _echo_request, methods=["POST"]),
         ]
@@ -248,16 +251,22 @@ def test_operator_request_size_limit_caps_the_decoded_body_when_it_is_lower(
 @pytest.mark.parametrize(("coding", "compress"), [
     ("identity", bytes), ("gzip", gzip.compress), ("zstd", zstd.compress),
 ])
+@pytest.mark.parametrize(("method", "path"), [
+    ("POST", "/claude-code/plugins/upload"),
+    ("POST", "/skill-hub/skills/upload"),
+    ("PUT", "/skill-hub/skills/example/upload"),
+    ("PUT", "/skill-hub/submissions/absent/upload"),
+])
 def test_proxy_bounds_skill_uploads_before_authentication_or_body_parsing(
-    coding: str, compress: Callable[[bytes], bytes],
+    coding: str, compress: Callable[[bytes], bytes], method: str, path: str,
 ) -> None:
     from litellm.proxy.proxy_server import app
 
     body: Final = random.Random(0).randbytes(6 * MIB) + bytes(6 * MIB)
     encoded: Final = compress(body)
 
-    response: Final = TestClient(app).post(
-        "/claude-code/plugins/upload",
+    response: Final = TestClient(app).request(
+        method, path,
         content=encoded,
         headers={"content-encoding": coding, "content-type": "multipart/form-data; boundary=upload"},
     )
@@ -267,6 +276,32 @@ def test_proxy_bounds_skill_uploads_before_authentication_or_body_parsing(
     assert response.json() == (
         {"error": "Request size is too large. Max size is 11 MB"} if coding == "identity" else _decoded_too_large(11)
     )
+
+
+@pytest.mark.parametrize("root_path", ("", "/gateway"))
+@pytest.mark.parametrize(("coding", "compress"), [("gzip", gzip.compress), ("zstd", zstd.compress)])
+def test_replacement_upload_route_limit_caps_decoded_bytes(
+    root_path: str, coding: str, compress: Callable[[bytes], bytes],
+) -> None:
+    limit: Final = 1 / 32
+    client: Final = _client(
+        root_path=root_path,
+        route_max_request_size_mb={("PUT", "/skill-hub/skills/{name}/upload"): limit},
+    )
+    body: Final = _low_entropy_text(int(limit * MIB))
+    path: Final = f"{root_path}/skill-hub/skills/example/upload"
+    headers: Final = {"content-encoding": coding, "content-type": "application/zip"}
+
+    within: Final = client.put(path, content=compress(body), headers=headers)
+    over: Final = client.put(path, content=compress(body + b"x"), headers=headers)
+
+    assert within.status_code == 200
+    decoded: Final = bytes.fromhex(within.json()["body_hex"])
+    actual: Final = (len(decoded), hashlib.sha256(decoded).hexdigest())
+    expected: Final = (len(body), hashlib.sha256(body).hexdigest())
+    assert actual == expected
+    assert over.status_code == 413
+    assert over.json() == _decoded_too_large(limit)
 
 
 @pytest.mark.parametrize(("signature", "content_encoding"), [(GZIP_MAGIC, "gzip"), (ZSTD_FRAME_MAGIC, "zstd")])
