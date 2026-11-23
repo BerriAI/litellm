@@ -2106,7 +2106,7 @@ async def test_real_router_selection_keeps_origin_reasoning_and_strips_foreign_o
 
 @pytest.mark.asyncio
 async def test_real_router_pin_strips_unmarked_reasoning_beside_the_origins_marked_reasoning():
-    router = litellm.Router(
+    router: Final = litellm.Router(
         model_list=[
             {
                 "model_name": "gpt-mantle",
@@ -2129,9 +2129,9 @@ async def test_real_router_pin_strips_unmarked_reasoning_beside_the_origins_mark
         optional_pre_call_checks=["encrypted_content_affinity"],
         num_retries=0,
     )
-    openai_item_id = ResponsesAPIRequestUtils._build_encrypted_item_id("dep-openai", "rs-openai")
-    openai_wrapped = ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id("blob-openai", "dep-openai")
-    request_kwargs = {
+    openai_item_id: Final = ResponsesAPIRequestUtils._build_encrypted_item_id("dep-openai", "rs-openai")
+    openai_wrapped: Final = ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id("blob-openai", "dep-openai")
+    request_kwargs: Final = {
         "input": [
             {"type": "message", "role": "user", "content": "first question"},
             {
@@ -2152,7 +2152,7 @@ async def test_real_router_pin_strips_unmarked_reasoning_beside_the_origins_mark
         "store": False,
     }
     try:
-        deployment = await router.async_get_available_deployment(
+        deployment: Final = await router.async_get_available_deployment(
             model="gpt-openai", request_kwargs=request_kwargs, input=request_kwargs["input"]
         )
 
@@ -2168,6 +2168,73 @@ async def test_real_router_pin_strips_unmarked_reasoning_beside_the_origins_mark
                 "summary": [{"type": "summary_text", "text": "openai summary"}],
             },
             {"type": "message", "role": "user", "content": "third question"},
+        ]
+    finally:
+        router.discard()
+
+
+@pytest.mark.asyncio
+async def test_real_router_pin_drops_unmarked_bridge_thinking_beside_the_origins_marked_thinking():
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-mantle",
+                "litellm_params": {
+                    "model": "bedrock_mantle/openai.gpt-oss-120b",
+                    "aws_region_name": "us-east-1",
+                },
+                "model_info": {"id": "dep-mantle"},
+            },
+            {
+                "model_name": "gpt-openai",
+                "litellm_params": {
+                    "model": "openai/gpt-5.1-codex",
+                    "api_base": "https://api.openai.com/v1",
+                    "api_key": "key-openai",
+                },
+                "model_info": {"id": "dep-openai"},
+            },
+        ],
+        optional_pre_call_checks=["encrypted_content_affinity"],
+        num_retries=0,
+    )
+    openai_thinking: Final = {
+        "type": "thinking",
+        "thinking": "openai turn",
+        "signature": (
+            "litellm_encrypted_reasoning:"
+            f"{ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id('gAAAAA_openai', 'dep-openai')}"
+        ),
+    }
+    messages: Final = [
+        {"role": "user", "content": "first question"},
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "thinking",
+                    "thinking": "unmarked turn",
+                    "signature": "litellm_encrypted_reasoning:gAAAAA_unmarked",
+                },
+                {"type": "text", "text": "first answer"},
+            ],
+        },
+        {"role": "user", "content": "second question"},
+        {"role": "assistant", "content": [openai_thinking, {"type": "text", "text": "second answer"}]},
+        {"role": "user", "content": "third question"},
+    ]
+    try:
+        deployment: Final = await router.async_get_available_deployment(
+            model="gpt-openai", request_kwargs={"messages": messages}, messages=messages
+        )
+
+        assert deployment["model_info"]["id"] == "dep-openai"
+        assert [message["content"] for message in messages] == [
+            "first question",
+            [{"type": "text", "text": "first answer"}],
+            "second question",
+            [openai_thinking, {"type": "text", "text": "second answer"}],
+            "third question",
         ]
     finally:
         router.discard()
