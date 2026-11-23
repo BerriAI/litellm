@@ -11,7 +11,7 @@ from pydantic import JsonValue, TypeAdapter
 from typing_extensions import assert_never
 
 import litellm
-from litellm._logging import verbose_logger
+from litellm._logging import verbose_logger, verbose_proxy_stdout_logger
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.common_utils import context_management_betas, context_management_with_edits
@@ -29,7 +29,11 @@ from litellm.llms.bedrock.common_utils import (
     get_bedrock_base_model,
     strip_bedrock_routing_prefix,
 )
-from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensHandler, BedrockCountTokensRequestError
+from litellm.llms.bedrock.count_tokens.handler import (
+    BedrockCountTokensHandler,
+    BedrockCountTokensRequestError,
+    is_caller_refusal,
+)
 from litellm.llms.bedrock.count_tokens.mantle_handler import BedrockMantleCountTokensHandler
 from litellm.llms.bedrock_mantle.common_utils import is_mantle_claude_model
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
@@ -371,7 +375,10 @@ class BedrockTokenCounter(BaseTokenCounter):
                     original_response=dict(outcome.original_response),
                 )
             case CountTokensFailure():
-                verbose_logger.warning(
+                refused_for_caller: Final = is_caller_refusal(
+                    outcome.status_code, outcome.message, outcome.rejected_before_provider_call
+                )
+                (verbose_proxy_stdout_logger if refused_for_caller else verbose_logger).warning(
                     "%s CountTokens API error: status=%s, message=%s",
                     outcome.tokenizer_type,
                     outcome.status_code,

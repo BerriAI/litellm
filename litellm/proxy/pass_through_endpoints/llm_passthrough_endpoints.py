@@ -1432,10 +1432,6 @@ def is_bedrock_count_tokens_endpoint(endpoint: str) -> bool:
     return "count_tokens" in endpoint or "count-tokens" in endpoint
 
 
-_COUNT_TOKENS_CALLER_ERROR_STATUSES: Final = frozenset({400, 429})
-_BEDROCK_INVALID_MODEL_ID_MESSAGE: Final = "model identifier is invalid"
-
-
 def extract_model_from_bedrock_endpoint(endpoint: str) -> str:
     """
     Extract model name from Bedrock endpoint path.
@@ -1714,7 +1710,11 @@ async def _bedrock_count_tokens(
     user_api_key_dict: UserAPIKeyAuth, request_body: dict[str, object], litellm_call_id: str
 ) -> Mapping[str, object]:
     from litellm.llms.bedrock.common_utils import BedrockError
-    from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensHandler
+    from litellm.llms.bedrock.count_tokens.handler import (
+        BedrockCountTokensHandler,
+        BedrockCountTokensRequestError,
+        is_caller_refusal,
+    )
     from litellm.proxy.proxy_server import llm_router
 
     try:
@@ -1767,8 +1767,8 @@ async def _bedrock_count_tokens(
 
     except BedrockError as e:
         # Convert BedrockError to HTTPException for FastAPI
-        is_caller_error: Final = (
-            e.status_code in _COUNT_TOKENS_CALLER_ERROR_STATUSES and _BEDROCK_INVALID_MODEL_ID_MESSAGE not in e.message
+        is_caller_error: Final = is_caller_refusal(
+            e.status_code, e.message, isinstance(e, BedrockCountTokensRequestError)
         )
         (verbose_proxy_stdout_logger if is_caller_error else verbose_proxy_logger).log(
             logging.WARNING if is_caller_error else logging.ERROR,

@@ -8611,10 +8611,17 @@ async def test_bedrock_native_count_tokens_logs_the_provider_status_when_the_cou
 @pytest.mark.parametrize(
     ("aws_status", "aws_message", "log_level", "stream"),
     [
+        # Bedrock us-east-1 answered a count for Claude Opus 5.5 with this message on 2026-11-22
         (400, "The provided model doesn't support counting tokens.", logging.WARNING, "stdout"),
         (429, "Too many requests, please wait before trying again.", logging.WARNING, "stdout"),
-        # Bedrock us-east-1 answered a nonexistent deployment model id this way on 2026-11-22
         (400, "The provided model identifier is invalid.", logging.ERROR, "stderr"),
+        (400, "`max_tokens` must be greater than `thinking.budget_tokens`", logging.ERROR, "stderr"),
+        (
+            400,
+            "The provided model doesn't support counting tokens.: Extra inputs are not permitted",
+            logging.ERROR,
+            "stderr",
+        ),
         (403, "The security token included in the request is invalid.", logging.ERROR, "stderr"),
         (404, "The count failed.", logging.ERROR, "stderr"),
         (500, "The count failed.", logging.ERROR, "stderr"),
@@ -8666,16 +8673,22 @@ async def test_bedrock_native_count_tokens_answers_400_for_a_malformed_body_with
     monkeypatch: pytest.MonkeyPatch,
     httpx_transport: None,
     respx_mock: respx.MockRouter,
+    caplog: pytest.LogCaptureFixture,
     request_body: Mapping[str, object],
     problem: str,
 ) -> None:
-    with pytest.raises(HTTPException) as exc_info:
+    with caplog.at_level(logging.INFO, logger="LiteLLM Proxy"), pytest.raises(HTTPException) as exc_info:
         await _bedrock_native_count(
             monkeypatch, respx_mock, httpx.Response(200, json={"inputTokens": 12}), Response(), request_body
         )
 
     assert (exc_info.value.status_code, exc_info.value.detail) == (400, {"error": problem})
     assert len(respx_mock.calls) == 0
+    assert [
+        (record.name, record.levelno)
+        for record in caplog.records
+        if record.name.startswith("LiteLLM Proxy") and record.levelno >= logging.WARNING
+    ] == [("LiteLLM Proxy.stdout", logging.WARNING)]
 
 
 @pytest.mark.parametrize(

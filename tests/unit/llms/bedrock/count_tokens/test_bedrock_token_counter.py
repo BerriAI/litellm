@@ -1,5 +1,6 @@
 import base64
 import copy
+import logging
 from collections.abc import Mapping
 from itertools import chain
 from copy import deepcopy
@@ -10,6 +11,7 @@ import pytest
 from pydantic import JsonValue, TypeAdapter
 
 import litellm
+from litellm._logging import LevelRoutingStreamHandler
 from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude_transformation import (
     AmazonAnthropicClaudeConfig,
 )
@@ -179,6 +181,48 @@ async def test_other_bedrock_runtime_failures_are_not_retried_on_mantle(
     assert result.status_code == runtime[0]
     assert result.tokenizer_type == "bedrock_api"
     assert bedrock.posted_hosts() == (RUNTIME_HOST,)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("messages", "runtime", "stream"),
+    (
+        (MESSAGES, (400, UNSUPPORTED), "stdout"),
+        (MESSAGES, (429, {"message": "Too many requests, please wait before trying again."}), "stdout"),
+        ([{"role": "user"}], (200, {"inputTokens": 12}), "stdout"),
+        (MESSAGES, (400, {"message": "The provided model identifier is invalid."}), "stderr"),
+        (MESSAGES, (403, {"message": "The security token included in the request is invalid."}), "stderr"),
+        (MESSAGES, (500, {"message": "The count failed."}), "stderr"),
+    ),
+)
+async def test_bedrock_count_failure_warning_goes_to_stdout_only_when_the_caller_caused_it(
+    caplog: pytest.LogCaptureFixture,
+    capsys: pytest.CaptureFixture[str],
+    messages: list[dict[str, str]],
+    runtime: tuple[int, Mapping[str, object]],
+    stream: str,
+) -> None:
+    bedrock: Final = _Bedrock(runtime=runtime, mantle=(200, {"input_tokens": 2177}))
+
+    with caplog.at_level(logging.WARNING):
+        result: Final = await _counter(bedrock).count_tokens(
+            model_to_use="amazon.nova-pro-v1:0",
+            messages=messages,
+            contents=None,
+            deployment=DEPLOYMENT,
+            request_model="amazon.nova-pro-v1:0",
+        )
+
+    assert result is not None and result.error is True
+    warnings: Final = [record for record in caplog.records if "CountTokens API error" in record.getMessage()]
+    assert [record.levelno for record in warnings] == [logging.WARNING]
+
+    _ = capsys.readouterr()
+    routing: Final = LevelRoutingStreamHandler()
+    routing.setFormatter(logging.Formatter("%(message)s"))
+    routing.emit(warnings[0])
+    out, err = capsys.readouterr()
+    assert {"stdout": (out, err), "stderr": (err, out)}[stream] == (f"{warnings[0].getMessage()}\n", "")
 
 
 @pytest.mark.asyncio
@@ -352,7 +396,10 @@ def _invoke_body(request: httpx.Request) -> dict[str, JsonValue]:
         {
             "response_format": {
                 "type": "json_schema",
-                "json_schema": {"name": "city", "schema": {"type": "object", "properties": {"city": {"type": "string"}}}},
+                "json_schema": {
+                    "name": "city",
+                    "schema": {"type": "object", "properties": {"city": {"type": "string"}}},
+                },
             }
         },
         {"reasoning_effort": "low"},
@@ -478,7 +525,6 @@ async def test_claude_count_rejects_a_lone_responses_tool_without_calling_bedroc
     assert result is not None
     assert (result.error, result.status_code, result.rejected_before_provider_call) == (True, 400, True)
     assert bedrock.posted_hosts() == ()
-
 
 
 def _deployment(model: str) -> dict[str, JsonValue]:
@@ -623,6 +669,7 @@ async def test_claude_count_sends_a_chat_tool_call_turn_sent_without_a_content_k
     assert result is not None
     assert (result.error, result.total_tokens) == (False, 412)
     assert bedrock.posted_hosts() == (RUNTIME_HOST,)
+
 
 _CLAUDE_REPLY: Final = {
     "id": "msg_1",
@@ -1129,7 +1176,9 @@ async def test_claude_converse_count_sends_system_messages_where_converse_infere
 
 
 @pytest.mark.asyncio
-async def test_claude_converse_count_keeps_tool_history_when_neutralizing_is_off(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_claude_converse_count_keeps_tool_history_when_neutralizing_is_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(litellm, "modify_params", True)
     monkeypatch.setattr(litellm, "bedrock_neutralize_orphaned_tool_blocks", False)
 
@@ -1425,7 +1474,9 @@ async def test_claude_converse_count_of_a_message_without_a_role_answers_bedrock
         model_to_use="us.anthropic.claude-haiku-5-5",
         messages=[{"content": "What is 2+2?"}],
         contents=None,
-        deployment={"litellm_params": {**DEPLOYMENT["litellm_params"], "model": "bedrock/us.anthropic.claude-haiku-5-5"}},
+        deployment={
+            "litellm_params": {**DEPLOYMENT["litellm_params"], "model": "bedrock/us.anthropic.claude-haiku-5-5"}
+        },
         request_model="claude-haiku-5-5",
         messages_format="openai",
     )
