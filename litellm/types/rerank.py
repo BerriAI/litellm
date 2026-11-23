@@ -80,7 +80,7 @@ class RerankUsage(TypedDict):
 
 _RERANK_META: Final = TypeAdapter(RerankResponseMeta)
 _FIELD_VALUE: Final = TypeAdapter(object)
-_Default: Final = TypeVar("_Default")
+_Default = TypeVar("_Default")
 
 
 def get_rerank_usage(response: Mapping[str, object]) -> RerankUsage | None:
