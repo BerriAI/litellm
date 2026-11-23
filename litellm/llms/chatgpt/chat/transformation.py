@@ -78,7 +78,7 @@ class ChatGPTConfig(OpenAIConfig):
         headers: dict[str, str],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict[str, object],
+        optional_params: dict,
         litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
