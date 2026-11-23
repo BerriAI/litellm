@@ -63,7 +63,7 @@ from ..constants import (
 from ..errors import AnthropicContextManagementError
 from ..result import PolyfillResult
 
-_MsgT: Final = TypeVar("_MsgT", bound=Mapping[str, object])
+_MsgT = TypeVar("_MsgT", bound=Mapping[str, object])
 
 
 def _as_object(value: object) -> object:

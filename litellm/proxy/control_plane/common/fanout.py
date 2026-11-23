@@ -16,8 +16,8 @@ from litellm.proxy.control_plane.dataplanes.client import (
 from litellm.proxy.control_plane.dataplanes.credentials import CredentialUnavailable
 from litellm.proxy.control_plane.dataplanes.registry import Dataplane
 
-T: Final = TypeVar("T")
-M: Final = TypeVar("M")
+T = TypeVar("T")
+M = TypeVar("M")
 
 
 @dataclass(frozen=True, slots=True)

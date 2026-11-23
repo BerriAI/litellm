@@ -83,6 +83,8 @@ from litellm.types.llms.vertex_ai import (
     FunctionCallingConfig,
     FunctionDeclaration,
     GeminiFinishReason,
+    GeminiImageProviderSpecificFields,
+    GeminiImageURLListItem,
     GeminiThinkingConfig,
     GenerateContentResponseBody,
     HttpxPartType,
@@ -280,16 +282,24 @@ def _content_parts(candidate: Candidates) -> Sequence[HttpxPartType]:
     return content.get("parts", ()) if content is not None else ()
 
 
+def _generated_image_item(data_uri: str, thought_signature: str | None) -> ImageURLListItem:
+    image_url: Final = ImageURLObject(url=data_uri, detail="auto")
+    if thought_signature is None:
+        return ImageURLListItem(image_url=image_url, index=0, type="image_url")
+    return GeminiImageURLListItem(
+        image_url=image_url,
+        index=0,
+        type="image_url",
+        provider_specific_fields=GeminiImageProviderSpecificFields(thought_signature=thought_signature),
+    )
+
+
 def _inline_image(part: HttpxPartType) -> ImageURLListItem | None:
     inline_data: Final = part.get("inlineData", {})
     mime_type: Final = inline_data.get("mimeType", "")
     if not mime_type.startswith("image/"):
         return None
-    return ImageURLListItem(
-        image_url=ImageURLObject(url=f"data:{mime_type};base64,{inline_data.get('data', '')}", detail="auto"),
-        index=0,
-        type="image_url",
-    )
+    return _generated_image_item(f"data:{mime_type};base64,{inline_data.get('data', '')}", part.get("thoughtSignature"))
 
 
 def _images_in(parts: Sequence[HttpxPartType]) -> tuple[ImageURLListItem, ...]:
