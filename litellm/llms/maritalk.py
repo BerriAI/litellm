@@ -1,4 +1,4 @@
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from typing import Final
 
 from httpx._models import Headers
@@ -12,7 +12,7 @@ class MaritalkError(BaseLLMException):
         self,
         status_code: int,
         message: str,
-        headers: dict[str, object] | Headers | None = None,
+        headers: dict | Headers | None = None,
     ):
         super().__init__(status_code=status_code, message=message, headers=headers)
 
@@ -29,9 +29,9 @@ class MaritalkConfig(OpenAIGPTConfig):
         n: int | None = None,
         stop: list[str] | None = None,
         stream: bool | None = None,
-        stream_options: Mapping[str, object] | None = None,
-        tools: Sequence[Mapping[str, object]] | None = None,
-        tool_choice: str | Mapping[str, object] | None = None,
+        stream_options: dict | None = None,
+        tools: list[dict] | None = None,
+        tool_choice: str | dict | None = None,
     ) -> None:
         locals_: Final[Mapping[str, object]] = dict(locals())
         for key, value in locals_.items():
@@ -42,7 +42,7 @@ class MaritalkConfig(OpenAIGPTConfig):
     def get_config(cls):
         return super().get_config()
 
-    def get_supported_openai_params(self, model: str) -> list[str]:
+    def get_supported_openai_params(self, model: str) -> list:
         return [
             "frequency_penalty",
             "presence_penalty",
@@ -58,7 +58,5 @@ class MaritalkConfig(OpenAIGPTConfig):
             "tool_choice",
         ]
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: dict[str, object] | Headers
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | Headers) -> BaseLLMException:
         return MaritalkError(status_code=status_code, message=error_message, headers=headers)
