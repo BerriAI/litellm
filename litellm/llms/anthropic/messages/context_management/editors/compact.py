@@ -12,7 +12,6 @@ Mirrors Anthropic's native ``compact_20260112`` for non-Anthropic providers:
   the response adapter can prepend it to the response ``content`` array.
 """
 
-import re
 from collections.abc import Awaitable, Mapping, Sequence
 from typing import TYPE_CHECKING, Final, Optional, Protocol, TypeVar, Union, cast
 
@@ -59,13 +58,12 @@ from ..constants import (
     COMPACT_SUMMARY_MODEL_SETTING_KEY,
     COMPACT_SUMMARY_SYSTEM_PREFIX,
     COMPACT_SUMMARY_TIMEOUT_SECONDS,
+    text_in_summary_tags,
 )
 from ..errors import AnthropicContextManagementError
 from ..result import PolyfillResult
 
-_SUMMARY_TAG_RE: Final = re.compile(r"<summary>(.*?)</summary>", re.IGNORECASE | re.DOTALL)
-
-_MsgT: Final = TypeVar("_MsgT", bound=Mapping[str, object])
+_MsgT = TypeVar("_MsgT", bound=Mapping[str, object])
 
 
 def _as_object(value: object) -> object:
@@ -403,10 +401,10 @@ def _select_last_user_question(
 def _extract_summary_text(raw: str | None) -> str | None:
     if not raw:
         return None
-    match: Final = _SUMMARY_TAG_RE.search(raw)
-    if match is None:
+    tagged: Final = text_in_summary_tags(raw)
+    if tagged is None:
         return None
-    summary: Final = match.group(1).strip()
+    summary: Final = tagged.strip()
     return summary or None
 
 

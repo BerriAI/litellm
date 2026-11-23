@@ -13,7 +13,6 @@ from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
     Annotated,
-    Any,
     Final,
     Literal,
     NamedTuple,
@@ -107,6 +106,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     add_guardrails_from_policy_engine,
     client_pricing_fields_stripped_for,
     is_chat_completions_body,
+    request_routing_metadata,
 )
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attribution import (
     request_tags_from_request_data,
@@ -118,6 +118,7 @@ from litellm.proxy.utils import (
     count_request_input_tokens,
     handle_exception_on_proxy,
 )
+from litellm.responses.input_items_query import INPUT_ITEMS_QUERY_KEYS
 from litellm.responses.litellm_completion_transformation.compaction_items import messages_since_newest_compaction
 from litellm.responses.litellm_completion_transformation.count_request import MODEL_FILE_ID_MAPPING_FIELD
 from litellm.responses.retrieve_stream_query import RETRIEVE_INCLUDE_QUERY_KEYS, RETRIEVE_STREAM_QUERY_KEYS
@@ -125,6 +126,8 @@ from litellm.responses.streaming_iterator import (
     GuardedResponsesWsFrame,
     ResponsesWsFrameGuard,
     ResponsesWsFrameRejection,
+    responses_ws_error_frame,
+    responses_ws_error_type,
     spawn_logging_task,
     turn_refusal_frame,
 )
@@ -147,6 +150,7 @@ _RESPONSES_WS_CONFIG_VALUE_ADAPTER: Final[TypeAdapter[object | None]] = TypeAdap
 _DECODED_JSON: Final = TypeAdapter(object)
 _PROXY_SERVER_REQUEST_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 _RETRIEVE_QUERY_PARAMS: Final = tuple(sorted(RETRIEVE_INCLUDE_QUERY_KEYS | RETRIEVE_STREAM_QUERY_KEYS))
+_INPUT_ITEMS_QUERY_PARAMS: Final = tuple(sorted(INPUT_ITEMS_QUERY_KEYS))
 _RETRIEVE_QUERY_OPENAPI: Final = {
     "parameters": [
         {
@@ -180,6 +184,46 @@ _RETRIEVE_QUERY_OPENAPI: Final = {
     ]
 }
 
+_INPUT_ITEMS_QUERY_OPENAPI: Final = {
+    "parameters": [
+        {
+            "name": "after",
+            "in": "query",
+            "required": False,
+            "schema": {"type": "string"},
+            "description": "An item ID to list items after, used in pagination",
+        },
+        {
+            "name": "before",
+            "in": "query",
+            "required": False,
+            "schema": {"type": "string"},
+            "description": "An item ID to list items before, used in pagination",
+        },
+        {
+            "name": "include",
+            "in": "query",
+            "required": False,
+            "schema": {"type": "array", "items": {"type": "string"}},
+            "description": "Additional fields to include in the response, forwarded to the provider",
+        },
+        {
+            "name": "limit",
+            "in": "query",
+            "required": False,
+            "schema": {"type": "integer", "minimum": 0, "default": 20},
+            "description": "How many items to return, with the range enforced by the provider",
+        },
+        {
+            "name": "order",
+            "in": "query",
+            "required": False,
+            "schema": {"type": "string", "enum": ["asc", "desc"], "default": "desc"},
+            "description": "The order to return the input items in",
+        },
+    ]
+}
+
 _ResponseDocSchemas: TypeAlias = dict[int | str, dict[str, object]]  # fastapi's responses kwarg
 
 RESPONSES_API_RESPONSE_SCHEMAS: Final[_ResponseDocSchemas] = {
@@ -203,6 +247,17 @@ _TOOL_PAYLOAD_KEYS: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType(
     }
 )
 _EMPTY_TOOL_PAYLOAD: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def _extra_query_with_query_params(
+    body_extra_query: object, request: Request, keys: Sequence[str]
+) -> Mapping[str, object] | None:
+    query: Final = {
+        key: values[0] if len(values) == 1 else values for key in keys if (values := request.query_params.getlist(key))
+    }
+    if not query:
+        return None
+    return {**(body_extra_query if isinstance(body_extra_query, dict) else {}), **query}
 
 
 def _convert_tool_payload_value(key: str, value: object, *, to_chat: bool) -> object:
@@ -237,8 +292,8 @@ def _convert_tool_envelope(obj: object, *, to_chat: bool) -> object:
 
 
 def _normalize_tool_dialect(
-    data: dict, *, to_chat: bool
-) -> dict:  # mutable-ok: the parsed request body contract is a plain dict
+    data: dict[str, object], *, to_chat: bool
+) -> dict[str, object]:  # mutable-ok: the parsed request body contract is a plain dict
     tools: Final = data.get("tools")
     tool_choice: Final = data.get("tool_choice")
     normalized_tools: Final = (
@@ -281,8 +336,8 @@ def _router_can_serve(model: str, llm_router: "Router | None") -> bool:
 
 
 def _resolve_cursor_model_variant(
-    data: dict, llm_router: "Router | None"
-) -> dict:  # mutable-ok: the parsed request body contract is a plain dict
+    data: dict[str, object], llm_router: "Router | None"
+) -> dict[str, object]:  # mutable-ok: the parsed request body contract is a plain dict
     model: Final = data.get("model")
     if not isinstance(model, str) or _router_can_serve(model, llm_router):
         return data
@@ -706,7 +761,9 @@ async def cursor_chat_completions(
 
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
 
-    def cursor_data_generator(response, user_api_key_dict, request_data, request=None):
+    def cursor_data_generator(
+        response: object, user_api_key_dict: UserAPIKeyAuth, request_data, request: Request | None = None
+    ):
         """
         Custom generator that transforms Responses API streaming chunks to chat completion chunks.
 
@@ -786,12 +843,12 @@ async def cursor_chat_completions(
 
         # Transform non-streaming Responses API response to chat completions format
         if isinstance(response, ResponsesAPIResponse):
-            logging_obj: Final = processor.data.get("litellm_logging_obj")
+            logging_obj: Final = _DECODED_JSON.validate_python(processor.data.get("litellm_logging_obj"))
             transformed_response: Final = responses_api_bridge.transformation_handler.transform_response(
                 model=processor.data.get("model", ""),
                 raw_response=response,
                 model_response=ModelResponse(),
-                logging_obj=cast(Any, logging_obj),
+                logging_obj=logging_obj,
                 request_data=processor.data,
                 messages=processor.data.get("input", []),
                 optional_params={},
@@ -905,17 +962,14 @@ async def get_response(
         return state
 
     # Normal provider response flow
-    data: Final = await read_request_body(request=request)
+    data: Final[dict[str, object]] = await read_request_body(request=request)
     read_settles_billing: Final = not carries_client_side_overrides(data)
     data["response_id"] = response_id
-    retrieve_query: Final = {
-        key: values[0] if len(values) == 1 else values
-        for key in _RETRIEVE_QUERY_PARAMS
-        if (values := request.query_params.getlist(key))
-    }
-    if retrieve_query:
-        body_extra_query: Final[object] = data.get("extra_query")
-        data["extra_query"] = {**(body_extra_query if isinstance(body_extra_query, dict) else {}), **retrieve_query}
+    retrieve_extra_query: Final = _extra_query_with_query_params(
+        data.get("extra_query"), request, _RETRIEVE_QUERY_PARAMS
+    )
+    if retrieve_extra_query is not None:
+        data["extra_query"] = retrieve_extra_query
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
         response: Final[object] = await processor.base_process_llm_request(
@@ -1369,18 +1423,21 @@ async def delete_response(
     dependencies=[Depends(user_api_key_auth)],
     tags=["responses"],
     responses=RESPONSE_ITEM_LIST_SCHEMAS,
+    openapi_extra=_INPUT_ITEMS_QUERY_OPENAPI,
 )
 @router.get(
     "/responses/{response_id}/input_items",
     dependencies=[Depends(user_api_key_auth)],
     tags=["responses"],
     responses=RESPONSE_ITEM_LIST_SCHEMAS,
+    openapi_extra=_INPUT_ITEMS_QUERY_OPENAPI,
 )
 @router.get(
     "/openai/v1/responses/{response_id}/input_items",
     dependencies=[Depends(user_api_key_auth)],
     tags=["responses"],
     responses=RESPONSE_ITEM_LIST_SCHEMAS,
+    openapi_extra=_INPUT_ITEMS_QUERY_OPENAPI,
 )
 async def get_response_input_items(
     response_id: str,
@@ -1404,8 +1461,18 @@ async def get_response_input_items(
         version,
     )
 
-    data: Final = await read_request_body(request=request)
-    data["response_id"] = response_id
+    body: Final[dict[str, object]] = await read_request_body(request=request)
+    body_extra_query: Final = body.get("extra_query")
+    input_items_extra_query: Final = (
+        None
+        if isinstance(body_extra_query, str | list | int | float)
+        else _extra_query_with_query_params(body_extra_query, request, _INPUT_ITEMS_QUERY_PARAMS)
+    )
+    data: Final = {
+        **body,
+        "response_id": response_id,
+        **({} if input_items_extra_query is None else {"extra_query": input_items_extra_query}),
+    }
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
         return await processor.base_process_llm_request(
@@ -1548,6 +1615,8 @@ class _TokenCounter(Protocol):
         call_endpoint: bool,
         responses_request: Mapping[str, object] | None,
         litellm_call_id: str | None,
+        caller: UserAPIKeyAuth | None,
+        request_routing: Mapping[str, object],
     ) -> Awaitable[TokenCountResponse]: ...
 
 
@@ -1610,12 +1679,12 @@ async def _with_managed_file_id_mapping(
     caller_fields: Final = {name: value for name, value in data.items() if name != MODEL_FILE_ID_MAPPING_FIELD}
     if managed_files is None:
         return caller_fields
-    from litellm.proxy.proxy_server import user_api_key_cache
+    from litellm.proxy.proxy_server import hook_cache
 
     hooked: Final = dict(caller_fields)
     try:
         await managed_files.async_pre_call_hook(
-            user_api_key_dict=user_api_key_dict, cache=user_api_key_cache, data=hooked, call_type="aresponses"
+            user_api_key_dict=user_api_key_dict, cache=hook_cache, data=hooked, call_type="aresponses"
         )
     except HTTPException as e:
         raise ProxyException(message=str(e.detail), type="permission_error", param=None, code=e.status_code) from e
@@ -1917,6 +1986,8 @@ async def _responses_input_tokens(
             call_endpoint=True,
             responses_request=responses_request,
             litellm_call_id=litellm_call_id,
+            caller=user_api_key_dict,
+            request_routing=request_routing_metadata(request, request_fields, user_api_key_dict),
         )
     except ProxyException as e:
         if e.type != _PROVIDER_COUNT_ERROR_TYPE:
@@ -2092,29 +2163,15 @@ async def _read_ws_model_from_first_frame(
         first_event: Final = as_str_mapping(_DECODED_JSON.validate_python(json.loads(first_message)))
     except json.JSONDecodeError:
         await websocket.send_text(
-            json.dumps(
-                {
-                    "type": "error",
-                    "error": {
-                        "type": "invalid_request_error",
-                        "message": "First message is not valid JSON.",
-                    },
-                }
-            )
+            responses_ws_error_frame(400, "invalid_request_error", "First message is not valid JSON.")
         )
         await websocket.close(code=1008, reason="Invalid JSON in first message")
         return None
 
     if first_event is None or first_event.get("type") != "response.create":
         await websocket.send_text(
-            json.dumps(
-                {
-                    "type": "error",
-                    "error": {
-                        "type": "invalid_request_error",
-                        "message": "First message must be a response.create JSON object.",
-                    },
-                }
+            responses_ws_error_frame(
+                400, "invalid_request_error", "First message must be a response.create JSON object."
             )
         )
         await websocket.close(code=1008, reason="Invalid first message")
@@ -2123,14 +2180,10 @@ async def _read_ws_model_from_first_frame(
     model: Final = query_model or _extract_model_from_first_ws_event(first_event)
     if not model:
         await websocket.send_text(
-            json.dumps(
-                {
-                    "type": "error",
-                    "error": {
-                        "type": "invalid_request_error",
-                        "message": "No model provided. Supply ?model=<model> in the URL or include 'model' in the first response.create event.",
-                    },
-                }
+            responses_ws_error_frame(
+                400,
+                "invalid_request_error",
+                "No model provided. Supply ?model=<model> in the URL or include 'model' in the first response.create event.",
             )
         )
         await websocket.close(code=1008, reason="No model provided")
@@ -2176,21 +2229,10 @@ def _routing_hints_from_first_ws_frame(first_message: str) -> Mapping[str, objec
 
 def _responses_ws_failure_frame(failure: Exception) -> str:
     if isinstance(failure, EndpointNotSupportedByModelError):
-        return json.dumps(
-            {
-                "type": "error",
-                "status": 400,
-                "error": {"type": "invalid_request_error", "message": failure.message.split("\n\n", 1)[0]},
-            }
-        )
+        return responses_ws_error_frame(400, "invalid_request_error", failure.message.split("\n\n", 1)[0])
     proxy_exception: Final = handle_exception_on_proxy(failure)
     status: Final = int(proxy_exception.code) if str(proxy_exception.code).isdigit() else 500
-    error_type: Final = (
-        "rate_limit_exceeded" if status == 429 else "invalid_request_error" if 400 <= status < 500 else "server_error"
-    )
-    return json.dumps(
-        {"type": "error", "status": status, "error": {"type": error_type, "message": proxy_exception.message}}
-    )
+    return responses_ws_error_frame(status, responses_ws_error_type(status), proxy_exception.message)
 
 
 async def _enforce_responses_ws_first_frame_model_auth(
@@ -2210,7 +2252,7 @@ async def _enforce_responses_ws_first_frame_model_auth(
         user_custom_auth,
     )
 
-    request_data: Final = {"model": model}
+    request_data: Final[dict[str, object]] = {"model": model}
     route: Final = request.scope.get("path") or "/v1/responses"
     if master_key is None and not (
         general_settings.get("enable_jwt_auth", False)
@@ -2374,7 +2416,11 @@ def _responses_ws_frame_guard(
     ) -> ResponsesWsFrameRejection:
         await _bill_rejected_frame(rejected_frame_auth, exception, data)
         proxy_exception: Final = proxy_exception_from_route_error(exception)
-        return ResponsesWsFrameRejection(proxy_exception.message, proxy_exception.provider_specific_fields)
+        # a passthrough block is a 200 on HTTP, and an error frame must never invite a retry of the blocked turn
+        status_code: Final = (
+            400 if isinstance(exception, ModifyResponseException) else error_status_code(proxy_exception, 500)
+        )
+        return ResponsesWsFrameRejection(proxy_exception.message, proxy_exception.provider_specific_fields, status_code)
 
     async def guard(frame: str) -> GuardedResponsesWsFrame:
         started_at: Final = datetime.now()  # noqa: DTZ005  # the request pipeline logs naive local start times
@@ -2700,6 +2746,12 @@ async def _bill_rejected_frame(
                 )
             except Exception:  # noqa: BLE001  # billing never replaces the guardrail's own error
                 verbose_proxy_logger.exception("[Non-Blocking] Responses WebSocket: billing a rejected frame failed")
+    from litellm.proxy.hooks.rust_spend_logger import bill_failure_in_rust
+
+    try:
+        await bill_failure_in_rust(user_api_key_dict, exception, frame_data)
+    except Exception:  # noqa: BLE001  # billing never replaces the guardrail's own error
+        verbose_proxy_logger.exception("[Non-Blocking] Responses WebSocket: billing a rejected frame failed")
 
 
 def _recorded_pii_tokens(metadata: object) -> Mapping[str, str]:
@@ -2828,24 +2880,19 @@ async def _responses_websocket_session(
             skip_guardrails=True,
         )
     except RateLimitError as e:
+        await proxy_logging_obj.arelease_refused_responses_websocket_slot(user_api_key_dict)
         verbose_proxy_logger.info("Responses WebSocket refused at open by a rate limit: %s", e)
         with contextlib.suppress(WebSocketDisconnect, RuntimeError, OSError):
             await websocket.send_text(turn_refusal_frame(e))
         await websocket.close(code=1008, reason="Rate limit exceeded")
         return
     except Exception as e:
+        await proxy_logging_obj.arelease_refused_responses_websocket_slot(user_api_key_dict)
         verbose_proxy_logger.exception("Responses WebSocket pre-call error")
         try:
+            open_status: Final = error_status_code(e, 500)
             await websocket.send_text(
-                json.dumps(
-                    {
-                        "type": "error",
-                        "error": {
-                            "type": "invalid_request_error",
-                            "message": str(e),
-                        },
-                    }
-                )
+                responses_ws_error_frame(open_status, responses_ws_error_type(open_status), str(e))
             )
         except (WebSocketDisconnect, RuntimeError, OSError):
             pass

@@ -8,6 +8,7 @@ use serde::{Deserialize, de::DeserializeOwned};
 pub(super) struct Process {
     pub environment: Environment,
     pub log_level: Level,
+    pub minimum_custom_key_length: usize,
     pub mode: Mode,
 }
 
@@ -50,6 +51,7 @@ impl Process {
         Ok(Self {
             environment,
             log_level: log.log_level(),
+            minimum_custom_key_length: log.minimum_custom_key_length(),
             mode,
         })
     }
@@ -58,6 +60,7 @@ impl Process {
 #[derive(Deserialize)]
 struct LogSettings {
     rust_log: Option<String>,
+    minimum_custom_key_length: Option<String>,
 }
 
 impl LogSettings {
@@ -67,6 +70,19 @@ impl LogSettings {
             .and_then(|value| value.parse().ok())
             .unwrap_or(Level::INFO)
     }
+
+    /// The length the log scrubs `sk-` keys at until the config is read, which can set it too.
+    fn minimum_custom_key_length(&self) -> usize {
+        self.minimum_custom_key_length
+            .as_deref()
+            .and_then(key_length)
+            .unwrap_or(16)
+    }
+}
+
+/// `MINIMUM_CUSTOM_KEY_LENGTH` as authentication reads it.
+pub(super) fn key_length(value: &str) -> Option<usize> {
+    value.trim().parse().ok()
 }
 
 fn from_vars<T: DeserializeOwned>(variables: &[(OsString, OsString)]) -> envy::Result<T> {
@@ -130,6 +146,19 @@ mod tests {
         let settings: LogSettings = parse(variables).unwrap();
 
         assert_eq!(settings.log_level(), expected);
+    }
+
+    #[rstest]
+    #[case::unset(&[], 16)]
+    #[case::shorter(&[("MINIMUM_CUSTOM_KEY_LENGTH", " 8 ")], 8)]
+    #[case::invalid(&[("MINIMUM_CUSTOM_KEY_LENGTH", "short")], 16)]
+    fn the_scrubbed_key_length_is_the_one_authentication_uses(
+        #[case] variables: &[(&str, &str)],
+        #[case] expected: usize,
+    ) {
+        let settings: LogSettings = parse(variables).unwrap();
+
+        assert_eq!(settings.minimum_custom_key_length(), expected);
     }
 
     fn process(variables: &[(&str, &str)]) -> Result<Process, Box<dyn Error>> {

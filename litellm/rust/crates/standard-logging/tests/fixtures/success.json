@@ -57,6 +57,7 @@
   ],
   "metadata": {
     "applied_guardrails": null,
+    "claude_subscription_usage": null,
     "cold_storage_object_key": null,
     "kubernetes_pod_routing": null,
     "mcp_tool_call_metadata": null,

@@ -17,6 +17,7 @@ from litellm.proxy.auth.customer_hierarchy_auth import (
     CUSTOMER_ORG_ALIAS_HEADER,
     CUSTOMER_TEAM_ID_HEADER,
     AmbiguousOrganizationAlias,
+    CustomerIdentityHeaderNames,
     check_customer_hierarchy_budget,
     check_customer_hierarchy_key_scope,
     check_customer_hierarchy_model_access,
@@ -708,7 +709,9 @@ def test_jwt_app_with_custom_customer_headers_respects_claim_precedence(
         },
         claims,
         jwt_settings,
-        general_settings={"customer_org_alias_header": "X-Tenant-ID", "customer_member_id_header": "X-User-ID"},
+        names=CustomerIdentityHeaderNames.from_settings(
+            {"customer_org_alias_header": "X-Tenant-ID", "customer_member_id_header": "X-User-ID"}
+        ),
     )
     assert identity == expected
 
@@ -718,7 +721,7 @@ def test_configured_customer_header_does_not_fall_back_to_the_standard_header() 
         {CUSTOMER_ORG_ALIAS_HEADER: "org", CUSTOMER_MEMBER_ID_HEADER: "member"},
         None,
         LiteLLM_JWTAuth(),
-        general_settings={"customer_member_id_header": "X-User-ID"},
+        names=CustomerIdentityHeaderNames.from_settings({"customer_member_id_header": "X-User-ID"}),
     ) == CustomerRequestIdentity(customer_org_alias="org")
 
 

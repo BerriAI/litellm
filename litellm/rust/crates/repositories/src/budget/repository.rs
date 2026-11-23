@@ -33,15 +33,18 @@ impl BudgetRepository {
         &self,
         budget_id: &str,
     ) -> Result<Option<Budget>, litellm_db::Error> {
-        self.find_as(GET_DEFAULT_END_USER_BUDGET, budget_id).await
+        self.find_as(GET_DEFAULT_END_USER_BUDGET, budget_id, Side::Read)
+            .await
     }
 
-    /// The budget row `budget_id`, reported as the team member default budget lookup it serves.
+    /// The budget row `budget_id`, reported as the team member default budget lookup it serves. A member add
+    /// reads it from `Side::Writer`, since it links the budget it finds.
     pub async fn find_team_member_default(
         &self,
         budget_id: &str,
+        side: Side,
     ) -> Result<Option<Budget>, litellm_db::Error> {
-        self.find_as(FIND_TEAM_MEMBER_DEFAULT_BUDGET, budget_id)
+        self.find_as(FIND_TEAM_MEMBER_DEFAULT_BUDGET, budget_id, side)
             .await
     }
 
@@ -49,10 +52,11 @@ impl BudgetRepository {
         &self,
         call: Call,
         budget_id: &str,
+        side: Side,
     ) -> Result<Option<Budget>, litellm_db::Error> {
         self.database
             .run(call, || async {
-                let mut session = self.database.session(Side::Read).await?;
+                let mut session = self.database.session(side).await?;
                 queries::find_budget(session.executor(), budget_id).await
             })
             .await

@@ -41,7 +41,9 @@ class _PROXY_SensitiveDataRoutingHandler(CustomLogger):
     model field if a routing override exists for the session.
     """
 
-    def __init__(self, internal_usage_cache: InternalUsageCache, route_pins: SensitiveRoutePinStore | None = None):
+    def __init__(
+        self, internal_usage_cache: InternalUsageCache, route_pins: SensitiveRoutePinStore | None = None
+    ) -> None:
         self.route_pins: Final = route_pins or SensitiveRoutePinStore(
             connect(internal_usage_cache.dual_cache.redis_cache).sensitive_route_pins()
         )

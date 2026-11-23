@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use litellm_repositories::BudgetRepository;
+use litellm_repositories::{BudgetRepository, Side};
 use pyo3::prelude::*;
 
 use crate::db::{NativeDatabase, map_error};
@@ -38,17 +38,20 @@ impl RustBudgetRepository {
         )
     }
 
+    #[pyo3(signature = (budget_id, *, use_writer=false))]
     fn find_team_member_default_budget<'py>(
         &self,
         py: Python<'py>,
         budget_id: String,
+        use_writer: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         let repository = Arc::clone(&self.0);
+        let side = if use_writer { Side::Writer } else { Side::Read };
         crate::execution::run_async_value(
             py,
             crate::db::for_caller(py, async move {
                 let budget = repository
-                    .find_team_member_default(&budget_id)
+                    .find_team_member_default(&budget_id, side)
                     .await
                     .map_err(map_error)?;
                 super::json(budget.as_ref())

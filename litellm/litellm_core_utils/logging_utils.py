@@ -14,7 +14,7 @@ from litellm.constants import (
     BASE64_TRUNCATION_OFFLOAD_THRESHOLD_STRINGS,
     MAX_BASE64_LENGTH_FOR_LOGGING,
 )
-from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
+from litellm.litellm_core_utils.core_helpers import as_object_list, get_litellm_metadata_from_kwargs
 from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
@@ -108,8 +108,8 @@ def _truncate_base64_in_value(
                     copy: dict[str, object] | list[object] = {ck: cv for ck, cv in v.items()}
                     container[k] = copy
                     stack.append((copy, depth + 1))
-                elif isinstance(v, list):
-                    copy = list(v)
+                elif (items := as_object_list(v)) is not None:
+                    copy = list(items)
                     container[k] = copy
                     stack.append((copy, depth + 1))
         else:
@@ -120,8 +120,8 @@ def _truncate_base64_in_value(
                     copy = {ck: cv for ck, cv in v.items()}
                     container[i] = copy
                     stack.append((copy, depth + 1))
-                elif isinstance(v, list):
-                    copy = list(v)
+                elif (items := as_object_list(v)) is not None:
+                    copy = list(items)
                     container[i] = copy
                     stack.append((copy, depth + 1))
 
@@ -313,7 +313,7 @@ _assemble_complete_response_from_streaming_chunks = assemble_complete_response_f
 
 
 def _set_duration_in_model_call_details(
-    logging_obj: Any,  # we're not guaranteed this will be `LiteLLMLoggingObject`
+    logging_obj: LiteLLMLoggingObject | None,
     start_time: datetime,
     end_time: datetime,
 ):

@@ -441,6 +441,32 @@ def _claude_code_billing_fields(text: str) -> tuple[tuple[str, str], ...] | None
     return parsed_fields
 
 
+def is_claude_code_billing_header(text: object) -> bool:
+    if not isinstance(text, str):
+        return False
+    fields: Final = _claude_code_billing_fields(text)
+    return fields is not None and {"cc_version", "cc_entrypoint"} <= {key for key, _ in fields}
+
+
+def system_without_claude_code_billing_header(
+    system: object,
+) -> str | list[object] | None:  # mutable-ok: translated API system blocks
+    if isinstance(system, str):
+        first_line, _, remainder = system.partition("\n")
+        return remainder if is_claude_code_billing_header(first_line) else system
+    blocks: Final = as_object_list(system)
+    if blocks is None:
+        return None
+    first_block: Final = as_str_mapping(blocks[0]) if blocks else None
+    if (
+        first_block is not None
+        and first_block.get("type") == "text"
+        and is_claude_code_billing_header(first_block.get("text"))
+    ):
+        return list(blocks[1:])
+    return list(blocks)
+
+
 def _claude_code_billing_texts(system: object) -> tuple[str, ...] | None:
     if isinstance(system, str):
         return (system,)
@@ -563,6 +589,12 @@ def merge_anthropic_beta_headers(existing: str | Sequence[str] | None, new_beta:
     return ",".join(sorted(betas))
 
 
+def anthropic_oauth_token_from_header(value: object) -> str | None:
+    if isinstance(value, str) and value.startswith(f"Bearer {ANTHROPIC_OAUTH_TOKEN_PREFIX}"):
+        return value.removeprefix("Bearer ")
+    return None
+
+
 def optionally_handle_anthropic_oauth(headers: dict, api_key: str | None) -> tuple[dict, str | None]:
     """
     Handle Anthropic OAuth token detection and header setup.
@@ -579,8 +611,9 @@ def optionally_handle_anthropic_oauth(headers: dict, api_key: str | None) -> tup
     """
     # Check Authorization header (passthrough / forwarded requests)
     auth_header: Final = next((value for name, value in headers.items() if name.lower() == "authorization"), "")
-    if auth_header.startswith(f"Bearer {ANTHROPIC_OAUTH_TOKEN_PREFIX}"):
-        api_key = auth_header.removeprefix("Bearer ")
+    oauth_token: Final = anthropic_oauth_token_from_header(_DECODED_JSON.validate_python(auth_header))
+    if oauth_token is not None:
+        api_key = oauth_token
         for name in tuple(
             header_name for header_name in headers if header_name.lower() in ("x-api-key", "authorization")
         ):
@@ -828,7 +861,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
                         return True
         return False
 
-    def is_tool_search_used(self, tools: list | None) -> bool:
+    def is_tool_search_used(self, tools: Sequence[Mapping[str, object]] | None) -> bool:
         """
         Check if tool search tools are present in the tools list.
         """
@@ -844,7 +877,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
                 return True
         return False
 
-    def is_programmatic_tool_calling_used(self, tools: list | None) -> bool:
+    def is_programmatic_tool_calling_used(self, tools: Sequence[Mapping[str, object]] | None) -> bool:
         """
         Check if programmatic tool calling is being used (tools with allowed_callers field).
 
@@ -870,7 +903,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
 
         return False
 
-    def is_input_examples_used(self, tools: list | None) -> bool:
+    def is_input_examples_used(self, tools: Sequence[Mapping[str, object]] | None) -> bool:
         """
         Check if input_examples is being used in any tools.
 
@@ -931,7 +964,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
 
     @staticmethod
     def _apply_sampling_param(
-        optional_params: dict,
+        optional_params: dict[str, object],
         model: str,
         param: str,
         value: object,
@@ -1301,7 +1334,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
 
     def is_effort_used(
         self,
-        optional_params: dict | None,
+        optional_params: Mapping[str, object] | None,
         model: str | None = None,
         *,
         custom_llm_provider: str,
@@ -1335,7 +1368,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
 
         return False
 
-    def is_code_execution_tool_used(self, tools: list | None) -> bool:
+    def is_code_execution_tool_used(self, tools: Sequence[Mapping[str, object]] | None) -> bool:
         """
         Check if code execution tool is being used.
 
@@ -1350,7 +1383,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
                 return True
         return False
 
-    def is_container_with_skills_used(self, optional_params: dict | None) -> bool:
+    def is_container_with_skills_used(self, optional_params: Mapping[str, object] | None) -> bool:
         """
         Check if container with skills is being used.
 
@@ -1391,7 +1424,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
     def get_anthropic_beta_list(
         self,
         model: str,
-        optional_params: dict | None = None,
+        optional_params: Mapping[str, object] | None = None,
         computer_tool_used: str | None = None,
         prompt_caching_set: bool = False,
         file_id_used: bool = False,
@@ -1410,7 +1443,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         """
         from litellm.types.llms.anthropic import ANTHROPIC_EFFORT_BETA_HEADER
 
-        betas: Final = []
+        betas: Final[list[str]] = []
 
         # Detect features
         effort_used: Final = self.is_effort_used(optional_params, model, custom_llm_provider=custom_llm_provider)
@@ -1503,8 +1536,8 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         thinking: AnthropicThinkingParam | None = None,
         is_mid_conversation_tool_change_used: bool = False,
         wif_minted: bool = False,
-    ) -> dict:
-        betas: Final = set()
+    ) -> dict[str, str]:
+        betas: Final[set[str]] = set()
         # Anthropic no longer requires the prompt-caching beta header
         # Prompt caching now works automatically when cache_control is used in messages
         # Reference: https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching
@@ -2195,7 +2228,7 @@ def _with_native_redacted_data(block: object) -> object:
 
 def strip_encrypted_reasoning_blocks_from_anthropic_messages(
     messages: Sequence[dict],  # mutable-ok: Anthropic message payload shape
-) -> list[dict]:  # mutable-ok: AnthropicMessagesRequest.messages is typed list[dict]
+) -> list[dict[str, object]]:  # mutable-ok: AnthropicMessagesRequest.messages is typed list[dict]
     """
     Drop thinking / redacted_thinking blocks that carry another provider's encrypted
     reasoning (a turn the Responses API bridge served) before the request reaches

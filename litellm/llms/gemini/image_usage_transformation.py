@@ -30,7 +30,7 @@ def _get_modality_token_details(
             for details_key in details_keys
             if isinstance(usage_metadata.get(details_key), list)
         ),
-        [],
+        list[object](),
     )
     return tuple(
         _TOKEN_DETAILS_MAPPING_ADAPTER.validate_python(detail) for detail in details if isinstance(detail, Mapping)
@@ -99,7 +99,11 @@ def transform_gemini_image_usage(usage_metadata: Mapping[str, object]) -> ImageU
     input_tokens_details: Final = ImageUsageInputTokensDetails(
         text_tokens=input_modalities.text_tokens,
         image_tokens=input_modalities.image_tokens,
-        cached_tokens=_get_usage_token_count(usage_metadata, "cachedContentTokenCount"),
+        cached_tokens=(
+            0
+            if usage_metadata.get("cachedContentTokenCount") is None
+            else _get_usage_token_count(usage_metadata, "cachedContentTokenCount")
+        ),
         cached_tokens_details=(
             CachedTokensDetails(text_tokens=cached_modalities.text_tokens, image_tokens=cached_modalities.image_tokens)
             if cache_details

@@ -286,7 +286,9 @@ _PAIRS: Final = TypeAdapter(tuple[tuple[str, object], ...])
 
 
 def _registry_unavailable(error: Exception) -> bool:
-    if isinstance(error, RedisCircuitBreakerOpenError | ValidationError):
+    from litellm.rust_bridge._native import NativeRedisStoreError
+
+    if isinstance(error, RedisCircuitBreakerOpenError | ValidationError | NativeRedisStoreError):
         return True
     try:
         from redis.exceptions import RedisError
