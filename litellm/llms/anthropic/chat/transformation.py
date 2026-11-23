@@ -1,7 +1,7 @@
 import json
 import re
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence, Sized
 from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, NoReturn, cast
@@ -186,18 +186,29 @@ def _is_json_object(value: object) -> bool:
     return isinstance(value, Mapping)
 
 
-def _is_block_list(value: object) -> bool:
-    return isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray))
+def _thinking_block_items(value: object) -> tuple[object, ...] | None:
+    if not isinstance(value, Collection) or isinstance(value, (str, bytes, bytearray, Mapping)):
+        return None
+    return tuple(cast(Collection[object], value))  # cast-ok: isinstance above proved it is a Collection
+
+
+def _is_unsized_iterable(value: object) -> bool:
+    return isinstance(value, Iterable) and not isinstance(value, Collection)
+
+
+def _is_empty_sized(value: object) -> bool:
+    return isinstance(value, Sized) and not value
 
 
 def _thinking_blocks_faults(index: int, thinking_blocks: object) -> tuple[tuple[str, object, str], ...]:
-    if thinking_blocks is None:
+    if thinking_blocks is None or _is_unsized_iterable(thinking_blocks) or _is_empty_sized(thinking_blocks):
         return ()
-    if not _is_block_list(thinking_blocks):
+    blocks: Final = _thinking_block_items(thinking_blocks)
+    if blocks is None:
         return ((f"messages[{index}].thinking_blocks", thinking_blocks, "a list"),)
     return tuple(
         (f"messages[{index}].thinking_blocks[{position}]", block, "an object")
-        for position, block in enumerate(parts_of(thinking_blocks))
+        for position, block in enumerate(blocks)
         if not _is_json_object(block)
     )
 
@@ -222,8 +233,9 @@ def without_malformed_thinking_blocks(message: AllMessageValues) -> AllMessageVa
     thinking_blocks: Final = message_field(message, "thinking_blocks")
     if message_field(message, "role") != "assistant" or not _thinking_blocks_faults(0, thinking_blocks):
         return message
-    if _is_block_list(thinking_blocks):
-        kept: Final = tuple(block for block in parts_of(thinking_blocks) if _is_json_object(block))
+    blocks: Final = _thinking_block_items(thinking_blocks)
+    if blocks is not None:
+        kept: Final = tuple(block for block in blocks if _is_json_object(block))
         return cast(  # cast-ok: dict spread keeps message shape
             AllMessageValues, {**message, "thinking_blocks": kept}
         )
@@ -353,13 +365,14 @@ _ENUM_TYPE_CHECKS: Final[Mapping[object, Callable[[object], bool]]] = MappingPro
 def _enum_conflicts_with_declared_type(schema: Mapping[str, object]) -> bool:
     """Whether ``schema``'s ``enum`` cannot match its declared ``type``."""
     enum_values: Final = schema.get("enum")
+    enum_items: Final = parts_of(enum_values)
     declared_type: Final = schema.get("type")
     if not isinstance(enum_values, list) or declared_type is None:
         return False
     if isinstance(declared_type, list):
         return True
     check: Final = _ENUM_TYPE_CHECKS.get(declared_type)
-    return check is not None and not all(check(value) for value in parts_of(enum_values))
+    return check is not None and not all(check(value) for value in enum_items)
 
 
 # Single, internal-only key on ``litellm_params`` used to thread the per-

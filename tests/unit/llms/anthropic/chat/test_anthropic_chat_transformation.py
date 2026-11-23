@@ -1,7 +1,7 @@
 import copy
 import json
 from collections import deque
-from collections.abc import Mapping
+from collections.abc import Callable, Iterable, Mapping
 from itertools import chain
 from typing import Final
 from unittest.mock import MagicMock, patch
@@ -10144,7 +10144,6 @@ def _replayed_signatures(converted: dict) -> list[object]:
 
 _MALFORMED_THINKING_BLOCKS: Final = (
     pytest.param("abc", "messages[1].thinking_blocks", "a list", "str", id="string"),
-    pytest.param("", "messages[1].thinking_blocks", "a list", "str", id="empty_string"),
     pytest.param(_REPLAYED_THINKING, "messages[1].thinking_blocks", "a list", "dict", id="unwrapped_block"),
     pytest.param(0, "messages[1].thinking_blocks", "a list", "int", id="zero"),
     pytest.param(["abc"], "messages[1].thinking_blocks[0]", "an object", "str", id="string_block"),
@@ -10237,7 +10236,40 @@ def test_chat_transform_request_replays_every_well_formed_thinking_block(local_m
     assert _replayed_signatures(converted) == ["sig-1", "sig-2"]
 
 
-@pytest.mark.parametrize("thinking_blocks", [pytest.param(None, id="none"), pytest.param([], id="empty_list")])
+@pytest.mark.parametrize("drop_params", [False, True])
+@pytest.mark.parametrize(
+    "make_blocks",
+    [
+        pytest.param(lambda: {"a": _REPLAYED_THINKING, "b": _SECOND_REPLAYED_THINKING}.values(), id="dict_values"),
+        pytest.param(lambda: iter([_REPLAYED_THINKING, _SECOND_REPLAYED_THINKING]), id="iterator"),
+        pytest.param(lambda: (block for block in (_REPLAYED_THINKING, _SECOND_REPLAYED_THINKING)), id="generator"),
+    ],
+)
+def test_chat_transform_request_replays_thinking_blocks_from_any_iterable(
+    local_model_cost_map, make_blocks: Callable[[], Iterable[object]], drop_params: bool
+):
+    converted: Final = AnthropicConfig().transform_request(
+        model=UNFLAGGED_CLAUDE,
+        messages=_replayed_turn(make_blocks()),
+        optional_params={},
+        litellm_params={"drop_params": drop_params},
+        headers={},
+    )
+
+    assert _replayed_signatures(converted) == ["sig-1", "sig-2"]
+
+
+@pytest.mark.parametrize(
+    "thinking_blocks",
+    [
+        pytest.param(None, id="none"),
+        pytest.param([], id="empty_list"),
+        pytest.param("", id="empty_string"),
+        pytest.param({}, id="empty_object"),
+        pytest.param(b"", id="empty_bytes"),
+        pytest.param(set(), id="empty_set"),
+    ],
+)
 def test_chat_transform_request_treats_no_thinking_blocks_as_absent(local_model_cost_map, thinking_blocks: object):
     absent: Final = [
         {key: value for key, value in message.items() if key != "thinking_blocks"} for message in _replayed_turn(None)
