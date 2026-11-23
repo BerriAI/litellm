@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from litellm.proxy.mcp_server.events.webhooks.settlement import SettlementOutcome, settle_delivery
-from litellm.types.mcp_server.events import CallbackFailure, JsonObject
+from litellm.types.mcp_server.events import CallbackFailure, GapEnvelope, JsonObject
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
@@ -59,10 +59,14 @@ class QueuedDelivery(BaseModel):
     claim_id: str | None = None
 
 
+class ActivatedCursor(BaseModel):
+    cursor: str | None
+
+
 class Activation(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    reactivation_gap: QueuedDelivery | None = None
+    reactivation_gap_id: str | None = None
     client_secret: str
     upstream_subscription_id: str | None
     upstream_refresh_before: datetime | None
@@ -96,9 +100,9 @@ class EventStore(Protocol):
         subscription_id: str,
         activation: Activation,
         from_statuses: tuple[SubscriptionStatus, ...] = LIVE_STATUSES,
-    ) -> bool:
+    ) -> ActivatedCursor | None:
         """Mark the row active with fresh secrets and deadlines while its status is still one of ``from_statuses``;
-        False when it changed, so a renewal cannot revive a row an unsubscribe is holding."""
+        None when it changed, so a renewal cannot revive a row an unsubscribe is holding."""
         ...
 
     async def mark_delivered(self, subscription_id: str, at: datetime) -> None: ...
@@ -110,7 +114,7 @@ class EventStore(Protocol):
     async def terminate(self, subscription_id: str) -> None: ...
 
     async def end_if_current(self, subscription_id: str, upstream_subscription_id: str | None) -> bool:
-        """Terminate the row only while it is still this upstream subscription; False when it changed or ended."""
+        """Terminate the row only while it is still this upstream subscription; None when it changed or ended."""
         ...
 
     async def hold_for_unsubscribe(self, subscription_id: str, upstream_subscription_id: str | None) -> bool:
@@ -254,9 +258,25 @@ class PrismaEventStore:
         subscription_id: str,
         activation: Activation,
         from_statuses: tuple[SubscriptionStatus, ...] = LIVE_STATUSES,
-    ) -> bool:
+    ) -> ActivatedCursor | None:
         eligible: Final = [state for state in LIVE_STATUSES if state in from_statuses]
         async with self._client.tx() as tx:
+            # The receiver takes FOR SHARE on this row before it inserts a delivery.
+            previous: Final = await tx.query_first(
+                'SELECT cursor FROM "LiteLLM_MCPEventSubscription" WHERE id = $1 FOR UPDATE',
+                subscription_id,
+                model=ActivatedCursor,
+            )
+            if previous is None:
+                return None
+            pending: Final = await tx.query_first(
+                'SELECT $2::text AS cursor FROM "LiteLLM_MCPEventDelivery" '
+                "WHERE subscription_id = $1 AND delivered_at IS NULL LIMIT 1",
+                subscription_id,
+                previous.cursor,
+                model=ActivatedCursor,
+            )
+            watermark: Final = pending or ActivatedCursor(cursor=activation.cursor)
             updated: Final = await tx.litellm_mcpeventsubscription.update_many(
                 where={"id": subscription_id, "status": {"in": eligible}},  # bounded-ok: at most the three live states
                 data={
@@ -266,23 +286,21 @@ class PrismaEventStore:
                     "upstream_subscription_id": activation.upstream_subscription_id,
                     "upstream_refresh_before": activation.upstream_refresh_before,
                     "refresh_before": activation.refresh_before,
-                    "cursor": activation.cursor,
+                    "cursor": watermark.cursor,
                     "consecutive_failures": 0,
                 },
             )
-            gap: Final = activation.reactivation_gap
+            gap: Final = activation.reactivation_gap_id
             if updated and gap is not None:
                 await tx.execute_raw(
                     """INSERT INTO "LiteLLM_MCPEventDelivery"
-                    (delivery_id, subscription_id, webhook_id, body, next_attempt_at, prepared)
-                    VALUES ($1, $2, $3, $4, $5::timestamp, true)""",
-                    gap.delivery_id,
+                    (delivery_id, subscription_id, webhook_id, body, prepared)
+                    VALUES ($1, $2, $1, $3, true)""",
+                    gap,
                     subscription_id,
-                    gap.webhook_id,
-                    gap.body,
-                    gap.next_attempt_at.isoformat(),
+                    GapEnvelope(cursor=watermark.cursor).model_dump_json(),
                 )
-        return updated > 0
+        return watermark if updated else None
 
     async def mark_delivered(self, subscription_id: str, at: datetime) -> None:
         await self._subscriptions.update_many(
