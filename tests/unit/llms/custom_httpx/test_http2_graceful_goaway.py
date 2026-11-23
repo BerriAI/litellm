@@ -1,8 +1,9 @@
 import asyncio
+import queue
 import threading
 import time
 from collections.abc import Callable, Iterable, Iterator, Sequence
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Final
 
 import httpcore
@@ -14,6 +15,7 @@ from h2.connection import H2Connection
 from h2.errors import ErrorCodes
 from h2.events import ConnectionTerminated, StreamEnded
 from h2.exceptions import NoAvailableStreamIDError
+from h2.settings import SettingCodes, Settings
 from httpcore._backends.base import SOCKET_OPTION
 from hyperframe.frame import GoAwayFrame, PingFrame, RstStreamFrame, WindowUpdateFrame
 from typing_extensions import override
@@ -27,6 +29,8 @@ URL: Final = "https://search.example/v1/search"
 ANSWER: Final = b'{"results": [{"id": "answered"}]}'
 LAST_POSSIBLE_STREAM_ID: Final = 2**31 - 1
 TIME_FOR_THE_OTHER_SEARCH_TO_WAIT_ON_THE_READ: Final = 0.1
+TIME_FOR_THE_OTHER_SEARCHES_TO_WAIT_FOR_A_STREAM: Final = 0.1
+SEARCHES_FINISH_WITHIN: Final = 2.0
 UPLOAD_WINDOW: Final = H2Connection().remote_settings.initial_window_size
 REQUEST_HEADERS: Final = (
     (":method", "POST"),
@@ -362,6 +366,114 @@ class _OneStreamSyncBackend(httpcore.MockBackend):
         return self._stream
 
 
+def _server_allowing_one_stream_at_a_time() -> H2Connection:
+    server: Final = H2Connection(config=H2Configuration(client_side=False))
+    server.local_settings = Settings(client=False, initial_values={SettingCodes.MAX_CONCURRENT_STREAMS: 1})
+    server.initiate_connection()
+    return server
+
+
+def _answer_with_a_graceful_goaway(server: H2Connection, stream_id: int) -> bytes:
+    return _goaway(stream_id) + _answer(server, stream_id)
+
+
+class _OneStreamAtATimeStream(httpcore.AsyncMockStream):
+    def __init__(self, answer: Callable[[H2Connection, int], bytes]) -> None:
+        super().__init__([], http2=True)
+        self._server: Final = _server_allowing_one_stream_at_a_time()
+        self._answer: Final = answer
+        self._arrived: Final = asyncio.Queue[int]()
+
+    @override
+    async def write(self, buffer: bytes, timeout: float | None = None) -> None:
+        for event in self._server.receive_data(buffer):
+            if isinstance(event, StreamEnded) and event.stream_id:
+                self._arrived.put_nowait(event.stream_id)
+
+    @override
+    async def read(self, max_bytes: int, timeout: float | None = None) -> bytes:
+        pending: Final = self._server.data_to_send()
+        if pending:
+            return pending
+        stream_id: Final = await self._arrived.get()
+        await asyncio.sleep(TIME_FOR_THE_OTHER_SEARCHES_TO_WAIT_FOR_A_STREAM)
+        return self._answer(self._server, stream_id)
+
+
+class _DrainsItsFirstConnectionBackend(httpcore.AsyncMockBackend):
+    def __init__(self) -> None:
+        super().__init__([], http2=True)
+        self._connected = False
+
+    @override
+    async def connect_tcp(
+        self,
+        host: str,
+        port: int,
+        timeout: float | None = None,
+        local_address: str | None = None,
+        socket_options: Iterable[SOCKET_OPTION] | None = None,
+    ) -> httpcore.AsyncNetworkStream:
+        answer: Final = _answer if self._connected else _answer_with_a_graceful_goaway
+        self._connected = True
+        return _OneStreamAtATimeStream(answer)
+
+
+class _OneStreamAtATimeSyncStream(httpcore.MockStream):
+    def __init__(self, answer: Callable[[H2Connection, int], bytes]) -> None:
+        super().__init__([], http2=True)
+        self._server: Final = _server_allowing_one_stream_at_a_time()
+        self._answer: Final = answer
+        self._arrived: Final = queue.Queue[int]()
+
+    @override
+    def write(self, buffer: bytes, timeout: float | None = None) -> None:
+        for event in self._server.receive_data(buffer):
+            if isinstance(event, StreamEnded) and event.stream_id:
+                self._arrived.put_nowait(event.stream_id)
+
+    @override
+    def read(self, max_bytes: int, timeout: float | None = None) -> bytes:
+        pending: Final = self._server.data_to_send()
+        if pending:
+            return pending
+        stream_id: Final = self._arrived.get()
+        time.sleep(TIME_FOR_THE_OTHER_SEARCHES_TO_WAIT_FOR_A_STREAM)
+        return self._answer(self._server, stream_id)
+
+
+class _DrainsItsFirstConnectionSyncBackend(httpcore.MockBackend):
+    def __init__(self) -> None:
+        super().__init__([], http2=True)
+        self._connected = False
+
+    @override
+    def connect_tcp(
+        self,
+        host: str,
+        port: int,
+        timeout: float | None = None,
+        local_address: str | None = None,
+        socket_options: Iterable[SOCKET_OPTION] | None = None,
+    ) -> httpcore.NetworkStream:
+        answer: Final = _answer if self._connected else _answer_with_a_graceful_goaway
+        self._connected = True
+        return _OneStreamAtATimeSyncStream(answer)
+
+
+def _search_on_a_daemon_thread(pool: httpcore.ConnectionPool) -> Future[bytes]:
+    content: Final[Future[bytes]] = Future()
+
+    def search() -> None:
+        try:
+            content.set_result(pool.request("POST", URL, content=b"{}").content)
+        except httpcore.HTTPCoreException as error:
+            content.set_exception(error)
+
+    threading.Thread(target=search, daemon=True).start()
+    return content
+
+
 async def test_two_searches_answered_in_one_read_with_a_graceful_goaway_both_get_their_answers() -> None:
     async with httpcore.AsyncConnectionPool(
         http2=True, network_backend=_RepliesOnceBothSearchesArriveBackend(_both_answered_after_a_graceful_goaway)
@@ -385,6 +497,19 @@ async def test_a_draining_connection_takes_no_new_requests() -> None:
         with sync_pool.stream("POST", URL, content=b"{}") as sync_response:
             assert not sync_pool.connections[0].is_available()
             assert sync_response.read() == ANSWER
+
+
+async def test_searches_waiting_for_a_stream_at_a_graceful_goaway_move_to_a_new_connection() -> None:
+    async with httpcore.AsyncConnectionPool(http2=True, network_backend=_DrainsItsFirstConnectionBackend()) as pool:
+        responses: Final = await asyncio.wait_for(
+            asyncio.gather(*(pool.request("POST", URL, content=b"{}") for _ in range(3))), SEARCHES_FINISH_WITHIN
+        )
+
+    assert [response.content for response in responses] == [ANSWER, ANSWER, ANSWER]
+
+    with httpcore.ConnectionPool(http2=True, network_backend=_DrainsItsFirstConnectionSyncBackend()) as sync_pool:
+        searches: Final = [_search_on_a_daemon_thread(sync_pool) for _ in range(3)]
+        assert [search.result(timeout=SEARCHES_FINISH_WITHIN) for search in searches] == [ANSWER, ANSWER, ANSWER]
 
 
 def test_a_client_that_saw_a_graceful_goaway_opens_no_new_stream() -> None:

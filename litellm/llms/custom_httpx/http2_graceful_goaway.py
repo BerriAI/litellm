@@ -101,6 +101,15 @@ class _DrainingAsyncHTTP2Connection(httpcore.AsyncHTTP2Connection):
         self._h2_state = self._draining_h2_state
 
     @override
+    async def handle_async_request(self, request: httpcore.Request) -> httpcore.Response:
+        try:
+            return await super().handle_async_request(request)
+        except httpcore.ConnectionNotAvailable as error:
+            if isinstance(error.__context__, NoAvailableStreamIDError):
+                await self._max_streams_semaphore.release()
+            raise
+
+    @override
     async def _receive_events(self, request: httpcore.Request, stream_id: int | None = None) -> None:
         try:
             await super()._receive_events(request, stream_id)
@@ -137,6 +146,15 @@ class _DrainingHTTP2Connection(httpcore.HTTP2Connection):
         super().__init__(origin=origin, stream=stream, keepalive_expiry=keepalive_expiry)
         self._draining_h2_state: Final = DrainingH2Connection(config=self.CONFIG)
         self._h2_state = self._draining_h2_state
+
+    @override
+    def handle_request(self, request: httpcore.Request) -> httpcore.Response:
+        try:
+            return super().handle_request(request)
+        except httpcore.ConnectionNotAvailable as error:
+            if isinstance(error.__context__, NoAvailableStreamIDError):
+                self._max_streams_semaphore.release()
+            raise
 
     @override
     def _receive_events(self, request: httpcore.Request, stream_id: int | None = None) -> None:
