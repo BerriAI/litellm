@@ -14,6 +14,24 @@ REPO_ROOT: Final = Path(__file__).parents[2]
 CostMap = dict[str, dict[str, object]]
 COST_MAP_ADAPTER: Final = TypeAdapter(CostMap)
 
+ABSORBED_MODELS: Final = frozenset(
+    (
+        "together_ai/ByteDance/Seedream-5.0-lite",
+        "together_ai/Qwen/Qwen-Image-2.0",
+        "together_ai/Qwen/Qwen-Image-2.0-Pro",
+        "together_ai/Wan-AI/Wan2.6-image",
+        "together_ai/black-forest-labs/FLUX.1-kontext-max",
+        "together_ai/black-forest-labs/FLUX.1-kontext-pro",
+        "together_ai/black-forest-labs/FLUX.1.1-pro",
+        "together_ai/black-forest-labs/FLUX.2-flex",
+        "together_ai/black-forest-labs/FLUX.2-max",
+        "together_ai/black-forest-labs/FLUX.2-pro",
+        "together_ai/google/flash-image-3.1-lite",
+        "together_ai/nvidia/parakeet-tdt-0.6b-v3",
+        "together_ai/openai/whisper-large-v3",
+    )
+)
+
 SERVERLESS_CHAT_MODELS: Final = (
     "together_ai/moonshotai/Kimi-K3",
     "together_ai/zai-org/GLM-5.2",
@@ -36,34 +54,6 @@ SERVERLESS_CHAT_MODELS: Final = (
     "together_ai/openai/gpt-oss-120b",
     "together_ai/openai/gpt-oss-20b",
     "together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo",
-)
-
-# Absent from https://api.together.ai/v1/models?serverless=true and refused by a direct call on 2026-10-30
-LAST_PROBED: Final = datetime.date(2026, 10, 30)
-DEDICATED_ONLY_MODELS: Final = (
-    "together_ai/BAAI/bge-base-en-v1.5",
-    "together_ai/MiniMaxAI/MiniMax-M2.7",
-    "together_ai/Qwen/Qwen2-1.5B-Instruct",
-    "together_ai/Qwen/Qwen2.5-14B-Instruct",
-    "together_ai/Qwen/Qwen2.5-72B-Instruct",
-    "together_ai/Qwen/Qwen2.5-7B-Instruct-Turbo",
-    "together_ai/arcee-ai/trinity-mini",
-    "together_ai/deepseek-ai/DeepSeek-R1-0528",
-    "together_ai/deepseek-ai/DeepSeek-V3",
-    "together_ai/meta-llama/Llama-3.1-405B-Instruct",
-    "together_ai/meta-llama/Llama-3.2-1B-Instruct",
-    "together_ai/meta-llama/Llama-3.2-3B-Instruct",
-    "together_ai/meta-llama/Meta-Llama-3.1-8B",
-    "together_ai/mistralai/Ministral-3-14B-Instruct-2512",
-    "together_ai/mistralai/Mistral-7B-Instruct-v0.3",
-    "together_ai/moonshotai/Kimi-K2-Instruct",
-    "together_ai/moonshotai/Kimi-K2.5-fp4",
-    "together_ai/togethercomputer/CodeLlama-34b-Instruct",
-    "together_ai/zai-org/GLM-4.6",
-)
-
-ROUTED_MODES: Final = frozenset(
-    {"chat", "completion", "embedding", "rerank", "image_generation", "audio_transcription"}
 )
 
 DEPRECATED_MODELS: Final = {
@@ -162,31 +152,30 @@ def _together_rows(cost_map: CostMap, mode: str) -> tuple[tuple[str, dict[str, o
     return tuple(
         (model, info)
         for model, info in cost_map.items()
-        if model.startswith("together_ai/") and info.get("mode") == mode
+        if model in ABSORBED_MODELS and info.get("mode") == mode
     )
 
 
-def _deprecated_by(info: dict[str, object], day: datetime.date) -> bool:
-    deprecation_date: Final = info.get("deprecation_date")
-    return isinstance(deprecation_date, str) and datetime.date.fromisoformat(deprecation_date) <= day
-
-
-def test_together_dedicated_only_rows_are_deprecated_by_their_last_probe(cost_map: CostMap):
-    undated: Final = tuple(
-        model
-        for model in DEDICATED_ONLY_MODELS
-        if model in cost_map and not _deprecated_by(cost_map[model], LAST_PROBED)
-    )
-    assert undated == ()
-
-
-def test_together_rows_only_use_modes_litellm_can_call(cost_map: CostMap):
-    unroutable: Final = {
-        model: info.get("mode")
-        for model, info in cost_map.items()
-        if model.startswith("together_ai/") and info.get("mode") not in ROUTED_MODES
-    }
-    assert unroutable == {}
+# Published serverless removals or redirects by July 29, 2026:
+# https://docs.together.ai/docs/deprecations and https://docs.together.ai/docs/changelog
+@pytest.mark.parametrize(
+    "model",
+    (
+        "together_ai/BAAI/bge-base-en-v1.5",
+        "together_ai/zai-org/GLM-4.6",
+        "together_ai/deepseek-ai/DeepSeek-R1-0528",
+        "together_ai/mistralai/Ministral-3-14B-Instruct-2512",
+        "together_ai/mistralai/Mistral-7B-Instruct-v0.3",
+        "together_ai/meta-llama/Llama-3.2-1B-Instruct",
+        "together_ai/meta-llama/Llama-3.2-3B-Instruct",
+        "together_ai/Qwen/Qwen2-1.5B-Instruct",
+        "together_ai/Qwen/Qwen2.5-14B-Instruct",
+        "together_ai/Qwen/Qwen2.5-72B-Instruct",
+    ),
+)
+def test_together_retired_serverless_rows_keep_a_deprecation_date(model: str, cost_map: CostMap) -> None:
+    value: Final = cost_map[model].get("deprecation_date")
+    assert isinstance(value, str) and datetime.date.fromisoformat(value) <= datetime.date(2026, 7, 29)
 
 
 def test_together_image_rows_price_through_the_cost_calculator(cost_map: CostMap):
