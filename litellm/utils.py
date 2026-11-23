@@ -8473,6 +8473,11 @@ def validate_environment(
                 keys_in_environment = True
             else:
                 missing_keys.append("EDENAI_API_KEY")
+        elif custom_llm_provider == "deapi":
+            if "DEAPI_API_KEY" in os.environ:
+                keys_in_environment = True  # rebind-ok: each provider branch sets the shared flag
+            else:
+                missing_keys.append("DEAPI_API_KEY")
         elif custom_llm_provider == "datarobot":
             if "DATAROBOT_API_TOKEN" in os.environ:
                 keys_in_environment = True
@@ -8740,6 +8745,12 @@ def validate_environment(
                 keys_in_environment = True
             else:
                 missing_keys.append("EDENAI_API_KEY")
+        ## deapi
+        elif model in litellm.deapi_models:
+            if "DEAPI_API_KEY" in os.environ:
+                keys_in_environment = True  # rebind-ok: each provider branch sets the shared flag
+            else:
+                missing_keys.append("DEAPI_API_KEY")
         ## datarobot
         elif model in litellm.datarobot_models:
             if "DATAROBOT_API_TOKEN" in os.environ:
@@ -10208,6 +10219,22 @@ def _get_model_cost_entry_for_provider_config(
     return {}
 
 
+_REPORTED_COST_GATEWAY_VIDEO_CONFIGS: Final[Mapping[LlmProviders, Callable[[], BaseVideoConfig]]] = MappingProxyType(
+    {
+        LlmProviders.EDENAI: lambda: litellm.EdenAIVideoConfig(),
+        LlmProviders.DEAPI: lambda: litellm.DeapiVideoConfig(),
+    }
+)
+_REPORTED_COST_GATEWAY_TTS_CONFIGS: Final[Mapping[LlmProviders, Callable[[], BaseTextToSpeechConfig]]] = (
+    MappingProxyType(
+        {
+            LlmProviders.EDENAI: lambda: litellm.EdenAITextToSpeechConfig(),
+            LlmProviders.DEAPI: lambda: litellm.DeapiTextToSpeechConfig(),
+        }
+    )
+)
+
+
 class ProviderConfigManager:
     # Dictionary mapping for O(1) provider lookup
     # Stores tuples of (factory_function, needs_model_parameter)
@@ -10308,6 +10335,7 @@ class ProviderConfigManager:
                 False,
             ),
             LlmProviders.EDENAI: (litellm.EdenAIChatConfig, False),
+            LlmProviders.DEAPI: (litellm.DeapiChatConfig, False),
             LlmProviders.FAL_AI: (litellm.FalAIChatConfig, False),
             LlmProviders.COMETAPI: (lambda: litellm.CometAPIConfig(), False),
             LlmProviders.DATAROBOT: (lambda: litellm.DataRobotConfig(), False),
@@ -10662,6 +10690,8 @@ class ProviderConfigManager:
             return litellm.PerplexityEmbeddingConfig()
         elif litellm.LlmProviders.EDENAI == provider:
             return litellm.EdenAIEmbeddingConfig()
+        elif litellm.LlmProviders.DEAPI == provider:
+            return litellm.DeapiEmbeddingConfig()
         return None
 
     @staticmethod
@@ -10998,6 +11028,8 @@ class ProviderConfigManager:
             return GeminiAudioTranscriptionConfig()
         elif litellm.LlmProviders.EDENAI == provider:
             return litellm.EdenAIAudioTranscriptionConfig()
+        elif litellm.LlmProviders.DEAPI == provider:
+            return litellm.DeapiAudioTranscriptionConfig()
         return None
 
     @staticmethod
@@ -11256,6 +11288,8 @@ class ProviderConfigManager:
             return litellm.ClarifaiConfig()
         elif LlmProviders.EDENAI == provider:
             return litellm.EdenAIChatConfig()
+        elif LlmProviders.DEAPI == provider:
+            return litellm.DeapiChatConfig()
         elif LlmProviders.BEDROCK == provider:
             from litellm.llms.bedrock.common_utils import BedrockModelInfo
 
@@ -11635,6 +11669,8 @@ class ProviderConfigManager:
             return get_modelscope_image_generation_config(model)
         elif LlmProviders.EDENAI == provider:
             return litellm.EdenAIImageGenerationConfig()
+        elif LlmProviders.DEAPI == provider:
+            return litellm.DeapiImageGenerationConfig()
         elif LlmProviders.TENCENT == provider:
             from litellm.llms.tencent.image_generation.transformation import (
                 TencentImageGenerationConfig,
@@ -11654,6 +11690,8 @@ class ProviderConfigManager:
             if custom_video_config is not None or provider not in LlmProvidersSet:
                 return custom_video_config
             return ProviderConfigManager.get_provider_video_config(model=model, provider=LlmProviders(provider))
+        if (gateway_config := _REPORTED_COST_GATEWAY_VIDEO_CONFIGS.get(provider)) is not None:
+            return gateway_config()
         if LlmProviders.OPENAI == provider:
             from litellm.llms.openai.videos.transformation import OpenAIVideoConfig
 
@@ -11700,8 +11738,6 @@ class ProviderConfigManager:
             from litellm.llms.minimax.videos.transformation import MinimaxVideoConfig
 
             return MinimaxVideoConfig()
-        elif LlmProviders.EDENAI == provider:
-            return litellm.EdenAIVideoConfig()
         elif LlmProviders.VOLCENGINE == provider:
             from litellm.llms.volcengine.videos.transformation import VolcEngineVideoConfig
 
@@ -11831,6 +11867,8 @@ class ProviderConfigManager:
             )
 
             return DashScopeImageEditConfig()
+        elif LlmProviders.DEAPI == provider:
+            return litellm.DeapiImageEditConfig()
         return None
 
     @staticmethod
@@ -12030,6 +12068,8 @@ class ProviderConfigManager:
             BaseTextToSpeechConfig,
         )
 
+        if (gateway_config := _REPORTED_COST_GATEWAY_TTS_CONFIGS.get(provider)) is not None:
+            return gateway_config()
         if litellm.LlmProviders.AZURE == provider:
             # Only return Azure AVA config for Azure Speech Service models (speech/)
             # Azure OpenAI TTS models (azure/azure-tts) should not use this config
@@ -12092,8 +12132,6 @@ class ProviderConfigManager:
             )
 
             return AWSPollyTextToSpeechConfig()
-        elif litellm.LlmProviders.EDENAI == provider:
-            return litellm.EdenAITextToSpeechConfig()
         elif litellm.LlmProviders.DASHSCOPE == provider:
             from litellm.llms.dashscope.text_to_speech.transformation import (
                 DashScopeTextToSpeechConfig,

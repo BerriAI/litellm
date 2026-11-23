@@ -727,6 +727,7 @@ cometapi_models: Set = set()
 oci_models: Set = set()
 vercel_ai_gateway_models: Set = set()
 edenai_models: Set = set()
+deapi_models: Set[str] = set()
 volcengine_models: Set = set()
 wandb_models: Set = set(WANDB_MODELS)
 ovhcloud_models: Set = set()
@@ -807,6 +808,8 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             vercel_ai_gateway_models.add(key)
         elif value.get("litellm_provider") == "edenai":
             edenai_models.add(key)
+        elif value.get("litellm_provider") == "deapi":
+            deapi_models.add(key)
         elif value.get("litellm_provider") == "datarobot":
             datarobot_models.add(key)
         elif value.get("litellm_provider") == "vertex_ai-text-models":
@@ -1222,6 +1225,7 @@ model_list = list(
     | heroku_models
     | vercel_ai_gateway_models
     | edenai_models
+    | deapi_models
     | volcengine_models
     | wandb_models
     | ovhcloud_models
@@ -1252,6 +1256,7 @@ def _build_models_by_provider() -> dict[str, Collection[str]]:
         "openrouter": openrouter_models,
         "vercel_ai_gateway": vercel_ai_gateway_models,
         "edenai": edenai_models,
+        "deapi": deapi_models,
         "datarobot": datarobot_models,
         "vertex_ai": vertex_chat_models
         | vertex_code_chat_models
@@ -2373,6 +2378,27 @@ if TYPE_CHECKING:
     )
     from .llms.edenai.videos.transformation import (
         EdenAIVideoConfig as EdenAIVideoConfig,
+    )
+    from .llms.deapi.chat.transformation import (
+        DeapiChatConfig as DeapiChatConfig,
+    )
+    from .llms.deapi.embedding.transformation import (
+        DeapiEmbeddingConfig as DeapiEmbeddingConfig,
+    )
+    from .llms.deapi.audio_transcription.transformation import (
+        DeapiAudioTranscriptionConfig as DeapiAudioTranscriptionConfig,
+    )
+    from .llms.deapi.text_to_speech.transformation import (
+        DeapiTextToSpeechConfig as DeapiTextToSpeechConfig,
+    )
+    from .llms.deapi.image_generation.transformation import (
+        DeapiImageGenerationConfig as DeapiImageGenerationConfig,
+    )
+    from .llms.deapi.image_edit.transformation import (
+        DeapiImageEditConfig as DeapiImageEditConfig,
+    )
+    from .llms.deapi.videos.transformation import (
+        DeapiVideoConfig as DeapiVideoConfig,
     )
     from .llms.fal_ai.chat.transformation import (
         FalAIChatConfig as FalAIChatConfig,

@@ -4001,14 +4001,16 @@ def _complete_vercel_ai_gateway(
     return response
 
 
-def _complete_edenai(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
-    api_base: Final = litellm.EdenAIChatConfig.get_api_base(ctx.api_base)
-    api_key: Final = litellm.EdenAIChatConfig.get_api_key(ctx.api_key or litellm.api_key)
+def _complete_reported_cost_gateway(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
+    """Eden AI and deAPI: OpenAI-compatible gateways whose answers carry the charge LiteLLM bills."""
+    config: Final = litellm.DeapiChatConfig if ctx.custom_llm_provider == "deapi" else litellm.EdenAIChatConfig
+    api_base: Final = config.get_api_base(ctx.api_base)
+    api_key: Final = config.get_api_key(ctx.api_key or litellm.api_key)
     response: Final = base_llm_http_handler.completion(
         model=ctx.model,
         messages=ctx.messages,
         api_base=api_base,
-        custom_llm_provider="edenai",
+        custom_llm_provider=ctx.custom_llm_provider,
         model_response=ctx.model_response,
         encoding=_get_encoding(),
         logging_obj=ctx.logging,
@@ -6757,8 +6759,8 @@ def completion(
             response = _complete_minimax(_dispatch_ctx)
         elif custom_llm_provider == "hosted_vllm":
             response = _complete_hosted_vllm(_dispatch_ctx)
-        elif custom_llm_provider == "edenai":
-            response = _complete_edenai(_dispatch_ctx)  # rebind-ok: dispatch chain binds response per branch
+        elif custom_llm_provider in ("edenai", "deapi"):
+            response = _complete_reported_cost_gateway(_dispatch_ctx)  # rebind-ok: bound per branch
         elif custom_llm_provider == "fal_ai":
             response = _complete_fal_ai(_dispatch_ctx)  # rebind-ok: dispatch chain binds response per branch
         elif (
@@ -7493,7 +7495,7 @@ def embedding(
                 litellm_params=litellm_params_dict,
                 headers=headers or {},
             )
-        elif custom_llm_provider == "edenai":
+        elif custom_llm_provider in ("edenai", "deapi"):
             response = base_llm_http_handler.embedding(
                 model=model,
                 input=input,
@@ -9352,7 +9354,10 @@ def speech(
         custom_llm_provider=custom_llm_provider,
     )
     response: HttpxBinaryResponseContent | Coroutine[object, object, HttpxBinaryResponseContent] | None = None
-    if custom_llm_provider in ("edenai", "dashscope", "replicate") and text_to_speech_provider_config is not None:
+    if (
+        custom_llm_provider in ("edenai", "deapi", "dashscope", "replicate")
+        and text_to_speech_provider_config is not None
+    ):
         litellm_params_dict["api_base"] = caller_api_base if custom_llm_provider == "dashscope" else api_base
         response = base_llm_http_handler.text_to_speech_handler(
             model=model,

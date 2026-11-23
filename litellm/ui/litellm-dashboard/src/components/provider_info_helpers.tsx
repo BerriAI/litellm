@@ -19,6 +19,7 @@ import deepinfraLogo from "../../public/assets/logos/deepinfra.png";
 import opencodeLogo from "../../public/assets/moyai/logos/opencode.svg";
 import deepseekLogo from "../../public/assets/logos/deepseek.svg";
 import edenaiLogo from "../../public/assets/logos/edenai.svg";
+import deapiLogo from "../../public/assets/logos/deapi.svg";
 import elevenlabsLogo from "../../public/assets/logos/elevenlabs.png";
 import falAiLogo from "../../public/assets/logos/fal_ai.jpg";
 import featherlessLogo from "../../public/assets/logos/featherless.svg";
@@ -119,6 +120,7 @@ export enum Providers {
   DOCKER_MODEL_RUNNER = "Docker Model Runner",
   DOTPROMPT = "Dotprompt",
   EDENAI = "Eden AI",
+  DEAPI = "deAPI",
   ElevenLabs = "ElevenLabs",
   EMPIRIOLABS = "EmpirioLabs AI",
   EMPOWER = "Empower",
@@ -257,6 +259,7 @@ export const provider_map: Record<string, string> = {
   DOCKER_MODEL_RUNNER: "docker_model_runner",
   DOTPROMPT: "dotprompt",
   EDENAI: "edenai",
+  DEAPI: "deapi",
   ElevenLabs: "elevenlabs",
   EMPIRIOLABS: "empiriolabs",
   EMPOWER: "empower",
@@ -393,6 +396,7 @@ export const providerLogoMap: Partial<Record<Providers, string>> = {
   [Providers.Deepgram]: deepgramLogo.src,
   [Providers.DeepInfra]: deepinfraLogo.src,
   [Providers.EDENAI]: edenaiLogo.src,
+  [Providers.DEAPI]: deapiLogo.src,
   [Providers.ElevenLabs]: elevenlabsLogo.src,
   [Providers.FalAI]: falAiLogo.src,
   [Providers.FEATHERLESS_AI]: featherlessLogo.src,
@@ -512,6 +516,7 @@ const providerPlaceholderMap: Partial<Record<Providers, string>> = {
   [Providers.Cursor]: "cursor/claude-4-sonnet",
   [Providers.DeepInfra]: "deepinfra/<any-model-on-deepinfra>",
   [Providers.EDENAI]: "edenai/openai/gpt-mini-latest",
+  [Providers.DEAPI]: "deapi/deepseek-v4.1-flash",
   [Providers.EMPIRIOLABS]: "empiriolabs/aplomb-1",
   [Providers.FalAI]: "fal_ai/fal-ai/flux-pro/v1.1-ultra",
   [Providers.Google_AI_Studio]: "gemini-pro",
