@@ -224,7 +224,8 @@ class DeliveryWorker:
         row: Final = context.row
         accepted: Final = status is not None and 200 <= status < 300
         outcome: Final = "terminated" if outgoing.terminal else "delivered" if accepted else "discarded"
-        if not await self._store.settle(context.delivery, row.generation, self._clock(), outcome):
+        gap: Final = status == 413 and outgoing.event_id is not None
+        if not await self._store.settle(context.delivery, row.generation, self._clock(), outcome, gap=gap):
             return
         if accepted and not outgoing.terminal:
             EventMetrics.observe_latency(elapsed)
