@@ -970,13 +970,23 @@ async def test_moonshot_invoke_async_stream_yields_openai_shaped_chunks(_aws_tes
     response.aclose.assert_awaited_once()
 
 
-def test_moonshot_invoke_stream_reports_the_token_counts_bedrock_returns(_aws_test_credentials: None) -> None:
+@pytest.mark.parametrize(
+    ("chunk_usage", "expected_counts"),
+    [
+        (None, [(31, 47)]),
+        ({"prompt_tokens": 12, "completion_tokens": 5, "total_tokens": 17}, [(12, 5)]),
+    ],
+)
+def test_moonshot_invoke_stream_reports_the_token_counts_bedrock_returns(
+    _aws_test_credentials: None, chunk_usage: Mapping[str, int] | None, expected_counts: Sequence[tuple[int, int]]
+) -> None:
     raw_stream: Final = b"".join(
         _bedrock_event_stream_frame(chunk)
         for chunk in (
             _openai_stream_chunk({"role": "assistant", "content": "1, 2, 3"}),
             {
                 **_openai_stream_chunk({}, "stop"),
+                **({"usage": chunk_usage} if chunk_usage else {}),
                 "amazon-bedrock-invocationMetrics": {
                     "inputTokenCount": 31,
                     "outputTokenCount": 47,
@@ -1000,7 +1010,7 @@ def test_moonshot_invoke_stream_reports_the_token_counts_bedrock_returns(_aws_te
     )
 
     usages: Final = [chunk.usage for chunk in stream if getattr(chunk, "usage", None) is not None]
-    assert [(usage.prompt_tokens, usage.completion_tokens) for usage in usages] == [(31, 47)]
+    assert [(usage.prompt_tokens, usage.completion_tokens) for usage in usages] == expected_counts
 
 
 def test_moonshot_invoke_stream_finishes_when_the_trailer_has_no_token_counts(_aws_test_credentials: None) -> None:
