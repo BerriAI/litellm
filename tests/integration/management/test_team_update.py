@@ -1,4 +1,6 @@
 import json
+import uuid
+from typing import Final
 
 import pytest
 
@@ -7,6 +9,8 @@ from litellm.proxy._types import LitellmUserRoles
 from tests.integration._support.actors import Actor, SeededKey
 from tests.integration._support.actors import create_scratch_actor, create_scratch_team
 from tests.integration._support.client import team_admin_permissions
+from tests.integration._support.client import Gateway
+from tests.integration._support.database import write_rows
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
@@ -170,6 +174,40 @@ _MEMBER_DEFAULTS = [
     pytest.param("team_member_tpm_limit", 200, "tpm_limit", id="team_member_tpm_limit"),
     pytest.param("team_member_rpm_limit", 9, "rpm_limit", id="team_member_rpm_limit"),
 ]
+
+
+async def test_rejecting_an_ambiguous_event_grant_preserves_the_member_budget(gateway: Gateway) -> None:
+    shared_alias: Final = f"ci-{uuid.uuid4().hex}"
+    with gateway.scenario() as scenario:
+        team_id: Final = scenario.team(team_member_budget=25.0)
+        write_rows(
+            'INSERT INTO "LiteLLM_MCPServerTable" (server_id, alias) VALUES (%s, %s), (%s, %s)',
+            (str(uuid.uuid4()), shared_alias, str(uuid.uuid4()), shared_alias),
+            database_url=gateway.database_url,
+        )
+        try:
+            response: Final = gateway.request(
+                "POST",
+                "/team/update",
+                {
+                    "team_id": team_id,
+                    "team_member_budget": 5.0,
+                    "object_permission": {"mcp_event_permissions": {shared_alias: ["build.*"]}},
+                },
+            )
+            assert response.status_code == 400 and "Ambiguous mcp_event_permissions" in response.text
+            stored: Final = gateway.rows(
+                'SELECT b.max_budget FROM "LiteLLM_BudgetTable" b JOIN "LiteLLM_TeamTable" t '
+                "ON b.budget_id = t.metadata->>'team_member_budget_id' WHERE t.team_id = %s",
+                (team_id,),
+            )
+            assert stored == [{"max_budget": 25.0}]
+        finally:
+            write_rows(
+                'DELETE FROM "LiteLLM_MCPServerTable" WHERE alias = %s',
+                (shared_alias,),
+                database_url=gateway.database_url,
+            )
 
 
 @pytest.mark.parametrize("field,value,budget_column", _MEMBER_DEFAULTS)
