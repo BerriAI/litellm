@@ -636,6 +636,37 @@ model LiteLLM_MCPServerTable {
   @@index([approval_status])
 }
 
+model LiteLLM_MCPEventSubscription {
+  id                       String    @id
+  principal                String
+  key_hash                 String?
+  user_id                  String?
+  team_id                  String?
+  server_id                String
+  event_name               String
+  arguments                Json      @default("{}")
+  client_url               String
+  client_secret            String
+  upstream_subscription_id String?
+  upstream_secret          String
+  upstream_refresh_before  DateTime?
+  refresh_before           DateTime?
+  cursor                   String?
+  status                   String    @default("pending")
+  verified_at              DateTime?
+  last_delivery_at         DateTime?
+  last_error               String?
+  failed_since             DateTime?
+  consecutive_failures     Int       @default(0)
+  created_at               DateTime  @default(now())
+  updated_at               DateTime  @default(now()) @updatedAt
+
+  @@index([principal])
+  @@index([server_id])
+  @@index([key_hash])
+  @@index([status])
+}
+
 // Named collection of {server_id, tool_name} pairs that can be granted to keys/teams
 model LiteLLM_MCPToolsetTable {
   toolset_id   String   @id @default(uuid())
