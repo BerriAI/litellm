@@ -1683,9 +1683,10 @@ class ToolPermissionGuardrail(CustomGuardrail):
                 yield chunk
             return
 
-        forwardable: Final = not anthropic_sse_error_events(all_chunks) and anthropic_sse_reads_alike(all_chunks)
+        upstream_errors: Final = anthropic_sse_error_events(all_chunks)
+        forwardable: Final = not upstream_errors and anthropic_sse_reads_alike(all_chunks)
         anthropic_response: Final = assemble_anthropic_sse_stream(
-            all_chunks, restore_identity=not forwardable, through_upstream_error=True
+            all_chunks, restore_identity=bool(upstream_errors), through_upstream_error=True
         )
         if anthropic_response is None:
             if is_raw_sse_stream(all_chunks) and not is_sse_error_stream(all_chunks):

@@ -931,9 +931,10 @@ def anthropic_sse_reads_alike(all_chunks: Sequence[object]) -> bool:
     Python SDK keeps it, so a block that starts with its input takes no input delta. A frame named ``error``
     may carry any data, since the SDKs raise on it and other clients read its type. A leading byte order mark
     stays part of the first field name, as the Python SDK reads it, so these rules refuse it wherever it
-    changes what that SDK reads. No client dispatches a frame the stream never ended, and a client splitting
-    lines with ``str.splitlines`` also breaks a line at a form feed or U+2028, so a stream with either reads
-    differently too.
+    changes what that SDK reads. No client dispatches a frame the stream never ended, a client splitting
+    lines with ``str.splitlines`` also breaks a line at a form feed or U+2028, and a client parsing each
+    ``data:`` line on its own reads a frame of several data lines as several events, so a stream with any of
+    these reads differently too.
     """
     sse_stream: Final = _joined_sse_stream(all_chunks) or ""
     client_frames: Final = _client_frames(_frames_a_client_dispatches(sse_stream))
@@ -941,6 +942,8 @@ def anthropic_sse_reads_alike(all_chunks: Sequence[object]) -> bool:
     widest_frames: Final = _frames_of_the_widest_reader(sse_stream)
     other_readings: Final = (sse_frames,) if widest_frames == sse_frames else (sse_frames, widest_frames)
     if any(_client_frames(frames) != client_frames for frames in other_readings):
+        return False
+    if any("\n" in data for _, data in client_frames):
         return False
     named_data: Final = _named_data(client_frames)
     if not all(_names_its_own_type(name, data) for name, data in named_data):

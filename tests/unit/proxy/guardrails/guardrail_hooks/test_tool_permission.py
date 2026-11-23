@@ -4322,13 +4322,31 @@ _DENIED_CALL_SHAPES: Final = {
 }
 
 
+_SHAPES_THE_CHECK_READS_AS_THE_ALLOWED_CALL: Final = frozenset(
+    {"input-finished-by-a-ping-named-frame", "input-finished-by-a-frame-the-stream-never-ended"}
+)
+_SHAPES_WHOSE_CALL_THE_CHECK_DENIES: Final = {
+    shape: chunks
+    for shape, chunks in _DENIED_CALL_SHAPES.items()
+    if shape not in _SHAPES_THE_CHECK_READS_AS_THE_ALLOWED_CALL
+}
+
+
 def _call_in_a_comment_broken_by(line_break: bytes) -> tuple[bytes, ...]:
     return _stream(b": keepalive" + line_break * 2 + b"".join(_RM_RF_CALL).replace(b"\n", line_break) + b"\n")
+
+
+def _call_as_data_lines_of_one_frame(name_line: bytes) -> tuple[bytes, ...]:
+    events: Final = (_tool_start(1, "Bash"), _input_delta(1, json.dumps(_RM_RF)), _block_stop(1))
+    return _stream(name_line + b"".join(b"data: " + json.dumps(event).encode() + b"\n" for event in events) + b"\n")
 
 
 _DENIED_CALLS_ONLY_A_LINE_SPLITTING_CLIENT_READS: Final = {
     "form-feed": _call_in_a_comment_broken_by(b"\x0c"),
     "line-separator": _call_in_a_comment_broken_by("\u2028".encode()),
+    "data-lines-of-a-keepalive-frame": _call_as_data_lines_of_one_frame(b"event: keepalive\n"),
+    "data-lines-of-a-ping-frame": _call_as_data_lines_of_one_frame(b"event: ping\n"),
+    "data-lines-of-an-unnamed-frame": _call_as_data_lines_of_one_frame(b""),
 }
 _LS_STREAM: Final = _stream(*_bash_call(_LS))
 _LS_ONLY_STREAM: Final = (
@@ -4515,6 +4533,21 @@ class TestToolPermissionGuardrailAnthropicStreamShapes:
         out: Final = await self._drain(self._bash_ls_only("rewrite"), chunks)
 
         assert _RM_RF not in _tool_inputs_read_line_by_line(out)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "chunks", _SHAPES_WHOSE_CALL_THE_CHECK_DENIES.values(), ids=_SHAPES_WHOSE_CALL_THE_CHECK_DENIES
+    )
+    async def test_denied_reply_keeps_the_upstream_message_id_only_when_the_plain_stream_would(
+        self, chunks: tuple[bytes, ...]
+    ):
+        guardrail: Final = self._bash_ls_only("rewrite")
+        upstream_id: Final = _sdk_message(list(_LS_STREAM)).id
+
+        plain_id: Final = _sdk_message(await self._drain(guardrail, _stream(*_RM_RF_CALL))).id
+        shaped_id: Final = _sdk_message(await self._drain(guardrail, chunks)).id
+
+        assert (shaped_id == upstream_id) == (plain_id == upstream_id)
 
     @pytest.mark.asyncio
     async def test_check_judges_the_input_field_the_sdk_reads_when_a_delta_carries_another(self):
