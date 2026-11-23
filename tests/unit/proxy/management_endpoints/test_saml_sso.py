@@ -645,18 +645,19 @@ async def test_build_login_redirect_targets_idp_and_caches_request_id(saml_env):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("user_code", "relay_override", "sign", "unsolicited", "prefill_enabled", "disable_admin_ui"),
+    ("user_code", "relay_override", "sign", "unsolicited", "prefill_enabled", "disable_admin_ui", "relay_carries_code"),
     [
-        (None, None, True, False, True, False),
-        ("ABCD-EFGH", None, True, False, True, False),
-        (None, "litellm-session-token:", True, False, True, False),
-        (None, "litellm-session-token:cli-never-issued-session-00", True, False, True, False),
-        (None, None, False, False, True, False),
-        (None, None, True, True, True, False),
-        ("ABCD-EFGH", None, True, False, False, False),
-        pytest.param(None, None, True, False, True, True, id="disabled-ui-cli"),
-        pytest.param(None, None, False, False, True, True, id="disabled-ui-unsigned"),
-        pytest.param(None, None, True, True, True, True, id="disabled-ui-unsolicited"),
+        (None, None, True, False, True, False, False),
+        ("ABCD-EFGH", None, True, False, True, False, False),
+        (None, "litellm-session-token:", True, False, True, False, False),
+        (None, "litellm-session-token:cli-never-issued-session-00", True, False, True, False, False),
+        (None, None, False, False, True, False, False),
+        (None, None, True, True, True, False, False),
+        ("ABCD-EFGH", None, True, False, False, False, False),
+        pytest.param(None, None, True, False, True, True, False, id="disabled-ui-cli"),
+        pytest.param(None, None, False, False, True, True, False, id="disabled-ui-unsigned"),
+        pytest.param(None, None, True, True, True, True, False, id="disabled-ui-unsolicited"),
+        pytest.param("ABCD-EFGH", None, True, False, False, False, True, id="prefill-off-code-in-relay"),
     ],
 )
 async def test_saml_cli_device_login_completes_after_signed_assertion(
@@ -668,6 +669,7 @@ async def test_saml_cli_device_login_completes_after_signed_assertion(
     unsolicited: bool,
     prefill_enabled: bool,
     disable_admin_ui: bool,
+    relay_carries_code: bool,
 ) -> None:
     from litellm.proxy import proxy_server
     from litellm.proxy.management_endpoints.ui_sso import (
@@ -723,7 +725,8 @@ async def test_saml_cli_device_login_completes_after_signed_assertion(
     assert relay == expected_relay
     ticket: Final = SimpleCookie(redirect.headers["set-cookie"])[_SAML_AUTHN_STATE_COOKIE].value
     signed: Final = _build_signed_response(key_pem, cert_pem, in_response_to=None if unsolicited else ticket, sign=sign)
-    body: Final = urlencode({"SAMLResponse": _b64(signed), "RelayState": relay_override or relay}).encode()
+    callback_relay: Final = relay_override or (f"{relay}:{user_code}" if relay_carries_code else relay)
+    body: Final = urlencode({"SAMLResponse": _b64(signed), "RelayState": callback_relay}).encode()
 
     async def receive() -> Message:
         return {"type": "http.request", "body": body, "more_body": False}
