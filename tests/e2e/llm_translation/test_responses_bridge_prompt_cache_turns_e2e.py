@@ -6,23 +6,23 @@ from dataclasses import dataclass
 from typing import Final, Literal, TypeAlias
 
 import pytest
+from _pytest.mark.structures import ParameterSet
 from anthropic import Anthropic
 from anthropic.types import Message, MessageParam, ToolParam
-from openai import OpenAI, omit
-from openai.types.chat import ChatCompletionMessageParam, ChatCompletionToolParam
-from openai.types.completion_usage import CompletionUsage
-from openai.types.responses import ResponseInputParam, ToolParam as ResponsesToolParam
-
 from e2e_config import PROMPT_CACHE_OPENAI_MODEL, unique_marker
 from e2e_metadata import Capability, Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
+from openai import OpenAI, omit
+from openai.types.chat import ChatCompletionMessageParam, ChatCompletionToolParam
+from openai.types.completion_usage import CompletionUsage
+from openai.types.responses import ResponseInputParam
+from openai.types.responses import ToolParam as ResponsesToolParam
 from proxy_client import ProxyClient
 from sdk_clients import NO_PROXY_CACHE, SdkClients
 
 pytestmark = [pytest.mark.e2e, pytest.mark.provider_live]
 
-BACKEND: Final = f"openai/{PROMPT_CACHE_OPENAI_MODEL}"
 CONVERSATION_ATTEMPTS: Final = 3
 SHARE_OF_DIRECT_CACHE: Final = 0.9
 RULES: Final = 160
@@ -44,7 +44,60 @@ TOOL_PARAMETERS: Final[dict[str, object]] = {
     "required": ["city"],
 }
 
-Endpoint: TypeAlias = Literal["chat", "messages"]
+Surface: TypeAlias = Literal["chat_completions", "messages"]
+
+
+@dataclass(frozen=True, slots=True)
+class Backend:
+    id: str
+    registry_route: str
+    provider: Provider
+    litellm_params: LiteLLMParamsBody
+    passthrough_model: str | None = None
+
+
+BACKENDS: Final = (
+    Backend(
+        "openai",
+        "openai",
+        Provider.OPENAI,
+        LiteLLMParamsBody(model=f"openai/{PROMPT_CACHE_OPENAI_MODEL}", api_key="os.environ/OPENAI_API_KEY"),
+        passthrough_model=PROMPT_CACHE_OPENAI_MODEL,
+    ),
+    Backend(
+        "bedrock_mantle",
+        "bedrock_mantle",
+        Provider.BEDROCK_MANTLE,
+        LiteLLMParamsBody(model="bedrock_mantle/openai.gpt-6.2-sol", aws_region_name="us-east-1"),
+    ),
+)
+
+
+def _backends(surface: Surface, mode: Mode) -> tuple[ParameterSet, ...]:
+    return tuple(
+        pytest.param(
+            backend,
+            id=backend.id,
+            marks=(
+                pytest.mark.covers(
+                    f"llm.{surface}.{backend.registry_route}.prompt_cache_5m."
+                    f"{mode.value}.system_prompt_cached_every_turn",
+                    exercised_on=[surface],
+                ),
+                meta(
+                    Subject(
+                        domain=Domain.LLM_TRANSLATION,
+                        route=Route(surface),
+                        providers=(backend.provider,),
+                        models=(backend.litellm_params.model,),
+                        capabilities=(Capability.PROMPT_CACHING,),
+                        mode=mode,
+                    )
+                ),
+            ),
+        )
+        for backend in BACKENDS
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -224,22 +277,20 @@ def _messages_sender(sdk: SdkClients, key: str, model: str, store: bool | None, 
     return send
 
 
-def _direct_sender(sdk: SdkClients, key: str, store: bool | None) -> TurnSender:
-    client: Final = OpenAI(
-        base_url=f"{sdk.base_url}/openai_passthrough/v1",
-        api_key=key,
-        timeout=sdk.request_timeout,
-        max_retries=0,
-    )
+def _direct_sender(sdk: SdkClients, key: str, backend: Backend, model: str, store: bool | None) -> TurnSender:
+    route: Final = "/openai_passthrough/v1" if backend.passthrough_model else "/v1"
+    extra_body: Final[dict[str, object]] = {} if backend.passthrough_model else dict(NO_PROXY_CACHE)
+    client: Final = OpenAI(base_url=f"{sdk.base_url}{route}", api_key=key, timeout=sdk.request_timeout, max_retries=0)
 
     def send(prompt: str, answers: tuple[str, ...]) -> Turn:
         response: Final = client.responses.create(
-            model=PROMPT_CACHE_OPENAI_MODEL,
+            model=backend.passthrough_model or model,
             input=_responses_input(prompt, answers),
             tools=_responses_tools(),
             tool_choice="none",
             reasoning={"effort": "low"},
             store=omit if store is None else store,
+            extra_body=extra_body,
         )
         usage: Final = response.usage
         return Turn(
@@ -281,125 +332,75 @@ def _matches_direct(direct: tuple[Turn, ...]) -> Callable[[tuple[Turn, ...]], bo
     return accepts
 
 
-def _register(proxy: ProxyClient, resources: ResourceManager) -> str:
-    model: Final = f"e2e-prompt-cache-turns-{unique_marker()}"
-    model_id: Final = proxy.create_model(model, LiteLLMParamsBody(model=BACKEND, api_key="os.environ/OPENAI_API_KEY"))
+def _register(proxy: ProxyClient, resources: ResourceManager, backend: Backend) -> str:
+    model: Final = f"e2e-prompt-cache-turns-{backend.id}-{unique_marker()}"
+    model_id: Final = proxy.create_model(model, backend.litellm_params)
     resources.defer(lambda: proxy.delete_model(model_id))
     return model
 
 
 def _assert_bridged_conversation_caches_like_direct(
-    sdk: SdkClients, key: str, store: bool | None, bridged: TurnSender
+    sdk: SdkClients, key: str, backend: Backend, model: str, store: bool | None, bridged: TurnSender
 ) -> None:
     direct: Final = _converse_until(
-        _direct_sender(sdk, key, store), _direct_caches_every_continued_turn, CONVERSATION_ATTEMPTS
+        _direct_sender(sdk, key, backend, model, store), _direct_caches_every_continued_turn, CONVERSATION_ATTEMPTS
     )
     assert _direct_caches_every_continued_turn(direct), (
-        f"OpenAI cached nothing on a continued turn of the direct conversation, so it is no yardstick: {direct}"
+        f"{backend.id} cached nothing on a continued turn of the conversation sent as Responses input, "
+        f"so it is no yardstick: {direct}"
     )
 
     turns: Final = _converse_until(bridged, _matches_direct(direct), CONVERSATION_ATTEMPTS)
 
     assert all(turn.text for turn in turns), turns
     assert _matches_direct(direct)(turns), (
-        f"continued turns through the proxy cached {[turn.cached_tokens for turn in _continued(turns)]} tokens, "
-        f"the same conversation sent straight to OpenAI cached {[turn.cached_tokens for turn in _continued(direct)]}"
+        f"continued turns bridged to {backend.id} cached {[turn.cached_tokens for turn in _continued(turns)]} "
+        f"tokens, the same conversation sent as Responses input cached "
+        f"{[turn.cached_tokens for turn in _continued(direct)]}"
     )
 
 
 class TestBridgedConversationPromptCache:
-    @pytest.mark.covers(
-        "llm.chat_completions.openai.prompt_cache_5m.nonstream.system_prompt_cached_every_turn",
-        exercised_on=["chat_completions"],
-    )
-    @meta(
-        Subject(
-            domain=Domain.LLM_TRANSLATION,
-            route=Route.CHAT_COMPLETIONS,
-            providers=(Provider.OPENAI,),
-            models=(BACKEND,),
-            capabilities=(Capability.PROMPT_CACHING,),
-            mode=Mode.NONSTREAM,
-        )
-    )
+    @pytest.mark.parametrize("backend", _backends("chat_completions", Mode.NONSTREAM))
     @pytest.mark.parametrize("store", STORES)
     def test_chat_conversation_caches_the_system_prompt_on_every_continued_turn(
-        self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients, store: bool | None
+        self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients, backend: Backend, store: bool | None
     ) -> None:
         key: Final = resources.key()
-        model: Final = _register(proxy, resources)
+        model: Final = _register(proxy, resources, backend)
         _assert_bridged_conversation_caches_like_direct(
-            sdk, key, store, _chat_sender(sdk.openai(key), model, store, stream=False)
+            sdk, key, backend, model, store, _chat_sender(sdk.openai(key), model, store, stream=False)
         )
 
-    @pytest.mark.covers(
-        "llm.chat_completions.openai.prompt_cache_5m.stream.system_prompt_cached_every_turn",
-        exercised_on=["chat_completions"],
-    )
-    @meta(
-        Subject(
-            domain=Domain.LLM_TRANSLATION,
-            route=Route.CHAT_COMPLETIONS,
-            providers=(Provider.OPENAI,),
-            models=(BACKEND,),
-            capabilities=(Capability.PROMPT_CACHING,),
-            mode=Mode.STREAM,
-        )
-    )
+    @pytest.mark.parametrize("backend", _backends("chat_completions", Mode.STREAM))
     @pytest.mark.parametrize("store", STORES)
     def test_streamed_chat_conversation_caches_the_system_prompt_on_every_continued_turn(
-        self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients, store: bool | None
+        self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients, backend: Backend, store: bool | None
     ) -> None:
         key: Final = resources.key()
-        model: Final = _register(proxy, resources)
+        model: Final = _register(proxy, resources, backend)
         _assert_bridged_conversation_caches_like_direct(
-            sdk, key, store, _chat_sender(sdk.openai(key), model, store, stream=True)
+            sdk, key, backend, model, store, _chat_sender(sdk.openai(key), model, store, stream=True)
         )
 
-    @pytest.mark.covers(
-        "llm.messages.openai.prompt_cache_5m.nonstream.system_prompt_cached_every_turn",
-        exercised_on=["messages"],
-    )
-    @meta(
-        Subject(
-            domain=Domain.LLM_TRANSLATION,
-            route=Route.MESSAGES,
-            providers=(Provider.OPENAI,),
-            models=(BACKEND,),
-            capabilities=(Capability.PROMPT_CACHING,),
-            mode=Mode.NONSTREAM,
-        )
-    )
+    @pytest.mark.parametrize("backend", _backends("messages", Mode.NONSTREAM))
     @pytest.mark.parametrize("store", STORES)
     def test_messages_conversation_caches_the_system_prompt_on_every_continued_turn(
-        self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients, store: bool | None
+        self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients, backend: Backend, store: bool | None
     ) -> None:
         key: Final = resources.key()
-        model: Final = _register(proxy, resources)
+        model: Final = _register(proxy, resources, backend)
         _assert_bridged_conversation_caches_like_direct(
-            sdk, key, store, _messages_sender(sdk, key, model, store, stream=False)
+            sdk, key, backend, model, store, _messages_sender(sdk, key, model, store, stream=False)
         )
 
-    @pytest.mark.covers(
-        "llm.messages.openai.prompt_cache_5m.stream.system_prompt_cached_every_turn",
-        exercised_on=["messages"],
-    )
-    @meta(
-        Subject(
-            domain=Domain.LLM_TRANSLATION,
-            route=Route.MESSAGES,
-            providers=(Provider.OPENAI,),
-            models=(BACKEND,),
-            capabilities=(Capability.PROMPT_CACHING,),
-            mode=Mode.STREAM,
-        )
-    )
+    @pytest.mark.parametrize("backend", _backends("messages", Mode.STREAM))
     @pytest.mark.parametrize("store", STORES)
     def test_streamed_messages_conversation_caches_the_system_prompt_on_every_continued_turn(
-        self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients, store: bool | None
+        self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients, backend: Backend, store: bool | None
     ) -> None:
         key: Final = resources.key()
-        model: Final = _register(proxy, resources)
+        model: Final = _register(proxy, resources, backend)
         _assert_bridged_conversation_caches_like_direct(
-            sdk, key, store, _messages_sender(sdk, key, model, store, stream=True)
+            sdk, key, backend, model, store, _messages_sender(sdk, key, model, store, stream=True)
         )
