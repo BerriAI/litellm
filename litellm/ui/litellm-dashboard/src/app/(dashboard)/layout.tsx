@@ -124,46 +124,19 @@ const PAGE_FRAME_CLASS_NAMES = {
   fixed: "h-full overflow-hidden pb-0 sm:pb-0",
 } as const;
 
-const FRAMED_SEGMENTS: ReadonlyMap<string, keyof typeof PAGE_FRAME_CLASS_NAMES> = new Map([
-  ["", "default"],
-  ["access-groups", "default"],
-  ["admin-panel", "default"],
-  ["agents", "default"],
-  ["alerts", "default"],
+const NON_DEFAULT_PAGE_FRAMES: ReadonlyMap<string, keyof typeof PAGE_FRAME_CLASS_NAMES> = new Map([
   ["api-keys", "fill"],
-  ["app-groups", "default"],
-  ["apps", "default"],
   ["budgets", "fill"],
-  ["caching", "default"],
-  ["cost-optimization", "default"],
-  ["cost-tracking", "default"],
-  ["customers", "default"],
-  ["guardrails", "default"],
-  ["guardrails-monitor", "default"],
-  ["home", "default"],
-  ["logging-and-alerts", "default"],
   ["logs", "fill"],
   ["mcp-servers", "fill"],
-  ["memory", "default"],
-  ["models-and-endpoints", "default"],
-  ["organizations", "default"],
   ["playground", "fixed"],
   ["policies", "fill"],
-  ["projects", "default"],
-  ["prompts", "default"],
-  ["router-settings", "default"],
   ["search-tools", "fill"],
-  ["skills", "default"],
   ["tag-management", "fill"],
   ["teams", "fill"],
-  ["telemetry", "default"],
-  ["tool-policies", "default"],
-  ["ui-theme", "default"],
-  ["usage", "default"],
-  ["users", "default"],
-  ["vector-stores", "default"],
-  ["workflows", "default"],
 ]);
+
+const UNFRAMED_SEGMENTS = new Set(["aria", "change-password", "lens", "model-insights"]);
 
 function CloseMobileSidebarOnNavigation({ navigationKey }: { navigationKey: string }) {
   useCloseMobileSidebarOn(navigationKey);
@@ -189,7 +162,9 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
   const navigationKey = `${pathname}?${searchParams.toString()}`;
   const [deploymentHealthHandle] = useState(createDeploymentHealthHandle);
   const isFullBleed = FULL_BLEED_SEGMENTS.has(routeSegment);
-  const pageFrame = FRAMED_SEGMENTS.get(routeSegment);
+  const pageFrame = UNFRAMED_SEGMENTS.has(routeSegment)
+    ? undefined
+    : NON_DEFAULT_PAGE_FRAMES.get(routeSegment) ?? "default";
   // A manual toggle holds only for the route it was made on; full-bleed routes default to collapsed.
   const [sidebarOverride, setSidebarOverride] = useState<{ segment: string; collapsed: boolean } | null>(null);
   const sidebarCollapsed = sidebarOverride?.segment === routeSegment ? sidebarOverride.collapsed : isFullBleed;

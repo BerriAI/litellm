@@ -223,7 +223,12 @@ describe("(dashboard) Layout", () => {
     { segment: "playground", present: ["p-4", "sm:p-6", "h-full", "overflow-hidden", "pb-0", "sm:pb-0"], absent: [] },
     { segment: "", present: ["p-4", "sm:p-6"], absent: ["h-full", "overflow-hidden", "pb-0"] },
     { segment: "teams", present: ["p-4", "sm:p-6", "h-full"], absent: ["overflow-hidden", "pb-0"] },
+    { segment: "transform-request", present: ["p-4", "sm:p-6"], absent: ["h-full", "overflow-hidden", "pb-0"] },
+    { segment: "a-page-added-later", present: ["p-4", "sm:p-6"], absent: ["h-full", "overflow-hidden", "pb-0"] },
+    { segment: "aria", present: [], absent: ["p-4", "sm:p-6", "h-full", "pb-0"] },
+    { segment: "change-password", present: [], absent: ["p-4", "sm:p-6", "h-full", "pb-0"] },
     { segment: "lens", present: [], absent: ["p-4", "sm:p-6", "h-full", "pb-0"] },
+    { segment: "model-insights", present: [], absent: ["p-4", "sm:p-6", "h-full", "pb-0"] },
   ])("wraps /ui/$segment in only the classes of its page frame variant", async ({ segment, present, absent }) => {
     vi.mocked(usePathname).mockReturnValue(`/ui/${segment}`);
     render(
