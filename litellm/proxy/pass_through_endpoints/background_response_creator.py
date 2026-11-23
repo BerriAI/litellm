@@ -258,7 +258,7 @@ def _lease_expired_by(now: datetime) -> tuple[_LeaseExpiry, ...]:
     return (_LeaseExpiry(poll_lease_expires_at=None), _LeaseExpiry(poll_lease_expires_at=_Earlier(lt=now)))
 
 
-_Result: Final = TypeVar("_Result")
+_Result = TypeVar("_Result")
 
 
 @dataclass(frozen=True, slots=True)

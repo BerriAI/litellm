@@ -2356,6 +2356,35 @@ class TestNormalizeImagesForMessage:
         result = _normalize_images_for_message(images)
         assert result[0]["index"] == 5
 
+@pytest.mark.parametrize(
+    "image_fields",
+    [{}, {"upstream_id": "img-1"}, {"thought_signature": 42}],
+    ids=["empty", "without-signature", "non-string-signature"],
+)
+def test_chat_response_keeps_image_provider_fields_as_sent(image_fields: dict[str, object]) -> None:
+    image: Final = {
+        "type": "image_url",
+        "image_url": {"url": "data:image/png;base64,QQ=="},
+        "index": 0,
+        "provider_specific_fields": image_fields,
+    }
+    response: Final = convert_to_model_response_object(
+        response_object={
+            "id": "chatcmpl-1",
+            "object": "chat.completion",
+            "created": 1700000000,
+            "model": "image-model",
+            "choices": [
+                {"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": None, "images": [image]}}
+            ],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        },
+        model_response_object=ModelResponse(),
+    )
+
+    assert response.choices[0].message.images == [image]
+
+
 class TestSafeConvertCreatedField:
     def test_none_returns_current_time(self):
         import time
@@ -2916,6 +2945,26 @@ class TestConvertToModelResponseObjectAudioTranscription:
         assert result.usage.input_tokens == 10
         assert result.usage.output_tokens == 5
         assert result.usage.input_token_details.audio_tokens == 4
+
+    @pytest.mark.parametrize(
+        ("hidden_params", "expected"),
+        [
+            (None, {"text": "Hello"}),
+            ({"cache_hit": True}, {"text": "Hello", "request_id": "rid-1", "truncated": True}),
+        ],
+    )
+    def test_request_id_and_truncation_come_back_only_from_the_cache(
+        self, hidden_params: dict[str, object] | None, expected: dict[str, object]
+    ) -> None:
+        from litellm.types.utils import TranscriptionResponse
+
+        result: Final = convert_to_model_response_object(
+            response_object={"text": "Hello", "request_id": "rid-1", "truncated": True},
+            model_response_object=TranscriptionResponse(),
+            response_type="audio_transcription",
+            hidden_params=hidden_params,
+        )
+        assert result.model_dump(exclude_none=True) == expected
 
     def test_parse_error_keeps_the_transcript_out_of_the_exception(self):
         import traceback

@@ -60,7 +60,7 @@ class OpenAILikeBase:
         return api_base, headers
 
 
-_HeaderValue: Final = TypeVar("_HeaderValue")
+_HeaderValue = TypeVar("_HeaderValue")
 
 
 def with_canonical_authorization(

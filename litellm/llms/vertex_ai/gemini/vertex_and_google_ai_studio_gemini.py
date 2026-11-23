@@ -45,6 +45,7 @@ from litellm.litellm_core_utils.model_param_helper import embeds_thought_signatu
 from litellm.litellm_core_utils.prompt_templates.factory import encode_tool_call_id_with_signature
 from litellm.litellm_core_utils.reasoning_effort_capability import declared_reasoning_efforts_for_model
 from litellm.litellm_core_utils.reasoning_effort_utils import warn_dropped_reasoning
+from litellm.litellm_core_utils.service_tier_utils import GEMINI_TRAFFIC_TYPE_SERVICE_TIERS
 from litellm.litellm_core_utils.tool_fields import (
     declared_function_name,
     qualified_member_name,
@@ -83,6 +84,8 @@ from litellm.types.llms.vertex_ai import (
     FunctionCallingConfig,
     FunctionDeclaration,
     GeminiFinishReason,
+    GeminiImageProviderSpecificFields,
+    GeminiImageURLListItem,
     GeminiThinkingConfig,
     GenerateContentResponseBody,
     HttpxPartType,
@@ -117,10 +120,13 @@ from ..common_utils import (
     VertexAIError,
     build_json_schema,
     build_vertex_schema,
+    enums_fit,
     has_bare_root_union,
+    has_const,
     parameters_json_schema_for,
     supports_response_json_schema,
-    with_integer_enums_that_fit,
+    with_enums_that_fit,
+    with_pins_that_fit,
 )
 from ..context_caching.known_cached_contents import known_cached_contents
 from ..context_caching.rejected_cache_retry import (
@@ -217,6 +223,37 @@ OPENAI_TO_GEMINI_TTS_VOICES: Final[Mapping[str, str]] = MappingProxyType(
 )
 
 
+SENT_SERVICE_TIERS: Final = frozenset({"priority", "flex", "standard"})
+PROVIDER_DEFAULT_SERVICE_TIERS: Final = frozenset({"auto", "default", "unspecified"})
+VERTEX_SHARED_REQUEST_TIERS: Final = frozenset({"priority", "flex"})
+SERVICE_TIER_ALIASES: Final[Mapping[str, str]] = MappingProxyType({"standard_only": "standard"})
+GEMINI_SERVICE_TIER_ALIASES: Final[Mapping[str, str]] = MappingProxyType(
+    {**SERVICE_TIER_ALIASES, "auto": "priority", "default": "standard"}
+)
+
+
+def _response_service_tier(header_tier: str | None, traffic_type: object) -> str | None:
+    if header_tier:
+        lowered: Final = header_tier.lower()
+        return "default" if lowered == "standard" else lowered
+    if isinstance(traffic_type, str) and traffic_type:
+        return GEMINI_TRAFFIC_TYPE_SERVICE_TIERS.get(traffic_type.upper(), "default")
+    return None
+
+
+def _unsupported_service_tier(service_tier: str) -> UnsupportedParamsError:
+    known_tiers: Final = sorted(SENT_SERVICE_TIERS | PROVIDER_DEFAULT_SERVICE_TIERS | frozenset(SERVICE_TIER_ALIASES))
+    return UnsupportedParamsError(
+        message=(
+            f"Invalid `service_tier`: {service_tier!r}. "
+            f"Must be one of: {', '.join(repr(tier) for tier in known_tiers)}. "
+            "To drop this param, set `litellm.drop_params = True` or pass in `(.., drop_params=True)` "
+            "in the request - https://docs.litellm.ai/docs/completion/drop_params"
+        ),
+        status_code=400,
+    )
+
+
 def _unsupported_reasoning_effort(reasoning_effort: str) -> UnsupportedParamsError:
     return UnsupportedParamsError(
         message=(
@@ -277,16 +314,24 @@ def _content_parts(candidate: Candidates) -> Sequence[HttpxPartType]:
     return content.get("parts", ()) if content is not None else ()
 
 
+def _generated_image_item(data_uri: str, thought_signature: str | None) -> ImageURLListItem:
+    image_url: Final = ImageURLObject(url=data_uri, detail="auto")
+    if thought_signature is None:
+        return ImageURLListItem(image_url=image_url, index=0, type="image_url")
+    return GeminiImageURLListItem(
+        image_url=image_url,
+        index=0,
+        type="image_url",
+        provider_specific_fields=GeminiImageProviderSpecificFields(thought_signature=thought_signature),
+    )
+
+
 def _inline_image(part: HttpxPartType) -> ImageURLListItem | None:
     inline_data: Final = part.get("inlineData", {})
     mime_type: Final = inline_data.get("mimeType", "")
     if not mime_type.startswith("image/"):
         return None
-    return ImageURLListItem(
-        image_url=ImageURLObject(url=f"data:{mime_type};base64,{inline_data.get('data', '')}", detail="auto"),
-        index=0,
-        type="image_url",
-    )
+    return _generated_image_item(f"data:{mime_type};base64,{inline_data.get('data', '')}", part.get("thoughtSignature"))
 
 
 def _images_in(parts: Sequence[HttpxPartType]) -> tuple[ImageURLListItem, ...]:
@@ -376,6 +421,7 @@ _GEMINI_SPEECH_CONFIG_KEY_MAP: Final[Mapping[str, str]] = MappingProxyType(
 
 _SPEECH_CONFIG_ITEMS: Final = TypeAdapter(list[object])
 _CALLER_HEADERS: Final = TypeAdapter(dict[str, str])
+_REQUEST_PARAMS: Final = TypeAdapter(dict[str, object])
 
 
 def _normalize_gemini_speech_config_item(value: Mapping[str, object]) -> Mapping[str, object]:
@@ -678,19 +724,24 @@ def _caller_parameters(tool: object) -> Mapping[str, object] | None:
     return caller_tool.get("function", caller_tool).get("parameters")
 
 
-def _parameters_json_schema(tool: object, forced_function_names: frozenset[str]) -> Mapping[str, JsonValue] | None:
+def _parameters_json_schema(
+    tool: object, forced_function_names: frozenset[str], pin_consts: bool
+) -> Mapping[str, JsonValue] | None:
     parameters: Final = _caller_parameters(tool)
-    json_schema: Final = None if parameters is None else parameters_json_schema_for(parameters)
+    json_schema: Final = None if parameters is None else parameters_json_schema_for(parameters, pin_consts)
     if json_schema is None or declared_function_name(tool) not in forced_function_names:
         return json_schema
     return None if has_bare_root_union(json_schema) else json_schema
 
 
 def _parameters_json_schemas(
-    tools: object, allow_parameters_json_schema: bool, forced_function_names: frozenset[str]
+    tools: object,
+    allow_parameters_json_schema: bool,
+    forced_function_names: frozenset[str],
+    pin_consts: bool,
 ) -> tuple[Mapping[str, JsonValue] | None, ...]:
     return tuple(
-        _parameters_json_schema(tool, forced_function_names) if allow_parameters_json_schema else None
+        _parameters_json_schema(tool, forced_function_names, pin_consts) if allow_parameters_json_schema else None
         for tool in _CALLER_TOOLS.validate_python(tools)
     )
 
@@ -917,6 +968,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
     _route: ClassVar[str] = "vertex_ai"
     _removes_undeclared_thinking_levels: ClassVar[bool] = False
+    _service_tier_aliases: ClassVar[Mapping[str, str]] = SERVICE_TIER_ALIASES
 
     temperature: float | None = None
     max_output_tokens: int | None = None
@@ -1217,16 +1269,15 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     ) -> None:
         return cls._drop_search_tools_mixed_with_functions(optional_params)
 
-    def _map_service_tier_param(self, value: str, optional_params: dict) -> None:
-        """
-        Map OpenAI service_tier (string) to Gemini serviceTier.
-        'auto' maps to 'priority'.
-        Other values are passed lowercased.
-        """
-        if value.lower() == "auto":
-            optional_params["service_tier"] = "priority"
-        else:
-            optional_params["service_tier"] = value.lower()
+    def _map_service_tier_param(self, value: str, optional_params: dict, drop_params: bool) -> None:
+        unprefixed: Final = value.lower().removeprefix("service_tier_")
+        normalized: Final = self._service_tier_aliases.get(unprefixed, unprefixed)
+        if normalized in SENT_SERVICE_TIERS:
+            optional_params["service_tier"] = normalized
+            return
+        if normalized in PROVIDER_DEFAULT_SERVICE_TIERS or drops_unsupported_params(drop_params):
+            return
+        raise _unsupported_service_tier(value)
 
     def _transform_computer_use_config(self, computer_use_config: dict) -> dict:
         """
@@ -1376,9 +1427,32 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
     def _map_function(
         self,
+        value: list[dict[str, object]],  # mutable-ok: mirrors override contract
+        optional_params: dict[str, object],  # mutable-ok: mirrors override contract
+        send_integer_enums: bool = False,
+        allow_parameters_json_schema: bool = True,
+        outside_declarations: JsonValue = None,
+        tool_choice: object = None,
+    ) -> list[Tools]:  # mutable-ok: mirrors override contract
+        return with_pins_that_fit(
+            partial(
+                self._build_function_tools,
+                value,
+                optional_params,
+                send_integer_enums,
+                allow_parameters_json_schema=allow_parameters_json_schema,
+                outside_declarations=outside_declarations,
+                tool_choice=tool_choice,
+            ),
+            has_const(cast(JsonValue, value)),  # cast-ok: tools are JSON request data
+        )
+
+    def _build_function_tools(
+        self,
         value: list[dict],
         optional_params: dict,
         send_integer_enums: bool = False,
+        pin_consts: bool = True,
         allow_parameters_json_schema: bool = True,
         outside_declarations: JsonValue = None,
         tool_choice: object = None,
@@ -1390,6 +1464,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             value: List of tool definitions
             optional_params: Request-scoped parameters to store retrieval config
             send_integer_enums: Whether to send integer enums with string values
+            pin_consts: Whether to send each scalar `const` as a one-value enum
             allow_parameters_json_schema: Whether a tool whose parameters root Vertex cannot take as `parameters`
                 goes as `parametersJsonSchema`
 
@@ -1415,6 +1490,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             _with_namespace_members_inlined(schema_value, outside_declarations),
             allow_parameters_json_schema,
             _function_names_forced_by(tool_choice, [*_listed(schema_value), *_listed(outside_declarations)]),
+            pin_consts,
         )
         remove_additional_properties(schema_value)
         # remove 'strict' from tools
@@ -1434,7 +1510,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     and isinstance(_openai_function_object["parameters"], dict)
                 ):  # OPENAI accepts JSON Schema, Google accepts OpenAPI schema.
                     _openai_function_object["parameters"] = build_vertex_schema(
-                        _openai_function_object["parameters"], send_integer_enums=send_integer_enums
+                        _openai_function_object["parameters"],
+                        send_integer_enums=send_integer_enums,
+                        pin_consts=pin_consts,
                     )
 
                 openai_function_object = _openai_function_object
@@ -1587,23 +1665,39 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     ) -> list[Tools]:  # mutable-ok: mirrors override contract
         return self._map_function(value, optional_params, send_integer_enums, allow_parameters_json_schema)
 
-    def _map_response_schema(self, value: dict, send_integer_enums: bool = False) -> Mapping[str, object]:
+    def _map_response_schema(
+        self,
+        value: dict,
+        send_integer_enums: bool = False,
+        pin_consts: bool = True,
+    ) -> Mapping[str, object]:
         old_schema = deepcopy(value)
         if isinstance(old_schema, list):
             for item in old_schema:
                 if isinstance(item, dict):
                     item = build_vertex_schema(
-                        parameters=item, add_property_ordering=True, send_integer_enums=send_integer_enums
+                        parameters=item,
+                        add_property_ordering=True,
+                        send_integer_enums=send_integer_enums,
+                        pin_consts=pin_consts,
                     )
 
         elif isinstance(old_schema, dict):
             old_schema = build_vertex_schema(
-                parameters=old_schema, add_property_ordering=True, send_integer_enums=send_integer_enums
+                parameters=old_schema,
+                add_property_ordering=True,
+                send_integer_enums=send_integer_enums,
+                pin_consts=pin_consts,
             )
         return old_schema
 
     def apply_response_schema_transformation(
-        self, value: dict, optional_params: dict, model: str, allow_integer_enums: bool = True
+        self,
+        value: dict,
+        optional_params: dict,
+        model: str,
+        allow_integer_enums: bool = True,
+        pin_consts: bool = True,
     ):
         new_value = deepcopy(value)
         # remove 'strict' from json schema (not supported by Gemini)
@@ -1640,15 +1734,20 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 # - Standard JSON Schema format (lowercase types)
                 # - Supports additionalProperties
                 # - No propertyOrdering needed
-                optional_params["response_json_schema"] = build_json_schema(deepcopy(schema))
+                json_schema: Final[Mapping[str, object]] = schema
+                optional_params["response_json_schema"] = with_pins_that_fit(
+                    partial(build_json_schema, json_schema),
+                    pin_consts and has_const(cast(JsonValue, schema)),  # cast-ok: response schemas are JSON
+                )
             else:
                 # Use responseSchema (default, backwards compatible)
                 # - OpenAPI-style format (uppercase types)
                 # - No additionalProperties support
                 # - Requires propertyOrdering
-                optional_params["response_schema"] = with_integer_enums_that_fit(
+                optional_params["response_schema"] = with_enums_that_fit(
                     partial(self._map_response_schema, schema),
                     allow_integer_enums and self._is_gemini_3_or_newer(model),
+                    pin_consts and has_const(cast(JsonValue, schema)),  # cast-ok: response schemas are JSON
                 )
 
     @property
@@ -2042,6 +2141,54 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         )
         return {"includeThoughts": VertexGeminiConfig._include_thoughts(thinking_config.get("includeThoughts"))}
 
+    def _tools_builder(
+        self,
+        param: str,
+        request_params: Mapping[str, object],
+        optional_params: dict[str, object],  # mutable-ok: _map_function adds toolConfig to the request's params
+        allow_parameters_json_schema: bool,
+    ) -> Callable[[bool, bool], Sequence[Tools]]:
+        return partial(
+            self._build_function_tools,
+            cast(list[dict], request_params[param]),  # cast-ok: the caller checked it is a non-empty tools list
+            optional_params,
+            allow_parameters_json_schema=allow_parameters_json_schema,
+            outside_declarations=cast(  # cast-ok: tools are JSON request data
+                JsonValue, request_params.get("functions" if param == "tools" else "tools")
+            ),
+            tool_choice=_TOOL_CHOICE_PARAM.validate_python(request_params).get("tool_choice"),
+        )
+
+    def _schema_pins_fit(
+        self,
+        request_params: Mapping[str, object],
+        model: str,
+        allow_integer_enums: bool,
+        allow_parameters_json_schema: bool,
+    ) -> bool:
+        tool_params: Final = tuple(
+            param
+            for param in ("tools", "functions")
+            if isinstance(listed := request_params.get(param), list) and listed
+        )
+        response_format: Final = request_params.get("response_format")
+        schema_parts: Final = [request_params.get(param) for param in (*tool_params, "response_format")]
+        if not tool_params or not isinstance(response_format, dict):
+            return True
+        if not has_const(cast(JsonValue, schema_parts)):  # cast-ok: tools and response formats are JSON request data
+            return True
+        response_params: Final[dict[str, object]] = {}  # mutable-ok: the transformation writes the schema into it
+        self.apply_response_schema_transformation(response_format, response_params, model, allow_integer_enums)
+        tools: Final = [
+            with_enums_that_fit(
+                self._tools_builder(param, request_params, {}, allow_parameters_json_schema),
+                allow_integer_enums and self._is_gemini_3_or_newer(model),
+                has_const(cast(JsonValue, request_params[param])),  # cast-ok: tools are JSON request data
+            )
+            for param in tool_params
+        ]
+        return enums_fit(cast(JsonValue, [response_params, tools]))  # cast-ok: built tools and schemas are JSON
+
     def map_openai_params(
         self,
         non_default_params: dict,
@@ -2059,6 +2206,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         self._apply_include_server_side_tool_invocations(request_params, optional_params)
         supports_sampling_params: Final = self.supports_sampling_params(model)
         drops_logprobs: Final = self._drops_logprobs(model, drop_params, allowed_openai_params)
+        typed_request_params: Final = _REQUEST_PARAMS.validate_python(request_params)
+        pins_fit: Final = self._schema_pins_fit(
+            typed_request_params, model, allow_integer_enums, allow_parameters_json_schema
+        )
         for param, value in request_params.items():
             if param in ("temperature", "top_p", "top_k") and not supports_sampling_params:
                 continue
@@ -2098,7 +2249,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 optional_params["max_output_tokens"] = value
             elif param == "response_format" and isinstance(value, dict):
                 self.apply_response_schema_transformation(
-                    value=value, optional_params=optional_params, model=model, allow_integer_enums=allow_integer_enums
+                    value=value,
+                    optional_params=optional_params,
+                    model=model,
+                    allow_integer_enums=allow_integer_enums,
+                    pin_consts=pins_fit,
                 )
             elif param == "frequency_penalty":
                 if self._supports_penalty_parameters(model):
@@ -2112,18 +2267,12 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 optional_params["logprobs"] = value
             elif (param == "tools" or param == "functions") and isinstance(value, list) and value:
                 # Pass optional_params so _map_function can add toolConfig if needed
-                mapped_tools = with_integer_enums_that_fit(
-                    partial(
-                        self._map_function,
-                        value,
-                        optional_params,
-                        allow_parameters_json_schema=allow_parameters_json_schema,
-                        outside_declarations=request_params.get("functions" if param == "tools" else "tools"),
-                        tool_choice=_TOOL_CHOICE_PARAM.validate_python(request_params).get("tool_choice"),
-                    ),
+                mapped_tools = with_enums_that_fit(
+                    self._tools_builder(param, typed_request_params, optional_params, allow_parameters_json_schema),
                     allow_integer_enums and self._is_gemini_3_or_newer(model),
+                    pins_fit and has_const(cast(JsonValue, value)),  # cast-ok: tools are JSON request data
                 )
-                optional_params = self._add_tools_to_optional_params(optional_params, mapped_tools)
+                optional_params = self._add_tools_to_optional_params(optional_params, list(mapped_tools))
             elif param == "tool_choice" and (isinstance(value, str) or isinstance(value, dict)):
                 _tool_choice_value = self.map_tool_choice_values(
                     model=model,
@@ -2185,7 +2334,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 _tools = self._map_web_search_options(value)
                 optional_params = self._add_tools_to_optional_params(optional_params, [_tools])
             elif param == "service_tier" and isinstance(value, str):
-                self._map_service_tier_param(value, optional_params)
+                self._map_service_tier_param(value, optional_params, drop_params)
             elif param == "include_server_side_tool_invocations" and value is True:
                 optional_params["include_server_side_tool_invocations"] = True
         if litellm.vertex_ai_safety_settings is not None:
@@ -3510,13 +3659,13 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 model_response.hidden_params.setdefault("provider_specific_fields", {})["traffic_type"] = traffic_type
 
             ## ADD SERVICE TIER ##
-            if getattr(raw_response, "headers", None):
-                service_tier: Final = _response_header(raw_response.headers, "x-gemini-service-tier")
-                if service_tier:
-                    if service_tier.lower() == "standard":
-                        setattr(model_response, "service_tier", "default")
-                    else:
-                        setattr(model_response, "service_tier", service_tier.lower())
+            response_headers: Final = getattr(raw_response, "headers", None)
+            service_tier: Final = _response_service_tier(
+                _response_header(response_headers, "x-gemini-service-tier") if response_headers else None,
+                traffic_type,
+            )
+            if service_tier:
+                setattr(model_response, "service_tier", service_tier)
 
         except Exception as e:
             raise VertexAIError(
@@ -3590,9 +3739,18 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             default_headers.update(api_key)
         elif api_key is not None:
             default_headers["Authorization"] = f"Bearer {api_key}"
-        if headers is not None:
-            default_headers.update(headers)
 
+        optional_fields: Final[Mapping[str, object]] = cast(Mapping[str, object], optional_params)  # cast-ok: bare dict
+        litellm_fields: Final[Mapping[str, object]] = cast(Mapping[str, object], litellm_params)  # cast-ok: bare dict
+        caller_headers: Final[Mapping[str, str]] = cast(Mapping[str, str], headers or {})  # cast-ok: bare dict
+        service_tier: Final = optional_fields.get("service_tier")
+        is_vertex: Final = litellm_fields.get("custom_llm_provider") != litellm.LlmProviders.GEMINI
+        if is_vertex and isinstance(service_tier, str) and service_tier in VERTEX_SHARED_REQUEST_TIERS:
+            caller_header_names: Final = frozenset(name.lower() for name in caller_headers)
+            if "x-vertex-ai-llm-shared-request-type" not in caller_header_names:
+                default_headers["X-Vertex-AI-LLM-Shared-Request-Type"] = service_tier
+
+        default_headers.update(caller_headers)
         return default_headers
 
 
@@ -4517,12 +4675,9 @@ class ModelResponseIterator:
         if traffic_type:
             model_response.hidden_params.setdefault("provider_specific_fields", {})["traffic_type"] = traffic_type
 
-        service_tier: Final = self.response_headers.get("x-gemini-service-tier")
+        service_tier: Final = _response_service_tier(self.response_headers.get("x-gemini-service-tier"), traffic_type)
         if service_tier:
-            if service_tier.lower() == "standard":
-                setattr(model_response, "service_tier", "default")
-            else:
-                setattr(model_response, "service_tier", service_tier.lower())
+            setattr(model_response, "service_tier", service_tier)
 
         return usage
 

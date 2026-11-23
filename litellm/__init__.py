@@ -685,6 +685,7 @@ nadir_models: Set = set()
 galadriel_models: Set = set()
 nvidia_nim_models: Set = set()
 nvidia_riva_models: Set = set()
+gnani_models: Final[set[str]] = set()  # mutable-ok: price reloads add keys to this registry in place
 soniox_models: Set = set()
 sambanova_models: Set = set()
 scaledown_models: Final[Set[str]] = set()  # Price reloads update this registry through existing references.
@@ -700,6 +701,7 @@ nebius_embedding_models: Set = set()
 aiml_models: Set = set()
 deepgram_models: Set = set()
 elevenlabs_models: Set = set()
+gradium_models: Final[set[str]] = set()  # mutable-ok: filled from the cost map at import time
 dashscope_models: Set = set()
 qwencloud_models: Set = set()
 qwen_ai_platform_models: Set = set()
@@ -956,6 +958,8 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             nvidia_nim_models.add(key)
         elif value.get("litellm_provider") == "nvidia_riva":
             nvidia_riva_models.add(key)
+        elif value.get("litellm_provider") == "gnani":
+            gnani_models.add(key)
         elif value.get("litellm_provider") == "soniox":
             soniox_models.add(key)
         elif value.get("litellm_provider") == "sambanova":
@@ -986,6 +990,8 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             deepgram_models.add(key)
         elif value.get("litellm_provider") == "elevenlabs":
             elevenlabs_models.add(key)
+        elif value.get("litellm_provider") == "gradium":
+            gradium_models.add(key)
         elif value.get("litellm_provider") == "heroku":
             heroku_models.add(key)
         elif value.get("litellm_provider") == "dashscope":
@@ -1172,6 +1178,7 @@ model_list = list(
     | galadriel_models
     | nvidia_nim_models
     | nvidia_riva_models
+    | gnani_models
     | soniox_models
     | sambanova_models
     | scaledown_models
@@ -1186,6 +1193,7 @@ model_list = list(
     | nscale_models
     | deepgram_models
     | elevenlabs_models
+    | gradium_models
     | dashscope_models
     | qwencloud_models
     | qwen_ai_platform_models
@@ -1303,6 +1311,7 @@ def _build_models_by_provider() -> dict[str, Collection[str]]:
         "galadriel": galadriel_models,
         "nvidia_nim": nvidia_nim_models,
         "nvidia_riva": nvidia_riva_models,
+        "gnani": gnani_models,
         "soniox": soniox_models,
         "sambanova": sambanova_models | sambanova_embedding_models,
         "scaledown": scaledown_models,
@@ -1318,6 +1327,7 @@ def _build_models_by_provider() -> dict[str, Collection[str]]:
         "featherless_ai": featherless_ai_models,
         "deepgram": deepgram_models,
         "elevenlabs": elevenlabs_models,
+        "gradium": gradium_models,
         "heroku": heroku_models,
         "dashscope": dashscope_models,
         "qwencloud": qwencloud_models,
