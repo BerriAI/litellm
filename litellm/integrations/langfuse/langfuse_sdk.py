@@ -898,18 +898,16 @@ class _MediaExtractingExporter(SpanExporter):
         if field is None or not isinstance(value, str):
             return None
         serialized, found = extract_media(value)
-        accepted: Final = tuple(
-            self.uploader.submit(
-                MediaUpload(
-                    media=media,
-                    trace_id=trace_id,
-                    observation_id=None if _in_group(key, _TRACE_LEVEL_KEYS) else observation_id,
-                    field=field,
-                )
+        uploads: Final = tuple(
+            MediaUpload(
+                media=media,
+                trace_id=trace_id,
+                observation_id=None if _in_group(key, _TRACE_LEVEL_KEYS) else observation_id,
+                field=field,
             )
             for media in found
         )
-        return serialized if accepted and all(accepted) else None
+        return serialized if uploads and self.uploader.submit(uploads) else None
 
     def shutdown(self) -> None:
         self.exporter.shutdown()
@@ -920,12 +918,16 @@ class _MediaExtractingExporter(SpanExporter):
         return self.exporter.force_flush(timeout_millis)
 
 
-def _build_media_uploader(*, public_key: str, secret_key: str, base_url: str) -> MediaUploader:
-    """Uploads go through litellm's HTTP handler, as v2's did, with the export channel's timeout and retry delays."""
+def _build_media_uploader(*, public_key: str, secret_key: str, base_url: str, tenant_host: bool) -> MediaUploader:
+    """Uploads go through litellm's HTTP client, as v2's did, with the export channel's timeout and retry delays.
+
+    A host the operator configured is trusted to name its own storage; one that came with a key's or team's
+    credentials has its upload URLs validated like any other caller-supplied URL."""
     handler: Final = get_httpx_client()
     return MediaUploader(
         api=_rest_api(public_key=public_key, secret_key=secret_key, base_url=base_url, httpx_client=handler.client),
         client=handler.client,
+        validate_upload_url=tenant_host,
         timeout=configured_timeout(),
         delays=tuple(2.0 ** min(attempt, _MAX_BACKOFF_EXPONENT) for attempt in range(configured_max_retries())),
     )
@@ -972,6 +974,7 @@ class _TracingKey:
     flush_at: int
     flush_interval_millis: int
     mock_mode: bool
+    tenant_host: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -994,6 +997,7 @@ def acquire_langfuse_tracing(
     release: str | None,
     flush_interval: float,
     mock_mode: bool,
+    tenant_host: bool = False,
 ) -> LangfuseTracing:
     """One export channel per credential set, shared by every logger built for it.
 
@@ -1012,6 +1016,7 @@ def acquire_langfuse_tracing(
         flush_at=configured_flush_at(),
         flush_interval_millis=int(flush_interval * 1000),
         mock_mode=mock_mode,
+        tenant_host=tenant_host,
     )
     with _TRACING_LOCK:
         cached: Final = _TRACING.get(key)
@@ -1026,7 +1031,9 @@ def acquire_langfuse_tracing(
             else _build_span_exporter(public_key=public_key, secret_key=secret_key, base_url=base_url),
             uploader=None
             if mock_mode
-            else _build_media_uploader(public_key=public_key, secret_key=secret_key, base_url=base_url),
+            else _build_media_uploader(
+                public_key=public_key, secret_key=secret_key, base_url=base_url, tenant_host=tenant_host
+            ),
             environment=environment,
             release=release,
             sample_rate=key.sample_rate,

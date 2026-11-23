@@ -11,6 +11,7 @@ import threading
 import time
 import uuid
 from base64 import b64encode
+from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
 from time import monotonic, sleep
 from types import MappingProxyType, SimpleNamespace
@@ -1795,8 +1796,8 @@ class _RecordingUploader:
         self.failed_uploads = 0
         self.calls: list[str] = []
 
-    def submit(self, upload: MediaUpload) -> bool:
-        self.uploads.append(upload)
+    def submit(self, uploads: Sequence[MediaUpload]) -> bool:
+        self.uploads.extend(uploads if self.accepts else ())
         return self.accepts
 
     def drain(self, timeout_millis: int) -> bool:
@@ -1947,6 +1948,27 @@ def test_retiring_the_channel_lets_queued_uploads_finish_before_the_uploader_sto
 
     assert exporter.shutdowns == 1
     assert uploader.calls == ["drain", "shutdown"]
+
+
+def test_a_host_from_request_credentials_gets_its_own_channel_whose_upload_urls_are_validated(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    built: list[bool] = []
+
+    def record(*, tenant_host: bool, **_: object) -> _RecordingUploader:
+        built.append(tenant_host)
+        return _RecordingUploader()
+
+    monkeypatch.setattr(
+        "litellm.integrations.langfuse.langfuse_sdk._build_span_exporter", lambda **_: _RecordsShutdown()
+    )
+    monkeypatch.setattr("litellm.integrations.langfuse.langfuse_sdk._build_media_uploader", record)
+
+    operator = _acquire(public_key="pk-media-tenant-test", mock_mode=False, flush_interval=600.0)
+    tenant = _acquire(public_key="pk-media-tenant-test", mock_mode=False, flush_interval=600.0, tenant_host=True)
+
+    assert operator is not tenant
+    assert built == [False, True]
 
 
 def test_mock_mode_builds_no_media_uploader(monkeypatch: pytest.MonkeyPatch):

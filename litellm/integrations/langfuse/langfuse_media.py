@@ -21,6 +21,7 @@ from langfuse.api.core.api_error import ApiError
 from pydantic import JsonValue, TypeAdapter
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.url_utils import SSRFError, validate_url
 
 __all__ = ("Media", "MediaField", "MediaUpload", "MediaUploader", "extract_media")
 
@@ -141,6 +142,19 @@ def _retryable_status(status: int) -> bool:
     return status in (408, 429) or status >= 500
 
 
+def _storage_headers(upload_url: str, host: str, media: Media) -> Mapping[str, str]:
+    """Google Cloud Storage rejects the S3 checksum and Azure blob headers, so its URLs get the content type only."""
+    return {
+        "Content-Type": media.content_type.value,
+        **(
+            {}
+            if "storage.googleapis.com" in upload_url
+            else {"x-ms-blob-type": "BlockBlob", "x-amz-checksum-sha256": media.sha256_hash}
+        ),
+        **({"Host": host} if host else {}),
+    }
+
+
 class MediaUploader:
     """Uploads queued media to Langfuse on one daemon thread, so storage latency never holds up span export."""
 
@@ -151,12 +165,14 @@ class MediaUploader:
         client: httpx.Client,
         timeout: float,
         delays: Sequence[float],
+        validate_upload_url: bool = False,
         max_queued_bytes: int = _MAX_QUEUED_BYTES,
     ) -> None:
         self._api: Final = api
         self._client: Final = client
         self._timeout: Final = timeout
         self._delays: Final = tuple(delays)
+        self._validate_upload_url: Final = validate_upload_url
         self._max_queued_bytes: Final = max_queued_bytes
         self._queue: Final[Queue[MediaUpload]] = Queue()
         self._lock: Final = threading.Lock()
@@ -165,14 +181,16 @@ class MediaUploader:
         self.failed_uploads = 0
         threading.Thread(target=self._run, name="langfuse-media-upload", daemon=True).start()
 
-    def submit(self, upload: MediaUpload) -> bool:
-        """``False`` when the payload does not fit next to the ones still waiting, so the caller keeps it inline."""
-        size: Final = len(upload.media.content)
+    def submit(self, uploads: Sequence[MediaUpload]) -> bool:
+        """All of ``uploads`` or none: ``False`` when they do not fit next to the payloads still waiting, so the
+        caller keeps them inline."""
+        size: Final = sum(len(upload.media.content) for upload in uploads)
         with self._lock:
             if self._queued_bytes + size > self._max_queued_bytes:
                 return False
             self._queued_bytes += size
-        self._queue.put_nowait(upload)
+        for upload in uploads:
+            self._queue.put_nowait(upload)
         return True
 
     def drain(self, timeout_millis: int) -> bool:
@@ -220,8 +238,9 @@ class MediaUploader:
     def _upload(self, upload: MediaUpload) -> str | None:
         """Registers the media with its trace; Langfuse returns an upload URL only for content it does not hold yet.
 
-        Langfuse is told the storage status but never the storage response body, so a storage URL pointing
-        somewhere else cannot be read back through the Langfuse host.
+        The upload URL is as trusted as the host that returned it. For a Langfuse host that came with the request
+        credentials it goes through ``validate_url``, the PUT never follows a redirect, and Langfuse is told the
+        storage status but never the storage response body.
         """
         media: Final = upload.media
         registered: Final = self._api.media.get_upload_url(
@@ -234,8 +253,14 @@ class MediaUploader:
         )
         if not registered.upload_url:
             return None
+        try:
+            url, host = (
+                validate_url(registered.upload_url) if self._validate_upload_url else (registered.upload_url, "")
+            )
+        except SSRFError as error:
+            return f"its upload URL was refused: {error}"
         started: Final = monotonic()
-        response: Final = self._put(registered.upload_url, media)
+        response: Final = self._put(url, _storage_headers(registered.upload_url, host, media), media)
         if response is None:
             return "the media storage was not reached"
         self._api.media.patch(
@@ -247,26 +272,20 @@ class MediaUploader:
         )
         return None if response.is_success else f"the media storage refused it with HTTP {response.status_code}"
 
-    def _put(self, url: str, media: Media) -> httpx.Response | None:
+    def _put(self, url: str, headers: Mapping[str, str], media: Media) -> httpx.Response | None:
         """The storage response, re-sent after each delay on a transport failure or a retryable status; ``None``
         when the storage was never reached."""
         for delay in self._delays:
-            response: httpx.Response | None = self._put_once(url, media)
+            response: httpx.Response | None = self._put_once(url, headers, media)
             if response is not None and not _retryable_status(response.status_code):
                 return response
             sleep(delay)
-        return self._put_once(url, media)
+        return self._put_once(url, headers, media)
 
-    def _put_once(self, url: str, media: Media) -> httpx.Response | None:
-        """Google Cloud Storage rejects the S3 checksum and Azure blob headers, so its URLs get the content type only."""
-        headers: Final = {"Content-Type": media.content_type.value} | (
-            {}
-            if "storage.googleapis.com" in url
-            else {"x-ms-blob-type": "BlockBlob", "x-amz-checksum-sha256": media.sha256_hash}
-        )
+    def _put_once(self, url: str, headers: Mapping[str, str], media: Media) -> httpx.Response | None:
         try:
             return self._client.put(
-                url, content=media.content, headers=headers, timeout=self._timeout, follow_redirects=False
+                url, content=media.content, headers=dict(headers), timeout=self._timeout, follow_redirects=False
             )
         except httpx.TransportError as error:
             verbose_logger.warning("Langfuse media %s upload raised %s", media.media_id, error)

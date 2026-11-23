@@ -152,7 +152,13 @@ def _upload(field: MediaField = "input", observation_id: str | None = OBSERVATIO
     )
 
 
-def _uploader(transport: Transport, *, delays: Sequence[float] = (), max_queued_bytes: int = 1_000) -> MediaUploader:
+def _uploader(
+    transport: Transport,
+    *,
+    delays: Sequence[float] = (),
+    max_queued_bytes: int = 1_000,
+    validate_upload_url: bool = False,
+) -> MediaUploader:
     client: Final = httpx.Client(transport=httpx.MockTransport(transport))
     return MediaUploader(
         api=LangfuseAPI(base_url="https://langfuse.example", username="pk", password="sk", httpx_client=client),
@@ -160,6 +166,7 @@ def _uploader(transport: Transport, *, delays: Sequence[float] = (), max_queued_
         timeout=5.0,
         delays=delays,
         max_queued_bytes=max_queued_bytes,
+        validate_upload_url=validate_upload_url,
     )
 
 
@@ -186,7 +193,7 @@ def test_new_media_is_registered_with_its_trace_put_to_storage_and_confirmed():
     requests: list[httpx.Request] = []
     uploader = _uploader(_langfuse(requests))
 
-    assert uploader.submit(_upload()) is True
+    assert uploader.submit((_upload(),)) is True
 
     assert uploader.drain(5_000) is True
     assert uploader.failed_uploads == 0
@@ -215,7 +222,7 @@ def test_media_langfuse_already_holds_is_linked_to_the_trace_without_a_second_up
     uploader = _uploader(_langfuse(requests, upload_url=None))
 
     with caplog.at_level(logging.WARNING, logger="LiteLLM"):
-        uploader.submit(_upload(field="metadata"))
+        uploader.submit((_upload(field="metadata"),))
         assert uploader.drain(5_000) is True
 
     assert caplog.text == ""
@@ -227,7 +234,7 @@ def test_trace_level_media_is_registered_without_an_observation():
     requests: list[httpx.Request] = []
     uploader = _uploader(_langfuse(requests, upload_url=None))
 
-    uploader.submit(_upload(observation_id=None))
+    uploader.submit((_upload(observation_id=None),))
 
     assert uploader.drain(5_000) is True
     registered = json.loads(requests[0].content)
@@ -239,7 +246,7 @@ def test_google_cloud_storage_upload_leaves_out_the_s3_and_azure_headers():
     requests: list[httpx.Request] = []
     uploader = _uploader(_langfuse(requests, upload_url="https://storage.googleapis.com/bucket/hello?sig=1"))
 
-    uploader.submit(_upload())
+    uploader.submit((_upload(),))
 
     assert uploader.drain(5_000) is True
     put = requests[1]
@@ -251,7 +258,7 @@ def test_a_storage_outage_is_retried_and_the_final_status_is_what_langfuse_is_to
     requests: list[httpx.Request] = []
     uploader = _uploader(_langfuse(requests, storage=(httpx.Response(503), httpx.Response(200))), delays=(0.0,))
 
-    uploader.submit(_upload())
+    uploader.submit((_upload(),))
 
     assert uploader.drain(5_000) is True
     assert [request.method for request in requests] == ["POST", "PUT", "PUT", "PATCH"]
@@ -266,7 +273,7 @@ def test_a_refused_upload_is_reported_to_langfuse_by_status_only_and_logged(capl
     uploader = _uploader(_langfuse(requests, storage=(refusal,)), delays=(0.0,))
 
     with caplog.at_level(logging.WARNING, logger="LiteLLM"):
-        uploader.submit(_upload())
+        uploader.submit((_upload(),))
         assert uploader.drain(5_000) is True
 
     assert [request.method for request in requests] == ["POST", "PUT", "PATCH"]
@@ -282,7 +289,7 @@ def test_a_storage_redirect_is_not_followed():
     redirect = httpx.Response(307, headers={"location": "http://169.254.169.254/latest/meta-data"})
     uploader = _uploader(_langfuse(requests, storage=(redirect,)))
 
-    uploader.submit(_upload())
+    uploader.submit((_upload(),))
 
     assert uploader.drain(5_000) is True
     assert [(request.method, request.url.host) for request in requests] == [
@@ -292,6 +299,37 @@ def test_a_storage_redirect_is_not_followed():
     ]
     assert json.loads(requests[-1].content)["uploadHttpStatus"] == 307
     assert uploader.failed_uploads == 1
+
+
+@pytest.mark.parametrize(
+    "upload_url", ["http://169.254.169.254/latest/meta-data", "http://127.0.0.1:8080/admin", "file:///etc/passwd"]
+)
+def test_a_host_from_request_credentials_cannot_send_the_upload_to_an_internal_address(upload_url: str, caplog):
+    requests: list[httpx.Request] = []
+    uploader = _uploader(_langfuse(requests, upload_url=upload_url), validate_upload_url=True)
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        uploader.submit((_upload(),))
+        assert uploader.drain(5_000) is True
+
+    assert [(request.method, request.url.host) for request in requests] == [("POST", "langfuse.example")]
+    assert "its upload URL was refused" in caplog.text
+    assert uploader.failed_uploads == 1
+
+
+def test_an_operator_configured_host_may_keep_its_storage_on_an_internal_address():
+    requests: list[httpx.Request] = []
+    uploader = _uploader(_langfuse(requests, upload_url="http://127.0.0.1:9000/bucket/hello"))
+
+    uploader.submit((_upload(),))
+
+    assert uploader.drain(5_000) is True
+    assert [(request.method, request.url.host) for request in requests] == [
+        ("POST", "langfuse.example"),
+        ("PUT", "127.0.0.1"),
+        ("PATCH", "langfuse.example"),
+    ]
+    assert uploader.failed_uploads == 0
 
 
 def test_storage_that_is_never_reached_is_not_reported_as_uploaded(caplog):
@@ -307,7 +345,7 @@ def test_storage_that_is_never_reached_is_not_reported_as_uploaded(caplog):
     uploader = _uploader(transport, delays=(0.0,))
 
     with caplog.at_level(logging.WARNING, logger="LiteLLM"):
-        uploader.submit(_upload())
+        uploader.submit((_upload(),))
         assert uploader.drain(5_000) is True
 
     assert [request.method for request in requests] == ["POST", "PUT", "PUT"]
@@ -328,8 +366,8 @@ def test_a_failed_registration_is_logged_without_its_headers_and_the_next_upload
     uploader = _uploader(transport)
 
     with caplog.at_level(logging.WARNING, logger="LiteLLM"):
-        uploader.submit(_upload())
-        uploader.submit(_upload())
+        uploader.submit((_upload(),))
+        uploader.submit((_upload(),))
         assert uploader.drain(5_000) is True
 
     assert [request.method for request in requests] == ["POST", "PUT", "PATCH"]
@@ -350,7 +388,7 @@ def _blocked_uploader(release: threading.Event, started: threading.Event, **limi
 def test_drain_reports_uploads_still_running_at_the_deadline():
     release, started = threading.Event(), threading.Event()
     uploader = _blocked_uploader(release, started)
-    uploader.submit(_upload())
+    uploader.submit((_upload(),))
     assert started.wait(5)
 
     assert uploader.drain(50) is False
@@ -358,18 +396,31 @@ def test_drain_reports_uploads_still_running_at_the_deadline():
     assert uploader.drain(5_000) is True
 
 
+def test_a_group_that_does_not_fit_as_a_whole_queues_none_of_its_uploads():
+    requests: list[httpx.Request] = []
+    uploader = _uploader(_langfuse(requests, upload_url=None), max_queued_bytes=9)
+
+    assert uploader.submit((_upload(), _upload())) is False
+
+    assert uploader.drain(5_000) is True
+    assert requests == []
+    assert uploader.submit((_upload(),)) is True
+    assert uploader.drain(5_000) is True
+    assert len(requests) == 1
+
+
 def test_media_that_does_not_fit_next_to_the_waiting_uploads_is_turned_away_until_they_finish():
     """Each waiting upload holds its decoded payload, so the bytes are what is capped."""
     release, started = threading.Event(), threading.Event()
     uploader = _blocked_uploader(release, started, max_queued_bytes=5)
-    assert uploader.submit(_upload()) is True
+    assert uploader.submit((_upload(),)) is True
     assert started.wait(5)
 
-    assert uploader.submit(_upload()) is False
+    assert uploader.submit((_upload(),)) is False
 
     release.set()
     assert uploader.drain(5_000) is True
-    assert uploader.submit(_upload()) is True
+    assert uploader.submit((_upload(),)) is True
     assert uploader.drain(5_000) is True
 
 
@@ -380,7 +431,7 @@ def test_shutdown_ends_the_upload_thread_after_the_queued_uploads():
     thread = next(thread for thread in threading.enumerate() if thread.ident not in before)
     assert (thread.name, thread.daemon) == ("langfuse-media-upload", True)
 
-    uploader.submit(_upload())
+    uploader.submit((_upload(),))
     uploader.shutdown()
 
     deadline = monotonic() + 5
