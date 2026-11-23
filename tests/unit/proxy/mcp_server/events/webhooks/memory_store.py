@@ -41,9 +41,7 @@ class MemoryStore:
         return True
 
     async def discard_pending(self, subscription_id: str, generation: str | None = None) -> None:
-        current: Final = self.rows.get(subscription_id)
-        if current is not None and current.status == "pending" and generation in (None, current.generation):
-            self.rows.pop(subscription_id)
+        await self.delete_held(subscription_id, None, generation)
 
     def _update_live(self, subscription_id: str, **fields: object) -> bool:  # noqa: ANN003  # test double mirrors a guarded UPDATE
         current: Final = self.rows.get(subscription_id)
