@@ -62,7 +62,7 @@ def test_resolution_picks_the_longest_matching_prefix() -> None:
 def test_webhook_is_offered_only_with_a_public_url_and_an_authenticated_caller(
     settings: EventsSettings, caller: UserAPIKeyAuth, modes: tuple[str, ...]
 ) -> None:
-    assert offered_modes(BUILD_FAILED, settings, context(caller)) == modes
+    assert offered_modes(BUILD_FAILED, server(), settings, context(caller)) == modes
 
 
 @pytest.mark.asyncio
@@ -164,3 +164,13 @@ async def test_a_rate_limited_server_is_not_asked_for_its_catalog() -> None:
         runtime((server(),), rate_limited=True), list_upstream=listing, descriptor_cache=DescriptorCache()
     )
     assert (await list_events(context(), SETTINGS, limited), asked) == ((), [])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scoped", (True, False))
+async def test_catalog_omits_webhook_when_subscription_authority_cannot_be_reloaded(scoped: bool) -> None:
+    caller: Final = CALLER.model_copy(update={"end_user_id": "request-user"}) if scoped else CALLER
+    upstream: Final = server().model_copy(update={"available_on_public_internet": scoped})
+    webhook_only: Final = EventType(name="webhook.only", delivery=("webhook",))
+    events: Final = await list_events(context(caller), SETTINGS, runtime((upstream,), (BUILD_FAILED, webhook_only)))
+    assert [(item.name, item.delivery) for item in events] == [("ci-build.failed", ("poll", "push"))]
