@@ -260,9 +260,8 @@ async def _retire_if_moved(
     """A row for a server the name no longer resolves to is ended there, so the new server starts fresh."""
     if row is None or row.status == "terminated" or row.server_id == prepared.resolved.target.server.server_id:
         return row
-    await store.terminate(row.id)
-    await store.drop_deliveries(row.id)
-    await end_upstream(row, settings, runtime)
+    if await store.end_if_current(row.id, row.upstream_subscription_id, row.generation):
+        await end_upstream(row, settings, runtime)
     return row.model_copy(update={"status": "terminated"})
 
 
