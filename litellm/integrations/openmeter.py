@@ -53,12 +53,14 @@ class OpenMeterLogger(CustomLogger):
 
         in the environment
         """
-        missing_keys: Final = [key for key in ("OPENMETER_API_KEY",) if os.getenv(key, None) is None]
+        missing_keys: Final = []
+        if os.getenv("OPENMETER_API_KEY", None) is None:
+            missing_keys.append("OPENMETER_API_KEY")
 
         if len(missing_keys) > 0:
             raise Exception(f"Missing keys={missing_keys} in environment.")
 
-    def _common_logic(self, kwargs: Mapping[str, object], response_obj: _SupportsGet):
+    def _common_logic(self, kwargs: Mapping[str, object], response_obj):
         call_id: Final = response_obj.get("id", kwargs.get("litellm_call_id"))
         dt: Final = get_utc_datetime().isoformat()
         cost: Final = kwargs.get("response_cost", None)
@@ -107,9 +109,7 @@ class OpenMeterLogger(CustomLogger):
             "data": {"model": model, "cost": cost, **usage},
         }
 
-    def log_success_event(
-        self, kwargs: Mapping[str, object], response_obj: _SupportsGet, start_time: object, end_time: object
-    ):
+    def log_success_event(self, kwargs, response_obj, start_time, end_time):
         _url = os.getenv("OPENMETER_API_ENDPOINT", "https://openmeter.cloud")
         if _url.endswith("/"):
             _url += "api/v1/events"
@@ -135,9 +135,7 @@ class OpenMeterLogger(CustomLogger):
         except Exception as e:
             raise e
 
-    async def async_log_success_event(
-        self, kwargs: Mapping[str, object], response_obj: _SupportsGet, start_time: object, end_time: object
-    ):
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         _url = os.getenv("OPENMETER_API_ENDPOINT", "https://openmeter.cloud")
         if _url.endswith("/"):
             _url += "api/v1/events"
