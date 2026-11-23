@@ -137,7 +137,7 @@ class AzureContentSafetyPromptShieldGuardrail(AzureGuardrailBase, CustomGuardrai
         guardrail_name: str,
         api_key: str,
         api_base: str,
-        **kwargs,
+        **kwargs: object,
     ):
         """Initialize Azure Prompt Shield guardrail handler."""
         # AzureGuardrailBase.__init__ stores api_key, api_base, api_version,

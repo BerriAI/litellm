@@ -319,8 +319,9 @@ def _get_usage_tokens(usage: object) -> tuple[int, int, int]:
 
 
 def _extract_response_usage(response_obj: object) -> object:
-    if isinstance(response_obj, dict):
-        return response_obj.get("usage")
+    response: Final = _as_mutable_mapping(response_obj)
+    if response is not None:
+        return response.get("usage")
     return getattr(response_obj, "usage", None)
 
 
@@ -395,8 +396,12 @@ def _reservation(
 
 
 def _stash_reservation_in_metadata(request: _IoTokenRateLimitRequest | None, reservation: Mapping[str, object]) -> None:
-    metadata: Final = None if request is None or not request.kwargs else request.kwargs.get(request.metadata_channel)
-    if isinstance(metadata, dict):
+    metadata: Final = (
+        None
+        if request is None or not request.kwargs
+        else _as_mutable_mapping(request.kwargs.get(request.metadata_channel))
+    )
+    if metadata is not None:
         metadata.update(reservation)
         metadata[IO_TOKEN_ATTEMPT_KEY] = current_attempt_id()
 
