@@ -5,7 +5,7 @@ use aws_sdk_kms::{
     config::{BehaviorVersion, Region},
     primitives::Blob,
 };
-use litellm_core_utils::settings::Lookup;
+use litellm_env::Lookup;
 use litellm_secrets_types::KeyManagementSettings;
 
 use crate::{Error, auth};

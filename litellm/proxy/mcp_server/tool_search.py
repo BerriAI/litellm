@@ -721,6 +721,7 @@ async def handle_mcp_tool_call(
     guardrail_context: Mapping[str, object] | None = None,
     incoming_bearer_token: SecretStr | None | EllipsisType = ...,
     guardrail_auth: UserAPIKeyAuth | None = None,
+    flatten_url_elicitation: bool = False,
 ) -> CallToolResult:
     from litellm.proxy.mcp_server.operations import (
         _get_allowed_mcp_servers,
@@ -764,5 +765,6 @@ async def handle_mcp_tool_call(
         guardrail_context=guardrail_context,
         guardrail_auth=guardrail_auth,
         incoming_bearer_token=incoming_bearer_token,
+        flatten_url_elicitation=flatten_url_elicitation,
     )
     return complete_call_tool_result(result, WireCompat.LEGACY)

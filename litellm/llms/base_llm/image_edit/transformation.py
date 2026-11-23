@@ -1,6 +1,6 @@
 import types
 from abc import ABC, abstractmethod
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
@@ -51,7 +51,7 @@ class BaseImageEditConfig(ABC):
         }
 
     @abstractmethod
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         pass
 
     @abstractmethod
@@ -60,7 +60,7 @@ class BaseImageEditConfig(ABC):
         image_edit_optional_params: ImageEditOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         pass
 
     @abstractmethod
@@ -69,7 +69,7 @@ class BaseImageEditConfig(ABC):
         headers: dict,
         model: str,
         api_key: str | None = None,
-        litellm_params: dict | None = None,
+        litellm_params: dict[str, object] | None = None,
         api_base: str | None = None,
     ) -> dict:
         return {}
@@ -79,7 +79,7 @@ class BaseImageEditConfig(ABC):
         self,
         model: str,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
     ) -> str:
         """
         OPTIONAL
@@ -97,22 +97,22 @@ class BaseImageEditConfig(ABC):
         self,
         model: str,
         prompt: str | None,
-        image: FileTypes | None,
-        image_edit_optional_request_params: dict,
+        image: FileTypes | Sequence[FileTypes | None] | None,
+        image_edit_optional_request_params: dict[str, object],
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> tuple[dict, RequestFiles]:
+    ) -> tuple[dict[str, object], RequestFiles]:
         pass
 
     async def async_transform_image_edit_request(
         self,
         model: str,
         prompt: str | None,
-        image: FileTypes | None,
+        image: FileTypes | Sequence[FileTypes | None] | None,
         image_edit_optional_request_params: Mapping[str, object],
         litellm_params: GenericLiteLLMParams,
         headers: Mapping[str, str],
-    ) -> tuple[dict, RequestFiles]:
+    ) -> tuple[dict[str, object], RequestFiles]:
         return self.transform_image_edit_request(
             model=model,
             prompt=prompt,
@@ -122,7 +122,7 @@ class BaseImageEditConfig(ABC):
             headers=dict(headers),
         )
 
-    def finalize_image_edit_request_data(self, data: dict, resolved_request_url: str) -> dict:
+    def finalize_image_edit_request_data(self, data: dict[str, object], resolved_request_url: str) -> dict[str, object]:
         """
         Last pass on the request dict after ``transform_image_edit_request``, using the
         exact URL string used for the HTTP POST (same as ``get_complete_url`` output).
@@ -141,6 +141,14 @@ class BaseImageEditConfig(ABC):
     ) -> ImageResponse:
         pass
 
+    def get_request_count(self, model: str, image_edit_optional_request_params: Mapping[str, object]) -> int:
+        """
+        Number of identical upstream requests the handler sends and merges into one response.
+
+        Override for providers that return one image per call, so a caller's `n` still yields `n` images.
+        """
+        return 1
+
     def use_multipart_form_data(self) -> bool:
         """
         Return True if the provider uses multipart/form-data for image edit requests.
@@ -151,7 +159,7 @@ class BaseImageEditConfig(ABC):
         return True
 
     def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
+        self, error_message: str, status_code: int, headers: Union[dict[str, object], httpx.Headers]
     ) -> BaseLLMException:
         from ..chat.transformation import BaseLLMException
 

@@ -677,6 +677,32 @@ def test_responses_web_search_and_image_generation_costs_are_additive(local_mode
     assert combined == pytest.approx(web_search_only + image_only)
 
 
+def test_responses_web_search_and_file_search_costs_are_additive(local_model_cost_map: None) -> None:
+    model: Final = "gpt-4o-search-preview"
+    tools: Final = StandardBuiltInToolsParams(file_search=FileSearchTool(type="file_search"))
+    web_search: Final[dict[str, object]] = {"type": "web_search_call", "id": "ws_1", "status": "completed"}
+    file_search: Final[dict[str, object]] = {
+        "type": "file_search_call",
+        "id": "fs_1",
+        "status": "completed",
+        "queries": ["test"],
+    }
+
+    def tool_cost(*output: dict[str, object]) -> float:
+        return StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+            model=model,
+            response_object=_openai_responses_response(model, list(output)),
+            custom_llm_provider="openai",
+            standard_built_in_tools_params=tools,
+        )
+
+    web_cost: Final = tool_cost(web_search)
+    file_cost: Final = tool_cost(file_search)
+    assert web_cost > 0
+    assert file_cost > 0
+    assert tool_cost(web_search, file_search) == pytest.approx(web_cost + file_cost)
+
+
 def test_responses_incomplete_image_generation_call_not_billed(local_model_cost_map):
     """A failed image_generation_call produced no billable image, so it must cost $0."""
     response = _openai_responses_response(

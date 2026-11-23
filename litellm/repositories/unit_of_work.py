@@ -42,6 +42,37 @@ _KEY_SPEND_RESET_SQL: Final = (
 _USER_SPEND_RESET_SQL: Final = (
     'UPDATE "LiteLLM_UserTable"' + _SPEND_RESET_SET + " WHERE user_id = $1" + _SPEND_RESET_WHERE
 )
+_USER_CREDIT_RESET_SQL: Final = (
+    'UPDATE "LiteLLM_UserTable"'
+    + _SPEND_RESET_SET
+    + ", rollover_credit = CASE WHEN budget_duration IS NOT NULL AND max_budget > 0"
+    " AND rollover_max_budget > max_budget AND rollover_max_budget < 'Infinity'::double precision THEN"
+    " LEAST(rollover_max_budget - max_budget, GREATEST(0, max_budget"
+    " + LEAST(rollover_max_budget - max_budget, GREATEST(0, COALESCE(rollover_credit, 0))) - $6::text::double precision))"
+    " ELSE NULL END WHERE user_id = $1" + _SPEND_RESET_WHERE
+)
+_MEMBER_CREDIT_WINDOW_RESET_SQL: Final = """
+WITH budget AS (
+    UPDATE "LiteLLM_BudgetTable"
+    SET budget_reset_at = $3::timestamp, budget_reset_count = budget_reset_count + 1,
+        updated_at = (NOW() AT TIME ZONE 'UTC')
+    WHERE budget_id = $1 AND budget_reset_at IS NOT DISTINCT FROM $4::timestamp AND budget_duration = $5::text
+    RETURNING budget_id, max_budget,
+        CASE WHEN max_budget > 0 AND rollover_max_budget > max_budget
+            AND rollover_max_budget < 'Infinity'::double precision
+            THEN rollover_max_budget - max_budget END AS credit_room
+)
+UPDATE "LiteLLM_TeamMembership" AS member
+SET rollover_credit = CASE WHEN credit_room IS NOT NULL THEN
+        LEAST(credit_room, GREATEST(0, budget.max_budget
+            + LEAST(credit_room, GREATEST(0, COALESCE(member.rollover_credit, 0))) - member.spend)) END,
+    spend = CASE WHEN $2::boolean AND ABS(budget.max_budget) < 'Infinity'::double precision THEN
+        GREATEST(0, member.spend - budget.max_budget
+            - LEAST(COALESCE(credit_room, 0), GREATEST(0, COALESCE(member.rollover_credit, 0))))
+        ELSE 0 END
+FROM budget
+WHERE member.budget_id = budget.budget_id
+"""
 _TEAM_SPEND_RESET_SQL: Final = (
     'UPDATE "LiteLLM_TeamTable"' + _SPEND_RESET_SET + " WHERE team_id = $1" + _SPEND_RESET_WHERE
 )
@@ -111,6 +142,25 @@ class KeySpendResetWrites:
 class UserSpendResetWrites:
     table: BatchTable
     batch: PrismaBatch
+
+    def queue_credit_reset(
+        self,
+        user_id: str,
+        budget_reset_at: datetime,
+        expected_reset_at: datetime | None,
+        closed_spend: float,
+        spend_decrement: float,
+        spend_after_reset: float,
+    ) -> None:
+        self.batch.execute_raw(
+            _USER_CREDIT_RESET_SQL,
+            user_id,
+            _reset_timestamp(budget_reset_at),
+            repr(spend_decrement),
+            _reset_timestamp(expected_reset_at),
+            str(4 * ulp(spend_decrement) if spend_after_reset == 0.0 else 0.0),
+            repr(closed_spend),
+        )
 
     def queue_spend_reset(
         self,
@@ -188,6 +238,43 @@ class LinkedSpendResetWrites:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class WindowedSpendResetWrites:
+    """End-user and customer team and member pages commit ahead of the window
+    advance, so a failed advance replays them. Each reset stamps the tier window
+    it closes and skips rows already stamped with it: replaying the cap
+    predicate would zero a carried overage, and replaying the zero would erase
+    spend accrued since. Without a window the resets are unguarded."""
+
+    table: BatchTable
+
+    def queue_spend_zero(self, where: Mapping[str, object], window: str | None) -> None:
+        self.table.update_many(where=_not_reset_in(window, where), data=_stamped(window, {"spend": 0}))
+
+    def queue_spend_decrement(self, where: Mapping[str, object], amount: float, window: str | None) -> None:
+        self.table.update_many(
+            where=_not_reset_in(window, where),
+            data=_stamped(window, {"spend": {"decrement": amount}}),
+        )
+
+
+def _stamped(window: str | None, data: Mapping[str, object]) -> Mapping[str, object]:
+    if window is None:
+        return data
+    return {**data, "spend_reset_window": window}
+
+
+def _not_reset_in(window: str | None, where: Mapping[str, object]) -> Mapping[str, object]:
+    if window is None:
+        return where
+    return {
+        "AND": [
+            {**where},
+            {"OR": [{"spend_reset_window": None}, {"spend_reset_window": {"not": window}}]},
+        ]
+    }
+
+
 # Membership rows written before total_spend existed (migration 20260421135425, default 0) hold their
 # history only in spend. Zeroing spend would erase it, so the floor lands in the same batch, ahead of the reset.
 _TEAM_MEMBERSHIP_TOTAL_SPEND_REPAIR_SQL: Final = """
@@ -260,11 +347,34 @@ class BudgetLinkedRowLocks:
 @dataclass(frozen=True, slots=True)
 class BudgetWindowWrites:
     table: BatchTable
+    batch: PrismaBatch
 
     def queue_window_advance(self, budget_id: str, budget_reset_at: datetime) -> None:
         """``update_many`` so a tier deleted between the read and the commit is a
-        no-op row count instead of a P2025 that aborts the whole chunk."""
-        self.table.update_many(where={"budget_id": budget_id}, data={"budget_reset_at": budget_reset_at})
+        no-op row count instead of a P2025 that aborts the whole chunk. The
+        count names the tier's windows for the end-user reset stamps."""
+        self.table.update_many(
+            where={"budget_id": budget_id},
+            data={"budget_reset_at": budget_reset_at, "budget_reset_count": {"increment": 1}},
+        )
+
+    def queue_member_credit_window_advance(
+        self,
+        budget_id: str,
+        *,
+        carry_overage: bool,
+        budget_reset_at: datetime,
+        expected_reset_at: datetime | None,
+        expected_duration: str,
+    ) -> None:
+        self.batch.execute_raw(
+            _MEMBER_CREDIT_WINDOW_RESET_SQL,
+            budget_id,
+            carry_overage,
+            _reset_timestamp(budget_reset_at),
+            _reset_timestamp(expected_reset_at),
+            expected_duration,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -323,7 +433,7 @@ async def budget_cascade_unit_of_work(
         model_access_groups=LinkedSpendResetWrites(table=batch.litellm_modelaccessgroupbudgettable),
         projects=LinkedSpendResetWrites(table=batch.litellm_projecttable),
         customer_organizations=LinkedSpendResetWrites(table=batch.litellm_customerorganizationtable),
-        budgets=BudgetWindowWrites(table=batch.litellm_budgettable),
+        budgets=BudgetWindowWrites(table=batch.litellm_budgettable, batch=batch),
     )
     await batch.commit()
 
@@ -334,20 +444,24 @@ CustomerSpendTable: TypeAlias = Literal["litellm_customerteamtable", "litellm_cu
 @asynccontextmanager
 async def customer_spend_reset_unit_of_work(
     new_batch: Callable[[], PrismaBatch], table: CustomerSpendTable
-) -> AsyncGenerator[LinkedSpendResetWrites, None]:
+) -> AsyncGenerator[WindowedSpendResetWrites, None]:
     """One page of customer team or member spend resets, committed on its own like end users: an aliased request
     can register a member, so the rows a template governs are unbounded."""
     batch: Final = new_batch()
-    yield LinkedSpendResetWrites(table=getattr(batch, table))
+    yield WindowedSpendResetWrites(
+        table=batch.litellm_customerteamtable
+        if table == "litellm_customerteamtable"
+        else batch.litellm_customermembertable
+    )
     await batch.commit()
 
 
 @asynccontextmanager
 async def enduser_spend_reset_unit_of_work(
     new_batch: Callable[[], PrismaBatch],
-) -> AsyncGenerator[LinkedSpendResetWrites, None]:
+) -> AsyncGenerator[WindowedSpendResetWrites, None]:
     """One page of end-user spend resets, committed on its own so a statement
     never grows with the end-user population."""
     batch: Final = new_batch()
-    yield LinkedSpendResetWrites(table=batch.litellm_endusertable)
+    yield WindowedSpendResetWrites(table=batch.litellm_endusertable)
     await batch.commit()

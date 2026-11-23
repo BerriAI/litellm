@@ -5,7 +5,7 @@ mod project;
 
 use host::OcrPythonHost;
 use litellm_callbacks_legacy_python::LoggingOperation;
-use litellm_core_utils::settings::ProcessEnvironment;
+use litellm_env::ProcessEnvironment;
 use litellm_host_python::to_py;
 use litellm_inference_ocr::provider_config;
 use litellm_llms::base_llm::ocr::settings::OcrSettings;

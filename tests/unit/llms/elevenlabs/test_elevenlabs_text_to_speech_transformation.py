@@ -58,6 +58,37 @@ def test_speech_keeps_an_internal_prefixed_kwarg_out_of_the_elevenlabs_request(r
 
 
 @pytest.mark.parametrize(
+    ("stream", "expected_path"),
+    [
+        (True, "/v1/text-to-speech/21m00Tcm4TlvDq8ikWAM/stream"),
+        (False, "/v1/text-to-speech/21m00Tcm4TlvDq8ikWAM"),
+    ],
+)
+def test_speech_calls_the_elevenlabs_streaming_endpoint_only_when_stream_is_requested(
+    respx_mock: respx.MockRouter, stream: bool, expected_path: str
+) -> None:
+    api_base: Final = "http://localhost:12346"
+    respx_mock.post(url__regex=rf"{api_base}/v1/text-to-speech/.*").mock(
+        return_value=httpx.Response(status_code=200, content=b"audio", headers={"content-type": "audio/mpeg"})
+    )
+
+    response: Final = litellm.speech(
+        model="elevenlabs/eleven_flash_v2_5",
+        input="hi",
+        voice="21m00Tcm4TlvDq8ikWAM",
+        api_base=api_base,
+        api_key="fake_elevenlabs_api_key",
+        response_format="mp3",
+        stream=stream,
+    )
+
+    assert response.read() == b"audio"
+    sent_url: Final = respx_mock.calls[0].request.url
+    assert sent_url.path == expected_path
+    assert sent_url.params["output_format"] == "mp3_44100_128"
+
+
+@pytest.mark.parametrize(
     ("response_format", "expected_output_format"),
     [("wav", "wav_24000"), ("pcm", "pcm_24000")],
 )

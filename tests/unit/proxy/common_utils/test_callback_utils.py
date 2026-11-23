@@ -2,6 +2,7 @@ import copy
 import json
 import logging
 import sys
+from collections import UserString
 from types import ModuleType, SimpleNamespace
 from typing import Final
 from unittest.mock import patch
@@ -775,6 +776,13 @@ def test_initialize_callbacks_on_proxy_accepts_plain_function_callback(probe_con
 
 def test_initialize_callbacks_on_proxy_accepts_instance_non_list_value(probe_config_path):
     _load_callbacks(f"{_PROBE_MODULE_NAME}.proxy_handler_instance", probe_config_path)
+
+    assert len(litellm.callbacks) == 1
+    assert isinstance(litellm.callbacks[0], CustomLogger)
+
+
+def test_initialize_callbacks_on_proxy_loads_a_non_str_path_that_supports_str_methods(probe_config_path: str) -> None:
+    _load_callbacks(UserString(f"{_PROBE_MODULE_NAME}.proxy_handler_instance"), probe_config_path)
 
     assert len(litellm.callbacks) == 1
     assert isinstance(litellm.callbacks[0], CustomLogger)

@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
 from types import MappingProxyType, UnionType
-from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias, runtime_checkable
+from typing import TYPE_CHECKING, Final, Literal, Protocol, SupportsIndex, TypeAlias, runtime_checkable
 
 import tiktoken
 
@@ -74,7 +74,7 @@ class OpenAIEncoding:
     def special_tokens_set(self) -> set[str]:  # mutable-ok: [LIT001] SDK return type
         return set(self._special_tokens)
 
-    def is_special_token(self, token: int) -> bool:
+    def is_special_token(self, token: SupportsIndex) -> bool:
         return self._native.is_special_token(token)
 
     # ---- encoding -------------------------------------------------------------------------
@@ -90,8 +90,6 @@ class OpenAIEncoding:
         disallowed_special: SpecialTokens = "all",
     ) -> list[int]:  # mutable-ok: [LIT001] SDK return type
         allowed: Final = self._allowed(text, allowed_special, disallowed_special)
-        if not allowed:
-            return self.encode_ordinary(text)
         return self._native.encode_special(text, tuple(allowed))
 
     def encode_to_numpy(
@@ -103,10 +101,8 @@ class OpenAIEncoding:
     ) -> npt.NDArray[np.uint32]:
         import numpy
 
-        return numpy.asarray(
-            self.encode(text, allowed_special=allowed_special, disallowed_special=disallowed_special),
-            dtype=numpy.uint32,
-        )
+        allowed: Final = self._allowed(text, allowed_special, disallowed_special)
+        return numpy.asarray(self._native.encode_special_strict(text, tuple(allowed)), dtype=numpy.uint32)
 
     def encode_ordinary_batch(
         self, text: Sequence[str], *, num_threads: int = 8

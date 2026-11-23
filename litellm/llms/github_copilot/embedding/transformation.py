@@ -77,7 +77,7 @@ class GithubCopilotEmbeddingConfig(BaseEmbeddingConfig):
             session_headers: Final = cast(  # cast-ok: both spreads are str-valued header dicts
                 "dict[str, str]", {**get_copilot_default_headers(user_session.token), **headers}
             )
-            pin_session_authorization(session_headers, user_session.token)
+            pin_session_authorization(session_headers, user_session.token, user_session.integration_id)
             return session_headers
         try:
             # Get GitHub Copilot API key via OAuth

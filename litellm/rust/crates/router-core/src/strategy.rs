@@ -3,10 +3,9 @@
 //! routing group the resolved model belongs to (called as the group, or as a member of a
 //! non-priority group), then the router's own strategy.
 
-use crate::{
-    config::RoutingStrategy,
-    registry::{Registry, ResolveKind},
-};
+use litellm_router_types::RoutingStrategy;
+
+use crate::registry::{Registry, ResolveKind};
 
 /// The per-request overrides `_OVERRIDABLE_ROUTING_STRATEGIES` honours: simple-shuffle and every
 /// strategy with a default selector. Anything else is ignored.
@@ -40,6 +39,15 @@ impl StrategyScope {
             Self::Override => ("override", None),
         }
     }
+}
+
+/// Whether router-core picks by `strategy` itself. Every other strategy is a
+/// [`crate::RouterHost::select`] step until router-core implements it.
+pub fn implemented(strategy: &RoutingStrategy) -> bool {
+    matches!(
+        strategy,
+        RoutingStrategy::SimpleShuffle | RoutingStrategy::Unset
+    )
 }
 
 /// A request's `routing_strategy` override, when it is one Python honours.
