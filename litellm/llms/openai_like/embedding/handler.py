@@ -235,4 +235,4 @@ class OpenAILikeEmbeddingHandler(OpenAILikeBase):
             original_response=response_json,
         )
 
-        return litellm.EmbeddingResponse(**response_json)
+        return EmbeddingResponse(**_EmbeddingResponseFields(**keyword_arguments(response_json, EmbeddingResponse)))

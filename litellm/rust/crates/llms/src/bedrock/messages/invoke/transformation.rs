@@ -255,7 +255,7 @@ pub(crate) fn should_retry_anthropic_messages_without_native_output(
         } else {
             ""
         };
-        litellm_tracing::warn!(
+        tracing::warn!(
             "Bedrock rejected native structured output for model={model}, so litellm sent the request again without it.{opt_out_advice}"
         );
     }
