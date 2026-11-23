@@ -1,5 +1,5 @@
-from collections.abc import Mapping
-from typing import Final
+from collections.abc import Mapping, Sequence
+from typing import Final, Protocol
 
 import httpx
 from pydantic import ConfigDict, TypeAdapter
@@ -39,6 +39,12 @@ class VertexTextToSpeechRequest(TypedDict, total=False):
     audioConfig: VertexAudioConfig | None
 
 
+class _PreCallLogger(Protocol):
+    """The one logging method the handler invokes before sending the request."""
+
+    def pre_call(self, input: Sequence[object], api_key: str, additional_args: Mapping[str, object]) -> object: ...
+
+
 class VertexTextToSpeechAPI(VertexLLM):
     """
     Vertex methods to support for batches
@@ -49,7 +55,7 @@ class VertexTextToSpeechAPI(VertexLLM):
 
     def audio_speech(
         self,
-        logging_obj,
+        logging_obj: _PreCallLogger,
         vertex_project: str | None,
         vertex_location: str | None,
         vertex_credentials: VERTEX_CREDENTIALS_TYPES | None,
@@ -59,7 +65,7 @@ class VertexTextToSpeechAPI(VertexLLM):
         input: str,
         voice: dict | None = None,
         _is_async: bool | None = False,
-        optional_params: dict | None = None,
+        optional_params: Mapping[str, object] | None = None,
         kwargs: dict | None = None,
     ) -> HttpxBinaryResponseContent:
         import base64
@@ -174,7 +180,7 @@ class VertexTextToSpeechAPI(VertexLLM):
 
     async def async_audio_speech(
         self,
-        logging_obj,
+        logging_obj: _PreCallLogger,
         url: str,
         headers: dict,
         request: VertexTextToSpeechRequest,
@@ -210,7 +216,9 @@ class VertexTextToSpeechAPI(VertexLLM):
         return http_binary_response
 
 
-def validate_vertex_input(input_data: VertexInput, kwargs: dict, optional_params: dict) -> None:
+def validate_vertex_input(
+    input_data: VertexInput, kwargs: Mapping[str, object], optional_params: Mapping[str, object]
+) -> None:
     # Remove None values
     if input_data.get("text") is None:
         input_data.pop("text", None)

@@ -138,7 +138,7 @@ def _check_basic(config: SessionConfig) -> None:
         raise CapabilityUnsupported("install=True is not supported yet; put the runtime binary on PATH in the sandbox")
 
 
-def _check_options(config: SessionConfig, harness_config: BaseHarnessConfig) -> None:
+def _check_options(config: SessionConfig, harness_config: BaseHarnessConfig[HarnessOptions]) -> None:
     if config.options is None or isinstance(config.options, harness_config.options_type):
         return
     raise OptionsMismatch(
@@ -168,7 +168,7 @@ def _check_capabilities(config: SessionConfig, caps: Capabilities, interactive: 
         raise CapabilityUnsupported(f"{name} does not support disable_tools=")
 
 
-def validate(config: SessionConfig, harness_config: BaseHarnessConfig, interactive: bool) -> None:
+def validate(config: SessionConfig, harness_config: BaseHarnessConfig[HarnessOptions], interactive: bool) -> None:
     """Raise before anything starts if the request cannot be served."""
     _check_basic(config)
     _check_options(config, harness_config)
