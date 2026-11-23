@@ -7,6 +7,7 @@ use tokio::runtime::Handle;
 use super::{
     background::{Background, Delivery},
     host::{self, Line},
+    route::PythonLogger,
     sink::litellm_target,
 };
 
@@ -23,6 +24,7 @@ impl Delivery for ToPython {
     fn lost(&self, count: u64) {
         host::emit(
             &Line {
+                logger: PythonLogger::Sdk,
                 level: host::level(&Level::WARN),
                 message: &format!(
                     "{count} native log lines were dropped because the Python logger fell behind"

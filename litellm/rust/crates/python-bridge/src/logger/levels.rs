@@ -2,17 +2,26 @@
 
 use std::sync::atomic::{AtomicU8, Ordering};
 
+use strum::EnumCount;
+
+use super::route::PythonLogger;
+
 #[derive(Default)]
-pub(super) struct Levels([AtomicU8; 8]);
+pub(super) struct Levels([[AtomicU8; 4]; PythonLogger::COUNT]);
 
 const UNKNOWN: u8 = 0;
 const DISABLED: u8 = 1;
 const ENABLED: u8 = 2;
 
 impl Levels {
-    /// Python routes proxy targets to its proxy logger, which has its own level, so each logger gets its own slots.
-    pub(super) fn enabled(&self, level: u8, proxy: bool, query: impl FnOnce() -> bool) -> bool {
-        let slot = &self.0[usize::from(level / 10 - 1) + if proxy { 4 } else { 0 }];
+    /// Each Python logger has its own level, so each gets its own slots.
+    pub(super) fn enabled(
+        &self,
+        logger: PythonLogger,
+        level: u8,
+        query: impl FnOnce() -> bool,
+    ) -> bool {
+        let slot = &self.0[logger as usize][usize::from(level / 10 - 1)];
         match slot.load(Ordering::Relaxed) {
             UNKNOWN => {
                 let enabled = query();
@@ -28,7 +37,7 @@ impl Levels {
 mod tests {
     use std::cell::Cell;
 
-    use super::Levels;
+    use super::{Levels, PythonLogger};
 
     #[rstest::rstest]
     #[case::debug(10)]
@@ -45,18 +54,18 @@ mod tests {
             queries.set(queries.get() + 1);
             enabled
         };
-        assert_eq!(levels.enabled(level, false, query), enabled);
-        assert_eq!(levels.enabled(level, false, query), enabled);
-        assert_eq!(levels.enabled(level, false, query), enabled);
+        assert_eq!(levels.enabled(PythonLogger::Sdk, level, query), enabled);
+        assert_eq!(levels.enabled(PythonLogger::Sdk, level, query), enabled);
+        assert_eq!(levels.enabled(PythonLogger::Sdk, level, query), enabled);
         assert_eq!(queries.get(), 1);
     }
 
     #[rstest::rstest]
-    fn the_proxy_logger_keeps_its_own_cached_levels() {
+    fn each_python_logger_keeps_its_own_cached_levels() {
         let levels = Levels::default();
-        assert!(levels.enabled(20, false, || true));
-        assert!(!levels.enabled(20, true, || false));
-        assert!(levels.enabled(20, false, || false));
-        assert!(!levels.enabled(20, true, || true));
+        assert!(levels.enabled(PythonLogger::Sdk, 20, || true));
+        assert!(!levels.enabled(PythonLogger::Proxy, 20, || false));
+        assert!(levels.enabled(PythonLogger::Sdk, 20, || false));
+        assert!(!levels.enabled(PythonLogger::Proxy, 20, || true));
     }
 }
