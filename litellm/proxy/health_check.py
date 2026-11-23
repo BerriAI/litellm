@@ -433,9 +433,11 @@ def _as_mapping(value: object) -> Mapping[str, object]:
         return MappingProxyType({})
 
 
-def _wildcard_child(public_name: str, wildcard_id: str, row: Mapping[str, object]) -> Mapping[str, object]:
+def _wildcard_child(
+    public_name: str, wildcard_id: str, row: Mapping[str, object], configured: Mapping[str, object]
+) -> Mapping[str, object]:
     """``row`` checked as ``public_name``, its id stable per wildcard and routed model across pods and cycles."""
-    params: Final = _as_mapping(row.get("litellm_params"))
+    params: Final = {**_as_mapping(row.get("litellm_params")), **configured}
     info: Final = _as_mapping(row.get("model_info"))
     child_id: Final = uuid.uuid5(_WILDCARD_CHILD_ID_NAMESPACE, f"{wildcard_id}|{params.get('model')}")
     return {
@@ -444,6 +446,11 @@ def _wildcard_child(public_name: str, wildcard_id: str, row: Mapping[str, object
         "litellm_params": dict(params),
         "model_info": {**{k: v for k, v in info.items() if not _is_probe_tuning(k)}, "id": str(child_id)},
     }
+
+
+def _configured_params(router: "Router", wildcard_id: str) -> Mapping[str, object]:
+    stored: Final = _as_mapping(router.registry().deployment_dict(wildcard_id))
+    return {key: value for key, value in _as_mapping(stored.get("litellm_params")).items() if key != "model"}
 
 
 def _in_model_groups(public_name: str, row: Mapping[str, object], model_groups: AbstractSet[str] | None) -> bool:
@@ -462,7 +469,7 @@ def _wildcard_children_for(
         (row, wildcard_id) for row, wildcard_id in zip(rows, ids) if wildcard_id and not _skips_health_checks(row)
     )
     return tuple(
-        _wildcard_child(public_name, wildcard_id, row)
+        _wildcard_child(public_name, wildcard_id, row, _configured_params(router, wildcard_id))
         for row, wildcard_id in eligible
         if _in_model_groups(public_name, row, model_groups)
     )

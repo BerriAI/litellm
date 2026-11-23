@@ -1481,6 +1481,10 @@ class _EndpointPort:
     def group_members(self, model_name: str) -> Sequence[tuple[object, object]] | None:
         return self._core._hosted._group_members(model_name)  # pyright: ignore[reportPrivateUsage]  # see the class docstring
 
+    def served_deployments(self) -> tuple[Mapping[str, object], ...]:
+        records: Final = self._core._handle.deployments()  # pyright: ignore[reportPrivateUsage]  # see the class docstring
+        return tuple(_with_live_params(self._core, as_str_mapping(record) or {}) for record in records)
+
     def routed_name(self, model: object) -> str:
         return self._core.routed_name(model)
 

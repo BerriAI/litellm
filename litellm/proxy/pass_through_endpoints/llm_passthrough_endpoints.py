@@ -55,7 +55,12 @@ from litellm.constants import (
     PASS_THROUGH_HEADER_PREFIX,
     TYPESAFE_DANGER_ZONE_HEADER_PREFIX,
 )
-from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
+from litellm.exceptions import (
+    AuthenticationError,
+    BlockedPiiEntityError,
+    GuardrailRaisedException,
+    ServiceUnavailableError,
+)
 from litellm.integrations.custom_guardrail import guardrail_request_data_with_streaming, is_guardrail_intervention
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.litellm_core_utils.core_helpers import (
@@ -221,11 +226,13 @@ from litellm.types.router import LiteLLMParamsTypedDict, RouterRateLimitError
 from litellm.types.utils import (
     DEPLOYMENT_SCOPED_PRICING_FIELDS,
     SERVER_DERIVED_PRICING_FIELDS,
+    AdminApiKeySecretReference,
     CallTypes,
     LlmProviders,
+    credential_api_key_secret_reference,
 )
 from litellm.types.vector_stores import LiteLLM_ManagedVectorStore, LiteLLM_ManagedVectorStoreIndex
-from litellm.utils import ProviderConfigManager, with_named_credential
+from litellm.utils import ProviderConfigManager, aresolve_api_key_secret_reference, with_named_credential
 from litellm.vector_stores.fallbacks import native_store_id
 
 from .passthrough_endpoint_router import PassthroughEndpointRouter
@@ -4524,8 +4531,9 @@ async def cursor_proxy_route(
     if cursor_api_key is None:
         for credential in litellm.credential_list:
             if credential.credential_info and credential.credential_info.get("custom_llm_provider") == "cursor":
-                cursor_api_key = credential.credential_values.get("api_key")
-                credential_api_base = credential.credential_values.get("api_base")
+                credential_values = credential_api_key_secret_reference(credential.credential_values)
+                credential_api_base = credential_values.get("api_base")
+                cursor_api_key = await _cursor_credential_api_key(credential_values)
                 if credential_api_base:
                     base_target_url = credential_api_base
                 break
@@ -4561,6 +4569,22 @@ async def cursor_proxy_route(
     )
 
     return received_value
+
+
+async def _cursor_credential_api_key(credential_values: Mapping[str, object]) -> object:
+    api_key: Final = credential_values.get("api_key")
+    if not isinstance(api_key, AdminApiKeySecretReference):
+        return api_key
+    try:
+        return await aresolve_api_key_secret_reference(
+            api_key,
+            None,
+            "cursor",
+            {"api_base": credential_values.get("api_base")},
+            call_type=CallTypes.allm_passthrough_route.value,
+        )
+    except (AuthenticationError, ServiceUnavailableError) as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
 
 
 TINYFISH_JSON_OBJECT_BODY_DETAIL: Final = (

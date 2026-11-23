@@ -848,6 +848,18 @@ def get_applied_guardrails(kwargs: dict[str, object]) -> list[str]:
 
 
 def _named_credential_values(kwargs: Mapping[str, object]) -> Mapping[str, object]:
+    stored: Final = _stored_credential_values(kwargs)
+    if stored is None:
+        verbose_logger.warning(
+            "litellm_credential_name=%s matched none of the %d loaded credentials; the request runs without it",
+            kwargs.get("litellm_credential_name"),
+            len(litellm.credential_list),
+        )
+        return MappingProxyType({})
+    return MappingProxyType({key: copy.deepcopy(value) for key, value in stored.items()})
+
+
+def _stored_credential_values(kwargs: Mapping[str, object]) -> Mapping[str, object] | None:
     # Access CredentialAccessor via module to trigger lazy loading if needed
     credential_accessor: Final[type[CredentialAccessor]] = litellm_utils.CredentialAccessor
 
@@ -856,15 +868,10 @@ def _named_credential_values(kwargs: Mapping[str, object]) -> Mapping[str, objec
         return MappingProxyType({})
     credential: Final = credential_accessor.find_credential(credential_name)
     if credential is None:
-        verbose_logger.warning(
-            "litellm_credential_name=%s matched none of the %d loaded credentials; the request runs without it",
-            credential_name,
-            len(litellm.credential_list),
-        )
-        return MappingProxyType({})
+        return None
     return MappingProxyType(
         {
-            key: copy.deepcopy(value)
+            key: value
             for key, value in credential_api_key_secret_reference(credential.credential_values).items()
             if key not in kwargs and key != "github_copilot_app_private_key"
         }
@@ -872,12 +879,35 @@ def _named_credential_values(kwargs: Mapping[str, object]) -> Mapping[str, objec
 
 
 async def aresolve_api_key_secret_reference(
-    api_key: str | None, model: object, llm_provider: object, upstream: Mapping[str, object]
+    api_key: str | None,
+    model: object,
+    llm_provider: object,
+    upstream: Mapping[str, object],
+    call_type: str | None = None,
 ) -> str | None:
     if not isinstance(api_key, AdminApiKeySecretReference):
         return api_key
     return await _resolved_off_the_event_loop(
-        partial(_secret_behind_api_key_reference, api_key, model, llm_provider, upstream), api_key
+        partial(_secret_behind_api_key_reference, api_key, model, llm_provider, upstream, call_type=call_type),
+        api_key,
+    )
+
+
+def resolve_api_key_secret_reference_without_fetch(
+    api_key: str | None, model: object, llm_provider: object, upstream: Mapping[str, object]
+) -> str | None:
+    if not isinstance(api_key, AdminApiKeySecretReference):
+        return api_key
+    return _secret_behind_api_key_reference(
+        api_key, model, llm_provider, upstream, resolve_oidc=_resolved_without_a_google_fetch
+    )
+
+
+def _resolved_without_a_google_fetch(reference: str) -> str | UnresolvableSecretReference:
+    if not reference.startswith(GOOGLE_OIDC_SECRET_PREFIX):
+        return resolve_api_key_oidc_reference(reference)
+    return cached_oidc_token(reference) or UnresolvableSecretReference(
+        kind=oidc_reference_kind(reference), reason="no Google ID token has been fetched yet", retryable=True
     )
 
 
@@ -1001,6 +1031,23 @@ def load_credentials_from_list(kwargs: dict[str, object], call_type: str | None 
     kwargs.update(_credential_updates(kwargs, _named_credential_values(kwargs), call_type=call_type))
 
 
+def resolved_api_key_update(kwargs: Mapping[str, object], call_type: str | None = None) -> Mapping[str, object]:
+    return _api_key_update(_secret_for_api_key(kwargs, _stored_credential_values(kwargs) or {}, call_type=call_type))
+
+
+async def aresolved_api_key_update(kwargs: Mapping[str, object], call_type: str | None = None) -> Mapping[str, object]:
+    credential_values: Final = _stored_credential_values(kwargs) or {}
+    secret: Final = await _resolved_off_the_event_loop(
+        partial(_secret_for_api_key, kwargs, credential_values, call_type=call_type),
+        _api_key_after_credentials(kwargs, credential_values),
+    )
+    return _api_key_update(secret)
+
+
+def _api_key_update(secret: str | None) -> Mapping[str, object]:
+    return MappingProxyType({} if secret is None else {"api_key": secret})
+
+
 async def acredential_updates(kwargs: Mapping[str, object], call_type: str | None = None) -> Mapping[str, object]:
     credential_values: Final = _named_credential_values(kwargs)
     return await _resolved_off_the_event_loop(
@@ -1019,10 +1066,20 @@ def _credential_updates(
     resolve_oidc: OidcResolver = resolve_api_key_oidc_reference,
     call_type: str | None = None,
 ) -> Mapping[str, object]:
+    secret: Final = _secret_for_api_key(kwargs, credential_values, resolve_oidc, call_type)
+    return credential_values if secret is None else MappingProxyType({**credential_values, "api_key": secret})
+
+
+def _secret_for_api_key(
+    kwargs: Mapping[str, object],
+    credential_values: Mapping[str, object],
+    resolve_oidc: OidcResolver = resolve_api_key_oidc_reference,
+    call_type: str | None = None,
+) -> str | None:
     api_key: Final = _api_key_after_credentials(kwargs, credential_values)
     if not isinstance(api_key, AdminApiKeySecretReference):
-        return credential_values
-    secret: Final = _secret_behind_api_key_reference(
+        return None
+    return _secret_behind_api_key_reference(
         api_key,
         resolve_oidc=resolve_oidc,
         call_type=call_type,
@@ -1035,7 +1092,6 @@ def _credential_updates(
             }
         ),
     )
-    return MappingProxyType({**credential_values, "api_key": secret})
 
 
 def get_dynamic_callbacks(
