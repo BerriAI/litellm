@@ -316,7 +316,7 @@ class PrismaEventStore:
     async def end_if_current(
         self, subscription_id: str, upstream_subscription_id: str | None, generation: str | None = None
     ) -> bool:
-        where: LiteLLM_MCPEventSubscriptionWhereInput = {
+        where: Final[LiteLLM_MCPEventSubscriptionWhereInput] = {
             "id": subscription_id,
             "upstream_subscription_id": upstream_subscription_id,
             "status": {"not": "terminated"},
