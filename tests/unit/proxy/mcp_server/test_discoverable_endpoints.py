@@ -913,6 +913,176 @@ async def test_authorization_code_exchange_forwards_requested_or_configured_scop
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("sealed_scope", "requested", "sent"),
+    [
+        ("tools.read", "tools.read tools.call", "tools.read"),
+        ("tools.read", None, "tools.read"),
+        (None, None, None),
+        (None, "tools.read", "tools.read"),
+    ],
+)
+async def test_sealed_grant_scope_stays_authoritative_and_does_not_expand_to_configured_scopes(
+    sealed_scope: str | None, requested: str | None, sent: str | None
+) -> None:
+    from collections.abc import Mapping
+
+    from pydantic import TypeAdapter
+    from starlette.responses import Response
+
+    from litellm.proxy._types import MCPTransport
+    from litellm.proxy.mcp_server.discoverable_endpoints import (
+        exchange_token_with_server,
+        seal_bridge_authorization_code,
+    )
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    class _UpstreamTokenResponse:
+        def __init__(self, body: Mapping[str, object]) -> None:
+            self._body: Mapping[str, object] = body
+
+        def json(self) -> Mapping[str, object]:
+            return self._body
+
+        def raise_for_status(self) -> None:
+            return None
+
+    class _UpstreamTokenClient:
+        def __init__(self, body: Mapping[str, object]) -> None:
+            self._body: Mapping[str, object] = body
+            self.sent: Mapping[str, str] | None = None
+
+        async def post(
+            self, url: str, *, headers: Mapping[str, str], data: Mapping[str, str]
+        ) -> _UpstreamTokenResponse:
+            self.sent = data
+            return _UpstreamTokenResponse(self._body)
+
+    issuer: Final = "https://idp.example"
+    server: Final = MCPServer(
+        server_id="sealed-scope",
+        name="sealed-scope",
+        server_name="sealed-scope",
+        alias="sealed-scope",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        client_id="scope-client",
+        client_secret="scope-secret",
+        authorization_url=f"{issuer}/authorize",
+        token_url=f"{issuer}/token",
+        issuer=issuer,
+        scopes=["tools.read", "tools.call"],
+    )
+    mock_request: Final = MagicMock(spec=Request)
+    mock_request.base_url = "https://litellm-proxy.example.com/"
+    mock_request.headers = {}
+    upstream_body: Final = {"access_token": "upstream-token", "token_type": "Bearer", "expires_in": 3600}
+    client: Final = _UpstreamTokenClient(upstream_body)
+    with (
+        patch("litellm.proxy.proxy_server.master_key", "sk-scope-seal-master-key-0123456789abcdef"),
+        patch(
+            "litellm.proxy.mcp_server.discoverable_endpoints.get_async_httpx_client",
+            return_value=client,
+        ),
+    ):
+        code: Final = seal_bridge_authorization_code(
+            upstream_code="upstream-code",
+            litellm_user_id="scope-user",
+            mcp_server_id=server.server_id,
+            requested_scope=sealed_scope,
+            expected_issuer=issuer if sealed_scope is not None else None,
+        )
+        response: Final = await exchange_token_with_server(
+            request=mock_request,
+            mcp_server=server,
+            grant_type="authorization_code",
+            code=code,
+            redirect_uri="http://localhost/callback",
+            client_id="scope-client",
+            client_secret="scope-secret",
+            code_verifier="verifier",
+            scope=requested,
+        )
+
+    assert client.sent is not None
+    assert client.sent["code"] == "upstream-code"
+    assert client.sent.get("scope") == sent
+    assert isinstance(response, Response)
+    issued: Final = TypeAdapter(dict[str, object]).validate_json(bytes(response.body))
+    assert issued.get("scope") == sent
+
+
+@pytest.mark.asyncio
+async def test_sealed_grant_for_another_server_is_rejected_before_the_upstream_token_post() -> None:
+    from collections.abc import Mapping
+
+    from litellm.proxy._types import MCPTransport
+    from litellm.proxy.mcp_server.discoverable_endpoints import (
+        exchange_token_with_server,
+        seal_bridge_authorization_code,
+    )
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    class _UpstreamTokenClient:
+        def __init__(self) -> None:
+            self.sent: Mapping[str, str] | None = None
+
+        async def post(
+            self, url: str, *, headers: Mapping[str, str], data: Mapping[str, str]
+        ) -> Mapping[str, object]:
+            self.sent = data
+            return {}
+
+    server: Final = MCPServer(
+        server_id="sealed-scope",
+        name="sealed-scope",
+        server_name="sealed-scope",
+        alias="sealed-scope",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        client_id="scope-client",
+        client_secret="scope-secret",
+        authorization_url="https://idp.example/authorize",
+        token_url="https://idp.example/token",
+        issuer="https://idp.example",
+        scopes=["tools.read", "tools.call"],
+    )
+    mock_request: Final = MagicMock(spec=Request)
+    mock_request.base_url = "https://litellm-proxy.example.com/"
+    mock_request.headers = {}
+    client: Final = _UpstreamTokenClient()
+    with (
+        patch("litellm.proxy.proxy_server.master_key", "sk-scope-seal-master-key-0123456789abcdef"),
+        patch(
+            "litellm.proxy.mcp_server.discoverable_endpoints.get_async_httpx_client",
+            return_value=client,
+        ),
+    ):
+        code: Final = seal_bridge_authorization_code(
+            upstream_code="upstream-code",
+            litellm_user_id="scope-user",
+            mcp_server_id="some-other-server",
+            requested_scope="tools.read",
+            expected_issuer="https://idp.example",
+        )
+        with pytest.raises(HTTPException) as rejected:
+            await exchange_token_with_server(
+                request=mock_request,
+                mcp_server=server,
+                grant_type="authorization_code",
+                code=code,
+                redirect_uri="http://localhost/callback",
+                client_id="scope-client",
+                client_secret="scope-secret",
+                code_verifier="verifier",
+                scope="tools.read tools.call",
+            )
+
+    assert rejected.value.status_code == 400
+    assert client.sent is None
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("server_name", [None, "missing"])
 async def test_register_client_without_mcp_server_name_returns_dummy(server_name):
     try:
