@@ -110,27 +110,26 @@ _SPEND_LOGS_PRIVACY_METADATA_ADAPTER: Final[TypeAdapter[Mapping[str, object] | N
 )
 
 
-def _max_string_length_in_db(env_var: str, default: int) -> int:
+def _max_string_length_in_db(configured: str | None, default: int) -> int:
     """
     Resolve a truncation threshold at runtime so values loaded later via
     proxy config environment_variables are honored.
     """
-    max_length_str: Final = os.getenv(env_var)
-    if max_length_str is None:
+    if configured is None:
         return default
     try:
-        return int(max_length_str)
-    except (TypeError, ValueError):
+        return int(configured)
+    except ValueError:
         return default
 
 
 def _get_max_string_length_prompt_in_db() -> int:
-    return _max_string_length_in_db("MAX_STRING_LENGTH_PROMPT_IN_DB", DEFAULT_MAX_STRING_LENGTH_PROMPT_IN_DB)
+    return _max_string_length_in_db(os.getenv("MAX_STRING_LENGTH_PROMPT_IN_DB"), DEFAULT_MAX_STRING_LENGTH_PROMPT_IN_DB)
 
 
 def _get_max_string_length_provider_signed_in_db() -> int:
     return _max_string_length_in_db(
-        "MAX_STRING_LENGTH_PROVIDER_SIGNED_IN_DB", DEFAULT_MAX_STRING_LENGTH_PROVIDER_SIGNED_IN_DB
+        os.getenv("MAX_STRING_LENGTH_PROVIDER_SIGNED_IN_DB"), DEFAULT_MAX_STRING_LENGTH_PROVIDER_SIGNED_IN_DB
     )
 
 
