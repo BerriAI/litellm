@@ -68,15 +68,18 @@ async def receive_webhook(
         return Response(status_code=204)
     delivery_id: Final = gateway_delivery_id(subscription_id, headers.get("webhook-id", ""))
     try:
-        await events_store.enqueue(
+        accepted: Final = await events_store.enqueue_current(
+            row,
             QueuedDelivery(
                 delivery_id=delivery_id,
                 subscription_id=subscription_id,
                 body=body.decode("utf-8"),
                 webhook_id=delivery_id,
                 next_attempt_at=datetime.now(timezone.utc),
-            )
+            ),
         )
+        if not accepted:
+            return Response(status_code=503)
     except Exception as error:  # noqa: BLE001  # the upstream retries a delivery the gateway could not store durably
         verbose_logger.warning("Failed to enqueue MCP event delivery for %s: %s", subscription_id, error)
         return Response(status_code=503)

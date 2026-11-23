@@ -139,6 +139,8 @@ class EventStore(Protocol):
         """Terminate the row only while it is still past its deadline, so a renewal that just landed survives."""
         ...
 
+    async def enqueue_current(self, row: SubscriptionRow, delivery: QueuedDelivery) -> bool: ...
+
     async def enqueue(self, delivery: QueuedDelivery) -> bool: ...
 
     async def claim(self, now: datetime, lease_until: datetime, limit: int) -> tuple[QueuedDelivery, ...]: ...
@@ -371,6 +373,26 @@ class PrismaEventStore:
             data={"status": "terminated"},
         )
         return ended > 0
+
+    async def enqueue_current(self, row: SubscriptionRow, delivery: QueuedDelivery) -> bool:
+        """Acknowledge duplicates, but retry if the subscription changed after signature verification."""
+        checked: Final = await self._raw.query_raw(
+            """WITH current AS (
+                SELECT id FROM "LiteLLM_MCPEventSubscription"
+                WHERE id = $1 AND generation = $2 AND status = $3 FOR SHARE
+            ), inserted AS (
+                INSERT INTO "LiteLLM_MCPEventDelivery" (subscription_id, delivery_id, body, webhook_id, next_attempt_at)
+                SELECT id, $4, $5, $6, $7::timestamp FROM current ON CONFLICT (delivery_id) DO NOTHING
+            ) SELECT id FROM current""",
+            delivery.subscription_id,
+            row.generation,
+            row.status,
+            delivery.delivery_id,
+            delivery.body,
+            delivery.webhook_id,
+            delivery.next_attempt_at.isoformat(),
+        )
+        return bool(checked)
 
     async def enqueue(self, delivery: QueuedDelivery) -> bool:
         from prisma.errors import UniqueViolationError
