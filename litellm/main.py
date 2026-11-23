@@ -126,6 +126,7 @@ from litellm.litellm_core_utils.request_timeout_resolver import (
     get_configured_request_timeout,
 )
 from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
+from litellm.litellm_core_utils.tool_fields import raise_if_a_forced_hosted_tool_stays
 from litellm.llms.base_llm import BaseConfig, BaseImageGenerationConfig
 from litellm.llms.base_llm.base_model_iterator import (
     MockResponseIterator,
@@ -5820,6 +5821,16 @@ def completion(
                 provider=LlmProviders(custom_llm_provider),
                 base_model=base_model,
             )
+        raise_if_a_forced_hosted_tool_stays(
+            cast(  # cast-ok: widening untyped tool kwargs to object is always sound, the helper validates them
+                Mapping[str, object],
+                {"tools": tools, "tool_choice": tool_choice},
+            ),
+            model=model,
+            route=custom_llm_provider,
+            drop_params=drops_unsupported,
+            provider_config=provider_config,
+        )
 
         if provider_config is not None:
             translated_messages: Final = provider_config.translate_developer_role_to_system_role(messages=messages)

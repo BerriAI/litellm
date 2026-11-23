@@ -8963,6 +8963,8 @@ def validate_chat_completion_tool_choice(
         if is_allowed_tools_tool_choice(requested_choice):
             allowed_tools: Final = parse_allowed_tools_tool_choice_or_refuse(requested_choice, model, drop_params)
             return None if allowed_tools is None else dict(chat_allowed_tools_tool_choice(allowed_tools))
+        if tool_choice_type == "mcp":
+            return tool_choice
 
         # Standard OpenAI format: {"type": "function", "function": {...}}
         if tool_choice_type is None or tool_choice.get("function") is None:
