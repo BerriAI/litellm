@@ -31,7 +31,7 @@ else:
     Span = Any
 
 
-_T: Final = TypeVar("_T")
+_T = TypeVar("_T")
 
 
 def _connection_limit(max_connections: object) -> int | None:

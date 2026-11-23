@@ -3,6 +3,7 @@ from collections.abc import Iterator, Mapping
 from typing import Final
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.anthropic_beta_headers_manager import (
@@ -22,8 +23,17 @@ from litellm.types.utils import ModelResponse
 from litellm.utils import CustomStreamWrapper
 
 from ..base_aws_llm import BaseAWSLLM, Credentials, bedrock_bearer_token, pop_aws_auth_params, run_aws_signing
-from ..common_utils import BedrockError, error_response_text, get_all_bedrock_regions
+from ..common_utils import (
+    BEDROCK_RUNTIME_OPENAI_CHAT_ROUTE_SUFFIXES,
+    BEDROCK_RUNTIME_OPENAI_RESPONSES_ROUTE_SUFFIXES,
+    BedrockError,
+    error_response_text,
+    get_all_bedrock_regions,
+    strip_bedrock_runtime_route_suffix,
+)
 from .invoke_handler import AWSEventStreamDecoder, make_call
+
+_REQUEST_IDENTITY: Final = TypeAdapter(Mapping[str, object])
 
 
 def make_sync_call(
@@ -299,10 +309,10 @@ class BedrockConverseLLM(BaseAWSLLM):
         api_key: str | None = None,
     ):
         ## SETUP ##
-        stream: Final = optional_params.pop("stream", None)
-        stream_chunk_size: Final = stored_control_options(litellm_params).stream_chunk_size if stream is True else None
+        stream: Final = optional_params.pop("stream", None) is True
+        stream_chunk_size: Final = stored_control_options(litellm_params).stream_chunk_size if stream else None
         unencoded_model_id: Final = optional_params.pop("model_id", None)
-        fake_stream = optional_params.pop("fake_stream", False)
+        requested_fake_stream: Final = optional_params.pop("fake_stream", False) is True
         json_mode: Final = optional_params.get("json_mode") is True
         if unencoded_model_id is not None:
             modelId = self.encode_model_id(model_id=unencoded_model_id)
@@ -331,8 +341,8 @@ class BedrockConverseLLM(BaseAWSLLM):
             if _region_from_model is not None and "aws_region_name" not in optional_params:
                 optional_params["aws_region_name"] = _region_from_model
 
-        fake_stream = litellm.AmazonConverseConfig().should_fake_stream(
-            fake_stream=fake_stream,
+        fake_stream: Final = litellm.AmazonConverseConfig().should_fake_stream(
+            fake_stream=requested_fake_stream,
             model=model,
             stream=stream,
             custom_llm_provider="bedrock",
@@ -354,21 +364,29 @@ class BedrockConverseLLM(BaseAWSLLM):
         credentials: Final[Credentials | None] = (
             None
             if bedrock_bearer_token(api_key) is not None
-            else self.resolve_credentials(auth_params, aws_region_name)
+            else self.resolve_credentials(
+                auth_params, aws_region_name, _REQUEST_IDENTITY.validate_python(litellm_params)
+            )
         )
 
         ### SET RUNTIME ENDPOINT ###
-        endpoint_url, proxy_endpoint_url = self.get_runtime_endpoint(
+        _, runtime_url = self.get_runtime_endpoint(
             api_base=api_base,
             aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
             aws_region_name=aws_region_name,
         )
-        if (stream is not None and stream is True) and not fake_stream:
-            endpoint_url = join_api_base(endpoint_url, f"model/{modelId}/converse-stream")
-            proxy_endpoint_url = join_api_base(proxy_endpoint_url, f"model/{modelId}/converse-stream")
-        else:
-            endpoint_url = join_api_base(endpoint_url, f"model/{modelId}/converse")
-            proxy_endpoint_url = join_api_base(proxy_endpoint_url, f"model/{modelId}/converse")
+        converse_route: Final = "converse-stream" if stream and not fake_stream else "converse"
+        proxy_endpoint_url: Final = join_api_base(
+            strip_bedrock_runtime_route_suffix(
+                runtime_url,
+                (
+                    *BEDROCK_RUNTIME_OPENAI_CHAT_ROUTE_SUFFIXES,
+                    *BEDROCK_RUNTIME_OPENAI_RESPONSES_ROUTE_SUFFIXES,
+                    "/openai/v1",
+                ),
+            ),
+            f"model/{modelId}/{converse_route}",
+        )
 
         ## COMPLETION CALL
         headers = {"Content-Type": "application/json"}
@@ -463,7 +481,7 @@ class BedrockConverseLLM(BaseAWSLLM):
         else:
             client = client
 
-        if stream is not None and stream is True:
+        if stream:
             completion_stream, response_headers = make_sync_call(
                 client=(client if client is not None and isinstance(client, HTTPHandler) else None),
                 api_base=proxy_endpoint_url,
@@ -513,7 +531,7 @@ class BedrockConverseLLM(BaseAWSLLM):
             model=model,
             response=response,
             model_response=model_response,
-            stream=stream if isinstance(stream, bool) else False,
+            stream=stream,
             logging_obj=logging_obj,
             api_key="",
             data=data,

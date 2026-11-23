@@ -159,6 +159,8 @@
     "endpoint_type",
     "request_body",
     "chunks",
-    "error"
+    "error",
+    "head",
+    "detached"
   ]
 }

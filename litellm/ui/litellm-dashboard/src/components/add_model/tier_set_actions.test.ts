@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ComplexityRouterConfigValue } from "./ComplexityRouterConfig";
 import { applyTierSetAction, setFallbackTier } from "./tier_set_actions";
 
@@ -23,6 +23,20 @@ const apply = (value: ComplexityRouterConfigValue, action: Parameters<typeof app
   applyTierSetAction(value, rules, action);
 
 describe("applyTierSetAction", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("adds independently editable tiers without a secure browser context", () => {
+    vi.stubGlobal("crypto", { getRandomValues: crypto.getRandomValues.bind(crypto), randomUUID: undefined });
+    const first = apply(builtIn, { kind: "add" }).value;
+    const second = apply(first, { kind: "add" }).value;
+    const rows = second.custom_tier_set?.tiers ?? [];
+    expect(rows).toHaveLength(6);
+    expect(new Set(rows.map((row) => row.id)).size).toBe(6);
+    expect(rows.every((row) => row.id.length > 0)).toBe(true);
+    const renamed = apply(second, { kind: "patch", id: rows[4].id, patch: { name: "AUDIT" } }).value;
+    expect(renamed.custom_tier_set?.tiers.slice(-2).map((row) => row.name)).toEqual(["AUDIT", ""]);
+  });
+
   it.each(["llm", "capability", "llm_v2"] as const)(
     "clears an emptied plan floor and can repopulate its pool for %s",
     (classifier_type) => {

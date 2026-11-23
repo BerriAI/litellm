@@ -42,6 +42,7 @@ from models import (
     KeyDeleteByAliasBody,
     KeyGenerateBody,
     KeyGenerateResponse,
+    KeyInfoBulkBody,
     KeyInfoParams,
     KeyInfoResponse,
     KeyListParams,
@@ -214,7 +215,7 @@ class ManagementClient:
             self.proxy.transport.post(
                 "/v2/key/info",
                 headers=self.proxy.management_headers(caller_key),
-                json=KeyDeleteBody(keys=keys),
+                json=KeyInfoBulkBody(keys=keys),
                 response_type=BulkKeyInfoResponse,
             )
         )

@@ -78,3 +78,33 @@ async def test_recorded_usage_matches_enforced_windows_and_keeps_shared_members_
     )
     assert result[1].budget_usage is not None
     assert tuple(item.spend for item in result[1].budget_usage) == (40, 0, 0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("duration,year,month", (("1mo", 2026, 10), ("12mo", 2025, 11)))
+@pytest.mark.parametrize("microsecond", (0, 123000, 123456, 123999, 999999))
+async def test_fractional_reset_keeps_recorded_customer_window_spend(
+    duration: str, year: int, month: int, microsecond: int
+) -> None:
+    database: Final = Database()
+    reset: Final = datetime(2026, 11, 15, 5, 48, 2, microsecond, tzinfo=timezone.utc)
+    stored_start: Final = datetime(year, month, 15, 5, 48, 2, microsecond // 1000 * 1000, tzinfo=timezone.utc)
+    entity: Final = member("fractional").model_copy(
+        update={"effective_budget": Budget(budget_limits=(BudgetLimit(
+            budget_duration=duration, max_budget=10, reset_at=reset,
+        ),))}
+    )
+    database.litellm_budgetwindowspend.rows = {
+        "window": Record(
+            entity_type="customer_member", entity_id="fractional", window_duration=duration,
+            window_start=stored_start, spend=10,
+        )
+    }
+
+    result: Final = await customer_budget_usage(
+        (entity,), cast(TableActions[LiteLLM_BudgetWindowSpend], database.litellm_budgetwindowspend), NOW,
+        BudgetResetSettings(),
+    )
+
+    assert result[0].budget_usage is not None
+    assert tuple((item.spend, item.window_start) for item in result[0].budget_usage) == ((10, stored_start),)

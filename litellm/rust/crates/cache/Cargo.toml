@@ -7,6 +7,7 @@ repository.workspace = true
 
 [dependencies]
 litellm-error.workspace = true
+litellm-python-compat.workspace = true
 serde.workspace = true
 serde_json = { workspace = true, features = ["preserve_order"] }
 strum.workspace = true

@@ -9,8 +9,9 @@ from contextlib import AsyncExitStack, closing
 from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 from urllib.parse import unquote, urlparse
 
 import pytest
@@ -97,6 +98,251 @@ class TestBedrockFilesTransformation:
         model_input: Final = json.dumps(result[0]["modelInput"])
         assert "_litellm_undeclared_sentinel" not in model_input, model_input
         assert result[0]["modelInput"]["max_tokens"] == 10
+
+    @staticmethod
+    def _nova_row(
+        url: str = "/v1/chat/completions",
+        model: str = "us.amazon.nova-pro-v1:0",
+        body_params: Mapping[str, object] = MappingProxyType({}),
+    ) -> Mapping[str, object]:
+        prompt: Final = {"input": "hi"} if url == "/v1/responses" else {"messages": [{"role": "user", "content": "hi"}]}
+        return {
+            "custom_id": "nova-tier-1",
+            "method": "POST",
+            "url": url,
+            "body": {"model": model, **prompt, **body_params},
+        }
+
+    @pytest.mark.parametrize("tier", [None, "auto", "AUTO"])
+    def test_nova_row_with_null_or_auto_service_tier_sends_no_tier(self, tier: str | None):
+        result: Final = BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(
+            [self._nova_row(body_params={"service_tier": tier})]
+        )
+
+        assert "serviceTier" not in result[0]["modelInput"]
+
+    @pytest.mark.parametrize("tier", ["ultrafast", "reserved", "priority", "standard_only"])
+    @pytest.mark.parametrize("url", ["/v1/chat/completions", "/v1/responses"])
+    def test_nova_row_with_a_service_tier_fails_the_row_without_drop_params(self, url: str, tier: str):
+        with pytest.raises(litellm.UnsupportedParamsError, match=f"service_tier='{tier}'"):
+            BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(
+                [self._nova_row(url, body_params={"service_tier": tier})]
+            )
+
+    @pytest.mark.parametrize("tier", ["ultrafast", "reserved"])
+    @pytest.mark.parametrize("url", ["/v1/chat/completions", "/v1/responses"])
+    def test_nova_row_level_drop_params_drops_the_service_tier(self, url: str, tier: str):
+        result: Final = BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(
+            [self._nova_row(url, body_params={"service_tier": tier, "drop_params": True})]
+        )
+
+        assert "serviceTier" not in result[0]["modelInput"]
+        assert "drop_params" not in json.dumps(result[0]["modelInput"])
+
+    def test_nova_row_service_tier_drops_under_global_drop_params(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr(litellm, "drop_params", True)
+
+        result: Final = BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(
+            [self._nova_row(body_params={"service_tier": "reserved"})]
+        )
+
+        assert "serviceTier" not in result[0]["modelInput"]
+
+    def test_nova_row_level_drop_params_sends_a_guarded_system_part_as_text(self):
+        result: Final = BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(
+            [
+                self._nova_row(
+                    body_params={
+                        "messages": [
+                            {"role": "system", "content": [{"type": "guarded_text", "text": "be brief"}]},
+                            {"role": "user", "content": "hi"},
+                        ],
+                        "drop_params": True,
+                    }
+                )
+            ]
+        )
+
+        assert result[0]["modelInput"]["system"] == [{"text": "be brief"}]
+
+    @pytest.mark.parametrize("tier", ["ultrafast", "reserved"])
+    def test_deployment_drop_params_drops_the_service_tier_from_the_uploaded_nova_rows(self, tier: str):
+        request: Final = BedrockFilesConfig().transform_create_file_request(
+            model="us.amazon.nova-pro-v1:0",
+            create_file_data={
+                "file": (
+                    "batch.jsonl",
+                    json.dumps(self._nova_row(body_params={"service_tier": tier})).encode(),
+                    "application/jsonl",
+                ),
+                "purpose": "batch",
+            },
+            optional_params={
+                "aws_access_key_id": "test-key-id",
+                "aws_secret_access_key": "test-secret",
+                "aws_region_name": "us-west-2",
+            },
+            litellm_params={"s3_bucket_name": "litellm-batch-bucket", "drop_params": True},
+        )
+
+        assert isinstance(request, dict)
+        uploaded_row: Final = json.loads(request["data"])
+        assert uploaded_row["modelInput"]["messages"]
+        assert "serviceTier" not in uploaded_row["modelInput"]
+
+    @pytest.mark.parametrize("drop_params, drops", [(False, False), ("false", False), (True, True), ("true", True)])
+    def test_deployment_drop_params_decides_whether_a_claude_row_tier_fails_or_drops(
+        self, drop_params: bool | str, drops: bool
+    ):
+        claude_model: Final = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+        row: Final = {
+            "custom_id": "claude-tier-1",
+            "method": "POST",
+            "url": "/v1/chat/completions",
+            "body": {
+                "model": claude_model,
+                "messages": [{"role": "user", "content": "hi"}],
+                "max_tokens": 10,
+                "service_tier": "ultrafast",
+            },
+        }
+
+        def upload() -> Mapping[str, object]:
+            request: Final = BedrockFilesConfig().transform_create_file_request(
+                model=claude_model,
+                create_file_data={
+                    "file": ("batch.jsonl", json.dumps(row).encode(), "application/jsonl"),
+                    "purpose": "batch",
+                },
+                optional_params={
+                    "aws_access_key_id": "test-key-id",
+                    "aws_secret_access_key": "test-secret",
+                    "aws_region_name": "us-west-2",
+                },
+                litellm_params={"s3_bucket_name": "litellm-batch-bucket", "drop_params": drop_params},
+            )
+            assert isinstance(request, dict)
+            return json.loads(request["data"])
+
+        if not drops:
+            with pytest.raises(BedrockError, match="service_tier"):
+                upload()
+            return
+
+        model_input: Final = upload()["modelInput"]
+        assert model_input["messages"]
+        assert "service_tier" not in json.dumps(model_input)
+        assert "serviceTier" not in model_input
+
+    @pytest.mark.parametrize("tier", [None, "auto", "AUTO"])
+    def test_claude_row_with_null_or_auto_service_tier_sends_no_tier(self, tier: str | None):
+        result: Final = BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(
+            [
+                self._nova_row(
+                    model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+                    body_params={"service_tier": tier, "max_tokens": 10},
+                )
+            ]
+        )
+
+        assert result[0]["modelInput"]["messages"]
+        assert "service_tier" not in json.dumps(result[0]["modelInput"])
+
+    @pytest.mark.parametrize("drop_params, drops", [(True, True), ("true", True), (False, False), ("false", False)])
+    @pytest.mark.parametrize(
+        "model", ["us.anthropic.claude-haiku-4-5-20251001-v1:0", "openai.gpt-oss-120b-1:0", "us.amazon.nova-pro-v1:0"]
+    )
+    def test_row_level_drop_params_decides_whether_a_rejected_tier_fails_or_drops_for_every_row_format(
+        self, model: str, drop_params: bool | str, drops: bool
+    ):
+        rows: Final = [
+            self._nova_row(
+                model=model, body_params={"service_tier": "ultrafast", "drop_params": drop_params, "max_tokens": 10}
+            )
+        ]
+
+        if not drops:
+            with pytest.raises(litellm.UnsupportedParamsError, match="service_tier='ultrafast'"):
+                BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(rows)
+            return
+
+        result: Final = BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(rows)
+        assert result[0]["modelInput"]["messages"]
+        assert "ultrafast" not in json.dumps(result[0]["modelInput"])
+
+    @pytest.mark.parametrize(
+        "tier, bedrock_tier",
+        [("priority", "priority"), ("Flex", "flex"), ("standard", "default"), ("default", "default")],
+    )
+    @pytest.mark.parametrize("url", ["/v1/chat/completions", "/v1/responses"])
+    def test_openai_format_row_forwards_a_tier_its_invoke_body_takes(self, url: str, tier: str, bedrock_tier: str):
+        result: Final = BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(
+            [self._nova_row(url, model="openai.gpt-oss-120b-1:0", body_params={"service_tier": tier})]
+        )
+
+        assert result[0]["modelInput"]["service_tier"] == bedrock_tier
+
+    @pytest.mark.parametrize("tier", [None, "auto", "AUTO"])
+    def test_openai_format_row_with_null_or_auto_service_tier_sends_no_tier(self, tier: str | None):
+        result: Final = BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(
+            [self._nova_row(model="openai.gpt-oss-120b-1:0", body_params={"service_tier": tier})]
+        )
+
+        assert "service_tier" not in result[0]["modelInput"]
+
+    @pytest.mark.parametrize("tier", ["ultrafast", "reserved", "scale"])
+    @pytest.mark.parametrize("url", ["/v1/chat/completions", "/v1/responses"])
+    def test_openai_format_row_with_a_tier_bedrock_rejects_fails_without_drop_params(self, url: str, tier: str):
+        with pytest.raises(litellm.UnsupportedParamsError, match=f"service_tier='{tier}'"):
+            BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(
+                [self._nova_row(url, model="openai.gpt-oss-120b-1:0", body_params={"service_tier": tier})]
+            )
+
+    @pytest.mark.parametrize("url", ["/v1/chat/completions", "/v1/responses"])
+    def test_passthrough_row_keeps_row_level_drop_params_out_of_the_model_input(self, url: str):
+        result: Final = BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(
+            [self._nova_row(url, "openai.gpt-oss-120b-1:0", {"drop_params": True})]
+        )
+
+        assert "drop_params" not in result[0]["modelInput"]
+
+    @pytest.mark.parametrize(
+        "row_drop_params, deployment_drop_params, drops",
+        [(True, False, True), ("true", False, True), (None, True, True), (None, False, False), ("false", False, False)],
+    )
+    def test_drop_params_decides_whether_a_param_nova_rejects_fails_or_drops_from_an_uploaded_nova_row(
+        self, row_drop_params: bool | str | None, deployment_drop_params: bool, drops: bool
+    ):
+        tool: Final = {"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}
+        row_params: Final = {
+            "tools": [tool],
+            "tool_choice": "none",
+            **({} if row_drop_params is None else {"drop_params": row_drop_params}),
+        }
+        row_bytes: Final = json.dumps(self._nova_row(body_params=row_params)).encode()
+
+        def upload() -> Mapping[str, object]:
+            request: Final = BedrockFilesConfig().transform_create_file_request(
+                model="us.amazon.nova-pro-v1:0",
+                create_file_data={"file": ("batch.jsonl", row_bytes, "application/jsonl"), "purpose": "batch"},
+                optional_params={
+                    "aws_access_key_id": "test-key-id",
+                    "aws_secret_access_key": "test-secret",
+                    "aws_region_name": "us-west-2",
+                },
+                litellm_params={"s3_bucket_name": "litellm-batch-bucket", "drop_params": deployment_drop_params},
+            )
+            assert isinstance(request, dict)
+            return json.loads(request["data"])
+
+        if not drops:
+            with pytest.raises(BedrockError, match="tool_choice"):
+                upload()
+            return
+
+        tool_config: Final = upload()["modelInput"]["toolConfig"]
+        assert tool_config["tools"]
+        assert "toolChoice" not in tool_config
 
     def test_nova_text_only_uses_converse_format(self):
         """
@@ -1430,6 +1676,7 @@ class TestBedrockFilesEmbeddingTransformation:
             BedrockFilesConfig._transform_batch_body_to_chat_body(
                 {"model": "bedrock/amazon.titan-embed-text-v2:0", "input": "hi"},
                 BedrockBatchRecordKind.EMBEDDING,
+                drop_params=False,
             )
 
     def test_explicit_chat_url_with_input_body_short_circuits_to_chat(self):
@@ -4455,6 +4702,41 @@ def test_sign_s3_request_without_body_uses_the_s3_pair_when_it_differs_from_the_
     )
 
 
+def test_file_download_identity_survives_the_typed_s3_params(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.llms.bedrock.files.transformation import S3_SIGNED_REQUEST_HEADERS_PARAM
+
+    monkeypatch.setattr(litellm, "bedrock_session_tag_fields", ["user_api_key_alias"])
+    monkeypatch.setattr(litellm, "bedrock_session_name_fields", ["user_api_key_alias"])
+    sts: Final = MagicMock()
+    sts.assume_role.return_value = {
+        "Credentials": {
+            "AccessKeyId": "ASIAFILEIDENTITY",
+            "SecretAccessKey": "secret",
+            "SessionToken": "token",
+            "Expiration": datetime(2099, 1, 1, tzinfo=timezone.utc),
+        }
+    }
+    params: Final[dict[str, object]] = {
+        "aws_access_key_id": "AKIACALLER",
+        "aws_secret_access_key": "caller-secret",
+        "aws_region_name": "us-east-1",
+        "aws_role_name": "arn:aws:iam::123456789012:role/file-identity",
+        "s3_bucket_name": "safe-bucket",
+        "litellm_metadata": {"user_api_key_alias": "file-caller"},
+    }
+    with patch.dict(os.environ, {}, clear=True), patch("boto3.client", return_value=sts):
+        BedrockFilesConfig().transform_file_content_request(
+            file_content_request={"file_id": "s3://safe-bucket/litellm-bedrock-files-model-id-abc.jsonl"},
+            optional_params={},
+            litellm_params=params,
+        )
+    assert sts.assume_role.call_args.kwargs["Tags"] == ({"Key": "user_api_key_alias", "Value": "file-caller"},)
+    assert sts.assume_role.call_args.kwargs["RoleSessionName"] == "file-caller"
+    assert _authorization(params[S3_SIGNED_REQUEST_HEADERS_PARAM]).startswith(
+        "AWS4-HMAC-SHA256 Credential=ASIAFILEIDENTITY/"
+    )
+
+
 def test_transform_file_content_request_signs_with_the_s3_pair_from_litellm_params():
     from litellm.llms.bedrock.files.transformation import S3_SIGNED_REQUEST_HEADERS_PARAM, BedrockFilesConfig
 
@@ -4630,6 +4912,32 @@ def _batch_line_with_body(field: str, value: object) -> str:
     return _batch_line({**_VALID_BATCH_RECORD["body"], field: value})
 
 
+_BATCH_S3_IMAGE: Final = "s3://media-bucket/dir/cat.png"
+_BATCH_S3_MEDIA_REFUSAL: Final = (
+    f"Batch input file line 2 has s3:// media URLs ({_BATCH_S3_IMAGE}). "
+    "LiteLLM does not accept s3:// media URLs in Bedrock batch files, so send the media inline as base64 data"
+)
+_CHAT_BATCH_LINE_WITH_AN_S3_IMAGE: Final = _batch_line_with_body(
+    "messages",
+    [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": _BATCH_S3_IMAGE}}]}],
+)
+_S3_IMAGE_PART: Final = {"type": "image_url", "image_url": {"url": _BATCH_S3_IMAGE}}
+_CHAT_BATCH_LINE_WITH_THE_SAME_S3_IMAGE_TWICE: Final = _batch_line_with_body(
+    "messages", [{"role": "user", "content": [_S3_IMAGE_PART, _S3_IMAGE_PART]}]
+)
+_RESPONSES_BATCH_LINE_WITH_AN_S3_IMAGE: Final = json.dumps(
+    {
+        "custom_id": "req-2",
+        "method": "POST",
+        "url": "/v1/responses",
+        "body": {
+            "model": "bedrock/amazon.nova-pro-v1:0",
+            "input": [{"role": "user", "content": [{"type": "input_image", "image_url": _BATCH_S3_IMAGE}]}],
+        },
+    }
+)
+
+
 @pytest.mark.usefixtures(httpx_transport.__name__)
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
@@ -4672,6 +4980,21 @@ def _batch_line_with_body(field: str, value: object) -> str:
             id="claude-list-role-before-a-system-message",
         ),
         pytest.param(
+            f"{_VALID_BATCH_LINE}\n{_CHAT_BATCH_LINE_WITH_AN_S3_IMAGE}\n".encode(),
+            _BATCH_S3_MEDIA_REFUSAL,
+            id="chat-s3-image",
+        ),
+        pytest.param(
+            f"{_VALID_BATCH_LINE}\n{_RESPONSES_BATCH_LINE_WITH_AN_S3_IMAGE}\n".encode(),
+            _BATCH_S3_MEDIA_REFUSAL,
+            id="responses-s3-image",
+        ),
+        pytest.param(
+            f"{_VALID_BATCH_LINE}\n{_CHAT_BATCH_LINE_WITH_THE_SAME_S3_IMAGE_TWICE}\n".encode(),
+            _BATCH_S3_MEDIA_REFUSAL,
+            id="chat-repeated-s3-image",
+        ),
+        pytest.param(
             f"{_VALID_BATCH_LINE}\n{'[' * 1_000_000}{']' * 1_000_000}\n".encode(),
             "Batch input file line 2 could not be parsed",
             id="deep-nesting",
@@ -4702,6 +5025,35 @@ async def test_create_file_rejects_a_malformed_batch_line_with_a_400_before_uplo
     assert exc_info.value.status_code == 400
     assert exc_info.value.message.startswith(expected_message)
     assert not put_route.called
+
+
+@pytest.mark.usefixtures(httpx_transport.__name__)
+@pytest.mark.asyncio
+async def test_create_file_uploads_s3_values_that_no_converse_record_sends_as_an_s3_source(
+    respx_mock: respx.MockRouter,
+) -> None:
+    put_route: Final = respx_mock.put(url__regex=r"https://s3\..+").respond(status_code=200)
+    passthrough_messages: Final = [{"role": "user", "content": [_S3_IMAGE_PART]}]
+    passthrough_line: Final = _batch_line(
+        {"model": "bedrock/openai.gpt-oss-120b-1:0", "max_tokens": 10, "messages": passthrough_messages}
+    )
+    metadata_only_line: Final = _batch_line_with_body("metadata", {"url": _BATCH_S3_IMAGE})
+
+    await litellm.acreate_file(
+        file=("batch.jsonl", f"{passthrough_line}\n{metadata_only_line}\n".encode(), "application/jsonl"),
+        purpose="batch",
+        custom_llm_provider="bedrock",
+        s3_bucket_name="litellm-batch-bucket",
+        aws_region_name="us-west-2",
+        aws_access_key_id="test-access-key",
+        aws_secret_access_key="test-secret-key",
+    )
+
+    passthrough_record, metadata_only_record = (
+        json.loads(line) for line in put_route.calls.last.request.content.decode().split("\n")
+    )
+    assert passthrough_record["modelInput"]["messages"] == passthrough_messages
+    assert metadata_only_record["recordId"] == _VALID_BATCH_RECORD["custom_id"]
 
 
 @pytest.mark.usefixtures(httpx_transport.__name__)
@@ -4745,3 +5097,258 @@ async def test_create_file_uploads_a_bedrock_format_batch_file_unchanged_when_it
     )
 
     assert put_route.calls.last.request.content == f"{bedrock_line}\n".encode()
+
+
+_HOSTED_MCP_TOOL: Final = {
+    "type": "mcp",
+    "server_label": "deepwiki",
+    "server_url": "https://mcp.deepwiki.com/mcp",
+    "require_approval": "never",
+}
+_WEATHER_TOOL: Final = {
+    "type": "function",
+    "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}},
+}
+_BATCH_MODELS: Final = (
+    "bedrock/us.amazon.nova-pro-v1:0",
+    "bedrock/us.anthropic.claude-sonnet-4-6",
+    "bedrock/openai.gpt-oss-120b-1:0",
+)
+
+
+def _uploaded_row(
+    model: str, url: str, body: Mapping[str, object], deployment_drop_params: bool | None
+) -> Mapping[str, object]:
+    upload: Final = BedrockFilesConfig().transform_create_file_request(
+        model="",
+        create_file_data={
+            "file": (
+                "batch.jsonl",
+                json.dumps({"custom_id": "row-1", "method": "POST", "url": url, "body": body}).encode(),
+                "application/jsonl",
+            ),
+            "purpose": "batch",
+        },
+        optional_params={
+            "aws_access_key_id": "test-key-id",
+            "aws_secret_access_key": "test-secret",
+            "aws_region_name": "us-west-2",
+        },
+        litellm_params={
+            "s3_bucket_name": "litellm-batch-bucket",
+            "model": model,
+            **({} if deployment_drop_params is None else {"drop_params": deployment_drop_params}),
+        },
+    )
+    return json.loads(upload["data"])["modelInput"]
+
+
+def _uploaded_hosted_mcp_row(
+    model: str, row_drop_params: object, deployment_drop_params: bool | None
+) -> Mapping[str, object]:
+    body: Final = {
+        "model": model,
+        "max_tokens": 10,
+        "messages": [{"role": "user", "content": "hi"}],
+        "tools": [_HOSTED_MCP_TOOL, _WEATHER_TOOL],
+        "tool_choice": {"type": "function", "function": {"name": "deepwiki"}},
+        **({} if row_drop_params is None else {"drop_params": row_drop_params}),
+    }
+    return _uploaded_row(model, "/v1/chat/completions", body, deployment_drop_params)
+
+
+@pytest.mark.parametrize("model", _BATCH_MODELS)
+@pytest.mark.parametrize(
+    ("row_drop_params", "deployment_drop_params"), [(None, True), (True, None)], ids=["deployment", "row"]
+)
+def test_batch_row_drops_a_hosted_mcp_tool_and_its_tool_choice_under_drop_params(
+    monkeypatch: pytest.MonkeyPatch, model: str, row_drop_params: bool | None, deployment_drop_params: bool | None
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    model_input: Final = _uploaded_hosted_mcp_row(model, row_drop_params, deployment_drop_params)
+
+    assert "get_weather" in json.dumps(model_input)
+    assert "deepwiki" not in json.dumps(model_input)
+    assert "drop_params" not in model_input
+
+
+_ROW_VALUE_KEEPS_DROPPING_OFF: Final = "this row sets `drop_params` to a value that does not turn dropping on"
+_SET_DROP_PARAMS_ANYWHERE: Final = (
+    "on the row, in `router_settings.default_litellm_params`, or on the deployment the upload names, to drop it."
+)
+
+
+@pytest.mark.parametrize("model", _BATCH_MODELS)
+@pytest.mark.parametrize(
+    ("row_drop_params", "deployment_drop_params", "advice", "misleading_advice"),
+    [
+        (None, None, _SET_DROP_PARAMS_ANYWHERE, "this row sets"),
+        (False, True, _ROW_VALUE_KEEPS_DROPPING_OFF, "router_settings"),
+        ("no", True, _ROW_VALUE_KEEPS_DROPPING_OFF, "drop_params: false"),
+        (0, True, _ROW_VALUE_KEEPS_DROPPING_OFF, "drop_params: false"),
+    ],
+    ids=["unset", "row_false_wins", "row_no_wins", "row_zero_wins"],
+)
+def test_batch_row_with_a_hosted_mcp_tool_is_refused_with_advice_that_matches_why_it_was_refused(
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    row_drop_params: object,
+    deployment_drop_params: bool | None,
+    advice: str,
+    misleading_advice: str,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    with pytest.raises(BedrockError) as exc_info:
+        _uploaded_hosted_mcp_row(model, row_drop_params, deployment_drop_params)
+
+    assert exc_info.value.status_code == 400
+    assert "`deepwiki`" in exc_info.value.message
+    assert advice in exc_info.value.message
+    assert misleading_advice not in exc_info.value.message
+    assert "litellm_proxy/mcp" not in exc_info.value.message
+
+
+_RESPONSES_WEATHER_TOOL: Final = {
+    "type": "function",
+    "name": "get_weather",
+    "parameters": {"type": "object", "properties": {}},
+}
+
+
+@pytest.mark.parametrize("model", _BATCH_MODELS)
+@pytest.mark.parametrize(
+    ("row_drop_params", "deployment_drop_params"), [(None, True), (True, None)], ids=["deployment", "row"]
+)
+def test_batch_responses_row_drops_a_tool_choice_that_forces_the_dropped_hosted_mcp_server(
+    monkeypatch: pytest.MonkeyPatch, model: str, row_drop_params: bool | None, deployment_drop_params: bool | None
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    body: Final = {
+        "model": model,
+        "input": "hi",
+        "max_output_tokens": 10,
+        "tools": [_HOSTED_MCP_TOOL, _RESPONSES_WEATHER_TOOL],
+        "tool_choice": {"type": "mcp", "server_label": "deepwiki"},
+        **({} if row_drop_params is None else {"drop_params": row_drop_params}),
+    }
+
+    model_input: Final = json.dumps(_uploaded_row(model, "/v1/responses", body, deployment_drop_params))
+
+    assert "get_weather" in model_input
+    assert "deepwiki" not in model_input
+    assert "toolChoice" not in model_input
+    assert "tool_choice" not in model_input
+    assert "drop_params" not in model_input
+
+
+_CHAT_ROW: Final = {"messages": [{"role": "user", "content": "hi"}], "max_tokens": 10}
+_FORCE_DEEPWIKI: Final = {"type": "mcp", "server_label": "deepwiki"}
+_FORCE_DOCS: Final = {"type": "mcp", "server_label": "docs"}
+_RESPONSES_ROW: Final = {"input": "hi", "max_output_tokens": 10}
+_REAL_TIME_MCP_CHOICE_REFUSAL: Final = (
+    "tool_choice type 'mcp' forces an OpenAI hosted tool and is only supported for azure, litellm_proxy, openai"
+)
+_REAL_TIME_CALLS: Final = MappingProxyType(
+    {"/v1/chat/completions": litellm.completion, "/v1/responses": litellm.responses}
+)
+
+
+@pytest.mark.parametrize("model", _BATCH_MODELS)
+@pytest.mark.parametrize(
+    ("url", "body", "drop_params", "cause"),
+    [
+        pytest.param(
+            "/v1/chat/completions",
+            {**_CHAT_ROW, "tools": [_HOSTED_MCP_TOOL, _WEATHER_TOOL], "tool_choice": _FORCE_DOCS},
+            True,
+            "This request sends no hosted MCP tool with server_label `docs`. Send that tool or remove the tool_choice.",
+            id="chat-another-server",
+        ),
+        pytest.param(
+            "/v1/chat/completions",
+            {**_CHAT_ROW, "tools": [_WEATHER_TOOL], "tool_choice": _FORCE_DEEPWIKI},
+            True,
+            "This request sends no hosted MCP tool with server_label `deepwiki`. "
+            "Send that tool or remove the tool_choice.",
+            id="chat-no-mcp-tool",
+        ),
+        pytest.param(
+            "/v1/chat/completions",
+            {**_CHAT_ROW, "tools": [_HOSTED_MCP_TOOL, _WEATHER_TOOL], "tool_choice": _FORCE_DEEPWIKI},
+            False,
+            "Set drop_params to true to drop this tool_choice together with the hosted MCP tool `deepwiki`, "
+            "or remove both.",
+            id="chat-drop-params-off",
+        ),
+        pytest.param(
+            "/v1/responses",
+            {**_RESPONSES_ROW, "tools": [_HOSTED_MCP_TOOL, _RESPONSES_WEATHER_TOOL], "tool_choice": _FORCE_DOCS},
+            True,
+            "This request sends no hosted MCP tool with server_label `docs`. Send that tool or remove the tool_choice.",
+            id="responses-another-server",
+        ),
+        pytest.param(
+            "/v1/responses",
+            {**_RESPONSES_ROW, "tools": [_RESPONSES_WEATHER_TOOL], "tool_choice": _FORCE_DEEPWIKI},
+            True,
+            "This request sends no hosted MCP tool with server_label `deepwiki`. "
+            "Send that tool or remove the tool_choice.",
+            id="responses-no-mcp-tool",
+        ),
+    ],
+)
+def test_batch_row_is_refused_like_a_real_time_call_when_drop_params_cannot_drop_its_mcp_tool_choice(
+    monkeypatch: pytest.MonkeyPatch, model: str, url: str, body: Mapping[str, object], drop_params: bool, cause: str
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    with pytest.raises(BedrockError) as batch:
+        _uploaded_row(model, url, {"model": model, **body}, drop_params)
+    with pytest.raises(litellm.BadRequestError) as real_time:
+        _REAL_TIME_CALLS[url](
+            model=model, **body, drop_params=drop_params, api_key="test-bedrock-token", aws_region_name="us-west-2"
+        )
+
+    assert batch.value.status_code == 400
+    assert _REAL_TIME_MCP_CHOICE_REFUSAL in batch.value.message
+    assert batch.value.message.endswith(f"custom_llm_provider=bedrock. {cause}")
+    assert real_time.value.message.endswith(f"custom_llm_provider=bedrock. {cause}")
+
+
+@pytest.mark.parametrize("model", _BATCH_MODELS)
+@pytest.mark.parametrize(
+    ("url", "body"),
+    [
+        (
+            "/v1/chat/completions",
+            {
+                "messages": [{"role": "user", "content": "hi"}],
+                "max_tokens": 10,
+                "tools": [_HOSTED_MCP_TOOL, _WEATHER_TOOL],
+                "tool_choice": {"type": "function", "function": {"name": "deepwiki"}},
+            },
+        ),
+        (
+            "/v1/responses",
+            {
+                "input": "hi",
+                "max_output_tokens": 10,
+                "tools": [_HOSTED_MCP_TOOL, _RESPONSES_WEATHER_TOOL],
+                "tool_choice": {"type": "mcp", "server_label": "deepwiki"},
+            },
+        ),
+    ],
+    ids=["chat", "responses"],
+)
+def test_batch_row_with_a_null_drop_params_takes_its_deployments_drop_params(
+    monkeypatch: pytest.MonkeyPatch, model: str, url: str, body: Mapping[str, object]
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    model_input: Final = json.dumps(_uploaded_row(model, url, {"model": model, **body, "drop_params": None}, True))
+
+    assert "get_weather" in model_input
+    assert "deepwiki" not in model_input
+    assert "drop_params" not in model_input

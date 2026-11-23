@@ -1,3 +1,6 @@
+import { Bell, Plus } from "lucide-react";
+import { PageContent } from "@/components/shared/Page";
+import { PageHeader, PageHeaderTitle, PageHeaderDescription, PageHeaderControls } from "@/components/shared/PageHeader";
 import type { ParseKeys } from "i18next";
 import React, { useEffect, useState } from "react";
 import { Controller, FormProvider, useForm, useFormContext } from "react-hook-form";
@@ -610,10 +613,25 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
   }
 
   return (
-    <div className="mx-4">
-      <div className="grid grid-cols-1 gap-2 p-8 w-full mt-2">
-        <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as SettingsTab)}>
-          <TabsList variant="line">
+    <>
+      <PageContent>
+        <PageHeader>
+          <PageHeaderTitle>
+            <Bell />
+            {t("shell.nav.items.loggingAndAlerts")}
+          </PageHeaderTitle>
+          <PageHeaderDescription>{t("shell.pageDescriptions.loggingAndAlerts")}</PageHeaderDescription>
+          {activeTab === "logging-callbacks" && (
+            <PageHeaderControls>
+              <Button onClick={() => setShowAddCallbacksModal(true)}>
+                <Plus />
+                {t("loggingAndAlerts.loggingCallbacks.table.add")}
+              </Button>
+            </PageHeaderControls>
+          )}
+        </PageHeader>
+        <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as SettingsTab)} className="gap-6">
+          <TabsList variant="line" className="max-w-full justify-start overflow-x-auto">
             <TabsTrigger value="logging-callbacks">{t("loggingAndAlerts.page.tabs.loggingCallbacks")}</TabsTrigger>
             <TabsTrigger value="cloudzero-cost-tracking">{t("loggingAndAlerts.page.tabs.cloudZero")}</TabsTrigger>
             <TabsTrigger value="alerting-types">{t("loggingAndAlerts.page.tabs.alertingTypes")}</TabsTrigger>
@@ -626,7 +644,6 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
               callbacks={callbacks}
               availableCallbacks={allCallbacks}
               isLoading={isLoadingCallbacks}
-              onAdd={() => setShowAddCallbacksModal(true)}
               onEdit={(cb) => {
                 setSelectedEditCallback(cb);
                 setShowEditCallback(true);
@@ -743,7 +760,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
             <MSTeamsSettings accessToken={accessToken} userID={userID} userRole={userRole} alerts={alerts} />
           </TabsContent>
         </Tabs>
-      </div>
+      </PageContent>
 
       <Dialog open={showAddCallbacksModal} onOpenChange={(open) => !open && closeAddCallbackModal()}>
         <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[800px]">
@@ -851,7 +868,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
         onOk={confirmDeleteCallback}
         confirmLoading={isDeletingCallback}
       />
-    </div>
+    </>
   );
 };
 

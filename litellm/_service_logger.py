@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 
     from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
-    Span = _Span | Any
+    Span = _Span
     OTELClass = OpenTelemetry
 else:
     Span = Any

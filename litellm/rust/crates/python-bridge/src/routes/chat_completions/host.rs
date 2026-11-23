@@ -3,7 +3,11 @@ use std::convert::Infallible;
 
 use crate::routes::inference::InferenceHost;
 use litellm_host_python::{InvokeError, PythonBinding, PythonHostCalls, PythonOwned};
-use litellm_inference_chat::{Error, route::ChatCompletions, types::ChatCompletionsCall};
+use litellm_inference_chat::{
+    Error,
+    route::ChatCompletions,
+    types::{ChatCompletionsCall, OptionalParams},
+};
 use pyo3::{
     gc::{PyTraverseError, PyVisit},
     prelude::*,
@@ -21,7 +25,7 @@ pub(super) fn project(
     Ok(ChatCompletionsCall {
         model: call.options.model,
         messages: call.input,
-        optional_params: call.params,
+        optional_params: OptionalParams::ProviderMapped(call.params),
         api_key: call.options.api_key,
         api_base: call.options.api_base,
         custom_llm_provider: call.options.custom_llm_provider,
@@ -40,8 +44,9 @@ impl PythonBinding for ChatCompletionsPythonHost {
         arguments: &Bound<'_, PyDict>,
     ) -> Result<ChatCompletionsCall, InvokeError<Error>> {
         let call = project(&mut self.0, py, arguments).map_err(InvokeError::Python)?;
-        if call
-            .optional_params
+        let (OptionalParams::OpenAi { params, .. } | OptionalParams::ProviderMapped(params)) =
+            &call.optional_params;
+        if params
             .get("stream")
             .is_some_and(|value| value == &serde_json::Value::Bool(true))
         {

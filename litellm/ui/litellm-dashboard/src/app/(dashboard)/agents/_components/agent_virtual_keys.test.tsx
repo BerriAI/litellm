@@ -17,7 +17,7 @@ const makeKey = (overrides: Partial<KeyResponse>): KeyResponse =>
 describe("AgentVirtualKeys", () => {
   it("shows the empty state when the agent has no keys", () => {
     renderWithProviders(<AgentVirtualKeys keys={[]} isLoading={false} onKeyClick={vi.fn()} />);
-    expect(screen.getByText("No virtual key assigned to this agent.")).toBeInTheDocument();
+    expect(screen.getByText("No Virtual Key assigned to this agent.")).toBeInTheDocument();
   });
 
   it("shows a loading state while keys are fetching", () => {

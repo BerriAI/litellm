@@ -59,6 +59,9 @@ class KeyMetadata(BaseModel):
     batch_enqueued_token_limit: int | None = None
     tag: str | None = None
     guardrails: list[str] | None = None
+    webhook_token: str | None = None
+    apiKey: str | None = None
+    OpenAIAPIKey: str | None = None
 
 
 class ObjectPermission(BaseModel):
@@ -184,6 +187,10 @@ class KeyInfo(BaseModel):
 
 class KeyInfoResponse(BaseModel):
     info: KeyInfo
+
+
+class KeyInfoBulkBody(BaseModel, frozen=True):
+    keys: list[str]
 
 
 class BulkKeyInfoResponse(BaseModel, frozen=True):
@@ -1656,6 +1663,10 @@ class TeamDeleteBody(BaseModel):
     team_ids: list[str]
 
 
+class TeamBlockBody(BaseModel):
+    team_id: str
+
+
 class ProjectCreateBody(BaseModel):
     team_id: str
     project_alias: str
@@ -1688,6 +1699,7 @@ class UserNewBody(BaseModel):
     user_id: str | None = None
     auto_create_key: bool | None = None
     max_budget: float | None = None
+    metadata: dict[str, str] | None = None
 
 
 class UserNewResponse(BaseModel):

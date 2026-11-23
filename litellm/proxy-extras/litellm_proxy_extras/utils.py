@@ -93,6 +93,7 @@ class _InvalidIndex:
 MAX_MIGRATE_DEPLOY_ATTEMPTS = 4
 LIBPQ_URL_PARAMS: Final = frozenset(
     {
+        "host",
         "sslmode",
         "sslcert",
         "sslkey",

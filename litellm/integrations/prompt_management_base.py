@@ -1,7 +1,8 @@
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Final
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Final
 
-from typing_extensions import TypedDict
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.prompts.init_prompts import PromptSpec
@@ -15,7 +16,7 @@ class PromptManagementClient(TypedDict):
     prompt_id: str | None
     prompt_template: list[AllMessageValues]
     prompt_template_model: str | None
-    prompt_template_optional_params: dict[str, Any] | None
+    prompt_template_optional_params: ReadOnly[Mapping[str, object] | None]
     completed_messages: list[AllMessageValues] | None
 
 
@@ -33,6 +34,8 @@ def resolve_prompt_manager_ignore_flags(
 
 
 class PromptManagementBase(ABC):
+    ignore_prompt_manager_optional_params: bool | None = False
+
     @property
     @abstractmethod
     def integration_name(self) -> str:
@@ -198,7 +201,8 @@ class PromptManagementBase(ABC):
         resolved_ignore_model, resolved_ignore_optional_params = resolve_prompt_manager_ignore_flags(
             prompt_spec=prompt_spec,
             ignore_prompt_manager_model=ignore_prompt_manager_model,
-            ignore_prompt_manager_optional_params=ignore_prompt_manager_optional_params,
+            ignore_prompt_manager_optional_params=ignore_prompt_manager_optional_params
+            or self.ignore_prompt_manager_optional_params,
         )
         return self.post_compile_prompt_processing(
             prompt_template=prompt_template,
@@ -245,7 +249,8 @@ class PromptManagementBase(ABC):
         resolved_ignore_model, resolved_ignore_optional_params = resolve_prompt_manager_ignore_flags(
             prompt_spec=prompt_spec,
             ignore_prompt_manager_model=ignore_prompt_manager_model,
-            ignore_prompt_manager_optional_params=ignore_prompt_manager_optional_params,
+            ignore_prompt_manager_optional_params=ignore_prompt_manager_optional_params
+            or self.ignore_prompt_manager_optional_params,
         )
         return self.post_compile_prompt_processing(
             prompt_template=prompt_template,

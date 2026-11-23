@@ -7,7 +7,7 @@ use litellm_python_compat::{
     literal::literal_eval,
     pickle,
     repr::{repr, to_str},
-    truthy::truthy,
+    truthy::{json_truthy, truthy},
 };
 use rstest::{fixture, rstest};
 use serde::Deserialize;
@@ -38,6 +38,8 @@ struct Row {
     truthy: bool,
     json: Option<String>,
     json_error: Option<String>,
+    json_truthy: Option<bool>,
+    json_type: Option<String>,
     pickle: Option<BTreeMap<String, String>>,
     view: Option<String>,
 }
@@ -115,6 +117,16 @@ const KNOWN: &[(&str, &str, &str)] = &[
         "-(2**70)",
         "to_json",
         "serde_json has no exact form for integers beyond i64",
+    ),
+    (
+        "2**64",
+        "json type",
+        "serde_json holds integers beyond u64 as f64",
+    ),
+    (
+        "-(2**70)",
+        "json type",
+        "serde_json holds integers beyond i64 as f64",
     ),
     (
         "b''",
@@ -359,6 +371,32 @@ fn loads_reads_back_what_python_json_dumps_wrote(fixtures: &Fixtures) {
             Err(error) => format!("error: {error}"),
         };
         mismatches.check(row, "json.loads", text, &actual);
+    }
+    mismatches.finish();
+}
+
+/// `bool` and `type(...).__name__` of `json.loads(json.dumps(value))`, read off the
+/// `serde_json` value without building a [`Value`]. Texts with `NaN` or `Infinity` have no
+/// `serde_json` form and are skipped.
+#[rstest]
+fn serde_json_values_match_python_bool_and_type(fixtures: &Fixtures) {
+    let mut mismatches = Mismatches::default();
+    for row in &fixtures.rows {
+        let (Some(text), Some(expected_truthy), Some(expected_type)) =
+            (&row.json, row.json_truthy, &row.json_type)
+        else {
+            continue;
+        };
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(text) else {
+            continue;
+        };
+        mismatches.check(
+            row,
+            "json bool",
+            &expected_truthy.to_string(),
+            &json_truthy(&value).to_string(),
+        );
+        mismatches.check(row, "json type", expected_type, json::type_name(&value));
     }
     mismatches.finish();
 }

@@ -1,8 +1,8 @@
 import math
 from contextlib import asynccontextmanager
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Final
 
 import pytest
 
@@ -11,10 +11,13 @@ from litellm.proxy.db.budget_window_spend_writer import (
     commit_window_spend_updates,
     open_window_spend_row,
     roll_window_spend_row,
+    roll_window_spend_rows,
     spend_logs_seed_totals,
 )
 from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
+    WindowSpendUpdateQueue,
     build_window_spend_transaction,
+    to_wire_payload,
 )
 from litellm.proxy.db.log_db_metrics import record_db_io
 
@@ -37,17 +40,22 @@ class _FakeBatcher:
 class _FakeDB:
     """Stands in for prisma_client.db; records every statement it is handed."""
 
-    def __init__(self, existing_rows: list[dict[str, str]] | None = None) -> None:
+    def __init__(
+        self,
+        existing_rows: list[dict[str, str]] | None = None,
+        committed_rows: tuple[Mapping[str, object], ...] = (),
+    ) -> None:
         self.existing_rows = existing_rows or []
         self.query_raw_calls: list[tuple[str, tuple[Any, ...]]] = []
         self.execute_raw_calls: list[tuple[str, tuple[Any, ...]]] = []
         self.batcher = _FakeBatcher()
         self.committed = False
+        self.committed_rows = iter(committed_rows)
 
-    async def query_raw(self, query: str, *args: Any) -> list[dict[str, str]]:
+    async def query_raw(self, query: str, *args: Any) -> Sequence[Mapping[str, object]]:
         record_db_io()
         self.query_raw_calls.append((query, args))
-        return self.existing_rows
+        return (next(self.committed_rows),) if "RETURNING" in query else self.existing_rows
 
     async def execute_raw(self, query: str, *args: Any) -> int:
         record_db_io()
@@ -148,6 +156,63 @@ def _batch(spend: float, started_at: datetime | None = BATCH_STARTED_AT) -> dict
 
 def _existing(entity_type: str, entity_id: str, window_duration: str) -> dict[str, str]:
     return {"entity_type": entity_type, "entity_id": entity_id, "window_duration": window_duration}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("capture", (False, True))
+@pytest.mark.parametrize("already_rolled", (False, True))
+@pytest.mark.parametrize("offset", (None, timezone(timedelta(hours=5, minutes=30))))
+async def test_alert_snapshots_keep_each_committed_balance_before_the_next_rollover(
+    capture: bool, already_rolled: bool, offset: timezone | None
+) -> None:
+    periods: Final = (
+        (datetime(2026, 2, 28, tzinfo=timezone.utc), datetime(2026, 3, 31, tzinfo=timezone.utc), 11.0, 2.0),
+        (datetime(2026, 3, 31, tzinfo=timezone.utc), datetime(2026, 4, 30, tzinfo=timezone.utc), 6.0, 6.0),
+    )
+    rows: Final = tuple(
+        dict(
+            entity_type="app",
+            entity_id="app",
+            window_duration="1mo",
+            window_start=periods[1][0] if already_rolled else start,
+            spend=total,
+        )
+        for start, _, total, _ in periods
+    )
+    database: Final = _FakeDB([_existing("app", "app", "1mo")], rows)
+    committed: Final = await commit_window_spend_updates(
+        prisma_client=_FakePrismaClient(database),
+        transactions=WindowSpendUpdateQueue.get_aggregated_window_spend_transactions(
+            (
+                tuple(
+                    {
+                        **to_wire_payload(
+                            build_window_spend_transaction(
+                                "app", "app", "1mo", start, delta, reset_at=reset.isoformat().replace("+00:00", "Z")
+                            )
+                        ),
+                        "window_start": (
+                            start.astimezone(offset) if offset else start.replace(tzinfo=None)
+                        ).isoformat(),
+                    }
+                    for start, reset, _, delta in periods
+                ),
+            )
+        ),
+        capture_spend=capture,
+    )
+    assert tuple((row.window_start, row.reset_at, row.spend) for row in committed) == (
+        tuple(
+            (
+                periods[1][0] if already_rolled else start,
+                None if already_rolled and start != periods[1][0] else reset,
+                total,
+            )
+            for start, reset, total, _ in periods
+        )
+        if capture
+        else ()
+    )
 
 
 @pytest.mark.asyncio
@@ -407,6 +472,25 @@ async def test_roll_window_spend_row_is_conditional_on_the_stored_window_being_o
 
 
 @pytest.mark.asyncio
+async def test_many_window_rolls_deduplicate_at_the_newest_start_in_one_guarded_update() -> None:
+    transaction: Final = _FakeDB()
+    shifted: Final = WINDOW_B.astimezone(timezone(timedelta(hours=-7)))
+
+    await roll_window_spend_rows(
+        transaction, "team", "t1",
+        (("30d", shifted), ("1d", WINDOW_A), ("30d", WINDOW_A), ("30d", WINDOW_B.replace(tzinfo=None))),
+    )
+
+    ((query, params),) = transaction.execute_raw_calls
+    assert params[:4] == ("team", "t1", ("1d", "30d"), ("2026-08-01T00:00:00+00:00", "2026-08-31T00:00:00+00:00"))
+    assert "stored.window_start < pending.window_start" in query
+    assert "stored.window_duration = pending.duration" in query
+    assert "stored.entity_type = $1 AND stored.entity_id = $2" in query
+    await roll_window_spend_rows(transaction, "team", "t1", ())
+    assert len(transaction.execute_raw_calls) == 1
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(("replaces_window_start", "replaced_param"), [(None, None), (WINDOW_A, datetime(2026, 8, 1))])
 async def test_open_window_spend_row_moves_only_the_window_the_caller_saw_end(replaces_window_start, replaced_param):
     db = _FakeDB()
@@ -544,7 +628,7 @@ async def test_new_row_is_correct_when_the_batch_logs_have_not_flushed_yet():
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "entity_type, expected_column",
-    [("key", "api_key = $1"), ("team", "team_id = $1")],
+    [("key", "api_key = $1"), ("team", "team_id = $1"), ("user", '"user" = $1')],
 )
 async def test_seed_aggregate_sql_splits_the_window_at_the_batch_start(entity_type, expected_column):
     db = _FakeDB(existing_rows=[{"total": 1.25, "before_batch": 0.75}])
@@ -564,8 +648,7 @@ async def test_seed_aggregate_sql_splits_the_window_at_the_batch_start(entity_ty
     assert (
         'FILTER (WHERE EXISTS (SELECT 1 FROM "LiteLLM_SpendLogDelivery" delivery '
         'WHERE delivery.request_id = "LiteLLM_SpendLogs".request_id) '
-        "OR \"startTime\" < ($3::timestamptz AT TIME ZONE 'UTC'))"
-        in normalized
+        "OR \"startTime\" < ($3::timestamptz AT TIME ZONE 'UTC'))" in normalized
     )
     assert 'FROM "LiteLLM_SpendLogs"' in normalized
     # startTime is TIMESTAMP(3): the bound is floored to the second so the
@@ -603,7 +686,7 @@ async def test_seed_aggregate_returns_none_for_an_entity_type_with_no_spend_logs
 
     totals = await spend_logs_seed_totals(
         prisma_client=_FakePrismaClient(db),
-        entity_type="user",
+        entity_type="unsupported",
         entity_id="u1",
         window_start=WINDOW_A,
         batch_started_at=None,
@@ -649,9 +732,7 @@ async def test_window_reads_inside_an_enclosing_transaction_use_its_connection()
 
     await commit_window_spend_updates(
         prisma_client=_FakePrismaClient(client_db),
-        transactions=(
-            build_window_spend_transaction("key", "k1", "30d", WINDOW_A, 1.0, started_at=BATCH_STARTED_AT),
-        ),
+        transactions=(build_window_spend_transaction("key", "k1", "30d", WINDOW_A, 1.0, started_at=BATCH_STARTED_AT),),
         outer_transaction=transaction,
     )
 

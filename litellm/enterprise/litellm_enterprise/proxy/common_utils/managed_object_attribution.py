@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Final, Protocol, TypeGuard, cast
 
 from pydantic import TypeAdapter
@@ -27,6 +27,7 @@ from litellm.repositories.verification_token_repository import VerificationToken
 if TYPE_CHECKING:
     from prisma import models as prisma_models
 
+    from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.utils import PrismaClient
     from litellm.repositories.prisma_protocols import TableActions
 
@@ -70,6 +71,9 @@ class ManagedObjectRow(Protocol):
 
     @property
     def end_user_id(self) -> str | None: ...
+
+    @property
+    def creator_billing_context(self) -> object: ...
 
 
 _TAG_LIST_ADAPTER: Final[TypeAdapter[list[object]]] = TypeAdapter(list[object])
@@ -129,6 +133,42 @@ class ResponseCreator:
     team_id: str | None
     team_metadata: Mapping[str, object]
     settings_read: bool = True
+
+
+_CONTEXT_FIELDS: Final = TypeAdapter(Mapping[str, object])
+_CONTEXT_TIME: Final = TypeAdapter(datetime)
+
+
+def creator_billing_context(auth: UserAPIKeyAuth) -> Mapping[str, object] | None:
+    if auth.customer_hierarchy is None:
+        return None
+    started_at: Final = auth.customer_hierarchy_started_at or datetime.now(timezone.utc)
+    return {"hierarchy": auth.customer_hierarchy.model_dump(mode="json"), "started_at": started_at.isoformat()}
+
+
+def _billing_context(job: ManagedObjectRow) -> Mapping[str, object]:
+    context: Final = getattr(job, "creator_billing_context", None)
+    return _CONTEXT_FIELDS.validate_python(context) if isinstance(context, Mapping) else {}
+
+
+def creator_billing_started_at(job: ManagedObjectRow) -> datetime | None:
+    value: Final = _billing_context(job).get("started_at")
+    return _CONTEXT_TIME.validate_python(value) if value is not None else None
+
+
+def _customer_metadata(job: ManagedObjectRow) -> Mapping[str, object]:
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+    from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth
+
+    snapshot: Final = _billing_context(job).get("hierarchy")
+    if snapshot is None:
+        return {}
+    auth: Final = UserAPIKeyAuth(customer_hierarchy=CustomerHierarchyAuth.model_validate(snapshot))
+    metadata: Final = LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(auth)
+    return {
+        key: value for key, value in metadata.items() if key.startswith(("user_api_key_customer_", "user_api_key_app_"))
+    }
 
 
 class ManagedObjectCreatorAttribution:
@@ -327,6 +367,7 @@ def _shared_metadata(job: ManagedObjectRow, rows: _CreatorRows) -> Mapping[str, 
         **({"user_api_key_team_alias": team_alias} if team_alias is not None else {}),
         **({"user_api_key_org_id": org_id} if org_id is not None else {}),
         **({"tags": tags} if tags else {}),
+        **_customer_metadata(job),
     }
 
 

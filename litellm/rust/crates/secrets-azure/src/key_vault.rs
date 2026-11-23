@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use litellm_auth_azure::{AzureAuthInputs, AzureAuthService, ConfigValue};
 use litellm_auth_types::{InputSource, Sourced};
-use litellm_core_utils::settings::Lookup;
+use litellm_env::Lookup;
 use litellm_secret_value::SecretValue;
 use litellm_secrets_types::{AzureOperationContext, BaseSecretManager, Secret};
 
