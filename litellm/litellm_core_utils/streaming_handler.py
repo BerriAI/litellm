@@ -595,6 +595,7 @@ class CustomStreamWrapper:
         self.complete_response = ""
         self.response_uptil_now = ""
         self._emitted_disqualifying_content = False
+        self.sent_visible_chunk = False
         _model_info: Final[dict] = litellm_params.model_info or {}
 
         _api_base: Final = get_api_base(
@@ -3014,6 +3015,11 @@ class CustomStreamWrapper:
         "images",
         "annotations",
     )
+    _RESTART_DISQUALIFYING_DELTA_FIELDS: Final = tuple(
+        field
+        for field in _CONTINUATION_DISQUALIFYING_DELTA_FIELDS
+        if field not in ("reasoning_content", "thinking_blocks", "reasoning_items")
+    )
 
     @classmethod
     def _delta_disqualifies_continuation(cls, delta: object) -> bool:
@@ -3048,6 +3054,10 @@ class CustomStreamWrapper:
     def _accumulate_streamed_delta(self, delta: object) -> None:
         get: Final = getattr(delta, "get", None)
         content: Final = get("content") if callable(get) else None
+        if (isinstance(content, str) and content) or (
+            callable(get) and any(get(field) for field in self._RESTART_DISQUALIFYING_DELTA_FIELDS)
+        ):
+            self.sent_visible_chunk = True
         self.response_uptil_now += content if isinstance(content, str) else ""
         if not self._emitted_disqualifying_content and self._delta_disqualifies_continuation(delta):
             self._emitted_disqualifying_content = True
@@ -3098,7 +3108,7 @@ class CustomStreamWrapper:
                 llm_provider=self.custom_llm_provider or "anthropic",
                 original_exception=e.original_exception,
                 generated_content=self.response_uptil_now,
-                is_pre_first_chunk=not self.sent_first_chunk,
+                is_pre_first_chunk=not self.sent_visible_chunk,
                 emitted_disqualifying_content=self._emitted_disqualifying_content or e.emitted_disqualifying_content,
             )
 
@@ -3153,7 +3163,7 @@ class CustomStreamWrapper:
             llm_provider=self.custom_llm_provider or "anthropic",
             original_exception=mapped_exception,
             generated_content=self.response_uptil_now,
-            is_pre_first_chunk=not self.sent_first_chunk,
+            is_pre_first_chunk=not self.sent_visible_chunk,
             emitted_disqualifying_content=self._emitted_disqualifying_content,
         )
 

@@ -1332,6 +1332,29 @@ async def test_mid_stream_break_after_reasoning_disqualifies_continuation(loggin
             pass
 
     assert excinfo.value.is_pre_first_chunk is False
+
+
+def test_partial_tool_call_blocks_fallback_restart(logging_obj: Logging) -> None:
+    from litellm.exceptions import RateLimitError
+
+    response: Final = CustomStreamWrapper(
+        completion_stream=iter(()),
+        model=logging_obj.model,
+        logging_obj=logging_obj,
+        custom_llm_provider="openai",
+    )
+    response._accumulate_streamed_delta(
+        Delta(tool_calls=[{"index": 0, "function": {"arguments": '{"path":'}}])
+    )
+    response._accumulate_streamed_delta(Delta(reasoning_content="Continue the tool call"))
+
+    with pytest.raises(MidStreamFallbackError) as excinfo:
+        response._handle_stream_fallback_error(
+            RateLimitError(message="Rate limit exceeded", model=logging_obj.model, llm_provider="openai")
+        )
+
+    assert excinfo.value.is_pre_first_chunk is False
+    assert excinfo.value.emitted_disqualifying_content is True
     assert excinfo.value.emitted_disqualifying_content is True
 
 
@@ -10744,6 +10767,50 @@ async def test_leaving_an_async_with_block_closes_the_provider_stream():
     async with _wrapper_over(stream):
         pass
     assert stream.close_calls == 1
+
+
+def test_reasoning_only_prefix_keeps_fallback_eligible(logging_obj: Logging) -> None:
+    from litellm.exceptions import MidStreamFallbackError
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+
+    response: Final = CustomStreamWrapper(
+        completion_stream=iter(()),
+        model=logging_obj.model,
+        logging_obj=logging_obj,
+        custom_llm_provider="vertex_ai_beta",
+    )
+    response.sent_first_chunk = True
+    response._accumulate_streamed_delta({"reasoning_content": "thinking hard"})
+    assert response.sent_visible_chunk is False
+
+    with pytest.raises(MidStreamFallbackError) as excinfo:
+        response._handle_stream_fallback_error(
+            VertexAIError(status_code=429, message="Resource exhausted.", headers=None)
+        )
+
+    assert excinfo.value.is_pre_first_chunk is True
+    assert excinfo.value.emitted_disqualifying_content is True
+
+
+def test_visible_answer_delta_still_blocks_fallback_restart(logging_obj: Logging) -> None:
+    from litellm.exceptions import MidStreamFallbackError
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+
+    response: Final = CustomStreamWrapper(
+        completion_stream=iter(()),
+        model=logging_obj.model,
+        logging_obj=logging_obj,
+        custom_llm_provider="vertex_ai_beta",
+    )
+    response.sent_first_chunk = True
+    response._accumulate_streamed_delta({"content": "partial answer"})
+
+    with pytest.raises(MidStreamFallbackError) as excinfo:
+        response._handle_stream_fallback_error(
+            VertexAIError(status_code=429, message="Resource exhausted.", headers=None)
+        )
+
+    assert excinfo.value.is_pre_first_chunk is False
 
 
 def _final_chunk_with_dict_usage(choices) -> ModelResponseStream:
