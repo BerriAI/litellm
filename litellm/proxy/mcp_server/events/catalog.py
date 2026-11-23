@@ -65,12 +65,10 @@ def resolve(name: str, servers: tuple[EventServer, ...]) -> ResolvedEvent | None
 
 
 def offered_modes(
-    descriptor: EventType, server: MCPServer, settings: EventsSettings, context: OperationContext
+    descriptor: EventType, server: MCPServer, webhooks_enabled: bool, context: OperationContext
 ) -> tuple[DeliveryMode, ...]:
     webhook_ready: Final = (
-        server.available_on_public_internet
-        and settings.public_base_url is not None
-        and holds_webhooks(context.user_api_key_auth)
+        server.available_on_public_internet and webhooks_enabled and holds_webhooks(context.user_api_key_auth)
     )
     return tuple(mode for mode in descriptor.delivery if mode != "webhook" or webhook_ready)
 
@@ -84,9 +82,9 @@ def publishable(descriptor: EventType, config: MCPServerEventsConfig, grant: Eve
 
 
 def _published(
-    descriptor: EventType, server: MCPServer, settings: EventsSettings, context: OperationContext
+    descriptor: EventType, server: MCPServer, webhooks_enabled: bool, context: OperationContext
 ) -> EventType | None:
-    modes: Final = offered_modes(descriptor, server, settings, context)
+    modes: Final = offered_modes(descriptor, server, webhooks_enabled, context)
     if not modes:
         return None
     return descriptor.model_copy(update={"name": gateway_name(server, descriptor.name), "delivery": modes})
@@ -96,7 +94,7 @@ async def server_catalog(
     context: OperationContext,
     server: EventServer,
     allowed: tuple[MCPServer, ...],
-    settings: EventsSettings,
+    webhooks_enabled: bool,
     runtime: EventsRuntime,
 ) -> tuple[EventType, ...]:
     if await runtime.rate_limited(server.server, context.user_api_key_auth):
@@ -104,7 +102,7 @@ async def server_catalog(
     target: Final = await runtime.prepare_target(context, server.server, allowed)
     grant: Final = await runtime.grant(server.server.server_id, context.user_api_key_auth)
     listed: Final = tuple(
-        _published(descriptor, server.server, settings, context)
+        _published(descriptor, server.server, webhooks_enabled, context)
         for descriptor in await runtime.descriptors(target)
         if publishable(descriptor, server.config, grant)
     )
@@ -116,14 +114,18 @@ async def list_events(
     settings: EventsSettings,
     runtime: EventsRuntime,
     deadline: float = LIST_DEADLINE_SECONDS,
+    *,
+    store_available: bool = False,
 ) -> tuple[EventType, ...]:
     """Every reachable server's catalog, fetched concurrently; a server that fails or misses the deadline is skipped."""
     allowed: Final = await runtime.allowed_servers(context)
 
+    webhooks_enabled: Final = store_available and settings.public_base_url is not None
+
     async def safe(server: EventServer) -> tuple[EventType, ...]:
         try:
             with anyio.fail_after(deadline):
-                return await server_catalog(context, server, allowed, settings, runtime)
+                return await server_catalog(context, server, allowed, webhooks_enabled, runtime)
         except Exception as error:  # noqa: BLE001  # one failing upstream must not hide the other servers' events
             verbose_logger.warning("MCP events/list failed for server %s: %s", server.server.server_id, error)
             return ()

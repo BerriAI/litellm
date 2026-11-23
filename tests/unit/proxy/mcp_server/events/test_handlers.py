@@ -20,6 +20,7 @@ from litellm.proxy.mcp_server.events.handlers import (
 )
 from litellm.proxy.mcp_server.events.runtime import EventsRuntime
 from litellm.proxy.mcp_server.events.upstream import StreamFrame
+from litellm.types.mcp_server.events import EventType
 
 from .fakes import SETTINGS, FakeUpstream, context, occurrence, runtime, server
 
@@ -121,6 +122,13 @@ async def test_events_list_returns_the_gateway_catalog() -> None:
     status, frames = await _call(_server(SETTINGS, runtime((server(),))), "events/list", {})
     assert status == 200
     assert [item["name"] for item in frames[0]["result"]["events"]] == ["ci-build.failed"]  # pyright: ignore[reportIndexIssue, reportCallIssue, reportArgumentType]  # wire dict
+
+
+@pytest.mark.asyncio
+async def test_listing_without_storage_omits_a_webhook_only_event() -> None:
+    webhook_only: Final = EventType(name="webhook.only", delivery=("webhook",))
+    status, frames = await _call(_server(SETTINGS, runtime((server(),), (webhook_only,))), "events/list", {})
+    assert status == 200 and frames[0]["result"]["events"] == []  # pyright: ignore[reportIndexIssue]  # JSON-RPC response
 
 
 @pytest.mark.asyncio
