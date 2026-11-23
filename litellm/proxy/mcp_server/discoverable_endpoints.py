@@ -30,6 +30,7 @@ from typing_extensions import Buffer
 
 from litellm._logging import verbose_logger
 from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.litellm_core_utils.core_helpers import SupportsGet, require_get, unpackable_mapping
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -636,7 +637,7 @@ def _normalize_for_token_comparison(value: object) -> str:
 
 
 def _validate_token_response(
-    token_response: Mapping[str, object],
+    token_response: SupportsGet,
     validation_rules: Mapping[str, object],
     server_id: str,
 ) -> None:
@@ -706,6 +707,7 @@ async def _store_per_user_token_server_side(
     identity_binding_proof: str | None = None,
     cimd_client_id: str | None = None,
     requested_scope: str | None = None,
+    refreshed_from: str | None = None,
 ) -> None:
     """Persist the OAuth token server-side and warm the Redis cache.
 
@@ -733,7 +735,7 @@ async def _store_per_user_token_server_side(
     except (TypeError, ValueError):
         expires_in = None
 
-    refresh_token: Final[str | None] = token_response.get("refresh_token") or None
+    refresh_token: Final[str | None] = token_response.get("refresh_token") or refreshed_from
     raw_scope: Final[object] = _DECODED_JSON.validate_python(token_response.get("scope", requested_scope))
     scopes: Final[list[str] | None] = raw_scope.split() if isinstance(raw_scope, str) else None
 
@@ -743,7 +745,7 @@ async def _store_per_user_token_server_side(
             store_user_oauth_credential,
         )
 
-        await store_user_oauth_credential(
+        stored: Final = await store_user_oauth_credential(
             prisma_client=prisma_client,
             user_id=user_id,
             server_id=server.server_id,
@@ -753,7 +755,10 @@ async def _store_per_user_token_server_side(
             scopes=scopes,
             identity_binding_proof=identity_binding_proof,
             **({"cimd_client_id": cimd_client_id} if cimd_client_id is not None else {}),
+            **({"refreshed_from": refreshed_from} if refreshed_from is not None else {}),
         )
+        if stored is False:
+            return
         verbose_logger.info(
             "_store_per_user_token_server_side: stored token for user=%s server=%s",
             user_id,
@@ -1521,7 +1526,7 @@ async def exchange_token_with_server(
     # This rejects tokens from wrong Slack workspaces, Atlassian orgs, etc.
     if resolved_server.token_validation and isinstance(resolved_server.token_validation, dict):
         _validate_token_response(
-            token_response=token_response,
+            token_response=require_get(_DECODED_JSON.validate_python(token_response)),
             validation_rules=resolved_server.token_validation,
             server_id=resolved_server.server_id,
         )
@@ -1579,6 +1584,7 @@ async def exchange_token_with_server(
                         token_response=token_response,
                         identity_binding_proof=binding_proof,
                         requested_scope=requested_scope,
+                        **({"refreshed_from": refresh_token} if grant_type == "refresh_token" else {}),
                         **({"cimd_client_id": cimd_client_id} if cimd_client_id is not None else {}),
                     )
                 else:
@@ -2336,7 +2342,7 @@ async def register_client_with_server(
         server_id=resolved_server.server_id,
     )
 
-    token_response: Final = response.json()
+    token_response: Final = _DECODED_JSON.validate_python(response.json())
     persistence_result: Final = (
         await _persist_dcr_client_registration(
             resolved_server, token_response, current_redirect_uri, replace_stale_client=replace_stale_client
@@ -2348,12 +2354,12 @@ async def register_client_with_server(
         return dummy_return
     if persistence_result == "failed":
         raise HTTPException(status_code=503, detail="OAuth client registration could not be saved; retry authorization")
-    shared_client_response: Final[Mapping[str, object]] = (
+    shared_client_response: Final[object] = (
         _without_upstream_client_management(_UPSTREAM_REGISTRATION.validate_python(token_response))
         if persistence_result == "persisted" and not replace_stale_client and isinstance(token_response, dict)
         else token_response
     )
-    bound_response: Final[Mapping[str, object]] = (
+    bound_response: Final[object] = (
         {
             **_UPSTREAM_REGISTRATION.validate_python(token_response),
             "dcr_issuer": resolved_server.issuer,
@@ -2363,8 +2369,8 @@ async def register_client_with_server(
         if persistence_result == "persisted" and replace_stale_client
         else shared_client_response
     )
-    client_response: Final[Mapping[str, object]] = (
-        {**bound_response, "redirect_uris": client_facing_redirect_uris}
+    client_response: Final[object] = (
+        {**unpackable_mapping(bound_response), "redirect_uris": client_facing_redirect_uris}
         if client_redirect_uris and not bridge_relay
         else bound_response
     )
@@ -3144,7 +3150,7 @@ async def _build_oauth_protected_resource_response(
     }
 
 
-def _obo_protected_resource_response(mcp_server: MCPServer | None, resource_url: str) -> dict | None:
+def _obo_protected_resource_response(mcp_server: MCPServer | None, resource_url: str) -> dict[str, object] | None:
     """The OBO (token_exchange) PRM, or None when this server is not OBO / no issuer is configured.
 
     The client SSOs with the IdP to obtain a subject token, which LiteLLM then exchanges, so discovery
@@ -3200,7 +3206,7 @@ def oauth_protected_resource_root(request: Request) -> dict[str, str | tuple[str
     }
 
 
-def _build_aggregate_protected_resource_response(request: Request) -> dict:
+def _build_aggregate_protected_resource_response(request: Request) -> dict[str, object]:
     """RFC 9728 metadata for the aggregate /mcp resource: the gateway itself is
     the authorization server. No per-server names or scopes leak here; access
     is resolved after sign-in from the authenticated user's grants.

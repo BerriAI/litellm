@@ -30,6 +30,7 @@ from litellm.types.utils import (
     ModelResponse,
     StandardLoggingPayloadErrorInformation,
 )
+from tests.test_litellm_rust.support.recording_server import ResponseSpec, recording_service
 
 
 @pytest.mark.asyncio
@@ -80,6 +81,85 @@ async def test_openai_messages_forwards_stop_sequences_to_chat_completions(
         body: Final = json.loads(chat.calls.last.request.content)
         assert body["stop"] == ["STOPPROBE", "ENDPROBE"]
         assert "stop_sequences" not in body
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("drop_params", [True, False], ids=["drop_params", "no_drop_params"])
+@pytest.mark.parametrize("base_from_env", [False, True], ids=["deployment_api_base", "anthropic_api_base_env"])
+async def test_anthropic_version_2026_10_21_sends_sampling_params_to_a_third_party_anthropic_api(
+    monkeypatch: pytest.MonkeyPatch, base_from_env: bool, drop_params: bool
+) -> None:
+    with recording_service() as upstream:
+        upstream.expected_requests = 1
+        if base_from_env:
+            monkeypatch.setenv("ANTHROPIC_API_BASE", upstream.base_url)
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": "deepseek",
+                    "litellm_params": {
+                        "model": "anthropic/deepseek-v4-flash",
+                        "api_key": "test-api-key",
+                        "drop_params": drop_params,
+                        **({} if base_from_env else {"api_base": upstream.base_url}),
+                    },
+                }
+            ]
+        )
+        upstream.enqueue(
+            ResponseSpec(
+                body={
+                    "id": "msg_sampling",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "deepseek-v4-flash",
+                    "content": [{"type": "text", "text": "hi"}],
+                    "stop_reason": "end_turn",
+                    "stop_sequence": None,
+                    "usage": {"input_tokens": 1, "output_tokens": 1},
+                }
+            )
+        )
+        await router.aanthropic_messages(
+            model="deepseek",
+            max_tokens=16,
+            temperature=0.2,
+            messages=[{"role": "user", "content": "hi"}],
+            extra_headers={"anthropic-version": "2026-10-21"},
+        )
+
+    sent: Final = upstream.requests[-1]
+    assert sent.headers["anthropic-version"] == "2026-10-21"
+    assert isinstance(sent.body, dict)
+    assert sent.body["temperature"] == 0.2
+
+
+@pytest.mark.asyncio
+async def test_anthropic_version_2026_10_21_refuses_deployment_sampling_params_before_calling_anthropic() -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "claude",
+                "litellm_params": {
+                    "model": "anthropic/claude-sonnet-4-6",
+                    "api_key": "test-api-key",
+                    "api_base": "https://api.anthropic.com",
+                    "temperature": 1,
+                },
+            }
+        ]
+    )
+
+    with pytest.raises(
+        litellm.UnsupportedParamsError,
+        match=r"does not support temperature=1\. anthropic-version 2026-10-21 removed temperature, top_p and top_k",
+    ):
+        await router.aanthropic_messages(
+            model="claude",
+            max_tokens=16,
+            messages=[{"role": "user", "content": "hi"}],
+            extra_headers={"anthropic-version": "2026-10-21"},
+        )
 
 
 @pytest.mark.parametrize("stop_sequences", [None, []], ids=["no-stops", "empty-stops"])
@@ -2885,3 +2965,101 @@ async def test_a_v2_callback_between_pre_request_hooks_sees_the_first_rewrite(mo
     await _pre_request_hooks()
 
     assert journal == ["first", ("v2", [{"name": "rewritten"}]), "second"]
+
+
+_DIAGNOSTICS: Final = {"previous_message_id": "msg_01previous"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "deployment",
+    (
+        {"model": "anthropic/claude-opus-5-5", "api_key": "sk-ant-test"},
+        {
+            "model": "azure_ai/claude-opus-5-5",
+            "api_key": "test-key",
+            "api_base": "https://foundry-test.services.ai.azure.com/anthropic",
+        },
+    ),
+    ids=("anthropic", "azure_ai"),
+)
+@pytest.mark.parametrize("drop_params", (False, True), ids=("default", "drop_params"))
+async def test_messages_forwards_diagnostics_to_providers_that_take_it(
+    deployment: dict[str, str], drop_params: bool
+) -> None:
+    bodies: Final[list[dict[str, object]]] = []
+
+    await python_messages.anthropic_messages(
+        max_tokens=16,
+        messages=[{"role": "user", "content": "hi"}],
+        client=_bedrock_invoke_recording(bodies),
+        diagnostics=_DIAGNOSTICS,
+        drop_params=drop_params,
+        **deployment,
+    )
+
+    assert bodies[0]["diagnostics"] == _DIAGNOSTICS
+
+
+_AWS_TEST_CREDENTIALS: Final = {
+    "aws_access_key_id": "test-access-key",
+    "aws_secret_access_key": "test-secret-key",
+    "aws_region_name": "us-east-1",
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "deployment",
+    (
+        {"model": "vertex_ai/claude-opus-5-5", "api_key": "ya29.test-token", "vertex_project": "test-project"},
+        {"model": _OPUS_4_8_ON_BEDROCK_INVOKE, **_AWS_TEST_CREDENTIALS},
+        {"model": "bedrock/mantle/anthropic.claude-mythos-preview", **_AWS_TEST_CREDENTIALS},
+    ),
+    ids=("vertex", "bedrock_invoke", "bedrock_mantle"),
+)
+async def test_messages_rejects_diagnostics_before_calling_a_provider_that_rejects_it(
+    deployment: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    bodies: Final[list[dict[str, object]]] = []
+
+    with pytest.raises(litellm.UnsupportedParamsError) as raised:
+        await python_messages.anthropic_messages(
+            max_tokens=16,
+            messages=[{"role": "user", "content": "hi"}],
+            client=_bedrock_invoke_recording(bodies),
+            diagnostics=_DIAGNOSTICS,
+            **deployment,
+        )
+
+    assert raised.value.status_code == 400
+    assert "drop_params" in raised.value.message
+    assert bodies == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "drop",
+    ({"drop_params": True}, {"additional_drop_params": ["diagnostics"]}),
+    ids=("drop_params", "additional_drop_params"),
+)
+async def test_messages_drops_diagnostics_for_a_rejecting_provider_when_asked(
+    drop: dict[str, object], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    bodies: Final[list[dict[str, object]]] = []
+
+    response: Final = await python_messages.anthropic_messages(
+        max_tokens=16,
+        messages=[{"role": "user", "content": "hi"}],
+        model="vertex_ai/claude-opus-5-5",
+        api_key="ya29.test-token",
+        vertex_project="test-project",
+        client=_bedrock_invoke_recording(bodies),
+        diagnostics=_DIAGNOSTICS,
+        **drop,
+    )
+
+    assert response["content"] == [{"type": "text", "text": "ok"}]
+    assert "diagnostics" not in bodies[0]

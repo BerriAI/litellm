@@ -1,12 +1,12 @@
 # What is this?
 ## Helper utils for the management endpoints (keys/users/teams)
 import json
-from collections.abc import Awaitable, Callable, Mapping, MutableMapping, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Mapping, MutableMapping, Sequence
 from collections.abc import Set as AbstractSet
 from datetime import datetime
 from functools import wraps
 from types import MappingProxyType
-from typing import Any, Final, NoReturn, ParamSpec, Protocol, TypeVar
+from typing import Final, NoReturn, ParamSpec, Protocol, TypeVar
 
 from fastapi import HTTPException, Request
 from pydantic import BaseModel, TypeAdapter
@@ -18,7 +18,13 @@ from litellm._internal_context import with_service_target
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.integrations.otel.model.config import is_otel_v2_enabled
-from litellm.litellm_core_utils.core_helpers import attribute_or_none, require_attributes
+from litellm.litellm_core_utils.core_helpers import (
+    KeywordArguments,
+    attribute_or_none,
+    dict_from_pairs,
+    has_attributes,
+    require_attributes,
+)
 from litellm.models.team import BudgetLimitEntry
 from litellm.proxy._types import (  # key request types; user request types; team request types; customer request types
     BudgetNewRequest,
@@ -393,6 +399,7 @@ async def handle_budget_for_entity(
 # default member-budget into an individual member-budget so that the new
 # row starts with the same limits as the default.
 _CLONABLE_BUDGET_FIELDS: Final[tuple[str, ...]] = (
+    "rollover_max_budget",
     "max_budget",
     "soft_budget",
     "max_parallel_requests",
@@ -822,13 +829,26 @@ def _redact_env_var_values(response: MutableMapping[str, object]) -> None:
         response["items"] = [_redact_record_env_vars(item) for item in items]
 
 
+class _KeyValuePairs(Protocol):
+    def __iter__(self) -> Iterator[tuple[str, object]]: ...
+
+
+def _response_fields(result: object) -> Mapping[str, object]:
+    if has_attributes(result, KeywordArguments, "keys"):
+        return dict(result)
+    if has_attributes(result, _KeyValuePairs, "__iter__") or has_attributes(result, _KeyValuePairs, "__getitem__"):
+        return dict(result)
+    dict_from_pairs(result)
+    raise TypeError(f"{type(result).__name__!r} object is not iterable")
+
+
 async def _emit_management_endpoint_otel_span(
     func: Callable,
     kwargs: dict,
     parent_otel_span: Span | None,
     start_time: datetime,
     end_time: datetime,
-    result: Any = None,
+    result: object = None,
     exception: Exception | None = None,
     log_payload: bool = True,
 ) -> None:
@@ -884,7 +904,7 @@ async def _emit_management_endpoint_otel_span(
     _response: dict[str, object] | None = None
     if log_payload and exception is None and result is not None:
         try:
-            raw: Final[Mapping[str, object]] = dict(result)
+            raw: Final = _response_fields(result)
             _response = {k: v for k, v in raw.items() if k not in _CREDENTIAL_FIELDS}
             _redact_env_var_values(_response)
         except Exception:
@@ -911,8 +931,8 @@ async def _emit_management_endpoint_otel_span(
         )
 
 
-_P: Final = ParamSpec("_P")
-_R: Final = TypeVar("_R")
+_P = ParamSpec("_P")
+_R = TypeVar("_R")
 
 
 def management_endpoint_wrapper(func: Callable[_P, Awaitable[_R]]) -> Callable[_P, Awaitable[_R]]:

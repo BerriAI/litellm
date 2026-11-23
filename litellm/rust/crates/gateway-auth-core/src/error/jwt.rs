@@ -233,6 +233,10 @@ pub enum ClaimDenial {
     UnmappedScopeType { kind: &'static str },
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("Authentication Error, invalid credentials")]
+pub(crate) struct InvalidCredentials;
+
 /// The client half of `ModelAccessDeniedHTTPException`, which never names the models that are allowed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 #[error(

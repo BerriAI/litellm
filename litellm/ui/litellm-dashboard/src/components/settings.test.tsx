@@ -81,7 +81,7 @@ describe("Settings", () => {
     renderWithProviders(<Settings {...defaultProps} />);
 
     await waitFor(() => {
-      expect(screen.getByText("Active Logging Callbacks")).toBeInTheDocument();
+      expect(screen.getByRole("heading", { name: "Logging & Alerts", level: 1 })).toBeInTheDocument();
     });
   });
 
@@ -89,6 +89,18 @@ describe("Settings", () => {
     renderWithProviders(<Settings {...defaultProps} />, { searchParams: { tab: "alerting-types" } });
 
     expect(await screen.findByRole("tab", { name: "Alerting Types" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("opens callback creation from the page controls only on the callbacks tab", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<Settings {...defaultProps} />);
+
+    const controls = screen.getByRole("group", { name: "Page controls" });
+    await user.click(within(controls).getByRole("button", { name: "Add Callback" }));
+    expect(screen.getByRole("dialog", { name: "Add Logging Callback" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    await user.click(screen.getByRole("tab", { name: "Alerting Types" }));
+    expect(screen.queryByRole("group", { name: "Page controls" })).not.toBeInTheDocument();
   });
 
   it("should display additional settings tabs", async () => {
@@ -150,7 +162,7 @@ describe("Settings", () => {
     renderWithProviders(<Settings {...defaultProps} />);
 
     await waitFor(() => {
-      expect(screen.getByText("Active Logging Callbacks")).toBeInTheDocument();
+      expect(screen.getByRole("heading", { name: "Logging & Alerts", level: 1 })).toBeInTheDocument();
     });
 
     await waitFor(() => {
@@ -560,7 +572,7 @@ describe("Settings", () => {
     renderWithProviders(<Settings {...defaultProps} />);
 
     await waitFor(() => {
-      expect(screen.getByText("Active Logging Callbacks")).toBeInTheDocument();
+      expect(screen.getByRole("heading", { name: "Logging & Alerts", level: 1 })).toBeInTheDocument();
     });
 
     expect(screen.getByText("CloudZero Cost Tracking")).toBeInTheDocument();
