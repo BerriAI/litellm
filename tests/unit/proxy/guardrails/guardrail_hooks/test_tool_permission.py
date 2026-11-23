@@ -4227,7 +4227,7 @@ class TestToolPermissionGuardrailGenerateContentStream:
     """The Google ``:streamGenerateContent`` route hands the hook raw Gemini SSE frames, which the guardrail
     refused as an unparseable Anthropic stream, so every stream on that route answered 400."""
 
-    def setup_method(self):
+    def setup_method(self) -> None:
         rules: Final = [
             {"id": "allow_weather", "tool_name": r"^get_weather$", "decision": "allow"},
             {"id": "deny_delete", "tool_name": r"^delete_file$", "decision": "deny"},
@@ -4289,7 +4289,7 @@ class TestToolPermissionGuardrailGenerateContentStream:
             ),
         ],
     )
-    async def test_stream_without_a_denied_call_is_delivered_verbatim(self, chunks, mode):
+    async def test_stream_without_a_denied_call_is_delivered_verbatim(self, chunks: list[bytes], mode: str) -> None:
         guardrail: Final = self.blocking if mode == "block" else self.rewriting
 
         delivered: Final = await self._drain(guardrail, chunks)
@@ -4314,13 +4314,13 @@ class TestToolPermissionGuardrailGenerateContentStream:
             pytest.param([_DENIED_FRAME[:50], _DENIED_FRAME[50:]], id="split-mid-line"),
         ],
     )
-    async def test_denied_call_blocks_the_stream(self, chunks):
+    async def test_denied_call_blocks_the_stream(self, chunks: list[bytes]) -> None:
         with pytest.raises(GuardrailRaisedException, match="deny_delete"):
             await self._drain(self.blocking, chunks)
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("as_text", [False, True], ids=["bytes", "str"])
-    async def test_rewrite_replaces_only_the_denied_call(self, as_text):
+    async def test_rewrite_replaces_only_the_denied_call(self, as_text: bool) -> None:
         sent: Final = [
             _generate_content_frame([{"text": "Checking"}]),
             _DENIED_FRAME,
@@ -4352,7 +4352,9 @@ class TestToolPermissionGuardrailGenerateContentStream:
             ),
         ],
     )
-    async def test_rewrite_moves_a_denied_first_call_signature_to_the_first_kept_call(self, chunks):
+    async def test_rewrite_moves_a_denied_first_call_signature_to_the_first_kept_call(
+        self, chunks: list[bytes]
+    ) -> None:
         delivered: Final = await self._drain(self.rewriting, chunks)
 
         denial, allowed_call = _stream_parts(delivered)
@@ -4373,7 +4375,7 @@ class TestToolPermissionGuardrailGenerateContentStream:
             ),
         ],
     )
-    async def test_rewrite_keeps_the_signature_on_the_denial_when_its_turn_has_no_kept_call(self, frame):
+    async def test_rewrite_keeps_the_signature_on_the_denial_when_its_turn_has_no_kept_call(self, frame: bytes) -> None:
         delivered: Final = await self._drain(self.rewriting, [frame])
 
         signed_denial, other_part = _stream_parts(delivered)
@@ -4397,7 +4399,9 @@ class TestToolPermissionGuardrailGenerateContentStream:
             ),
         ],
     )
-    async def test_rewrite_leaves_a_frame_without_a_changed_part_byte_for_byte(self, chunks, untouched):
+    async def test_rewrite_leaves_a_frame_without_a_changed_part_byte_for_byte(
+        self, chunks: list[bytes], untouched: int
+    ) -> None:
         delivered: Final = await self._drain(self.rewriting, chunks)
 
         frames: Final = _joined_text(delivered).split("\r\n\r\n")
@@ -4405,7 +4409,7 @@ class TestToolPermissionGuardrailGenerateContentStream:
         assert "deny_delete" in frames[1 - untouched]
 
     @pytest.mark.asyncio
-    async def test_rewrite_keeps_the_other_candidates_of_the_denied_frame(self):
+    async def test_rewrite_keeps_the_other_candidates_of_the_denied_frame(self) -> None:
         finished: Final = {"finishReason": "STOP", "index": 0}
         denied: Final = {"content": {"role": "model", "parts": [_gemini_function_call("delete_file")]}, "index": 1}
         frame: Final = f"data: {json.dumps({'candidates': [finished, denied]})}\r\n\r\n".encode()
@@ -4461,7 +4465,7 @@ class TestToolPermissionGuardrailGenerateContentStream:
             ),
         ],
     )
-    async def test_stream_no_client_reads_safely_fails_closed(self, chunks, mode):
+    async def test_stream_no_client_reads_safely_fails_closed(self, chunks: list[object], mode: str) -> None:
         guardrail: Final = self.blocking if mode == "block" else self.rewriting
 
         with pytest.raises(GuardrailRaisedException, match="could not be verified"):
