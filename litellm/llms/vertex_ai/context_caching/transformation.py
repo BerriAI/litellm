@@ -6,6 +6,7 @@ Why separate file? Make it easy to see how transformation works
 
 import re
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Final, Literal
@@ -57,7 +58,7 @@ def get_first_continuous_block_idx(
     return len(filtered_messages) - 1
 
 
-def extract_ttl_from_cached_messages(messages: list[AllMessageValues]) -> str | None:
+def extract_ttl_from_cached_messages(messages: Sequence[AllMessageValues]) -> str | None:
     """
     Extract TTL from cached messages. Returns the first valid TTL found.
 
@@ -134,6 +135,33 @@ def _cached_block_end(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class _MarkedBlock:
+    leading_run_end: int
+    block: range
+
+
+def _marked_block(messages: Sequence[AllMessageValues]) -> _MarkedBlock | None:
+    filtered_messages: Final = [(idx, message) for idx, message in enumerate(messages) if is_cached_message(message)]
+    if not filtered_messages:
+        return None
+    leading_system_run, _ = split_leading_system_run(messages)
+    marked_end: Final = filtered_messages[get_first_continuous_block_idx(filtered_messages)][0] + 1
+    return _MarkedBlock(len(leading_system_run), range(filtered_messages[0][0], marked_end))
+
+
+def cached_block_ttl(messages: Sequence[AllMessageValues]) -> str | None:
+    """
+    The TTL the caller marked on the first continuous cached block, read before separate_cached_messages trims a
+    later system run off either end of it, so a reminder that carries the only TTL still sets how long the cache
+    lives.
+    """
+    marked: Final = _marked_block(messages)
+    if marked is None:
+        return None
+    return extract_ttl_from_cached_messages(messages[marked.block.start : marked.block.stop])
+
+
 def separate_cached_messages(
     messages: list[AllMessageValues],
     supports_system_message: bool = True,
@@ -149,23 +177,20 @@ def separate_cached_messages(
     reminder follows it. A model without system message support gets its later system messages back as they
     are, so the request renders them the way it does without a cache.
     """
-    filtered_messages: Final = [(idx, message) for idx, message in enumerate(messages) if is_cached_message(message)]
-    if not filtered_messages:
+    marked: Final = _marked_block(messages)
+    if marked is None:
         return [], messages
 
-    leading_system_run, _ = split_leading_system_run(messages)
-    last_continuous_block_idx: Final = get_first_continuous_block_idx(filtered_messages)
-    marked_end: Final = filtered_messages[last_continuous_block_idx][0] + 1
-    block_start: Final = _cached_block_start(messages, len(leading_system_run), filtered_messages[0][0], marked_end)
+    block_start: Final = _cached_block_start(messages, marked.leading_run_end, marked.block.start, marked.block.stop)
     cached_block: Final = range(
-        block_start, _cached_block_end(messages, len(leading_system_run), block_start, marked_end)
+        block_start, _cached_block_end(messages, marked.leading_run_end, block_start, marked.block.stop)
     )
     uncached: Final = tuple((idx, message) for idx, message in enumerate(messages) if idx not in cached_block)
-    later_messages: Final = tuple(message for idx, message in uncached if idx >= len(leading_system_run))
+    later_messages: Final = tuple(message for idx, message in uncached if idx >= marked.leading_run_end)
     return (
         messages[cached_block.start : cached_block.stop],
         [
-            *(message for idx, message in uncached if idx < len(leading_system_run)),
+            *(message for idx, message in uncached if idx < marked.leading_run_end),
             *(
                 place_mid_conversation_system(later_messages, supports_mid_conversation_system=False)
                 if supports_system_message
@@ -207,13 +232,11 @@ def transform_openai_messages_to_gemini_context_caching(
     messages: list[AllMessageValues],
     custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
     cache_key: str,
+    ttl: str | None,
     vertex_project: str | None,
     vertex_location: str | None,
     drop_params: bool = False,
 ) -> CachedContentRequestBody:
-    # Extract TTL from cached messages BEFORE system message transformation
-    ttl: Final = extract_ttl_from_cached_messages(messages)
-
     supports_system_message: Final = get_supports_system_message(model=model, custom_llm_provider=custom_llm_provider)
 
     transformed_system_messages, new_messages = transform_system_message(

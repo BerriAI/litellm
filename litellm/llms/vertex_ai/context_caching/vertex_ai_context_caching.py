@@ -22,7 +22,9 @@ from ..common_utils import VertexAIError, get_supports_system_message, get_verte
 from ..gemini.transformation import reject_system_message_videos
 from ..vertex_llm_base import VertexBase
 from .transformation import (
+    cached_block_ttl,
     cached_messages_end_on_supported_turn,
+    extract_ttl_from_cached_messages,
     reject_unusable_tool_call_arguments,
     separate_cached_messages,
     transform_openai_messages_to_gemini_context_caching,
@@ -31,6 +33,15 @@ from .transformation import (
 local_cache_obj: Final = Cache(type=LiteLLMCacheType.LOCAL)  # only used for calling 'get_cache_key' function
 
 MAX_PAGINATION_PAGES: Final = 100  # Reasonable upper bound for pagination
+
+
+def _cache_key(
+    cached_messages: Sequence[AllMessageValues], ttl: str | None, tools: object, tool_choice: object, model: str
+) -> str:
+    key: Final = local_cache_obj.get_cache_key(
+        messages=cached_messages, tools=tools, tool_choice=tool_choice, model=model
+    )
+    return key if ttl == extract_ttl_from_cached_messages(cached_messages) else f"{key}-{ttl}"
 
 
 @with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
@@ -415,9 +426,8 @@ class ContextCachingEndpoints(VertexBase):
             client = client
 
         ## CHECK IF CACHED ALREADY
-        generated_cache_key: Final = local_cache_obj.get_cache_key(
-            messages=cached_messages, tools=tools, tool_choice=tool_choice, model=model
-        )
+        ttl: Final = cached_block_ttl(messages)
+        generated_cache_key: Final = _cache_key(cached_messages, ttl, tools, tool_choice, model)
         google_cache_name: Final = self.check_cache(
             cache_key=generated_cache_key,
             client=client,
@@ -439,6 +449,7 @@ class ContextCachingEndpoints(VertexBase):
             model=model,
             messages=cached_messages,
             cache_key=generated_cache_key,
+            ttl=ttl,
             custom_llm_provider=custom_llm_provider,
             vertex_project=vertex_project,
             vertex_location=vertex_location,
@@ -579,9 +590,8 @@ class ContextCachingEndpoints(VertexBase):
             client = client
 
         ## CHECK IF CACHED ALREADY
-        generated_cache_key: Final = local_cache_obj.get_cache_key(
-            messages=cached_messages, tools=tools, tool_choice=tool_choice, model=model
-        )
+        ttl: Final = cached_block_ttl(messages)
+        generated_cache_key: Final = _cache_key(cached_messages, ttl, tools, tool_choice, model)
         google_cache_name: Final = await self.async_check_cache(
             cache_key=generated_cache_key,
             client=client,
@@ -604,6 +614,7 @@ class ContextCachingEndpoints(VertexBase):
             model=model,
             messages=cached_messages,
             cache_key=generated_cache_key,
+            ttl=ttl,
             custom_llm_provider=custom_llm_provider,
             vertex_project=vertex_project,
             vertex_location=vertex_location,
