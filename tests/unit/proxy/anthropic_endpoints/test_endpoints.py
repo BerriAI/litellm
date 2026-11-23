@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 import respx
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 from fastapi.testclient import TestClient
 from starlette.types import Message
@@ -26,7 +26,8 @@ from litellm import Router
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.anthropic_endpoints.endpoints import router as messages_router
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
@@ -399,7 +400,7 @@ class TestProxyExceptionAnthropicEnvelope:
             ),
             patch.object(proxy_server, "proxy_logging_obj") as mock_logging,
         ):
-            mock_logging.post_call_failure_hook = AsyncMock()
+            mock_logging.post_call_failure_hook = AsyncMock(return_value=None)
             response = await ep.anthropic_response(
                 fastapi_response=MagicMock(),
                 request=request,
@@ -676,7 +677,7 @@ class TestHttpExceptionDictDetail:
                 proxy_server, "proxy_logging_obj"
             ) as mock_logging,  # test-quality-ok: module global imported at call time; no injection seam
         ):
-            mock_logging.post_call_failure_hook = AsyncMock()
+            mock_logging.post_call_failure_hook = AsyncMock(return_value=None)
             response: Final = await ep.anthropic_response(
                 fastapi_response=MagicMock(),
                 request=request,
@@ -731,6 +732,97 @@ class TestFailureHookRequestData:
         hook_request_data = mock_logging.post_call_failure_hook.await_args.kwargs["request_data"]
         assert hook_request_data is captured["processor_data"]
         assert hook_request_data["litellm_logging_obj"] == "logging-obj-sentinel"
+
+
+class _RewriteEveryFailure(CustomLogger):
+    async def async_post_call_failure_hook(
+        self,
+        request_data: dict[str, object],
+        original_exception: Exception,
+        user_api_key_dict: UserAPIKeyAuth,
+        traceback_str: str | None = None,
+    ) -> HTTPException:
+        return HTTPException(
+            status_code=500,
+            detail="rewritten by hook",
+            headers={"retry-after": "7", "x-should-retry": "true", "strict-transport-security": "max-age=1"},
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "denial",
+    (
+        litellm.PermissionDeniedError(
+            message="BedrockException - security token invalid",
+            llm_provider="bedrock",
+            model="claude-haiku-5-5",
+            response=httpx.Response(403, request=httpx.Request("POST", "https://bedrock.invalid")),
+        ),
+        ProxyException(message="denied", type="permission_error", param=None, code=403),
+    ),
+    ids=("provider_error", "proxy_exception"),
+)
+async def test_messages_answers_the_error_the_failure_hook_returns(denial: Exception) -> None:
+    import litellm.proxy.anthropic_endpoints.endpoints as ep
+    from litellm.proxy.utils import ProxyLogging
+
+    request: Final = MagicMock()
+    request.headers = {}
+    with (
+        patch.object(
+            ep, "read_request_body", new=AsyncMock(return_value={"model": "claude-haiku-5-5"})
+        ),  # test-quality-ok: endpoint reads the body via a module function; no injection seam
+        patch.object(
+            ep.ProxyBaseLLMRequestProcessing, "base_process_llm_request", new=AsyncMock(side_effect=denial)
+        ),  # test-quality-ok: the provider failure happens inside this call; the test targets the endpoint's except block
+        patch.object(
+            proxy_server, "proxy_logging_obj", new=ProxyLogging(user_api_key_cache=DualCache())
+        ),  # test-quality-ok: module global imported at call time; no injection seam
+        patch.object(
+            litellm, "callbacks", new=[_RewriteEveryFailure()]
+        ),  # test-quality-ok: callbacks register through this global
+    ):
+        response: Final = await ep.anthropic_response(
+            fastapi_response=MagicMock(), request=request, user_api_key_dict=UserAPIKeyAuth()
+        )
+
+    assert response.status_code == 500
+    assert json.loads(response.body)["error"]["message"] == "rewritten by hook"
+    assert (response.headers.get("retry-after"), response.headers.get("x-should-retry")) == ("7", "true")
+    assert "strict-transport-security" not in response.headers
+
+
+@pytest.mark.asyncio
+async def test_messages_forwards_the_headers_of_a_proxy_rate_limit_without_a_failure_hook() -> None:
+    import litellm.proxy.anthropic_endpoints.endpoints as ep
+    from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+    from litellm.proxy.utils import ProxyLogging
+
+    limited: Final = ProxyRateLimitError(
+        detail="parallel request limit reached",
+        headers={"retry-after": "37", "x-ratelimit-remaining-requests": "0"},
+    )
+    request: Final = MagicMock()
+    request.headers = {}
+    with (
+        patch.object(
+            ep, "read_request_body", new=AsyncMock(return_value={"model": "claude-haiku-5-5"})
+        ),  # test-quality-ok: endpoint reads the body via a module function; no injection seam
+        patch.object(
+            ep.ProxyBaseLLMRequestProcessing, "base_process_llm_request", new=AsyncMock(side_effect=limited)
+        ),  # test-quality-ok: the limiter's 429 is raised inside this call; the test targets the endpoint's except block
+        patch.object(
+            proxy_server, "proxy_logging_obj", new=ProxyLogging(user_api_key_cache=DualCache())
+        ),  # test-quality-ok: module global imported at call time; no injection seam
+        patch.object(litellm, "callbacks", new=[]),  # test-quality-ok: no failure hook is registered
+    ):
+        response: Final = await ep.anthropic_response(
+            fastapi_response=MagicMock(), request=request, user_api_key_dict=UserAPIKeyAuth()
+        )
+
+    assert response.status_code == 429
+    assert (response.headers.get("retry-after"), response.headers.get("x-ratelimit-remaining-requests")) == ("37", "0")
 
 
 class TestErrorLogCarriesCallId:
