@@ -2512,6 +2512,7 @@ _MODEL_ROUTING_SESSION_MODEL_ROUTE_MARKERS: Final = (
     "/realtime/calls",
     "/live/sessions",
 )
+_MODEL_ROUTING_SVG_MODEL_ROUTE_MARKERS: Final = ("/images/",)
 _MODEL_ROUTING_ID_FIELDS: Final = (
     "file_id",
     "input_file_id",
@@ -2773,6 +2774,7 @@ def _extract_model_candidates_from_request(
     completion: Final = request_data.get("completion")
     if uses_completion_model_sources and isinstance(completion, Mapping):
         _append_model_candidates(candidates, completion.get("model"))
+    candidates.extend(_svg_model_candidates(request_data, route))
 
     if uses_model_routing_sources:
         if uses_header_or_query_model_sources:
@@ -2801,6 +2803,16 @@ def _extract_model_candidates_from_request(
             )
 
     return _dedupe_model_candidates(candidates)
+
+
+def _svg_model_candidates(request_data: Mapping[str, object], route: str) -> list[str]:
+    svg: Final = request_data.get("svg")
+    candidates: Final[list[str]] = []
+    if isinstance(svg, Mapping) and _route_matches_any_marker(
+        route=route, markers=_MODEL_ROUTING_SVG_MODEL_ROUTE_MARKERS
+    ):
+        _append_model_candidates(candidates, svg.get("model"))
+    return candidates
 
 
 def _format_model_candidates(
@@ -2874,7 +2886,9 @@ def get_model_from_request(
     handler_path_params: Final = read_request_path_params(request) if request is not None else path_params
     handler_model: Final = _handler_selected_model(route, handler_request_data, handler_path_params)
     if handler_model is not None:
-        return handler_model
+        return _format_model_candidates(
+            _dedupe_model_candidates([handler_model, *_svg_model_candidates(request_data, route)])
+        )
 
     candidates: Final = _extract_model_candidates_from_request(
         request_data=request_data,
