@@ -260,6 +260,19 @@ class _Streamed(httpx.AsyncByteStream):
 
 
 @pytest.mark.asyncio
+async def test_reads_raw_chunks_until_the_response_limit() -> None:
+    body: Final = bytes(range(256)) * 257
+    response: Final = await post_callback(
+        "https://hook.example/in",
+        b"{}",
+        {},
+        resolve=_resolver("93.184.216.34"),  # pyright: ignore[reportArgumentType]  # test resolver
+        transport=httpx.MockTransport(lambda _: httpx.Response(200, stream=_Streamed(body))),
+    )
+    assert isinstance(response, Ok) and response.ok.body == body[:65536]
+
+
+@pytest.mark.asyncio
 async def test_a_compressed_callback_body_is_capped_on_the_wire_and_never_inflated() -> None:
     import gzip
 
