@@ -1,5 +1,5 @@
 """
-Tests for the SpecStream Search provider (GET https://api.specstream.ai/v1/web-search).
+Tests for the SpecStream Search provider (POST https://api.specstream.ai/v1/web-search).
 """
 
 from typing import Final
@@ -31,7 +31,7 @@ _BODY: Final = {
 }
 
 
-def test_search_sends_get_with_bearer_key_and_maps_sources(monkeypatch):
+def test_search_sends_post_with_bearer_key_and_maps_sources(monkeypatch):
     monkeypatch.setenv("SPECSTREAM_API_KEY", "test-specstream-key")
     monkeypatch.delenv("SPECSTREAM_API_BASE", raising=False)
     mock_response: Final = MagicMock()
@@ -39,19 +39,22 @@ def test_search_sends_get_with_bearer_key_and_maps_sources(monkeypatch):
     mock_response.json.return_value = _BODY
 
     with patch(
-        "litellm.llms.custom_httpx.http_handler.HTTPHandler.get",
+        "litellm.llms.custom_httpx.http_handler.HTTPHandler.post",
         return_value=mock_response,
-    ) as mock_get:
+    ) as mock_post:
         response: Final = litellm.search(
             query=["litellm", "proxy"],
             search_provider="specstream",
             max_results=2,
+            country="us",
         )
 
-    assert mock_get.call_count == 1
-    call: Final = mock_get.call_args
-    assert call.kwargs["url"] == "https://api.specstream.ai/v1/web-search?q=litellm+proxy"
+    assert mock_post.call_count == 1
+    call: Final = mock_post.call_args
+    assert call.kwargs["url"] == "https://api.specstream.ai/v1/web-search"
     assert call.kwargs["headers"]["Authorization"] == "Bearer test-specstream-key"
+    assert call.kwargs["headers"]["Content-Type"] == "application/json"
+    assert call.kwargs["json"] == {"q": "litellm proxy", "num": 2, "country": "US"}
 
     assert response.object == "search"
     assert len(response.results) == 2
