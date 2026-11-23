@@ -15,7 +15,7 @@ class MailgunDetector(RegexBasedDetector):
         return "Mailgun Secret"
 
     @property
-    def denylist(self) -> list[re.Pattern]:
+    def denylist(self) -> list[re.Pattern[str]]:
         return [
             # Mailgun Private API Token
             re.compile(

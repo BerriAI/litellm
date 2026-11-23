@@ -2,6 +2,7 @@
 MiniMax OpenAI transformation config - extends OpenAI chat config for MiniMax's OpenAI-compatible API
 """
 
+from collections.abc import Mapping
 from typing import Final
 
 import litellm
@@ -54,8 +55,8 @@ class MinimaxChatConfig(OpenAIGPTConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         """
@@ -85,7 +86,7 @@ class MinimaxChatConfig(OpenAIGPTConfig):
         # MiniMax supports cache_control, so return messages and tools unchanged
         return messages, tools
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         """
         Get supported OpenAI parameters for MiniMax.
         Adds reasoning_split, plus thinking and reasoning_effort when the cost map, or its

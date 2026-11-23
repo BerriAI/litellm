@@ -28,6 +28,7 @@ from litellm.llms.bedrock_mantle.common_utils import (
     drop_schema_keywords_gemma_4_rejects,
     is_mantle_gemma_4_model,
 )
+from litellm.llms.mistral.common_utils import with_mistral_tool_call_ids
 from litellm.llms.openai.chat.gpt_reasoning_transformation import get_effort_level, is_gpt_reasoning_series_name
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
@@ -179,14 +180,14 @@ class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, str],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
+        optional_params: dict[str, object],
         litellm_params: dict,
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, str]:
         headers = super().validate_environment(
             headers=headers,
             model=model,
@@ -246,8 +247,13 @@ class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
         headers: dict[str, str],  # mutable-ok: OpenAIGPTConfig.transform_request signature
     ) -> dict[str, object]:  # mutable-ok: OpenAIGPTConfig.transform_request signature
         request_params: Final = dict(_chat_request_params(optional_params, _drops_params(litellm_params)))
+        sent_messages: Final = (
+            [with_mistral_tool_call_ids(message) for message in messages]
+            if BaseAWSLLM.get_bedrock_invoke_provider(model) == "mistral"
+            else messages
+        )
         request: Final = _REQUEST_BODY.validate_python(
-            super().transform_request(model, messages, request_params, litellm_params, headers)
+            super().transform_request(model, sent_messages, request_params, litellm_params, headers)
         )
         if not is_mantle_gemma_4_model(model):
             return request

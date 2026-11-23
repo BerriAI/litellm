@@ -88,10 +88,8 @@ def test_bundled_crypto_without_waiver_fails_even_when_inventoried(tmp_path: Pat
 @pytest.mark.parametrize(
     ("relative", "label"),
     [
-        ("site-packages/grpc/_cython/cygrpc.cpython-313-x86_64-linux-gnu.so", "BoringSSL"),
         ("site-packages/granian/_granian.cpython-313-aarch64-linux-gnu.so", "BoringSSL"),
         ("site-packages/litellm/rust_bridge/_native.abi3.so", "BoringSSL"),
-        ("site-packages/psycopg_binary.libs/libcrypto-2d1629ee.so.3", "BoringSSL,crypto-library"),
         ("prisma/binaries/node_modules/prisma/query-engine-debian-openssl-3.0.x", "BoringSSL"),
     ],
 )
@@ -106,6 +104,27 @@ def test_waived_bundled_crypto_passes(tmp_path: Path, relative: str, label: str)
 
 
 @pytest.mark.parametrize(
+    ("relative", "payload", "label"),
+    [
+        ("site-packages/grpc/_cython/cygrpc.cpython-313-x86_64-linux-gnu.so", b"BoringSSL", "BoringSSL"),
+        (
+            "site-packages/psycopg_binary.libs/libssl-8bd944e8.so.3",
+            b"OpenSSL 3.5.8 1 Jul 2026",
+            "bundled-OpenSSL,crypto-library",
+        ),
+        ("site-packages/psycopg_binary.libs/libk5crypto-b1f99d5a.so.3.1", b"", "crypto-library"),
+    ],
+)
+def test_pypi_grpcio_and_psycopg_binary_tls_fails(tmp_path: Path, relative: str, payload: bytes, label: str) -> None:
+    bundled: Final = _elf(tmp_path / "root" / relative, payload)
+
+    result, _ = _scan(tmp_path, [tmp_path / "root"], inventory=[str(bundled)])
+
+    assert result.returncode == 1
+    assert result.stdout == f"VIOLATION {bundled} [{label}] bundled crypto with no waiver\n" + FAIL_ONE
+
+
+@pytest.mark.parametrize(
     ("relative", "label"),
     [
         ("site-packages/granian_plugin/native.so", "BoringSSL"),
@@ -113,7 +132,7 @@ def test_waived_bundled_crypto_passes(tmp_path: Path, relative: str, label: str)
         ("site-packages/libsodium/libsodium.so", "BoringSSL,crypto-library"),
         ("site-packages/xmlsec.libs/libcrypto.so.3", "BoringSSL,crypto-library"),
         ("site-packages/evilpkg/_vendor/site-packages/nacl/_sodium.abi3.so", "BoringSSL"),
-        ("site-packages/grpc/_cython/cygrpc.cpython-313-x86_64-linux-gnu.so/native.so", "BoringSSL"),
+        ("site-packages/ddtrace/internal/native/_native.cpython-313-x86_64-linux-gnu.so/native.so", "BoringSSL"),
         ("vendor/site-packages/nacl/_sodium.abi3.so", "BoringSSL"),
         ("prisma/binaries/node_modules/evilpkg/query-engine-plugins/native.so", "BoringSSL"),
         ("prisma/binaries/node_modules/prisma/query-engine-debian-openssl-3.0.x.d/native.so", "BoringSSL"),
@@ -149,6 +168,17 @@ def test_whitespace_in_a_name_is_still_scanned(tmp_path: Path, name: str) -> Non
 
     assert result.returncode == 1
     assert result.stdout == f"VIOLATION {bundled} [BoringSSL] bundled crypto with no waiver\n" + FAIL_ONE
+
+
+def test_cryptography_wheel_with_its_own_openssl_fails(tmp_path: Path) -> None:
+    wheel: Final = _elf(
+        tmp_path / "root" / "site-packages/cryptography/hazmat/bindings/_rust.abi3.so", b"OpenSSL 4.0.1 9 Jun 2026"
+    )
+
+    result, _ = _scan(tmp_path, [tmp_path / "root"], inventory=[str(wheel)])
+
+    assert result.returncode == 1
+    assert result.stdout == f"VIOLATION {wheel} [bundled-OpenSSL] bundled crypto with no waiver\n" + FAIL_ONE
 
 
 @pytest.mark.parametrize("emit", [False, True], ids=["scan", "emit"])

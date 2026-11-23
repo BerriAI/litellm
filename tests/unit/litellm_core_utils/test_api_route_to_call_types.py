@@ -48,8 +48,11 @@ class TestGenerateContentRouteResolution:
         assert call_types is not None
         assert list(call_types) == [CallTypes.agenerate_content, CallTypes.generate_content]
 
-    def test_empty_model_name_does_not_match(self):
-        assert get_call_types_for_route("/models/:generateContent") is None
+    def test_empty_model_name_resolves_like_the_router(self):
+        for route in ("/models/:generateContent", "/v1beta/models/:generateContent"):
+            call_types = get_call_types_for_route(route)
+            assert call_types is not None
+            assert list(call_types) == [CallTypes.agenerate_content, CallTypes.generate_content]
 
     def test_unrelated_model_action_does_not_match(self):
         assert get_call_types_for_route("/models/gemini-2.5-flash:countTokens") is None

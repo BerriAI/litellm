@@ -282,7 +282,7 @@ class UISettings(LiteLLMBaseModel):
     model_config = ConfigDict(extra="allow")
 
     usage_default_time_range: Literal["today", "last_7_days", "last_30_days", "month_to_date", "year_to_date"] = Field(
-        default="last_7_days",
+        default="month_to_date",
         description="Default date range when opening Usage without an explicit URL range. Calendar ranges use the browser timezone.",
     )
 
@@ -856,9 +856,10 @@ def _root_schema(settings_class: type[BaseModel]) -> _RootSchema:
 
 def _model_field_default(settings_class: type[BaseModel], field_name: str) -> object:
     field_info: Final = settings_class.model_fields.get(field_name)
-    if field_info is None or field_info.default is PydanticUndefined:
+    if field_info is None:
         return None
-    return cast(object, field_info.default)  # cast-ok: Pydantic field defaults are untyped
+    default: Final = cast(object, field_info.default)  # cast-ok: Pydantic field defaults are untyped
+    return None if default is PydanticUndefined else default
 
 
 def _ui_setting_source(

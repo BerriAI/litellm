@@ -536,10 +536,50 @@ def test_usage_helpers() -> None:
     assert tracker.cost == pytest.approx(0.3)
 
 
-def test_compute_cost_never_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_sse_usage_parser_counts_usage_past_a_data_line_nested_too_deep_to_decode() -> None:
+    deep_line: Final = b"event: ping\ndata: " + b"[" * 100_000 + b"]" * 100_000 + b"\n\n"
+    message_start_end: Final = ANTHROPIC_SSE.index(b"event: content_block_delta")
+    parser: Final = SSEUsageParser()
+
+    parser.feed(ANTHROPIC_SSE[:message_start_end] + deep_line + ANTHROPIC_SSE[message_start_end:])
+    parser.close()
+
+    assert (parser.input_tokens, parser.output_tokens) == (11, 7)
+
+
+def test_compute_cost_keeps_failed_price_lookups_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(**kwargs: Any) -> Any:
         raise ValueError("unknown model")
 
     monkeypatch.setattr(litellm, "cost_per_token", boom)
-    assert compute_cost("mystery", 10, 10) == 0.0
-    assert compute_cost(None, 10, 10) == 0.0
+    assert compute_cost("mystery", 10, 10) is None
+    assert compute_cost(None, 10, 10) is None
+    assert compute_cost(None, 0, 0) == 0.0
+
+
+@pytest.mark.parametrize("reported_cost", (None, 0.0, 0.42))
+async def test_gateway_alias_preserves_unknown_or_reported_stream_cost(
+    monkeypatch: pytest.MonkeyPatch, reported_cost: float | None
+) -> None:
+    monkeypatch.setattr(litellm, "cost_per_token", REAL_COST_PER_TOKEN)
+    model: Final = "harness-unknown-price-alias"
+    endpoint: Final = ModelEndpoint(Harness.CODEX, model, GATEWAY)
+    headers: Final = {} if reported_cost is None else {"x-litellm-response-cost": str(reported_cost)}
+    response: Final = sse_response(RESPONSES_SSE, headers)
+
+    relayed: Final = b"".join([chunk async for chunk in endpoint._relay(response, model)])
+
+    assert relayed == RESPONSES_SSE
+    assert endpoint.usage.snapshot() == Usage(input_tokens=20, output_tokens=4, calls=1)
+    assert endpoint.usage.cost == reported_cost
+
+
+@pytest.mark.parametrize("costs", ((None, 0.25), (0.25, None)))
+def test_unknown_call_cost_keeps_the_session_total_unknown(costs: tuple[float | None, ...]) -> None:
+    tracker: Final = UsageTracker()
+    assert tracker.cost == 0.0
+    for cost in costs:
+        tracker.add(10, 5, cost)
+
+    assert tracker.snapshot() == Usage(input_tokens=20, output_tokens=10, calls=2)
+    assert tracker.cost is None
