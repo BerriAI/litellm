@@ -145,12 +145,14 @@ from .tool_search import (
     answers_tool_search,
     anthropic_tool_search_chat_tool,
     build_tool_search_call,
+    chat_config_builds_anthropic_request,
     has_server_tool_search,
     holds_tool_search_use,
     is_anthropic_tool_search_chat_tool,
     is_anthropic_tool_search_use,
     is_server_tool_search_tool,
     provider_builds_anthropic_request,
+    provider_chat_config,
     request_runs_tool_search,
     route_runs_tool_search,
     tool_search_call_ids,
@@ -323,8 +325,29 @@ def _made_with_signed_thinking(message: SessionMessage) -> bool:
     return any(map(is_verifiable_thinking_block, blocks))
 
 
-def _with_each_call_made_once(messages: Sequence[SessionMessage]) -> Sequence[SessionMessage]:
-    return without_repeated_tool_calls(messages, keep_stored_arguments=_made_with_signed_thinking)
+def _keeps_stored_arguments(target_checks_whole_conversation: bool, message: SessionMessage) -> bool:
+    return target_checks_whole_conversation or _made_with_signed_thinking(message)
+
+
+def _target_checks_whole_conversation(model: str, custom_llm_provider: str | None) -> bool:
+    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+
+    try:
+        chat_config: Final = provider_chat_config(model, custom_llm_provider)
+    except litellm.BadRequestError:
+        return False
+    return isinstance(chat_config, AmazonConverseConfig) or chat_config_builds_anthropic_request(chat_config)
+
+
+def _with_each_call_made_once(
+    messages: Sequence[SessionMessage], model: str, custom_llm_provider: str | None
+) -> Sequence[SessionMessage]:
+    return without_repeated_tool_calls(
+        messages,
+        keep_stored_arguments=partial(
+            _keeps_stored_arguments, _target_checks_whole_conversation(model, custom_llm_provider)
+        ),
+    )
 
 
 def _replayed_assistant_without_tool_search_uses(message: Mapping[str, object]) -> SessionMessage | None:
@@ -1111,7 +1134,7 @@ class LiteLLMCompletionResponsesConfig:
         # Pass tools parameter to help reconstruct tool_calls if not in cache
         tools: Final = litellm_completion_request.get("tools") or []
         combined_messages = LiteLLMCompletionResponsesConfig._ensure_tool_results_have_corresponding_tool_calls(
-            messages=_with_each_call_made_once(combined_messages),
+            messages=_with_each_call_made_once(combined_messages, model, provider),
             tools=tools,
         )
 

@@ -6262,23 +6262,26 @@ _REDACTED_THINKING: Final = {"type": "redacted_thinking", "data": "EmwKAhgB"}
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("provider", "model"),
+    ("provider", "model", "target_checks_whole_conversation"),
     [
-        ("anthropic", "claude-sonnet-5-5"),
-        ("snowflake", "Claude-Sonnet-5-5"),
-        ("openai", "claude-behind-an-alias"),
-        ("bedrock", "converse/house-model"),
-        ("gemini", "gemini-3.8-flash"),
-        (None, "house-model"),
+        ("anthropic", "claude-sonnet-5-5", True),
+        ("anthropic", "house-model", True),
+        ("vertex_ai", "claude-sonnet-5-5", True),
+        ("bedrock", "converse/house-model", True),
+        ("bedrock", "invoke/mistral.house-model", False),
+        ("snowflake", "Claude-Sonnet-5-5", False),
+        ("openai", "claude-behind-an-alias", False),
+        ("gemini", "gemini-3.8-flash", False),
+        (None, "house-model", False),
     ],
 )
 @pytest.mark.parametrize(
-    ("stored_fields", "target_gets_whole_arguments"),
+    ("stored_fields", "made_with_signed_thinking"),
     [
-        pytest.param({"thinking_blocks": [_SIGNED_THINKING]}, False, id="signed-thinking"),
-        pytest.param({"thinking_blocks": [_UNSIGNED_THINKING, _REDACTED_THINKING]}, False, id="redacted-thinking"),
-        pytest.param({"thinking_blocks": [_UNSIGNED_THINKING]}, True, id="unsigned-thinking"),
-        pytest.param({}, True, id="no-thinking"),
+        pytest.param({"thinking_blocks": [_SIGNED_THINKING]}, True, id="signed-thinking"),
+        pytest.param({"thinking_blocks": [_UNSIGNED_THINKING, _REDACTED_THINKING]}, True, id="redacted-thinking"),
+        pytest.param({"thinking_blocks": [_UNSIGNED_THINKING]}, False, id="unsigned-thinking"),
+        pytest.param({}, False, id="no-thinking"),
     ],
 )
 @pytest.mark.parametrize(
@@ -6291,9 +6294,10 @@ async def test_tool_outputs_follow_the_stored_turn_that_made_the_calls_when_this
     call_ids: tuple[str, ...],
     stored_arguments: str,
     stored_fields: Mapping[str, object],
-    target_gets_whole_arguments: bool,
+    made_with_signed_thinking: bool,
     provider: str | None,
     model: str,
+    target_checks_whole_conversation: bool,
 ):
     def calls(arguments: str) -> list[dict[str, object]]:
         return [
@@ -6335,7 +6339,8 @@ async def test_tool_outputs_follow_the_stored_turn_that_made_the_calls_when_this
         for call_id in call_ids:
             TOOL_CALLS_CACHE.delete_cache(key=call_id)
 
-    gets_whole_arguments: Final = target_gets_whole_arguments and stored_arguments != "{}"
+    keeps_stored_arguments: Final = target_checks_whole_conversation or made_with_signed_thinking
+    gets_whole_arguments: Final = not keeps_stored_arguments and stored_arguments != "{}"
     replayed_calls: Final = remembered_calls if gets_whole_arguments else calls(stored_arguments)
     assert request["messages"][:2] == [
         question,
@@ -6498,20 +6503,30 @@ async def test_calls_resent_after_the_assistants_words_stay_the_calls_the_client
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("model", "provider"),
-    [("claude-sonnet-5-5", "anthropic"), ("gemini-3.8-flash", "gemini"), ("house-model", "hosted_vllm")],
-    ids=["claude", "gemini", "house-model"],
+    ("model", "provider", "target_checks_whole_conversation"),
+    [
+        ("claude-sonnet-5-5", "anthropic", True),
+        ("claude-sonnet-5-5", "vertex_ai", True),
+        ("gemini-3.8-flash", "gemini", False),
+        ("house-model", "hosted_vllm", False),
+    ],
+    ids=["claude", "vertex-claude", "gemini", "house-model"],
 )
 @pytest.mark.parametrize(
-    ("stored_fields", "replayed_arguments"),
+    ("stored_fields", "made_with_signed_thinking"),
     [
-        pytest.param({"thinking_blocks": [_SIGNED_THINKING]}, _LONG_ARGUMENTS_AS_STORED, id="signed-thinking"),
-        pytest.param({}, _LONG_ARGUMENTS, id="no-thinking"),
+        pytest.param({"thinking_blocks": [_SIGNED_THINKING]}, True, id="signed-thinking"),
+        pytest.param({}, False, id="no-thinking"),
     ],
 )
 @pytest.mark.parametrize("together", [True, False], ids=["together", "one-by-one"])
 async def test_calls_the_client_resends_with_their_outputs_are_made_once(
-    together: bool, stored_fields: Mapping[str, object], replayed_arguments: str, model: str, provider: str
+    together: bool,
+    stored_fields: Mapping[str, object],
+    made_with_signed_thinking: bool,
+    model: str,
+    provider: str,
+    target_checks_whole_conversation: bool,
 ) -> None:
     calls: Final = [_order_call(*call) for call in _ORDER_CALLS]
     outputs: Final = [_order_output(call_id) for call_id, _ in _ORDER_CALLS]
@@ -6521,6 +6536,8 @@ async def test_calls_the_client_resends_with_their_outputs_are_made_once(
         [*calls, *outputs] if together else one_by_one, model=model, provider=provider, stored_fields=stored_fields
     )
 
+    keeps_stored_arguments: Final = target_checks_whole_conversation or made_with_signed_thinking
+    replayed_arguments: Final = _LONG_ARGUMENTS_AS_STORED if keeps_stored_arguments else _LONG_ARGUMENTS
     assert replayed == ([(*call, replayed_arguments) for call in _ORDER_CALLS],)
 
 
