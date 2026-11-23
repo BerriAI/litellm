@@ -510,3 +510,32 @@ async def test_admission_lease_cannot_be_reused_by_another_worker(state: Admissi
     response: Final = await _call(parent)
     assert response[1]["body"] == b"1"
     assert state.get_stats() == other_state.get_stats() == AdmissionControlStats(0, 0, 0)
+
+
+@pytest.mark.asyncio
+async def test_a_messages_request_turned_away_at_capacity_gets_the_anthropic_overloaded_error(
+    state: AdmissionControlState,
+) -> None:
+    started: Final = asyncio.Event()
+    release: Final = asyncio.Event()
+    middleware: Final = AdmissionControlMiddleware(
+        _handler_with_release(started, release),
+        lambda: AdmissionControlSettings(1, 0, 1.0),
+        state,
+    )
+
+    first: Final = asyncio.create_task(_call(middleware, path="/v1/messages"))
+    await started.wait()
+    rejected: Final = await _call(middleware, path="/v1/messages")
+    release.set()
+    await first
+
+    assert rejected[0]["status"] == 503
+    assert dict(rejected[0]["headers"])[b"retry-after"] == b"1"
+    assert json.loads(rejected[1]["body"]) == {
+        "type": "error",
+        "error": {
+            "type": "overloaded_error",
+            "message": "Worker at capacity: 1 in-flight, 0 queued requests. Retry later.",
+        },
+    }

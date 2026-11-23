@@ -1,12 +1,11 @@
 import json
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import Final
 
 import httpx
-from pydantic import TypeAdapter
 
 import litellm
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, iter_items
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, iter_items, loads_json_object
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.anthropic.messages.native.transformation import (
     AnthropicMessagesConfig,
@@ -26,7 +25,6 @@ DROP_CONTAINER_WARNING: Final = (
     "and the chat completions bridge it replaces never forwarded it."
 )
 BEDROCK_INVOCATION_METRICS_FIELD: Final = "amazon-bedrock-invocationMetrics"
-_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def _is_unsupported_server_tool(tool: object) -> bool:
@@ -59,7 +57,7 @@ def _without_unsupported_server_tools(params: Mapping[str, object]) -> dict[str,
 def _without_invocation_metrics(sse_line: bytes) -> bytes:
     if not sse_line.startswith(b"data:") or BEDROCK_INVOCATION_METRICS_FIELD.encode() not in sse_line:
         return sse_line
-    event: Final = as_str_mapping(_DECODED_JSON.validate_python(json.loads(sse_line.removeprefix(b"data:"))))
+    event: Final = loads_json_object(sse_line.removeprefix(b"data:"))
     if event is None:
         return sse_line
     kept_fields: Final = {key: value for key, value in event.items() if key != BEDROCK_INVOCATION_METRICS_FIELD}
@@ -122,7 +120,7 @@ class DatabricksAnthropicMessagesConfig(DatabricksBase, AnthropicMessagesConfig)
         self,
         headers: dict[str, str],  # mutable-ok: mirrors the base signature
         model: str,
-        messages: list[object],  # mutable-ok: mirrors the base signature
+        messages: Sequence[object],
         optional_params: dict[str, object],  # mutable-ok: mirrors the base signature
         litellm_params: dict[str, object],  # mutable-ok: mirrors the base signature
         api_key: str | None = None,
@@ -192,7 +190,7 @@ class DatabricksAnthropicMessagesConfig(DatabricksBase, AnthropicMessagesConfig)
             headers=headers,
         )
         self._normalize_system_role_messages(  # pyright: ignore[reportUnknownMemberType]  # the shared helper takes a bare dict
-            anthropic_messages_request, model=model, drop_params=getattr(litellm_params, "drop_params", None)
+            anthropic_messages_request, model=model, drop_params=litellm_params.drop_params
         )
         self._remove_scope_from_cache_control(anthropic_messages_request)  # pyright: ignore[reportUnknownMemberType]  # the shared helper takes a bare dict
         return anthropic_messages_request
