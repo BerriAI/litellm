@@ -34,6 +34,7 @@ import { Page } from "@/components/shared/Page";
 import { CommandPaletteProvider } from "@/components/CommandPalette/CommandPaletteProvider";
 import { recordUiEvent } from "@/lib/telemetry/uiEvents";
 import TelemetryEnvBanner from "@/app/(dashboard)/telemetry/_components/TelemetryEnvBanner";
+import { GatewayLensNavigationProvider } from "@/components/lens/GatewayLensNavigation";
 
 const pluginApiClient = createApiClient({ getBaseUrl: () => getProxyBaseUrl() ?? "" });
 
@@ -288,7 +289,9 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
 
   return (
     <ThemeProvider accessToken={accessToken}>
-      <DashboardShell>{children}</DashboardShell>
+      <GatewayLensNavigationProvider>
+        <DashboardShell>{children}</DashboardShell>
+      </GatewayLensNavigationProvider>
     </ThemeProvider>
   );
 }

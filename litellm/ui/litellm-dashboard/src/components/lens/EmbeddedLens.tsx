@@ -1,17 +1,64 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useEffectEvent, useRef, useState } from "react";
+import { useTheme } from "next-themes";
 import { useTranslation } from "react-i18next";
 import { getProxyBaseUrl } from "@/components/networking";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { lensWorkspaceAvailability, type LensWorkspaceAvailability } from "@/lib/http/lensWorkspace";
 import { serverRootPath } from "@/lib/serverRootPath";
 import { LensIntroduction } from "./LensIntroduction";
+import { LENS_FRAME_CHANNEL, lensFrameMessage, useSetLensNavigation } from "./GatewayLensNavigation";
 
 type Workspace = { state: "checking" } | LensWorkspaceAvailability;
 
 const gatewayUrl = (path: string): string =>
   `${getProxyBaseUrl().replace(/\/$/, "")}${serverRootPath.replace(/\/$/, "")}${path}`;
+
+function LensFrame({ source }: { source: string }) {
+  const { t } = useTranslation();
+  const { resolvedTheme } = useTheme();
+  const iframe = useRef<HTMLIFrameElement>(null);
+  const setNavigation = useSetLensNavigation();
+  const origin = new URL(source, window.location.href).origin;
+  const theme = resolvedTheme === "dark" ? "dark" : "light";
+  const sendTheme = useCallback(() => {
+    iframe.current?.contentWindow?.postMessage(
+      { channel: LENS_FRAME_CHANNEL, command: { type: "theme", theme } },
+      origin,
+    );
+  }, [origin, theme]);
+  const receive = useEffectEvent((event: MessageEvent<unknown>) => {
+    const child = iframe.current?.contentWindow;
+    if (!child || event.source !== child || event.origin !== origin) return;
+    const parsed = lensFrameMessage.safeParse(event.data);
+    if (!parsed.success) return;
+    if (parsed.data.type === "ready") {
+      setNavigation(null);
+      sendTheme();
+    } else {
+      setNavigation({
+        model: parsed.data.navigation,
+        select: (command) => child.postMessage({ channel: LENS_FRAME_CHANNEL, command }, origin),
+      });
+    }
+  });
+  useEffect(() => {
+    const listener = (event: MessageEvent<unknown>) => receive(event);
+    window.addEventListener("message", listener);
+    return () => {
+      window.removeEventListener("message", listener);
+      setNavigation(null);
+    };
+  }, [setNavigation]);
+  useEffect(() => {
+    sendTheme();
+  }, [sendTheme]);
+
+  return (
+    <iframe ref={iframe} title={t("lensWorkspace.frameTitle")} src={source} className="h-full w-full flex-1 border-0" />
+  );
+}
 
 export function EmbeddedLens() {
   const { t } = useTranslation();
@@ -37,8 +84,7 @@ export function EmbeddedLens() {
         {t("lensWorkspace.opening")}
       </p>
     );
-  if (workspace.state === "served")
-    return <iframe title={t("lensWorkspace.frameTitle")} src={source} className="h-full w-full flex-1 border-0" />;
+  if (workspace.state === "served") return <LensFrame source={source} />;
   if (workspace.state === "unconfigured") return <LensIntroduction onRetry={retry} />;
   return (
     <div className="flex min-h-96 flex-1 items-center justify-center px-6 py-16 sm:px-10">
