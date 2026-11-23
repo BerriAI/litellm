@@ -2,14 +2,17 @@
 Handler for transforming responses api requests to litellm.completion requests
 """
 
+import sys
 from collections.abc import Coroutine, Mapping
 from typing import Final
 
 from pydantic import TypeAdapter
 
 import litellm
+from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.allowed_tools_tool_choice import unenforced_allowed_tools_tool_choice
 from litellm.litellm_core_utils.asyncify import run_async_function
+from litellm.litellm_core_utils.core_helpers import attribute_or_none
 from litellm.responses.additional_tools import hoist_additional_tools
 from litellm.responses.litellm_completion_transformation.streaming_iterator import (
     LiteLLMCompletionStreamingIterator,
@@ -59,6 +62,24 @@ async def _with_previous_turns(
             request_kwargs=request_kwargs,
             client_previous_response_id=client_previous_response_id,
         )
+    )
+
+
+def _proxy_database_connected() -> bool:
+    return attribute_or_none(sys.modules.get("litellm.proxy.proxy_server"), "prisma_client") is not None
+
+
+def _stored_turns_need_aresponses(client_response_id: str, model: str, provider: str | None) -> BadRequestError:
+    message: Final = (
+        f"Previous response with id '{client_response_id}' can only be continued with `litellm.aresponses()` in "
+        "this process. Its conversation is rebuilt from the LiteLLM proxy's database, which only the proxy's event "
+        "loop can query."
+    )
+    return BadRequestError(
+        message=message,
+        model=model,
+        llm_provider=provider,
+        body={"message": message, "type": "invalid_request_error", "param": "previous_response_id", "code": None},
     )
 
 
@@ -112,6 +133,10 @@ class LiteLLMCompletionTransformationHandler:
                 **kwargs,
             )
 
+        if previous_response_id and _proxy_database_connected():
+            raise _stored_turns_need_aresponses(
+                client_previous_response_id or previous_response_id, model, custom_llm_provider
+            )
         completion_request: Final[Mapping[str, object]] = (
             _REQUEST_KWARGS_ADAPTER.validate_python(
                 run_async_function(
