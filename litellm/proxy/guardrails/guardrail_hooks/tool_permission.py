@@ -520,7 +520,7 @@ def _is_tool_use_block(block: object) -> bool:
 class ToolPermissionGuardrail(CustomGuardrail):
     def __init__(
         self,
-        rules: list[dict] | None = None,
+        rules: Sequence[object] | None = None,
         default_action: Literal["deny", "allow"] = "deny",
         on_disallowed_action: Literal["block", "rewrite"] = "block",
         **kwargs,
@@ -563,13 +563,13 @@ class ToolPermissionGuardrail(CustomGuardrail):
         sync) reflects rule changes instead of keeping the construction-time maps.
         """
         parsed_rules: Final[list[ToolPermissionRule]] = []
-        compiled_targets: Final[dict[str, dict[str, re.Pattern | None]]] = {}
-        compiled_patterns: Final[dict[str, dict[str, re.Pattern]]] = {}
+        compiled_targets: Final[dict[str, dict[str, re.Pattern[str] | None]]] = {}
+        compiled_patterns: Final[dict[str, dict[str, re.Pattern[str]]]] = {}
 
         for rule_item in rules or []:
             rule = rule_item if isinstance(rule_item, ToolPermissionRule) else _rule_from_fields(rule_item)
 
-            target_patterns: dict[str, re.Pattern | None] = {
+            target_patterns: dict[str, re.Pattern[str] | None] = {
                 "tool_name": None,
                 "tool_type": None,
             }
@@ -584,7 +584,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
                 except re.error as exc:
                     raise ValueError(f"Invalid regex for tool_type in rule '{rule.id}': {exc}") from exc
 
-            rule_patterns: dict[str, re.Pattern] = {}
+            rule_patterns: dict[str, re.Pattern[str]] = {}
             for path, pattern in (rule.allowed_param_patterns or {}).items():
                 try:
                     rule_patterns[path] = re.compile(pattern)
@@ -665,7 +665,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
             GuardrailEventHooks.post_call,
         ]
 
-    def _matches_regex(self, pattern: re.Pattern | None, value: str | None) -> bool:
+    def _matches_regex(self, pattern: re.Pattern[str] | None, value: str | None) -> bool:
         if pattern is None:
             return True
         if value is None:
@@ -1408,7 +1408,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
 
     def _modify_request_with_permission_errors(
         self,
-        data: dict,
+        data: dict[str, object],
         denied_targets: frozenset[_ToolTarget],
     ):
         """
