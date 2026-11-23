@@ -1727,12 +1727,12 @@ async def test_every_binding_write_forgets_the_cached_old_and_new_bindings_on_ea
         "put": {"old-client", "new-client"},
         "delete": {"old-client"},
     }[operation]
+    expected: Final = {client_id: None if client_id in forgotten else "agent-123" for client_id in clients}
     for worker in (cache, peer):
-        actual = {
+        assert {
             client_id: worker.get_cache(AuthObject.agent_identity("microsoft_entra", "tenant", client_id))
             for client_id in clients
-        }
-        assert actual == {client_id: None if client_id in forgotten else "agent-123" for client_id in clients}
+        } == expected
 
 
 @pytest.mark.asyncio
