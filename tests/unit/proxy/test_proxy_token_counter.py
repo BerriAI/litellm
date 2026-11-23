@@ -7238,31 +7238,32 @@ _COUNTED_HELLO: Final[Mapping[str, JsonValue]] = MappingProxyType(
 )
 
 
-def _utils_token_counter(
-    monkeypatch: pytest.MonkeyPatch, body: Mapping[str, JsonValue], headers: Mapping[str, str]
+def _post_count(
+    monkeypatch: pytest.MonkeyPatch,
+    path: str,
+    deployment: Mapping[str, JsonValue],
+    body: Mapping[str, JsonValue],
+    headers: Mapping[str, str],
 ) -> httpx.Response:
     from fastapi.testclient import TestClient
 
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
     from litellm.proxy.proxy_server import app
 
-    monkeypatch.setattr(
-        litellm.proxy.proxy_server,
-        "llm_router",
-        Router(
-            model_list=[
-                {
-                    "model_name": "count-log-gpt",
-                    "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "test-key"},
-                    "model_info": {"id": "count-log-utils-deployment"},
-                }
-            ]
-        ),
-    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", Router(model_list=[dict(deployment)]))
     monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, lambda: UserAPIKeyAuth(api_key="sk-test"))
-    return TestClient(app, raise_server_exceptions=False).post(
-        "/utils/token_counter", json=dict(body), headers=dict(headers)
-    )
+    return TestClient(app, raise_server_exceptions=False).post(path, json=dict(body), headers=dict(headers))
+
+
+def _utils_token_counter(
+    monkeypatch: pytest.MonkeyPatch, body: Mapping[str, JsonValue], headers: Mapping[str, str]
+) -> httpx.Response:
+    deployment: Final[Mapping[str, JsonValue]] = {
+        "model_name": "count-log-gpt",
+        "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "test-key"},
+        "model_info": {"id": "count-log-utils-deployment"},
+    }
+    return _post_count(monkeypatch, "/utils/token_counter", deployment, body, headers)
 
 
 def test_utils_token_counter_logs_one_line_with_the_callers_call_id_model_and_count(
@@ -7333,8 +7334,31 @@ def test_utils_token_counter_answers_400_naming_a_content_block_the_local_counte
     assert response.status_code == 400, response.text
     error: Final = response.json()["error"]
     assert (error["type"], error["param"], error["code"]) == ("invalid_request_error", "messages", "400"), error
-    assert "Invalid content item type: future_block" in error["message"], error
+    assert error["message"].startswith("The token counter can't count content blocks of type future_block."), error
     assert [line["status_code"] for line in token_count_log_lines()] == [400]
+
+
+def test_responses_input_tokens_points_param_at_input_for_a_content_block_the_local_counter_cannot_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deployment: Final[Mapping[str, JsonValue]] = {
+        "model_name": "count-local-vllm",
+        "litellm_params": {"model": "hosted_vllm/zai-org/GLM-5.3", "api_base": "http://127.0.0.1:9/v1"},
+    }
+    audio: Final[JsonValue] = {"type": "input_audio", "input_audio": {"data": "UklGRg==", "format": "wav"}}
+
+    response: Final = _post_count(
+        monkeypatch,
+        "/v1/responses/input_tokens",
+        deployment,
+        {"model": "count-local-vllm", "input": [{"role": "user", "content": [audio]}]},
+        {},
+    )
+
+    assert response.status_code == 400, response.text
+    error: Final = response.json()["error"]
+    assert (error["type"], error["param"]) == ("invalid_request_error", "input"), error
+    assert error["message"].startswith("The token counter can't count content blocks of type input_audio."), error
 
 
 def test_utils_token_counter_failed_count_logs_its_status_in_place_of_a_count(

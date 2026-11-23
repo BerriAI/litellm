@@ -2207,7 +2207,7 @@ def test_count_content_list_rejects_unknown_type():
     """
     from litellm.litellm_core_utils.token_counter import _count_content_list
 
-    with pytest.raises(ValueError, match='Error getting number of tokens from content list: Invalid') as exc_info:
+    with pytest.raises(ValueError, match="can't count content blocks of type totally_unknown_block") as exc_info:
         _count_content_list(
             count_function=len,
             content_list=[{"type": "totally_unknown_block"}],
@@ -2216,7 +2216,6 @@ def test_count_content_list_rejects_unknown_type():
         )
 
     message = str(exc_info.value)
-    assert "Invalid content item type: totally_unknown_block" in message
     assert "tool_reference" in message
 
 
@@ -2711,7 +2710,7 @@ def test_unknown_content_type_remains_a_value_error_with_an_optional_fallback(co
     unknown: Final = {"type": "future_block"}
     content: Final = [{"type": container, "tool_use_id": "toolu_1", "content": [unknown]}] if container else [unknown]
 
-    with pytest.raises(ValueError, match="Invalid content item type: future_block"):
+    with pytest.raises(ValueError, match=r"^The token counter can't count content blocks of type future_block\."):
         _count_content_list(len, content, False, None)
     assert _count_content_list(len, content, False, 7) == 7
 
