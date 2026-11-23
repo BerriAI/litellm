@@ -37,8 +37,15 @@ from litellm.integrations.anthropic_cache_control_hook import (
 from litellm.litellm_core_utils.allowed_tools_tool_choice import (
     allowed_tools_tool_choice_in_effect,
     allowed_tools_tool_choice_with_gateway_tools_as_functions,
+    raise_if_mcp_tool_choice_forces_a_gateway_server,
 )
 from litellm.litellm_core_utils.asyncify import run_async_function
+from litellm.litellm_core_utils.bridged_audio_output import (
+    AudioOnlyModel,
+    AudioRequested,
+    bridged_audio_output_request,
+    raise_audio_output_refusal,
+)
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout, StreamKind
 from litellm.litellm_core_utils.core_helpers import (
     allowed_openai_param_names,
@@ -357,6 +364,7 @@ async def aresponses_api_with_mcp(
         mcp_tools_with_litellm_proxy,
         other_tools,
     ) = await LiteLLM_Proxy_MCP_Handler.split_mcp_tools(tools)
+    raise_if_mcp_tool_choice_forces_a_gateway_server(tool_choice, mcp_tools_with_litellm_proxy, model)
 
     # Process MCP tools through the complete pipeline (fetch + filter + deduplicate + transform)
     # Extract user_api_key_auth from litellm_metadata (where it's added by add_user_api_key_auth_to_request_metadata)
@@ -763,6 +771,23 @@ def _raise_untranslatable_responses_fields(
             f"If you want to use these params dynamically send allowed_openai_params={fields} in your request."
         ),
     )
+
+
+def _chat_completions_bridge_kwargs(
+    kwargs: Mapping[str, object],
+    responses_api_provider_config: BaseResponsesAPIConfig | None,
+    allowed_openai_params: Sequence[str] | None,
+    model: str,
+    custom_llm_provider: str | None,
+    prompt_kwargs: Mapping[str, object],
+) -> Mapping[str, object]:
+    bridge_kwargs: Final = _bridge_kwargs(kwargs, responses_api_provider_config, allowed_openai_params)
+    if isinstance(bridge_kwargs, _UntranslatableResponsesFields):
+        _raise_untranslatable_responses_fields(bridge_kwargs, model, custom_llm_provider)
+    chat_kwargs: Final = bridged_audio_output_request({**bridge_kwargs, **prompt_kwargs}, model, custom_llm_provider)
+    if isinstance(chat_kwargs, AudioOnlyModel | AudioRequested):
+        raise_audio_output_refusal(chat_kwargs, "/v1/responses")
+    return chat_kwargs
 
 
 _ResponsesCompatibilityFailure: TypeAlias = Literal["encrypted_task_unsupported"]
@@ -1928,9 +1953,14 @@ def responses(
             return _file_search_dispatch
 
         if _bridges_to_chat_completions(responses_api_provider_config, use_chat_completions_api):
-            bridge_kwargs: Final = _bridge_kwargs(kwargs, responses_api_provider_config, allowed_openai_params)
-            if isinstance(bridge_kwargs, _UntranslatableResponsesFields):
-                _raise_untranslatable_responses_fields(bridge_kwargs, model, custom_llm_provider)
+            chat_kwargs: Final = _chat_completions_bridge_kwargs(
+                kwargs,
+                responses_api_provider_config,
+                allowed_openai_params,
+                model,
+                custom_llm_provider,
+                chat_bridge_prompt_kwargs,
+            )
             return litellm_completion_transformation_handler.response_api_handler(
                 previous_response_client_ids(previous_response_id, kwargs),
                 model=model,
@@ -1943,7 +1973,7 @@ def responses(
                 extra_body=extra_body,
                 timeout=timeout if timeout is not None else request_timeout,
                 allowed_openai_params=allowed_openai_params,
-                **{**bridge_kwargs, **chat_bridge_prompt_kwargs},
+                **chat_kwargs,
             )
 
         # Get optional parameters for the responses API
@@ -2050,7 +2080,7 @@ async def adelete_responses(
     timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> DeleteResponseResult:
     """
     Async version of the DELETE Responses API
@@ -2252,7 +2282,7 @@ async def aget_responses(
     custom_llm_provider: str | None = None,
     stream: bool | None = None,
     starting_after: int | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> ResponsesAPIResponse | BaseResponsesAPIStreamingIterator:
     """
     Async: Fetch a response by its ID.
@@ -2488,7 +2518,7 @@ async def alist_input_items(
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     extra_query: Mapping[str, object] | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> dict[str, object]:
     """Async: List input items for a response"""
     local_vars: Final = locals()
@@ -2633,7 +2663,7 @@ async def acancel_responses(
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
     litellm_metadata: Mapping[str, object] | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> ResponsesAPIResponse:
     """
     Async version of the POST Cancel Responses API

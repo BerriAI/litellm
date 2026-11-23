@@ -72,6 +72,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
     DEFAULT_TRIM_RATIO,
     FUNCTION_DEFINITION_TOKEN_COUNT,
+    GNANI_REJECTED_OPENAI_TRANSCRIPTION_PARAMS,
     HF_CONFIG_FETCH_TIMEOUT_SECONDS,
     HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS,
     INITIAL_RETRY_DELAY,
@@ -847,6 +848,18 @@ def get_applied_guardrails(kwargs: dict[str, object]) -> list[str]:
 
 
 def _named_credential_values(kwargs: Mapping[str, object]) -> Mapping[str, object]:
+    stored: Final = _stored_credential_values(kwargs)
+    if stored is None:
+        verbose_logger.warning(
+            "litellm_credential_name=%s matched none of the %d loaded credentials; the request runs without it",
+            kwargs.get("litellm_credential_name"),
+            len(litellm.credential_list),
+        )
+        return MappingProxyType({})
+    return MappingProxyType({key: copy.deepcopy(value) for key, value in stored.items()})
+
+
+def _stored_credential_values(kwargs: Mapping[str, object]) -> Mapping[str, object] | None:
     # Access CredentialAccessor via module to trigger lazy loading if needed
     credential_accessor: Final[type[CredentialAccessor]] = litellm_utils.CredentialAccessor
 
@@ -855,15 +868,10 @@ def _named_credential_values(kwargs: Mapping[str, object]) -> Mapping[str, objec
         return MappingProxyType({})
     credential: Final = credential_accessor.find_credential(credential_name)
     if credential is None:
-        verbose_logger.warning(
-            "litellm_credential_name=%s matched none of the %d loaded credentials; the request runs without it",
-            credential_name,
-            len(litellm.credential_list),
-        )
-        return MappingProxyType({})
+        return None
     return MappingProxyType(
         {
-            key: copy.deepcopy(value)
+            key: value
             for key, value in credential_api_key_secret_reference(credential.credential_values).items()
             if key not in kwargs and key != "github_copilot_app_private_key"
         }
@@ -871,12 +879,35 @@ def _named_credential_values(kwargs: Mapping[str, object]) -> Mapping[str, objec
 
 
 async def aresolve_api_key_secret_reference(
-    api_key: str | None, model: object, llm_provider: object, upstream: Mapping[str, object]
+    api_key: str | None,
+    model: object,
+    llm_provider: object,
+    upstream: Mapping[str, object],
+    call_type: str | None = None,
 ) -> str | None:
     if not isinstance(api_key, AdminApiKeySecretReference):
         return api_key
     return await _resolved_off_the_event_loop(
-        partial(_secret_behind_api_key_reference, api_key, model, llm_provider, upstream), api_key
+        partial(_secret_behind_api_key_reference, api_key, model, llm_provider, upstream, call_type=call_type),
+        api_key,
+    )
+
+
+def resolve_api_key_secret_reference_without_fetch(
+    api_key: str | None, model: object, llm_provider: object, upstream: Mapping[str, object]
+) -> str | None:
+    if not isinstance(api_key, AdminApiKeySecretReference):
+        return api_key
+    return _secret_behind_api_key_reference(
+        api_key, model, llm_provider, upstream, resolve_oidc=_resolved_without_a_google_fetch
+    )
+
+
+def _resolved_without_a_google_fetch(reference: str) -> str | UnresolvableSecretReference:
+    if not reference.startswith(GOOGLE_OIDC_SECRET_PREFIX):
+        return resolve_api_key_oidc_reference(reference)
+    return cached_oidc_token(reference) or UnresolvableSecretReference(
+        kind=oidc_reference_kind(reference), reason="no Google ID token has been fetched yet", retryable=True
     )
 
 
@@ -1000,6 +1031,23 @@ def load_credentials_from_list(kwargs: dict[str, object], call_type: str | None 
     kwargs.update(_credential_updates(kwargs, _named_credential_values(kwargs), call_type=call_type))
 
 
+def resolved_api_key_update(kwargs: Mapping[str, object], call_type: str | None = None) -> Mapping[str, object]:
+    return _api_key_update(_secret_for_api_key(kwargs, _stored_credential_values(kwargs) or {}, call_type=call_type))
+
+
+async def aresolved_api_key_update(kwargs: Mapping[str, object], call_type: str | None = None) -> Mapping[str, object]:
+    credential_values: Final = _stored_credential_values(kwargs) or {}
+    secret: Final = await _resolved_off_the_event_loop(
+        partial(_secret_for_api_key, kwargs, credential_values, call_type=call_type),
+        _api_key_after_credentials(kwargs, credential_values),
+    )
+    return _api_key_update(secret)
+
+
+def _api_key_update(secret: str | None) -> Mapping[str, object]:
+    return MappingProxyType({} if secret is None else {"api_key": secret})
+
+
 async def acredential_updates(kwargs: Mapping[str, object], call_type: str | None = None) -> Mapping[str, object]:
     credential_values: Final = _named_credential_values(kwargs)
     return await _resolved_off_the_event_loop(
@@ -1018,10 +1066,20 @@ def _credential_updates(
     resolve_oidc: OidcResolver = resolve_api_key_oidc_reference,
     call_type: str | None = None,
 ) -> Mapping[str, object]:
+    secret: Final = _secret_for_api_key(kwargs, credential_values, resolve_oidc, call_type)
+    return credential_values if secret is None else MappingProxyType({**credential_values, "api_key": secret})
+
+
+def _secret_for_api_key(
+    kwargs: Mapping[str, object],
+    credential_values: Mapping[str, object],
+    resolve_oidc: OidcResolver = resolve_api_key_oidc_reference,
+    call_type: str | None = None,
+) -> str | None:
     api_key: Final = _api_key_after_credentials(kwargs, credential_values)
     if not isinstance(api_key, AdminApiKeySecretReference):
-        return credential_values
-    secret: Final = _secret_behind_api_key_reference(
+        return None
+    return _secret_behind_api_key_reference(
         api_key,
         resolve_oidc=resolve_oidc,
         call_type=call_type,
@@ -1034,7 +1092,6 @@ def _credential_updates(
             }
         ),
     )
-    return MappingProxyType({**credential_values, "api_key": secret})
 
 
 def get_dynamic_callbacks(
@@ -4828,10 +4885,13 @@ def get_optional_params_transcription(
     drops_unsupported_params: Final = normalized_drop_params is True or litellm.drop_params is True
     transcription_params: Final = (
         OPENAI_TRANSCRIPTION_PARAMS
-        if sends_through_openai_sdk or drops_unsupported_params
+        if sends_through_openai_sdk or drops_unsupported_params or custom_llm_provider == "gnani"
         else [param for param in OPENAI_TRANSCRIPTION_PARAMS if param not in _OPENAI_SDK_ONLY_TRANSCRIPTION_PARAMS]
     )
-    default_params: Final = {param: None for param in (*transcription_params, "prompt", "temperature")}
+    extra_openai_params: Final = GNANI_REJECTED_OPENAI_TRANSCRIPTION_PARAMS if custom_llm_provider == "gnani" else ()
+    default_params: Final = {
+        param: None for param in (*transcription_params, "prompt", "temperature", *extra_openai_params)
+    }
     stream_unset: Final = transcription_stream_unset(stream)
     malformed_stream: Final = not stream_unset and transcription_stream_flag(stream) is None
     if malformed_stream and not drops_unsupported_params:
@@ -4840,11 +4900,13 @@ def get_optional_params_transcription(
             message="`stream` must be a boolean. To drop it from the call, set `litellm.drop_params = True`.",
         )
 
+    gnani_stream_off: Final = custom_llm_provider == "gnani" and transcription_stream_flag(stream) is False
+    stream_ignored: Final = stream_unset or malformed_stream or gnani_stream_off
     passed_entries: Final[Mapping[str, object]] = MappingProxyType(passed_params)
     non_default_params: Final = {
         k: v
         for k, v in passed_entries.items()
-        if k in default_params and v != default_params[k] and not (k == "stream" and (stream_unset or malformed_stream))
+        if k in default_params and v != default_params[k] and not (k == "stream" and stream_ignored)
     }
     optional_params = {}
 
@@ -4858,7 +4920,7 @@ def get_optional_params_transcription(
                 elif k not in supported_params:
                     raise UnsupportedParamsError(
                         status_code=500,
-                        message=f"Setting user/encoding format is not supported by {custom_llm_provider}. To drop it from the call, set `litellm.drop_params = True`.",
+                        message=f"Setting `{k}` is not supported by {custom_llm_provider}. To drop it from the call, set `litellm.drop_params = True`.",
                     )
             return non_default_params
 
@@ -4900,7 +4962,7 @@ def get_optional_params_transcription(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
-            drop_params=normalized_drop_params if normalized_drop_params is not None else False,
+            drop_params=drops_unsupported_params,
         )
 
     optional_params = add_provider_specific_params_to_optional_params(
@@ -5257,6 +5319,15 @@ def get_optional_params_embeddings(
             object = litellm.TwelveLabsMarengoEmbeddingConfig(model=model)
         elif "nova" in model.lower():
             object = litellm.AmazonNovaEmbeddingConfig()
+            if (
+                "encoding_format" in non_default_params
+                and non_default_params["encoding_format"] not in object.servable_encoding_formats
+            ):
+                _check_valid_arg(
+                    supported_params=[
+                        param for param in object.get_supported_openai_params() if param != "encoding_format"
+                    ]
+                )
         else:  # unmapped model
             supported_params = []
             _check_valid_arg(supported_params=supported_params)
@@ -5834,6 +5905,16 @@ def _map_params_with_provider_config(
             model=model,
             drop_params=drop_params,
             reasoning_drop_logger=reasoning_drop_logger,
+        )
+    from litellm.llms.openai_like.dynamic_config import MapsAllowedOpenAIParams
+
+    if isinstance(provider_config, MapsAllowedOpenAIParams):
+        return provider_config.map_openai_params_allowing(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=drop_params,
+            allowed_openai_params=allowed_openai_param_names(allowed_openai_params),
         )
     return provider_config.map_openai_params(
         non_default_params=non_default_params,
@@ -8483,6 +8564,8 @@ def validate_environment(
             else:
                 missing_keys.append("GOOGLE_API_KEY")
                 missing_keys.append("GEMINI_API_KEY")
+        elif custom_llm_provider == "gnani" and not os.environ.get("GNANI_API_KEY"):
+            missing_keys.append("GNANI_API_KEY")
         elif custom_llm_provider == "groq":
             if "GROQ_API_KEY" in os.environ:
                 keys_in_environment = True
@@ -9373,9 +9456,13 @@ _FAILED_PROVIDER_LISTING_TTL_SECONDS: Final = 30
 
 
 def _provider_api_key_env_vars(provider: str) -> tuple[str, ...]:
+    from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
     if provider == LlmProviders.TOGETHER_AI:
         return TOGETHER_AI_API_KEY_ENV_VARS
-    return (f"{provider.replace('_', '').upper()}_API_KEY", f"{provider.upper()}_API_KEY")
+    json_provider: Final = JSONProviderRegistry.get(provider)
+    derived: Final = (f"{provider.replace('_', '').upper()}_API_KEY", f"{provider.upper()}_API_KEY")
+    return derived if json_provider is None else (*derived, *json_provider.api_key_envs)
 
 
 def _infer_valid_provider_from_env_vars(
@@ -10830,6 +10917,10 @@ class ProviderConfigManager:
             return AzureSpeechAudioTranscriptionConfig()
         elif litellm.LlmProviders.DEEPGRAM == provider:
             return litellm.DeepgramAudioTranscriptionConfig()
+        elif litellm.LlmProviders.GNANI == provider:
+            from litellm.llms.gnani.audio_transcription.transformation import GnaniAudioTranscriptionConfig
+
+            return GnaniAudioTranscriptionConfig()
         elif litellm.LlmProviders.ELEVENLABS == provider:
             from litellm.llms.elevenlabs.audio_transcription.transformation import (
                 ElevenLabsAudioTranscriptionConfig,

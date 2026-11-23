@@ -146,7 +146,7 @@ class _WebIdentityTokenClaims(LiteLLMBaseModel):
 
 
 class AwsAuthError(Exception):
-    def __init__(self, status_code, message):
+    def __init__(self, status_code: int, message: str) -> None:
         self.status_code = status_code
         self.message = message
         self.request = httpx.Request(method="POST", url="https://us-west-2.console.aws.amazon.com/bedrock")
@@ -1690,7 +1690,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
 
         return prepped
 
-    def _filter_headers_for_aws_signature(self, headers: dict) -> dict:
+    def _filter_headers_for_aws_signature(self, headers: Mapping[str, object]) -> dict[str, object]:
         """
         Filter headers to only include those that AWS SigV4 includes in signature calculation.
         This Fixes forwarded client headers from breaking the signature calculation.

@@ -5,6 +5,8 @@ from enum import Enum
 from types import MappingProxyType
 from typing import Final, Literal
 
+from typing_extensions import Never
+
 from litellm.litellm_core_utils.env_utils import (
     get_env_float,
     get_env_float_in_range,
@@ -1019,6 +1021,13 @@ OPENAI_TRANSCRIPTION_PARAMS: Final = [
     "timestamp_granularities",
 ]
 
+GNANI_REJECTED_OPENAI_TRANSCRIPTION_PARAMS: Final = (
+    "chunking_strategy",
+    "include",
+    "known_speaker_names",
+    "known_speaker_references",
+)
+
 OPENAI_EMBEDDING_PARAMS: Final = ["dimensions", "encoding_format", "user"]
 
 DEFAULT_EMBEDDING_PARAM_VALUES: Final = {
@@ -1217,6 +1226,7 @@ openai_compatible_providers: Final[list[str]] = [
     "meta",  # Meta Model API (Muse Spark) - JSON-configured provider
     "cognition",
     "coralbricks",
+    "perplexity_orchestrator",
     "cortecs",
     "scx-ai",
     "prism",
@@ -1229,7 +1239,7 @@ openai_compatible_providers: Final[list[str]] = [
 
 OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS: Final = frozenset({"openai"} | frozenset(openai_compatible_providers))
 
-openai_text_completion_compatible_providers: Final[list] = [  # providers that support `/v1/completions`
+openai_text_completion_compatible_providers: Final[list[str]] = [  # providers that support `/v1/completions`
     "together_ai",
     "fireworks_ai",
     "hosted_vllm",
@@ -1416,7 +1426,7 @@ nebius_models: Final[set] = set(
     ]
 )
 
-dashscope_models: Final[frozenset] = frozenset(
+dashscope_models: Final[frozenset[str]] = frozenset(
     [
         "qwen-turbo",
         "qwen-plus",
@@ -1431,9 +1441,9 @@ dashscope_models: Final[frozenset] = frozenset(
     ]
 )
 
-qwencloud_models: Final[frozenset] = frozenset(dashscope_models)
+qwencloud_models: Final[frozenset[str]] = frozenset(dashscope_models)
 
-qwen_ai_platform_models: Final[frozenset] = frozenset(dashscope_models)
+qwen_ai_platform_models: Final[frozenset[str]] = frozenset(dashscope_models)
 
 nebius_embedding_models: Final[set] = set(
     [
@@ -2173,6 +2183,7 @@ SENTRY_DENYLIST: Final = [
     "authorization",
     "api-key",
     "x-api-key",
+    "x-api-key-id",
     "x-goog-api-key",
     "ocp-apim-subscription-key",
     "x-litellm-api-key",
@@ -2415,7 +2426,7 @@ MESSAGE_THREAD_MAX_TRACKED_OWNERS: Final = 20_000
 
 # Shared read-only empty mapping, for defaulting optional Mapping parameters without
 # constructing a fresh mutable dict at each call site.
-EMPTY_MAPPING: Final = MappingProxyType({})
+EMPTY_MAPPING: Final[MappingProxyType[str, Never]] = MappingProxyType({})
 
 # API endpoint for breached password k-anonymity search
 HIBP_RANGE_API_BASE: Final = "https://api.pwnedpasswords.com/range"

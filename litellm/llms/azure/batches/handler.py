@@ -49,7 +49,7 @@ class AzureBatchesAPI(BaseAzureLLM):
         timeout: float | httpx.Timeout,
         max_retries: int | None,
         client: AzureOpenAI | AsyncAzureOpenAI | OpenAI | AsyncOpenAI | None = None,
-        litellm_params: dict | None = None,
+        litellm_params: dict[str, object] | None = None,
     ) -> LiteLLMBatch | Coroutine[object, object, LiteLLMBatch]:
         azure_client: AzureOpenAI | AsyncAzureOpenAI | OpenAI | AsyncOpenAI | None = self.get_azure_openai_client(
             api_key=api_key,
@@ -91,7 +91,7 @@ class AzureBatchesAPI(BaseAzureLLM):
         timeout: float | httpx.Timeout,
         max_retries: int | None,
         client: AzureOpenAI | AsyncAzureOpenAI | OpenAI | AsyncOpenAI | None = None,
-        litellm_params: dict | None = None,
+        litellm_params: dict[str, object] | None = None,
     ):
         azure_client: AzureOpenAI | AsyncAzureOpenAI | OpenAI | AsyncOpenAI | None = self.get_azure_openai_client(
             api_key=api_key,
@@ -133,7 +133,7 @@ class AzureBatchesAPI(BaseAzureLLM):
         timeout: float | httpx.Timeout,
         max_retries: int | None,
         client: AzureOpenAI | AsyncAzureOpenAI | OpenAI | AsyncOpenAI | None = None,
-        litellm_params: dict | None = None,
+        litellm_params: dict[str, object] | None = None,
     ):
         azure_client: AzureOpenAI | AsyncAzureOpenAI | OpenAI | AsyncOpenAI | None = self.get_azure_openai_client(
             api_key=api_key,
@@ -183,7 +183,7 @@ class AzureBatchesAPI(BaseAzureLLM):
         after: str | None = None,
         limit: int | None = None,
         client: AzureOpenAI | AsyncAzureOpenAI | OpenAI | AsyncOpenAI | None = None,
-        litellm_params: dict | None = None,
+        litellm_params: dict[str, object] | None = None,
     ):
         azure_client: AzureOpenAI | AsyncAzureOpenAI | OpenAI | AsyncOpenAI | None = self.get_azure_openai_client(
             api_key=api_key,

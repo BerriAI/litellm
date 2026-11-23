@@ -8,9 +8,11 @@ Use litellm with Anthropic SDK, Vertex AI SDK, Cohere SDK, etc.
 
 from __future__ import annotations
 
+import contextlib
 import hmac
 import inspect
 import json
+import logging
 import os
 import posixpath
 import re
@@ -32,7 +34,11 @@ from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm import get_llm_provider
-from litellm._logging import redact_internal_details_from_client_message, verbose_proxy_logger
+from litellm._logging import (
+    CALLER_ERROR_LOG_EXTRA,
+    redact_internal_details_from_client_message,
+    verbose_proxy_logger,
+)
 from litellm._uuid import uuid
 from litellm.constants import (
     ALLOWED_VERTEX_AI_PASSTHROUGH_HEADERS,
@@ -49,7 +55,12 @@ from litellm.constants import (
     PASS_THROUGH_HEADER_PREFIX,
     TYPESAFE_DANGER_ZONE_HEADER_PREFIX,
 )
-from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
+from litellm.exceptions import (
+    AuthenticationError,
+    BlockedPiiEntityError,
+    GuardrailRaisedException,
+    ServiceUnavailableError,
+)
 from litellm.integrations.custom_guardrail import guardrail_request_data_with_streaming, is_guardrail_intervention
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.litellm_core_utils.core_helpers import (
@@ -218,11 +229,13 @@ from litellm.types.router import LiteLLMParamsTypedDict, RouterRateLimitError
 from litellm.types.utils import (
     DEPLOYMENT_SCOPED_PRICING_FIELDS,
     SERVER_DERIVED_PRICING_FIELDS,
+    AdminApiKeySecretReference,
     CallTypes,
     LlmProviders,
+    credential_api_key_secret_reference,
 )
 from litellm.types.vector_stores import LiteLLM_ManagedVectorStore, LiteLLM_ManagedVectorStoreIndex
-from litellm.utils import ProviderConfigManager, with_named_credential
+from litellm.utils import ProviderConfigManager, aresolve_api_key_secret_reference, with_named_credential
 from litellm.vector_stores.fallbacks import native_store_id
 
 from .passthrough_endpoint_router import PassthroughEndpointRouter
@@ -261,7 +274,9 @@ def create_request_copy(request: Request):
     }
 
 
-def is_passthrough_request_using_router_model(request_body: dict, llm_router: litellm.Router | None) -> bool:
+def is_passthrough_request_using_router_model(
+    request_body: Mapping[str, object], llm_router: litellm.Router | None
+) -> bool:
     """
     Returns True if the model is in the llm_router model names
     """
@@ -1657,13 +1672,13 @@ async def handle_bedrock_passthrough_router_model(
     model: str,
     endpoint: str,
     request: Request,
-    request_body: dict,
+    request_body: Mapping[str, object],
     llm_router: litellm.Router,
     user_api_key_dict: UserAPIKeyAuth,
-    proxy_logging_obj,
+    proxy_logging_obj: ProxyLoggingType,
     general_settings: dict,
-    proxy_config,
-    select_data_generator,
+    proxy_config: ProxyConfig,
+    select_data_generator: Callable[..., object],
     user_model: str | None,
     user_temperature: float | None,
     user_request_timeout: float | None,
@@ -1773,7 +1788,11 @@ async def _bedrock_count_tokens(
     request: Request, user_api_key_dict: UserAPIKeyAuth, request_body: dict[str, object], litellm_call_id: str
 ) -> Mapping[str, object]:
     from litellm.llms.bedrock.common_utils import BedrockError
-    from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensHandler
+    from litellm.llms.bedrock.count_tokens.handler import (
+        BedrockCountTokensHandler,
+        BedrockCountTokensRequestError,
+        is_caller_refusal,
+    )
     from litellm.proxy.litellm_pre_call_utils import request_routing_metadata
     from litellm.proxy.proxy_server import route_count
 
@@ -1834,7 +1853,15 @@ async def _bedrock_count_tokens(
 
     except BedrockError as e:
         # Convert BedrockError to HTTPException for FastAPI
-        verbose_proxy_logger.error("BedrockError in handle_bedrock_count_tokens: %s", e)
+        is_caller_error: Final = is_caller_refusal(
+            e.status_code, e.message, isinstance(e, BedrockCountTokensRequestError)
+        )
+        verbose_proxy_logger.log(
+            logging.WARNING if is_caller_error else logging.ERROR,
+            "BedrockError in handle_bedrock_count_tokens: %s",
+            e,
+            extra=CALLER_ERROR_LOG_EXTRA if is_caller_error else None,
+        )
         from litellm.litellm_core_utils.llm_response_utils.get_headers import get_response_headers
 
         provider_headers: Final = e.response.headers
@@ -2503,6 +2530,7 @@ async def transcribe_sdk_proxy_route(
 async def _resolve_vertex_model_from_router(
     model_id: str,
     llm_router: litellm.Router | None,
+    call_id: str,
     encoded_endpoint: str,
     endpoint: str,
     vertex_project: str | None,
@@ -2514,6 +2542,7 @@ async def _resolve_vertex_model_from_router(
     Args:
         model_id: The model ID extracted from the URL (e.g., "gcp/google/gemini-2.5-flash")
         llm_router: The LiteLLM router instance
+        call_id: The id the pick's least-busy reservation is held under
         encoded_endpoint: The encoded endpoint path
         endpoint: The original endpoint path
         vertex_project: Current vertex project (may be from URL)
@@ -2528,7 +2557,7 @@ async def _resolve_vertex_model_from_router(
         return encoded_endpoint, endpoint, vertex_project, vertex_location, None
 
     try:
-        deployment: Final = await llm_router.select(model_id, kind="pass_through")
+        deployment: Final = await llm_router.select(model_id, {"litellm_call_id": call_id}, kind="pass_through")
         if not deployment:
             return encoded_endpoint, endpoint, vertex_project, vertex_location, None
 
@@ -3634,6 +3663,34 @@ async def _base_vertex_proxy_route(
     user_api_key_dict: UserAPIKeyAuth,
     router_credentials: LiteLLM_ManagedVectorStore | None = None,
 ):
+    from litellm.proxy.proxy_server import llm_router
+
+    call_id: Final = str(uuid.uuid4())
+    with contextlib.nullcontext() if llm_router is None else llm_router.reserving_picks(call_id):
+        return await _relay_vertex_call(
+            endpoint,
+            request,
+            fastapi_response,
+            get_vertex_pass_through_handler,
+            general_settings,
+            user_api_key_dict,
+            router_credentials,
+            llm_router,
+            call_id,
+        )
+
+
+async def _relay_vertex_call(
+    endpoint: str,
+    request: Request,
+    fastapi_response: Response,
+    get_vertex_pass_through_handler: BaseVertexAIPassThroughHandler,
+    general_settings: Mapping[str, object],
+    user_api_key_dict: UserAPIKeyAuth,
+    router_credentials: LiteLLM_ManagedVectorStore | None,
+    llm_router: litellm.Router | None,
+    call_id: str,
+) -> object:
     """
     Base function for Vertex AI passthrough routes.
     Handles common logic for all Vertex AI services.
@@ -3649,6 +3706,8 @@ async def _base_vertex_proxy_route(
         general_settings: Proxy general settings, read per request for the anthropic-beta values to drop
         user_api_key_dict: The caller the route authenticated
         router_credentials: Optional vector store credentials from registry (LiteLLM_ManagedVectorStore)
+        llm_router: The proxy's router, which picks the deployment for a model in the URL
+        call_id: The id the router's least-busy pick is reserved under
     """
     from litellm.llms.vertex_ai.common_utils import (
         construct_target_url,
@@ -3656,7 +3715,6 @@ async def _base_vertex_proxy_route(
         get_vertex_model_id_from_url,
         get_vertex_project_id_from_url,
     )
-    from litellm.proxy.proxy_server import llm_router
 
     encoded_endpoint = httpx.URL(endpoint).path
     verbose_proxy_logger.debug("requested endpoint %s", endpoint)
@@ -3691,6 +3749,7 @@ async def _base_vertex_proxy_route(
             ) = await _resolve_vertex_model_from_router(
                 model_id=model_id,
                 llm_router=llm_router,
+                call_id=call_id,
                 encoded_endpoint=encoded_endpoint,
                 endpoint=endpoint,
                 vertex_project=vertex_project,
@@ -4512,8 +4571,9 @@ async def cursor_proxy_route(
     if cursor_api_key is None:
         for credential in litellm.credential_list:
             if credential.credential_info and credential.credential_info.get("custom_llm_provider") == "cursor":
-                cursor_api_key = credential.credential_values.get("api_key")
-                credential_api_base = credential.credential_values.get("api_base")
+                credential_values = credential_api_key_secret_reference(credential.credential_values)
+                credential_api_base = credential_values.get("api_base")
+                cursor_api_key = await _cursor_credential_api_key(credential_values)
                 if credential_api_base:
                     base_target_url = credential_api_base
                 break
@@ -4549,6 +4609,22 @@ async def cursor_proxy_route(
     )
 
     return received_value
+
+
+async def _cursor_credential_api_key(credential_values: Mapping[str, object]) -> object:
+    api_key: Final = credential_values.get("api_key")
+    if not isinstance(api_key, AdminApiKeySecretReference):
+        return api_key
+    try:
+        return await aresolve_api_key_secret_reference(
+            api_key,
+            None,
+            "cursor",
+            {"api_base": credential_values.get("api_base")},
+            call_type=CallTypes.allm_passthrough_route.value,
+        )
+    except (AuthenticationError, ServiceUnavailableError) as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
 
 
 TINYFISH_JSON_OBJECT_BODY_DETAIL: Final = (

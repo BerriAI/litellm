@@ -380,6 +380,12 @@ class _TeamListBudgetRow(Protocol):
     def temp_budget_expiry(self) -> datetime | None: ...
 
     @property
+    def rollover_max_budget(self) -> float | None: ...
+
+    @property
+    def budget_duration(self) -> str | None: ...
+
+    @property
     def temp_budget_increase(self) -> float | None: ...
 
 
@@ -392,6 +398,9 @@ class _TeamListMembershipRow(Protocol):
 
     @property
     def litellm_budget_table(self) -> _TeamListBudgetRow | None: ...
+
+    @property
+    def rollover_credit(self) -> float | None: ...
 
 
 class _CacheableTeamRow(_TeamIdRow, _ModelDumpRow, Protocol): ...
@@ -2275,7 +2284,7 @@ async def new_team(
 
 async def _create_team_update_audit_log(
     existing_team_row: _AuditableTeamRow,
-    updated_kv: dict,
+    updated_kv: Mapping[str, object],
     team_id: str,
     litellm_changed_by: str | None,
     user_api_key_dict: UserAPIKeyAuth,
@@ -3242,7 +3251,9 @@ async def patch_team(
         raise handle_exception_on_proxy(e)
 
 
-def _set_budget_reset_at(data: UpdateTeamRequest, updated_kv: dict, existing_team: LiteLLM_TeamTable) -> None:
+def _set_budget_reset_at(
+    data: UpdateTeamRequest, updated_kv: dict[str, object], existing_team: LiteLLM_TeamTable
+) -> None:
     """Set budget_reset_at in updated_kv if budget_duration is provided."""
     if data.budget_duration is not None and not keeps_budget_reset(
         data.budget_duration, existing_team.budget_duration, existing_team.budget_reset_at
@@ -4263,7 +4274,7 @@ async def _team_member_delete(
 
         existing_team_row.members_with_roles = new_team_members
 
-        _db_new_team_members: Final[list[dict]] = [m.model_dump() for m in new_team_members]
+        _db_new_team_members: Final[list[dict[str, object]]] = [m.model_dump() for m in new_team_members]
 
         ## DELETE TEAM ID from USER ROW, IF EXISTS ##
         # get user row
@@ -6423,11 +6434,11 @@ def _team_list_caller_membership(
     rollover_credit: Final = (
         active_rollover_credit(
             member_budget_row.max_budget,
-            getattr(member_budget_row, "rollover_max_budget", None),
-            getattr(member_budget_row, "budget_duration", None),
-            getattr(membership_row, "rollover_credit", None),
+            member_budget_row.rollover_max_budget,
+            member_budget_row.budget_duration,
+            membership_row.rollover_credit,
         )
-        if member_budget_row is not None
+        if membership_row is not None and member_budget_row is not None
         else None
     )
     return TeamListCallerMembership(
@@ -7474,10 +7485,12 @@ async def bulk_update_team_member_permissions(
 
 
 async def _compute_and_batch_updates(
-    prisma_client, teams: "Sequence[prisma_models.LiteLLM_TeamTable]", permissions_to_add: set
+    prisma_client: PrismaClient,
+    teams: "Sequence[prisma_models.LiteLLM_TeamTable]",
+    permissions_to_add: AbstractSet[str],
 ) -> int:
     """Compute merged permissions and batch-write updates. Returns count of teams updated."""
-    updates: Final = []
+    updates: Final[list[tuple[str, list[str]]]] = []
     for team in teams:
         existing = set(team.team_member_permissions or [])
         if permissions_to_add <= existing:
@@ -7498,7 +7511,7 @@ async def _compute_and_batch_updates(
 
 
 async def _append_permissions_to_specific_teams(
-    prisma_client: PrismaClient, team_ids: list[str], permissions_to_add: set
+    prisma_client: PrismaClient, team_ids: list[str], permissions_to_add: AbstractSet[str]
 ) -> int:
     """Fetch specific teams by ID and append permissions."""
     teams: Final = await _team_db(prisma_client).find_many(
@@ -7516,7 +7529,7 @@ async def _append_permissions_to_specific_teams(
     return await _compute_and_batch_updates(prisma_client, teams, permissions_to_add)
 
 
-async def _append_permissions_to_all_teams(prisma_client: PrismaClient, permissions_to_add: set) -> int:
+async def _append_permissions_to_all_teams(prisma_client: PrismaClient, permissions_to_add: AbstractSet[str]) -> int:
     """Paginated read + batched write across all teams."""
     teams_updated = 0
     cursor = None
