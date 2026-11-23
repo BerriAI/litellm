@@ -4,6 +4,7 @@ import logging
 import os
 import re
 import time
+import traceback
 from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 from typing import Final, List, TypeAlias
@@ -68,7 +69,8 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 )
 from litellm.llms.vertex_ai.gemini.transformation import gemini_convert_messages_with_history
 from litellm.types.llms.bedrock import BedrockConverseReasoningContentBlock
-from litellm.types.llms.openai import AllMessageValues
+from litellm.types.llms.bedrock import ContentBlock as BedrockContentBlock
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionUserMessage
 
 
 READ_FILE: Final[list[object]] = [{"name": "read_file", "description": "Read the contents of a file."}]
@@ -422,6 +424,46 @@ def test_anthropic_messages_pt_drops_the_stream_index_from_replayed_thinking_blo
     ]
 
 
+@pytest.mark.parametrize(
+    ("model", "expected_content"),
+    (
+        (
+            "global.anthropic.claude-haiku-5-5",
+            [
+                {"reasoningContent": {"reasoningText": {"text": "pondering", "signature": "signed-reasoning"}}},
+                {"text": "hello"},
+            ],
+        ),
+        ("global.zai.glm-5.3", [{"text": "hello"}]),
+        ("amazon.nova-pro-v1:0", [{"text": "hello"}]),
+        ("converse/us.openai.gpt-6-luna", [{"text": "hello"}]),
+    ),
+)
+def test_bedrock_converse_replays_signed_thinking_only_to_claude(
+    model: str, expected_content: Sequence[Mapping[str, object]]
+) -> None:
+    body: Final = litellm.AmazonConverseConfig().transform_request(
+        model=model,
+        messages=[
+            ChatCompletionUserMessage(role="user", content="hi"),
+            ChatCompletionAssistantMessage(
+                role="assistant",
+                content="hello",
+                thinking_blocks=[{"type": "thinking", "thinking": "pondering", "signature": "signed-reasoning"}],
+            ),
+            ChatCompletionUserMessage(role="user", content="continue"),
+        ],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+    assert body["messages"] == [
+        {"role": "user", "content": [{"text": "hi"}]},
+        {"role": "assistant", "content": expected_content},
+        {"role": "user", "content": [{"text": "continue"}]},
+    ]
+
+
 async def test_anthropic_bedrock_thinking_blocks_with_none_content():
     """
     Test the specific function that processes thinking_blocks when content is None
@@ -693,6 +735,192 @@ async def test_bedrock_converse_keeps_dropping_redacted_thinking_for_non_claude_
 
     assistant_content: Final = next(m["content"] for m in result if m["role"] == "assistant")
     assert assistant_content == [{"text": "hello"}]
+
+
+_HIDDEN_MODEL_ARN: Final = "arn:aws:bedrock:us-west-2:123456789012:application-inference-profile/abc123"
+
+
+async def _converse_messages(
+    messages: list[dict[str, object]],
+    model: str,
+    base_model: str | None,
+    use_async: bool,
+    assistant_continue_message: str | None = None,
+) -> list[dict[str, object]]:
+    return (
+        await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+            messages=messages,
+            model=model,
+            llm_provider="bedrock",
+            base_model=base_model,
+            assistant_continue_message=assistant_continue_message,
+        )
+        if use_async
+        else _bedrock_converse_messages_pt(
+            messages=messages,
+            model=model,
+            llm_provider="bedrock",
+            base_model=base_model,
+            assistant_continue_message=assistant_continue_message,
+        )
+    )
+
+
+def _assistant_with_thinking(placement: str, block: dict[str, object]) -> dict[str, object]:
+    return (
+        {"role": "assistant", "content": "hello", "thinking_blocks": [block]}
+        if placement == "thinking_blocks"
+        else {"role": "assistant", "content": [block, {"type": "text", "text": "hello"}]}
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize("placement", ["thinking_blocks", "content"])
+@pytest.mark.parametrize(
+    "signature", ["claude-signature", encrypted_reasoning_signature("gAAAA_1")], ids=["claude", "encrypted"]
+)
+@pytest.mark.parametrize(
+    ("model", "base_model"),
+    [
+        ("converse/us.openai.gpt-6-luna", None),
+        ("us.amazon.nova-pro-v1:0", None),
+        ("us.amazon.nova-pro-v1:0", "anthropic.claude-sonnet-4-6"),
+        (_HIDDEN_MODEL_ARN, "openai.gpt-oss-120b-1:0"),
+    ],
+)
+async def test_bedrock_converse_drops_signed_thinking_for_a_known_non_claude_target(
+    use_async: bool, placement: str, signature: str, model: str, base_model: str | None
+):
+    block: Final = {"type": "thinking", "thinking": "private plan", "signature": signature}
+    messages: Final = [
+        {"role": "user", "content": "hi"},
+        _assistant_with_thinking(placement, block),
+        {"role": "user", "content": "again"},
+    ]
+
+    assert await _converse_messages(messages, model, base_model, use_async) == [
+        {"role": "user", "content": [{"text": "hi"}]},
+        {"role": "assistant", "content": [{"text": "hello"}]},
+        {"role": "user", "content": [{"text": "again"}]},
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize("placement", ["thinking_blocks", "content"])
+@pytest.mark.parametrize(
+    ("model", "base_model"),
+    [
+        ("us.anthropic.claude-sonnet-4-6", None),
+        ("ca.anthropic.claude-haiku-5-5", None),
+        ("converse/in.anthropic.claude-sonnet-5", None),
+        ("claude-sonnet-4-6", None),
+        (_HIDDEN_MODEL_ARN, None),
+        (_HIDDEN_MODEL_ARN, "anthropic.claude-sonnet-4-6"),
+    ],
+)
+async def test_bedrock_converse_keeps_signed_thinking_for_a_target_that_may_be_claude(
+    use_async: bool, placement: str, model: str, base_model: str | None
+):
+    block: Final = {"type": "thinking", "thinking": "private plan", "signature": "claude-signature"}
+    messages: Final = [
+        {"role": "user", "content": "hi"},
+        _assistant_with_thinking(placement, block),
+        {"role": "user", "content": "again"},
+    ]
+
+    result: Final = await _converse_messages(messages, model, base_model, use_async)
+
+    assistant_content: Final = next(m["content"] for m in result if m["role"] == "assistant")
+    assert assistant_content == [
+        {"reasoningContent": {"reasoningText": {"text": "private plan", "signature": "claude-signature"}}},
+        {"text": "hello"},
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+async def test_bedrock_converse_keeps_the_tool_call_when_dropping_signed_thinking(use_async: bool):
+    messages: Final = [
+        {"role": "user", "content": "weather?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "thinking_blocks": [{"type": "thinking", "thinking": "private plan", "signature": "claude-signature"}],
+            "tool_calls": [
+                {"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": "sunny"},
+    ]
+
+    result: Final = await _converse_messages(messages, "converse/us.openai.gpt-6-luna", None, use_async)
+
+    assert [m["role"] for m in result] == ["user", "assistant", "user"]
+    assert [list(part) for part in result[1]["content"]] == [["toolUse"]]
+    assert result[1]["content"][0]["toolUse"]["toolUseId"] == "call_1"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize(
+    ("assistant_continue_message", "expected"),
+    [
+        (None, [{"role": "user", "content": [{"text": "hi"}, {"text": "again"}]}]),
+        (
+            "Please continue.",
+            [
+                {"role": "user", "content": [{"text": "hi"}]},
+                {"role": "assistant", "content": [{"text": "Please continue."}]},
+                {"role": "user", "content": [{"text": "again"}]},
+            ],
+        ),
+    ],
+    ids=["merged_into_one_user_turn", "split_by_the_continue_message"],
+)
+async def test_bedrock_converse_drops_a_turn_that_held_only_signed_thinking(
+    use_async: bool, assistant_continue_message: str | None, expected: list[dict[str, object]]
+):
+    messages: Final = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": None,
+            "thinking_blocks": [{"type": "thinking", "thinking": "private plan", "signature": "claude-signature"}],
+        },
+        {"role": "user", "content": "again"},
+    ]
+
+    result: Final = await _converse_messages(
+        messages, "converse/us.openai.gpt-6-luna", None, use_async, assistant_continue_message
+    )
+
+    assert result == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+async def test_bedrock_converse_drops_the_cache_point_of_a_dropped_signed_thinking_block(use_async: bool):
+    messages: Final = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "thinking",
+                    "thinking": "private plan",
+                    "signature": "claude-signature",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        },
+        {"role": "user", "content": "again"},
+    ]
+
+    result: Final = await _converse_messages(messages, "converse/us.amazon.nova-2-lite-v1:0", None, use_async)
+
+    assert result == [{"role": "user", "content": [{"text": "hi"}, {"text": "again"}]}]
 
 
 @pytest.mark.parametrize(
@@ -1342,6 +1570,110 @@ def test_vertex_ai_transform_empty_function_call_arguments():
     }
 
 
+@pytest.mark.parametrize(
+    "arguments, expected_args",
+    [
+        (None, {}),
+        ('{"location": "Boston"', {"location": "Boston"}),
+        (b'{"location": "Boston"}', {"location": "Boston"}),
+    ],
+    ids=["null_arguments", "truncated_arguments", "bytes_arguments"],
+)
+def test_convert_to_gemini_tool_call_invoke_tolerates_null_truncated_and_bytes_arguments(
+    arguments: str | bytes | None, expected_args: dict[str, str]
+) -> None:
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        convert_to_gemini_tool_call_invoke,
+    )
+
+    message: Final = {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "get_weather", "arguments": arguments},
+            }
+        ],
+    }
+    parts: Final = convert_to_gemini_tool_call_invoke(message)
+    assert len(parts) == 1
+    assert parts[0]["function_call"]["name"] == "get_weather"
+    assert parts[0]["function_call"]["args"] == expected_args
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [{"location": "Boston"}, ["Boston"], 5, False],
+    ids=["object", "list", "number", "false"],
+)
+def test_convert_to_gemini_tool_call_invoke_rejects_arguments_that_are_not_a_json_string(
+    arguments: dict[str, str] | list[str] | int | bool,
+) -> None:
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        convert_to_gemini_tool_call_invoke,
+    )
+
+    message: Final = {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "get_weather", "arguments": arguments},
+            }
+        ],
+    }
+    with pytest.raises(litellm.BadRequestError, match="must be a JSON string"):
+        convert_to_gemini_tool_call_invoke(message)
+
+
+@pytest.mark.parametrize("arguments", ['["Boston"]', '"Boston"', "5"], ids=["list", "string", "number"])
+def test_convert_to_gemini_tool_call_invoke_rejects_json_text_that_is_not_an_object(arguments: str) -> None:
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        convert_to_gemini_tool_call_invoke,
+    )
+
+    message: Final = {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "get_weather", "arguments": arguments},
+            }
+        ],
+    }
+    with pytest.raises(litellm.BadRequestError, match="must be a JSON object"):
+        convert_to_gemini_tool_call_invoke(message)
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [{"location": "Boston"}, ["Boston"], '["Boston"]', "not json"],
+    ids=["object", "list", "json_list_text", "not_json"],
+)
+@pytest.mark.parametrize("shape", ["tool_calls", "function_call"])
+def test_convert_to_gemini_tool_call_invoke_drops_unusable_arguments_under_drop_params(
+    arguments: object, shape: str
+) -> None:
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        convert_to_gemini_tool_call_invoke,
+    )
+
+    function: Final = {"name": "get_weather", "arguments": arguments}
+    message: Final = (
+        {"role": "assistant", "content": None, "tool_calls": [{"id": "call_1", "type": "function", "function": function}]}
+        if shape == "tool_calls"
+        else {"role": "assistant", "content": None, "function_call": function}
+    )
+    parts: Final = convert_to_gemini_tool_call_invoke(message, drop_params=True)
+    assert parts == [{"function_call": {"name": "get_weather", "args": {}}}]
+
+
 @pytest.mark.asyncio
 async def test_bedrock_process_image_async_factory():
     """
@@ -1489,6 +1821,279 @@ def test_convert_gemini_tool_call_result_with_image_url():
     )
     inline_parts = _get_gemini_function_response_inline_data_parts(result2)
     assert len(inline_parts) == 1
+
+
+_FIND_CLIP_CALL: Final = {
+    "role": "assistant",
+    "content": None,
+    "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "find_clip", "arguments": "{}"}}],
+}
+
+
+def _find_clip_result(video_url: Mapping[str, object]) -> Mapping[str, object]:
+    return {
+        "role": "tool",
+        "tool_call_id": "call_1",
+        "content": [{"type": "text", "text": '{"ok":true}'}, {"type": "video_url", "video_url": video_url}],
+    }
+
+
+_TOOL_OUTPUT_ONLY: Final = {"function_response": {"name": "find_clip", "response": {"ok": True}}}
+_CLIP_SETTINGS: Final = ({"video_metadata": {"fps": 2}}, {"detail": "high"})
+
+
+def test_gemini_tool_result_video_url_reaches_gemini_as_inline_video() -> None:
+    delivered: Final = convert_to_gemini_tool_call_result(
+        _find_clip_result({"url": "data:video/mp4;base64,AAAAGGZ0eXA="}), _FIND_CLIP_CALL
+    )
+
+    assert delivered == [
+        {
+            "function_response": {
+                "name": "find_clip",
+                "response": {"ok": True},
+                "parts": [{"inline_data": {"data": "AAAAGGZ0eXA=", "mime_type": "video/mp4"}}],
+            }
+        }
+    ]
+
+
+_LINKS_GEMINI_CANNOT_INLINE: Final = (
+    pytest.param("https://www.youtube.com/watch?v=aqz-KE-bpKQ", id="youtube"),
+    pytest.param("gs://cloud-samples-data/video/animals.mp4", id="gcs-uri"),
+)
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai"])
+@pytest.mark.parametrize("video_url", _LINKS_GEMINI_CANNOT_INLINE)
+def test_gemini_tool_result_video_link_it_cannot_inline_is_a_bad_request(
+    custom_llm_provider: str, video_url: str
+) -> None:
+    with respx.mock, pytest.raises(litellm.BadRequestError, match="require inline media data"):
+        convert_to_gemini_tool_call_result(
+            _find_clip_result({"url": video_url}), _FIND_CLIP_CALL, custom_llm_provider=custom_llm_provider
+        )
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai"])
+@pytest.mark.parametrize("video_url", _LINKS_GEMINI_CANNOT_INLINE)
+def test_drop_params_drops_a_video_link_gemini_cannot_inline_from_a_tool_result(
+    custom_llm_provider: str, video_url: str
+) -> None:
+    with respx.mock:
+        delivered: Final = convert_to_gemini_tool_call_result(
+            _find_clip_result({"url": video_url}),
+            _FIND_CLIP_CALL,
+            drop_params=True,
+            custom_llm_provider=custom_llm_provider,
+        )
+
+    assert delivered == _TOOL_OUTPUT_ONLY
+
+
+_MISSING_VIDEO_URL: Final = f"https://8.8.8.8/{uuid.uuid4()}.mp4"
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai"])
+@pytest.mark.parametrize(
+    "video_url",
+    [
+        pytest.param(_MISSING_VIDEO_URL, id="link-answering-404"),
+        pytest.param("data:video/mp4;base64", id="data-url-without-data"),
+    ],
+)
+def test_gemini_tool_result_video_that_fails_to_download_is_a_bad_request_unless_drop_params(
+    custom_llm_provider: str, video_url: str
+) -> None:
+    with respx.mock(assert_all_called=False) as router:
+        router.get(_MISSING_VIDEO_URL).respond(404)
+        with pytest.raises(litellm.BadRequestError, match="Could not download the video in a tool result") as excinfo:
+            convert_to_gemini_tool_call_result(
+                _find_clip_result({"url": video_url}), _FIND_CLIP_CALL, custom_llm_provider=custom_llm_provider
+            )
+        dropped: Final = convert_to_gemini_tool_call_result(
+            _find_clip_result({"url": video_url}),
+            _FIND_CLIP_CALL,
+            custom_llm_provider=custom_llm_provider,
+            drop_params=True,
+        )
+
+    assert excinfo.value.llm_provider == custom_llm_provider
+    assert dropped == _TOOL_OUTPUT_ONLY
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai"])
+def test_failed_tool_result_video_download_keeps_its_signed_link_out_of_the_error(custom_llm_provider: str) -> None:
+    signature: Final = uuid.uuid4().hex
+    signed_url: Final = f"https://8.8.8.8/{uuid.uuid4()}.mp4?X-Goog-Signature={signature}"
+
+    with respx.mock as router:
+        router.get(signed_url).respond(404)
+        with pytest.raises(litellm.BadRequestError) as excinfo:
+            convert_to_gemini_tool_call_result(
+                _find_clip_result({"url": signed_url}), _FIND_CLIP_CALL, custom_llm_provider=custom_llm_provider
+            )
+
+    assert signature not in str(excinfo.value)
+    assert signature not in "".join(traceback.format_exception(excinfo.value))
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai"])
+def test_dropped_tool_result_video_keeps_its_signed_link_out_of_the_logs(
+    custom_llm_provider: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    signature: Final = uuid.uuid4().hex
+    signed_url: Final = f"https://8.8.8.8/{uuid.uuid4()}.mp4?X-Goog-Signature={signature}"
+
+    with respx.mock as router, caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        router.get(signed_url).respond(404)
+        dropped: Final = convert_to_gemini_tool_call_result(
+            _find_clip_result({"url": signed_url}),
+            _FIND_CLIP_CALL,
+            custom_llm_provider=custom_llm_provider,
+            drop_params=True,
+        )
+
+    assert dropped == _TOOL_OUTPUT_ONLY
+    assert caplog.records
+    assert signature not in caplog.text
+
+
+_MP4_BYTES: Final = b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom"
+_HEIC_BYTES: Final = b"\x00\x00\x00\x18ftypheic\x00\x00\x00\x00mif1heic"
+_XAVC_BYTES: Final = b"\x00\x00\x00\x18ftypXAVC\x00\x00\x00\x00XAVCmp42"
+_QUICKTIME_BYTES: Final = b"\x00\x00\x00\x14ftypqt  \x00\x00\x00\x00qt  "
+
+
+@pytest.mark.parametrize(
+    ("part_type", "suffix", "body", "mime_type"),
+    [
+        pytest.param("video_url", ".mp4", _MP4_BYTES, "video/mp4", id="mp4-link"),
+        pytest.param("video_url", "", _MP4_BYTES, "video/mp4", id="mp4-bytes"),
+        pytest.param("video_url", "", _XAVC_BYTES, "video/mp4", id="xavc-bytes"),
+        pytest.param("video_url", "", _QUICKTIME_BYTES, "video/mov", id="quicktime-bytes"),
+        pytest.param("image_url", "", _HEIC_BYTES, "image/heic", id="heic-bytes"),
+    ],
+)
+def test_gemini_tool_result_media_served_as_octet_stream_keeps_its_real_type(
+    part_type: str, suffix: str, body: bytes, mime_type: str
+) -> None:
+    media_url: Final = f"https://8.8.8.8/{uuid.uuid4()}{suffix}"
+    message: Final = {
+        "role": "tool",
+        "tool_call_id": "call_1",
+        "content": [{"type": "text", "text": '{"ok":true}'}, {"type": part_type, part_type: {"url": media_url}}],
+    }
+
+    with respx.mock as router:
+        router.get(media_url).respond(200, content=body, headers={"content-type": "application/octet-stream"})
+        delivered: Final = convert_to_gemini_tool_call_result(message, _FIND_CLIP_CALL)
+
+    assert delivered == [
+        {
+            "function_response": {
+                "name": "find_clip",
+                "response": {"ok": True},
+                "parts": [{"inline_data": {"data": base64.b64encode(body).decode(), "mime_type": mime_type}}],
+            }
+        }
+    ]
+
+
+def test_gemini_tool_result_video_without_a_url_is_a_bad_request_instead_of_a_silent_drop() -> None:
+    with pytest.raises(litellm.BadRequestError, match="'video_url' but it has no 'url'"):
+        convert_to_gemini_tool_call_result(_find_clip_result({}), _FIND_CLIP_CALL)
+
+
+def test_drop_params_drops_a_tool_result_video_without_a_url() -> None:
+    delivered: Final = convert_to_gemini_tool_call_result(_find_clip_result({}), _FIND_CLIP_CALL, drop_params=True)
+
+    assert delivered == _TOOL_OUTPUT_ONLY
+
+
+@pytest.mark.parametrize("settings", _CLIP_SETTINGS)
+@pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai"])
+def test_gemini_tool_result_video_settings_are_a_bad_request_instead_of_a_silent_drop(
+    settings: Mapping[str, object], custom_llm_provider: str
+) -> None:
+    with pytest.raises(litellm.BadRequestError, match="cannot carry detail or video_metadata") as excinfo:
+        convert_to_gemini_tool_call_result(
+            _find_clip_result({"url": "data:video/mp4;base64,AAAAGGZ0eXA=", **settings}),
+            _FIND_CLIP_CALL,
+            model="gemini-3.8-flash",
+            custom_llm_provider=custom_llm_provider,
+        )
+
+    assert (excinfo.value.llm_provider, excinfo.value.model) == (custom_llm_provider, "gemini-3.8-flash")
+
+
+@pytest.mark.parametrize(
+    "settings",
+    [pytest.param({"detail": "auto"}, id="detail-auto"), pytest.param({"video_metadata": {"label": "x"}}, id="no-op-metadata")],
+)
+@pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai"])
+def test_tool_result_video_settings_that_change_nothing_are_sent_without_error(
+    settings: Mapping[str, object], custom_llm_provider: str
+) -> None:
+    delivered: Final = convert_to_gemini_tool_call_result(
+        _find_clip_result({"url": "data:video/mp4;base64,AAAAGGZ0eXA=", **settings}),
+        _FIND_CLIP_CALL,
+        model="gemini-3.8-flash",
+        custom_llm_provider=custom_llm_provider,
+    )
+
+    assert delivered == [
+        {
+            "function_response": {
+                "name": "find_clip",
+                "response": {"ok": True},
+                "parts": [{"inline_data": {"data": "AAAAGGZ0eXA=", "mime_type": "video/mp4"}}],
+            }
+        }
+    ]
+
+
+@pytest.mark.parametrize("settings", _CLIP_SETTINGS)
+def test_drop_params_sends_a_tool_result_video_without_its_settings(settings: Mapping[str, object]) -> None:
+    delivered: Final = convert_to_gemini_tool_call_result(
+        _find_clip_result({"url": "data:video/mp4;base64,AAAAGGZ0eXA=", **settings}), _FIND_CLIP_CALL, drop_params=True
+    )
+
+    assert delivered == [
+        {
+            "function_response": {
+                "name": "find_clip",
+                "response": {"ok": True},
+                "parts": [{"inline_data": {"data": "AAAAGGZ0eXA=", "mime_type": "video/mp4"}}],
+            }
+        }
+    ]
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai"])
+def test_gemini_tool_result_video_url_linking_a_web_page_is_a_bad_request_instead_of_sending_html(
+    monkeypatch: pytest.MonkeyPatch, custom_llm_provider: str
+) -> None:
+    monkeypatch.setattr(litellm, "user_url_validation", False)
+    page_url: Final = f"https://videos.example/watch/{uuid.uuid4()}"
+
+    with respx.mock:
+        respx.get(page_url).mock(
+            return_value=httpx.Response(200, text="<html>clip</html>", headers={"content-type": "text/html"})
+        )
+        with pytest.raises(litellm.BadRequestError, match="but it holds text/html") as excinfo:
+            convert_to_gemini_tool_call_result(
+                _find_clip_result({"url": page_url}), _FIND_CLIP_CALL, custom_llm_provider=custom_llm_provider
+            )
+        dropped: Final = convert_to_gemini_tool_call_result(
+            _find_clip_result({"url": page_url}),
+            _FIND_CLIP_CALL,
+            custom_llm_provider=custom_llm_provider,
+            drop_params=True,
+        )
+
+    assert excinfo.value.llm_provider == custom_llm_provider
+    assert dropped == _TOOL_OUTPUT_ONLY
 
 
 def test_convert_gemini_tool_call_result_with_anthropic_image_block():
@@ -2013,6 +2618,16 @@ def test_bedrock_image_processor_content_type_fallback_binary_detection():
     assert base64_bytes == base64.b64encode(jpeg_content).decode("utf-8")
 
 
+def test_bedrock_sends_an_mp4_link_served_as_octet_stream_as_a_video_block() -> None:
+    video_url: Final = f"https://8.8.8.8/{uuid.uuid4()}"
+
+    with respx.mock as router:
+        router.get(video_url).respond(200, content=_MP4_BYTES, headers={"content-type": "application/octet-stream"})
+        block: Final = BedrockImageProcessor.process_image_sync(video_url)
+
+    assert block == {"video": {"source": {"bytes": base64.b64encode(_MP4_BYTES).decode()}, "format": "mp4"}}
+
+
 def test_bedrock_image_processor_content_type_fallback_application_octet_stream():
     """
     Test that _post_call_image_processing handles application/octet-stream correctly
@@ -2255,10 +2870,10 @@ def test_bedrock_create_bedrock_block_deterministic_document_hash():
 
     # Create two blocks with same content
     block1 = BedrockImageProcessor._create_bedrock_block(
-        image_bytes=base64_content, mime_type="application/pdf", image_format="pdf"
+        source={"bytes": base64_content}, mime_type="application/pdf", image_format="pdf"
     )
     block2 = BedrockImageProcessor._create_bedrock_block(
-        image_bytes=base64_content, mime_type="application/pdf", image_format="pdf"
+        source={"bytes": base64_content}, mime_type="application/pdf", image_format="pdf"
     )
 
     # Both should have the same document name
@@ -2283,10 +2898,10 @@ def test_bedrock_create_bedrock_block_different_content_different_hash():
 
     # Create blocks
     block1 = BedrockImageProcessor._create_bedrock_block(
-        image_bytes=base64_content1, mime_type="application/pdf", image_format="pdf"
+        source={"bytes": base64_content1}, mime_type="application/pdf", image_format="pdf"
     )
     block2 = BedrockImageProcessor._create_bedrock_block(
-        image_bytes=base64_content2, mime_type="application/pdf", image_format="pdf"
+        source={"bytes": base64_content2}, mime_type="application/pdf", image_format="pdf"
     )
 
     # Should have different document names
@@ -2309,15 +2924,15 @@ def test_bedrock_create_bedrock_block_normalized_base64():
 
     # Create blocks
     block1 = BedrockImageProcessor._create_bedrock_block(
-        image_bytes=base64_content, mime_type="application/pdf", image_format="pdf"
+        source={"bytes": base64_content}, mime_type="application/pdf", image_format="pdf"
     )
     block2 = BedrockImageProcessor._create_bedrock_block(
-        image_bytes=base64_with_newlines,
+        source={"bytes": base64_with_newlines},
         mime_type="application/pdf",
         image_format="pdf",
     )
     block3 = BedrockImageProcessor._create_bedrock_block(
-        image_bytes=base64_with_spaces,
+        source={"bytes": base64_with_spaces},
         mime_type="application/pdf",
         image_format="pdf",
     )
@@ -2344,10 +2959,10 @@ def test_bedrock_create_bedrock_block_large_file_sampling():
 
     # Create blocks
     block1 = BedrockImageProcessor._create_bedrock_block(
-        image_bytes=base64_content1, mime_type="application/pdf", image_format="pdf"
+        source={"bytes": base64_content1}, mime_type="application/pdf", image_format="pdf"
     )
     block2 = BedrockImageProcessor._create_bedrock_block(
-        image_bytes=base64_content2, mime_type="application/pdf", image_format="pdf"
+        source={"bytes": base64_content2}, mime_type="application/pdf", image_format="pdf"
     )
 
     # Should have different names because total length is different
@@ -2366,7 +2981,7 @@ def test_bedrock_create_bedrock_block_very_large_file():
 
     # Create block
     block = BedrockImageProcessor._create_bedrock_block(
-        image_bytes=base64_content, mime_type="application/pdf", image_format="pdf"
+        source={"bytes": base64_content}, mime_type="application/pdf", image_format="pdf"
     )
 
     # Should have a valid document name
@@ -2388,7 +3003,7 @@ def test_bedrock_create_bedrock_block_image_type():
 
     # Create block
     block = BedrockImageProcessor._create_bedrock_block(
-        image_bytes=base64_content, mime_type="image/png", image_format="png"
+        source={"bytes": base64_content}, mime_type="image/png", image_format="png"
     )
 
     # Should be an image block, not a document block
@@ -2409,7 +3024,7 @@ def test_bedrock_create_bedrock_block_video_type():
 
     # Create block
     block = BedrockImageProcessor._create_bedrock_block(
-        image_bytes=base64_content, mime_type="video/mp4", image_format="mp4"
+        source={"bytes": base64_content}, mime_type="video/mp4", image_format="mp4"
     )
 
     # Should be a video block, not a document block
@@ -2430,7 +3045,7 @@ def test_bedrock_create_bedrock_block_document_name_format():
     base64_content = base64.b64encode(pdf_content).decode("utf-8")
 
     block = BedrockImageProcessor._create_bedrock_block(
-        image_bytes=base64_content, mime_type="application/pdf", image_format="pdf"
+        source={"bytes": base64_content}, mime_type="application/pdf", image_format="pdf"
     )
 
     document_name = block["document"]["name"]
@@ -2459,13 +3074,402 @@ def test_bedrock_create_bedrock_block_different_document_formats():
     for content, mime_type, format_type in test_cases:
         base64_content = base64.b64encode(content + b"\x00" * 100).decode("utf-8")
         block = BedrockImageProcessor._create_bedrock_block(
-            image_bytes=base64_content, mime_type=mime_type, image_format=format_type
+            source={"bytes": base64_content}, mime_type=mime_type, image_format=format_type
         )
 
         assert block.get("document") is not None
         assert f"DocumentPDFmessages_" in block["document"]["name"]
         assert block["document"]["name"].endswith(f"_{format_type}")
         assert block["document"]["format"] == format_type
+
+
+_S3_MEDIA_MODEL: Final = "us.amazon.nova-2-lite-v1:0"
+_S3_BUCKET_OWNER: Final = "111122223333"
+
+
+async def _converse_user_content(part: Mapping[str, object], run_async: bool) -> Sequence[BedrockContentBlock]:
+    messages: Final = [{"role": "user", "content": [{"type": "text", "text": "Describe this."}, part]}]
+    with respx.mock:
+        converted: Final = (
+            await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+                messages=messages, model=_S3_MEDIA_MODEL, llm_provider="bedrock"
+            )
+            if run_async
+            else _bedrock_converse_messages_pt(messages=messages, model=_S3_MEDIA_MODEL, llm_provider="bedrock")
+        )
+    return converted[0]["content"][1:]
+
+
+def _s3_source(uri: str, bucket_owner: str | None = None) -> Mapping[str, object]:
+    return {"s3Location": {"uri": uri} if bucket_owner is None else {"uri": uri, "bucketOwner": bucket_owner}}
+
+
+@pytest.mark.parametrize("run_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    ("part", "expected"),
+    [
+        pytest.param(
+            {"type": "image_url", "image_url": {"url": "s3://media-bucket/dir/cat.png"}},
+            {"image": {"format": "png", "source": _s3_source("s3://media-bucket/dir/cat.png")}},
+            id="image-format-from-extension",
+        ),
+        pytest.param(
+            {"type": "image_url", "image_url": "s3://media-bucket/dir/CAT.JPG"},
+            {"image": {"format": "jpeg", "source": _s3_source("s3://media-bucket/dir/CAT.JPG")}},
+            id="string-url-uppercase-extension",
+        ),
+        pytest.param(
+            {"type": "image_url", "image_url": {"url": "s3://media-bucket/dir/cat.jpg"}},
+            {"image": {"format": "jpeg", "source": _s3_source("s3://media-bucket/dir/cat.jpg")}},
+            id="jpg-is-jpeg",
+        ),
+        pytest.param(
+            {"type": "image_url", "image_url": {"url": "s3://media-bucket/dir/CAT.PNG"}},
+            {"image": {"format": "png", "source": _s3_source("s3://media-bucket/dir/CAT.PNG")}},
+            id="uppercase-image-extension",
+        ),
+        pytest.param(
+            {"type": "image_url", "image_url": {"url": "s3://media-bucket/clips/DEMO.MOV"}},
+            {"video": {"format": "mov", "source": _s3_source("s3://media-bucket/clips/DEMO.MOV")}},
+            id="uppercase-video-extension",
+        ),
+        pytest.param(
+            {
+                "type": "image_url",
+                "image_url": {"url": "s3://media-bucket/dir/cat.png", "bucket_owner": _S3_BUCKET_OWNER},
+            },
+            {"image": {"format": "png", "source": _s3_source("s3://media-bucket/dir/cat.png", _S3_BUCKET_OWNER)}},
+            id="bucket-owner",
+        ),
+        pytest.param(
+            {"type": "image_url", "image_url": {"url": "s3://media-bucket/dir/cat.png", "format": "image/webp"}},
+            {"image": {"format": "webp", "source": _s3_source("s3://media-bucket/dir/cat.png")}},
+            id="explicit-format-wins",
+        ),
+        pytest.param(
+            {"type": "image_url", "image_url": {"url": "s3://media-bucket/base64/cat.png"}},
+            {"image": {"format": "png", "source": _s3_source("s3://media-bucket/base64/cat.png")}},
+            id="base64-in-key",
+        ),
+        pytest.param(
+            {"type": "image_url", "image_url": {"url": "s3://media-bucket/clips/demo.mp4"}},
+            {"video": {"format": "mp4", "source": _s3_source("s3://media-bucket/clips/demo.mp4")}},
+            id="video",
+        ),
+        pytest.param(
+            {"type": "image_url", "image_url": {"url": "s3://media-bucket/clips/demo.mov"}},
+            {"video": {"format": "mov", "source": _s3_source("s3://media-bucket/clips/demo.mov")}},
+            id="video-extension-is-the-bedrock-format",
+        ),
+        pytest.param(
+            {"type": "file", "file": {"file_id": "s3://media-bucket/dir/cat.png", "bucket_owner": _S3_BUCKET_OWNER}},
+            {"image": {"format": "png", "source": _s3_source("s3://media-bucket/dir/cat.png", _S3_BUCKET_OWNER)}},
+            id="file-id",
+        ),
+    ],
+)
+async def test_bedrock_converse_s3_media_is_sent_as_an_s3_location_without_a_download(
+    part: Mapping[str, object], expected: Mapping[str, object], run_async: bool
+):
+    assert await _converse_user_content(part, run_async) == [expected]
+
+
+@pytest.mark.parametrize("run_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    ("declared", "block", "converse_format"),
+    [
+        pytest.param("image/jpg", "image", "jpeg", id="image-jpg"),
+        pytest.param("IMAGE/PNG", "image", "png", id="upper-case"),
+        pytest.param("image/png; charset=binary", "image", "png", id="image-with-parameter"),
+        pytest.param("video/quicktime", "video", "mov", id="quicktime"),
+        pytest.param("video/x-matroska", "video", "mkv", id="matroska"),
+        pytest.param("video/x-flv", "video", "flv", id="flv"),
+        pytest.param("video/x-ms-wmv", "video", "wmv", id="wmv"),
+        pytest.param("video/3gpp", "video", "three_gp", id="3gpp"),
+    ],
+)
+async def test_bedrock_converse_s3_media_format_accepts_a_registered_mime_type(
+    declared: str, block: str, converse_format: str, run_async: bool
+):
+    uri: Final = "s3://media-bucket/uploads/7f3a9c"
+
+    content: Final = await _converse_user_content(
+        {"type": "image_url", "image_url": {"url": uri, "format": declared}}, run_async
+    )
+
+    assert content == [{block: {"format": converse_format, "source": _s3_source(uri)}}]
+
+
+@pytest.mark.parametrize("run_async", [False, True], ids=["sync", "async"])
+async def test_bedrock_converse_s3_3gp_key_uses_the_converse_format_name(run_async: bool):
+    uri: Final = "s3://media-bucket/clips/demo.3gp"
+
+    content: Final = await _converse_user_content({"type": "image_url", "image_url": {"url": uri}}, run_async)
+
+    assert content == [{"video": {"format": "three_gp", "source": _s3_source(uri)}}]
+
+
+@pytest.mark.parametrize("run_async", [False, True], ids=["sync", "async"])
+async def test_bedrock_converse_s3_text_with_a_charset_is_a_txt_document(run_async: bool):
+    uri: Final = "s3://media-bucket/docs/7f3a9c"
+
+    content: Final = await _converse_user_content(
+        {"type": "file", "file": {"file_id": uri, "format": "text/plain; charset=utf-8"}}, run_async
+    )
+
+    assert content[0]["document"]["format"] == "txt"
+    assert content[0]["document"]["source"] == _s3_source(uri)
+
+
+@pytest.mark.parametrize("run_async", [False, True], ids=["sync", "async"])
+async def test_bedrock_converse_s3_pdf_is_a_document_named_after_its_uri(run_async: bool):
+    report: Final = "s3://media-bucket/docs/report.pdf"
+    invoice: Final = "s3://media-bucket/docs/invoice.pdf"
+
+    report_content: Final = await _converse_user_content({"type": "file", "file": {"file_id": report}}, run_async)
+    report_again: Final = await _converse_user_content({"type": "file", "file": {"file_id": report}}, run_async)
+    invoice_content: Final = await _converse_user_content({"type": "file", "file": {"file_id": invoice}}, run_async)
+
+    report_name: Final = report_content[0]["document"]["name"]
+    assert report_content == [{"document": {"format": "pdf", "name": report_name, "source": _s3_source(report)}}]
+    assert re.fullmatch(r"DocumentPDFmessages_[0-9a-f]{16}_pdf", report_name)
+    assert report_again == report_content
+    assert invoice_content[0]["document"]["name"] != report_name
+
+
+@pytest.mark.parametrize("run_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("uri", ["s3://media-bucket/docs/notes.md", "s3://media-bucket/docs/NOTES.markdown"])
+async def test_bedrock_converse_s3_markdown_without_a_format_is_an_md_document(uri: str, run_async: bool):
+    content: Final = await _converse_user_content({"type": "file", "file": {"file_id": uri}}, run_async)
+
+    assert [{**block, "document": {**block["document"], "name": "-"}} for block in content] == [
+        {"document": {"format": "md", "name": "-", "source": _s3_source(uri)}}
+    ]
+
+
+@pytest.mark.parametrize("run_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("uri", ["s3://media-bucket/uploads/7f3a9c", "s3://media-bucket/uploads/blob.unknownext"])
+async def test_bedrock_converse_s3_media_without_a_known_extension_or_format_is_a_bad_request(
+    uri: str, run_async: bool
+):
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        await _converse_user_content({"type": "image_url", "image_url": {"url": uri}}, run_async)
+
+    assert uri in excinfo.value.message
+    assert "`format`" in excinfo.value.message
+
+
+@pytest.mark.parametrize("run_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    ("image_url", "named_format"),
+    [
+        pytest.param({"url": "s3://media-bucket/scans/page.tiff"}, "page.tiff", id="tiff-key"),
+        pytest.param(
+            {"url": "s3://media-bucket/scans/page.png", "format": "image/tiff"}, "image/tiff", id="tiff-format"
+        ),
+        pytest.param({"url": "s3://media-bucket/voice/note.mp3"}, "audio/mpeg", id="mp3-key"),
+        pytest.param(
+            {"url": "s3://media-bucket/voice/note.bin", "format": "audio/mp4"}, "audio/mp4", id="audio-format"
+        ),
+    ],
+)
+async def test_bedrock_converse_s3_media_in_a_format_bedrock_does_not_take_is_a_bad_request(
+    image_url: Mapping[str, str], named_format: str, run_async: bool
+):
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        await _converse_user_content({"type": "image_url", "image_url": image_url}, run_async)
+
+    assert image_url["url"] in excinfo.value.message
+    assert named_format in excinfo.value.message
+
+
+_PNG_BASE64: Final = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
+
+
+def _owned_image_url_part(url: str, bucket_owner: object) -> Mapping[str, object]:
+    return {"type": "image_url", "image_url": {"url": url, "bucket_owner": bucket_owner}}
+
+
+def _owned_file_part(url: str, bucket_owner: object) -> Mapping[str, object]:
+    return {"type": "file", "file": {"file_id": url, "bucket_owner": bucket_owner}}
+
+
+@pytest.mark.parametrize("run_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("bucket_owner", [111122223333, ["111122223333"], ""], ids=["int", "list", "empty-string"])
+@pytest.mark.parametrize("part_for", [_owned_image_url_part, _owned_file_part], ids=["image-url", "file"])
+async def test_bedrock_converse_s3_media_with_a_bucket_owner_that_is_not_an_account_id_is_a_bad_request(
+    part_for: Callable[[str, object], Mapping[str, object]], bucket_owner: object, run_async: bool
+):
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        await _converse_user_content(part_for("s3://media-bucket/dir/cat.png", bucket_owner), run_async)
+
+    assert "`bucket_owner`" in excinfo.value.message
+    assert "s3://media-bucket/dir/cat.png" in excinfo.value.message
+
+
+@pytest.mark.parametrize("run_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("part_for", [_owned_image_url_part, _owned_file_part], ids=["image-url", "file"])
+async def test_bedrock_converse_ignores_a_bucket_owner_on_media_that_is_not_on_s3(
+    part_for: Callable[[str, object], Mapping[str, object]], run_async: bool
+):
+    content: Final = await _converse_user_content(
+        part_for(f"data:image/png;base64,{_PNG_BASE64}", 111122223333), run_async
+    )
+
+    assert content == [{"image": {"format": "png", "source": {"bytes": _PNG_BASE64}}}]
+
+
+@pytest.mark.parametrize(
+    "part",
+    [
+        pytest.param(
+            {
+                "type": "image_url",
+                "image_url": {"url": "s3://media-bucket/dir/cat.png", "bucket_owner": _S3_BUCKET_OWNER},
+            },
+            id="image-url",
+        ),
+        pytest.param(
+            {"type": "file", "file": {"file_id": "s3://media-bucket/dir/cat.png", "bucket_owner": _S3_BUCKET_OWNER}},
+            id="file",
+        ),
+    ],
+)
+def test_bedrock_converse_tool_result_s3_media_keeps_its_bucket_owner(part: Mapping[str, object]):
+    messages: Final = [
+        {"role": "user", "content": "Describe the screenshot."},
+        {"tool_call_id": "tooluse_s3_1", "role": "tool", "name": "fetch_screenshot", "content": [part]},
+    ]
+
+    with respx.mock:
+        converted: Final = _bedrock_converse_messages_pt(
+            messages=messages, model=_S3_MEDIA_MODEL, llm_provider="bedrock"
+        )
+
+    assert converted[-1]["content"][-1]["toolResult"]["content"] == [
+        {"image": {"format": "png", "source": _s3_source("s3://media-bucket/dir/cat.png", _S3_BUCKET_OWNER)}}
+    ]
+
+
+_OCTET_STREAM_MP4_URL: Final = "https://8.8.8.8/clip"
+_NON_S3_TOOL_RESULT_VIDEOS: Final = (
+    pytest.param({"type": "file", "file": {"file_data": "data:video/mp4;base64,AAAAGGZ0eXBtcDQy"}}, id="inline-file"),
+    pytest.param({"type": "image_url", "image_url": {"url": _OCTET_STREAM_MP4_URL}}, id="octet-stream-mp4-link"),
+)
+
+
+async def _converse_tool_result_content(
+    part: Mapping[str, object], run_async: bool, drop_params: bool
+) -> Sequence[Mapping[str, object]]:
+    messages: Final = [
+        {"role": "user", "content": "Describe the clip."},
+        {
+            "tool_call_id": "tooluse_video_1",
+            "role": "tool",
+            "name": "fetch_clip",
+            "content": [{"type": "text", "text": "clip:"}, part],
+        },
+    ]
+    with respx.mock(assert_all_called=False) as router:
+        router.get(_OCTET_STREAM_MP4_URL).respond(
+            200, content=_MP4_BYTES, headers={"content-type": "application/octet-stream"}
+        )
+        converted: Final = (
+            await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+                messages=messages, model=_S3_MEDIA_MODEL, llm_provider="bedrock", drop_params=drop_params
+            )
+            if run_async
+            else _bedrock_converse_messages_pt(
+                messages=messages, model=_S3_MEDIA_MODEL, llm_provider="bedrock", drop_params=drop_params
+            )
+        )
+    return converted[-1]["content"][-1]["toolResult"]["content"]
+
+
+@pytest.mark.parametrize("run_async", [False, True], ids=["sync", "async"])
+async def test_bedrock_converse_tool_result_s3_video_is_forwarded(run_async: bool):
+    content: Final = await _converse_tool_result_content(
+        {"type": "file", "file": {"file_id": "s3://media-bucket/clips/demo.mp4"}}, run_async, drop_params=False
+    )
+
+    assert content == [
+        {"text": "clip:"},
+        {"video": {"format": "mp4", "source": _s3_source("s3://media-bucket/clips/demo.mp4")}},
+    ]
+
+
+@pytest.mark.parametrize("run_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("part", _NON_S3_TOOL_RESULT_VIDEOS)
+async def test_bedrock_converse_tool_result_video_not_on_s3_is_a_bad_request(
+    part: Mapping[str, object], run_async: bool
+):
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        await _converse_tool_result_content(part, run_async, drop_params=False)
+
+    assert "drop_params=True" in excinfo.value.message
+
+
+@pytest.mark.parametrize("run_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("part", _NON_S3_TOOL_RESULT_VIDEOS)
+async def test_drop_params_drops_a_bedrock_tool_result_video_not_on_s3(part: Mapping[str, object], run_async: bool):
+    content: Final = await _converse_tool_result_content(part, run_async, drop_params=True)
+
+    assert content == [{"text": "clip:"}]
+
+
+@pytest.mark.parametrize("bucket_owner", [111122223333, ""], ids=["int", "empty-string"])
+@pytest.mark.parametrize("part_for", [_owned_image_url_part, _owned_file_part], ids=["image-url", "file"])
+def test_bedrock_converse_tool_result_s3_media_with_a_bucket_owner_that_is_not_an_account_id_is_a_bad_request(
+    part_for: Callable[[str, object], Mapping[str, object]], bucket_owner: object
+):
+    messages: Final = [
+        {"role": "user", "content": "Describe the screenshot."},
+        {
+            "tool_call_id": "tooluse_s3_1",
+            "role": "tool",
+            "name": "fetch_screenshot",
+            "content": [part_for("s3://media-bucket/dir/cat.png", bucket_owner)],
+        },
+    ]
+
+    with respx.mock, pytest.raises(litellm.BadRequestError) as excinfo:
+        _bedrock_converse_messages_pt(messages=messages, model=_S3_MEDIA_MODEL, llm_provider="bedrock")
+
+    assert "`bucket_owner`" in excinfo.value.message
+
+
+@pytest.mark.parametrize("run_async", [False, True], ids=["sync", "async"])
+async def test_bedrock_converse_assistant_s3_image_is_sent_as_an_s3_location(run_async: bool):
+    messages: Final = [
+        {"role": "user", "content": "Draw a cat."},
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "s3://media-bucket/dir/cat.png",
+                        "format": "image/webp",
+                        "bucket_owner": _S3_BUCKET_OWNER,
+                    },
+                }
+            ],
+        },
+        {"role": "user", "content": "Make it bigger."},
+    ]
+
+    with respx.mock:
+        converted: Final = (
+            await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+                messages=messages, model=_S3_MEDIA_MODEL, llm_provider="bedrock"
+            )
+            if run_async
+            else _bedrock_converse_messages_pt(messages=messages, model=_S3_MEDIA_MODEL, llm_provider="bedrock")
+        )
+
+    assert converted[1]["content"] == [
+        {"image": {"format": "webp", "source": _s3_source("s3://media-bucket/dir/cat.png", _S3_BUCKET_OWNER)}}
+    ]
 
 
 def test_bedrock_nova_web_search_options_mapping():

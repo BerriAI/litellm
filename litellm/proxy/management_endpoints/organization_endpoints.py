@@ -47,7 +47,7 @@ from litellm.proxy.management_endpoints.budget_management_endpoints import (
     new_budget,
     update_budget,
 )
-from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
+from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity, unless_database_fails
 from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # legacy module exports
     _set_object_metadata_field,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _user_has_admin_view,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -655,10 +655,12 @@ async def resolve_organization_daily_activity_scope(
     )
 
     organization_table: Final = _table(OrganizationRepository(prisma_client))
-    organization_rows: Final = (
-        await find_many_in(organization_table, "organization_id", resolved_organization_ids)
+    organization_rows: Final = await unless_database_fails(
+        find_many_in(organization_table, "organization_id", resolved_organization_ids)
         if resolved_organization_ids is not None
-        else await organization_table.find_many(where={})
+        else organization_table.find_many(where={}),
+        (),
+        "its organization aliases",
     )
     metadata: Final = MappingProxyType(
         {

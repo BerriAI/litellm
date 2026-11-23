@@ -16,7 +16,7 @@ from litellm.litellm_core_utils.bug_report import (
     build_bug_report,
     should_report_bug,
 )
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none
 from litellm.litellm_core_utils.secret_redaction import redact_string as redact_secret_string
 from litellm.types.utils import LlmProviders
 
@@ -36,6 +36,8 @@ from ..exceptions import (
     ServiceUnavailableError,
     Timeout,
     UnprocessableEntityError,
+    error_response_without_credentials,
+    with_provider_reply,
 )
 
 
@@ -296,11 +298,11 @@ def _litellm_proxy_response(
     if not isinstance(headers, Mapping) or not headers:
         return response
     pairs: Final = headers.multi_items() if isinstance(headers, httpx.Headers) else headers.items()
-    return httpx.Response(
-        status_code=response.status_code,
-        headers=[(str(k), str(v)) for k, v in pairs],
-        request=getattr(original_exception, "request", None),
+    with_body: Final = error_response_without_credentials(
+        response.status_code, response, "https://docs.litellm.ai/docs"
     )
+    with_body.headers = httpx.Headers([(str(k), str(v)) for k, v in pairs])
+    return with_body
 
 
 def _map_openai_exception(
@@ -2779,6 +2781,7 @@ def exception_type(
                     request=httpx.Request(method="POST", url="https://api.openai.com/v1/"),  # stub the request
                 )
     except Exception as e:
+        _ = with_provider_reply(e, attribute_or_none(mappable_exception, "response"))
         # LOGGING
         exception_logging(
             logger_fn=None,

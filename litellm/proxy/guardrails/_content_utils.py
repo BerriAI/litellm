@@ -8,8 +8,14 @@ skip the other shapes — these helpers normalise that so every hook sees
 every text fragment.
 """
 
+import json
 from collections.abc import Callable, Iterator, Mapping, Sequence
+from dataclasses import dataclass
+from functools import partial
+from itertools import count
 from typing import Any, Final
+
+from pydantic import TypeAdapter
 
 # Call types whose body carries free-form chat / prompt text that
 # text-content guardrails (banned keywords, content moderation, secret
@@ -70,25 +76,143 @@ def _part_text(part: Mapping[str, object]) -> str | None:
     return None
 
 
+_OBJECT_LIST: Final[TypeAdapter[Sequence[object]]] = TypeAdapter(Sequence[object])
+_TEXT_OBJECT: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+
+
+def _object_list(value: object) -> Sequence[object] | None:
+    return _OBJECT_LIST.validate_python(value) if isinstance(value, list) else None
+
+
+def _text_object(value: object) -> Mapping[str, object] | None:
+    if not isinstance(value, dict):
+        return None
+    try:
+        return _TEXT_OBJECT.validate_python(value)
+    except ValueError:
+        return None
+
+
+def _is_json_part(part: Mapping[str, object]) -> bool:
+    return part.get("type") == "input_json" and "data" in part
+
+
+def iter_json_fields(value: object) -> Iterator[tuple[str | None, str]]:
+    pending: Final[list[tuple[object, str | None]]] = [(value, None)]  # mutable-ok: owned DFS stack avoids recursion
+    while pending:
+        current, key = pending.pop()
+        if isinstance(current, str):
+            if current:
+                yield key, current
+            continue
+        fields = _text_object(current)
+        if fields is not None:
+            pending.extend((child, child_key) for child_key, child in reversed(tuple(fields.items())))
+            continue
+        pending.extend((child, key) for child in reversed(_object_list(current) or ()))
+
+
+def iter_json_keys(value: object) -> Iterator[str]:
+    pending: Final[list[object]] = [value]  # mutable-ok: owned DFS stack avoids recursion
+    while pending:
+        current = pending.pop()
+        fields = _text_object(current)
+        if fields is not None:
+            yield from (key for key in fields if key)
+            pending.extend(reversed(tuple(fields.values())))
+            continue
+        pending.extend(reversed(_object_list(current) or ()))
+
+
+def _json_has_text(value: object, *, with_keys: bool) -> bool:
+    has_value: Final = next(iter_json_fields(value), None) is not None
+    return has_value or (with_keys and next(iter_json_keys(value), None) is not None)
+
+
+def distinct_keys(renames: Sequence[tuple[str, str]]) -> tuple[str, ...]:
+    return tuple(_claim_names(renames))
+
+
+def _claim_names(renames: Sequence[tuple[str, str]]) -> Iterator[str]:
+    taken: Final[set[str]] = {new for old, new in renames if new == old}  # mutable-ok: names already used in one object
+    candidates: Final[dict[str, Iterator[str]]] = {}  # mutable-ok: resumes each name's suffix search where it stopped
+    for old, new in renames:
+        if new == old:
+            yield old
+            continue
+        name = next(candidate for candidate in candidates.setdefault(new, _numbered(new)) if candidate not in taken)
+        taken.add(name)
+        yield name
+
+
+def _numbered(name: str) -> Iterator[str]:
+    yield name
+    yield from (f"{name} ({number})" for number in count(2))
+
+
+def _renamed_fields(fields: Mapping[str, object], visit: Callable[[str], str]) -> tuple[tuple[str, object], ...]:
+    names: Final = distinct_keys(tuple((key, visit(key) if key else key) for key in fields))
+    return tuple(zip(names, fields.values()))
+
+
+@dataclass(frozen=True, slots=True)
+class _JsonFrame:
+    source: object
+    write: Callable[[object], None]
+
+
+def map_json_text(value: object, visit: Callable[[str], str], *, rewrite_keys: bool = False) -> object:
+    root: Final[list[object]] = [None]  # mutable-ok: one owned root slot receives the iterative result
+    pending: Final[list[_JsonFrame]] = [_JsonFrame(value, partial(root.__setitem__, 0))]  # mutable-ok: owned DFS stack
+    while pending:
+        frame = pending.pop()
+        current = frame.source
+        if isinstance(current, str):
+            frame.write(visit(current) if current else current)
+            continue
+        fields = _text_object(current)
+        if fields is not None:
+            renamed = _renamed_fields(fields, visit) if rewrite_keys else tuple(fields.items())
+            mapped: dict[str, object] = {key: None for key, _ in renamed}  # mutable-ok: owned output slots
+            frame.write(mapped)
+            pending.extend(_JsonFrame(child, partial(mapped.__setitem__, key)) for key, child in reversed(renamed))
+            continue
+        children = _object_list(current)
+        if children is None:
+            frame.write(current)
+            continue
+        items: list[object] = [None] * len(children)  # mutable-ok: fresh indexed output slots
+        frame.write(items)
+        pending.extend(
+            _JsonFrame(child, partial(items.__setitem__, index))
+            for index, child in reversed(tuple(enumerate(children)))
+        )
+    return root[0]
+
+
 def _iter_text_parts_in_content(content: object) -> Iterator[str]:
     """Yield text fragments from a ``message.content`` value (string or
     multimodal list). Non-text parts (images, audio, …) are skipped."""
     if isinstance(content, str):
         if content:
             yield content
-    elif isinstance(content, list):
-        for part in content:
-            if isinstance(part, str):
-                # A bare string in a content/input list is itself a text
-                # fragment (Responses-API mixed-list shape).
-                if part:
-                    yield part
-                continue
-            if not isinstance(part, dict):
-                continue
-            text = _part_text(part)
-            if text is not None:
-                yield text
+        return
+    for part in _object_list(content) or ():
+        if isinstance(part, str):
+            # A bare string in a content/input list is itself a text
+            # fragment (Responses-API mixed-list shape).
+            if part:
+                yield part
+            continue
+        fields = _text_object(part)
+        if fields is None:
+            continue
+        if _is_json_part(fields):
+            yield json.dumps(fields["data"], ensure_ascii=False)
+            continue
+        text = _part_text(fields)
+        if text is not None:
+            yield text
 
 
 def _coerce_input_to_messages(input_value: object) -> list[dict[str, object]]:
@@ -146,7 +270,11 @@ def iter_message_text(data: Mapping[str, object]) -> Iterator[str]:
         yield from _iter_text_parts_in_content(message.get("content"))
 
 
-def walk_user_text(data: dict[str, object], visit: Callable[[str], str]) -> int:
+def walk_user_text(
+    data: dict[str, object],
+    visit: Callable[[str], str],
+    visit_json: Callable[[object], object] | None = None,
+) -> int:
     """Rewrite every text fragment in place via ``visit``.
 
     Mutates ``data["messages"]`` and ``data["input"]``. Returns the number
@@ -162,15 +290,30 @@ def walk_user_text(data: dict[str, object], visit: Callable[[str], str]) -> int:
                 visited += 1
                 return visit(content)
             return content
-        if isinstance(content, list):
+        parts: Final = _object_list(content)
+        if parts is not None:
             new_parts: Final[list[object]] = []
-            for part in content:
+            for part in parts:
+                fields = _text_object(part)
                 if isinstance(part, str) and part:
                     visited += 1
                     new_parts.append(visit(part))
-                elif isinstance(part, dict) and _part_text(part) is not None:
+                elif fields is not None and (text := _part_text(fields)) is not None:
                     visited += 1
-                    new_parts.append({**part, "text": visit(part["text"])})
+                    new_parts.append({**fields, "text": visit(text)})
+                elif (
+                    fields is not None
+                    and _is_json_part(fields)
+                    and _json_has_text(fields["data"], with_keys=visit_json is not None)
+                ):
+                    visited += 1
+                    payload = fields["data"]
+                    new_parts.append(
+                        {
+                            **fields,
+                            "data": visit_json(payload) if visit_json is not None else map_json_text(payload, visit),
+                        }
+                    )
                 else:
                     new_parts.append(part)
             return new_parts

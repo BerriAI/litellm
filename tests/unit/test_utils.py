@@ -1068,6 +1068,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                         "chat",
                         "completion",
                         "container",
+                        "decisions",
                         "image_edit",
                         "embedding",
                         "evaluation",
@@ -1187,6 +1188,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "thinking_always_on": {"type": "boolean"},
                 "supports_mid_conversation_system": {"type": "boolean"},
                 "supports_sampling_params": {"type": "boolean"},
+                "supports_search_tools_with_functions": {"type": "boolean"},
                 "supports_output_config": {"type": "boolean"},
                 "supports_speed": {"type": "boolean"},
                 "supports_fast_mode": {"type": "boolean"},
@@ -1288,7 +1290,6 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_native_streaming": {"type": "boolean"},
                 "supports_image_size": {"type": "boolean"},
                 "supports_native_structured_output": {"type": "boolean"},
-                "supports_bedrock_native_structured_output": {"type": "boolean"},
                 "use_openai_responses_path": {"type": "boolean"},
                 "off_peak_pricing": {
                     "type": "object",
@@ -5103,6 +5104,57 @@ async def test_wrapper_async_logs_converted_chat_stream_with_standard_logging_ob
     assert success_kwargs["stream"] is True
 
 
+class _SyncSuccessKwargsCapture(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.success_kwargs: tuple[dict[str, object], ...] = ()
+
+    def log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        self.success_kwargs = (*self.success_kwargs, kwargs)
+
+
+def test_wrapper_sync_logs_a_replayed_fake_stream_as_a_stream(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    capture: Final = _SyncSuccessKwargsCapture()
+    monkeypatch.setattr(litellm, "callbacks", [capture])
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-replayed",
+                "object": "chat.completion",
+                "created": 1712697600,
+                "model": "gpt-5.6",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+    )
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        monkeypatch.setattr("litellm.litellm_core_utils.streaming_handler.executor", executor)
+        replayed: Final = litellm.completion(
+            model="openai/gpt-5.6",
+            messages=[{"role": "user", "content": "hi"}],
+            api_key="fake-key",
+            stream=True,
+            fake_stream=True,
+        )
+        assert isinstance(replayed, CustomStreamWrapper)
+        assert "".join(chunk.choices[0].delta.content or "" for chunk in replayed if chunk.choices) == "ok"
+
+    assert len(capture.success_kwargs) == 1
+    standard_logging_object: Final = capture.success_kwargs[0]["standard_logging_object"]
+    assert isinstance(standard_logging_object, dict)
+    assert standard_logging_object["stream"] is True
+    assert capture.success_kwargs[0]["stream"] is True
+
+
 class _RewritingSuccessDeploymentHook(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
@@ -7448,6 +7500,59 @@ def test_validate_tool_choice_invalid_dict_is_a_400(tool_choice):
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+@pytest.mark.parametrize("mode", ["auto", "required"])
+def test_validate_tool_choice_allowed_tools_either_layout_comes_back_in_the_chat_layout(mode: str):
+    chat_layout: Final = {
+        "type": "allowed_tools",
+        "allowed_tools": {
+            "mode": mode,
+            "tools": [{"type": "function", "function": {"name": "get_time"}}, {"type": "mcp", "server_label": "docs"}],
+        },
+    }
+    responses_layout: Final = {
+        "type": "allowed_tools",
+        "mode": mode,
+        "tools": [{"type": "function", "name": "get_time"}, {"type": "mcp", "server_label": "docs"}],
+    }
+    assert validate_chat_completion_tool_choice(chat_layout, model=MODEL) == chat_layout
+    assert validate_chat_completion_tool_choice(responses_layout, model=MODEL) == chat_layout
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+@pytest.mark.parametrize(
+    "tool_choice",
+    [
+        {"type": "allowed_tools", "mode": "required", "tools": [{"type": "function"}]},
+        {"type": "allowed_tools", "mode": "required", "tools": []},
+        {"type": "allowed_tools"},
+        {"type": "allowed_tools", "allowed_tools": {"mode": "required"}},
+        {"type": "allowed_tools", "allowed_tools": {"mode": "required", "tools": []}},
+        {"type": "allowed_tools", "allowed_tools": {"mode": "none", "tools": [{"type": "function"}]}},
+        {"type": "allowed_tools", "allowed_tools": {"tools": [{"type": "function", "function": {"name": "a"}}]}},
+        {"type": "allowed_tools", "allowed_tools": {"mode": "auto", "tools": "get_time"}},
+    ],
+)
+def test_validate_tool_choice_allowed_tools_malformed_is_a_400(tool_choice: dict[str, object]):
+    with pytest.raises(litellm.BadRequestError, match="allowed_tools") as exc_info:
+        validate_chat_completion_tool_choice(tool_choice, model=MODEL)
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.model == MODEL
+    assert '"mode": "auto" | "required"' in str(exc_info.value)
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+@pytest.mark.parametrize(
+    "tool_choice",
+    [
+        {"type": "allowed_tools", "mode": "required", "tools": []},
+        {"type": "allowed_tools", "allowed_tools": {"mode": "none", "tools": [{"type": "function"}]}},
+    ],
+)
+def test_validate_tool_choice_allowed_tools_malformed_is_dropped_under_drop_params(tool_choice: dict[str, object]):
+    assert validate_chat_completion_tool_choice(tool_choice, model=MODEL, drop_params=True) is None
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.parametrize("tool_choice", [123, []])
 def test_validate_tool_choice_invalid_type_is_a_400(tool_choice):
     """A non-str, non-dict tool_choice is rejected as a 400 that names the type it got."""
@@ -9338,6 +9443,19 @@ def test_get_valid_models_from_provider():
     valid_models = get_valid_models(custom_llm_provider="openai")
     assert len(valid_models) > 0
     assert "gpt-5-mini" in valid_models
+
+
+def test_get_valid_models_lists_a_json_provider_set_up_through_its_declared_key_variable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.utils import get_valid_models
+
+    monkeypatch.delenv("PERPLEXITYORCHESTRATOR_API_KEY", raising=False)
+    monkeypatch.delenv("PERPLEXITY_ORCHESTRATOR_API_KEY", raising=False)
+    monkeypatch.delenv("PERPLEXITYAI_API_KEY", raising=False)
+    monkeypatch.setenv("PERPLEXITY_API_KEY", "pplx-test-key")
+
+    assert "perplexity_orchestrator/anthropic/claude-haiku-5-5" in get_valid_models()
 
 
 @pytest.mark.parametrize(

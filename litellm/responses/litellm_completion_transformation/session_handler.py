@@ -42,6 +42,13 @@ def _normalize_redacted_tool_call_arguments(message: Message) -> None:
         function_call.arguments = REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER
 
 
+_FAILED_TURN_STATUS: Final = "failure"
+
+
+def _is_a_failed_turn(spend_log: "SpendLogsPayload") -> bool:
+    return "status" in spend_log and spend_log["status"] == _FAILED_TURN_STATUS
+
+
 def _stored_instructions(proxy_server_request: Mapping[str, object] | None) -> str | None:
     instructions: Final = None if proxy_server_request is None else proxy_server_request.get("instructions")
     return instructions if isinstance(instructions, str) and instructions else None
@@ -52,6 +59,7 @@ class ResponsesSessionHandler:
     async def get_chat_completion_message_history_for_previous_response_id(
         previous_response_id: str,
         item_cache_control: bool = False,
+        client_response_ids: tuple[str, ...] = (),
     ) -> ChatCompletionSession:
         """
         Return the chat completion message history for a previous response id
@@ -61,9 +69,13 @@ class ResponsesSessionHandler:
         )
 
         verbose_proxy_logger.debug("inside get_chat_completion_message_history_for_previous_response_id")
-        all_spend_logs: list[
-            SpendLogsPayload
-        ] = await ResponsesSessionHandler.get_all_spend_logs_for_previous_response_id(previous_response_id)
+        all_spend_logs: Final = [
+            spend_log
+            for spend_log in await ResponsesSessionHandler.get_all_spend_logs_for_previous_response_id(
+                previous_response_id, client_response_ids
+            )
+            if not _is_a_failed_turn(spend_log)
+        ]
         verbose_proxy_logger.debug("found %s spend logs for this response id", len(all_spend_logs))
 
         litellm_session_id: str | None = None
@@ -152,6 +164,7 @@ class ResponsesSessionHandler:
                     responses_api_request={},
                     replay_reasoning=True,
                     item_cache_control=item_cache_control,
+                    replay_tool_search=True,
                 )
             )
 
@@ -274,6 +287,7 @@ class ResponsesSessionHandler:
     @staticmethod
     async def get_all_spend_logs_for_previous_response_id(
         previous_response_id: str,
+        client_response_ids: tuple[str, ...] = (),
     ) -> "list[SpendLogsPayload]":
         """
         Get all spend logs for a previous response id
@@ -298,6 +312,7 @@ class ResponsesSessionHandler:
 
         decoded_response_id: Final = ResponsesAPIRequestUtils.decode_responses_api_response_id(previous_response_id)
         response_id: Final = decoded_response_id.get("response_id", previous_response_id)
+        request_ids: Final = list(dict.fromkeys((response_id, previous_response_id, *client_response_ids)))
         if prisma_client is None:
             return []
 
@@ -305,7 +320,7 @@ class ResponsesSessionHandler:
             WITH matching_session AS (
                 SELECT session_id
                 FROM "LiteLLM_SpendLogs"
-                WHERE request_id = $1
+                WHERE request_id = ANY($1::text[])
             )
             SELECT *
             FROM "LiteLLM_SpendLogs"
@@ -317,7 +332,7 @@ class ResponsesSessionHandler:
         for attempt in range(max_attempts):
             if attempt:
                 await asyncio.sleep(RESPONSES_SESSION_LOOKUP_RETRY_INTERVAL)
-            if spend_logs := await prisma_client.db.query_raw(query, response_id):
+            if spend_logs := await prisma_client.db.query_raw(query, request_ids):
                 verbose_proxy_logger.debug(
                     "Found the following spend logs for previous response id %s: %s",
                     response_id,

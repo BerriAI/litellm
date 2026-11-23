@@ -20,6 +20,8 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm import verbose_logger
+from litellm.constants import REDACTED_BY_LITELLM
+from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
 from litellm.router_utils.batch_utils import InMemoryFile
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -966,7 +968,7 @@ def _estimate_json_bytes(obj: object) -> int:
     serialised size, which is what a schema-bomb budget needs.
     """
     total = 0
-    stack: Final[list] = [obj]
+    stack: Final[list[object]] = [obj]
     while stack:
         x = stack.pop()
         if isinstance(x, dict):
@@ -991,10 +993,40 @@ def _estimate_json_bytes(obj: object) -> int:
     return total
 
 
+_JSON_SCHEMA_ANNOTATION_KEYWORDS: Final = frozenset(
+    {"title", "description", "default", "deprecated", "readOnly", "writeOnly", "examples"}
+)
+JSON_SCHEMA_KEPT_REF_SIBLINGS: Final = _JSON_SCHEMA_ANNOTATION_KEYWORDS | frozenset({"required"})
+
+_SCHEMA_NODE: Final = TypeAdapter(Mapping[str, object])
+
+
+def _required_names(schema: Mapping[str, object]) -> tuple[str, ...] | None:
+    entries: Final = as_object_list(schema.get("required", []))
+    if entries is None:
+        return None
+    names: Final = tuple(entry for entry in entries if isinstance(entry, str))
+    return names if len(names) == len(entries) else None
+
+
+def _ref_target_with_siblings(
+    target_schema: Mapping[str, object], ref_node: Mapping[str, object]
+) -> Mapping[str, object]:
+    target_required: Final = _required_names(target_schema)
+    target_names: Final = frozenset(target_required or ())
+    added: Final = tuple(dict.fromkeys(name for name in _required_names(ref_node) or () if name not in target_names))
+    return {
+        **target_schema,
+        **{key: value for key, value in ref_node.items() if key in _JSON_SCHEMA_ANNOTATION_KEYWORDS},
+        **({"required": [*target_required, *added]} if target_required is not None and added else {}),
+    }
+
+
 def unpack_defs(
     schema: dict,
     defs: dict,
     max_inlined_bytes: int | None = None,
+    keep_ref_siblings: bool = False,
 ) -> None:
     """Expand *all* ``$ref`` entries pointing into ``$defs`` / ``definitions``.
 
@@ -1014,6 +1046,10 @@ def unpack_defs(
     (a target containing a large string, ``const``, or ``enum`` entry).
     Defaults to ``None`` (unbounded) so existing callers are unaffected;
     raises ``ValueError`` on overflow.
+
+    ``keep_ref_siblings`` keeps the annotations next to a ``$ref`` (a field's
+    ``description``, say) over the inlined target's and adds a sibling
+    ``required`` to the target's, since both apply to the value.
     """
 
     import copy
@@ -1022,15 +1058,17 @@ def unpack_defs(
     # Combine the defs handed down by the caller with defs/definitions found on
     # the current node.  Local keys shadow parent keys to match JSON-schema
     # scoping rules.
-    root_defs: Final[dict] = {
-        **defs,
-        **schema.get("$defs", {}),
-        **schema.get("definitions", {}),
-    }
+    root_defs: Final[tuple[Mapping[str, object], ...]] = (
+        {
+            **defs,
+            **schema.get("$defs", {}),
+            **schema.get("definitions", {}),
+        },
+    )
 
     # Use iterative approach with queue to avoid recursion
     # Each item in queue is (node, parent_container, key/index, active_defs, ref_chain)
-    queue: Final[deque[tuple[object, dict | list | None, str | int | None, dict, set]]] = deque(
+    queue: Final[deque[tuple[object, dict | list | None, str | int | None, tuple, set[str]]]] = deque(
         [(schema, None, None, root_defs, set())]
     )
     inlined_bytes = 0
@@ -1043,19 +1081,34 @@ def unpack_defs(
             # --- Case 1: this node *is* a reference ---
             if "$ref" in node:
                 ref_name = node["$ref"].split("/")[-1]
+                resolved_ref = next(
+                    (
+                        (node["$ref"], scope[node["$ref"]]) if node["$ref"] in scope else (ref_name, scope[ref_name])
+                        for scope in active_defs
+                        if ref_name in scope
+                    ),
+                    None,
+                )
+                # Unknown reference – leave untouched
+                if resolved_ref is None:
+                    continue
+                ref_key, target_schema = resolved_ref
 
                 # Check for circular reference in the resolution chain
-                if ref_name in ref_chain:
+                if ref_key in ref_chain:
                     # Circular reference detected - leave as-is to prevent infinite recursion
                     continue
 
-                target_schema = active_defs.get(ref_name)
-                # Unknown reference – leave untouched
-                if target_schema is None:
-                    continue
+                replacement = (
+                    _ref_target_with_siblings(
+                        _SCHEMA_NODE.validate_python(target_schema), _SCHEMA_NODE.validate_python(node)
+                    )
+                    if keep_ref_siblings
+                    else target_schema
+                )
 
                 if max_inlined_bytes is not None:
-                    inlined_bytes += _estimate_json_bytes(target_schema)
+                    inlined_bytes += _estimate_json_bytes(replacement)
                     if inlined_bytes > max_inlined_bytes:
                         raise ValueError(
                             f"unpack_defs: inlined schema exceeded the "
@@ -1065,14 +1118,16 @@ def unpack_defs(
                         )
 
                 # Merge defs from the target to capture nested definitions
-                child_defs = {
-                    **active_defs,
-                    **target_schema.get("$defs", {}),
-                    **target_schema.get("definitions", {}),
-                }
+                child_defs = (
+                    active_defs
+                    if isinstance(target_schema, dict)
+                    and "$defs" not in target_schema
+                    and "definitions" not in target_schema
+                    else ({**target_schema.get("$defs", {}), **target_schema.get("definitions", {})}, *active_defs)
+                )
 
                 # Replace the reference with resolved copy
-                resolved = copy.deepcopy(target_schema)
+                resolved = copy.deepcopy(replacement)
                 if parent is not None and key is not None:
                     if (
                         isinstance(parent, dict)
@@ -1089,7 +1144,7 @@ def unpack_defs(
 
                 # Add to ref chain to track circular references
                 new_ref_chain = ref_chain.copy()
-                new_ref_chain.add(ref_name)
+                new_ref_chain.add(ref_key)
 
                 # Add resolved node to queue for further processing
                 queue.append((resolved, parent, key, child_defs, new_ref_chain))
@@ -1097,11 +1152,11 @@ def unpack_defs(
 
             # --- Case 2: regular dict – process its values ---
             # Update defs with any nested $defs/definitions present *here*.
-            current_defs = {
-                **active_defs,
-                **node.get("$defs", {}),
-                **node.get("definitions", {}),
-            }
+            current_defs = (
+                ({**node.get("$defs", {}), **node.get("definitions", {})}, *active_defs)
+                if "$defs" in node or "definitions" in node
+                else active_defs
+            )
 
             # Add all dict values to queue
             for k, v in node.items():
@@ -1130,6 +1185,38 @@ def _has_legacy_defs(schema: object) -> bool:
 # below memory-pressure territory, and rejects request-supplied bombs before
 # the proxy materialises them.
 DEFS_MAX_INLINED_BYTES: Final = 10_000_000
+
+
+def _definitions_shadowed_by_defs(json_schema: Mapping[str, object]) -> Mapping[str, object]:
+    dollar_defs: Final = json_schema.get("$defs")
+    definitions: Final = json_schema.get("definitions")
+    if not isinstance(dollar_defs, dict) or not isinstance(definitions, dict):
+        return MappingProxyType({})
+    current: Final = _SCHEMA_NODE.validate_python(dollar_defs)
+    legacy: Final = _SCHEMA_NODE.validate_python(definitions)
+    return MappingProxyType(
+        {
+            f"#/definitions/{name}": legacy[name]
+            for name in current.keys() & legacy.keys()
+            if current[name] != legacy[name]
+        }
+    )
+
+
+def defs_unpacked(json_schema: Mapping[str, object], keep_ref_siblings: bool = False) -> Mapping[str, object]:
+    import copy
+
+    unpacked: Final = copy.deepcopy(dict(json_schema))
+    dollar_defs: Final = unpacked.pop("$defs", None)
+    definitions: Final = unpacked.pop("definitions", None)
+    defs: Final = {
+        **(definitions if isinstance(definitions, dict) else {}),
+        **(dollar_defs if isinstance(dollar_defs, dict) else {}),
+        **_definitions_shadowed_by_defs(json_schema),
+    }
+    if defs:
+        unpack_defs(unpacked, defs, max_inlined_bytes=DEFS_MAX_INLINED_BYTES, keep_ref_siblings=keep_ref_siblings)
+    return unpacked
 
 
 def unpack_legacy_defs(
@@ -1724,6 +1811,20 @@ def get_image_mime_type_from_url(url: str) -> str | None:
 _get_image_mime_type_from_url = get_image_mime_type_from_url
 
 
+_MP4_VIDEO_BRANDS: Final = frozenset(
+    (b"isom", b"iso2", b"iso4", b"iso5", b"iso6", b"mp41", b"mp42", b"avc1", b"M4V ", b"dash", b"XAVC", b"MSNV")
+)
+
+
+def _sniffed_video_mime(content: bytes) -> str | None:
+    if content[4:8] != b"ftyp":
+        return None
+    brand: Final = content[8:12]
+    if brand == b"qt  ":
+        return "video/mov"
+    return "video/mp4" if brand in _MP4_VIDEO_BRANDS else None
+
+
 def infer_content_type_from_url_and_content(
     url: str,
     content: bytes,
@@ -1782,6 +1883,15 @@ def infer_content_type_from_url_and_content(
         "png": "image/png",
         "gif": "image/gif",
         "webp": "image/webp",
+        # Video formats
+        "mp4": "video/mp4",
+        "mov": "video/mov",
+        "webm": "video/webm",
+        "mpeg": "video/mpeg",
+        "mpg": "video/mpeg",
+        "avi": "video/avi",
+        "wmv": "video/wmv",
+        "flv": "video/flv",
         # Document formats
         "pdf": "application/pdf",
         "csv": "text/csv",
@@ -1802,6 +1912,9 @@ def infer_content_type_from_url_and_content(
             return inferred_type
 
     # Try to detect from binary content signature (magic bytes)
+    video_type: Final = _sniffed_video_mime(content)
+    if video_type:
+        return video_type
     if content:
         detected_type: Final = get_image_type(content[:100])
         if detected_type:
@@ -1986,19 +2099,31 @@ def _tool_call_without_provider_specific_fields(tool_call: object) -> object:
     }
 
 
+def _image_without_provider_specific_fields(image: object) -> object:
+    fields: Final = as_str_mapping(image)
+    if fields is None or "provider_specific_fields" not in fields:
+        return image
+    return {key: value for key, value in fields.items() if key != "provider_specific_fields"}
+
+
 def _message_without_fields(message: AllMessageValues, dropped: frozenset[str]) -> AllMessageValues:
-    kept: Final = {key: value for key, value in message.items() if key not in dropped}
-    tool_calls: Final = message.get("tool_calls")
-    if not isinstance(tool_calls, list):
-        return cast(AllMessageValues, kept)  # cast-ok: same TypedDict minus dropped keys
-    return cast(  # cast-ok: same TypedDict minus dropped keys, tool calls minus their provider_specific_fields
+    kept: Final[Mapping[str, object]] = {key: value for key, value in message.items() if key not in dropped}
+    tool_calls: Final = as_object_list(kept.get("tool_calls"))
+    images: Final = as_object_list(kept.get("images"))
+    return cast(  # cast-ok: same TypedDict minus dropped keys and nested provider_specific_fields
         AllMessageValues,
         {
             **kept,
-            "tool_calls": [
-                _tool_call_without_provider_specific_fields(tool_call)
-                for tool_call in cast(list[object], tool_calls)  # cast-ok: untyped JSON tool calls
-            ],
+            **(
+                {"tool_calls": [_tool_call_without_provider_specific_fields(tool_call) for tool_call in tool_calls]}
+                if tool_calls is not None
+                else {}
+            ),
+            **(
+                {"images": [_image_without_provider_specific_fields(image) for image in images]}
+                if images is not None
+                else {}
+            ),
         },
     )
 
@@ -2289,6 +2414,89 @@ def encrypted_content_of_block(block: Mapping[str, object]) -> str | None:
     return encrypted_content_from_signature(_encrypted_reasoning_field(block))
 
 
+_REASONING_SUMMARY_SEPARATOR: Final = "\n\n"
+
+_OBJECT_TUPLE: Final = TypeAdapter(tuple[object, ...])
+
+
+def _object_sequence(value: object) -> tuple[object, ...]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        return ()
+    return _OBJECT_TUPLE.validate_python(value)
+
+
+def _iter_mappings(value: object) -> tuple[Mapping[str, object], ...]:
+    return tuple(mapping for item in _object_sequence(value) if (mapping := as_str_mapping(item)) is not None)
+
+
+def _reasoning_summary_part_text(part: object) -> str:
+    mapping: Final = as_str_mapping(part)
+    if mapping is not None:
+        text: Final = mapping.get("text")
+        return text if isinstance(text, str) else ""
+    text_attr: Final = getattr(part, "text", None)
+    return text_attr if isinstance(text_attr, str) else ""
+
+
+def _reasoning_item_summary_text(item: Mapping[str, object]) -> str:
+    parts: Final = tuple(_reasoning_summary_part_text(part) for part in _object_sequence(item.get("summary")))
+    return _REASONING_SUMMARY_SEPARATOR.join(part for part in parts if part)
+
+
+def thinking_block_from_reasoning_item(
+    item: object,
+) -> ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock | None:
+    """The chat thinking block that carries one Responses `reasoning` item back to an Anthropic client.
+
+    `encrypted_content` rides the same `litellm_encrypted_reasoning:` signature the Responses
+    adapter uses. A summary becomes thinking text. Bytes with no summary become `redacted_thinking`,
+    because an empty thinking string is not something the client can replay.
+    """
+    mapping: Final = as_str_mapping(item)
+    if mapping is None or mapping.get("type") not in (None, "reasoning"):
+        return None
+    encrypted_content: Final = mapping.get("encrypted_content")
+    if not isinstance(encrypted_content, str) or not encrypted_content:
+        return None
+    signature: Final = encrypted_reasoning_signature(encrypted_content)
+    text: Final = _reasoning_item_summary_text(mapping)
+    if not text:
+        return ChatCompletionRedactedThinkingBlock(type="redacted_thinking", data=signature)
+    return ChatCompletionThinkingBlock(type="thinking", thinking=text, signature=signature)
+
+
+def thinking_blocks_from_reasoning_items(
+    items: object,
+) -> tuple[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock, ...]:
+    return tuple(
+        block for item in _object_sequence(items) if (block := thinking_block_from_reasoning_item(item)) is not None
+    )
+
+
+def _block_encrypted_content(block: object) -> str | None:
+    mapping: Final = as_str_mapping(block)
+    if mapping is None:
+        return None
+    return encrypted_content_of_block(mapping)
+
+
+def thinking_blocks_with_encrypted_reasoning(
+    thinking_blocks: object,
+    reasoning_items: object,
+) -> tuple[Mapping[str, object], ...]:
+    """Thinking blocks already on the message, plus any encrypted reasoning item they do not already carry."""
+    direct: Final = _iter_mappings(thinking_blocks)
+    represented: Final = frozenset(
+        content for block in direct if (content := _block_encrypted_content(block)) is not None
+    )
+    extra: Final = tuple(
+        block
+        for block in thinking_blocks_from_reasoning_items(_iter_mappings(reasoning_items))
+        if _block_encrypted_content(block) not in represented
+    )
+    return (*extra, *direct)
+
+
 def is_encrypted_reasoning_block(block: object) -> bool:
     """A thinking or redacted_thinking block carrying Responses API encrypted reasoning.
 
@@ -2378,6 +2586,14 @@ def anthropic_content_lists(messages: Sequence[object]) -> Iterator[object]:
         for content in (cast(Mapping[str, object], message).get("content"),)  # cast-ok: narrowed by isinstance
         if isinstance(content, list)
     )
+
+
+def _content_carries_encrypted_reasoning(content: object) -> bool:
+    return any(is_encrypted_reasoning_block(block) for block in _object_sequence(content))
+
+
+def messages_carry_encrypted_reasoning(messages: Sequence[object]) -> bool:
+    return any(_content_carries_encrypted_reasoning(content) for content in anthropic_content_lists(messages))
 
 
 def _strip_encrypted_reasoning_from_blocks(
@@ -2660,6 +2876,15 @@ def merge_consecutive_system_messages(
 
 
 _DECODED_JSON: Final = TypeAdapter(object)
+_ARGUMENT_PREVIEW_CHARS: Final = 200
+
+
+def _logged_arguments(arguments: str) -> str:
+    if litellm.turn_off_message_logging:
+        return REDACTED_BY_LITELLM
+    if len(arguments) <= _ARGUMENT_PREVIEW_CHARS:
+        return arguments
+    return f"{arguments[:_ARGUMENT_PREVIEW_CHARS]}..."
 
 
 def _attempt_json_repair(s: str) -> object | None:
@@ -2757,12 +2982,11 @@ def parse_tool_call_arguments(
         repaired: Final = _attempt_json_repair(arguments)
         if repaired is not None:
             verbose_logger.warning(
-                "Repaired truncated tool call arguments for tool '%s' (%s). Original (%d chars): %.200s%s",
+                "Repaired truncated tool call arguments for tool '%s' (%s). Original (%d chars): %s",
                 tool_name or "<unknown>",
                 context or "unknown context",
                 len(arguments),
-                arguments,
-                "..." if len(arguments) > 200 else "",
+                _logged_arguments(arguments),
             )
             return repaired
 

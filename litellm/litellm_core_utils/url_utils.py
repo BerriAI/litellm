@@ -23,7 +23,7 @@ import asyncio
 import socket
 from ipaddress import ip_address, ip_network
 from typing import Any, Final, Protocol
-from urllib.parse import quote, urlparse, urlunparse
+from urllib.parse import quote, urlparse, urlsplit, urlunparse
 
 import httpx
 from typing_extensions import ReadOnly, TypedDict
@@ -50,6 +50,7 @@ class _UrlFetcher(Protocol):
         *,
         headers: dict[str, str] | None = None,
         follow_redirects: bool = False,
+        timeout: float | httpx.Timeout | None = None,
     ) -> httpx.Response: ...
 
 
@@ -62,6 +63,8 @@ class _AsyncUrlFetcher(Protocol):
         *,
         headers: dict[str, str] | None = None,
         follow_redirects: bool = False,
+        timeout: float | httpx.Timeout | None = None,
+        max_response_bytes: int | None = None,
     ) -> httpx.Response: ...
 
 
@@ -127,6 +130,21 @@ def encode_url_path_segments(value: object, *, field_name: str = "path") -> str:
         raise ValueError(f"{field_name} is required")
 
     return "/".join(encode_url_path_segment(segment, field_name=field_name) for segment in value_str.split("/"))
+
+
+def _strip_trailing_slashes_keeping_the_scheme(api_base: str) -> str:
+    stripped: Final = api_base.rstrip("/")
+    parts: Final = urlsplit(stripped)
+    if parts.scheme and not (parts.netloc or parts.path or parts.query or parts.fragment):
+        return api_base
+    if not parts.query or not parts.path.endswith("/"):
+        return stripped
+    url_before_query, _, query = stripped.partition("?")
+    return f"{url_before_query.rstrip('/')}?{query}"
+
+
+def join_api_base(api_base: str, route: str) -> str:
+    return f"{_strip_trailing_slashes_keeping_the_scheme(api_base)}/{route.lstrip('/')}"
 
 
 def _is_blocked_ip(addr: str) -> bool:

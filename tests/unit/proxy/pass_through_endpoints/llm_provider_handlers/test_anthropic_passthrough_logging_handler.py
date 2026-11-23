@@ -1,6 +1,7 @@
 import asyncio
 import json
 from datetime import datetime
+from itertools import chain
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
@@ -2630,6 +2631,49 @@ class TestRecordPartialUsageForFailure:
         usage = logging_obj.model_call_details["combined_usage_object"]
         assert usage.prompt_tokens == 52
         assert logging_obj.model_call_details["response_cost"] == 0.0
+
+    @pytest.mark.parametrize("events_before_failure", [1, 3], ids=["after-message-start", "after-content"])
+    def test_upstream_error_frame_stashes_the_same_usage_as_a_dropped_connection(self, events_before_failure: int):
+        received: Final = self._interrupted_chunks()[:events_before_failure]
+        error_frame: Final = self._sse(
+            "error", {"type": "error", "error": {"type": "api_error", "message": "upstream"}}
+        )
+        dropped: Final = self._make_logging_obj()
+        errored: Final = self._make_logging_obj()
+
+        for logging_obj, chunks in ((dropped, received), (errored, [*received, error_frame])):
+            AnthropicPassthroughLoggingHandler.record_partial_usage_for_failure(
+                litellm_logging_obj=logging_obj,
+                request_body={"model": "claude-sonnet-5", "stream": True},
+                all_chunks=chunks,
+            )
+
+        assert (
+            errored.model_call_details["combined_usage_object"] == dropped.model_call_details["combined_usage_object"]
+        )
+        assert errored.model_call_details["response_cost"] == dropped.model_call_details["response_cost"]
+
+    @pytest.mark.parametrize("events_before_failure", [1, 3], ids=["after-message-start", "after-content"])
+    def test_upstream_error_frame_split_into_lines_logs_the_same_usage_as_a_dropped_connection(
+        self, events_before_failure: int
+    ):
+        received: Final = self._interrupted_chunks()[:events_before_failure]
+        error_frame: Final = self._sse(
+            "error", {"type": "error", "error": {"type": "api_error", "message": "upstream"}}
+        )
+        dropped, errored = (
+            AnthropicPassthroughLoggingHandler._build_streaming_response_for_logging(
+                litellm_logging_obj=self._make_logging_obj(),
+                request_body={"model": "claude-sonnet-5", "stream": True},
+                all_chunks=[line for line in chain.from_iterable(chunk.splitlines() for chunk in chunks) if line],
+                model="claude-sonnet-5",
+            )
+            for chunks in (received, [*received, error_frame])
+        )
+
+        assert dropped is not None
+        assert errored is not None
+        assert errored.usage == dropped.usage
 
     def test_leaves_logging_obj_untouched_when_nothing_streamed(self):
         logging_obj = self._make_logging_obj()

@@ -1,12 +1,16 @@
 import json
+from collections.abc import Mapping
 from typing import Final
 from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from pydantic import BaseModel, ConfigDict
 
 import litellm
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _get_proxy_server_request_for_spend_logs_payload,
 )
@@ -126,7 +130,7 @@ async def test_get_chat_completion_message_history_for_previous_response_id():
         )
 
         # Verify the mock was called with correct parameters
-        mock_get_spend_logs.assert_called_once_with(previous_response_id)
+        mock_get_spend_logs.assert_called_once_with(previous_response_id, ())
 
         # Verify the returned ChatCompletionSession structure
         assert "messages" in result
@@ -554,7 +558,7 @@ async def test_message_history_retries_a_spend_log_the_batch_writer_has_not_flus
         ("assistant", "OK"),
     ]
     assert result["litellm_session_id"] == session_id
-    assert fake_prisma_client.db.calls == [(request_id,), (request_id,)]
+    assert fake_prisma_client.db.calls == [([request_id],), ([request_id],)]
 
 
 @pytest.mark.asyncio
@@ -584,6 +588,33 @@ async def test_message_history_reconstructs_every_turn_of_the_session_in_order()
         ("assistant", "Noted."),
     ]
     assert result["litellm_session_id"] == session_id
+
+
+@pytest.mark.asyncio
+async def test_message_history_skips_the_turns_the_provider_rejected():
+    session_id: Final = "5c5f9a3e-1c86-4c0e-9d7c-0a54b8a0f2f1"
+    answered_request_id: Final = "chatcmpl-1111"
+    rejected_request_id: Final = "chatcmpl-2222"
+    answered_turn: Final = {
+        **_spend_log(answered_request_id, session_id, "What is the weather in Paris?", "Checking."),
+        "status": "success",
+    }
+    rejected_turn: Final = {
+        **_spend_log(rejected_request_id, session_id, "Never mind. Just say hello", ""),
+        "status": "failure",
+        "response": {},
+    }
+    fake_prisma_client: Final = _FakePrismaClient(results=[[answered_turn, rejected_turn]])
+
+    with patch("litellm.proxy.proxy_server.prisma_client", fake_prisma_client):
+        result: Final = await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
+            answered_request_id
+        )
+
+    assert [(message.get("role"), message.get("content")) for message in result["messages"]] == [
+        ("user", "What is the weather in Paris?"),
+        ("assistant", "Checking."),
+    ]
 
 
 @pytest.mark.asyncio
@@ -622,7 +653,99 @@ async def test_message_history_looks_up_the_decoded_chat_completion_id():
             encoded_response_id
         )
 
-    assert fake_prisma_client.db.calls == [(request_id,)]
+    assert fake_prisma_client.db.calls == [([request_id, encoded_response_id],)]
+
+
+class _SpendLogTable:
+    def __init__(self, rows: tuple[Mapping[str, object], ...]):
+        self.rows: Final = rows
+
+    async def query_raw(self, query: str, request_ids: list[str]) -> list[Mapping[str, object]]:
+        sessions: Final = frozenset(row["session_id"] for row in self.rows if row["request_id"] in request_ids)
+        return [row for row in self.rows if row["session_id"] in sessions]
+
+
+class _PrismaClientWith:
+    def __init__(self, db: _SpendLogTable):
+        self.db: Final = db
+
+
+class _TextBlock(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    text: str
+
+
+class _ChatTurn(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    role: str
+    content: tuple[_TextBlock, ...]
+
+
+class _AnthropicRequest(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    messages: tuple[_ChatTurn, ...]
+
+
+def _turn(role: str, text: str) -> _ChatTurn:
+    return _ChatTurn(role=role, content=(_TextBlock(text=text),))
+
+
+class _RecordingAnthropic:
+    def __init__(self) -> None:
+        self.requests: Final[list[_AnthropicRequest]] = []
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.requests.append(_AnthropicRequest.model_validate_json(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_turn_two",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-5-5",
+                "content": [{"type": "text", "text": "marmalade"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 20, "output_tokens": 2},
+            },
+            request=request,
+        )
+
+
+@pytest.mark.asyncio
+async def test_bridged_turn_replays_a_turn_stored_under_its_model_encoded_id(
+    instant_session_lookup_retries: None,
+):
+    """
+    A faked Responses stream (gpt-5-pro) stores its spend log under the model-encoded id. A chat-bridge
+    turn that names it by previous_response_id has to find that row, or the bridge drops the earlier turn.
+    """
+    encoded_response_id: Final = ResponsesAPIRequestUtils._build_responses_api_response_id(
+        custom_llm_provider="openai",
+        model_id="pro-a",
+        response_id="resp_0c75a57cdd0cd4a1006b04657b42ec87d0b94a09c5163e501c",
+    )
+    table: Final = _SpendLogTable(
+        rows=(_spend_log(encoded_response_id, "session-pro", "Remember this code word: marmalade.", "noted"),)
+    )
+    provider: Final = _RecordingAnthropic()
+    client: Final = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(provider))
+
+    with patch("litellm.proxy.proxy_server.prisma_client", _PrismaClientWith(table)):
+        await litellm.aresponses(
+            model="anthropic/claude-sonnet-5-5",
+            api_key="fake-api-key",
+            input="What code word did I give you earlier?",
+            previous_response_id=encoded_response_id,
+            client=client,
+        )
+
+    assert provider.requests[0].messages == (
+        _turn("user", "Remember this code word: marmalade."),
+        _turn("assistant", "noted"),
+        _turn("user", "What code word did I give you earlier?"),
+    )
 
 
 @pytest.mark.asyncio
@@ -643,7 +766,7 @@ async def test_session_lookup_does_not_retry_when_spend_logs_are_disabled(
         )
 
     assert spend_logs == []
-    assert fake_prisma_client.db.calls == [("chatcmpl-does-not-exist",)]
+    assert fake_prisma_client.db.calls == [(["chatcmpl-does-not-exist"],)]
 
 
 def test_normalize_redacted_arguments_skips_custom_tool_calls():

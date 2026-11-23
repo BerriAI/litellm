@@ -196,6 +196,83 @@ def test_completion_cost_uses_response_model_for_dynamic_routing(_local_model_co
     assert cost > 0, "Cost should be calculated using response model"
 
 
+_ROUTER_FEE_PER_INPUT_TOKEN: Final = 3e-07
+
+
+def _model_router_cost_map(routed_model_rows: Mapping[str, tuple[float, float]]) -> dict[str, dict[str, object]]:
+    fee_rows: Final = {
+        f"{provider}/model-router": {
+            "litellm_provider": provider,
+            "mode": "chat",
+            "input_cost_per_token": _ROUTER_FEE_PER_INPUT_TOKEN,
+            "output_cost_per_token": 0.0,
+        }
+        for provider in ("azure", "azure_ai")
+    }
+    routed_rows: Final = {
+        key: {
+            "litellm_provider": key.partition("/")[0],
+            "mode": "chat",
+            "input_cost_per_token": input_rate,
+            "output_cost_per_token": output_rate,
+        }
+        for key, (input_rate, output_rate) in routed_model_rows.items()
+    }
+    return {**fee_rows, **routed_rows}
+
+
+def _routed_response(served_model: str) -> ModelResponse:
+    response: Final = ModelResponse(
+        model=served_model, choices=[], usage=Usage(prompt_tokens=25, completion_tokens=10, total_tokens=35)
+    )
+    response._hidden_params = {"model": "model-router"}
+    return response
+
+
+@pytest.mark.parametrize(
+    ("routed_model_rows", "served_model", "billed_rates"),
+    [
+        ({"azure_ai/foundry-only-model": (2e-06, 5e-06)}, "foundry-only-model", (2e-06, 5e-06)),
+        (
+            {"azure/azure-priced-model": (1e-06, 4e-06), "azure_ai/azure-priced-model": (9e-06, 9e-06)},
+            "azure-priced-model",
+            (1e-06, 4e-06),
+        ),
+    ],
+)
+def test_azure_model_router_bills_the_routed_model_and_the_router_fee_once(
+    monkeypatch: pytest.MonkeyPatch,
+    routed_model_rows: Mapping[str, tuple[float, float]],
+    served_model: str,
+    billed_rates: tuple[float, float],
+) -> None:
+    monkeypatch.setattr(litellm, "model_cost", _model_router_cost_map(routed_model_rows))
+
+    cost: Final = completion_cost(
+        completion_response=_routed_response(served_model), model="model-router", custom_llm_provider="azure"
+    )
+
+    input_rate, output_rate = billed_rates
+    assert cost == pytest.approx(25 * input_rate + 10 * output_rate + 25 * _ROUTER_FEE_PER_INPUT_TOKEN)
+
+
+def test_azure_and_azure_ai_model_routers_bill_a_foundry_only_routed_model_the_same(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "model_cost", _model_router_cost_map({"azure_ai/foundry-only-model": (2e-06, 5e-06)}))
+
+    azure_cost: Final = completion_cost(
+        completion_response=_routed_response("foundry-only-model"), model="model-router", custom_llm_provider="azure"
+    )
+    azure_ai_cost: Final = completion_cost(
+        completion_response=_routed_response("foundry-only-model"),
+        model="model-router",
+        custom_llm_provider="azure_ai",
+    )
+
+    assert azure_cost == pytest.approx(azure_ai_cost)
+
+
 def test_completion_cost_prefers_exact_route_price_over_capability_generalization(
     _local_model_cost_map: None,
     _claude_family_generalization: None,
@@ -353,6 +430,38 @@ def test_completion_cost_prices_rule_only_response_model_at_the_azure_deployment
         completion_response=response,
         model=deployment_model,
         custom_llm_provider="azure",
+    )
+
+    assert cost == pytest.approx(usage.prompt_tokens * 0.0000111 + usage.completion_tokens * 0.0000222)
+
+
+def test_completion_cost_prices_rule_only_base_model_from_the_response_model(
+    _local_model_cost_map: None,
+    _price_free_gpt_family_generalization: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """LIT-9812: a deployment whose base_model is an undated name only a capability rule matches must not
+    stop the ladder at $0 when the response names a priced model"""
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            "azure/gpt-9.9-2026-01-01": {
+                "litellm_provider": "azure",
+                "mode": "chat",
+                "input_cost_per_token": 0.0000111,
+                "output_cost_per_token": 0.0000222,
+            }
+        },
+    )
+    usage: Final = Usage(prompt_tokens=17, completion_tokens=9, total_tokens=26)
+    response: Final = ModelResponse(model="gpt-9.9-2026-01-01", choices=[], usage=usage)
+
+    cost: Final = completion_cost(
+        completion_response=response,
+        model="azure/my-eu-deployment",
+        custom_llm_provider="azure",
+        base_model="azure/eu/gpt-9.9",
     )
 
     assert cost == pytest.approx(usage.prompt_tokens * 0.0000111 + usage.completion_tokens * 0.0000222)
@@ -1020,6 +1129,15 @@ def test_transcription_usage_cost_returns_zero_for_unknown_type():
 
     assert _transcription_usage_cost({"type": "future_billing_type"}, {}) == 0.0
     assert _transcription_usage_cost({}, {}) == 0.0
+
+
+@pytest.mark.parametrize("malformed_seconds", [-1.0, float("nan"), float("inf"), 10**1000, True])
+def test_transcription_ignores_invalid_provider_duration(malformed_seconds: float | int | bool) -> None:
+    from litellm.cost_calculator import _get_transcription_usage_duration
+
+    response: Final = SimpleNamespace(usage={"type": "duration", "seconds": malformed_seconds})
+
+    assert _get_transcription_usage_duration(response) is None
 
 
 def test_get_transcription_model_falls_back_to_session_model(monkeypatch):
@@ -2029,6 +2147,36 @@ def test_vertex_gemini_flash_image_generation_regional_costs_uplift_over_global(
     global_cost: Final = image_cost("global")
     assert global_cost > 0
     assert image_cost("us-central1") == pytest.approx(global_cost * 1.10, rel=1e-9)
+
+
+@pytest.mark.parametrize("requested_tier", ["flex", "priority"])
+def test_vertex_gemini_image_generation_bills_only_the_tier_vertex_served(
+    _local_model_cost_map: None, requested_tier: str
+) -> None:
+    """Image requests never send service_tier upstream, so a request tier must not change the bill
+    when Vertex reports no trafficType, while a served ON_DEMAND_PRIORITY still bills priority rates."""
+    usage: Final = ImageUsage(
+        input_tokens=1000,
+        input_tokens_details=ImageUsageInputTokensDetails(image_tokens=0, text_tokens=1000),
+        output_tokens=1120,
+        total_tokens=2120,
+    )
+
+    def image_cost(traffic_type: str | None, service_tier: str | None) -> float:
+        response: Final = ImageResponse(data=[ImageObject(b64_json="img")], usage=usage)
+        response.hidden_params["provider_specific_fields"] = {"traffic_type": traffic_type} if traffic_type else {}
+        return completion_cost(
+            completion_response=response,
+            model="vertex_ai/gemini-3.1-flash-image",
+            call_type="image_generation",
+            optional_params={"service_tier": service_tier} if service_tier else {},
+        )
+
+    standard_cost: Final = image_cost(None, None)
+    assert standard_cost > 0
+    assert image_cost(None, requested_tier) == standard_cost
+    assert image_cost("ON_DEMAND", requested_tier) == standard_cost
+    assert image_cost("ON_DEMAND_PRIORITY", requested_tier) > standard_cost
 
 
 def test_vertex_uplift_composes_with_above_128k_pricing(monkeypatch):
@@ -6775,6 +6923,70 @@ def test_whisper_azure():
     assert round(cost, 5) == round(expected_cost, 5)
 
 
+def _per_second_transcription(
+    monkeypatch: pytest.MonkeyPatch, provider: str, model: str, response_object: Mapping[str, object]
+) -> TranscriptionResponse:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {"input_cost_per_second": 0.01, "litellm_provider": provider, "mode": "audio_transcription"},
+    )
+    return convert_to_model_response_object(
+        response_object={"text": "What is the weather in Paris?", **response_object},
+        model_response_object=TranscriptionResponse(),
+        hidden_params={"model": model, "custom_llm_provider": provider},
+        response_type="audio_transcription",
+    )
+
+
+@pytest.mark.parametrize(
+    ("provider", "model", "measured"),
+    [
+        ("openai", "whisper-fake", {}),
+        ("openai", "whisper-fake", {"_audio_transcription_duration": 2.4}),
+        ("openai", "whisper-fake", {"duration": 2.4}),
+        ("openai", "gpt-fake-transcribe", {"_audio_transcription_duration": 2.4}),
+        ("azure", "whisper-fake", {"_audio_transcription_duration": 2.4}),
+    ],
+    ids=[
+        "unmeasured_upload",
+        "measured_upload",
+        "verbose_json_duration",
+        "gpt_transcribe_model",
+        "azure",
+    ],
+)
+def test_transcription_cost_bills_the_seconds_the_provider_billed(
+    monkeypatch: pytest.MonkeyPatch, provider: str, model: str, measured: Mapping[str, float]
+) -> None:
+    transcription: Final = _per_second_transcription(
+        monkeypatch, provider, model, {"usage": {"type": "duration", "seconds": 3}, **measured}
+    )
+
+    cost: Final = completion_cost(
+        completion_response=transcription, model=f"{provider}/{model}", call_type="atranscription"
+    )
+
+    assert cost == pytest.approx(0.01 * 3)
+
+
+@pytest.mark.parametrize(
+    ("measured", "expected_seconds"),
+    [({"_audio_transcription_duration": 2.4}, 2.4), ({"duration": 2.4}, 2.4), ({}, 0.0)],
+    ids=["measured_upload", "reply_duration", "nothing_known"],
+)
+def test_transcription_cost_without_provider_seconds_bills_the_measured_length(
+    monkeypatch: pytest.MonkeyPatch, measured: Mapping[str, float], expected_seconds: float
+) -> None:
+    transcription: Final = _per_second_transcription(monkeypatch, "openai", "whisper-fake", measured)
+
+    cost: Final = completion_cost(
+        completion_response=transcription, model="openai/whisper-fake", call_type="atranscription"
+    )
+
+    assert cost == pytest.approx(0.01 * expected_seconds)
+
+
 def test_gpt_image_2_azure_cost_tracking():
     azure_image_generation_response: Final = {
         "created": 1758585600,
@@ -10195,3 +10407,39 @@ def test_bedrock_registered_cache_prices_preserve_dynamic_threshold_rates(
     assert entry is not None
     assert entry[1]["input_cost_per_token_above_300k_tokens"] == 0.03
     assert entry[1][tier_field] == (tier_override if tier_override is not None else 0.007)
+
+
+@pytest.mark.parametrize(
+    ("message_logging_off", "query_image", "echoes_response"),
+    [
+        (True, None, False),
+        (False, None, True),
+        (False, {"type": "base64", "media_type": "image/jpeg", "data": "cXVlcnk="}, False),
+    ],
+)
+def test_cost_failure_for_an_unpriced_response_echoes_only_a_text_search_response_with_message_logging_on(
+    message_logging_off: bool,
+    query_image: Mapping[str, str] | None,
+    echoes_response: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "turn_off_message_logging", message_logging_off)
+    image_data: Final = "c2VjcmV0LWltYWdlLWJ5dGVz"
+    logging_obj: Final = Logging(
+        model="",
+        messages=[],
+        stream=False,
+        call_type="avector_store_search",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="unpriced-search",
+        function_id="f",
+    )
+    logging_obj.model_call_details["query_image"] = query_image
+
+    with pytest.raises(ValueError, match="Model is None") as exc_info:
+        completion_cost(
+            completion_response={"data": [{"content": [{"source": {"data": image_data}}]}]},
+            litellm_logging_obj=logging_obj,
+        )
+
+    assert (image_data in str(exc_info.value)) is echoes_response

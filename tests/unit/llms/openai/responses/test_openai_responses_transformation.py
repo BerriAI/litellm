@@ -13,6 +13,8 @@ import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
+from litellm.llms.bedrock.responses.transformation import BedrockOpenAIResponsesConfig
+from litellm.llms.bedrock_mantle.responses.transformation import BedrockMantleResponsesAPIConfig
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.responses.litellm_completion_transformation.transformation import LiteLLMCompletionResponsesConfig
 from litellm.types.llms.openai import (
@@ -1298,7 +1300,15 @@ class TestOpenAIResponsesAPIConfig:
         )
         return list(bridged.output)
 
-    @pytest.mark.parametrize("config", [OpenAIResponsesAPIConfig(), AzureOpenAIResponsesAPIConfig()])
+    @pytest.mark.parametrize(
+        "config",
+        [
+            OpenAIResponsesAPIConfig(),
+            AzureOpenAIResponsesAPIConfig(),
+            BedrockOpenAIResponsesConfig(),
+            BedrockMantleResponsesAPIConfig(),
+        ],
+    )
     def test_claude_reasoning_minted_by_the_bridge_is_dropped_before_the_history_reaches_openai(self, config):
         saved_claude_turn = json.loads(
             json.dumps([item.model_dump() for item in self._claude_turn_bridged_to_responses_output()])
