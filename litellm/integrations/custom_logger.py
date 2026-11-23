@@ -23,6 +23,7 @@ from litellm.types.utils import (
     CallTypesLiteral,
     LLMResponseTypes,
     ModelResponse,
+    ModelResponseStream,
     StandardAuditLogPayload,
     StandardBatchLineItemsPayload,
     StandardCallbackDynamicParams,
@@ -169,6 +170,15 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
 
     def log_stream_event(self, kwargs, response_obj, start_time, end_time):
         pass
+
+    def on_stream_chunk(self, kwargs: dict[str, object], completion_chunk: ModelResponseStream) -> None:
+        """Called for every chunk produced by a stream, before it is returned to
+        the caller. Override to observe streams chunk by chunk (live monitoring).
+        Delivery follows the same privacy policy as the logging events: skipped for
+        ``no-log`` requests (unless ``runs_on_no_log_requests``) and redacted when
+        ``message_logging`` is disabled. Runs inline on the streaming hot path:
+        keep it fast and non-blocking, and do not raise - the handler logs and
+        swallows subscriber exceptions."""
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
         pass

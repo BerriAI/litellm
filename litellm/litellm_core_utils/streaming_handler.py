@@ -56,7 +56,12 @@ from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import object_items
 from litellm.litellm_core_utils.model_response_utils import (
     is_model_response_stream_empty,
 )
-from litellm.litellm_core_utils.redact_messages import LiteLLMLoggingObject, drop_token_ids
+from litellm.litellm_core_utils.redact_messages import (
+    LiteLLMLoggingObject,
+    drop_token_ids,
+    redacted_model_call_details_for_custom_logger,  # pyright: ignore[reportUnknownVariableType]  # legacy bare-dict signature
+    redacted_stream_chunk_for_custom_logger,
+)
 from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.ollama.common_utils import OllamaResponseIdNormalizer
@@ -85,6 +90,8 @@ from .llm_response_utils.get_api_base import get_api_base
 from .rules import Rules
 
 if TYPE_CHECKING:
+    from litellm.integrations.custom_logger import CustomLogger
+
     from .litellm_logging import BilledRoundsSpend
 
 # Constants for special delta attribute names
@@ -524,6 +531,31 @@ def _provider_hidden_params(
     return params or None
 
 
+class _MessageLoggingToggle(Protocol):
+    message_logging: bool
+
+
+def _collect_stream_chunk_subscribers() -> "tuple[tuple[CustomLogger, Callable[..., None], bool], ...]":
+    """``(callback, bound on_stream_chunk, opted_out_of_message_logging)`` triples for
+    registered callbacks that override the ``CustomLogger`` no-op base. Collected once
+    per stream so the per-chunk hot path never re-scans ``litellm.callbacks``."""
+    from litellm.integrations.custom_logger import CustomLogger
+
+    base_method: Final = CustomLogger.on_stream_chunk
+    subscribers: list[tuple[CustomLogger, Callable[..., None], bool]] = []
+    for callback in litellm.callbacks:
+        if isinstance(callback, CustomLogger) and type(callback).on_stream_chunk is base_method:
+            continue
+        on_stream_chunk = getattr(callback, "on_stream_chunk", None)
+        if callable(on_stream_chunk):
+            opted_out = (
+                hasattr(callback, "message_logging")
+                and cast(_MessageLoggingToggle, callback).message_logging is not True
+            )
+            subscribers.append((cast(CustomLogger, callback), cast(Callable[..., None], on_stream_chunk), opted_out))
+    return tuple(subscribers)
+
+
 class CustomStreamWrapper:
     _earlier_rounds_spend: "BilledRoundsSpend | None" = None
 
@@ -565,6 +597,7 @@ class CustomStreamWrapper:
         self._failure_logging: asyncio.Task[None] | None = None
         self._closed = False
         self._stream_created_time: float = time.time()
+        self._stream_chunk_subscribers: Final = _collect_stream_chunk_subscribers()
 
         raw_litellm_params: Final = dict[str, object](**self.logging_obj.model_call_details.get("litellm_params", {}))
         litellm_params: Final[GenericLiteLLMParams] = GenericLiteLLMParams.model_validate(raw_litellm_params)
@@ -650,6 +683,36 @@ class CustomStreamWrapper:
         }
 
         self._post_streaming_hooks: list | None = None
+
+    def _notify_stream_chunk(self, chunk: "ModelResponseStream") -> None:
+        """Deliver one chunk to per-chunk subscribers under the same privacy policy
+        as normal logging delivery: eligibility via ``Logging.should_run_callback``
+        (``no-log``, dynamic callback disabling) and per-logger message redaction.
+        Redaction works on copies, so the client-visible chunk is never mutated."""
+        if not self._stream_chunk_subscribers:
+            return
+        model_call_details: Final = self.logging_obj.model_call_details
+        should_run_callback = getattr(self.logging_obj, "should_run_callback", None)
+        redacted_kwargs: dict[str, object] | None = None
+        for callback, on_stream_chunk, opted_out in self._stream_chunk_subscribers:
+            try:
+                if callable(should_run_callback) and not should_run_callback(
+                    callback, model_call_details.get("litellm_params", {}), "on_stream_chunk"
+                ):
+                    continue
+                delivered_kwargs: dict[str, object] = model_call_details
+                delivered_chunk: object = chunk
+                if opted_out:
+                    if redacted_kwargs is None:
+                        redacted_kwargs = cast(
+                            dict[str, object],
+                            redacted_model_call_details_for_custom_logger(model_call_details, callback),
+                        )
+                    delivered_kwargs = redacted_kwargs
+                    delivered_chunk = redacted_stream_chunk_for_custom_logger(chunk, callback)
+                on_stream_chunk(delivered_kwargs, delivered_chunk)
+            except Exception:
+                verbose_logger.exception("litellm.on_stream_chunk subscriber raised")
 
     def _check_max_streaming_duration(self) -> None:
         """Raise litellm.Timeout if the stream has exceeded LITELLM_MAX_STREAMING_DURATION_SECONDS."""
@@ -2572,6 +2635,7 @@ class CustomStreamWrapper:
                         if isinstance(choice, StreamingChoices):
                             self._accumulate_streamed_delta(choice.delta)
                     self.rules.post_call_rules(input=self.response_uptil_now, model=self.model)
+                    self._notify_stream_chunk(response)
                     # HANDLE STREAM OPTIONS
                     self.chunks.append(response)
 
@@ -2764,6 +2828,7 @@ class CustomStreamWrapper:
                         if isinstance(choice, StreamingChoices):
                             self._accumulate_streamed_delta(choice.delta)
                     self.rules.post_call_rules(input=self.response_uptil_now, model=self.model)
+                    self._notify_stream_chunk(processed_chunk)
                     # Add mcp_list_tools to first chunk if present
                     if not self.sent_first_chunk and processed_chunk.choices:
                         processed_chunk = self._add_mcp_list_tools_to_first_chunk(processed_chunk)
@@ -2812,6 +2877,7 @@ class CustomStreamWrapper:
                             if isinstance(choice, StreamingChoices):
                                 self._accumulate_streamed_delta(choice.delta)
                         self.rules.post_call_rules(input=self.response_uptil_now, model=self.model)
+                        self._notify_stream_chunk(processed_chunk)
                         if (returned_chunk := self._returned_sync_stream_chunk(processed_chunk)) is None:
                             continue
                         self._maybe_set_final_chunk_usage(returned_chunk)

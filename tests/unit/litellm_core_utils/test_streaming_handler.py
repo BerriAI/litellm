@@ -11252,3 +11252,138 @@ def test_text_completion_stream_carries_the_finish_chunks_choice_fields_only_on_
         (choice.finish_reason, getattr(choice, "provider_specific_fields", None))
         for choice in chain.from_iterable(chunk.choices for chunk in emitted)
     ] == [(None, None), *([(None, None)] if final_text else []), ("stop", _UPSTREAM_REASON_FIELDS)]
+
+
+class _ChunkCollectorLogger(CustomLogger):
+    def __init__(self) -> None:
+        self.contents: list[str] = []
+
+    def on_stream_chunk(self, kwargs: dict, completion_chunk: ModelResponseStream) -> None:
+        self.contents.append(completion_chunk.choices[0].delta.content or "")
+
+
+class _RaisingChunkLogger(CustomLogger):
+    def on_stream_chunk(self, kwargs: dict, completion_chunk: ModelResponseStream) -> None:
+        raise RuntimeError("subscriber boom")
+
+
+def _three_text_chunks() -> list[ModelResponseStream]:
+    return [
+        ModelResponseStream(id="c1", choices=[StreamingChoices(index=0, delta=Delta(role="assistant", content="a"))]),
+        ModelResponseStream(id="c1", choices=[StreamingChoices(index=0, delta=Delta(content="b"))]),
+        ModelResponseStream(id="c1", choices=[StreamingChoices(index=0, delta=Delta(), finish_reason="stop")]),
+    ]
+
+
+async def _async_gen(items: list[ModelResponseStream]):
+    for item in items:
+        yield item
+
+
+@pytest.mark.parametrize(
+    ("sync_mode", "stream_kind"),
+    [(True, "iter"), (False, "iter"), (False, "agen")],
+)
+@pytest.mark.asyncio
+async def test_on_stream_chunk_fires_for_every_delivered_chunk(monkeypatch, sync_mode: bool, stream_kind: str):
+    collector = _ChunkCollectorLogger()
+    monkeypatch.setattr(litellm, "callbacks", [collector])
+    stream: Final = (
+        _async_gen(_three_text_chunks()) if stream_kind == "agen" else ModelResponseListIterator(_three_text_chunks())
+    )
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=stream,
+        model="hosted_vllm/m",
+        custom_llm_provider="hosted_vllm",
+        logging_obj=_usage_test_logging(None),
+    )
+
+    chunks: Final = list(wrapper) if sync_mode else [chunk async for chunk in wrapper]
+
+    assert len(collector.contents) == len(chunks) == 3
+    assert "".join(collector.contents) == "ab"
+
+
+@pytest.mark.asyncio
+async def test_on_stream_chunk_subscriber_failure_does_not_break_stream(monkeypatch):
+    monkeypatch.setattr(litellm, "callbacks", [_RaisingChunkLogger()])
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=ModelResponseListIterator(_three_text_chunks()),
+        model="hosted_vllm/m",
+        custom_llm_provider="hosted_vllm",
+        logging_obj=_usage_test_logging(None),
+    )
+
+    chunks: Final = [chunk async for chunk in wrapper]
+
+    assert [chunk.choices[0].finish_reason for chunk in chunks] == [None, None, "stop"]
+
+
+def test_custom_logger_base_on_stream_chunk_is_not_collected_as_subscriber(monkeypatch):
+    from litellm.litellm_core_utils.streaming_handler import _collect_stream_chunk_subscribers
+
+    monkeypatch.setattr(litellm, "callbacks", [CustomLogger()])
+    assert _collect_stream_chunk_subscribers() == ()
+
+
+@pytest.mark.asyncio
+async def test_on_stream_chunk_skipped_for_no_log_request(monkeypatch):
+    collector = _ChunkCollectorLogger()
+    monkeypatch.setattr(litellm, "callbacks", [collector])
+    logging_obj = _usage_test_logging(None)
+    logging_obj.model_call_details["litellm_params"]["no-log"] = True
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=ModelResponseListIterator(_three_text_chunks()),
+        model="hosted_vllm/m",
+        custom_llm_provider="hosted_vllm",
+        logging_obj=logging_obj,
+    )
+
+    chunks: Final = [chunk async for chunk in wrapper]
+
+    assert len(chunks) == 3
+    assert collector.contents == []
+
+
+@pytest.mark.asyncio
+async def test_on_stream_chunk_honours_runs_on_no_log_requests(monkeypatch):
+    class _NoLogAwareCollector(_ChunkCollectorLogger):
+        runs_on_no_log_requests = True
+
+    collector = _NoLogAwareCollector()
+    monkeypatch.setattr(litellm, "callbacks", [collector])
+    logging_obj = _usage_test_logging(None)
+    logging_obj.model_call_details["litellm_params"]["no-log"] = True
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=ModelResponseListIterator(_three_text_chunks()),
+        model="hosted_vllm/m",
+        custom_llm_provider="hosted_vllm",
+        logging_obj=logging_obj,
+    )
+
+    await wrapper.__anext__()
+
+    assert collector.contents == ["a"]
+
+
+@pytest.mark.asyncio
+async def test_on_stream_chunk_redacts_content_for_logger_opted_out_of_message_logging(monkeypatch):
+    from litellm.constants import REDACTED_BY_LITELLM
+
+    class _OptedOutCollector(_ChunkCollectorLogger):
+        message_logging = False
+
+    collector = _OptedOutCollector()
+    monkeypatch.setattr(litellm, "callbacks", [collector])
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=ModelResponseListIterator(_three_text_chunks()),
+        model="hosted_vllm/m",
+        custom_llm_provider="hosted_vllm",
+        logging_obj=_usage_test_logging(None),
+    )
+
+    chunks: Final = [chunk async for chunk in wrapper]
+
+    assert collector.contents == [REDACTED_BY_LITELLM, REDACTED_BY_LITELLM, ""]
+    assert [chunk.choices[0].delta.content for chunk in chunks[:2]] == ["a", "b"]
+    assert wrapper.logging_obj.model_call_details["messages"] == [{"role": "user", "content": "hi"}]
