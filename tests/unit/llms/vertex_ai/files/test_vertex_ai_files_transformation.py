@@ -18,6 +18,7 @@ from unittest.mock import MagicMock
 
 import litellm
 from litellm.llms.base_llm.files.transformation import BaseFileUploadStream
+from litellm.llms.vertex_ai.common_utils import VertexAIError
 from litellm.llms.vertex_ai.files.transformation import (
     VertexAIFilesConfig,
     _get_litellm_batch_custom_id_from_labels,
@@ -1025,6 +1026,22 @@ class TestVertexBatchCustomIdLabels:
         assert labels_a["litellm_custom_id_raw_1"] != labels_b["litellm_custom_id_raw_1"]
         assert _get_litellm_batch_custom_id_from_labels(labels_a) == custom_id_a
         assert _get_litellm_batch_custom_id_from_labels(labels_b) == custom_id_b
+
+    def test_raw_custom_id_chunk_litellm_did_not_encode_is_not_decoded(self):
+        custom_id = "Row/One"
+        vertex_jsonl_content = _wrap_entries(
+            [
+                {
+                    "custom_id": custom_id,
+                    "method": "POST",
+                    "url": "/v1/chat/completions",
+                    "body": {"model": "gemini-1.5-flash-001", "messages": [{"role": "user", "content": "Question"}]},
+                }
+            ]
+        )
+        labels = {**vertex_jsonl_content[0]["request"]["labels"], "litellm_custom_id_raw_1": "tamp"}
+
+        assert _get_litellm_batch_custom_id_from_labels(labels) == labels["litellm_custom_id_raw"]
 
     def test_multiple_requests_each_get_their_own_label(self):
         """Test that multiple requests each get their own custom_id label"""
@@ -3151,6 +3168,142 @@ def test_drop_params_keeps_json_schema_literals_whole_while_dropping_annotations
         "type": "object",
         "properties": {"answer": answer},
     }
+
+
+_CITY_SCHEMA: Final = MappingProxyType(
+    {
+        "type": "object",
+        "properties": {"city": {"type": "string"}, "population": {"type": "integer"}},
+        "required": ["city", "population"],
+    }
+)
+
+
+def _object_schema(properties: Mapping[str, object], **keywords: object) -> Mapping[str, object]:
+    return {"type": "object", "properties": dict(properties), **keywords}
+
+
+def _tags_schema(item_property: str) -> Mapping[str, object]:
+    return _object_schema(
+        {"tags": {"type": "array", "items": _object_schema({item_property: {"type": "string"}})}}
+    )
+
+
+def _x_any_of_schema(*first_option_keywords: tuple[str, object]) -> Mapping[str, object]:
+    return _object_schema({"x": {"anyOf": [{"type": "string", **dict(first_option_keywords)}, {"type": "integer"}]}})
+
+
+def _batch_entry(schema: Mapping[str, object] | None) -> Mapping[str, object]:
+    return dict(_chat_entry("gemini-2.5-flash", {})) if schema is None else _schema_entry(schema)
+
+
+@pytest.mark.parametrize(
+    ("schemas", "clash"),
+    [
+        ((_ANSWER_SCHEMA, _CITY_SCHEMA), (2, 1, "properties.city", 1)),
+        (
+            (_object_schema({"answer": {"type": "string"}, "country": {"type": "string"}}), _ANSWER_SCHEMA),
+            (2, 1, "properties.country", 2),
+        ),
+        (
+            (_ANSWER_SCHEMA, _object_schema({"answer": {"type": "string", "description": "a city"}})),
+            (2, 1, "properties.answer.description", 1),
+        ),
+        ((_object_schema({"answer": {"type": "string"}}, description="d"), _ANSWER_SCHEMA), (2, 1, "description", 2)),
+        (
+            (_object_schema({"n": {"type": "integer"}}), _object_schema({"n": {"type": "integer", "minimum": 0}})),
+            (2, 1, "properties.n.minimum", 1),
+        ),
+        ((_tags_schema("a"), _tags_schema("b")), (2, 1, "properties.tags.items.properties.b", 1)),
+        ((_x_any_of_schema(), _x_any_of_schema(("maxLength", 5))), (2, 1, "properties.x.anyOf[].maxLength", 1)),
+        ((_ANSWER_SCHEMA, None, _ANSWER_SCHEMA, _CITY_SCHEMA), (4, 1, "properties.city", 1)),
+        ((_ANSWER_SCHEMA, {**_ANSWER_SCHEMA, "additionalProperties": False}), (2, 1, "additionalProperties", 1)),
+    ],
+    ids=[
+        "different_properties",
+        "later_row_lacks_a_property",
+        "property_description_on_one_row",
+        "top_level_description_on_one_row",
+        "minimum_on_one_row",
+        "different_array_item_properties",
+        "any_of_option_keyword_on_one_row",
+        "clash_after_plain_and_repeated_rows",
+        "additional_properties_on_one_row",
+    ],
+)
+def test_json_schemas_the_batch_merge_breaks_answer_400_naming_both_lines(
+    config: VertexAIFilesConfig,
+    schemas: Sequence[Mapping[str, object] | None],
+    clash: tuple[int, int, str, int],
+) -> None:
+    """Vertex loads a batch file into one BigQuery table, so each row's schema gains a null for every key another
+    row's schema sets, and Vertex then fails every row with 'Invalid response_json_schema'"""
+    line, earlier_line, path, nulled_line = clash
+
+    with pytest.raises(
+        VertexAIError,
+        match=rf"line {line} .* line {earlier_line}\. .* set {re.escape(path)} to null in the schema of line "
+        rf"{nulled_line},",
+    ) as exc_info:
+        _uploaded_rows(config, _GEMINI_DEPLOYMENT, [_batch_entry(schema) for schema in schemas])
+    assert exc_info.value.status_code == 400
+
+
+def test_a_responses_row_json_schema_the_batch_merge_breaks_answers_400(config: VertexAIFilesConfig) -> None:
+    responses_entry: Final = _responses_entry(
+        {
+            "model": "gemini-2.5-flash",
+            "input": "hi",
+            "text": {"format": {"type": "json_schema", "name": "city", "schema": dict(_CITY_SCHEMA)}},
+        }
+    )
+
+    with pytest.raises(VertexAIError, match=r"line 2 .* line 1\. .* set properties\.city to null") as exc_info:
+        _uploaded_rows(config, _GEMINI_DEPLOYMENT, [_schema_entry(_ANSWER_SCHEMA), responses_entry])
+    assert exc_info.value.status_code == 400
+
+
+@pytest.mark.parametrize(
+    "schemas",
+    [
+        (_ANSWER_SCHEMA, _ANSWER_SCHEMA, None, _ANSWER_SCHEMA),
+        (
+            _object_schema({"x": {"type": "string", "enum": ["a", "b"]}}),
+            _object_schema({"x": {"type": "string", "enum": ["c"]}}),
+        ),
+        (_object_schema({"x": {"type": "string", "enum": ["a"]}}), _object_schema({"x": {"type": "string"}})),
+        (_ANSWER_SCHEMA, _object_schema({"answer": {"type": "string"}})),
+        (
+            _object_schema({"answer": {"type": "string", "description": "a city"}}),
+            _object_schema({"answer": {"type": "string", "description": "a country"}}),
+        ),
+        (
+            _object_schema({"x": {"type": "string"}}),
+            _object_schema({"x": {"type": "string", "anyOf": [{"type": "string"}]}}),
+        ),
+    ],
+    ids=[
+        "identical_schemas_and_a_plain_row",
+        "different_enum_values",
+        "enum_on_one_row",
+        "required_on_one_row",
+        "different_descriptions",
+        "any_of_on_one_row",
+    ],
+)
+def test_json_schemas_the_batch_merge_keeps_valid_upload_unchanged(
+    config: VertexAIFilesConfig, schemas: Sequence[Mapping[str, object] | None]
+) -> None:
+    rows: Final = TypeAdapter(list[dict[str, object]]).validate_python(
+        _uploaded_rows(config, _GEMINI_DEPLOYMENT, [_batch_entry(schema) for schema in schemas])
+    )
+    schema_configs: Final = [
+        TypeAdapter(dict[str, object]).validate_python(_request_of(row).get("generation_config", {})) for row in rows
+    ]
+
+    assert [schema_config.get("response_json_schema") for schema_config in schema_configs] == [
+        None if schema is None else dict(schema) for schema in schemas
+    ]
 
 
 @pytest.mark.parametrize("allowed", [("logprobs",), ("top_logprobs",), ("logprobs", "top_logprobs")])

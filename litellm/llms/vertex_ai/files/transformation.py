@@ -107,6 +107,7 @@ from litellm.utils import get_non_default_completion_params, get_optional_params
 
 from ..common_utils import VertexAIError
 from ..vertex_llm_base import VertexBase
+from .batch_json_schema_merge import JSON_SCHEMA_CONFIG_COLUMN, reject_json_schemas_the_batch_merge_breaks
 
 _GCP_LABEL_VALUE_MAX_LEN: Final = 63
 _CUSTOM_ID_RAW_LABEL_PREFIX: Final = "b32_"
@@ -236,12 +237,9 @@ def _encode_gcp_label_value_chunks(value: str) -> list[str]:
 
 def _decode_gcp_label_value_chunks(values: list[str]) -> str | None:
     """Decode values produced by _encode_gcp_label_value_chunks."""
-    encoded_parts: Final = []
-    for value in values:
-        if not value.startswith(_CUSTOM_ID_RAW_LABEL_PREFIX):
-            return None
-        encoded_parts.append(value[len(_CUSTOM_ID_RAW_LABEL_PREFIX) :])
-    encoded: Final = "".join(encoded_parts).upper()
+    if not all(value.startswith(_CUSTOM_ID_RAW_LABEL_PREFIX) for value in values):
+        return None
+    encoded: Final = "".join(value[len(_CUSTOM_ID_RAW_LABEL_PREFIX) :] for value in values).upper()
     padding: Final = "=" * (-len(encoded) % 8)
     try:
         return base64.b32decode(encoded + padding).decode("utf-8")
@@ -1022,7 +1020,7 @@ def _with_json_schema_config_in_its_own_column(
     json_schema: Final = schema_config["response_json_schema"]
     return {
         **{key: value for key, value in vertex_request_body.items() if key != "generationConfig"},
-        "generation_config": {
+        JSON_SCHEMA_CONFIG_COLUMN: {
             **schema_config,
             "response_json_schema": (
                 _bigquery_loadable_schema(_JSON_OBJECT.validate_python(json_schema), drop_params)
@@ -1249,8 +1247,7 @@ class _OpenAIToVertexBatchUploadStream(BaseFileUploadStream):
         self._batch_model = batch_model
         self._deployment_params = deployment_params
 
-    def _iter_vertex_jsonl_chunks(self) -> Iterator[bytes]:
-        first = True
+    def _iter_numbered_vertex_rows(self) -> Iterator[tuple[int, Mapping[str, object]]]:
         for lineno, entry in _iter_openai_jsonl_entries(self._openai_file_content):
             try:
                 vertex_rows = _openai_batch_jsonl_entry_to_vertex_rows(
@@ -1265,10 +1262,12 @@ class _OpenAIToVertexBatchUploadStream(BaseFileUploadStream):
                     message=f"Batch input file line {lineno} could not be converted to a Vertex AI request: "
                     f"{_describe_batch_row_error(e)}",
                 ) from e
-            for wrapped in vertex_rows:
-                prefix = b"" if first else b"\n"
-                first = False
-                yield prefix + json.dumps(wrapped).encode("utf-8")
+            yield from ((lineno, wrapped) for wrapped in vertex_rows)
+
+    def _iter_vertex_jsonl_chunks(self) -> Iterator[bytes]:
+        checked_rows: Final = reject_json_schemas_the_batch_merge_breaks(self._iter_numbered_vertex_rows())
+        for index, (_, wrapped) in enumerate(checked_rows):
+            yield (b"\n" if index else b"") + json.dumps(wrapped).encode("utf-8")
 
     def iter_bytes(self) -> Iterator[bytes]:
         return self._iter_vertex_jsonl_chunks()
