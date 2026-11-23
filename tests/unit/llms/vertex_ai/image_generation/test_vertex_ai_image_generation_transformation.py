@@ -553,8 +553,8 @@ class TestVertexAIGeminiImageGenerationConfig:
         assert result.data[0].b64_json == "image1"
         assert result.data[1].b64_json == "image2"
 
-    def test_transform_image_generation_response_signature(self):
-        """Test response transformation includes thoughtSignature for Gemini 3 Pro"""
+    def test_transform_image_generation_response_drops_thought_signature(self):
+        """The Images API cannot replay a thoughtSignature, so it is not returned"""
         mock_response = MagicMock(spec=httpx.Response)
         mock_response.status_code = 200
         mock_response.json.return_value = {
@@ -592,7 +592,7 @@ class TestVertexAIGeminiImageGenerationConfig:
 
         assert len(result.data) == 1
         assert result.data[0].b64_json == "base64_encoded_image_data"
-        assert result.data[0].provider_specific_fields["thought_signature"] == "test_signature_abc123"
+        assert result.data[0].provider_specific_fields is None
 
     def test_transform_image_generation_response_tracks_web_search_requests(self):
         """Grounding queries are carried onto usage so search spend can be billed"""
@@ -928,7 +928,7 @@ def test_gemini_image_generation_response_without_inline_image_data_has_no_image
     assert _transform_gemini_response(payload).data == []
 
 
-def test_gemini_image_generation_response_keeps_image_order_and_thought_signatures():
+def test_gemini_image_generation_response_keeps_image_order_and_drops_thought_signatures():
     response = _transform_gemini_response(
         {
             "candidates": [
@@ -955,10 +955,10 @@ def test_gemini_image_generation_response_keeps_image_order_and_thought_signatur
     )
 
     assert [(image.b64_json, image.provider_specific_fields) for image in response.data or []] == [
-        ("first", {"thought_signature": "sig-1"}),
+        ("first", None),
         ("second", None),
         (None, None),
-        ("fourth", {"thought_signature": {"nested": ["sig"]}}),
+        ("fourth", None),
     ]
 
 
@@ -1295,3 +1295,27 @@ def test_vertex_image_generation_drops_a_caller_labels_header_only_while_the_set
     assert setting_off["x-vertex-ai-labels"] == _FORGED_LABELS_HEADER
     assert "x-vertex-ai-labels" not in setting_on
     assert setting_on["x-trace-id"] == "t-1"
+
+
+_SIGNED_GEMINI_IMAGE_REPLY: Final = {
+    "candidates": [
+        {
+            "content": {
+                "parts": [{"inlineData": {"mimeType": "image/png", "data": "aW1n"}, "thoughtSignature": "sig-abc123"}]
+            }
+        }
+    ]
+}
+
+
+def test_vertex_gemini_image_generation_returns_the_image_without_its_thought_signature() -> None:
+    transport: Final = httpx.MockTransport(lambda request: httpx.Response(200, json=_SIGNED_GEMINI_IMAGE_REPLY))
+    response: Final = litellm.image_generation(
+        model="vertex_ai/gemini-3.1-flash-image",
+        prompt="a lighthouse",
+        api_base="https://vertex.invalid/generate",
+        client=HTTPHandler(client=httpx.Client(transport=transport)),
+    )
+
+    assert [(image.b64_json, image.provider_specific_fields) for image in response.data or []] == [("aW1n", None)]
+    assert "sig-abc123" not in json.dumps(response.model_dump(), default=str)
