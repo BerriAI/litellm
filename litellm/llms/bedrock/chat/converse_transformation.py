@@ -132,11 +132,16 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
 UNRESOLVED_ARN_BASE_MODEL_EXAMPLE: Final = "us.anthropic.claude-fable-5-1"
+UNRESOLVED_ARN_BASE_MODEL_TARGET: Final = (
+    "the model the profile points at, either as its Bedrock model ID "
+    f"(for example `{UNRESOLVED_ARN_BASE_MODEL_EXAMPLE}`) or as the ARN of the system inference profile or "
+    "foundation model the profile was created from"
+)
 ADAPTIVE_THINKING_ON_UNRESOLVED_ARN_WARNING: Final = (
     "Sending adaptive `thinking` as a fixed thinking budget for model=%s: an application inference profile ARN "
     "does not name its model, so LiteLLM cannot tell whether it supports adaptive thinking. Set "
-    "`model_info.base_model` on the deployment to the Bedrock model ID the profile points at "
-    f"(for example `{UNRESOLVED_ARN_BASE_MODEL_EXAMPLE}`) to send adaptive thinking as requested."
+    f"`model_info.base_model` on the deployment to {UNRESOLVED_ARN_BASE_MODEL_TARGET}. LiteLLM then sends "
+    "adaptive thinking as requested."
 )
 
 # Computer use tool prefixes supported by Bedrock
