@@ -3,7 +3,7 @@ import contextvars
 import importlib
 from collections.abc import Coroutine, Mapping
 from functools import partial
-from typing import TYPE_CHECKING, Final, Literal, Optional, cast, overload
+from typing import TYPE_CHECKING, Final, Literal, Optional, cast, get_type_hints, overload
 
 from pydantic import TypeAdapter, ValidationError
 
@@ -20,6 +20,7 @@ from litellm import client
 from litellm.constants import DEFAULT_IMAGE_ENDPOINT_MODEL
 from litellm.constants import request_timeout as DEFAULT_REQUEST_TIMEOUT
 from litellm.exceptions import LiteLLMUnknownProvider
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.get_llm_provider_logic import (
     invalid_provider_routing_hints_message,
 )
@@ -54,7 +55,7 @@ from litellm.main import (
 
 ###########################################
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.images.main import ImageEditOptionalRequestParams
+from litellm.types.images.main import IMAGE_CONFIG_FIELDS, ImageEditOptionalRequestParams, UnsupportedImageParam
 from litellm.types.llms.openai import ImageGenerationRequestQuality
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
@@ -749,6 +750,8 @@ def image_variation(
 
 _OBJECT_DICT_ADAPTER: Final = TypeAdapter[dict[str, object]](dict[str, object])
 _ADDITIONAL_DROP_PARAMS: Final = TypeAdapter[tuple[str, ...]](tuple[str, ...])
+_IMAGE_EDIT_OPENAI_PARAMS: Final = frozenset(get_type_hints(ImageEditOptionalRequestParams))
+_DROP_PARAM_KWARGS: Final = frozenset({"drop_params", "additional_drop_params"})
 
 
 def _listed_drop_params(additional_drop_params: object) -> tuple[str, ...]:
@@ -904,13 +907,33 @@ def image_edit(
             raise ValueError(f"image edit is not supported for {custom_llm_provider}")
 
         local_vars.update(kwargs)
+        provider_supported_params: Final[frozenset[str]] = frozenset(
+            image_edit_provider_config.get_supported_openai_params(model)
+        )
+        should_drop_params: Final = drops_unsupported_params(kwargs.get("drop_params"))
+        additional_drop_params: Final = _listed_drop_params(kwargs.get("additional_drop_params"))
+        kept_params: Final = {
+            key: value
+            for key, value in non_default_params.items()
+            if key not in additional_drop_params and key.split("[", 1)[0] not in additional_drop_params
+        }
+        requested_params: Final = _get_ImageEditRequestUtils().fold_bracket_form_fields(
+            kept_params,
+            tuple(field for field in IMAGE_CONFIG_FIELDS if field in provider_supported_params),
+            should_drop_params,
+        )
+        if isinstance(requested_params, UnsupportedImageParam):
+            raise litellm.UnsupportedParamsError(
+                model=model,
+                llm_provider=custom_llm_provider,
+                message=f"`{requested_params.param}` {requested_params.reason} for {model}. "
+                "To drop it from the call, set `litellm.drop_params = True`.",
+            )
         # Get ImageEditOptionalRequestParams with only valid parameters
         image_edit_optional_params: Final[ImageEditOptionalRequestParams] = (
             _get_ImageEditRequestUtils().get_requested_image_edit_optional_param(
-                local_vars,
-                provider_supported_params=frozenset(
-                    image_edit_provider_config.get_supported_openai_params(model)
-                ).intersection(non_default_params),
+                {**local_vars, **requested_params},
+                provider_supported_params=provider_supported_params.intersection(requested_params),
             )
         )
         # Get optional parameters for the responses API
@@ -919,7 +942,7 @@ def image_edit(
             image_edit_provider_config=image_edit_provider_config,
             image_edit_optional_params=image_edit_optional_params,
             drop_params=kwargs.get("drop_params"),
-            additional_drop_params=kwargs.get("additional_drop_params"),
+            additional_drop_params=additional_drop_params,
         )
 
         if image_edit_provider_config.use_multipart_form_data() and (
@@ -928,9 +951,25 @@ def image_edit(
             or custom_llm_provider in litellm.openai_compatible_providers
         ):
             dropped_form_params: Final = header_auth_params(custom_llm_provider)
+            drops_for_upstream: Final = custom_llm_provider != LlmProviders.LITELLM_PROXY.value
+            unsupported_edit_params: Final[frozenset[str]] = (
+                _IMAGE_EDIT_OPENAI_PARAMS - provider_supported_params if drops_for_upstream else frozenset()
+            )
+            dropped_edit_params: Final = (
+                dropped_form_params
+                | (_DROP_PARAM_KWARGS if drops_for_upstream else frozenset[str]())
+                | unsupported_edit_params
+            )
+            dropped_form_field_roots: Final[frozenset[str]] = (
+                unsupported_edit_params if should_drop_params else frozenset()
+            )
             image_edit_request_params.update(
                 flatten_form_field_values(
-                    {key: value for key, value in non_default_params.items() if key not in dropped_form_params},
+                    {
+                        key: value
+                        for key, value in kept_params.items()
+                        if key not in dropped_edit_params and key.split("[", 1)[0] not in dropped_form_field_roots
+                    },
                     (
                         {key: value for key, value in extra_body.items() if key not in dropped_form_params}
                         if isinstance(extra_body, dict)
