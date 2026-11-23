@@ -68,7 +68,12 @@ from .realtime_guardrails import (
     realtime_screening_guardrails,
     rewritten_item,
 )
-from .realtime_turn_limits import RealtimeTurnLimiterSource, realtime_turn_limits, registered_realtime_turn_limiters
+from .realtime_turn_limits import (
+    RealtimeTurnLimiterSource,
+    realtime_turn_limits,
+    registered_realtime_turn_limiters,
+    turn_token_usage,
+)
 
 if TYPE_CHECKING:
     from openai.types.realtime.realtime_audio_formats import RealtimeAudioFormats
@@ -559,7 +564,6 @@ class RealTimeStreaming:
         self._turn_limits: Final = realtime_turn_limits(
             turn_limiters, user_api_key_dict, logging_obj.model_call_details, model
         )
-        self._admitted_response_creates: int = 0
         # Violation counter for end_session_after_n_fails support
         self._violation_count: int = 0
         # When a text message is blocked, hold the guardrail reason so the next
@@ -1604,7 +1608,6 @@ class RealTimeStreaming:
             return False
         refusal: Final = await self._turn_limits.refusal()
         if refusal is None:
-            self._admitted_response_creates += 1
             return False
         await self.websocket.send_text(refusal)
         return True
@@ -1615,20 +1618,38 @@ class RealTimeStreaming:
         for event in events:
             await self._send_to_backend(event)
 
-    async def _apply_turn_limits(self, event: Mapping[str, object]) -> None:
+    async def _end_session_over_token_limit(self, refusal: str) -> None:
+        await self.websocket.send_text(refusal)
+        await self.backend_ws.close()
+
+    async def _session_ended_by_turn_limits(self, event: Mapping[str, object]) -> bool:
         if self._turn_limits is None:
-            return
+            return False
         if event.get("type") == "response.done":
             await self._turn_limits.charge(event)
-            return
+            return False
         if self._listens_only or event.get("type") != "response.created":
-            return
-        if self._admitted_response_creates > 0:
-            self._admitted_response_creates -= 1
-            return
+            return False
         refusal: Final = await self._turn_limits.refusal()
-        if refusal is not None and await self._send_guardrail_cancel():
+        if refusal is None:
+            return False
+        if await self._send_guardrail_cancel():
             await self.websocket.send_text(refusal)
+            return False
+        await self._end_session_over_token_limit(refusal)
+        return True
+
+    async def _session_ended_by_transcription_limits(self, event: Mapping[str, object]) -> bool:
+        if self._turn_limits is None or not self._is_transcription_session or turn_token_usage(event) is None:
+            return False
+        await self._turn_limits.charge(event)
+        if self._listens_only:
+            return False
+        refusal: Final = await self._turn_limits.refusal()
+        if refusal is None:
+            return False
+        await self._end_session_over_token_limit(refusal)
+        return True
 
     async def _send_blocked_turn_to_backend(self, pre_block_backend_message: str | None, item_id: str | None) -> None:
         if pre_block_backend_message is None and self._is_transcription_session:
@@ -1881,21 +1902,13 @@ class RealTimeStreaming:
             if isinstance(event, dict):
                 self._detect_transcription_session_from_backend(event)
                 self._capture_translation_output_audio(event)
-                await self._apply_turn_limits(event)
+                if await self._session_ended_by_turn_limits(event):
+                    return
             is_session_created_event = isinstance(event, dict) and event.get("type") == "session.created"
             if is_session_created_event:
                 if self._awaiting_setup_complete:
                     await self._release_content_held_for_setup_complete()
-                if self._uses_deferred_backend_setup() and not self._backend_setup_complete:
-                    self._backend_setup_complete = True
-                    self._flushing_pending_messages_until_setup = True
-                    try:
-                        while self._pending_messages_until_setup:
-                            flushed = await self._flush_pending_messages_until_setup()
-                            if not flushed:
-                                break
-                    finally:
-                        self._flushing_pending_messages_until_setup = False
+                await self._complete_deferred_backend_setup()
                 if self.session_created_sent_to_client and self._builds_setup_lazily():
                     await self._maybe_send_guardrail_turn_detection_update()
                     continue
@@ -1931,6 +1944,8 @@ class RealTimeStreaming:
                 self.store_message(event_str)
                 self._capture_transcription_usage(event)
                 await self._send_event_to_client(event, event_str)
+                if await self._session_ended_by_transcription_limits(event):
+                    return
                 blocked = await self.run_realtime_guardrails(transcript)
                 if not blocked and self._should_disable_vad_auto_response():
                     await self._send_proxy_response_create((json.dumps({"type": "response.create"}),))
@@ -1938,6 +1953,27 @@ class RealTimeStreaming:
             ## LOGGING
             self.store_message(event_str)
             await self._send_event_to_client(event, event_str)
+
+    async def _complete_deferred_backend_setup(self) -> None:
+        if not self._uses_deferred_backend_setup() or self._backend_setup_complete:
+            return
+        self._backend_setup_complete = True
+        self._flushing_pending_messages_until_setup = True
+        try:
+            while self._pending_messages_until_setup and await self._flush_pending_messages_until_setup():
+                pass
+        finally:
+            self._flushing_pending_messages_until_setup = False
+
+    @staticmethod
+    def _decoded_backend_frame(received: str | bytes) -> str | None:
+        if not isinstance(received, bytes):
+            return received
+        try:
+            return received.decode("utf-8")
+        except UnicodeDecodeError:
+            verbose_logger.warning("Received non-UTF-8 binary frame from backend, skipping.")
+            return None
 
     @staticmethod
     def _parse_backend_event(raw_response: str) -> dict[str, object] | None:
@@ -1972,6 +2008,8 @@ class RealTimeStreaming:
 
             if self._is_transcription_session:
                 self._capture_transcription_usage(event_obj)
+            if await self._session_ended_by_transcription_limits(event_obj):
+                return True
 
             blocked: Final = await self.run_realtime_guardrails(
                 transcript,
@@ -1985,17 +2023,13 @@ class RealTimeStreaming:
     async def _relay_backend_messages(self) -> NoReturn:
         while True:
             try:
-                raw_response = await self.backend_ws.recv(decode=False)
+                received = await self.backend_ws.recv(decode=False)
             except TypeError:
-                raw_response = await self.backend_ws.recv()
+                received = await self.backend_ws.recv()
             self._backend_sent_frames = True
 
-            if isinstance(raw_response, bytes):
-                try:
-                    raw_response = raw_response.decode("utf-8")
-                except UnicodeDecodeError:
-                    verbose_logger.warning("Received non-UTF-8 binary frame from backend, skipping.")
-                    continue
+            if (raw_response := self._decoded_backend_frame(received)) is None:
+                continue
 
             if self.provider_config:
                 self._backend_sent_non_error_frames = True
@@ -2028,7 +2062,8 @@ class RealTimeStreaming:
                     continue
 
                 event = self._normalize_event_for_ga_client(event)
-                await self._apply_turn_limits(event)
+                if await self._session_ended_by_turn_limits(event):
+                    continue
                 self.store_message(event)
 
                 if not self._client_wants_beta:

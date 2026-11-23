@@ -285,15 +285,35 @@ def _raise_provider_failure(scope: MutableMapping[str, object], failure: BaseExc
     raise error from failure
 
 
-async def _refused_response_create(
-    turn_limits: RealtimeTurnLimits | None, client_event: Mapping[str, JsonValue], client_ws: RealtimeClientWebSocket
-) -> bool:
-    if turn_limits is None or client_event.get("type") != "response.create":
-        return False
-    refusal: Final = await turn_limits.refusal()
+async def _refused_turn(turn_limits: RealtimeTurnLimits | None, client_ws: RealtimeClientWebSocket) -> bool:
+    refusal: Final = None if turn_limits is None else await turn_limits.refusal()
     if refusal is None:
         return False
     await client_ws.send_text(refusal)
+    return True
+
+
+async def _refused_response_create(
+    turn_limits: RealtimeTurnLimits | None, client_event: Mapping[str, JsonValue], client_ws: RealtimeClientWebSocket
+) -> bool:
+    return client_event.get("type") == "response.create" and await _refused_turn(turn_limits, client_ws)
+
+
+async def _ended_audio_turn_over_limit(
+    turn_limits: RealtimeTurnLimits | None,
+    provider_event: Mapping[str, object],
+    client_audio_streamed: bool,
+    client_ws: RealtimeClientWebSocket,
+) -> bool:
+    if not client_audio_streamed or provider_event.get("type") != "response.created":
+        return False
+    refusal: Final = None if turn_limits is None else await turn_limits.refusal()
+    if refusal is None:
+        return False
+    with contextlib.suppress(Exception):
+        await client_ws.send_text(refusal)
+    with contextlib.suppress(Exception):
+        await client_ws.close()
     return True
 
 
@@ -458,6 +478,7 @@ class BedrockRealtimeGuardrails:
         client_event: Mapping[str, JsonValue],
         client_ws: RealtimeClientWebSocket,
         forward_to_bedrock: Callable[[str], Awaitable[None]],
+        turn_limits: RealtimeTurnLimits | None = None,
     ) -> _ClientEventRoute:
         from litellm.types.guardrails import GuardrailEventHooks
 
@@ -480,7 +501,7 @@ class BedrockRealtimeGuardrails:
                 await forward_to_bedrock(json.dumps({**client_event, "item": rewritten_item(client_event, texts)}))
                 return _ClientEventRoute.DROP
             case RealtimeGuardrailBlock() as block:
-                return await self._route_blocked_item(block, guarded_item, client_ws, forward_to_bedrock)
+                return await self._route_blocked_item(block, guarded_item, client_ws, forward_to_bedrock, turn_limits)
             case _GuardrailUnavailable():
                 await _end_unscreened_session(client_ws)
                 return _ClientEventRoute.END_SESSION
@@ -491,6 +512,7 @@ class BedrockRealtimeGuardrails:
         guarded_item: RealtimeGuardedItem,
         client_ws: RealtimeClientWebSocket,
         forward_to_bedrock: Callable[[str], Awaitable[None]],
+        turn_limits: RealtimeTurnLimits | None,
     ) -> _ClientEventRoute:
         if isinstance(guarded_item, RealtimeToolOutput):
             await forward_to_bedrock(guarded_item.sanitized_event)
@@ -501,9 +523,11 @@ class BedrockRealtimeGuardrails:
             return _ClientEventRoute.END_SESSION
         if isinstance(guarded_item, RealtimeToolOutput):
             return _ClientEventRoute.DROP
+        self._drop_next_response_create = True
+        if await _refused_turn(turn_limits, client_ws):
+            return _ClientEventRoute.DROP
         for voice_prompt_event in guardrail_voice_prompt_events(f'"{block.message}"'):
             await forward_to_bedrock(voice_prompt_event)
-        self._drop_next_response_create = True
         return _ClientEventRoute.DROP
 
     async def continues_after(
@@ -744,13 +768,13 @@ class BedrockRealtime(BaseAWSLLM):
         if session_guardrails.failed:
             logging_obj.model_call_details[REALTIME_SESSION_ENDED_ABNORMALLY_KEY] = True
 
+        leftover_usage_events: Final = tuple(transformation_config.leftover_usage_done_events())
+        if turn_limits is not None:
+            for leftover_event in leftover_usage_events:
+                await turn_limits.charge(leftover_event)
         logged_events: Final = (
             *outcome.logged_events,
-            *(
-                leftover_event
-                for leftover_event in transformation_config.leftover_usage_done_events()
-                if _should_log_event(leftover_event)
-            ),
+            *(leftover_event for leftover_event in leftover_usage_events if _should_log_event(leftover_event)),
         )
         if outcome.provider_failure is not None and outcome.client_disconnected:
             verbose_proxy_logger.debug(
@@ -904,7 +928,7 @@ class BedrockRealtime(BaseAWSLLM):
                         continue
 
                 match await session_guardrails.screen_client_event(
-                    parsed_client_message, client_ws, forward_to_bedrock
+                    parsed_client_message, client_ws, forward_to_bedrock, turn_limits
                 ):
                     case _ClientEventRoute.END_SESSION:
                         break
@@ -1009,6 +1033,10 @@ class BedrockRealtime(BaseAWSLLM):
                 for openai_message in openai_messages:
                     if turn_limits is not None:
                         await turn_limits.charge(openai_message)
+                    if await _ended_audio_turn_over_limit(
+                        turn_limits, openai_message, transformation_config.client_audio_streamed, client_ws
+                    ):
+                        return
                     if not await send_to_client(json.dumps(openai_message)):
                         return
                     if _should_log_event(openai_message):

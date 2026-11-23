@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Final, Protocol, TypeAlias, runtime_checkable
@@ -25,6 +26,13 @@ class RealtimeTurnLimiter(Protocol):
     ) -> None: ...
 
 
+@runtime_checkable
+class RealtimeCapacityCheck(Protocol):
+    async def enforce_token_limits_for_frame(
+        self, user_api_key_dict: UserAPIKeyAuth, requested_model: str | None
+    ) -> None: ...
+
+
 RealtimeTurnLimiterSource: TypeAlias = Callable[[], Sequence[object]]
 
 
@@ -42,9 +50,19 @@ def _refusal_event(error: Exception) -> str:
             return realtime_error_event(TURN_LIMIT_CHECK_FAILED_MESSAGE, error_type="server_error")
 
 
-def response_done_usage(event: Mapping[str, object]) -> Usage | None:
-    response: Final = as_str_mapping(event.get("response")) if event.get("type") == "response.done" else None
-    usage: Final = None if response is None else as_str_mapping(response.get("usage"))
+def _reported_usage(event: Mapping[str, object]) -> Mapping[str, object] | None:
+    match event.get("type"):
+        case "response.done":
+            response: Final = as_str_mapping(event.get("response"))
+            return None if response is None else as_str_mapping(response.get("usage"))
+        case "conversation.item.input_audio_transcription.completed":
+            return as_str_mapping(event.get("usage"))
+        case _:
+            return None
+
+
+def turn_token_usage(event: Mapping[str, object]) -> Usage | None:
+    usage: Final = _reported_usage(event)
     if usage is None:
         return None
     converted: Final = ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(usage)
@@ -57,19 +75,32 @@ def _response_id(event: Mapping[str, object]) -> str | None:
     return response_id if isinstance(response_id, str) and response_id else None
 
 
+@dataclass(frozen=True, slots=True)
+class _UnchargedTurn:
+    limiter: RealtimeTurnLimiter
+    usage: Usage
+
+
 @dataclass(slots=True)
 class RealtimeTurnLimits:
     limiters: tuple[RealtimeTurnLimiter, ...]
     user_api_key_dict: UserAPIKeyAuth
     requested_model: str
+    capacity_checks: tuple[RealtimeCapacityCheck, ...] = ()
     _charged_response_ids: frozenset[str] = field(default=frozenset(), init=False)
+    _uncharged: tuple[_UnchargedTurn, ...] = field(default=(), init=False)
 
     async def refusal(self) -> str | None:
+        await self._settle_uncharged()
+        if self._uncharged:
+            return realtime_error_event(TURN_LIMIT_CHECK_FAILED_MESSAGE, error_type="server_error")
         try:
             for limiter in self.limiters:
                 await limiter.enforce_token_limits_for_frame(
                     self.user_api_key_dict, self.requested_model, call_type=CallTypes.arealtime.value
                 )
+            for capacity_check in self.capacity_checks:
+                await capacity_check.enforce_token_limits_for_frame(self.user_api_key_dict, self.requested_model)
         except RateLimitError as refused:
             return _refusal_event(refused)
         except Exception as error:  # noqa: BLE001  # a response the limits could not check must not reach the provider
@@ -78,7 +109,7 @@ class RealtimeTurnLimits:
         return None
 
     async def charge(self, event: Mapping[str, object]) -> None:
-        usage: Final = response_done_usage(event)
+        usage: Final = turn_token_usage(event)
         if usage is None:
             return
         response_id: Final = _response_id(event)
@@ -86,18 +117,32 @@ class RealtimeTurnLimits:
             return
         if response_id is not None:
             self._charged_response_ids = self._charged_response_ids | {response_id}
+        self._uncharged = (*self._uncharged, *(_UnchargedTurn(limiter, usage) for limiter in self.limiters))
+        await self._settle_uncharged()
+
+    async def _still_uncharged(self, turn: _UnchargedTurn) -> bool:
         try:
-            for limiter in self.limiters:
-                await limiter.charge_realtime_turn_usage(self.user_api_key_dict, self.requested_model, usage)
+            await turn.limiter.charge_realtime_turn_usage(self.user_api_key_dict, self.requested_model, turn.usage)
         except Exception as error:  # noqa: BLE001  # the response already ran, so a failed charge must not end the session
             verbose_logger.exception("Realtime turn token charge failed: %s", error)
+            return True
+        return False
+
+    async def _settle_uncharged(self) -> None:
+        settling: Final = self._uncharged
+        if not settling:
+            return
+        self._uncharged = ()
+        outcomes: Final = await asyncio.gather(*(self._still_uncharged(turn) for turn in settling))
+        failed: Final = tuple(turn for turn, still_uncharged in zip(settling, outcomes, strict=True) if still_uncharged)
+        self._uncharged = (*failed, *self._uncharged)
 
 
 def _session_model_group(model_call_details: object, model: str) -> str:
     details: Final = as_str_mapping(model_call_details) or {}
     litellm_params: Final = as_str_mapping(details.get("litellm_params")) or {}
-    metadata: Final = as_str_mapping(litellm_params.get("metadata")) or {}
-    model_group: Final = metadata.get("model_group")
+    router_metadata: Final = as_str_mapping(litellm_params.get("litellm_metadata")) or {}
+    model_group: Final = router_metadata.get("model_group")
     return model_group if isinstance(model_group, str) and model_group else model
 
 
@@ -106,7 +151,15 @@ def realtime_turn_limits(
 ) -> RealtimeTurnLimits | None:
     if not isinstance(user_api_key_dict, UserAPIKeyAuth):
         return None
-    limiters: Final = tuple(callback for callback in source() if isinstance(callback, RealtimeTurnLimiter))
-    if not limiters:
+    callbacks: Final = tuple(source())
+    limiters: Final = tuple(callback for callback in callbacks if isinstance(callback, RealtimeTurnLimiter))
+    capacity_checks: Final = tuple(
+        callback
+        for callback in callbacks
+        if isinstance(callback, RealtimeCapacityCheck) and not isinstance(callback, RealtimeTurnLimiter)
+    )
+    if not limiters and not capacity_checks:
         return None
-    return RealtimeTurnLimits(limiters, user_api_key_dict, _session_model_group(model_call_details, model))
+    return RealtimeTurnLimits(
+        limiters, user_api_key_dict, _session_model_group(model_call_details, model), capacity_checks
+    )

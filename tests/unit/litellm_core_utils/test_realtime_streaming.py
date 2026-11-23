@@ -21,7 +21,7 @@ from litellm.constants import (
     REALTIME_SESSION_FAILURE_LOGGED_KEY,
     REALTIME_SESSION_SUCCESS_LOGGED_KEY,
 )
-from litellm.exceptions import ServiceUnavailableError
+from litellm.exceptions import RateLimitError, ServiceUnavailableError
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.realtime_streaming import (
     RealTimeStreaming,
@@ -6725,13 +6725,23 @@ async def test_a_session_that_only_listens_to_a_call_counts_its_turns_and_sends_
 
 
 @pytest.mark.asyncio
-async def test_the_response_a_client_create_was_admitted_for_is_not_cancelled_when_a_later_one_is(
+async def test_a_response_create_the_provider_rejected_does_not_exempt_the_next_response_from_the_tpm_limit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("LITELLM_TPM_TOKEN_RESERVATION_ENABLED", "false")
+    rejected_create: Final = json.dumps(
+        {
+            "type": "error",
+            "error": {
+                "type": "invalid_request_error",
+                "code": "conversation_already_has_active_response",
+                "message": "Conversation already has an active response",
+            },
+        }
+    )
     session: Final = await _turn_limited_session(
         client_frames=(_CLIENT_RESPONSE_CREATE,),
-        backend_frames=(_response_created("resp_client"), _response_created("resp_vad")),
+        backend_frames=(rejected_create, _response_created("resp_vad")),
         auth_limits={"tpm_limit": _TURN_TPM_LIMIT},
     )
     await session.streaming.client_ack_messages()
@@ -6742,7 +6752,10 @@ async def test_the_response_a_client_create_was_admitted_for_is_not_cancelled_wh
     await session.streaming.backend_to_client_send_messages()
 
     assert [event["type"] for event in session.sent_upstream()] == ["response.create", "response.cancel"]
-    assert [event["type"] for event in session.sent_to_client()] == ["response.created", "error", "response.created"]
+    assert [event["error"]["type"] for event in session.sent_to_client() if event["type"] == "error"] == [
+        "invalid_request_error",
+        "rate_limit_exceeded",
+    ]
 
 
 @pytest.mark.asyncio
@@ -6850,11 +6863,241 @@ async def test_a_failed_turn_charge_still_delivers_the_response_done_to_the_clie
     assert [json.loads(call.args[0])["type"] for call in client_ws.send_text.await_args_list] == ["response.done"]
 
 
+@dataclass(slots=True)
+class _RecoveringTurnLimiter(_ScriptedTurnLimiter):
+    failed_charges_left: int = 2
+
+    async def charge_realtime_turn_usage(
+        self, user_api_key_dict: UserAPIKeyAuth, requested_model: str | None, usage: Usage
+    ) -> None:
+        self.charges = (*self.charges, (requested_model, usage.total_tokens))
+        if self.failed_charges_left > 0:
+            self.failed_charges_left -= 1
+            raise RuntimeError("store down")
+
+
+@pytest.mark.asyncio
+async def test_a_failed_turn_charge_refuses_turns_until_a_retry_counts_it() -> None:
+    limiter: Final = _RecoveringTurnLimiter()
+    streaming, client_ws, backend_ws = _scripted_session(
+        limiter,
+        client_frames=(_CLIENT_RESPONSE_CREATE, _CLIENT_RESPONSE_CREATE),
+        backend_frames=(_response_done(300),),
+    )
+
+    await streaming.backend_to_client_send_messages()
+    await streaming.client_ack_messages()
+
+    assert limiter.charges == ((_TURN_LIMITED_MODEL, 300),) * 3
+    assert [json.loads(call.args[0])["type"] for call in backend_ws.send.await_args_list] == ["response.create"]
+    errors: Final = [json.loads(call.args[0]) for call in client_ws.send_text.await_args_list]
+    assert [event["error"]["type"] for event in errors if event["type"] == "error"] == ["server_error"]
+
+
+@dataclass(slots=True)
+class _CapacityOnlyCheck:
+    error: Exception
+
+    async def enforce_token_limits_for_frame(
+        self, user_api_key_dict: UserAPIKeyAuth, requested_model: str | None
+    ) -> None:
+        raise self.error
+
+
+@pytest.mark.asyncio
+async def test_a_turn_over_deployment_capacity_is_refused_and_not_sent_upstream() -> None:
+    capacity: Final = _CapacityOnlyCheck(
+        RateLimitError(message="deployment capacity reached", llm_provider="litellm_proxy", model="m")
+    )
+    streaming, client_ws, backend_ws = _scripted_session(capacity, client_frames=(_CLIENT_RESPONSE_CREATE,))
+
+    await streaming.client_ack_messages()
+
+    backend_ws.send.assert_not_awaited()
+    assert [json.loads(call.args[0])["error"]["type"] for call in client_ws.send_text.await_args_list] == [
+        "rate_limit_exceeded"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_response_the_provider_cannot_cancel_over_the_limit_ends_the_session_before_its_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
+
+    monkeypatch.setattr(litellm, "gemini_live_defer_setup", False, raising=False)
+    limiter: Final = _ScriptedTurnLimiter(
+        check_error=RateLimitError(message="tpm limit reached", llm_provider="litellm_proxy", model="m")
+    )
+    client_ws: Final = _ga_client_ws()
+    client_ws.close = AsyncMock()
+    backend_ws: Final = MagicMock(send=AsyncMock(), close=AsyncMock())
+    backend_ws.recv = AsyncMock(
+        side_effect=[
+            json.dumps({"setupComplete": {}}),
+            json.dumps({"serverContent": {"modelTurn": {"parts": [{"text": "Hello"}]}}}),
+            ConnectionClosed(None, None),
+        ]
+    )
+    streaming: Final = RealTimeStreaming(
+        client_ws,
+        backend_ws,
+        _mock_logging(),
+        provider_config=GeminiRealtimeConfig(),
+        model="gemini-live-2.5-flash",
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        turn_limiters=lambda: (limiter,),
+    )
+
+    await streaming.backend_to_client_send_messages()
+
+    sent: Final = [json.loads(call.args[0]) for call in client_ws.send_text.await_args_list]
+    assert [event["error"]["type"] for event in sent if event["type"] == "error"] == ["rate_limit_exceeded"]
+    assert not [event for event in sent if event["type"].endswith(".delta")]
+    backend_ws.close.assert_awaited_once()
+
+
+def _transcription_completed(usage: Mapping[str, object]) -> str:
+    return json.dumps(
+        {
+            "type": "conversation.item.input_audio_transcription.completed",
+            "item_id": "item_1",
+            "content_index": 0,
+            "transcript": "hello",
+            "usage": dict(usage),
+        }
+    )
+
+
+_TRANSCRIPTION_TOKEN_USAGE: Final = MappingProxyType(
+    {"type": "tokens", "input_tokens": 100, "output_tokens": 20, "total_tokens": 120}
+)
+
+
+def _transcription_session(
+    limiter: _ScriptedTurnLimiter, usage: Mapping[str, object], *, through_provider_config: bool, listens_only: bool
+) -> tuple[RealTimeStreaming, MagicMock, MagicMock]:
+    client_ws: Final = _ga_client_ws()
+    client_ws.close = AsyncMock()
+    backend_ws: Final = MagicMock(send=AsyncMock(), close=AsyncMock())
+    backend_ws.recv = AsyncMock(side_effect=[_transcription_completed(usage), ConnectionClosed(None, None)])
+    streaming: Final = RealTimeStreaming(
+        client_ws,
+        backend_ws,
+        _mock_logging(),
+        provider_config=_PassthroughRealtimeConfig() if through_provider_config else None,
+        model="gpt-4o-transcribe",
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        turn_limiters=lambda: (limiter,),
+        force_transcription_model="gpt-4o-transcribe",
+        listens_only=listens_only,
+    )
+    return streaming, client_ws, backend_ws
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("through_provider_config", [False, True], ids=["raw", "provider_config"])
+async def test_a_transcription_turn_counts_its_tokens_and_ends_the_session_over_the_limit(
+    through_provider_config: bool,
+) -> None:
+    limiter: Final = _ScriptedTurnLimiter(
+        check_error=RateLimitError(message="tpm limit reached", llm_provider="litellm_proxy", model="m")
+    )
+    streaming, client_ws, backend_ws = _transcription_session(
+        limiter, _TRANSCRIPTION_TOKEN_USAGE, through_provider_config=through_provider_config, listens_only=False
+    )
+
+    await streaming.backend_to_client_send_messages()
+
+    assert [charge[1] for charge in limiter.charges] == [120]
+    sent: Final = [json.loads(call.args[0]) for call in client_ws.send_text.await_args_list]
+    assert [event["type"] for event in sent] == ["conversation.item.input_audio_transcription.completed", "error"]
+    assert sent[1]["error"]["type"] == "rate_limit_exceeded"
+    backend_ws.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_a_transcription_turn_under_the_limit_keeps_the_session_open() -> None:
+    limiter: Final = _ScriptedTurnLimiter()
+    streaming, client_ws, backend_ws = _transcription_session(
+        limiter, _TRANSCRIPTION_TOKEN_USAGE, through_provider_config=False, listens_only=False
+    )
+
+    await streaming.backend_to_client_send_messages()
+
+    assert ([charge[1] for charge in limiter.charges], len(limiter.checks)) == ([120], 1)
+    assert [json.loads(call.args[0])["type"] for call in client_ws.send_text.await_args_list] == [
+        "conversation.item.input_audio_transcription.completed"
+    ]
+    backend_ws.close.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_response_under_the_tpm_limit_streams_to_the_client_without_a_cancel() -> None:
+    limiter: Final = _ScriptedTurnLimiter()
+    streaming, client_ws, backend_ws = _scripted_session(
+        limiter, backend_frames=(_response_created("resp_vad"), _response_done(300))
+    )
+
+    await streaming.backend_to_client_send_messages()
+
+    assert len(limiter.checks) == 1
+    assert [json.loads(call.args[0])["type"] for call in client_ws.send_text.await_args_list] == [
+        "response.created",
+        "response.done",
+    ]
+    backend_ws.send.assert_not_awaited()
+    backend_ws.close.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_transcription_turn_billed_by_duration_is_neither_counted_nor_refused() -> None:
+    limiter: Final = _ScriptedTurnLimiter(
+        check_error=RateLimitError(message="tpm limit reached", llm_provider="litellm_proxy", model="m")
+    )
+    streaming, client_ws, backend_ws = _transcription_session(
+        limiter, {"type": "duration", "seconds": 4.2}, through_provider_config=False, listens_only=False
+    )
+
+    await streaming.backend_to_client_send_messages()
+
+    assert (limiter.checks, limiter.charges) == ((), ())
+    assert [json.loads(call.args[0])["type"] for call in client_ws.send_text.await_args_list] == [
+        "conversation.item.input_audio_transcription.completed"
+    ]
+    backend_ws.close.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_transcription_session_that_only_listens_is_counted_and_never_ended() -> None:
+    limiter: Final = _ScriptedTurnLimiter(
+        check_error=RateLimitError(message="tpm limit reached", llm_provider="litellm_proxy", model="m")
+    )
+    streaming, client_ws, backend_ws = _transcription_session(
+        limiter, _TRANSCRIPTION_TOKEN_USAGE, through_provider_config=False, listens_only=True
+    )
+
+    await streaming.backend_to_client_send_messages()
+
+    assert ([charge[1] for charge in limiter.charges], limiter.checks) == ([120], ())
+    assert not [
+        event
+        for event in (json.loads(call.args[0]) for call in client_ws.send_text.await_args_list)
+        if event["type"] == "error"
+    ]
+    backend_ws.close.assert_not_awaited()
+
+
 @pytest.mark.asyncio
 async def test_turns_are_checked_and_charged_against_the_sessions_model_group() -> None:
     limiter: Final = _ScriptedTurnLimiter()
     logging_obj: Final = _RecordingLogging()
-    logging_obj.model_call_details = {"litellm_params": {"metadata": {"model_group": "realtime-group"}}}
+    logging_obj.model_call_details = {
+        "litellm_params": {
+            "metadata": {"model_group": "caller-supplied"},
+            "litellm_metadata": {"model_group": "realtime-group"},
+        }
+    }
     streaming, _, _ = _scripted_session(
         limiter,
         client_frames=(_CLIENT_RESPONSE_CREATE,),
