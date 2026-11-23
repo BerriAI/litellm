@@ -1989,3 +1989,17 @@ async def test_logging_only_sends_each_attachment_once() -> None:
     assert json.loads(file_call.kwargs["data"])["files"] == [
         {"filename": "a.png", "type": "image", "url": "https://example.com/a.png"}
     ]
+
+
+@pytest.mark.asyncio
+async def test_event_only_guardrail_checks_outgoing_event_data() -> None:
+    guardrail: Final = _akto("mcp_event")
+    guardrail.async_handler.post = AsyncMock(return_value=_mock_allowed_response())
+    await guardrail.apply_guardrail(
+        inputs=GenericGuardrailAPIInputs(texts=["build complete"]),
+        request_data={"call_type": "call_mcp_tool", "mcp_tool_name": "build.finished"},
+        input_type="response",
+    )
+    [(params, payload)] = _calls(guardrail)
+    assert params.get("response_guardrails") == "true"
+    assert json.loads(payload["responsePayload"])["result"]["content"] == [{"type": "text", "text": "build complete"}]
