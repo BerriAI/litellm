@@ -679,6 +679,17 @@ async def test_list__provider_from_header(harness):
     }
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("headers", "query"),
+    [(None, {"model": "seedance-video"}), ({"x-litellm-model": "seedance-video"}, None)],
+)
+async def test_list__named_model_routes_the_list_to_its_deployment(harness, headers, query):
+    await call_list(harness, headers=headers, query=query)
+
+    assert harness.processor_data() == {"query_params": query or {}, "model": "seedance-video"}
+
+
 # =========================================================================== #
 #   POST /v1/videos/{video_id}/remix  -  video_remix                           #
 # =========================================================================== #

@@ -8,6 +8,7 @@ from pydantic import TypeAdapter
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
 from litellm.proxy._types import *
+from litellm.proxy.auth.auth_utils import MODEL_ROUTING_HEADER_NAME
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
@@ -29,6 +30,7 @@ from litellm.proxy.video_endpoints.utils import (
     fallback_requested_model,
     get_custom_provider_from_data,
     routable_model_name,
+    video_list_target,
     video_reference_to_id,
 )
 from litellm.types.videos.utils import (
@@ -178,19 +180,21 @@ async def video_list(
         version,
     )
 
-    # Read query parameters
-    query_params: Final = dict(request.query_params)
-    data: Final[dict[str, object]] = {"query_params": query_params}
-
-    # Extract custom_llm_provider from headers, query params, or body
     custom_llm_provider: Final = (
         get_custom_llm_provider_from_request_headers(request=request)
         or get_custom_llm_provider_from_request_query(request=request)
         or await get_custom_llm_provider_from_request_body(request=request)
     )
-    if custom_llm_provider:
-        data["custom_llm_provider"] = custom_llm_provider
-    # Process request using ProxyBaseLLMRequestProcessing
+    data: Final[dict[str, object]] = {
+        "query_params": dict(request.query_params),
+        **({"custom_llm_provider": custom_llm_provider} if custom_llm_provider else {}),
+        **await video_list_target(
+            requested_model=request.query_params.get("model") or request.headers.get(MODEL_ROUTING_HEADER_NAME),
+            custom_llm_provider=custom_llm_provider,
+            llm_router=llm_router,
+            user_api_key_dict=user_api_key_dict,
+        ),
+    }
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
         listed: Final[object] = await processor.base_process_llm_request(

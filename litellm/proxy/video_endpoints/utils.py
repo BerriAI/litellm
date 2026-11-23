@@ -7,7 +7,10 @@ from pydantic import BaseModel, ConfigDict, TypeAdapter
 from litellm.litellm_core_utils.core_helpers import has_attributes
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import video_access_group
-from litellm.proxy.openai_files_endpoints.common_utils import authorize_model_for_key
+from litellm.proxy.openai_files_endpoints.common_utils import (
+    authorize_model_for_key,
+    model_less_provider_deployment,
+)
 from litellm.types.videos.main import DecodedVideoId, VideoObject
 from litellm.types.videos.utils import (
     decode_video_id_with_provider,
@@ -145,6 +148,23 @@ async def authorized_video_model(
         user_api_key_dict=user_api_key_dict,
     )
     return model
+
+
+async def video_list_target(
+    requested_model: str | None,
+    custom_llm_provider: object,
+    llm_router: "Router | None",
+    user_api_key_dict: UserAPIKeyAuth,
+) -> Mapping[str, object]:
+    if requested_model:
+        await authorize_model_for_key(
+            model_id=requested_model, llm_router=llm_router, user_api_key_dict=user_api_key_dict
+        )
+        return {"model": requested_model}
+    if not isinstance(custom_llm_provider, str):
+        return {}
+    deployment: Final = await model_less_provider_deployment(llm_router, user_api_key_dict, custom_llm_provider)
+    return {} if deployment is None else {"model": deployment.deployment_id}
 
 
 def fallback_requested_model(requested_model: str | None, response: object, llm_router: "Router | None") -> str | None:

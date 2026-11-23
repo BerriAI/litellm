@@ -675,15 +675,21 @@ async def model_less_provider_credentials(
     deployment for the provider, any deployment the caller is granted for it
     answers. None means the caller falls back to environment credentials.
     """
+    deployment: Final = await model_less_provider_deployment(llm_router, user_api_key_dict, custom_llm_provider)
+    return None if deployment is None else deployment.credentials
+
+
+async def model_less_provider_deployment(
+    llm_router: Optional["Router"],
+    user_api_key_dict: "UserAPIKeyAuth",
+    custom_llm_provider: str,
+) -> TeamProviderDeployment | None:
     if llm_router is None:
         return None
     team_deployments: Final = _team_provider_deployments(llm_router, user_api_key_dict, custom_llm_provider)
     if not team_deployments:
-        return _accessible_provider_credentials(llm_router, user_api_key_dict, custom_llm_provider)
-    team_deployment: Final = await _model_less_pick(
-        team_deployments, custom_llm_provider, llm_router, user_api_key_dict
-    )
-    return None if team_deployment is None else team_deployment.credentials
+        return _accessible_provider_deployment(llm_router, user_api_key_dict, custom_llm_provider)
+    return await _model_less_pick(team_deployments, custom_llm_provider, llm_router, user_api_key_dict)
 
 
 async def team_deployment_as_the_caller_reaches_it(
@@ -995,6 +1001,18 @@ def _provider_credentials(
     return MappingProxyType({key: value for key, value in credentials.items() if key != "model"})
 
 
+def _provider_deployment(
+    registry: "RouterRegistry", model_name: str, team_id: str | None, custom_llm_provider: str
+) -> TeamProviderDeployment | None:
+    credentials: Final = _provider_credentials(registry, model_name, team_id, custom_llm_provider)
+    deployment: Final = (
+        None if credentials is None else registry.credentials(model_name, form="deployment", team_id=team_id)
+    )
+    if credentials is None or deployment is None or deployment.model_info.id is None:
+        return None
+    return TeamProviderDeployment(deployment.model_info.id, model_name, credentials)
+
+
 def _team_provider_deployments(
     llm_router: "Router",
     user_api_key_dict: "UserAPIKeyAuth",
@@ -1057,11 +1075,11 @@ def _team_provider_deployments(
     )
 
 
-def _accessible_provider_credentials(
+def _accessible_provider_deployment(
     llm_router: "Router",
     user_api_key_dict: "UserAPIKeyAuth",
     custom_llm_provider: str,
-) -> Mapping[str, object] | None:
+) -> TeamProviderDeployment | None:
     from litellm.proxy._types import SpecialModelNames
     from litellm.proxy.auth.auth_checks import is_model_allowed_by_pattern
     from litellm.proxy.auth.model_checks import get_complete_model_list
@@ -1103,9 +1121,9 @@ def _accessible_provider_credentials(
     )
     return next(
         (
-            credentials
-            for model_id in dict.fromkeys(itertools.chain(granted_models, deployments_granted_by_wildcard))
-            if (credentials := _provider_credentials(registry, model_id, team_id, custom_llm_provider)) is not None
+            deployment
+            for model_name in dict.fromkeys(itertools.chain(granted_models, deployments_granted_by_wildcard))
+            if (deployment := _provider_deployment(registry, model_name, team_id, custom_llm_provider)) is not None
         ),
         None,
     )

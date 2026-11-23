@@ -20,7 +20,7 @@ import pytest
 
 
 from litellm.router import Router
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.types.videos.main import DecodedVideoId
 from litellm.proxy.video_endpoints.utils import (
     authorized_video_model,
@@ -30,6 +30,7 @@ from litellm.proxy.video_endpoints.utils import (
     fallback_requested_model,
     get_custom_provider_from_data,
     routable_model_name,
+    video_list_target,
     video_model_group,
     video_reference_to_id,
 )
@@ -620,3 +621,64 @@ def test_fallback_requested_model__is_none_for_a_create_a_provider_wildcard_serv
 
 def test_video_model_group__is_none_without_a_router() -> None:
     assert video_model_group(_decoded("sora-2", "dep-sora-shared"), None) is None
+
+
+def _video_list_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "seedance-video",
+                "litellm_params": {"model": "volcengine/doubao-seedance-2-0-mini-260615", "api_key": "ark-key"},
+                "model_info": {"id": "dep-seedance"},
+            },
+            {
+                "model_name": "sora-video",
+                "litellm_params": {"model": "openai/sora-2", "api_key": "openai-key"},
+                "model_info": {"id": "dep-sora"},
+            },
+        ]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("custom_llm_provider", "deployment_id"), [("volcengine", "dep-seedance"), ("openai", "dep-sora")])
+async def test_video_list_target_routes_a_model_less_list_to_the_providers_deployment(
+    custom_llm_provider: str, deployment_id: str
+) -> None:
+    target: Final = await video_list_target(
+        None, custom_llm_provider, _video_list_router(), UserAPIKeyAuth(api_key="hashed")
+    )
+
+    assert target == {"model": deployment_id}
+
+
+@pytest.mark.asyncio
+async def test_video_list_target_never_lends_a_deployment_the_key_cannot_call() -> None:
+    restricted: Final = UserAPIKeyAuth(api_key="hashed", models=["sora-video"])
+
+    assert await video_list_target(None, "volcengine", _video_list_router(), restricted) == {}
+    assert await video_list_target(None, "openai", _video_list_router(), restricted) == {"model": "dep-sora"}
+
+
+@pytest.mark.asyncio
+async def test_video_list_target_without_a_provider_or_model_leaves_routing_alone() -> None:
+    assert await video_list_target(None, None, _video_list_router(), UserAPIKeyAuth(api_key="hashed")) == {}
+
+
+@pytest.mark.asyncio
+async def test_video_list_target_routes_a_named_model_the_key_may_call() -> None:
+    allowed: Final = UserAPIKeyAuth(api_key="hashed", models=["seedance-video"])
+
+    assert await video_list_target("seedance-video", "openai", _video_list_router(), allowed) == {
+        "model": "seedance-video"
+    }
+
+
+@pytest.mark.asyncio
+async def test_video_list_target_refuses_a_named_model_the_key_cannot_call() -> None:
+    restricted: Final = UserAPIKeyAuth(api_key="hashed", models=["sora-video"])
+
+    with pytest.raises(ProxyException) as refused:
+        await video_list_target("seedance-video", None, _video_list_router(), restricted)
+
+    assert str(refused.value.code) == "403"
