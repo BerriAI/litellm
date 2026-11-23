@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Final, Literal, TypeAlias, cast
 from pydantic import TypeAdapter
 
 import litellm
-from litellm.litellm_core_utils.core_helpers import as_object_list
+from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
 from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
     extract_file_data as extract_file_data,  # noqa: PLC0414  # public compatibility re-export
 )
@@ -185,13 +185,13 @@ from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
     split_concatenated_json_objects as split_concatenated_json_objects,  # noqa: PLC0414  # public compatibility re-export
 )
 from litellm.litellm_core_utils.prompt_templates.tpm_media_utils import (
-    _image_part_url,  # pyright: ignore[reportPrivateUsage]  # Shared implementation for as_openai_image_part
-)
-from litellm.litellm_core_utils.prompt_templates.tpm_media_utils import (
     anthropic_image_source_to_openai_url as anthropic_image_source_to_openai_url,  # noqa: PLC0414  # public compatibility re-export
 )
 from litellm.litellm_core_utils.prompt_templates.tpm_media_utils import (
     embedding_input_is_all_media as embedding_input_is_all_media,  # noqa: PLC0414  # public compatibility re-export
+)
+from litellm.litellm_core_utils.prompt_templates.tpm_media_utils import (
+    image_part_url,
 )
 from litellm.litellm_core_utils.prompt_templates.tpm_media_utils import (
     split_embedding_media_for_tpm as split_embedding_media_for_tpm,  # noqa: PLC0414  # public compatibility re-export
@@ -433,7 +433,7 @@ def strip_name_from_messages(
     """
     Removes 'name' from messages
     """
-    new_messages: Final = []
+    new_messages: Final[list[AllMessageValues]] = []
     for message in messages:
         msg_role = message.get("role")
         msg_copy = message.copy()
@@ -681,7 +681,7 @@ def as_openai_image_part(part: Mapping[str, object]) -> ChatCompletionImageObjec
 
     Rebuilt rather than forwarded so no caller-controlled key beyond the URL rides along.
     """
-    url: Final = _image_part_url(part)
+    url: Final = image_part_url(part)
     return {"type": "image_url", "image_url": {"url": url}} if url else None
 
 
@@ -729,7 +729,7 @@ def convert_openai_message_to_only_content_messages(
 
     Used for calling guardrails integrations which expect string content
     """
-    converted_messages: Final = []
+    converted_messages: Final[list[dict[str, str]]] = []
     user_roles: Final = ["user", "tool", "function"]
     for message in messages:
         if message.get("role") in user_roles:
@@ -877,7 +877,7 @@ def _insert_assistant_continue_message(
     continue_message: Final = assistant_continue_message or DEFAULT_ASSISTANT_CONTINUE_MESSAGE
 
     # Find indexes where assistant_continue should be inserted (before that index)
-    insert_before_indexes: Final[set] = set()
+    insert_before_indexes: Final[set[int]] = set()
 
     for i in range(len(messages)):
         curr = messages[i]
@@ -1265,7 +1265,7 @@ def get_tool_call_names(tools: list[ChatCompletionToolParam]) -> list[str]:
     return tool_call_names
 
 
-def is_function_call(optional_params: dict) -> bool:
+def is_function_call(optional_params: Mapping[str, object]) -> bool:
     """
     Checks if the optional params contain the function call
     """
@@ -1339,19 +1339,31 @@ def _tool_call_without_provider_specific_fields(tool_call: object) -> object:
     }
 
 
+def _image_without_provider_specific_fields(image: object) -> object:
+    fields: Final = as_str_mapping(image)
+    if fields is None or "provider_specific_fields" not in fields:
+        return image
+    return {key: value for key, value in fields.items() if key != "provider_specific_fields"}
+
+
 def _message_without_fields(message: AllMessageValues, dropped: frozenset[str]) -> AllMessageValues:
-    kept: Final = {key: value for key, value in message.items() if key not in dropped}
-    tool_calls: Final = message.get("tool_calls")
-    if not isinstance(tool_calls, list):
-        return cast(AllMessageValues, kept)  # cast-ok: same TypedDict minus dropped keys
-    return cast(  # cast-ok: same TypedDict minus dropped keys, tool calls minus their provider_specific_fields
+    kept: Final[Mapping[str, object]] = {key: value for key, value in message.items() if key not in dropped}
+    tool_calls: Final = as_object_list(kept.get("tool_calls"))
+    images: Final = as_object_list(kept.get("images"))
+    return cast(  # cast-ok: same TypedDict minus dropped keys and nested provider_specific_fields
         AllMessageValues,
         {
             **kept,
-            "tool_calls": [
-                _tool_call_without_provider_specific_fields(tool_call)
-                for tool_call in cast(list[object], tool_calls)  # cast-ok: untyped JSON tool calls
-            ],
+            **(
+                {"tool_calls": [_tool_call_without_provider_specific_fields(tool_call) for tool_call in tool_calls]}
+                if tool_calls is not None
+                else {}
+            ),
+            **(
+                {"images": [_image_without_provider_specific_fields(image) for image in images]}
+                if images is not None
+                else {}
+            ),
         },
     )
 
@@ -1448,7 +1460,7 @@ def get_last_user_message(messages: list[AllMessageValues]) -> str | None:
         return None
 
     # Iterate from the end to find the last consecutive block of user messages
-    user_messages: Final = []
+    user_messages: Final[list[AllMessageValues]] = []
     for message in reversed(messages):
         if message.get("role") == "user":
             user_messages.append(message)
@@ -1478,7 +1490,7 @@ def set_last_user_message(messages: list[AllMessageValues], content: str) -> lis
     1. remove all the last consecutive user messages (FROM THE END)
     2. add the new message
     """
-    idx_to_remove: Final = []
+    idx_to_remove: Final[list[int]] = []
     for idx, message in enumerate(reversed(messages)):
         if message.get("role") == "user":
             idx_to_remove.append(idx)
@@ -1596,7 +1608,7 @@ def extract_images_from_message(message: AllMessageValues) -> list[str]:
     data portion is extracted. This is required for providers like Ollama
     that expect pure base64 data rather than full data URLs.
     """
-    images: Final = []
+    images: Final[list[str]] = []
     message_content: Final = message.get("content")
     if isinstance(message_content, list):
         for m in message_content:

@@ -601,12 +601,14 @@ class GoogleAIStudioTokenCounter(BaseTokenCounter):
             return provider_error_response(error, request_model, model_to_use)
 
         if result is not None:
-            return TokenCountResponse(
-                total_tokens=result.get("totalTokens", 0),
-                request_model=request_model,
-                model_used=model_to_use,
-                tokenizer_type=result.get("tokenizer_used", ""),
-                original_response=result,
+            return TokenCountResponse.model_validate(
+                {
+                    "total_tokens": result.get("totalTokens", 0),
+                    "request_model": request_model,
+                    "model_used": model_to_use,
+                    "tokenizer_type": result.get("tokenizer_used", ""),
+                    "original_response": result,
+                }
             )
 
         return None

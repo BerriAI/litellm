@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 from litellm.anthropic_beta_gated_fields import log_beta_gated_strips, strip_beta_gated_thinking
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
+from litellm.litellm_core_utils.allowed_tools_tool_choice import HostedMcpToolHandling
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     handle_invalid_parallel_tool_calls,
@@ -470,12 +471,21 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         use_ai_gateway: Final = self.uses_ai_gateway(model)
         return join_api_base(self._get_api_base(api_base, use_ai_gateway=use_ai_gateway), "chat/completions")
+
+    def transform_extra_body(
+        self,
+        extra_body: Mapping[str, object],
+        request: Mapping[str, object],
+        model: str,
+        litellm_params: Mapping[str, object],
+    ) -> Mapping[str, object]:
+        return extra_body
 
     def get_supported_openai_params(self, model: str | None = None) -> list[str]:
         return [
@@ -575,6 +585,9 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         # every request doesn't have to be transformed for to OpenAI and Anthropic request formats.
         return messages, tools
 
+    def hosted_mcp_tool_handling(self, model: str) -> HostedMcpToolHandling:
+        return "drops" if "claude" in model else "forwards"
+
     def map_openai_params(
         self,
         non_default_params: dict,
@@ -582,11 +595,13 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         model: str,
         drop_params: bool,
         replace_max_completion_tokens_with_max_tokens: bool = True,
-    ) -> dict:
-        request_params: Final = (
-            tool_params_without_hosted_mcp(non_default_params, model=model, route="databricks", drop_params=drop_params)
-            if "claude" in model
-            else non_default_params
+    ) -> dict[str, object]:
+        request_params: Final = tool_params_without_hosted_mcp(
+            non_default_params,
+            model=model,
+            route="databricks",
+            drop_params=drop_params,
+            handling=self.hosted_mcp_tool_handling(model),
         )
         mapped_params: Final = super().map_openai_params(request_params, optional_params, model, drop_params)
         if "claude" in model:
@@ -669,7 +684,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
 
         return mapped_params
 
-    def _should_fake_stream(self, optional_params: dict) -> bool:
+    def _should_fake_stream(self, optional_params: Mapping[str, object]) -> bool:
         """
         Databricks doesn't support 'response_format' while streaming
         """
@@ -955,7 +970,8 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
 
         ## RESPONSE OBJECT
         try:
-            completion_response: Final = DatabricksResponse(**raw_response.json())
+            decoded_response: Final[DatabricksResponse] = raw_response.json()
+            completion_response: Final = DatabricksResponse(**decoded_response)
         except Exception as e:
             response_headers: Final = getattr(raw_response, "headers", None)
             raise DatabricksException(

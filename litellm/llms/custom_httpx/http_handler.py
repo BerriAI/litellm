@@ -2,6 +2,7 @@ import asyncio
 import concurrent.futures
 import inspect
 import os
+import re
 import socket
 import ssl
 import sys
@@ -46,6 +47,7 @@ from litellm.litellm_core_utils.request_timeout_resolver import (
 )
 from litellm.llms.base_llm.auth.token_exchange import JwtBearerTokenExchangeEngine, default_token_exchange_engine
 from litellm.llms.base_llm.auth.types import MintedToken
+from litellm.llms.custom_httpx.accept_encoding import ACCEPT_ENCODING_HEADER
 from litellm.llms.custom_httpx.aiohttp_pool_diagnostics import build_pool_wait_trace_config
 from litellm.llms.custom_httpx.http2_connection_spread import AsyncHTTP2ConnectionSpread
 from litellm.types.llms.custom_http import *
@@ -78,7 +80,7 @@ _RequestContent: TypeAlias = str | bytes | Iterable[bytes] | AsyncIterable[bytes
 
 _IPV4_LOCAL_ADDRESS: Final = "0.0.0.0"
 
-_HttpxTransportT: Final = TypeVar("_HttpxTransportT", httpx.BaseTransport, httpx.AsyncBaseTransport)
+_HttpxTransportT = TypeVar("_HttpxTransportT", httpx.BaseTransport, httpx.AsyncBaseTransport)
 
 HTTPEventHooks: TypeAlias = Mapping[str, list[Callable[..., object]]]
 
@@ -186,12 +188,10 @@ def get_default_headers() -> dict[str, str]:
 
     - Default: `User-Agent: litellm/{version}`
     - Override: set `LITELLM_USER_AGENT` to fully override the header value.
+    - `Accept-Encoding` offers everything httpx decodes but zstd (see accept_encoding.py).
     """
     user_agent: Final = os.environ.get("LITELLM_USER_AGENT")
-    if user_agent is not None:
-        return {"User-Agent": user_agent}
-
-    return {"User-Agent": default_user_agent()}
+    return {**ACCEPT_ENCODING_HEADER, "User-Agent": user_agent if user_agent is not None else default_user_agent()}
 
 
 def default_user_agent() -> str:
@@ -274,10 +274,19 @@ _STREAMING_ERROR_BODY_READ_EXECUTOR: Final = concurrent.futures.ThreadPoolExecut
 )
 
 
+_SURROGATE_RE: Final = re.compile(r"[\ud800-\udfff]")
+
+
+def _repair_surrogates(value: str) -> str:
+    if not _SURROGATE_RE.search(value):
+        return value
+    return value.encode("utf-16-le", errors="surrogatepass").decode("utf-16-le", errors="replace")
+
+
 def _prepare_request_data_and_content(
-    data: dict | str | bytes | None = None,
+    data: Mapping[str, object] | str | bytes | None = None,
     content: _RequestContent | None = None,
-) -> tuple[dict | Mapping | None, _RequestContent | None]:
+) -> tuple[Mapping[str, object] | None, _RequestContent | None]:
     """
     Helper function to route data/content parameters correctly for httpx requests
 
@@ -311,7 +320,7 @@ def _prepare_request_data_and_content(
             # dict/Mapping stays in data= parameter
             request_data = data
 
-    return request_data, request_content
+    return request_data, _repair_surrogates(request_content) if isinstance(request_content, str) else request_content
 
 
 # Cache for SSL contexts to avoid creating duplicate contexts with the same configuration
@@ -756,7 +765,7 @@ class AsyncHTTPHandler:
         self,
         timeout: float | httpx.Timeout | None = None,
         event_hooks: Mapping[str, list[Callable[..., object]]] | None = None,
-        concurrent_limit=None,  # Kept for backward compatibility, but ignored (no limits)
+        concurrent_limit: object = None,  # Kept for backward compatibility, but ignored (no limits)
         client_alias: str | None = None,  # name for client in logs
         ssl_verify: VerifyTypes | None = None,
         shared_session: Optional["ClientSession"] = None,
@@ -1603,7 +1612,7 @@ class HTTPHandler:
     def __init__(
         self,
         timeout: float | httpx.Timeout | None = None,
-        concurrent_limit=None,  # Kept for backward compatibility, but ignored (no limits)
+        concurrent_limit: object = None,  # Kept for backward compatibility, but ignored (no limits)
         client: httpx.Client | None = None,
         ssl_verify: bool | str | None = None,
         disable_default_headers: bool

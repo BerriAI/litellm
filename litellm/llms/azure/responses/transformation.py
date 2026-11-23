@@ -19,7 +19,7 @@ from litellm.llms.azure.chat.gpt_reasoning_transformation import AzureOpenAIGPT5
 from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.llms.azure.ptu_capacity import is_str_keyed_mapping
 from litellm.llms.base_llm.responses.transformation import SUMMARY_ONLY_REASONING_FIELD_VALUES, ReasoningFieldValues
-from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig, list_input_items_query_params
 from litellm.types.llms.openai import *
 from litellm.types.responses.main import *
 from litellm.types.router import GenericLiteLLMParams
@@ -48,6 +48,10 @@ def _predates_responses_api(api_version: str | None) -> bool:
         and _DATED_API_VERSION.fullmatch(api_version) is not None
         and api_version[:10] < _MIN_RESPONSES_API_DATE
     )
+
+
+def _query_param(params: Mapping[str, str], name: str) -> str | None:
+    return params.get(name)
 
 
 def _str_param(litellm_params: Mapping[str, object], key: str) -> str | None:
@@ -239,7 +243,7 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
             str(parsed_url.copy_with(params=parsed_url.params.remove("api-version")))
             if parsed_url is not None
             and (
-                _predates_responses_api(parsed_url.params.get("api-version"))
+                _predates_responses_api(_query_param(parsed_url.params, "api-version"))
                 or _str_param(litellm_params, "responses_api_version") is not None
             )
             else base
@@ -390,19 +394,8 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         url: Final = self._construct_url_for_response_id_in_path(
             api_base=api_base, response_id=response_id, path_suffix="/input_items"
         )
-        params: Final[dict[str, str | int]] = {}
-        if after is not None:
-            params["after"] = after
-        if before is not None:
-            params["before"] = before
-        if include:
-            params["include"] = ",".join(include)
-        if limit is not None:
-            params["limit"] = limit
-        if order is not None:
-            params["order"] = order
         verbose_logger.debug("list input items url=%s", url)
-        return url, params
+        return url, list_input_items_query_params(after=after, before=before, include=include, limit=limit, order=order)
 
     #########################################################
     ########## CANCEL RESPONSE API TRANSFORMATION ##########

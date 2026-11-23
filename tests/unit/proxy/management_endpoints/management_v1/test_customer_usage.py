@@ -30,6 +30,7 @@ class DailyRecord(SpendMetrics):
     customer_team_id: str
     customer_member_id: str
     app_id: str = ""
+    app_group_id: str = ""
     api_key: str
     model: str | None = None
     model_group: str | None = None
@@ -125,8 +126,13 @@ class Database:
             Record(app_id="search", resource_type="team", resource_id="search-team"),
         )
     )
+    litellm_appgrouptable: Table = Table((Record(app_group_id="first"), Record(app_group_id="second")))
     litellm_deletedverificationtoken: Table = Table()
     litellm_usertable: Table = Table()
+    litellm_teamtable: Table = Table()
+    litellm_organizationtable: Table = Table()
+    litellm_organizationmembership: Table = Table()
+    litellm_objectpermissiontable: Table = Table()
 
 
 @dataclass(frozen=True, slots=True)
@@ -147,6 +153,7 @@ def usage_row(
     provider: str = "provider-a",
     spend: float = 2.0,
     app_id: str = "",
+    app_group_id: str = "",
 ) -> DailyRecord:
     return DailyRecord(
         id=id,
@@ -155,6 +162,7 @@ def usage_row(
         customer_team_id=customer_team_id,
         customer_member_id=customer_member_id,
         app_id=app_id,
+        app_group_id=app_group_id,
         api_key=api_key,
         model=model,
         model_group=model_group,
@@ -455,3 +463,96 @@ def test_aggregated_customer_usage_rejects_empty_or_unknown_apps(app_id: str, ex
         params={**RANGE, "customer_org_id": "org-a", "app_id": app_id},
     )
     assert response.status_code == expected_status
+
+
+GRANTEE_PATHS: Final = (
+    "/management/v1/customer_organizations/daily/activity/aggregated",
+    "/management/v1/customer_organizations/daily/activity",
+    "/management/v1/customer_teams/daily/activity",
+    "/management/v1/customer_members/daily/activity",
+)
+
+
+def granted(route: str) -> Database:
+    """User "admin" holds the chat app through their own, their team's or their organization's object permission."""
+    return Database(
+        Table(
+            (
+                usage_row(app_id="chat", spend=2),
+                usage_row(id="search", app_id="search", spend=5, customer_org_id="org-b", api_key="hash-b"),
+                usage_row(id="legacy", spend=3),
+            )
+        ),
+        litellm_usertable=Table(
+            (
+                Record(
+                    user_id="admin",
+                    teams=["owners"] if route == "team" else [],
+                    object_permission_id="grant" if route == "user" else None,
+                ),
+            )
+        ),
+        litellm_teamtable=Table((Record(team_id="owners", object_permission_id="grant" if route == "team" else None),)),
+        litellm_organizationtable=Table(
+            (Record(organization_id="division", object_permission_id="grant" if route == "organization" else None),)
+        ),
+        litellm_organizationmembership=Table(
+            (Record(organization_id="division", user_id="admin"),) if route == "organization" else ()
+        ),
+        litellm_objectpermissiontable=Table((Record(object_permission_id="grant", apps=["chat"]),)),
+    )
+
+
+@pytest.mark.parametrize("route", ("user", "team", "organization"))
+@pytest.mark.parametrize("path", GRANTEE_PATHS[1:])
+def test_a_grantee_reads_usage_for_a_granted_app_only(path: str, route: str) -> None:
+    http: Final = client(role=LitellmUserRoles.INTERNAL_USER, database=granted(route))
+    own: Final = http.get(path, params={**DATES, "app_id": "chat"})
+    assert own.status_code == 200, own.text
+    assert own.json()["metadata"]["total_spend"] == 2
+    assert http.get(path, params={**DATES, "app_id": "search"}).status_code == 403
+    assert http.get(path, params=DATES).status_code == 403
+
+
+@pytest.mark.parametrize("route", ("user", "team", "organization"))
+def test_a_grantee_cannot_aggregate_usage_outside_a_granted_app(route: str) -> None:
+    http: Final = client(role=LitellmUserRoles.INTERNAL_USER, database=granted(route))
+    path: Final = GRANTEE_PATHS[0]
+    scope: Final = {**DATES, "customer_org_id": "org-b"}
+    assert http.get(path, params={**scope, "app_id": "search"}).status_code == 403
+    assert http.get(path, params=scope).status_code == 403
+
+
+@pytest.mark.parametrize("path", GRANTEE_PATHS[1:])
+def test_a_grantee_cannot_reach_another_apps_usage_by_naming_its_key(path: str) -> None:
+    http: Final = client(role=LitellmUserRoles.INTERNAL_USER, database=granted("user"))
+    response: Final = http.get(path, params={**DATES, "app_id": "chat", "api_key": "hash-b"})
+    assert response.status_code == 200, response.text
+    assert response.json()["metadata"]["total_spend"] == 0
+
+
+@pytest.mark.parametrize("resource,parameter,excluded,first,second,label", SCOPES)
+def test_group_filter_uses_the_recorded_group_and_intersects_app_permissions(
+    resource: str,
+    parameter: str,
+    excluded: str,
+    first: str,
+    second: str,
+    label: str,
+) -> None:
+    http: Final = client(
+        (
+            usage_row(app_id="chat", app_group_id="first", spend=2),
+            usage_row(id="later", app_id="chat", app_group_id="second", spend=5),
+            usage_row(id="sibling", app_id="search", app_group_id="first", spend=7),
+        )
+    )
+    path: Final = f"/management/v1/{resource}/daily/activity"
+    response: Final = http.get(path, params={**DATES, parameter: first, "app_group_id": "first"})
+    assert response.status_code == 200
+    assert response.json()["metadata"]["total_spend"] == 9
+    app: Final = http.get(path, params={**DATES, parameter: first, "app_group_id": "first", "app_id": "chat"})
+    assert app.status_code == 200
+    assert app.json()["metadata"]["total_spend"] == 2
+    grantee: Final = client(role=LitellmUserRoles.INTERNAL_USER, database=granted("user"))
+    assert grantee.get(path, params={**DATES, "app_group_id": "first"}).status_code == 403

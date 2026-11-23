@@ -17,7 +17,7 @@ from litellm.proxy._types import (
 from litellm.proxy.auth import core
 from litellm.proxy.auth.host.python import PythonAuthHost
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.caching.dual_cache import DualCache
 from litellm.rust_bridge._native import RustAuth, RustAuthSettings, RustDenial, RustPlan
 
 JWT: Final = "eyJhbGciOiJSUzI1NiIsImtpZCI6ImsifQ.eyJzdWIiOiJ1In0.c2ln"
@@ -83,11 +83,11 @@ async def test_a_host_failure_the_core_cannot_skip_propagates_unchanged(
         core.HostFacts(master_key=None, premium=True, has_db=False),
     )
 
-    class _Unreadable(UserApiKeyCache):
+    class _Unreadable(DualCache):
         async def async_get_cache(self, *args: object, **kwargs: object) -> object:
             raise ConnectionError("cache down")
 
-    failing: Final = dataclasses.replace(auth_host(), user_api_key_cache=_Unreadable())
+    failing: Final = dataclasses.replace(auth_host(), jwks_cache=_Unreadable())
     token: Final = "eyJhbGciOiJSUzI1NiIsImtpZCI6ImsifQ.eyJzdWIiOiJ1In0.c2ln"
 
     with pytest.raises(ConnectionError, match="cache down"):

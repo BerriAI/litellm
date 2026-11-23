@@ -13,28 +13,29 @@ import json
 import logging
 import time
 import traceback
-from collections.abc import Awaitable, Callable, Generator, Iterable, Iterator, Mapping
+from collections.abc import Awaitable, Callable, Generator, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from enum import Enum
 from itertools import chain
 from types import MappingProxyType
-from typing import Any, Final, Literal, Protocol, cast
+from typing import Final, Literal, Protocol, cast
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._internal_context import current_service_target, service_target
 from litellm._logging import verbose_logger
 from litellm.constants import CACHED_STREAMING_CHUNK_DELAY
 from litellm.integrations.otel.runtime import phase_span
-from litellm.litellm_core_utils.core_helpers import require_attributes
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, has_attributes, require_attributes
 from litellm.litellm_core_utils.model_param_helper import (
     ModelParamHelper,
     embeds_thought_signature_in_tool_call_id,
     peek_reasoning_summary_aliases,
 )
 from litellm.types.caching import *
-from litellm.types.utils import EmbeddingResponse, is_litellm_owned_kwarg
+from litellm.types.utils import EmbeddingResponse, Usage, is_litellm_owned_kwarg
 
 from .azure_blob_cache import AzureBlobCache
 from .base_cache import BaseCache
@@ -63,6 +64,42 @@ class _SupportsAsyncPing(Protocol):
 class _SupportsAsyncDeleteCacheKeys(Protocol):
     @property
     def delete_cache_keys(self) -> Callable[[object], Awaitable[object]] | None: ...
+
+
+class _SupportsModelDump(Protocol):
+    def model_dump(self) -> object: ...
+
+
+class _SupportsFieldLookup(Protocol):
+    def get(self, key: str, /) -> object: ...
+
+
+class _SupportsEmbeddingData(Protocol):
+    @property
+    def data(self) -> Sequence[object]: ...
+
+
+class _UnvalidatedCachedEmbedding(TypedDict):
+    embedding: ReadOnly[object]
+    index: ReadOnly[object]
+    model: ReadOnly[str | None]
+    prompt_tokens: ReadOnly[int | None]
+    prompt_tokens_details: ReadOnly[Mapping[str, object] | None]
+    format_version: ReadOnly[int]
+    object: ReadOnly[object]
+
+
+def _embedding_item(response: _SupportsEmbeddingData, index: int) -> object:
+    return response.data[index]
+
+
+def _embedding_fields(embedding_response: object) -> _SupportsFieldLookup:
+    mapping: Final = as_str_mapping(embedding_response)
+    if mapping is not None and isinstance(embedding_response, dict):
+        return mapping
+    if has_attributes(embedding_response, _SupportsModelDump, "model_dump"):
+        return require_attributes(embedding_response.model_dump(), _SupportsFieldLookup, "get")
+    return vars(embedding_response)
 
 
 def _keyed_provider_params_in_extra_body(kwargs: Mapping[str, object]) -> str:
@@ -220,7 +257,7 @@ def response_cache_phase(operation: Literal["get", "set"]) -> Generator[None]:
         yield
 
 
-def print_verbose(print_statement):
+def print_verbose(print_statement: object):
     try:
         verbose_logger.debug(print_statement)
         if litellm.set_verbose:
@@ -241,11 +278,11 @@ def _is_conversation_item(item: object) -> bool:
     if not isinstance(item, Mapping):
         return False
     block: Final = cast(Mapping[str, object], item)  # cast-ok: isinstance leaves the key and value types unknown
-    return block.get("type") != "file"
+    return block.get("type") not in ("file", "text")
 
 
 def _request_message_count(kwargs: Mapping[str, object]) -> int:
-    """Chat and Messages API `messages`, else Responses API `input` items; embedding strings and file blocks count as none"""
+    """Chat and Messages API `messages`, else Responses API `input` items; embedding strings and blocks count as none"""
     messages: Final = kwargs.get("messages")
     if isinstance(messages, list):
         return len(messages)
@@ -309,6 +346,7 @@ class Cache:
         gcp_service_account: str | None = None,
         gcp_ssl_ca_certs: str | None = None,
         _backend: BaseCache | None = None,
+        excluded_call_types: Sequence[CachingSupportedCallTypes] | None = None,
         **kwargs,
     ):
         """
@@ -355,6 +393,7 @@ class Cache:
 
             # Common Cache Args
             supported_call_types (list, optional): List of call types to cache for. Defaults to cache == on for all call types.
+            excluded_call_types (Sequence, optional): Call types to drop from supported_call_types. Defaults to None.
             **kwargs: Additional keyword arguments for redis.Redis() cache
 
         Raises:
@@ -477,7 +516,9 @@ class Cache:
         if "cache" not in litellm._async_success_callback:
             litellm.logging_callback_manager.add_litellm_async_success_callback("cache")
         self.supported_call_types = (
-            supported_call_types  # default to ["completion", "acompletion", "embedding", "aembedding"]
+            supported_call_types
+            if supported_call_types is None or not excluded_call_types
+            else [call_type for call_type in supported_call_types if call_type not in excluded_call_types]
         )
         self.type = type
         self.namespace = namespace
@@ -503,7 +544,7 @@ class Cache:
     # Params whose values carry prompt content. Excluded from semantic-cache
     # scope keys so differently worded prompts share a bucket and match via
     # vector similarity rather than being split into per-wording buckets.
-    _SEMANTIC_CACHE_SCOPE_EXCLUDED_PARAMS: frozenset = frozenset({"messages", "prompt", "input"})
+    _SEMANTIC_CACHE_SCOPE_EXCLUDED_PARAMS: frozenset[str] = frozenset({"messages", "prompt", "input"})
 
     # Server-set identity (from proxy auth) used to isolate semantic-cache
     # buckets per tenant. Required once the prompt is out of the scope key, so a
@@ -886,7 +927,7 @@ class Cache:
             print_verbose(f"An exception occurred: {traceback.format_exc()}")
             return None
 
-    def _add_cache_logic(self, result, **kwargs):
+    def _add_cache_logic(self, result: object, **kwargs):
         """
         Common implementation across sync + async add_cache functions
         """
@@ -916,7 +957,7 @@ class Cache:
         except Exception as e:
             raise e
 
-    def add_cache(self, result, **kwargs):
+    def add_cache(self, result: object, **kwargs: object):
         """
         Adds a result to the cache.
 
@@ -943,7 +984,7 @@ class Cache:
             return
         verbose_logger.error("%s: %s", message, exc)
 
-    async def async_add_cache(self, result, dynamic_cache_object: BaseCache | None = None, **kwargs):
+    async def async_add_cache(self, result: object, dynamic_cache_object: BaseCache | None = None, **kwargs: object):
         """
         Async implementation of add_cache
         """
@@ -965,23 +1006,17 @@ class Cache:
 
     def _convert_to_cached_embedding(
         self,
-        embedding_response: Any,
+        embedding_response: object,
         model: str | None,
         prompt_tokens: int | None = None,
-        prompt_tokens_details: dict | None = None,
-    ) -> CachedEmbedding:
+        prompt_tokens_details: Mapping[str, object] | None = None,
+    ) -> _UnvalidatedCachedEmbedding:
         """
         Convert any embedding response into the standardized CachedEmbedding TypedDict format.
         """
         try:
-            data: Final = (
-                embedding_response
-                if isinstance(embedding_response, dict)
-                else embedding_response.model_dump()
-                if hasattr(embedding_response, "model_dump")
-                else vars(embedding_response)
-            )
-            cached: Final[CachedEmbedding] = {
+            data: Final = _embedding_fields(embedding_response)
+            cached: Final[_UnvalidatedCachedEmbedding] = {
                 "embedding": data.get("embedding"),
                 "index": data.get("index"),
                 "object": data.get("object"),
@@ -994,19 +1029,29 @@ class Cache:
         except KeyError as e:
             raise ValueError(f"Missing expected key in embedding response: {e}")
 
+    @staticmethod
+    def _provider_item_usage(result: EmbeddingResponse, idx_in_result_data: int, num_items: int) -> Usage | None:
+        item_usages: Final = result.item_usage
+        return item_usages[idx_in_result_data] if len(item_usages) == num_items else None
+
     def _get_per_item_prompt_tokens_details(
         self,
         result: EmbeddingResponse,
         idx_in_result_data: int,
-    ) -> dict | None:
+    ) -> dict[str, object] | None:
         """
         Extract per-item prompt_tokens_details from a response for caching.
 
         For single-item responses (common for multimodal providers like Bedrock Titan,
         Nova, Vertex AI), returns the full prompt_tokens_details.
-        For multi-item responses, distributes integer fields evenly across items
-        so that summing all per-item details reconstructs the original totals.
+        For multi-item responses, uses the per-item usage the provider attributed when it
+        set one, else distributes integer fields evenly across items so that summing all
+        per-item details reconstructs the original totals.
         """
+        num_items: Final = len(result.data)
+        item_usage: Final = self._provider_item_usage(result, idx_in_result_data, num_items)
+        if item_usage is not None and item_usage.prompt_tokens_details is not None:
+            return item_usage.prompt_tokens_details.model_dump(exclude_none=True)
         if result.usage is None or result.usage.prompt_tokens_details is None:
             return None
 
@@ -1021,12 +1066,11 @@ class Cache:
         if not details_dict:
             return None
 
-        num_items: Final = len(result.data)
         if num_items <= 1:
             return details_dict
 
         # Distribute integer/float fields evenly across items
-        per_item: Final[dict] = {}
+        per_item: Final[dict[str, object]] = {}
         for key, value in details_dict.items():
             if isinstance(value, int):
                 quotient, remainder = divmod(value, num_items)
@@ -1046,14 +1090,18 @@ class Cache:
         Extract the per-item prompt_tokens from a response for caching.
 
         Single-item responses store the full usage.prompt_tokens. Multi-item
-        responses distribute it evenly (with remainder) so that summing all
+        responses use the provider's per-item usage when it set one, else
+        distribute it evenly (with remainder) so that summing all
         per-item values on retrieval reconstructs the original total.
         """
+        num_items: Final = len(result.data)
+        item_usage: Final = self._provider_item_usage(result, idx_in_result_data, num_items)
+        if item_usage is not None:
+            return item_usage.prompt_tokens
         if result.usage is None or result.usage.prompt_tokens is None:
             return None
 
         total: Final = result.usage.prompt_tokens
-        num_items: Final = len(result.data)
         if num_items <= 1:
             return total
 
@@ -1066,10 +1114,10 @@ class Cache:
         input: str,
         kwargs: dict,
         idx_in_result_data: int = 0,
-    ) -> tuple[str, dict, dict]:
+    ) -> tuple[str, dict[str, object], dict[str, object]]:
         preset_cache_key: Final = self.get_cache_key(**{**kwargs, "input": input})
         kwargs["cache_key"] = preset_cache_key
-        embedding_response: Final = result.data[idx_in_result_data]
+        embedding_response: Final = _embedding_item(result, idx_in_result_data)
 
         # Extract per-item prompt_tokens + details from response usage
         prompt_tokens: Final = self._get_per_item_prompt_tokens(
@@ -1083,7 +1131,7 @@ class Cache:
 
         # Always convert to properly typed CachedEmbedding
         model_name: Final = result.model
-        embedding_dict: Final[CachedEmbedding] = self._convert_to_cached_embedding(
+        embedding_dict: Final = self._convert_to_cached_embedding(
             embedding_response,
             model_name,
             prompt_tokens=prompt_tokens,
@@ -1142,7 +1190,7 @@ class Cache:
         except Exception as e:
             self._log_add_cache_failure(e)
 
-    def should_use_cache(self, **kwargs):
+    def should_use_cache(self, **kwargs: object) -> bool:
         """
         Returns true if we should use the cache for LLM API calls
 
@@ -1163,7 +1211,7 @@ class Cache:
                 return True
         return False
 
-    async def batch_cache_write(self, result, **kwargs):
+    async def batch_cache_write(self, result: object, **kwargs: object):
         cache_key, cached_data, kwargs = self._add_cache_logic(result=result, **kwargs)
         await self.cache.batch_cache_write(cache_key, cached_data, **kwargs)
 
@@ -1203,6 +1251,7 @@ def enable_cache(
     port: str | None = None,
     password: str | None = None,
     supported_call_types: list[CachingSupportedCallTypes] | None = list(DEFAULT_CACHING_SUPPORTED_CALL_TYPES),
+    excluded_call_types: Sequence[CachingSupportedCallTypes] | None = None,
     **kwargs,
 ):
     """
@@ -1215,6 +1264,7 @@ def enable_cache(
         password (Optional[str]): The password for the cache server. Defaults to None.
         supported_call_types (Optional[List[Literal["completion", "acompletion", "embedding", "aembedding"]]]):
             The supported call types for the cache. Defaults to ["completion", "acompletion", "embedding", "aembedding"].
+        excluded_call_types (Optional[Sequence[str]]): Call types to drop from supported_call_types.
         **kwargs: Additional keyword arguments.
 
     Returns:
@@ -1238,6 +1288,7 @@ def enable_cache(
             port=port,
             password=password,
             supported_call_types=supported_call_types,
+            excluded_call_types=excluded_call_types,
             **kwargs,
         )
     print_verbose(f"LiteLLM: Cache enabled, litellm.cache={litellm.cache}")
@@ -1250,6 +1301,7 @@ def update_cache(
     port: str | None = None,
     password: str | None = None,
     supported_call_types: list[CachingSupportedCallTypes] | None = list(DEFAULT_CACHING_SUPPORTED_CALL_TYPES),
+    excluded_call_types: Sequence[CachingSupportedCallTypes] | None = None,
     **kwargs,
 ):
     """
@@ -1262,6 +1314,7 @@ def update_cache(
         password (Optional[str]): The password for the cache. Defaults to None.
         supported_call_types (Optional[List[Literal["completion", "acompletion", "embedding", "aembedding"]]]):
             The supported call types for the cache. Defaults to ["completion", "acompletion", "embedding", "aembedding"].
+        excluded_call_types (Optional[Sequence[str]]): Call types to drop from supported_call_types.
         **kwargs: Additional keyword arguments for the cache.
 
     Returns:
@@ -1275,6 +1328,7 @@ def update_cache(
         port=port,
         password=password,
         supported_call_types=supported_call_types,
+        excluded_call_types=excluded_call_types,
         **kwargs,
     )
     print_verbose(f"LiteLLM: Cache Updated, litellm.cache={litellm.cache}")

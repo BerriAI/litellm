@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   rust-bridge:
-    name: rust-bridge
+    name: smoke-rust-bridge
     runs-on: ubuntu-latest-16-cores
     timeout-minutes: 25
     permissions:

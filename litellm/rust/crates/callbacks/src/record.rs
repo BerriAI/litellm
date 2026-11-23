@@ -314,6 +314,32 @@ pub struct Cost {
     pub rejected: Option<Vec<String>>,
     pub response_cost: Option<Scalar>,
     pub zero_cost: Option<ZeroCost>,
+    pub cost_finalized: Option<bool>,
+    pub response_cost_failure_debug_info: Option<String>,
+    #[serde(with = "crate::scalar::float")]
+    pub failure_row_response_cost: Option<f64>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct SpendLogId {
+    pub rejected: Option<Vec<String>>,
+    pub id: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct BilledRetryAttempt {
+    pub rejected: Option<Vec<String>>,
+    pub position: Option<i64>,
+    pub spend_log_id: Option<SpendLogId>,
+    pub litellm_call_id: Option<String>,
+    pub parent_request_id: Option<String>,
+    pub attempted_retries: Option<i64>,
+    pub deployment_id: Option<String>,
+    #[serde(with = "crate::scalar::float")]
+    pub response_cost: Option<f64>,
+    pub usage: Option<UsageRecord>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -447,6 +473,8 @@ mod tests {
             Field::MetadataLabels => round_trip::<typed::MetadataLabels>(sample),
             Field::InputSequenceLength => round_trip::<typed::InputSequenceLength>(sample),
             Field::LimiterRequest => round_trip::<typed::LimiterRequest>(sample),
+            Field::SpendLogId => round_trip::<typed::SpendLogId>(sample),
+            Field::BilledRetryAttempts => round_trip::<typed::BilledRetryAttempts>(sample),
             other => panic!("{other:?} has no typed record sample"),
         }
     }
@@ -460,7 +488,7 @@ mod tests {
             assert_eq!(&decoded(field, sample), sample, "{name}");
         }
         let typed: Vec<&str> = samples.keys().map(String::as_str).collect();
-        assert_eq!(typed.len(), 23);
+        assert_eq!(typed.len(), 25);
     }
 
     #[rstest]

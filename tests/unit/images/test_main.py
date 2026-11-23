@@ -3,7 +3,7 @@ import base64
 import json
 from datetime import datetime
 from pathlib import Path
-from collections.abc import Generator
+from collections.abc import Generator, Sequence
 from queue import SimpleQueue
 from typing import Final, Literal, TypedDict
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -842,15 +842,23 @@ async def test_custom_handler_receives_the_callers_openai_image_edit_params(
 
 
 @pytest.mark.parametrize("operation", ["generation", "edit"])
+@pytest.mark.parametrize(
+    "additional_drop_params",
+    [
+        pytest.param(["response_format", "user", "studio_preset"], id="list"),
+        pytest.param(("response_format", "user", "studio_preset"), id="tuple"),
+        pytest.param(["response_format", "user", "studio_preset", None, 1], id="list-with-non-string-entries"),
+    ],
+)
 def test_custom_image_handler_is_not_handed_additional_drop_params(
-    custom_image_params: SimpleQueue[dict[str, object]], operation: str
+    custom_image_params: SimpleQueue[dict[str, object]], operation: str, additional_drop_params: Sequence[object]
 ) -> None:
     request: Final = {
         "model": "studio/flare-1",
         "prompt": "draw",
         **_OPENAI_IMAGE_PARAMS,
         "studio_preset": "matte",
-        "additional_drop_params": ["response_format", "user", "studio_preset"],
+        "additional_drop_params": additional_drop_params,
     }
 
     if operation == "edit":

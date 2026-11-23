@@ -4,6 +4,7 @@ use litellm_host_python::json_from_py;
 use litellm_llms::{
     anthropic::model_capabilities::{bedrock_model_capabilities, messages_route_capabilities},
     base_llm::messages::context::{BedrockCapabilities, MessagesModelCapabilities},
+    vertex_ai::common_utils::supported_regions,
 };
 use litellm_model_catalog::Catalog;
 use pyo3::{
@@ -39,6 +40,11 @@ fn live_catalog(py: Python<'_>) -> PyResult<Arc<Catalog>> {
     );
     *LIVE.lock().unwrap_or_else(PoisonError::into_inner) = Some((version, Arc::clone(&catalog)));
     Ok(catalog)
+}
+
+/// The live model map's `supported_regions` for a Claude on Vertex AI model.
+pub(super) fn vertex_supported_regions(py: Python<'_>, model: &str) -> PyResult<Vec<String>> {
+    Ok(supported_regions(&*live_catalog(py)?, model))
 }
 
 fn declared_flags<'py>(

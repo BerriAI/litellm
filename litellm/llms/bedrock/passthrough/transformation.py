@@ -67,7 +67,7 @@ _BEDROCK_INVOKE_GUARDRAIL_HEADERS: Final = frozenset(
     {"x-amzn-bedrock-guardrailidentifier", "x-amzn-bedrock-guardrailversion", "x-amzn-bedrock-trace"}
 )
 _NO_RESPONSE_HEADERS: Final[Mapping[str, str]] = MappingProxyType({})
-_TieredResponse: Final = TypeVar("_TieredResponse", bound=BaseModel)
+_TieredResponse = TypeVar("_TieredResponse", bound=BaseModel)
 
 
 def _bedrock_endpoint_action(endpoint: str) -> str:
@@ -682,7 +682,10 @@ class BedrockPassthroughConfig(BaseAWSLLM, BedrockModelInfo, BedrockEventStreamD
         logging_obj: Logging,
         endpoint: str,
     ) -> Optional["CostResponseTypes"]:
-        from litellm import encoding
+        if TYPE_CHECKING:
+            from litellm.main import encoding
+        else:
+            from litellm import encoding
         from litellm.types.utils import LlmProviders, ModelResponse
         from litellm.utils import ProviderConfigManager
 

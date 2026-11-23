@@ -5,11 +5,11 @@ from typing import Final
 
 import pytest
 
-from litellm.caching.dual_cache import DualCache
 from litellm.proxy._types import LiteLLM_OrganizationMembershipTable, LiteLLM_UserTable, LitellmUserRoles
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.management.users.service import PrismaOrgRoles, holds_org_admin
 from litellm.proxy.utils import ProxyLogging
+from litellm.redis.stores.auth_cache import AuthObject
 
 NOW: Final = datetime.now(timezone.utc)
 
@@ -48,6 +48,6 @@ def test_holds_org_admin_needs_the_org_admin_role_in_that_org(user: LiteLLM_User
 )
 async def test_prisma_org_roles_answers_from_the_cached_user_row(organization_id: str, expected: bool) -> None:
     cache: Final = UserApiKeyCache()
-    await cache.async_set_cache(key="u1", value=user_in(("org-1", LitellmUserRoles.ORG_ADMIN.value)))
-    roles: Final = PrismaOrgRoles(None, cache, ProxyLogging(user_api_key_cache=DualCache()))
+    await cache.async_set_cache(key=AuthObject.user("u1"), value=user_in(("org-1", LitellmUserRoles.ORG_ADMIN.value)))
+    roles: Final = PrismaOrgRoles(None, cache, ProxyLogging(user_api_key_cache=UserApiKeyCache()))
     assert await roles.is_org_admin("u1", organization_id) is expected

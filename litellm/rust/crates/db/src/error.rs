@@ -4,6 +4,9 @@ pub enum Error {
     Query(#[from] sqlx::Error),
     #[error("invalid pool duration")]
     InvalidDuration(#[from] std::time::TryFromFloatSecsError),
+    /// A transaction did not commit within the deadline its caller gave it, so it was rolled back.
+    #[error("transaction timed out")]
+    TransactionTimedOut,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, strum::IntoStaticStr)]
@@ -23,7 +26,7 @@ pub enum ErrorKind {
 impl Error {
     pub fn kind(&self) -> ErrorKind {
         match self {
-            Self::Query(sqlx::Error::Io(_)) => ErrorKind::Unreachable,
+            Self::Query(sqlx::Error::Io(_) | sqlx::Error::Tls(_)) => ErrorKind::Unreachable,
             Self::Query(sqlx::Error::PoolTimedOut) => ErrorKind::Capacity,
             Self::Query(sqlx::Error::Database(error)) => {
                 sqlstate_kind(error.code().as_deref(), error.message())
@@ -54,7 +57,8 @@ impl Error {
 
     pub fn is_requeue_safe(&self) -> bool {
         match self {
-            Self::Query(sqlx::Error::PoolTimedOut | sqlx::Error::PoolClosed) => true,
+            Self::Query(sqlx::Error::PoolTimedOut | sqlx::Error::PoolClosed)
+            | Self::TransactionTimedOut => true,
             Self::Query(sqlx::Error::Database(_)) => self.kind() != ErrorKind::DataRejected,
             _ => false,
         }
@@ -67,11 +71,17 @@ fn sqlstate_kind(code: Option<&str>, message: &str) -> ErrorKind {
             ErrorKind::StalePlan
         }
         Some("53300") => ErrorKind::Capacity,
+        Some("57P01" | "57P02" | "57P03" | "57P05") => ErrorKind::Unreachable,
+        Some(code) if code.starts_with("08") => ErrorKind::Unreachable,
         Some("40P01") => ErrorKind::Deadlock,
         Some("40001") => ErrorKind::SerializationFailure,
         Some("55P03") => ErrorKind::LockTimeout,
         Some("25006") => ErrorKind::ReadOnly,
-        Some(code) if code.starts_with("22") || code.starts_with("23") => ErrorKind::DataRejected,
+        Some(code)
+            if code.starts_with("22") || code.starts_with("23") || code.starts_with("54") =>
+        {
+            ErrorKind::DataRejected
+        }
         _ => ErrorKind::Other,
     }
 }
@@ -96,6 +106,13 @@ mod tests {
         true,
         false
     )]
+    #[case::tls(
+        sqlx::Error::Tls("handshake failed".into()),
+        ErrorKind::Unreachable,
+        true,
+        true,
+        false
+    )]
     #[case::missing_row(sqlx::Error::RowNotFound, ErrorKind::Other, false, false, false)]
     fn classifies_client_errors(
         #[case] error: sqlx::Error,
@@ -113,6 +130,21 @@ mod tests {
     }
 
     #[rstest]
+    #[case::transaction_timed_out(Error::TransactionTimedOut, ErrorKind::Other, false, false, true)]
+    fn classifies_errors_raised_outside_sqlx(
+        #[case] error: Error,
+        #[case] kind: ErrorKind,
+        #[case] retryable: bool,
+        #[case] unavailable: bool,
+        #[case] requeue_safe: bool,
+    ) {
+        assert_eq!(error.kind(), kind);
+        assert_eq!(error.is_retryable(), retryable);
+        assert_eq!(error.is_unavailable(), unavailable);
+        assert_eq!(error.is_requeue_safe(), requeue_safe);
+    }
+
+    #[rstest]
     #[case::connection_capacity("53300", ErrorKind::Capacity, true, true, true)]
     #[case::deadlock("40P01", ErrorKind::Deadlock, true, false, true)]
     #[case::lock_unavailable("55P03", ErrorKind::LockTimeout, true, false, true)]
@@ -120,6 +152,10 @@ mod tests {
     #[case::read_only_after_failover("25006", ErrorKind::ReadOnly, false, false, true)]
     #[case::unique_violation("23505", ErrorKind::DataRejected, false, false, false)]
     #[case::numeric_overflow("22003", ErrorKind::DataRejected, false, false, false)]
+    #[case::program_limit_exceeded("54000", ErrorKind::DataRejected, false, false, false)]
+    #[case::admin_shutdown("57P01", ErrorKind::Unreachable, true, true, true)]
+    #[case::cannot_connect_now("57P03", ErrorKind::Unreachable, true, true, true)]
+    #[case::connection_failure("08006", ErrorKind::Unreachable, true, true, true)]
     #[case::undefined_table("42P01", ErrorKind::Other, false, false, true)]
     #[case::feature_not_supported_without_a_stale_plan(
         "0A000",

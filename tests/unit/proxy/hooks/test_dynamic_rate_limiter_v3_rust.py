@@ -30,6 +30,7 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
 from litellm.proxy.hooks.priority_class_share import pool_member
 from litellm.proxy.utils import InternalUsageCache
 from litellm.redis.stores.rate_limits import RateLimitScope
+from litellm.rust_bridge._native import NativeRedisStoreError
 from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
 from tests.unit.proxy.hooks.native_capacity_handler import NativeDynamicRateLimitHandler as DynamicRateLimitHandler
 from tests.unit.proxy.hooks.native_capacity_handler import (
@@ -2650,12 +2651,20 @@ class _UnavailableRegistry:
         raise RedisConnectionError("redis is down")
 
 
+class _UnavailableNativeRegistry:
+    async def touch(self, model: str, team_id: str, priority: str, window: int) -> Mapping[str, str]:
+        raise NativeRedisStoreError("transport", "redis is down")
+
+
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "registry", [_UnavailableRegistry, _UnavailableNativeRegistry], ids=["redis_py", "native_store"]
+)
 async def test_a_registry_failure_falls_back_to_the_class_pool_instead_of_skipping_the_limits(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, registry: Callable[[], object]
 ):
     handler = _borrowing_handler(monkeypatch, borrows=False, splits=True)
-    handler.active_teams = _UnavailableRegistry()  # pyright: ignore[reportAttributeAccessIssue]  # injected failing registry
+    handler.active_teams = registry()  # pyright: ignore[reportAttributeAccessIssue]  # injected failing registry
     await _burn(handler, _class_team("team-a"), "interactive", 650)
     with pytest.raises(ProxyRateLimitError) as exc:
         await _check(handler, _class_team("team-a"), saturation=0.65, priority="interactive")
