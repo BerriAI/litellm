@@ -612,10 +612,39 @@ def test_nova_embedding_with_a_float_encoding_format_sends_no_encoding_format_an
     assert [item.embedding for item in response.data] == [[0.3, 0.2, 0.1]]
 
 
-def test_nova_embedding_with_a_base64_encoding_format_returns_the_vector_as_base64_float32(
+def test_nova_embedding_with_a_base64_encoding_format_returns_each_vector_as_base64_float32_in_input_order(
     respx_mock: respx.MockRouter,
 ) -> None:
-    route: Final = _mock_nova_invoke(respx_mock)
+    vectors: Final = ([0.3, 0.2, 0.1], [-0.5, 0.25, 1.0])
+    route: Final = respx_mock.post(NOVA_INVOKE_URL).mock(
+        side_effect=tuple(
+            httpx.Response(200, json={"embeddings": [{"embeddingType": "TEXT", "embedding": vector}]})
+            for vector in vectors
+        )
+    )
+
+    response: Final = litellm.embedding(
+        model="bedrock/amazon.nova-2-multimodal-embeddings-v1:0",
+        input=["hello", "world"],
+        encoding_format="base64",
+        dimensions=256,
+        api_key="test-bearer-token",
+        aws_region_name="us-east-1",
+    )
+
+    assert SENT_BODY.validate_json(route.calls[0].request.content) == NOVA_REQUEST_WITHOUT_ENCODING_FORMAT
+    assert [_decoded_like_the_openai_sdk(item.embedding) for item in response.data] == [
+        pytest.approx(vector) for vector in vectors
+    ]
+
+
+
+def test_nova_embedding_with_a_base64_encoding_format_passes_an_upstream_base64_vector_through_unchanged(
+    respx_mock: respx.MockRouter,
+) -> None:
+    respx_mock.post(NOVA_INVOKE_URL).mock(
+        return_value=httpx.Response(200, json={"embeddings": [{"embeddingType": "TEXT", "embedding": "AAAAPw=="}]})
+    )
 
     response: Final = litellm.embedding(
         model="bedrock/amazon.nova-2-multimodal-embeddings-v1:0",
@@ -626,10 +655,7 @@ def test_nova_embedding_with_a_base64_encoding_format_returns_the_vector_as_base
         aws_region_name="us-east-1",
     )
 
-    assert SENT_BODY.validate_json(route.calls.last.request.content) == NOVA_REQUEST_WITHOUT_ENCODING_FORMAT
-    assert [_decoded_like_the_openai_sdk(item.embedding) for item in response.data] == [
-        pytest.approx([0.3, 0.2, 0.1])
-    ]
+    assert [item.embedding for item in response.data] == ["AAAAPw=="]
 
 
 async def test_async_nova_embedding_with_a_base64_encoding_format_returns_the_vector_as_base64_float32() -> None:
