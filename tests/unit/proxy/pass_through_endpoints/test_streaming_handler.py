@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 from collections.abc import Iterator
@@ -5,10 +6,12 @@ from datetime import datetime
 from typing import Final
 from unittest.mock import MagicMock
 
+import httpx
 import pytest
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.litellm_logging import get_standard_logging_object_payload
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_passthrough_logging_handler import (
     VertexPassthroughLoggingHandler,
@@ -20,7 +23,10 @@ from litellm.proxy.pass_through_endpoints.streaming_handler import (
 from litellm.proxy.pass_through_endpoints.success_handler import (
     PassThroughEndpointLogging,
 )
+from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+from litellm.proxy._types import SpendLogsPayload
 from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
+from litellm.types.utils import ClaudeSubscriptionUsage
 
 MODEL = "gemini-stream-pricing-probe"
 PROMPT_TOKENS = 1000
@@ -58,6 +64,140 @@ def divergent_rate_cards(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     litellm.get_model_info.cache_clear()
     yield
     litellm.get_model_info.cache_clear()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ("/v1/messages", "/anthropic/v1/messages"))
+@pytest.mark.parametrize("overage", (False, True, None))
+async def test_oauth_stream_retains_billing_headers_through_reassembly_and_spend_logging(
+    monkeypatch: pytest.MonkeyPatch, route: str, overage: bool | None
+) -> None:
+    model: Final = "claude-subscription-stream-test"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {"input_cost_per_token": 0.01, "output_cost_per_token": 0.02, "litellm_provider": "anthropic", "mode": "chat"},
+    )
+    now: Final = datetime(2025, 1, 1)
+    logger: Final = LiteLLMLoggingObj(
+        model=model,
+        messages=[],
+        stream=True,
+        call_type="anthropic_messages" if route == "/v1/messages" else "pass_through_endpoint",
+        start_time=now,
+        litellm_call_id="subscription",
+        function_id="subscription",
+    )
+    logger.update_environment_variables(
+        model=model,
+        optional_params={},
+        custom_llm_provider="anthropic",
+        litellm_params={"litellm_metadata": {"used_client_oauth_token": True}},
+    )
+    events: Final = (
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_subscription",
+                "type": "message",
+                "role": "assistant",
+                "model": model,
+                "content": [],
+                "usage": {"input_tokens": 100, "output_tokens": 0},
+            },
+        },
+        {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "hello"}},
+        {"type": "content_block_stop", "index": 0},
+        {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 10}},
+        {"type": "message_stop"},
+    )
+    body: Final = "".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events).encode()
+    headers: Final = (
+        {}
+        if overage is None
+        else {
+            "anthropic-ratelimit-unified-status": "allowed",
+            "anthropic-ratelimit-unified-overage-in-use": "true" if overage else "false",
+        }
+    )
+    observed: Final[asyncio.Future[tuple[float | None, ClaudeSubscriptionUsage | None, SpendLogsPayload]]] = (
+        asyncio.get_running_loop().create_future()
+    )
+
+    async def log_stream(
+        *,
+        litellm_logging_obj: LiteLLMLoggingObj,
+        passthrough_success_handler_obj: PassThroughEndpointLogging,
+        url_route: str,
+        request_body: dict[str, object],
+        endpoint_type: EndpointType,
+        start_time: datetime,
+        raw_bytes: list[bytes],
+        end_time: datetime,
+    ) -> None:
+        rebuilt, _ = PassThroughStreamingHandler._build_passthrough_logging_result(
+            litellm_logging_obj=litellm_logging_obj,
+            passthrough_success_handler_obj=passthrough_success_handler_obj,
+            url_route=url_route,
+            request_body=request_body,
+            endpoint_type=endpoint_type,
+            start_time=now,
+            raw_bytes=raw_bytes,
+            end_time=now,
+            model=model,
+        )
+        cost: Final = litellm_logging_obj.response_cost_calculator(rebuilt)
+        details: Final = {**litellm_logging_obj.model_call_details, "response_cost": cost}
+        standard: Final = get_standard_logging_object_payload(
+            kwargs=details,
+            init_response_obj=rebuilt,
+            start_time=now,
+            end_time=now,
+            logging_obj=litellm_logging_obj,
+            status="success",
+        )
+        assert standard is not None
+        spend: Final = get_logging_payload(
+            kwargs={**details, "standard_logging_object": standard},
+            response_obj=rebuilt,
+            start_time=now,
+            end_time=now,
+        )
+        observed.set_result((cost, standard["metadata"].get("claude_subscription_usage"), spend))
+
+    upstream: Final = httpx.Response(200, headers=headers, stream=httpx.ByteStream(body))
+    forwarded: Final = tuple(
+        [
+            chunk
+            async for chunk in PassThroughStreamingHandler.chunk_processor(
+                response=upstream,
+                request_body={"model": model, "stream": True},
+                litellm_logging_obj=logger,
+                endpoint_type=EndpointType.ANTHROPIC,
+                start_time=now,
+                passthrough_success_handler_obj=PassThroughEndpointLogging(),
+                url_route=route,
+                route_streaming_logging=log_stream,
+            )
+        ]
+    )
+    await GLOBAL_LOGGING_WORKER.flush()
+    cost, usage, spend = observed.result()
+    expected_usage: Final = (
+        None
+        if overage is None
+        else {
+            "is_overage": overage,
+            "status": "allowed",
+            "overage_status": None,
+        }
+    )
+    assert b"".join(forwarded) == body
+    assert cost == pytest.approx(0.0 if overage is False else 100 * 0.01 + 10 * 0.02)
+    assert usage == expected_usage
+    assert json.loads(spend["metadata"])["claude_subscription_usage"] == expected_usage
+    assert spend["spend"] == cost
 
 
 def _chunks() -> list[str]:
@@ -165,10 +305,10 @@ def _interrupted_anthropic_stream(model: str, output_text: str) -> list[bytes]:
 async def test_interrupted_anthropic_stream_recovers_output_tokens_off_the_event_loop(caplog):
     from unittest.mock import AsyncMock
 
-    from tests.large_text import text
     from tests.unit.litellm_core_utils.event_loop_lag import (
         assert_loop_stayed_free,
         timed_with_loop_lags,
+        uncounted_text,
         warm_tokenizer,
     )
 
@@ -190,7 +330,7 @@ async def test_interrupted_anthropic_stream_recovers_output_tokens_off_the_event
             request_body={"model": model, "stream": True},
             endpoint_type=EndpointType.ANTHROPIC,
             start_time=datetime.now(),
-            raw_bytes=_interrupted_anthropic_stream(model, text * 100),
+            raw_bytes=_interrupted_anthropic_stream(model, uncounted_text()),
             end_time=datetime.now(),
             model=model,
         )
@@ -206,10 +346,10 @@ async def test_interrupted_anthropic_stream_recovers_output_tokens_off_the_event
 async def test_failed_anthropic_stream_records_partial_usage_off_the_event_loop(caplog):
     from unittest.mock import AsyncMock
 
-    from tests.large_text import text
     from tests.unit.litellm_core_utils.event_loop_lag import (
         assert_loop_stayed_free,
         timed_with_loop_lags,
+        uncounted_text,
         warm_tokenizer,
     )
 
@@ -232,7 +372,7 @@ async def test_failed_anthropic_stream_records_partial_usage_off_the_event_loop(
             litellm_logging_obj=logging_obj,
             endpoint_type=EndpointType.ANTHROPIC,
             request_body={"model": model, "stream": True},
-            raw_bytes=_interrupted_anthropic_stream(model, text * 100),
+            raw_bytes=_interrupted_anthropic_stream(model, uncounted_text()),
             exception=RuntimeError("upstream closed the stream"),
         )
     )

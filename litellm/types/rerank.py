@@ -5,7 +5,7 @@ https://docs.cohere.com/reference/rerank
 """
 
 from collections.abc import Mapping, Sequence
-from typing import Final, Literal, overload
+from typing import Final, Literal, TypeVar, overload
 
 from pydantic import ConfigDict, PrivateAttr, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, Required, TypedDict
@@ -79,6 +79,8 @@ class RerankUsage(TypedDict):
 
 
 _RERANK_META: Final = TypeAdapter(RerankResponseMeta)
+_FIELD_VALUE: Final = TypeAdapter(object)
+_Default = TypeVar("_Default")
 
 
 def get_rerank_usage(response: Mapping[str, object]) -> RerankUsage | None:
@@ -124,7 +126,7 @@ class RerankResponse(LiteLLMBaseModel):
     meta: RerankResponseMeta | None = None  # Contains api_version and billed_units
 
     # Define private attributes using PrivateAttr
-    _hidden_params: dict = PrivateAttr(default_factory=dict)
+    _hidden_params: dict[str, object] = PrivateAttr(default_factory=dict)
 
     @property
     def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
@@ -146,8 +148,8 @@ class RerankResponse(LiteLLMBaseModel):
     @overload
     def __getitem__(self, key: str) -> str | Sequence[RerankResponseResult] | RerankResponseMeta | None: ...
 
-    def __getitem__(self, key: str) -> str | Sequence[RerankResponseResult] | RerankResponseMeta | None:
-        return self.__dict__[key]
+    def __getitem__(self, key: str) -> object:
+        return _FIELD_VALUE.validate_python(self.__dict__[key])
 
     @overload
     def get(self, key: Literal["id"], default: None = None) -> str | None: ...
@@ -156,13 +158,16 @@ class RerankResponse(LiteLLMBaseModel):
     def get(self, key: Literal["results"], default: None = None) -> list[RerankResponseResult] | None: ...
 
     @overload
+    def get(self, key: Literal["results"], default: _Default) -> Sequence[RerankResponseResult] | _Default | None: ...
+
+    @overload
     def get(self, key: Literal["meta"], default: None = None) -> RerankResponseMeta | None: ...
 
     @overload
     def get(self, key: str, default: object = None) -> object: ...
 
     def get(self, key: str, default: object = None) -> object:
-        return self.__dict__.get(key, default)
+        return _FIELD_VALUE.validate_python(self.__dict__.get(key, default))
 
     def __contains__(self, key: str) -> bool:
         return key in self.__dict__

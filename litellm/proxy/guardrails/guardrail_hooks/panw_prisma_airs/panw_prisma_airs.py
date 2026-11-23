@@ -24,11 +24,18 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.caching import DualCache
+from litellm.exceptions import GuardrailRaisedException
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
-from litellm.litellm_core_utils.core_helpers import decoded_json_object, json_contains
+from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
+    decoded_json_object,
+    is_undecodable_json_object,
+    joined,
+    json_contains,
+)
 from litellm.llms.anthropic.common_utils import (
     anthropic_server_tool_call_params,
     tool_calls_with_server_tool_calls,
@@ -348,14 +355,14 @@ class PanwPrismaAirsHandler(CustomGuardrail):
 
         return ""
 
-    def _extract_text_from_content_list(self, content_list: list[dict[str, Any]]) -> str:
+    def _extract_text_from_content_list(self, content_list: Sequence[object]) -> str:
         """Extract text from content list format."""
         text_parts: Final = [
             part.get("text", "")
-            for part in content_list
+            for part in map(as_str_mapping, content_list)
             if isinstance(part, dict) and part.get("type") == "text" and part.get("text")
         ]
-        return " ".join(text_parts) if text_parts else ""
+        return joined(" ", text_parts) if text_parts else ""
 
     def _extract_response_text(self, response: ModelResponse) -> str:
         """
@@ -961,9 +968,14 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             line = line.strip()
             if not line.startswith("data: "):
                 continue
+            if is_undecodable_json_object(line[6:]):
+                raise GuardrailRaisedException(
+                    message="PANW Prisma AIRS could not read an event in the upstream stream, so it cannot scan the response",
+                    should_wrap_with_default_message=False,
+                )
             try:
                 data = _DECODED_ARGUMENTS.validate_python(json.loads(line[6:]))
-            except (json.JSONDecodeError, ValueError):
+            except (ValueError, RecursionError):
                 continue
             if not isinstance(data, dict):
                 continue
@@ -977,7 +989,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
     def _extract_text_from_streaming_events(chunks: Sequence[object]) -> str:
         """Extract text from /v1/responses streaming events (object or dict)."""
 
-        def _attr(c, key):
+        def _attr(c: object, key: str) -> object:
             val = getattr(c, key, None)
             if val is None and isinstance(c, dict):
                 val = c.get(key)
@@ -1816,6 +1828,9 @@ class PanwPrismaAirsHandler(CustomGuardrail):
 
     def supports_scan_only_tool_results(self) -> bool:
         return False
+
+    def supports_scan_tool_descriptions_as_text(self) -> bool:
+        return True
 
     def supports_structured_messages(self) -> bool:
         return False

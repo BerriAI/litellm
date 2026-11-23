@@ -871,7 +871,7 @@ class InvokeStreamFrame:
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object])
 _DECODED_JSON: Final = TypeAdapter(object)
-_Frame: Final = TypeVar("_Frame", ConverseStreamFrame, InvokeStreamFrame)
+_Frame = TypeVar("_Frame", ConverseStreamFrame, InvokeStreamFrame)
 
 
 def _event_message(raw: bytes) -> tuple[str, bytes] | None:
@@ -1663,6 +1663,17 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
         return StreamingScanKey(
             texts=_group_stream_texts([frame.received_texts() for frame in frames]).texts(),
             stream_ended=self._check_streaming_has_ended(frames),
+        )
+
+    def starts_client_tool_call(self, item: object) -> bool:
+        """A Converse ``contentBlockStart`` that opens a ``toolUse``, or an invoke frame whose ``/v1/messages``
+        event opens a ``tool_use`` block."""
+        if isinstance(item, InvokeStreamFrame):
+            return AnthropicMessagesHandler().starts_client_tool_call(item.received_sse())
+        return any(
+            frame.event_type == "contentBlockStart"
+            and _json_object_member(_json_object_member(frame.payload, "start"), "toolUse") is not None
+            for frame in _converse_frames((item,))
         )
 
     def _check_streaming_has_ended(self, responses_so_far: Sequence[object]) -> bool:

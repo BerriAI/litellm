@@ -26,9 +26,6 @@ vi.mock("./detailNavigation", () => ({
   useModelDetailRouting: () => ({ ...detailState, close: vi.fn(), openModel: vi.fn(), openTeam: vi.fn() }),
 }));
 
-vi.mock("@/components/molecules/DecisionModelsBanner", () => ({
-  default: () => <section aria-label="Decision models" />,
-}));
 vi.mock("@/components/model_info_view", () => ({
   default: ({ modelId }: { modelId: string }) => <div data-testid="model-info">model:{modelId}</div>,
 }));
@@ -87,6 +84,11 @@ describe("ModelsAndEndpointsPage", () => {
     };
   });
 
+  it("titles the page with its sidebar label", () => {
+    renderPage();
+    expect(screen.getByRole("heading", { level: 1, name: "Model Management" })).toBeInTheDocument();
+  });
+
   it("renders the admin tab bar and the Deployed Models panel by default", () => {
     renderPage();
     expect(screen.getByRole("tab", { name: "Deployed Models" })).toBeInTheDocument();
@@ -101,12 +103,6 @@ describe("ModelsAndEndpointsPage", () => {
     await user.click(screen.getByRole("tab", { name: "Health Status" }));
     expect(screen.getByTestId("panel-health")).toBeInTheDocument();
     expect(screen.queryByTestId("panel-all-models")).not.toBeInTheDocument();
-  });
-
-  it("does not show a view-only session the decision models banner, whose Playground it cannot open", () => {
-    mockUseAuthorized.mockReturnValue(VIEW_ONLY_ADMIN);
-    renderPage();
-    expect(screen.queryByRole("region", { name: "Decision models" })).not.toBeInTheDocument();
   });
 
   it("renders the model detail overlay from the ?model drill-in and hides the tabs", () => {

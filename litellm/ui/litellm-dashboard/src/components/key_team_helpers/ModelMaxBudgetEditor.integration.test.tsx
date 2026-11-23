@@ -25,14 +25,15 @@ describe("ModelMaxBudgetEditor without an enterprise license", () => {
   it("locks every control on an existing row", () => {
     renderEditor(false);
 
-    expect(screen.getByPlaceholderText("Max spend ($)")).toBeDisabled();
+    expect(screen.getByPlaceholderText("Max Budget")).toBeDisabled();
     expect(addButton()).toBeDisabled();
   });
 
   it("still shows the budgets already stored, so they stay auditable", () => {
     renderEditor(false);
 
-    expect(screen.getByPlaceholderText("Max spend ($)")).toHaveValue(5);
+    expect(screen.getByText("$")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Max Budget")).toHaveValue(5);
   });
 
   it("says why the controls are locked instead of failing silently", () => {
@@ -53,7 +54,7 @@ describe("ModelMaxBudgetEditor with an enterprise license", () => {
   it("leaves every control usable", () => {
     renderEditor(true);
 
-    expect(screen.getByPlaceholderText("Max spend ($)")).toBeEnabled();
+    expect(screen.getByPlaceholderText("Max Budget")).toBeEnabled();
     expect(addButton()).toBeEnabled();
   });
 
@@ -87,7 +88,7 @@ describe("ModelMaxBudgetEditor model families", () => {
     const modelField = screen.getByPlaceholderText("Select model");
     await user.type(modelField, "claude-opus*");
     await user.click(await screen.findByRole("option", { name: /claude-opus\*/ }));
-    fireEvent.change(screen.getByPlaceholderText("Max spend ($)"), { target: { value: "10" } });
+    fireEvent.change(screen.getByPlaceholderText("Max Budget"), { target: { value: "10" } });
 
     expect(onChange).toHaveBeenLastCalledWith({ "claude-opus*": { budget_limit: 10, time_period: "30d" } });
   });

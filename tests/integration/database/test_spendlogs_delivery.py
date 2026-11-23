@@ -81,7 +81,7 @@ async def test_delivery_first_acceptance_deduplicates_all_storage_modes(
 ):
     from types import SimpleNamespace
 
-    from litellm.repositories.table_repositories import SpendLogsRepository
+    from litellm.repositories.spend_logs_repository import SpendLogsRepository
 
     if partitioned:
         delivery_database.execute('ALTER TABLE "LiteLLM_SpendLogs" RENAME TO spend_template')
@@ -122,7 +122,7 @@ async def test_delivery_first_acceptance_deduplicates_all_storage_modes(
 async def test_duplicate_rows_in_one_flush_keep_first_accounting_payload(delivery_database, delivery_client, mode):
     from types import SimpleNamespace
 
-    from litellm.repositories.table_repositories import SpendLogsRepository
+    from litellm.repositories.spend_logs_repository import SpendLogsRepository
 
     repository = SpendLogsRepository(SimpleNamespace(db=delivery_client, writer_db=delivery_client))
     first = {**_with_payload(_row("repeated")), "accounting_log_disabled": mode == "disabled"}
@@ -146,7 +146,7 @@ async def test_batch_charged_before_the_ledger_is_not_charged_again(
 ):
     from types import SimpleNamespace
 
-    from litellm.repositories.table_repositories import SpendLogsRepository
+    from litellm.repositories.spend_logs_repository import SpendLogsRepository
 
     batch: Final = {**_row("batch_legacy"), "call_type": "aretrieve_batch", "status": "success"}
     _insert(delivery_database, ({**batch, "spend": legacy_spend},), ledger=False)
@@ -164,7 +164,7 @@ async def test_transaction_a_rolls_back_payload_and_log_on_failure(delivery_data
     from prisma.errors import PrismaError
     from psycopg import sql
 
-    from litellm.repositories.table_repositories import SpendLogsRepository
+    from litellm.repositories.spend_logs_repository import SpendLogsRepository
 
     delivery_database.execute(
         sql.SQL("ALTER TABLE {} ADD CONSTRAINT reject_poison CHECK (request_id <> 'poison')").format(

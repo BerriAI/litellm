@@ -37,6 +37,8 @@ interface SearchSelectProps {
   inputId?: string;
   allowClear?: boolean;
   customValue?: CustomValue;
+  inputValue?: string;
+  onInputChange?: (typed: string) => void;
   reservedValues?: readonly string[];
   "aria-label"?: string;
   id?: string;
@@ -64,6 +66,8 @@ export function SearchSelect({
   inputId,
   allowClear = true,
   customValue,
+  inputValue,
+  onInputChange,
   reservedValues = [],
   "aria-label": ariaLabel,
   id,
@@ -84,11 +88,18 @@ export function SearchSelect({
     <Combobox
       items={items}
       value={selected}
-      onValueChange={(item: SearchSelectOption | null) => onValueChange(item?.value ?? null)}
+      inputValue={inputValue}
+      onValueChange={(item: SearchSelectOption | null, details) => {
+        if (onInputChange && details.reason === "escape-key") return;
+        onValueChange(item?.value ?? null);
+      }}
       isItemEqualToValue={(a: SearchSelectOption, b: SearchSelectOption) => a.value === b.value}
       itemToStringLabel={(item: SearchSelectOption) => item.label}
       filter={matchesQuery}
-      onInputValueChange={setQuery}
+      onInputValueChange={(text, details) => {
+        setQuery(text);
+        if (details.reason === "input-change") onInputChange?.(text);
+      }}
       disabled={disabled}
     >
       <ComboboxInput

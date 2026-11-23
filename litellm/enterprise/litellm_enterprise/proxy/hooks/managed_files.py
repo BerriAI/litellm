@@ -29,6 +29,7 @@ from uuid import NAMESPACE_URL, uuid5
 
 import httpx
 from fastapi import HTTPException
+from litellm_enterprise.proxy.common_utils.managed_object_attribution import creator_billing_context
 from openai import APIConnectionError, AsyncOpenAI
 from openai.types.file_deleted import FileDeleted
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
@@ -106,6 +107,7 @@ from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (  # pyright: ignore[reportAttributeAccessIssue]
     AllMessageValues,
     AsyncCursorPage,
+    BatchInputFormat,
     ChatCompletionFileObject,
     CreateFileRequest,
     FileListPage,
@@ -926,11 +928,13 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
 
         api_key = LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict) or None
         end_user_id: Final = user_api_key_dict.end_user_id if file_purpose == "response" else None
+        billing_context: Final = creator_billing_context(user_api_key_dict) if persist_attribution else None
         attribution_columns = (
             {
                 **({"api_key": api_key} if api_key is not None else {}),
                 **({"request_tags": Json([_storable_text(tag) for tag in request_tags])} if request_tags else {}),
                 **({"end_user_id": end_user_id} if end_user_id else {}),
+                **({"creator_billing_context": Json(dict(billing_context))} if billing_context is not None else {}),
             }
             if persist_attribution
             else {}
@@ -1113,7 +1117,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         if self.prisma_client is None:
             return
         spellings: Final = list(provider_file_id_spellings(file_id))
-        managed_file = await _managed_file_table(self.prisma_client).find_first(
+        managed_files: Final = await _managed_file_table(self.prisma_client).find_many(
             where={
                 "OR": [
                     {"unified_file_id": {"in": spellings}},  # bounded-ok: at most four spellings of one file id
@@ -1121,17 +1125,16 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 ]
             }
         )
-        if managed_file is None:
-            return
-        if not can_access_resource(
-            user_api_key_dict=user_api_key_dict,
-            created_by=managed_file.created_by,
-            resource_team_id=managed_file.team_id,
-        ):
-            raise HTTPException(
-                status_code=403,
-                detail=f"User {user_api_key_dict.user_id} does not have access to the file {file_id}",
-            )
+        for managed_file in managed_files:
+            if not can_access_resource(
+                user_api_key_dict=user_api_key_dict,
+                created_by=managed_file.created_by,
+                resource_team_id=managed_file.team_id,
+            ):
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"User {user_api_key_dict.user_id} does not have access to the file {file_id}",
+                )
 
     async def store_batch_output_file_ownership(
         self, response: LiteLLMBatch, litellm_parent_otel_span: Optional[Span]
@@ -2901,7 +2904,11 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         """
         managed_file: Final = await self.get_unified_file_id(file_id, litellm_parent_otel_span)
         if managed_file is not None and managed_file.storage_backend and managed_file.storage_url:
-            return await self._storage_backend_content(managed_file.storage_backend, managed_file.storage_url)
+            return await self._storage_backend_content(
+                managed_file.storage_backend,
+                managed_file.storage_url,
+                managed_file.file_object.purpose if managed_file.file_object else None,
+            )
 
         model_file_id_mapping = data.pop("model_file_id_mapping", None)
         model_file_id_mapping = model_file_id_mapping or await self.get_model_file_id_mapping(
@@ -2940,10 +2947,15 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         else:
             raise Exception(f"LiteLLM Managed File object with id={file_id} not found")
 
-    async def _storage_backend_content(self, storage_backend_name: str, storage_url: str) -> HttpxBinaryResponseContent:
+    async def _storage_backend_content(
+        self, storage_backend_name: str, storage_url: str, purpose: str | None
+    ) -> HttpxBinaryResponseContent:
         storage_backend: Final = get_storage_backend(storage_backend_name, prisma_client=self.prisma_client)
         content: Final = await storage_backend.download_file(storage_url)
-        return HttpxBinaryResponseContent(response=httpx.Response(status_code=httpx.codes.OK, content=content))
+        return HttpxBinaryResponseContent(
+            response=httpx.Response(status_code=httpx.codes.OK, content=content),
+            batch_input_format=BatchInputFormat.OPENAI if purpose == "batch" else BatchInputFormat.UNKNOWN,
+        )
 
     async def _convert_storage_files_to_base64(
         self,

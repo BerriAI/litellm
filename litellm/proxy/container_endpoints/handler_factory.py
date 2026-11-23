@@ -462,7 +462,7 @@ def register_container_file_endpoints(router: APIRouter) -> None:
 
     for endpoint_config in config["endpoints"]:
         path = endpoint_config["path"]
-        method = endpoint_config["method"].lower()
+        method = endpoint_config["method"].upper()
         path_params = endpoint_config.get("path_params", [])
         route_type = endpoint_config["async_name"]
         returns_binary = endpoint_config.get("returns_binary", False)
@@ -477,34 +477,35 @@ def register_container_file_endpoints(router: APIRouter) -> None:
             query_param_names=endpoint_config.get("query_params", ()),
         )
 
-        # Register routes
-        route_method = getattr(router, method)
-
         # For binary endpoints, don't use ORJSONResponse
         if returns_binary:
             # Register both /v1/... and /... paths without JSON response class
-            route_method(
+            router.api_route(
                 f"/v1{path}",
+                methods=[method],
                 dependencies=[Depends(user_api_key_auth)],
                 tags=["containers"],
             )(handler)
 
-            route_method(
+            router.api_route(
                 path,
+                methods=[method],
                 dependencies=[Depends(user_api_key_auth)],
                 tags=["containers"],
             )(handler)
         else:
             # Register both /v1/... and /... paths with JSON response
-            route_method(
+            router.api_route(
                 f"/v1{path}",
+                methods=[method],
                 dependencies=[Depends(user_api_key_auth)],
                 response_class=ORJSONResponse,
                 tags=["containers"],
             )(handler)
 
-            route_method(
+            router.api_route(
                 path,
+                methods=[method],
                 dependencies=[Depends(user_api_key_auth)],
                 response_class=ORJSONResponse,
                 tags=["containers"],

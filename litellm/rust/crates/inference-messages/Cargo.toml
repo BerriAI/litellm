@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+litellm-env.workspace = true
 litellm-secret-value.workspace = true
 bytes.workspace = true
 flate2 = { workspace = true, features = ["zlib-rs"] }
@@ -20,8 +21,10 @@ litellm-http.workspace = true
 litellm-inference.workspace = true
 litellm-llms.workspace = true
 litellm-llms-types.workspace = true
+litellm-python-compat.workspace = true
 litellm-router-types.workspace = true
 litellm-secrets.workspace = true
+litellm-redaction.workspace = true
 litellm-tracing.workspace = true
 reqwest.workspace = true
 serde.workspace = true
@@ -30,13 +33,17 @@ tokio.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+base64.workspace = true
 litellm-error.workspace = true
+litellm-auth-gcp = { workspace = true, features = ["test-support"] }
 litellm-framer = { workspace = true, features = ["sse"] }
 litellm-cache.workspace = true
 litellm-cache-memory.workspace = true
 litellm-host-native.workspace = true
 litellm-http = { workspace = true, features = ["test-support"] }
 litellm-inference-testing.workspace = true
+regex.workspace = true
 rstest.workspace = true
 thiserror.workspace = true
+tokio-util = { version = "0.7", features = ["codec"] }
 wiremock.workspace = true

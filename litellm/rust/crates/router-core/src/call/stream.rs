@@ -10,39 +10,72 @@ use std::sync::Arc;
 use serde::Deserialize;
 
 use super::{
-    Failed, FallbackChain, FallbackHop, Lists, Target, Tried, fallback_lookup, group_members,
-    serving_the_refused_model,
+    Failed, FallbackChain, FallbackHop, Level, Lists, Target, Tried, counted, counting, ends_call,
+    group_members, refused_or, serving_the_refused_model,
 };
 use crate::{
-    Router, RouterStateSnapshot,
+    Call, Router, RouterStateSnapshot,
     config::Op,
     error::{AttemptError, Error, FailureKind},
     fallback::FallbackTarget,
     health::should_retry_status,
-    host::{RouterEvent, RouterRequest, UncountedRetries},
-    select::{Candidates, SelectInputs},
+    host::{CallError, RouterEvent, RouterHost, RouterRequest, UncountedRetries},
+    retry::RetryStep,
+    select::{SelectInputs, skips_batch_only},
 };
 
-/// Where a streamed response came from: the attempt that returned it.
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+/// Where a streamed response came from: the level of the fallback chain its attempt served, as
+/// the attempt held it. A take-over starts from that level whole, so the params a dict fallback
+/// merged and the deployments a failover hop excluded ride with the stream.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(from = "Document")]
 pub struct StreamOrigin {
-    /// The name the attempt served: the requested group, or the fallback target.
-    pub group: String,
-    /// The `order` level an order fallback targeted.
-    pub order: Option<i64>,
+    target: Target,
     /// `fallback_depth` of the attempt.
-    pub depth: u32,
-    pub level: u32,
+    depth: u32,
+    level: u32,
     /// The deployment the attempt ran on.
-    pub deployment_id: Option<String>,
+    deployment_id: Option<String>,
     /// Same-group stream retries this request already spent (`attempted_retries_for_request`).
-    pub attempted_retries: u32,
+    attempted_retries: u32,
     /// The budget the first stream retry committed to (`committed_retry_budget_for_request`).
-    pub committed_budget: Option<u32>,
+    committed_budget: Option<u32>,
+}
+
+/// A [`StreamOrigin`] as the Python host hands it back. It names the level without the params
+/// and the exclusions the level carried, so a stream that host recovers starts without them.
+#[derive(Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct Document {
+    /// The name the attempt served: the requested group, or the fallback target.
+    group: String,
+    /// The `order` level an order fallback targeted.
+    order: Option<i64>,
+    depth: u32,
+    level: u32,
+    deployment_id: Option<String>,
+    attempted_retries: u32,
+    committed_budget: Option<u32>,
     /// The group a pre-routing hook selected for `group`, which the fallback lookup keys on first.
-    #[serde(default)]
-    pub routed: Option<String>,
+    routed: Option<String>,
+}
+
+impl From<Document> for StreamOrigin {
+    fn from(document: Document) -> Self {
+        Self {
+            target: Target {
+                group: document.group,
+                order: document.order,
+                routed: document.routed,
+                ..Target::default()
+            },
+            depth: document.depth,
+            level: document.level,
+            deployment_id: document.deployment_id,
+            attempted_retries: document.attempted_retries,
+            committed_budget: document.committed_budget,
+        }
+    }
 }
 
 /// What may still take over a stream that fails before content.
@@ -59,15 +92,68 @@ pub struct StreamPolicy {
     pub retry_budget: Option<(u32, bool)>,
 }
 
+/// The take-over of a stream that failed before content, which the core found an attempt may
+/// still run for. The failed stream is closed before it runs.
+pub struct TakeOver<'a> {
+    router: &'a Router,
+    request: RouterRequest,
+    origin: StreamOrigin,
+    failure: AttemptError,
+}
+
+/// Stream retries that served nothing: the failure the fallbacks start from, and the budget the
+/// group committed to, which the fallback that answers next reports as `x-litellm-max-retries`
+/// (`record_retry_attempt`).
+struct Spent {
+    failed: Failed,
+    committed_budget: Option<u32>,
+}
+
+/// A take-over whose attempts served nothing. `raised` is the host's error of the attempt the
+/// take-over ended on, `None` when it ends on the stream's own failure.
+#[derive(Debug, PartialEq)]
+pub struct Unanswered<F> {
+    pub raised: Option<F>,
+}
+
 impl StreamOrigin {
-    fn target(&self) -> Target {
-        Target {
-            group: self.group.clone(),
-            order: self.order,
-            params: None,
-            excluded: Arc::from([]),
-            failover_excluded: Arc::from([]),
-            routed: self.routed.clone(),
+    /// The origin of the response an attempt of `target` at `at` returned.
+    pub(super) fn of(
+        target: Target,
+        at: FallbackHop,
+        deployment_id: Option<String>,
+        retry: u32,
+    ) -> Self {
+        Self {
+            target,
+            depth: at.depth,
+            level: at.level,
+            deployment_id,
+            attempted_retries: retry,
+            committed_budget: None,
+        }
+    }
+
+    /// The name the attempt served: the requested group, or the fallback target.
+    pub fn group(&self) -> &str {
+        &self.target.group
+    }
+
+    fn at(&self) -> FallbackHop {
+        FallbackHop {
+            depth: self.depth,
+            level: self.level,
+            scope: 0,
+        }
+    }
+
+    /// The stream's failure as its level's, on the deployment the stream ran on.
+    fn failed(&self, failure: AttemptError) -> Failed {
+        Failed {
+            error: Box::new(failure.into()),
+            deployment_id: self.deployment_id.clone(),
+            routed: self.target.routed.clone(),
+            served_as: None,
         }
     }
 
@@ -75,10 +161,11 @@ impl StreamOrigin {
     fn lookup<'a>(&'a self, request: &'a RouterRequest) -> Vec<&'a str> {
         let mut lookup: Vec<&str> = Vec::new();
         for group in self
+            .target
             .routed
             .as_deref()
             .into_iter()
-            .chain([self.group.as_str(), request.model.as_str()])
+            .chain([self.target.group.as_str(), request.model.as_str()])
         {
             if !lookup.contains(&group) {
                 lookup.push(group);
@@ -98,7 +185,7 @@ impl StreamOrigin {
         }
         chain
             .iter()
-            .any(|target| *target != self.group && *target != request.model)
+            .any(|target| *target != self.target.group && *target != request.model)
     }
 }
 
@@ -169,176 +256,271 @@ impl Router {
         }
     }
 
+    /// Whether a retry or a fallback could still answer in place of a stream from `origin`, so
+    /// its host holds the stream back until it sends content.
+    pub fn may_take_over(&self, request: &RouterRequest, origin: &StreamOrigin) -> bool {
+        let snapshot = self.core.snapshot.load_full();
+        stream_can_retry(&snapshot, request, origin)
+            || stream_can_fall_back(&snapshot, request, origin)
+    }
+
     /// The fallback chain for a stream from `origin` that failed with `failure` before content:
     /// `async_function_with_fallbacks_common_utils` re-entered from the stream wrapper, so the
     /// group's own retry loop does not run again.
-    pub async fn fallback_stream(
+    pub async fn fallback_stream<H: RouterHost>(
         &self,
+        host: &H,
         op: Op,
         request: RouterRequest,
         origin: StreamOrigin,
         failure: AttemptError,
-    ) -> Result<super::RouterResponse, Error> {
+    ) -> Result<super::RouterResponse<H::Response>, Box<CallError<H::Failure>>> {
         self.live()?;
+        let call = Call::new(&self.core, host);
         let snapshot = self.core.snapshot.load_full();
-        let request = Arc::new(request);
-        let mut chain = FallbackChain::default();
-        if request.model != origin.group {
-            chain
-                .attempted
-                .push(Tried::Target(FallbackTarget::Name(request.model.clone())));
-        }
-        self.core
-            .fall_back(
-                &snapshot,
-                &op,
-                &request,
-                origin.target(),
-                FallbackHop {
-                    depth: origin.depth,
-                    level: origin.level,
-                    scope: 0,
-                },
-                &mut chain,
-                Failed {
-                    routed: origin.routed.clone(),
-                    ..Failed::from(Error::Attempt(failure))
-                },
-            )
+        let failed = origin.failed(failure);
+        call.fall_back_from(&snapshot, &op, &Arc::new(request), origin, failed)
             .await
+            .map_err(|error| call.ended(error))
     }
 
     /// `_astream_retry_same_group`: re-run the attempt in the stream's own group until a retry
     /// returns a response or the budget runs out. The failed result carries the newest failure.
-    pub async fn retry_stream(
+    pub async fn retry_stream<H: RouterHost>(
         &self,
+        host: &H,
         op: Op,
         request: RouterRequest,
         origin: StreamOrigin,
         failure: AttemptError,
-    ) -> Result<super::RouterResponse, Error> {
+    ) -> Result<super::RouterResponse<H::Response>, Box<CallError<H::Failure>>> {
         self.live()?;
+        let call = Call::new(&self.core, host);
         let snapshot = self.core.snapshot.load_full();
-        let request = Arc::new(request);
-        let target = origin.target();
-        let at = FallbackHop {
-            depth: origin.depth,
-            level: origin.level,
-            scope: 0,
+        call.retry_in_group(&snapshot, &op, &Arc::new(request), &origin, failure)
+            .await
+            .map_err(|spent| call.ended(*spent.failed.error))
+    }
+
+    /// The take-over of a stream from `origin` that failed with `failure` before content
+    /// (`_anthropic_recover_stream_error`). `None` when no attempt may answer in the stream's
+    /// place: no retry clears the failure, or neither a retry nor a fallback is left.
+    pub fn take_over_stream(
+        &self,
+        request: &RouterRequest,
+        origin: &StreamOrigin,
+        failure: &AttemptError,
+    ) -> Option<TakeOver<'_>> {
+        if failure
+            .status
+            .is_some_and(|status| !should_retry_status(status))
+        {
+            return None;
+        }
+        let policy = self.stream_policy(request, origin, Some(failure.kind));
+        let retries = policy
+            .retry_budget
+            .is_some_and(|(budget, _)| budget > origin.attempted_retries);
+        (retries || policy.can_fall_back).then(|| TakeOver {
+            router: self,
+            request: request.clone(),
+            origin: origin.clone(),
+            failure: failure.clone(),
+        })
+    }
+}
+
+impl<H: RouterHost> Call<'_, H> {
+    /// The fallbacks of the level a stream came from, after `failed`.
+    async fn fall_back_from(
+        &self,
+        snapshot: &RouterStateSnapshot,
+        op: &Op,
+        request: &Arc<RouterRequest>,
+        origin: StreamOrigin,
+        failed: Failed,
+    ) -> Result<super::RouterResponse<H::Response>, Error> {
+        let mut chain = FallbackChain::default();
+        if request.model != origin.target.group {
+            chain
+                .attempted
+                .push(Tried::Target(FallbackTarget::Name(request.model.clone())));
+        }
+        let level = Level {
+            snapshot,
+            op,
+            request,
+            at: origin.at(),
+            target: origin.target,
+            chain: &mut chain,
         };
-        let counting = SelectInputs {
-            count_only: true,
-            ..SelectInputs::default()
+        self.fall_back(level, failed).await
+    }
+
+    /// The retries of the level a stream came from, which failed with `failure`. What they end
+    /// on is what the level's fallbacks start from: the newest failed attempt, the stream's own
+    /// when no retry ran, or the error of a retry the host ended the call from.
+    async fn retry_in_group(
+        &self,
+        snapshot: &RouterStateSnapshot,
+        op: &Op,
+        request: &Arc<RouterRequest>,
+        origin: &StreamOrigin,
+        failure: AttemptError,
+    ) -> Result<super::RouterResponse<H::Response>, Spent> {
+        // A stream's retries start from a chain that has tried nothing.
+        let mut chain = FallbackChain::default();
+        let level = Level {
+            snapshot,
+            op,
+            request,
+            target: origin.target.clone(),
+            at: origin.at(),
+            chain: &mut chain,
         };
-        let counted = |c: &Candidates, n: usize| if c.kind.is_single() { 0 } else { n };
+        let target = &level.target;
         let (healthy_deployments, all) = self
-            .core
-            .candidates(&snapshot, &op, &request, &target.group, &counting)
+            .candidates(snapshot, op, request, &target.group, &counting())
             .await
             .map(|c| {
-                let (healthy, all) = (counted(&c, c.healthy.len()), counted(&c, c.all.len()));
+                let (healthy, all) = (counted(&c, c.healthy.len()), counted(&c, c.routable()));
                 (c.healthy.into_iter().take(healthy).collect::<Vec<_>>(), all)
             })
             .unwrap_or_default();
         let healthy = healthy_deployments.len();
+        let mut inputs = SelectInputs {
+            target_order: target.order,
+            excluded_ids: target.excluded.clone(),
+            requested: Some(target.group.clone()),
+            fallback_hop: level.at.level > 0,
+            failed_ids: origin.deployment_id.iter().cloned().collect(),
+            ..SelectInputs::default()
+        };
+        let (budget, policy_applies) = stream_retry_budget(snapshot, request, origin, failure.kind);
+        let refusal = (!policy_applies && failure.is_a("ContextWindowExceededError"))
+            .then(|| origin.failed(failure.clone()));
         let refused_by = failure
             .failed_deployment_id
             .as_deref()
             .or(origin.deployment_id.as_deref());
-        let (budget, policy_applies) =
-            stream_retry_budget(&snapshot, &request, &origin, failure.kind);
-        let refusal = (!policy_applies && failure.is_a("ContextWindowExceededError"))
-            .then(|| failure.clone());
-        let mut inputs = SelectInputs {
-            target_order: target.order,
-            requested: Some(target.group.clone()),
-            fallback_hop: at.level > 0,
-            failed_ids: origin.deployment_id.iter().cloned().collect(),
-            ..SelectInputs::default()
-        };
         let untried = match refused_by {
             Some(refused) if refusal.is_some() => {
                 inputs.skipped_ids =
-                    serving_the_refused_model(&snapshot, refused, &healthy_deployments).collect();
-                self.core
-                    .untried(&snapshot, &op, &request, &target.group, &inputs)
-                    .await
+                    serving_the_refused_model(snapshot, refused, &healthy_deployments).collect();
+                self.untried(&level, &inputs).await
             }
             _ => 0,
         };
-        let lookup = fallback_lookup(origin.routed.as_deref(), None, &target, &request);
-        let mut last = failure;
-        for attempt in origin.attempted_retries..budget {
-            if last.agentic_followup {
+        let lookup = origin.lookup(request);
+        let mut newest = origin.failed(failure);
+        let mut committed_budget = origin.committed_budget;
+        for attempt in origin.attempted_retries.. {
+            let Some(last) = newest.error.attempt() else {
+                break;
+            };
+            if last.ends_retries() {
                 break;
             }
-            if !policy_applies
-                && !self.core.should_retry(
-                    &snapshot,
-                    &request,
-                    &last,
-                    &lookup,
-                    (healthy, untried),
-                    all,
-                )
-            {
-                break;
-            }
-            let delay = self.core.time_to_sleep(
-                &snapshot,
-                last.retry_after,
-                budget - attempt,
-                budget,
-                healthy,
+            let step = level.retry_step(
+                last,
+                (budget, policy_applies),
+                attempt,
+                (healthy, untried),
                 all,
+                &lookup,
             );
-            self.core.host.sleep(delay).await;
-            self.core.host.observe(&RouterEvent::Retry {
+            let RetryStep::Retry { backoff } = step else {
+                break;
+            };
+            let delay = backoff.delay(|| self.rng.next_f64());
+            self.host.sleep(delay).await;
+            committed_budget = Some(budget);
+            self.host.observe(&RouterEvent::Retry {
                 model_group: target.group.clone(),
                 retry: attempt + 1,
                 delay,
             });
-            match self
-                .core
-                .attempt(
-                    &snapshot,
-                    &op,
-                    &request,
-                    &target,
-                    &inputs,
-                    (attempt + 1, budget),
-                    (at, &[]),
-                )
-                .await
-            {
+            let retried = self.attempt(&level, &inputs, (attempt + 1, budget)).await;
+            let failed = match retried {
                 Ok(mut response) => {
                     response.attempted_retries = attempt + 1;
                     response.max_retries = Some(budget);
+                    response.origin.committed_budget = Some(budget);
                     return Ok(response);
                 }
-                Err(failed) => match *failed.error {
-                    // `_stream_fallback_error_for_raised`: a status the pre-stream retry rule
-                    // would not retry ends the retries with that failure.
-                    Error::Attempt(failure) => {
-                        if let Some(id) = failure
-                            .failed_deployment_id
-                            .clone()
-                            .or(failed.deployment_id)
-                            && !inputs.failed_ids.contains(&id)
-                        {
-                            inputs.failed_ids.push(id);
-                        }
-                        let stop = failure.status.is_some_and(|s| !should_retry_status(s));
-                        last = failure;
-                        if stop {
-                            break;
-                        }
-                    }
-                    other => return Err(refusal.map_or(other, Error::Attempt)),
-                },
+                Err(failed) => failed,
+            };
+            if ends_call(&failed.error) {
+                return Err(Spent {
+                    failed,
+                    committed_budget,
+                });
+            }
+            // No deployment could be picked: the fallbacks start from the newest attempt.
+            let Error::Attempt { failure, .. } = &*failed.error else {
+                break;
+            };
+            if let Some(id) = failure
+                .failed_deployment_id
+                .as_ref()
+                .or(failed.deployment_id.as_ref())
+                && !inputs.failed_ids.contains(id)
+            {
+                inputs.failed_ids.push(id.clone());
+            }
+            // `_stream_fallback_error_for_raised`: a status the pre-stream retry rule would not
+            // retry ends the retries with that failure.
+            let stop = failure.status.is_some_and(|s| !should_retry_status(s));
+            newest = failed;
+            if stop {
+                break;
             }
         }
-        Err(Error::Attempt(refusal.unwrap_or(last)))
+        Err(Spent {
+            failed: refused_or(refusal, newest),
+            committed_budget,
+        })
+    }
+}
+
+impl TakeOver<'_> {
+    /// A retry in the stream's group while the failure's retry budget lasts, then the level's
+    /// fallbacks, which start from what the retries ended on. The response that answers says
+    /// where its own stream came from, so a take-over of that stream starts from its `origin`.
+    pub async fn run<H: RouterHost>(
+        self,
+        host: &H,
+        op: Op,
+    ) -> Result<super::RouterResponse<H::Response>, Unanswered<H::Failure>> {
+        let Self {
+            router,
+            request,
+            origin,
+            failure,
+        } = self;
+        router.live().map_err(|_| Unanswered { raised: None })?;
+        let call = Call::new(&router.core, host);
+        let snapshot = router.core.snapshot.load_full();
+        let request = Arc::new(request);
+        let Spent {
+            failed,
+            committed_budget,
+        } = match call
+            .retry_in_group(&snapshot, &op, &request, &origin, failure)
+            .await
+        {
+            Ok(answer) => return Ok(answer),
+            Err(spent) => spent,
+        };
+        call.fall_back_from(&snapshot, &op, &request, origin, failed)
+            .await
+            .map(|answer| super::RouterResponse {
+                max_retries: answer.max_retries.or(committed_budget),
+                ..answer
+            })
+            .map_err(|error| Unanswered {
+                raised: call.ended(error).raised.map(|raised| raised.failure),
+            })
     }
 }
 
@@ -359,14 +541,9 @@ fn plain_retry_budget(
         .deployment_id
         .as_deref()
         .and_then(|id| snapshot.registry.deployment(id));
-    let configured = deployment.and_then(|d| match d.raw_params.get("num_retries") {
-        Some(serde_json::Value::Number(n)) => n.as_u64().and_then(|n| u32::try_from(n).ok()),
-        Some(serde_json::Value::String(s)) if s.chars().all(|c| c.is_ascii_digit()) => {
-            s.parse().ok()
-        }
-        _ => None,
-    });
-    configured.unwrap_or(snapshot.settings.num_retries)
+    deployment
+        .and_then(|deployment| deployment.num_retries())
+        .unwrap_or(snapshot.settings.num_retries)
 }
 
 /// The retry policy for the request's model group (`_anthropic_messages_resolved_retry_policy`),
@@ -377,13 +554,14 @@ fn retry_policy<'a>(
     request: &'a RouterRequest,
     origin: &StreamOrigin,
 ) -> Option<&'a crate::config::RetryPolicy> {
-    if request.num_retries == Some(0) || request.retry_policy_raises.contains(&origin.group) {
+    if request.num_retries == Some(0) || request.retry_policy_raises.contains(&origin.target.group)
+    {
         return None;
     }
     let settings = &snapshot.settings;
     crate::retry::resolve_retry_policy(
         settings.retry_policy.as_ref(),
-        &origin.group,
+        &origin.target.group,
         Some(
             request
                 .model_group_retry_policy
@@ -456,15 +634,20 @@ fn stream_can_fall_back(
     }
     // `_stream_order_levels`, the levels the fallback walk sees for the group.
     let listing_team = request.listing_team_id.as_deref();
-    let mut orders: Vec<i64> = group_members(snapshot, &origin.group, listing_team)
-        .iter()
+    let members: Vec<_> = group_members(snapshot, &origin.target.group, listing_team)
+        .into_iter()
         .filter(|d| d.listed_for_team(listing_team))
+        .collect();
+    let skips_batch_only = skips_batch_only(request, &members);
+    let mut orders: Vec<i64> = members
+        .iter()
+        .filter(|d| !skips_batch_only || !d.serves_only_batches())
         .filter_map(|d| d.order())
         .collect();
     orders.sort_unstable();
     orders.dedup();
     if orders.len() > 1 {
-        let current = origin.order.unwrap_or(orders[0]);
+        let current = origin.target.order.unwrap_or(orders[0]);
         if orders.iter().any(|order| *order > current) {
             return true;
         }

@@ -106,23 +106,23 @@ describe("ViewSwitcher", () => {
     expect(assignSpy).not.toHaveBeenCalled();
   });
 
-  it("should open the Customer Portal at the customers page and come back to the gateway", async () => {
+  it("should open Customer Management at the customers page and come back to the gateway", async () => {
     const user = userEvent.setup();
     renderSwitcher();
 
     await user.click(screen.getByRole("button", { name: "Switch workspace, current: AI Gateway" }));
-    await user.click(await screen.findByRole("menuitem", { name: /Customer Portal/ }));
+    await user.click(await screen.findByRole("menuitem", { name: /Customer Management/ }));
     expect(pushMock).toHaveBeenCalledWith("/ui/customers");
     expect(assignSpy).not.toHaveBeenCalled();
     expect(localStorage.getItem("litellm_plugin_mode")).toBeNull();
   });
 
-  it("should route back to the gateway from Customer Portal mode instead of only flipping the mode", async () => {
+  it("should route back to the gateway from Customer Management mode instead of only flipping the mode", async () => {
     localStorage.setItem("litellm_plugin_mode", "customer-portal");
     const user = userEvent.setup();
     renderSwitcher();
 
-    await user.click(await screen.findByRole("button", { name: "Switch workspace, current: Customer Portal" }));
+    await user.click(await screen.findByRole("button", { name: "Switch workspace, current: Customer Management" }));
     await user.click(await screen.findByRole("menuitem", { name: /^AI Gateway/ }));
     expect(pushMock).toHaveBeenCalledWith("/ui/api-keys");
   });
@@ -201,25 +201,52 @@ describe("ViewSwitcher", () => {
     },
   );
 
-  it("should switch from Chat to the connected Moyai deployment", async () => {
+  it("should open Lens from Chat with a full page load", async () => {
     state.pathname = "/ui/chat";
-    const settings = { values: { enable_chat_ui: true, moyai_url: "https://moyai.example.com" } };
-    getUiSettingsMock.mockResolvedValue(settings);
+    getUiSettingsMock.mockResolvedValue({ values: { enable_chat_ui: true } });
     const user = userEvent.setup();
     renderSwitcher();
 
     await user.click(screen.getByRole("button", { name: "Switch workspace, current: Chat" }));
-    await user.click(await screen.findByRole("menuitem", { name: "Moyai Cloud Coding Agent" }));
-    expect(assignSpy).toHaveBeenCalledWith("https://moyai.example.com");
+    await user.click(await screen.findByRole("menuitem", { name: "Lens Beta Agent traces and findings" }));
+    expect(assignSpy).toHaveBeenCalledWith("/ui/lens");
+    expect(pushMock).not.toHaveBeenCalled();
   });
 
-  it("should keep the local Moyai route available when Chat is disabled", async () => {
+  it("should open Lens from the gateway and no longer offer Moyai", async () => {
     const user = userEvent.setup();
     renderSwitcher();
 
     await user.click(screen.getByRole("button", { name: "Switch workspace, current: AI Gateway" }));
-    await user.click(await screen.findByRole("menuitem", { name: "Moyai Cloud Coding Agent" }));
-    expect(assignSpy).toHaveBeenCalledWith("/ui/moyai");
+    expect(screen.queryByRole("menuitem", { name: /Moyai/ })).not.toBeInTheDocument();
+    await user.click(await screen.findByRole("menuitem", { name: "Lens Beta Agent traces and findings" }));
+    expect(pushMock).toHaveBeenCalledWith("/ui/lens");
+    expect(assignSpy).not.toHaveBeenCalled();
+  });
+
+  it("should leave a plugin mode for the gateway when opening Lens", async () => {
+    state.plugins = [{ name: "metrics", display_name: "Metrics", url: "/metrics" }];
+    localStorage.setItem("litellm_plugin_mode", "metrics");
+    const user = userEvent.setup();
+    renderSwitcher();
+
+    await user.click(await screen.findByRole("button", { name: "Switch workspace, current: Metrics" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Lens Beta Agent traces and findings" }));
+    expect(localStorage.getItem("litellm_plugin_mode")).toBe("ai-gateway");
+    expect(pushMock).toHaveBeenCalledWith("/ui/lens");
+  });
+
+  it("should name Lens as the current workspace on the Lens page and return to the gateway", async () => {
+    state.pathname = "/ui/lens";
+    const user = userEvent.setup();
+    renderSwitcher();
+
+    const trigger = screen.getByRole("button", { name: "Switch workspace, current: Lens" });
+    expect(trigger).toHaveTextContent("Lens");
+    await user.click(trigger);
+    await user.click(await screen.findByRole("menuitem", { name: "AI Gateway" }));
+    expect(pushMock).toHaveBeenCalledWith("/ui/");
+    expect(assignSpy).not.toHaveBeenCalled();
   });
 
   it("should navigate from Moyai back to the gateway", async () => {

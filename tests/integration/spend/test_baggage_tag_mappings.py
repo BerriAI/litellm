@@ -580,12 +580,12 @@ def _queue_chat(rig: Rig, baggage: str) -> httpx.Response:
 def test_queued_chat_runs_the_baggage_mapper_like_chat_completions(mapped: Rig) -> None:
     value: Final = uuid.uuid4().hex
     mapped.provider.drain()
-    missing_required: Final = _queue_chat(mapped, "entrypoint=a")
+    missing_required: Final = _queue_chat(mapped, "service=a")
     assert missing_required.status_code == 400, missing_required.text
     unbudgeted: Final = _queue_chat(mapped, f"budgeted={value},tenant={value}")
     assert unbudgeted.status_code == 400, unbudgeted.text
     assert mapped.provider.drain() == ()
-    admitted: Final = _queue_chat(mapped, f"entrypoint=a,tenant={value}")
+    admitted: Final = _queue_chat(mapped, f"service=a,tenant={value}")
     assert admitted.status_code == 200, admitted.text
     request_id: Final = string_value(JSON_OBJECT.validate_json(admitted.content)["id"])
     rows: Final = eventually(
@@ -598,8 +598,8 @@ def test_queued_chat_runs_the_baggage_mapper_like_chat_completions(mapped: Rig) 
 
 def test_spent_mapped_tag_budget_rejects_the_next_queued_request_before_the_provider(mapped: Rig) -> None:
     entry: Final = uuid.uuid4().hex
-    tag: Final = mapped.usecase_tag(entry)
-    baggage: Final = f"entrypoint={entry},tenant={entry}"
+    tag: Final = mapped.app_tag(entry)
+    baggage: Final = f"service={entry},tenant={entry}"
     with mapped.proxy.scenario() as scenario:
         mapped.proxy.post("/tag/new", {"name": tag, "max_budget": 0.0001})
         scenario.cleanups.callback(lambda: mapped.proxy.request("POST", "/tag/delete", {"name": tag}))
