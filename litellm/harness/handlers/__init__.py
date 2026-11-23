@@ -12,14 +12,14 @@ from litellm.llms.base_llm.harness.transformation import (
 from litellm.utils import ProviderConfigManager
 
 
-def get_harness_config(harness: Harness) -> BaseHarnessConfig:
+def get_harness_config(harness: Harness) -> BaseHarnessConfig[object]:
     config = ProviderConfigManager.get_provider_harness_config(require_harness(harness))
     if config is None:
         raise HarnessError(f"No harness config registered for Harness.{harness.name}")
     return config
 
 
-def get_harness_handler(config: BaseHarnessConfig) -> BaseHarnessHandler:
+def get_harness_handler(config: BaseHarnessConfig[object]) -> BaseHarnessHandler:
     """The handler that knows how to run this kind of config."""
     if isinstance(config, BaseCLIHarnessConfig):
         from litellm.harness.handlers.cli_handler import CLIHarnessHandler
