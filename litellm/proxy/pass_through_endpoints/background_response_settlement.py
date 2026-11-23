@@ -1,6 +1,6 @@
 import asyncio
 from collections.abc import Awaitable, Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Final, Protocol, TypeAlias
 
 from typing_extensions import ReadOnly, TypedDict
@@ -47,7 +47,7 @@ CLAIM_UNRECORDED: Final = ClaimUnrecorded()
 
 
 class BackgroundResponseSettlementStore(Protocol):
-    async def claim_outcome(self, response_id: str) -> ClaimOutcome: ...
+    async def claim_outcome(self, response_id: str, *, release_if_late: bool = False) -> ClaimOutcome: ...
 
     async def release(self, response_id: str) -> None: ...
 
@@ -64,22 +64,50 @@ def _proxy_settlement_table() -> BackgroundResponseSettlementTable | None:
 class PrismaBackgroundResponseSettlementStore:
     table: Callable[[], BackgroundResponseSettlementTable | None] = _proxy_settlement_table
     timeout_seconds: float = BACKGROUND_RESPONSE_SETTLEMENT_TIMEOUT_SECONDS
+    late_claims: set["asyncio.Task[None]"] = field(  # mutable-ok: asyncio needs strong refs to late claims
+        default_factory=set
+    )
 
-    async def claim_outcome(self, response_id: str) -> ClaimOutcome:
+    async def claim_outcome(self, response_id: str, *, release_if_late: bool = False) -> ClaimOutcome:
         try:
             table: Final = self.table()
             if table is None:
                 return CLAIM_UNRECORDED
-            inserted: Final = await asyncio.wait_for(
-                table.create_many([_NewSettlementRow(response_id=response_id)], skip_duplicates=True),
-                timeout=self.timeout_seconds,
+            insert: Final = asyncio.ensure_future(
+                table.create_many([_NewSettlementRow(response_id=response_id)], skip_duplicates=True)
             )
+            finished, _ = await asyncio.wait((insert,), timeout=self.timeout_seconds)
+            if not finished:
+                self._settle_late_claim(response_id, insert, release_if_late)
+                return CLAIM_UNRECORDED
+            inserted: Final = insert.result()
         except Exception as e:  # noqa: BLE001  # a DB failure comes back as a value so each caller picks its side
             verbose_proxy_logger.warning(
                 "Could not record the settlement of background response %s: %s", response_id, e
             )
             return CLAIM_UNRECORDED
         return CLAIMED if inserted > 0 else CLAIMED_BEFORE
+
+    def _settle_late_claim(self, response_id: str, insert: "asyncio.Future[int]", release_if_late: bool) -> None:
+        verbose_proxy_logger.warning(
+            "Recording the settlement of background response %s took over %s s, so it is settled when it returns",
+            response_id,
+            self.timeout_seconds,
+        )
+        late_claim: Final = asyncio.create_task(self._release_late_claim(response_id, insert, release_if_late))
+        self.late_claims.add(late_claim)
+        late_claim.add_done_callback(self.late_claims.discard)
+
+    async def _release_late_claim(self, response_id: str, insert: "asyncio.Future[int]", release_if_late: bool) -> None:
+        try:
+            inserted: Final = await insert
+        except Exception as e:  # noqa: BLE001  # its caller already went on as if the claim was never recorded
+            verbose_proxy_logger.warning(
+                "Could not record the settlement of background response %s: %s", response_id, e
+            )
+            return
+        if release_if_late and inserted > 0:
+            await self.release(response_id)
 
     async def release(self, response_id: str) -> None:
         try:
@@ -91,5 +119,5 @@ class PrismaBackgroundResponseSettlementStore:
             )
         except Exception as e:  # noqa: BLE001  # an unreleased claim leaves the response unbilled, never billed twice
             verbose_proxy_logger.warning(
-                "Could not release the settlement of background response %s after its bill failed: %s", response_id, e
+                "Could not release the settlement of background response %s, so it stays unbilled: %s", response_id, e
             )

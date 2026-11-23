@@ -3064,6 +3064,7 @@ READER_METADATA: Final = {
 UPSTREAM_AUTHORIZATION: Final = "Bearer upstream-openai-key"
 CREATOR_RECORDED_AT: Final = datetime(2026, 10, 17, 13, 47, 4, tzinfo=timezone.utc)
 FAST_POLLS: Final = PollSchedule(initial_interval_seconds=0.001, max_interval_seconds=0.001, timeout_seconds=5.0)
+HALF_SECOND_POLLS: Final = PollSchedule(initial_interval_seconds=0.5, max_interval_seconds=0.5, timeout_seconds=5.0)
 LEASE_LAPSED_AT: Final = CREATOR_RECORDED_AT + timedelta(seconds=BACKGROUND_RESPONSE_POLL_LEASE_SECONDS + 2)
 RESUMED_POLLS: Final = PollSchedule(
     initial_interval_seconds=0.001,
@@ -3179,6 +3180,7 @@ class _ScriptedFetch:
 class _DispatchedRow:
     metadata: Mapping[str, object]
     spend_row: SpendLogsPayload
+    start_time: datetime
     end_time: datetime
     logging_obj: LiteLLMLoggingObj
 
@@ -3217,6 +3219,7 @@ class _DispatchedSpendRows:
                     start_time=start_time,
                     end_time=end_time,
                 ),
+                start_time=start_time,
                 end_time=end_time,
                 logging_obj=logging_obj,
             )
@@ -3267,6 +3270,25 @@ class _ClaimUnrecordedOnCall:
         return await self.table.delete_many(where=where)
 
 
+class _ClaimAcksLateOnCall:
+    def __init__(self, table: _SettlementTable, late_call: int, ack_delay_seconds: float) -> None:
+        self.table: Final = table
+        self.late_call: Final = late_call
+        self.ack_delay_seconds: Final = ack_delay_seconds
+        self.calls: Final[list[Sequence[Mapping[str, str]]]] = []
+
+    async def create_many(self, data: Sequence[Mapping[str, str]], *, skip_duplicates: bool) -> int:
+        self.calls.append(data)
+        call: Final = len(self.calls)
+        inserted: Final = await self.table.create_many(data, skip_duplicates=skip_duplicates)
+        if call == self.late_call:
+            await asyncio.sleep(self.ack_delay_seconds)
+        return inserted
+
+    async def delete_many(self, *, where: Mapping[str, str]) -> int:
+        return await self.table.delete_many(where=where)
+
+
 class _CreatorDispatchFailsAfterTheCreate:
     def __init__(self, rows: _DispatchedSpendRows, refusals: int) -> None:
         self.rows: Final = rows
@@ -3302,19 +3324,22 @@ class _CreatorDispatchFailsAfterTheCreate:
 
 def _creator_billing_passthrough_logging(
     rows: _DispatchedSpendRows | _CreatorDispatchFailsAfterTheCreate,
-    settlements: _SettlementTable | _FirstClaimWaitsUntilASecondClaimLoses | _ClaimUnrecordedOnCall,
+    settlements: (
+        _SettlementTable | _FirstClaimWaitsUntilASecondClaimLoses | _ClaimUnrecordedOnCall | _ClaimAcksLateOnCall
+    ),
     creators: _CreatorTable,
     fetch: _ScriptedFetch,
     polls: bool,
     now: datetime = CREATOR_RECORDED_AT + timedelta(seconds=1),
     schedule: PollSchedule = FAST_POLLS,
     creator_logging_wiring: CreatorLoggingWiring = proxy_creator_logging_wiring,
+    settlement_timeout_seconds: float = 5,
 ) -> PassThroughEndpointLogging:
     return PassThroughEndpointLogging(
         creator_logging_wiring=creator_logging_wiring,
         log_dispatch=rows,
         background_response_settlement=PrismaBackgroundResponseSettlementStore(
-            table=lambda: settlements, timeout_seconds=5
+            table=lambda: settlements, timeout_seconds=settlement_timeout_seconds
         ),
         background_response_creators=PrismaBackgroundResponseCreatorStore(table=lambda: creators, timeout_seconds=5),
         background_response_poller=BackgroundResponsePoller(
@@ -3420,6 +3445,11 @@ async def _reader_paid_spend() -> float:
         _creator_billing_passthrough_logging(rows, _SettlementTable(), _CreatorTable(), _ScriptedFetch(), polls=False)
     )
     return rows.rows[0].spend_row["spend"]
+
+
+async def _first_fetch(fetch: _ScriptedFetch) -> None:
+    while not fetch.requests:
+        await asyncio.sleep(0.01)
 
 
 async def _poll_settled(creators: _CreatorTable) -> None:
@@ -3830,6 +3860,118 @@ class TestOpenAIPassthroughBackgroundResponseCreatorBilling:
         await asyncio.wait_for(poll, timeout=5)
         assert len(rows.billed()) == 1
         _assert_billed_to_the_creator(rows.billed()[0], rows.spend_rows()[0], await _reader_paid_spend())
+
+    @pytest.mark.asyncio
+    async def test_a_read_claim_the_database_commits_after_its_timeout_still_lets_the_poll_bill_the_creator(
+        self, local_model_cost_map
+    ):
+        rows: Final = _DispatchedSpendRows()
+        creators: Final = _CreatorTable()
+        fetch: Final = _ScriptedFetch()
+        passthrough_logging: Final = _creator_billing_passthrough_logging(
+            rows,
+            _ClaimAcksLateOnCall(_SettlementTable(), late_call=1, ack_delay_seconds=0.05),
+            creators,
+            fetch,
+            polls=True,
+            schedule=HALF_SECOND_POLLS,
+            settlement_timeout_seconds=0.01,
+        )
+        await _background_create(passthrough_logging)
+        await _finished_read(passthrough_logging)
+        fetch.outcomes.put_nowait(Fetched(body=_stored_response("completed", True, RESPONSES_USAGE)))
+
+        await _poll_settled(creators)
+
+        assert len(rows.billed()) == 1
+        _assert_billed_to_the_creator(rows.billed()[0], rows.spend_rows()[0], await _reader_paid_spend())
+
+    @pytest.mark.asyncio
+    async def test_a_poll_claim_the_database_commits_after_its_timeout_is_retried_and_bills_the_creator(
+        self, local_model_cost_map
+    ):
+        rows: Final = _DispatchedSpendRows()
+        creators: Final = _CreatorTable()
+        fetch: Final = _ScriptedFetch()
+        passthrough_logging: Final = _creator_billing_passthrough_logging(
+            rows,
+            _ClaimAcksLateOnCall(_SettlementTable(), late_call=1, ack_delay_seconds=0.05),
+            creators,
+            fetch,
+            polls=True,
+            schedule=HALF_SECOND_POLLS,
+            settlement_timeout_seconds=0.01,
+        )
+        await _background_create(passthrough_logging)
+        fetch.outcomes.put_nowait(Fetched(body=_stored_response("completed", True, RESPONSES_USAGE)))
+        fetch.outcomes.put_nowait(Fetched(body=_stored_response("completed", True, RESPONSES_USAGE)))
+
+        await _poll_settled(creators)
+
+        assert len(fetch.requests) == 2
+        assert len(rows.billed()) == 1
+        _assert_billed_to_the_creator(rows.billed()[0], rows.spend_rows()[0], await _reader_paid_spend())
+
+    @pytest.mark.asyncio
+    async def test_a_late_poll_claim_that_lost_to_a_read_keeps_the_read_claim_so_a_later_read_is_not_billed(
+        self, local_model_cost_map
+    ):
+        rows: Final = _DispatchedSpendRows()
+        creators: Final = _CreatorTable()
+        fetch: Final = _ScriptedFetch()
+        passthrough_logging: Final = _creator_billing_passthrough_logging(
+            rows,
+            _ClaimAcksLateOnCall(_SettlementTable(), late_call=2, ack_delay_seconds=0.05),
+            creators,
+            fetch,
+            polls=True,
+            schedule=HALF_SECOND_POLLS,
+            settlement_timeout_seconds=0.01,
+        )
+        await _background_create(passthrough_logging)
+        poll: Final = _running_poll(passthrough_logging)
+        await asyncio.wait_for(_first_fetch(fetch), timeout=5)
+        await _finished_read(passthrough_logging)
+        fetch.outcomes.put_nowait(Fetched(body=_stored_response("completed", True, RESPONSES_USAGE)))
+        await asyncio.wait_for(poll, timeout=5)
+
+        await _finished_read(passthrough_logging)
+
+        assert len(rows.billed()) == 1
+        _assert_billed_to_the_creator(rows.billed()[0], rows.spend_rows()[0], await _reader_paid_spend())
+        assert len(rows.logged_for(READER_METADATA["user_api_key_team_id"])) == 2
+
+    @pytest.mark.asyncio
+    async def test_the_creator_bill_gets_its_own_logging_id_so_it_never_overwrites_the_create_log(
+        self, local_model_cost_map
+    ):
+        rows: Final = _DispatchedSpendRows()
+        creators: Final = _CreatorTable()
+        fetch: Final = _ScriptedFetch()
+        passthrough_logging: Final = _creator_billing_passthrough_logging(
+            rows, _SettlementTable(), creators, fetch, polls=True
+        )
+        completed_at: Final = DISPATCH_TIME + timedelta(seconds=42)
+        await _background_create(passthrough_logging)
+        fetch.outcomes.put_nowait(
+            Fetched(
+                body={
+                    **_stored_response("completed", True, RESPONSES_USAGE),
+                    "completed_at": int(completed_at.timestamp()),
+                }
+            )
+        )
+
+        await _poll_settled(creators)
+
+        create, bill = rows.rows
+        assert bill.spend_row["spend"] > 0
+        assert bill.start_time == bill.end_time == completed_at
+        assert litellm.utils.get_logging_id(
+            bill.start_time, bill.logging_obj.model_call_details["standard_logging_object"]
+        ) != litellm.utils.get_logging_id(
+            create.start_time, create.logging_obj.model_call_details["standard_logging_object"]
+        )
 
     @pytest.mark.asyncio
     async def test_a_background_create_that_finishes_at_create_is_not_billed_again_by_a_read(

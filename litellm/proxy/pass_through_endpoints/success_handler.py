@@ -370,7 +370,9 @@ class PassThroughEndpointLogging:
         )
         if isinstance(creator, CreatorLookupFailed):
             return CREATOR_BILL_DEFERRED
-        match await self.background_response_settlement.claim_outcome(upstream_response_id):
+        match await self.background_response_settlement.claim_outcome(
+            upstream_response_id, release_if_late=creator is not None
+        ):
             case ClaimedBefore():
                 return SETTLED_BEFORE
             case Claimed() if creator is not None:
@@ -410,7 +412,7 @@ class PassThroughEndpointLogging:
         if not is_finished_background_response(response_body):
             await self.background_response_creators.forget(creator.response_id)
             return True
-        match await self.background_response_settlement.claim_outcome(creator.response_id):
+        match await self.background_response_settlement.claim_outcome(creator.response_id, release_if_late=True):
             case Claimed():
                 return await self._bill_creator_once(creator, response_body)
             case ClaimedBefore():
@@ -443,6 +445,7 @@ class PassThroughEndpointLogging:
         url_route: Final = f"{creator.upstream_url}/{quote(creator.response_id, safe='')}"
         wiring: Final = await self.creator_logging_wiring(context) if context.key_or_team_logging else None
         rewired: Final = _wires_logging(wiring)
+        completed_at: Final = _completed_at(response_body, context.start_time)
         litellm_params: Final = _creator_litellm_params(
             context, spend_only=context.no_log or (context.key_or_team_logging and not rewired)
         )
@@ -453,7 +456,7 @@ class PassThroughEndpointLogging:
             litellm_call_id=context.litellm_call_id,
             function_id=context.litellm_call_id,
             litellm_trace_id=context.litellm_trace_id,
-            start_time=context.start_time,
+            start_time=completed_at,
             litellm_params=litellm_params,
             dynamic_success_callbacks=None if wiring is None else wiring.success_callbacks,
             dynamic_failure_callbacks=None if wiring is None else wiring.failure_callbacks,
@@ -475,8 +478,8 @@ class PassThroughEndpointLogging:
             logging_obj=logging_obj,
             url_route=url_route,
             result="",
-            start_time=context.start_time,
-            end_time=_completed_at(response_body, context.start_time),
+            start_time=completed_at,
+            end_time=completed_at,
             cache_hit=False,
             passthrough_logging_payload=passthrough_logging_payload,
             custom_llm_provider=context.custom_llm_provider,
