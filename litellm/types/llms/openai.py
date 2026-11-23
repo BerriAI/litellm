@@ -93,6 +93,7 @@ from litellm.types.responses.main import (
     OutputFunctionToolCall,
     OutputImageGenerationCall,
     OutputToolSearchCall,
+    OutputToolSearchOutput,
 )
 
 from .base import CachedTokensDetails
@@ -793,6 +794,12 @@ class ChatCompletionTextObject(
     cache_control: ChatCompletionCachedContent
 
 
+class ChatCompletionGuardedTextObject(TypedDict):
+    type: ReadOnly[Literal["guarded_text"]]
+    text: ReadOnly[str]
+    cache_control: NotRequired[ReadOnly[ChatCompletionCachedContent]]
+
+
 class ChatCompletionImageUrlObject(TypedDict, total=False):
     url: Required[str]
     detail: str
@@ -1483,6 +1490,7 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
             | ResponseFunctionWebSearch
             | CustomToolCallOutputItem
             | OutputToolSearchCall
+            | OutputToolSearchOutput
         ]
     )
     parallel_tool_calls: bool | None = None

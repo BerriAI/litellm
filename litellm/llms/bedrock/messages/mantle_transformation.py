@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any, Final
 import httpx
 from pydantic import TypeAdapter
 
+from litellm.llms.anthropic.pass_through.messages.api_versions import requested_api_version
 from litellm.llms.anthropic.pass_through.messages.transformation import (
     DEFAULT_ANTHROPIC_API_VERSION,
     AnthropicMessagesConfig,
@@ -66,6 +67,9 @@ class AmazonMantleMessagesConfig(AmazonAnthropicClaudeMessagesConfig):
 
     def should_filter_anthropic_beta_headers(self) -> bool:
         return False
+
+    def anthropic_api_version(self, headers: Mapping[str, object], api_base: str | None) -> str | None:
+        return requested_api_version(headers)
 
     def get_complete_url(
         self,

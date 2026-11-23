@@ -2,7 +2,7 @@ import asyncio, base64, importlib
 import copy
 import json
 import uuid
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from collections.abc import Mapping
 from typing import Final
 from unittest.mock import MagicMock, patch
@@ -17,7 +17,7 @@ import litellm
 from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
     AmazonAnthropicClaudeConfig,
 )
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 from tests.unit.llms.anthropic.anthropic_docs_refusal import ANTHROPIC_DOCS_REFUSAL_MESSAGE
 
@@ -1180,6 +1180,88 @@ def test_bedrock_chat_invoke_tool_search_beta_follows_model_map(
     assert result.get("anthropic_beta") == expected_betas
 
 
+_WEATHER_CALL: Final = {
+    "id": "toolu_01Weather",
+    "type": "function",
+    "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+}
+_PLAIN_WEATHER_CALL: Final = {"role": "assistant", "content": None, "tool_calls": [_WEATHER_CALL]}
+_REPLAYED_WEATHER_SEARCH: Final = {
+    **_PLAIN_WEATHER_CALL,
+    "tool_calls": [
+        {
+            "id": "srvtoolu_01Search",
+            "type": "function",
+            "function": {"name": "tool_search_tool_regex", "arguments": '{"pattern": "weather"}'},
+        },
+        _WEATHER_CALL,
+    ],
+    "provider_specific_fields": {
+        "tool_results": [
+            {
+                "type": "tool_search_tool_result",
+                "tool_use_id": "srvtoolu_01Search",
+                "content": {
+                    "type": "tool_search_tool_search_result",
+                    "tool_references": [{"type": "tool_reference", "tool_name": "get_weather"}],
+                },
+            }
+        ],
+    },
+}
+
+
+@pytest.mark.parametrize(
+    ("model", "assistant_turn", "expected_betas"),
+    [
+        pytest.param(
+            "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            _REPLAYED_WEATHER_SEARCH,
+            ["tool-search-tool-2025-10-19"],
+            id="replayed_search",
+        ),
+        pytest.param("us.anthropic.claude-sonnet-4-5-20250929-v1:0", _PLAIN_WEATHER_CALL, None, id="no_search"),
+        pytest.param(
+            "us.anthropic.claude-opus-4-1-20250805-v1:0", _REPLAYED_WEATHER_SEARCH, None, id="opus_4_1_unsupported"
+        ),
+    ],
+)
+def test_bedrock_chat_invoke_sends_the_tool_search_beta_for_a_search_replayed_without_the_search_tool(
+    local_model_cost_map, local_beta_headers_config, model, assistant_turn, expected_betas
+):
+    config: Final = AmazonAnthropicClaudeConfig()
+    result: Final = config.transform_request(
+        model=model,
+        messages=[
+            {"role": "user", "content": "What is the weather in Paris?"},
+            assistant_turn,
+            {"role": "tool", "tool_call_id": "toolu_01Weather", "content": "18C"},
+            {"role": "user", "content": "And in Osaka?"},
+        ],
+        optional_params=config.map_openai_params(
+            non_default_params={
+                "max_tokens": 64,
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
+                        },
+                    }
+                ],
+            },
+            optional_params={},
+            model=model,
+            drop_params=False,
+        ),
+        litellm_params={},
+        headers={},
+    )
+
+    assert result.get("anthropic_beta") == expected_betas
+
+
 def test_bedrock_chat_invoke_adds_thinking_display_updates_beta(
     local_model_cost_map, local_beta_headers_config
 ) -> None:
@@ -2064,3 +2146,96 @@ def test_invoke_uses_opt_in_native_output_is_false_when_native_output_did_not_co
     assert not AmazonAnthropicClaudeConfig().uses_opt_in_native_output(
         model, optional_params, {"model_info": model_info}
     )
+
+
+def _bedrock_invoke_claude_with_extra_body(
+    extra_body: Mapping[str, object] | str, drop_params: bool
+) -> tuple[httpx.Request, ...]:
+    captured_requests: Final[list[httpx.Request]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        captured_requests.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "us.anthropic.claude-sonnet-5",
+                "content": [{"type": "text", "text": "Hello"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+
+    client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond)))
+    try:
+        litellm.completion(
+            model="bedrock/invoke/us.anthropic.claude-sonnet-5",
+            messages=[{"role": "user", "content": "Hello"}],
+            aws_access_key_id="AKIAEXAMPLE",
+            aws_secret_access_key="fake-secret",
+            aws_region_name="us-east-1",
+            client=client,
+            max_tokens=16,
+            drop_params=drop_params,
+            extra_body=dict(extra_body) if isinstance(extra_body, Mapping) else extra_body,
+        )
+    finally:
+        client.close()
+    return tuple(captured_requests)
+
+
+def test_bedrock_invoke_claude_extra_body_caps_a_raised_max_tokens_only_under_drop_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    with pytest.raises(litellm.BadRequestError, match="extra_body can't raise max_tokens"):
+        _bedrock_invoke_claude_with_extra_body({"max_tokens": 4096}, drop_params=False)
+    requests: Final = _bedrock_invoke_claude_with_extra_body({"max_tokens": 4096}, drop_params=True)
+
+    assert json.loads(requests[0].content)["max_tokens"] == 16
+
+
+def test_bedrock_invoke_claude_rejects_a_non_object_extra_body_before_calling_bedrock(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    with pytest.raises(litellm.BadRequestError, match="Invalid type for 'extra_body': expected an object, got str"):
+        _bedrock_invoke_claude_with_extra_body('{"top_k": 5}', drop_params=False)
+
+
+_GUARDED_EXTRA_BODY: Final = MappingProxyType(
+    {
+        "model": "claude-opus-5-5",
+        "messages": [{"role": "user", "content": "unchecked"}],
+        "system": "unchecked",
+        "tools": [{"name": "unchecked", "input_schema": {"type": "object"}}],
+        "stop_sequences": ["5"],
+        "max_tokens": 4096,
+    }
+)
+
+
+def test_bedrock_invoke_claude_extra_body_drops_guarded_keys_under_drop_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    requests: Final = _bedrock_invoke_claude_with_extra_body(_GUARDED_EXTRA_BODY, drop_params=True)
+
+    request_body: Final = json.loads(requests[0].content)
+    assert request_body["messages"] == [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}]
+    assert {"model", "system", "tools"}.isdisjoint(request_body)
+    assert request_body["stop_sequences"] == ["5"]
+    assert request_body["max_tokens"] == 16
+
+
+def test_bedrock_invoke_claude_extra_body_answers_400_for_guarded_keys_without_drop_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    with pytest.raises(litellm.BadRequestError, match="extra_body can't set messages, model, system, tools"):
+        _bedrock_invoke_claude_with_extra_body(_GUARDED_EXTRA_BODY, drop_params=False)
