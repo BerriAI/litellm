@@ -16,7 +16,16 @@ import { CustomerBudgetDialog, CustomerBudgetFormDialog } from "../../customers/
 import { useCustomerBudgetForm } from "../../customers/_components/useCustomerBudgetForm";
 import { customerBudgetPatch, hasLegacyCustomerBudget } from "../../customers/_components/customerBudgetForm";
 import { ErrorState } from "@/components/shared/ErrorState";
+import { DataTablePagination, useUrlTableState } from "@/components/shared/DataTable";
 import { AppBudgetRow, AppBudgetTable, type AppUsageContext } from "./AppBudgetCells";
+
+const MEMBER_APPS_TABLE = {
+  keyPrefix: "member_apps_",
+  sortFields: [],
+  defaultSort: { id: "", desc: false },
+  defaultPageSize: 5,
+  filterColumns: [],
+};
 
 const BUDGET_SOURCES = {
   member_budget: "apps.customBudget",
@@ -39,6 +48,9 @@ export default function CustomerMemberApps({
 }) {
   const { t } = useTranslation();
   const apps = useQuery({ queryKey: ["apps"], queryFn: () => loadApps() });
+  const { pagination, onPaginationChange } = useUrlTableState(MEMBER_APPS_TABLE);
+  const { pageSize, pageIndex } = pagination;
+  const page = Math.min(pageIndex, Math.max(0, Math.ceil((apps.data?.length ?? 0) / pageSize) - 1));
   return (
     <section className="space-y-4 border-t pt-6" aria-label={t("apps.memberTitle")}>
       <h2 className="text-base font-semibold">{t("apps.memberTitle")}</h2>
@@ -47,8 +59,22 @@ export default function CustomerMemberApps({
       {apps.isError && <p role="alert">{extractProxyErrorMessage(apps.error)}</p>}
       {apps.data?.length === 0 && <p>{t("apps.noMemberApps")}</p>}
       {apps.data && apps.data.length > 0 && (
-        <AppBudgetTable scope="member" usageLayout={Boolean(usageContext)}>
-          {apps.data.map((app) => (
+        <AppBudgetTable
+          scope="member"
+          usageLayout={Boolean(usageContext)}
+          footer={
+            <DataTablePagination
+              className="justify-end border-t px-4 py-3"
+              page={page}
+              pageSize={pageSize}
+              pageSizeOptions={[5, 10, 25]}
+              rowCount={apps.data.length}
+              onPageChange={(pageIndex) => onPaginationChange({ pageIndex, pageSize })}
+              onPageSizeChange={(pageSize) => onPaginationChange({ pageIndex: 0, pageSize })}
+            />
+          }
+        >
+          {apps.data.slice(page * pageSize, (page + 1) * pageSize).map((app) => (
             <MemberAppRow
               key={app.app_id}
               app={app}

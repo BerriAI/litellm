@@ -541,6 +541,8 @@ class Row:
 
 REPORTED: Final[tuple[tuple[Metric, int | None], ...]] = (
     ("unexpected_status_count", None),
+    ("client_total_seconds", 50),
+    ("client_total_seconds", 95),
     ("gateway_added_seconds", 50),
     ("gateway_added_seconds", 99),
     ("litellm_overhead_seconds", 50),

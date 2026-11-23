@@ -1,0 +1,85 @@
+{
+  "requests": [
+    {
+      "method": "POST",
+      "target": "/v1/messages",
+      "headers": {
+        "accept": [
+          "*/*"
+        ],
+        "accept-encoding": [
+          "gzip,deflate"
+        ],
+        "anthropic-beta": [
+          "context-management-2025-06-27,structured-outputs-2025-11-13"
+        ],
+        "anthropic-version": [
+          "2023-06-01"
+        ],
+        "authorization": [
+          "Bearer <api-key>"
+        ],
+        "content-length": [
+          "308"
+        ],
+        "content-type": [
+          "application/json"
+        ],
+        "host": [
+          "<upstream-address>"
+        ]
+      },
+      "body": {
+        "model": "claude-sonnet-4-5",
+        "messages": [
+          {
+            "role": "user",
+            "content": "hi"
+          }
+        ],
+        "max_tokens": 16,
+        "metadata": {
+          "user_id": "conformance-user"
+        },
+        "context_management": {
+          "edits": [
+            {
+              "type": "clear_tool_uses_20250919"
+            }
+          ]
+        },
+        "output_format": {
+          "type": "json_schema",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "answer": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "outcome": {
+    "complete": {
+      "id": "msg_1",
+      "type": "message",
+      "role": "assistant",
+      "model": "claude-sonnet-4-5",
+      "content": [
+        {
+          "type": "text",
+          "text": "hi"
+        }
+      ],
+      "stop_reason": "end_turn",
+      "stop_sequence": null,
+      "usage": {
+        "input_tokens": 1,
+        "output_tokens": 2
+      }
+    }
+  }
+}

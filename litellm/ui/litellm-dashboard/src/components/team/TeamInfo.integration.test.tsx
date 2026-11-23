@@ -127,9 +127,18 @@ vi.mock("@/components/mcp_server_management/MCPServerSelector", () => ({
 }));
 
 vi.mock("@/components/team/TeamMemberTab", () => ({
-  default: vi.fn(({ setIsAddMemberModalVisible }) => (
+  default: vi.fn(({ setIsAddMemberModalVisible, setSelectedEditMember, setIsEditMemberModalVisible }) => (
     <div>
       <button onClick={() => setIsAddMemberModalVisible(true)}>Add Member</button>
+      <button
+        type="button"
+        onClick={() => {
+          setSelectedEditMember({ user_id: "dev-example", user_email: "dev@example.com", role: "user" });
+          setIsEditMemberModalVisible(true);
+        }}
+      >
+        Edit dev@example.com
+      </button>
     </div>
   )),
 }));
@@ -140,19 +149,6 @@ vi.mock("@/components/common_components/user_search_modal", () => ({
       <div>
         <button onClick={onCancel}>Cancel</button>
         <button onClick={() => onSubmit({ user_email: "new@test.com", user_id: "new-user", role: "user" })}>
-          Submit
-        </button>
-      </div>
-    ) : null,
-  ),
-}));
-
-vi.mock("@/components/team/EditMembership", () => ({
-  default: vi.fn(({ visible, onCancel, onSubmit }) =>
-    visible ? (
-      <div>
-        <button onClick={onCancel}>Cancel</button>
-        <button onClick={() => onSubmit({ user_email: "edit@test.com", user_id: "edit-user", role: "admin" })}>
           Submit
         </button>
       </div>
@@ -410,9 +406,8 @@ describe("TeamInfoView - member budget reset prompt", () => {
 
     renderWithProviders(<TeamInfoView {...props} />);
     await waitFor(() => expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0));
-    await user.click(screen.getByRole("tab", { name: "Settings" }));
-    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
-    await user.click(screen.getByText("Team Member Settings"));
+    await user.click(await screen.findByRole("tab", { name: "Member Defaults" }));
+    await user.click(await screen.findByRole("button", { name: "Edit Defaults" }));
     return await screen.findByLabelText("Default Budget (USD)");
   };
 
@@ -432,6 +427,8 @@ describe("TeamInfoView - member budget reset prompt", () => {
 
   it.each([
     ["members", "Members", true],
+    ["member-defaults", "Member Defaults", true],
+    ["member-defaults", "Member Defaults", false],
     ["member-permissions", "Member Permissions", true],
     ["settings", "Settings", true],
     ["settings", "Settings", false],
@@ -492,6 +489,23 @@ describe("TeamInfoView - member budget reset prompt", () => {
     expect(within(keyPanel).getByRole("tab", { name: "Settings" })).toHaveAttribute("aria-selected", "true");
     await user.click(screen.getByRole("button", { name: "Back to Keys" }));
     expect(await screen.findByRole("button", { name: "example-key" })).toBeInTheDocument();
+  });
+
+  it("opens the inherited member's team keys without updating their model scope", async () => {
+    const user = userEvent.setup({ delay: null });
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData() as TeamData);
+    renderWithProviders(<TeamInfoView {...props} />, { searchParams: { detail_tab: "members" } });
+
+    await user.click(await screen.findByRole("button", { name: "Edit dev@example.com" }));
+    await user.click(await screen.findByRole("button", { name: "View member’s keys" }));
+
+    expect(screen.getByRole("tab", { name: "Virtual Keys" })).toHaveAttribute("aria-selected", "true");
+    expect(mockUseKeys).toHaveBeenCalledWith(
+      1,
+      50,
+      expect.objectContaining({ teamID: "123", ownerUserID: "dev-example" }),
+    );
+    expect(networking.teamMemberUpdateCall).not.toHaveBeenCalled();
   });
 
   it("holds the save behind the prompt when the default changes while a member has a custom budget", async () => {
@@ -719,9 +733,8 @@ describe("TeamInfoView - member budget reset prompt", () => {
 
     const { rerender } = renderWithProviders(<TeamInfoView {...props} />);
     await waitFor(() => expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0));
-    await user.click(screen.getByRole("tab", { name: "Settings" }));
-    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
-    await user.click(screen.getByText("Team Member Settings"));
+    await user.click(await screen.findByRole("tab", { name: "Member Defaults" }));
+    await user.click(await screen.findByRole("button", { name: "Edit Defaults" }));
     const input = await screen.findByLabelText("Default Budget (USD)");
 
     await submitNewDefault(user, input, "20");
@@ -748,9 +761,8 @@ describe("TeamInfoView - member budget reset prompt", () => {
 
     const { rerender } = renderWithProviders(<TeamInfoView {...props} />);
     await waitFor(() => expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0));
-    await user.click(screen.getByRole("tab", { name: "Settings" }));
-    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
-    await user.click(screen.getByText("Team Member Settings"));
+    await user.click(await screen.findByRole("tab", { name: "Member Defaults" }));
+    await user.click(await screen.findByRole("button", { name: "Edit Defaults" }));
     const input = await screen.findByLabelText("Default Budget (USD)");
 
     await submitNewDefault(user, input, "20");
@@ -805,9 +817,8 @@ describe("TeamInfoView - member budget reset prompt", () => {
 
     renderWithProviders(<TeamInfoView {...props} premiumUser />);
     await waitFor(() => expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0));
-    await user.click(screen.getByRole("tab", { name: "Settings" }));
-    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
-    await user.click(screen.getByText("Team Member Settings"));
+    await user.click(await screen.findByRole("tab", { name: "Member Defaults" }));
+    await user.click(await screen.findByRole("button", { name: "Edit Defaults" }));
     await screen.findByPlaceholderText("Max Budget");
     await user.click(screen.getByRole("button", { name: /save changes/i }));
 
@@ -833,9 +844,8 @@ describe("TeamInfoView - member budget reset prompt", () => {
 
     renderWithProviders(<TeamInfoView {...props} premiumUser />);
     await waitFor(() => expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0));
-    await user.click(screen.getByRole("tab", { name: "Settings" }));
-    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
-    await user.click(screen.getByText("Team Member Settings"));
+    await user.click(await screen.findByRole("tab", { name: "Member Defaults" }));
+    await user.click(await screen.findByRole("button", { name: "Edit Defaults" }));
     fireEvent.change(await screen.findByPlaceholderText("Max Budget"), { target: { value: "7" } });
     await user.click(screen.getByRole("button", { name: /save changes/i }));
 
@@ -856,9 +866,8 @@ describe("TeamInfoView - member budget reset prompt", () => {
 
     renderWithProviders(<TeamInfoView {...props} userModels={["gpt-4o", "claude-haiku-4-5"]} premiumUser />);
     await waitFor(() => expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0));
-    await user.click(screen.getByRole("tab", { name: "Settings" }));
-    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
-    await user.click(screen.getByText("Team Member Settings"));
+    await user.click(await screen.findByRole("tab", { name: "Member Defaults" }));
+    await user.click(await screen.findByRole("button", { name: "Edit Defaults" }));
     await user.click(screen.getAllByRole("button", { name: /add model budget/i })[0]);
     await user.click(screen.getByPlaceholderText("Select model"));
 
@@ -871,9 +880,8 @@ describe("TeamInfoView - member budget reset prompt", () => {
 
     renderWithProviders(<TeamInfoView {...props} userModels={["gpt-4o", "claude-haiku-4-5"]} premiumUser />);
     await waitFor(() => expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0));
-    await user.click(screen.getByRole("tab", { name: "Settings" }));
-    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
-    await user.click(screen.getByText("Team Member Settings"));
+    await user.click(await screen.findByRole("tab", { name: "Member Defaults" }));
+    await user.click(await screen.findByRole("button", { name: "Edit Defaults" }));
     await user.click(screen.getAllByRole("button", { name: /add model budget/i })[0]);
     await user.click(screen.getByPlaceholderText("Select model"));
 
@@ -882,7 +890,7 @@ describe("TeamInfoView - member budget reset prompt", () => {
   });
 });
 
-describe("TeamInfoView - model settings", () => {
+describe("TeamInfoView - team settings", () => {
   const props = {
     teamId: "123",
     onUpdate: vi.fn(),
@@ -895,6 +903,39 @@ describe("TeamInfoView - model settings", () => {
 
   beforeEach(() => {
     seedDefaultMocks();
+  });
+
+  it("shows custom team metadata without opening the settings editor", async () => {
+    const user = userEvent.setup({ delay: null });
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(
+      createMockTeamData({
+        caller_edit_access: {
+          kind: "team_admin",
+          editable_fields: ["metadata"],
+          proxy_controlled_metadata_keys: ["internal_setting"],
+        },
+        metadata: {
+          region: "us",
+          review_required: true,
+          tags: ["dev"],
+          require_trace_id: true,
+          internal_setting: "enabled",
+        },
+      }),
+    );
+    renderWithProviders(<TeamInfoView {...props} is_proxy_admin={false} userModels={[]} />);
+    await user.click(await screen.findByRole("tab", { name: "Settings" }));
+
+    const settings = within(screen.getByRole("tabpanel", { name: "Settings" }));
+    expect(settings.getByRole("heading", { name: "Metadata" })).toBeVisible();
+    expect(settings.getByText("region")).toBeVisible();
+    expect(settings.getByText("us")).toBeVisible();
+    expect(settings.getByText("review_required")).toBeVisible();
+    expect(settings.getByText("true")).toBeVisible();
+    expect(settings.getByText("tags")).toBeVisible();
+    expect(settings.getByText('["dev"]')).toBeVisible();
+    expect(settings.queryByText("require_trace_id")).not.toBeInTheDocument();
+    expect(settings.queryByText("internal_setting")).not.toBeInTheDocument();
   });
 
   it("submits the prompt storage restriction in team metadata", async () => {
@@ -945,6 +986,23 @@ describe("TeamInfoView - model settings", () => {
     const payload = vi.mocked(networking.teamUpdateCall).mock.calls[0][1];
     expect(payload).toMatchObject({ team_id: "123", max_budget: 100 });
     expect(payload).not.toHaveProperty("models");
+  });
+
+  it("submits a semantic cache threshold in team metadata", async () => {
+    const user = userEvent.setup({ delay: null });
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData({ metadata: { region: "us" } }));
+    renderWithProviders(<TeamInfoView {...props} userModels={[]} />);
+
+    await user.click(await screen.findByRole("tab", { name: "Settings" }));
+    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+    fireEvent.change(await screen.findByLabelText("Similarity threshold"), { target: { value: "0" } });
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(networking.teamUpdateCall).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(networking.teamUpdateCall).mock.calls[0][1].metadata).toMatchObject({
+      region: "us",
+      cache_params: { similarity_threshold: 0 },
+    });
   });
 
   it("discards a cancelled model clear but saves an intentional clear of unrestricted access", async () => {
@@ -1031,8 +1089,10 @@ describe("TeamInfoView - vector stores from access groups", () => {
       />,
     );
 
-    expect(await screen.findByTitle("Granted via access group kb-readers. Full ID: store-a")).toHaveTextContent(
-      "Parks knowledge base (store-a) (access group)",
+    await waitFor(() =>
+      expect(screen.getByTitle("Granted via access group kb-readers. Full ID: store-a")).toHaveTextContent(
+        "Parks knowledge base (store-a) (access group)",
+      ),
     );
     expect(screen.queryByText("No vector stores configured")).not.toBeInTheDocument();
 

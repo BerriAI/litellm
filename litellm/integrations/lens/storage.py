@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import Final, TypeVar
 
 from pydantic import TypeAdapter, ValidationError
@@ -10,6 +11,7 @@ from litellm.integrations.lens.generated.types import (
     SpanDetail,
     SpanErrorPage,
     Trace,
+    TraceConversationPage,
     TracePage,
     TraceScope,
 )
@@ -23,7 +25,8 @@ _TRACE_PAGE: Final = TypeAdapter(TracePage)
 _TRACE: Final[TypeAdapter[Trace | None]] = TypeAdapter(Trace | None)
 _SPAN_DETAIL: Final[TypeAdapter[SpanDetail | None]] = TypeAdapter(SpanDetail | None)
 _SPAN_ERROR_PAGE: Final[TypeAdapter[SpanErrorPage | None]] = TypeAdapter(SpanErrorPage | None)
-_ResponseT: Final = TypeVar("_ResponseT")
+_CONVERSATION_PAGE: Final[TypeAdapter[TraceConversationPage | None]] = TypeAdapter(TraceConversationPage | None)
+_ResponseT = TypeVar("_ResponseT")
 
 
 def _decode_query_response(adapter: TypeAdapter[_ResponseT], body: str) -> _ResponseT:
@@ -43,6 +46,9 @@ def _validate_query_response(adapter: TypeAdapter[_ResponseT], value: object) ->
 class LensTraceStorage:
     def __init__(self, remote: RemoteTraceStore) -> None:
         self._remote: Final = remote
+
+    async def forward(self, path: str, body: bytes, headers: Mapping[str, str]) -> tuple[int, bytes] | None:
+        return await self._remote.forward(path, body, headers)
 
     async def list_traces(
         self,
@@ -69,6 +75,17 @@ class LensTraceStorage:
     async def get_span(self, trace_id: str, span_id: str, scope: TraceScope, trace_ref: str = "") -> SpanDetail | None:
         result: Final = await self._remote.get_span(trace_id, span_id, scope, trace_ref)
         return _validate_query_response(_SPAN_DETAIL, result)
+
+    async def get_conversation(
+        self,
+        trace_id: str,
+        scope: TraceScope,
+        trace_ref: str = "",
+        cursor: str | None = None,
+        page_size: int | None = None,
+    ) -> TraceConversationPage | None:
+        result: Final = await self._remote.get_conversation(trace_id, scope, trace_ref, cursor, page_size)
+        return _validate_query_response(_CONVERSATION_PAGE, result)
 
     async def get_span_error(
         self, trace_id: str, span_id: str, scope: TraceScope, trace_ref: str = "", cursor: str | None = None

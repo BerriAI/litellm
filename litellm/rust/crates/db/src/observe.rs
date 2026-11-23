@@ -37,10 +37,10 @@ pub async fn observe<T>(
     let result = query.await;
     let outcome = match &result {
         Ok(_) => Some(Outcome::Succeeded),
-        Err(error @ Error::Query(_)) => Some(Outcome::Failed(
+        Err(Error::InvalidDuration(_)) => None,
+        Err(error) => Some(Outcome::Failed(
             litellm_error::Report::new(error).to_string(),
         )),
-        Err(_) => None,
     };
     if let Some(outcome) = outcome {
         observer.record(QueryEvent {
@@ -110,6 +110,22 @@ mod tests {
         assert_eq!(outcomes.len(), 1);
         assert!(
             matches!(&outcomes[0], (call, Outcome::Failed(message)) if *call == CALL && message.contains("pool timed out"))
+        );
+    }
+
+    #[tokio::test]
+    async fn records_a_transaction_that_timed_out() {
+        let recording = Recording::default();
+
+        let result = observe(&recording, CALL, async {
+            Err::<(), _>(Error::TransactionTimedOut)
+        })
+        .await;
+
+        assert!(result.is_err());
+        assert_eq!(
+            recording.outcomes(),
+            vec![(CALL, Outcome::Failed("transaction timed out".to_owned()))]
         );
     }
 

@@ -1,4 +1,6 @@
 "use client";
+import { LensCreateField } from "@/components/lens/LensControls";
+import { readLensPolicy, readLensPolicyJson, type LensPolicy } from "@/components/lens/lensPolicy";
 import { useTerminology } from "@/contexts/TerminologyContext";
 import { keyKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
@@ -99,6 +101,7 @@ import {
   anotherUserScope,
   effectiveKeyOwner,
   isTeamMemberOwner,
+  keyOwnerOption,
   teamMemberOwnerOptions,
   teamMemberOwnerPlaceholder,
 } from "./createKeyOwnerAccess";
@@ -207,12 +210,6 @@ interface CreateKeyProps {
   prefillData?: CreateKeyPrefillData;
 }
 
-interface User {
-  user_id: string;
-  user_email: string | null;
-  role?: string;
-}
-
 export const fetchTeamModels = async (
   userID: string,
   userRole: string,
@@ -310,6 +307,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
   const [policiesList, setPoliciesList] = useState<string[]>([]);
   const [promptsList, setPromptsList] = useState<string[]>([]);
   const [loggingSettings, setLoggingSettings] = useState<any[]>([]);
+  const [lensPolicy, setLensPolicy] = useState<LensPolicy>(null);
   const [selectedCreateKeyTeam, setSelectedCreateKeyTeam] = useState<Team | null>(initialTeam);
   const [selectedOrganizationId, setSelectedOrganizationId] = useState<string | null>(null);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
@@ -370,6 +368,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
     setApiKey(null);
     setSelectedCreateKeyTeam(null);
     form.reset(formDefaults);
+    setLensPolicy(null);
     setLoggingSettings([]);
     setDisabledCallbacks([]);
     setKeyType("llm_api");
@@ -510,6 +509,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
     try {
       const input: KeyCreateInput = {
         formValues,
+        lensPolicy,
         existingKeys: data,
         keyOwner,
         userID,
@@ -557,6 +557,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
       setApiKey(response["key"]);
       toast.success(t("createKey.toasts.created"));
       form.reset(formDefaults);
+      setLensPolicy(null);
       setBudgetLimits([]);
       setTagRateLimits([]);
       setBudgetFallbacks({});
@@ -684,13 +685,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
       const response = await userFilterUICall(accessToken, params);
       if (!isLatestSearch()) return;
 
-      const data: User[] = response;
-      const options: SearchSelectOption[] = data.map((user) => ({
-        label: user.user_email ? `${user.user_email} (${user.user_id})` : user.user_id,
-        value: user.user_id,
-      }));
-
-      setUserOptions(options);
+      setUserOptions(response.map(keyOwnerOption));
     } catch (error) {
       console.error("Error fetching users:", error);
       if (isLatestSearch()) toast.fromError(t("createKey.toasts.userSearchFailed"));
@@ -847,6 +842,11 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
           </DialogHeader>
           <MountedFormProvider value={mountedForm}>
             <form onSubmit={handleSubmit}>
+              <LensCreateField
+                policy={lensPolicy ?? readLensPolicyJson(form.watch("metadata"))}
+                teamPolicy={readLensPolicy(selectedCreateKeyTeam?.metadata)}
+                onChange={setLensPolicy}
+              />
               {/* Section 1: Key Ownership */}
               <div className="mb-8">
                 <h3 className="text-lg font-medium text-foreground mb-4">{t("createKey.sections.ownership")}</h3>
