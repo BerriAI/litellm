@@ -57,19 +57,19 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: Mapping[str, object],
-        litellm_params: Mapping[str, object],
+        optional_params: dict,
+        litellm_params: dict,
         stream: bool | None = None,
     ) -> str:
         return ensure_api_route(get_voyage_api_base(api_base, api_key), "contextualizedembeddings")
 
-    def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: base class signature
+    def get_supported_openai_params(self, model: str) -> list:  # mutable-ok: base class signature
         return ["encoding_format", "dimensions"]
 
     def map_openai_params(
         self,
-        non_default_params: dict[str, object],  # mutable-ok: base class signature
-        optional_params: dict[str, object],  # mutable-ok: base class signature
+        non_default_params: dict,  # mutable-ok: base class signature
+        optional_params: dict,  # mutable-ok: base class signature
         model: str,
         drop_params: bool,
     ) -> dict:  # mutable-ok: base class signature
@@ -86,14 +86,14 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
 
     def validate_environment(
         self,
-        headers: dict[str, object],  # mutable-ok: base class signature
+        headers: dict,  # mutable-ok: base class signature
         model: str,
         messages: list[AllMessageValues],
-        optional_params: Mapping[str, object],
-        litellm_params: Mapping[str, object],
+        optional_params: dict,
+        litellm_params: dict,
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict[str, str]:
+    ) -> dict:
         return {
             "Authorization": f"Bearer {get_voyage_api_key(api_key)}",
         }
@@ -104,9 +104,9 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
         self,
         model: str,
         input: AllEmbeddingInputValues | list[list[str]],
-        optional_params: Mapping[str, object],
-        headers: Mapping[str, object],
-    ) -> dict[str, object]:
+        optional_params: dict,
+        headers: dict,
+    ) -> dict:
         return {
             "inputs": [input] if isinstance(input, str) else input,
             "model": model,
@@ -136,9 +136,9 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
         model_response: EmbeddingResponse,
         logging_obj: LiteLLMLoggingObj,
         api_key: str | None = None,
-        request_data: Mapping[str, object] = {},
-        optional_params: Mapping[str, object] = {},
-        litellm_params: Mapping[str, object] = {},
+        request_data: dict = {},
+        optional_params: dict = {},
+        litellm_params: dict = {},
     ) -> EmbeddingResponse:
         try:
             raw_response_json: Final = raw_response.json()

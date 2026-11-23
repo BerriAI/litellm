@@ -7,7 +7,7 @@ LiteLLM Docs: https://docs.litellm.ai/docs/providers/aws_sagemaker#sagemaker-mes
 Huggingface Docs: https://huggingface.co/docs/text-generation-inference/en/messages_api
 """
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, ClassVar, Final, cast
 
 import httpx
@@ -54,8 +54,8 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
         headers: dict,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: Mapping[str, object],
-        litellm_params: Mapping[str, object],
+        optional_params: dict,
+        litellm_params: dict,
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
@@ -73,10 +73,10 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
         self,
         model: str,
         messages: list[AllMessageValues],  # mutable-ok: matches the base chat transform signature
-        optional_params: dict[str, object],  # mutable-ok: matches the base chat transform signature
-        litellm_params: dict[str, object],  # mutable-ok: matches the base chat transform signature
-        headers: dict[str, object],  # mutable-ok: matches the base chat transform signature
-    ) -> dict[str, object]:  # mutable-ok: the handler sends this body straight to httpx
+        optional_params: dict,  # mutable-ok: matches the base chat transform signature
+        litellm_params: dict,  # mutable-ok: matches the base chat transform signature
+        headers: dict,  # mutable-ok: matches the base chat transform signature
+    ) -> dict:  # mutable-ok: the handler sends this body straight to httpx
         request: Final[dict[str, object]] = super().transform_request(  # mutable-ok: base transform returns a dict
             model=model,
             messages=messages,
@@ -96,8 +96,8 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict[str, object],
-        litellm_params: Mapping[str, object],
+        optional_params: dict,
+        litellm_params: dict,
         stream: bool | None = None,
     ) -> str:
         aws_region_name: Final = self._get_aws_region_name(
@@ -119,9 +119,9 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
 
     def sign_request(
         self,
-        headers: dict[str, object],
-        optional_params: dict[str, object],
-        request_data: dict[str, object],
+        headers: dict,
+        optional_params: dict,
+        request_data: dict,
         api_base: str,
         api_key: str | None = None,
         model: str | None = None,
@@ -154,9 +154,9 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
         custom_llm_provider: str,
         logging_obj: LiteLLMLoggingObj,
         api_base: str,
-        headers: dict[str, object],
-        data: dict[str, object],
-        messages: Sequence[object],
+        headers: dict,
+        data: dict,
+        messages: list,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
@@ -201,9 +201,9 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
         custom_llm_provider: str,
         logging_obj: LiteLLMLoggingObj,
         api_base: str,
-        headers: dict[str, object],
-        data: dict[str, object],
-        messages: Sequence[object],
+        headers: dict,
+        data: dict,
+        messages: list,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
