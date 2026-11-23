@@ -3385,10 +3385,10 @@ def test_sanitize_guardrail_information_redacts_all_prompt_carrying_fields_when_
 
     assert result is not None
     entry = result[0]
-    assert entry["guardrail_request"] == REDACTED_BY_LITELM_STRING
-    assert entry["guardrail_response"] == REDACTED_BY_LITELM_STRING
-    assert entry["match_details"] == REDACTED_BY_LITELM_STRING
-    assert entry["classification"] == REDACTED_BY_LITELM_STRING
+    assert entry["guardrail_request"] is None
+    assert entry["guardrail_response"] is None
+    assert entry["match_details"] is None
+    assert entry["classification"] is None
     assert entry["guardrail_name"] == "demo-echo-guard"
     assert entry["guardrail_status"] == "success"
     assert entry["guardrail_action"] == "NONE"
@@ -3434,8 +3434,8 @@ def test_sanitize_guardrail_information_redacts_prompt_fields_when_flag_false(
     assert result is not None
     assert len(result) == 1
     entry = result[0]
-    assert entry["guardrail_request"] == REDACTED_BY_LITELM_STRING
-    assert entry["guardrail_response"] == REDACTED_BY_LITELM_STRING
+    assert entry["guardrail_request"] is None
+    assert entry["guardrail_response"] is None
     assert entry["guardrail_name"] == "demo-echo-guard"
     assert entry["guardrail_provider"] == "custom"
     assert entry["guardrail_mode"] == "pre_call"
@@ -3486,7 +3486,7 @@ def test_sanitize_guardrail_information_preserves_guardrail_usage_when_flag_fals
 
     assert result is not None
     entry = result[0]
-    assert entry["guardrail_response"] == REDACTED_BY_LITELM_STRING
+    assert entry["guardrail_response"] is None
     assert entry["guardrail_usage"] == {"topicPolicyUnits": 1, "contentPolicyUnits": 1, "wordPolicyUnits": 0}
 
 
@@ -3545,7 +3545,7 @@ def test_sanitize_guardrail_information_normalizes_bare_dict_input(mock_should_s
     assert isinstance(result, list)
     assert len(result) == 1
     entry = result[0]
-    assert entry["guardrail_response"] == REDACTED_BY_LITELM_STRING
+    assert entry["guardrail_response"] is None
     assert entry["guardrail_name"] == "xecguard"
     assert entry["guardrail_status"] == "success"
     assert entry["start_time"] == 1.0
@@ -3567,7 +3567,7 @@ def test_sanitize_guardrail_information_drops_non_dict_items_in_list(mock_should
 
     result = _sanitize_guardrail_information_for_spend_logs(mixed_input)
 
-    assert result == [{"guardrail_name": "x", "guardrail_response": REDACTED_BY_LITELM_STRING}]
+    assert result == [{"guardrail_name": "x", "guardrail_response": None}]
 
 
 @patch("litellm.proxy.spend_tracking.spend_tracking_utils.should_store_prompts_and_responses_in_spend_logs")
@@ -3592,7 +3592,7 @@ def test_sanitize_guardrail_information_preserves_absent_prompt_fields(mock_shou
     assert result is not None
     entry = result[0]
     assert "guardrail_request" not in entry
-    assert entry["guardrail_response"] == REDACTED_BY_LITELM_STRING
+    assert entry["guardrail_response"] is None
     assert entry["guardrail_name"] == "demo-echo-guard"
     assert entry["guardrail_status"] == "success"
 
@@ -3638,10 +3638,119 @@ def test_get_logging_payload_redacts_guardrail_prompt_fields_when_flag_false():
 
     metadata_result = json.loads(payload["metadata"])
     stored = metadata_result["guardrail_information"][0]
-    assert stored["guardrail_request"] == REDACTED_BY_LITELM_STRING
-    assert stored["guardrail_response"] == REDACTED_BY_LITELM_STRING
+    assert stored["guardrail_request"] is None
+    assert stored["guardrail_response"] is None
     assert stored["guardrail_name"] == "demo-echo-guard"
     assert stored["guardrail_status"] == "success"
+
+
+_PASSED_CONTENT_FILTER_ENTRY: Final[dict[str, object]] = {
+    "guardrail_name": "api-key-regex",
+    "guardrail_provider": "litellm_content_filter",
+    "guardrail_status": "success",
+    "guardrail_response": [],
+    "match_details": None,
+    "masked_entity_count": {},
+    "patterns_checked": 1,
+}
+_MASKED_CONTENT_FILTER_ENTRY: Final[dict[str, object]] = {
+    "guardrail_name": "api-key-mask",
+    "guardrail_provider": "litellm_content_filter",
+    "guardrail_status": "success",
+    "guardrail_response": [{"type": "pattern", "pattern_name": "aws_access_key", "action": "MASK"}],
+    "match_details": [{"type": "pattern", "snippet": "AKIA", "action_taken": "MASK"}],
+    "masked_entity_count": {"aws_access_key": 1},
+}
+_MASKED_CONTENT_FILTER_ENTRY_STORED: Final[dict[str, object]] = {
+    **_MASKED_CONTENT_FILTER_ENTRY,
+    "guardrail_response": None,
+    "match_details": None,
+}
+_PROMPTS_NOT_STORED: Final[dict[str, object]] = {"store_prompts_in_spend_logs": False}
+
+
+@pytest.mark.parametrize(
+    "empty_fields",
+    [
+        {"guardrail_response": [], "match_details": None},
+        {"guardrail_request": "", "guardrail_response": {}, "match_details": [], "classification": None},
+        {"guardrail_request": None, "guardrail_response": "", "classification": {}},
+        {"guardrail_response": (), "match_details": ""},
+    ],
+)
+@patch("litellm.proxy.proxy_server.general_settings", _PROMPTS_NOT_STORED)
+def test_sanitize_guardrail_information_leaves_an_empty_prompt_field_as_it_is(
+    empty_fields: dict[str, object],
+) -> None:
+    entry: Final[dict[str, object]] = {
+        "guardrail_name": "api-key-regex",
+        "guardrail_status": "success",
+        **empty_fields,
+    }
+
+    assert _sanitize_guardrail_information_for_spend_logs([entry]) == [entry]
+
+
+@pytest.mark.parametrize("held", [0, 0.0, False, " ", [None], {"": None}])
+@patch("litellm.proxy.proxy_server.general_settings", _PROMPTS_NOT_STORED)
+def test_sanitize_guardrail_information_stores_none_for_a_prompt_field_that_holds_any_value(held: object) -> None:
+    entry: Final[dict[str, object]] = {
+        "guardrail_name": "classifier",
+        "classification": held,
+        "guardrail_response": held,
+    }
+
+    assert _sanitize_guardrail_information_for_spend_logs([entry]) == [
+        {
+            "guardrail_name": "classifier",
+            "classification": None,
+            "guardrail_response": None,
+        }
+    ]
+
+
+@patch("litellm.proxy.proxy_server.general_settings", _PROMPTS_NOT_STORED)
+def test_sanitize_guardrail_information_blanks_only_the_fields_and_entries_that_hold_a_value() -> None:
+    half_empty: Final[dict[str, object]] = {
+        "guardrail_name": "echo",
+        "guardrail_request": {"text": "secret"},
+        "guardrail_response": [],
+    }
+
+    result: Final = _sanitize_guardrail_information_for_spend_logs(
+        [_PASSED_CONTENT_FILTER_ENTRY, _MASKED_CONTENT_FILTER_ENTRY, half_empty, _PASSED_CONTENT_FILTER_ENTRY]
+    )
+
+    assert result == [
+        _PASSED_CONTENT_FILTER_ENTRY,
+        _MASKED_CONTENT_FILTER_ENTRY_STORED,
+        {"guardrail_name": "echo", "guardrail_request": None, "guardrail_response": []},
+        _PASSED_CONTENT_FILTER_ENTRY,
+    ]
+
+
+@patch("litellm.proxy.proxy_server.master_key", "sk-master")
+@patch("litellm.proxy.proxy_server.general_settings", _PROMPTS_NOT_STORED)
+def test_get_logging_payload_writes_no_marker_for_any_guardrail_run() -> None:
+    kwargs: Final[dict[str, object]] = {
+        "model": "gpt-4o-mini",
+        "litellm_call_id": "test-call-id",
+        "litellm_params": {
+            "metadata": {
+                "user_api_key": "test-key",
+                "standard_logging_guardrail_information": [_PASSED_CONTENT_FILTER_ENTRY, _MASKED_CONTENT_FILTER_ENTRY],
+            },
+            "proxy_server_request": {},
+        },
+    }
+    now: Final = datetime.datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+    payload: Final = get_logging_payload(kwargs=kwargs, response_obj={}, start_time=now, end_time=now)
+
+    assert json.loads(payload["metadata"])["guardrail_information"] == [
+        _PASSED_CONTENT_FILTER_ENTRY,
+        _MASKED_CONTENT_FILTER_ENTRY_STORED,
+    ]
 
 
 def test_get_logging_payload_guardrail_info_when_no_standard_logging_payload():
@@ -5055,9 +5164,7 @@ def test_get_logging_payload_uses_recovered_combined_usage_on_failure():
     assert payload["total_tokens"] == 31
 
 
-def _fallback_after_a_failed_follow_up(
-    cache_hit: bool, request_params: Mapping[str, object] = MappingProxyType({})
-):
+def _fallback_after_a_failed_follow_up(cache_hit: bool, request_params: Mapping[str, object] = MappingProxyType({})):
     from litellm.litellm_core_utils.hidden_params import set_hidden_param
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.types.utils import ModelResponse, Usage
@@ -5505,7 +5612,7 @@ def test_sanitize_guardrail_information_preserves_headroom_compression_token_sta
         "tokens_saved": 600,
         "compression_ratio": 0.4,
     }
-    assert result[1]["guardrail_response"] == REDACTED_BY_LITELM_STRING
+    assert result[1]["guardrail_response"] is None
 
 
 @pytest.mark.asyncio
@@ -5781,7 +5888,9 @@ def test_get_spend_logs_id_prefers_the_response_id_for_batch_and_file_calls(call
     ],
     ids=["charged", "free", "unpriced", "non_finite"],
 )
-def test_get_logging_payload_gives_only_a_charged_video_poll_a_row_of_its_own(status_call_type, response_cost, status_id):
+def test_get_logging_payload_gives_only_a_charged_video_poll_a_row_of_its_own(
+    status_call_type, response_cost, status_id
+):
     """A custom provider charges the video on the poll that sees it completed, so that poll needs
     a row apart from the create row, which answers with the same video id and would drop it on the
     skip_duplicates insert. A poll that charges nothing keeps the bare id, so it still lands on the
@@ -5802,7 +5911,10 @@ def test_get_logging_payload_gives_only_a_charged_video_poll_a_row_of_its_own(st
             start_time=datetime.datetime.now(timezone.utc),
             end_time=datetime.datetime.now(timezone.utc),
         )
-        for call_type, call_id, cost in (("avideo_generation", "call-1", 0.42), (status_call_type, "call-2", response_cost))
+        for call_type, call_id, cost in (
+            ("avideo_generation", "call-1", 0.42),
+            (status_call_type, "call-2", response_cost),
+        )
     )
 
     assert create["request_id"] == "video_abc"

@@ -1168,9 +1168,9 @@ def _sanitize_guardrail_information_for_spend_logs(
     metadata: Mapping[str, object] | None = None,
 ) -> list[StandardLoggingGuardrailInformation] | None:
     """
-    When ``store_prompts_in_spend_logs`` is False, redact prompt-carrying fields
+    When ``store_prompts_in_spend_logs`` is False, blank prompt-carrying fields
     (``guardrail_request``, ``guardrail_response``, ``match_details``,
-    ``classification``) before they land in ``LiteLLM_SpendLogs.metadata``.
+    ``classification``) to ``None`` before they land in ``LiteLLM_SpendLogs.metadata``.
 
     Guardrail hooks may echo the LLM request payload back into
     ``guardrail_response``, and two first-party hooks
@@ -1192,11 +1192,20 @@ def _sanitize_guardrail_information_for_spend_logs(
     return [_redact_prompt_fields_in_guardrail_entry(entry) for entry in entries if isinstance(entry, dict)]
 
 
+def _holds_nothing(value: object) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, (str, list, tuple, dict)):
+        return len(value) == 0  # pyright: ignore[reportUnknownArgumentType]  # only its length is read
+    return False
+
+
 def _redact_prompt_fields_in_guardrail_entry(
     entry: StandardLoggingGuardrailInformation,
 ) -> StandardLoggingGuardrailInformation:
     """
-    Replace prompt-carrying fields with the redaction marker. Purely numeric
+    Store ``None`` in place of every prompt-carrying field that holds a value. A field that is
+    ``None`` or an empty string, list or dict is stored as it is. Purely numeric
     compression stats inside ``guardrail_response`` (e.g. Headroom's
     ``tokens_saved``) cannot carry prompt content, so they are preserved as a
     stats-only dict; spend aggregation reads them via
@@ -1205,7 +1214,11 @@ def _redact_prompt_fields_in_guardrail_entry(
     preserved_stats: Final = numeric_compression_stats(entry)
     redacted: Final[StandardLoggingGuardrailInformation] = {
         **entry,
-        **{key: REDACTED_BY_LITELM_STRING for key in PROMPT_CARRYING_GUARDRAIL_FIELDS if key in entry},
+        **{
+            key: None
+            for key, value in entry.items()
+            if key in PROMPT_CARRYING_GUARDRAIL_FIELDS and not _holds_nothing(value)
+        },
     }
     if preserved_stats is None:
         return redacted
