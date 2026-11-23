@@ -516,7 +516,11 @@ class RouteChecks:
 
     @staticmethod
     def runs_inference_checks(route: str) -> bool:
-        return route in _QUEUED_INFERENCE_ROUTES or RouteChecks.is_llm_api_route(route=route)
+        return (
+            route in _QUEUED_INFERENCE_ROUTES
+            or RouteChecks.is_live_session_accept_route(route)
+            or RouteChecks.is_llm_api_route(route=route)
+        )
 
     @staticmethod
     def is_llm_api_route(route: str) -> bool:
