@@ -6,7 +6,7 @@
 # +-------------------------------------------------------------+
 
 import os
-from collections.abc import AsyncGenerator, AsyncIterable
+from collections.abc import AsyncGenerator, AsyncIterable, Mapping
 from datetime import datetime
 from typing import TYPE_CHECKING, Final, Literal, Optional
 
@@ -33,6 +33,7 @@ from litellm.types.utils import (
     CallTypesLiteral,
     GenericGuardrailAPIInputs,
     GuardrailStatus,
+    LLMResponseTypes,
     ModelResponseStream,
 )
 
@@ -85,7 +86,7 @@ class EnkryptAIGuardrails(CustomGuardrail):
     async def _call_enkryptai_guardrails(
         self,
         prompt: str,
-        request_data: dict | None = None,
+        request_data: dict[str, object] | None = None,
     ) -> EnkryptAIResponse:
         """
         Call Enkrypt AI Guardrails API to detect potential issues in the given prompt.
@@ -365,7 +366,7 @@ class EnkryptAIGuardrails(CustomGuardrail):
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        response,
+        response: LLMResponseTypes,
     ):
         """
         Runs on response from LLM API call
@@ -467,7 +468,7 @@ class EnkryptAIGuardrails(CustomGuardrail):
         self,
         user_api_key_dict: UserAPIKeyAuth,
         response: AsyncIterable[ModelResponseStream],
-        request_data: dict,
+        request_data: Mapping[str, object],
     ) -> AsyncGenerator[ModelResponseStream, None]:
         """
         Passes the entire stream to the guardrail
