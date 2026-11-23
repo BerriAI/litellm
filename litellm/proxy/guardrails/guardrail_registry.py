@@ -880,7 +880,9 @@ class InMemoryGuardrailHandler:
         config_file_path: str | None,
         llm_router: Optional["Router"],
     ) -> GuardrailCallbacks:
-        initializer: Final = guardrail_initializer_registry.get(guardrail_type)
+        initializer: Final[Callable[..., CustomGuardrail | Sequence[CustomGuardrail] | None] | None] = (
+            guardrail_initializer_registry.get(guardrail_type)
+        )
         if initializer:
             import inspect
 
