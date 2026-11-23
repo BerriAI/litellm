@@ -18,7 +18,7 @@ from litellm.repositories.accounting_delivery_repository import (
 from litellm.repositories.spend_log_insert import spend_log_insert_statement
 from tests.integration._support.database import scratch_database
 
-_MIGRATIONS: Final = Path(__file__).resolve().parents[3] / "litellm-proxy-extras/litellm_proxy_extras/migrations"
+_MIGRATIONS: Final = Path(__file__).resolve().parents[3] / "litellm/proxy-extras/litellm_proxy_extras/migrations"
 
 
 @pytest.fixture
@@ -81,7 +81,7 @@ async def test_delivery_first_acceptance_deduplicates_all_storage_modes(
 ):
     from types import SimpleNamespace
 
-    from litellm.repositories.table_repositories import SpendLogsRepository
+    from litellm.repositories.spend_logs_repository import SpendLogsRepository
 
     if partitioned:
         delivery_database.execute('ALTER TABLE "LiteLLM_SpendLogs" RENAME TO spend_template')
@@ -122,7 +122,7 @@ async def test_delivery_first_acceptance_deduplicates_all_storage_modes(
 async def test_duplicate_rows_in_one_flush_keep_first_accounting_payload(delivery_database, delivery_client, mode):
     from types import SimpleNamespace
 
-    from litellm.repositories.table_repositories import SpendLogsRepository
+    from litellm.repositories.spend_logs_repository import SpendLogsRepository
 
     repository = SpendLogsRepository(SimpleNamespace(db=delivery_client, writer_db=delivery_client))
     first = {**_with_payload(_row("repeated")), "accounting_log_disabled": mode == "disabled"}
@@ -146,7 +146,7 @@ async def test_batch_charged_before_the_ledger_is_not_charged_again(
 ):
     from types import SimpleNamespace
 
-    from litellm.repositories.table_repositories import SpendLogsRepository
+    from litellm.repositories.spend_logs_repository import SpendLogsRepository
 
     batch: Final = {**_row("batch_legacy"), "call_type": "aretrieve_batch", "status": "success"}
     _insert(delivery_database, ({**batch, "spend": legacy_spend},), ledger=False)
@@ -164,7 +164,7 @@ async def test_transaction_a_rolls_back_payload_and_log_on_failure(delivery_data
     from prisma.errors import PrismaError
     from psycopg import sql
 
-    from litellm.repositories.table_repositories import SpendLogsRepository
+    from litellm.repositories.spend_logs_repository import SpendLogsRepository
 
     delivery_database.execute(
         sql.SQL("ALTER TABLE {} ADD CONSTRAINT reject_poison CHECK (request_id <> 'poison')").format(
@@ -373,13 +373,43 @@ async def test_receipt_cleanup_keeps_pending_and_parked_rows_and_reports_lag(
     )
     repository = AccountingDeliveryRepository(delivery_client)
     assert await repository.cleanup_applied() == 1
-    metrics = await repository.metrics()
-    assert metrics.pending_count == 1
-    assert metrics.parked_count == 1
-    assert metrics.oldest_pending_seconds >= 40 * 86400
+    backlog = await repository.backlog()
+    assert backlog.pending_count == 1
+    assert backlog.parked_count == 1
+    assert backlog.oldest_pending_seconds >= 40 * 86400
     assert delivery_database.execute(
         'SELECT request_id FROM "LiteLLM_SpendLogDelivery" ORDER BY request_id'
     ).fetchall() == [("parked",), ("pending",)]
+
+
+@pytest.mark.asyncio
+async def test_backlog_reads_only_unapplied_deliveries_however_many_receipts_are_retained(
+    delivery_database: psycopg.Connection[tuple[object, ...]], delivery_client: Prisma
+) -> None:
+    from litellm.repositories.accounting_delivery_repository import _BACKLOG
+
+    delivery_database.execute(
+        'INSERT INTO "LiteLLM_SpendLogDelivery" (delivery_id, request_id, accounting_payload, is_batch, state, applied_at) '
+        "SELECT 'applied-' || n, 'applied-' || n, jsonb_build_object('payload', repeat(md5(n::text), 32)), "
+        "n % 10 = 0, 'applied', CURRENT_TIMESTAMP FROM generate_series(1, 20000) AS n"
+    )
+    _insert(delivery_database, tuple(_row(state) for state in ("pending", "parked")))
+    delivery_database.execute(
+        'UPDATE "LiteLLM_SpendLogDelivery" SET state = request_id::"AccountingDeliveryState" '
+        "WHERE request_id IN ('pending', 'parked')"
+    )
+    delivery_database.execute('ANALYZE "LiteLLM_SpendLogDelivery"')
+    explained = delivery_database.execute(f"EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) {_BACKLOG}").fetchone()
+    assert explained is not None
+    plan = explained[0][0]["Plan"]
+    table_pages = delivery_database.execute(
+        "SELECT relpages FROM pg_class WHERE oid = '\"LiteLLM_SpendLogDelivery\"'::regclass"
+    ).fetchone()
+    assert table_pages is not None and table_pages[0] > 1000
+    assert plan["Shared Hit Blocks"] + plan["Shared Read Blocks"] < table_pages[0] / 20
+
+    backlog = await AccountingDeliveryRepository(delivery_client).backlog()
+    assert (backlog.pending_count, backlog.parked_count) == (1, 1)
 
 
 @pytest.mark.parametrize("delivery_database", ["public", "ledger_tenant"], indirect=True)
@@ -467,9 +497,9 @@ async def test_retention_keeps_batch_receipts_indefinitely(delivery_database, de
     assert await repository.cleanup_applied() == 1
     assert await repository.cleanup_applied() == 0
     assert delivery_database.execute('SELECT request_id FROM "LiteLLM_SpendLogDelivery"').fetchall() == [("batch",)]
-    metrics = await repository.metrics()
-    assert metrics.batch_count == 1
-    assert metrics.table_bytes > 0
+    storage = await repository.storage()
+    assert storage.batch_count == 1
+    assert storage.table_bytes > 0
 
 
 @pytest.mark.parametrize("disabled", [False, True])

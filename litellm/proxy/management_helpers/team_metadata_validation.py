@@ -18,6 +18,7 @@ from typing import Final, Literal, Protocol
 from fastapi import HTTPException, status
 from pydantic import JsonValue, TypeAdapter
 
+from litellm.integrations.lens.policy import lens_logging_metadata_error
 from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.proxy.management_endpoints.team_endpoints import (
@@ -164,6 +165,10 @@ async def validate_team_metadata_if_configured(
     registry: TeamMetadataValidatorRegistry = TEAM_METADATA_VALIDATOR_REGISTRY,
 ) -> None:
     from litellm.proxy.proxy_server import general_settings, premium_user
+
+    error: Final = lens_logging_metadata_error(metadata)
+    if error is not None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={"error": error})
 
     validator: Final = registry.get()
     if validator is None:

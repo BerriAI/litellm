@@ -3,6 +3,9 @@
 import re
 import traceback
 from collections.abc import AsyncGenerator, Mapping, Sequence
+from datetime import datetime
+from functools import cache
+from itertools import takewhile
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Optional
 
@@ -20,7 +23,6 @@ from litellm.types.utils import (
     CallTypesLiteral,
     LLMResponseTypes,
     ModelResponse,
-    ModelResponseStream,
     StandardAuditLogPayload,
     StandardBatchLineItemsPayload,
     StandardCallbackDynamicParams,
@@ -28,7 +30,7 @@ from litellm.types.utils import (
 )
 
 if TYPE_CHECKING:
-    from fastapi import HTTPException
+    from fastapi import APIRouter, HTTPException
     from opentelemetry.trace import Span as _Span
 
     from litellm.caching.caching import DualCache
@@ -36,6 +38,7 @@ if TYPE_CHECKING:
     from litellm.llms.base_llm.anthropic_messages.transformation import (
         BaseAnthropicMessagesConfig,
     )
+    from litellm.types.integrations.customer_budget import CustomerBudgetEvent
     from litellm.types.mcp import (
         MCPPostCallResponseObject,
         MCPPreCallRequestObject,
@@ -64,8 +67,15 @@ _BASE64_INLINE_PATTERN: Final = re.compile(
 
 
 class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callback#callback-class
+    logs_every_failed_attempt: ClassVar[bool] = False
+    reads_original_response: ClassVar[bool] = False
     # Class variables or attributes
     server_fulfilled_tool_names: ClassVar[frozenset[str]] = frozenset()
+    wants_failed_prompt_token_estimate: ClassVar[bool] = False
+    wants_chat_completion_hooks_on_bridged_chat: ClassVar[bool] = False
+    runs_on_no_log_requests: ClassVar[bool] = False
+    """Proxy accounting hooks that must see every request, ``no-log`` ones included. A class named ``_PROXY_*``
+    counts as one without setting this."""
 
     enforces_request_content: bool = False
     """
@@ -99,6 +109,18 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         """
         self.message_logging = message_logging
         self.turn_off_message_logging = turn_off_message_logging
+
+    async def async_setup_proxy(self) -> "APIRouter | None":
+        """
+        Runs once when the proxy starts, before it serves traffic. Raising aborts startup.
+
+        HTTP API routes on a returned router are added to the proxy behind LiteLLM key auth.
+        Websocket routes, mounts and plain Starlette routes are refused.
+        """
+        return None
+
+    async def async_close_proxy(self) -> None:
+        """Runs when the proxy shuts down, after in-flight requests and queued logs have drained."""
 
     @staticmethod
     def get_callback_env_vars(callback_name: str | None = None) -> list[str]:
@@ -193,8 +215,19 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         pass
 
+    async def async_log_failed_attempt(
+        self,
+        kwargs: Mapping[str, object],
+        start_time: datetime | float | None,
+        end_time: datetime | float | None,
+    ) -> None:
+        await self.async_log_failure_event(kwargs, None, start_time, end_time)
+
     async def async_log_audit_log_event(self, audit_log: "StandardAuditLogPayload"):
         """Called when an audit log is created. Override in subclasses to handle."""
+
+    async def async_on_customer_budget_event(self, event: "CustomerBudgetEvent") -> None:
+        pass
 
     async def async_log_batch_line_items(self, payload: StandardBatchLineItemsPayload) -> None:
         """Called once per part of a finished batch's lines, when this logger is listed in batch_line_item_callbacks."""
@@ -299,7 +332,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         request_data: dict,
         response: LLMResponseTypes,
         call_type: CallTypes | None,
-    ) -> LLMResponseTypes | None:
+    ) -> object:
         """
         Allow modifying / reviewing the response just after it's received from the deployment.
         """
@@ -433,7 +466,12 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         """Runs on the model listing routes (`/v1/models`, `/v1/models/{id}`, `/model/info`,
         `/model_group/info`) with the public model names the route would otherwise return, so a
         lookup of one model may offer just that name: decide per name, never by position in the
-        sequence. Return the names to keep as a sequence of strings; a name left out disappears
+        sequence. The names also include each unlisted model that a key alias, a team alias, or
+        `litellm.model_alias_map` sends a listed name to without checking the caller's access to that
+        model, and the model a `model_group_alias` of that name resolves to, and the listed name's row
+        carries that model's info only while the callback keeps all of them. Leaving one out hides
+        no listed name. Alias names a key or team maps without listing them are not offered. Return
+        the names to keep as a sequence of strings; a name left out disappears
         from every listing, any alias of it offered in the same call goes with it, and
         `/v1/models/{id}` answers 404 for it, exactly as for a model that does not exist. Names
         outside `model_names` are ignored, so a callback can only narrow the listing, never widen
@@ -528,7 +566,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         user_api_key_dict: UserAPIKeyAuth,
         response: Any,
         request_data: dict,
-    ) -> AsyncGenerator[ModelResponseStream, None]:
+    ) -> AsyncGenerator[object, None]:
         async for item in response:
             yield item
 
@@ -759,7 +797,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         response: object,
         plan: AgenticLoopPlan,
         kwargs: dict,
-    ) -> Any:
+    ) -> object:
         """
         Post-process the response returned by the agentic-loop follow-up call.
 
@@ -1115,3 +1153,9 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
                     msg[key] = self._redact_base64(value=val, max_depth=max_depth)
             filtered_messages.append(msg)
         return filtered_messages
+
+
+@cache
+def subclass_overrides_hook(cls: type, hook_name: str, base: type = CustomLogger) -> bool:
+    below_base: Final = takewhile(lambda klass: klass is not base, cls.__mro__)
+    return any(hook_name in vars(klass) for klass in below_base)

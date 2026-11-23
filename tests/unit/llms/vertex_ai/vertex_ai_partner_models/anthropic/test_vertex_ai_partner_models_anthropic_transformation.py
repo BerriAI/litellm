@@ -1506,3 +1506,52 @@ def test_beta_detection_preserves_unrecognized_thinking(thinking: object) -> Non
 
     assert result["thinking"] == thinking
     assert ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER not in headers.get("anthropic-beta", "").split(",")
+
+
+@pytest.mark.parametrize(
+    ("cost_map_rows", "litellm_params", "expected_max_tokens"),
+    (
+        pytest.param({"vertex_ai/claude-unit-test@20990101": 1234}, {}, 1234, id="vertex-row-fills-unmapped-bare-id"),
+        pytest.param(
+            {"claude-unit-test@20990101": 4321, "vertex_ai/claude-unit-test@20990101": 1234},
+            {},
+            4321,
+            id="own-row-first",
+        ),
+        pytest.param(
+            {"claude-unit-test": 4321, "vertex_ai/claude-unit-test@20990101": 1234},
+            {},
+            4321,
+            id="unversioned-row-before-vertex-row",
+        ),
+        pytest.param(
+            {"vertex_ai/claude-unit-test@20990101": 1234},
+            {"model_info": {"max_output_tokens": 500}},
+            500,
+            id="deployment-cap-first",
+        ),
+        pytest.param({}, {}, None, id="no-row-keeps-default"),
+    ),
+)
+def test_vertex_ai_anthropic_default_max_tokens_reads_vertex_row(
+    monkeypatch: pytest.MonkeyPatch,
+    cost_map_rows: Mapping[str, int],
+    litellm_params: Mapping[str, object],
+    expected_max_tokens: int | None,
+) -> None:
+    from litellm.constants import DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS
+
+    for key, max_output_tokens in cost_map_rows.items():
+        monkeypatch.setitem(litellm.model_cost, key, {"max_output_tokens": max_output_tokens})
+
+    result: Final = VertexAIAnthropicConfig().transform_request(
+        model="claude-unit-test@20990101",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params=dict(litellm_params),
+        headers={},
+    )
+
+    assert result["max_tokens"] == (
+        DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS if expected_max_tokens is None else expected_max_tokens
+    )

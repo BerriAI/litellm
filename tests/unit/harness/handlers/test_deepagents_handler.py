@@ -22,10 +22,12 @@ from langchain_core.language_models.fake_chat_models import (  # noqa: E402
     FakeMessagesListChatModel,
 )
 from langchain_core.messages import AIMessage  # noqa: E402
+from langchain_core.outputs import ChatGeneration, LLMResult  # noqa: E402
 
 from litellm.llms.deepagents.harness.sandbox_backend import (  # noqa: E402
     SandboxBackend,
     message_cost,
+    record_llm_usage,
 )
 
 USAGE = {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15}
@@ -123,7 +125,7 @@ async def test_write_then_read_events_and_file(tmp_path: Path, fake_model) -> No
     assert (tmp_path / "hello.txt").read_text() == "hi"
     assert ctx.final_text == "done"
     assert (ctx.input_tokens, ctx.output_tokens, ctx.calls) == (30, 15, 3)
-    assert ctx.cost > 0
+    assert ctx.cost is not None and ctx.cost > 0
     history = await handler.history(ctx)
     assert history[0] == {"role": "user", "content": "write hello.txt with hi"}
     assert history[-1]["content"] == "done"
@@ -335,8 +337,9 @@ async def test_sandbox_backend_fs_ops(tmp_path: Path) -> None:
 def test_message_cost_prefers_reported_and_never_raises() -> None:
     reported = AIMessage(content="", response_metadata={"response_cost": 0.5})
     assert message_cost(reported, "gpt-4o-mini", 1, 1) == 0.5
-    assert message_cost(AIMessage(content=""), "not-a-real-model-xyz", 10, 10) == 0.0
-    assert message_cost(AIMessage(content=""), "gpt-4o-mini", 1000, 1000) > 0
+    assert message_cost(AIMessage(content=""), "not-a-real-model-xyz", 10, 10) is None
+    priced = message_cost(AIMessage(content=""), "gpt-4o-mini", 1000, 1000)
+    assert priced is not None and priced > 0
 
 
 def test_missing_deps_raise_install_hint(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -376,3 +379,20 @@ async def test_live_gateway_write_file(tmp_path: Path) -> None:
     assert any(isinstance(e, ToolCall) and e.name == "write" for e in events)
     assert (tmp_path / "hello.txt").read_text().strip() == "hi"
     assert ctx.calls >= 1 and ctx.input_tokens > 0
+
+
+@pytest.mark.parametrize("reported_costs", ((None, 0.2), (0.2, None), (0.0, 0.2)))
+def test_deep_agents_preserves_unknown_and_reported_costs(tmp_path: Path, reported_costs: tuple[float | None, ...]) -> None:
+    ctx = make_ctx(tmp_path)
+    assert ctx.cost == 0.0
+    for cost in reported_costs:
+        message = AIMessage(
+            content="answer",
+            usage_metadata={"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+            response_metadata={} if cost is None else {"response_cost": cost},
+        )
+        response = LLMResult(generations=[[ChatGeneration(message=message)]])
+        record_llm_usage(ctx, "harness-unknown-price-alias", response)
+
+    assert (ctx.input_tokens, ctx.output_tokens, ctx.calls) == (20, 10, 2)
+    assert ctx.cost == (None if any(cost is None for cost in reported_costs) else 0.2)

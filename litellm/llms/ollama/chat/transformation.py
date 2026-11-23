@@ -1,20 +1,37 @@
 import json
 import time
 from collections.abc import AsyncIterator, Iterator, Mapping
-from typing import TYPE_CHECKING, Any, Final, cast
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, Final, Protocol, cast
 
 from httpx._models import Headers, Response
 from pydantic import BaseModel, TypeAdapter
+from typing_extensions import TypedDict
 
 import litellm
 from litellm._uuid import uuid
-from litellm.litellm_core_utils.core_helpers import map_finish_reason
+from litellm.litellm_core_utils.allowed_tools_tool_choice import HostedMcpToolHandling
+from litellm.litellm_core_utils.core_helpers import (
+    decoded_json_object,
+    json_contains,
+    json_loaded,
+    keyword_arguments,
+    map_finish_reason,
+    require_attributes,
+    require_get,
+    subscript,
+    sum_of,
+)
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
     extract_images_from_message,
 )
 from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
     extract_reasoning_content,
+    parse_content_for_reasoning,
+)
+from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
+    parse_tool_call_arguments,
 )
 from litellm.litellm_core_utils.reasoning_effort_utils import OPAQUE_VALUE
 from litellm.litellm_core_utils.tool_fields import tool_params_without_hosted_mcp
@@ -30,6 +47,7 @@ from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantToolCall,
     ChatCompletionUsageBlock,
+    OpenAIChatCompletionFinishReason,
 )
 from litellm.types.utils import ModelResponse, ModelResponseStream
 
@@ -44,6 +62,57 @@ else:
     LiteLLMLoggingObj = Any
 
 _REQUEST_PARAMS: Final = TypeAdapter(dict[str, object])
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
+_TOOL_CALL_ARGUMENTS: Final = TypeAdapter(dict[str, object])
+
+
+class _KeywordFields(TypedDict, total=False, extra_items=object):
+    pass
+
+
+class _SupportsSetItem(Protocol):
+    def __setitem__(self, key: str, value: object, /) -> None: ...
+
+
+class _MessageSlots(_SupportsSetItem, Protocol):
+    def __delitem__(self, key: str, /) -> None: ...
+
+
+_NON_STRING_FINISH_REASONS: Final[Mapping[object, OpenAIChatCompletionFinishReason]] = MappingProxyType({})
+
+
+def _json_finish_reason(value: object) -> OpenAIChatCompletionFinishReason:
+    if isinstance(value, str):
+        return map_finish_reason(value)
+    return _NON_STRING_FINISH_REASONS.get(value) or map_finish_reason(str(value))
+
+
+def _split_json_reasoning_content(content: object) -> tuple[str | None, str | None]:
+    return parse_content_for_reasoning(content)  # pyright: ignore[reportArgumentType]  # re raises its own TypeError
+
+
+def _to_ollama_tool_call_function(model: str, tool_call: ChatCompletionAssistantToolCall) -> OllamaToolCallFunction:
+    function: Final = tool_call["function"]
+    name: Final = function.get("name") or ""
+    raw_arguments: Final[object] = function.get("arguments")
+    try:
+        parsed: Final[object] = (
+            _DECODED_JSON.validate_python(
+                parse_tool_call_arguments(raw_arguments, tool_name=name, context="Ollama chat request")
+            )
+            if isinstance(raw_arguments, str) or raw_arguments is None
+            else raw_arguments
+        )
+        arguments: Final = _TOOL_CALL_ARGUMENTS.validate_python({} if parsed is None else parsed)
+    except ValueError:
+        raise litellm.BadRequestError(
+            message=f"OllamaException - arguments of assistant tool call {tool_call.get('id')!r} are not a JSON object",
+            model=model,
+            llm_provider="ollama_chat",
+        ) from None
+    return OllamaToolCallFunction(name=name, arguments=arguments)
 
 
 class OllamaChatConfig(BaseConfig):
@@ -150,6 +219,9 @@ class OllamaChatConfig(BaseConfig):
             "reasoning_effort",
         ]
 
+    def hosted_mcp_tool_handling(self, model: str) -> HostedMcpToolHandling:
+        return "drops"
+
     def map_openai_params(
         self,
         non_default_params: dict,
@@ -162,6 +234,7 @@ class OllamaChatConfig(BaseConfig):
             model=model,
             route="ollama_chat",
             drop_params=drop_params,
+            handling=self.hosted_mcp_tool_handling(model),
         )
         for param, value in request_params.items():
             if param == "max_tokens" or param == "max_completion_tokens":
@@ -247,12 +320,7 @@ class OllamaChatConfig(BaseConfig):
         tools: Final = optional_params.pop("tools", None)
 
         def transform_tool_call(typed_tool: ChatCompletionAssistantToolCall) -> OllamaToolCall:
-            function: Final = OllamaToolCallFunction(
-                name=typed_tool["function"].get("name") or "",
-                arguments=json.loads(typed_tool["function"]["arguments"])
-                if "arguments" in typed_tool["function"]
-                else {},
-            )
+            function: Final = _to_ollama_tool_call_function(model, typed_tool)
             tool_id: Final = typed_tool.get("id")
             ollama_tool_call: Final = (
                 OllamaToolCall(function=function) if tool_id is None else OllamaToolCall(id=tool_id, function=function)
@@ -343,50 +411,58 @@ class OllamaChatConfig(BaseConfig):
         )
 
         response_json: Final = raw_response.json()
+        response_fields: Final = require_get(_DECODED_JSON.validate_python(response_json))
 
         ## RESPONSE OBJECT
-        _done_reason: Final = map_finish_reason(response_json.get("done_reason") or "stop")
+        _done_reason: Final = _json_finish_reason(response_fields.get("done_reason") or "stop")
         model_response.choices[0].finish_reason = _done_reason
-        response_json_message: Final = response_json.get("message")
+        response_json_message: Final = response_fields.get("message")
         if response_json_message is not None:
-            if "thinking" in response_json_message:
+            if json_contains(response_json_message, "thinking"):
                 # remap 'thinking' to 'reasoning_content'
-                response_json_message["reasoning_content"] = response_json_message["thinking"]
-                del response_json_message["thinking"]
-            elif response_json_message.get("content") is not None:
-                # parse reasoning content from content
-                from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
-                    parse_content_for_reasoning,
+                thinking: Final = subscript(response_json_message, "thinking")
+                message_slots: Final = require_attributes(
+                    response_json_message, _MessageSlots, "__setitem__", "__delitem__"
                 )
-
-                reasoning_content, content = parse_content_for_reasoning(response_json_message["content"])
-                response_json_message["reasoning_content"] = reasoning_content
-                response_json_message["content"] = content
+                message_slots["reasoning_content"] = thinking
+                del message_slots["thinking"]
+            elif decoded_json_object(response_json_message).get("content") is not None:
+                # parse reasoning content from content
+                reasoning_content, content = _split_json_reasoning_content(subscript(response_json_message, "content"))
+                content_slots: Final = require_attributes(response_json_message, _SupportsSetItem, "__setitem__")
+                content_slots["reasoning_content"] = reasoning_content
+                content_slots["content"] = content
 
         if (
             request_data.get("format", "") == "json"
             and litellm_params.get("function_name") is not None
             and response_json_message is not None
         ):
-            function_call: Final = json.loads(response_json_message["content"])
+            function_call: Final = decoded_json_object(json_loaded(subscript(response_json_message, "content")))
             message: Final = litellm.Message(
-                content=None,
-                tool_calls=[
-                    {
-                        "id": f"call_{uuid.uuid4()}",
-                        "function": {
-                            "name": function_call.get("name", litellm_params.get("function_name")),
-                            "arguments": json.dumps(function_call.get("arguments", function_call)),
-                        },
-                        "type": "function",
-                    }
-                ],
-                reasoning_content=response_json_message.get("reasoning_content"),
+                **_KeywordFields(
+                    content=None,
+                    tool_calls=[
+                        {
+                            "id": f"call_{uuid.uuid4()}",
+                            "function": {
+                                "name": function_call.get(
+                                    "name", _DECODED_JSON.validate_python(litellm_params.get("function_name"))
+                                ),
+                                "arguments": json.dumps(function_call.get("arguments", function_call)),
+                            },
+                            "type": "function",
+                        }
+                    ],
+                    reasoning_content=require_get(response_json_message).get("reasoning_content"),
+                )
             )
             model_response.choices[0].message = message
             model_response.choices[0].finish_reason = "tool_calls"
         else:
-            _message: Final = litellm.Message(**response_json_message)
+            _message: Final = litellm.Message(
+                **_KeywordFields(**keyword_arguments(response_json_message, litellm.Message))
+            )
             model_response.choices[0].message = _message
             # Set finish_reason to "tool_calls" when tool_calls are present
             # Fixes: https://github.com/BerriAI/litellm/issues/18922
@@ -394,8 +470,8 @@ class OllamaChatConfig(BaseConfig):
                 model_response.choices[0].finish_reason = "tool_calls"
         model_response.created = int(time.time())
         model_response.model = "ollama_chat/" + model
-        prompt_tokens = response_json.get("prompt_eval_count", litellm.token_counter(messages=messages))
-        completion_tokens: Final = response_json.get(
+        prompt_tokens: Final = response_fields.get("prompt_eval_count", litellm.token_counter(messages=messages))
+        completion_tokens: Final = response_fields.get(
             "eval_count",
             litellm.token_counter(text=response_json["message"]["content"]),
         )
@@ -403,9 +479,11 @@ class OllamaChatConfig(BaseConfig):
             model_response,
             "usage",
             litellm.Usage(
-                prompt_tokens=prompt_tokens,
-                completion_tokens=completion_tokens,
-                total_tokens=prompt_tokens + completion_tokens,
+                **_KeywordFields(
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    total_tokens=sum_of(prompt_tokens, completion_tokens),
+                )
             ),
         )
         return model_response
@@ -442,6 +520,7 @@ class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
     started_reasoning_content: bool = False
     finished_reasoning_content: bool = False
     seen_tool_calls: bool = False
+    _next_tool_call_index: int = 0
 
     def _is_function_call_complete(self, function_args: str | dict) -> bool:
         if isinstance(function_args, dict):
@@ -489,6 +568,8 @@ class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
             if tool_calls is not None:
                 self.seen_tool_calls = True
                 for tool_call in tool_calls:
+                    tool_call["index"] = self._next_tool_call_index
+                    self._next_tool_call_index += 1
                     function_args = tool_call.get("function").get("arguments")
                     if function_args is not None and len(function_args) > 0:
                         is_function_call_complete = self._is_function_call_complete(function_args)

@@ -331,6 +331,25 @@ def test_search_tool_support_comes_from_model_info_else_an_anthropic_request_sha
     assert registry.resolve("zzz", kind="search_tool_support") == ()  # pyright: ignore[reportCallIssue, reportArgumentType]
 
 
+def test_upstreams_name_every_routable_deployments_model_and_the_provider_it_declares(make_core: MakeCore) -> None:
+    core: Final = make_core(
+        model_list=[
+            deployment("g", "o1"),
+            deployment("g", "br", model="us.openai.gpt-6.1-sol", custom_llm_provider="bedrock"),
+            deployment("g", "mt", model="bedrock_mantle/openai.gpt-6.1-sol"),
+            deployment("g", "bare", model="gpt-6.1-sol"),
+        ]
+    )
+    registry: Final = core.registry()
+    assert registry.resolve("g", kind="upstreams") == (  # pyright: ignore[reportCallIssue, reportArgumentType]
+        ("openai/o1", "openai"),
+        ("us.openai.gpt-6.1-sol", "bedrock"),
+        ("bedrock_mantle/openai.gpt-6.1-sol", "bedrock_mantle"),
+        ("gpt-6.1-sol", None),
+    )
+    assert registry.resolve("zzz", kind="upstreams") == ()  # pyright: ignore[reportCallIssue, reportArgumentType]
+
+
 # --- per-request strategy overrides ---------------------------------------------------------------
 
 
@@ -375,8 +394,10 @@ def test_a_sync_usage_based_v2_override_counts_rpm_before_the_call(make_core: Ma
 
 @pytest.mark.asyncio
 async def test_an_async_usage_based_v2_override_counts_rpm_before_the_call(
-    make_core: MakeCore, host: ScriptedHost
+    make_core: MakeCore, host: ScriptedHost, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    now: Final = datetime.datetime(2026, 1, 1, 12, tzinfo=datetime.timezone.utc)
+    monkeypatch.setattr("litellm.router_strategy.lowest_tpm_rpm_v2.get_utc_datetime", lambda: now)
     core: Final = make_core(model_list=[deployment("g", "a", rpm=1)], num_retries=0)
     await core.acompletion(model="g", messages=MESSAGES, routing_strategy="usage-based-routing-v2")  # pyright: ignore[reportAttributeAccessIssue]
     with pytest.raises(litellm.RateLimitError, match=re.escape("No deployments available for selected model.")):

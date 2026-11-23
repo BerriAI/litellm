@@ -22,6 +22,7 @@ import json
 import random
 import re
 import time
+from collections import deque
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial
@@ -42,6 +43,7 @@ from litellm.constants import (
     EMPTY_MAPPING,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
     OUTPUT_TOKEN_CEILING_PARAMS,
+    REDACTED_HEADER_VALUE,
     RETURN_RAW_MODEL_NAME_METADATA_KEY,
     SESSION_ID_GENERATED_METADATA_KEY,
 )
@@ -49,11 +51,17 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.otel.runtime import phase_event
 from litellm.litellm_core_utils.classifier_logging import masked_originating_request
 from litellm.litellm_core_utils.core_helpers import (
+    float_of,
     get_metadata_variable_name_from_kwargs,
     get_parent_otel_span_from_kwargs,
     is_codex_user_agent,
+    keyword_arguments,
     require_attributes,
 )
+from litellm.litellm_core_utils.harness_context import CODEX_MARKERS as _CODEX_REMINDER_MARKERS
+from litellm.litellm_core_utils.harness_context import OPENCODE_MARKERS as _OPENCODE_REMINDER_MARKERS
+from litellm.litellm_core_utils.harness_context import SYSTEM_REMINDER_MARKERS as _DEFAULT_REMINDER_MARKERS
+from litellm.litellm_core_utils.harness_context import strip_marked_blocks as _strip_reminder_blocks
 from litellm.litellm_core_utils.hidden_params import get_hidden_params
 from litellm.litellm_core_utils.internal_call_metadata import forwarded_internal_call_metadata
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -65,6 +73,7 @@ from litellm.llms.anthropic.common_utils import is_claude_code_user_agent
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.llms.databricks.decisions.transformation import DATABRICKS_DECISIONS_CONFIG
+from litellm.redis.stores.router_session_pins import TierModelPin, TierSessionPin
 from litellm.router_deprecated import RenamedRouterAttribute, renamed_router_param
 from litellm.router_strategy.adaptive_router.classifier import classify_prompt
 from litellm.router_strategy.complexity_router.context_compaction import compaction_pending
@@ -192,6 +201,14 @@ class _SupportsGet(Protocol):
 def _declared_vision_support(deployment: Mapping[str, object]) -> object:
     model_info: Final = deployment.get("model_info")
     return require_attributes(model_info, _SupportsGet, "get").get("supports_vision") if model_info else None
+
+
+class _AdaptiveRouterPreferencesFields(TypedDict, total=False, extra_items=object):
+    pass
+
+
+def _deployment_model_info(deployment: DeploymentTypedDict) -> Mapping[str, object]:
+    return deployment.get("model_info") or {}
 
 
 _CLASSIFICATION_TIER_CRITERIA: Final[Mapping[ComplexityTier, str]] = MappingProxyType(
@@ -510,16 +527,7 @@ def _log_rejected_classifier_verdict(
     verbose_router_logger.warning("ComplexityRouter: classifier verdict rejected (%s); %s", problems, reply)
 
 
-_REMINDER_OPEN: Final = "<system-reminder>"
-_REMINDER_CLOSE: Final = "</system-reminder>"
-_DEFAULT_REMINDER_MARKERS: Final = ((_REMINDER_OPEN, _REMINDER_CLOSE),)
-_CODEX_REMINDER_MARKERS: Final = _DEFAULT_REMINDER_MARKERS + (
-    ("<environment_context>", "</environment_context>"),
-    ("<recommended_plugins>", "</recommended_plugins>"),
-    ("<user_instructions>", "</user_instructions>"),
-    ("<environments_instructions>", "</environments_instructions>"),
-    ("# agents.md instructions for ", "</instructions>"),
-)
+_OPENCODE_USER_AGENT_PREFIX: Final = "opencode/"
 
 _TRUNCATION_MARKER: Final = "..."
 _TRUNCATION_HEAD_FRACTION: Final = 0.3
@@ -528,6 +536,10 @@ _MIN_QUOTED_TURN_CHARS: Final = 120
 _CLASSIFIER_CIRCUIT_OPEN_SIGNAL: Final = "classifier-circuit-open"
 
 _CJK_CHARACTER: Final = re.compile("[぀-ヿㇰ-ㇿ㐀-䶿一-鿿豈-﫿ｦ-ﾝ\U00020000-\U0003ffff]")
+
+
+def _is_opencode_user_agent(user_agent: str) -> bool:
+    return user_agent.lower().startswith(_OPENCODE_USER_AGENT_PREFIX)
 
 
 def _message_text(content: object) -> str:
@@ -544,50 +556,25 @@ def _message_text(content: object) -> str:
     return content if isinstance(content, str) else ""
 
 
-def _reminder_block_spans(lowered: str, open_marker: str, close_marker: str) -> Iterator[tuple[int, int]]:
-    """Span of each complete reminder block for one marker pair, left to right.
+def _conversation_text_lengths(content: object) -> Iterator[int]:
+    pending: Final[deque[object]] = deque((content,))  # mutable-ok: explicit stack avoids recursive content traversal
+    while pending:
+        part = pending.pop()
+        if isinstance(part, str):
+            yield len(part)
+        elif isinstance(part, list):
+            parts = cast(Sequence[object], part)  # cast-ok: every list element is an object
+            pending.extend(parts)
+        elif isinstance(part, Mapping):
+            block = cast(Mapping[object, object], part)  # cast-ok: mapping keys and values are objects
+            if block.get("type") == "text":
+                pending.append(block.get("text"))
+            elif block.get("type") == "tool_result":
+                pending.append(block.get("content"))
 
-    Literal `str.find`, not a regex: the delimiters are fixed strings, and `<system-reminder>.*?`
-    retried its lazy quantifier from every opening tag, so repeated unclosed tags were quadratic
-    (272KB took 7.6s) on a pre-routing path any keyholder can reach. The cursor only moves forward
-    and an unclosed tag ends the scan, so this is linear without bounding the input.
-    """
-    cursor = 0
-    while (start := lowered.find(open_marker, cursor)) != -1:
-        end = lowered.find(close_marker, start + len(open_marker))
-        if end == -1:
-            return
-        cursor = end + len(close_marker)
-        yield start, cursor
 
-
-def _strip_reminder_blocks(text: str, marker_pairs: tuple[tuple[str, str], ...] = _DEFAULT_REMINDER_MARKERS) -> str:
-    """Remove every complete reminder block from text, keeping everything written around them.
-
-    Blocks from different pairs can nest or overlap, which the gap construction below would
-    otherwise mishandle: an inner block's end would resume the kept text partway through the outer
-    block, leaking the rest of that block into the classified ask. Running the block ends through a
-    maximum resumes each gap past the furthest block seen so far, which collapses nested and
-    overlapping spans without a separate merge pass. A single pair's ends already increase, so the
-    maximum is the identity there and the default path is byte-identical to a plain scan.
-
-    Deliberately linear in both the text and the block count. This runs pre-routing on input any
-    keyholder controls, and both a regex scan and a fold that rebuilds a growing tuple of merged
-    spans go quadratic on inputs that are cheap to send.
-    """
-    lowered: Final = text.lower()
-    spans: Final = tuple(
-        sorted(
-            span
-            for open_marker, close_marker in marker_pairs
-            for span in _reminder_block_spans(lowered, open_marker, close_marker)
-        )
-    )
-    if not spans:
-        return text.strip()
-    keep_from: Final = (0, *accumulate((end for _, end in spans), max))
-    keep_to: Final = (*(start for start, _ in spans), len(text))
-    return " ".join(kept for a, b in zip(keep_from, keep_to) if (kept := text[a:b].strip()))
+def _estimated_conversation_tokens(messages: Sequence[Mapping[str, object]] | None) -> int:
+    return sum(sum(_conversation_text_lengths(message.get("content"))) // 4 for message in messages or ())
 
 
 def _inline_image_part(part: Mapping[str, object]) -> ChatCompletionImageObject | None:
@@ -799,6 +786,40 @@ def _newest_turn_is_human_ask(
     if newest_activity is None:
         return False
     return _last_human_ask_index(messages, marker_pairs) == newest_activity
+
+
+_CLAUDE_CODE_REQUEST_CLASS_HEADER: Final = "x-claude-code-request-class"
+_CLAUDE_CODE_AUXILIARY_SENTINEL: Final = f"{_CLAUDE_CODE_REQUEST_CLASS_HEADER}: auxiliary"
+
+
+_REQUEST_KWARGS: Final = TypeAdapter(Mapping[str, object])
+_NO_REQUEST_KWARGS: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def _proxy_request_header(request_kwargs: Mapping[str, object], header_name: str) -> str | None:
+    proxy_request: Final = request_kwargs.get("proxy_server_request")
+    if not isinstance(proxy_request, Mapping):
+        return None
+    headers: Final = cast(Mapping[str, object], proxy_request).get("headers")  # cast-ok: proxy request is JSON-shaped
+    if not isinstance(headers, Mapping):
+        return None
+    return next(
+        (
+            value
+            for key, value in cast(Mapping[object, object], headers).items()  # cast-ok: header map from the proxy
+            if isinstance(key, str) and key.lower() == header_name and isinstance(value, str)
+        ),
+        None,
+    )
+
+
+def _claude_code_request_class(request_kwargs: Mapping[str, object]) -> str | None:
+    value: Final = _proxy_request_header(request_kwargs, _CLAUDE_CODE_REQUEST_CLASS_HEADER)
+    return value.strip().lower() if value is not None else None
+
+
+def _conversation_pin_id(parts: tuple[str, ...]) -> str:
+    return "conversation-header:" + hashlib.sha256(json.dumps(parts).encode()).hexdigest()
 
 
 _CODEX_TURN_METADATA_KEY: Final = "x-codex-turn-metadata"
@@ -2175,10 +2196,12 @@ class ComplexityRouter(CustomLogger):
         """
         scored: Final = self._classify_locally(prompt, system_prompt)
         threshold: Final = self.config.heuristic_first_max_tier
+        context_limit: Final = self.config.heuristic_first_max_context_tokens
         decided_cheaply: Final = (
             threshold is not None
             and self._local_outcome_is_decided(scored)
             and not self._classifier_image_parts(messages)
+            and (context_limit is None or _estimated_conversation_tokens(messages) <= context_limit)
             and self._active_tier_severity(scored.tier) <= self._active_tier_severity(threshold)
         )
         if decided_cheaply:
@@ -2773,7 +2796,10 @@ class ComplexityRouter(CustomLogger):
             {"role": "user", "content": user_content},
         ]
         content, classifier_cost = await self._call_classifier_model(
-            messages_for_call, request_kwargs, encrypted_task=encrypted_task
+            messages_for_call,
+            request_kwargs,
+            max_output_tokens=llm_config.max_output_tokens,
+            encrypted_task=encrypted_task,
         )
         try:
             raw_tier: Final = _LabeledTierClassification.model_validate_json(extract_classifier_json(content)).tier
@@ -2951,7 +2977,10 @@ class ComplexityRouter(CustomLogger):
                 **classifier_payload,
                 **(
                     MappingProxyType(
-                        {"max_output_tokens" if encrypted_task is not None else "max_tokens": max_output_tokens}
+                        {
+                            **dict.fromkeys(OUTPUT_TOKEN_CEILING_PARAMS),
+                            "max_output_tokens" if encrypted_task is not None else "max_tokens": max_output_tokens,
+                        }
                     )
                     if max_output_tokens is not None
                     else EMPTY_MAPPING
@@ -3060,7 +3089,7 @@ class ComplexityRouter(CustomLogger):
             else ()
         )
 
-        cumulative_tokens: Final = sum(len(_message_text(msg.get("content"))) // 4 for msg in messages or ())
+        cumulative_tokens: Final = _estimated_conversation_tokens(messages)
         trajectory_block: Final = (
             (f"\nConversation so far: ~{cumulative_tokens} tokens across the request",)
             if has_prior_conversation
@@ -3149,20 +3178,19 @@ class ComplexityRouter(CustomLogger):
         if retained_model is not None and retained_model in candidates:
             self._restamp_adaptive_choice(request_kwargs, model, retained_model)
             return retained_model
-        session_id: Final = self._get_session_id_from_request_kwargs(request_kwargs)
+        session_id: Final = self._affinity_session_id(request_kwargs)
         if session_id is None:
             return model
-        caller: Final = DeploymentAffinityCheck.get_user_key_from_request_kwargs(request_kwargs)
-        identity: Final = (self.model_name, self._tier_affinity_config, caller, session_id, _tier_name(tier))
-        cache_identity: Final = (
-            (*identity, ("replay_fallback", retained_model)) if retained_model is not None else identity
-        )
-        cache_key: Final = (
-            "complexity_router_tier_model_affinity:v1:"
-            + hashlib.sha256(json.dumps(cache_identity).encode()).hexdigest()
+        cache_key: Final = TierModelPin(
+            router=self.model_name,
+            tiers=self._tier_affinity_config,
+            caller=DeploymentAffinityCheck.get_user_key_from_request_kwargs(request_kwargs),
+            session_id=session_id,
+            tier=_tier_name(tier),
+            replay_fallback=retained_model,
         )
         winner: Final = await claim_affinity_pin(
-            self.ctx.health().store,
+            self.ctx.health().session_pins,
             cache_key,
             MappingProxyType({"model": model}),
             self.config.session_affinity_ttl_seconds,
@@ -3261,10 +3289,12 @@ class ComplexityRouter(CustomLogger):
                 model_to_cost[name] = 0.0
                 continue
             deployment = deployments[0]
-            mi_dict: dict[str, Any] = deployment.get("model_info") or {}
+            mi_dict = _deployment_model_info(deployment)
             prefs_raw = mi_dict.get("adaptive_router_preferences")
             if prefs_raw is not None:
-                model_to_prefs[name] = AdaptiveRouterPreferences(**prefs_raw)
+                model_to_prefs[name] = AdaptiveRouterPreferences.model_validate(
+                    _AdaptiveRouterPreferencesFields(**keyword_arguments(prefs_raw, AdaptiveRouterPreferences))
+                )
             else:
                 model_to_prefs[name] = AdaptiveRouterPreferences(quality_tier=2, strengths=[])
 
@@ -3272,7 +3302,7 @@ class ComplexityRouter(CustomLogger):
             cost = deployment.get("litellm_params", {}).get("input_cost_per_token")
             if cost is None:
                 cost = mi_dict.get("input_cost_per_token")
-            model_to_cost[name] = float(cost) if cost is not None else 0.0
+            model_to_cost[name] = float_of(cost) if cost is not None else 0.0
 
         self.adaptive_router = AdaptiveRouter(
             router_name=self.model_name,
@@ -3475,8 +3505,11 @@ class ComplexityRouter(CustomLogger):
             self._reminder_markers_for_request(request_kwargs),
         )
 
-    def _matched_housekeeping_sentinel(self, newest_ask: str | None) -> str | None:
-        """The client housekeeping sentinel on this request's newest ask, or None.
+    def _matched_housekeeping_sentinel(
+        self, newest_ask: str | None, request_kwargs: Mapping[str, object]
+    ) -> str | None:
+        """The client housekeeping sentinel on this request's newest ask, or None. Claude Code's
+        `auxiliary` request-class hint counts as one, so it keeps working when the prompts change.
 
         Read from the newest ask alone, never the whole history, for the reason `_newest_turn_ask`
         exists: a title request quoted into a later turn's context would otherwise keep matching and
@@ -3490,6 +3523,8 @@ class ComplexityRouter(CustomLogger):
         """
         if self.config.classifier_type == "custom" or not self.config.route_housekeeping_to_cheapest_tier:
             return None
+        if _claude_code_request_class(request_kwargs) == "auxiliary":
+            return _CLAUDE_CODE_AUXILIARY_SENTINEL
         if not newest_ask:
             return None
         return next(
@@ -3981,7 +4016,7 @@ class ComplexityRouter(CustomLogger):
     async def _model_group_can_serve(
         self,
         model_name: str,
-        messages: list[dict[str, Any]] | None,  # mutable-ok: forwarded verbatim to the router's own probe
+        messages: Sequence[Mapping[str, object]] | None,
         input: str | list | None,  # mutable-ok: mirrors the owner's own input parameter, which this forwards verbatim
         request_kwargs: dict[str, object],  # mutable-ok: same shape the hook receives
     ) -> bool:
@@ -4332,7 +4367,9 @@ class ComplexityRouter(CustomLogger):
             return None
         return self.config.resolve_classified_tier(route_choice.name)
 
-    async def _resolve_keyword_tier_override(self, user_message: str, request_kwargs: dict) -> KeywordOverride | None:
+    async def _resolve_keyword_tier_override(
+        self, user_message: str, request_kwargs: dict[str, object]
+    ) -> KeywordOverride | None:
         """Resolve a keyword_tier_rule override, semantically or lexically per config.
 
         Returns None (no override -> fall through to the scorer) not only when no rule
@@ -4363,7 +4400,7 @@ class ComplexityRouter(CustomLogger):
     def _resolve_messages(
         self,
         messages: list[dict[str, object]] | None,
-        request_kwargs: dict,
+        request_kwargs: dict[str, object],
     ) -> list[dict[str, object]] | None:
         """
         Resolve messages from the request, converting from other formats if needed.
@@ -4392,12 +4429,20 @@ class ComplexityRouter(CustomLogger):
     def _reminder_markers_for_request(self, request_kwargs: Mapping[str, object]) -> tuple[tuple[str, str], ...]:
         if self.config.reminder_markers is not None:
             return self._reminder_markers
-        return _CODEX_REMINDER_MARKERS if self._is_codex_request(request_kwargs) else _DEFAULT_REMINDER_MARKERS
+        if self._is_codex_request(request_kwargs):
+            return _CODEX_REMINDER_MARKERS
+        if self._request_user_agent_matches(request_kwargs, _is_opencode_user_agent):
+            return _OPENCODE_REMINDER_MARKERS
+        return _DEFAULT_REMINDER_MARKERS
 
     @staticmethod
     def _is_codex_request(request_kwargs: Mapping[str, object]) -> bool:
+        return ComplexityRouter._request_user_agent_matches(request_kwargs, is_codex_user_agent)
+
+    @staticmethod
+    def _request_user_agent_matches(request_kwargs: Mapping[str, object], matches: Callable[[str], bool]) -> bool:
         return any(
-            is_codex_user_agent(user_agent)
+            matches(user_agent)
             for metadata_key in ("litellm_metadata", "metadata")
             if isinstance(metadata := request_kwargs.get(metadata_key), Mapping)
             if isinstance(user_agent := metadata.get("user_agent"), str)
@@ -4437,23 +4482,46 @@ class ComplexityRouter(CustomLogger):
                 return str(session_id)
         return None
 
+    def _child_tier_session_metadata(self, request_kwargs: Mapping[str, object]) -> Mapping[str, object] | None:
+        if self.config.classification_mode != "user_turn" or self.config.session_affinity:
+            return None
+        return next(
+            (
+                metadata
+                for metadata in self._iter_metadata_dicts(request_kwargs)
+                if COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY in metadata
+            ),
+            None,
+        )
+
+    def _configured_conversation_id(self, request_kwargs: Mapping[str, object], header_name: str) -> str | None:
+        conversation: Final = _proxy_request_header(request_kwargs, header_name)
+        if not conversation or conversation == REDACTED_HEADER_VALUE:
+            return None
+        child_metadata: Final = self._child_tier_session_metadata(request_kwargs)
+        if child_metadata is None:
+            return _conversation_pin_id((header_name, conversation))
+        child_session: Final = child_metadata[COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY]
+        if not isinstance(child_session, str) or not child_session:
+            return None
+        return _conversation_pin_id((header_name, conversation, child_session))
+
+    def _affinity_session_id(self, request_kwargs: Mapping[str, object]) -> str | None:
+        if self.config.conversation_header is not None:
+            return self._configured_conversation_id(request_kwargs, self.config.conversation_header)
+        return self._get_session_id_from_request_kwargs(request_kwargs)
+
     def _get_tier_pin_session_id(self, request_kwargs: Mapping[str, object]) -> str | None:
-        if self.config.classification_mode == "user_turn" and not self.config.session_affinity:
-            child_metadata: Final = next(
-                (
-                    metadata
-                    for metadata in self._iter_metadata_dicts(request_kwargs)
-                    if COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY in metadata
-                ),
-                None,
-            )
-            if child_metadata is not None:
-                child_session: Final = child_metadata[COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY]
-                return child_session if isinstance(child_session, str) and child_session else None
+        if self.config.conversation_header is not None:
+            return self._configured_conversation_id(request_kwargs, self.config.conversation_header)
+        child_metadata: Final = self._child_tier_session_metadata(request_kwargs)
+        if child_metadata is not None:
+            child_session: Final = child_metadata[COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY]
+            return child_session if isinstance(child_session, str) and child_session else None
         return self._get_session_id_from_request_kwargs(request_kwargs)
 
     @staticmethod
-    def _get_user_api_key_hash_from_request_kwargs(request_kwargs: dict) -> str | None:
+    def _get_user_api_key_hash_from_request_kwargs(request_kwargs: dict[str, object]) -> str | None:
         """Resolve the proxy-derived API key hash, the same trust boundary
         DeploymentAffinityCheck uses for its own key-based affinity (not the
         client-supplied OpenAI `user` param, which isn't authenticated)."""
@@ -4463,13 +4531,18 @@ class ComplexityRouter(CustomLogger):
                 return str(user_key)
         return None
 
-    def _get_session_affinity_cache_key(self, session_id: str, request_kwargs: dict) -> str:
-        # Namespace by the caller's API key hash so two different callers reusing the
-        # same client-supplied session_id can't poison each other's routing pin. Falls
-        # back to "unscoped" only when there's no authenticated caller to scope by
-        # (e.g. direct Router usage without the proxy layer).
-        caller_scope: Final = self._get_user_api_key_hash_from_request_kwargs(request_kwargs) or "unscoped"
-        return f"complexity_router_session_affinity:v1:{self.model_name}:{caller_scope}:{session_id}"
+    def _get_session_affinity_cache_key(self, session_id: str, request_kwargs: dict[str, object]) -> TierSessionPin:
+        return TierSessionPin(
+            router=self.model_name,
+            caller=(
+                DeploymentAffinityCheck.get_user_key_from_request_kwargs(
+                    _REQUEST_KWARGS.validate_python(request_kwargs)
+                )
+                if self.config.conversation_header is not None
+                else self._get_user_api_key_hash_from_request_kwargs(request_kwargs)
+            ),
+            session_id=session_id,
+        )
 
     @property
     def _uses_tier_pin(self) -> bool:
@@ -4487,11 +4560,23 @@ class ComplexityRouter(CustomLogger):
         return bool(self.config.deployment_affinity and not self.config.plugins) or self._uses_tier_pin
 
     def _with_session_deployment_affinity(
-        self, response: PreRoutingHookResponse | None
+        self, response: PreRoutingHookResponse | None, request_kwargs: Mapping[str, object]
     ) -> PreRoutingHookResponse | None:
         if response is None or not self._uses_deployment_pin:
             return response
-        return response.model_copy(update={"session_affinity_ttl_seconds": self.config.session_affinity_ttl_seconds})
+        if self.config.conversation_header is None:
+            return response.model_copy(
+                update={"session_affinity_ttl_seconds": self.config.session_affinity_ttl_seconds}
+            )
+        conversation_id: Final = self._configured_conversation_id(request_kwargs, self.config.conversation_header)
+        if conversation_id is None:
+            return response
+        return response.model_copy(
+            update={
+                "session_affinity_ttl_seconds": self.config.session_affinity_ttl_seconds,
+                "session_affinity_conversation_id": conversation_id,
+            }
+        )
 
     @with_service_target(ROUTER_SESSION_PINS_TARGET)
     async def async_pre_routing_hook(
@@ -4551,7 +4636,7 @@ class ComplexityRouter(CustomLogger):
 
         if cache_key is not None and pin_replay_allowed:
             pinned_value: Final = await read_affinity_pin(
-                self.ctx.health().store, cache_key, self.config.session_affinity_ttl_seconds
+                self.ctx.health().session_pins, cache_key, self.config.session_affinity_ttl_seconds
             )
             pinned_pin: Final = _parse_session_affinity_pin(pinned_value, self.config.tier_names())
             if pinned_pin is not None:
@@ -4571,7 +4656,8 @@ class ComplexityRouter(CustomLogger):
                         pinned_pin.tier if pinned_pin.tier is not None else self._tier_for_model(pinned_pin.model),
                     )
                 )
-                if selected_pin is not None:
+                pin_plan_sentinel: Final = self._matched_plan_mode_signal(request_kwargs, resolved_messages)
+                if selected_pin is not None and (selected_pin.tier is not None or pin_plan_sentinel is None):
                     escalated: Final = selected_pin.model != pinned_pin.model or (
                         pin_escalation_keyword is not None
                         and pinned_pin.tier is not None
@@ -4598,7 +4684,6 @@ class ComplexityRouter(CustomLogger):
                     # the floor, and the stored pin deliberately keeps the session's own model so
                     # the first turn after plan mode exits auto-routes exactly as it would have.
                     # Escalation is the opposite on purpose -- an explicit ask to re-pin higher.
-                    pin_plan_sentinel: Final = self._matched_plan_mode_signal(request_kwargs, resolved_messages)
                     pinned_tier: Final = resolved_pin_tier if pin_plan_sentinel is not None else None
                     plan_floored: Final = (
                         pinned_tier is not None and self._apply_plan_mode_floor(pinned_tier) != pinned_tier
@@ -4650,10 +4735,10 @@ class ComplexityRouter(CustomLogger):
                         else floor_model
                     )
                     if escalated:
-                        await self.ctx.health().store.async_set_cache(
-                            key=cache_key,
-                            value=_session_affinity_cache_value(session_model, resolved_pin_tier),
-                            ttl=self.config.session_affinity_ttl_seconds,
+                        await self.ctx.health().session_pins.set(
+                            cache_key,
+                            _session_affinity_cache_value(session_model, resolved_pin_tier),
+                            self.config.session_affinity_ttl_seconds,
                         )
                     if self.config.adaptive:
                         from litellm.router_strategy.adaptive_router.config import (
@@ -4712,7 +4797,10 @@ class ComplexityRouter(CustomLogger):
                             request_kwargs,
                             context_fit,
                             retained_pin,
-                        )
+                        ),
+                        _REQUEST_KWARGS.validate_python(request_kwargs)
+                        if self.config.conversation_header is not None
+                        else _NO_REQUEST_KWARGS,
                     )
 
         routed_response: Final = await self._classify_and_route(
@@ -4746,22 +4834,33 @@ class ComplexityRouter(CustomLogger):
         # classified at or above the floor keeps its ordinary cause, yet on an adaptive router
         # the hard floor constrained its pick, so pinning it would carry a plan-mode-shaped
         # choice past plan mode's exit. No sentinel turn writes the pin, whatever its cause.
+        holds_fallback_for_this_ask: Final = (
+            not self.config.session_affinity
+            and response is not None
+            and response.routing_decision is not None
+            and response.routing_decision.get("cause") == "default_model_fallback"
+        )
         pinnable: Final = (
             cache_key is not None
             and response is not None
-            and _decision_is_pinnable(response.routing_decision)
+            and (_decision_is_pinnable(response.routing_decision) or holds_fallback_for_this_ask)
             and self._matched_plan_mode_signal(request_kwargs, resolved_messages) is None
         )
         if pinnable and cache_key is not None and response is not None:
-            await self.ctx.health().store.async_set_cache(
-                key=cache_key,
-                value=_session_affinity_cache_value(
+            await self.ctx.health().session_pins.set(
+                cache_key,
+                _session_affinity_cache_value(
                     response.model,
                     response.routing_decision.get("tier") if response.routing_decision is not None else None,
                 ),
-                ttl=self.config.session_affinity_ttl_seconds,
+                self.config.session_affinity_ttl_seconds,
             )
-        return self._with_session_deployment_affinity(response)
+        return self._with_session_deployment_affinity(
+            response,
+            _REQUEST_KWARGS.validate_python(request_kwargs)
+            if self.config.conversation_header is not None
+            else _NO_REQUEST_KWARGS,
+        )
 
     async def _apply_prompt_cache_routing(
         self,
@@ -4815,7 +4914,7 @@ class ComplexityRouter(CustomLogger):
         model: str,
         request_kwargs: dict[str, object],
         messages: list[dict[str, object]] | None = None,
-        input: str | list | None = None,
+        input: str | list[object] | None = None,
         specific_deployment: bool | None = False,
         conversation_continuing: bool = True,
         resolved_messages: Sequence[Mapping[str, object]] | None = None,
@@ -4970,7 +5069,7 @@ class ComplexityRouter(CustomLogger):
                 ),
             )
 
-        housekeeping_sentinel: Final = self._matched_housekeeping_sentinel(newest_ask)
+        housekeeping_sentinel: Final = self._matched_housekeeping_sentinel(newest_ask, request_kwargs)
         housekeeping_tier: Final = self._cheapest_configured_tier() if housekeeping_sentinel is not None else None
         outcome: Final = (
             ClassificationOutcome(tier=housekeeping_tier, score=None, signals=("housekeeping",), cause="housekeeping")

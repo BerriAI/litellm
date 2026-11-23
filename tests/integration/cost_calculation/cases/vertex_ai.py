@@ -5,8 +5,7 @@ PARITY pairs the streamed case with its plain twin where both bill the same row.
 import json
 from typing import Final, Literal, cast
 
-from pydantic import JsonValue
-
+from integration.cost_calculation.bridge_cost_parity.case import BridgeCostParityTestCase, bridge_pairs
 from integration.cost_calculation.cases.anthropic import (
     CLAUDE_FABLE_5_1_CACHE_READ,
     CLAUDE_FABLE_5_1_CACHE_WRITE_1H,
@@ -17,6 +16,15 @@ from integration.cost_calculation.cases.anthropic import (
     CLAUDE_FABLE_5_1_STREAM,
     CLAUDE_FABLE_5_1_THINKING,
     CLAUDE_FABLE_5_1_TOOL_CALL,
+    CLAUDE_FABLE_5_2_CACHE_READ,
+    CLAUDE_FABLE_5_2_CACHE_WRITE_1H,
+    CLAUDE_FABLE_5_2_CACHE_WRITE_5M,
+    CLAUDE_FABLE_5_2_INPUT_TEXT,
+    CLAUDE_FABLE_5_2_MESSAGES_INPUT_TEXT,
+    CLAUDE_FABLE_5_2_MESSAGES_STREAM,
+    CLAUDE_FABLE_5_2_STREAM,
+    CLAUDE_FABLE_5_2_THINKING,
+    CLAUDE_FABLE_5_2_TOOL_CALL,
     CLAUDE_HAIKU_5_5_MESSAGES_INPUT_TEXT,
     CLAUDE_HAIKU_5_5_MESSAGES_STREAM,
     CLAUDE_OPUS_5_5_CACHE_READ,
@@ -38,7 +46,6 @@ from integration.cost_calculation.cases.anthropic import (
     CLAUDE_SONNET_5_5_THINKING,
     CLAUDE_SONNET_5_5_TOOL_CALL,
 )
-from integration.cost_calculation.bridge_cost_parity.case import BridgeCostParityTestCase, bridge_pairs
 from integration.cost_calculation.cost_tracking_case import (
     CostTrackingTestCase,
     Deployment,
@@ -49,6 +56,7 @@ from integration.cost_calculation.cost_tracking_case import (
     SseResponse,
 )
 from integration.cost_calculation.stream_parity.case import StreamParityTestCase, sse_frames
+from pydantic import JsonValue
 
 
 def _gemini_case_response(
@@ -131,6 +139,7 @@ def _vertex_claude_usage(
     ephemeral_5m_input_tokens: int = 0,
     ephemeral_1h_input_tokens: int = 0,
     thinking_tokens: int = 0,
+    speed: str | None = None,
 ) -> dict[str, JsonValue]:
     return {
         "input_tokens": input_tokens,
@@ -142,6 +151,7 @@ def _vertex_claude_usage(
         },
         "output_tokens": output_tokens,
         "output_tokens_details": {"thinking_tokens": thinking_tokens},
+        **({"speed": speed} if speed is not None else {}),
     }
 
 
@@ -191,7 +201,9 @@ def _vertex_claude_shape_case(
     )
 
 
-def _vertex_claude_stream_response(model: str, stop_reason: str, text_deltas: tuple[str, ...]) -> SseResponse:
+def _vertex_claude_stream_response(
+    model: str, stop_reason: str, text_deltas: tuple[str, ...], speed: str | None = None
+) -> SseResponse:
     text_frames: Final = (
         (
             {"type": "content_block_start", "index": 1, "content_block": {"type": "text", "text": ""}},
@@ -230,6 +242,7 @@ def _vertex_claude_stream_response(model: str, stop_reason: str, text_deltas: tu
                             "cache_read_input_tokens": 0,
                             "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
                             "output_tokens": 0,
+                            **({"speed": speed} if speed is not None else {}),
                         },
                     },
                 },
@@ -2916,6 +2929,7 @@ VERTEX_AI_CLAUDE_SONNET_5_5_INPUT_TEXT: Final = CLAUDE_SONNET_5_5_INPUT_TEXT.mod
                     "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
                     "output_tokens": 412,
                     "output_tokens_details": {"thinking_tokens": 0},
+                    "speed": "standard",
                 },
             },
         ),
@@ -2928,7 +2942,7 @@ VERTEX_AI_CLAUDE_SONNET_5_5_STREAM: Final = CLAUDE_SONNET_5_5_STREAM.model_copy(
     update={
         "name": "vertex_ai/claude-sonnet-5-5-stream",
         "model": "vertex_ai/claude-sonnet-5-5",
-        "response": _vertex_claude_stream_response("claude-sonnet-5-5", "max_tokens", ()),
+        "response": _vertex_claude_stream_response("claude-sonnet-5-5", "max_tokens", (), speed="standard"),
         "expected": VERTEX_AI_CLAUDE_SONNET_5_5_INPUT_TEXT.expected,
     }
 )
@@ -2958,6 +2972,7 @@ VERTEX_AI_CLAUDE_OPUS_5_5_INPUT_TEXT: Final = CLAUDE_OPUS_5_5_INPUT_TEXT.model_c
                     "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
                     "output_tokens": 412,
                     "output_tokens_details": {"thinking_tokens": 0},
+                    "speed": "standard",
                 },
             },
         ),
@@ -2974,6 +2989,7 @@ VERTEX_AI_CLAUDE_OPUS_5_5_STREAM: Final = CLAUDE_OPUS_5_5_STREAM.model_copy(
             "claude-opus-5-5",
             "end_turn",
             ("scripted ", "answer ", "for ", "cost ", "fixtures", "", "", "", ""),
+            speed="standard",
         ),
         "expected": VERTEX_AI_CLAUDE_OPUS_5_5_INPUT_TEXT.expected,
     }
@@ -3009,6 +3025,37 @@ VERTEX_AI_CLAUDE_FABLE_5_1_INPUT_TEXT: Final = CLAUDE_FABLE_5_1_INPUT_TEXT.model
         ),
     }
 )
+VERTEX_AI_CLAUDE_FABLE_5_2_INPUT_TEXT: Final = CLAUDE_FABLE_5_2_INPUT_TEXT.model_copy(
+    update={
+        "name": "vertex_ai/claude-fable-5-2-input_text",
+        "model": "vertex_ai/claude-fable-5-2",
+        "response": JsonResponse(
+            content_type="application/json",
+            body={
+                "model": "claude-fable-5-2",
+                "id": "msg_$REQUEST_ID",
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "thinking", "thinking": "scripted thought", "signature": "scripted signature"}],
+                "container": None,
+                "stop_reason": "max_tokens",
+                "stop_sequence": None,
+                "stop_details": None,
+                "usage": {
+                    "input_tokens": 1840,
+                    "cache_creation_input_tokens": 0,
+                    "cache_read_input_tokens": 0,
+                    "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+                    "output_tokens": 412,
+                    "output_tokens_details": {"thinking_tokens": 0},
+                },
+            },
+        ),
+        "expected": ExactExpected(
+        spend=0.05928, input_cost=0.027968, output_cost=0.031312, prompt_tokens=1840, completion_tokens=412
+    ),
+    }
+)
 VERTEX_AI_CLAUDE_FABLE_5_1_STREAM: Final = CLAUDE_FABLE_5_1_STREAM.model_copy(
     update={
         "name": "vertex_ai/claude-fable-5-1-stream",
@@ -3017,12 +3064,20 @@ VERTEX_AI_CLAUDE_FABLE_5_1_STREAM: Final = CLAUDE_FABLE_5_1_STREAM.model_copy(
         "expected": VERTEX_AI_CLAUDE_FABLE_5_1_INPUT_TEXT.expected,
     }
 )
+VERTEX_AI_CLAUDE_FABLE_5_2_STREAM: Final = CLAUDE_FABLE_5_2_STREAM.model_copy(
+    update={
+        "name": "vertex_ai/claude-fable-5-2-stream",
+        "model": "vertex_ai/claude-fable-5-2",
+        "response": _vertex_claude_stream_response("claude-fable-5-2", "max_tokens", ()),
+        "expected": VERTEX_AI_CLAUDE_FABLE_5_2_INPUT_TEXT.expected,
+    }
+)
 
 VERTEX_AI_CLAUDE_SONNET_5_5_CACHE_READ: Final = _vertex_claude_shape_case(
     CLAUDE_SONNET_5_5_CACHE_READ,
     "vertex_ai/claude-sonnet-5-5-cache_read",
     "vertex_ai/claude-sonnet-5-5",
-    _vertex_claude_usage(input_tokens=14, output_tokens=6, cache_read_input_tokens=27003),
+    _vertex_claude_usage(input_tokens=14, output_tokens=6, cache_read_input_tokens=27003, speed="standard"),
     ExactExpected(
         spend=0.00474011, input_cost=0.00463811, output_cost=0.000102, prompt_tokens=27017, completion_tokens=6
     ),
@@ -3053,7 +3108,7 @@ VERTEX_AI_CLAUDE_SONNET_5_5_THINKING: Final = _vertex_claude_shape_case(
     CLAUDE_SONNET_5_5_THINKING,
     "vertex_ai/claude-sonnet-5-5-thinking",
     "vertex_ai/claude-sonnet-5-5",
-    _vertex_claude_usage(input_tokens=18, output_tokens=144, thinking_tokens=37),
+    _vertex_claude_usage(input_tokens=18, output_tokens=144, thinking_tokens=37, speed="standard"),
     ExactExpected(
         spend=0.0025092, input_cost=0.0000612, output_cost=0.002448, prompt_tokens=18, completion_tokens=144
     ),
@@ -3076,7 +3131,7 @@ VERTEX_AI_CLAUDE_OPUS_5_5_CACHE_READ: Final = _vertex_claude_shape_case(
     CLAUDE_OPUS_5_5_CACHE_READ,
     "vertex_ai/claude-opus-5-5-cache_read",
     "vertex_ai/claude-opus-5-5",
-    _vertex_claude_usage(input_tokens=14, output_tokens=6, cache_read_input_tokens=27003),
+    _vertex_claude_usage(input_tokens=14, output_tokens=6, cache_read_input_tokens=27003, speed="standard"),
     ExactExpected(
         spend=0.01003788, input_cost=0.00982188, output_cost=0.000216, prompt_tokens=27017, completion_tokens=6
     ),
@@ -3107,7 +3162,7 @@ VERTEX_AI_CLAUDE_OPUS_5_5_THINKING: Final = _vertex_claude_shape_case(
     CLAUDE_OPUS_5_5_THINKING,
     "vertex_ai/claude-opus-5-5-thinking",
     "vertex_ai/claude-opus-5-5",
-    _vertex_claude_usage(input_tokens=18, output_tokens=162, thinking_tokens=66),
+    _vertex_claude_usage(input_tokens=18, output_tokens=162, thinking_tokens=66, speed="standard"),
     ExactExpected(
         spend=0.0059616, input_cost=0.0001296, output_cost=0.005832, prompt_tokens=18, completion_tokens=162
     ),
@@ -3135,6 +3190,15 @@ VERTEX_AI_CLAUDE_FABLE_5_1_CACHE_READ: Final = _vertex_claude_shape_case(
         spend=0.013567425, input_cost=0.013092425, output_cost=0.000475, prompt_tokens=27017, completion_tokens=5
     ),
 )
+VERTEX_AI_CLAUDE_FABLE_5_2_CACHE_READ: Final = _vertex_claude_shape_case(
+    CLAUDE_FABLE_5_2_CACHE_READ,
+    "vertex_ai/claude-fable-5-2-cache_read",
+    "vertex_ai/claude-fable-5-2",
+    _vertex_claude_usage(input_tokens=14, output_tokens=5, cache_read_input_tokens=27003),
+    ExactExpected(
+        spend=0.01085394, input_cost=0.01047394, output_cost=0.00038, prompt_tokens=27017, completion_tokens=5
+    ),
+)
 VERTEX_AI_CLAUDE_FABLE_5_1_CACHE_WRITE_5M: Final = _vertex_claude_shape_case(
     CLAUDE_FABLE_5_1_CACHE_WRITE_5M,
     "vertex_ai/claude-fable-5-1-cache_write_5m",
@@ -3146,6 +3210,17 @@ VERTEX_AI_CLAUDE_FABLE_5_1_CACHE_WRITE_5M: Final = _vertex_claude_shape_case(
         spend=0.64225225, input_cost=0.64177725, output_cost=0.000475, prompt_tokens=27025, completion_tokens=5
     ),
 )
+VERTEX_AI_CLAUDE_FABLE_5_2_CACHE_WRITE_5M: Final = _vertex_claude_shape_case(
+    CLAUDE_FABLE_5_2_CACHE_WRITE_5M,
+    "vertex_ai/claude-fable-5-2-cache_write_5m",
+    "vertex_ai/claude-fable-5-2",
+    _vertex_claude_usage(
+        input_tokens=14, output_tokens=5, cache_creation_input_tokens=27011, ephemeral_5m_input_tokens=27011
+    ),
+    ExactExpected(
+        spend=0.5138018, input_cost=0.5134218, output_cost=0.00038, prompt_tokens=27025, completion_tokens=5
+    ),
+)
 VERTEX_AI_CLAUDE_FABLE_5_1_CACHE_WRITE_1H: Final = _vertex_claude_shape_case(
     CLAUDE_FABLE_5_1_CACHE_WRITE_1H,
     "vertex_ai/claude-fable-5-1-cache_write_1h",
@@ -3155,6 +3230,17 @@ VERTEX_AI_CLAUDE_FABLE_5_1_CACHE_WRITE_1H: Final = _vertex_claude_shape_case(
     ),
     ExactExpected(
         spend=1.027159, input_cost=1.026684, output_cost=0.000475, prompt_tokens=27025, completion_tokens=5
+    ),
+)
+VERTEX_AI_CLAUDE_FABLE_5_2_CACHE_WRITE_1H: Final = _vertex_claude_shape_case(
+    CLAUDE_FABLE_5_2_CACHE_WRITE_1H,
+    "vertex_ai/claude-fable-5-2-cache_write_1h",
+    "vertex_ai/claude-fable-5-2",
+    _vertex_claude_usage(
+        input_tokens=14, output_tokens=5, cache_creation_input_tokens=27011, ephemeral_1h_input_tokens=27011
+    ),
+    ExactExpected(
+        spend=0.8217272, input_cost=0.8213472, output_cost=0.00038, prompt_tokens=27025, completion_tokens=5
     ),
 )
 VERTEX_AI_CLAUDE_FABLE_5_1_THINKING: Final = _vertex_claude_shape_case(
@@ -3171,6 +3257,20 @@ VERTEX_AI_CLAUDE_FABLE_5_1_THINKING: Final = _vertex_claude_shape_case(
         ],
     adaptive_thinking=True,
 )
+VERTEX_AI_CLAUDE_FABLE_5_2_THINKING: Final = _vertex_claude_shape_case(
+    CLAUDE_FABLE_5_2_THINKING,
+    "vertex_ai/claude-fable-5-2-thinking",
+    "vertex_ai/claude-fable-5-2",
+    _vertex_claude_usage(input_tokens=18, output_tokens=98, thinking_tokens=33),
+    ExactExpected(
+        spend=0.0077216, input_cost=0.0002736, output_cost=0.007448, prompt_tokens=18, completion_tokens=98
+    ),
+        [
+            {"type": "thinking", "thinking": "scripted thought", "signature": "scripted signature"},
+            {"type": "text", "text": "scripted answer for cost fixtures"},
+        ],
+    adaptive_thinking=True,
+)
 VERTEX_AI_CLAUDE_FABLE_5_1_TOOL_CALL: Final = _vertex_claude_shape_case(
     CLAUDE_FABLE_5_1_TOOL_CALL,
     "vertex_ai/claude-fable-5-1-tool_call",
@@ -3180,19 +3280,30 @@ VERTEX_AI_CLAUDE_FABLE_5_1_TOOL_CALL: Final = _vertex_claude_shape_case(
         spend=0.012065, input_cost=0.007315, output_cost=0.00475, prompt_tokens=385, completion_tokens=50
     ),
 )
+VERTEX_AI_CLAUDE_FABLE_5_2_TOOL_CALL: Final = _vertex_claude_shape_case(
+    CLAUDE_FABLE_5_2_TOOL_CALL,
+    "vertex_ai/claude-fable-5-2-tool_call",
+    "vertex_ai/claude-fable-5-2",
+    _vertex_claude_usage(input_tokens=385, output_tokens=50),
+    ExactExpected(
+        spend=0.009652, input_cost=0.005852, output_cost=0.0038, prompt_tokens=385, completion_tokens=50
+    ),
+)
 
 VERTEX_AI_CLAUDE_HAIKU_5_5_INPUT_TEXT: Final = _vertex_claude_shape_case(
     VERTEX_AI_CLAUDE_SONNET_5_5_INPUT_TEXT,
     "vertex_ai/claude-haiku-5-5-input_text",
     "vertex_ai/claude-haiku-5-5",
-    _vertex_claude_usage(input_tokens=1840, output_tokens=412),
+    _vertex_claude_usage(input_tokens=1840, output_tokens=412, speed="standard"),
     ExactExpected(spend=0.00507, input_cost=0.002392, output_cost=0.002678, prompt_tokens=1840, completion_tokens=412),
 )
 VERTEX_AI_CLAUDE_HAIKU_5_5_STREAM: Final = VERTEX_AI_CLAUDE_SONNET_5_5_STREAM.model_copy(
     update={
         "name": "vertex_ai/claude-haiku-5-5-stream",
         "model": "vertex_ai/claude-haiku-5-5",
-        "response": _vertex_claude_stream_response("claude-haiku-5-5", "end_turn", ("scripted answer",)),
+        "response": _vertex_claude_stream_response(
+            "claude-haiku-5-5", "end_turn", ("scripted answer",), speed="standard"
+        ),
         "expected": VERTEX_AI_CLAUDE_HAIKU_5_5_INPUT_TEXT.expected,
     }
 )
@@ -3200,7 +3311,7 @@ VERTEX_AI_CLAUDE_HAIKU_5_5_CACHE_READ: Final = _vertex_claude_shape_case(
     VERTEX_AI_CLAUDE_SONNET_5_5_CACHE_READ,
     "vertex_ai/claude-haiku-5-5-cache_read",
     "vertex_ai/claude-haiku-5-5",
-    _vertex_claude_usage(input_tokens=14, output_tokens=6, cache_read_input_tokens=27003),
+    _vertex_claude_usage(input_tokens=14, output_tokens=6, cache_read_input_tokens=27003, speed="standard"),
     ExactExpected(
         spend=0.00356759,
         input_cost=0.00352859,
@@ -3281,7 +3392,7 @@ VERTEX_AI_CLAUDE_HAIKU_5_5_THINKING: Final = _vertex_claude_shape_case(
     VERTEX_AI_CLAUDE_SONNET_5_5_THINKING,
     "vertex_ai/claude-haiku-5-5-thinking",
     "vertex_ai/claude-haiku-5-5",
-    _vertex_claude_usage(input_tokens=18, output_tokens=144, thinking_tokens=37),
+    _vertex_claude_usage(input_tokens=18, output_tokens=144, thinking_tokens=37, speed="standard"),
     ExactExpected(
         spend=0.0009594, input_cost=0.0000234, output_cost=0.000936, prompt_tokens=18, completion_tokens=144
     ),
@@ -3325,6 +3436,15 @@ VERTEX_AI_CLAUDE_FABLE_5_1_MESSAGES_INPUT_TEXT: Final = CLAUDE_FABLE_5_1_MESSAGE
         "expected": VERTEX_AI_CLAUDE_FABLE_5_1_INPUT_TEXT.expected,
     }
 )
+VERTEX_AI_CLAUDE_FABLE_5_2_MESSAGES_INPUT_TEXT: Final = CLAUDE_FABLE_5_2_MESSAGES_INPUT_TEXT.model_copy(
+    update={
+        "name": "vertex_ai/claude-fable-5-2-messages_input_text",
+        "model": "vertex_ai/claude-fable-5-2",
+        "endpoint": "/v1/messages",
+        "response": VERTEX_AI_CLAUDE_FABLE_5_2_INPUT_TEXT.response,
+        "expected": VERTEX_AI_CLAUDE_FABLE_5_2_INPUT_TEXT.expected,
+    }
+)
 VERTEX_AI_CLAUDE_FABLE_5_1_MESSAGES_STREAM: Final = CLAUDE_FABLE_5_1_MESSAGES_STREAM.model_copy(
     update={
         "name": "vertex_ai/claude-fable-5-1-messages_stream",
@@ -3334,8 +3454,21 @@ VERTEX_AI_CLAUDE_FABLE_5_1_MESSAGES_STREAM: Final = CLAUDE_FABLE_5_1_MESSAGES_ST
         "expected": VERTEX_AI_CLAUDE_FABLE_5_1_INPUT_TEXT.expected,
     }
 )
+VERTEX_AI_CLAUDE_FABLE_5_2_MESSAGES_STREAM: Final = CLAUDE_FABLE_5_2_MESSAGES_STREAM.model_copy(
+    update={
+        "name": "vertex_ai/claude-fable-5-2-messages_stream",
+        "model": "vertex_ai/claude-fable-5-2",
+        "endpoint": "/v1/messages",
+        "response": VERTEX_AI_CLAUDE_FABLE_5_2_STREAM.response,
+        "expected": VERTEX_AI_CLAUDE_FABLE_5_2_INPUT_TEXT.expected,
+    }
+)
 VERTEX_AI_CLAUDE_FABLE_5_1_BRIDGE_PAIRS: Final = bridge_pairs(
     (VERTEX_AI_CLAUDE_FABLE_5_1_MESSAGES_INPUT_TEXT, VERTEX_AI_CLAUDE_FABLE_5_1_MESSAGES_STREAM),
+    ("/v1/responses",),
+)
+VERTEX_AI_CLAUDE_FABLE_5_2_BRIDGE_PAIRS: Final = bridge_pairs(
+    (VERTEX_AI_CLAUDE_FABLE_5_2_MESSAGES_INPUT_TEXT, VERTEX_AI_CLAUDE_FABLE_5_2_MESSAGES_STREAM),
     ("/v1/responses",),
 )
 VERTEX_AI_CLAUDE_OPUS_5_5_MESSAGES_INPUT_TEXT: Final = CLAUDE_OPUS_5_5_MESSAGES_INPUT_TEXT.model_copy(
@@ -3694,6 +3827,40 @@ GEMINI_3_1_PRO_PREVIEW_TIERED_CACHE_READ_ABOVE_200K: Final = _gemini_case(
     },
 )
 
+GEMINI_3_1_PRO_PREVIEW_TIERED_FLEX_ABOVE_200K: Final = _gemini_case(
+    GEMINI_3_1_PRO_TIERED_INPUT_ABOVE_200K,
+    "vertex_ai/gemini-3.1-pro-preview-tiered_flex_above_200k",
+    "vertex_ai/gemini-3.1-pro-preview",
+    ExactExpected(
+        spend=0.456698, input_cost=0.45056, output_cost=0.006138, prompt_tokens=204800, completion_tokens=620
+    ),
+    usage_fields={
+        "candidatesTokensDetails": [{"modality": "TEXT", "tokenCount": 620}],
+        "trafficType": "ON_DEMAND_FLEX",
+    },
+)
+GEMINI_3_1_PRO_PREVIEW_SERVICE_TIER_FLEX: Final = _gemini_case(
+    GEMINI_3_8_FLASH_SERVICE_TIER_FLEX,
+    "vertex_ai/gemini-3.1-pro-preview-service_tier_flex",
+    "vertex_ai/gemini-3.1-pro-preview",
+    ExactExpected(spend=0.0047432, input_cost=0.002024, output_cost=0.0027192, prompt_tokens=1840, completion_tokens=412),
+    usage_fields={
+        "candidatesTokensDetails": [{"modality": "TEXT", "tokenCount": 412}],
+        "trafficType": "ON_DEMAND_FLEX",
+    },
+)
+GEMINI_3_1_PRO_PREVIEW_SERVICE_TIER_PRIORITY: Final = _gemini_case(
+    GEMINI_3_8_FLASH_SERVICE_TIER_PRIORITY,
+    "vertex_ai/gemini-3.1-pro-preview-service_tier_priority",
+    "vertex_ai/gemini-3.1-pro-preview",
+    ExactExpected(
+        spend=0.01707552, input_cost=0.0072864, output_cost=0.00978912, prompt_tokens=1840, completion_tokens=412
+    ),
+    usage_fields={
+        "candidatesTokensDetails": [{"modality": "TEXT", "tokenCount": 412}],
+        "trafficType": "ON_DEMAND_PRIORITY",
+    },
+)
 GEMINI_4_ARGON_INPUT_TEXT: Final = GEMINI_3_8_FLASH_INPUT_TEXT.model_copy(
     update={
         "name": "vertex_ai/gemini-4-argon-input_text",
@@ -3851,6 +4018,17 @@ GEMINI_4_ARGON_TOOL_CALL: Final = GEMINI_3_8_FLASH_TOOL_CALL.model_copy(
     }
 )
 
+GEMINI_4_ARGON_SERVICE_TIER_PRIORITY: Final = _gemini_case(
+    GEMINI_3_8_FLASH_SERVICE_TIER_PRIORITY,
+    "vertex_ai/gemini-4-argon-service_tier_priority",
+    "vertex_ai/gemini-4-argon",
+    ExactExpected(spend=0.016848, input_cost=0.0079488, output_cost=0.0088992, prompt_tokens=1840, completion_tokens=412),
+    usage_fields={
+        "candidatesTokensDetails": [{"modality": "TEXT", "tokenCount": 412}],
+        "trafficType": "ON_DEMAND_PRIORITY",
+    },
+    model_version="gemini-4-argon",
+)
 GEMINI_4_ARGON_ROUTE_BRIDGES: Final = bridge_pairs(
     (GEMINI_4_ARGON_INPUT_TEXT, GEMINI_4_ARGON_STREAM),
     ("/v1/responses", "/v1/messages"),
@@ -3915,7 +4093,9 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     VERTEX_AI_CLAUDE_OPUS_5_5_INPUT_TEXT,
     VERTEX_AI_CLAUDE_OPUS_5_5_STREAM,
     VERTEX_AI_CLAUDE_FABLE_5_1_INPUT_TEXT,
+    VERTEX_AI_CLAUDE_FABLE_5_2_INPUT_TEXT,
     VERTEX_AI_CLAUDE_FABLE_5_1_STREAM,
+    VERTEX_AI_CLAUDE_FABLE_5_2_STREAM,
     VERTEX_AI_CLAUDE_SONNET_5_5_CACHE_READ,
     VERTEX_AI_CLAUDE_SONNET_5_5_CACHE_WRITE_5M,
     VERTEX_AI_CLAUDE_SONNET_5_5_CACHE_WRITE_1H,
@@ -3927,10 +4107,15 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     VERTEX_AI_CLAUDE_OPUS_5_5_THINKING,
     VERTEX_AI_CLAUDE_OPUS_5_5_TOOL_CALL,
     VERTEX_AI_CLAUDE_FABLE_5_1_CACHE_READ,
+    VERTEX_AI_CLAUDE_FABLE_5_2_CACHE_READ,
     VERTEX_AI_CLAUDE_FABLE_5_1_CACHE_WRITE_5M,
+    VERTEX_AI_CLAUDE_FABLE_5_2_CACHE_WRITE_5M,
     VERTEX_AI_CLAUDE_FABLE_5_1_CACHE_WRITE_1H,
+    VERTEX_AI_CLAUDE_FABLE_5_2_CACHE_WRITE_1H,
     VERTEX_AI_CLAUDE_FABLE_5_1_THINKING,
+    VERTEX_AI_CLAUDE_FABLE_5_2_THINKING,
     VERTEX_AI_CLAUDE_FABLE_5_1_TOOL_CALL,
+    VERTEX_AI_CLAUDE_FABLE_5_2_TOOL_CALL,
     VERTEX_AI_CLAUDE_HAIKU_5_5_INPUT_TEXT,
     VERTEX_AI_CLAUDE_HAIKU_5_5_STREAM,
     VERTEX_AI_CLAUDE_HAIKU_5_5_CACHE_READ,
@@ -3944,8 +4129,11 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     VERTEX_AI_CLAUDE_HAIKU_5_5_MESSAGES_STREAM,
     *(pair.bridged for pair in VERTEX_AI_CLAUDE_HAIKU_5_5_BRIDGE_PAIRS),
     VERTEX_AI_CLAUDE_FABLE_5_1_MESSAGES_INPUT_TEXT,
+    VERTEX_AI_CLAUDE_FABLE_5_2_MESSAGES_INPUT_TEXT,
     VERTEX_AI_CLAUDE_FABLE_5_1_MESSAGES_STREAM,
+    VERTEX_AI_CLAUDE_FABLE_5_2_MESSAGES_STREAM,
     *(pair.bridged for pair in VERTEX_AI_CLAUDE_FABLE_5_1_BRIDGE_PAIRS),
+    *(pair.bridged for pair in VERTEX_AI_CLAUDE_FABLE_5_2_BRIDGE_PAIRS),
     VERTEX_AI_CLAUDE_OPUS_5_5_MESSAGES_INPUT_TEXT,
     VERTEX_AI_CLAUDE_OPUS_5_5_MESSAGES_STREAM,
     *(pair.bridged for pair in VERTEX_AI_CLAUDE_OPUS_5_5_BRIDGE_PAIRS),
@@ -3965,13 +4153,17 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     GEMINI_3_1_PRO_PREVIEW_CACHE_READ,
     GEMINI_3_1_PRO_PREVIEW_TIERED_INPUT_ABOVE_200K,
     GEMINI_3_1_PRO_PREVIEW_TIERED_CACHE_READ_ABOVE_200K,
+    GEMINI_3_1_PRO_PREVIEW_TIERED_FLEX_ABOVE_200K,
     GEMINI_3_1_PRO_PREVIEW_REASONING,
     GEMINI_3_1_PRO_PREVIEW_TOOL_CALL,
+    GEMINI_3_1_PRO_PREVIEW_SERVICE_TIER_FLEX,
+    GEMINI_3_1_PRO_PREVIEW_SERVICE_TIER_PRIORITY,
     GEMINI_4_ARGON_INPUT_TEXT,
     GEMINI_4_ARGON_STREAM,
     GEMINI_4_ARGON_CACHE_READ,
     GEMINI_4_ARGON_REASONING,
     GEMINI_4_ARGON_TOOL_CALL,
+    GEMINI_4_ARGON_SERVICE_TIER_PRIORITY,
     *(pair.bridged for pair in GEMINI_4_ARGON_ROUTE_BRIDGES),
     *(pair.bridged for pair in GEMINI_3_8_FLASH_ROUTE_BRIDGES),
     *(pair.bridged for pair in GEMINI_3_1_PRO_PREVIEW_ROUTE_BRIDGES),
@@ -3995,6 +4187,7 @@ PARITY: Final[tuple[StreamParityTestCase, ...]] = (
     ),
     StreamParityTestCase(plain=VERTEX_AI_CLAUDE_OPUS_5_5_INPUT_TEXT, streamed=VERTEX_AI_CLAUDE_OPUS_5_5_STREAM),
     StreamParityTestCase(plain=VERTEX_AI_CLAUDE_FABLE_5_1_INPUT_TEXT, streamed=VERTEX_AI_CLAUDE_FABLE_5_1_STREAM),
+    StreamParityTestCase(plain=VERTEX_AI_CLAUDE_FABLE_5_2_INPUT_TEXT, streamed=VERTEX_AI_CLAUDE_FABLE_5_2_STREAM),
     StreamParityTestCase(
         plain=VERTEX_AI_CLAUDE_HAIKU_5_5_INPUT_TEXT, streamed=VERTEX_AI_CLAUDE_HAIKU_5_5_STREAM
     ),
@@ -4011,8 +4204,16 @@ PARITY: Final[tuple[StreamParityTestCase, ...]] = (
         streamed=VERTEX_AI_CLAUDE_FABLE_5_1_MESSAGES_STREAM,
     ),
     StreamParityTestCase(
+        plain=VERTEX_AI_CLAUDE_FABLE_5_2_MESSAGES_INPUT_TEXT,
+        streamed=VERTEX_AI_CLAUDE_FABLE_5_2_MESSAGES_STREAM,
+    ),
+    StreamParityTestCase(
         plain=VERTEX_AI_CLAUDE_FABLE_5_1_BRIDGE_PAIRS[0].bridged,
         streamed=VERTEX_AI_CLAUDE_FABLE_5_1_BRIDGE_PAIRS[1].bridged,
+    ),
+    StreamParityTestCase(
+        plain=VERTEX_AI_CLAUDE_FABLE_5_2_BRIDGE_PAIRS[0].bridged,
+        streamed=VERTEX_AI_CLAUDE_FABLE_5_2_BRIDGE_PAIRS[1].bridged,
     ),
     StreamParityTestCase(
         plain=VERTEX_AI_CLAUDE_OPUS_5_5_MESSAGES_INPUT_TEXT,
@@ -4068,6 +4269,7 @@ BRIDGE_COST_PARITY: Final[tuple[BridgeCostParityTestCase, ...]] = (
     *GEMINI_4_ARGON_ROUTE_BRIDGES,
     *VERTEX_AI_CLAUDE_HAIKU_5_5_BRIDGE_PAIRS,
     *VERTEX_AI_CLAUDE_FABLE_5_1_BRIDGE_PAIRS,
+    *VERTEX_AI_CLAUDE_FABLE_5_2_BRIDGE_PAIRS,
     *VERTEX_AI_CLAUDE_OPUS_5_5_BRIDGE_PAIRS,
     *VERTEX_AI_CLAUDE_SONNET_5_5_BRIDGE_PAIRS,
 )

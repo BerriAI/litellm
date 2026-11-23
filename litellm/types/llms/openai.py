@@ -4,7 +4,7 @@ from collections.abc import ItemsView, Iterable, Mapping, Sequence
 from enum import Enum
 from os import PathLike
 from types import MappingProxyType
-from typing import IO, TYPE_CHECKING, Any, Final, Generic, Literal, Optional, TypeAlias, Union
+from typing import IO, TYPE_CHECKING, Any, Final, Generic, Literal, Optional, Protocol, TypeAlias, Union
 
 import httpx
 from openai import Omit
@@ -73,6 +73,7 @@ from pydantic import (
     PrivateAttr,
     SerializeAsAny,
     SerializerFunctionWrapHandler,
+    TypeAdapter,
     field_serializer,
     field_validator,
     model_serializer,
@@ -95,6 +96,7 @@ from litellm.types.responses.main import (
     OutputFunctionToolCall,
     OutputImageGenerationCall,
     OutputToolSearchCall,
+    OutputToolSearchOutput,
 )
 
 from .base import CachedTokensDetails
@@ -102,7 +104,7 @@ from .base import CachedTokensDetails
 if TYPE_CHECKING:
     from litellm.types.utils import Usage
 
-FileContent = IO[bytes] | bytes | PathLike
+FileContent = IO[bytes] | bytes | PathLike[str]
 
 FileTypes = (
     # file (or bytes)
@@ -131,6 +133,19 @@ class BinaryResponseSummary(TypedDict):
 _ResponseT = TypeVar("_ResponseT", bound=httpx.Response | SDKResponse, default=httpx.Response)
 
 
+class BatchInputFormat(str, Enum):
+    """Expected layout of batch input retrieved from a file reader."""
+
+    OPENAI = "openai"
+    VERTEX = "vertex"
+    BEDROCK = "bedrock"
+    UNKNOWN = "unknown"
+
+
+def _header_value(headers: Mapping[str, str], name: str) -> str | None:
+    return headers.get(name)
+
+
 class HttpxBinaryResponseContent(_HttpxBinaryResponseContent, Generic[_ResponseT]):
     _hidden_params: dict
     usage: "Usage | None"
@@ -144,15 +159,21 @@ class HttpxBinaryResponseContent(_HttpxBinaryResponseContent, Generic[_ResponseT
     def hidden_params(self, hidden_params: dict[str, builtins.object]) -> None:  # mutable-ok: API requires mutation
         self._hidden_params = hidden_params
 
-    def __init__(self, response: _ResponseT) -> None:
+    def __init__(
+        self,
+        response: _ResponseT,
+        usage: "Usage | None" = None,
+        *,
+        batch_input_format: BatchInputFormat = BatchInputFormat.UNKNOWN,
+    ) -> None:
         super().__init__(response)  # pyright: ignore[reportArgumentType]  # SDK accepts both backends at runtime
         self._hidden_params = {}
-        self.usage = None
+        self.usage = usage
+        self.batch_input_format = batch_input_format
 
     @property
     def content_type(self) -> str | None:
-        headers: Final[Mapping[str, str]] = self.response.headers
-        return headers.get("content-type")
+        return _header_value(self.response.headers, "content-type")
 
     def logging_summary(self) -> BinaryResponseSummary:
         summary: Final[BinaryResponseSummary] = {
@@ -168,6 +189,9 @@ class HttpxBinaryResponseContent(_HttpxBinaryResponseContent, Generic[_ResponseT
         except RuntimeError:
             return self.response.num_bytes_downloaded
         return len(content)
+
+    def unread_response(self) -> httpx.Response | None:
+        return None if self.response.is_stream_consumed else self.response
 
     def set_response_cost(self, response_cost: float | None) -> None:
         if response_cost is None:
@@ -386,9 +410,23 @@ class BatchGuardrailReport(LiteLLMBaseModel):
 _JsonValue: TypeAlias = object
 """Alias for ``object``, usable inside model bodies that declare a field named ``object``."""
 
+_ATTRIBUTE_VALUE: Final = TypeAdapter(_JsonValue)
+
+
+class _ModelDumpable(Protocol):
+    def model_dump(self) -> builtins.object: ...
+
 
 BATCH_GUARDRAIL_RESPONSE_FIELD: Final = "litellm_batch_guardrail"
 LITELLM_DETAILS_FALLBACK_RESPONSE_FIELD: Final = "litellm_details_fallback"
+
+
+class _SerializeHandler(Protocol):
+    def __call__(self, value: builtins.object, /) -> builtins.object: ...
+
+
+def _serialized_by(handler: _SerializeHandler, value: builtins.object) -> builtins.object:
+    return handler(value)
 
 
 class OpenAIFileObject(LiteLLMBaseModel):
@@ -459,7 +497,10 @@ class OpenAIFileObject(LiteLLMBaseModel):
     def _omit_absent_proxy_only_fields(  # noqa: ANN202  # annotating it replaces the model's serialization schema
         self, handler: SerializerFunctionWrapHandler
     ):
-        serialized: Final[Mapping[str, object]] = handler(self)
+        raw: Final = _serialized_by(handler, self)
+        serialized: Final = _as_json_object(raw)
+        if serialized is None:
+            return raw
         fields_to_omit: Final = tuple(
             field_name
             for field_name, value in (
@@ -478,9 +519,9 @@ class OpenAIFileObject(LiteLLMBaseModel):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key) -> _JsonValue:
         # Allow dictionary-style access to attributes
-        return getattr(self, key)
+        return _ATTRIBUTE_VALUE.validate_python(getattr(self, key))
 
     def json(self, **kwargs):
         try:
@@ -817,6 +858,12 @@ class ChatCompletionTextObject(
     cache_control: ChatCompletionCachedContent
 
 
+class ChatCompletionGuardedTextObject(TypedDict):
+    type: ReadOnly[Literal["guarded_text"]]
+    text: ReadOnly[str]
+    cache_control: NotRequired[ReadOnly[ChatCompletionCachedContent]]
+
+
 class ChatCompletionImageUrlObject(TypedDict, total=False):
     url: Required[str]
     detail: str
@@ -874,7 +921,7 @@ class ChatCompletionFileObjectFile(TypedDict, total=False):
     filename: str
     format: str
     detail: str  # For video/image resolution control (low, medium, high, ultra_high)
-    video_metadata: dict[str, Any]  # For video-specific metadata (fps, start_offset, end_offset)
+    video_metadata: dict[str, object]  # For video-specific metadata (fps, start_offset, end_offset)
 
 
 class ChatCompletionFileObject(TypedDict):
@@ -1160,7 +1207,7 @@ class ChatCompletionRequest(TypedDict, total=False):
     functions: list
     user: str
     metadata: dict  # litellm specific param
-    reasoning_effort: str  # OpenAI o1/o3 reasoning parameter
+    reasoning_effort: str | Mapping[str, object]  # OpenAI o1/o3 reasoning parameter
     output_config: Mapping[str, object]  # Anthropic adaptive-thinking effort, bridged for Bedrock Claude
 
 
@@ -1595,19 +1642,20 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
             | ResponseFunctionWebSearch
             | CustomToolCallOutputItem
             | OutputToolSearchCall
+            | OutputToolSearchOutput
             | ResponseCompactionItem
         ]
     )
     parallel_tool_calls: bool | None = None
     temperature: float | None = None
     tool_choice: ToolChoice | None = None
-    tools: list[Tool] | list[ResponseFunctionToolCall] | list[dict[str, Any]] | None = None
+    tools: list[Tool] | list[ResponseFunctionToolCall] | list[dict[str, builtins.object]] | None = None
     top_p: float | None = None
     max_output_tokens: int | None = None
     previous_response_id: str | None = None
-    reasoning: dict[str, Any] | None = None
+    reasoning: dict[str, builtins.object] | None = None
     status: str | None = None
-    text: Union["ResponseText", dict[str, Any]] | None = None
+    text: Union["ResponseText", dict[str, builtins.object]] | None = None
     truncation: Literal["auto", "disabled"] | None = None
     usage: ResponseAPIUsage | None = None
     user: str | None = None
@@ -1625,13 +1673,15 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
 
     @field_validator("reasoning", mode="before")
     @classmethod
-    def validate_reasoning_to_dict(cls, value: Any) -> builtins.object:
+    def validate_reasoning_to_dict(cls, value: builtins.object) -> builtins.object:
         """Accept API reasoning dict (including effort 'none'/'xhigh'); always store as dict."""
         if value is None:
             return None
         if isinstance(value, dict):
             return value
-        if hasattr(value, "model_dump"):
+        from litellm.litellm_core_utils.core_helpers import has_attributes
+
+        if has_attributes(value, _ModelDumpable, "model_dump"):
             return value.model_dump()
         return value
 
@@ -1655,7 +1705,7 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
         (OpenAI rejects it when `output` is replayed as `input`), and status/content/encrypted_content on
         reasoning items (the OpenAI C# SDK crashes on status=null, issue #16824).
         """
-        serialized: Final[object] = handler(value)
+        serialized: Final = _serialized_by(handler, value)
         return replayable_responses_input(serialized)
 
     @property
@@ -2458,6 +2508,21 @@ class OpenAIRealtimeDoneEvent(TypedDict):
     type: Literal["response.done"]
 
 
+class OpenAIRealtimeOutputVideoDelta(TypedDict):
+    """A fragmented-MP4 chunk of a Gemini Live avatar stream; the video counterpart of
+    response.output_audio.delta. The ids are those of the open response, or None when
+    the video flows outside a turn."""
+
+    type: ReadOnly[Literal["response.output_video.delta"]]
+    event_id: ReadOnly[str]
+    response_id: ReadOnly[str | None]
+    item_id: ReadOnly[str | None]
+    output_index: ReadOnly[int]
+    content_index: ReadOnly[int]
+    mime_type: ReadOnly[str | None]
+    delta: ReadOnly[str]
+
+
 class OpenAIRealtimeInputAudioBufferSpeechEvent(TypedDict):
     type: ReadOnly[Literal["input_audio_buffer.speech_started", "input_audio_buffer.speech_stopped"]]
     event_id: ReadOnly[str]
@@ -2599,6 +2664,7 @@ OpenAIRealtimeEvents = (
     | OpenAIRealtimeFunctionCallArgumentsDone
     | OpenAIRealtimeDoneEvent
     | OpenAIRealtimeInputAudioBufferSpeechEvent
+    | OpenAIRealtimeOutputVideoDelta
     | OpenAIRealtimeInputAudioTranscriptionDelta
     | OpenAIRealtimeInputAudioTranscriptionCompleted
     | OpenAIRealtimeTranscriptionSessionCreated
@@ -2827,7 +2893,7 @@ class OpenAIVideoObject(LiteLLMBaseModel):
         return getattr(self, key, default)
 
     def __getitem__(self, key) -> _JsonValue:
-        return getattr(self, key)
+        return _ATTRIBUTE_VALUE.validate_python(getattr(self, key))
 
     def json(self, **kwargs):
         try:

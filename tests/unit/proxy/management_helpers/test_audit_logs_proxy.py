@@ -42,6 +42,7 @@ from starlette.datastructures import URL
 
 from litellm.proxy.management_helpers.audit_logs import (
     create_audit_log_for_update,
+    create_object_audit_log,
     drain_audit_tasks,
     get_audit_log_changed_by,
     track_audit_task,
@@ -56,6 +57,49 @@ from unittest.mock import AsyncMock, MagicMock, patch
 proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
 import json
 from tests._master_key import MASTER_KEY
+from tests.unit.proxy.rust_auth_stores import FakeAuditLogStore
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("impersonated", [False, True])
+@pytest.mark.parametrize("after_value", [None, '{"max_budget":42}', '"deleted"'])
+async def test_object_audit_preserves_the_actor_and_subject_in_storage_and_exports(
+    impersonated: bool, after_value: str | None
+) -> None:
+    actor_hash: Final = hash_token("sk-original-audit-actor")
+    auth: Final = UserAPIKeyAuth(
+        api_key=None if impersonated else actor_hash,
+        token=actor_hash,
+        user_id="subject",
+    ).model_copy(update={"impersonated_by": "service-key" if impersonated else None})
+    database: Final = MagicMock()
+    database.db.litellm_auditlog.create = AsyncMock()
+    callback: Final = CustomLogger()
+    export: Final = AsyncMock()
+    callback.async_log_audit_log_event = export
+    with (
+        patch("litellm.store_audit_logs", True),
+        patch("litellm.proxy.proxy_server.premium_user", True),
+        patch("litellm.proxy.proxy_server.prisma_client", database),
+        patch("litellm.audit_log_callbacks", [callback]),
+    ):
+        await create_object_audit_log(
+            "object", "updated", None, auth, "admin", LitellmTableNames.KEY_TABLE_NAME, after_value=after_value
+        )
+        await drain_audit_tasks()
+    stored: Final = database.db.litellm_auditlog.create.call_args.kwargs["data"]
+    exported: Final = export.call_args.args[0]
+    assert stored["changed_by"] == exported["changed_by"] == "subject"
+    assert stored["changed_by_api_key"] == exported["changed_by_api_key"] == actor_hash
+    assert stored.get("updated_values") == exported["updated_values"]
+    if impersonated:
+        assert json.loads(stored["updated_values"])["_litellm_impersonation"] == {
+            "impersonated_by": "service-key",
+            "subject": "subject",
+        }
+        assert auth.api_key is None
+    else:
+        assert "_litellm_impersonation" not in (stored.get("updated_values") or "")
 
 
 def test_get_audit_log_changed_by_prefers_authenticated_user():
@@ -187,7 +231,7 @@ async def test_create_audit_log_for_update_premium_user():
 
         request_data = LiteLLM_AuditLogs(
             id="test_id",
-            updated_at=datetime.now(),
+            updated_at=datetime.now(timezone.utc),
             changed_by="test_changed_by",
             action="updated",
             table_name=LitellmTableNames.TEAM_TABLE_NAME,
@@ -737,3 +781,59 @@ async def test_user_created_audit_write_is_drained_while_its_user_read_is_still_
 
     assert drain_waited_for_the_user_read
     assert [(write["object_id"], write["action"]) for write in writes] == [("new-user", "created")]
+
+
+def _audit_log(updated_at: datetime, updated_values: object) -> LiteLLM_AuditLogs:
+    return LiteLLM_AuditLogs(
+        id="audit-1",
+        updated_at=updated_at,
+        changed_by="admin",
+        action="updated",
+        table_name=LitellmTableNames.TEAM_TABLE_NAME,
+        object_id="team-a",
+    ).model_copy(update={"updated_values": updated_values})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "updated_at",
+    [datetime(2026, 11, 19, 5, 7, 32, 123456, tzinfo=timezone.utc), datetime(2026, 11, 19, 5, 7, 32, 123456)],
+    ids=["aware", "without_a_zone_read_as_utc"],
+)
+async def test_an_audit_log_is_inserted_with_its_time_in_utc_and_its_values_as_json_text(
+    audit_log_store: FakeAuditLogStore, updated_at: datetime
+) -> None:
+    with (
+        patch("litellm.store_audit_logs", True),
+        patch("litellm.proxy.proxy_server.premium_user", True),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock(db=MagicMock(litellm_auditlog=AsyncMock()))),
+    ):
+        await create_audit_log_for_update(_audit_log(updated_at, {"members": ["u1"]}))
+        await drain_audit_tasks()
+
+    assert audit_log_store.rows == [
+        {
+            "id": "audit-1",
+            "updated_at": datetime(2026, 11, 19, 5, 7, 32, 123456, tzinfo=timezone.utc),
+            "changed_by": "admin",
+            "action": "updated",
+            "table_name": "LiteLLM_TeamTable",
+            "object_id": "team-a",
+            "updated_values": '{"members": ["u1"]}',
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_an_audit_log_whose_value_is_not_json_text_is_not_inserted_and_does_not_fail_the_caller(
+    audit_log_store: FakeAuditLogStore,
+) -> None:
+    with (
+        patch("litellm.store_audit_logs", True),
+        patch("litellm.proxy.proxy_server.premium_user", True),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock(db=MagicMock(litellm_auditlog=AsyncMock()))),
+    ):
+        await create_audit_log_for_update(_audit_log(datetime.now(timezone.utc), ["not", "text"]))
+        await drain_audit_tasks()
+
+    assert audit_log_store.rows == []

@@ -14,10 +14,88 @@ import litellm
 from litellm.litellm_core_utils.tool_fields import DropPolicy
 from litellm.llms.anthropic.messages.context_management.constants import CLEARED_TOOL_RESULT_PLACEHOLDER
 from litellm.llms.openai.responses.count_tokens.token_counter import OpenAITokenCounter
+from litellm.proxy.anthropic_endpoints.endpoints import _count_tokens_body_options
+from litellm.proxy.proxy_server import _deployment_with_request_drop_settings
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.utils import CountContextManagement, TokenCountMessagesFormat, TokenCountResponse
 
 COUNT_URL: Final = "https://api.openai.com/v1/responses/input_tokens"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("configured", "requested", "preserve"),
+    [
+        ({"store": False}, {}, False),
+        ({"store": False}, {"store": None}, False),
+        ({"extra_body": {"store": False}}, {"extra_body": None}, False),
+        ({"store": False, "previous_response_id": "resp_old"}, {"previous_response_id": None}, False),
+        ({"store": False, "conversation": "conv_old"}, {"conversation": None}, False),
+        ({"store": False, "truncation": "auto"}, {"truncation": None}, False),
+        ({"store": False, "additional_drop_params": ["store"]}, {"additional_drop_params": None}, False),
+        ({"store": False, "drop_params": True}, {"drop_params": None}, False),
+    ],
+)
+async def test_count_explicit_null_overrides_match_routed_generation(
+    monkeypatch: pytest.MonkeyPatch,
+    configured: Mapping[str, object],
+    requested: Mapping[str, JsonValue],
+    preserve: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    params: Final = {"model": "openai/responses/gpt-6.2-sol", "api_key": "sk-test", **configured}
+    router: Final = litellm.Router(model_list=[{"model_name": "qa-null", "litellm_params": params}], num_retries=0)
+    messages: Final = [{"role": "user", "content": "hi"}]
+    with respx.mock:
+        generation: Final = respx.post("https://api.openai.com/v1/responses").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": "resp_null_override",
+                    "object": "response",
+                    "created_at": 1,
+                    "status": "completed",
+                    "model": "gpt-6.2-sol",
+                    "output": [
+                        {
+                            "id": "msg_null_override",
+                            "type": "message",
+                            "role": "assistant",
+                            "content": [{"type": "output_text", "text": "QA_OK", "annotations": []}],
+                        }
+                    ],
+                    "usage": {"input_tokens": 10, "output_tokens": 1, "total_tokens": 11},
+                },
+            )
+        )
+        await router.aanthropic_messages(
+            model="qa-null", max_tokens=64, system="Be brief.", messages=messages, **requested
+        )
+        generated: Final = json.loads(generation.calls.last.request.content)
+        options: Final = _count_tokens_body_options(requested, False)
+        deployment: Final = _deployment_with_request_drop_settings(
+            {"litellm_params": params}, options["request_litellm_params"]
+        )
+        route: Final = respx.post(COUNT_URL).mock(return_value=httpx.Response(200, json={"input_tokens": 10}))
+        result: Final = await OpenAITokenCounter().count_tokens(
+            model_to_use="gpt-6.2-sol",
+            messages=messages,
+            contents=None,
+            deployment=deployment,
+            request_model="openai/responses/gpt-6.2-sol",
+            system="Be brief.",
+            messages_format="anthropic",
+        )
+    assert result is not None and result.total_tokens == 10
+    assert generated.get("store") is (None if {"store", "extra_body"} & requested.keys() else False)
+    assert generated.get("instructions") == ("Be brief." if preserve else None)
+    assert json.loads(route.calls.last.request.content) == {
+        "model": "gpt-6.2-sol",
+        "input": generated["input"],
+        **({"instructions": "Be brief."} if preserve else {}),
+    }
+    assert deployment is not None
+    assert deployment["litellm_params"] == {**params, **requested}
 
 
 async def _count(monkeypatch: pytest.MonkeyPatch, response: httpx.Response) -> TokenCountResponse | None:
@@ -220,6 +298,7 @@ async def test_anthropic_format_sends_the_document_image_and_tool_turns_to_the_c
     assert sent == {
         "model": "gpt-4o",
         "input": [
+            {"type": "message", "role": "developer", "content": [{"type": "input_text", "text": "Be brief."}]},
             {
                 "type": "message",
                 "role": "user",
@@ -232,7 +311,6 @@ async def test_anthropic_format_sends_the_document_image_and_tool_turns_to_the_c
             {"type": "function_call", "call_id": "toolu_01", "name": "lookup", "arguments": "{}"},
             {"type": "function_call_output", "call_id": "toolu_01", "output": "found"},
         ],
-        "instructions": "Be brief.",
     }
 
 
@@ -301,7 +379,14 @@ async def test_anthropic_format_counts_the_structured_output_schema(monkeypatch:
     assert sent == {
         "model": "gpt-4o",
         "input": [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Answer in JSON."}]}],
-        "text": {"format": {"type": "json_schema", "name": "structured_output", "schema": schema, "strict": True}},
+        "text": {
+            "format": {
+                "type": "json_schema",
+                "name": "structured_output",
+                "schema": {**schema, "required": ["answer"], "additionalProperties": False},
+                "strict": True,
+            }
+        },
     }
 
 
@@ -464,9 +549,7 @@ async def test_anthropic_format_malformed_tool_result_text_answers_400_without_c
 async def test_anthropic_format_drop_params_counts_the_tool_result_without_the_malformed_text(
     monkeypatch: pytest.MonkeyPatch, text_block: Mapping[str, object]
 ) -> None:
-    result, route = await _count_tool_result_turns(
-        monkeypatch, text_block, {"api_key": "sk-test", "drop_params": True}
-    )
+    result, route = await _count_tool_result_turns(monkeypatch, text_block, {"api_key": "sk-test", "drop_params": True})
 
     assert result is not None
     assert (result.error, result.total_tokens) == (False, 9)
@@ -583,7 +666,9 @@ async def test_anthropic_format_input_tokens_trigger_counts_the_system_prompt_li
 async def test_anthropic_format_malformed_clear_edit_answers_400_without_calling_openai(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    result, route = await _count_with_edit(monkeypatch, {**CLEAR_EDIT, "exclude_tools": "log"}, drop_invalid_edits=False)
+    result, route = await _count_with_edit(
+        monkeypatch, {**CLEAR_EDIT, "exclude_tools": "log"}, drop_invalid_edits=False
+    )
 
     assert route.called is False
     assert result is not None

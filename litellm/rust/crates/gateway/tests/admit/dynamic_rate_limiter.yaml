@@ -1,0 +1,37 @@
+# `dynamic_rate_limiter_v3` is the one callback the native app runs: it shares a model group's tpm
+# and rpm out by priority, and splits a priority class among its active keys when asked.
+config:
+  model_list:
+    - model_name: claude
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+        tpm: 100000
+        rpm: 10
+  litellm_settings:
+    callbacks: [dynamic_rate_limiter_v3]
+    priority_reservation:
+      prod: 0.9
+      dev: {type: rpm, value: 1}
+    priority_reservation_settings:
+      default_priority: 0.1
+      saturation_threshold: 0.6
+      saturation_check_cache_ttl: 10
+      priority_class_share_config:
+        split_equally_among_active: [key]
+  general_settings:
+    master_key: gateway-key
+
+keys:
+  sk-any: []
+
+requests:
+  - name: the master key
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: rust
+
+  - name: a virtual key
+    headers: {authorization: Bearer sk-any}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: rust

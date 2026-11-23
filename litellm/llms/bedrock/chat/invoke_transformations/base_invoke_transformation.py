@@ -22,7 +22,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.bedrock.chat.invoke_handler import make_call, make_sync_call
-from litellm.llms.bedrock.common_utils import BedrockError
+from litellm.llms.bedrock.common_utils import BEDROCK_SERVICE_TIER_HEADER, BedrockError
 from litellm.llms.bedrock.request_metadata import (
     bedrock_request_metadata_headers,
     merge_bedrock_invoke_headers,
@@ -32,6 +32,7 @@ from litellm.llms.custom_httpx.http_handler import (
     HTTPHandler,
     get_httpx_client,
 )
+from litellm.types.litellm_params import MCP_HANDLER_KWARG_NAMES
 from litellm.types.llms.bedrock import GuardrailConfigBlock
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse, Usage
@@ -67,8 +68,33 @@ class _LlamaInvokeResponse(TypedDict):
     generation: ReadOnly[str | None]
 
 
+class _InvokeServiceTierParams(TypedDict):
+    serviceTier: NotRequired[ReadOnly[object]]
+
+
+class _Ai21CompletionData(TypedDict):
+    text: ReadOnly[str]
+
+
+class _Ai21Completion(TypedDict):
+    data: ReadOnly[_Ai21CompletionData]
+
+
+class _Ai21InvokeResponse(TypedDict):
+    completions: ReadOnly[Sequence[_Ai21Completion]]
+
+
+class _TitanResult(TypedDict):
+    outputText: ReadOnly[str]
+
+
+class _TitanInvokeResponse(TypedDict):
+    results: ReadOnly[Sequence[_TitanResult]]
+
+
 _COHERE_INVOKE_RESPONSE: Final = TypeAdapter(_CohereInvokeResponse)
 _LLAMA_INVOKE_RESPONSE: Final = TypeAdapter(_LlamaInvokeResponse)
+_INVOKE_SERVICE_TIER_PARAMS: Final = TypeAdapter(_InvokeServiceTierParams)
 
 _GUARDRAIL_CONFIG_EXPECTED_FORMAT: Final = (
     "{'guardrailIdentifier': str, 'guardrailVersion': str, 'trace': 'enabled'|'disabled'|'enabled_full'}"
@@ -77,6 +103,14 @@ _GUARDRAIL_CONFIG_EXPECTED_FORMAT: Final = (
 
 def _response_header(headers: Mapping[str, str], name: str) -> str | None:
     return headers.get(name, None)
+
+
+def _bedrock_invoke_service_tier_headers(optional_params: _InvokeServiceTierParams) -> tuple[tuple[str, str], ...]:
+    match optional_params.get("serviceTier"):
+        case {"type": str(tier)}:
+            return ((BEDROCK_SERVICE_TIER_HEADER, tier),)
+        case _:
+            return ()
 
 
 def bedrock_invoke_guardrail_headers(raw_guardrail_config: object) -> "dict[str, str]":
@@ -186,7 +220,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             fake_stream=fake_stream,
         )
 
-    def _apply_config_to_params(self, config: dict, inference_params: dict) -> None:
+    def _apply_config_to_params(self, config: Mapping[str, object], inference_params: dict[str, object]) -> None:
         """Apply config values to inference_params if not already set."""
         for k, v in config.items():
             if k not in inference_params:
@@ -213,8 +247,11 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             provider=provider,
             custom_prompt_dict=custom_prompt_dict,
         )
-        inference_params = copy.deepcopy(optional_params)
-        inference_params = {k: v for k, v in inference_params.items() if k not in self.aws_authentication_params}
+        inference_params: Final = {
+            k: v
+            for k, v in copy.deepcopy(optional_params).items()
+            if k not in self.aws_authentication_params and k not in MCP_HANDLER_KWARG_NAMES
+        }
         request_data: dict = {}
         if provider == "cohere":
             if model.startswith("cohere.command-r"):
@@ -378,13 +415,15 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
                     json_mode=json_mode,
                 )
             elif provider == "ai21":
-                outputText = completion_response.get("completions")[0].get("data").get("text")
+                ai21_response: Final[_Ai21InvokeResponse] = completion_response
+                outputText = ai21_response.get("completions")[0].get("data").get("text")
             elif provider == "meta" or provider == "llama" or provider == "deepseek_r1":
                 outputText = _LLAMA_INVOKE_RESPONSE.validate_python(completion_response)["generation"]
             elif provider == "mistral":
                 outputText = litellm.AmazonMistralConfig.get_outputText(completion_response, model_response)
             else:  # amazon titan
-                outputText = completion_response.get("results")[0].get("outputText")
+                titan_response: Final[_TitanInvokeResponse] = completion_response
+                outputText = titan_response.get("results")[0].get("outputText")
         except Exception as e:
             raise BedrockError(
                 message=f"Error processing={raw_response.text}, Received error={e}",
@@ -455,8 +494,15 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             if raw_guardrail_config is None
             else tuple(bedrock_invoke_guardrail_headers(raw_guardrail_config).items())
         )
+        service_tier_headers: Final = (
+            _bedrock_invoke_service_tier_headers(_INVOKE_SERVICE_TIER_PARAMS.validate_python(optional_params))
+            if self.get_bedrock_invoke_provider(model) == "nova"
+            else ()
+        )
         owned_names, metadata_headers = bedrock_request_metadata_headers(litellm_params)
-        return merge_bedrock_invoke_headers(headers, guardrail_headers, metadata_headers, owned_names)
+        return merge_bedrock_invoke_headers(
+            headers, (*guardrail_headers, *service_tier_headers), metadata_headers, owned_names
+        )
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return BedrockError(status_code=status_code, message=error_message, headers=headers)
@@ -558,7 +604,9 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         """
         return False
 
-    def convert_messages_to_prompt(self, model: str, messages, provider, custom_prompt_dict) -> tuple[str, list | None]:
+    def convert_messages_to_prompt(
+        self, model: str, messages, provider: object, custom_prompt_dict
+    ) -> tuple[str, list | None]:
         # handle anthropic prompts and amazon titan prompts
         prompt = ""
         chat_history: list | None = None

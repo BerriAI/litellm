@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Final
 
 import packaging
+
 from litellm.llms.anthropic.common_utils import tool_calls_with_server_tool_calls
 
 if TYPE_CHECKING:
@@ -106,18 +107,18 @@ class LunaryLogger:
     def log_event(
         self,
         kwargs,
-        type,
-        event,
-        run_id,
-        model,
+        type: object,
+        event: object,
+        run_id: object,
+        model: object,
         print_verbose,
         extra={},
         input=None,
-        user_id=None,
+        user_id: object = None,
         response_obj=None,
         start_time=datetime.now(timezone.utc),
         end_time=datetime.now(timezone.utc),
-        error=None,
+        error: object = None,
     ):
         try:
             print_verbose(f"Lunary Logging - Logging request for model {model}")

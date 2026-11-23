@@ -1,12 +1,13 @@
 import asyncio
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from types import MappingProxyType
+from types import MappingProxyType, TracebackType
 from typing import TYPE_CHECKING, Final, Protocol
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from typing_extensions import ReadOnly, TypedDict
 
+import litellm
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.core_helpers import iter_items
@@ -35,10 +36,13 @@ from litellm.proxy.management_helpers.resource_display_names import (
     agent_display_names,
     key_display_names,
     mcp_server_display_names,
+    vector_store_display_names,
 )
 from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
 from litellm.proxy.utils import PrismaClient, get_prisma_client_or_throw
-from litellm.repositories.table_repositories import AccessGroupRepository, TeamRepository
+from litellm.redis.stores.auth_cache import AuthObject
+from litellm.repositories.access_group_repository import AccessGroupRepository
+from litellm.repositories.table_repositories import TeamRepository
 from litellm.types.access_group import (
     AccessGroupCreateRequest,
     AccessGroupResource,
@@ -66,6 +70,9 @@ class _AccessGroupRecord(Protocol):
 
     @property
     def access_agent_ids(self) -> Sequence[str] | None: ...
+
+    @property
+    def access_vector_store_ids(self) -> Sequence[str] | None: ...
 
     @property
     def assigned_team_ids(self) -> Sequence[str] | None: ...
@@ -98,11 +105,11 @@ class _KeyRecord(Protocol):
 class _AccessGroupTable(Protocol):
     async def find_unique(self, where: Mapping[str, object]) -> _AccessGroupRecord | None: ...
 
-    async def find_many(self, order: Mapping[str, object]) -> Sequence[_AccessGroupRecord]: ...
+    async def find_many(self, *, order: Mapping[str, object]) -> Sequence[_AccessGroupRecord]: ...
 
     async def create(self, data: Mapping[str, object]) -> _AccessGroupRecord: ...
 
-    async def update(self, where: Mapping[str, object], data: Mapping[str, object]) -> _AccessGroupRecord: ...
+    async def update(self, *, where: Mapping[str, object], data: Mapping[str, object]) -> _AccessGroupRecord | None: ...
 
     async def delete(self, where: Mapping[str, object]) -> object: ...
 
@@ -118,9 +125,9 @@ class _TeamTable(Protocol):
 class _KeyTable(Protocol):
     async def find_unique(self, where: Mapping[str, object]) -> _KeyRecord | None: ...
 
-    async def find_many(self, where: Mapping[str, object]) -> Sequence[_KeyRecord]: ...
+    async def find_many(self, *, where: Mapping[str, object]) -> Sequence[_KeyRecord]: ...
 
-    async def update(self, where: Mapping[str, object], data: Mapping[str, object]) -> object: ...
+    async def update(self, *, where: Mapping[str, object], data: Mapping[str, object]) -> object: ...
 
 
 class _AgentRecord(Protocol):
@@ -132,9 +139,9 @@ class _AgentRecord(Protocol):
 
 
 class _AgentTable(Protocol):
-    async def find_many(self, where: Mapping[str, object]) -> Sequence[_AgentRecord]: ...
+    async def find_many(self, *, where: Mapping[str, object]) -> Sequence[_AgentRecord]: ...
 
-    async def update(self, where: Mapping[str, object], data: Mapping[str, object]) -> object: ...
+    async def update(self, *, where: Mapping[str, object], data: Mapping[str, object]) -> object: ...
 
 
 class _HasSomeFilter(TypedDict):
@@ -170,7 +177,13 @@ class _AccessGroupTx(Protocol):
 class _AccessGroupTransaction(Protocol):
     async def __aenter__(self) -> _AccessGroupTx: ...
 
-    async def __aexit__(self, *exc_info: object) -> None: ...
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+        /,
+    ) -> None: ...
 
 
 def _access_group_transaction(prisma_client: PrismaClient) -> _AccessGroupTransaction:
@@ -210,6 +223,7 @@ def _explicitly_set_fields(data: AccessGroupUpdateRequest) -> Mapping[str, objec
 class _ResourceNames:
     mcp_servers: Mapping[str, str]
     agents: Mapping[str, str]
+    vector_stores: Mapping[str, str]
     teams: Mapping[str, str | None]
     keys: Mapping[str, str]
 
@@ -227,6 +241,7 @@ def _record_to_response(
             "assigned_team_ids": assigned_team_ids,
             "access_mcp_servers": _label(record.access_mcp_server_ids or (), names.mcp_servers),
             "access_agents": _label(record.access_agent_ids or (), names.agents),
+            "access_vector_stores": _label(record.access_vector_store_ids or (), names.vector_stores),
             "assigned_teams": _label(assigned_team_ids, names.teams),
             "assigned_keys": _label(record.assigned_key_ids or (), names.keys),
         }
@@ -246,7 +261,7 @@ async def _responses_for(
     if not records:
         return ()
     teams: Final = await _teams_touching(TeamRepository(prisma_client).table, records)
-    mcp_servers, agents, keys = await asyncio.gather(
+    mcp_servers, agents, vector_stores, keys = await asyncio.gather(
         mcp_server_display_names(
             prisma_client,
             _ids_across(records, lambda record: record.access_mcp_server_ids),
@@ -255,11 +270,17 @@ async def _responses_for(
         agent_display_names(
             prisma_client, _ids_across(records, lambda record: record.access_agent_ids), global_agent_registry
         ),
+        vector_store_display_names(
+            prisma_client,
+            _ids_across(records, lambda record: record.access_vector_store_ids),
+            litellm.vector_store_registry.vector_stores if litellm.vector_store_registry is not None else (),
+        ),
         key_display_names(prisma_client, _ids_across(records, lambda record: record.assigned_key_ids)),
     )
     names: Final = _ResourceNames(
         mcp_servers=mcp_servers,
         agents=agents,
+        vector_stores=vector_stores,
         teams=MappingProxyType({team.team_id: team.team_alias for team in teams}),
         keys=keys,
     )
@@ -438,7 +459,7 @@ async def _patch_team_caches_add_access_group(
     """Patch cached team objects to include access_group_id."""
     for team_id in team_ids:
         cached_team = await get_team_object_from_cache(
-            key=f"team_id:{team_id}",
+            key=AuthObject.team(team_id),
             user_api_key_cache=user_api_key_cache,
             parent_otel_span=None,
         )
@@ -467,7 +488,7 @@ async def _patch_team_caches_remove_access_group(
     """Patch cached team objects to remove access_group_id."""
     for team_id in team_ids:
         cached_team = await get_team_object_from_cache(
-            key=f"team_id:{team_id}",
+            key=AuthObject.team(team_id),
             user_api_key_cache=user_api_key_cache,
             parent_otel_span=None,
         )
@@ -491,7 +512,7 @@ async def _patch_key_caches_add_access_group(
     """Patch cached key objects to include access_group_id."""
     for token in key_tokens:
         cached_key = await user_api_key_cache.async_get_cache(
-            key=token,
+            key=AuthObject.virtual_key(token),
             model_type=UserAPIKeyAuth,
         )
         if cached_key is None:
@@ -520,7 +541,7 @@ async def _patch_key_caches_remove_access_group(
     """Patch cached key objects to remove access_group_id."""
     for token in key_tokens:
         cached_key = await user_api_key_cache.async_get_cache(
-            key=token,
+            key=AuthObject.virtual_key(token),
             model_type=UserAPIKeyAuth,
         )
         if cached_key is not None and cached_key.access_group_ids:
@@ -572,6 +593,7 @@ async def create_access_group(
                     "mcp_tool_permissions": _tool_permissions_json(data.mcp_tool_permissions),
                     "access_agent_ids": data.access_agent_ids or [],
                     "access_skill_names": list(data.access_skill_names or ()),
+                    "access_vector_store_ids": list(data.access_vector_store_ids or ()),
                     "assigned_team_ids": data.assigned_team_ids or [],
                     "assigned_key_ids": data.assigned_key_ids or [],
                     "created_by": user_api_key_dict.user_id,
@@ -670,6 +692,7 @@ async def update_access_group(
             "access_mcp_server_ids",
             "access_agent_ids",
             "access_skill_names",
+            "access_vector_store_ids",
         ):
             value = list(iter_items(value or ()))
         update_data[field] = (
@@ -731,6 +754,8 @@ async def update_access_group(
 
     from litellm.proxy.proxy_server import proxy_logging_obj, user_api_key_cache
 
+    if record is None:
+        raise AttributeError("'NoneType' object has no attribute 'dict'", name="dict", obj=None)
     await _cache_access_group_record(record)
     await _patch_team_caches_add_access_group(teams_to_add, access_group_id, user_api_key_cache, proxy_logging_obj)
     await _patch_team_caches_remove_access_group(
