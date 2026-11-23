@@ -31,6 +31,7 @@ from litellm.llms.bedrock.chat.invoke_handler import (
 from litellm.llms.bedrock.common_utils import BedrockError, get_bedrock_stream_event_statuses
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_httpx.stream_close import aclose_if_supported
+from litellm.llms.openai.common_utils import OpenAIError
 from litellm.types.llms.bedrock import BedrockInvokeNovaRequest
 from litellm.types.utils import ModelResponseStream
 from tests.unit.llms.bedrock.slow_upstream import (
@@ -970,6 +971,31 @@ async def test_moonshot_invoke_async_stream_yields_openai_shaped_chunks(_aws_tes
     response.aclose.assert_awaited_once()
 
 
+def test_moonshot_invoke_stream_raises_when_upstream_aborts(_aws_test_credentials: None) -> None:
+    raw_stream: Final = b"".join(
+        _bedrock_event_stream_frame(chunk)
+        for chunk in (
+            _openai_stream_chunk({"role": "assistant", "content": "Partial answer"}),
+            _openai_stream_chunk({}, "abort"),
+        )
+    )
+    client: Final = HTTPHandler(
+        client=httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(200, content=raw_stream)))
+    )
+
+    stream: Final = litellm.completion(
+        model="bedrock/invoke/moonshot.kimi-k2-thinking",
+        messages=[{"role": "user", "content": "weather as json"}],
+        stream=True,
+        client=client,
+    )
+
+    assert isinstance(stream, CustomStreamWrapper)
+    with pytest.raises(MidStreamFallbackError, match="abort") as excinfo:
+        _chunks: Final = list(stream)
+    assert excinfo.value.generated_content == "Partial answer"
+
+
 def _truncated_frame() -> bytes:
     return _bedrock_event_stream_frame(_openai_stream_chunk({"role": "assistant"}))[:-8]
 
@@ -1073,6 +1099,22 @@ def test_iter_bytes_raises_when_the_stream_ends_mid_message() -> None:
     _assert_moonshot_stream_content(chunks)
     assert exc_info.value.status_code == 502
     assert f"{len(_truncated_frame())} undecoded bytes after 4 events" in exc_info.value.message
+
+
+def test_iter_bytes_raises_the_openai_error_when_upstream_aborts() -> None:
+    decoder: Final = AmazonOpenAICompatibleStreamDecoder(model="moonshot.kimi-k2-thinking", sync_stream=True)
+    raw_stream: Final = b"".join(
+        _bedrock_event_stream_frame(chunk)
+        for chunk in (
+            _openai_stream_chunk({"role": "assistant", "content": "Partial answer"}),
+            _openai_stream_chunk({}, "abort"),
+        )
+    )
+
+    with pytest.raises(OpenAIError, match="finish_reason=abort") as exc_info:
+        _chunks: Final = list(decoder.iter_bytes(iter([raw_stream])))
+
+    assert exc_info.value.status_code == 500
 
 
 def test_iter_bytes_yields_a_complete_stream_without_raising() -> None:

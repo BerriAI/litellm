@@ -1,8 +1,11 @@
 import json
 from abc import abstractmethod
-from typing import TYPE_CHECKING, Final, cast
+from typing import TYPE_CHECKING, ClassVar, Final, cast
+
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 import litellm
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
 if TYPE_CHECKING:
     import httpx
@@ -71,7 +74,31 @@ def convert_model_response_to_streaming(
         raise ValueError(f"Failed to convert ModelResponse to ModelResponseStream: {model_response}. Error: {e}")
 
 
+UPSTREAM_ABORT_MESSAGE: Final = "Upstream generation aborted (finish_reason=abort)"
+
+
+class _StreamedChoice(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    finish_reason: object = None
+
+
+class _StreamedChunk(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    choices: tuple[_StreamedChoice, ...] | None = None
+
+
+def raise_on_upstream_abort(chunk: object, error: type[BaseLLMException] = BaseLLMException) -> None:
+    try:
+        choices: Final = _StreamedChunk.model_validate(chunk).choices or ()
+    except ValidationError:
+        return
+    if any(choice.finish_reason == "abort" for choice in choices):
+        raise error(status_code=500, message=UPSTREAM_ABORT_MESSAGE)
+
+
 class BaseModelResponseIterator:
+    upstream_abort_error: ClassVar[type[BaseLLMException]] = BaseLLMException
+
     def __init__(self, streaming_response, sync_stream: bool, json_mode: bool | None = False):
         self.streaming_response = streaming_response
         self.response_iterator = self.streaming_response
@@ -129,7 +156,7 @@ class BaseModelResponseIterator:
 
     def _handle_string_chunk(self, str_line: str) -> GenericStreamingChunk | ModelResponseStream:
         # chunk is a str at this point
-        stripped_json_chunk: Final = BaseModelResponseIterator._string_to_dict_parser(str_line=str_line)
+        stripped_json_chunk: Final = BaseModelResponseIterator.string_to_dict_parser(str_line=str_line)
         if "[DONE]" in str_line:
             return GenericStreamingChunk(
                 text="",
@@ -140,6 +167,7 @@ class BaseModelResponseIterator:
                 tool_use=None,
             )
         elif stripped_json_chunk:
+            raise_on_upstream_abort(stripped_json_chunk, self.upstream_abort_error)
             return self.chunk_parser(chunk=stripped_json_chunk)
         else:
             return GenericStreamingChunk(

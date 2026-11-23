@@ -3,6 +3,7 @@ from typing import Final
 
 import litellm
 from litellm import verbose_logger
+from litellm.llms.base_llm.base_model_iterator import raise_on_upstream_abort
 from litellm.types.llms.openai import (
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
@@ -100,6 +101,7 @@ class ModelResponseIterator:
         chunk: Final = self._next_sse_data()
         try:
             json_chunk: Final = json.loads(chunk)
+            raise_on_upstream_abort(json_chunk)
             return self.chunk_parser(chunk=json_chunk)
         except ValueError as e:
             verbose_logger.debug(
@@ -127,6 +129,7 @@ class ModelResponseIterator:
             raise StopAsyncIteration
         try:
             json_chunk: Final = json.loads(chunk)
+            raise_on_upstream_abort(json_chunk)
             return self.chunk_parser(chunk=json_chunk)
         except ValueError as e:
             verbose_logger.debug(

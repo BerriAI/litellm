@@ -22,6 +22,7 @@ from litellm.llms.anthropic.chat.handler import (
     ModelResponseIterator as AnthropicModelResponseIterator,
 )
 from litellm.llms.anthropic.chat.transformation import JsonModeRequest
+from litellm.llms.base_llm import base_model_iterator
 from litellm.llms.base_llm.base_utils import ResponseFormatSchema
 from litellm.llms.bedrock.common_utils import BEDROCK_INVOKE_TRACE_FIELD
 from litellm.llms.custom_httpx.http_handler import (
@@ -924,6 +925,9 @@ class AmazonOpenAICompatibleStreamDecoder(AWSEventStreamDecoder):
         )
 
     def _chunk_parser(self, chunk_data: dict[str, object]) -> ModelResponseStream:
+        base_model_iterator.raise_on_upstream_abort(
+            chunk_data, self.openai_model_response_iterator.upstream_abort_error
+        )
         return self.openai_model_response_iterator.chunk_parser(chunk=chunk_data)
 
 
