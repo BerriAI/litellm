@@ -103,15 +103,14 @@ def _embedding_fields(embedding_response: object) -> _SupportsFieldLookup:
 
 
 def _extra_body_mapping(raw_extra_body: object) -> Mapping[str, object] | None:
-    if not isinstance(raw_extra_body, dict):
-        return None
-    return cast(  # cast-ok: isinstance leaves the key and value types unknown
-        Mapping[str, object], raw_extra_body
-    )
+    mapping: Final = as_str_mapping(raw_extra_body)
+    return mapping if isinstance(raw_extra_body, dict) else None
 
 
 def _concrete_sequence(value: object) -> Sequence[object] | None:
-    return value if isinstance(value, (list, tuple)) else None
+    if not isinstance(value, (list, tuple)):
+        return None
+    return cast(Sequence[object], value)  # cast-ok: isinstance leaves the item type unknown
 
 
 def _extra_body_pair(item: object) -> tuple[str, object] | None:
