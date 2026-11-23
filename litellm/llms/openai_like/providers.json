@@ -258,6 +258,18 @@
       "verbosity",
       "prompt_cache_retention"
     ],
+    "extra_supported_params": ["user"],
+    "model_special_handling": {
+      "perplexity/auto": {
+        "reads_prompt_cache_breakpoint": true
+      }
+    },
+    "fixed_value_params": {
+      "n": 1,
+      "frequency_penalty": 0,
+      "presence_penalty": 0,
+      "logprobs": false
+    },
     "provider_info": {
       "supports_function_calling": true,
       "supports_reasoning": true

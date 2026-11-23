@@ -194,6 +194,86 @@ def test_a_param_the_orchestrator_rejects_answers_400_or_drops_under_drop_params
     assert body["temperature"] == 0.2
 
 
+def test_chat_forwards_user_to_the_orchestrator():
+    with respx.mock() as upstream:
+        route: Final = upstream.post(f"{ORCHESTRATOR_BASE}/chat/completions").respond(
+            200, json=_chat_response("openai/gpt-6-luna", {"prompt_tokens": 4, "completion_tokens": 1})
+        )
+        litellm.completion(
+            model=GPT_LUNA, messages=[{"role": "user", "content": "hi"}], user="end-user-42", api_key="pplx-test-key"
+        )
+
+    assert json.loads(route.calls.last.request.content)["user"] == "end-user-42"
+
+
+@pytest.mark.parametrize(
+    ("param", "rejected", "accepted"),
+    [("n", 2, 1), ("frequency_penalty", 0.5, 0), ("presence_penalty", 0.5, 0), ("logprobs", True, False)],
+)
+def test_a_value_the_orchestrator_rejects_answers_400_or_drops_under_drop_params_while_its_default_passes(
+    param: str, rejected: object, accepted: object
+):
+    with respx.mock() as upstream:
+        route: Final = upstream.post(f"{ORCHESTRATOR_BASE}/chat/completions").respond(
+            200, json=_chat_response("openai/gpt-6-luna", {"prompt_tokens": 4, "completion_tokens": 1})
+        )
+        with pytest.raises(litellm.UnsupportedParamsError):
+            litellm.completion(
+                model=GPT_LUNA,
+                messages=[{"role": "user", "content": "hi"}],
+                api_key="pplx-test-key",
+                **{param: rejected},
+            )
+        assert route.call_count == 0
+
+        litellm.completion(
+            model=GPT_LUNA,
+            messages=[{"role": "user", "content": "hi"}],
+            drop_params=True,
+            api_key="pplx-test-key",
+            **{param: rejected},
+        )
+        dropped: Final = json.loads(route.calls.last.request.content)
+
+        litellm.completion(
+            model=GPT_LUNA, messages=[{"role": "user", "content": "hi"}], api_key="pplx-test-key", **{param: accepted}
+        )
+        kept: Final = json.loads(route.calls.last.request.content)
+
+    assert param not in dropped
+    assert kept.get(param, accepted) == accepted
+
+
+def test_auto_routing_keeps_the_callers_cache_marker_on_chat_and_responses():
+    marked_text: Final = {"type": "text", "text": "rules", "cache_control": {"type": "ephemeral"}}
+    with respx.mock() as upstream:
+        chat_route: Final = upstream.post(f"{ORCHESTRATOR_BASE}/chat/completions").respond(
+            200, json=_chat_response("anthropic/claude-haiku-5-5", {"prompt_tokens": 4, "completion_tokens": 1})
+        )
+        responses_route: Final = upstream.post(f"{ORCHESTRATOR_BASE}/responses").respond(200, json=_RESPONSES_RESPONSE)
+        litellm.completion(
+            model=AUTO,
+            messages=[{"role": "system", "content": [marked_text]}, {"role": "user", "content": "hi"}],
+            api_key="pplx-test-key",
+        )
+        litellm.responses(
+            model=AUTO,
+            input=[
+                {
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "rules", "cache_control": {"type": "ephemeral"}}],
+                }
+            ],
+            api_key="pplx-test-key",
+        )
+
+    breakpoint: Final = {"mode": "explicit"}
+    chat_body: Final = json.loads(chat_route.calls.last.request.content)
+    responses_body: Final = json.loads(responses_route.calls.last.request.content)
+    assert chat_body["messages"][0]["content"][0]["prompt_cache_breakpoint"] == breakpoint
+    assert responses_body["input"][0]["content"][0]["prompt_cache_breakpoint"] == breakpoint
+
+
 def test_responses_request_goes_to_the_orchestrator_responses_route():
     with respx.mock() as upstream:
         route: Final = upstream.post(f"{ORCHESTRATOR_BASE}/responses").respond(200, json=_RESPONSES_RESPONSE)

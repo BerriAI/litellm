@@ -2,11 +2,14 @@
 Dynamic configuration class generator for JSON-based providers.
 """
 
-from collections.abc import Coroutine
+import json
+from collections.abc import Coroutine, Mapping, Sequence
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, overload
 
 from pydantic import TypeAdapter
 
+import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_messages_with_content_list_to_str_conversion,
@@ -20,8 +23,21 @@ from .json_loader import SimpleProviderConfig
 
 if TYPE_CHECKING:
     from litellm.llms.openai_like.responses.transformation import OpenAILikeResponsesConfig
+    from litellm.types.llms.openai import ChatCompletionToolParam
 
 _PARAM_NAMES_ADAPTER: Final[TypeAdapter[tuple[str, ...]]] = TypeAdapter(tuple[str, ...])
+
+
+def _values_outside_fixed(
+    params: Mapping[str, object], fixed_values: Mapping[str, bool | int | float]
+) -> Mapping[str, object]:
+    return MappingProxyType(
+        {param: value for param, value in params.items() if param in fixed_values and value != fixed_values[param]}
+    )
+
+
+def _describe(params: Mapping[str, object]) -> str:
+    return ", ".join(f"{param}={json.dumps(value)}" for param, value in params.items())
 
 
 def create_config_class(provider: SimpleProviderConfig):
@@ -60,6 +76,28 @@ def create_config_class(provider: SimpleProviderConfig):
                 return super()._transform_messages(messages=messages, model=model, is_async=True)
             else:
                 return super()._transform_messages(messages=messages, model=model, is_async=False)
+
+        def _messages_and_tools_in_cache_mark_dialect(
+            self,
+            model: str,
+            messages: Sequence[AllMessageValues],
+            tools: Sequence["ChatCompletionToolParam"] | None,
+            prompt_cache_options: object,
+            litellm_params: Mapping[str, object],
+        ) -> tuple[Sequence[AllMessageValues], Sequence["ChatCompletionToolParam"] | None]:
+            if not provider.special_handling_for(model).get("reads_prompt_cache_breakpoint"):
+                return super()._messages_and_tools_in_cache_mark_dialect(
+                    model, messages, tools, prompt_cache_options, litellm_params
+                )
+            from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
+
+            return self.remove_cache_control_flag_from_messages_and_tools(
+                model=model,
+                messages=[
+                    AnthropicCacheControlHook.cache_control_as_prompt_cache_breakpoints(message) for message in messages
+                ],
+                tools=None if tools is None else list(tools),
+            )
 
         def _get_openai_compatible_provider_info(
             self, api_base: str | None, api_key: str | None
@@ -114,7 +152,10 @@ def create_config_class(provider: SimpleProviderConfig):
             inherited_params: Final = _PARAM_NAMES_ADAPTER.validate_python(
                 super().get_supported_openai_params(model=model)
             )
-            supported_params: Final = [param for param in inherited_params if param not in provider.unsupported_params]
+            supported_params: Final = [
+                *(param for param in inherited_params if param not in provider.unsupported_params),
+                *(param for param in provider.extra_supported_params if param not in inherited_params),
+            ]
 
             _supports_fc: Final = supports_function_calling(model=model, custom_llm_provider=provider.slug)
 
@@ -151,9 +192,20 @@ def create_config_class(provider: SimpleProviderConfig):
             """Apply parameter mappings and constraints"""
 
             supported_params: Final = self.get_supported_openai_params(model)
+            rejected_values: Final = _values_outside_fixed(non_default_params, provider.fixed_value_params)
+            if rejected_values and not (drop_params or litellm.drop_params is True):
+                raise litellm.UnsupportedParamsError(
+                    message=f"{provider.slug} does not support {_describe(rejected_values)}. It only accepts "
+                    f"{_describe({param: provider.fixed_value_params[param] for param in rejected_values})}. "
+                    "To drop unsupported openai params from the call, set `litellm.drop_params = True`",
+                    llm_provider=provider.slug,
+                    model=model,
+                )
 
             # Apply supported params
             for param, value in non_default_params.items():
+                if param in rejected_values:
+                    continue
                 # Check parameter mappings first
                 if param in provider.param_mappings:
                     optional_params[provider.param_mappings[param]] = value
@@ -241,6 +293,13 @@ def create_responses_config_class(provider: SimpleProviderConfig) -> "type[OpenA
 
             api_base = api_base.rstrip("/")
             return f"{api_base}/responses"
+
+        def _reads_prompt_cache_breakpoints(
+            self, model: str, litellm_params: GenericLiteLLMParams, prompt_cache_options: object
+        ) -> bool:
+            return bool(
+                provider.special_handling_for(model).get("reads_prompt_cache_breakpoint")
+            ) or super()._reads_prompt_cache_breakpoints(model, litellm_params, prompt_cache_options)
 
         def transform_responses_api_request(
             self,

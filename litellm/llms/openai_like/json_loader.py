@@ -3,8 +3,9 @@ JSON-based provider configuration loader for OpenAI-compatible providers.
 """
 
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
+from types import MappingProxyType
 from typing import Annotated, Final
 
 from pydantic import Field, TypeAdapter
@@ -13,7 +14,10 @@ from litellm._logging import verbose_logger
 from litellm.types.utils import ProviderSpecificModelInfo
 
 _PROVIDER_INFO_ADAPTER: Final = TypeAdapter(ProviderSpecificModelInfo)
+_SPECIAL_HANDLING_ADAPTER: Final = TypeAdapter(Mapping[str, bool])
 _STR_TUPLE_ADAPTER: Final = TypeAdapter(tuple[str, ...])
+_MODEL_SPECIAL_HANDLING_ADAPTER: Final = TypeAdapter(Mapping[str, Mapping[str, bool]])
+_FIXED_VALUE_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, bool | int | float])
 _API_KEY_ENV_ADAPTER: Final[TypeAdapter[str | tuple[str, ...]]] = TypeAdapter(
     str | Annotated[tuple[str, ...], Field(min_length=1)]
 )
@@ -32,9 +36,26 @@ class SimpleProviderConfig:
         self.base_class = data.get("base_class", "openai_gpt")
         self.param_mappings = data.get("param_mappings", {})
         self.constraints = data.get("constraints", {})
-        self.special_handling = data.get("special_handling", {})
+        self.special_handling: Mapping[str, bool] = _SPECIAL_HANDLING_ADAPTER.validate_python(
+            data.get("special_handling", {})
+        )
         self.unsupported_params: Final[frozenset[str]] = frozenset(
             _STR_TUPLE_ADAPTER.validate_python(data["unsupported_params"]) if "unsupported_params" in data else ()
+        )
+        self.extra_supported_params: Final[tuple[str, ...]] = (
+            _STR_TUPLE_ADAPTER.validate_python(data["extra_supported_params"])
+            if "extra_supported_params" in data
+            else ()
+        )
+        self.fixed_value_params: Final[Mapping[str, bool | int | float]] = (
+            _FIXED_VALUE_PARAMS_ADAPTER.validate_python(data["fixed_value_params"])
+            if "fixed_value_params" in data
+            else MappingProxyType({})
+        )
+        self.model_special_handling: Final[Mapping[str, Mapping[str, bool]]] = (
+            _MODEL_SPECIAL_HANDLING_ADAPTER.validate_python(data["model_special_handling"])
+            if "model_special_handling" in data
+            else MappingProxyType({})
         )
         self.supported_endpoints = data.get("supported_endpoints", [])
         self.provider_info: ProviderSpecificModelInfo = (
@@ -43,6 +64,12 @@ class SimpleProviderConfig:
 
     def api_key_from(self, lookup: Callable[[str], str | None]) -> str | None:
         return next(filter(None, map(lookup, self.api_key_envs)), None)
+
+    def special_handling_for(self, model: str) -> Mapping[str, bool]:
+        model_overrides: Final = self.model_special_handling.get(model.removeprefix(f"{self.slug}/"))
+        if model_overrides is None:
+            return self.special_handling
+        return MappingProxyType({**self.special_handling, **model_overrides})
 
 
 class JSONProviderRegistry:
