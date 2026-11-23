@@ -22,6 +22,7 @@ from litellm.litellm_core_utils.reasoning_effort_strength import nearest_declare
 from litellm.litellm_core_utils.url_utils import ensure_api_route, join_api_base
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.llms.openai_like.chat.transformation import OpenAILikeChatConfig
+from litellm.llms.openai_like.common_utils import resolve_nousresearch_api_key
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues, ResponsesAPIOptionalRequestParams
 
@@ -472,12 +473,16 @@ def create_responses_config_class(provider: SimpleProviderConfig) -> "type[OpenA
 
         def validate_environment(
             self,
-            headers: dict,
+            headers: dict[str, object],
             model: str,
             litellm_params: GenericLiteLLMParams | None,
-        ) -> dict:
+        ) -> dict[str, object]:
             litellm_params = litellm_params or GenericLiteLLMParams()
-            api_key: Final = litellm_params.api_key or provider.api_key_from(get_secret_str)
+            api_key: Final = (
+                resolve_nousresearch_api_key(litellm_params.api_key, model, headers=headers)
+                if provider.slug == "nousresearch"
+                else litellm_params.api_key or provider.api_key_from(get_secret_str)
+            )
             if api_key:
                 headers["Authorization"] = f"Bearer {api_key}"
             return headers

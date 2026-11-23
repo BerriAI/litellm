@@ -2,11 +2,39 @@ from collections.abc import Mapping
 from typing import Final, Literal, TypeVar
 
 import httpx
+from openai import AsyncOpenAI, OpenAI
 
 import litellm
 from litellm.exceptions import AuthenticationError
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+from litellm.secret_managers.main import get_secret_str
+
+
+def resolve_nousresearch_api_key(
+    api_key: str | None,
+    model: str,
+    *,
+    client: object = None,
+    is_async: bool = False,
+    headers: Mapping[str, object] | None = None,
+) -> str | None:
+    resolved: Final = api_key or get_secret_str("NOUSRESEARCH_API_KEY")
+    if resolved:
+        return resolved
+    if isinstance(client, AsyncOpenAI if is_async else OpenAI) and (
+        client.api_key or client._api_key_provider is not None  # pyright: ignore[reportPrivateUsage]  # SDK has no public credential-provider getter
+    ):
+        return None
+    if headers and any(
+        isinstance(value, str) and bool(value.strip())
+        for name, value in headers.items()
+        if name.lower() in ("authorization", "x-api-key")
+    ):
+        return None
+    raise AuthenticationError(
+        message="Set NOUSRESEARCH_API_KEY or pass api_key", llm_provider="nousresearch", model=model
+    )
 
 
 class OpenAILikeError(Exception):

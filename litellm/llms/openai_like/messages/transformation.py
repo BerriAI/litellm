@@ -7,6 +7,7 @@ from litellm.llms.anthropic.common_utils import normalize_cache_control_in_anthr
 from litellm.llms.anthropic.messages.native.transformation import (
     AnthropicMessagesConfig,
 )
+from litellm.llms.openai_like.common_utils import resolve_nousresearch_api_key
 from litellm.llms.openai_like.json_loader import SimpleProviderConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
@@ -170,7 +171,11 @@ class JSONProviderAnthropicMessagesConfig(OpenAILikeAnthropicMessagesConfig):
             messages=messages,
             optional_params=optional_params,
             litellm_params=litellm_params,
-            api_key=self._resolve_api_key(api_key),
+            api_key=(
+                resolve_nousresearch_api_key(api_key, model, headers=headers)
+                if self._provider.slug == "nousresearch"
+                else self._resolve_api_key(api_key)
+            ),
             api_base=api_base,
         )
 
