@@ -8509,3 +8509,69 @@ def test_a_three_turn_bridged_conversation_maps_each_overlong_id_the_same_way_ev
     assert (later_call[0], later_output) == ("function_call", ("function_call_output", later_call[1])), sent
     assert isinstance(later_call[1], str) and len(later_call[1]) <= _CALL_ID_LIMIT, sent
     assert len({call_id for _, call_id in sent[2]}) == 3, sent
+
+
+
+_OVERLONG_HISTORY_IDS: Final = [_OVERLONG_FUNCTION_ID] * 2 + [_OVERLONG_CUSTOM_ID] * 2
+
+
+def _assert_fake_streamed_call_ids(sent_body: Mapping[str, object], event_types: list[object], bounded: bool) -> None:
+    assert "stream" not in sent_body and event_types[-1] == "response.completed", (sent_body, event_types)
+    sent_input: Final = sent_body["input"]
+    assert isinstance(sent_input, list), sent_body
+    sent_ids: Final = [item["call_id"] for item in sent_input]
+    assert sent_ids[0::2] == sent_ids[1::2], "every output keeps the id of its own call"
+    assert (sent_ids != _OVERLONG_HISTORY_IDS) is bounded, sent_ids
+    assert all(isinstance(call_id, str) and len(call_id) <= _CALL_ID_LIMIT for call_id in sent_ids) is bounded, sent_ids
+
+
+@pytest.mark.parametrize("bridged", [True, False], ids=["bridged-chat", "native-responses"])
+def test_a_fake_streamed_responses_dispatch_bounds_call_ids_only_for_a_bridged_chat(bridged: bool) -> None:
+    from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+
+    sent: Final = _SentRequestRecorder()
+    with httpx.Client(transport=httpx.MockTransport(sent.respond)) as http_client:
+        stream: Final = BaseLLMHTTPHandler().response_api_handler(
+            model="gpt-6.2-sol",
+            input=_overlong_tool_history(),
+            responses_api_provider_config=OpenAIResponsesAPIConfig(),
+            response_api_optional_request_params={"stream": True},
+            custom_llm_provider="openai",
+            litellm_params=GenericLiteLLMParams(api_key="sk-test", api_base=_OPENAI_BASE),
+            logging_obj=_logging_obj(bridged=bridged),
+            client=HTTPHandler(client=http_client),
+            fake_stream=True,
+        )
+        assert isinstance(stream, MockResponsesAPIStreamingIterator), stream
+        event_types: Final = [event.type for event in stream]
+
+    _assert_fake_streamed_call_ids(sent.body, event_types, bounded=bridged)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bridged", [True, False], ids=["bridged-chat", "native-responses"])
+async def test_an_async_fake_streamed_responses_dispatch_bounds_call_ids_only_for_a_bridged_chat(
+    bridged: bool,
+) -> None:
+    from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+
+    sent: Final = _SentRequestRecorder()
+    client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(sent.respond))
+    try:
+        stream: Final = await BaseLLMHTTPHandler().async_response_api_handler(
+            model="gpt-6.2-sol",
+            input=_overlong_tool_history(),
+            responses_api_provider_config=OpenAIResponsesAPIConfig(),
+            response_api_optional_request_params={"stream": True},
+            custom_llm_provider="openai",
+            litellm_params=GenericLiteLLMParams(api_key="sk-test", api_base=_OPENAI_BASE),
+            logging_obj=_logging_obj(bridged=bridged),
+            client=client,
+            fake_stream=True,
+        )
+        assert isinstance(stream, MockResponsesAPIStreamingIterator), stream
+        event_types: Final = [event.type async for event in stream]
+    finally:
+        await client.close()
+
+    _assert_fake_streamed_call_ids(sent.body, event_types, bounded=bridged)

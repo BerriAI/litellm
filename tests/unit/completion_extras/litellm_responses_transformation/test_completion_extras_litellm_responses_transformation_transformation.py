@@ -7903,3 +7903,13 @@ def test_bounded_call_id_fields_never_gives_a_later_long_id_a_replacement_alread
     assert sent_ids[4] == short_id, sent_ids
     assert len(set(sent_ids[0::2])) == 3, sent_ids
     assert sent_reversed_ids == sent_ids[::-1], "the assignment must not depend on item order"
+
+
+def test_bounded_call_id_fields_gives_a_long_id_repeated_across_items_one_replacement() -> None:
+    long_id: Final = "call_" + "m" * 80
+    repeated: Final = [*_function_pair(long_id), *_function_pair(long_id)]
+
+    sent_ids: Final = _sent_call_ids({"input": repeated})
+
+    assert len(set(sent_ids)) == 1 and sent_ids[0] != long_id, sent_ids
+    assert isinstance(sent_ids[0], str) and len(sent_ids[0]) <= 64, sent_ids
