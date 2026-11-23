@@ -130,3 +130,15 @@ def test_conditional_static_html_is_not_stored(tmp_path):
     conditional = client.get("/ui/", headers={"If-None-Match": page.headers["etag"]})
     assert conditional.status_code == 304
     assert conditional.headers["cache-control"] == "no-store"
+
+
+def test_conditional_static_javascript_is_not_stored(tmp_path):
+    (tmp_path / "app.js").write_text("console.log(1)\n")
+    client = _static_client(tmp_path)
+
+    asset = client.get("/ui/app.js")
+    assert asset.status_code == 200
+    assert "no-store" not in asset.headers.get("cache-control", "")
+    conditional = client.get("/ui/app.js", headers={"If-None-Match": asset.headers["etag"]})
+    assert conditional.status_code == 304
+    assert conditional.headers["cache-control"] == "no-store"

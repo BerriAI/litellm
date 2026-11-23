@@ -312,3 +312,13 @@ class TestSensitiveResponseCaching:
         assert asset.status_code == 200, asset.body[:200]
         assert asset.body
         assert "no-store" not in asset.headers.get("cache-control", "")
+
+    @meta(Subject(domain=Domain.PROXY_AUTH))
+    def test_jwks_keeps_its_public_cache_policy(self, proxy: ProxyClient) -> None:
+        from typing import Final
+
+        response: Final = proxy.transport.download("/.well-known/jwks.json", headers=proxy.transport.master)
+        assert response.status_code == 200, response.body
+        cache_control: Final = response.headers.get("cache-control", "")
+        assert cache_control.startswith("public, max-age="), response.headers
+        assert "no-store" not in cache_control
