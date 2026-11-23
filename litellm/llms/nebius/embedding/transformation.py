@@ -1,5 +1,1 @@
-"""
-Calls handled in openai/
-
-as Nebius AI Studio is an openai-compatible endpoint.
-"""
+"""Nebius Token Factory embeddings use the OpenAI-compatible handler."""

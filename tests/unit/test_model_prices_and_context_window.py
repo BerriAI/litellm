@@ -180,9 +180,7 @@ def test_regional_catalog_rows_price_the_requested_service_tier(
         service_tier=service_tier,
         prompt_tokens=1,
         completion_tokens=1,
-    ) == pytest.approx(
-        (row[f"input_cost_per_token_{service_tier}"], row[f"output_cost_per_token_{service_tier}"])
-    )
+    ) == pytest.approx((row[f"input_cost_per_token_{service_tier}"], row[f"output_cost_per_token_{service_tier}"]))
 
 
 @pytest.mark.parametrize("tokens", (0, 1))
@@ -1292,6 +1290,30 @@ def test_azure_ai_claude_rows_priced_for_web_search_say_they_support_it(path: Pa
     assert priced_rows
     unflagged: Final = tuple(key for key, row in priced_rows.items() if row.get("supports_web_search") is not True)
     assert unflagged == (), unflagged
+
+
+@pytest.mark.parametrize(
+    ("provider", "mode"),
+    (
+        ("nebius", "chat"),
+        ("nebius", "embedding"),
+        ("nebius-chat-models", "chat"),
+        ("nebius-embedding-models", "embedding"),
+    ),
+)
+def test_nebius_catalog_models_reach_provider_discovery(
+    provider: str, mode: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "nebius_models", set())
+    monkeypatch.setattr(litellm, "nebius_embedding_models", set())
+    monkeypatch.setattr(litellm, "models_by_provider", {})
+    model: Final = "nebius/catalog-model"
+
+    litellm.add_known_models({model: {"litellm_provider": provider, "mode": mode}})
+
+    assert litellm.nebius_models == ({model} if mode == "chat" else set())
+    assert litellm.nebius_embedding_models == ({model} if mode == "embedding" else set())
+    assert litellm.models_by_provider["nebius"] == {model}
 
 
 @pytest.mark.parametrize(

@@ -1,8 +1,4 @@
-"""
-Nebius AI Studio Chat Completions API - Transformation
-
-This is OpenAI compatible - no translation needed / occurs
-"""
+"""Nebius Token Factory Chat Completions API transformation."""
 
 from typing import Final
 
@@ -10,6 +6,8 @@ from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 
 
 class NebiusConfig(OpenAIGPTConfig):
+    API_BASE_URL = "https://api.tokenfactory.nebius.com/v1"
+
     def map_openai_params(
         self,
         non_default_params: dict,
