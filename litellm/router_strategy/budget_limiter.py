@@ -26,10 +26,9 @@ from collections.abc import Callable, Mapping, MutableMapping, Sequence
 from datetime import datetime, timedelta, timezone
 from itertools import groupby
 from types import MappingProxyType
-from typing import Any, Final, Protocol, TypedDict
+from typing import Any, Final, Protocol
 
 from pydantic import TypeAdapter
-from typing_extensions import ReadOnly
 
 import litellm
 from litellm._internal_context import with_service_target
@@ -59,10 +58,6 @@ from litellm.types.utils import BudgetConfig as GenericBudgetInfo
 DEFAULT_REDIS_SYNC_INTERVAL: Final = 1
 _CALLBACK_FIELDS: Final = TypeAdapter(dict[str, object])
 _JOB_CHARGE_VALUES: Final = TypeAdapter(tuple[object, float])
-
-
-class _SuccessEventKwargs(TypedDict, total=False):
-    standard_logging_object: ReadOnly[StandardLoggingPayload | None]
 
 
 class _SupportsGet(Protocol):
@@ -154,7 +149,7 @@ class RouterBudgetLimiting(CustomLogger):
     def __init__(
         self,
         dual_cache: DualCache,
-        provider_budget_config: GenericBudgetConfigType | None,
+        provider_budget_config: dict | None,
         model_list: Sequence[Mapping[str, object]] | None = None,
         clock: Callable[[], float] = time.time,
     ):
@@ -210,7 +205,7 @@ class RouterBudgetLimiting(CustomLogger):
         messages: list[AllMessageValues] | None,
         request_kwargs: dict | None = None,
         parent_otel_span: Span | None = None,
-    ) -> list[dict[str, object]]:
+    ) -> list[dict]:
         """
         Filter out deployments that have exceeded their provider budget limit.
 
@@ -229,7 +224,7 @@ class RouterBudgetLimiting(CustomLogger):
         if len(healthy_deployments) == 0:
             return healthy_deployments
 
-        potential_deployments: list[dict[str, object]] = []
+        potential_deployments: list[dict] = []
 
         (
             cache_keys,
@@ -365,7 +360,7 @@ class RouterBudgetLimiting(CustomLogger):
     async def _async_get_cache_keys_for_router_budget_limiting(
         self,
         healthy_deployments: Sequence[Mapping[str, object]],
-        request_kwargs: Mapping[str, object] | None = None,
+        request_kwargs: dict | None = None,
     ) -> tuple[
         list[str],
         dict[str, GenericBudgetInfo],
@@ -569,13 +564,7 @@ class RouterBudgetLimiting(CustomLogger):
         return True
 
     @with_service_target("router_budgets")
-    async def async_log_success_event(
-        self,
-        kwargs: _SuccessEventKwargs,
-        response_obj: object,
-        start_time: object,
-        end_time: object,
-    ):
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         """Original method now uses helper functions"""
         verbose_router_logger.debug("in RouterBudgetLimiting.async_log_success_event")
         callback_fields: Final = _CALLBACK_FIELDS.validate_python(kwargs)
@@ -765,7 +754,7 @@ class RouterBudgetLimiting(CustomLogger):
         if redis_cache is None or not await self._flush_queued_increment_operations(redis_cache):
             return
 
-        cache_keys: Final[list[str]] = []
+        cache_keys: Final = []
 
         if self.provider_budget_config is not None:
             for provider, config in self.provider_budget_config.items():
@@ -926,7 +915,7 @@ class RouterBudgetLimiting(CustomLogger):
 
     @staticmethod
     def should_init_router_budget_limiter(
-        provider_budget_config: GenericBudgetConfigType | None,
+        provider_budget_config: dict | None,
         model_list: Sequence[Mapping[str, object]] | None = None,
     ):
         """
