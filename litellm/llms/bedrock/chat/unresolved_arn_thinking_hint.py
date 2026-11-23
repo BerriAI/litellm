@@ -2,7 +2,10 @@ from collections.abc import Callable, Coroutine
 from typing import Final
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.llms.bedrock.chat.converse_transformation import UNRESOLVED_ARN_BASE_MODEL_TARGET
+from litellm.llms.bedrock.chat.converse_transformation import (
+    UNRESOLVED_ARN_BASE_MODEL_TARGET,
+    UNRESOLVED_ARN_SDK_BASE_MODEL_ADVICE,
+)
 from litellm.llms.bedrock.chat.native_output_fallback import NativeOutputAttemptResult, NativeOutputResponse
 from litellm.llms.bedrock.common_utils import (
     BedrockError,
@@ -15,7 +18,8 @@ UNRESOLVED_ARN_THINKING_HINT: Final = (
     "An application inference profile ARN does not name its model, so LiteLLM cannot tell that this model needs "
     "adaptive thinking and sends budget thinking (`thinking.type: enabled`). Set `model_info.base_model` on the "
     "deployment, in config.yaml or in the model's Model Info JSON in the Admin UI, to "
-    f"{UNRESOLVED_ARN_BASE_MODEL_TARGET}. LiteLLM then sends adaptive thinking and prices the call at that model."
+    f"{UNRESOLVED_ARN_BASE_MODEL_TARGET}. {UNRESOLVED_ARN_SDK_BASE_MODEL_ADVICE} LiteLLM then sends adaptive "
+    "thinking and prices the call at that model."
 )
 
 

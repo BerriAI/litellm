@@ -137,11 +137,14 @@ UNRESOLVED_ARN_BASE_MODEL_TARGET: Final = (
     f"(for example `{UNRESOLVED_ARN_BASE_MODEL_EXAMPLE}`) or as the ARN of the system inference profile or "
     "foundation model the profile was created from"
 )
+UNRESOLVED_ARN_SDK_BASE_MODEL_ADVICE: Final = (
+    "On a direct SDK call, pass that value as the `base_model` argument instead."
+)
 ADAPTIVE_THINKING_ON_UNRESOLVED_ARN_WARNING: Final = (
     "Sending adaptive `thinking` as a fixed thinking budget for model=%s: an application inference profile ARN "
     "does not name its model, so LiteLLM cannot tell whether it supports adaptive thinking. Set "
-    f"`model_info.base_model` on the deployment to {UNRESOLVED_ARN_BASE_MODEL_TARGET}. LiteLLM then sends "
-    "adaptive thinking as requested."
+    f"`model_info.base_model` on the deployment to {UNRESOLVED_ARN_BASE_MODEL_TARGET}. "
+    f"{UNRESOLVED_ARN_SDK_BASE_MODEL_ADVICE} LiteLLM then sends adaptive thinking as requested."
 )
 
 # Computer use tool prefixes supported by Bedrock

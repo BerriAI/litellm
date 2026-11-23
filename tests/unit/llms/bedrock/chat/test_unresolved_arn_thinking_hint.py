@@ -120,6 +120,19 @@ def test_bedrock_400_keeps_its_message_without_the_hint(
     assert UNRESOLVED_ARN_THINKING_HINT not in error.message
 
 
+@pytest.mark.parametrize(
+    "body", [_MALFORMED_THINKING, _OTHER_UNSUPPORTED_FIELD], ids=["other_thinking_400", "other_unsupported_field"]
+)
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+def test_streamed_bedrock_400_other_than_the_enabled_thinking_rejection_gets_no_hint(
+    body: str, asynchronous: bool
+) -> None:
+    error: Final = _raised(_PROFILE_ARN, body, asynchronous=asynchronous, stream=True)
+
+    assert error.status_code == 400
+    assert UNRESOLVED_ARN_THINKING_HINT not in error.message
+
+
 @pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
 def test_bedrock_server_error_with_the_same_wording_keeps_its_message_without_the_hint(asynchronous: bool) -> None:
     with pytest.raises(litellm.ServiceUnavailableError) as raised:
@@ -155,6 +168,7 @@ def test_every_base_model_form_the_hint_names_is_priced_and_gets_adaptive_thinki
 
     assert f"`{UNRESOLVED_ARN_BASE_MODEL_EXAMPLE}`" in error.message
     assert "system inference profile or foundation model" in error.message
+    assert "pass that value as the `base_model` argument" in error.message
     assert isinstance(response, litellm.ModelResponse)
     assert response.choices[0].message.content == "hello"
     assert (response._hidden_params.get("response_cost") or 0) > 0
