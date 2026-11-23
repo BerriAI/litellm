@@ -595,8 +595,16 @@ async def test_failed_tool_table_write_requeues_the_rows_only_when_they_provably
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("failure", "retried"),
-    [(httpx.ConnectError("connection refused"), True), (_postgres_rejection("54000"), False)],
-    ids=["connection_failure_retries_only_failed_chunk", "limit_rejection_drops_only_failed_chunk"],
+    [
+        (httpx.ConnectError("connection refused"), True),
+        (_postgres_rejection("25006"), True),
+        (_postgres_rejection("54000"), False),
+    ],
+    ids=[
+        "connection_failure_retries_only_failed_chunk",
+        "read_only_failover_retries_only_failed_chunk",
+        "limit_rejection_drops_only_failed_chunk",
+    ],
 )
 async def test_redis_drain_continues_after_a_failed_chunk_without_replaying_successful_chunks(
     monkeypatch: pytest.MonkeyPatch, failure: Exception, retried: bool
@@ -609,8 +617,15 @@ async def test_redis_drain_continues_after_a_failed_chunk_without_replaying_succ
     prisma = _make_prisma()
     prisma.db.execute_raw.side_effect = (1, failure, 1, 1)
 
-    for _ in range(2):
-        await commit_tool_discoveries(prisma, queue, RedisUpdateBuffer(redis_cache=redis), PodLockManager(redis), True)
+    buffer: Final = RedisUpdateBuffer(redis_cache=redis)
+    lock: Final = PodLockManager(redis)
+    await commit_tool_discoveries(prisma, queue, buffer, lock, True)
+
+    restored: Final = [json.loads(entry) for entry in redis.lists.get(REDIS_TOOL_DISCOVERY_BUFFER_KEY, [])]
+    expected: Final = [[{"tool_name": "middle", "call_count": 1}]] if retried else []
+    assert restored == expected
+
+    await commit_tool_discoveries(prisma, queue, buffer, lock, True)
 
     attempted: Final = tuple(call.args[2] for call in prisma.db.execute_raw.await_args_list)
     assert attempted == (("first", "middle", "last", "middle") if retried else ("first", "middle", "last"))

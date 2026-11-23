@@ -25,8 +25,8 @@ from litellm.proxy.db.db_transaction_queue.tool_discovery_queue import (
     aggregate_tool_discoveries,
 )
 from litellm.proxy.db.exception_handler import (
-    PrismaDBExceptionHandler,
     call_with_db_reconnect_retry,
+    db_write_failure_is_requeue_safe,
     db_write_never_sent,
 )
 from litellm.proxy.db.spend_log_tool_index import tool_name_fits_index
@@ -190,22 +190,13 @@ async def commit_tool_discoveries(
         await pod_lock_manager.release_lock(cronjob_id=TOOL_DISCOVERY_COMMIT_JOB_NAME)
 
 
-def _tool_redis_write_can_requeue(e: Exception) -> bool:
-    return (
-        db_write_never_sent(e)
-        or PrismaDBExceptionHandler.postgres_sqlstate(e) in {"40001", "40P01"}
-        or PrismaDBExceptionHandler.is_lock_timeout_error(e)
-        or PrismaDBExceptionHandler.is_statement_timeout_error(e)
-    )
-
-
 async def _commit_tool_discoveries_from_redis(
     prisma_client: "PrismaClient", redis_update_buffer: RedisUpdateBuffer
 ) -> None:
     """Tool lock holder only: drain every worker's tool rows from Redis and write them."""
     items: Final = await redis_update_buffer.get_all_tool_discoveries_from_redis_buffer()
     retryable: Final = await batch_upsert_tools(
-        prisma_client=prisma_client, items=items, can_requeue=_tool_redis_write_can_requeue
+        prisma_client=prisma_client, items=items, can_requeue=db_write_failure_is_requeue_safe
     )
     if retryable:
         await redis_update_buffer.restore_tool_discoveries_to_redis(retryable)
