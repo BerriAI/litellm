@@ -3693,6 +3693,50 @@ def test_image_response_discounts_only_a_fully_accounted_cache_split(
     assert cost == pytest.approx(expected_input_cost + 10 * _IMAGE_CACHE_OUTPUT_IMAGE_RATE)
 
 
+def _image_cache_cost(input_details: dict[str, object]) -> float:
+    response: Final = ImageResponse(data=[ImageObject(b64_json="x")])
+    response.usage = Usage(
+        prompt_tokens=0,
+        completion_tokens=0,
+        total_tokens=20,
+        input_tokens=10,
+        output_tokens=10,
+        input_tokens_details=input_details,
+        output_tokens_details={"image_tokens": 10, "text_tokens": 0},
+    )
+    cost: Final = calculate_image_response_cost_from_usage(
+        model="gpt-image-cache-probe",
+        image_response=response,
+        custom_llm_provider="openai",
+        model_info=_IMAGE_CACHE_PRICES,
+    )
+    assert cost is not None
+    return cost
+
+
+def test_image_response_does_not_infer_a_full_cache_when_modality_counts_fall_short() -> None:
+    cost: Final = _image_cache_cost(
+        {"text_tokens": 3, "image_tokens": 3, "cached_tokens": 10},
+    )
+    assert cost == pytest.approx(
+        3 * _IMAGE_CACHE_TEXT_RATE + 3 * _IMAGE_CACHE_IMAGE_RATE + 10 * _IMAGE_CACHE_OUTPUT_IMAGE_RATE
+    )
+
+
+def test_image_response_discounts_a_complete_image_only_cache_split() -> None:
+    cost: Final = _image_cache_cost(
+        {
+            "text_tokens": 4,
+            "image_tokens": 6,
+            "cached_tokens": 6,
+            "cached_tokens_details": {"image_tokens": 6},
+        },
+    )
+    assert cost == pytest.approx(
+        4 * _IMAGE_CACHE_TEXT_RATE + 6 * _IMAGE_CACHE_CACHED_IMAGE_RATE + 10 * _IMAGE_CACHE_OUTPUT_IMAGE_RATE
+    )
+
+
 GEMINI_DAY0_LAUNCH_PRICING = [
     ("gemini-3.6-flash", 7.5e-07, 3.75e-06, 7.5e-08),
     ("gemini/gemini-3.6-flash", 7.5e-07, 3.75e-06, 7.5e-08),
