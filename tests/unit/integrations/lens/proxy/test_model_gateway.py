@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock
 import httpx
 import jwt
 import pytest
+from pydantic import TypeAdapter
 
 from litellm.integrations.lens.proxy.adapter import Connection, Identity
 from litellm.integrations.lens.proxy.model_gateway import (
@@ -64,6 +65,7 @@ async def test_connects_the_gateway_server_side_and_returns_only_public_status()
         result: Final = await connect_models(
             CONNECTION, ADMIN, CONNECTED.api_base or "", client, ensure_key, 1_700_000_000
         )
+    assert isinstance(result, GatewayStatus)
     assert result == CONNECTED
     assert key not in result.model_dump_json()
     ensure_key.assert_awaited_once_with(key)
@@ -159,7 +161,8 @@ def test_dedicated_key_preserves_route_restrictions() -> None:
 
 def test_dedicated_key_allows_models_added_after_setup() -> None:
     request: Final = key_request(model_key(CONNECTION))
-    assert check_model_access_helper("added-after-setup", None, request.models)
+    models: Final = TypeAdapter(list[str]).validate_python(request.models)
+    assert check_model_access_helper("added-after-setup", None, models)
 
 
 def test_separate_lens_services_do_not_share_model_keys() -> None:
