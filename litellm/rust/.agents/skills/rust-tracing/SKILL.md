@@ -11,6 +11,8 @@ Use upstream `tracing` throughout Rust, including `#[tracing::instrument]`, even
 
 `litellm-tracing` owns shared subscriber layers, span field collection, and diagnostic processing. Keep adapters composable as `tracing_subscriber::Layer`s, with `Logger` providing host setup. Runtime-specific delivery belongs in the host bridge. The Python bridge delivers directly to the existing Python SDK logger, preserving its handlers, filtering, redaction, and request correlation. Keep Python dependencies out of `crates/tracing`
 
+The bridge alone decides which Python logger a Rust target logs on, in `python-bridge/src/logger/route.rs`. Python's host module is told the logger's name and never matches on a Rust target, so the rule is written once
+
 Secret scrubbing of free text lives in `crates/redaction` (`litellm-redaction`). `Processor` uses it for log records, and request logging callbacks such as spend logs depend on it directly, never through `litellm-tracing`
 
 Hosts configure subscribers. The Python bridge installs one process-wide subscriber when the extension loads, so a warning or error from a thread no call scoped, such as a detached task on the native runtime, still reaches the Python logger. Records from runtime threads go through a bounded queue and are delivered from the blocking pool, never on an async worker. Call execution stays scoped to its captured dispatch, which carries request correlation and the lower levels, so keep propagating both span context and dispatch across spawned work and returned streams. The target is that one subscriber for everything, with correlation carried in span fields and every record delivered through the queue, which removes the scoped dispatch

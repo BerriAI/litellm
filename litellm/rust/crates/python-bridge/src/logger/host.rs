@@ -6,16 +6,9 @@ use litellm_tracing::{Level, Record};
 use pyo3::prelude::*;
 use serde_json::{Map, Value};
 
+use super::route::PythonLogger;
+
 const MODULE: &str = "litellm.rust_bridge.host.logger";
-
-/// The targets `litellm.rust_bridge.host.logger` logs on the `LiteLLM Proxy` logger.
-const PROXY_TARGETS: [&str; 1] = ["litellm_callbacks_parallel_request_limiter"];
-
-pub(super) fn proxy_target(target: &str) -> bool {
-    PROXY_TARGETS
-        .iter()
-        .any(|prefix| target.starts_with(prefix))
-}
 
 /// The Python `logging` number for a Rust level.
 pub(super) fn level(level: &Level) -> u8 {
@@ -48,13 +41,13 @@ pub(super) fn context(py: Python<'_>) -> Option<(String, String)> {
     )
 }
 
-/// Whether the Python logger for `target` takes records at `level`.
-pub(super) fn enabled(level: u8, target: &str) -> bool {
+/// Whether `logger` takes records at `level`.
+pub(super) fn enabled(logger: PythonLogger, level: u8) -> bool {
     Python::try_attach(|py| {
         report(
             py,
             py.import(MODULE)
-                .and_then(|module| module.call_method1("enabled", (level, target)))
+                .and_then(|module| module.call_method1("enabled", (<&str>::from(logger), level)))
                 .and_then(|enabled| enabled.extract()),
         )
     })
@@ -63,6 +56,7 @@ pub(super) fn enabled(level: u8, target: &str) -> bool {
 
 /// One log line as Python's `emit` takes it.
 pub(super) struct Line<'a> {
+    pub(super) logger: PythonLogger,
     pub(super) level: u8,
     pub(super) message: &'a str,
     pub(super) file: &'a str,
@@ -74,6 +68,7 @@ pub(super) struct Line<'a> {
 impl<'a> From<&'a Record> for Line<'a> {
     fn from(record: &'a Record) -> Self {
         Self {
+            logger: PythonLogger::of(record.metadata.target()),
             level: level(record.metadata.level()),
             message: &record.message,
             file: record.metadata.file().unwrap_or_default(),
@@ -94,6 +89,7 @@ pub(super) fn emit(line: &Line<'_>, correlation: (&str, &str)) {
                     .call_method1(
                         "emit",
                         (
+                            <&str>::from(line.logger),
                             line.level,
                             line.message,
                             line.file,

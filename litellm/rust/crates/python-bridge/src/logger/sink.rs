@@ -3,7 +3,7 @@
 use litellm_tracing::{Logger, Metadata, Record, Sink};
 use pyo3::prelude::*;
 
-use super::{host, levels::Levels};
+use super::{host, levels::Levels, route::PythonLogger};
 
 struct PythonSink {
     correlation: (String, String),
@@ -20,12 +20,10 @@ impl Sink for PythonSink {
             return false;
         }
         let level = host::level(metadata.level());
-        let target = metadata.target();
+        let logger = PythonLogger::of(metadata.target());
         match &self.levels {
-            Some(levels) => levels.enabled(level, host::proxy_target(target), || {
-                host::enabled(level, target)
-            }),
-            None => host::enabled(level, target),
+            Some(levels) => levels.enabled(logger, level, || host::enabled(logger, level)),
+            None => host::enabled(logger, level),
         }
     }
 
@@ -196,6 +194,16 @@ mod tests {
     }
 
     #[pyfunction]
+    fn limiter_warning(py: Python<'_>) {
+        super::capture(py).scope(|| {
+            litellm_tracing::warn!(
+                target: "litellm_callbacks_parallel_request_limiter::hosted",
+                "limiter warning"
+            );
+        });
+    }
+
+    #[pyfunction]
     fn asynchronous_warning(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
         crate::execution::run_async_value(py, async {
             tokio::task::yield_now().await;
@@ -280,6 +288,12 @@ mod tests {
                 .set_item("warning", wrap_pyfunction!(warning, py).unwrap())
                 .unwrap();
             locals
+                .set_item(
+                    "limiter_warning",
+                    wrap_pyfunction!(limiter_warning, py).unwrap(),
+                )
+                .unwrap();
+            locals
                 .set_item("span_warning", wrap_pyfunction!(span_warning, py).unwrap())
                 .unwrap();
             locals
@@ -320,7 +334,7 @@ import sys
 sys.path.insert(0, repo_root)
 sys.modules['litellm.rust_bridge._native'] = native
 import litellm
-from litellm._logging import verbose_logger, session_id_var, trace_id_var
+from litellm._logging import verbose_logger, verbose_proxy_logger, session_id_var, trace_id_var
 
 class Capture(logging.Handler):
     def __init__(self):
@@ -393,12 +407,35 @@ try:
         ('warn', logging.WARNING), ('error', logging.ERROR),
     ]
 
+    class Records(logging.Handler):
+        def __init__(self):
+            super().__init__()
+            self.records = []
+        def emit(self, record):
+            self.records.append(record)
+
+    proxy_records = Records()
+    old_proxy_level = verbose_proxy_logger.level
+    verbose_proxy_logger.addHandler(proxy_records)
+    try:
+        verbose_proxy_logger.setLevel(logging.WARNING)
+        before_limiter = len(capture.records)
+        limiter_warning()
+        assert [(r.name, r.getMessage()) for r in proxy_records.records] == [('LiteLLM Proxy', 'limiter warning')]
+        assert capture.records[before_limiter:] == []
+        verbose_proxy_logger.setLevel(logging.ERROR)
+        limiter_warning()
+        assert len(proxy_records.records) == 1
+    finally:
+        verbose_proxy_logger.removeHandler(proxy_records)
+        verbose_proxy_logger.setLevel(old_proxy_level)
+
     import litellm.rust_bridge.host.logger as host_logger
     original_enabled = host_logger.enabled
     queries = []
-    def counting_enabled(level, target=''):
+    def counting_enabled(logger, level):
         queries.append(level)
-        return original_enabled(level, target)
+        return original_enabled(logger, level)
     host_logger.enabled = counting_enabled
     async def chunks(raise_level):
         await machine_chunks(raise_level)
