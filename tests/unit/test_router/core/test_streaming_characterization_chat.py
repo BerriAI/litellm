@@ -370,6 +370,22 @@ async def test_a_dict_targets_params_carry_over_its_stream_that_fails_before_con
     ]
 
 
+async def test_a_dict_targets_stream_that_fails_before_content_moves_on_to_the_next_target(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    host.answer("openai/a", rate_limit())
+    host.answer("openai/b", chat_stream(error=server_error(), leading_role_chunk=True))
+    host.answer("openai/c", chat_stream("C"))
+    core = build(
+        make_core,
+        model_list=[*GROUPS_AB, deployment("c", "c")],
+        fallbacks=[{"a": [{"model": "b", "temperature": 0.3}, "c"]}],
+    )
+    stream = await open_stream(core)
+    assert await collect_texts(stream) == "C"
+    assert host.deployments_called() == ["a", "b", "c"]
+
+
 async def open_team_stream(core: RouterCore, bucket: str) -> object:
     return await core.acompletion(  # pyright: ignore[reportAttributeAccessIssue]  # endpoint method
         model="tp", messages=MESSAGES, stream=True, **{bucket: {"user_api_key_team_id": "T1"}}

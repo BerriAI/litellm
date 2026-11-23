@@ -27,7 +27,8 @@ use crate::{
 
 /// Where a streamed response came from: the level of the fallback chain its attempt served, as
 /// the attempt held it. A take-over starts from that level whole, so the params a dict fallback
-/// merged and the deployments a failover hop excluded ride with the stream.
+/// merged, the deployments a failover hop excluded and the targets the chain already tried ride
+/// with the stream.
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(from = "Document")]
 pub struct StreamOrigin {
@@ -41,10 +42,12 @@ pub struct StreamOrigin {
     attempted_retries: u32,
     /// The budget the first stream retry committed to (`committed_retry_budget_for_request`).
     committed_budget: Option<u32>,
+    /// What the fallback chain had tried when the attempt ran (`attempted_targets`).
+    attempted: Arc<[Tried]>,
 }
 
 /// A [`StreamOrigin`] named by hand: the level's place in the chain, without the params and the
-/// exclusions the level carried. A host never writes one; it keeps the origin its attempt was
+/// exclusions the level carried or the targets its chain tried. A host never writes one; it keeps the origin its attempt was
 /// given ([`Attempt::origin`](crate::host::Attempt::origin)) and hands that back.
 #[derive(Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -76,6 +79,7 @@ impl From<Document> for StreamOrigin {
             deployment_id: document.deployment_id,
             attempted_retries: document.attempted_retries,
             committed_budget: document.committed_budget,
+            attempted: Arc::from([]),
         }
     }
 }
@@ -123,20 +127,29 @@ pub struct Unanswered<F> {
 }
 
 impl StreamOrigin {
-    /// The origin of the response an attempt of `target` at `at` returned.
+    /// The origin of the response an attempt of `level`'s `target` returned.
     pub(super) fn of(
+        level: &Level<'_>,
         target: Target,
-        at: FallbackHop,
         deployment_id: Option<String>,
         retry: u32,
     ) -> Self {
         Self {
             target,
-            depth: at.depth,
-            level: at.level,
+            depth: level.at.depth,
+            level: level.at.level,
             deployment_id,
             attempted_retries: retry,
             committed_budget: None,
+            attempted: level.chain.attempted.as_slice().into(),
+        }
+    }
+
+    /// The chain a take-over of the stream goes on from: what the stream's chain had tried.
+    fn chain(&self) -> FallbackChain {
+        FallbackChain {
+            attempted: self.attempted.to_vec(),
+            ..FallbackChain::default()
         }
     }
 
@@ -390,11 +403,10 @@ impl<H: RouterHost> Call<'_, H> {
         origin: StreamOrigin,
         failed: Failed,
     ) -> Result<super::RouterResponse<H::Response>, Error> {
-        let mut chain = FallbackChain::default();
-        if request.model != origin.target.group {
-            chain
-                .attempted
-                .push(Tried::Target(FallbackTarget::Name(request.model.clone())));
+        let mut chain = origin.chain();
+        let requested = Tried::Target(FallbackTarget::Name(request.model.clone()));
+        if request.model != origin.target.group && !chain.attempted.contains(&requested) {
+            chain.attempted.push(requested);
         }
         let level = Level {
             snapshot,
@@ -418,8 +430,7 @@ impl<H: RouterHost> Call<'_, H> {
         origin: &StreamOrigin,
         failure: AttemptError,
     ) -> Result<super::RouterResponse<H::Response>, Spent> {
-        // A stream's retries start from a chain that has tried nothing.
-        let mut chain = FallbackChain::default();
+        let mut chain = origin.chain();
         let level = Level {
             snapshot,
             op,

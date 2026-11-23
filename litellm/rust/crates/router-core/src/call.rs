@@ -1183,11 +1183,11 @@ impl<H: RouterHost> Call<'_, H> {
             target_order: target.order,
             candidate_ids: candidates.all.iter().map(|d| d.id.clone()).collect(),
             origin: StreamOrigin::of(
+                level,
                 Target {
                     routed,
                     ..target.clone()
                 },
-                at,
                 Some(deployment.id.clone()),
                 retry,
             ),
@@ -1407,7 +1407,7 @@ impl<H: RouterHost> Call<'_, H> {
             routed: None,
             target_order: target.order,
             candidate_ids: Vec::new(),
-            origin: StreamOrigin::of(target.clone(), at, None, retry),
+            origin: StreamOrigin::of(level, target.clone(), None, retry),
             retry,
             fallback_depth: at.depth,
             fallback_level: at.level,

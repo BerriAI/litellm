@@ -1893,6 +1893,17 @@ fn origin(named: Value) -> StreamOrigin {
     serde_json::from_value(Value::Object(primary.into_iter().chain(named).collect())).unwrap()
 }
 
+/// Where `origin` says its stream came from: the group, the fallback depth and level, and the
+/// deployment.
+fn placed(origin: &StreamOrigin) -> (&str, u32, u32, Option<&str>) {
+    (
+        origin.group(),
+        origin.depth(),
+        origin.level(),
+        origin.deployment_id(),
+    )
+}
+
 fn stream_origin() -> StreamOrigin {
     origin(json!({}))
 }
@@ -2033,6 +2044,36 @@ async fn a_stream_fallback_looks_its_targets_up_by_the_group_a_hook_routed_the_s
         .map(|response| response.output.response);
 
     assert_eq!(served.ok(), Some("b1".to_owned()));
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_dict_fallbacks_failed_stream_moves_on_to_the_next_target_of_its_chain() {
+    let host = Arc::new(ScriptedHost::failing("primary", vec![server_error()]));
+    let fallbacks = json!([{"primary": [{"model": "backup", "max_tokens": 64}, "context"]}]);
+    let hosted = router(
+        tiers(false),
+        json!({"num_retries": 0, "fallbacks": fallbacks}),
+        host.clone(),
+    );
+    let fallback = hosted
+        .call(Op::from("acompletion"), request())
+        .await
+        .unwrap();
+
+    let served = hosted
+        .router
+        .fallback_stream(
+            &*host,
+            Op::from("acompletion"),
+            request(),
+            fallback.origin,
+            server_error(),
+        )
+        .await
+        .map(|response| response.output.response);
+
+    assert_eq!(served.ok(), Some("c1".to_owned()));
 }
 
 fn pinned_to_a1() -> Arc<ScriptedHost> {
@@ -2367,15 +2408,10 @@ async fn spent_stream_retries_hand_the_stream_over_to_the_fallbacks() {
         (
             fallback.output.response.as_str(),
             fallback.attempted_fallbacks,
-            fallback.origin,
+            placed(&fallback.origin),
             host.retries(),
         ),
-        (
-            "b1",
-            1,
-            origin(json!({"group": "backup", "depth": 1, "level": 1, "deployment_id": "b1"})),
-            1,
-        )
+        ("b1", 1, ("backup", 1, 1, Some("b1")), 1)
     );
 }
 
@@ -2498,10 +2534,7 @@ async fn answered_by_the_fallback(num_retries: u32) -> (Hosted, RouterResponse<S
 async fn a_response_says_where_its_stream_came_from() {
     let (_, response) = answered_by_the_fallback(1).await;
 
-    assert_eq!(
-        response.origin,
-        origin(json!({"group": "backup", "depth": 1, "level": 1, "deployment_id": "b1"}))
-    );
+    assert_eq!(placed(&response.origin), ("backup", 1, 1, Some("b1")));
 }
 
 #[tokio::test]
