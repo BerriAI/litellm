@@ -216,3 +216,26 @@ async def test_saved_model_group_alias_is_applied_once_to_the_author(router: Rou
     authorized: Final = await _authorize(request, UserAPIKeyAuth(), router)
     assert _author_sent(authorized) == "gpt-5-nano"
     assert authorized["metadata"] == {SVG_AUTHOR_DEPLOYMENT_METADATA_KEY: AUTHOR_STAMP}
+
+
+@pytest.mark.asyncio
+async def test_team_alias_for_the_author_is_sent_as_its_team_deployment_model() -> None:
+    team_router: Final = Router(
+        model_list=[
+            {
+                "model_name": "model_name_team1_nano",
+                "litellm_params": {"model": "openai/gpt-5-nano", "api_key": "sk-test"},
+                "model_info": {"id": "team-nano-deployment"},
+            },
+        ]
+    )
+    key: Final = UserAPIKeyAuth(
+        team_id="team1",
+        team_models=["gpt-image-2.6", "team-nano"],
+        team_model_aliases={"team-nano": "model_name_team1_nano"},
+    )
+    authorized: Final = await _authorize(_request(_svg_top_level, "team-nano"), key, team_router)
+    assert _author_sent(authorized) == "gpt-5-nano"
+    assert authorized["metadata"] == {
+        SVG_AUTHOR_DEPLOYMENT_METADATA_KEY: {"deployment_id": "team-nano-deployment", "provider_model": "gpt-5-nano"}
+    }

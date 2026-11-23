@@ -18,7 +18,11 @@ from litellm.proxy.auth.auth_checks import (
     get_user_object,
     key_model_aliases_for_auth_check,
 )
-from litellm.proxy.litellm_pre_call_utils import customer_request_auth, global_then_key_alias_target
+from litellm.proxy.litellm_pre_call_utils import (
+    customer_request_auth,
+    global_then_key_alias_target,
+    team_alias_target,
+)
 from litellm.types.images.main import ImageSVGAuthorDeployment
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 
@@ -189,12 +193,15 @@ async def _authorized_author_updates(
 ) -> Mapping[str, object]:
     model_group_alias: Final = (_as_object(body.get(_ROUTER_SETTINGS_FIELD)) or {}).get("model_group_alias")
     grouped_author: Final = resolve_model_group_alias(model_group_alias, author) or author
-    served_author: Final = global_then_key_alias_target(grouped_author, user_api_key_dict)
+    team_author: Final = team_alias_target(grouped_author, user_api_key_dict, llm_router) or grouped_author
+    served_author: Final = global_then_key_alias_target(team_author, user_api_key_dict)
     auth: Final[UserAPIKeyAuth] = customer_request_auth(body) or user_api_key_dict
+    without_key_aliases: Final = auth.model_copy(update={"aliases": {}})
     deployment: Final = _author_deployment(served_author, user_api_key_dict.team_id, llm_router)
-    sent_author: Final = served_author if deployment is not None else author
-    without_aliases: Final = auth.model_copy(update={"aliases": {}, "team_model_aliases": None})
-    for name, valid_token in ((grouped_author, auth), (sent_author, without_aliases)):
+    key_aliased_author: Final = global_then_key_alias_target(grouped_author, user_api_key_dict)
+    sent_unchanged_author: Final = () if deployment is not None else ((author, without_key_aliases),)
+    checks: Final = ((grouped_author, auth), (key_aliased_author, without_key_aliases), *sent_unchanged_author)
+    for name, valid_token in checks:
         await can_key_call_resolved_model(
             model=name,
             llm_model_list=llm_router.registry().all() if llm_router else None,
