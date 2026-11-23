@@ -305,3 +305,11 @@ async def test_revoking_a_key_visits_every_page_of_live_subscriptions() -> None:
     )
     await terminate_key_subscriptions((ALICE.token,), notify=False, services=services)
     assert {row.id for row in store.rows.values() if row.status != "terminated"} == {"other"}
+
+
+@pytest.mark.asyncio
+async def test_admin_catalog_removes_webhook_mode_when_there_is_no_public_origin() -> None:
+    async with _client(ALICE, None, Callback()) as client:
+        response = await client.get("/events/types", params={"server_id": "srv-ci"})
+    assert response.status_code == 200
+    assert response.json()[0]["delivery"] == ["poll", "push"]

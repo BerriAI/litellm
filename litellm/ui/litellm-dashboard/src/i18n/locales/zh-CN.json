@@ -13093,6 +13093,10 @@
       }
     },
     "serverEdit": {
+      "events": {
+        "description": "通过网关转发此服务器的事件，使用与工具调用相同的密钥、护栏和日志。启用事件会将自动协商的协议版本固定为 2026-07-28，并要求在通用设置中启用 mcp_events_enabled。",
+        "requirements": "MCP 事件需要使用 HTTP 或 stdio 传输和 2026-07-28 版协议。请将上游协议设为 auto 或 2026-07-28。"
+      },
       "toasts": {
         "browserTokenHeld": "令牌仅保留在当前浏览器会话中，现可加载和配置工具，不会保存到 LiteLLM。",
         "oauthAuthorized": "OAuth 授权成功！请点击“更新 MCP 服务器”以保存凭据。",

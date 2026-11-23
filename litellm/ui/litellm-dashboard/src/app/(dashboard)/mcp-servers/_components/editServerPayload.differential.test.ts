@@ -15,7 +15,6 @@ import { TOOL_DISPLAY_NAME_PATTERN, normalizeEnvVars } from "./utils";
 import {
   buildEditServerPayload,
   eventsEntry,
-  eventsProtocol,
   type EditServerFormValues,
   type EditServerUiState,
 } from "./editServerPayload";
@@ -482,12 +481,36 @@ describe("events in the edit payload", () => {
     });
   });
 
-  it("pins a server on auto negotiation to the events protocol only when events turn on", () => {
-    expect(eventsProtocol(undefined, true)).toEqual({ protocol_version: "2026-07-28" });
-    expect(eventsProtocol("auto", true)).toEqual({ protocol_version: "2026-07-28" });
-    expect(eventsProtocol("2025-06-18", true)).toEqual({});
-    expect(eventsProtocol("auto", false)).toEqual({});
-    expect(eventsProtocol(undefined, undefined)).toEqual({});
+  it.each([
+    ["sse", "auto"],
+    ["http", "2025-06-18"],
+    ["openapi", "auto"],
+  ])("rejects saving enabled MCP events with transport %s and revision %s", (transport, protocol_version) => {
+    const mcpServer = {
+      ...baseUi.mcpServer,
+      mcp_info: { server_name: "srv", protocol_version },
+      events: { enabled: true },
+    };
+    const result = buildEditServerPayload({ ...EDIT_FORM_VALUES, transport }, { ...baseUi, mcpServer });
+    expect(result.kind).toBe("incompatible_events");
+  });
+
+  it.each([
+    ["http", undefined],
+    ["http", "auto"],
+    ["stdio", "2026-07-28"],
+  ])("saves MCP events for supported transport %s and revision %s", (transport, protocol_version) => {
+    const mcpServer = { ...baseUi.mcpServer, mcp_info: { server_name: "srv", protocol_version } };
+    const values = { ...EDIT_FORM_VALUES, transport, command: "server", events_enabled: true };
+    const result = buildEditServerPayload(values, { ...baseUi, mcpServer });
+    expect(result).toMatchObject({
+      kind: "ok",
+      payload: {
+        transport,
+        mcp_info: { protocol_version: "2026-07-28" },
+        events: { enabled: true },
+      },
+    });
   });
 
   it("keeps the other stored settings when an admin turns events off", () => {
