@@ -125,13 +125,18 @@ def _created_model(request_body: Mapping[str, object], response_body: Mapping[st
     )
 
 
-def _completed_at(response_body: Mapping[str, object], start_time: datetime) -> datetime:
-    completed_at: Final = response_body.get("completed_at")
-    now: Final = datetime.now(tz=start_time.tzinfo)
-    if isinstance(completed_at, bool) or not isinstance(completed_at, (int, float)):
-        return now
-    completed: Final = datetime.fromtimestamp(completed_at, tz=start_time.tzinfo)
-    return completed if completed >= start_time else now
+def _response_time(response_body: Mapping[str, object], field: str, start_time: datetime) -> datetime | None:
+    timestamp: Final = response_body.get(field)
+    if isinstance(timestamp, bool) or not isinstance(timestamp, (int, float)):
+        return None
+    return datetime.fromtimestamp(timestamp, tz=start_time.tzinfo)
+
+
+def _run_window(response_body: Mapping[str, object], start_time: datetime) -> tuple[datetime, datetime]:
+    completed: Final = _response_time(response_body, "completed_at", start_time)
+    end: Final = completed if completed is not None and completed >= start_time else datetime.now(tz=start_time.tzinfo)
+    created: Final = _response_time(response_body, "created_at", start_time)
+    return (created if created is not None and created <= end else end), end
 
 
 def _creator_litellm_params(context: BackgroundResponseCreateContext, spend_only: bool) -> Mapping[str, object]:
@@ -445,7 +450,7 @@ class PassThroughEndpointLogging:
         url_route: Final = f"{creator.upstream_url}/{quote(creator.response_id, safe='')}"
         wiring: Final = await self.creator_logging_wiring(context) if context.key_or_team_logging else None
         rewired: Final = _wires_logging(wiring)
-        completed_at: Final = _completed_at(response_body, context.start_time)
+        run_started_at, run_ended_at = _run_window(response_body, context.start_time)
         litellm_params: Final = _creator_litellm_params(
             context, spend_only=context.no_log or (context.key_or_team_logging and not rewired)
         )
@@ -456,7 +461,7 @@ class PassThroughEndpointLogging:
             litellm_call_id=context.litellm_call_id,
             function_id=context.litellm_call_id,
             litellm_trace_id=context.litellm_trace_id,
-            start_time=completed_at,
+            start_time=run_started_at,
             litellm_params=litellm_params,
             dynamic_success_callbacks=None if wiring is None else wiring.success_callbacks,
             dynamic_failure_callbacks=None if wiring is None else wiring.failure_callbacks,
@@ -478,8 +483,8 @@ class PassThroughEndpointLogging:
             logging_obj=logging_obj,
             url_route=url_route,
             result="",
-            start_time=completed_at,
-            end_time=completed_at,
+            start_time=run_started_at,
+            end_time=run_ended_at,
             cache_hit=False,
             passthrough_logging_payload=passthrough_logging_payload,
             custom_llm_provider=context.custom_llm_provider,

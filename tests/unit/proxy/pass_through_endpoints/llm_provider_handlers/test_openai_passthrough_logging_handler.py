@@ -3942,7 +3942,7 @@ class TestOpenAIPassthroughBackgroundResponseCreatorBilling:
         assert len(rows.logged_for(READER_METADATA["user_api_key_team_id"])) == 2
 
     @pytest.mark.asyncio
-    async def test_the_creator_bill_gets_its_own_logging_id_so_it_never_overwrites_the_create_log(
+    async def test_the_creator_bill_spans_the_run_under_its_own_logging_id_so_it_never_overwrites_the_create_log(
         self, local_model_cost_map
     ):
         rows: Final = _DispatchedSpendRows()
@@ -3951,12 +3951,14 @@ class TestOpenAIPassthroughBackgroundResponseCreatorBilling:
         passthrough_logging: Final = _creator_billing_passthrough_logging(
             rows, _SettlementTable(), creators, fetch, polls=True
         )
+        created_at: Final = DISPATCH_TIME + timedelta(seconds=1)
         completed_at: Final = DISPATCH_TIME + timedelta(seconds=42)
         await _background_create(passthrough_logging)
         fetch.outcomes.put_nowait(
             Fetched(
                 body={
                     **_stored_response("completed", True, RESPONSES_USAGE),
+                    "created_at": int(created_at.timestamp()),
                     "completed_at": int(completed_at.timestamp()),
                 }
             )
@@ -3966,7 +3968,9 @@ class TestOpenAIPassthroughBackgroundResponseCreatorBilling:
 
         create, bill = rows.rows
         assert bill.spend_row["spend"] > 0
-        assert bill.start_time == bill.end_time == completed_at
+        assert (bill.start_time, bill.end_time) == (created_at, completed_at)
+        timing: Final = bill.logging_obj.v2_call_facts(bill.end_time).timing
+        assert (timing.start, timing.end) == (created_at.timestamp(), completed_at.timestamp())
         assert litellm.utils.get_logging_id(
             bill.start_time, bill.logging_obj.model_call_details["standard_logging_object"]
         ) != litellm.utils.get_logging_id(
