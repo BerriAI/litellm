@@ -684,8 +684,17 @@ def _made_with_signed_thinking(message: SessionMessage) -> bool:
     return any(map(is_verifiable_thinking_block, blocks))
 
 
-def _with_each_call_made_once(messages: Sequence[SessionMessage]) -> Sequence[SessionMessage]:
-    return without_repeated_tool_calls(messages, keep_stored_arguments=_made_with_signed_thinking)
+def _keeps_stored_arguments(target_checks_whole_conversation: bool, message: SessionMessage) -> bool:
+    return target_checks_whole_conversation or _made_with_signed_thinking(message)
+
+
+def _with_each_call_made_once(
+    messages: Sequence[SessionMessage], model: str, custom_llm_provider: str | None
+) -> Sequence[SessionMessage]:
+    return without_repeated_tool_calls(
+        messages,
+        keep_stored_arguments=partial(_keeps_stored_arguments, target_refuses_blank_text(model, custom_llm_provider)),
+    )
 
 
 def _replayed_assistant_without_tool_search_uses(message: Mapping[str, object]) -> SessionMessage | None:
@@ -1846,7 +1855,7 @@ class LiteLLMCompletionResponsesConfig:
         # Fix: Ensure tool_results have corresponding tool_calls in previous assistant message
         # Pass tools parameter to help reconstruct tool_calls if not in cache
         combined_messages = LiteLLMCompletionResponsesConfig._ensure_tool_results_have_corresponding_tool_calls(
-            messages=_with_each_call_made_once(combined_messages),
+            messages=_with_each_call_made_once(combined_messages, model, provider),
             tools=request_tools,
         )
 
