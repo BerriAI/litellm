@@ -7,6 +7,7 @@ are normalized to match the OpenAI streaming spec:
 - Deduplication of "closing" chunks with repeated id/name
 """
 
+import datetime
 from pathlib import Path
 from typing import Final
 
@@ -219,3 +220,14 @@ def test_chatgpt_config_streams_parallel_tool_calls_with_distinct_indices(
     results: Final = list(ChatGPTConfig().post_stream_processing(iter(chunks)))
 
     assert [result.choices[0].delta.tool_calls[0].index for result in results] == [0, 1]
+
+
+def test_normalizer_over_a_non_iterator_raises_the_same_error_as_next():
+    stream: Final = datetime.date(2026, 1, 1)
+    with pytest.raises(TypeError) as builtin:
+        next(stream)  # pyright: ignore[reportArgumentType]  # the builtin error is the expected value
+
+    with pytest.raises(TypeError) as normalized:
+        next(ChatGPTToolCallNormalizer(stream))
+
+    assert str(normalized.value) == str(builtin.value)

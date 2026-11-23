@@ -9,7 +9,9 @@ from typing import Final
 from pydantic import TypeAdapter, ValidationError
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+from litellm.llms.base_llm.search.transformation import SearchResponse
 from litellm.utils import get_model_info
 
 PROVIDER_USAGE_ADAPTER: Final[TypeAdapter[tuple[Mapping[str, object], ...]]] = TypeAdapter(
@@ -39,19 +41,32 @@ def _registered_at_runtime(entry: str) -> bool:
     return live != GetModelCostMap.loaded_model_cost_map().get(entry)  # pyright: ignore[reportUnknownVariableType]  # `live` comes from the untyped registry
 
 
+def _tavily_auto_depth(response: SearchResponse | None) -> str | None:
+    metadata: Final = as_str_mapping(attribute_or_none(response, "provider_metadata"))
+    auto_parameters: Final = as_str_mapping(metadata.get("auto_parameters")) if metadata is not None else None
+    depth: Final = auto_parameters.get("search_depth") if auto_parameters is not None else None
+    return depth if isinstance(depth, str) else None
+
+
 def _pricing_model(
     model: str,
     custom_llm_provider: str | None,
     optional_params: Mapping[str, object] | None,
+    search_response: SearchResponse | None,
 ) -> str:
-    """`<provider>/search-<mode>` when `model` is the generic `<provider>/search` entry (bare or provider-prefixed) and
-    the request's mode parameter names a priced entry, else `model`. A price registered at runtime on the generic entry
-    keeps applying until the mode entry is registered too."""
+    """Use the priced mode entry for a generic search model. For Tavily, fall back to the reported depth when
+    no depth was requested. A price registered at runtime on the generic entry keeps applying until the mode
+    entry is registered too."""
     mode_param: Final = SEARCH_MODE_PARAM_BY_PROVIDER.get(custom_llm_provider or "")
     generic_model: Final = f"{custom_llm_provider}/search"
     if mode_param is None or model not in (generic_model, f"{custom_llm_provider}/{generic_model}"):
         return model
-    mode: Final = (optional_params if optional_params is not None else EMPTY_OPTIONAL_PARAMS).get(mode_param)
+    requested_mode: Final = (optional_params if optional_params is not None else EMPTY_OPTIONAL_PARAMS).get(mode_param)
+    mode: Final = (
+        _tavily_auto_depth(search_response)
+        if requested_mode is None and custom_llm_provider == "tavily"
+        else requested_mode
+    )
     mode_model: Final = f"{custom_llm_provider}/search-{mode}"
     priced: Final = mode_model in litellm.model_cost  # pyright: ignore[reportUnknownMemberType]  # registry is dynamically typed
     if not priced or (_registered_at_runtime(generic_model) and not _registered_at_runtime(mode_model)):
@@ -64,6 +79,8 @@ def search_provider_cost_per_query(
     custom_llm_provider: str | None = None,
     number_of_queries: int = 1,
     optional_params: Mapping[str, object] | None = None,
+    *,
+    search_response: SearchResponse | None = None,
 ) -> tuple[float, float]:
     """
     Calculate cost for search-only providers.
@@ -77,6 +94,7 @@ def search_provider_cost_per_query(
         custom_llm_provider: Provider name (e.g., "exa_ai", "tavily")
         number_of_queries: Number of search queries performed (default: 1)
         optional_params: Optional parameters including max_results for tiered pricing
+        search_response: Provider response for pricing automatically selected search depth
 
     Returns:
         Tuple of (input_cost, output_cost) where output_cost is always 0.0
@@ -94,7 +112,7 @@ def search_provider_cost_per_query(
         return (input_cost, 0.0)
 
     model_info: Final = get_model_info(
-        model=_pricing_model(model, custom_llm_provider, optional_params),
+        model=_pricing_model(model, custom_llm_provider, optional_params, search_response),
         custom_llm_provider=custom_llm_provider,
     )
 

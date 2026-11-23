@@ -7,10 +7,11 @@ from itertools import chain
 from typing import TYPE_CHECKING, Any, Final, Optional, Protocol, runtime_checkable
 
 from opentelemetry import trace
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.constants import REDACTED_BY_LITELLM
+from litellm.constants import FAILED_PROMPT_TOKEN_ESTIMATE_KEY, REDACTED_BY_LITELLM
 from litellm.integrations._types.open_inference import ErrorAttributes
 from litellm.integrations.arize import _utils
 from litellm.integrations.langfuse.langfuse_otel_attributes import (
@@ -18,19 +19,24 @@ from litellm.integrations.langfuse.langfuse_otel_attributes import (
     serialize_langfuse_datetime,
 )
 from litellm.integrations.opentelemetry import (
+    ESTIMATED_INPUT_TOKENS_ATTRIBUTE,
     HTTP_RESPONSE_STATUS_CODE_ATTRIBUTE,
     LITELLM_PROXY_REQUEST_SPAN_NAME,
+    USAGE_PROVIDER_STATUS_ATTRIBUTE,
     OpenTelemetry,
     OpenTelemetryConfig,
 )
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
+from litellm.llms.anthropic.common_utils import tool_calls_with_server_tool_calls
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.integrations.langfuse_otel import (
     LangfuseSpanAttributes,
 )
 from litellm.types.utils import StandardCallbackDynamicParams
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -146,6 +152,12 @@ def _a_destination_carries_the_trace() -> bool:
     from litellm.integrations.otel.plumbing.context import destination_backends
 
     return ExporterOwner.LANGFUSE_OTEL in destination_backends()
+
+
+def _refused_on_otel_v2(params: StandardCallbackDynamicParams) -> bool:
+    from litellm.integrations.otel.presets.destinations import langfuse_tenant_host_refused_by_otel_v2
+
+    return langfuse_tenant_host_refused_by_otel_v2(params)
 
 
 class LangfuseOtelLogger(OpenTelemetry):
@@ -374,9 +386,15 @@ class LangfuseOtelLogger(OpenTelemetry):
         limit: Final = span_attribute_limit(span)
         carried: Final = carried_keys(span)
         new_keys: Final = tuple(key for key, _value in fields if key not in carried)
-        room: Final = (
-            len(new_keys) if limit is None else max(limit - len(carried) - len(_ERROR_ATTRIBUTES - carried), 0)
+        pending_usage: Final[frozenset[str]] = (
+            frozenset((USAGE_PROVIDER_STATUS_ATTRIBUTE, ESTIMATED_INPUT_TOKENS_ATTRIBUTE))
+            if isinstance(kwargs.get(FAILED_PROMPT_TOKEN_ESTIMATE_KEY), int)
+            else frozenset((USAGE_PROVIDER_STATUS_ATTRIBUTE,))
+            if FAILED_PROMPT_TOKEN_ESTIMATE_KEY in kwargs
+            else frozenset()
         )
+        reserved: Final = _ERROR_ATTRIBUTES | pending_usage
+        room: Final = len(new_keys) if limit is None else max(limit - len(carried) - len(reserved - carried), 0)
         written: Final = carried | frozenset(new_keys[:room])
         for key, value in fields:
             if key in written:
@@ -515,7 +533,11 @@ class LangfuseOtelLogger(OpenTelemetry):
 
         dynamic_langfuse_public_key: Final = standard_callback_dynamic_params.get("langfuse_public_key")
         dynamic_langfuse_secret_key: Final = standard_callback_dynamic_params.get("langfuse_secret_key")
-        if dynamic_langfuse_public_key and dynamic_langfuse_secret_key:
+        if (
+            dynamic_langfuse_public_key
+            and dynamic_langfuse_secret_key
+            and not _refused_on_otel_v2(standard_callback_dynamic_params)
+        ):
             auth_header: Final = LangfuseOtelLogger._get_langfuse_authorization_header(
                 public_key=dynamic_langfuse_public_key,
                 secret_key=dynamic_langfuse_secret_key,
@@ -537,7 +559,7 @@ class LangfuseOtelLogger(OpenTelemetry):
         """
         public_key: Final = standard_callback_dynamic_params.get("langfuse_public_key")
         secret_key: Final = standard_callback_dynamic_params.get("langfuse_secret_key")
-        if not public_key or not secret_key:
+        if not public_key or not secret_key or _refused_on_otel_v2(standard_callback_dynamic_params):
             return None
 
         langfuse_host: Final = standard_callback_dynamic_params.get("langfuse_host") or self._get_langfuse_otel_host()
@@ -605,8 +627,8 @@ def _extract_choices_output(response_obj: _Gettable) -> str | None:
     message: Final = _as_gettable(first_choice.get("message", {}))
     if message is None:
         return None
-    tool_calls: Final = message.get("tool_calls")
-    if isinstance(tool_calls, list) and tool_calls:
+    tool_calls: Final = tool_calls_with_server_tool_calls(message)
+    if tool_calls:
         transformed_tool_calls: Final = [
             entry for tool_call in tool_calls if (entry := _transformed_tool_call(response_obj, tool_call)) is not None
         ]
@@ -642,7 +664,7 @@ def _tool_call_arguments(arguments: object) -> object:
     if not isinstance(arguments, str):
         return arguments
     try:
-        return json.loads(arguments)
+        return _DECODED_JSON.validate_python(json.loads(arguments))
     except json.JSONDecodeError:
         return {}
 

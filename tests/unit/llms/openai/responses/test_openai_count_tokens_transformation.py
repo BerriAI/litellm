@@ -603,15 +603,26 @@ def test_anthropic_messages_keep_every_block_the_chat_converter_drops() -> None:
     )
 
 
-def test_anthropic_list_system_becomes_joined_instruction_text() -> None:
-    _, instructions, _, _ = OpenAICountTokensConfig.anthropic_messages_to_responses_input(
+def test_anthropic_list_system_is_counted_as_leading_developer_input() -> None:
+    input_items, instructions, _, _ = OpenAICountTokensConfig.anthropic_messages_to_responses_input(
         model="gpt-4o",
         messages=[{"role": "user", "content": "hi"}],
         system=[{"type": "text", "text": "First rule."}, {"type": "text", "text": "Second rule."}],
         tools=None,
     )
 
-    assert instructions == "First rule.\nSecond rule."
+    assert instructions is None
+    assert input_items == (
+        {
+            "type": "message",
+            "role": "developer",
+            "content": [
+                {"type": "input_text", "text": "First rule."},
+                {"type": "input_text", "text": "Second rule."},
+            ],
+        },
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+    )
 
 
 def test_a_saved_conversation_with_a_null_created_by_is_counted_without_it() -> None:

@@ -5,6 +5,7 @@ Domain models for LiteLLM backend.
 from litellm.models.access_group import LiteLLM_AccessGroupTable
 from litellm.models.autorouter_session import LiteLLM_AutoRouterSession
 from litellm.models.budget import (
+    CUSTOMER_ONLY_BUDGET_FIELDS,
     LiteLLM_BudgetTable,
     LiteLLM_BudgetTableFull,
     LiteLLM_TeamMemberTable,
@@ -38,6 +39,7 @@ from litellm.models.user import LiteLLM_UserTable
 from litellm.models.verification_token import LiteLLM_VerificationToken
 
 __all__ = [
+    "CUSTOMER_ONLY_BUDGET_FIELDS",
     "CreateCredentialItem",
     "CredentialBase",
     "CredentialItem",

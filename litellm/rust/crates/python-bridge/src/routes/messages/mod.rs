@@ -1,0 +1,119 @@
+mod agentic;
+mod host;
+mod model_catalog;
+mod modify_params;
+mod plan;
+mod requests_reason;
+mod safeguards;
+mod transport;
+pub(crate) mod workload_identity;
+
+use host::MessagesPythonHost;
+use litellm_callbacks_legacy_python::{LoggedCallParam, LoggingOperation};
+use litellm_core_utils::get_llm_provider_logic::LlmProviders;
+use litellm_llms::vertex_ai::common_utils::EXPLICIT_LOCATION_PARAMS;
+use litellm_llms_types::formats::messages::MessagesOptionalParams;
+use modify_params::ModifyParams;
+use plan::MessagesPlan;
+use pyo3::prelude::*;
+
+use super::NativeCall;
+
+/// Python's Vertex AI Messages handler logs the explicitly configured location, which cost
+/// tracking prices the regional uplift from.
+fn vertex_explicit_location() -> LoggedCallParam {
+    LoggedCallParam {
+        provider: LlmProviders::VertexAi.into(),
+        read_from: &EXPLICIT_LOCATION_PARAMS,
+        logged_as: EXPLICIT_LOCATION_PARAMS[0],
+    }
+}
+
+fn run_messages(py: Python<'_>, call: NativeCall<'_>, asynchronous: bool) -> PyResult<Py<PyAny>> {
+    let (arguments, logging) =
+        crate::routes::call_hooks(py, LoggingOperation::Messages, &call, asynchronous)?;
+    let hooks = logging.with_logged_call_param(vertex_explicit_location());
+    let hooked_request = agentic::HookedRequest::default();
+    let hooks = litellm_host_python::HookChain::new()
+        .with(agentic::AgenticLoop::new(
+            asynchronous,
+            std::sync::Arc::clone(&hooked_request),
+        ))
+        .with(hooks);
+    let modify_params = ModifyParams::new(&call.args, &call.kwargs)?;
+    crate::routes::run_public_call_after_policy(
+        py,
+        arguments,
+        move |py, arguments, plan: MessagesPlan| {
+            let context = litellm_host_python::PythonContext::capture(py)?;
+            let secrets = std::sync::Arc::new(crate::secrets::seeded::SeededSecrets::new(
+                crate::secrets::source(py)?,
+            ));
+            let route = litellm_inference_messages::MessagesRoute::new(
+                crate::http::messages_client(py, arguments, asynchronous)?
+                    .map_err(crate::http::client_error)?,
+                crate::http::resources().auth.clone(),
+                std::sync::Arc::clone(&secrets) as _,
+            )
+            .with_workload_identity(std::sync::Arc::new(
+                workload_identity::PythonWorkloadIdentity::new(context.clone()),
+            ));
+            let route =
+                route.with_azure_ad_token_hosts(litellm_llms::base_llm::auth::AzureAdTokenHosts {
+                    caller: crate::credentials::azure_ad_token_provider(arguments)?.map(
+                        |provider| {
+                            workload_identity::azure_ad_token_provider(context.clone(), provider)
+                        },
+                    ),
+                    host: Some(workload_identity::host_azure_ad_token(
+                        context,
+                        arguments.clone().unbind(),
+                    )),
+                });
+            let route = route.with_host_services(plan.host_services());
+            secrets.seed(plan.transport.read);
+            Ok(route.machine(
+                plan.call,
+                litellm_inference::CallOptions {
+                    cache: Some(plan.cache.policy),
+                    observers: None,
+                },
+            ))
+        },
+        MessagesPythonHost::new(call.view()?, asynchronous, hooked_request),
+        hooks,
+        modify_params,
+        asynchronous,
+    )
+}
+
+/// Python's sync Messages handler answers a mock without logging, hands proxy MCP tools to the
+/// gateway, and raises for every other native provider call before it sends anything or opens a
+/// logging object (`BaseLLMHTTPHandler.anthropic_messages_handler`), and Rust copies that until
+/// both sides serve sync calls.
+const SYNC_NOT_IMPLEMENTED: &str = "anthropic_messages_handler is not implemented for sync calls";
+
+#[pyfunction]
+#[pyo3(signature = (call))]
+pub(crate) fn messages(py: Python<'_>, call: NativeCall<'_>) -> PyResult<Py<PyAny>> {
+    let answer = py
+        .import(host::ROUTE_HOST_MODULE)?
+        .getattr("sync_answer")?
+        .call1((call.resolved()?,))?;
+    if answer.is_none() {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            SYNC_NOT_IMPLEMENTED,
+        ));
+    }
+    Ok(answer.unbind())
+}
+
+#[pyfunction]
+pub(crate) fn amessages(py: Python<'_>, call: NativeCall<'_>) -> PyResult<Py<PyAny>> {
+    run_messages(py, call, true)
+}
+
+#[pyfunction]
+pub(crate) fn messages_optional_params() -> Vec<&'static str> {
+    MessagesOptionalParams::fields().collect()
+}

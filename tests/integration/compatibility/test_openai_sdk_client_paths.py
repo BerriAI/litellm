@@ -78,7 +78,7 @@ SPEECH_UPSTREAM_MODEL: Final = "gpt-4o-mini-tts"
 PAYMENT_REQUIRED_DEPLOYMENTS: Final[Mapping[str, str]] = MappingProxyType(
     {"openai": "openai/gpt-4o-mini", "anthropic": "anthropic/claude-sonnet-4-5"}
 )
-_R: Final = TypeVar("_R")
+_R = TypeVar("_R")
 
 
 def _identity(prefix: str) -> str:
@@ -630,19 +630,6 @@ def _spend_row(identity: str) -> Mapping[str, JsonValue]:
     return rows[0]
 
 
-def _spend_row_keyed_by_any(identities: frozenset[str]) -> Mapping[str, JsonValue]:
-    keys: Final = tuple(sorted(identities))
-    placeholders: Final = ", ".join("%s" for _ in keys)
-    rows: Final = eventually(
-        lambda: read_rows(
-            f'SELECT request_id, call_type, model FROM "LiteLLM_SpendLogs" WHERE request_id IN ({placeholders})', keys
-        ),
-        lambda rows: len(rows) == 1,
-        seconds=70,
-    )
-    return rows[0]
-
-
 def _spend_request_ids(identities: tuple[str, str, str]) -> frozenset[str]:
     rows: Final = eventually(
         lambda: read_rows('SELECT request_id FROM "LiteLLM_SpendLogs" WHERE request_id IN (%s, %s, %s)', identities),
@@ -815,7 +802,7 @@ def test_r07_responses_stream_through_the_async_openai_sdk(gateway: Gateway) -> 
         served: Final = _served(wire)
         assert _routes(served) == (("POST", "/v1/responses"),), served
         assert _body(served[0])["stream"] is True, served[0].body
-        assert _spend_row_keyed_by_any(response_identities(last.response.id))["model"] == DEPLOYMENT_MODEL
+        assert _spend_row(last.response.id)["model"] == DEPLOYMENT_MODEL
 
 
 def test_r08_completions_non_stream_through_the_sync_openai_sdk(gateway: Gateway) -> None:

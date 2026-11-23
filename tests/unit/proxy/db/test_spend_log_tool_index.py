@@ -6,7 +6,7 @@ plus the LiteLLM_DailyToolSpend rollup in one transaction.
 
 from collections.abc import Awaitable, Callable
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Final
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
@@ -23,6 +23,7 @@ from litellm.proxy.db.spend_log_tool_index import (
 )
 from litellm.responses.mcp.litellm_proxy_mcp_handler import LiteLLM_Proxy_MCP_Handler
 from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.types.utils import ModelResponse
 from tests.unit.proxy.db.fake_prisma_engine import engine_call
 
 
@@ -65,6 +66,19 @@ def _index_rows_written(prisma: MagicMock) -> list[tuple[str, str]]:
 
 
 class TestBuildToolUsageTransaction:
+    def test_oversized_names_are_not_recorded(self) -> None:
+        transaction = build_tool_usage_transaction(
+            request_id="r1",
+            start_time_iso="2026-07-25T10:00:00+00:00",
+            mcp_namespaced_tool_name=None,
+            spend=0.5,
+            total_tokens=100,
+            completion_response=_response_with_tool_calls("é" * 257, "healthy_tool"),
+        )
+
+        assert transaction is not None
+        assert transaction.tool_names == ("healthy_tool",)
+
     def test_declared_tools_never_reach_the_transaction(self):
         # Regression for the inflation bug: the builder's only non-MCP source is
         # the response's tool_calls, so a request declaring N tools while the
@@ -203,6 +217,36 @@ class TestResponseToolCallNames:
 
     def test_blank_names_are_dropped(self):
         assert response_tool_call_names(_response_with_tool_calls("  ", "real_tool")) == ("real_tool",)
+
+    @pytest.mark.parametrize("as_object", [False, True], ids=["dict", "model_response"])
+    def test_server_tool_calls_of_every_choice_are_named_before_client_tool_calls(self, as_object: bool):
+        def tool_call(call_id: str, name: str) -> dict[str, object]:
+            return {"id": call_id, "type": "function", "function": {"name": name, "arguments": "{}"}}
+
+        response: dict[str, object] = {
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [tool_call("call_1", "get_weather")],
+                        "provider_specific_fields": {"server_tool_calls": [tool_call("srvtoolu_01", "web_search")]},
+                    },
+                },
+                {
+                    "index": 1,
+                    "message": {
+                        "role": "assistant",
+                        "content": "done",
+                        "provider_specific_fields": {"server_tool_calls": [tool_call("srvtoolu_02", "web_fetch")]},
+                    },
+                },
+            ]
+        }
+        completion_response: Final = ModelResponse(**response) if as_object else response
+
+        assert response_tool_call_names(completion_response) == ("web_search", "web_fetch", "get_weather")
 
     def test_responses_api_output_function_calls(self):
         # Regression: /v1/responses carries invocations in output[] items of

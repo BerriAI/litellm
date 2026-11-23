@@ -335,3 +335,27 @@ def test_completion_nvidia_nim_drops_top_logprobs_without_logprobs_only_under_dr
 
     request_body: Final = transport.request_bodies[0]
     assert {key: request_body[key] for key in ("logprobs", "top_logprobs") if key in request_body} == expected_body
+
+def test_embedding_nvidia_nim_sends_extra_body_fields_without_an_extra_body_key():
+    from openai import OpenAI
+
+    transport: Final = CapturingTransport(
+        CreateEmbeddingResponse(
+            object="list",
+            data=(Embedding(object="embedding", index=0, embedding=(0.1, 0.2, 0.3)),),
+            model="nvidia/nv-embedqa-e5-v5",
+            usage=EmbeddingUsage(prompt_tokens=6, total_tokens=6),
+        )
+    )
+    client: Final = OpenAI(api_key="fake-api-key", http_client=httpx.Client(transport=transport))
+
+    litellm.embedding(
+        model="nvidia_nim/nvidia/nv-embedqa-e5-v5",
+        input="What is the meaning of life?",
+        extra_body={"input_type": "query", "truncate": "END"},
+        client=client,
+    )
+
+    request_body: Final = transport.request_bodies[0]
+    assert "extra_body" not in request_body
+    assert (request_body["input_type"], request_body["truncate"]) == ("query", "END")

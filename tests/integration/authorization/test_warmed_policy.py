@@ -194,6 +194,7 @@ def test_key_block_and_unblock_reach_both_warmed_workers(gateway: Gateway, peer:
 
 
 SCIM_CORE_USER_SCHEMA: Final = "urn:ietf:params:scim:schemas:core:2.0:User"
+SCIM_ERROR_SCHEMA: Final = "urn:ietf:params:scim:api:messages:2.0:Error"
 
 
 class ScimNameResponse(BaseModel):
@@ -673,15 +674,12 @@ def test_scim_put_without_active_keeps_a_deactivated_user_blocked(gateway: Gatew
 def _expected_scim_write_denial(route: str, user_id: str, user_role: str) -> dict[str, JsonValue]:
     masked_user_id: Final = f"{user_id[:6]}{'*' * (len(user_id) - 8)}{user_id[-2:]}"
     return {
-        "error": {
-            "message": (
-                "Authentication Error, Only proxy admin can be used to generate, delete, update info for new "
-                f"keys/users/teams. Route={route}. Your role={user_role}. Your user_id={masked_user_id}"
-            ),
-            "type": "auth_error",
-            "param": None,
-            "code": "401",
-        }
+        "schemas": [SCIM_ERROR_SCHEMA],
+        "status": "401",
+        "detail": (
+            "Authentication Error, Only proxy admin can be used to generate, delete, update info for new "
+            f"keys/users/teams. Route={route}. Your role={user_role}. Your user_id={masked_user_id}"
+        ),
     }
 
 

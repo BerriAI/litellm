@@ -12,11 +12,13 @@ from pydantic import TypeAdapter
 
 from litellm._logging import redact_internal_details_from_client_fields
 from litellm.constants import STRINGIFIED_NONE
+from litellm.litellm_core_utils.core_helpers import error_status_code
 from litellm.proxy._types import ProxyErrorTypes, ProxyException, proxy_exception_status_code
 from litellm.proxy.db.db_lookup_gate import DBLookupDeadlineExceeded
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler, exception_chain
 
 LITELLM_CALL_ID_HEADER: Final = "x-litellm-call-id"
+_SERVER_IS_OVERLOADED_CODE: Final = "server_is_overloaded"
 
 _OPENAI_ERROR_TYPE_BY_STATUS: Final[Mapping[int, str]] = MappingProxyType(
     {
@@ -27,8 +29,6 @@ _OPENAI_ERROR_TYPE_BY_STATUS: Final[Mapping[int, str]] = MappingProxyType(
 )
 
 _AUTH_FAILURE_STATUS_CODES: Final = frozenset({status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN})
-
-_HTTP_ERROR_STATUSES: Final = range(status.HTTP_400_BAD_REQUEST, 600)
 
 _ERROR_BODY: Final = TypeAdapter(dict[str, object])
 
@@ -44,31 +44,33 @@ _FAILOVER_REFUSALS: Final = (
 )
 
 
+class OverloadedProxyException(ProxyException):
+    def __init__(
+        self,
+        message: str,
+        headers: dict[str, str] | None,  # mutable-ok: matches ProxyException's constructor
+        provider_specific_fields: dict[str, object] | None,  # mutable-ok: matches ProxyException's constructor
+    ) -> None:
+        super().__init__(  # pyright: ignore[reportUnknownMemberType]  # ProxyException omits generic arguments
+            message=message,
+            type="service_unavailable_error",
+            param=None,
+            code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            headers=None if headers is None else dict(headers),
+            provider_specific_fields=provider_specific_fields,
+        )
+
+    def to_dict(self) -> dict[str, object]:  # mutable-ok: matches ProxyException.to_dict
+        return {
+            **_ERROR_BODY.validate_python(
+                super().to_dict()  # pyright: ignore[reportUnknownMemberType]  # ProxyException omits generic arguments
+            ),
+            "code": _SERVER_IS_OVERLOADED_CODE,
+        }
+
+
 def attribute_of(value: object, name: str, default: object = None) -> object:
     return getattr(value, name, default)
-
-
-def error_status_code(exc: object, default: int) -> int:
-    """The 4xx or 5xx HTTP status an exception carries as ``status_code`` (an int or a decimal string) or,
-    the way ``ProxyException`` stores it, as a stringified ``code``; ``default`` when it carries neither."""
-    carried: Final = _http_error_status(attribute_of(exc, "status_code"))
-    if carried is not None:
-        return carried
-    stringified: Final = attribute_of(exc, "code")
-    from_code: Final = _http_error_status(stringified) if isinstance(stringified, str) else None
-    return default if from_code is None else from_code
-
-
-def _http_error_status(value: object) -> int | None:
-    match value:
-        case bool():
-            return None
-        case int() if value in _HTTP_ERROR_STATUSES:
-            return value
-        case str() if len(value) == 3 and value.isascii() and value.isdigit() and int(value) in _HTTP_ERROR_STATUSES:
-            return int(value)
-        case _:
-            return None
 
 
 def openai_error_type(exc: object, status_code: int) -> str:

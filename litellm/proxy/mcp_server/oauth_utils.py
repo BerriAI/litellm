@@ -131,6 +131,13 @@ def build_upstream_authorize_url(authorization_url: str, params: Mapping[str, st
     return urlunparse(parsed._replace(query=urlencode(merged)))
 
 
+MCP_WILDCARD_SCOPE: Final = "mcp_all"
+
+
+def asks_for_wildcard(scope: str | None) -> bool:
+    return MCP_WILDCARD_SCOPE in (scope or "").split()
+
+
 def proxy_base_url_from_env() -> str | None:
     """The gateway's fixed public URL from ``PROXY_BASE_URL``, ``None`` when unset or malformed."""
     return _resolve_proxy_base_url_env()

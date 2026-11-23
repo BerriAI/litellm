@@ -15,6 +15,7 @@ from pydantic import JsonValue, TypeAdapter
 pytestmark: Final = pytest.mark.shares_worker_state
 
 ANTHROPIC_MODEL: Final = "beta-gated-anthropic"
+FOUNDRY_MODEL: Final = "beta-gated-foundry"
 DATABRICKS_MODEL: Final = "beta-gated-databricks"
 DATABRICKS_DROP_PARAMS_MODEL: Final = "beta-gated-databricks-drop-params"
 CLEAR_AT_BETA: Final = "mid-conversation-system-clear-at-2026-08-21"
@@ -71,6 +72,7 @@ def write_config(directory: Path, wire_url: str) -> Path:
             {
                 "model_list": [
                     deployment(ANTHROPIC_MODEL, "anthropic/claude-opus-4-8", f"{wire_url}/anthropic"),
+                    deployment(FOUNDRY_MODEL, "azure_ai/claude-opus-4-8", f"{wire_url}/foundry"),
                     deployment(
                         DATABRICKS_MODEL,
                         "databricks/databricks-claude-opus-4-8",
@@ -177,9 +179,10 @@ def test_a_leg_whose_row_lacks_the_beta_forwards_clear_at_as_sent_without_drop_p
     }
 
 
-def test_a_leg_that_carries_the_beta_forwards_clear_at_untouched(rig: Rig) -> None:
+@pytest.mark.parametrize("model", (ANTHROPIC_MODEL, FOUNDRY_MODEL))
+def test_a_leg_that_carries_the_beta_forwards_clear_at_untouched(rig: Rig, model: str) -> None:
     request_nonce: Final = nonce()
-    status, raw = rig.send(ANTHROPIC_MODEL, request_nonce)
+    status, raw = rig.send(model, request_nonce)
     assert reply_text(status, raw) == f"answered {request_nonce.removeprefix('nonce-')}"
     upstream: Final = rig.received(request_nonce)
     assert CLEAR_AT_BETA in beta_header(upstream.headers), upstream.headers
