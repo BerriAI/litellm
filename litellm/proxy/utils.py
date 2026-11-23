@@ -6091,6 +6091,10 @@ def _raise_user_unique_conflict(error: "UniqueViolationError", user_id: object, 
     ) from error
 
 
+class KeyWriter(Protocol):
+    async def __call__(self, data: Mapping[str, object]) -> "prisma_models.LiteLLM_VerificationToken": ...
+
+
 class PrismaClient:
     spend_log_transactions: list = []
     _spend_log_transactions_lock = asyncio.Lock()
@@ -6817,7 +6821,7 @@ class PrismaClient:
         table_name: Literal["user", "key", "config", "spend", "team", "user_notification"],
         *,
         allow_existing_user: bool = True,
-        key_writer: Callable[[Mapping[str, object]], Awaitable[object]] | None = None,
+        key_writer: KeyWriter | None = None,
     ):
         """
         Add a key to the database. If it already exists, do nothing.

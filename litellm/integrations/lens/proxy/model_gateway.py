@@ -4,7 +4,12 @@ import time
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import timedelta
 from enum import Enum
-from typing import Final, cast  # noqa: TID251  # generated Prisma cursor type needs the typed repository interface
+from functools import partial
+from typing import (  # noqa: TID251  # generated Prisma cursor type needs the typed repository interface
+    TYPE_CHECKING,
+    Final,
+    cast,
+)
 
 import httpx
 from pydantic import BaseModel, ConfigDict, ValidationError
@@ -15,6 +20,11 @@ from litellm.integrations.lens.remote import bounded_response
 from litellm.proxy._types import GenerateKeyRequest, LitellmUserRoles, ProxyException, SpecialModelNames, UserAPIKeyAuth
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.repositories.prisma_protocols import TableActions
+
+if TYPE_CHECKING:
+    from prisma import models as prisma_models
+
+    from litellm.proxy.utils import PrismaClient
 
 MODEL_ROUTES: Final = (
     "/model_group/info",
@@ -125,7 +135,7 @@ async def setup(
     connection: Connection, identity: Identity, gateway_url: str, auth: UserAPIKeyAuth
 ) -> GatewayStatus | SetupFailure:
     from litellm.proxy import proxy_server
-    from litellm.proxy.management_endpoints.key_management_endpoints import KeyPersistenceError, generate_key_fn
+    from litellm.proxy.management_endpoints.key_management_endpoints import generate_key_fn
 
     if auth.user_role != LitellmUserRoles.PROXY_ADMIN:
         return SetupFailure.FORBIDDEN
@@ -154,30 +164,12 @@ async def setup(
             )
 
     async def generate(request: GenerateKeyRequest) -> None:
-        async def write_key(data: Mapping[str, object]) -> object:
-            async with database.tx(timeout=timedelta(seconds=10)) as transaction:
-                await transaction.query_raw(
-                    "SELECT 1 AS locked FROM pg_advisory_xact_lock(hashtext($1))",
-                    f"lens-model-key:{data['token']}",
-                )
-                keys: Final = cast(  # cast-ok: normalized insert fields use the repository's mapping interface
-                    TableActions[object], transaction.litellm_verificationtoken
-                )
-                existing: Final = await keys.find_unique(where={"token": data["token"]})
-                if existing is not None:
-                    raise KeyPersistenceError(status_code=409, detail="The Lens key already exists")
-                deleted_table: Final = (
-                    cast(  # cast-ok: generated Prisma cursor type is absent; use the repository interface
-                        TableActions[object], transaction.litellm_deletedverificationtoken
-                    )
-                )
-                deleted: Final = await deleted_table.find_many(where={"token": data["token"]}, take=1)
-                rotated: Final = await keys.find_many(where={"key_alias": data["key_alias"]}, take=1)
-                if deleted or rotated:
-                    raise KeyPersistenceError(status_code=409, detail=SetupFailure.KEY_POLICY.value)
-                return await keys.create(data=data, include={"litellm_budget_table": True})
-
-        await generate_key_fn(data=request, user_api_key_dict=auth, litellm_changed_by=None, key_writer=write_key)
+        await generate_key_fn(
+            data=request,
+            user_api_key_dict=auth,
+            litellm_changed_by=None,
+            key_writer=partial(_persist_model_key, database),
+        )
 
     async def ensure_key(key: str) -> bool:
         return await ensure_model_key(key, active, retired, generate)
@@ -185,6 +177,31 @@ async def setup(
     return await connect_models(
         connection, identity, gateway_url, connection.remote.control_client(), ensure_key, int(time.time())
     )
+
+
+async def _persist_model_key(
+    database: "PrismaClient", data: Mapping[str, object]
+) -> "prisma_models.LiteLLM_VerificationToken":
+    from litellm.proxy.management_endpoints.key_management_endpoints import KeyPersistenceError
+
+    async with database.tx(timeout=timedelta(seconds=10)) as transaction:
+        await transaction.query_raw(
+            "SELECT 1 AS locked FROM pg_advisory_xact_lock(hashtext($1))", f"lens-model-key:{data['token']}"
+        )
+        keys: Final = cast(  # cast-ok: normalized insert fields use the repository's mapping interface
+            "TableActions[prisma_models.LiteLLM_VerificationToken]", transaction.litellm_verificationtoken
+        )
+        existing: Final = await keys.find_unique(where={"token": data["token"]})
+        if existing is not None:
+            raise KeyPersistenceError(status_code=409, detail="The Lens key already exists")
+        deleted_table: Final = cast(  # cast-ok: generated Prisma cursor type is absent; use the repository interface
+            TableActions[object], transaction.litellm_deletedverificationtoken
+        )
+        deleted: Final = await deleted_table.find_many(where={"token": data["token"]}, take=1)
+        rotated: Final = await keys.find_many(where={"key_alias": data["key_alias"]}, take=1)
+        if deleted or rotated:
+            raise KeyPersistenceError(status_code=409, detail=SetupFailure.KEY_POLICY.value)
+        return await keys.create(data=data, include={"litellm_budget_table": True})
 
 
 async def ensure_model_key(

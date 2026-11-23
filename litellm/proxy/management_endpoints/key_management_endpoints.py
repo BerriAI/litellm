@@ -20,6 +20,7 @@ import secrets
 import traceback
 from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
+from functools import partial
 from types import MappingProxyType, TracebackType
 from typing import (
     TYPE_CHECKING,
@@ -207,6 +208,7 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (  # noqa: F401  #
     is_master_key,
 )
 from litellm.proxy.utils import (
+    KeyWriter,
     PrismaClient,
     ProxyLogging,
     _hash_token_if_needed,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -1588,7 +1590,7 @@ async def _common_key_generation_helper(
     user_api_key_dict: UserAPIKeyAuth,
     litellm_changed_by: str | None,
     team_table: LiteLLM_TeamTableCachedObj | None,
-    key_writer: Callable[[Mapping[str, object]], Awaitable[object]] | None = None,
+    key_writer: KeyWriter | None = None,
 ) -> GenerateKeyResponse:
     from litellm.proxy import proxy_server
     from litellm.proxy.proxy_server import (
@@ -2551,9 +2553,7 @@ async def generate_key_fn(
         None,
         description="The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
     ),
-    key_writer: Annotated[
-        Callable[[Mapping[str, object]], Awaitable[object]] | None, Depends(_default_key_writer)
-    ] = None,
+    key_writer: Annotated[KeyWriter | None, Depends(_default_key_writer)] = None,
 ):
     """
     Generate an API key based on the provided data.
@@ -5603,7 +5603,7 @@ async def generate_key_helper_fn(
     llm_router: Router | None = None,
     actor: UserAPIKeyAuth | None = None,
     rollover_max_budget: object = None,
-    key_writer: Callable[[Mapping[str, object]], Awaitable[object]] | None = None,
+    key_writer: KeyWriter | None = None,
 ):
     customer_metadata: Final = validated_customer_key_metadata(_DECODED_JSON.validate_python(metadata), None, actor)
     from litellm.proxy.proxy_server import premium_user, prisma_client
@@ -5824,11 +5824,12 @@ async def generate_key_helper_fn(
                 "prisma_client: Creating Key= %s",
                 {**key_data, "token": hash_token(token=token)},
             )
-            create_key_response: Final = (
-                await prisma_client.insert_data(data=key_data, table_name="key")
+            insert_key: Final = (
+                prisma_client.insert_data
                 if key_writer is None
-                else await prisma_client.insert_data(data=key_data, table_name="key", key_writer=key_writer)
+                else partial(prisma_client.insert_data, key_writer=key_writer)
             )
+            create_key_response: Final = await insert_key(data=key_data, table_name="key")
 
             key_data["token_id"] = getattr(create_key_response, "token", None)
             created_token_hash: Final = getattr(create_key_response, "token", None)
