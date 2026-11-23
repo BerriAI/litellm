@@ -1,6 +1,6 @@
 "use client";
 
-import { Page, PageContent } from "@/components/shared/Page";
+import { PageContent } from "@/components/shared/Page";
 import { PageHeader, PageHeaderTitle, PageHeaderDescription, PageHeaderControls } from "@/components/shared/PageHeader";
 
 import { useMemo, useState } from "react";
@@ -175,90 +175,87 @@ export default function ModelsAndEndpointsPage() {
 
   if (teamId) {
     return (
-      <div className="w-full h-full">
-        <TeamInfoView
-          teamId={teamId}
-          onClose={close}
-          accessToken={accessToken}
-          is_team_admin={userRole === "Admin" && !isViewOnly}
-          is_proxy_admin={userRole === "Admin" && !isViewOnly}
-          userModels={allModelsOnProxy}
-          editTeam={false}
-          onUpdate={invalidateModels}
-          premiumUser={premiumUser}
-        />
-      </div>
+      <TeamInfoView
+        framed
+        teamId={teamId}
+        onClose={close}
+        accessToken={accessToken}
+        is_team_admin={userRole === "Admin" && !isViewOnly}
+        is_proxy_admin={userRole === "Admin" && !isViewOnly}
+        userModels={allModelsOnProxy}
+        editTeam={false}
+        onUpdate={invalidateModels}
+        premiumUser={premiumUser}
+      />
     );
   }
 
   return (
-    <Page>
-      <PageContent>
-        <PageHeader>
-          <PageHeaderTitle>
-            <Network />
-            {t("modelsAndEndpoints.page.title")}
-          </PageHeaderTitle>
-          <PageHeaderDescription>
-            {t(isAdmin ? "modelsAndEndpoints.page.adminDescription" : "modelsAndEndpoints.page.userDescription")}
-          </PageHeaderDescription>
-          {!modelId && (
-            <PageHeaderControls className="flex-wrap">
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                onClick={handleRefreshClick}
-                aria-label={t("modelsAndEndpoints.page.refreshModels")}
-              >
-                <RefreshCw />
-              </Button>
-              {lastRefreshed && (
-                <span className="text-xs text-muted-foreground">
-                  {t("modelsAndEndpoints.page.lastRefreshed", { time: lastRefreshed })}
-                </span>
-              )}
-            </PageHeaderControls>
-          )}
-        </PageHeader>
-
-        {modelId ? (
-          <ModelInfoView
-            modelId={modelId}
-            onClose={close}
-            accessToken={accessToken}
-            userID={userID}
-            userRole={userRole}
-            isViewOnly={isViewOnly}
-            onModelUpdate={invalidateModels}
-            modelAccessGroups={availableModelAccessGroups}
-          />
-        ) : (
-          <Tabs value={activeKey} onValueChange={handleTabChange} className="gap-6">
-            <div className="flex min-w-0 flex-nowrap items-center gap-3 border-b">
-              <div className="no-scrollbar scroll-fade-e -mb-1.5 min-w-0 flex-1 overflow-x-auto pb-1.5">
-                <TabsList variant="line" className="w-max justify-start">
-                  {visibleSlugs.map((slug) => {
-                    const key = slug || BASE_TAB_KEY;
-                    return (
-                      <TabsTrigger key={key} value={key} className="flex-none">
-                        {tabLabel(slug)}
-                      </TabsTrigger>
-                    );
-                  })}
-                </TabsList>
-              </div>
-            </div>
-            {visibleSlugs.map((slug) => {
-              const key = slug || BASE_TAB_KEY;
-              return (
-                <TabsContent key={key} value={key}>
-                  {renderPanel(key)}
-                </TabsContent>
-              );
-            })}
-          </Tabs>
+    <PageContent>
+      <PageHeader>
+        <PageHeaderTitle>
+          <Network />
+          {t("modelsAndEndpoints.page.title")}
+        </PageHeaderTitle>
+        <PageHeaderDescription>
+          {t(isAdmin ? "modelsAndEndpoints.page.adminDescription" : "modelsAndEndpoints.page.userDescription")}
+        </PageHeaderDescription>
+        {!modelId && (
+          <PageHeaderControls className="flex-wrap">
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              onClick={handleRefreshClick}
+              aria-label={t("modelsAndEndpoints.page.refreshModels")}
+            >
+              <RefreshCw />
+            </Button>
+            {lastRefreshed && (
+              <span className="text-xs text-muted-foreground">
+                {t("modelsAndEndpoints.page.lastRefreshed", { time: lastRefreshed })}
+              </span>
+            )}
+          </PageHeaderControls>
         )}
-      </PageContent>
-    </Page>
+      </PageHeader>
+
+      {modelId ? (
+        <ModelInfoView
+          modelId={modelId}
+          onClose={close}
+          accessToken={accessToken}
+          userID={userID}
+          userRole={userRole}
+          isViewOnly={isViewOnly}
+          onModelUpdate={invalidateModels}
+          modelAccessGroups={availableModelAccessGroups}
+        />
+      ) : (
+        <Tabs value={activeKey} onValueChange={handleTabChange} className="gap-6">
+          <div className="flex min-w-0 flex-nowrap items-center gap-3 border-b">
+            <div className="no-scrollbar scroll-fade-e -mb-1.5 min-w-0 flex-1 overflow-x-auto pb-1.5">
+              <TabsList variant="line" className="w-max justify-start">
+                {visibleSlugs.map((slug) => {
+                  const key = slug || BASE_TAB_KEY;
+                  return (
+                    <TabsTrigger key={key} value={key} className="flex-none">
+                      {tabLabel(slug)}
+                    </TabsTrigger>
+                  );
+                })}
+              </TabsList>
+            </div>
+          </div>
+          {visibleSlugs.map((slug) => {
+            const key = slug || BASE_TAB_KEY;
+            return (
+              <TabsContent key={key} value={key}>
+                {renderPanel(key)}
+              </TabsContent>
+            );
+          })}
+        </Tabs>
+      )}
+    </PageContent>
   );
 }

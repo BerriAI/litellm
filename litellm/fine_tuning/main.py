@@ -25,8 +25,8 @@ from litellm.llms.vertex_ai.fine_tuning.handler import VertexFineTuningAPI
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import FineTuningJobCreate, Hyperparameters
 from litellm.types.router import *
-from litellm.types.utils import LiteLLMFineTuningJob
-from litellm.utils import client, supports_httpx_timeout
+from litellm.types.utils import CallTypes, LiteLLMFineTuningJob
+from litellm.utils import client, load_credentials_from_list, supports_httpx_timeout
 
 ####### ENVIRONMENT VARIABLES ###################
 openai_fine_tuning_apis_instance: Final = OpenAIFineTuningAPI()
@@ -540,6 +540,7 @@ def list_fine_tuning_jobs(
     - limit: Optional[int] = None, Number of fine-tuning jobs to retrieve. Defaults to 20
     """
     try:
+        load_credentials_from_list(kwargs, CallTypes.list_fine_tuning_jobs.value)  # pyright: ignore[reportUnknownArgumentType]  # **kwargs is untyped
         optional_params: Final = GenericLiteLLMParams(**kwargs)
         ### TIMEOUT LOGIC ###
         timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600

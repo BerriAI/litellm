@@ -4990,6 +4990,258 @@ def test_batch_cost_calculator_bills_cached_tokens_at_the_standard_cache_price_w
     assert prompt_cost == pytest.approx(1000 * expected_rate)
 
 
+def _text_batch_prices() -> ModelInfo:
+    return {"input_cost_per_token": 3e-7, "input_cost_per_token_batches": 1.5e-7}
+
+
+def _uncached_audio_batch_usage(prompt_tokens: int) -> Usage:
+    return Usage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=0,
+        total_tokens=prompt_tokens,
+        prompt_tokens_details=PromptTokensDetailsWrapper(audio_tokens=1000),
+    )
+
+
+@pytest.mark.parametrize(
+    ("audio_prices", "expected_audio_rate"),
+    [
+        pytest.param({"input_cost_per_audio_token": 1e-6}, 5e-7, id="missing-audio-batch-price-halves-standard-audio"),
+        pytest.param(
+            {"input_cost_per_audio_token": 1e-6, "input_cost_per_audio_token_batches": None},
+            5e-7,
+            id="null-audio-batch-price-halves-standard-audio",
+        ),
+        pytest.param(
+            {"input_cost_per_audio_token": 1e-6, "input_cost_per_audio_token_batches": 4e-7},
+            4e-7,
+            id="explicit-audio-batch-price-wins",
+        ),
+        pytest.param(
+            {"input_cost_per_audio_token": 1e-6, "input_cost_per_audio_token_batches": 0.0},
+            0.0,
+            id="explicit-zero-audio-batch-price-wins",
+        ),
+        pytest.param({"input_cost_per_audio_token": 0.0}, 0.0, id="zero-standard-audio-price-halves-to-zero"),
+        pytest.param(
+            {"input_cost_per_audio_token_batches": 4e-7}, 4e-7, id="audio-batch-price-without-standard-audio-price"
+        ),
+        pytest.param({}, 1.5e-7, id="no-audio-prices-bill-the-text-batch-price"),
+        pytest.param(
+            {"input_cost_per_audio_token": None, "input_cost_per_audio_token_batches": None},
+            1.5e-7,
+            id="null-audio-prices-bill-the-text-batch-price",
+        ),
+    ],
+)
+def test_batch_cost_calculator_falls_back_to_half_the_standard_audio_price_for_uncached_audio(
+    audio_prices: ModelInfo, expected_audio_rate: float
+) -> None:
+    model_info: Final[ModelInfo] = {**_text_batch_prices(), **audio_prices}
+
+    prompt_cost, _ = batch_cost_calculator(
+        usage=_uncached_audio_batch_usage(1000),
+        model="gemini-2.5-flash",
+        custom_llm_provider="vertex_ai",
+        model_info=model_info,
+    )
+
+    assert prompt_cost == pytest.approx(1000 * expected_audio_rate)
+
+
+@pytest.mark.parametrize(
+    ("audio_prices", "prompt_tokens", "expected_audio_rate"),
+    [
+        pytest.param(
+            {"input_cost_per_audio_token": 1e-6, "input_cost_per_audio_token_above_200k_tokens": 4e-6},
+            200_000,
+            5e-7,
+            id="at-threshold-halves-base-standard-audio",
+        ),
+        pytest.param(
+            {"input_cost_per_audio_token": 1e-6, "input_cost_per_audio_token_above_200k_tokens": 4e-6},
+            200_001,
+            2e-6,
+            id="above-threshold-halves-tiered-standard-audio",
+        ),
+        pytest.param(
+            {
+                "input_cost_per_audio_token": 1e-6,
+                "input_cost_per_audio_token_above_200k_tokens": 4e-6,
+                "input_cost_per_audio_token_above_200k_tokens_batches": 2.5e-7,
+            },
+            200_001,
+            2.5e-7,
+            id="above-threshold-explicit-tiered-audio-batch-price-wins",
+        ),
+        pytest.param(
+            {
+                "input_cost_per_audio_token": 1e-6,
+                "input_cost_per_audio_token_above_200k_tokens": 4e-6,
+                "input_cost_per_audio_token_above_200k_tokens_batches": 2.5e-7,
+            },
+            1000,
+            5e-7,
+            id="below-threshold-with-only-tiered-audio-batch-price-halves-base-standard-audio",
+        ),
+        pytest.param(
+            {
+                "input_cost_per_audio_token": 1e-6,
+                "input_cost_per_audio_token_above_200k_tokens": 4e-6,
+                "input_cost_per_audio_token_batches": 4e-7,
+            },
+            200_001,
+            4e-7,
+            id="above-threshold-flat-audio-batch-price-wins-over-tiered-standard-audio",
+        ),
+    ],
+)
+def test_batch_cost_calculator_uncached_audio_fallback_follows_the_audio_price_tier(
+    audio_prices: ModelInfo, prompt_tokens: int, expected_audio_rate: float
+) -> None:
+    model_info: Final[ModelInfo] = {**_text_batch_prices(), **audio_prices}
+
+    prompt_cost, _ = batch_cost_calculator(
+        usage=_uncached_audio_batch_usage(prompt_tokens),
+        model="gemini-2.5-flash",
+        custom_llm_provider="vertex_ai",
+        model_info=model_info,
+    )
+
+    assert prompt_cost == pytest.approx((prompt_tokens - 1000) * 1.5e-7 + 1000 * expected_audio_rate)
+
+
+def test_batch_cost_calculator_halves_only_uncached_audio_in_a_mixed_modality_prompt() -> None:
+    model_info: Final[ModelInfo] = {
+        **_text_batch_prices(),
+        "input_cost_per_audio_token": 1e-6,
+        "input_cost_per_image_token": 2e-6,
+        "input_cost_per_video_token": 3e-6,
+        "cache_read_input_token_cost": 3e-8,
+        "cache_read_input_audio_token_cost": 1e-7,
+    }
+    usage: Final = Usage(
+        prompt_tokens=1000,
+        completion_tokens=0,
+        total_tokens=1000,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            audio_tokens=300,
+            image_tokens=100,
+            video_tokens=100,
+            cached_tokens=100,
+            cached_tokens_details=CachedTokensDetails(audio_tokens=100),
+        ),
+    )
+
+    prompt_cost, _ = batch_cost_calculator(
+        usage=usage, model="gemini-2.5-flash", custom_llm_provider="vertex_ai", model_info=model_info
+    )
+
+    text_cost: Final = 500 * 1.5e-7
+    uncached_audio_cost: Final = 200 * 5e-7
+    image_and_video_cost: Final = 200 * 1.5e-7
+    cached_audio_cost: Final = 100 * 1e-7
+    assert prompt_cost == pytest.approx(text_cost + uncached_audio_cost + image_and_video_cost + cached_audio_cost)
+
+
+@pytest.mark.parametrize(
+    ("audio_batch_prices", "prompt_tokens", "expected_audio_rate"),
+    [
+        pytest.param({}, 199_999, 5e-7, id="below-threshold-halves-base-standard-audio"),
+        pytest.param({}, 200_000, 2e-6, id="at-inclusive-threshold-halves-tiered-standard-audio"),
+        pytest.param({}, 200_001, 2e-6, id="above-threshold-halves-tiered-standard-audio"),
+        pytest.param(
+            {"input_cost_per_audio_token_batches": 4e-7},
+            200_000,
+            4e-7,
+            id="at-inclusive-threshold-explicit-audio-batch-price-wins",
+        ),
+        pytest.param(
+            {"input_cost_per_audio_token_above_200k_tokens_batches": 8e-7},
+            199_999,
+            5e-7,
+            id="below-threshold-upper-only-audio-batch-price-halves-base-standard-audio",
+        ),
+        pytest.param(
+            {"input_cost_per_audio_token_above_200k_tokens_batches": 8e-7},
+            200_000,
+            8e-7,
+            id="at-inclusive-threshold-upper-only-audio-batch-price-wins",
+        ),
+        pytest.param(
+            {"input_cost_per_audio_token_above_200k_tokens_batches": 8e-7},
+            200_001,
+            8e-7,
+            id="above-threshold-upper-only-audio-batch-price-wins",
+        ),
+        pytest.param(
+            {"input_cost_per_audio_token_above_200k_tokens_batches": 0.0},
+            200_000,
+            0.0,
+            id="at-inclusive-threshold-upper-only-zero-audio-batch-price-wins",
+        ),
+        pytest.param(
+            {
+                "input_cost_per_audio_token_batches": 4e-7,
+                "input_cost_per_audio_token_above_200k_tokens_batches": 8e-7,
+            },
+            200_000,
+            4e-7,
+            id="at-threshold-flat-and-upper-audio-batch-prices-keep-the-flat-price",
+        ),
+        pytest.param(
+            {
+                "input_cost_per_audio_token_batches": 4e-7,
+                "input_cost_per_audio_token_above_200k_tokens_batches": 8e-7,
+            },
+            200_001,
+            8e-7,
+            id="above-threshold-flat-and-upper-audio-batch-prices-use-the-upper-price",
+        ),
+        pytest.param(
+            {
+                "input_cost_per_audio_token_batches": 0.0,
+                "input_cost_per_audio_token_above_200k_tokens_batches": 8e-7,
+            },
+            200_000,
+            0.0,
+            id="at-threshold-zero-flat-and-upper-audio-batch-prices-keep-the-zero-flat-price",
+        ),
+    ],
+)
+def test_batch_cost_calculator_uncached_audio_fallback_uses_the_providers_inclusive_audio_threshold(
+    audio_batch_prices: ModelInfo, prompt_tokens: int, expected_audio_rate: float
+) -> None:
+    model_info: Final[ModelInfo] = {
+        **_text_batch_prices(),
+        "input_cost_per_audio_token": 1e-6,
+        "input_cost_per_audio_token_above_200k_tokens": 4e-6,
+        **audio_batch_prices,
+    }
+
+    prompt_cost, _ = batch_cost_calculator(
+        usage=_uncached_audio_batch_usage(prompt_tokens),
+        model="grok-4",
+        custom_llm_provider="xai",
+        model_info=model_info,
+    )
+
+    assert prompt_cost == pytest.approx((prompt_tokens - 1000) * 1.5e-7 + 1000 * expected_audio_rate)
+
+
+def test_batch_cost_calculator_without_a_text_batch_price_keeps_halving_the_text_price_for_audio() -> None:
+    model_info: Final[ModelInfo] = {"input_cost_per_token": 3e-7, "input_cost_per_audio_token": 1e-6}
+
+    prompt_cost, _ = batch_cost_calculator(
+        usage=_uncached_audio_batch_usage(1000),
+        model="gemini-2.5-flash",
+        custom_llm_provider="vertex_ai",
+        model_info=model_info,
+    )
+
+    assert prompt_cost == pytest.approx(1000 * 1.5e-7)
+
+
 def _cached_image_batch_usage() -> Usage:
     return Usage(
         prompt_tokens=1000,

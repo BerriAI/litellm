@@ -177,7 +177,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
         return user_api_key_dict.user_email
 
     @staticmethod
-    async def _cancel_background_task(task: asyncio.Task) -> None:
+    async def _cancel_background_task(task: asyncio.Task[object]) -> None:
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError, Exception):
             await task
@@ -219,7 +219,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
         )
 
     @classmethod
-    def _inspection_messages(cls, data: dict) -> list:
+    def _inspection_messages(cls, data: dict) -> list[object]:
         """Flatten multimodal list ``content`` into plain text so Cato inspects
         every text fragment. Chat ``messages`` stay 1:1 with the request so
         redacted results map back by index, and every other field the proxy
@@ -227,7 +227,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
         completion ``prompt`` and tool/function/``response_format`` schema strings)
         is appended as synthetic messages so blocked text cannot bypass inspection
         by hiding in one of them."""
-        flattened: Final = []
+        flattened: Final[list[object]] = []
         for message in data.get("messages") or []:
             if isinstance(message, dict) and isinstance(message.get("content"), list):
                 parts = build_inspection_messages({"messages": [message]})
@@ -261,7 +261,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
         scalar_keys: Final = ("description", "title", "const", "default")
         list_keys: Final = ("enum", "examples")
 
-        stack: Final[list] = []
+        stack: Final[list[object]] = []
         for tool in iter_items(data.get("tools") or ()):
             if isinstance(tool, dict) and isinstance(tool.get("function"), dict):
                 stack.append(tool["function"])
@@ -297,7 +297,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
         ``prompt`` and tool/function/``response_format`` schema strings. Returned
         as ``(field, messages)`` in a fixed order so the anonymize path can slice
         redactions back to the field they came from."""
-        sources: Final[list] = []
+        sources: Final[list[tuple[str, Sequence[Mapping[str, str]]]]] = []
         input_messages: Final = build_inspection_messages({"input": data.get("input")})
         if input_messages:
             sources.append(("input", input_messages))
@@ -407,7 +407,9 @@ class CatoNetworksGuardrail(CustomGuardrail):
         return data
 
     @classmethod
-    def _apply_extra_redaction(cls, data: dict, field: str, redacted: Sequence[Mapping[str, object]]) -> bool:
+    def _apply_extra_redaction(
+        cls, data: dict[str, object], field: str, redacted: Sequence[Mapping[str, object]]
+    ) -> bool:
         if field == "input":
             input_only: Final = {"input": data["input"]}
             if not redacted:
@@ -428,7 +430,9 @@ class CatoNetworksGuardrail(CustomGuardrail):
         return True
 
     @classmethod
-    def _apply_schema_string_redaction(cls, data: dict, redacted: Sequence[Mapping[str, object]]) -> None:
+    def _apply_schema_string_redaction(
+        cls, data: Mapping[str, object], redacted: Sequence[Mapping[str, object]]
+    ) -> None:
         redactions: Final = iter(redacted)
         for container, key in cls._iter_schema_string_refs(data):
             replacement = next(redactions, None)
@@ -436,7 +440,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
                 container[key] = replacement["content"]
 
     @staticmethod
-    def _apply_prompt_redaction(data: dict, redacted: Sequence[Mapping[str, object]]) -> None:
+    def _apply_prompt_redaction(data: dict[str, object], redacted: Sequence[Mapping[str, object]]) -> None:
         contents: Final = [m.get("content") for m in redacted if isinstance(m, dict)]
         prompt: Final = data.get("prompt")
         if isinstance(prompt, str):
@@ -590,7 +594,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
         string, each paired with the ``(container, key)`` a Cato redaction is
         written back to. Output items and their content may be pydantic objects
         or plain dicts, so both access patterns are handled."""
-        fragments: Final[list] = []
+        fragments: Final[list[tuple[object, str, str]]] = []
         for item in response.output or []:
             item_type = cls._responses_output_field(item, "type")
             if item_type == "function_call":

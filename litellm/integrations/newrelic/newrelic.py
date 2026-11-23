@@ -844,10 +844,10 @@ class NewRelicLogger(CustomLogger):
 
     # CustomLogger interface implementation
 
-    def log_pre_api_call(self, model, messages, kwargs):
+    def log_pre_api_call(self, model: object, messages: object, kwargs: object):
         """Unused per spec."""
 
-    def log_post_api_call(self, kwargs, response_obj, start_time, end_time):
+    def log_post_api_call(self, kwargs: object, response_obj: object, start_time: object, end_time: object):
         """Unused per spec."""
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
@@ -876,7 +876,7 @@ class NewRelicLogger(CustomLogger):
             verbose_logger.warning("Error in New Relic async_log_success_event: %s", e)
             self.handle_callback_failure("newrelic")
 
-    def log_failure_event(self, kwargs, response_obj, start_time, end_time):
+    def log_failure_event(self, kwargs: object, response_obj: object, start_time: object, end_time: object):
         """
         Log error metric for failed LLM calls (sync).
 
@@ -889,7 +889,7 @@ class NewRelicLogger(CustomLogger):
             verbose_logger.warning("Error in New Relic log_failure_event: %s", e)
             self.handle_callback_failure("newrelic")
 
-    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_failure_event(self, kwargs: object, response_obj: object, start_time: object, end_time: object):
         """
         Log error metric for failed LLM calls (async).
 

@@ -64,6 +64,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     get_vertex_regional_endpoint_uplift,
     parse_prompt_tokens_details,
     select_cost_metric_for_model,
+    uses_inclusive_token_thresholds,
 )
 from litellm.litellm_core_utils.llm_response_utils.response_metadata import response_ms_since_logging_start
 from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
@@ -493,7 +494,7 @@ def cost_per_token(
     completion_tokens: int = 0,
     response_time_ms: float | None = 0.0,
     custom_llm_provider: str | None = None,
-    region_name=None,
+    region_name: object = None,
     ### CHARACTER PRICING ###
     prompt_characters: int | None = None,
     completion_characters: int | None = None,
@@ -1525,7 +1526,7 @@ def _extraction_usage(usage: ExtractionUsage) -> Usage:
     )
 
 
-def _is_known_usage_objects(usage_obj):
+def _is_known_usage_objects(usage_obj: object) -> bool:
     """Returns True if the usage obj is a known Usage type"""
     return (
         isinstance(usage_obj, litellm.Usage)
@@ -1903,9 +1904,9 @@ def _adjusted_provider_billed_cost(
 def completion_cost(
     completion_response: object | None = None,
     model: str | None = None,
-    prompt="",
+    prompt: str = "",
     messages: list = [],
-    completion="",
+    completion: str | list[str] | None = "",
     total_time: float | None = 0.0,  # used for replicate, sagemaker
     call_type: CallTypesLiteral | None = None,
     ### REGION ###
@@ -3184,7 +3185,7 @@ def default_image_cost_calculator(
     quality: str | None = None,
     n: int | None = 1,  # Default to 1 image
     size: str | None = "1024-x-1024",  # OpenAI default
-    optional_params: dict | None = None,
+    optional_params: Mapping[str, object] | None = None,
     model_info: ModelInfo | None = None,
 ) -> float:
     """
@@ -3369,8 +3370,12 @@ def _optional_batch_rate(
         "input_cost_per_video_token_batches",
     ],
     prompt_tokens: int,
+    *,
+    threshold_is_inclusive: bool = False,
 ) -> float | None:
-    context_key: Final = get_modality_token_cost_key(model_info, key, prompt_tokens)
+    context_key: Final = get_modality_token_cost_key(
+        model_info, key, prompt_tokens, threshold_is_inclusive=threshold_is_inclusive
+    )
     context_rate: Final = get_cost_per_unit(model_info, context_key, None)
     return model_info.get(key) if context_rate is None else context_rate
 
@@ -3474,6 +3479,7 @@ def batch_cost_calculator(
             batch_rates.cache_read_image,
             batch_rates.cache_creation,
             batch_rates.cache_creation_rates_by_ttl,
+            threshold_is_inclusive=uses_inclusive_token_thresholds(custom_llm_provider),
         )
     elif input_cost_per_token is not None:
         total_prompt_cost = _half_price_prompt_cost(
@@ -3500,8 +3506,13 @@ def batch_cost_calculator(
     return total_prompt_cost * vertex_uplift, total_completion_cost * vertex_uplift
 
 
-def _standard_rate(model_info: ModelInfo, key: str, prompt_tokens: int) -> float | None:
-    return get_cost_per_unit(model_info, get_modality_token_cost_key(model_info, key, prompt_tokens), None)
+def _standard_rate(
+    model_info: ModelInfo, key: str, prompt_tokens: int, *, threshold_is_inclusive: bool = False
+) -> float | None:
+    cost_key: Final = get_modality_token_cost_key(
+        model_info, key, prompt_tokens, threshold_is_inclusive=threshold_is_inclusive
+    )
+    return get_cost_per_unit(model_info, cost_key, None)
 
 
 def _cached_modality_rate(
@@ -3562,6 +3573,8 @@ def _batch_prompt_cost(
     batch_cache_read_image_rate: float | None,
     cache_creation_rate: float | None,
     cache_creation_rates_by_ttl: Mapping[str, float],
+    *,
+    threshold_is_inclusive: bool = False,
 ) -> float:
     details: Final = parse_prompt_tokens_details(usage)
     cache_read_rate: Final = (
@@ -3603,10 +3616,29 @@ def _batch_prompt_cost(
     text_tokens: Final = max(
         (usage.prompt_tokens or 0) - audio_tokens - image_tokens - video_tokens - cached_tokens - written_tokens, 0
     )
+    audio_batch_rate: Final = _optional_batch_rate(
+        model_info, "input_cost_per_audio_token_batches", usage.prompt_tokens
+    )
     return (
         text_tokens * input_rate
         + audio_tokens
-        * _batch_rate(model_info, "input_cost_per_audio_token_batches", input_rate, prompt_tokens=usage.prompt_tokens)
+        * _batch_or_half(
+            _optional_batch_rate(
+                model_info,
+                "input_cost_per_audio_token_batches",
+                usage.prompt_tokens,
+                threshold_is_inclusive=threshold_is_inclusive,
+            )
+            if audio_batch_rate is None and threshold_is_inclusive
+            else audio_batch_rate,
+            _standard_rate(
+                model_info,
+                "input_cost_per_audio_token",
+                usage.prompt_tokens,
+                threshold_is_inclusive=threshold_is_inclusive,
+            ),
+            default=input_rate,
+        )
         + image_tokens * _batch_rate(model_info, "input_cost_per_image_token_batches", input_rate)
         + video_tokens * _batch_rate(model_info, "input_cost_per_video_token_batches", input_rate)
         + cached_text_tokens * (cache_read_rate or 0.0)
