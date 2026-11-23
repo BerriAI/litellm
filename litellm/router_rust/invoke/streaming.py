@@ -81,6 +81,7 @@ if TYPE_CHECKING:
     from litellm.router_python_host import PythonHost
     from litellm.router_rust.core import RustCore
     from litellm.router_utils.pre_call_checks.continuation_prefill_check import ContinuationOutput, ContinuedPartial
+    from litellm.rust_bridge._native import StreamOrigin
     from litellm.types.llms.openai import ResponseAPIUsage, ResponseIncompleteEvent
 
 # A stream that never emits content or an error could grow a held-frame buffer without bound, so
@@ -107,23 +108,16 @@ class StreamAttempt:
     """The attempt that returned a stream, and the core that can still recover it.
 
     ``request`` is the call's prepared request, the one every attempt of the call is built from;
-    ``kwargs`` are this attempt's own kwargs. The origin fields are what the core reads to decide
-    what may take over a failure of this stream.
+    ``kwargs`` are this attempt's own kwargs. ``origin`` is where the core says the stream came from:
+    it goes back to the core as it came, so a take-over starts from everything the attempt's level
+    carried.
     """
 
     core: "RustCore"
     op: str
     request: Mapping[str, object]
     kwargs: Mapping[str, object]
-    group: str
-    order: int | None
-    depth: int
-    level: int
-    deployment_id: str | None
-    attempted_retries: int
-    committed_budget: int | None = None
-    # The group a pre-routing hook selected for ``group``, which a fallback lookup keys on first.
-    routed: str | None = None
+    origin: "StreamOrigin"
     # The deployment's max_parallel_requests slot the attempt holds; an open chat or speech stream takes it.
     slot: contextlib.ExitStack | None = None
     explain_failure: "Callable[[BaseException], tuple[str, str] | None] | None" = None
@@ -140,23 +134,31 @@ class StreamAttempt:
     failure_recording: "asyncio.Task[None] | None" = None
 
     @property
-    def model_group(self) -> str:
-        return self.group
+    def group(self) -> str:
+        return self.origin.group
 
-    def origin(self) -> Mapping[str, object]:
-        return {
-            "group": self.group,
-            "order": self.order,
-            "depth": self.depth,
-            "level": self.level,
-            "deployment_id": self.deployment_id,
-            "attempted_retries": self.attempted_retries,
-            "committed_budget": self.committed_budget,
-            "routed": self.routed,
-        }
+    @property
+    def model_group(self) -> str:
+        return self.origin.group
+
+    @property
+    def depth(self) -> int:
+        return self.origin.depth
+
+    @property
+    def level(self) -> int:
+        return self.origin.level
+
+    @property
+    def attempted_retries(self) -> int:
+        return self.origin.attempted_retries
+
+    def retried(self, attempted_retries: int, committed_budget: int) -> None:
+        """A same-group retry returned this stream: it counts on from the retries already made."""
+        self.origin = self.origin.retried(attempted_retries, committed_budget)
 
     def policy(self, trigger: BaseException | None = None) -> Mapping[str, object]:
-        return self.core.stream_policy(self.request, self.origin(), trigger)
+        return self.core.stream_policy(self.request, self.origin, trigger)
 
     def can_retry(self) -> bool:
         return self.policy().get("can_retry") is True
@@ -166,6 +168,11 @@ class StreamAttempt:
 
     def refusal_fallback_available(self) -> bool:
         return self.policy().get("refusal_fallback") is True
+
+    def fallback_overrides_params(self) -> bool:
+        """Whether a fallback of this stream would send a dict target's params, so it cannot continue the
+        stream's partial output."""
+        return self.policy().get("overrides_params") is True
 
     def retry_budget(self, trigger: BaseException) -> tuple[int, bool]:
         policy: Final = self.policy(trigger)
@@ -177,14 +184,14 @@ class StreamAttempt:
 
     async def fallback(self, trigger: BaseException, request: Mapping[str, object] | None = None) -> object:
         """The fallback walk for this stream's failure; raises when no fallback answers."""
-        return await self.core.recover_stream("fallback", self.op, request or self.request, self.origin(), trigger)
+        return await self.core.recover_stream("fallback", self.op, request or self.request, self.origin, trigger)
 
     def fallback_sync(self, trigger: BaseException) -> object:
-        return self.core.recover_stream_sync("fallback", self.op, self.request, self.origin(), trigger)
+        return self.core.recover_stream_sync("fallback", self.op, self.request, self.origin, trigger)
 
     async def retry(self, trigger: BaseException) -> "tuple[object, int, int] | BaseException":
         """A same-group retry: the retried response with the retry count and budget, or the newest failure."""
-        return await self.core.retry_stream(self.op, self.request, self.origin(), trigger)
+        return await self.core.retry_stream(self.op, self.request, self.origin, trigger)
 
     # -- the stream's outcome, reported once when it ends --------------------------------------
 
@@ -734,7 +741,6 @@ def _mid_stream_continuation_eligible(
     from litellm.router_utils.fallback_event_handlers import (
         continuation_fallback_targets,
         fallback_lookup_groups,
-        fallback_target_overrides_request_params,
     )
     from litellm.router_utils.pre_call_checks.continuation_prefill_check import constrains_continuation
     from litellm.types.guardrails import GuardrailEventHooks
@@ -759,7 +765,7 @@ def _mid_stream_continuation_eligible(
         request.get("fallbacks", core.settings().fallbacks),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # the request's list replaces the router's
         lookup_groups,
     )
-    if any(fallback_target_overrides_request_params(target) for target in targets):
+    if attempt.fallback_overrides_params():
         return False
     if any(_names_deployment_that_cannot_continue(core, target) for target in targets):
         return False
@@ -1558,9 +1564,8 @@ async def _anthropic_recover_stream_error(
     response, attempted, budget = retried
     inner: Final = response
     if isinstance(inner, FallbackAwareAnthropicMessagesStream):
-        inner.attempt.attempted_retries = attempted
+        inner.attempt.retried(attempted, budget)
         inner.attempt.explain_failure = attempt.explain_failure
-        inner.attempt.committed_budget = budget
     async for item in _anthropic_yield_recovered(inner, wrapper, (attempted, budget)):
         yield item
 
@@ -1925,7 +1930,7 @@ def _responses_continuation_request(
 ) -> Mapping[str, object] | None:
     """The request a fallback continues from once a Responses stream broke after text, or None before
     output. Raises the primary's error when the output is constrained, a tool call began, a content
-    filter cut it, or the output ceiling is spent."""
+    filter cut it, a fallback would send a dict target's params, or the output ceiling is spent."""
     from litellm.litellm_core_utils.token_counter import (
         token_counter,  # pyright: ignore[reportUnknownVariableType]  # untyped tokenizer argument
     )
@@ -1942,6 +1947,8 @@ def _responses_continuation_request(
     if _mid_stream_error_before_output(e):
         return None
     if isinstance(e.original_exception, litellm_exceptions.ContentPolicyViolationError):
+        _raise_original_mid_stream_error(e)
+    if attempt.fallback_overrides_params():
         _raise_original_mid_stream_error(e)
     cut_deployment_id: Final = (get_hidden_params(source_iterator) or {}).get("model_id")
     if constrains_responses_continuation(_params_sent_to_deployment(attempt, cut_deployment_id)):
@@ -2026,8 +2033,7 @@ async def _responses_yield_retried(
     response, attempted, budget = retried
     inner_attempt: Final = getattr(response, "attempt", None)
     if isinstance(inner_attempt, StreamAttempt):
-        inner_attempt.attempted_retries = attempted
-        inner_attempt.committed_budget = budget
+        inner_attempt.retried(attempted, budget)
         inner_attempt.explain_failure = explain_failure
 
     served_as: Final = _prepare_fallback_hidden_params(wrapper_ref())[1].get("x-litellm-model-group")

@@ -104,6 +104,7 @@ from litellm.router_config import build_router_config
 from litellm.router_python_host import python_host
 from litellm.router_rust.core import RustCore
 from litellm.router_rust.invoke.streaming import StreamAttempt, open_attempt_stream
+from litellm.rust_bridge._native import StreamOrigin
 from litellm.types.router import RouterRateLimitError, RouterRateLimitErrorBasic
 from litellm.types.utils import CachingDetails, Delta, ModelResponseStream, SpecialEnums, StreamingChoices
 from litellm.utils import ModelResponseListIterator
@@ -374,9 +375,7 @@ class _ManagedFilesCreatedBy(CustomLogger):
         super().__init__()
         self.creators: Final = creators
 
-    async def can_user_call_unified_file_id(
-        self, unified_file_id: str, user_api_key_dict: ProxyUserAPIKeyAuth
-    ) -> bool:
+    async def can_user_call_unified_file_id(self, unified_file_id: str, user_api_key_dict: ProxyUserAPIKeyAuth) -> bool:
         if unified_file_id not in self.creators:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"File not found: {unified_file_id}")
         return self.creators[unified_file_id] == user_api_key_dict.user_id
@@ -392,9 +391,7 @@ class _ManagedFilesCountingLookups(_ManagedFilesCreatedBy):
         super().__init__(creators)
         self.looked_up: Final[list[str]] = []  # mutable-ok: the fake records the lookups the gate makes
 
-    async def can_user_call_unified_file_id(
-        self, unified_file_id: str, user_api_key_dict: ProxyUserAPIKeyAuth
-    ) -> bool:
+    async def can_user_call_unified_file_id(self, unified_file_id: str, user_api_key_dict: ProxyUserAPIKeyAuth) -> bool:
         self.looked_up.append(unified_file_id)
         return await super().can_user_call_unified_file_id(unified_file_id, user_api_key_dict)
 
@@ -11380,12 +11377,7 @@ class TestStreamingClientDisconnectBilling:
             op="acompletion",
             request=MappingProxyType({}),
             kwargs=MappingProxyType({}),
-            group="gpt-4o",
-            order=None,
-            depth=0,
-            level=0,
-            deployment_id=None,
-            attempted_retries=0,
+            origin=StreamOrigin("gpt-4o"),
         )
         core.retire()
 

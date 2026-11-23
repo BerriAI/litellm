@@ -461,7 +461,7 @@ pub(crate) fn total_tokens(usage: Option<&Value>) -> u64 {
 mod tests {
     use std::sync::Arc;
 
-    use litellm_router_core::DeploymentSpec;
+    use litellm_router_core::{DeploymentSpec, call::StreamOrigin};
     use rstest::rstest;
     use serde_json::json;
 
@@ -481,6 +481,7 @@ mod tests {
             routed: None,
             target_order: None,
             candidate_ids: vec!["d1".to_owned()],
+            origin: StreamOrigin::default(),
             retry: 0,
             fallback_depth: 0,
             fallback_level: 0,

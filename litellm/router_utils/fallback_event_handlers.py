@@ -324,10 +324,6 @@ def continuation_fallback_targets(fallbacks: object, lookup_groups: tuple[str, .
     )
 
 
-def fallback_target_overrides_request_params(target: object) -> bool:
-    return isinstance(target, Mapping) and "model" in target and len(target) > 1
-
-
 def fallback_target_name(target: object) -> str | None:
     name: Final = target.get("model") if isinstance(target, Mapping) else target
     return name if isinstance(name, str) else None

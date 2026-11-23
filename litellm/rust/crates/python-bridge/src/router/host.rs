@@ -25,7 +25,7 @@ use litellm_router_core::{
     Deployment, Error, HealthState, Outcomes, PreRoute, PreRouted, Provided, Randomness,
     RegistryHost, RouterCache, RouterEvent, RouterHost, RouterResponse, RoutingContext, SecretRef,
     SelectStage, Served, ThreadRandomness, UsageCounts, UsageWindow, build::BuiltDeployment,
-    health::CooldownValue, host::ModelInfoLookup, model_info::MergedModelInfo,
+    call::StreamOrigin, health::CooldownValue, host::ModelInfoLookup, model_info::MergedModelInfo,
     precall::PreCallFacts, shape::AttemptShape,
 };
 use pyo3::{PyResult, Python, types::PyAnyMethods};
@@ -248,6 +248,8 @@ pub(crate) enum HostCall {
         target_order: Option<i64>,
         /// Every deployment `model` resolved to for this caller, the picked one included.
         candidate_ids: Vec<String>,
+        /// Where a stream the attempt returns comes from, which the stream's wrapper hands back.
+        origin: Box<StreamOrigin>,
         retry: u32,
         fallback_depth: u32,
         fallback_level: u32,
@@ -846,6 +848,7 @@ impl RouterHost for PythonRouterHost {
             routed: attempt.routed.clone(),
             target_order: attempt.target_order,
             candidate_ids: attempt.candidate_ids.clone(),
+            origin: Box::new(attempt.origin.clone()),
             retry: attempt.retry,
             fallback_depth: attempt.fallback_depth,
             fallback_level: attempt.fallback_level,

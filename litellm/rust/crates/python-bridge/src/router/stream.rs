@@ -2,10 +2,7 @@
 //! failed before content, the same-group stream retry, and the fallback walk re-entered from a
 //! stream. The host's stream wrappers call them; the calls are driven like `start`.
 
-use litellm_router_core::{
-    FailureKind, Op, Router,
-    call::{StreamOrigin, StreamPolicy},
-};
+use litellm_router_core::{FailureKind, Op, Router, call, call::StreamPolicy};
 use pyo3::{exceptions::PyValueError, prelude::*, types::PyDict};
 
 use super::{
@@ -22,9 +19,55 @@ pub(super) enum Recovery {
     Fallback,
 }
 
-fn origin(value: &Bound<'_, PyAny>) -> PyResult<StreamOrigin> {
-    serde_json::from_value(document(value)?)
-        .map_err(|error| PyValueError::new_err(format!("a stream origin: {error}")))
+/// Where a streamed response came from, as router-core built it for the attempt that returned
+/// it. Python cannot take it apart: the stream's wrapper keeps it and hands it back to the
+/// recovery entry points, so a take-over starts from everything the attempt's level carried.
+#[pyclass(frozen, name = "StreamOrigin")]
+pub(crate) struct StreamOrigin(call::StreamOrigin);
+
+impl From<call::StreamOrigin> for StreamOrigin {
+    fn from(origin: call::StreamOrigin) -> Self {
+        Self(origin)
+    }
+}
+
+#[pymethods]
+impl StreamOrigin {
+    /// The origin of a stream of `group` that no attempt of a call returned.
+    #[new]
+    fn outside_a_call(group: String) -> Self {
+        Self(call::StreamOrigin::outside_a_call(group))
+    }
+
+    /// This origin after the stream's group retried it.
+    fn retried(&self, attempted_retries: u32, committed_budget: u32) -> Self {
+        Self(self.0.clone().retried(attempted_retries, committed_budget))
+    }
+
+    #[getter]
+    fn group(&self) -> &str {
+        self.0.group()
+    }
+
+    #[getter]
+    fn depth(&self) -> u32 {
+        self.0.depth()
+    }
+
+    #[getter]
+    fn level(&self) -> u32 {
+        self.0.level()
+    }
+
+    #[getter]
+    fn deployment_id(&self) -> Option<&str> {
+        self.0.deployment_id()
+    }
+
+    #[getter]
+    fn attempted_retries(&self) -> u32 {
+        self.0.attempted_retries()
+    }
 }
 
 fn kind(kind: Option<&str>) -> PyResult<Option<FailureKind>> {
@@ -35,13 +78,13 @@ fn kind(kind: Option<&str>) -> PyResult<Option<FailureKind>> {
     .transpose()
 }
 
-/// `{"can_retry", "can_fall_back", "refusal_fallback", "retry_budget": int | None,
+/// `{"can_retry", "can_fall_back", "refusal_fallback", "overrides_params", "retry_budget": int | None,
 /// "policy_applies": bool}`.
 pub(super) fn policy<'py>(
     py: Python<'py>,
     router: &Router,
     request: &Bound<'py, PyAny>,
-    stream_origin: &Bound<'py, PyAny>,
+    stream_origin: &StreamOrigin,
     failure_kind: Option<&str>,
 ) -> PyResult<Bound<'py, PyDict>> {
     let request = config::parse_request(document(request)?, None).map_err(config_error_to_pyerr)?;
@@ -50,11 +93,13 @@ pub(super) fn policy<'py>(
         can_fall_back,
         refusal_fallback,
         retry_budget,
-    } = router.stream_policy(&request, &origin(stream_origin)?, kind(failure_kind)?);
+        overrides_params,
+    } = router.stream_policy(&request, &stream_origin.0, kind(failure_kind)?);
     let dict = PyDict::new(py);
     dict.set_item("can_retry", can_retry)?;
     dict.set_item("can_fall_back", can_fall_back)?;
     dict.set_item("refusal_fallback", refusal_fallback)?;
+    dict.set_item("overrides_params", overrides_params)?;
     dict.set_item("retry_budget", retry_budget.map(|(budget, _)| budget))?;
     dict.set_item(
         "policy_applies",
@@ -69,12 +114,12 @@ pub(super) fn recover(
     recovery: Recovery,
     op: &str,
     request: &Bound<'_, PyAny>,
-    stream_origin: &Bound<'_, PyAny>,
+    stream_origin: &StreamOrigin,
     failure: &Bound<'_, PyDict>,
 ) -> PyResult<RouterCall> {
     let op = Op::new(op);
     let request = config::parse_request(document(request)?, None).map_err(config_error_to_pyerr)?;
-    let stream_origin = origin(stream_origin)?;
+    let stream_origin = stream_origin.0.clone();
     let Err(failure) = attempt_outcome(failure)? else {
         return Err(PyValueError::new_err("a stream failure needs `ok: False`"));
     };

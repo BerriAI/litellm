@@ -299,6 +299,7 @@ if TYPE_CHECKING:
         AttemptShape,
         RouterCall,
         RouterCoreHandle,
+        StreamOrigin,
         _CallSteps,  # pyright: ignore[reportPrivateUsage]  # the stub's step shapes
         _FailureReportSteps,  # pyright: ignore[reportPrivateUsage]  # see above
         _SuccessReportSteps,  # pyright: ignore[reportPrivateUsage]  # see above
@@ -3203,7 +3204,7 @@ class RustCore(
         recovery: str,
         op: str,
         request: Mapping[str, object],
-        origin: Mapping[str, object],
+        origin: "StreamOrigin",
         failure: BaseException,
     ) -> "RouterCall[_CallSteps]":
         start: Final = self._handle.retry_stream if recovery == "retry" else self._handle.fallback_stream
@@ -3218,10 +3219,10 @@ class RustCore(
                 **self._outcome_fields(plan, request),
             }
         )
-        return start(op, routing, _document(origin), attempt_failure(failure))
+        return start(op, routing, origin, attempt_failure(failure))
 
     def stream_policy(
-        self, request: Mapping[str, object], origin: Mapping[str, object], trigger: BaseException | None
+        self, request: Mapping[str, object], origin: "StreamOrigin", trigger: BaseException | None
     ) -> Mapping[str, object]:
         routing: Final = _document(
             {
@@ -3232,22 +3233,20 @@ class RustCore(
             }
         )
         kind: Final = None if trigger is None else str(attempt_failure(trigger)["kind"])
-        return self._handle.stream_policy(routing, _document(origin), kind)
+        return self._handle.stream_policy(routing, origin, kind)
 
     async def recover_stream(
         self,
         recovery: str,
         op: str,
         request: Mapping[str, object],
-        origin: Mapping[str, object],
+        origin: "StreamOrigin",
         failure: BaseException,
     ) -> object:
         """The fallback walk for a stream that failed before content: the fallback's response with the
         router's headers, or the error the walk ended on."""
         call: Final = self._recovery_call(recovery, op, request, origin, failure)
-        driver, step = await self._run(
-            plan_for(op), call, request, origin.get("deployment_id"), (_origin_level(origin), failure)
-        )
+        driver, step = await self._run(plan_for(op), call, request, origin.deployment_id, (origin.level, failure))
         if step["kind"] == "failed":
             raise driver.failed(step)
         return await driver.finish_async(step)
@@ -3257,25 +3256,23 @@ class RustCore(
         recovery: str,
         op: str,
         request: Mapping[str, object],
-        origin: Mapping[str, object],
+        origin: "StreamOrigin",
         failure: BaseException,
     ) -> object:
         call: Final = self._recovery_call(recovery, op, request, origin, failure)
-        driver, step = self._run_sync(
-            plan_for(op), call, request, origin.get("deployment_id"), (_origin_level(origin), failure)
-        )
+        driver, step = self._run_sync(plan_for(op), call, request, origin.deployment_id, (origin.level, failure))
         if step["kind"] == "failed":
             raise driver.failed(step)
         return driver.finish(step)
 
     async def retry_stream(
-        self, op: str, request: Mapping[str, object], origin: Mapping[str, object], failure: BaseException
+        self, op: str, request: Mapping[str, object], origin: "StreamOrigin", failure: BaseException
     ) -> "tuple[object, int, int] | BaseException":
         """A same-group retry of a stream that failed before content: the retried response (without the
         router's headers) with the retry count and budget, or the newest failure (``failure`` itself
         when no retry ran)."""
         call: Final = self._recovery_call("retry", op, request, origin, failure)
-        driver, step = await self._run(plan_for(op), call, request, origin.get("deployment_id"))
+        driver, step = await self._run(plan_for(op), call, request, origin.deployment_id)
         try:
             await await_all(driver.outcomes.take_pending())
             if step["kind"] == "failed":
@@ -4063,11 +4060,6 @@ def _lookup_error(kind: object, model: str, default_deployment: object) -> BaseE
         # `_get_routing_context` reads the stale member map's group from the replaced groups.
         return KeyError(model)
     return None
-
-
-def _origin_level(origin: Mapping[str, object]) -> int:
-    level: Final = origin.get("level")
-    return level if isinstance(level, int) else 0
 
 
 def _error_outlasting_total_timeout(driver: "_Driver", seconds: float) -> BaseException | None:
@@ -5164,25 +5156,17 @@ class _Driver:
     def _stream_attempt(
         self, step: Mapping[str, object], kwargs: Mapping[str, object], slot: "contextlib.ExitStack | None" = None
     ) -> StreamAttempt:
-        def number(key: str) -> int:
-            value: Final = step.get(key)
-            return value if isinstance(value, int) else 0
+        from litellm.rust_bridge._native import StreamOrigin
 
-        order: Final = step.get("target_order")
-        deployment_id: Final = step.get("deployment_id")
-        routed: Final = step.get("routed")
+        origin: Final = step.get("origin")
+        if not isinstance(origin, StreamOrigin):
+            raise TypeError(f"the attempt step carries no StreamOrigin: {origin!r}")
         return StreamAttempt(
             core=self._core,
             op=self._op,
             request=self._request,
             kwargs=kwargs,
-            group=str(step.get("model") or step.get("model_group")),
-            order=order if isinstance(order, int) else None,
-            depth=number("fallback_depth"),
-            level=number("fallback_level"),
-            deployment_id=deployment_id if isinstance(deployment_id, str) else None,
-            attempted_retries=number("retry"),
-            routed=routed if isinstance(routed, str) else None,
+            origin=origin,
             slot=slot,
             explain_failure=self._hop_failure_explainer(step),
         )

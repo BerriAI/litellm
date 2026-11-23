@@ -2586,6 +2586,7 @@ __all__ = [
     "RustUpstreamError",
     "RustUserRepository",
     "SpendRead",
+    "StreamOrigin",
     "TokenCounter",
     "Tokenizer",
     "WindowCount",
@@ -2721,6 +2722,25 @@ class AttemptShape:
     @property
     def drops_mock_timeout(self) -> bool: ...
 
+# Where a streamed response came from, as router-core built it for the attempt that returned it. The
+# stream's wrapper keeps it and hands it back to `stream_policy`, `retry_stream` and `fallback_stream`.
+@final
+class StreamOrigin:
+    # The origin of a stream of `group` that no attempt of a call returned.
+    def __new__(cls, group: str) -> StreamOrigin: ...
+    # This origin after the stream's group retried it.
+    def retried(self, attempted_retries: int, committed_budget: int) -> StreamOrigin: ...
+    @property
+    def group(self) -> str: ...
+    @property
+    def depth(self) -> int: ...
+    @property
+    def level(self) -> int: ...
+    @property
+    def deployment_id(self) -> str | None: ...
+    @property
+    def attempted_retries(self) -> int: ...
+
 class _AttemptStep(_Step):
     kind: Literal["attempt"]
     deployment_id: str
@@ -2742,6 +2762,7 @@ class _AttemptStep(_Step):
     max_retries: int
     model_group_size: int
     shape: AttemptShape
+    origin: StreamOrigin
 
 class _SleepStep(_Step):
     kind: Literal["sleep"]
@@ -3184,17 +3205,17 @@ class RouterCoreHandle:
     def routing_context(self, model: str, routing_strategy: str | None = None) -> tuple[str, str, str | None]: ...
     def retire(self) -> None: ...
     # A stream that failed before content: what may still take over it, and the retry budget for
-    # a failure of `kind`: {"can_retry", "can_fall_back", "refusal_fallback": bool,
+    # a failure of `kind`: {"can_retry", "can_fall_back", "refusal_fallback", "overrides_params": bool,
     # "retry_budget": int | None, "policy_applies": bool}.
     def stream_policy(
-        self, request: _Document, origin: _Document, kind: str | None = None
+        self, request: _Document, origin: StreamOrigin, kind: str | None = None
     ) -> dict[str, bool | int | None]: ...
     # The same-group retry and the fallback walk for such a stream, driven like `start`.
     def retry_stream(
-        self, op: str, request: _Document, origin: _Document, failure: Mapping[str, object]
+        self, op: str, request: _Document, origin: StreamOrigin, failure: Mapping[str, object]
     ) -> RouterCall[_CallSteps]: ...
     def fallback_stream(
-        self, op: str, request: _Document, origin: _Document, failure: Mapping[str, object]
+        self, op: str, request: _Document, origin: StreamOrigin, failure: Mapping[str, object]
     ) -> RouterCall[_CallSteps]: ...
     def retry_policy_retries(self, failure: Mapping[str, object], model_group: str | None = None) -> int | None: ...
     def allowed_fails_for(self, failure: Mapping[str, object]) -> int | None: ...
