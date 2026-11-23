@@ -20,7 +20,7 @@ class NvidiaRivaException(BaseLLMException):
 # Mapping from grpc.StatusCode.name -> equivalent HTTP status code.
 # Kept as a plain dict (rather than importing grpc enums) so this module is
 # importable without grpc installed.
-_GRPC_STATUS_CODE_TO_HTTP: Final[dict] = {
+_GRPC_STATUS_CODE_TO_HTTP: Final[dict[str, int]] = {
     "OK": 200,
     "CANCELLED": 499,
     "UNKNOWN": 500,

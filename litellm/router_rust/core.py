@@ -3876,7 +3876,7 @@ class RustCore(
             return frozenset()
         tag_request: Final = {**request, field: {**metadata}} if isinstance(metadata, Mapping) else dict(request)
         found = frozenset[str]()  # rebind-ok: gains each pass's tag routing picks
-        remaining = [  # rebind-ok: each pass drops what tag routing just picked
+        remaining: list[Mapping[str, object]] = [  # rebind-ok: each pass drops what tag routing just picked
             record for record in routable if picked_id(record) in among
         ]
         while remaining:

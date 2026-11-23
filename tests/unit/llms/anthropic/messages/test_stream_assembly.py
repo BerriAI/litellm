@@ -639,7 +639,7 @@ def test_overlapped_blocks_read_alike_and_assemble_by_index(chunks: tuple[bytes,
     ]
 
 
-def test_a_block_reusing_an_earlier_index_assembles_where_it_started():
+def test_a_delta_at_a_reused_index_assembles_onto_the_block_at_that_list_position_as_the_sdks_apply_it():
     assembled: Final = assemble_anthropic_sse_stream(
         _message(
             _block_start(0, _TEXT_BLOCK),
@@ -654,7 +654,7 @@ def test_a_block_reusing_an_earlier_index_assembles_where_it_started():
         )
     )
     assert assembled is not None and isinstance(assembled.choices[0], Choices)
-    assert assembled.choices[0].message.content == "Call the office at noon"
+    assert assembled.choices[0].message.content == "Call noonthe office at "
 
 
 _BLOCKS_CLIENTS_READ_DIFFERENTLY: Final = {

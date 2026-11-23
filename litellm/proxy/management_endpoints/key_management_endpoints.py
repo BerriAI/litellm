@@ -48,8 +48,10 @@ from litellm.constants import (
     MINIMUM_CUSTOM_KEY_LENGTH,
     UI_SESSION_TOKEN_TEAM_ID,
 )
+from litellm.integrations.lens.policy import LENS_ENABLED_METADATA_KEY, lens_logging_metadata_error
 from litellm.litellm_core_utils.core_helpers import (
     as_object_list,
+    as_str_mapping,
     attribute_or_none,
     has_attributes,
     int_of,
@@ -929,6 +931,11 @@ def key_generation_check(
     _is_admin: Final = (
         user_api_key_dict.user_role is not None and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
     )
+    if data.spend and not _is_admin:
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "Only proxy admins can set spend when creating a key."},
+        )
     if is_team_key:
         if team_table is None and litellm.key_generation_settings is not None:
             raise HTTPException(
@@ -1002,6 +1009,9 @@ def raise_on_invalid_key_metadata(metadata: Mapping[str, object] | None) -> None
     """Every key metadata check that rejects a write: logging config and expiry alert days."""
     raise_on_invalid_key_logging_config(metadata)
     raise_on_invalid_key_expiry_alert_days(metadata)
+    error: Final = lens_logging_metadata_error(metadata)
+    if error is not None:
+        raise HTTPException(status_code=400, detail={"error": error})
     validate_required_customer_headers_metadata(metadata)
 
 
@@ -3268,7 +3278,7 @@ async def prepare_key_update_data(
             prisma_client=prisma_client,
             llm_router=llm_router,
         )
-    data_json: Final[dict] = data.model_dump(exclude_unset=True)
+    data_json: Final[dict] = data.model_dump(exclude_unset=True, exclude={LENS_ENABLED_METADATA_KEY})
     if "metadata" in data_json:
         customer_binding: Final = validated_customer_key_metadata(
             data.metadata,
@@ -3276,6 +3286,15 @@ async def prepare_key_update_data(
             user_api_key_dict,
         )
         data_json["metadata"] = dict(customer_binding) if customer_binding is not None else None
+    if isinstance(data, UpdateKeyRequest) and "lens_enabled" in data.model_fields_set:
+        stored_metadata: Final = _StoredKeyMetadata.model_validate(existing_key_row, from_attributes=True).metadata
+        requested_metadata: Final = (
+            _StoredKeyMetadata.model_validate(data_json).metadata if "metadata" in data_json else stored_metadata
+        )
+        data_json["metadata"] = {
+            **(as_str_mapping(requested_metadata) or {}),
+            LENS_ENABLED_METADATA_KEY: data.lens_enabled,
+        }
     data_json.pop("key", None)
     data_json.pop("new_key", None)
     data_json.pop("grace_period", None)  # Request-only param, not a DB column
@@ -4375,6 +4394,7 @@ async def update_key_fn(
     - router_settings: Optional[UpdateRouterConfig] - key-specific router settings. Example - {"model_group_retry_policy": {"gpt-4": {"RateLimitErrorRetries": 5}}}. IF null or {} then no router settings.
     - access_group_ids: Optional[List[str]] - List of access group IDs to associate with the key. Access groups define which models a key can access. Example - ["access_group_1", "access_group_2"].
     - budget_limits: Optional[list] - List of concurrent budget windows for the key. Each window specifies a budget_limit, time_period, and optional budget_duration. Example - [{"budget_limit": 10.0, "time_period": "1d"}, {"budget_limit": 50.0, "time_period": "7d"}].
+    - lens_enabled: Optional[bool] - Whether this key's requests are sent to Lens. `null` inherits the team default, which is on when unset.
 
     Example:
     ```bash
