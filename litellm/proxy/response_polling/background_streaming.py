@@ -22,6 +22,7 @@ from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import LITELLM_CLIENT_DISCONNECT_DETAIL, LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import (
     RESPONSES_SSE_FRAMING,
@@ -125,6 +126,14 @@ def _first_chunk_error(response: object) -> Mapping[str, object] | None:
         return None
     error_obj: Final = sse_error_object(bytes(response.body)) or {}
     return responses_error_fields({**error_obj, "code": error_obj.get("code") or str(response.status_code)})
+
+
+def _stream_teardown_billed_the_call(request_data: Mapping[str, object]) -> bool:
+    logging_obj: Final = request_data.get("litellm_logging_obj")
+    return (
+        isinstance(logging_obj, LiteLLMLoggingObj)
+        and logging_obj.model_call_details.get("has_dispatched_final_stream_success") is True
+    )
 
 
 async def _never_receive() -> Message:
@@ -302,15 +311,16 @@ async def _stream_into_polling_state(
                 sse_framing=RESPONSES_SSE_FRAMING,
             )
         except asyncio.CancelledError:
-            with anyio.CancelScope(shield=True):
-                await proxy_logging_obj.post_call_failure_hook(
-                    user_api_key_dict=user_api_key_dict,
-                    original_exception=HTTPException(
-                        status_code=LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED, detail=LITELLM_CLIENT_DISCONNECT_DETAIL
-                    ),
-                    request_data=data,
-                    dispatched_call_type="aresponses",
-                )
+            if not _stream_teardown_billed_the_call(data):
+                with anyio.CancelScope(shield=True):
+                    await proxy_logging_obj.post_call_failure_hook(
+                        user_api_key_dict=user_api_key_dict,
+                        original_exception=HTTPException(
+                            status_code=LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED, detail=LITELLM_CLIENT_DISCONNECT_DETAIL
+                        ),
+                        request_data=data,
+                        dispatched_call_type="aresponses",
+                    )
             raise
 
         # Process streaming response following OpenAI events format
