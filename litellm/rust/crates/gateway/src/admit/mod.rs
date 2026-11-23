@@ -14,7 +14,7 @@ use axum::{body::Body, extract::Request, http::request::Parts};
 use litellm_config::{Config, Environment};
 use litellm_core_utils::get_llm_provider_logic::LlmProviders;
 use litellm_gateway_auth::{Auth, Authenticated, Preauthenticated};
-use litellm_gateway_auth_core::authz::Layer;
+use litellm_gateway_auth_core::authz::ModelList;
 use litellm_gateway_inference::{JsonObject, routing};
 use litellm_model_catalog::CostMap;
 use litellm_router_core::{Router, registry::DeploymentFilter};
@@ -177,7 +177,7 @@ impl Admit {
         let model = fields.get("model")?.as_str()?;
         let allowed = match &self.inference {
             Some(inference) => routing::allows(inference, caller, model),
-            None => host::layers(caller).all(|Layer::Key(models)| models.is_empty()),
+            None => host::layers(caller).all(|layer| layer.list() == ModelList::Every),
         };
         (!allowed).then(|| Reason::new(Refused::Credential, "models"))
     }
