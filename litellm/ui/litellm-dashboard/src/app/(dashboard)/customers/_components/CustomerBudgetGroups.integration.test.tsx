@@ -100,6 +100,7 @@ describe("CustomerBudgetGroups", () => {
   });
 
   const catalogs = [
+    ["App group budget groups", "App Group Budget Groups", "/management/v1/app_group_budget_groups", "app-group"],
     ["Overall app budget groups", "Overall App Budget Groups", "/management/v1/app_budget_groups", "overall-app"],
     [
       "Organization budget groups",
@@ -125,6 +126,7 @@ describe("CustomerBudgetGroups", () => {
     const user = userEvent.setup();
     const { period, duration } = {
       "overall-app": { period: "No reset", duration: null },
+      "app-group": { period: "/ month", duration: "1mo" },
       organization: { period: "/ month", duration: "1mo" },
       app: { period: "Custom period", duration: "7d" },
       "app-member": { period: "/ year", duration: "12mo" },
@@ -330,15 +332,19 @@ describe("CustomerBudgetGroups", () => {
     expect(fetchMock.mock.calls.every(([input]) => (input as Request).method === "GET")).toBe(true);
   });
 
-  it("saves a default for new organizations and lets No limit clear it", async () => {
+  it.each([
+    ["organization", "New organizations join", "/management/v1/customer_organization_budget_groups"],
+    ["overall-app", "New apps use", "/management/v1/app_budget_groups"],
+    ["app-group", "New app groups use", "/management/v1/app_group_budget_groups"],
+  ])("saves the %s default and lets No limit clear it", async (tab, label, endpoint) => {
     const user = userEvent.setup();
     fetchMock.mockImplementation(async (input) => {
       const request = input as Request;
       const body = request.method === "PATCH" ? await request.clone().json() : null;
       return json({ ...organization, default_budget_template_id: body?.default_budget_template ? "standard" : null });
     });
-    renderWithProviders(<CustomerSettings />);
-    const defaults = await screen.findByRole("combobox", { name: "New organizations join" });
+    renderWithProviders(<CustomerSettings />, { searchParams: `?tab=${tab}` });
+    const defaults = await screen.findByRole("combobox", { name: label });
     expect(defaults).toHaveTextContent("No limit");
     await user.click(defaults);
     await user.click(await screen.findByRole("option", { name: "Standard" }));
@@ -354,6 +360,7 @@ describe("CustomerBudgetGroups", () => {
       .map(([input]) => input as Request)
       .filter((request) => request.method === "PATCH");
     expect(requests).toHaveLength(2);
+    expect(requests.map((request) => new URL(request.url).pathname)).toEqual([endpoint, endpoint]);
     expect(await requests[0].clone().json()).toMatchObject({ default_budget_template: "Standard" });
     expect(await requests[1].clone().json()).toMatchObject({ default_budget_template: null });
   });

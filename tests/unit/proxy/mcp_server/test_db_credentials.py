@@ -13,9 +13,9 @@ import base64
 import itertools
 import json
 from collections.abc import Mapping
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, tzinfo
 from types import SimpleNamespace
-from typing import Final
+from typing import TYPE_CHECKING, Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -44,6 +44,7 @@ from litellm.proxy.mcp_server.db import (
     is_oauth_credential_expired,
     list_user_oauth_credentials,
     record_oauth_scope_refusal,
+    refresh_user_oauth_token,
     resolve_valid_user_oauth_token,
     rotate_mcp_server_credentials_master_key,
     rotate_mcp_user_credentials_master_key,
@@ -53,6 +54,9 @@ from litellm.proxy.mcp_server.db import (
     update_mcp_server,
 )
 from litellm.types.mcp import MCPAuth, MCPTransport
+
+if TYPE_CHECKING:
+    from respx import MockRouter
 
 SALT_KEY = "test-salt-key-for-byok-credential-tests-1234"
 
@@ -67,8 +71,10 @@ def _make_prisma_with_existing(row):
     """Build a MagicMock prisma_client whose user-credentials table returns ``row``
     for find_unique and behaves async-correctly for upsert/find_many."""
     prisma = MagicMock()
+    prisma.writer_db = prisma.db
     prisma.db.litellm_mcpusercredentials.find_unique = AsyncMock(return_value=row)
     prisma.db.litellm_mcpusercredentials.upsert = AsyncMock()
+    prisma.db.litellm_mcpusercredentials.update_many = AsyncMock(return_value=1)
     prisma.db.litellm_mcpusercredentials.find_many = AsyncMock(return_value=[])
     return prisma
 
@@ -914,6 +920,73 @@ async def test_saving_a_grant_drops_the_refusal_note(
     await record_oauth_scope_refusal(credentials_prisma, "alice", "srv-1", "gist")
     await store_user_oauth_credential(credentials_prisma, "alice", "srv-1", "at-2", skip_byok_guard=skip_byok_guard)
     assert "needs_scopes" not in await _saved_grant(credentials_prisma)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("interleaving", ["none", "refusal", "signin", "expired_signin", "delete"])
+@pytest.mark.parametrize("legacy", [False, True])
+async def test_refresh_preserves_refusals_without_replacing_a_new_signin(
+    credentials_prisma: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: "MockRouter",
+    interleaving: str,
+    legacy: bool,
+) -> None:
+    fixed_now: Final = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    clock_ticks: Final = itertools.count()
+
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz: tzinfo | None = None) -> datetime:
+            current_time: Final = fixed_now + timedelta(seconds=next(clock_ticks))
+            return current_time.replace(tzinfo=None) if tz is None else current_time.astimezone(tz)
+
+    monkeypatch.setattr("litellm.proxy.mcp_server.db.datetime", FrozenDateTime)
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    await store_user_oauth_credential(credentials_prisma, "alice", "srv-1", "at-1", refresh_token="rt-1")
+    await record_oauth_scope_refusal(credentials_prisma, "alice", "srv-1", "gist")
+    before: Final = await _saved_grant(credentials_prisma)
+    rows: Final = credentials_prisma.db.litellm_mcpusercredentials
+    update: Final = rows.update_many
+
+    async def interleaved_update(data: Mapping[str, object], where: Mapping[str, str]) -> int:
+        rows.update_many = update
+        if interleaving == "refusal":
+            await record_oauth_scope_refusal(credentials_prisma, "alice", "srv-1", "notifications")
+        elif interleaving in ("signin", "expired_signin"):
+            await store_user_oauth_credential(
+                credentials_prisma,
+                "alice",
+                "srv-1",
+                "at-new",
+                refresh_token="rt-new",
+                expires_in=-3600 if interleaving == "expired_signin" else None,
+            )
+        elif interleaving == "delete":
+            rows.rows = {}
+        return await update(data=data, where=where)
+
+    rows.update_many = interleaved_update
+    if legacy:
+        respx_mock.post("https://idp.example.com/token").respond(200, json={"access_token": "at-2"})
+        refreshed: Final = await refresh_user_oauth_token(credentials_prisma, "alice", _refresh_server(), before)
+        current: Final = await get_user_oauth_credential(credentials_prisma, "alice", "srv-1")
+        assert refreshed == (None if interleaving in ("expired_signin", "delete") else current)
+    else:
+        await store_user_oauth_credential(credentials_prisma, "alice", "srv-1", "at-2", refreshed_from="rt-1")
+    saved: Final = await get_user_oauth_credential(credentials_prisma, "alice", "srv-1")
+    expected: Final = {
+        "delete": None,
+        "signin": ("at-new", "rt-new", None),
+        "expired_signin": ("at-new", "rt-new", None),
+        "none": ("at-2", "rt-1", ["gist"]),
+        "refusal": ("at-2", "rt-1", ["gist", "notifications"]),
+    }
+    assert (
+        None if saved is None else (saved["access_token"], saved["refresh_token"], saved.get("needs_scopes"))
+    ) == expected[interleaving]
+    same_consent: Final = saved is not None and saved.get("connected_at") == before["connected_at"]
+    assert same_consent == (interleaving in ("none", "refusal"))
 
 
 def _row_written_under_previous_salt_key(monkeypatch, payload: str):
@@ -1937,8 +2010,15 @@ async def test_saved_cimd_grant_refreshes_from_encrypted_storage_on_a_fresh_repl
         cimd_client_id=identity,
     )
 
+    update_many: Final = prisma.db.litellm_mcpusercredentials.update_many
+
     async def read_row(**kwargs):
-        return SimpleNamespace(credential_b64=_stored_value(prisma), user_id="alice", server_id=server.server_id)
+        credential_b64: Final[str] = (
+            update_many.await_args.kwargs["data"]["credential_b64"]
+            if update_many.await_count
+            else _stored_value(prisma)
+        )
+        return SimpleNamespace(credential_b64=credential_b64, user_id="alice", server_id=server.server_id)
 
     prisma.db.litellm_mcpusercredentials.find_unique.side_effect = read_row
     saved = await get_user_oauth_credential(prisma, "alice", server.server_id)

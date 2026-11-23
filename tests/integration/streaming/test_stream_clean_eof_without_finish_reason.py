@@ -474,6 +474,17 @@ def _spend_statuses(database_url: str | None) -> Counter[tuple[str, str]]:
     return Counter((string_value(row["litellm_call_id"]), string_value(row["status"])) for row in rows)
 
 
+def _database_status_on_a_worker(gateway: Gateway) -> tuple[str, JsonValue]:
+    response: Final = gateway.request("GET", "/health/integration-database", headers={"connection": "close"})
+    body: Final = response.json()
+    return response.headers.get("x-integration-worker-pid", ""), body.get("db") if isinstance(body, dict) else None
+
+
+def _database_statuses_by_worker(gateway: Gateway) -> tuple[tuple[str, JsonValue], ...]:
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        return tuple(pool.map(lambda _: _database_status_on_a_worker(gateway), range(16)))
+
+
 def test_spend_log_outage_mid_burst_keeps_each_stream_ending_and_lands_every_row_once(
     gateway: Gateway, tmp_path: Path
 ) -> None:
@@ -514,6 +525,13 @@ def test_spend_log_outage_mid_burst_keeps_each_stream_ending_and_lands_every_row
             seconds=120,
         )
         assert landed == expected
+        eventually(
+            lambda: _database_statuses_by_worker(candidate),
+            lambda statuses: (
+                len({pid for pid, _ in statuses}) >= candidate.workers and all(db == "connected" for _, db in statuses)
+            ),
+            seconds=120,
+        )
 
 
 def _attempt(gateway: Gateway, model: str, route: Route, ending: Ending) -> tuple[bool, str] | None:

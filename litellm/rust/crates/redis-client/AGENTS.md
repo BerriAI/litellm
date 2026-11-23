@@ -46,7 +46,7 @@
 - Channel names never get the namespace. Python builds `{namespace}:{channel}` itself, so the store does too
 - `publish` is a command like any other, guarded by the breaker and reported to events
 - `subscribe` returns a `Stream` that opens its own RESP2 `PubSub` connection when first polled, like redis-py's `PubSub`, to the endpoint, the first reachable cluster node, or the master Sentinel names at that moment. It never touches the breaker or events, like Python's subscriber, which reads off its own connection
-- After a lost connection or a failed subscribe it waits and resubscribes, 5s doubling to 60s and reset by a successful subscribe, like `AuthCacheInvalidationSubscriber._run`. Messages published while it is down are lost. The connection has no idle ping, so a socket that dies silently is only noticed by TCP
+- After a lost connection or a failed subscribe it waits and resubscribes, 5s doubling to 60s and reset by a successful subscribe, like `CacheInvalidationSubscriber._run`. Messages published while it is down are lost. The connection has no idle ping, so a socket that dies silently is only noticed by TCP
 - redis-rs's `PubSub` takes no credentials provider, so a provider is asked for its current credentials once when the subscription connects, which is when redis-py's pubsub connection asks it. The connect is bounded by the connect timeout
 
 ## Batches

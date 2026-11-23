@@ -98,9 +98,9 @@ describe("UserEditView", () => {
 
     await user.click(screen.getByRole("combobox", { name: /Global Proxy Role/i }));
 
-    expect(screen.getByRole("option", { name: "Proxy Admin Viewer" })).toBeInTheDocument();
-    expect(screen.getByRole("option", { name: "Internal User Viewer" })).toBeInTheDocument();
-    expect(screen.getByRole("option", { name: "Custom Role" })).toBeInTheDocument();
+    expect(await screen.findByRole("option", { name: "Proxy Admin Viewer" })).toBeInTheDocument();
+    expect(await screen.findByRole("option", { name: "Internal User Viewer" })).toBeInTheDocument();
+    expect(await screen.findByRole("option", { name: "Custom Role" })).toBeInTheDocument();
   });
 
   it("should display user ID field when not in bulk edit mode", async () => {

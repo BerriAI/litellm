@@ -10,6 +10,7 @@ from ``proxy_server`` at call time, so patching them there still reaches this co
 
 import asyncio
 from collections.abc import Iterator, Sequence
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Final, TypeAlias
@@ -18,12 +19,6 @@ from pydantic import TypeAdapter
 
 from litellm._internal_context import service_target
 from litellm.proxy._types import Litellm_EntityType
-from litellm.proxy.common_utils.user_api_key_cache import (
-    end_user_cache_key,
-    model_access_group_cache_key,
-    project_cache_key,
-    tag_cache_key,
-)
 from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import build_window_spend_transaction
 from litellm.proxy.spend_tracking.budget_reservation import (
     BudgetCounter,
@@ -37,6 +32,7 @@ from litellm.proxy.spend_tracking.committed_spend import (
     seed_committed_spend,
 )
 from litellm.proxy.spend_tracking.spend_counter_batch import PendingSpendIncrement, bind_spend_counter_keys
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.redis.stores.spend_counters import (
     SPEND_COUNTERS_TARGET,
     end_user_counter,
@@ -185,7 +181,7 @@ async def increment_spend_counters_batched(
         return tuple(item for item in window_pending if item is not None)
 
     async def _cached_window_increments(
-        entity_type: Litellm_EntityType, entity_id: str, cache_key: str
+        entity_type: Litellm_EntityType, entity_id: str, cache_key: AuthObject
     ) -> tuple[_SpendScopeItem, ...]:
         cached: Final[object] = _UNTYPED_VALUE.validate_python(
             await proxy_server.user_api_key_cache.async_get_cache(key=cache_key)
@@ -222,13 +218,15 @@ async def increment_spend_counters_batched(
             else (
                 await _prepare_spend_counter_increment(
                     counter_key=key_counter_key,
-                    source_cache_key=hashed_token,
+                    source_cache_key=AuthObject.virtual_key(hashed_token),
                     increment=cost,
                 ),
             )
         )
 
-        return key_pending + await _cached_window_increments(Litellm_EntityType.KEY, hashed_token, hashed_token)
+        return key_pending + await _cached_window_increments(
+            Litellm_EntityType.KEY, hashed_token, AuthObject.virtual_key(hashed_token)
+        )
 
     async def _team_scope(scope_team_id: str) -> tuple[_SpendScopeItem, ...]:
         team_counter_key: Final = team_counter(scope_team_id)
@@ -238,14 +236,14 @@ async def increment_spend_counters_batched(
             else (
                 await _prepare_spend_counter_increment(
                     counter_key=team_counter_key,
-                    source_cache_key=f"team_id:{scope_team_id}",
+                    source_cache_key=AuthObject.team(scope_team_id),
                     increment=cost,
                 ),
             )
         )
 
         return team_pending + await _cached_window_increments(
-            Litellm_EntityType.TEAM, scope_team_id, f"team_id:{scope_team_id}"
+            Litellm_EntityType.TEAM, scope_team_id, AuthObject.team(scope_team_id)
         )
 
     async def _team_member_scope(
@@ -257,7 +255,7 @@ async def increment_spend_counters_batched(
         return (
             await _prepare_spend_counter_increment(
                 counter_key=team_member_counter_key,
-                source_cache_key=f"team_membership:{scope_user_id}:{scope_team_id}",
+                source_cache_key=AuthObject.team_membership_reservation(user_id=scope_user_id, team_id=scope_team_id),
                 increment=cost,
             ),
         )
@@ -270,12 +268,14 @@ async def increment_spend_counters_batched(
             else (
                 await _prepare_spend_counter_increment(
                     counter_key=user_counter_key,
-                    source_cache_key=scope_user_id,
+                    source_cache_key=AuthObject.user(scope_user_id),
                     increment=cost,
                 ),
             )
         )
-        return pending + await _cached_window_increments(Litellm_EntityType.USER, scope_user_id, scope_user_id)
+        return pending + await _cached_window_increments(
+            Litellm_EntityType.USER, scope_user_id, AuthObject.user(scope_user_id)
+        )
 
     scope_coros: Final = tuple(
         coro
@@ -385,7 +385,7 @@ class _ReservationCounterUpdate:
 
 
 async def _reconcile_budget_reservation_for_counter_update(
-    budget_reservation: dict | None,
+    budget_reservation: dict[str, object] | None,
     response_cost: float | None,
 ) -> _ReservationCounterUpdate:
     from litellm.proxy import proxy_server
@@ -449,7 +449,7 @@ async def _prepare_end_user_and_tag_spend_increments(
     end_user_id: str | None,
     tags: list[str] | None,
     response_cost: float,
-    reserved_counter_keys: set[str],
+    reserved_counter_keys: AbstractSet[str],
 ) -> tuple[PendingSpendIncrement | BaseException, ...]:
     unique_tags: Final = (
         tuple(dict.fromkeys(tag for tag in tags if tag and isinstance(tag, str))) if tags is not None else ()
@@ -460,7 +460,7 @@ async def _prepare_end_user_and_tag_spend_increments(
             for coro in (
                 _prepare_unreserved_spend_counter_increment(
                     counter_key=end_user_counter(end_user_id),
-                    source_cache_key=end_user_cache_key(end_user_id),
+                    source_cache_key=AuthObject.end_user(end_user_id),
                     increment=response_cost,
                     reserved_counter_keys=reserved_counter_keys,
                 )
@@ -469,7 +469,7 @@ async def _prepare_end_user_and_tag_spend_increments(
                 *(
                     _prepare_unreserved_spend_counter_increment(
                         counter_key=tag_counter(tag_name),
-                        source_cache_key=tag_cache_key(tag_name),
+                        source_cache_key=AuthObject.tag(tag_name),
                         increment=response_cost,
                         reserved_counter_keys=reserved_counter_keys,
                     )
@@ -486,7 +486,7 @@ async def _prepare_end_user_and_tag_spend_increments(
 async def _prepare_model_access_group_spend_increments(
     model_access_groups: Sequence[object],
     response_cost: float,
-    reserved_counter_keys: set[str],
+    reserved_counter_keys: AbstractSet[str],
 ) -> tuple[PendingSpendIncrement | BaseException, ...]:
     """Charge the model access groups that authorized this request.
 
@@ -505,7 +505,7 @@ async def _prepare_model_access_group_spend_increments(
         *(
             _prepare_unreserved_spend_counter_increment(
                 counter_key=model_access_group_counter(group),
-                source_cache_key=model_access_group_cache_key(group),
+                source_cache_key=AuthObject.model_access_group(group),
                 increment=response_cost,
                 reserved_counter_keys=reserved_counter_keys,
             )
@@ -519,14 +519,14 @@ async def _prepare_model_access_group_spend_increments(
 async def _prepare_org_spend_increment(
     org_id: str | None,
     response_cost: float,
-    reserved_counter_keys: set[str],
+    reserved_counter_keys: AbstractSet[str],
 ) -> tuple[PendingSpendIncrement, ...]:
     if org_id is None:
         return ()
 
     pending: Final = await _prepare_unreserved_spend_counter_increment(
         counter_key=org_counter(org_id),
-        source_cache_key=[f"org_id:{org_id}:with_budget", f"org_id:{org_id}"],
+        source_cache_key=(AuthObject.org_with_budget(org_id), AuthObject.org(org_id)),
         increment=response_cost,
         reserved_counter_keys=reserved_counter_keys,
     )
@@ -536,14 +536,14 @@ async def _prepare_org_spend_increment(
 async def _prepare_project_spend_increment(
     project_id: str | None,
     response_cost: float,
-    reserved_counter_keys: set[str],
+    reserved_counter_keys: AbstractSet[str],
 ) -> tuple[PendingSpendIncrement, ...]:
     if project_id is None:
         return ()
 
     pending: Final = await _prepare_unreserved_spend_counter_increment(
         counter_key=project_counter(project_id),
-        source_cache_key=project_cache_key(project_id),
+        source_cache_key=AuthObject.project(project_id),
         increment=response_cost,
         reserved_counter_keys=reserved_counter_keys,
     )
@@ -552,9 +552,9 @@ async def _prepare_project_spend_increment(
 
 async def _prepare_unreserved_spend_counter_increment(
     counter_key: str,
-    source_cache_key: str | list[str],
+    source_cache_key: AuthObject | Sequence[AuthObject],
     increment: float,
-    reserved_counter_keys: set[str],
+    reserved_counter_keys: AbstractSet[str],
 ) -> PendingSpendIncrement | None:
     if counter_key in reserved_counter_keys:
         return None
@@ -568,7 +568,7 @@ async def _prepare_unreserved_spend_counter_increment(
 
 async def _prepare_spend_counter_increment(
     counter_key: str,
-    source_cache_key: str | list[str],
+    source_cache_key: AuthObject | Sequence[AuthObject],
     increment: float,
 ) -> PendingSpendIncrement:
     """

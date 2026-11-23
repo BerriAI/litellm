@@ -16,7 +16,7 @@ use crate::{
     identity::{
         jwt::{
             AliasRead, DelegatedTeam, FinishedJwt, IdentityRead, ManagedAgent, ModelAccess, Org,
-            RegisteredAgent, TeamRead, User, UserLookup, UserRead,
+            RegisteredAgent, Team, TeamRead, User, UserLookup, UserRead,
         },
         key::Owner,
     },
@@ -57,6 +57,7 @@ pub(crate) struct ScriptedHost {
     /// Host calls that fail, by the name they record under.
     pub(crate) failing: HashMap<&'static str, Error>,
     pub(crate) teams: HashMap<&'static str, Result<TeamRead<String>, Error>>,
+    pub(crate) team_rosters: HashMap<&'static str, Vec<&'static str>>,
     pub(crate) aliases: HashMap<&'static str, Result<AliasRead<String>, Error>>,
     pub(crate) membership_fails: bool,
     /// Team rows whose model access the host allows.
@@ -100,6 +101,14 @@ fn keyed(record: &KeyRecord, label: &str) -> Keyed<String> {
     Keyed {
         record: record.clone(),
         row: label.to_owned(),
+    }
+}
+
+/// The key the script records a claim's mapping under.
+fn mapping_key(claim: MappedClaim<'_>) -> String {
+    match claim.issuer.filter(|issuer| !issuer.is_empty()) {
+        None => format!("jwt_key_mapping:{}:{}", claim.field, claim.value),
+        Some(issuer) => format!("jwt_key_mapping:{issuer}:{}:{}", claim.field, claim.value),
     }
 }
 
@@ -285,7 +294,7 @@ impl AuthHost for ScriptedHost {
         self.cache(key, value, ttl)
     }
     async fn cached_key_mapping(&self, claim: MappedClaim<'_>) -> Result<Option<Value>, Error> {
-        self.cached(&claim.cache_key())
+        self.cached(&mapping_key(claim))
     }
     async fn cache_key_mapping(
         &self,
@@ -293,10 +302,10 @@ impl AuthHost for ScriptedHost {
         value: &Value,
         ttl: Duration,
     ) -> Result<(), Error> {
-        self.cache(&claim.cache_key(), value, ttl)
+        self.cache(&mapping_key(claim), value, ttl)
     }
     async fn forget_key_mapping(&self, claim: MappedClaim<'_>) -> Result<(), Error> {
-        let key = claim.cache_key();
+        let key = mapping_key(claim);
         self.record(format!("forget {key}"));
         self.json_cache.lock().unwrap().remove(&key);
         Ok(())
@@ -318,6 +327,22 @@ impl AuthHost for ScriptedHost {
             .get(alias)
             .cloned()
             .unwrap_or(Ok(AliasRead::Absent))
+    }
+    async fn bind_team_member(
+        &self,
+        mut team: Team<String>,
+        user_id: &str,
+    ) -> Result<Team<String>, Error> {
+        if let Some(roster) = self.team_rosters.get(team.team_id.as_str()) {
+            self.record(format!("bind_team_member {} {user_id}", team.team_id));
+            team.members = roster
+                .iter()
+                .filter(|id| **id == user_id)
+                .map(ToString::to_string)
+                .collect();
+            team.row = format!("{} {user_id}", team.row);
+        }
+        Ok(team)
     }
     async fn granting_team(&self, team_id: &str) -> Result<TeamRead<String>, Error> {
         self.record(format!("granting_team {team_id}"));

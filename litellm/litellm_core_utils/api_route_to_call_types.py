@@ -19,7 +19,8 @@ def _segment_matches(route_segment: str, pattern_segment: str) -> bool:
     Match one concrete path segment against one pattern segment.
     A bare placeholder ({param}) matches any segment; a placeholder with a
     literal suffix ({model}:generateContent) requires the segment to end with
-    that suffix and have a non-empty value before it.
+    that suffix, and the value before it may be empty, as the router's path
+    converter allows.
     """
     if not pattern_segment.startswith("{"):
         return route_segment == pattern_segment
@@ -29,7 +30,7 @@ def _segment_matches(route_segment: str, pattern_segment: str) -> bool:
     literal_suffix: Final = pattern_segment[placeholder_end + 1 :]
     if not literal_suffix:
         return True
-    return route_segment.endswith(literal_suffix) and len(route_segment) > len(literal_suffix)
+    return route_segment.endswith(literal_suffix)
 
 
 def _pattern_tail_spans_segments(pattern_tail: str) -> bool:
@@ -80,7 +81,7 @@ def get_call_types_for_route(route: str) -> Sequence[CallTypes] | None:
     return None
 
 
-def get_routes_for_call_type(call_type: CallTypes) -> list:
+def get_routes_for_call_type(call_type: CallTypes) -> list[str]:
     """
     Get all routes that use a specific CallType.
 
@@ -90,8 +91,4 @@ def get_routes_for_call_type(call_type: CallTypes) -> list:
     Returns:
         List of routes that use this CallType
     """
-    routes: Final = []
-    for route, types in API_ROUTE_TO_CALL_TYPES.items():
-        if call_type in types:
-            routes.append(route)
-    return routes
+    return [route for route, types in API_ROUTE_TO_CALL_TYPES.items() if call_type in types]

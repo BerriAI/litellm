@@ -25,6 +25,7 @@ use futures_util::future::join_all;
 use litellm_callbacks::{BudgetReservation, Host, HostCall, HostCallError};
 use litellm_redis_store::{
     ErrorKind, Number, RequestRedis, Send,
+    auth_cache::AuthObject,
     spend_counters::{LostSeed, Reading, SpendCounter, SpendCounters},
 };
 use serde::{Deserialize, Serialize};
@@ -145,7 +146,7 @@ impl HostCall for StoredSpend {
 /// is cached, `0.0` when none is.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 struct CachedSpend {
-    sources: Vec<Vec<String>>,
+    sources: Vec<Vec<AuthObject>>,
 }
 
 impl HostCall for CachedSpend {
@@ -181,7 +182,7 @@ enum Unit {
     /// A lifetime counter, seeded from its row or, without one, from the auth cache.
     Counter {
         counter: SpendCounter,
-        sources: Vec<String>,
+        sources: Vec<AuthObject>,
     },
     /// A budget window, seeded from its window spend. A strict (customer) window is skipped when
     /// only this pod's memory could answer for it.

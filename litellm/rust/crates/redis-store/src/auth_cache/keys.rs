@@ -3,7 +3,8 @@ use litellm_python_compat::{Value, json};
 /// One object the auth cache holds. `key` writes the bytes `main`'s Python writes for it. Some of
 /// those spellings are ambiguous (a bare user id, `{team_id}_{user_id}`, a JWT claim value holding
 /// `:`), so a key is never parsed back: writers name the object, and evictions carry wire keys.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", content = "id", rename_all = "snake_case")]
 pub enum AuthObject {
     /// A virtual key, cached under its bare `hash_token` digest.
     Key(String),
@@ -156,13 +157,4 @@ fn json_strings(items: &[&String]) -> String {
             .collect(),
     );
     json::dumps(&list).expect("json.dumps never refuses a list of strings")
-}
-
-/// `is_user_key_cache_key`: user-key objects are cached under a bare `hash_token` digest, every
-/// other object under a prefixed key.
-pub fn is_key_object(key: &str) -> bool {
-    key.len() == 64
-        && key
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }

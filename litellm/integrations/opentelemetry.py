@@ -37,7 +37,7 @@ from litellm.integrations.otel.model.semconv import LiteLLM, Metric
 from litellm.integrations.otel.model.utils import as_str
 from litellm.integrations.otel.plumbing.otlp_tls import resolve_otlp_http_tls
 from litellm.integrations.otel.routing import routed_model_name, routing_decision_attributes
-from litellm.litellm_core_utils.core_helpers import iter_items, require_attributes
+from litellm.litellm_core_utils.core_helpers import iter_items, json_contains, require_attributes, spread, subscript
 from litellm.litellm_core_utils.hidden_params import get_hidden_params
 from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call_from_params
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
@@ -81,7 +81,7 @@ if TYPE_CHECKING:
     Context = _Context
     SpanExporter = _SpanExporter
     UserAPIKeyAuth = _UserAPIKeyAuth
-    ManagementEndpointLoggingPayload = _ManagementEndpointLoggingPayload | Any
+    ManagementEndpointLoggingPayload = _ManagementEndpointLoggingPayload
 else:
     Span = Any
     Tracer = Any
@@ -137,10 +137,20 @@ class _SupportsGet(Protocol):
     def get(self, key: str, /) -> object: ...
 
 
+class _SupportsGetWithDefault(Protocol):
+    def get(self, key: str, default: object = None, /) -> object: ...
+
+
 def _response_field(response_obj: object, key: str) -> object:
     if not response_obj:
         return None
     return require_attributes(response_obj, _SupportsGet, "get").get(key)
+
+
+def _response_view(response_obj: object) -> _SupportsGet | None:
+    if response_obj is None:
+        return None
+    return require_attributes(response_obj, _SupportsGet, "get")
 
 
 def _semconv_response_model(
@@ -2473,7 +2483,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
         return kv_pairs
 
-    def set_attributes(self, span: Span, kwargs, response_obj: Any | None):
+    def set_attributes(self, span: Span, kwargs, response_obj: object):
         try:
             if self.callback_name == "langtrace":
                 from litellm.integrations.langtrace import LangtraceAttributes
@@ -2776,11 +2786,11 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             #############################################
             ########## LLM Response Attributes ##########
             #############################################
-            if response_obj is not None:
-                response_view: Final = require_attributes(response_obj, _SupportsGet, "get")
+            response_view: Final = _response_view(response_obj)
+            if response_view is not None:
                 if response_view.get("choices"):
                     transformed_choices: Final = self._transform_choices_to_otel_semantic_conventions(
-                        response_obj.get("choices")
+                        iter_items(response_view.get("choices"))
                     )
                     self.safe_set_attribute(
                         span=span,
@@ -2892,7 +2902,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         primitive_value: Final = self._cast_as_primitive_value_type(value)
         span.set_attribute(key, primitive_value)
 
-    def _transform_messages_to_otel_semantic_conventions(self, messages: list[dict] | str) -> list[dict]:
+    def _transform_messages_to_otel_semantic_conventions(self, messages: Iterable[object] | str) -> list[dict]:
         """
         Transforms LiteLLM/OpenAI style messages into OTEL GenAI 1.38 compliant format.
         OTEL expects a 'parts' array instead of a single 'content' string.
@@ -2908,8 +2918,9 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
         transformed: Final = []
         for msg in messages:
-            role = msg.get("role", "user")
-            content = msg.get("content", "")
+            msg_fields = require_attributes(msg, _SupportsGetWithDefault, "get")
+            role = msg_fields.get("role", "user")
+            content = msg_fields.get("content", "")
             parts = []
 
             if isinstance(content, str):
@@ -2923,26 +2934,27 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                         parts.append({"type": "text", "content": str(part)})
 
             transformed_msg = {"role": role, "parts": parts}
-            if "id" in msg:
-                transformed_msg["id"] = msg["id"]
-            if server_tool_calls := anthropic_server_tool_call_params(cast(object, msg)):
-                transformed_msg["tool_calls"] = [*server_tool_calls, *(msg.get("tool_calls") or [])]
-            elif "tool_calls" in msg:
-                transformed_msg["tool_calls"] = msg["tool_calls"]
-            if "tool_call_id" in msg:
-                transformed_msg["tool_call_id"] = msg["tool_call_id"]
+            if json_contains(msg, "id"):
+                transformed_msg["id"] = subscript(msg, "id")
+            if server_tool_calls := anthropic_server_tool_call_params(msg):
+                transformed_msg["tool_calls"] = [*server_tool_calls, *spread(msg_fields.get("tool_calls") or ())]
+            elif json_contains(msg, "tool_calls"):
+                transformed_msg["tool_calls"] = subscript(msg, "tool_calls")
+            if json_contains(msg, "tool_call_id"):
+                transformed_msg["tool_call_id"] = subscript(msg, "tool_call_id")
             transformed.append(transformed_msg)
 
         return transformed
 
-    def _transform_choices_to_otel_semantic_conventions(self, choices: list[dict]) -> list[dict]:
+    def _transform_choices_to_otel_semantic_conventions(self, choices: Iterable[object]) -> list[dict]:
         """
         Transforms choices into OTEL GenAI 1.38 compliant format for output.messages.
         """
         transformed: Final = []
         for choice in choices:
-            message = choice.get("message") or {}
-            finish_reason = choice.get("finish_reason")
+            choice_fields = require_attributes(choice, _SupportsGet, "get")
+            message = choice_fields.get("message") or dict[str, object]()
+            finish_reason = choice_fields.get("finish_reason")
 
             transformed_msg = self._transform_messages_to_otel_semantic_conventions([message])[0]
             if finish_reason:
@@ -3548,14 +3560,13 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 start_time=_start_time_ns,
             )
 
-            _request_data: Final = logging_payload.request_data
-            if _request_data is not None:
-                for key, value in _request_data.items():
-                    self.safe_set_attribute(
-                        span=management_endpoint_span,
-                        key=f"request.{key}",
-                        value=value,
-                    )
+            _request_data: Final = logging_payload.request_data or {}
+            for key, value in _request_data.items():
+                self.safe_set_attribute(
+                    span=management_endpoint_span,
+                    key=f"request.{key}",
+                    value=value,
+                )
 
             _response: Final = logging_payload.response
             if _response is not None:
@@ -3606,14 +3617,13 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 start_time=_start_time_ns,
             )
 
-            _request_data: Final = logging_payload.request_data
-            if _request_data is not None:
-                for key, value in _request_data.items():
-                    self.safe_set_attribute(
-                        span=management_endpoint_span,
-                        key=f"request.{key}",
-                        value=value,
-                    )
+            _request_data: Final = logging_payload.request_data or {}
+            for key, value in _request_data.items():
+                self.safe_set_attribute(
+                    span=management_endpoint_span,
+                    key=f"request.{key}",
+                    value=value,
+                )
 
             _exception: Final = logging_payload.exception
             self.safe_set_attribute(

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { ChevronRight, MoreHorizontal, Pencil, Plus } from "lucide-react";
+import { MoreHorizontal, Pencil, Plus } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useTranslation } from "react-i18next";
 import { ErrorState } from "@/components/shared/ErrorState";
@@ -18,11 +18,11 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { extractProxyErrorMessage } from "@/lib/http/client";
 import CustomerHierarchyNavigation, { useCustomerHierarchyLinks } from "./CustomerHierarchyNavigation";
 import { CustomerDetailHeader, CustomerDetailLayout } from "./CustomerDetailLayout";
+import CustomerHierarchyBreadcrumbs from "./CustomerHierarchyBreadcrumbs";
 import CustomerHierarchySettings from "./CustomerHierarchySettings";
 import CustomerEntityBudgetDialog from "./CustomerEntityBudgetDialog";
 import CustomerBudgetGroups from "./CustomerBudgetGroups";
 import CustomerBudgetSummary from "./CustomerBudgetSummary";
-import CustomerOrganizationApps from "../../apps/_components/CustomerOrganizationApps";
 import CustomerMemberApps from "../../apps/_components/CustomerMemberApps";
 import CustomerMemberSearch from "./CustomerMemberSearch";
 import { customerUsageEntity, isCustomerUsageIdentifier, type CustomerUsageEntity } from "./customerUsageApi";
@@ -36,7 +36,6 @@ import CreateCustomerHierarchyDialog from "./CreateCustomerHierarchyDialog";
 import { customerEntityId, customerEntityLabel, type CreatedCustomerHierarchyEntity } from "./customerHierarchyForms";
 import useCustomerHierarchy, { type CustomerHierarchyContext } from "./useCustomerHierarchy";
 import type { CustomerHierarchyScope } from "./customerHierarchyApi";
-import { customerBudgetLimit } from "./customerBudgetUsage";
 import { CustomerBudgetLimitCell, CustomerBudgetSortHeader } from "./CustomerBudgetColumn";
 
 type Hierarchy = ReturnType<typeof useCustomerHierarchy>;
@@ -47,8 +46,7 @@ interface ScopeProps {
 }
 
 function HierarchyHeader({ hierarchy, selected }: Pick<ScopeProps, "hierarchy" | "selected">) {
-  const { t } = useTranslation();
-  const { customerHierarchyHref, customersHref } = useCustomerHierarchyLinks();
+  const { customerHierarchyHref } = useCustomerHierarchyLinks();
   const entity = selected.entity;
   const team = selected.team;
   const label = customerEntityLabel(entity);
@@ -73,31 +71,17 @@ function HierarchyHeader({ hierarchy, selected }: Pick<ScopeProps, "hierarchy" |
     <CustomerDetailHeader
       title={label}
       breadcrumbs={
-        <>
-          <a href={customersHref} className="hover:text-foreground">
-            {t("customerPortal.analytics.allCustomers")}
-          </a>
-          {(team || selected.member) && (
-            <>
-              <ChevronRight aria-hidden="true" className="size-3" />
-              <button type="button" onClick={hierarchy.openOrganization} className="hover:text-foreground">
-                {selected.organization.alias || selected.organization.customer_org_id}
-              </button>
-            </>
-          )}
-          {selected.member && team && (
-            <>
-              <ChevronRight aria-hidden="true" className="size-3" />
-              <button
-                type="button"
-                onClick={() => hierarchy.openTeam(team.customer_team_id)}
-                className="hover:text-foreground"
-              >
-                {team.alias || team.customer_team_id}
-              </button>
-            </>
-          )}
-        </>
+        <CustomerHierarchyBreadcrumbs
+          scope={budgetScope}
+          page="manage"
+          organizationLabel={selected.organization.alias}
+          teamLabel={team?.alias}
+          memberLabel={selected.member?.alias}
+          onOrganizationClick={hierarchy.openOrganization}
+          onTeamClick={() => {
+            if (team) hierarchy.openTeam(team.customer_team_id);
+          }}
+        />
       }
       actions={
         <div className="w-full sm:w-72">
@@ -268,7 +252,7 @@ function HierarchyChildRows(props: ScopeProps & { childLabel: string; showTeam: 
                         : "customerPortal.hierarchy.loading",
                     )}
                   </TableCell>
-                  <CustomerBudgetLimitCell limit={customerBudgetLimit(row.entity)} rateLimits={row.entity.rateLimits} />
+                  <CustomerBudgetLimitCell entity={row.entity} />
                   <TableCell colSpan={4} />
                 </>
               )}
@@ -421,7 +405,6 @@ export default function CustomerHierarchyManager() {
     );
 
   const entity = selected.entity;
-  const showOrganizationApps = entity.kind === "organization" && (tab === "teams" || tab === "members");
   const currentScope = {
     org: scope.org,
     team: selected.team?.customer_team_id ?? null,
@@ -438,13 +421,6 @@ export default function CustomerHierarchyManager() {
     <CustomerDetailLayout label={t("customerPortal.hierarchy.title")}>
       <HierarchyHeader hierarchy={hierarchy} selected={selected} />
       <CustomerHierarchyNavigation scope={currentScope} active={tab} />
-      {showOrganizationApps && (
-        <CustomerOrganizationApps
-          key={scope.org}
-          organizationId={scope.org}
-          organizationAlias={selected.organization.alias}
-        />
-      )}
       {selected.member && (
         <CustomerMemberApps
           key={selected.member.customer_member_id}
