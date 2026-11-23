@@ -224,7 +224,7 @@ impl RustUserRepository {
 }
 
 fn json_argument(name: &str, text: Option<&str>) -> PyResult<Option<serde_json::Value>> {
-    text.map(serde_json::from_str)
+    text.map(litellm_host_python::json_from_str)
         .transpose()
         .map_err(|error| PyValueError::new_err(format!("{name} is not JSON: {error}")))
 }

@@ -44,6 +44,11 @@ where
         .map_err(|error| PyValueError::new_err(litellm_error::Report::new(&error).to_string()))
 }
 
+/// Parses JSON text Python serialized into a value Rust reads. The caller names what the text was in its error.
+pub fn json_from_str(document: &str) -> serde_json::Result<Value> {
+    serde_json::from_str(document)
+}
+
 pub fn json_object_field(py: Python<'_>, document: &str, name: &str) -> PyResult<Py<PyAny>> {
     py.import("json")?
         .call_method1("loads", (document,))?
