@@ -5372,6 +5372,7 @@ dependencies = [
  "base64 0.22.1",
  "fancy-regex 0.19.2",
  "litellm-redaction",
+ "parking_lot",
  "percent-encoding",
  "rstest",
  "serde_json",
