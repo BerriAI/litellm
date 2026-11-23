@@ -127,15 +127,15 @@ describe("GuardrailsPanel", () => {
 
   it("should render the component", async () => {
     renderWithProviders(<GuardrailsPanel {...defaultProps} />);
-    expect(screen.getByText("Guardrails")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 1, name: "Guardrails" })).toBeInTheDocument();
     // Activate the Guardrails tab so its content (including the Add button) is rendered
-    fireEvent.click(screen.getByText("Guardrails"));
+    fireEvent.click(screen.getByRole("tab", { name: "Guardrails" }));
     expect(screen.getByText("Add New Guardrail")).toBeInTheDocument();
   });
 
   it("should delete the clicked guardrail after confirming in the modal", async () => {
     renderWithProviders(<GuardrailsPanel {...defaultProps} />);
-    fireEvent.click(screen.getByText("Guardrails"));
+    fireEvent.click(screen.getByRole("tab", { name: "Guardrails" }));
 
     fireEvent.click(await screen.findByTestId("delete-button"));
 
@@ -162,7 +162,7 @@ describe("GuardrailsPanel", () => {
   it("should show an error toast and not refetch when the row delete fails", async () => {
     mockDeleteGuardrailCall.mockRejectedValue(new Error("boom"));
     renderWithProviders(<GuardrailsPanel {...defaultProps} />);
-    fireEvent.click(screen.getByText("Guardrails"));
+    fireEvent.click(screen.getByRole("tab", { name: "Guardrails" }));
 
     fireEvent.click(await screen.findByTestId("delete-button"));
     const modal = within(await screen.findByRole("dialog"));
@@ -191,7 +191,7 @@ describe("GuardrailsPanel", () => {
     fireEvent.change(draft, { target: { value: "keep me" } });
     expect(draft).toHaveValue("keep me");
 
-    fireEvent.click(screen.getByText("Guardrails"));
+    fireEvent.click(screen.getByRole("tab", { name: "Guardrails" }));
     fireEvent.click(screen.getByText("Test Playground"));
 
     expect(await screen.findByLabelText("playground draft")).toHaveValue("keep me");
@@ -199,7 +199,7 @@ describe("GuardrailsPanel", () => {
 
   it("should not delete anything when the modal is cancelled", async () => {
     renderWithProviders(<GuardrailsPanel {...defaultProps} />);
-    fireEvent.click(screen.getByText("Guardrails"));
+    fireEvent.click(screen.getByRole("tab", { name: "Guardrails" }));
 
     fireEvent.click(await screen.findByTestId("delete-button"));
     const modal = within(await screen.findByRole("dialog"));

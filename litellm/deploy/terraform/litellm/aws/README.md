@@ -107,9 +107,9 @@ services.
 proxy_config = {
   model_list = [
     {
-      model_name = "gpt-4o"
+      model_name = "gpt-6.1-sol"
       litellm_params = {
-        model   = "openai/gpt-4o"
+        model   = "openai/gpt-6.1-sol"
         api_key = "os.environ/OPENAI_API_KEY"
       }
     },
@@ -133,10 +133,10 @@ Non-sensitive plaintext (feature flags, observability hosts, etc.):
 gateway_extra_env = {
   LANGFUSE_HOST = "https://us.cloud.langfuse.com"
 }
-backend_extra_env = {
-  STORE_MODEL_IN_DB = "True"
-}
 ```
+
+When a database is configured, the module sets `STORE_MODEL_IN_DB=true` on
+both the gateway and backend by default.
 
 ### Extra secrets (API keys)
 

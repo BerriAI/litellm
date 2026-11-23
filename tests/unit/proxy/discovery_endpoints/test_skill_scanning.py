@@ -1,5 +1,6 @@
 import hashlib
 import io
+import json
 import zipfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -96,7 +97,17 @@ def test_scanner_config_rejects_unsafe_credential_destinations(endpoint: str) ->
         SkillScannerConfig(endpoint=endpoint, api_key_env="SCANNER_TEST_KEY")
 
 
-def test_adapter_authentication_and_exact_remote_source(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("source", (
+    {"source": "url", "url": "https://example.org/repo.git", "ref": "release"},
+    {"source": "github", "repo": "example/skills", "sha": "a" * 40},
+    {"source": "github", "repo": "example/skills", "sha": "a" * 40, "ref": "release"},
+    {"source": "url", "url": "https://gitlab.com/example/skills", "sha": "a" * 40},
+    {"source": "url", "url": "https://git.example.org/team/skills.git", "sha": "a" * 40},
+    {"source": "git-subdir", "url": "https://github.com/example/skills", "path": "skills/review", "sha": "a" * 40},
+))
+def test_adapter_authentication_and_exact_remote_source(
+    monkeypatch: pytest.MonkeyPatch, source: dict[str, str],
+) -> None:
     from litellm.proxy.discovery_endpoints.skill_scanner_adapter import server
 
     monkeypatch.setenv("SKILL_SCANNER_API_KEY", "adapter-secret")
@@ -109,7 +120,7 @@ def test_adapter_authentication_and_exact_remote_source(monkeypatch: pytest.Monk
         assert client.post("/scan", data={"source": "{}"}).status_code == 401
         assert client.post("/scan", headers={"Authorization": "Bearer wrong"}, data={"source": "{}"}).status_code == 401
         response = client.post("/scan", headers={"Authorization": "Bearer adapter-secret"}, data={
-            "source": '{"source":"git","url":"https://example.org/repo.git","ref":"release"}',
+            "source": json.dumps(source), "expires_at": NOW.isoformat(),
         })
         assert response.status_code == 400
         for deadline, status in ((NOW.isoformat(), 504), (NOW.replace(tzinfo=None).isoformat(), 422)):

@@ -5,7 +5,7 @@
 
 import { describe, it, expect } from "vitest";
 import { getAvailablePages } from "./page_utils";
-import { menuGroups } from "./leftnav";
+import { menuGroups } from "./LeftNav";
 import { pageDescriptions } from "./page_metadata";
 import { internalUserRoles } from "@/utils/roles";
 
@@ -162,7 +162,7 @@ describe("Page Utils - LeftNav Sync", () => {
 
     expect(
       orphanedDescriptions,
-      `These descriptions don't match any page in menuGroups: ${orphanedDescriptions.join(", ")}. Remove them or add the pages to leftnav.`,
+      `These descriptions don't match any page in menuGroups: ${orphanedDescriptions.join(", ")}. Remove them or add the pages to LeftNav.`,
     ).toHaveLength(0);
   });
 

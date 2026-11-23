@@ -1,18 +1,43 @@
 use std::time::Duration;
 
+pub use litellm_llms::base_llm::chat::transformation::DropParams;
 use litellm_llms_types::formats::chat_completions::ChatMessage;
 use serde_json::{Map, Value};
 
+pub enum ClientSideCredentials {
+    Any,
+    Only(Box<[String]>),
+}
+
+impl ClientSideCredentials {
+    pub fn admits(&self, name: &str) -> bool {
+        match self {
+            Self::Any => true,
+            Self::Only(names) => names.iter().any(|allowed| allowed == name),
+        }
+    }
+}
+
+pub enum OptionalParams {
+    OpenAi {
+        params: Map<String, Value>,
+        client_side: ClientSideCredentials,
+        drop_params: DropParams,
+    },
+    ProviderMapped(Map<String, Value>),
+}
+
 /// A `/chat/completions` call as it crosses into the core.
 ///
-/// `optional_params` arrives already mapped to the provider's own parameter
-/// names by the host, exactly as the messages route receives an already
-/// Anthropic-shaped body. The core owns the conversation translation, the
-/// provider call, and the response normalization.
+/// The host says which names `optional_params` carries: the gateway passes the
+/// OpenAI body as received, and the Python bridge passes the output of Python's
+/// `map_openai_params`. The core maps OpenAI names to the provider's, and owns
+/// the conversation translation, the provider call, and the response
+/// normalization.
 pub struct ChatCompletionsRequest<'a> {
     pub model: &'a str,
     pub messages: Value,
-    pub optional_params: Map<String, Value>,
+    pub optional_params: OptionalParams,
     pub api_key: Option<&'a str>,
     pub api_base: Option<&'a str>,
     pub custom_llm_provider: Option<&'a str>,
@@ -23,7 +48,7 @@ pub struct ChatCompletionsRequest<'a> {
 pub struct ChatCompletionsCall {
     pub model: String,
     pub messages: Value,
-    pub optional_params: Map<String, Value>,
+    pub optional_params: OptionalParams,
     pub api_key: Option<String>,
     pub api_base: Option<String>,
     pub custom_llm_provider: Option<String>,

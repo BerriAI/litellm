@@ -23,7 +23,14 @@ class _RoutedDeployment(BaseModel):
 
 
 _ROUTED_DEPLOYMENTS: Final = TypeAdapter(tuple[_RoutedDeployment, ...])
-_PATTERN_WIDE_CACHE_FLAGS: Final = frozenset(("supports_prompt_cache_breakpoint", "supports_prompt_caching"))
+_PATTERN_WIDE_CACHE_FLAGS: Final = frozenset(
+    (
+        "supports_prompt_cache_breakpoint",
+        "supports_openai_prompt_cache_breakpoint",
+        "supports_bedrock_converse_cache_point",
+        "supports_prompt_caching",
+    )
+)
 _AZURE_AI_PATTERN_CACHE_FLAGS: Final = frozenset(("supports_prompt_caching",))
 
 

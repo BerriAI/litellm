@@ -27,7 +27,6 @@ def test_gemini_image_generation_request_uses_shared_generation_config():
     assert request["generationConfig"] == {
         "response_modalities": ["IMAGE", "TEXT"],
         "imageConfig": {"aspectRatio": "16:9", "imageSize": "2K"},
-        "candidateCount": 2,
     }
 
 

@@ -1,3 +1,11 @@
+use aws_credential_types::provider::error::CredentialsError;
+use aws_sdk_sts::{
+    error::ErrorMetadata,
+    operation::{
+        assume_role::AssumeRoleError, assume_role_with_web_identity::AssumeRoleWithWebIdentityError,
+    },
+};
+use aws_smithy_runtime_api::client::result::ConnectorError;
 use litellm_error::Source;
 
 #[derive(Clone, Debug, thiserror::Error, PartialEq, Eq)]
@@ -10,6 +18,18 @@ pub enum Error {
         #[source]
         source: Source,
     },
+    /// The named profile is in neither the AWS config nor the credentials file, which botocore
+    /// raises as `ProfileNotFound`.
+    #[error("the AWS profile {profile} is not in the AWS config or credentials files")]
+    ProfileNotFound { profile: String },
+    #[error(
+        "the AWS web identity token must name a secret or an oidc/ provider, not an environment variable"
+    )]
+    WebIdentityTokenReference,
+    #[error("the AWS web identity token reference resolved to no token")]
+    MissingWebIdentityToken,
+    #[error("could not read the AWS web identity token")]
+    WebIdentityToken(#[source] Source),
     #[error("AWS web identity response had no credentials")]
     MissingWebIdentityCredentials,
     #[error("AWS web identity response had an invalid expiration")]
@@ -48,7 +68,63 @@ pub enum SigningStage {
     Output,
 }
 
+/// Why an STS call made to acquire credentials failed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum StsFailure {
+    /// STS refused the web identity token the caller configured.
+    InvalidWebIdentityToken { message: String },
+    /// STS answered `operation` with an error code, such as `AccessDenied` or `ExpiredToken`.
+    Rejected {
+        operation: &'static str,
+        code: String,
+        message: String,
+    },
+    /// No answer came back from STS.
+    Unreachable,
+}
+
 impl Error {
+    pub fn sts_failure(&self) -> Option<StsFailure> {
+        let Self::Credentials { flow, source } = self else {
+            return None;
+        };
+        let cause: &(dyn std::error::Error + 'static) = &**source;
+        let rejected = |operation: &'static str, meta: &ErrorMetadata| StsFailure::Rejected {
+            operation,
+            code: meta.code().unwrap_or_default().to_owned(),
+            message: meta.message().unwrap_or_default().to_owned(),
+        };
+        if let Some(error) = litellm_error::find::<AssumeRoleWithWebIdentityError>(cause) {
+            return Some(match (flow, error) {
+                (
+                    CredentialFlow::WebIdentity,
+                    AssumeRoleWithWebIdentityError::InvalidIdentityTokenException(_),
+                ) => StsFailure::InvalidWebIdentityToken {
+                    message: error.meta().message().unwrap_or_default().to_owned(),
+                },
+                _ => rejected("AssumeRoleWithWebIdentity", error.meta()),
+            });
+        }
+        if let Some(error) = litellm_error::find::<AssumeRoleError>(cause) {
+            return Some(rejected("AssumeRole", error.meta()));
+        }
+        litellm_error::find::<ConnectorError>(cause).map(|_| StsFailure::Unreachable)
+    }
+
+    pub fn is_empty_default_chain(&self) -> bool {
+        let Self::Credentials {
+            flow: CredentialFlow::DefaultChain,
+            source,
+        } = self
+        else {
+            return false;
+        };
+        matches!(
+            source.downcast_ref::<CredentialsError>(),
+            Some(CredentialsError::CredentialsNotLoaded(_))
+        )
+    }
+
     pub(crate) fn credentials<E: std::error::Error + Send + Sync + 'static>(
         flow: CredentialFlow,
     ) -> impl FnOnce(E) -> Self {
@@ -71,5 +147,42 @@ impl Error {
 impl From<Error> for litellm_auth_types::Error {
     fn from(error: Error) -> Self {
         Self::provider(error)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[rstest::rstest]
+    #[case::empty_default_chain(
+        CredentialFlow::DefaultChain,
+        CredentialsError::not_loaded("no providers in chain provided credentials"),
+        true
+    )]
+    #[case::failed_default_chain(
+        CredentialFlow::DefaultChain,
+        CredentialsError::provider_error("IMDS answered 500"),
+        false
+    )]
+    #[case::empty_profile(
+        CredentialFlow::Profile,
+        CredentialsError::not_loaded("the profile has no credentials"),
+        false
+    )]
+    fn only_a_default_chain_that_loaded_nothing_is_empty(
+        #[case] flow: CredentialFlow,
+        #[case] failure: CredentialsError,
+        #[case] empty: bool,
+    ) {
+        assert_eq!(
+            Error::credentials(flow)(failure).is_empty_default_chain(),
+            empty
+        );
+    }
+
+    #[test]
+    fn a_web_identity_failure_is_not_an_empty_default_chain() {
+        assert!(!Error::MissingWebIdentityToken.is_empty_default_chain());
     }
 }

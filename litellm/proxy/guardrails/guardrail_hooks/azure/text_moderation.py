@@ -3,7 +3,7 @@
 Azure Text Moderation Native Guardrail Integrationfor LiteLLM
 """
 
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, cast
+from typing import TYPE_CHECKING, ClassVar, Final, Literal, cast
 
 from fastapi import HTTPException
 
@@ -223,7 +223,7 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
         self,
         user_api_key_dict: "UserAPIKeyAuth",
         cache: "DualCache",
-        data: dict[str, Any],
+        data: dict[str, object],
         call_type: CallTypesLiteral,
     ) -> dict[str, object] | None:
         """

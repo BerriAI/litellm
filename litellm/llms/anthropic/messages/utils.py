@@ -43,7 +43,7 @@ class ClientEffort(Enum):
     DROPPED = "dropped"
 
 
-_JsonValue: Final = TypeVar("_JsonValue")
+_JsonValue = TypeVar("_JsonValue")
 
 
 def json_copy_or_original(value: _JsonValue) -> _JsonValue:

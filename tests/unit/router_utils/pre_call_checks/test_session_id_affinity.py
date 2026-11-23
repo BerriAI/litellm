@@ -16,6 +16,7 @@ from litellm.redis.stores.router_session_pins import (
     TierModelPin,
 )
 from litellm.constants import (
+    SESSION_DEPLOYMENT_AFFINITY_CONVERSATION_METADATA_KEY,
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
     SESSION_ID_GENERATED_METADATA_KEY,
 )
@@ -392,7 +393,9 @@ MOCK_RESPONSES_API_RESPONSE = {
 }
 
 
-def _smart_router(session_affinity=True, ttl_seconds=777, deployment_affinity=True):
+def _smart_router(
+    session_affinity=True, ttl_seconds=777, deployment_affinity=True, conversation_header: str | None = None
+):
     return litellm.Router(
         model_list=[
             {
@@ -404,6 +407,7 @@ def _smart_router(session_affinity=True, ttl_seconds=777, deployment_affinity=Tr
                         "session_affinity": session_affinity,
                         "deployment_affinity": deployment_affinity,
                         "session_affinity_ttl_seconds": ttl_seconds,
+                        **({"conversation_header": conversation_header} if conversation_header else {}),
                         "tiers": {
                             "SIMPLE": "target-group",
                             "MEDIUM": "target-group",
@@ -810,6 +814,82 @@ async def test_pre_routing_hook_stamps_or_clears_the_marker_per_attempt(
         else:
             assert SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY not in request_kwargs["metadata"]
             assert SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY not in request_kwargs["litellm_metadata"]
+    finally:
+        _cleanup_router_callbacks(router)
+
+
+async def _conversation_turn(
+    router: litellm.Router, model: str, headers: Mapping[str, str], metadata: Mapping[str, object]
+) -> tuple[list[str], Mapping[str, object]]:
+    request_kwargs: Final[dict[str, object]] = {
+        "proxy_server_request": {"headers": headers},
+        "metadata": {**metadata, "user_api_key_hash": "key-1"},
+    }
+    await router.async_pre_routing_hook(
+        model=model, request_kwargs=request_kwargs, messages=[{"role": "user", "content": "Hello"}]
+    )
+    affinity: Final = next(cb for cb in router.optional_callbacks or () if isinstance(cb, DeploymentAffinityCheck))
+    filtered: Final = await affinity.async_filter_deployments(
+        model="target-group",
+        healthy_deployments=router.get_model_list("target-group") or [],
+        messages=None,
+        request_kwargs=request_kwargs,
+    )
+    routed: Final = request_kwargs["metadata"]
+    assert isinstance(routed, dict)
+    await affinity.async_pre_call_deployment_hook(
+        kwargs={
+            **request_kwargs,
+            "model_info": {"id": "deployment-2"},
+            "metadata": {**routed, "deployment_model_name": "target-group"},
+        },
+        call_type=None,
+    )
+    return sorted(str(deployment["model_info"]["id"]) for deployment in filtered), routed
+
+
+@pytest.mark.asyncio
+async def test_configured_conversation_header_owns_the_deployment_pin() -> None:
+    router: Final = _smart_router(conversation_header="x-app-conversation")
+    both: Final = ["deployment-1", "deployment-2"]
+    try:
+        affinity: Final = next(cb for cb in router.optional_callbacks or () if isinstance(cb, DeploymentAffinityCheck))
+        await affinity.async_pre_call_deployment_hook(
+            kwargs={
+                "model_info": {"id": "deployment-1"},
+                "metadata": {
+                    "deployment_model_name": "target-group",
+                    "session_id": "message-1",
+                    "user_api_key_hash": "key-1",
+                    SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY: 777,
+                },
+            },
+            call_type=None,
+        )
+        first, routed = await _conversation_turn(
+            router, "smart-router", {"x-app-conversation": "Ab"}, {"session_id": "message-1"}
+        )
+        conversation: Final = routed[SESSION_DEPLOYMENT_AFFINITY_CONVERSATION_METADATA_KEY]
+        forged: Final = {
+            SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY: 777,
+            SESSION_DEPLOYMENT_AFFINITY_CONVERSATION_METADATA_KEY: conversation,
+        }
+        same_conversation, _ = await _conversation_turn(
+            router, "smart-router", {"x-app-conversation": "Ab"}, {"session_id": "message-2"}
+        )
+        other_conversation, _ = await _conversation_turn(
+            router, "smart-router", {"x-app-conversation": "ab"}, {"session_id": "message-2"}
+        )
+        unusable_headers: Final = [
+            (await _conversation_turn(router, "smart-router", headers, {**forged, "session_id": "message-1"}))[0]
+            for headers in ({}, {"x-app-conversation": ""})
+        ]
+        rerouted, _ = await _conversation_turn(
+            router, "target-group", {"x-app-conversation": "Ab"}, {**forged, "session_id": "message-2"}
+        )
+        assert (first, same_conversation, other_conversation, unusable_headers, rerouted) == (
+            both, ["deployment-2"], both, [both, both], both
+        )
     finally:
         _cleanup_router_callbacks(router)
 

@@ -138,6 +138,8 @@ DEPLOYMENT_PARAM_CLASSIFICATION: Final[Mapping[str, Classification]] = MappingPr
         "anthropic_keycloak_client_secret_ref": Unplanted(),
         "anthropic_keycloak_scope": NotSecret("OAuth scope string"),
         "openai_identity_token_file": Unplanted(),
+        "github_copilot_app_private_key": Unplanted(),
+        "github_copilot_app_private_key_ref": Unplanted(),
     }
 )
 

@@ -686,6 +686,26 @@ class TestKimiK26ModelRegistry:
         return GetModelCostMap.load_local_model_cost_map()
 
 
+def test_kimi_k3_registry_prices_completion_usage() -> None:
+    row: Final = GetModelCostMap.load_local_model_cost_map()["moonshot/kimi-k3"]
+    response: Final = litellm.ModelResponse(
+        model="moonshot/kimi-k3", usage=litellm.Usage(prompt_tokens=100, completion_tokens=50)
+    )
+
+    assert litellm.completion_cost(completion_response=response) == pytest.approx(
+        100 * row["input_cost_per_token"] + 50 * row["output_cost_per_token"]
+    )
+
+
+def test_kimi_k3_registry_context_is_exposed_by_model_info() -> None:
+    row: Final = GetModelCostMap.load_local_model_cost_map()["moonshot/kimi-k3"]
+    info: Final = litellm.get_model_info("moonshot/kimi-k3")
+
+    assert (info["max_input_tokens"], info["max_output_tokens"]) == (
+        row["max_input_tokens"], row["max_output_tokens"]
+    )
+
+
 class TestMoonshotResponseSchemaSupport:
     """Every model currently live on api.moonshot.ai supports json_schema
     response_format, which gates discovery via litellm.responses(). The flag
@@ -694,6 +714,7 @@ class TestMoonshotResponseSchemaSupport:
     LIVE_MODELS = [
         "moonshot/kimi-k2.5",
         "moonshot/kimi-k2.6",
+        "moonshot/kimi-k3",
         "moonshot/moonshot-v1-8k",
         "moonshot/moonshot-v1-32k",
         "moonshot/moonshot-v1-128k",
@@ -706,6 +727,12 @@ class TestMoonshotResponseSchemaSupport:
     @pytest.fixture(autouse=True)
     def model_cost_map(self):
         return GetModelCostMap.load_local_model_cost_map()
+
+    @pytest.mark.parametrize("model", LIVE_MODELS)
+    def test_response_schema_discovery_matches_registry(self, model, model_cost_map):
+        assert litellm.supports_response_schema(model=model) == model_cost_map[model].get(
+            "supports_response_schema", False
+        )
 
 
 class TestMoonshotReasoningEffort:
@@ -761,6 +788,16 @@ class TestMoonshotReasoningEffort:
         )
 
         assert optional_params["reasoning_effort"] == "high"
+
+    def test_drop_params_omits_reasoning_effort_for_non_reasoning_model(self) -> None:
+        optional_params: Final = litellm.get_optional_params(
+            model="moonshot-v1-8k",
+            custom_llm_provider="moonshot",
+            reasoning_effort="max",
+            drop_params=True,
+        )
+
+        assert "reasoning_effort" not in optional_params
 
     @pytest.mark.parametrize("value", [{"summary": "detailed"}, {"effort": 3}, 7])
     def test_effort_without_a_level_string_is_omitted(self, value):

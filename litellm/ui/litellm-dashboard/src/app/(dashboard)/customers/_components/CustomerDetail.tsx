@@ -82,13 +82,13 @@ export default function CustomerDetail({ customerId, onBack }: { customerId: str
   const label = c?.alias || customerId;
 
   return (
-    <div className="w-full space-y-4 px-6 py-5">
+    <div className="mx-auto w-full max-w-[1600px] space-y-6 px-4 py-6 sm:px-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <div className="flex items-center gap-2">
             <h1 className="text-lg font-semibold tracking-tight">{label}</h1>
             {c && <StatusBadge status={customerStatus(c, spend)} />}
-            <span className="font-mono text-xs text-muted-foreground">{customerId}</span>
+            {label !== customerId && <span className="font-mono text-xs text-muted-foreground">{customerId}</span>}
           </div>
           <UsageSummary spend={spend} budget={c?.litellm_budget_table} />
         </div>

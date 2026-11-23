@@ -676,14 +676,15 @@ def test_sign_in_uses_the_matching_account_when_the_custom_mapping_leaves_the_us
 ) -> None:
     proxy: Final = entra_custom_mapping.gateway
     email: Final = f"{prefix}{uuid.uuid4().hex[:12]}@example.com"
+    provider_id: Final = str(uuid.uuid4())
     with gateway_module.scenario() as scenario, _browser() as browser:
         account: Final = scenario.user(user_email=email, user_role="internal_user")
-        callback: Final = _dashboard_sign_in(proxy, graph, graph.profile(_profile(str(uuid.uuid4()), email)))
+        callback: Final = _dashboard_sign_in(proxy, graph, graph.profile(_profile(provider_id, email)))
         session: Final = _session(callback)
         assert callback.status_code == 303 and session is not None, f"{callback.status_code} {callback.text}"
         assert session["user_id"] == account, session
         login: Final = _start_cli_login(proxy)
-        cli_hint: Final = graph.profile(_profile(str(uuid.uuid4()), email))
+        cli_hint: Final = graph.profile(_profile(provider_id, email))
         cli_callback: Final = _cli_callback(proxy, graph, browser, login, cli_hint)
         done: Final = _complete_cli(browser, cli_callback, login)
         assert done.status_code == 200 and CLI_SUCCESS_PAGE_TITLE in done.text, f"{done.status_code} {done.text}"

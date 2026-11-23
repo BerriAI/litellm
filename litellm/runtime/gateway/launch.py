@@ -80,7 +80,7 @@ def _serve(argv: Sequence[str]) -> None:
 
 def python_server(argv: Sequence[str]) -> "PythonServer":
     """What uvicorn would serve the public port with, read from the same flags and environment it reads."""
-    from litellm.proxy.rust_forward.server import PythonServer, Server, UvicornCliParams
+    from litellm.proxy.rust_forward.server import PythonServer, Server, UvicornCliParams, local_config_path
     from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
 
     params: Final = UvicornCliParams.model_validate(
@@ -96,6 +96,7 @@ def python_server(argv: Sequence[str]) -> "PythonServer":
         if params.timeout_graceful_shutdown is None
         else params.timeout_graceful_shutdown,
         trusted_proxies=params.trusted_proxies,
+        config_path=local_config_path(None, os.environ),
     )
 
 

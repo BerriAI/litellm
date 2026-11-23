@@ -475,6 +475,7 @@ async fn the_request_context_carries_the_shaped_params_without_model_or_messages
     let host = RecordingHost::passthrough(authenticated(
         MessagesCall {
             shaping: MessagesShaping {
+                vertex: Default::default(),
                 settings: MessagesSettings {
                     drop_params: true,
                     ..MessagesSettings::default()
@@ -535,6 +536,7 @@ async fn the_request_context_leaves_out_a_listed_param_the_model_refuses(call: M
     let host = RecordingHost::passthrough(authenticated(
         MessagesCall {
             shaping: MessagesShaping {
+                vertex: Default::default(),
                 settings: MessagesSettings {
                     additional_drop_params: vec!["temperature".into()],
                     ..MessagesSettings::default()
