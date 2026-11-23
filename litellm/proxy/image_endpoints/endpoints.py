@@ -35,6 +35,7 @@ from litellm.proxy.common_utils.openai_error_payload import (
     openai_error_param,
     openai_error_type,
 )
+from litellm.proxy.image_endpoints.svg_author_model import svg_author_model_updates
 from litellm.proxy.route_llm_request import route_request
 from litellm.types.images.main import ImageEditRequestParams
 from litellm.types.llms.openai import ChatCompletionUserMessage
@@ -106,7 +107,7 @@ async def image_generation(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     model: str | None = None,
 ):
-    from litellm.proxy.litellm_pre_call_utils import reject_url_valued_destination
+    from litellm.proxy.litellm_pre_call_utils import get_metadata_variable_name, reject_url_valued_destination
     from litellm.proxy.proxy_server import (
         add_litellm_data_to_request,
         general_settings,
@@ -159,6 +160,15 @@ async def image_generation(
                     apply_model_group_alias=request.scope.get(MODEL_GROUP_ALIAS_RESOLVED_SCOPE_KEY) is not True,
                 )
             )
+
+        data.update(
+            await svg_author_model_updates(
+                body=data,
+                user_api_key_dict=user_api_key_dict,
+                llm_router=llm_router,
+                metadata_variable_name=get_metadata_variable_name(request, data),
+            )
+        )
 
         ### CALL HOOKS ### - modify incoming data / reject request before calling the model
         prompt_value: Final = data.get("prompt")

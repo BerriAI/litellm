@@ -2,6 +2,7 @@
 ## File for 'response_cost' calculation in Logging
 import logging
 import math
+import re
 import time
 from collections.abc import Mapping, Sequence
 from datetime import datetime
@@ -23,6 +24,7 @@ from litellm.constants import (
     OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS,
     OPENAI_LIVE_TERMINAL_RESPONSE_EVENT_TYPES,
     REALTIME_METERED_USAGE_KEY,
+    SVG_AUTHOR_DEPLOYMENT_METADATA_KEY,
 )
 from litellm.litellm_core_utils.audio_utils.utils import normalized_audio_duration_seconds
 from litellm.litellm_core_utils.aws_partition import contains_bedrock_arn
@@ -152,6 +154,7 @@ from litellm.types.rerank import RerankBilledUnits, RerankResponse
 from litellm.types.utils import (
     CacheCreationTokenDetails,
     CallTypesLiteral,
+    ImageSVGAuthorDeployment,
     LiteLLMRealtimeStreamLoggingObject,
     LlmProviders,
     LlmProvidersSet,
@@ -2197,6 +2200,7 @@ def completion_cost(
                         model_info=_deployment_model_info(litellm_logging_obj, custom_pricing, router_model_id),
                         vertex_location=vertex_location,
                         service_tier=_served_image_service_tier(completion_response, cost_per_token_usage_object),
+                        svg_author_model_info=_svg_author_model_info(litellm_logging_obj, completion_response),
                     )
                 elif call_type in _VIDEO_CALL_TYPES:
                     ### VIDEO GENERATION COST CALCULATION ###
@@ -2801,6 +2805,7 @@ def _video_input_image_cost(
 
 
 _LOGGED_LITELLM_PARAMS: Final = TypeAdapter(Mapping[str, object])
+_SVG_AUTHOR_DEPLOYMENT: Final = TypeAdapter(ImageSVGAuthorDeployment)
 
 
 def _configured_search_cost_per_query(litellm_logging_obj: LitellmLoggingObject | None) -> float | None:
@@ -2809,6 +2814,31 @@ def _configured_search_cost_per_query(litellm_logging_obj: LitellmLoggingObject 
         return None
     cost_per_query: Final = _LOGGED_LITELLM_PARAMS.validate_python(logged_params).get("input_cost_per_query")
     return float(cost_per_query) if isinstance(cost_per_query, (int, float)) else None
+
+
+def _svg_author_model_info(
+    litellm_logging_obj: LitellmLoggingObject | None, image_response: ImageResponse
+) -> ModelInfo | None:
+    from litellm.litellm_core_utils.litellm_logging import deployment_pricing_model_info
+
+    svg_usage: Final = image_response.svg_usage
+    logged_params: Final = getattr(litellm_logging_obj, "litellm_params", None)
+    if svg_usage is None or logged_params is None:
+        return None
+    params: Final = _LOGGED_LITELLM_PARAMS.validate_python(logged_params)
+    stamps: Final = (
+        metadata.get(SVG_AUTHOR_DEPLOYMENT_METADATA_KEY)
+        for metadata_key in ("metadata", "litellm_metadata")
+        if isinstance(metadata := params.get(metadata_key), Mapping)
+    )
+    author: Final = next((_SVG_AUTHOR_DEPLOYMENT.validate_python(stamp) for stamp in stamps if stamp is not None), None)
+    if author is None or not _is_snapshot_of(svg_usage.model, author.provider_model):
+        return None
+    return deployment_pricing_model_info(author.deployment_id, svg_usage.model)
+
+
+def _is_snapshot_of(reported_model: str, provider_model: str) -> bool:
+    return re.fullmatch(rf"{re.escape(provider_model)}(-\d{{4}}-\d{{2}}-\d{{2}})?", reported_model) is not None
 
 
 def _deployment_model_info(

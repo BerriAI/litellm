@@ -1600,6 +1600,7 @@ async def test_add_litellm_data_to_request_strips_user_control_fields():
         "_guardrail_pipelines": [{"name": "spoofed"}],
         "_pipeline_managed_guardrails": ["evaded"],
         "_failover_excluded_ids": ["pinned-deployment"],
+        "_svg_author_deployment": "cheapest-deployment",
         "safe_user_metadata": "kept",
     }
     data = {
@@ -1662,6 +1663,7 @@ async def test_add_litellm_data_to_request_strips_user_control_fields():
         "_guardrail_pipelines",
         "_pipeline_managed_guardrails",
         "_failover_excluded_ids",
+        "_svg_author_deployment",
     }
     assert "litellm_metadata" not in updated
     for stripped_key in stripped_keys:

@@ -21,6 +21,7 @@ def cost_calculator(
     image_response: ImageResponse,
     custom_llm_provider: str | None = None,
     model_info: ModelInfo | None = None,
+    svg_author_model_info: ModelInfo | None = None,
 ) -> float:
     """Calculate cost for OpenAI gpt-image models (token-based pricing)."""
     rendering_cost: Final = _rendering_cost(model, image_response, custom_llm_provider, model_info)
@@ -36,6 +37,7 @@ def cost_calculator(
                 total_tokens=svg_usage.total_tokens,
             ),
             custom_llm_provider=custom_llm_provider or "openai",
+            model_info=svg_author_model_info,
         )
     except Exception as exc:  # noqa: BLE001  # get_model_info can raise a bare Exception for missing pricing
         verbose_logger.debug("Unable to price SVG authoring usage for model=%s: %s", svg_usage.model, exc)
