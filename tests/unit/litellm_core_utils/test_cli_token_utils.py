@@ -1400,6 +1400,18 @@ class TestKeyringVault:
         assert KeyringVault().erase() == KeyringUnreachable()
 
 
+def _about_to_expire():
+    return CliTokenRecord(
+        base_url=SERVER, key="sk-first", refresh_token="rt-spent", timestamp=1000.0, expires_at=time.time() + 60
+    )
+
+
+def _renewed():
+    return CliTokenRecord(
+        base_url=SERVER, key="sk-renewed", refresh_token="rt-renewed", timestamp=2000.0, expires_at=time.time() + 86400
+    )
+
+
 class TestARenewalStoppedMidSave:
     """`lite login --pkce` renews by spending the refresh token on the proxy before the new one is saved,
     and keyring replaces the keychain entry on macOS by deleting it and then adding the new one. A
@@ -1409,16 +1421,10 @@ class TestARenewalStoppedMidSave:
     def renewal_stopped_at(self, isolated_home, install_fake_keyring):
         def _stop(step):
             fake = install_fake_keyring(_DeleteThenAddKeyringModule())
-            save_cli_token(
-                CliTokenRecord(base_url=SERVER, key="sk-first", refresh_token="rt-spent", timestamp=1000.0),
-                vault=KeyringVault(),
-            )
+            save_cli_token(_about_to_expire(), vault=KeyringVault())
             fake.kill_at = step
             with pytest.raises(_ProcessKilled):
-                save_cli_token(
-                    CliTokenRecord(base_url=SERVER, key="sk-renewed", refresh_token="rt-renewed", timestamp=2000.0),
-                    vault=KeyringVault(),
-                )
+                save_cli_token(_renewed(), vault=KeyringVault())
             return fake
 
         return _stop
@@ -1434,6 +1440,12 @@ class TestARenewalStoppedMidSave:
         record = load_cli_token(vault=KeyringVault())
 
         assert (record.key, record.refresh_token) == ("sk-renewed", "rt-renewed")
+
+    def test_the_renewed_key_is_judged_by_its_own_expiry(self, renewal_stopped_at):
+        """The stopped save never rewrote the token file, which still carries the expiry of the key it replaced."""
+        renewal_stopped_at(("deleted", KEYRING_ACCOUNT))
+
+        assert is_cli_token_fresh(load_cli_token(vault=KeyringVault())) is True
 
     def test_a_later_write_to_the_live_entry_alone_wins(self, renewal_stopped_at):
         """A sign-in by a litellm version that predates staging writes only the live entry, and is newer
@@ -1473,6 +1485,21 @@ class TestARenewalStoppedMidSave:
 
         assert outcome == KeyringUnreachable()
         assert (record.key, record.refresh_token) == ("sk-renewed", "rt-renewed")
+
+    def test_a_live_entry_that_refuses_the_renewal_leaves_no_staged_copy_behind(
+        self, isolated_home, install_fake_keyring
+    ):
+        """The renewal then lives in the token file, so a staged copy left in the keychain would be a second
+        copy of the same secret."""
+        fake = install_fake_keyring(_DeleteThenAddKeyringModule())
+        save_cli_token(_about_to_expire(), vault=KeyringVault())
+        fake.refused = frozenset((KEYRING_ACCOUNT,))
+
+        outcome = save_cli_token(_renewed(), vault=KeyringVault())
+
+        assert outcome == KeyringUnreachable()
+        assert load_cli_token(vault=KeyringVault()).key == "sk-renewed"
+        assert KEYRING_STAGING_ACCOUNT not in fake.entries
 
 
 class TestIsCliTokenFreshWithExpiresAt:
