@@ -9,7 +9,6 @@ import httpx
 from httpx import Response
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
-from litellm._logging import verbose_logger
 from litellm.constants import AWS_ERROR_TYPE_HEADER
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import object_mapping
@@ -312,11 +311,15 @@ def _translate_message(decoder: "AWSEventStreamDecoder", message: str) -> ModelR
         convert_generic_chunk_to_model_response_stream,
         generic_chunk_has_all_required_fields,
     )
+    from litellm.llms.openai.common_utils import OpenAIError
     from litellm.types.utils import GenericStreamingChunk
 
     event: Final = _BEDROCK_EVENT.validate_json(message)
     trace: Final = object_mapping(event.get(BEDROCK_INVOKE_TRACE_FIELD))
-    translated_chunk: Final = decoder.chunk_parser(chunk_data=event)
+    try:
+        translated_chunk: Final = decoder.chunk_parser(chunk_data=event)
+    except OpenAIError:
+        return None
     if isinstance(translated_chunk, ModelResponseStream):
         return _with_invoke_trace(translated_chunk, trace)
     if generic_chunk_has_all_required_fields(cast(dict, translated_chunk)):
@@ -750,14 +753,11 @@ class BedrockPassthroughConfig(BaseAWSLLM, BedrockModelInfo, BedrockEventStreamD
         )
 
         if "invoke" in endpoint:
-            invoke_provider: Final = AmazonInvokeConfig.get_bedrock_invoke_provider(model)
-            if invoke_provider is None:
-                verbose_logger.warning(
-                    "Bedrock passthrough spend tracking skipped: no invoke provider for model %s", model
-                )
-                return None
             return get_bedrock_event_stream_decoder(
-                invoke_provider=invoke_provider, model=model, sync_stream=True, json_mode=False
+                invoke_provider=AmazonInvokeConfig.get_bedrock_invoke_provider(model),
+                model=model,
+                sync_stream=True,
+                json_mode=False,
             )
         if "converse" in endpoint:
             return get_bedrock_event_stream_decoder(

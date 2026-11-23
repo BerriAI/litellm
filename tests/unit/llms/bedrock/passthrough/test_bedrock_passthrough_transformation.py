@@ -983,6 +983,7 @@ def test_invoke_stream_collector_keeps_usage_without_retaining_the_stream():
 OPENAI_SHAPED_INVOKE_MODELS: Final = (
     pytest.param("qwen.qwen3-32b-v1:0", id="qwen3"),
     pytest.param("mistral.mistral-large-3-675b-instruct", id="mistral-large-3"),
+    pytest.param("deepseek.v3-v1:0", id="deepseek-v3-unrecognized-invoke-provider"),
 )
 OPENAI_SHAPED_PROMPT_TOKENS: Final = 11
 OPENAI_SHAPED_COMPLETION_TOKENS: Final = 14
@@ -1064,6 +1065,41 @@ async def test_openai_shaped_invoke_stream_passthrough_bills_the_tokens_bedrock_
         OPENAI_SHAPED_PROMPT_TOKENS * prices["input_cost_per_token"]
         + OPENAI_SHAPED_COMPLETION_TOKENS * prices["output_cost_per_token"]
     )
+
+
+
+OPENAI_SHAPED_FAILURE_EVENTS: Final = (
+    pytest.param({"choices": [{"index": 0, "delta": {}, "finish_reason": "abort"}]}, id="abort"),
+    pytest.param({"choices": [], "error": {"message": "upstream failed", "code": 500}}, id="error"),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", OPENAI_SHAPED_INVOKE_MODELS)
+@pytest.mark.parametrize("failure_event", OPENAI_SHAPED_FAILURE_EVENTS)
+async def test_openai_shaped_invoke_stream_passthrough_bills_a_stream_that_ends_in_a_failure(
+    model: str, failure_event: Mapping[str, object]
+) -> None:
+    endpoint: Final = f"/model/{model}/invoke-with-response-stream"
+    callback: Final = _CaptureAsyncSuccessCallback()
+    logging_obj: Final = _stream_logging_obj(endpoint, [callback], model=model)
+    collector: Final = BedrockPassthroughConfig().create_stream_collector(
+        model=model, custom_llm_provider="bedrock", endpoint=endpoint
+    )
+    stream: Final = _openai_shaped_invoke_chunk(
+        model, [{"index": 0, "delta": {"content": OPENAI_SHAPED_TEXTS[0]}, "finish_reason": None}], {}
+    ) + _openai_shaped_invoke_chunk(model, [], {**failure_event, **INVOCATION_METRICS})
+    _feed(collector, stream, chunk_size=7)
+
+    response: Final = collector.build_logged_response(logging_obj)
+    await logging_obj.async_flush_passthrough_collected_chunks(collector=collector)
+
+    assert isinstance(response, ModelResponse)
+    assert response.choices[0].message.content == OPENAI_SHAPED_TEXTS[0]
+    assert callback.kwargs is not None
+    standard_logging_object: Final = _STANDARD_LOGGING_OBJECT.validate_python(callback.kwargs["standard_logging_object"])
+    assert standard_logging_object["completion_tokens"] > 0
+    assert callback.kwargs["response_cost"] > 0
 
 
 def test_stream_collector_logs_nothing_for_an_unrecognized_endpoint():
