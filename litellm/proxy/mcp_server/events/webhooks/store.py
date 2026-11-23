@@ -116,12 +116,16 @@ class EventStore(Protocol):
         """Terminate the row only while it is still this upstream subscription; False when it changed or ended."""
         ...
 
-    async def hold_for_unsubscribe(self, subscription_id: str, upstream_subscription_id: str | None) -> bool:
+    async def hold_for_unsubscribe(
+        self, subscription_id: str, upstream_subscription_id: str | None, generation: str | None = None
+    ) -> bool:
         """Freeze a live row as pending while it is torn down, so delivery stops and a racing subscribe is told to
         retry instead of reclaiming it; the pending deadline frees the row if teardown never finishes."""
         ...
 
-    async def delete_held(self, subscription_id: str, upstream_subscription_id: str | None) -> None:
+    async def delete_held(
+        self, subscription_id: str, upstream_subscription_id: str | None, generation: str | None = None
+    ) -> None:
         """Delete the row only while it is still held for this upstream subscription's unsubscribe."""
         ...
 
@@ -326,20 +330,33 @@ class PrismaEventStore:
                 await tx.litellm_mcpeventdelivery.delete_many(where={"subscription_id": subscription_id})
         return ended > 0
 
-    async def hold_for_unsubscribe(self, subscription_id: str, upstream_subscription_id: str | None) -> bool:
-        held: Final = await self._subscriptions.update_many(
+    async def hold_for_unsubscribe(
+        self, subscription_id: str, upstream_subscription_id: str | None, generation: str | None = None
+    ) -> bool:
+        async with self._client.tx() as tx:
+            held: Final = await tx.litellm_mcpeventsubscription.update_many(
+                where={
+                    "id": subscription_id,
+                    **({"generation": generation} if generation is not None else {}),
+                    "upstream_subscription_id": upstream_subscription_id,
+                    "status": {"in": ["active", "suspended"]},
+                },
+                data={"status": "pending", "refresh_before": datetime.now(timezone.utc) + PENDING_TTL},
+            )
+            if held:
+                await tx.litellm_mcpeventdelivery.delete_many(where={"subscription_id": subscription_id})
+        return held > 0
+
+    async def delete_held(
+        self, subscription_id: str, upstream_subscription_id: str | None, generation: str | None = None
+    ) -> None:
+        await self._subscriptions.delete_many(
             where={
                 "id": subscription_id,
                 "upstream_subscription_id": upstream_subscription_id,
-                "status": {"in": ["active", "suspended"]},
-            },
-            data={"status": "pending", "refresh_before": datetime.now(timezone.utc) + PENDING_TTL},
-        )
-        return held > 0
-
-    async def delete_held(self, subscription_id: str, upstream_subscription_id: str | None) -> None:
-        await self._subscriptions.delete_many(
-            where={"id": subscription_id, "upstream_subscription_id": upstream_subscription_id, "status": "pending"}
+                "status": "pending",
+                **({"generation": generation} if generation else {}),
+            }
         )
 
     async def delete(self, subscription_id: str) -> None:
