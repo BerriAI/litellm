@@ -28,6 +28,7 @@ _SHARED_FIELDS: Final = frozenset(("format", "enable_substitution", "substitutio
 _V25_FIELDS: Final = _SHARED_FIELDS | {"bias_score", "itn_native_numerals"}
 _V3_FIELDS: Final = _SHARED_FIELDS | {"keyterms", "topic", "previous_text", "speaker_names"}
 _V25_MODEL: Final = "prisma-v2.5"
+_V25_FIELDS_FLAG: Final = "gnani_v25_request_fields"
 _NOT_FORWARDED: Final = frozenset(
     (
         *OPENAI_TRANSCRIPTION_PARAMS,
@@ -59,7 +60,11 @@ class _PrismaTranscript(BaseModel):
 
 
 def _is_v25(model: str) -> bool:
-    return model.removeprefix("gnani/") == _V25_MODEL
+    name: Final = model.removeprefix("gnani/")
+    if litellm.utils.get_model_cost_key(f"gnani/{name}") is None:
+        return name == _V25_MODEL
+    flags: Final = litellm.get_model_info(model=name, custom_llm_provider="gnani").get("provider_specific_entry")
+    return flags is not None and flags.get(_V25_FIELDS_FLAG) == 1
 
 
 def _normalized_hint(hint: str) -> str:

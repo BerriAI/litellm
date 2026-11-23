@@ -609,6 +609,25 @@ def test_unlisted_prisma_model_gets_current_model_behavior(respx_mock: MockRoute
     }
 
 
+def test_cost_map_flag_gives_a_new_model_prisma_v25_fields(
+    respx_mock: MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(litellm.model_cost, "gnani/prisma-v2.6", litellm.model_cost["gnani/prisma-v2.5"])
+    route: Final = respx_mock.post(f"{_BASE}/stt/v3").respond(json={"success": True, "transcript": "ok"})
+    with pytest.raises(litellm.BadRequestError, match="one explicit language"):
+        litellm.transcription(model="gnani/prisma-v2.6", file=_AUDIO, api_key="test", api_base=_BASE)
+    litellm.transcription(
+        model="gnani/prisma-v2.6", file=_AUDIO, api_key="test", api_base=_BASE, language="hi", keywords=["rupees"]
+    )
+    assert _form(route.calls.last.request) == {
+        "model": b"prisma-v2.6",
+        "language_code": b"hi-IN",
+        "bias_list": b'["rupees"]',
+        "bias_score": b"1.0",
+        "audio_file": _AUDIO[1],
+    }
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("failure", "expected"), [(httpx.ConnectError, litellm.APIConnectionError), (httpx.ReadTimeout, litellm.Timeout)]
