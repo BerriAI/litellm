@@ -323,12 +323,10 @@ def test_component_keeps_both_documentation_asset_mounts(keep_route):
 
 @pytest.mark.parametrize("keep_route", (_is_backend_route, _is_gateway_route))
 def test_component_keeps_custom_documentation_paths(keep_route):
-    from litellm.proxy.scalar_reference import mount_scalar_reference
-    from litellm.proxy.swagger_reference import mount_swagger_ui
+    from litellm.proxy.scalar_reference import mount_api_references
 
     docs_app = FastAPI(docs_url=None, redoc_url=None, openapi_url="/custom-schema.json")
-    mount_scalar_reference(docs_app, "/custom-scalar")
-    mount_swagger_ui(docs_app, "/custom-swagger")
+    mount_api_references(docs_app, "/custom-scalar", "/custom-swagger")
     kept_paths = {route.path for route in docs_app.routes if keep_route(route)}
     assert {"/custom-schema.json", "/custom-scalar", "/custom-swagger"} <= kept_paths
 

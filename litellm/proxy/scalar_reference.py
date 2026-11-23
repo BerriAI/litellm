@@ -6,17 +6,27 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
+from litellm.proxy.swagger_reference import mount_swagger_ui
+
 SCALAR_ASSET_PATH: Final = "/scalar"
 _ASSET_DIR: Final = Path(__file__).with_name("scalar")
 
 
-def mount_scalar_reference(app: FastAPI, docs_url: str | None) -> None:
+def mount_api_references(
+    app: FastAPI, docs_url: str | None, swagger_url: str | None, *, lazy_features: bool = False
+) -> None:
     openapi_url: Final = app.openapi_url
-    if not docs_url or not openapi_url:
+    if not openapi_url:
         return
 
-    app.mount(SCALAR_ASSET_PATH, StaticFiles(directory=_ASSET_DIR), name="scalar")
+    if docs_url:
+        _add_scalar_reference(app, docs_url, openapi_url)
+    mount_swagger_ui(app, swagger_url, lazy_features=lazy_features)
+    if docs_url:
+        app.mount(SCALAR_ASSET_PATH, StaticFiles(directory=_ASSET_DIR), name="scalar")
 
+
+def _add_scalar_reference(app: FastAPI, docs_url: str, openapi_url: str) -> None:
     async def scalar_reference(request: Request) -> HTMLResponse:
         scope_root_path: Final[object] = request.scope.get("root_path")
         root_path: Final = scope_root_path.rstrip("/") if isinstance(scope_root_path, str) else ""

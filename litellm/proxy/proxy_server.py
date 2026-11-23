@@ -1241,8 +1241,7 @@ from fastapi.security import OAuth2PasswordBearer
 from fastapi.security.api_key import APIKeyHeader
 from fastapi.staticfiles import StaticFiles
 
-from litellm.proxy.scalar_reference import mount_scalar_reference
-from litellm.proxy.swagger_reference import mount_swagger_ui
+from litellm.proxy.scalar_reference import mount_api_references
 
 # import enterprise folder
 enterprise_router = APIRouter()
@@ -2261,7 +2260,7 @@ app = FastAPI(
     strict_content_type=False,
 )
 
-mount_scalar_reference(app, docs_url)
+mount_api_references(app, docs_url, get_swagger_url(), lazy_features=True)
 
 ## V2 OTEL: instrument the FastAPI app for server spans (gated by
 ## LITELLM_OTEL_V2). This MUST run at app-creation time — once the lifespan runs,
@@ -3164,8 +3163,6 @@ app.add_middleware(InFlightRequestsMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(GZipBufferedResponseMiddleware)
 
-
-mount_swagger_ui(app, get_swagger_url(), lazy_features=True)
 
 root_redirect_url: Final[str | None] = os.getenv("ROOT_REDIRECT_URL")
 if docs_url != "/" and root_redirect_url is not None:

@@ -74,7 +74,10 @@ def test_health_routes_need_no_credentials() -> None:
     assert client.get("/readyz").json() == {"status": "ok"}
 
 
-@pytest.mark.parametrize(("root_path", "api_prefix"), (("", "/api/v1"), ("/gateway", "/fleet/v1")))
+@pytest.mark.parametrize(
+    ("root_path", "api_prefix"),
+    (("", "/api/v1"), ("/gateway", "/fleet/v1"), ("", "/scalar"), ("", "/swagger")),
+)
 def test_control_plane_viewers_use_local_assets_and_their_own_schema(root_path: str, api_prefix: str) -> None:
     app: Final = create_app(build_container(_settings(api_prefix=api_prefix)), Licensed())
     client: Final = TestClient(app, root_path=root_path)
@@ -104,6 +107,7 @@ def test_control_plane_viewers_use_local_assets_and_their_own_schema(root_path: 
     assert schema.status_code == 200
     operation: Final = schema.json()["paths"][f"{api_prefix}/auth/me"]["get"]
     assert operation["security"] == [{"ControlPlaneBearer": []}]
+    assert client.get(f"{api_url}/auth/me").status_code == 401
     assert client.get(f"{root_path}/redoc").status_code == 404
 
 

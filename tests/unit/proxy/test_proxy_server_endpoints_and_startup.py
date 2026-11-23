@@ -15779,8 +15779,7 @@ def test_production_app_docs_urls_are_wired_to_the_real_env_helpers():
 def _build_app_with_docs_env(monkeypatch, *, disabled: bool, overrides=None) -> FastAPI:
     from litellm.proxy import utils as proxy_utils
     from litellm.proxy.health_endpoints._health_endpoints import router as health_router
-    from litellm.proxy.scalar_reference import mount_scalar_reference
-    from litellm.proxy.swagger_reference import mount_swagger_ui
+    from litellm.proxy.scalar_reference import mount_api_references
 
     for flag in ("DOCS_URL", "SWAGGER_URL", "OPENAPI_URL"):
         monkeypatch.delenv(flag, raising=False)
@@ -15797,8 +15796,7 @@ def _build_app_with_docs_env(monkeypatch, *, disabled: bool, overrides=None) -> 
         redoc_url=None,
         openapi_url=proxy_utils._get_openapi_url(),
     )
-    mount_scalar_reference(app_under_test, proxy_utils._get_docs_url())
-    mount_swagger_ui(app_under_test, proxy_utils.get_swagger_url(), lazy_features=True)
+    mount_api_references(app_under_test, proxy_utils._get_docs_url(), proxy_utils.get_swagger_url(), lazy_features=True)
     app_under_test.include_router(health_router)
     return app_under_test
 
@@ -15843,24 +15841,35 @@ def test_disabling_docs_does_not_disable_other_routes(monkeypatch):
     assert client.get("/health/liveliness").status_code == 200
 
 
-def test_documentation_uses_custom_urls_under_proxy_prefix(monkeypatch):
+@pytest.mark.parametrize(
+    ("docs_url", "swagger_url"),
+    (
+        ("/reference", "/interactive"),
+        ("/scalar/docs", "/scalar/interactive"),
+        ("/reference", "/scalar/interactive"),
+        ("/swagger/docs", "/swagger/interactive"),
+    ),
+)
+def test_documentation_uses_custom_urls_under_proxy_prefix(
+    monkeypatch: pytest.MonkeyPatch, docs_url: str, swagger_url: str
+) -> None:
     docs_app = _build_app_with_docs_env(
         monkeypatch,
         disabled=False,
         overrides={
-            "DOCS_URL": "/reference",
-            "SWAGGER_URL": "/interactive",
+            "DOCS_URL": docs_url,
+            "SWAGGER_URL": swagger_url,
             "OPENAPI_URL": "/schema.json",
         },
     )
     client = TestClient(docs_app, root_path="/gateway")
 
-    scalar = client.get("/gateway/reference")
+    scalar = client.get(f"/gateway{docs_url}")
     assert scalar.status_code == 200
     assert 'src="/gateway/scalar/scalar-1.81.0.js"' in scalar.text
     assert 'data-openapi-url="/gateway/schema.json"' in scalar.text
     assert 'data-server-url="/gateway"' in scalar.text
-    swagger = client.get("/gateway/interactive")
+    swagger = client.get(f"/gateway{swagger_url}")
     assert swagger.status_code == 200
     assert 'src="/gateway/swagger/swagger-ui-bundle.js"' in swagger.text
     assert "url: '/gateway/schema.json'" in swagger.text
