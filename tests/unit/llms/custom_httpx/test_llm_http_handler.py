@@ -620,7 +620,7 @@ class _DeploymentSuccessRecorder(CustomLogger):
         self.called = asyncio.Event()
 
     async def async_post_call_success_deployment_hook(
-        self, request_data: dict, response: object, call_type: CallTypes | None
+        self, request_data: dict[str, object], response: object, call_type: CallTypes | None
     ) -> None:
         self.request_data = request_data
         self.called.set()
