@@ -29,7 +29,10 @@ from litellm.litellm_core_utils.tool_fields import (
     drops_mcp_servers,
     tools_without_mcp_servers,
 )
-from litellm.llms.anthropic.common_utils import strip_encrypted_reasoning_blocks_from_anthropic_messages
+from litellm.llms.anthropic.common_utils import (
+    strip_encrypted_reasoning_blocks_from_anthropic_messages,
+    strip_unsignable_thinking_blocks_for_claude,
+)
 from litellm.llms.anthropic.pass_through.adapters.transformation import (
     AnthropicAdapter,
     openai_thinking_routes_to_responses,
@@ -778,6 +781,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         )
 
         provider_kwargs: Final = extra_kwargs or {}
+        base_model: Final = provider_kwargs.get("base_model")
         custom_llm_provider: Final = provider_kwargs.get("custom_llm_provider")
         target_provider: Final = custom_llm_provider if isinstance(custom_llm_provider, str) else None
         drop_params: Final = drops_unsupported_params(provider_kwargs.get("drop_params"))
@@ -796,7 +800,9 @@ class LiteLLMMessagesToCompletionTransformationHandler:
 
         request_data: Final[dict[str, object]] = {
             "model": model,
-            "messages": messages,
+            "messages": strip_unsignable_thinking_blocks_for_claude(
+                messages, model, base_model if isinstance(base_model, str) else None
+            ),
             "max_tokens": max_tokens,
         }
 

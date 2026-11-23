@@ -12,7 +12,8 @@ import subprocess
 import sys
 import time
 import traceback
-from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Generator, Iterable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from datetime import datetime as dt_object
 from functools import lru_cache
 from types import MappingProxyType, TracebackType
@@ -711,12 +712,16 @@ class Logging(LiteLLMLoggingBaseClass):
 
         # Initialize dynamic callbacks
         self.dynamic_input_callbacks: list[str | Callable | CustomLogger] | None = dynamic_input_callbacks
-        self.dynamic_success_callbacks: list[str | Callable | CustomLogger] | None = dynamic_success_callbacks
-        self.dynamic_async_success_callbacks: list[str | Callable | CustomLogger] | None = (
+        self.dynamic_success_callbacks: list[str | Callable[..., object] | CustomLogger] | None = (
+            dynamic_success_callbacks
+        )
+        self.dynamic_async_success_callbacks: list[str | Callable[..., object] | CustomLogger] | None = (
             dynamic_async_success_callbacks
         )
-        self.dynamic_failure_callbacks: list[str | Callable | CustomLogger] | None = dynamic_failure_callbacks
-        self.dynamic_async_failure_callbacks: list[str | Callable | CustomLogger] | None = (
+        self.dynamic_failure_callbacks: list[str | Callable[..., object] | CustomLogger] | None = (
+            dynamic_failure_callbacks
+        )
+        self.dynamic_async_failure_callbacks: list[str | Callable[..., object] | CustomLogger] | None = (
             dynamic_async_failure_callbacks
         )
 
@@ -780,6 +785,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self.enqueue_deferred_logging: Callable[[], None] | None = None
         self._async_success_scheduled: bool = False
         self._async_success_enqueued: bool = False
+        self._sync_success_scheduled: bool = False
         self.on_detached_stream_failure: Callable[[Exception], Awaitable[None]] | None = None
         self.shadow_eval_request_snapshot: GuardrailRequestSnapshot | None = None
 
@@ -1812,6 +1818,22 @@ class Logging(LiteLLMLoggingBaseClass):
             return 0.0
         return (end_seconds - start_seconds) * 1000
 
+    @contextmanager
+    def pricing_left_unrecorded(self) -> Generator[None]:
+        previous_cost_breakdown: Final = self.cost_breakdown
+        previous_billed_token_rates: Final = self.billed_token_rates
+        debug_key: Final = "response_cost_failure_debug_information"
+        previous_failure_debug_info: Final = self.model_call_details.get(debug_key)
+        try:
+            yield
+        finally:
+            self.cost_breakdown = previous_cost_breakdown
+            self.billed_token_rates = previous_billed_token_rates
+            if previous_failure_debug_info is None:
+                self.model_call_details.pop(debug_key, None)
+            else:
+                self.model_call_details[debug_key] = previous_failure_debug_info
+
     def set_cost_breakdown(
         self,
         input_cost: float,
@@ -2387,6 +2409,14 @@ class Logging(LiteLLMLoggingBaseClass):
         self._async_success_scheduled = True
         return True
 
+    def claim_sync_success_log(self) -> bool:
+        if self.stream:
+            return True
+        if self._sync_success_scheduled:
+            return False
+        self._sync_success_scheduled = True
+        return True
+
     def mark_logging_complete(
         self,
         event_type: Literal["async_success", "sync_success", "async_failure", "sync_failure"],
@@ -2714,7 +2744,7 @@ class Logging(LiteLLMLoggingBaseClass):
             elif (
                 self.call_type == CallTypes.generate_content.value
                 or self.call_type == CallTypes.agenerate_content.value
-            ):
+            ) and not isinstance(result, ModelResponse):
                 result = self._handle_non_streaming_google_genai_generate_content_response_logging(result=result)
             elif self.call_type == CallTypes.asend_message.value or self.call_type == CallTypes.send_message.value:
                 result = self._handle_a2a_response_logging(result=result)
@@ -4291,6 +4321,8 @@ class Logging(LiteLLMLoggingBaseClass):
         end_time: datetime.datetime,
         cache_hit: bool | None = None,
     ) -> None:
+        if not self.claim_sync_success_log():
+            return
         executor.submit(self.success_handler, result, start_time, end_time, cache_hit)
 
     def _model_call_details_with_request_messages(self) -> dict[str, object]:  # mutable-ok: loggers take a dict

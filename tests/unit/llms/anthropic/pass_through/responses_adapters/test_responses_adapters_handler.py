@@ -50,6 +50,66 @@ RESPONSES_SSE_BODY = (
 )
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("stored_prefix", "sent_instructions"), [("Stable prefix", None), ("Older prefix", "Stable prefix")]
+)
+async def test_messages_follow_up_sends_the_system_prompt_only_when_the_stored_chain_lacks_it(
+    stored_prefix: str, sent_instructions: str | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    response_body: Final = {
+        "id": "resp_wire",
+        "object": "response",
+        "created_at": 1789788253,
+        "status": "completed",
+        "model": "gpt-6.2-sol",
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_wire",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+            }
+        ],
+        "usage": {"input_tokens": 10, "output_tokens": 1, "total_tokens": 11},
+    }
+    stored_chain: Final = {
+        "object": "list",
+        "data": [
+            {"type": "message", "role": "developer", "content": [{"type": "input_text", "text": stored_prefix}]},
+            {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "first"}]},
+        ],
+        "first_id": "msg_1",
+        "last_id": "msg_2",
+        "has_more": False,
+    }
+    with respx.mock(assert_all_called=True) as router:
+        router.get("https://api.openai.com/v1/responses/resp_prior/input_items").mock(
+            return_value=httpx.Response(200, json=stored_chain)
+        )
+        upstream: Final = router.post("https://api.openai.com/v1/responses").mock(
+            return_value=httpx.Response(200, json=response_body)
+        )
+        response: Final = await litellm.anthropic.messages.acreate(
+            model="openai/responses/gpt-6.2-sol",
+            max_tokens=16,
+            system="Stable prefix",
+            messages=[{"role": "user", "content": "again"}],
+            api_key="sk-test",
+            cache={"no-cache": True},
+            previous_response_id="resp_prior",
+        )
+    request_body: Final = json.loads(upstream.calls[0].request.content)
+    assert request_body.get("instructions") == sent_instructions
+    assert request_body["previous_response_id"] == "resp_prior"
+    assert request_body["input"] == [
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "again"}]}
+    ]
+    assert response["content"] == [{"type": "text", "text": "ok"}]
+
+
 def test_build_responses_kwargs_never_asks_the_nested_call_to_replay_a_stream():
     responses_kwargs: Final = _build_responses_kwargs(
         max_tokens=1024,
@@ -60,6 +120,147 @@ def test_build_responses_kwargs_never_asks_the_nested_call_to_replay_a_stream():
 
     assert not converted_stream_requested(responses_kwargs)
     assert responses_kwargs["custom_llm_provider"] == "azure"
+
+
+@pytest.mark.parametrize(
+    ("system", "params", "expected_instructions", "expected_role"),
+    [
+        ("System prefix", {"instructions": "Caller prompt"}, "Caller prompt", "developer"),
+        ("System prefix", {"store": True, "instructions": "Caller prompt"}, "Caller prompt", "developer"),
+        (
+            "System prefix",
+            {"previous_response_id": "resp_previous", "instructions": "Caller prompt"},
+            "System prefix\nCaller prompt",
+            "user",
+        ),
+        (
+            "System prefix",
+            {"store": False, "extra_body": {"truncation": "auto", "instructions": "Caller prompt"}},
+            "System prefix\nCaller prompt",
+            "user",
+        ),
+        (
+            "System prefix",
+            {
+                "store": False,
+                "truncation": "auto",
+                "extra_body": {"truncation": "disabled", "instructions": "Caller prompt"},
+            },
+            "Caller prompt",
+            "developer",
+        ),
+        (
+            "System prefix",
+            {"extra_body": {"store": False, "instructions": "Caller prompt"}},
+            "Caller prompt",
+            "developer",
+        ),
+        (None, {"instructions": "Caller prompt"}, "Caller prompt", "user"),
+        ("System prefix", {"store": False, "instructions": "Caller prompt"}, "Caller prompt", "developer"),
+        (
+            "System prefix",
+            {"store": False, "previous_response_id": "resp_previous", "instructions": "Caller prompt"},
+            "System prefix\nCaller prompt",
+            "user",
+        ),
+        (
+            "System prefix",
+            {
+                "store": False,
+                "previous_response_id": "resp_previous",
+                "extra_body": {"previous_response_id": None},
+                "instructions": "Caller prompt",
+            },
+            "Caller prompt",
+            "developer",
+        ),
+        (
+            "System prefix",
+            {
+                "store": False,
+                "conversation": "conv_previous",
+                "extra_body": {"conversation": None},
+                "instructions": "Caller prompt",
+            },
+            "Caller prompt",
+            "developer",
+        ),
+        (
+            "System prefix",
+            {
+                "store": False,
+                "conversation": "conv_previous",
+                "extra_body": {"previous_response_id": None},
+                "instructions": "Caller prompt",
+            },
+            "System prefix\nCaller prompt",
+            "user",
+        ),
+        (
+            "System prefix",
+            {"store": False, "extra_body": {"conversation": "conv_previous"}, "instructions": "Caller prompt"},
+            "System prefix\nCaller prompt",
+            "user",
+        ),
+        (
+            "System prefix",
+            {
+                "store": False,
+                "previous_response_id": "resp_previous",
+                "additional_drop_params": ["previous_response_id"],
+                "instructions": "Caller prompt",
+            },
+            "Caller prompt",
+            "developer",
+        ),
+        (
+            "System prefix",
+            {
+                "store": False,
+                "truncation": "auto",
+                "additional_drop_params": ["truncation"],
+                "instructions": "Caller prompt",
+            },
+            "Caller prompt",
+            "developer",
+        ),
+        (
+            "System prefix",
+            {
+                "store": False,
+                "extra_body": {"previous_response_id": "resp_previous"},
+                "additional_drop_params": ["previous_response_id"],
+                "instructions": "Caller prompt",
+            },
+            "System prefix\nCaller prompt",
+            "user",
+        ),
+    ],
+)
+def test_build_responses_kwargs_preserves_caller_instructions(
+    system: str | None, params: Mapping[str, object], expected_instructions: str, expected_role: str
+) -> None:
+    result: Final = _build_responses_kwargs(
+        model="openai/gpt-6.2-sol",
+        messages=[{"role": "user", "content": "hello"}],
+        max_tokens=16,
+        system=system,
+        extra_kwargs=params,
+    )
+    extra_body: Final = result.get("extra_body")
+    instructions: Final = (
+        extra_body.get("instructions", result.get("instructions"))
+        if isinstance(extra_body, dict)
+        else result.get("instructions")
+    )
+    assert instructions == expected_instructions
+    user_message: Final = {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hello"}]}
+    developer_message: Final = {
+        "type": "message",
+        "role": "developer",
+        "content": [{"type": "input_text", "text": system}],
+    }
+    assert result["input"] == ([developer_message, user_message] if expected_role == "developer" else [user_message])
 
 
 def test_build_responses_kwargs_derives_prompt_cache_key_from_claude_code_session_id():
