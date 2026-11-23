@@ -890,7 +890,7 @@ class AmazonBedrockGlobalConfig:
         """
         return {"region_name": "aws_region_name"}
 
-    def map_special_auth_params(self, non_default_params: Mapping[str, object], optional_params: dict[str, object]):
+    def map_special_auth_params(self, non_default_params: Mapping[str, object], optional_params: dict):
         mapped_params: Final = self.get_mapped_special_auth_params()
         for param, value in non_default_params.items():
             if param in mapped_params:
@@ -2221,9 +2221,7 @@ class BedrockModelInfo(BaseLLMModelInfo):
         return model.replace("claude_platform/", "", 1)
 
     @staticmethod
-    def map_claude_platform_auth_params(
-        passed_params: Mapping[str, object], optional_params: dict[str, object]
-    ) -> dict[str, object]:
+    def map_claude_platform_auth_params(passed_params: Mapping[str, object], optional_params: dict) -> dict:
         """
         Map Claude Platform route auth params that are not OpenAI request params.
         """
@@ -2793,7 +2791,7 @@ class CommonBatchFilesUtils:
         service_name: str,
         data: str | Mapping[str, object] | BedrockCreateBatchRequest,
         endpoint_url: str,
-        optional_params: dict[str, object],
+        optional_params: dict,
         method: str = "POST",
     ) -> tuple:
         """
