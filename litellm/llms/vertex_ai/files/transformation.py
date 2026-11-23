@@ -38,7 +38,6 @@ from litellm.litellm_core_utils.core_helpers import (
     allowed_openai_param_names,
     as_object_list,
     as_str_mapping,
-    drops_unsupported_params,
     iter_items,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging
@@ -47,11 +46,15 @@ from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
     extract_file_data,
     extract_file_metadata,
 )
+from litellm.litellm_core_utils.tool_fields import hosted_mcp_batch_row_remedy, tool_params_without_hosted_mcp
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.anthropic.chat.transformation import ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY
 from litellm.llms.base_llm.base_utils import map_developer_role_to_system_role
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.llms.base_llm.files.batch_records import responses_batch_body_to_chat_body
+from litellm.llms.base_llm.files.batch_records import (
+    responses_batch_body_to_chat_body,
+    row_or_deployment_drop_params,
+)
 from litellm.llms.base_llm.files.transformation import (
     BaseFilesConfig,
     BaseFileUploadStream,
@@ -817,11 +820,18 @@ def _openai_batch_jsonl_entry_to_vertex_anthropic_row(
     config: Final = VertexAIAnthropicConfig()
     bare_model: Final = model.rsplit("/", 1)[-1]
     params: Final = {**deployment_params, **request_params}
-    drop_params: Final = drops_unsupported_params(params.get("drop_params"))
-    chat_params: Final = {
-        **get_non_default_completion_params(params),
-        **{key: value for key, value in params.items() if key in _CLAUDE_BATCH_OPENAI_PARAMS},
-    }
+    drop_params: Final = row_or_deployment_drop_params(request_params, deployment_params.get("drop_params"))
+    chat_params: Final = tool_params_without_hosted_mcp(
+        {
+            **get_non_default_completion_params(params),
+            **{key: value for key, value in params.items() if key in _CLAUDE_BATCH_OPENAI_PARAMS},
+        },
+        model=bare_model,
+        route="vertex_ai",
+        drop_params=drop_params,
+        remedy=hosted_mcp_batch_row_remedy(request_params.get("drop_params")),
+        handling="drops",
+    )
     if any(map(_names_the_response_format_tool, iter_items(chat_params.get("tools") or ()))):
         raise ValueError(
             f"tool name {RESPONSE_FORMAT_TOOL_NAME!r} is reserved for response_format on Claude, "
@@ -1054,7 +1064,11 @@ def _openai_batch_jsonl_entry_to_vertex_rows(
         raise TypeError("`body` on batch requests must be a JSON object, but was missing or not an object")
     chat_request_body: Final = (
         {
-            **responses_batch_body_to_chat_body(entry_body, custom_llm_provider="vertex_ai"),
+            **responses_batch_body_to_chat_body(
+                entry_body,
+                custom_llm_provider="vertex_ai",
+                drop_params=row_or_deployment_drop_params(entry_body, deployment_params.get("drop_params")),
+            ),
             **{key: value for key, value in entry_body.items() if key == "drop_params" and value is not None},
         }
         if _is_responses_batch_entry(openai_entry)
@@ -1073,7 +1087,7 @@ def _openai_batch_jsonl_entry_to_vertex_rows(
                 deployment_params=deployment_params,
             ),
         )
-    drop_params: Final = drops_unsupported_params(entry_body.get("drop_params", deployment_params.get("drop_params")))
+    drop_params: Final = row_or_deployment_drop_params(entry_body, deployment_params.get("drop_params"))
     vertex_request_body: Final = transform_request_body(
         messages=chat_messages,
         model=chat_request_body.get("model", ""),
@@ -1508,7 +1522,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         config: Final = VertexGeminiConfig()
         raw_model: Final = openai_request_body.get("model", "")
         model: Final = raw_model if isinstance(raw_model, str) else ""
-        drop_params: Final = drops_unsupported_params(openai_request_body.get("drop_params", deployment_drop_params))
+        drop_params: Final = row_or_deployment_drop_params(openai_request_body, deployment_drop_params)
         sampling_params: Final = tuple(
             p for p in ("temperature", "top_p", "top_k") if openai_request_body.get(p) is not None
         )
@@ -1518,12 +1532,20 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             )
         vertex_params: Final = config.map_openai_params(
             model=model,
-            non_default_params=openai_request_body,
+            non_default_params=tool_params_without_hosted_mcp(
+                openai_request_body,
+                model=model,
+                route="vertex_ai",
+                drop_params=drop_params,
+                remedy=hosted_mcp_batch_row_remedy(openai_request_body.get("drop_params")),
+                handling="drops",
+            ),
             optional_params={},
             drop_params=drop_params,
             allow_integer_enums=False,
             allow_parameters_json_schema=False,
             allowed_openai_params=allowed_openai_param_names(openai_request_body.get("allowed_openai_params")),
+            allow_unsupported_n=True,
         )
         if (
             "service_tier" in vertex_params

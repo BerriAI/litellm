@@ -3521,6 +3521,7 @@ dependencies = [
  "litellm-error",
  "litellm-http",
  "litellm-python-compat",
+ "litellm-redaction",
  "litellm-secret-value",
  "litellm-tracing",
  "moka",
@@ -3881,7 +3882,7 @@ dependencies = [
  "base64 0.22.1",
  "fancy-regex 0.19.2",
  "litellm-python-compat",
- "litellm-tracing",
+ "litellm-redaction",
  "num-traits",
  "regex",
  "rstest",
@@ -3904,10 +3905,10 @@ dependencies = [
  "litellm-coroutine",
  "litellm-db",
  "litellm-python-compat",
+ "litellm-redaction",
  "litellm-redis-store",
  "litellm-repositories",
  "litellm-spend-log-writer",
- "litellm-tracing",
  "rstest",
  "serde",
  "serde_json",
@@ -3976,7 +3977,7 @@ dependencies = [
  "fancy-regex 0.19.2",
  "litellm-error",
  "litellm-llms-types",
- "litellm-tracing",
+ "litellm-redaction",
  "rstest",
  "serde",
  "serde_json",
@@ -4456,6 +4457,7 @@ dependencies = [
  "litellm-llms",
  "litellm-llms-types",
  "litellm-python-compat",
+ "litellm-redaction",
  "litellm-router-types",
  "litellm-secret-value",
  "litellm-secrets",
@@ -4635,6 +4637,7 @@ dependencies = [
  "time",
  "tokio",
  "tokio-util",
+ "tracing",
  "url",
 ]
 
@@ -4666,7 +4669,6 @@ dependencies = [
  "litellm-cost",
  "litellm-error",
  "litellm-python-compat",
- "litellm-tracing",
  "macro_rules_attribute",
  "rstest",
  "schemars 1.2.2",
@@ -4677,6 +4679,7 @@ dependencies = [
  "strum",
  "thiserror 2.0.21",
  "time",
+ "tracing",
 ]
 
 [[package]]
@@ -4692,12 +4695,12 @@ dependencies = [
  "litellm-http",
  "litellm-s3",
  "litellm-secret-value",
- "litellm-tracing",
  "percent-encoding",
  "reqwest",
  "rstest",
  "thiserror 2.0.21",
  "tokio",
+ "tracing",
  "url",
 ]
 
@@ -4755,6 +4758,7 @@ dependencies = [
  "litellm-model-catalog",
  "litellm-model-catalog-refresh",
  "litellm-python-compat",
+ "litellm-redaction",
  "litellm-redis-client",
  "litellm-redis-connect",
  "litellm-redis-resolve",
@@ -4810,6 +4814,16 @@ dependencies = [
  "serde_with",
  "thiserror 2.0.21",
  "unicode-general-category",
+]
+
+[[package]]
+name = "litellm-redaction"
+version = "0.1.0"
+dependencies = [
+ "aho-corasick",
+ "fancy-regex 0.19.2",
+ "regex",
+ "rstest",
 ]
 
 [[package]]
@@ -5066,12 +5080,12 @@ dependencies = [
  "litellm-env",
  "litellm-secret-value",
  "litellm-secrets-types",
- "litellm-tracing",
  "rstest",
  "serde_json",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
+ "tracing",
  "veil",
  "wiremock",
 ]
@@ -5109,7 +5123,6 @@ dependencies = [
  "litellm-python-compat",
  "litellm-secret-value",
  "litellm-secrets-types",
- "litellm-tracing",
  "moka",
  "percent-encoding",
  "rcgen",
@@ -5120,6 +5133,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
+ "tracing",
  "url",
  "veil",
  "wiremock",
@@ -5356,11 +5370,11 @@ dependencies = [
 name = "litellm-tracing"
 version = "0.1.0"
 dependencies = [
- "aho-corasick",
  "base64 0.22.1",
  "fancy-regex 0.19.2",
+ "litellm-redaction",
+ "parking_lot",
  "percent-encoding",
- "regex",
  "rstest",
  "serde_json",
  "tokio",

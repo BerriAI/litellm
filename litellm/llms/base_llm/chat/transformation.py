@@ -12,6 +12,7 @@ import openai
 from pydantic import BaseModel, TypeAdapter
 
 from litellm.constants import DEFAULT_MAX_TOKENS, RESPONSE_FORMAT_TOOL_NAME
+from litellm.litellm_core_utils.allowed_tools_tool_choice import HostedMcpToolHandling
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -528,6 +529,9 @@ class BaseConfig(ABC):
     @property
     def accepts_reasoning_summary_in_reasoning_effort(self) -> bool:
         return False
+
+    def hosted_mcp_tool_handling(self, model: str) -> HostedMcpToolHandling:
+        return "forwards"
 
     def refuses_reasoning_effort(self, model: str, reasoning_effort: object, *, base_model: str | None) -> bool:
         return False

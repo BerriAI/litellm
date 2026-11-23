@@ -12,6 +12,7 @@ import contextlib
 import hmac
 import inspect
 import json
+import logging
 import os
 import posixpath
 import re
@@ -33,7 +34,11 @@ from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm import get_llm_provider
-from litellm._logging import redact_internal_details_from_client_message, verbose_proxy_logger
+from litellm._logging import (
+    CALLER_ERROR_LOG_EXTRA,
+    redact_internal_details_from_client_message,
+    verbose_proxy_logger,
+)
 from litellm._uuid import uuid
 from litellm.constants import (
     ALLOWED_VERTEX_AI_PASSTHROUGH_HEADERS,
@@ -1769,7 +1774,11 @@ async def _bedrock_count_tokens(
     request: Request, user_api_key_dict: UserAPIKeyAuth, request_body: dict[str, object], litellm_call_id: str
 ) -> Mapping[str, object]:
     from litellm.llms.bedrock.common_utils import BedrockError
-    from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensHandler
+    from litellm.llms.bedrock.count_tokens.handler import (
+        BedrockCountTokensHandler,
+        BedrockCountTokensRequestError,
+        is_caller_refusal,
+    )
     from litellm.proxy.litellm_pre_call_utils import request_routing_metadata
     from litellm.proxy.proxy_server import route_count
 
@@ -1830,7 +1839,15 @@ async def _bedrock_count_tokens(
 
     except BedrockError as e:
         # Convert BedrockError to HTTPException for FastAPI
-        verbose_proxy_logger.error("BedrockError in handle_bedrock_count_tokens: %s", e)
+        is_caller_error: Final = is_caller_refusal(
+            e.status_code, e.message, isinstance(e, BedrockCountTokensRequestError)
+        )
+        verbose_proxy_logger.log(
+            logging.WARNING if is_caller_error else logging.ERROR,
+            "BedrockError in handle_bedrock_count_tokens: %s",
+            e,
+            extra=CALLER_ERROR_LOG_EXTRA if is_caller_error else None,
+        )
         from litellm.litellm_core_utils.llm_response_utils.get_headers import get_response_headers
 
         provider_headers: Final = e.response.headers

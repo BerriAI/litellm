@@ -24,7 +24,7 @@ from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitErro
 from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit, socket_session_usage
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.redis.stores.rate_limits import RATE_LIMITS_TARGET
-from litellm.types.utils import CallTypes, Usage
+from litellm.types.utils import CallTypes, LLMResponseTypes, Usage
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -82,7 +82,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         self.internal_usage_cache = internal_usage_cache
         self._clock: Final = clock
 
-    def print_verbose(self, print_statement) -> None:
+    def print_verbose(self, print_statement: object) -> None:
         try:
             verbose_proxy_logger.debug(print_statement)
             if litellm.set_verbose:
@@ -522,7 +522,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         )
 
     @with_service_target(RATE_LIMITS_TARGET)
-    async def async_log_success_event(self, kwargs, response_obj: object, start_time, end_time) -> None:
+    async def async_log_success_event(self, kwargs, response_obj: object, start_time: object, end_time: object) -> None:
         from litellm.proxy.common_utils.callback_utils import (
             get_model_group_from_litellm_kwargs,
         )
@@ -723,7 +723,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             self.print_verbose(e)
 
     @with_service_target(RATE_LIMITS_TARGET)
-    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time) -> None:
+    async def async_log_failure_event(self, kwargs, response_obj: object, start_time: object, end_time: object) -> None:
         try:
             self.print_verbose("Inside Max Parallel Request Failure Hook")
             litellm_parent_otel_span: Final[Span | None] = get_parent_otel_span_from_kwargs(kwargs=kwargs)
@@ -856,7 +856,9 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             return None
 
     @with_service_target(RATE_LIMITS_TARGET)
-    async def async_post_call_success_hook(self, data: dict, user_api_key_dict: UserAPIKeyAuth, response) -> None:
+    async def async_post_call_success_hook(
+        self, data: dict, user_api_key_dict: UserAPIKeyAuth, response: LLMResponseTypes
+    ) -> None:
         """
         Retrieve the key's remaining rate limits.
         """

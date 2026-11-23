@@ -286,7 +286,7 @@ class _CiscoAIDefenseMcpMixin:
 
     async def _inspect_mcp_request(
         self,
-        data: dict,
+        data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth,
     ) -> object:
         del user_api_key_dict  # carried via logging metadata, not the wire payload
@@ -320,7 +320,7 @@ class _CiscoAIDefenseMcpMixin:
 
     async def _inspect_mcp_response(
         self,
-        request_data: dict,
+        request_data: dict[str, object],
         response: object,
         user_api_key_dict: UserAPIKeyAuth | None = None,
         redact_response_obj: object = None,
@@ -360,7 +360,7 @@ class _CiscoAIDefenseMcpMixin:
 
     def _build_mcp_request_payload(
         self,
-        data: dict,
+        data: dict[str, object],
     ) -> dict[str, object] | None:
         """Build the JSON-RPC ``tools/call`` envelope sent to ``/inspect/mcp``.
 
@@ -400,7 +400,7 @@ class _CiscoAIDefenseMcpMixin:
 
     def _build_mcp_response_payload(
         self,
-        request_data: dict,
+        request_data: dict[str, object],
         response: object,
     ) -> dict[str, object] | None:
         """Build the MCP response-inspection body sent to ``/inspect/mcp``."""
