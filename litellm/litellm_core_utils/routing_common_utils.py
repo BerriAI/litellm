@@ -1,9 +1,15 @@
 import hashlib
 import json
 from collections.abc import Mapping, Sequence
+from enum import Enum
 from itertools import chain
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, TypeVar, cast
+from typing import (
+    TYPE_CHECKING,
+    Final,
+    TypeVar,
+    cast,  # noqa: TID251  # fallback chain values can be model names or per-target overrides
+)
 
 from pydantic import TypeAdapter, ValidationError
 
@@ -15,7 +21,7 @@ from litellm._logging import verbose_logger, verbose_router_logger
 from litellm.constants import ROUTER_FALLBACK_ERROR_DETAIL_MAX_CHARS, ROUTER_FALLBACK_GROUP_LISTING_MAX_GROUPS
 from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
-from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider, inferred_provider
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_structure
 from litellm.llms.sagemaker.common_utils import deployment_inference_component
@@ -350,6 +356,105 @@ def _as_fallback_entries(fallbacks: object) -> tuple[Mapping[str, object], ...] 
         return None
 
 
+def _check_stripped_model_group(model_group: str, fallback_key: str) -> bool:
+    """
+    Handles wildcard routing scenario
+
+    where fallbacks set like:
+    [{"gpt-3.5-turbo": ["claude-3-haiku"]}]
+
+    but model_group is like:
+    "openai/gpt-3.5-turbo"
+
+    Returns:
+    - True if the stripped model group == fallback_key
+    """
+    for provider in litellm.provider_list:
+        _provider = provider.value if isinstance(provider, Enum) else provider
+        if model_group.startswith(f"{_provider}/"):
+            stripped_model_group = model_group.replace(f"{_provider}/", "")
+            if stripped_model_group == fallback_key:
+                return True
+    return False
+
+
+def _provider_prefixed_model_group(model_group: str, fallback_keys: Sequence[str]) -> str | None:
+    if "/" in model_group or not any(key.endswith(f"/{model_group}") for key in fallback_keys):
+        return None
+    provider: Final = inferred_provider(model_group)
+    return f"{provider}/{model_group}" if provider else None
+
+
+def get_fallback_model_group_with_owner(
+    fallbacks: Sequence[Mapping[str, list[str]] | str],  # mutable-ok: accepts the existing fallback configuration
+    model_group: str,
+) -> tuple[str | None, list[str] | None, int | None]:  # mutable-ok: retains the router's fallback list contract
+    indexed: Final = tuple(enumerate(fallbacks))
+    exact: Final = next(
+        (
+            (index, item)
+            for index, item in indexed
+            if isinstance(item, dict) and item and next(iter(item)) == model_group
+        ),
+        None,
+    )
+    preceding: Final = indexed[: exact[0]] if exact is not None else indexed
+    generic_idx: Final = next(
+        (index for index, item in reversed(preceding) if isinstance(item, dict) and next(iter(item), None) == "*"),
+        None,
+    )
+    if exact is not None:
+        return model_group, exact[1][model_group], generic_idx
+    plain_target: Final = next((item for _, item in reversed(preceding) if isinstance(item, str)), None)
+    if plain_target is not None:
+        return plain_target, [plain_target], generic_idx
+    fallback_keys: Final = tuple(next(iter(item)) for item in fallbacks if isinstance(item, dict) and item)
+    prefixed_model_group: Final = _provider_prefixed_model_group(model_group, fallback_keys)
+    matching: Final = next(
+        (
+            (next(iter(item)), item)
+            for _, item in reversed(indexed)
+            if isinstance(item, dict)
+            and item
+            and (
+                next(iter(item)) == prefixed_model_group
+                or _check_stripped_model_group(model_group=model_group, fallback_key=next(iter(item)))
+            )
+        ),
+        None,
+    )
+    if matching is not None:
+        key, entry = matching
+        return key, entry[key], generic_idx
+    if generic_idx is not None:
+        generic: Final = fallbacks[generic_idx]
+        if isinstance(generic, Mapping):
+            return "*", generic["*"], generic_idx
+    return None, None, None
+
+
+def get_fallback_chain_for_lookup_groups(
+    fallbacks: Sequence[Mapping[str, list[str]]],  # mutable-ok: mirrors the fallbacks config shape
+    lookup_groups: tuple[str, ...],
+) -> tuple[str, list[str]] | None:  # mutable-ok: mirrors get_fallback_model_group's contract
+    """The chain a request follows, with the lookup group that owns it.
+
+    The owner is "*" when the chain comes from the generic entry, which applies to every
+    model group rather than to one of the lookup groups. A pre-routing hook makes the tier
+    the first lookup group, so the owner is not always the group the caller requested.
+    """
+    results: Final = tuple(
+        get_fallback_model_group_with_owner(fallbacks=fallbacks, model_group=group) for group in lookup_groups
+    )
+    specific: Final = next((entry for entry in results if entry[0] not in (None, "*")), None)
+    resolved: Final = (
+        specific if specific is not None else next((entry for entry in results if entry[1] is not None), None)
+    )
+    if resolved is None or resolved[0] is None or resolved[1] is None:
+        return None
+    return resolved[0], resolved[1]
+
+
 def format_chain_for_lookup_groups(config_name: str, configured: object, lookup_groups: Sequence[str]) -> str:
     """Name only the chain a request would follow, never the whole fallback config.
 
@@ -361,8 +466,6 @@ def format_chain_for_lookup_groups(config_name: str, configured: object, lookup_
     entries: Final = _as_fallback_entries(configured)
     if entries is None or not lookup_groups:
         return f"{config_name}={mask_sensitive_structure(configured)}"
-    from litellm.router_utils.fallback_event_handlers import get_fallback_chain_for_lookup_groups
-
     resolved: Final = get_fallback_chain_for_lookup_groups(
         fallbacks=cast("Sequence[Mapping[str, list[str]]]", entries),  # cast-ok: only keys and values are read
         lookup_groups=tuple(lookup_groups),

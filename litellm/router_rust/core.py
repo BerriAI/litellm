@@ -973,7 +973,7 @@ class Resolved:
 
     def _fallback_keys(self, model_names: Sequence[str]) -> Mapping[str, object]:
         """The spellings a fallback key matches besides the group name (`get_fallback_model_group`)."""
-        from litellm.router_utils.fallback_event_handlers import (
+        from litellm.litellm_core_utils.routing_common_utils import (
             _provider_prefixed_model_group,  # pyright: ignore[reportPrivateUsage]  # the fallback walk's own spelling rule
         )
 
