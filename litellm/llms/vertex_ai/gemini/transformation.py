@@ -1514,14 +1514,9 @@ def transform_request_body(
         if cached_content is not None:
             data["cachedContent"] = cached_content
 
-        if service_tier := optional_params.pop("service_tier", None):
-            if isinstance(service_tier, str):
-                if service_tier.lower() == "default":
-                    data["serviceTier"] = "standard"
-                else:
-                    data["serviceTier"] = service_tier.lower()
-            else:
-                data["serviceTier"] = service_tier
+        service_tier: Final[str | None] = optional_params.pop("service_tier", None)
+        if service_tier is not None and custom_llm_provider == LlmProviders.GEMINI:
+            data["serviceTier"] = service_tier
 
         if continuation_token := optional_params.pop("continuation_token", None):
             data["continuationToken"] = continuation_token

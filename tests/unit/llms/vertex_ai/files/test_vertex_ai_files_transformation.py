@@ -2127,6 +2127,23 @@ class TestVertexClaudeBatch:
             _uploaded_rows(config, {**CLAUDE_DEPLOYMENT, "model": "vertex_ai/claude-zeta-9"}, [entry])
         assert exc_info.value.status_code == 400
 
+    def test_claude_responses_row_drops_service_tier_under_its_own_drop_params(self, config):
+        entry: Final = _responses_entry(
+            {
+                "model": "claude-sonnet-4-6",
+                "input": "Hello!",
+                "max_output_tokens": 50,
+                "service_tier": "priority",
+                "drop_params": True,
+            },
+            custom_id="r1",
+        )
+
+        (row,) = _uploaded_rows(config, CLAUDE_DEPLOYMENT, [entry])
+
+        assert row["request"]["messages"] == [{"role": "user", "content": [{"type": "text", "text": "Hello!"}]}]
+        assert "service_tier" not in row["request"]
+
     def test_claude_deployment_wins_over_a_gemini_body_model(self, config):
         entry: Final = _claude_chat_entry("r1", "hi", max_tokens=10, model="gemini-2.5-flash")
 
@@ -2895,12 +2912,21 @@ def test_batch_row_asking_for_n_image_candidates_uploads_with_n_beside_a_plain_r
     assert _generation_config_of(plain_row) == {"max_output_tokens": 5}
 
 
-def test_global_drop_params_drops_n_from_a_batch_row_asking_for_image_candidates(
-    config: VertexAIFilesConfig, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    ("globally", "deployment_params", "row_params"),
+    [(True, {}, {}), (False, {"drop_params": True}, {}), (False, {}, {"drop_params": True})],
+    ids=["global", "deployment", "row"],
+)
+def test_drop_params_drops_n_from_a_batch_row_asking_for_image_candidates(
+    config: VertexAIFilesConfig,
+    monkeypatch: pytest.MonkeyPatch,
+    globally: bool,
+    deployment_params: Mapping[str, object],
+    row_params: Mapping[str, object],
 ) -> None:
-    monkeypatch.setattr(litellm, "drop_params", True)
-    entry: Final = dict(_chat_entry("gemini-2.5-flash", {"modalities": ["image", "text"], "n": 2}))
+    monkeypatch.setattr(litellm, "drop_params", globally)
+    entry: Final = dict(_chat_entry("gemini-2.5-flash", {"modalities": ["image", "text"], "n": 2, **row_params}))
 
-    (row,) = _uploaded_rows(config, _GEMINI_DEPLOYMENT, [entry])
+    (row,) = _uploaded_rows(config, {**_GEMINI_DEPLOYMENT, **deployment_params}, [entry])
 
     assert "candidate_count" not in _generation_config_of(row)
