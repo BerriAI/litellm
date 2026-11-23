@@ -120,7 +120,7 @@ class EventStore(Protocol):
     async def end_if_current(
         self, subscription_id: str, upstream_subscription_id: str | None, generation: str | None = None
     ) -> bool:
-        """Terminate the row only while it is still this upstream subscription; None when it changed or ended."""
+        """Terminate the row only while it is still this upstream subscription; False when it changed or ended."""
         ...
 
     async def acknowledge_teardown(self, row: SubscriptionRow) -> None: ...
