@@ -8,14 +8,21 @@ from typing import Any, Final, Protocol, cast
 from pydantic import TypeAdapter
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_items, require_attributes
-from litellm.litellm_core_utils.hidden_params import get_or_create_hidden_params, served_from_cache
+from litellm.litellm_core_utils.hidden_params import (
+    get_hidden_params,
+    get_or_create_hidden_params,
+    served_from_cache,
+    set_hidden_params,
+)
 from litellm.litellm_core_utils.litellm_logging import BilledRoundsSpend
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import parts_of
 from litellm.llms.anthropic.common_utils import anthropic_server_call_fields, anthropic_server_tool_calls
 from litellm.llms.anthropic.messages.native.utils import openai_chat_refusal_text
 from litellm.main import stream_chunk_builder
 from litellm.responses.litellm_completion_transformation.compaction_items import compaction_output_item
+from litellm.responses.litellm_completion_transformation.compaction_trigger import CompactionSummaryStream
 from litellm.responses.litellm_completion_transformation.custom_tools import (
     build_tool_call_item_kwargs,
     extract_custom_tool_names,
@@ -81,6 +88,7 @@ from litellm.types.utils import (
     ModelResponseStream,
     StreamingChoices,
     TextCompletionResponse,
+    Usage,
 )
 
 _REQUEST_FIELDS: Final = TypeAdapter(Mapping[str, object])
@@ -181,6 +189,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         custom_llm_provider: str | None = None,
         litellm_metadata: dict | None = None,
         tool_call_provider_fields: bool = False,
+        compaction_summary: CompactionSummaryStream | None = None,
     ):
         self.model: str = model
         self.litellm_custom_stream_wrapper: litellm.CustomStreamWrapper = litellm_custom_stream_wrapper
@@ -189,6 +198,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self.custom_llm_provider: str | None = custom_llm_provider
         self.litellm_metadata: dict[str, object] | None = litellm_metadata or {}
         self.tool_call_provider_fields: Final = tool_call_provider_fields
+        self._compaction_summary: Final = compaction_summary
         # Store lightweight dict snapshots for stream_chunk_builder to reduce
         # repeated Pydantic attribute access in end-of-stream assembly.
         self.collected_chat_completion_chunks: list[dict[str, object]] = []
@@ -775,6 +785,12 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             self._queue_compaction_item_added()
         return ordered
 
+    def _received_and_client_chunks(
+        self, chunk: ModelResponseStream
+    ) -> tuple[ModelResponseStream, ModelResponseStream]:
+        received: Final = self._ordered_chunk(chunk)
+        return received, received if self._compaction_summary is None else self._compaction_summary.take(received)
+
     def _with_encoded_response_id(self, response: ResponsesAPIResponse) -> ResponsesAPIResponse:
         return ResponsesAPIRequestUtils.update_responses_api_response_id_with_model_id(
             responses_api_response=response,
@@ -1213,9 +1229,16 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             return True
         return False
 
+    def _with_compaction_summary(self, response: ModelResponse | None) -> ModelResponse | None:
+        if self._compaction_summary is None or response is None:
+            return response
+        reply: Final = self._compaction_summary.reply(response)
+        self._merge_provider_specific_fields(dict(self._compaction_summary.provider_specific_fields(reply.model)))
+        return reply
+
     def common_done_event_logic(self, sync_mode: bool = True) -> BaseLiteLLMOpenAIResponseObject:
         if not self.litellm_model_response or isinstance(self.litellm_model_response, TextCompletionResponse):
-            self.litellm_model_response = self.create_litellm_model_response()
+            self.litellm_model_response = self._with_compaction_summary(self.create_litellm_model_response())
         if self.litellm_model_response:
             self._queue_compaction_item_added()
             self._queue_compaction_item_done()
@@ -1257,7 +1280,8 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         if not chunk.choices:
             return
         delta: Final = chunk.choices[0].delta
-        if chunk.choices[0].finish_reason is None and not _delta_carries_output(delta):
+        opens_on_finish: Final = chunk.choices[0].finish_reason is not None and self._compaction_summary is None
+        if not opens_on_finish and not _delta_carries_output(delta):
             return
 
         self.sent_output_item_added_event = True
@@ -1372,7 +1396,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                             raise StopAsyncIteration
                         chunk = await self.litellm_custom_stream_wrapper.__anext__()
                     if chunk is not None:
-                        chunk = self._ordered_chunk(cast(ModelResponseStream, chunk))
+                        received, chunk = self._received_and_client_chunks(cast(ModelResponseStream, chunk))
                         for src in (
                             getattr(chunk, "provider_specific_fields", None),
                             getattr(
@@ -1388,7 +1412,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                         self._ensure_output_item_for_chunk(chunk)
                         # Proceed to transformation
                         self.collected_chat_completion_chunks.append(
-                            self._snapshot_chunk_for_stream_chunk_builder(chunk)
+                            self._snapshot_chunk_for_stream_chunk_builder(received)
                         )
                         self._queue_reasoning_done_events_on_reasoning_end(chunk)
                         self._queue_chunk_events(chunk)
@@ -1431,12 +1455,11 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                     return self._pending_tool_events.pop(0)
                 try:
                     buffered_chunk = self._take_buffered_chunk()
-                    if buffered_chunk is not None:
-                        chunk = self._ordered_chunk(buffered_chunk)
-                    elif self._upstream_exhausted:
+                    if buffered_chunk is None and self._upstream_exhausted:
                         raise StopIteration
-                    else:
-                        chunk = self._ordered_chunk(self.litellm_custom_stream_wrapper.__next__())
+                    received, chunk = self._received_and_client_chunks(
+                        self.litellm_custom_stream_wrapper.__next__() if buffered_chunk is None else buffered_chunk
+                    )
                     for src in (
                         getattr(chunk, "provider_specific_fields", None),
                         getattr(
@@ -1455,7 +1478,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                     # _ensure_output_item_for_chunk queues events on the same chunk.
                     # This mirrors the async path (see __anext__).
                     self.collected_chat_completion_chunks.append(
-                        self._snapshot_chunk_for_stream_chunk_builder(cast(ModelResponseStream, chunk))
+                        self._snapshot_chunk_for_stream_chunk_builder(received)
                     )
                     self._queue_reasoning_done_events_on_reasoning_end(chunk)
                     self._queue_chunk_events(chunk)
@@ -1631,21 +1654,47 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
     def bill_failure_after_earlier_rounds(self, earlier: BilledRoundsSpend) -> None:
         self.litellm_custom_stream_wrapper.bill_failure_after_earlier_rounds(earlier)
 
+    def _with_usage_of_every_streamed_chunk(self, built: ModelResponse, messages: Sequence[object]) -> ModelResponse:
+        try:
+            every_chunk: Final = stream_chunk_builder(
+                chunks=self.litellm_custom_stream_wrapper.chunks,
+                messages=messages,
+                logging_obj=self.litellm_logging_obj,
+            )
+        except Exception as e:  # noqa: BLE001  # the bill built from the relayed chunks still stands
+            verbose_logger.debug("Billing a cut stream from its relayed chunks, the full rebuild failed: %s", e)
+            return built
+        usage: Final[object] = getattr(every_chunk, "usage", None)
+        if not isinstance(usage, Usage):
+            return built
+        billed: Final = built.model_copy(update={"usage": usage})
+        set_hidden_params(
+            billed,
+            {
+                **(get_hidden_params(built) or {}),
+                "response_cost": (get_hidden_params(every_chunk) or {}).get("response_cost"),
+            },
+        )
+        return billed
+
     def partial_response_on_disconnect(self) -> ResponseIncompleteEvent | None:
         """
         The response.incomplete event to bill when the client went away mid-stream.
-        Built from the chat completion chunks relayed so far, so the usage is what
-        stream_chunk_builder counts for them.
+        The output is built from the chat completion chunks relayed so far (none yet means no output), and the usage
+        from every chunk the provider sent, so a usage-only chunk such as Anthropic's
+        message_start bills its input count instead of LiteLLM's estimate.
         """
-        if self.completed_response is not None or not self.collected_chat_completion_chunks:
+        relayed_or_kept: Final = self.collected_chat_completion_chunks or self.litellm_custom_stream_wrapper.chunks
+        if self.completed_response is not None or not relayed_or_kept:
             return None
+        messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(  # pyright: ignore[reportUnknownMemberType]  # the transformer's signature is partially untyped
+            input=self.request_input,
+            responses_api_request=dict(self.responses_api_request),
+            only_since_compaction=True,
+        )
         built: Final = stream_chunk_builder(
-            chunks=self.collected_chat_completion_chunks,
-            messages=LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(  # pyright: ignore[reportUnknownMemberType]  # the transformer's signature is partially untyped
-                input=self.request_input,
-                responses_api_request=dict(self.responses_api_request),
-                only_since_compaction=True,
-            ),
+            chunks=relayed_or_kept,
+            messages=messages,
             logging_obj=self.litellm_logging_obj,
         )
         if not isinstance(built, ModelResponse):
@@ -1653,7 +1702,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         responses_api_response: Final = (
             LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(  # pyright: ignore[reportUnknownMemberType]  # the transformer's signature is partially untyped
                 request_input=self.request_input,
-                chat_completion_response=built,
+                chat_completion_response=self._with_usage_of_every_streamed_chunk(built, messages),
                 responses_api_request=self.responses_api_request,
             )
         )

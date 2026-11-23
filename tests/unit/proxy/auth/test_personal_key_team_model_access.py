@@ -32,6 +32,7 @@ from litellm.proxy.common_request_processing import (
 from litellm.proxy.policy_engine import policy_registry
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.proxy.spend_tracking.budget_reservation import get_reserved_counter_keys, release_budget_reservation
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.spend_counters import SpendCounterStore
 from litellm.router_api import RoutingContext
@@ -291,7 +292,12 @@ async def test_resolved_model_check_denies_when_personal_key_owner_lookup_fails(
     monkeypatch.setattr(proxy_server, "prisma_client", None)
     token: Final = UserAPIKeyAuth(token="k1", user_id="u-no-db")
     await proxy_server.user_api_key_cache.async_delete_cache("u-no-db")
-    assert await proxy_server.user_api_key_cache.async_get_cache(key="u-no-db", model_type=LiteLLM_UserTable) is None
+    assert (
+        await proxy_server.user_api_key_cache.async_get_cache(
+            key=AuthObject.user("u-no-db"), model_type=LiteLLM_UserTable
+        )
+        is None
+    )
 
     with pytest.raises(ModelAccessDeniedProxyException) as exc_info:
         await can_key_call_resolved_model(model="gpt-a", llm_model_list=None, valid_token=token, llm_router=_ROUTER)
@@ -639,9 +645,9 @@ async def test_model_listing_empty_without_database(monkeypatch: pytest.MonkeyPa
 
 def _billing_database(monkeypatch: pytest.MonkeyPatch, owner: LiteLLM_UserTable) -> None:
     cache: Final = UserApiKeyCache()
-    cache.set_cache(owner.user_id, owner, model_type=LiteLLM_UserTable)
+    cache.set_cache(AuthObject.user(owner.user_id), owner, model_type=LiteLLM_UserTable)
     for team in _TEAMS.values():
-        cache.set_cache(f"team_id:{team.team_id}", team, model_type=LiteLLM_TeamTableCachedObj)
+        cache.set_cache(AuthObject.team(team.team_id), team, model_type=LiteLLM_TeamTableCachedObj)
     database: Final = prisma_with_empty_config()
     install_rust_auth_stores(monkeypatch, RustAuthStores(team=FakeTeamStore(rows=dict(_TEAMS))))
 
@@ -783,7 +789,7 @@ async def test_dashboard_own_primary_alias_keeps_its_admitted_billing_identity(
     )
     await _check_dashboard_request_billing(prepared, billed, _ROUTER)
     assert billed.team_id == UI_TEAM_ID
-    proxy_server.user_api_key_cache.set_cache(owner.user_id, owner, model_type=LiteLLM_UserTable)
+    proxy_server.user_api_key_cache.set_cache(AuthObject.user(owner.user_id), owner, model_type=LiteLLM_UserTable)
     assert (
         await RouterFallbackAccessCheck(is_enforced=lambda: True)(
             model="shared", request_kwargs={"metadata": {"user_api_key_auth": billed}}, ctx=RoutingContext(_ROUTER)
@@ -994,7 +1000,7 @@ async def test_dashboard_primary_call_inherits_team_guardrails_and_policies_like
     )
     guarded_team: Final = _TEAMS["team-billing-a"].model_copy(update={"metadata": team_config})
     proxy_server.user_api_key_cache.set_cache(
-        "team_id:team-billing-a", guarded_team, model_type=LiteLLM_TeamTableCachedObj
+        AuthObject.team("team-billing-a"), guarded_team, model_type=LiteLLM_TeamTableCachedObj
     )
     registry: Final = policy_registry.PolicyRegistry()
     registry.load_policies({"team-policy": {"guardrails": {"add": ["policy-input"]}}})

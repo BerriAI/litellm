@@ -77,7 +77,10 @@ COPY litellm/enterprise/pyproject.toml litellm/enterprise/
 COPY litellm/proxy-extras/pyproject.toml litellm/proxy-extras/
 COPY litellm/packaging/litellm-proxy/pyproject.toml litellm/packaging/litellm-proxy/
 
+RUN uv venv --system-site-packages --python python3.13 /app/.venv
+
 RUN uv sync --frozen --no-install-project --no-install-workspace --no-default-groups --no-editable \
+    --no-install-package cryptography --no-install-package grpcio --no-install-package psycopg-binary \
     --extra proxy \
     --extra proxy-runtime \
     --group admin-mcp \
@@ -96,6 +99,7 @@ RUN sed -i 's/\r$//' litellm/deploy/docker/build_admin_ui.sh && chmod +x litellm
 
 ARG MATURIN_PEP517_ARGS=""
 RUN uv sync --frozen --no-install-package litellm-proxy --no-default-groups --no-editable \
+    --no-install-package cryptography --no-install-package grpcio --no-install-package psycopg-binary \
     --extra proxy \
     --extra proxy-runtime \
     --group admin-mcp \
@@ -127,7 +131,8 @@ USER root
 # No public Wolfi repo here, so apk only resolves FIPS packages from the pinned Chainguard repo
 RUN --mount=type=secret,id=cgr-token \
     HTTP_AUTH="basic:virtualapk.cgr.dev:user:$(cat /run/secrets/cgr-token)" \
-    apk add --no-cache bash openssl libssl3 openssl-fips-test tzdata nodejs python-3.13 libsndfile libatomic libevent nginx
+    apk add --no-cache bash openssl libssl3 openssl-fips-test tzdata nodejs python-3.13 libsndfile libatomic libevent nginx \
+    py3.13-cryptography py3.13-grpcio-1.84 libpq-18
 COPY --from=pgbouncer-builder /usr/local/bin/pgbouncer /usr/local/bin/pgbouncer
 
 WORKDIR /app
@@ -183,6 +188,12 @@ RUN --mount=type=secret,id=cgr-token \
     HTTP_AUTH="basic:virtualapk.cgr.dev:user:$(cat /run/secrets/cgr-token)" \
     apk add --no-cache binutils
 RUN openssl-fips-test
+RUN python -c "from cryptography.hazmat.bindings._rust import openssl; assert openssl.is_fips_enabled(), openssl.openssl_version_text()"
+RUN for lib in "$(python -c 'import grpc._cython.cygrpc as m; print(m.__file__)')" \
+        "$(python -c 'import psycopg; psycopg.pq.version(); print(next(l.split()[-1] for l in open("/proc/self/maps") if "/libpq." in l))')"; do \
+      readelf -d "$lib" | grep -q 'NEEDED.*\[libssl\.so\.4\]' && ! nm -D --defined-only "$lib" | grep -qE ' (SSL|EVP|BIO)_' \
+        || { echo "$lib does not use the image's FIPS OpenSSL"; exit 1; }; \
+    done
 COPY litellm/deploy/docker/scan_bundled_crypto.sh litellm/deploy/docker/fips_elf_inventory.txt /fips-scan/
 RUN chmod +x /fips-scan/scan_bundled_crypto.sh && \
     /fips-scan/scan_bundled_crypto.sh /app/.venv /opt/prisma /usr/local/bin

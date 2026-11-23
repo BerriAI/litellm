@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Final
 
@@ -38,8 +39,11 @@ class OrganizationOutcome:
 def matches_patch(current: BaseModel | None, patch: BaseModel | None) -> bool:
     if current is None or patch is None:
         return current is patch
-    values: Final = current.model_dump()
-    return all(values.get(key) == value for key, value in patch.model_dump(exclude_unset=True).items())
+    return _values_match(current.model_dump(), patch.model_dump(exclude_unset=True))
+
+
+def _values_match(values: Mapping[str, object], patched: Mapping[str, object]) -> bool:
+    return all(values.get(key) == value for key, value in patched.items())
 
 
 async def organization_by_identity(
