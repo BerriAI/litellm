@@ -10,6 +10,7 @@
 //! | [`LaxBoolOr`] | `TypeAdapter(bool).validate_python(value)`, or the fallback where pydantic raises |
 //! | [`LaxBool`] | `core_helpers.lax_bool(value)` |
 //! | [`UintOrUnset`] | `get_env_int_or_none(name)`, unset for a negative value too |
+//! | [`FloatOrUnset`] | `get_env_float_or_none(name)` |
 //!
 //! The bool rules are `serde_with` adapters, used as `#[serde_as(as = "IsTrue")]` on a `bool`, and
 //! [`LaxBool`] on an `Option<bool>`.
@@ -22,7 +23,12 @@ use serde::{
 };
 use serde_with::DeserializeAs;
 
-use crate::{Value, flags, flags::str_to_bool, number::int, pydantic::lax_bool};
+use crate::{
+    Value, flags,
+    flags::str_to_bool,
+    number::{float, int},
+    pydantic::lax_bool,
+};
 
 /// `value is True`: only a boolean `true` is true. `"true"`, `1` and anything else are false.
 pub struct IsTrue;
@@ -71,6 +77,15 @@ impl<'de> DeserializeAs<'de, Option<u64>> for UintOrUnset {
     fn deserialize_as<D: Deserializer<'de>>(deserializer: D) -> Result<Option<u64>, D::Error> {
         let text = String::deserialize(deserializer)?;
         Ok(int(&text).and_then(|value| u64::try_from(value).ok()))
+    }
+}
+
+/// `get_env_float_or_none`, which reads text that `float(text)` refuses as unset.
+pub struct FloatOrUnset;
+
+impl<'de> DeserializeAs<'de, Option<f64>> for FloatOrUnset {
+    fn deserialize_as<D: Deserializer<'de>>(deserializer: D) -> Result<Option<f64>, D::Error> {
+        Ok(float(&String::deserialize(deserializer)?))
     }
 }
 

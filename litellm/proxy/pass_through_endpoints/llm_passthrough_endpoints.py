@@ -8,9 +8,11 @@ Use litellm with Anthropic SDK, Vertex AI SDK, Cohere SDK, etc.
 
 from __future__ import annotations
 
+import contextlib
 import hmac
 import inspect
 import json
+import logging
 import os
 import posixpath
 import re
@@ -32,7 +34,11 @@ from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm import get_llm_provider
-from litellm._logging import redact_internal_details_from_client_message, verbose_proxy_logger
+from litellm._logging import (
+    CALLER_ERROR_LOG_EXTRA,
+    redact_internal_details_from_client_message,
+    verbose_proxy_logger,
+)
 from litellm._uuid import uuid
 from litellm.constants import (
     ALLOWED_VERTEX_AI_PASSTHROUGH_HEADERS,
@@ -211,7 +217,7 @@ from litellm.types.passthrough_endpoints.tinyfish import (
     is_allowed_tinyfish_endpoint,
 )
 from litellm.types.passthrough_endpoints.vertex_ai import VertexPassThroughCredentials
-from litellm.types.router import LiteLLMParamsTypedDict
+from litellm.types.router import LiteLLMParamsTypedDict, RouterRateLimitError
 from litellm.types.utils import (
     DEPLOYMENT_SCOPED_PRICING_FIELDS,
     SERVER_DERIVED_PRICING_FIELDS,
@@ -1736,6 +1742,9 @@ async def handle_bedrock_passthrough_router_model(
         )
 
 
+_ROUTING_CAPACITY_MISSES: Final = (RouterRateLimitError, litellm.RateLimitError)
+
+
 async def handle_bedrock_count_tokens(
     endpoint: str,
     request: Request,
@@ -1752,7 +1761,7 @@ async def handle_bedrock_count_tokens(
     """
     litellm_call_id: Final = resolve_litellm_call_id(request.headers.get(LITELLM_CALL_ID_HEADER))
     return await answered_with_litellm_call_id(
-        _bedrock_count_tokens(user_api_key_dict, request_body, litellm_call_id),
+        _bedrock_count_tokens(request, user_api_key_dict, request_body, litellm_call_id),
         litellm_call_id,
         request,
         fastapi_response,
@@ -1760,11 +1769,16 @@ async def handle_bedrock_count_tokens(
 
 
 async def _bedrock_count_tokens(
-    user_api_key_dict: UserAPIKeyAuth, request_body: dict[str, object], litellm_call_id: str
+    request: Request, user_api_key_dict: UserAPIKeyAuth, request_body: dict[str, object], litellm_call_id: str
 ) -> Mapping[str, object]:
     from litellm.llms.bedrock.common_utils import BedrockError
-    from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensHandler
-    from litellm.proxy.proxy_server import llm_router
+    from litellm.llms.bedrock.count_tokens.handler import (
+        BedrockCountTokensHandler,
+        BedrockCountTokensRequestError,
+        is_caller_refusal,
+    )
+    from litellm.proxy.litellm_pre_call_utils import request_routing_metadata
+    from litellm.proxy.proxy_server import route_count
 
     try:
         # Initialize the handler
@@ -1779,25 +1793,32 @@ async def _bedrock_count_tokens(
                 None,
             )
 
-        # Get model parameters from router
+        route: Final = await route_count(
+            model, None, user_api_key_dict, request_routing_metadata(request, request_body, user_api_key_dict)
+        )
+        deployment: Final = route.usable_deployment()
+        if route.miss is not None and (deployment is None or not isinstance(route.miss, _ROUTING_CAPACITY_MISSES)):
+            raise rejected_token_count(
+                HTTPException(
+                    status_code=int(proxy_exception_status_code(str(route.miss), "400")),
+                    detail={"error": str(route.miss)},
+                ),
+                litellm_call_id,
+                model,
+            )
+        model_litellm_params: Final = as_str_mapping(None if deployment is None else deployment.get("litellm_params"))
+        deployment_model: Final = None if model_litellm_params is None else model_litellm_params.get("model")
+        resolved_model: Final = deployment_model if isinstance(deployment_model, str) else model
+        # Copy all litellm_params - BaseAWSLLM will handle AWS credential discovery
         litellm_params: Final = {
+            **{
+                key: value
+                for key, value in (model_litellm_params or {}).items()
+                if key not in ("user_api_key_dict", "metadata", "litellm_metadata")
+            },
             "user_api_key_dict": user_api_key_dict,
             "litellm_metadata": get_passthrough_router_request_metadata(user_api_key_dict),
         }
-        resolved_model = model  # Default fallback
-
-        deployments: Final = llm_router.registry().deployments(model) if llm_router else None
-        deployment: Final = deployments[0] if deployments else None
-        if deployment is not None:
-            model_litellm_params: Final = deployment.get("litellm_params", {})
-
-            if "model" in model_litellm_params:
-                resolved_model = model_litellm_params["model"]
-
-            # Copy all litellm_params - BaseAWSLLM will handle AWS credential discovery
-            for key, value in model_litellm_params.items():
-                if key not in ("user_api_key_dict", "metadata", "litellm_metadata"):
-                    litellm_params[key] = value
 
         verbose_proxy_logger.debug("Count tokens litellm_params: %s", litellm_params)
         verbose_proxy_logger.debug("Resolved model: %s", resolved_model)
@@ -1816,7 +1837,15 @@ async def _bedrock_count_tokens(
 
     except BedrockError as e:
         # Convert BedrockError to HTTPException for FastAPI
-        verbose_proxy_logger.error("BedrockError in handle_bedrock_count_tokens: %s", e)
+        is_caller_error: Final = is_caller_refusal(
+            e.status_code, e.message, isinstance(e, BedrockCountTokensRequestError)
+        )
+        verbose_proxy_logger.log(
+            logging.WARNING if is_caller_error else logging.ERROR,
+            "BedrockError in handle_bedrock_count_tokens: %s",
+            e,
+            extra=CALLER_ERROR_LOG_EXTRA if is_caller_error else None,
+        )
         from litellm.litellm_core_utils.llm_response_utils.get_headers import get_response_headers
 
         provider_headers: Final = e.response.headers
@@ -1828,6 +1857,8 @@ async def _bedrock_count_tokens(
     except HTTPException:
         # Re-raise HTTP exceptions as-is
         raise
+    except ProxyException as e:
+        raise rejected_token_count(e, litellm_call_id, _optional_str(request_body.get("model")))
     except Exception as e:
         verbose_proxy_logger.error("Error in handle_bedrock_count_tokens: %s", e)
         raise HTTPException(status_code=500, detail={"error": f"CountTokens processing error: {e}"})
@@ -2483,6 +2514,7 @@ async def transcribe_sdk_proxy_route(
 async def _resolve_vertex_model_from_router(
     model_id: str,
     llm_router: litellm.Router | None,
+    call_id: str,
     encoded_endpoint: str,
     endpoint: str,
     vertex_project: str | None,
@@ -2494,6 +2526,7 @@ async def _resolve_vertex_model_from_router(
     Args:
         model_id: The model ID extracted from the URL (e.g., "gcp/google/gemini-2.5-flash")
         llm_router: The LiteLLM router instance
+        call_id: The id the pick's least-busy reservation is held under
         encoded_endpoint: The encoded endpoint path
         endpoint: The original endpoint path
         vertex_project: Current vertex project (may be from URL)
@@ -2508,7 +2541,7 @@ async def _resolve_vertex_model_from_router(
         return encoded_endpoint, endpoint, vertex_project, vertex_location, None
 
     try:
-        deployment: Final = await llm_router.select(model_id, kind="pass_through")
+        deployment: Final = await llm_router.select(model_id, {"litellm_call_id": call_id}, kind="pass_through")
         if not deployment:
             return encoded_endpoint, endpoint, vertex_project, vertex_location, None
 
@@ -3586,6 +3619,34 @@ async def _base_vertex_proxy_route(
     user_api_key_dict: UserAPIKeyAuth,
     router_credentials: LiteLLM_ManagedVectorStore | None = None,
 ):
+    from litellm.proxy.proxy_server import llm_router
+
+    call_id: Final = str(uuid.uuid4())
+    with contextlib.nullcontext() if llm_router is None else llm_router.reserving_picks(call_id):
+        return await _relay_vertex_call(
+            endpoint,
+            request,
+            fastapi_response,
+            get_vertex_pass_through_handler,
+            general_settings,
+            user_api_key_dict,
+            router_credentials,
+            llm_router,
+            call_id,
+        )
+
+
+async def _relay_vertex_call(
+    endpoint: str,
+    request: Request,
+    fastapi_response: Response,
+    get_vertex_pass_through_handler: BaseVertexAIPassThroughHandler,
+    general_settings: Mapping[str, object],
+    user_api_key_dict: UserAPIKeyAuth,
+    router_credentials: LiteLLM_ManagedVectorStore | None,
+    llm_router: litellm.Router | None,
+    call_id: str,
+) -> object:
     """
     Base function for Vertex AI passthrough routes.
     Handles common logic for all Vertex AI services.
@@ -3601,6 +3662,8 @@ async def _base_vertex_proxy_route(
         general_settings: Proxy general settings, read per request for the anthropic-beta values to drop
         user_api_key_dict: The caller the route authenticated
         router_credentials: Optional vector store credentials from registry (LiteLLM_ManagedVectorStore)
+        llm_router: The proxy's router, which picks the deployment for a model in the URL
+        call_id: The id the router's least-busy pick is reserved under
     """
     from litellm.llms.vertex_ai.common_utils import (
         construct_target_url,
@@ -3608,7 +3671,6 @@ async def _base_vertex_proxy_route(
         get_vertex_model_id_from_url,
         get_vertex_project_id_from_url,
     )
-    from litellm.proxy.proxy_server import llm_router
 
     encoded_endpoint = httpx.URL(endpoint).path
     verbose_proxy_logger.debug("requested endpoint %s", endpoint)
@@ -3643,6 +3705,7 @@ async def _base_vertex_proxy_route(
             ) = await _resolve_vertex_model_from_router(
                 model_id=model_id,
                 llm_router=llm_router,
+                call_id=call_id,
                 encoded_endpoint=encoded_endpoint,
                 endpoint=endpoint,
                 vertex_project=vertex_project,

@@ -4603,6 +4603,7 @@ class _EndUserLedger:
             budget_id: types.SimpleNamespace(
                 budget_id=budget_id,
                 max_budget=max_budget,
+                rollover_max_budget=None,
                 budget_duration="1d",
                 budget_reset_at=window,
                 budget_reset_count=0,

@@ -71,7 +71,12 @@ const currentUserRequests = () =>
     .map(([request]) => request)
     .filter((request) => new URL(request.url).pathname === CURRENT_USER_PATH);
 
-type CurrentUserBody = { user_id: string; user_email: string | null; user_role: string | null };
+type CurrentUserBody = {
+  user_id: string;
+  user_email: string | null;
+  user_role: string | null;
+  user_alias?: string | null;
+};
 
 const serveCurrentUser = (reply: CurrentUserBody | ((request: Request) => CurrentUserBody)) => {
   fetchMock.mockImplementation(async (request) => Response.json(typeof reply === "function" ? reply(request) : reply));
@@ -424,6 +429,26 @@ describe("useAuthorized", () => {
       expect(result.current.isViewOnly).toBe(false);
       expect(result.current.userEmail).toBe("internal@example.com");
       expect(replaceMock).not.toHaveBeenCalled();
+    });
+
+    it("loads the signed-in user's alias when SSO has no email", async () => {
+      const userId = "abc301ea-49c0-47c9-aee2-53b86a550582";
+      getUiConfigMock.mockResolvedValue(uiConfig);
+      setSessionCookie({ key: "sso-key", login_method: "sso" });
+      const currentUser = {
+        user_id: userId,
+        user_email: null,
+        user_role: "internal_user",
+        user_alias: "Acme Developer",
+      };
+      serveCurrentUser(currentUser);
+
+      const { result } = renderHook(() => useAuthorized(), { wrapper });
+
+      await waitFor(() => expect(result.current.userAlias).toBe("Acme Developer"));
+      expect(result.current.userId).toBe(userId);
+      expect(result.current.userEmail).toBeNull();
+      expect(result.current.isAuthorized).toBe(true);
     });
 
     it("stays loading with no role until the server answers", async () => {

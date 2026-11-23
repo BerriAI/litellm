@@ -69,7 +69,7 @@ export default function ManageAlerts({ scope, readOnly }: { scope: string; readO
       <PageHeaderDescription>{t("alerts.unified.inboxDescription")}</PageHeaderDescription>
       <PageHeaderControls>
         <Dialog>
-          <DialogTrigger render={<Button variant="outline" size="sm" />}>
+          <DialogTrigger render={<Button />}>
             <Settings className="size-4" aria-hidden />
             {t("alerts.monitoring.manage")}
           </DialogTrigger>

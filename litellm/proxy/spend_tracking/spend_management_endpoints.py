@@ -142,8 +142,8 @@ class _DeploymentEntry(Protocol):
     def get(self, key: str, /) -> object: ...
 
 
-_DeploymentT: Final = TypeVar("_DeploymentT", bound=_DeploymentEntry)
-_DeploymentT_co: Final = TypeVar("_DeploymentT_co", bound=_DeploymentEntry, covariant=True)
+_DeploymentT = TypeVar("_DeploymentT", bound=_DeploymentEntry)
+_DeploymentT_co = TypeVar("_DeploymentT_co", bound=_DeploymentEntry, covariant=True)
 
 
 class _DeploymentRegistry(Protocol[_DeploymentT_co]):
@@ -604,7 +604,7 @@ async def spend_key_fn(
         )
 
 
-def _strip_password_from_users(users) -> None:
+def _strip_password_from_users(users: object) -> None:
     """Strip password field from a list of user objects."""
     for user in users if isinstance(users, list) else [users]:
         if user and hasattr(user, "__dict__"):
@@ -4624,7 +4624,7 @@ async def ui_get_spend_by_tags(
     # print(response)
     # Bar Chart 1 - Spend per tag - Top 10 tags by spend
     total_spend_per_tag: Final[collections.defaultdict] = collections.defaultdict(float)
-    total_requests_per_tag: Final[collections.defaultdict] = collections.defaultdict(int)
+    total_requests_per_tag: Final[collections.defaultdict[object, int]] = collections.defaultdict(int)
     for row in response:
         tag_name = row["individual_request_tag"]
         tag_spend = row["total_spend"]
