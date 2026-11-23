@@ -1931,7 +1931,7 @@ class TestStripEncryptedReasoningFromInput:
                 "type": "reasoning",
                 "summary": [{"type": "summary_text", "text": "thought about it"}],
             },
-            {"type": "message", "id": "msg_1", "role": "assistant", "content": "hi"},
+            {"type": "message", "role": "assistant", "content": "hi"},
             {"role": "user", "content": "second turn"},
         ]
 
@@ -2123,6 +2123,104 @@ async def test_real_router_pin_strips_unmarked_reasoning_beside_the_origins_mark
                 "encrypted_content": openai_wrapped,
                 "summary": [{"type": "summary_text", "text": "openai summary"}],
             },
+            {"type": "message", "role": "user", "content": "third question"},
+        ]
+    finally:
+        router.discard()
+
+
+@pytest.mark.asyncio
+async def test_real_router_pin_drops_the_ids_of_output_items_that_follow_stripped_reasoning():
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-openai",
+                "litellm_params": {
+                    "model": "openai/gpt-5.1-codex",
+                    "api_base": "https://api.openai.com/v1",
+                    "api_key": "key-openai",
+                },
+                "model_info": {"id": "dep-openai"},
+            },
+        ],
+        optional_pre_call_checks=["encrypted_content_affinity"],
+        num_retries=0,
+    )
+    openai_item_id: Final = ResponsesAPIRequestUtils._build_encrypted_item_id("dep-openai", "rs-openai")
+    openai_reasoning: Final = {
+        "type": "reasoning",
+        "id": openai_item_id,
+        "encrypted_content": ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id("blob-openai", "dep-openai"),
+        "summary": [{"type": "summary_text", "text": "openai summary"}],
+    }
+    openai_call: Final = {"type": "function_call", "id": "fc-openai", "call_id": "call-3", "name": "f", "arguments": "{}"}
+    answer_after_tool: Final = {
+        "type": "message",
+        "role": "assistant",
+        "id": "msg-after-tool",
+        "content": [{"type": "output_text", "text": "after tool"}],
+    }
+    answer_after_user: Final = {
+        "type": "message",
+        "role": "assistant",
+        "id": "msg-after-user",
+        "content": [{"type": "output_text", "text": "after user"}],
+    }
+    later_answer: Final = {
+        "type": "message",
+        "role": "assistant",
+        "id": "msg-later",
+        "content": [{"type": "output_text", "text": "later"}],
+    }
+    request_kwargs: Final = {
+        "input": [
+            {"type": "message", "role": "user", "content": "first question"},
+            {
+                "type": "reasoning",
+                "id": "rs-unmarked",
+                "encrypted_content": "blob-unmarked",
+                "summary": [{"type": "summary_text", "text": "unmarked summary"}],
+            },
+            {"type": "function_call", "id": "fc-unmarked", "call_id": "call-1", "name": "f", "arguments": "{}"},
+            {"type": "function_call_output", "call_id": "call-1", "output": "one"},
+            answer_after_tool,
+            {"type": "reasoning", "id": "rs-summaryless", "encrypted_content": "blob-summaryless", "summary": []},
+            {
+                "type": "message",
+                "role": "assistant",
+                "id": "msg-unmarked",
+                "content": [{"type": "output_text", "text": "first answer"}],
+            },
+            {"type": "web_search_call", "id": "ws-unmarked", "status": "completed"},
+            {"role": "user", "content": "second question"},
+            answer_after_user,
+            openai_reasoning,
+            openai_call,
+            {"type": "function_call_output", "call_id": "call-3", "output": "three"},
+            later_answer,
+            {"type": "message", "role": "user", "content": "third question"},
+        ],
+    }
+    try:
+        deployment: Final = await router.async_get_available_deployment(
+            model="gpt-openai", request_kwargs=request_kwargs, input=request_kwargs["input"]
+        )
+
+        assert deployment["model_info"]["id"] == "dep-openai"
+        assert request_kwargs["input"] == [
+            {"type": "message", "role": "user", "content": "first question"},
+            {"type": "reasoning", "summary": [{"type": "summary_text", "text": "unmarked summary"}]},
+            {"type": "function_call", "call_id": "call-1", "name": "f", "arguments": "{}"},
+            {"type": "function_call_output", "call_id": "call-1", "output": "one"},
+            answer_after_tool,
+            {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "first answer"}]},
+            {"type": "web_search_call", "status": "completed"},
+            {"role": "user", "content": "second question"},
+            answer_after_user,
+            openai_reasoning,
+            openai_call,
+            {"type": "function_call_output", "call_id": "call-3", "output": "three"},
+            later_answer,
             {"type": "message", "role": "user", "content": "third question"},
         ]
     finally:

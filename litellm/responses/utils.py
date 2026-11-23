@@ -2,6 +2,7 @@ import base64
 import re
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from functools import reduce
+from itertools import accumulate
 from typing import Any, Final, Optional, TypeVar, Union, cast, get_type_hints, overload
 
 from pydantic import BaseModel, TypeAdapter
@@ -577,19 +578,75 @@ class ResponsesAPIRequestUtils:
     ) -> None:
         """Drop reasoning items the routed deployment cannot decrypt, keeping their readable summary.
 
+        The output items that follow a stripped item lose their ids too, since OpenAI answers 400
+        to a stored item id whose reasoning item is missing.
+
         Mutates ``request_input`` in place: the router's fallback snapshot shares this
         list object, so a rebound list would replay the stripped items on the fallback hop.
         """
         if not isinstance(request_input, list):
             return
         items: Final = cast(list[object], request_input)  # cast-ok: untyped client json
-        stripped: Final = tuple(
-            ResponsesAPIRequestUtils._without_encrypted_reasoning(item)
-            if should_strip is None or (isinstance(item, Mapping) and should_strip(cast(Mapping[str, object], item)))
-            else item
+        strips: Final = tuple(
+            (reasoning := ResponsesAPIRequestUtils._encrypted_reasoning_item(item)) is not None
+            and (should_strip is None or should_strip(reasoning))
             for item in items
         )
-        items[:] = (item for item in stripped if item is not None)
+        follows_stripped: Final = tuple(
+            accumulate(zip(items, strips), ResponsesAPIRequestUtils._follows_stripped_reasoning, initial=False)
+        )
+        rebuilt: Final = tuple(
+            ResponsesAPIRequestUtils._stripped_input_item(item, stripped=stripped, follows_stripped=follows)
+            for item, stripped, follows in zip(items, strips, follows_stripped)
+        )
+        items[:] = (item for item in rebuilt if item is not None)
+
+    @staticmethod
+    def _encrypted_reasoning_item(item: object) -> Mapping[str, object] | None:
+        if not isinstance(item, dict):
+            return None
+        reasoning: Final = cast(Mapping[str, object], item)  # cast-ok: untyped client json
+        if reasoning.get("type") != "reasoning" or not reasoning.get("encrypted_content"):
+            return None
+        return reasoning
+
+    @staticmethod
+    def _follows_stripped_reasoning(follows_stripped: bool, item_and_stripped: tuple[object, bool]) -> bool:
+        item, stripped = item_and_stripped
+        if ResponsesAPIRequestUtils._input_item_type(item) == "reasoning":
+            return stripped
+        return follows_stripped and ResponsesAPIRequestUtils._is_response_output_item(item)
+
+    @staticmethod
+    def _stripped_input_item(item: object, *, stripped: bool, follows_stripped: bool) -> object | None:
+        if stripped:
+            return ResponsesAPIRequestUtils._without_encrypted_reasoning(item)
+        if not (follows_stripped and ResponsesAPIRequestUtils._is_response_output_item(item)):
+            return item
+        without_id: Final[dict[str, object]] = {  # mutable-ok: request item rebuilt without its id
+            key: value
+            for key, value in cast(Mapping[str, object], item).items()  # cast-ok: matched as a mapping above
+            if key != "id"
+        }
+        return without_id
+
+    @staticmethod
+    def _input_item_type(item: object) -> str | None:
+        match item:
+            case {"type": str() as item_type}:
+                return item_type
+            case _:
+                return None
+
+    @staticmethod
+    def _is_response_output_item(item: object) -> bool:
+        match item:
+            case {"type": "message", "role": "assistant"}:
+                return True
+            case {"type": str() as item_type}:
+                return item_type.endswith("_call")
+            case _:
+                return False
 
     @staticmethod
     def _without_encrypted_reasoning(item: object) -> object | None:
