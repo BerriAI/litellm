@@ -101,6 +101,7 @@ vi.mock("../networking", () => ({
   getProxyBaseUrl: vi.fn(() => ""),
   getUiSettings: vi.fn().mockResolvedValue({ values: {} }),
   keyDeleteCall: vi.fn().mockResolvedValue({}),
+  fetchMCPEventTypes: vi.fn().mockResolvedValue([]),
   keyUpdateCall: vi.fn().mockResolvedValue({}),
   regenerateKeyCall: vi.fn().mockResolvedValue({ key: "sk-regenerated", token: "regenerated-token" }),
   teamInfoCall: vi.fn(),
@@ -239,6 +240,25 @@ describe("KeyInfoView", () => {
   const openMoreKeyActions = async () => {
     await userEvent.click(await screen.findByRole("button", { name: /more key actions/i }));
   };
+
+  it("saves only the selected key's event restrictions", async () => {
+    vi.mocked(useAuthorized).mockReturnValue({ ...baseUseAuthorizedMock, userRole: "Admin" });
+    vi.mocked(useMCPServers).mockReturnValueOnce({
+      data: [{ server_id: "ci-server", server_name: "CI", events: { enabled: true } }],
+    } as unknown as ReturnType<typeof useMCPServers>);
+    const keyData = {
+      ...MOCK_KEY_DATA,
+      object_permission: { mcp_event_permissions: { "ci-server": ["build.failed"] } },
+    };
+    renderWithProviders(<KeyInfoView keyData={keyData} onClose={() => {}} keyId="test-key-id" teams={[]} />);
+    await userEvent.click(screen.getByRole("tab", { name: "Settings" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Block all" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save event permissions" }));
+    expect(keyUpdateCall).toHaveBeenCalledWith("test-token", {
+      key: MOCK_KEY_DATA.token,
+      object_permission: { mcp_event_permissions: { "ci-server": [] } },
+    });
+  });
 
   it("shows key-scoped auto-router usage as its own admin tab", async () => {
     vi.mocked(useAuthorized).mockReturnValue({ ...baseUseAuthorizedMock, userRole: "Admin" });
