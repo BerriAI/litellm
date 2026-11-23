@@ -23,13 +23,13 @@ from litellm.proxy.mcp_server.subscriptions import SubscriptionTarget
 from litellm.types.mcp_server.events import JsonObject
 from tests.integration._support.prisma_clients import connected_proxy_prisma
 from tests.unit.proxy.mcp_server.events.fakes import CALLER, SETTINGS, FakeUpstream, runtime, server
-from tests.unit.proxy.mcp_server.events.test_handlers import (  # pyright: ignore[reportPrivateUsage]  # reuse the stateless MCP wire harness
-    _call,
-    _server,
+from tests.unit.proxy.mcp_server.events.test_handlers import (
+    _call,  # pyright: ignore[reportPrivateUsage]  # shared stateless MCP wire harness
+    _server,  # pyright: ignore[reportPrivateUsage]  # registers the normal Events handlers
 )
-from tests.unit.proxy.mcp_server.events.webhooks.test_subscribe import (  # pyright: ignore[reportPrivateUsage]  # same subscribe request fixture
+from tests.unit.proxy.mcp_server.events.webhooks.test_subscribe import (
     UPSTREAM_OK,
-    _params,
+    _params,  # pyright: ignore[reportPrivateUsage]  # shared subscribe request fixture
 )
 
 SECRET: Final = "whsec_" + base64.b64encode(bytes(range(32))).decode()
@@ -603,20 +603,22 @@ async def test_cancelled_creation_frees_the_slot_for_a_fresh_mcp_request(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("committed", (False, True))
+@pytest.mark.parametrize("commit", ("never", "before_cancel", "after_retry_read"))
 async def test_fresh_mcp_unsubscribe_resolves_an_interrupted_hold_write(
-    committed: bool, monkeypatch: pytest.MonkeyPatch
+    commit: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     peer = FakeUpstream(responses={"events/subscribe": UPSTREAM_OK, "events/unsubscribe": {}})
     async with _connected() as store, _webhook_requests(store, peer, monkeypatch) as (sid, call):
         assert "result" in await call("subscribe")
-        entered = asyncio.Event()
+        entered, retry_read, commit_hold = asyncio.Event(), asyncio.Event(), asyncio.Event()
         hold = store.hold_for_unsubscribe
 
         async def interrupted(identity: str, upstream_id: str | None, generation: str | None) -> bool:
             if entered.is_set():
+                retry_read.set()
+                await commit_hold.wait()
                 return await hold(identity, upstream_id, generation)
-            if committed:
+            if commit == "before_cancel":
                 assert await hold(identity, upstream_id, generation)
             entered.set()
             return await asyncio.Future[bool]()
@@ -628,9 +630,16 @@ async def test_fresh_mcp_unsubscribe_resolves_an_interrupted_hold_write(
         with pytest.raises(asyncio.CancelledError):
             await asyncio.wait_for(request, 5)
         row = await store.get(sid)
-        assert row is not None and row.status == ("pending" if committed else "active")
+        assert row is not None and row.status == ("pending" if commit == "before_cancel" else "active")
         assert [method for method, *_ in peer.calls] == ["events/subscribe"]
-        assert "result" in await call("unsubscribe")
+        retry = asyncio.create_task(call("unsubscribe"))
+        try:
+            if commit == "after_retry_read":
+                await asyncio.wait_for(retry_read.wait(), 5)
+                assert await hold(sid, row.upstream_subscription_id, row.generation)
+        finally:
+            commit_hold.set()
+        assert "result" in await asyncio.wait_for(retry, 5)
         assert await store.get(sid) is None
         method, body, _ = peer.calls[-1]
         assert (method, body) == (
