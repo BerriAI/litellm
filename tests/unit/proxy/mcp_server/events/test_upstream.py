@@ -4,11 +4,13 @@ import anyio
 import pytest
 from mcp.shared.exceptions import MCPError
 
+from litellm.proxy.mcp_server.events.frames import StreamFrame
 from litellm.proxy.mcp_server.events.upstream import (
     EventsClientSession,
     call,
     list_all,
     routing_headers,
+    stream,
 )
 from litellm.types.mcp_server.events import EventType
 
@@ -61,6 +63,25 @@ async def test_listing_follows_upstream_pages(cursor: str) -> None:
     async with events_client(upstream) as client:
         listed: Final = await list_all(client, 10, 5.0)
     assert [item.name for item in listed] == ["a.one", "b.two", "c.three"]
+
+
+@pytest.mark.asyncio
+async def test_a_stream_delivers_its_own_notifications_in_wire_order() -> None:
+    received: Final[list[str]] = []  # mutable-ok: collects frames
+
+    async def consume(frames: object) -> None:
+        async for frame in frames:  # pyright: ignore[reportGeneralTypeIssues]  # memory receive stream
+            assert isinstance(frame, StreamFrame)
+            received.append(frame.method)
+
+    async with events_client(EventsUpstream()) as client:
+        with anyio.fail_after(5):
+            await stream(client, {"name": "build.failed"}, {}, consume)  # pyright: ignore[reportArgumentType]  # test consumer
+    assert received == [
+        "notifications/events/active",
+        "notifications/events/event",
+        "notifications/events/heartbeat",
+    ]
 
 
 @pytest.mark.asyncio
