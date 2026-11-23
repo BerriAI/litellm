@@ -32,7 +32,11 @@ from litellm.proxy.mcp_server.events.errors import (
 from litellm.proxy.mcp_server.events.observability import EventActivity
 from litellm.proxy.mcp_server.events.runtime import EventsRuntime
 from litellm.proxy.mcp_server.events.upstream import routing_headers
-from litellm.proxy.mcp_server.events.webhooks.delivery import is_https_callback, post_callback
+from litellm.proxy.mcp_server.events.webhooks.delivery import (
+    CALLBACK_DEADLINE_SECONDS,
+    is_https_callback,
+    post_callback,
+)
 from litellm.proxy.mcp_server.events.webhooks.policy import (
     callback_url,
     client_grant,
@@ -192,14 +196,15 @@ async def _subscribe_upstream(
 
 async def _discard_pending(subscription: _Subscription) -> None:
     if subscription.reserved:
-        with anyio.CancelScope(shield=True):
-            await subscription.request.store.discard_pending(subscription.base.id, subscription.base.generation)
+        await subscription.request.store.discard_pending(subscription.base.id, subscription.base.generation)
 
 
 async def _roll_back(
     subscription: _Subscription, upstream: SubscribeEventsResult, settings: EventsSettings, runtime: EventsRuntime
 ) -> None:
     """Undo an upstream subscription this request created but could not record."""
+    # The conditional delete serializes with a possibly committed activation before the ownership read.
+    await _discard_pending(subscription)
     current: Final = await subscription.request.store.get(subscription.base.id)
     if current is not None and current.upstream_secret == subscription.base.upstream_secret:
         if current.status in ("active", "suspended"):
@@ -208,7 +213,6 @@ async def _roll_back(
             return
     orphan: Final = subscription.base.model_copy(update={"upstream_subscription_id": upstream.id})
     await _unsubscribe_upstream(orphan, subscription.prepared, settings, runtime)
-    await _discard_pending(subscription)
 
 
 async def activate_subscription(
@@ -361,12 +365,22 @@ async def subscribe(
     try:
         upstream: Final = await _subscribe_upstream(subscription, settings, runtime)
     except BaseException:
-        await _discard_pending(subscription)
+        with anyio.move_on_after(CALLBACK_DEADLINE_SECONDS, shield=True):
+            await _discard_pending(subscription)
         raise
     if isinstance(upstream, Error):
-        await _discard_pending(subscription)
+        with anyio.move_on_after(CALLBACK_DEADLINE_SECONDS, shield=True):
+            await _discard_pending(subscription)
         return Error(upstream.error)
-    return await activate_subscription(subscription, upstream.ok, context, settings, runtime)
+    try:
+        return await activate_subscription(subscription, upstream.ok, context, settings, runtime)
+    except anyio.get_cancelled_exc_class() as cancelled:
+        try:
+            with anyio.move_on_after(CALLBACK_DEADLINE_SECONDS, shield=True):
+                await _roll_back(subscription, upstream.ok, settings, runtime)
+        except Exception as error:  # noqa: BLE001  # preserve cancellation when reconciliation itself fails
+            raise cancelled from error
+        raise
 
 
 async def unsubscribe(
