@@ -602,7 +602,7 @@ def _is_billed_retry_attempt(metadata: SpendLogsMetadata) -> bool:
 
 
 def _timed_request_duration_ms(
-    payload: Mapping[str, object],
+    payload: dict | SpendLogsPayload,
     request_status: Literal["success", "failure"],
     is_internal_call: bool,
 ) -> int | None:
@@ -1267,7 +1267,7 @@ class DBSpendUpdateWriter:
         payload: SpendLogsPayload,
         completion_response: object,
         prisma_client: "PrismaClient | None",
-        kwargs: "Mapping[str, object] | None" = None,
+        kwargs: "dict | None" = None,
     ) -> None:
         try:
             if prisma_client is None:
