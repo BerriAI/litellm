@@ -97,7 +97,9 @@ async def gated_cache_overrides(
     gates: Sequence[CustomLogger],
     cache: Cache | None,
 ) -> Mapping[str, object]:
-    if not gates or cache is None or not cache.is_semantic_cache() or call_type not in SEMANTIC_CACHE_ROUTES:
+    if not gates or call_type not in SEMANTIC_CACHE_ROUTES:
+        return {}
+    if cache is None or not cache.is_semantic_cache():
         return {}
     if await _every_gate_allows(gates, user_api_key_dict, data, call_type):
         return {}
