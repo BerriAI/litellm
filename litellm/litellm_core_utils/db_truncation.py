@@ -1,4 +1,5 @@
 import re
+import sys
 from typing import Final
 
 from litellm.constants import LITELLM_TRUNCATED_PAYLOAD_FIELD, LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE
@@ -7,6 +8,15 @@ _SKIPPED: Final = rf"\.\.\. \({re.escape(LITELLM_TRUNCATED_PAYLOAD_FIELD)} skipp
 _SAFEGUARD_NOTE: Final = rf"\. {re.escape(LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE)}"
 TRUNCATION_MARKER: Final = re.compile(rf"{_SKIPPED}\d+ chars{_SAFEGUARD_NOTE}\) \.\.\.")
 _MARKER_OF_ANY_RELEASE: Final = re.compile(rf"{_SKIPPED}(?P<skipped>\d+) chars(?:{_SAFEGUARD_NOTE})?\) \.\.\.")
+
+
+def _marker(skipped: int) -> str:
+    return (
+        f"... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped {skipped} chars. {LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE}) ..."
+    )
+
+
+_LONGEST_MARKER_LENGTH: Final = len(_marker(sys.maxsize))
 
 
 def _kept_chars(max_length: int) -> tuple[int, int]:
@@ -18,12 +28,8 @@ def truncated_for_db(value: str, max_length: int) -> str:
     if len(value) <= max_length:
         return value
     start_chars, end_chars = _kept_chars(max_length)
-    return (
-        f"{value[:start_chars]}"
-        f"... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped {len(value) - start_chars - end_chars} chars. "
-        f"{LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE}) ..."
-        f"{value[-end_chars:]}"
-    )
+    marker: Final = _marker(len(value) - start_chars - end_chars)
+    return f"{value[:start_chars]}{marker}{value[-end_chars:]}"
 
 
 def _is_where_the_value_was_cut(marker: re.Match[str]) -> bool:
@@ -47,4 +53,6 @@ def _is_cut_from(cut: re.Match[str], whole: str) -> bool:
 
 
 def is_truncation_of(stored: str, whole: str) -> bool:
+    if len(whole) + _LONGEST_MARKER_LENGTH < len(stored):
+        return False
     return any(_is_cut_from(cut, whole) for cut in _cuts(stored))
