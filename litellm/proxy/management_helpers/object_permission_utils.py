@@ -130,7 +130,7 @@ async def prepare_object_permission_upsert(
             *new_object_permission.items(),
             ("object_permission_id", object_permission_id),
         )
-        if can_grant_apps or key != "apps"
+        if (can_grant_apps or key != "apps") and (key != "mcp_event_permissions" or key in new_object_permission)
     }
     record: Final[dict[str, object]] = {
         **merged,
@@ -206,6 +206,10 @@ async def handle_update_object_permission_common(
         prisma_client=prisma_client,
         can_grant_apps=can_grant_apps,
     )
+    return await write_object_permission_upsert(upsert, prisma_client)
+
+
+async def write_object_permission_upsert(upsert: ObjectPermissionUpsert, prisma_client: PrismaClient) -> str:
     created_object_permission_row: Final = await ObjectPermissionRepository(prisma_client).table.upsert(
         where={"object_permission_id": upsert.object_permission_id},
         data={
