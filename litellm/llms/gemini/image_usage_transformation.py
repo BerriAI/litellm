@@ -30,7 +30,7 @@ def _get_modality_token_details(
             for details_key in details_keys
             if isinstance(usage_metadata.get(details_key), list)
         ),
-        [],
+        list[object](),
     )
     return tuple(
         _TOKEN_DETAILS_MAPPING_ADAPTER.validate_python(detail) for detail in details if isinstance(detail, Mapping)

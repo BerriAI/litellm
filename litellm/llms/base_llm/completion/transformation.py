@@ -22,9 +22,9 @@ class BaseTextCompletionConfig(BaseConfig, ABC):
         self,
         model: str,
         messages: list[AllMessageValues] | list[OpenAITextCompletionUserMessage],
-        optional_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: dict[str, object],
+        headers: dict[str, object],
+    ) -> dict[str, object]:
         return {}
 
     def get_complete_url(
@@ -32,8 +32,8 @@ class BaseTextCompletionConfig(BaseConfig, ABC):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         stream: bool | None = None,
     ) -> str:
         """
@@ -49,10 +49,10 @@ class BaseTextCompletionConfig(BaseConfig, ABC):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
+        headers: dict[str, object],
+    ) -> dict[str, object]:
         raise NotImplementedError(
             "AudioTranscriptionConfig does not need a request transformation for audio transcription models"
         )
@@ -63,10 +63,10 @@ class BaseTextCompletionConfig(BaseConfig, ABC):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
+        request_data: dict[str, object],
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,

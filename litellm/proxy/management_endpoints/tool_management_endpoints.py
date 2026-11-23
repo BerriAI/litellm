@@ -388,7 +388,7 @@ def _snippet_str(text: object, max_len: int = 200) -> str | None:
     if isinstance(text, str):
         s = text
     elif isinstance(text, list):
-        parts: Final = []
+        parts: Final = list[str]()
         for item in text:
             if isinstance(item, dict) and "content" in item:
                 c = item["content"]
