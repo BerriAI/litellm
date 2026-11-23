@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Annotated, Final, Literal, TypeAlias, TypeVar
 
 from pydantic import Field, JsonValue, TypeAdapter
 
+from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
 from litellm.types.extraction import (
@@ -201,6 +202,16 @@ class ExtractionHandler(BaseTranslation):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
     ) -> Mapping[str, object]:
+        if data.get("documents"):
+            raise BadRequestError(
+                message=(
+                    f"Guardrail '{guardrail_to_apply.guardrail_name or 'unknown'}' cannot inspect PDF documents, "
+                    "so the request was rejected rather than sent uninspected. Send the document's text as "
+                    "`state` or as images instead"
+                ),
+                model=data.get("model") if isinstance(data.get("model"), str) else None,
+                llm_provider="cloudflare",
+            )
         state: Final = data.get("state")
         states: Final = (state,) if isinstance(state, str) and state else ()
         fields: Final = _FIELDS_ADAPTER.validate_python(data.get("fields") or {})

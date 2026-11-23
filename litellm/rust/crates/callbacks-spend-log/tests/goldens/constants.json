@@ -82,6 +82,7 @@
   "instructions",
   "query_image",
   "images",
+  "documents",
   "retrievalQuery",
   "retrieval_query"
  ],

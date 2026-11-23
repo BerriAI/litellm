@@ -68,6 +68,8 @@ _ENVELOPE: Final[Mapping[str, object]] = {"result": _RESULT, "success": True, "e
 _PNG_DATA_URL: Final = "data:image/png;base64,AA=="
 _PDF_DATA_URL: Final = "data:application/pdf;base64,JVBERi0="
 _PDF_OBJECT: Final[Mapping[str, object]] = MappingProxyType({"content_type": "application/pdf", "base64": "JVBERi0="})
+_MAX_PDF_BASE64: Final = "A" * (4 * 1024 * 1024 // 3 * 4)
+_OVERSIZED_PDF_BASE64: Final = "A" * (4 * 1024 * 1024 // 3 * 4 + 8)
 
 
 @pytest.fixture(autouse=True)
@@ -431,8 +433,10 @@ async def test_a_dropped_stream_is_sent_and_logged_as_a_billed_non_stream_call(
         ["https://example.com/invoice.pdf"],
         [_PDF_DATA_URL] * 5,
         [{"content_type": "application/json", "base64": "e30="}],
+        [f"data:application/pdf;base64,{_OVERSIZED_PDF_BASE64}"],
+        [{"content_type": "application/pdf", "base64": _OVERSIZED_PDF_BASE64}],
     ),
-    ids=("remote_pdf", "too_many_documents", "wrong_content_type"),
+    ids=("remote_pdf", "too_many_documents", "wrong_content_type", "oversized_data_url", "oversized_object"),
 )
 @pytest.mark.usefixtures("cloudflare_env")
 async def test_an_invalid_documents_request_is_refused_before_http(

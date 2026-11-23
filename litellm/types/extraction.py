@@ -10,6 +10,7 @@ from pydantic import (
     StrictFloat,
     StrictInt,
     StrictStr,
+    field_validator,
     model_validator,
     with_config,
 )
@@ -80,6 +81,22 @@ class ExtractionBase64Document(_ClairicObject):
     base64: Annotated[str, Field(description="Base64-encoded PDF bytes")]
 
 
+EXTRACTION_DOCUMENT_MAX_BYTES: Final = 4 * 1024 * 1024
+_EXTRACTION_DOCUMENT_MAX_BASE64_CHARS: Final = -(-EXTRACTION_DOCUMENT_MAX_BYTES // 3) * 4
+_BASE64_DATA_URL_MARKER: Final = "base64,"
+
+
+def _base64_payload(document: "str | ExtractionBase64Document") -> str:
+    if isinstance(document, ExtractionBase64Document):
+        return document.base64
+    return document[document.index(_BASE64_DATA_URL_MARKER) + len(_BASE64_DATA_URL_MARKER) :]
+
+
+def _decoded_size(payload: str) -> int:
+    stripped: Final = payload.rstrip("=")
+    return len(stripped) * 3 // 4
+
+
 ExtractionDocument: TypeAlias = (
     Annotated[
         str,
@@ -123,6 +140,21 @@ class ExtractionRequestBody(_ClairicObject):
         None
     )
     options: ExtractionOptions | None = None
+
+    @field_validator("documents", mode="after")
+    @classmethod
+    def _documents_fit_the_size_limit(
+        cls, documents: tuple[ExtractionDocument, ...] | None
+    ) -> tuple[ExtractionDocument, ...] | None:
+        for index, document in enumerate(documents or ()):
+            payload = _base64_payload(document)
+            if len(payload) > _EXTRACTION_DOCUMENT_MAX_BASE64_CHARS or _decoded_size(payload) > (
+                EXTRACTION_DOCUMENT_MAX_BYTES
+            ):
+                raise ValueError(
+                    f"documents[{index}] is larger than {EXTRACTION_DOCUMENT_MAX_BYTES // (1024 * 1024)} MiB"
+                )
+        return documents
 
 
 class ExtractionRequest(ExtractionRequestBody):
