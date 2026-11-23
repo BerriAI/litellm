@@ -1577,6 +1577,8 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
             verbose_proxy_logger.debug("Presidio PII Masking: Redacted pii message: %s", messages)
             kwargs["messages"] = messages
+            if isinstance(kwargs.get("input"), list):
+                kwargs["input"] = copy.deepcopy(messages)
 
             raw_system = kwargs.get("system")
             if raw_system is not None:
