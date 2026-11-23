@@ -1421,9 +1421,12 @@
         "supports_native_structured_output": true,
         "supports_output_config": true,
         "bedrock_output_config_effort_ceiling": "high",
+        "deprecation_date": "2027-05-23",
+        "deprecation_source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html",
         "supports_parallel_tool_use_config": true,
         "prompt_cache_min_tokens": 4096,
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json",
+        "successor_model": "anthropic.claude-opus-5-5",
         "token_count_model": {
             "model": "anthropic.claude-opus-4-5-20251101-v1:0",
             "litellm_provider": "bedrock"
@@ -53502,9 +53505,12 @@
         "supports_native_structured_output": true,
         "supports_output_config": true,
         "bedrock_output_config_effort_ceiling": "high",
+        "deprecation_date": "2027-05-23",
+        "deprecation_source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html",
         "supports_parallel_tool_use_config": true,
         "prompt_cache_min_tokens": 4096,
         "source": "https://aws.amazon.com/bedrock/pricing/",
+        "successor_model": "us.anthropic.claude-opus-5-5",
         "token_count_model": {
             "model": "anthropic.claude-opus-4-5-20251101-v1:0",
             "litellm_provider": "bedrock"
@@ -53538,9 +53544,12 @@
         "supports_native_structured_output": true,
         "supports_output_config": true,
         "bedrock_output_config_effort_ceiling": "high",
+        "deprecation_date": "2027-05-23",
+        "deprecation_source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html",
         "supports_parallel_tool_use_config": true,
         "prompt_cache_min_tokens": 4096,
         "source": "https://aws.amazon.com/bedrock/pricing/",
+        "successor_model": "global.anthropic.claude-opus-5-5",
         "token_count_model": {
             "model": "anthropic.claude-opus-4-5-20251101-v1:0",
             "litellm_provider": "bedrock"
@@ -53574,9 +53583,12 @@
         "supports_native_structured_output": true,
         "supports_output_config": true,
         "bedrock_output_config_effort_ceiling": "high",
+        "deprecation_date": "2027-05-23",
+        "deprecation_source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-lifecycle-legacy.html",
         "supports_parallel_tool_use_config": true,
         "prompt_cache_min_tokens": 4096,
         "source": "https://aws.amazon.com/bedrock/pricing/",
+        "successor_model": "eu.anthropic.claude-opus-5-5",
         "token_count_model": {
             "model": "anthropic.claude-opus-4-5-20251101-v1:0",
             "litellm_provider": "bedrock"
