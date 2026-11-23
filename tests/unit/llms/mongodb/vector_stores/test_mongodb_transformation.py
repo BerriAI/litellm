@@ -258,7 +258,7 @@ async def test_a_sidecar_error_keeps_the_sidecar_reply_body_on_the_raised_except
     assert caught.value.response.json() == wire_body
 
 
-QUERY_IMAGE: Final ={"type": "base64", "media_type": "image/jpeg", "data": "/9j/4AAQSkZJRg=="}
+QUERY_IMAGE: Final = {"type": "base64", "media_type": "image/jpeg", "data": "/9j/4AAQSkZJRg=="}
 
 
 def _search_with_extra_body(extra_body: dict[str, object], **search_kwargs: object) -> VectorStoreSearchResponse:

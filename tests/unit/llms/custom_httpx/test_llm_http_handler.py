@@ -6424,6 +6424,16 @@ def _call_lookup_handler(name: str, is_async: bool, client: HTTPHandler | AsyncH
                 _is_async=is_async,
                 client=client,
             )
+        case "file_content":
+            return handler.retrieve_file_content(
+                file_content_request={"file_id": "file_missing"},
+                provider_config=MistralFilesConfig(),
+                litellm_params=files_params,
+                headers={},
+                logging_obj=Mock(),
+                _is_async=is_async,
+                client=client,
+            )
         case "vector_store_file_content":
             return handler.vector_store_file_content_handler(
                 vector_store_id="vs_missing",
@@ -6525,6 +6535,7 @@ async def _run_lookup_handler(name: str, is_async: bool, client: HTTPHandler | A
         "vector_store_file_retrieve",
         "vector_store_file_content",
         "file_retrieve",
+        "file_content",
         "file_list",
         "eval_list",
         "eval_get",
@@ -6542,6 +6553,28 @@ async def test_lookup_handlers_raise_the_provider_error_status(name: str, is_asy
 
     with pytest.raises(BaseLLMException) as error:
         await _run_lookup_handler(name, is_async, async_client if is_async else sync_client)
+
+    assert error.value.status_code == status_code
+    assert "No such object" in error.value.message
+    assert error.value.response.json() == wire_body
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status_code", (404, 503))
+async def test_streamed_file_content_error_keeps_the_provider_reply(status_code: int) -> None:
+    wire_body: Final = {"error": {"message": "No such object"}}
+    _, async_client = _clients_answering_with(httpx.Response(status_code, json=wire_body))
+
+    with pytest.raises(BaseLLMException) as error:
+        await BaseLLMHTTPHandler().async_retrieve_file_content_streaming(
+            file_content_request={"file_id": "file_missing"},
+            provider_config=MistralFilesConfig(),
+            litellm_params={"api_base": "https://api.example.test", "api_key": "sk-test"},
+            headers={},
+            logging_obj=Mock(),
+            chunk_size=16,
+            client=async_client,
+        )
 
     assert error.value.status_code == status_code
     assert "No such object" in error.value.message
