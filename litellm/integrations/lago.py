@@ -3,7 +3,7 @@
 
 import json
 import os
-from typing import Final, Literal
+from typing import Final, Literal, Protocol
 
 import httpx
 
@@ -11,11 +11,21 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import has_attributes, require_attributes
 from litellm.llms.custom_httpx.http_handler import (
     HTTPHandler,
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+
+
+class _SupportsGet(Protocol):
+    def get(self, key: str, default: object = None, /) -> object: ...
+
+
+class _HasUsage(Protocol):
+    @property
+    def usage(self) -> object: ...
 
 
 def get_utc_datetime():
@@ -69,11 +79,12 @@ class LagoLogger(CustomLogger):
 
         if (
             isinstance(response_obj, litellm.ModelResponse) or isinstance(response_obj, litellm.EmbeddingResponse)
-        ) and hasattr(response_obj, "usage"):
+        ) and has_attributes(response_obj, _HasUsage, "usage"):
+            response_usage: Final = require_attributes(response_obj.usage, _SupportsGet, "get")
             usage = {
-                "prompt_tokens": response_obj["usage"].get("prompt_tokens", 0),
-                "completion_tokens": response_obj["usage"].get("completion_tokens", 0),
-                "total_tokens": response_obj["usage"].get("total_tokens"),
+                "prompt_tokens": response_usage.get("prompt_tokens", 0),
+                "completion_tokens": response_usage.get("completion_tokens", 0),
+                "total_tokens": response_usage.get("total_tokens"),
             }
 
         litellm_params: Final = kwargs.get("litellm_params", {}) or {}

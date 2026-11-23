@@ -177,7 +177,7 @@ class _TranscriptionEventCollector:
 
 
 def _billed_usage(response: TranscriptionResponse) -> Usage:
-    usage: Final[object] = getattr(response, "usage", None)
+    usage: Final = response.usage
     token_usage: Final = (
         TranscriptionUsageObjectTransformation.transform_transcription_usage_object(usage)
         if isinstance(usage, TranscriptionUsageTokensObject)

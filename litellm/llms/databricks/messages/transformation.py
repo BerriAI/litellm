@@ -1,5 +1,5 @@
 import json
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import Final
 
 import httpx
@@ -122,7 +122,7 @@ class DatabricksAnthropicMessagesConfig(DatabricksBase, AnthropicMessagesConfig)
         self,
         headers: dict[str, str],  # mutable-ok: mirrors the base signature
         model: str,
-        messages: list[object],  # mutable-ok: mirrors the base signature
+        messages: Sequence[object],
         optional_params: dict[str, object],  # mutable-ok: mirrors the base signature
         litellm_params: dict[str, object],  # mutable-ok: mirrors the base signature
         api_key: str | None = None,
@@ -192,7 +192,7 @@ class DatabricksAnthropicMessagesConfig(DatabricksBase, AnthropicMessagesConfig)
             headers=headers,
         )
         self._normalize_system_role_messages(  # pyright: ignore[reportUnknownMemberType]  # the shared helper takes a bare dict
-            anthropic_messages_request, model=model, drop_params=getattr(litellm_params, "drop_params", None)
+            anthropic_messages_request, model=model, drop_params=litellm_params.drop_params
         )
         self._remove_scope_from_cache_control(anthropic_messages_request)  # pyright: ignore[reportUnknownMemberType]  # the shared helper takes a bare dict
         return anthropic_messages_request

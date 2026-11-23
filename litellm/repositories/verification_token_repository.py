@@ -8,16 +8,21 @@ from datetime import datetime
 from types import TracebackType
 from typing import TYPE_CHECKING, Final, Protocol
 
+from pydantic import TypeAdapter
+
 from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.models.verification_token import (
     LiteLLM_VerificationToken,
 )
+from litellm.repositories import rust_database
 from litellm.repositories.base_repository import (
     BaseRepository,
     DbRecord,
     record_to_dict,
 )
 from litellm.repositories.prisma_protocols import TableActions
+from litellm.rust_bridge._native import RustKeyRepository
 
 if TYPE_CHECKING:
     from prisma.models import (
@@ -58,6 +63,8 @@ class _PrismaClientView(Protocol):
     def db(self) -> _PrismaVerificationTokenDb: ...
 
 
+_CACHED_KEY: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
+
 _JSON_ENCODED_TOKEN_FIELDS: Final = (
     "aliases",
     "config",
@@ -76,8 +83,7 @@ class VerificationTokenRepository(BaseRepository[LiteLLM_VerificationToken]):
 
     @property
     def _db(self) -> _PrismaVerificationTokenDb:
-        client: Final[_PrismaClientView] = self.prisma_client
-        return client.db
+        return require_attributes(self._connected_client(), _PrismaClientView, "db").db
 
     @property
     def table(self) -> TableActions["PrismaVerificationToken"]:
@@ -90,6 +96,16 @@ class VerificationTokenRepository(BaseRepository[LiteLLM_VerificationToken]):
     @property
     def model_class(self) -> type[LiteLLM_VerificationToken]:
         return LiteLLM_VerificationToken
+
+    async def find_for_auth(self, hashed_token: str, *, use_writer: bool = False) -> Mapping[str, object] | None:
+        """The key as auth reads it and as the auth cache holds it, read by the Rust repository: the
+        ``combined_view`` row shaped into ``UserAPIKeyAuth``'s fields, with no object permission nested.
+
+        A hash rotated away from a key within its grace period answers with the active key, so the deprecated
+        token fallback needs no second call. ``use_writer`` reads the writer instead of a replica."""
+        return _CACHED_KEY.validate_python(
+            await rust_database.required_repository(RustKeyRepository).find(hashed_token, use_writer=use_writer)
+        )
 
     def _to_model(self, record: DbRecord | None) -> LiteLLM_VerificationToken | None:
         """Convert a database record to a VerificationToken model."""
@@ -124,9 +140,7 @@ class VerificationTokenRepository(BaseRepository[LiteLLM_VerificationToken]):
         records: Final[Sequence[PrismaVerificationToken]] = await self.table.find_many(where={"user_id": user_id})
         return self._to_model_list(records)
 
-    async def find_newest_reusable_llm_api_key(
-        self, user_id: str, team_id: str | None
-    ) -> LiteLLM_VerificationToken | None:
+    async def find_newest_reusable_key(self, user_id: str, team_id: str | None) -> LiteLLM_VerificationToken | None:
         records: Final[Sequence[PrismaVerificationToken]] = await self.table.find_many(
             where={
                 "user_id": user_id,
@@ -138,12 +152,6 @@ class VerificationTokenRepository(BaseRepository[LiteLLM_VerificationToken]):
                         "OR": [
                             {"team_id": None},
                             {"team_id": {"not": UI_SESSION_TOKEN_TEAM_ID}},
-                        ]
-                    },
-                    {
-                        "OR": [
-                            {"allowed_routes": {"is_empty": True}},
-                            {"allowed_routes": {"has": "llm_api_routes"}},
                         ]
                     },
                 ],

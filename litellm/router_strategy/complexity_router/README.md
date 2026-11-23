@@ -485,6 +485,16 @@ without storing a tier pin. `session_affinity: true` retains precedence and the 
 
 `session_affinity_ttl_seconds` is the idle window for both the model pin selected by session affinity and the deployment pin. Every request that reuses a pin refreshes its TTL, so a session actively sending requests stays pinned. After the window passes with no pin reuse, the next request classifies again and creates a fresh pin. Omit the setting to track the default of 3600 seconds.
 
+When the session ID changes per message, set `conversation_header` to the header your application uses to name the conversation
+
+```yaml
+complexity_router_config:
+  session_affinity: true
+  conversation_header: x-conversation-id
+```
+
+The tier pin, the per-tier model pin, the deployment pin and `user_turn` continuations then follow that header's value instead of the session ID. The header name matches case-insensitively and the value is used exactly as sent. Pins stay scoped to the calling key or JWT user, and a `user_turn` child keeps its own pin inside the conversation. A request without the header, with an empty value, or naming a credential header that the proxy redacts gets no conversation-based reuse from this router and never falls back to the session ID. The same applies to SDK calls that carry no proxy request headers. Spend logs and traces keep the request's own session ID. A separately enabled Router-level `session_affinity` pre-call check keeps its own session ID behavior for those requests
+
 ### Mid-task stall escalation
 
 A weak model working an agentic task can get stuck: it keeps calling the same tool with the
@@ -565,6 +575,12 @@ model_list:
 keep the classifier deployment or provider default, or set a supported value such as `none` or
 `low` to override that call.
 
+`classifier_llm_config.max_output_tokens` optionally limits the LLM classifier's output.
+Omit it or set it to `null` to keep the classifier deployment or provider default unchanged.
+Set it to a positive integer, such as `64`, to override that limit for the classifier call only.
+This can reduce quota reservation on providers such as Amazon Bedrock. Leave room for reasoning
+tokens when `reasoning_effort` is set.
+
 When the current ask is a Responses API `agent_message` containing `encrypted_content`, LLM
 classification preserves the encrypted task and uses native Responses. This also bypasses the
 local scoring shortcut in `heuristic_first` and `hybrid` modes. The configured classifier must use
@@ -590,6 +606,24 @@ every turn or session handled by the router process.
 With the default heuristic v1, a request short-circuits, meaning it routes on the scorer's own tier with no classifier call, when
 two things hold: the scorer landed at or below `heuristic_first_max_tier`, and it produced at least
 one signal. Everything else goes to the classifier, which then decides as it normally would.
+
+For coding agents with long conversations, set `heuristic_first_max_context_tokens: 8000` alongside
+`heuristic_first_max_tier`. Above that estimated size, even a short follow-up such as "why did that
+fail?" goes to the classifier. At or below the limit, the usual local-scoring rules apply. Omit the
+setting or use `null` to keep the existing behavior. The value must be a positive integer and is only
+accepted with `classifier_type: heuristic_first`.
+
+The estimate counts message text and tool-result bodies, including structured tool results, at
+roughly four characters per token. It excludes images and tool-call arguments. The classifier gets
+the same size estimate with its existing recent-turn context, not the full tool transcript. The
+limit requires a classifier decision, not a higher tier, and classifier failures still use
+`classifier_fallback`.
+
+Existing pins take precedence. With `classification_mode: user_turn`, tool continuations reuse the
+held tier and the next human ask checks the limit again. With `session_affinity: true`, the session
+pin also takes precedence on new asks. In the dashboard, set **Max conversation tokens before judge**
+under the heuristic-first classification settings. Clear the field to disable the limit. Confirm
+`llm_classifier` in the routing decision for a new ask above the limit.
 
 The signal requirement is what keeps this from quietly routing everything to your cheapest model.
 A prompt where no dimension fires scores exactly 0.0, which is below `simple_medium`, so the score
@@ -690,7 +724,7 @@ generic behavior; use the real client when checking Claude Code routing.
 
 Agent harnesses inject their own context into the conversation as ordinary message text. That text is plumbing, not something a human asked for, so the router strips complete reminder blocks before classifying and picking a tier. A turn that is nothing but a reminder block strips to empty and is skipped, and the router falls back to the last real ask instead
 
-By default the router strips complete `<system-reminder>` blocks. For requests with a Codex user agent, it also strips complete `<environment_context>`, `<recommended_plugins>`, `<user_instructions>`, and `<environments_instructions>` blocks, plus repository instructions from the fixed heading prefix `# AGENTS.md instructions for ` through `</INSTRUCTIONS>`, regardless of the repository path. Other clients keep those tags and their contents
+By default the router strips complete `<system-reminder>` blocks. For requests with a Codex user agent, it also strips complete `<environment_context>`, `<recommended_plugins>`, `<user_instructions>`, and `<environments_instructions>` blocks, plus repository instructions from the fixed heading prefix `# AGENTS.md instructions for ` through `</INSTRUCTIONS>`, regardless of the repository path. For requests with an `opencode/` user agent, it also strips complete `<task_result>` blocks and `<subagent ...>` blocks through `</subagent>`, attributes included, which OpenCode uses to return subagent output as a user turn. Other clients keep those tags and their contents
 
 The proxy records the incoming user agent in request metadata. SDK callers can supply `metadata.user_agent` (or `litellm_metadata.user_agent` on Responses requests), or configure `reminder_markers` explicitly when their client identity is unavailable
 
@@ -713,7 +747,7 @@ model_list:
             close: "[[SUBAGENT_CONTEXT_END]]"
 ```
 
-Setting `reminder_markers` replaces all built-in pairs, including the Codex heading pair, so include every default your harness still needs. Matching is case-insensitive. Blocks that nest or overlap across pairs are stripped whole. An unclosed delimiter is not a block and is left in place, which keeps prose that merely mentions a delimiter from being eaten
+Setting `reminder_markers` replaces all built-in pairs, including the Codex and OpenCode pairs, so include every default your harness still needs. Matching is case-insensitive. Blocks that nest or overlap across pairs are stripped whole. An unclosed delimiter is not a block and is left in place, which keeps prose that merely mentions a delimiter from being eaten
 
 ### Code Detection
 

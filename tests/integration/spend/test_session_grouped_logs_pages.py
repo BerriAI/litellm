@@ -319,6 +319,18 @@ class _ExplainedReads:
         self.database: Final = database
         self.rows_scanned: tuple[int, ...] = ()
 
+    @asynccontextmanager
+    async def tx(self, *, max_wait: timedelta, timeout: timedelta) -> AsyncIterator["_ExplainedReads"]:
+        async with self.database.tx(max_wait=max_wait, timeout=timeout) as transaction:
+            reads: Final = _ExplainedReads(transaction)
+            try:
+                yield reads
+            finally:
+                self.rows_scanned = (*self.rows_scanned, *reads.rows_scanned)
+
+    async def execute_raw(self, query: str, *args: object) -> int:
+        return await self.database.execute_raw(query, *args)
+
     async def query_raw(self, query: str, *args: object) -> Sequence[Mapping[str, object]]:
         explained: Final = await self.database.query_raw(f"EXPLAIN (ANALYZE, FORMAT JSON) {query}", *args)
         plan: Final = _Explained.model_validate(explained[0]["QUERY PLAN"][0]).plan
@@ -384,14 +396,14 @@ async def test_a_page_cut_inside_a_tie_reads_on_until_the_tie_is_whole() -> None
 
 @dataclass(frozen=True, slots=True)
 class _ExplainedPrisma:
-    db: _ExplainedReads
+    read_db: _ExplainedReads
 
 
 async def test_a_pages_representatives_are_found_by_session_not_by_scanning_the_window() -> None:
     async with _spend_logs_copy(*_generated_sessions(rows_per_session=10)) as database:
         reads: Final = _ExplainedReads(database)
         representatives: Final = await _fetch_session_representatives(
-            prisma_client=_ExplainedPrisma(reads),  # pyright: ignore[reportArgumentType]  # only .db is used
+            prisma_client=_ExplainedPrisma(reads),  # pyright: ignore[reportArgumentType]  # only .read_db is used
             where_clause=_COPY_WINDOW,
             sql_params=_COPY_WINDOW_PARAMS,
             next_param_index=len(_COPY_WINDOW_PARAMS) + 1,

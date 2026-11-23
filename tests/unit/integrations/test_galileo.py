@@ -984,3 +984,32 @@ def test_galileo_output_str_of_a_chat_response_whose_message_is_not_a_litellm_me
     )
 
     assert output == expected_output
+
+
+GALILEO_MESSAGES: Final = [{"role": "user", "content": "weather in SF?"}]
+GALILEO_TOOLS: Final = [{"type": "function", "function": {"name": "get_weather", "parameters": {}}}]
+GALILEO_FUNCTIONS: Final = [{"name": "get_time", "parameters": {}}]
+
+
+@pytest.mark.parametrize(
+    ("optional_params", "expected_input"),
+    [
+        (
+            {"functions": GALILEO_FUNCTIONS, "tools": GALILEO_TOOLS, "temperature": 0.1},
+            {"messages": GALILEO_MESSAGES, "functions": GALILEO_FUNCTIONS, "tools": GALILEO_TOOLS},
+        ),
+        (None, {"messages": GALILEO_MESSAGES}),
+    ],
+)
+def test_galileo_error_span_input_carries_the_request_functions_and_tools(
+    optional_params: dict[str, object] | None, expected_input: dict[str, object]
+) -> None:
+    _, output_text, logged_input = GalileoObserve()._get_galileo_input_output_content(
+        {"messages": GALILEO_MESSAGES, "optional_params": optional_params},
+        None,
+        level="ERROR",
+        status_message="upstream 500",
+    )
+
+    assert output_text == "upstream 500"
+    assert logged_input == expected_input

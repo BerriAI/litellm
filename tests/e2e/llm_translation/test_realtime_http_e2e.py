@@ -21,7 +21,7 @@ from pydantic import BaseModel
 
 pytestmark = pytest.mark.e2e
 
-REALTIME_BACKEND = "openai/gpt-realtime"
+REALTIME_BACKEND = "openai/gpt-realtime-2.1"
 TRANSLATIONS_CLIENT_SECRETS: Final = "/v1/realtime/translations/client_secrets"
 
 
