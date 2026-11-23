@@ -206,6 +206,10 @@ async def handle_update_object_permission_common(
         prisma_client=prisma_client,
         can_grant_apps=can_grant_apps,
     )
+    return await write_object_permission_upsert(upsert, prisma_client)
+
+
+async def write_object_permission_upsert(upsert: ObjectPermissionUpsert, prisma_client: PrismaClient) -> str:
     created_object_permission_row: Final = await ObjectPermissionRepository(prisma_client).table.upsert(
         where={"object_permission_id": upsert.object_permission_id},
         data={
