@@ -2,7 +2,7 @@ import asyncio
 import functools
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Final, TypeAlias, TypeVar
+from typing import Final, TypeAlias, TypeGuard, TypeVar
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
@@ -17,7 +17,7 @@ _SERVERS: Final = TypeAdapter(list[dict[str, object]])
 _DOCUMENTATION_ROUTE_NAMES: Final = frozenset({"openapi", "scalar_reference", "swagger_ui_html", "swagger_ui_redirect"})
 
 
-def is_proxy_documentation_route(route: object) -> bool:
+def is_proxy_documentation_route(route: object) -> TypeGuard[Route]:
     return isinstance(route, Route) and not route.include_in_schema and route.name in _DOCUMENTATION_ROUTE_NAMES
 
 

@@ -49,7 +49,9 @@ def _is_gateway_route(route) -> bool:
         return False
     if isinstance(route, Mount):
         return path in GATEWAY_MOUNT_PATHS
-    if path in GATEWAY_EXACT_PATHS or is_proxy_documentation_route(route):
+    if is_proxy_documentation_route(route):
+        return route.name == "openapi"
+    if path in GATEWAY_EXACT_PATHS:
         return True
     return any(path.startswith(prefix) for prefix in GATEWAY_PATH_PREFIXES)
 

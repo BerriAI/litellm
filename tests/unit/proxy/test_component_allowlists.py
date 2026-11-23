@@ -314,21 +314,54 @@ def test_gateway_drops_admin_ui_mounts():
             f"Mount {path} must not be served by the gateway"
 
 
-@pytest.mark.parametrize("keep_route", (_is_backend_route, _is_gateway_route))
-def test_component_keeps_both_documentation_asset_mounts(keep_route):
-    docs_mounts = {route.path: route for route in app.router.routes if isinstance(route, Mount)}
-    for path in ("/scalar", "/swagger"):
-        assert keep_route(docs_mounts[path])
-
-
-@pytest.mark.parametrize("keep_route", (_is_backend_route, _is_gateway_route))
-def test_component_keeps_custom_documentation_paths(keep_route):
+@pytest.mark.parametrize(
+    ("component_lifespan", "viewer_status"),
+    ((None, 200), (_backend_lifespan, 200), (_gateway_lifespan, 404)),
+    ids=("proxy", "backend", "gateway"),
+)
+@pytest.mark.parametrize(
+    ("docs_path", "swagger_path", "schema_path"),
+    (("/", "/swagger", "/openapi.json"), ("/v1/models/reference", "/v1/models/swagger", "/custom-schema.json")),
+    ids=("defaults", "custom"),
+)
+def test_component_serves_expected_documentation(
+    component_lifespan, viewer_status, docs_path, swagger_path, schema_path
+):
     from litellm.proxy.scalar_reference import mount_api_references
 
-    docs_app = FastAPI(docs_url=None, redoc_url=None, openapi_url="/custom-schema.json")
-    mount_api_references(docs_app, "/custom-scalar", "/custom-swagger")
-    kept_paths = {route.path for route in docs_app.routes if keep_route(route)}
-    assert {"/custom-schema.json", "/custom-scalar", "/custom-swagger"} <= kept_paths
+    @asynccontextmanager
+    async def lifespan(application: Starlette) -> AsyncGenerator[None, None]:
+        yield
+
+    application = FastAPI(
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=schema_path,
+        lifespan=lifespan if component_lifespan is None else partial(component_lifespan, lifespan=lifespan),
+    )
+    mount_api_references(application, docs_path, swagger_path)
+
+    @application.get("/")
+    async def status():
+        return "LiteLLM: RUNNING"
+
+    with TestClient(application) as client:
+        schema = client.get(schema_path)
+        assert schema.status_code == 200
+        assert "/" in schema.json()["paths"]
+        assert client.get(swagger_path).status_code == viewer_status
+        assert client.get("/docs/oauth2-redirect").status_code == viewer_status
+        assert client.get("/scalar/scalar-1.81.0.js").status_code == viewer_status
+        assert client.get("/swagger/swagger-ui-bundle.js").status_code == viewer_status
+
+        reference = client.get(docs_path)
+        if docs_path == "/" and viewer_status == 404:
+            assert reference.status_code == 200
+            assert reference.json() == "LiteLLM: RUNNING"
+        else:
+            assert reference.status_code == viewer_status
+            if viewer_status == 200:
+                assert "/scalar/reference.js" in reference.text
 
 
 def test_gateway_keeps_memory_summary_and_trims_the_other_debug_routes():
