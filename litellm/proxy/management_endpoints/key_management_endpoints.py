@@ -582,7 +582,7 @@ def _effective_key_for_generate(data: GenerateKeyRequest, now: datetime) -> Lite
         MappingProxyType(
             {
                 **columns,
-                "metadata": encrypt_callback_vars(folded_metadata),
+                "metadata": encrypt_callback_vars(folded_metadata, logging_references_approved=True),
                 "expires": expires,
                 "budget_reset_at": budget_reset_at,
                 "key_rotation_at": key_rotation_at,
@@ -2903,7 +2903,9 @@ async def generate_service_account_key_fn(
     )
 
 
-def prepare_metadata_fields(data: BaseModel, non_default_values: dict, existing_metadata: dict) -> dict:
+def prepare_metadata_fields(
+    data: BaseModel, non_default_values: dict, existing_metadata: dict, *, logging_references_approved: bool = False
+) -> dict:
     """
     Check LiteLLM_ManagementEndpoint_MetadataFields (proxy/_types.py) for fields that are allowed to be updated
     """
@@ -2950,7 +2952,9 @@ def prepare_metadata_fields(data: BaseModel, non_default_values: dict, existing_
             "litellm.proxy.proxy_server.prepare_metadata_fields(): Exception occured - %s", e
         )
 
-    non_default_values["metadata"] = encrypt_callback_vars(casted_metadata)
+    non_default_values["metadata"] = encrypt_callback_vars(
+        casted_metadata, logging_references_approved=logging_references_approved
+    )
     return non_default_values
 
 
@@ -3261,6 +3265,7 @@ async def prepare_key_update_data(
     user_api_key_dict: UserAPIKeyAuth | None = None,
 ):
     if user_api_key_dict is not None:
+        raise_on_logging_credential_change(data.metadata, existing_key_row, user_api_key_dict)
         await _check_customer_header_team_change(data, existing_key_row, user_api_key_dict, prisma_client)
     if data.router_settings is not None or (
         "router_settings" not in data.model_fields_set
@@ -3369,7 +3374,12 @@ async def prepare_key_update_data(
         non_default_values["router_settings"] = safe_dumps(non_default_values["router_settings"])
 
     non_default_values = prepare_metadata_fields(
-        data=data, non_default_values=non_default_values, existing_metadata=_metadata
+        data=data,
+        non_default_values=non_default_values,
+        existing_metadata=_metadata,
+        logging_references_approved=(
+            user_api_key_dict is not None and data.metadata is not None and "logging" in data.metadata
+        ),
     )
 
     return non_default_values
@@ -3691,7 +3701,6 @@ async def _process_single_key_update(
     )
 
     # Prepare update data
-    raise_on_logging_credential_change(key_request.metadata, existing_key_row, user_api_key_dict)
     non_default_values = await prepare_key_update_data(
         data=key_request,
         existing_key_row=existing_key_row,
@@ -4454,7 +4463,6 @@ async def update_key_fn(
 
         # Enforce upperbound key params on update (don't fill defaults)
         _enforce_upperbound_key_params(data, fill_defaults=False)
-        raise_on_logging_credential_change(data.metadata, existing_key_row, user_api_key_dict)
         non_default_values: Final = await prepare_key_update_data(
             data=data,
             existing_key_row=existing_key_row,
@@ -5486,6 +5494,7 @@ def metadata_json_with_limits(
     guardrails: Sequence[str] | None,
     policies: Sequence[str] | None,
     prompts: Sequence[str] | None,
+    logging_references_approved: bool = False,
 ) -> str:
     """Serialize the stored metadata blob with the per-model, MCP, tag, guardrail, policy and prompt settings folded in."""
     limits: Final = tuple(
@@ -5504,7 +5513,7 @@ def metadata_json_with_limits(
     if metadata is None and not limits:
         return json.dumps(None)
     merged: Final = {**(metadata or _NO_METADATA), **dict(limits)}
-    return json.dumps(encrypt_callback_vars(merged))
+    return json.dumps(encrypt_callback_vars(merged, logging_references_approved=logging_references_approved))
 
 
 async def generate_key_helper_fn(
@@ -5630,6 +5639,7 @@ async def generate_key_helper_fn(
         guardrails=guardrails,
         policies=policies,
         prompts=prompts,
+        logging_references_approved=actor is not None and actor.user_role == LitellmUserRoles.PROXY_ADMIN,
     )
     validate_model_max_budget(model_max_budget)
     model_max_budget_json: Final = json.dumps(model_max_budget)
@@ -6619,7 +6629,6 @@ async def _execute_virtual_key_regeneration(
             await _enforce_custom_key_update_policy(hook=_custom_key_update_hook(proxy_server), data=update_request)
         # Enforce upperbound key params on regenerate (don't fill defaults)
         _enforce_upperbound_key_params(data, fill_defaults=False)
-        raise_on_logging_credential_change(data.metadata, key_in_db, user_api_key_dict)
         non_default_values = await prepare_key_update_data(
             data=data,
             existing_key_row=key_in_db,

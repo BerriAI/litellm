@@ -794,3 +794,154 @@ func TestTeamUpdateKeepsServerMetadataTerraformDoesNotOwn(t *testing.T) {
 		t.Fatalf("payload metadata = %v, want %v", got, want)
 	}
 }
+
+func TestTeamReadMatchesManagedCallbacksByIdentity(t *testing.T) {
+	checkManagedCallbackRefresh(t, func(t *testing.T, prior, stored []interface{}) []interface{} {
+		payload, err := json.Marshal(map[string]interface{}{"team_info": map[string]interface{}{
+			"team_id": "team-1", "metadata": map[string]interface{}{"logging": stored},
+		}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var captured map[string]interface{}
+		srv := newTeamTestServer(t, &captured, string(payload))
+		defer srv.Close()
+		d := newTeamResourceData(t, map[string]interface{}{loggingCallbackAttr: prior})
+		d.SetId("team-1")
+		if err := resourceLiteLLMTeamRead(d, NewClient(srv.URL, "test-key", true)); err != nil {
+			t.Fatalf("read failed: %v", err)
+		}
+		return d.Get(loggingCallbackAttr).([]interface{})
+	})
+}
+
+func TestTeamCreateSendsNativeLoggingCallback(t *testing.T) {
+	var captured map[string]interface{}
+	srv := newTeamTestServer(t, &captured, `{"team_info":{"team_alias":"insights","metadata":{
+		"logging":[{"callback_name":"langfuse","callback_type":"success_and_failure","callback_vars":{"langfuse_secret_key":"litellm_enc::example"}}]
+	}}}`)
+	defer srv.Close()
+	d := newTeamResourceData(t, map[string]interface{}{
+		"team_alias": "insights",
+		"metadata":   map[string]interface{}{"department": "engineering"},
+		"logging_callback": []interface{}{map[string]interface{}{
+			"callback_name":    "langfuse",
+			"callback_vars_wo": `{"langfuse_secret_key":"create-fixture"}`, "callback_vars_wo_version": 1,
+		}},
+	})
+	if err := resourceLiteLLMTeamCreate(d, NewClient(srv.URL, "test-key", true)); err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+	want := map[string]interface{}{
+		"department": "engineering",
+		"logging": []interface{}{map[string]interface{}{
+			"callback_name": "langfuse", "callback_type": "success_and_failure",
+			"callback_vars": map[string]interface{}{"langfuse_secret_key": "create-fixture"},
+		}},
+	}
+	if got := captured["metadata"]; !reflect.DeepEqual(got, want) {
+		t.Errorf("create metadata = %v, want %v", got, want)
+	}
+}
+
+func TestTeamCallbackRotationKeepsCurrentServerMetadata(t *testing.T) {
+	var captured map[string]interface{}
+	srv := newTeamTestServer(t, &captured, `{"team_info":{"team_id":"team-1","team_alias":"insights","metadata":{
+		"department":"server-department",
+		"tags":["server-tag"],
+		"guardrails":["server-guardrail"],
+		"soft_budget_alerting_emails":["ops@example.com"],
+		"logging":[{"callback_name":"langfuse","callback_type":"success","callback_vars":{"langfuse_secret_key":"litellm_enc::old"}}]
+	}}}`)
+	defer srv.Close()
+
+	res := ResourceLiteLLMTeam()
+	prior := &terraform.InstanceState{ID: "team-1", Attributes: map[string]string{
+		"team_alias": "insights", "metadata.%": "1", "metadata.department": "planned-department",
+		"logging_callback.#": "1", "logging_callback.0.callback_name": "langfuse",
+		"logging_callback.0.callback_type": "success", "logging_callback.0.callback_vars_wo_version": "1",
+	}}
+	config := terraform.NewResourceConfigRaw(map[string]interface{}{
+		"team_alias": "insights",
+		"metadata":   map[string]interface{}{"department": "planned-department"},
+		"logging_callback": []interface{}{map[string]interface{}{
+			"callback_name": "langfuse", "callback_type": "success",
+			"callback_vars_wo": `{"langfuse_secret_key":"rotated-fixture"}`, "callback_vars_wo_version": 2,
+		}},
+	})
+	client := NewClient(srv.URL, "test-key", true)
+	diff, err := res.Diff(context.Background(), prior, config, client)
+	if err != nil || diff == nil {
+		t.Fatalf("expected a callback diff, got %v, error %v", diff, err)
+	}
+	if _, diags := res.Apply(context.Background(), prior, diff, client); diags.HasError() {
+		t.Fatalf("apply failed: %v", diags)
+	}
+	want := map[string]interface{}{
+		"department":                  "server-department",
+		"tags":                        []interface{}{"server-tag"},
+		"guardrails":                  []interface{}{"server-guardrail"},
+		"soft_budget_alerting_emails": []interface{}{"ops@example.com"},
+		"logging": []interface{}{map[string]interface{}{
+			"callback_name": "langfuse", "callback_type": "success",
+			"callback_vars": map[string]interface{}{"langfuse_secret_key": "rotated-fixture"},
+		}},
+	}
+	if got := captured["metadata"]; !reflect.DeepEqual(got, want) {
+		t.Errorf("sent metadata = %v, want %v", got, want)
+	}
+}
+
+func TestTeamCallbackRotationClearsRemovedGuardrails(t *testing.T) {
+	var captured map[string]interface{}
+	srv := newTeamTestServer(t, &captured, `{"team_info":{"team_id":"team-1","team_alias":"insights","metadata":{
+		"department":"server-department","guardrails":["old-guardrail"],"tags":["server-tag"],
+		"logging":[{"callback_name":"langfuse","callback_type":"success"}]
+	}}}`)
+	defer srv.Close()
+	res := ResourceLiteLLMTeam()
+	prior := &terraform.InstanceState{ID: "team-1", Attributes: map[string]string{
+		"team_alias": "insights", "guardrails.#": "1", "guardrails.0": "old-guardrail",
+		"logging_callback.#": "1", "logging_callback.0.callback_name": "langfuse",
+		"logging_callback.0.callback_type": "success", "logging_callback.0.callback_vars_wo_version": "1",
+	}}
+	config := terraform.NewResourceConfigRaw(map[string]interface{}{
+		"team_alias": "insights",
+		"logging_callback": []interface{}{map[string]interface{}{
+			"callback_name": "langfuse", "callback_type": "success",
+			"callback_vars_wo": `{"langfuse_secret_key":"rotated-fixture"}`, "callback_vars_wo_version": 2,
+		}},
+	})
+	client := NewClient(srv.URL, "test-key", true)
+	diff, err := res.Diff(context.Background(), prior, config, client)
+	if err != nil || diff == nil {
+		t.Fatalf("expected a callback and guardrail diff, got %v, error %v", diff, err)
+	}
+	if _, diags := res.Apply(context.Background(), prior, diff, client); diags.HasError() {
+		t.Fatalf("apply failed: %v", diags)
+	}
+	want := map[string]interface{}{
+		"department": "server-department",
+		"tags":       []interface{}{"server-tag"},
+		"logging": []interface{}{map[string]interface{}{
+			"callback_name": "langfuse", "callback_type": "success",
+			"callback_vars": map[string]interface{}{"langfuse_secret_key": "rotated-fixture"},
+		}},
+	}
+	if got := captured["metadata"]; !reflect.DeepEqual(got, want) {
+		t.Errorf("sent metadata = %v, want %v", got, want)
+	}
+}
+
+func TestTeamLoggingCallbackConflictsWithLegacyMetadata(t *testing.T) {
+	config := terraform.NewResourceConfigRaw(map[string]interface{}{
+		"team_alias": "insights",
+		"metadata":   map[string]interface{}{"logging": "[]"},
+		"logging_callback": []interface{}{map[string]interface{}{
+			"callback_name": "langfuse", "callback_vars_wo": "{}", "callback_vars_wo_version": 1,
+		}},
+	})
+	if _, err := ResourceLiteLLMTeam().Diff(context.Background(), nil, config, nil); err == nil {
+		t.Error("plan accepted both logging_callback and metadata.logging")
+	}
+}

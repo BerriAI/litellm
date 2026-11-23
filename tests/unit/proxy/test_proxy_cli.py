@@ -21,9 +21,9 @@ import httpx
 import pytest
 import uvicorn
 import yaml
-from gunicorn.config import Config as GunicornConfig
 from click.testing import CliRunner
 from fastapi.testclient import TestClient
+from gunicorn.config import Config as GunicornConfig
 from pydantic import SecretStr, TypeAdapter
 from uvicorn.config import LOOP_FACTORIES
 from uvicorn.importer import import_from_string
@@ -32,14 +32,14 @@ import litellm
 from litellm._logging import turn_on_json
 from litellm.constants import DEFAULT_MAX_REQUEST_HEADER_SIZE, GRACEFUL_SHUTDOWN_TEARDOWN_HEADROOM_SECONDS
 from litellm.proxy import proxy_cli
+from litellm.proxy.control_plane.main import serve as serve_control_plane
+from litellm.proxy.control_plane.settings import ControlPlaneSettings
 from litellm.proxy.db.connection_budget import RUST_READER_CONNECTIONS_ENV_VAR, RUST_WRITER_CONNECTIONS_ENV_VAR
 from litellm.proxy.db.db_url_settings import PRISMA_APPLICATION_NAME
 from litellm.proxy.proxy_cli import CliDependencies, ProxyInitializationHelpers, run_server
 from litellm.proxy.rust_forward.server import Listener, Server
 from litellm.proxy.server_listener import AssignedPort, InheritedFd
 from litellm.proxy.shutdown.graceful_shutdown_manager import DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT, GracefulShutdownManager
-from litellm.proxy.control_plane.main import serve as serve_control_plane
-from litellm.proxy.control_plane.settings import ControlPlaneSettings
 from tests.unit.proxy.control_plane.support import MASTER_KEY, Licensed
 
 
@@ -123,10 +123,9 @@ def test_request_header_size_preserves_parser_selection(server: str, limit: int 
 async def test_segmented_request_headers(
     monkeypatch: pytest.MonkeyPatch, server: str, parser: str, limit: int, header_bytes: int, expected_status: int
 ) -> None:
-    from uvicorn.server import ServerState
-
     from uvicorn.protocols.http.h11_impl import H11Protocol
     from uvicorn.protocols.http.httptools_impl import HttpToolsProtocol
+    from uvicorn.server import ServerState
 
     selected_protocol: Final = H11Protocol if parser == "h11" else HttpToolsProtocol
     monkeypatch.setattr("uvicorn.protocols.http.auto.AutoHTTPProtocol", selected_protocol)
@@ -1598,10 +1597,10 @@ class TestProxyInitializationHelpers:
                 max_request_header_size=None,
             )
 
-    @patch("uvicorn.run")
+    @patch("litellm.proxy.dev_reload.run_uvicorn_with_recycling")
     @patch("builtins.print")
     @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
-    def test_max_requests_before_restart_flag(self, mock_setup_db, mock_print, mock_uvicorn_run):
+    def test_max_requests_before_restart_flag(self, mock_setup_db, mock_print, mock_run_with_recycling):
         """Test that the max_requests_before_restart flag is passed to uvicorn as limit_max_requests"""
         from click.testing import CliRunner
 
@@ -1643,16 +1642,13 @@ class TestProxyInitializationHelpers:
             result: Final = runner.invoke(run_server, ["--local", "--max_requests_before_restart", "123"])
 
             assert result.exit_code == 0, f"exit_code={result.exit_code}, output={result.output}"
-            mock_uvicorn_run.assert_called_once()
+            mock_run_with_recycling.assert_called_once()
+            assert mock_run_with_recycling.call_args.args[0]["limit_max_requests"] == 123
 
-            # Check that uvicorn.run was called with limit_max_requests parameter
-            call_args = mock_uvicorn_run.call_args
-            assert call_args[1]["limit_max_requests"] == 123
-
-    @patch("uvicorn.run")
+    @patch("litellm.proxy.dev_reload.run_uvicorn_with_recycling")
     @patch("builtins.print")
     @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
-    def test_max_requests_before_restart_jitter_flag(self, mock_setup_db, mock_print, mock_uvicorn_run):
+    def test_max_requests_before_restart_jitter_flag(self, mock_setup_db, mock_print, mock_run_with_recycling):
         """--max_requests_before_restart_jitter maps to uvicorn limit_max_requests_jitter"""
         from click.testing import CliRunner
 
@@ -1698,10 +1694,10 @@ class TestProxyInitializationHelpers:
             )
 
             assert result.exit_code == 0, f"exit_code={result.exit_code}, output={result.output}"
-            mock_uvicorn_run.assert_called_once()
-            call_args = mock_uvicorn_run.call_args
-            assert call_args[1]["limit_max_requests"] == 1000
-            assert call_args[1]["limit_max_requests_jitter"] == 50
+            mock_run_with_recycling.assert_called_once()
+            options: Final = mock_run_with_recycling.call_args.args[0]
+            assert options["limit_max_requests"] == 1000
+            assert options["limit_max_requests_jitter"] == 50
 
     @patch("litellm.proxy.proxy_cli.ProxyInitializationHelpers.run_gunicorn_server")
     @patch("uvicorn.run")
@@ -1794,9 +1790,9 @@ class TestProxyInitializationHelpers:
         assert "gunicorn accepts no connections" in warning
         assert "uvicorn exits" not in warning
 
-    @patch("uvicorn.run")
+    @patch("litellm.proxy.dev_reload.run_uvicorn_with_recycling")
     @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
-    def test_single_worker_max_requests_warning_printed_on_uvicorn(self, mock_setup_db, mock_uvicorn_run):
+    def test_single_worker_max_requests_warning_printed_on_uvicorn(self, mock_setup_db, mock_run_with_recycling):
         """uvicorn single-worker startup prints the does-not-recycle warning"""
         from click.testing import CliRunner
 
@@ -1832,11 +1828,11 @@ class TestProxyInitializationHelpers:
             assert "uvicorn exits the process" in result.output
 
     @patch("litellm.proxy.proxy_cli.start_query_engine_reaper")
-    @patch("uvicorn.run")
+    @patch("litellm.proxy.dev_reload.run_uvicorn_with_recycling")
     @patch("builtins.print")
     @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
     def test_single_worker_max_requests_no_warning_with_two_workers(
-        self, mock_setup_db, mock_print, mock_uvicorn_run, mock_start_reaper
+        self, mock_setup_db, mock_print, mock_run_with_recycling, mock_start_reaper
     ):
         """num_workers 2 with --max_requests_before_restart prints no warning"""
         from click.testing import CliRunner
@@ -4900,6 +4896,32 @@ def test_control_plane_cli_serves_the_real_app_with_uvicorn_options(monkeypatch:
     assert call["limit_concurrency"] == 250
     response: Final = TestClient(call["app"]).get("/healthz")
     assert (response.status_code, response.json()) == (200, {"status": "ok"})
+
+
+@pytest.mark.parametrize(
+    ("argv", "env_timeout", "expected"),
+    [
+        ([], None, 95),
+        ([], "0", 0),
+        ([], "5", 5),
+        (["--keepalive_timeout", "0"], "5", 0),
+        (["--keepalive_timeout", "5"], "0", 5),
+    ],
+)
+def test_uvicorn_serves_the_effective_keepalive_timeout(
+    argv: list[str], env_timeout: str | None, expected: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for name in ("DATABASE_URL", "DIRECT_URL", "KEEPALIVE_TIMEOUT", "LITELLM_RUST_FIRST"):
+        monkeypatch.delenv(name, raising=False)
+    if env_timeout is not None:
+        monkeypatch.setenv("KEEPALIVE_TIMEOUT", env_timeout)
+
+    with patch("uvicorn.run") as serve:
+        result: Final = CliRunner().invoke(run_server, ["--local", "--port", "45999", *argv])
+
+    assert result.exit_code == 0, result.output
+    serve.assert_called_once()
+    assert serve.call_args.kwargs["timeout_keep_alive"] == expected
 
 
 def test_limit_concurrency_environment_reaches_control_plane_serve(

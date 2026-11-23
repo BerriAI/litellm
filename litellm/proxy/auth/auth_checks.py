@@ -3840,7 +3840,12 @@ async def get_team_object_from_cache(
     key: AuthObject,
     user_api_key_cache: UserApiKeyCache,
     parent_otel_span: Span | None,
+    *,
+    for_auth: bool = False,
+    auth_user_id: str | None = None,
 ) -> LiteLLM_TeamTableCachedObj | None:
+    if for_auth:
+        return await user_api_key_cache.get_auth_team(key, auth_user_id)
     decoded: Final = await user_api_key_cache.async_get_cache(
         key=key,
         model_type=LiteLLM_TeamTableCachedObj,
@@ -3865,6 +3870,9 @@ async def read_team(
     check_cache_only: bool | None = None,
     check_db_only: bool | None = None,
     team_id_upsert: bool | None = None,
+    *,
+    for_auth: bool = False,
+    auth_user_id: str | None = None,
 ) -> LiteLLM_TeamTableCachedObj | TeamReadFailed:
     if prisma_client is None:
         raise Exception("No DB Connected. See - https://docs.litellm.ai/docs/proxy/virtual_keys")
@@ -3877,6 +3885,8 @@ async def read_team(
             key=key,
             user_api_key_cache=user_api_key_cache,
             parent_otel_span=parent_otel_span,
+            for_auth=for_auth,
+            auth_user_id=auth_user_id,
         )
 
         if cached_team_obj is not None:
@@ -3890,7 +3900,7 @@ async def read_team(
 
     # else, check db
     try:
-        return await _get_team_object_from_user_api_key_cache(
+        team: Final = await _get_team_object_from_user_api_key_cache(
             team_id=team_id,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
@@ -3901,6 +3911,16 @@ async def read_team(
             team_id_upsert=team_id_upsert,
             use_writer=bool(check_db_only),
         )
+        if not for_auth:
+            return team
+        member: Final = (
+            next((member for member in team.members_with_roles if member.user_id == auth_user_id), None)
+            if auth_user_id is not None
+            else None
+        )
+        return team.model_copy(
+            update={"members_with_roles": [] if member is None else [member], "members": [], "admins": []}
+        ).model_copy(deep=True)
     except TeamNotFoundError:
         raise
     except Exception as error:
@@ -3916,6 +3936,9 @@ async def get_team_object(
     check_cache_only: bool | None = None,
     check_db_only: bool | None = None,
     team_id_upsert: bool | None = None,
+    *,
+    for_auth: bool = False,
+    auth_user_id: str | None = None,
 ) -> LiteLLM_TeamTableCachedObj:
     """
     - Check if team id in proxy Team Table
@@ -3934,6 +3957,8 @@ async def get_team_object(
         check_cache_only=check_cache_only,
         check_db_only=check_db_only,
         team_id_upsert=team_id_upsert,
+        for_auth=for_auth,
+        auth_user_id=auth_user_id,
     )
     if isinstance(read, TeamReadFailed):
         raise HTTPException(

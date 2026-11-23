@@ -1111,17 +1111,17 @@ def _build_passthrough_failure_request_payload(
 
 
 @dataclass(frozen=True, slots=True)
-class _TeamCallbackWiring:
+class TeamCallbackWiring:
     success_callbacks: "list[str | Callable[..., object] | CustomLogger] | None" = None  # mutable-ok: Logging init arg
     failure_callbacks: "list[str | Callable[..., object] | CustomLogger] | None" = None  # mutable-ok: Logging init arg
     logging_kwargs: dict[str, str | dict[str, str]] | None = None  # mutable-ok: Logging.__init__ arg
 
 
-def _resolve_team_callback_wiring(
+def resolve_team_callback_wiring(
     user_api_key_dict: UserAPIKeyAuth,
     proxy_config: "ProxyConfig",
     route_description: str,
-) -> _TeamCallbackWiring:
+) -> TeamCallbackWiring:
     """Resolve key/team dynamic logging callbacks for a passthrough request.
 
     Mirrors add_litellm_data_to_request: callback_vars are unpacked top-level
@@ -1148,9 +1148,9 @@ def _resolve_team_callback_wiring(
             "%s: failed to resolve team logging callbacks, continuing without them",
             route_description,
         )
-        return _TeamCallbackWiring()
+        return TeamCallbackWiring()
     if callback_settings_obj is None:
-        return _TeamCallbackWiring()
+        return TeamCallbackWiring()
     callback_vars: Final = callback_settings_obj.callback_vars
     success_callbacks: Final = callback_settings_obj.success_callback
     failure_callbacks: Final = callback_settings_obj.failure_callback
@@ -1164,7 +1164,7 @@ def _resolve_team_callback_wiring(
             "model_info": {},
         }
     )
-    return _TeamCallbackWiring(
+    return TeamCallbackWiring(
         success_callbacks=None if success_callbacks is None else [*success_callbacks],
         failure_callbacks=None if failure_callbacks is None else [*failure_callbacks],
         logging_kwargs=logging_kwargs,
@@ -1371,6 +1371,12 @@ def _with_pinned_profile_id_where_taken_or_sent(
 
 def _headers_unchanged(headers: Mapping[str, str], body: Mapping[str, object] | None) -> Mapping[str, str]:
     return headers
+
+
+def _filtered_upstream_headers(
+    upstream_headers_filter: Callable[[Mapping[str, str]], Mapping[str, str]] | None, headers: Mapping[str, str]
+) -> Mapping[str, str]:
+    return headers if upstream_headers_filter is None else upstream_headers_filter(headers)
 
 
 def _profile_pin_for_generic_routes(
@@ -1758,7 +1764,7 @@ async def pass_through_request(
             forward_headers=forward_headers,
         )
         upstream_headers: Final = _with_trace_context(
-            forwarded_headers if upstream_headers_filter is None else upstream_headers_filter(forwarded_headers),
+            _filtered_upstream_headers(upstream_headers_filter, forwarded_headers),
             parent_span=user_api_key_dict.parent_otel_span,
         )
         profile_pin: Final = _profile_pin_for_generic_routes(
@@ -1829,7 +1835,7 @@ async def pass_through_request(
         # read e.g. ``chat gpt-4o`` instead of ``chat unknown``.
         passthrough_model: Final = (_parsed_body.get("model") if isinstance(_parsed_body, dict) else None) or "unknown"
         start_time: Final = datetime.now()
-        team_callbacks: Final = _resolve_team_callback_wiring(
+        team_callbacks: Final = resolve_team_callback_wiring(
             user_api_key_dict=user_api_key_dict,
             proxy_config=proxy_config,
             route_description="pass_through_endpoint",
@@ -2101,6 +2107,9 @@ async def pass_through_request(
             stream=stream,
         )
         forwarded_json_body: Final = _forwarded_json_body(upstream_body, request.method, request_sent_body(request))
+        await pass_through_endpoint_logging.settle_background_response_before_delete(
+            request.method, str(url), outbound_headers
+        )
 
         if stream:
             logging_obj.stream = True
@@ -3589,7 +3598,7 @@ async def websocket_passthrough_request(
     upstream_headers: Final = _with_trace_context(forwarded_headers, parent_span=user_api_key_dict.parent_otel_span)
 
     # Initialize logging object similar to HTTP passthrough
-    team_callbacks: Final = _resolve_team_callback_wiring(
+    team_callbacks: Final = resolve_team_callback_wiring(
         user_api_key_dict=user_api_key_dict,
         proxy_config=proxy_config,
         route_description="websocket_passthrough",

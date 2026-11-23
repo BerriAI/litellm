@@ -2888,12 +2888,14 @@ async def _responses_websocket_session(
             skip_guardrails=True,
         )
     except RateLimitError as e:
+        await proxy_logging_obj.arelease_refused_responses_websocket_slot(user_api_key_dict)
         verbose_proxy_logger.info("Responses WebSocket refused at open by a rate limit: %s", e)
         with contextlib.suppress(WebSocketDisconnect, RuntimeError, OSError):
             await websocket.send_text(turn_refusal_frame(e))
         await websocket.close(code=1008, reason="Rate limit exceeded")
         return
     except Exception as e:
+        await proxy_logging_obj.arelease_refused_responses_websocket_slot(user_api_key_dict)
         verbose_proxy_logger.exception("Responses WebSocket pre-call error")
         try:
             open_status: Final = error_status_code(e, 500)

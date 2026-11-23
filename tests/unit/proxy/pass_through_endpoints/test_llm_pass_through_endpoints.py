@@ -9,6 +9,7 @@ import os
 import re
 import traceback
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from types import MappingProxyType, SimpleNamespace
@@ -38,6 +39,7 @@ from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException, 
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.prometheus import PrometheusLogger
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.eu_jev.common_utils import eu_jev_scoped_model, eu_jev_upstream_body
 from litellm.passthrough.main import raise_for_provider_status
@@ -73,6 +75,7 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     llm_passthrough_factory_proxy_route,
     milvus_proxy_route,
     mistral_proxy_route,
+    openai_passthrough_poll_headers,
     openai_proxy_route,
     openrouter_proxy_route,
     relay_nvidia_nim_request,
@@ -81,6 +84,20 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     vertex_proxy_route,
     vllm_proxy_route,
 )
+from litellm.proxy.pass_through_endpoints.background_response_creator import (
+    BackgroundResponseCreateContext,
+    PrismaBackgroundResponseCreatorStore,
+)
+from litellm.proxy.pass_through_endpoints.background_response_polling import (
+    BackgroundResponsePoller,
+    BackgroundResponsePollRequest,
+    Fetched,
+    FetchOutcome,
+)
+from litellm.proxy.pass_through_endpoints.background_response_settlement import (
+    PrismaBackgroundResponseSettlementStore,
+)
+from litellm.proxy.pass_through_endpoints.success_handler import PassThroughEndpointLogging
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_spend_logs_id
 from litellm.proxy.utils import ProxyLogging, hash_token
 from litellm.types.guardrails import GuardrailEventHooks
@@ -4495,6 +4512,263 @@ async def test_openai_passthrough_never_sends_workload_identity_token_to_foreign
     assert upstream.calls.call_count == 0
 
 
+@pytest.mark.asyncio
+async def test_a_resumed_background_response_poll_reads_with_the_configured_openai_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-configured-upstream")
+
+    headers: Final = await openai_passthrough_poll_headers("https://api.openai.com/")
+
+    assert headers == {"authorization": "Bearer sk-configured-upstream", "api-key": "sk-configured-upstream"}
+
+
+@pytest.mark.asyncio
+async def test_a_resumed_background_response_poll_reads_with_the_workload_identity_token_without_a_key(
+    openai_wif_env: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    with respx.mock(assert_all_called=True) as upstream:
+        upstream.post("https://auth.openai.com/oauth/token").mock(
+            return_value=httpx.Response(200, json={"access_token": "wif-bearer", "expires_in": 3600})
+        )
+
+        headers: Final = await openai_passthrough_poll_headers("https://api.openai.com/")
+
+    assert headers is not None
+    assert headers["authorization"] == "Bearer wif-bearer"
+
+
+@pytest.mark.asyncio
+async def test_a_resumed_background_response_poll_has_no_headers_without_an_openai_credential(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_IDENTITY_PROVIDER_ID", raising=False)
+    monkeypatch.delenv("OPENAI_SERVICE_ACCOUNT_ID", raising=False)
+    monkeypatch.delenv("OPENAI_IDENTITY_TOKEN_FILE", raising=False)
+
+    assert await openai_passthrough_poll_headers("https://api.openai.com/") is None
+
+
+DELETED_RESPONSE_ID: Final = "resp_080b10ff5d740c69006ad3de732e5087"
+DELETED_RESPONSE_CREATOR_CALL_ID: Final = "0d4b7e19-6a2c-4f83-9e51-2c8a7f3b6d40"
+FINISHED_BACKGROUND_RESPONSE: Final = {
+    "id": DELETED_RESPONSE_ID,
+    "object": "response",
+    "created_at": 1792269939,
+    "status": "completed",
+    "background": True,
+    "model": "gpt-5.4-mini-2026-03-17",
+    "output": [],
+    "parallel_tool_calls": True,
+    "tool_choice": "auto",
+    "tools": [],
+    "usage": {
+        "input_tokens": 11,
+        "input_tokens_details": {"cached_tokens": 0},
+        "output_tokens": 5,
+        "output_tokens_details": {"reasoning_tokens": 0},
+        "total_tokens": 16,
+    },
+}
+
+
+@dataclass(frozen=True, slots=True)
+class _TrackedCreatorRow:
+    response_id: str
+    upstream_url: str
+    create_context: object
+
+
+class _TrackedCreators:
+    def __init__(self) -> None:
+        context: Final = BackgroundResponseCreateContext(
+            model="gpt-5.4-mini",
+            custom_llm_provider="openai",
+            litellm_call_id=DELETED_RESPONSE_CREATOR_CALL_ID,
+            litellm_trace_id="5f1d2c3b-8e7a-4b69-9c0d-1a2b3c4d5e6f",
+            start_time=datetime(2026, 10, 17, 13, 47, 3, tzinfo=timezone.utc),
+            metadata={"user_api_key_team_id": "team-creator"},
+        )
+        self.rows: Final = {
+            DELETED_RESPONSE_ID: _TrackedCreatorRow(
+                DELETED_RESPONSE_ID, "https://api.openai.com/v1/responses", context.model_dump(mode="json")
+            )
+        }
+
+    async def find_unique(self, *, where: Mapping[str, str]) -> _TrackedCreatorRow | None:
+        return self.rows.get(where["response_id"])
+
+    async def delete_many(self, *, where: Mapping[str, str]) -> int:
+        return int(self.rows.pop(where["response_id"], None) is not None)
+
+
+class _SettlementClaims:
+    def __init__(self) -> None:
+        self.claimed: Final[set[str]] = set()
+
+    async def create_many(self, data: list[Mapping[str, str]], *, skip_duplicates: bool) -> int:
+        new_ids: Final = {row["response_id"] for row in data} - self.claimed
+        self.claimed.update(new_ids)
+        return len(new_ids)
+
+    async def delete_many(self, *, where: Mapping[str, str]) -> int:
+        self.claimed.discard(where["response_id"])
+        return 1
+
+
+class _ReadBeforeDelete:
+    def __init__(self, answer: FetchOutcome | Exception) -> None:
+        self.answer: Final = answer
+        self.requests: Final[list[BackgroundResponsePollRequest]] = []
+
+    async def __call__(self, request: BackgroundResponsePollRequest) -> FetchOutcome:
+        self.requests.append(request)
+        if isinstance(self.answer, Exception):
+            raise self.answer
+        return self.answer
+
+
+def _delete_tracked_response(
+    client: TestClient,
+    creators: _TrackedCreators,
+    fetch: _ReadBeforeDelete,
+    events: list[str],
+    endpoint: str = f"v1/responses/{DELETED_RESPONSE_ID}",
+) -> object:
+    from litellm.proxy import proxy_server
+
+    async def record_creator_bill(*, logging_obj: LiteLLMLoggingObj, **kwargs: object) -> None:
+        if logging_obj.litellm_call_id == DELETED_RESPONSE_CREATOR_CALL_ID:
+            events.append(f"billed {logging_obj.litellm_call_id}")
+
+    def forward(upstream_request: httpx.Request) -> httpx.Response:
+        events.append("forwarded")
+        return httpx.Response(200, json={"id": DELETED_RESPONSE_ID, "object": "response", "deleted": True})
+
+    admit: Final = proxy_server.proxy_logging_obj.pre_call_hook
+
+    async def admitted(*args: object, **kwargs: object) -> object:
+        admitted_body: Final = await admit(*args, **kwargs)
+        events.append("admitted")
+        return admitted_body
+
+    claims: Final = _SettlementClaims()
+    passthrough_logging: Final = PassThroughEndpointLogging(
+        log_dispatch=record_creator_bill,
+        background_response_settlement=PrismaBackgroundResponseSettlementStore(table=lambda: claims, timeout_seconds=5),
+        background_response_creators=PrismaBackgroundResponseCreatorStore(table=lambda: creators, timeout_seconds=5),
+        background_response_poller=BackgroundResponsePoller(fetch=fetch, database_configured=lambda: True),
+    )
+    with (
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.pass_through_endpoint_logging",
+            passthrough_logging,
+        ),
+        patch.object(proxy_server.proxy_logging_obj, "pre_call_hook", admitted),
+        respx.mock(assert_all_called=True) as upstream,
+    ):
+        upstream.delete(f"https://api.openai.com/{endpoint}").mock(side_effect=forward)
+        deleted: Final = client.delete(f"/openai_passthrough/{endpoint}")
+    return deleted.json()
+
+
+def test_deleting_a_finished_background_response_bills_its_creator_once_after_admission_and_before_forwarding(
+    openai_passthrough_client: TestClient, local_model_cost_map
+) -> None:
+    creators: Final = _TrackedCreators()
+    fetch: Final = _ReadBeforeDelete(Fetched(body=FINISHED_BACKGROUND_RESPONSE))
+    events: Final[list[str]] = []
+
+    deleted: Final = _delete_tracked_response(openai_passthrough_client, creators, fetch, events)
+
+    assert deleted == {"id": DELETED_RESPONSE_ID, "object": "response", "deleted": True}
+    assert events == ["admitted", f"billed {DELETED_RESPONSE_CREATOR_CALL_ID}", "forwarded"]
+    (read,) = fetch.requests
+    assert read.url == httpx.URL(f"https://api.openai.com/v1/responses/{DELETED_RESPONSE_ID}")
+    assert ("authorization", "Bearer sk-upstream") in read.headers
+    assert creators.rows == {}
+
+
+def test_deleting_a_tracked_background_response_still_forwards_when_settling_it_fails(
+    openai_passthrough_client: TestClient, local_model_cost_map
+) -> None:
+    creators: Final = _TrackedCreators()
+    events: Final[list[str]] = []
+
+    deleted: Final = _delete_tracked_response(
+        openai_passthrough_client, creators, _ReadBeforeDelete(RuntimeError("provider unreachable")), events
+    )
+
+    assert deleted == {"id": DELETED_RESPONSE_ID, "object": "response", "deleted": True}
+    assert events == ["admitted", "forwarded"]
+    assert set(creators.rows) == {DELETED_RESPONSE_ID}
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "answer", "reads"),
+    [
+        pytest.param(
+            f"v1/responses/{DELETED_RESPONSE_ID}",
+            {**FINISHED_BACKGROUND_RESPONSE, "status": "in_progress", "usage": None},
+            1,
+            id="still_running",
+        ),
+        pytest.param("v1/responses/resp_untracked", FINISHED_BACKGROUND_RESPONSE, 0, id="untracked"),
+        pytest.param(f"v1/responses/{DELETED_RESPONSE_ID}/input_items", FINISHED_BACKGROUND_RESPONSE, 0, id="sub_route"),
+    ],
+)
+def test_a_delete_with_nothing_finished_to_settle_bills_nobody_and_forwards(
+    openai_passthrough_client: TestClient,
+    endpoint: str,
+    answer: Mapping[str, object],
+    reads: int,
+    local_model_cost_map,
+) -> None:
+    creators: Final = _TrackedCreators()
+    fetch: Final = _ReadBeforeDelete(Fetched(body=answer))
+    events: Final[list[str]] = []
+
+    deleted: Final = _delete_tracked_response(openai_passthrough_client, creators, fetch, events, endpoint)
+
+    assert deleted == {"id": DELETED_RESPONSE_ID, "object": "response", "deleted": True}
+    assert events == ["admitted", "forwarded"]
+    assert len(fetch.requests) == reads
+    assert set(creators.rows) == {DELETED_RESPONSE_ID}
+
+
+@pytest.mark.asyncio
+async def test_a_delete_through_a_configured_openai_route_bills_the_creator_with_that_route_credential(
+    local_model_cost_map,
+) -> None:
+    billed: Final[list[str]] = []
+
+    async def record_creator_bill(*, logging_obj: LiteLLMLoggingObj, **kwargs: object) -> None:
+        billed.append(logging_obj.litellm_call_id)
+
+    creators: Final = _TrackedCreators()
+    fetch: Final = _ReadBeforeDelete(Fetched(body=FINISHED_BACKGROUND_RESPONSE))
+    claims: Final = _SettlementClaims()
+    passthrough_logging: Final = PassThroughEndpointLogging(
+        log_dispatch=record_creator_bill,
+        background_response_settlement=PrismaBackgroundResponseSettlementStore(table=lambda: claims, timeout_seconds=5),
+        background_response_creators=PrismaBackgroundResponseCreatorStore(table=lambda: creators, timeout_seconds=5),
+        background_response_poller=BackgroundResponsePoller(fetch=fetch, database_configured=lambda: True),
+    )
+
+    await passthrough_logging.settle_background_response_before_delete(
+        "DELETE",
+        f"https://api.openai.com/v1/responses/{DELETED_RESPONSE_ID}",
+        {"authorization": "Bearer sk-configured-route"},
+    )
+
+    (read,) = fetch.requests
+    assert ("authorization", "Bearer sk-configured-route") in read.headers
+    assert billed == [DELETED_RESPONSE_CREATOR_CALL_ID]
+    assert creators.rows == {}
+
+
 class TestCursorProxyRoute:
     """Tests for the Cursor Cloud Agents pass-through route."""
 
@@ -8094,6 +8368,11 @@ class TestPassthroughRouterModelBudgetReservation:
             "is_passthrough_request_using_router_model",
             lambda request_body, llm_router=None: request_body.get("model") in ("gpt-5", "router-model"),
         )
+        monkeypatch.setattr(
+            ep,
+            "is_azure_router_model_group",
+            lambda llm_router, model_group: model_group in ("gpt-5", "router-model"),
+        )
         return captured
 
     def _assert_metadata_carries_attribution(self, captured: list[dict], user_api_key_dict: UserAPIKeyAuth) -> None:
@@ -8197,6 +8476,11 @@ class TestAzureRouterModelStreamingDispatch:
             "is_passthrough_request_using_router_model",
             lambda request_body, llm_router=None: request_body.get("model") in ("gpt-5", "router-model"),
         )
+        monkeypatch.setattr(
+            ep,
+            "is_azure_router_model_group",
+            lambda llm_router, model_group: model_group in ("gpt-5", "router-model"),
+        )
 
         request = MagicMock(spec=Request)
         request.method = "POST"
@@ -8260,6 +8544,11 @@ class TestAzureRouterModelStreamingKeepalive:
             ep,
             "is_passthrough_request_using_router_model",
             lambda request_body, llm_router=None: request_body.get("model") in ("gpt-5", "router-model"),
+        )
+        monkeypatch.setattr(
+            ep,
+            "is_azure_router_model_group",
+            lambda llm_router, model_group: model_group in ("gpt-5", "router-model"),
         )
 
         request = MagicMock(spec=Request)
@@ -8331,6 +8620,11 @@ class TestRouterModelRelayUpstreamContract:
             ep,
             "is_passthrough_request_using_router_model",
             lambda request_body, llm_router=None: request_body.get("model") in ("gpt-5", "router-model"),
+        )
+        monkeypatch.setattr(
+            ep,
+            "is_azure_router_model_group",
+            lambda llm_router, model_group: model_group in ("gpt-5", "router-model"),
         )
 
     def _recording_router(self, captured: list[dict]):
@@ -9592,21 +9886,28 @@ async def _azure_relay_json_upstream() -> httpx.Response:
     return httpx.Response(200, json={"id": "resp_1", "model": "gpt-5.4-fallback"}, headers={"x-request-id": "r-1"})
 
 
+_AZURE_RELAY_GROUP_MODELS: Final = (("gpt-5.4", "azure/gpt-5.4-primary"), ("azure-gpt-5.4", "azure/gpt-5.4-fallback"))
+
+
 class _AzureBodyModelGroupRouter:
-    def __init__(self, captured: list[dict], upstream: _AzureRelayUpstream = _azure_relay_json_upstream) -> None:
+    def __init__(
+        self,
+        captured: list[dict],
+        upstream: _AzureRelayUpstream = _azure_relay_json_upstream,
+        group_models: tuple[tuple[str, str], ...] = _AZURE_RELAY_GROUP_MODELS,
+    ) -> None:
         self.captured = captured
         self.upstream = upstream
+        self.rows = [
+            {"model_name": group, "litellm_params": {"model": model, "api_key": "k"}} for group, model in group_models
+        ]
         route_entry_points_to_stubs(self)
 
     def get_model_names(self, team_id=None):
-        return ["gpt-5.4", "azure-gpt-5.4"]
+        return [row["model_name"] for row in self.rows]
 
     def get_model_list(self, model_name=None, team_id=None):
-        rows = [
-            {"model_name": "gpt-5.4", "litellm_params": {"model": "azure/gpt-5.4-primary", "api_key": "k"}},
-            {"model_name": "azure-gpt-5.4", "litellm_params": {"model": "azure/gpt-5.4-fallback", "api_key": "k"}},
-        ]
-        return [row for row in rows if model_name is None or row["model_name"] == model_name]
+        return [row for row in self.rows if model_name is None or row["model_name"] == model_name]
 
     async def allm_passthrough_route(self, **kwargs):
         self.captured.append(kwargs)
@@ -9619,6 +9920,7 @@ class TestAzureBodyModelGroupRelay:
         monkeypatch: pytest.MonkeyPatch,
         body: dict,
         upstream: _AzureRelayUpstream = _azure_relay_json_upstream,
+        group_models: tuple[tuple[str, str], ...] = _AZURE_RELAY_GROUP_MODELS,
     ) -> list[dict]:
         import litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints as ep
         from litellm.proxy import proxy_server
@@ -9628,7 +9930,7 @@ class TestAzureBodyModelGroupRelay:
         async def fake_get_request_body(_request: Request) -> dict:
             return body
 
-        monkeypatch.setattr(proxy_server, "llm_router", _AzureBodyModelGroupRouter(captured, upstream))
+        monkeypatch.setattr(proxy_server, "llm_router", _AzureBodyModelGroupRouter(captured, upstream, group_models))
         monkeypatch.setattr(ep, "get_request_body", fake_get_request_body)
         monkeypatch.delenv("AZURE_API_BASE", raising=False)
         return captured
@@ -9796,6 +10098,67 @@ class TestAzureBodyModelGroupRelay:
         assert captured == []
         (route,) = routes
         assert route["target"] == "https://operator.openai.azure.com/openai/v1/fine_tuning/jobs"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "group_models",
+        [
+            pytest.param((("gpt-5.4", "openai/gpt-4o"),), id="openai_group"),
+            pytest.param((("gpt-5.4", "bedrock/anthropic.claude-sonnet-4-5"),), id="bedrock_group"),
+        ],
+    )
+    @pytest.mark.parametrize(
+        "endpoint",
+        ["openai/v1/responses", "openai/v1/chat/completions", "openai/deployments/gpt-5.4/chat/completions"],
+    )
+    async def test_model_group_not_served_by_azure_goes_to_the_operator_azure_endpoint(
+        self, monkeypatch, group_models, endpoint
+    ):
+        import litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints as ep
+
+        captured = self._install(monkeypatch, {"model": "gpt-5.4", "input": "ping"}, group_models=group_models)
+        monkeypatch.setenv("AZURE_API_BASE", "https://operator.openai.azure.com")
+        monkeypatch.setenv("AZURE_API_KEY", "operator-key")
+        routes: list[dict] = []
+
+        def fake_create_pass_through_route(**kwargs):
+            routes.append(kwargs)
+            return AsyncMock(return_value=Response(content=b"{}", status_code=200))
+
+        monkeypatch.setattr(ep, "create_pass_through_route", fake_create_pass_through_route)
+
+        result = await azure_proxy_route(
+            endpoint=endpoint,
+            request=self._request(),
+            fastapi_response=MagicMock(spec=Response),
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-token"),
+        )
+
+        assert result.status_code == 200
+        assert captured == []
+        (route,) = routes
+        assert route["target"] == f"https://operator.openai.azure.com/{endpoint}"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "group_models",
+        [
+            pytest.param((("gpt-5.4", "azure_ai/gpt-5.4"),), id="azure_ai_group"),
+            pytest.param((("gpt-5.4", "openai/gpt-4o"), ("gpt-5.4", "azure/gpt-5.4-primary")), id="mixed_group"),
+        ],
+    )
+    async def test_model_group_with_an_azure_deployment_is_relayed_through_the_router(self, monkeypatch, group_models):
+        captured = self._install(monkeypatch, {"model": "gpt-5.4", "input": "ping"}, group_models=group_models)
+
+        result = await azure_proxy_route(
+            endpoint="openai/v1/responses",
+            request=self._request(),
+            fastapi_response=MagicMock(spec=Response),
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-token"),
+        )
+
+        assert result.status_code == 200
+        assert [relay["model"] for relay in captured] == ["gpt-5.4"]
 
 
 AZURE_SPEECH_SHORT_AUDIO_ENDPOINT: Final = "/speech/recognition/conversation/cognitiveservices/v1"

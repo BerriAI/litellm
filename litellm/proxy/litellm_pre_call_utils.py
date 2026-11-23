@@ -100,10 +100,12 @@ from litellm.proxy.auth.auth_utils import (
     is_valid_anthropic_user_profile_id,
 )
 from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.proxy.common_utils.callback_config_validation import has_invalid_logging_callback_vars
 from litellm.proxy.common_utils.callback_utils import (
     decrypted_callback_metadata,
     get_metadata_variable_name_from_kwargs,
     key_logging_entries,
+    stored_logging_entries,
     strip_callback_config,
 )
 from litellm.proxy.common_utils.customer_usage import (
@@ -1477,7 +1479,13 @@ class _CallbackModelFields(TypedDict, total=False, extra_items=object):
 
 def get_validated_callback_metadata(item: object, *, source: str) -> AddTeamCallback | None:
     if not isinstance(item, Mapping):
-        raise TypeError(f"{source} metadata.logging must be a list of objects, got an item of {type(item).__name__}")
+        verbose_proxy_logger.warning("Ignoring invalid %s callback metadata, expected an object", source)
+        return None
+    if has_invalid_logging_callback_vars(item):
+        verbose_proxy_logger.warning(
+            "Ignoring invalid %s callback metadata, expected callback_vars to be an object", source
+        )
+        return None
     try:
         return AddTeamCallback.model_validate(item)
     except (PydanticValidationError, ValueError) as e:
@@ -1506,7 +1514,8 @@ class KeyAndTeamLoggingSettings:
     @staticmethod
     def get_team_dynamic_logging_settings(user_api_key_dict: UserAPIKeyAuth) -> object:
         if user_api_key_dict.team_metadata is not None and "logging" in user_api_key_dict.team_metadata:
-            return decoded_json_object(decrypted_callback_metadata(user_api_key_dict.team_metadata)).get("logging")
+            entries: Final = stored_logging_entries(user_api_key_dict.team_metadata)
+            return list(entries) if entries is not None else None
         return None
 
 
@@ -3895,6 +3904,7 @@ async def _team_router_settings(user_api_key_dict_team_id: str | None) -> Mappin
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
+            for_auth=True,
         )
         settings: Final = getattr(team_obj, "router_settings", None)
         return (

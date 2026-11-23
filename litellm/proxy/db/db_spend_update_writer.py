@@ -1277,6 +1277,9 @@ class DBSpendUpdateWriter:
                 logged_full_tool_names,
             )
 
+            litellm_params: Final = as_str_mapping((kwargs or {}).get("litellm_params"))
+            metadata: Final = as_str_mapping(litellm_params.get("metadata")) if litellm_params is not None else None
+            key_alias: Final = metadata.get("user_api_key_alias") if metadata is not None else None
             transaction: Final = build_tool_usage_transaction(
                 request_id=payload["request_id"],
                 start_time_iso=str(payload["startTime"]),
@@ -1286,6 +1289,7 @@ class DBSpendUpdateWriter:
                 completion_response=completion_response,
                 realtime_tool_calls=_CALL_KWARG_VALUE.validate_python((kwargs or {}).get("realtime_tool_calls")),
                 full_names=logged_full_tool_names(_CALL_KWARG_VALUE.validate_python(kwargs or {})),
+                key_alias=key_alias if isinstance(key_alias, str) else None,
             )
             if transaction is None:
                 return
@@ -1487,11 +1491,17 @@ class DBSpendUpdateWriter:
             _metadata: Final = _litellm_params.get("metadata") or {}
             key_alias = _metadata.get("user_api_key_alias") or None
             user_agent: Final = _metadata.get("user_agent") or None
-            from litellm.proxy.db.spend_log_tool_index import logged_full_tool_names, response_tool_call_names
+            from litellm.proxy.db.spend_log_tool_index import (
+                logged_full_tool_names,
+                response_tool_call_names,
+                tool_name_fits_index,
+            )
 
             full_names: Final = logged_full_tool_names(_CALL_KWARG_VALUE.validate_python(kwargs or {}))
 
             def _enqueue(tool_name: str, origin: str = "user_defined") -> None:
+                if not tool_name_fits_index(tool_name, key_alias if isinstance(key_alias, str) else None):
+                    return
                 self.tool_discovery_queue.add_update(
                     ToolDiscoveryQueueItem(
                         tool_name=tool_name,

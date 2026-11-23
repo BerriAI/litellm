@@ -549,6 +549,44 @@ class _WebsocketsModule(Protocol):
 
 
 _ResponseT = TypeVar("_ResponseT")
+_IMAGE_EDIT_CHUNK_SIZE: Final = 1024 * 1024
+
+
+def _image_edit_chunks(body: str) -> Iterator[bytes]:
+    for start in range(0, len(body), _IMAGE_EDIT_CHUNK_SIZE):
+        yield body[start : start + _IMAGE_EDIT_CHUNK_SIZE].encode("ascii")
+
+
+class _ImageEditContent:
+    def __init__(self, body: str) -> None:
+        self._body = body
+
+    def __iter__(self) -> Iterator[bytes]:
+        return _image_edit_chunks(self._body)
+
+
+class _AsyncImageEditContent:
+    def __init__(self, body: str) -> None:
+        self._body = body
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        for chunk in _image_edit_chunks(self._body):
+            yield chunk
+
+
+def _ascii_image_edit_stream_body(data: object, files: object) -> str | None:
+    if isinstance(data, str) and data.isascii() and not files:
+        return data
+    return None
+
+
+def _image_edit_stream_headers(
+    headers: Mapping[str, str], body: str
+) -> dict[str, str]:  # mutable-ok: HTTPHandler.post and AsyncHTTPHandler.post require dict headers
+    return {
+        **{key: value for key, value in headers.items() if key.lower() not in ("content-length", "transfer-encoding")},
+        "Content-Length": str(len(body)),
+    }
 
 
 class _DeleteRequestKwargs(TypedDict, total=False):
@@ -7636,8 +7674,22 @@ class BaseLLMHTTPHandler:
             },
         )
 
+        request_count: Final = image_edit_provider_config.get_request_count(
+            model,
+            image_edit_optional_request_params,  # pyright: ignore[reportUnknownArgumentType]  # legacy handler params are untyped dicts
+        )
+        multipart: Final = image_edit_provider_config.use_multipart_form_data()
+        stream_body: Final = _ascii_image_edit_stream_body(data, files)
+
         def send() -> httpx.Response:
-            if image_edit_provider_config.use_multipart_form_data():
+            if stream_body is not None:
+                return sync_httpx_client.post(  # pyright: ignore[reportUnknownMemberType]  # legacy post signature has untyped parameters
+                    url=api_base,
+                    headers=_image_edit_stream_headers(headers, stream_body),  # pyright: ignore[reportUnknownArgumentType]  # legacy provider headers are untyped
+                    content=_ImageEditContent(stream_body),
+                    timeout=timeout,
+                )
+            if multipart:
                 return sync_httpx_client.post(
                     url=api_base,
                     headers=headers,
@@ -7652,15 +7704,7 @@ class BaseLLMHTTPHandler:
                 timeout=timeout,
             )
 
-        responses, failure = split_outcomes(
-            run_concurrently(
-                image_edit_provider_config.get_request_count(
-                    model,
-                    image_edit_optional_request_params,  # pyright: ignore[reportUnknownArgumentType]  # legacy handler params are untyped dicts
-                ),
-                send,
-            )
-        )
+        responses, failure = split_outcomes(run_concurrently(request_count, send))
         served: Final = [
             image_edit_provider_config.transform_image_edit_response(
                 model=model,
@@ -7744,8 +7788,22 @@ class BaseLLMHTTPHandler:
             },
         )
 
+        request_count: Final = image_edit_provider_config.get_request_count(
+            model,
+            image_edit_optional_request_params,  # pyright: ignore[reportUnknownArgumentType]  # legacy handler params are untyped dicts
+        )
+        multipart: Final = image_edit_provider_config.use_multipart_form_data()
+        stream_body: Final = _ascii_image_edit_stream_body(data, files)
+
         async def send() -> httpx.Response:
-            if image_edit_provider_config.use_multipart_form_data():
+            if stream_body is not None:
+                return await async_httpx_client.post(  # pyright: ignore[reportUnknownMemberType]  # legacy post signature has untyped parameters
+                    url=api_base,
+                    headers=_image_edit_stream_headers(headers, stream_body),  # pyright: ignore[reportUnknownArgumentType]  # legacy provider headers are untyped
+                    content=_AsyncImageEditContent(stream_body),
+                    timeout=timeout,
+                )
+            if multipart:
                 return await async_httpx_client.post(
                     url=api_base,
                     headers=headers,
@@ -7760,10 +7818,6 @@ class BaseLLMHTTPHandler:
                 timeout=timeout,
             )
 
-        request_count: Final = image_edit_provider_config.get_request_count(
-            model,
-            image_edit_optional_request_params,  # pyright: ignore[reportUnknownArgumentType]  # legacy handler params are untyped dicts
-        )
         responses, failure = split_outcomes(
             await asyncio.gather(*(send() for _ in range(request_count)), return_exceptions=True)
         )
