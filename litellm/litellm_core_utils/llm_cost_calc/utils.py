@@ -21,6 +21,7 @@ from litellm.litellm_core_utils.llm_cost_calc.tiered_pricing import (
     tier_rate,
 )
 from litellm.llms.fireworks_ai.cache_pricing import with_default_cache_read_rate
+from litellm.types.images.main import ImageSVGAuthorDeployment
 from litellm.types.llms.base import CachedTokensDetails
 from litellm.types.utils import (
     CacheCreationTokenDetails,
@@ -2311,7 +2312,7 @@ class CostCalculatorUtils:
         model_info: ModelInfo | None = None,
         vertex_location: str | None = None,
         service_tier: str | None = None,
-        svg_author_model_info: ModelInfo | None = None,
+        svg_author: ImageSVGAuthorDeployment | None = None,
     ) -> float:
         """
         Route the image generation cost calculator based on the custom_llm_provider
@@ -2438,7 +2439,7 @@ class CostCalculatorUtils:
                     image_response=completion_response,
                     custom_llm_provider=custom_llm_provider,
                     model_info=pricing,
-                    svg_author_model_info=svg_author_model_info,
+                    svg_author=svg_author,
                 )
             # Fall through to default for DALL-E models
             return default_image_cost_calculator(

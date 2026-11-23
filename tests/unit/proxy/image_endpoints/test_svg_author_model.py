@@ -194,3 +194,14 @@ async def test_customer_model_limits_apply_to_the_svg_author(router: Router) -> 
     with pytest.raises(ProxyException) as denied:
         await _authorize(request, UserAPIKeyAuth(), router)
     assert denied.value.code == "403"
+
+
+@pytest.mark.asyncio
+async def test_chained_key_aliases_cannot_approve_a_different_model_than_the_one_sent(router: Router) -> None:
+    key: Final = UserAPIKeyAuth(
+        models=["gpt-image-2.6", "my-nano"],
+        aliases={"nano-alias": "restricted-chat", "restricted-chat": "my-nano"},
+    )
+    with pytest.raises(ProxyException) as denied:
+        await _authorize(_request(_svg_top_level, "nano-alias"), key, router)
+    assert denied.value.code == "403"

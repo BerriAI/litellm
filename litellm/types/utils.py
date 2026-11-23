@@ -2872,13 +2872,6 @@ class ImageSVGUsage(BaseModel):
     total_tokens: int = Field(default=0, ge=0)
 
 
-class ImageSVGAuthorDeployment(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    deployment_id: str
-    provider_model: str
-
-
 def _parse_image_svg_usage(value: object) -> ImageSVGUsage | None:
     if value is None:
         return None

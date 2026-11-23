@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm.constants import SVG_AUTHOR_DEPLOYMENT_METADATA_KEY
+from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import (
     can_agent_call_model,
@@ -18,8 +19,8 @@ from litellm.proxy.auth.auth_checks import (
     key_model_aliases_for_auth_check,
 )
 from litellm.proxy.litellm_pre_call_utils import customer_request_auth, pre_call_served_model
+from litellm.types.images.main import ImageSVGAuthorDeployment
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
-from litellm.types.utils import ImageSVGAuthorDeployment
 
 if TYPE_CHECKING:
     from litellm.router import Router
@@ -186,19 +187,21 @@ async def _authorized_author_updates(
     llm_router: "Router | None",
     metadata_variable_name: str,
 ) -> Mapping[str, object]:
-    router_settings: Final = _as_object(body.get(_ROUTER_SETTINGS_FIELD)) or {}
-    served_author: Final = pre_call_served_model(author, user_api_key_dict, router_settings.get("model_group_alias"))
+    model_group_alias: Final = (_as_object(body.get(_ROUTER_SETTINGS_FIELD)) or {}).get("model_group_alias")
+    grouped_author: Final = resolve_model_group_alias(model_group_alias, author) or author
+    served_author: Final = pre_call_served_model(grouped_author, user_api_key_dict, model_group_alias)
     auth: Final[UserAPIKeyAuth] = customer_request_auth(body) or user_api_key_dict
     deployment: Final = _author_deployment(served_author, user_api_key_dict.team_id, llm_router)
-    sent_names: Final = (served_author,) if deployment is not None else tuple(dict.fromkeys((author, served_author)))
-    for name in sent_names:
+    sent_author: Final = served_author if deployment is not None else author
+    without_aliases: Final = auth.model_copy(update={"aliases": {}, "team_model_aliases": None})
+    for name, valid_token in ((grouped_author, auth), (sent_author, without_aliases)):
         await can_key_call_resolved_model(
             model=name,
             llm_model_list=llm_router.registry().all() if llm_router else None,
-            valid_token=auth,
+            valid_token=valid_token,
             llm_router=llm_router,
         )
-        await _check_key_owner_access(name, auth, llm_router)
+        await _check_key_owner_access(name, valid_token, llm_router)
     if deployment is None:
         return {}
     provider_model: Final = _provider_model(deployment.litellm_params.model)
