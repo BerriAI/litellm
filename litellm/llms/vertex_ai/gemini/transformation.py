@@ -1117,15 +1117,18 @@ def _without_search_tools_next_to_functions(tools: Tools) -> Tools:
     return cast(Tools, list(kept))  # cast-ok: a subset of the caller's tools list
 
 
-def _tools_fit_for_caller_tool_config(tools: Tools, extra_body: object, model: str) -> Tools:
+def _caller_tool_config(extra_body: object) -> JsonValue | None:
     extra_body_fields: Final = as_str_mapping(extra_body)
     if extra_body_fields is None:
-        return tools
+        return None
     try:
         caller: Final = _CALLER_TOOL_CONFIG.validate_python(extra_body_fields)
     except ValidationError:
-        return tools
-    tool_config: Final = caller.get("toolConfig", caller.get("tool_config"))
+        return None
+    return caller.get("toolConfig", caller.get("tool_config"))
+
+
+def _tools_fit_for_caller_tool_config(tools: Tools, tool_config: JsonValue | None, model: str) -> Tools:
     if tool_config is None:
         return tools
     from .vertex_and_google_ai_studio_gemini import VertexGeminiConfig
@@ -1241,7 +1244,9 @@ def transform_request_body(
         tools: Final[Tools | None] = optional_params.pop("tools", None)
         tool_choice: Final[ToolConfig | None] = optional_params.pop("tool_choice", None)
         include_server_side_tool_invocations: bool = optional_params.pop("include_server_side_tool_invocations", False)
-        turns_server_side_tools_off: Final = optional_params.pop("includeServerSideToolInvocations", None) is False
+        caller_turns_server_side_tools_off: Final = (
+            optional_params.pop("includeServerSideToolInvocations", None) is False
+        )
         safety_settings: list[SafetSettingsConfig] | None = optional_params.pop("safety_settings", None)
         # Drop output_config as it's not supported by Vertex AI
         optional_params.pop("output_config", None)
@@ -1260,6 +1265,13 @@ def transform_request_body(
                 param="top_k",
                 drop_params=drops_unsupported_params(request_params.get("drop_params")),
             )
+        caller_tool_config: Final = _caller_tool_config(
+            cast(Mapping[str, object], optional_params).get("extra_body")  # cast-ok: untyped shared signature
+        )
+        drops_search_next_to_functions: Final = (
+            caller_turns_server_side_tools_off
+            or VertexGeminiConfig.caller_tool_config_keeps_the_old_search_drop(caller_tool_config)
+        )
         config_keys: Final = set(config_fields) - {"top_k"} if drops_top_k else set(config_fields)
         filtered_params = {k: v for k, v in optional_params.items() if _get_equivalent_key(k, config_keys)}
 
@@ -1285,14 +1297,13 @@ def transform_request_body(
             if tools is not None:
                 built_tools: Final = (
                     _without_search_tools_next_to_functions(tools)
-                    if turns_server_side_tools_off
+                    if drops_search_next_to_functions
                     else cast(Tools, tools)  # cast-ok: popped from the untyped optional_params
                 )
-                caller_params: Final = cast(Mapping[str, object], optional_params)  # cast-ok: untyped shared signature
-                data["tools"] = _tools_fit_for_caller_tool_config(built_tools, caller_params.get("extra_body"), model)
+                data["tools"] = _tools_fit_for_caller_tool_config(built_tools, caller_tool_config, model)
             if tool_choice is not None:
                 data["toolConfig"] = tool_choice
-            if include_server_side_tool_invocations and not turns_server_side_tools_off:
+            if include_server_side_tool_invocations and not drops_search_next_to_functions:
                 if "toolConfig" not in data:
                     data["toolConfig"] = {}
                 data["toolConfig"]["includeServerSideToolInvocations"] = True
