@@ -318,19 +318,19 @@ class StandardBuiltInToolCostTracking:
             for position in positions:
                 if not isinstance(position, int) or position >= len(model_list):
                     continue
-                    deployment_id: Final = _output_item_field(
-                        _output_item_field(model_list[position], "model_info"), "id"
-                    )
-                    if not isinstance(deployment_id, str) or not deployment_id:
-                        return None
-                    deployment_info: Final = StandardBuiltInToolCostTracking._safe_get_model_info(model=deployment_id)
-                    if deployment_info is None:
-                        return None
-                    rates: Final = tuple(deployment_info.get(field) for field in _IMAGE_TOKEN_COST_FIELDS)
-                    if agreed_rates is None:
-                        agreed, agreed_rates = deployment_info, rates
-                    elif rates != agreed_rates:
-                        return None
+                deployment_id: Final = _output_item_field(
+                    _output_item_field(model_list[position], "model_info"), "id"
+                )
+                if not isinstance(deployment_id, str) or not deployment_id:
+                    return None
+                deployment_info: Final = StandardBuiltInToolCostTracking._safe_get_model_info(model=deployment_id)
+                if deployment_info is None:
+                    return None
+                rates: Final = tuple(deployment_info.get(field) for field in _IMAGE_TOKEN_COST_FIELDS)
+                if agreed_rates is None:
+                    agreed, agreed_rates = deployment_info, rates
+                elif rates != agreed_rates:
+                    return None
         return agreed
 
     @staticmethod
@@ -350,7 +350,7 @@ class StandardBuiltInToolCostTracking:
             except Exception as e:  # noqa: BLE001  # get_model_info raises bare Exception for unmapped models
                 verbose_logger.debug("Could not resolve pricing for image tool model %s: %s", tool_model, e)
                 return None
-                        image_gen: Final = tool_usage.image_gen
+        image_gen: Final = tool_usage.image_gen
         input_details: Final = image_gen.input_tokens_details
         output_details: Final = image_gen.output_tokens_details
         token_cost: Final = (
