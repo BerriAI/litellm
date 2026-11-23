@@ -56,7 +56,14 @@ class MemoryStore:
         current: Final = self.rows.get(subscription_id)
         if current is None or current.status not in from_statuses:
             return False
-        return self._update_live(subscription_id, status="active", consecutive_failures=0, **activation.model_dump())
+        if activation.reactivation_gap is not None and not await self.enqueue(activation.reactivation_gap):
+            raise ValueError("Duplicate reactivation gap")
+        return self._update_live(
+            subscription_id,
+            status="active",
+            consecutive_failures=0,
+            **activation.model_dump(exclude={"reactivation_gap"}),
+        )
 
     async def mark_delivered(self, subscription_id: str, at: datetime) -> None:
         self._update_live(
