@@ -5,13 +5,13 @@
 use std::collections::{BTreeSet, HashSet};
 use std::sync::Arc;
 
-use litellm_cost::candidates::{CandidateTable, Lookup, NameForms, Registration, RowRef};
+use litellm_cost::candidates::{self, CandidateTable, NameForms, Registration, RowRef};
 use litellm_cost::price::Adjustments;
 use serde_json::Value;
 
 use crate::fallback::CapabilityRules;
 use crate::lower::{BilledPrices, billed_prices};
-use crate::resolve::{Candidates, Found, lookup};
+use crate::resolve::{Candidates, ModelInfoLookup, lookup};
 use crate::wire::{EntryWire, Fields};
 
 /// The fields that price a call without being a `*cost_per*token*` field, from main's `_NON_TOKEN_RATE_FIELDS`
@@ -122,13 +122,13 @@ impl<V: CatalogView + ?Sized> CandidateTable for CostLookup<'_, V> {
         self.table.contains(key)
     }
 
-    fn lookup(&self, model: &str, provider: &str) -> Lookup {
+    fn lookup(&self, model: &str, provider: &str) -> candidates::ModelInfoLookup {
         match lookup(self.table, &self.context.rules, model, provider) {
-            Found::Row(key) => Lookup::Row(key),
-            Found::Rule(rule) => Lookup::Rule {
+            ModelInfoLookup::Row(key) => candidates::ModelInfoLookup::Row(key),
+            ModelInfoLookup::Rule(rule) => candidates::ModelInfoLookup::Rule {
                 prices_anything: prices_anything(&rule),
             },
-            Found::Missing => Lookup::Missing,
+            ModelInfoLookup::Missing => candidates::ModelInfoLookup::Missing,
         }
     }
 

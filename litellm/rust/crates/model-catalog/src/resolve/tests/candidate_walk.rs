@@ -1,5 +1,11 @@
 //! completion_cost's candidate walk in litellm-cost over this catalog's lookups, checked against main's answers in
 //! `cost_candidates.json`. The walk lives in litellm-cost, which cannot see a catalog, so these run here
+//!
+//! `cost_candidates.json` is generated and has no generator in the tree. It was captured once from
+//! `litellm.completion_cost(call_type="anthropic_messages")` at main 532df6ef85 plus #51566, with
+//! `LITELLM_LOCAL_MODEL_COST_MAP=True` and `NativePrices` spied for the row billed and, with every pricing attempt
+//! forced to fail, each row tried in order. Recapture it only against Python's own walk: from #52484 up,
+//! completion_cost goes through this walk, so a capture there would record Rust's answers
 
 use std::collections::BTreeSet;
 use std::sync::LazyLock;
@@ -10,7 +16,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 use litellm_cost::candidates::{
-    AfterRows, CallIdentity, CandidateRows, Deferral, RowProvenance, RowRef, candidates,
+    AfterRows, CallIdentity, CandidateRows, RowProvenance, RowRef, RustRefusal, candidates,
 };
 use serde_json::Value;
 
@@ -316,35 +322,35 @@ fn a_custom_priced_deployment_row_comes_first_as_registered() {
 }
 
 #[rstest]
-#[case::other_provider(call("openai", "gpt-4o", "gpt-4o"), Deferral::Provider)]
+#[case::other_provider(call("openai", "gpt-4o", "gpt-4o"), RustRefusal::Provider)]
 #[case::bedrock_inference_profile(
     CallIdentity {
         invoked_model_id: Some("arn:aws:bedrock:us-east-1:1:application-inference-profile/x".to_owned()),
         ..call("bedrock", "us.anthropic.claude-opus-5-5", "claude-opus-5-5")
     },
-    Deferral::BedrockPricing
+    RustRefusal::BedrockPricing
 )]
 #[case::azure_model_router(
     call("azure_ai", "model-router", "claude-opus-5-5"),
-    Deferral::ModelName
+    RustRefusal::ModelName
 )]
 #[case::renamed_before_lookup(
     call("azure_ai", "gpt-35-turbo", "claude-opus-5-5"),
-    Deferral::ModelName
+    RustRefusal::ModelName
 )]
 #[case::hidden_response_model(
     CallIdentity {
         provider_response_model: Some("claude-opus-5-5".to_owned()),
         ..call("anthropic", "claude-opus-5-5", "claude-opus-5-5")
     },
-    Deferral::HiddenParams
+    RustRefusal::HiddenParams
 )]
 #[case::base_model_its_provider_cannot_price(
     CallIdentity {
         base_model: Some("claude-opus-9-9".to_owned()),
         ..call("azure_ai", "prod-opus", "prod-opus")
     },
-    Deferral::BaseModelProvider
+    RustRefusal::BaseModelProvider
 )]
 #[case::vertex_character_pricing(
     CallIdentity {
@@ -352,11 +358,11 @@ fn a_custom_priced_deployment_row_comes_first_as_registered() {
         deployment_id: Some("dep-bedrock-custom".to_owned()),
         ..call("vertex_ai", "claude-opus-5-5", "claude-opus-5-5")
     },
-    Deferral::ModelName
+    RustRefusal::ModelName
 )]
 fn calls_main_prices_another_way_are_deferred(
     #[case] call: CallIdentity,
-    #[case] deferral: Deferral,
+    #[case] deferral: RustRefusal,
 ) {
     assert_eq!(
         candidates(&main(), &call),
@@ -376,7 +382,7 @@ fn calls_main_prices_another_way_are_deferred(
 #[case::cache_only_registration(
     json!({"cache_read_input_token_cost": 1e-7}),
     &[],
-    AfterRows::Deferred(Deferral::BedrockPricing)
+    AfterRows::Deferred(RustRefusal::BedrockPricing)
 )]
 #[case::capability_registration_is_not_a_price(
     json!({"supports_vision": true, "mode": "chat"}),

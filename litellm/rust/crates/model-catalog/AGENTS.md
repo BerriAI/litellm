@@ -63,8 +63,8 @@ Catalog errors use one opaque `Error` with typed causes and JSON Pointer accesso
 - `names.rs` builds the seven names `get_model_info` tries for a known provider (`Candidates::potential`)
 - `mod.rs` has `lookup`, the `get_model_info` walk over a `CatalogView`: the first name whose row's provider matches, else a capability rule when no name is a key
 - `bedrock.rs` reads Bedrock model id spellings (region paths, ARNs, base model). The routing prefix and cross-region profile spellings the billing walk needs live in `litellm_cost::candidates::bedrock`, and this file re-exports them. `litellm-llms` re-exports it, so the routes and the lookups share one copy
-- `candidate_walk.rs` tests litellm-cost's walk over this catalog against `cost_candidates.json`. The walk cannot see a catalog from litellm-cost, so its parity tests run here
-- `cost_candidates.json` is main's answer for each test case, captured once from `completion_cost` with `NativePrices` spied. Recapture it when main's selection changes on purpose, never to make a Rust change pass
+- `tests/candidate_walk.rs` tests litellm-cost's walk over this catalog against `cost_candidates.json`. The walk cannot see a catalog from litellm-cost, so its parity tests run here
+- `tests/cost_candidates.json` (marked generated) is main's answer for each test case, captured once from `completion_cost` with `NativePrices` spied. Recapture it when main's selection changes on purpose, never to make a Rust change pass
 
 `view.rs` is everything resolving and pricing read from a host. `CostLookup` is the table and the context of one call, and it implements litellm-cost's `CandidateTable` with row facts only (which key a name finds, whether a row declares a rate, what `register_model` wrote)
 
@@ -80,7 +80,7 @@ Each line is main's behavior kept on purpose. Fixing one is a separate behavior 
 
 - A deployment's price lives in at least seven places that disagree (`costmap/family_config.md` I1 to I7). Only the row the router registered under the deployment id, as stored, is exposed (`RowProvenance::Registered`, I3). Chat bills a direction the deployment did not declare at 0, while batch, the failure estimate and the model group display carry the published rate (I4, `deployment_pricing_model_info` in `litellm_logging.py`) and `per_call_model_info` (I7, `per_call_pricing.py`) rebuilds the row from the catalog whenever any per-call price is set. The I4 and I7 views land with their first callers
 - A served model wins over a dated or `@version` request row: Vertex `claude-opus-4-5@20251101` bills `vertex_ai/claude-opus-4-5` when the response names `claude-opus-4-5-20251101` (`_served_or_priced_requested_model`, `cost_calculator.py`)
-- A model only a capability rule knows bills from the rule, which prices nothing, so main charges 0 (`get_model_info_helper` generalization). Here it is `Deferral::Generalization`
+- A model only a capability rule knows bills from the rule, which prices nothing, so main charges 0 (`get_model_info_helper` generalization). Here it is `RustRefusal::Generalization`
 - A Bedrock Mantle row without token or tier prices bills 0 instead of trying the next candidate (the `else` branch of `cost_per_token`)
 - `stripped_model_name` keeps a Mantle region path, `us-gov-west-1/anthropic.claude-x` (`get_potential_model_names`)
 - A region path is any `<letters-digits-dashes>/` segment (`is_bedrock_region`), where Python checks a fixed region list (`get_all_bedrock_regions`)

@@ -65,12 +65,12 @@ pub enum AfterRows {
     /// Main raises once every row failed
     Exhausted,
     /// Main prices the call by a path not ported here, once every row before failed
-    Deferred(Deferral),
+    Deferred(RustRefusal),
 }
 
 /// Why a call is left to Python
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Deferral {
+pub enum RustRefusal {
     /// A provider other than the `/v1/messages` Claude providers
     Provider,
     /// A model name main prices by another path, or renames before its lookup
@@ -87,13 +87,12 @@ pub enum Deferral {
 
 /// What a catalog's `get_model_info(model, provider)` walk finds
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Lookup {
+pub enum ModelInfoLookup {
     /// The first name whose row's provider matches, as its key
     Row(String),
     /// No name is a key and a capability rule matches, which prices anything or not
-    Rule {
-        prices_anything: bool,
-    },
+    Rule { prices_anything: bool },
+    /// No name is a key and no capability rule matches
     Missing,
 }
 
@@ -121,7 +120,7 @@ pub trait CandidateTable {
     /// The table has exactly `key`, as `key in litellm.model_cost`
     fn contains(&self, key: &str) -> bool;
     /// `get_model_info(model, provider)`'s lookup
-    fn lookup(&self, model: &str, provider: &str) -> Lookup;
+    fn lookup(&self, model: &str, provider: &str) -> ModelInfoLookup;
     /// The row under exactly `key` declares a rate (`_cost_map_entry_prices_anything`)
     fn prices_anything(&self, key: &str) -> bool;
     /// What `register_model` wrote onto the row under exactly `key`
@@ -152,7 +151,7 @@ pub struct RowRef {
 enum Step {
     Row(String, RowProvenance),
     Skip,
-    Defer(Deferral),
+    Defer(RustRefusal),
 }
 
 /// The rows main would try to price `call` with, in its order
@@ -188,10 +187,10 @@ impl<T: CandidateTable + ?Sized> Walk<'_, T> {
         }
     }
 
-    fn cost_candidates(&self, call: &CallIdentity) -> Result<CandidateRows, Deferral> {
-        let provider = CostProvider::from_str(&call.provider).map_err(|_| Deferral::Provider)?;
+    fn cost_candidates(&self, call: &CallIdentity) -> Result<CandidateRows, RustRefusal> {
+        let provider = CostProvider::from_str(&call.provider).map_err(|_| RustRefusal::Provider)?;
         if call.provider_response_model.is_some() || call.hidden_model.is_some() {
-            return Err(Deferral::HiddenParams);
+            return Err(RustRefusal::HiddenParams);
         }
         let names = [
             &call.request_model,
@@ -204,14 +203,14 @@ impl<T: CandidateTable + ?Sized> Walk<'_, T> {
             .flatten()
             .any(|name| self.priced_elsewhere(name))
         {
-            return Err(Deferral::ModelName);
+            return Err(RustRefusal::ModelName);
         }
         let p = call.provider.as_str();
         if let Some(base_model) = &call.base_model
             && !call.custom_pricing
             && !self.declares_rates(&self.lookup(base_model, p))
         {
-            return Err(Deferral::BaseModelProvider);
+            return Err(RustRefusal::BaseModelProvider);
         }
         let explicit = call.custom_pricing || call.base_model.is_some();
         let configured = call
@@ -220,7 +219,7 @@ impl<T: CandidateTable + ?Sized> Walk<'_, T> {
             .or(call.response_model.as_deref());
         let bedrock_registration = match (provider, explicit, configured) {
             (CostProvider::Bedrock, false, Some(_)) if call.invoked_model_id.is_some() => {
-                return Err(Deferral::BedrockPricing);
+                return Err(RustRefusal::BedrockPricing);
             }
             (CostProvider::Bedrock, false, Some(configured)) => {
                 self.bedrock_registration(configured)?
@@ -419,7 +418,7 @@ impl<T: CandidateTable + ?Sized> Walk<'_, T> {
             .unwrap_or(model);
         let lookup = match provider {
             CostProvider::VertexAi if !without_prefix.contains("claude") => {
-                return Step::Defer(Deferral::ModelName);
+                return Step::Defer(RustRefusal::ModelName);
             }
             CostProvider::VertexAi => self.lookup(without_prefix, p),
             CostProvider::Bedrock => match self.bedrock_registration(chosen) {
@@ -430,13 +429,13 @@ impl<T: CandidateTable + ?Sized> Walk<'_, T> {
             _ => self.lookup(chosen, p),
         };
         match lookup {
-            Lookup::Row(key) => Step::Row(key, RowProvenance::Catalog),
-            Lookup::Rule { .. } => Step::Defer(Deferral::Generalization),
-            Lookup::Missing => Step::Skip,
+            ModelInfoLookup::Row(key) => Step::Row(key, RowProvenance::Catalog),
+            ModelInfoLookup::Rule { .. } => Step::Defer(RustRefusal::Generalization),
+            ModelInfoLookup::Missing => Step::Skip,
         }
     }
 
-    fn lookup(&self, model: &str, provider: &str) -> Lookup {
+    fn lookup(&self, model: &str, provider: &str) -> ModelInfoLookup {
         self.table.lookup(model, provider)
     }
 
@@ -444,7 +443,7 @@ impl<T: CandidateTable + ?Sized> Walk<'_, T> {
     fn is_unpriced_rule(&self, model: &str, provider: &str) -> bool {
         matches!(
             self.lookup(model, provider),
-            Lookup::Rule {
+            ModelInfoLookup::Rule {
                 prices_anything: false
             }
         )
@@ -453,24 +452,24 @@ impl<T: CandidateTable + ?Sized> Walk<'_, T> {
     /// Port of `_resolves_to_rates`
     fn resolves_to_rates(&self, model: &str, provider: &str) -> bool {
         match self.lookup(model, provider) {
-            Lookup::Row(key) => self.table.prices_anything(&key),
-            Lookup::Rule { prices_anything } => prices_anything,
-            Lookup::Missing => false,
+            ModelInfoLookup::Row(key) => self.table.prices_anything(&key),
+            ModelInfoLookup::Rule { prices_anything } => prices_anything,
+            ModelInfoLookup::Missing => false,
         }
     }
 
     /// Port of `_declares_rates` over a lookup: a key whose own row prices anything
-    fn declares_rates(&self, lookup: &Lookup) -> bool {
+    fn declares_rates(&self, lookup: &ModelInfoLookup) -> bool {
         match lookup {
-            Lookup::Row(key) => self.table.prices_anything(key),
-            Lookup::Rule { .. } | Lookup::Missing => false,
+            ModelInfoLookup::Row(key) => self.table.prices_anything(key),
+            ModelInfoLookup::Rule { .. } | ModelInfoLookup::Missing => false,
         }
     }
 
     /// Port of `_bedrock_cost_registration` with no inference profile: the first row `model` names whose
     /// `register_model` fields price anything, which main bills whatever the candidate. A registration that writes
     /// only cache rates is deferred, since main's server-derived cache field list is not ported
-    fn bedrock_registration(&self, model: &str) -> Result<Option<String>, Deferral> {
+    fn bedrock_registration(&self, model: &str) -> Result<Option<String>, RustRefusal> {
         let forms = self.table.name_forms(model, "bedrock");
         let split = forms.split_model.as_deref().unwrap_or(model);
         let keys = [
@@ -483,7 +482,7 @@ impl<T: CandidateTable + ?Sized> Walk<'_, T> {
         keys.into_iter()
             .find_map(|key| match self.table.registration(&key) {
                 Registration::Priced => Some(Ok(key)),
-                Registration::CacheRatesOnly => Some(Err(Deferral::BedrockPricing)),
+                Registration::CacheRatesOnly => Some(Err(RustRefusal::BedrockPricing)),
                 Registration::Unpriced => None,
             })
             .transpose()

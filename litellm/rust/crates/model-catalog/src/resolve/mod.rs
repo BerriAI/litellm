@@ -1,8 +1,8 @@
 mod bedrock;
-#[cfg(test)]
-mod candidate_walk;
 mod image;
 mod names;
+#[cfg(test)]
+mod tests;
 
 pub use bedrock::{
     bedrock_base_model, bedrock_model_name_from_arn, is_bedrock_cross_region_profile_of,
@@ -101,11 +101,12 @@ impl Catalog {
 
 /// What `get_model_info(model, provider)` finds in a table
 #[derive(Clone, Debug, PartialEq)]
-pub enum Found {
+pub enum ModelInfoLookup {
     /// The first of the seven names whose row's provider matches, as its key
     Row(String),
     /// None of the names is a key, and a capability rule matches with these fields
     Rule(Fields),
+    /// None of the names is a key and no capability rule matches
     Missing,
 }
 
@@ -116,7 +117,7 @@ pub fn lookup<V: CatalogView + ?Sized>(
     rules: &CapabilityRules,
     model: &str,
     provider: &str,
-) -> Found {
+) -> ModelInfoLookup {
     let candidates = Candidates::potential(model, provider);
     let registered = candidates.in_lookup_order().find_map(|name| {
         let key = table.find_key(name)?;
@@ -128,9 +129,10 @@ pub fn lookup<V: CatalogView + ?Sized>(
         .then_some(key)
     });
     if let Some(key) = registered {
-        return Found::Row(key);
+        return ModelInfoLookup::Row(key);
     }
-    generalization(table, rules, &candidates).map_or(Found::Missing, Found::Rule)
+    generalization(table, rules, &candidates)
+        .map_or(ModelInfoLookup::Missing, ModelInfoLookup::Rule)
 }
 
 /// Port of `_get_model_info_from_generalization`: rules lose to any name that is a key, whatever its provider
