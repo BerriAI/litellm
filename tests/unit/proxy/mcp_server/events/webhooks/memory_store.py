@@ -203,11 +203,7 @@ class MemoryStore:
         return True
 
     async def enqueue_current(self, row: SubscriptionRow, delivery: QueuedDelivery) -> bool:
-        current: Final = self.rows.get(delivery.subscription_id)
-        if current is None or (current.generation, current.status) != (row.generation, row.status):
-            return False
-        await self.enqueue(delivery)
-        return True
+        raise NotImplementedError("Inbound callbacks use the PostgreSQL receiver fixture")
 
     async def enqueue(self, delivery: QueuedDelivery) -> bool:
         if self.fail_enqueue:
