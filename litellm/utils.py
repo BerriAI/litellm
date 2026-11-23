@@ -942,18 +942,14 @@ class _GoogleTokenFetch:
     in_flight: asyncio.Future[str | UnresolvableSecretReference] | None = None
 
     def start_or_join(self) -> asyncio.Future[str | UnresolvableSecretReference]:
-        if self.in_flight is not None:
+        if self.in_flight is not None and not self.in_flight.done():
             return self.in_flight
         caller_context: Final = contextvars.copy_context()
         fetch: Final = asyncio.get_running_loop().run_in_executor(
             _OIDC_TOKEN_FETCH_EXECUTOR, lambda: caller_context.run(resolve_api_key_oidc_reference, self.reference)
         )
-        fetch.add_done_callback(self._land)
         self.in_flight = fetch
         return fetch
-
-    def _land(self, _fetch: asyncio.Future[str | UnresolvableSecretReference]) -> None:
-        self.in_flight = None
 
 
 @lru_cache(maxsize=256)
