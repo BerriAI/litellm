@@ -389,12 +389,12 @@
           "required": "Select a trusted authorization server",
           "placeholder": "Select the gateway's trusted authorization server",
           "noneAvailable": "Add a trusted Okta issuer with an audience, agent_identity_provider: okta and okta_org to the gateway JWT settings.",
-          "description": "Only issuers with agent_identity_provider: okta in the gateway's JWT issuer config can authenticate agents."
+          "description": "Choose a custom authorization server for agent access tokens. An org authorization server is for delegated ID-JAG redemption."
         },
         "clientId": {
           "label": "Client ID",
           "required": "Enter the Okta application client ID",
-          "description": "The agent's API Services application in Okta. Its client-credentials tokens authenticate as this agent. No client secret is required here."
+          "description": "Enter the client ID of the Okta application you want to bind to this agent. Leave its client secret in Okta."
         },
         "requiredScopes": {
           "label": "Required Scopes",
