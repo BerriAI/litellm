@@ -12,7 +12,7 @@ import os
 import re
 import time
 import traceback
-from collections.abc import Mapping
+from collections.abc import Coroutine, Mapping
 from typing import Final, Literal, get_args
 
 import httpx
@@ -424,7 +424,7 @@ class GenericAPILogger(CustomBatchLogger):
 
             if self.log_format == "single":
                 # Send each log as individual HTTP request in parallel
-                tasks: Final = []
+                tasks: Final[list[Coroutine[object, object, httpx.Response]]] = []
                 for log_entry in batch:
                     task = self._post_with_retries(data=safe_dumps(log_entry))
                     tasks.append(task)

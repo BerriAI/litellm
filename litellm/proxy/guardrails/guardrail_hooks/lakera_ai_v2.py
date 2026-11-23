@@ -425,7 +425,7 @@ class LakeraAIGuardrail(CustomGuardrail):
             ####################################################
             # Create Guardrail Trace for logging on Langfuse, Datadog, etc.
             ####################################################
-            guardrail_json_response: Exception | str | dict | list[dict] = {}
+            guardrail_json_response: Exception | str | dict[str, object] | list[dict[str, object]] = {}
             if status == "success":
                 copy_lakera_response_dict: Final = dict(copy.deepcopy(lakera_response)) if lakera_response else {}
                 # payload contains PII, we don't want to log it

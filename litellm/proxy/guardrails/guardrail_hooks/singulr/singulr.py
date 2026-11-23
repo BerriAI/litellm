@@ -107,7 +107,7 @@ class SingulrGuardrail(CustomGuardrail):
         self.timeout = _DEFAULT_TIMEOUT if timeout is None else timeout
 
     @staticmethod
-    def get_config_model() -> type["GuardrailConfigModel"] | None:
+    def get_config_model() -> type["GuardrailConfigModel[pydantic.BaseModel]"] | None:
         from litellm.types.proxy.guardrails.guardrail_hooks.singulr import (
             SingulrGuardrailConfigModel,
         )
@@ -424,7 +424,7 @@ class SingulrGuardrail(CustomGuardrail):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,  # mutable-ok: required by CustomGuardrail.apply_guardrail override signature
+        request_data: dict[str, object],  # mutable-ok: required by CustomGuardrail.apply_guardrail override signature
         input_type: str,
         logging_obj: "LiteLLMLoggingObj | None" = None,
     ) -> GenericGuardrailAPIInputs:

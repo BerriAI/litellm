@@ -173,7 +173,7 @@ class InMemoryCache(BaseCache):
         else:
             return False
 
-    def set_cache(self, key, value, **kwargs):
+    def set_cache(self, key: str, value: object, **kwargs):
         # Handle the edge case where max_size_in_memory is 0
         if self.max_size_in_memory == 0:
             return  # Don't cache anything if max size is 0
@@ -195,11 +195,11 @@ class InMemoryCache(BaseCache):
                     self.ttl_dict[key] = self._clock() + self.default_ttl
                     heapq.heappush(self.expiration_heap, (self.ttl_dict[key], key))
 
-    async def async_set_cache(self, key, value, **kwargs):
+    async def async_set_cache(self, key: str, value: object, **kwargs):
         self.set_cache(key=key, value=value, **kwargs)
 
     async def async_set_cache_pipeline(
-        self, cache_list: Iterable[Iterable[object]], ttl: object = None, **kwargs: object
+        self, cache_list: Iterable[tuple[str, object]], ttl: object = None, **kwargs: object
     ):
         for cache_key, cache_value in cache_list:
             if ttl is not None:
@@ -207,7 +207,7 @@ class InMemoryCache(BaseCache):
             else:
                 self.set_cache(key=cache_key, value=cache_value)
 
-    async def async_set_cache_sadd(self, key, value: Sequence[object], ttl: float | None):
+    async def async_set_cache_sadd(self, key: str, value: Sequence[object], ttl: float | None):
         """
         Add value to set
         """
@@ -245,13 +245,13 @@ class InMemoryCache(BaseCache):
         return None
 
     def batch_get_cache(self, keys: Sequence[object], **kwargs: object):
-        return_val: Final = []
+        return_val: Final[list[object | None]] = []
         for k in keys:
             val = self.get_cache(key=k, **kwargs)
             return_val.append(val)
         return return_val
 
-    def increment_cache(self, key, value: float, **kwargs: object) -> float:
+    def increment_cache(self, key: str, value: float, **kwargs: object) -> float:
         with self._increment_lock:
             # keep read-modify-write atomic
             init_value: Final = self.get_cache(key=key) or 0
@@ -263,19 +263,19 @@ class InMemoryCache(BaseCache):
         return self.get_cache(key=key, **kwargs)
 
     async def async_batch_get_cache(self, keys: Sequence[object], **kwargs: object):
-        return_val: Final = []
+        return_val: Final[list[object | None]] = []
         for k in keys:
             val = self.get_cache(key=k, **kwargs)
             return_val.append(val)
         return return_val
 
-    async def async_increment(self, key, value: float, **kwargs: object) -> float:
+    async def async_increment(self, key: str, value: float, **kwargs: object) -> float:
         return self.increment_cache(key=key, value=value, **kwargs)
 
     async def async_increment_pipeline(
         self, increment_list: list["RedisPipelineIncrementOperation"], **kwargs: object
     ) -> list[float] | None:
-        results: Final = []
+        results: Final[list[float]] = []
         for increment in increment_list:
             result = await self.async_increment(
                 increment["key"], increment["increment_value"], ttl=increment["ttl"], **kwargs

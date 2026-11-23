@@ -363,7 +363,7 @@ class MlflowLogger(CustomLogger):
                 start_time_ns=start_time_ns,
             )
 
-    def _transform_tag_list_to_dict(self, tag_list: list) -> dict:
+    def _transform_tag_list_to_dict(self, tag_list: list[str]) -> dict[str, str]:
         """
         Transform a list of colon-separated tags into a dictionary.
         Tags without colons are stored with empty string as the value.

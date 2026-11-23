@@ -93,7 +93,7 @@ class DailySpendUpdateQueue(BaseUpdateQueue):
     ) -> dict[str, BaseDailySpendTransaction]:
         """Get all updates from the queue and return all updates aggregated by daily_transaction_key. Works for both user and team spend updates."""
         await self.settle_interrupted_commits()
-        updates: Final = await self.flush_all_updates_from_in_memory_queue()
+        updates: Final[list[dict[str, BaseDailySpendTransaction]]] = await self.flush_all_updates_from_in_memory_queue()
         if len(updates) > 0:
             verbose_proxy_logger.info(
                 "Spend tracking - flushed %d daily spend update items from in-memory queue",
