@@ -77,7 +77,7 @@ from litellm.types.mcp import (
     MCPUpstreamProtocol,
     validate_mcp_protocol_transport,
 )
-from litellm.types.mcp_server.mcp_server_manager import MCPInfo, MCPServerEventsConfig
+from litellm.types.mcp_server.mcp_server_manager import MCPEventCallbackBase, MCPInfo, MCPServerEventsConfig
 from litellm.types.proxy.agent_identity import ManagedAgentContext
 from litellm.types.proxy.auth.special_headers import (
     SpecialHeaders as SpecialHeaders,  # noqa: PLC0414  # public re-export
@@ -3200,7 +3200,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         description="Serve the MCP Events extension (io.modelcontextprotocol/events) on /mcp for 2026-07-28 clients. "
         "Each upstream server also needs events.enabled. Off by default.",
     )
-    mcp_events_public_base_url: str | None = Field(
+    mcp_events_public_base_url: MCPEventCallbackBase | None = Field(
         None,
         description="Public https base URL of this proxy that upstream MCP servers can reach, used to build the "
         "callback URL for webhook event subscriptions. Webhook delivery is unavailable while unset.",
