@@ -14,6 +14,8 @@ from litellm.llms.azure_ai.common_utils import (
     api_key_header_for_base,
     foundry_project_root,
     get_azure_ai_auth_headers,
+    with_foundry_project_scope,
+    without_api_version,
 )
 from litellm.responses.litellm_completion_transformation.custom_tools import (
     CustomToolKey,
@@ -41,7 +43,8 @@ _UNENCODED_HEADERS: Final = frozenset({"content-encoding", "content-length"})
 
 def _responses_url(api_base: str) -> str:
     base_url: Final = httpx.URL(api_base)
-    return str(base_url.copy_with(path="/" + "/".join((*foundry_project_root(base_url), *_RESPONSES_PATH)), query=None))
+    responses_path: Final = "/" + "/".join((*foundry_project_root(base_url), *_RESPONSES_PATH))
+    return str(base_url.copy_with(path=responses_path, params=without_api_version(base_url)))
 
 
 def _router_function_tool(tool: object) -> object:
@@ -224,10 +227,13 @@ class AzureAIResponsesAPIConfig(AzureOpenAIResponsesAPIConfig):
 
     def validate_environment(self, headers: dict, model: str, litellm_params: GenericLiteLLMParams | None) -> dict:
         params: Final = litellm_params or GenericLiteLLMParams()
+        api_base: Final = AzureFoundryModelInfo.get_api_base(params.api_base)
+        on_project: Final = api_base is not None and bool(foundry_project_root(httpx.URL(api_base)))
+        auth_params: Final = with_foundry_project_scope(params, api_base)
         auth_headers: Final = get_azure_ai_auth_headers(
             api_key=AzureFoundryModelInfo.get_api_key(params.api_key),
-            litellm_params=params.model_dump(),
-            api_key_header=api_key_header_for_base(AzureFoundryModelInfo.get_api_base(params.api_base)),
+            litellm_params=auth_params.model_dump(),
+            api_key_header="Authorization" if on_project else api_key_header_for_base(api_base),
         )
         return {
             **headers,

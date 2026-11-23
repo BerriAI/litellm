@@ -81,6 +81,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.otel.routing import routing_decision_attributes
 from litellm.integrations.otel.runtime import phase_attributes, phase_event, phase_span
 from litellm.litellm_core_utils.asyncify import run_async_function
+from litellm.litellm_core_utils.aws_partition import contains_bedrock_arn
 from litellm.litellm_core_utils.core_helpers import (
     allowed_openai_param_names,
     coerce_token_limit,
@@ -229,7 +230,11 @@ from litellm.router_utils.cooldown_handlers import (
     is_video_lookup_not_found,
     set_cooldown_deployments,
 )
-from litellm.router_utils.deployment_pricing import deployment_pricing_models
+from litellm.router_utils.deployment_pricing import (
+    base_model_for_pricing,
+    deployment_pricing_models,
+    unpriced_bedrock_arn,
+)
 from litellm.router_utils.fallback_event_handlers import (
     MID_STREAM_FALLBACK_CONTROLS_KEY,
     AttemptedFallbackTargets,
@@ -310,6 +315,7 @@ from litellm.router_utils.routing_groups import (
 )
 from litellm.router_utils.routing_read_batch import ROUTER_USAGE_TARGET, RoutingPrefetch, RoutingReadBatch
 from litellm.scheduler import FlowItem, Scheduler
+from litellm.types.decisions import DecisionsIRMessages, DecisionsIRState
 from litellm.types.litellm_params import ControlOptions, RoutingStrategyName
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -370,7 +376,6 @@ from litellm.types.utils import (
     StandardLoggingRoutingDecision,
     Usage,
     all_litellm_params,
-    is_server_derived_pricing_key,
     shared_backend_model_info,
 )
 from litellm.types.utils import ModelInfo as ModelMapInfo
@@ -382,6 +387,7 @@ from litellm.utils import (
     ModelResponse,
     ProviderConfigManager,
     Rules,
+    cost_map_key_declared_prices,
     function_setup,
     get_llm_provider,
     get_non_default_completion_params,
@@ -390,7 +396,7 @@ from litellm.utils import (
     is_generalized_model_info,
     is_region_allowed,
     lookup_model_info_for_registration,
-    model_info_with_pricing_overrides,
+    pricing_with_overrides,
     provider_rejectable_params,
     set_live_deployment_replay,
 )
@@ -521,6 +527,7 @@ _ROUTE_CAPABILITY_RESOLVERS: Final[Mapping[str, Callable[[str, LlmProviders], ob
         "decisions": ProviderConfigManager.get_provider_decisions_config,
     }
 )
+_DECISIONS_CALL_TYPES: Final = frozenset({"adecisions", "decisions"})
 _RUNTIME_TOGGLEABLE_PRE_CALL_CHECKS: Final[Mapping[str, type[CustomLogger]]] = MappingProxyType(
     {
         "prompt_caching": PromptCachingDeploymentCheck,
@@ -9638,11 +9645,11 @@ class Router:
 
     @staticmethod
     def _cost_map_backend_model(deployment: Deployment) -> str:
-        model_info_base_model: Final = deployment.model_info.base_model
-        if isinstance(model_info_base_model, str) and model_info_base_model:
+        model_info_base_model: Final = base_model_for_pricing(deployment.model_info.base_model)
+        if model_info_base_model:
             return model_info_base_model
-        params_base_model: Final = deployment.litellm_params.get("base_model")
-        if isinstance(params_base_model, str) and params_base_model:
+        params_base_model: Final = base_model_for_pricing(deployment.litellm_params.get("base_model"))
+        if params_base_model:
             return params_base_model
         params: Final = _LITELLM_PARAMS_ADAPTER.validate_python(deployment.litellm_params.model_dump(exclude_none=True))
         invoked_model: Final = params.get("model_id")
@@ -9655,8 +9662,10 @@ class Router:
             )
         ):
             profile_model: Final = invoked_model if invoked_model.startswith("bedrock/") else f"bedrock/{invoked_model}"
-            profile_info: Final = lookup_model_info_for_registration(model=profile_model, custom_llm_provider="bedrock")
-            if not isinstance(profile_info, ModelInfoLookupMiss):
+            profile_info: Final = lookup_model_info_for_registration(
+                model=invoked_model.removeprefix("bedrock/"), custom_llm_provider="bedrock"
+            )
+            if not isinstance(profile_info, ModelInfoLookupMiss) and cost_map_key_declared_prices(profile_info["key"]):
                 return profile_model
         return deployment.litellm_params.model
 
@@ -10882,40 +10891,49 @@ class Router:
                 model_info[field] = field_value
         backend_model: Final = Router._cost_map_backend_model(deployment)
         params: Final = _LITELLM_PARAMS_ADAPTER.validate_python(deployment.litellm_params.model_dump(exclude_none=True))
-        if (
+        profile_backend: Final = bool(
             params.get("model_id")
             and backend_model != deployment.litellm_params.model
             and (
                 deployment.litellm_params.custom_llm_provider == "bedrock"
                 or deployment.litellm_params.model.startswith("bedrock/")
             )
-        ):
-            profile_info: Final = lookup_model_info_for_registration(model=backend_model, custom_llm_provider="bedrock")
+        )
+        if profile_backend:
+            profile_info: Final = lookup_model_info_for_registration(
+                model=backend_model.removeprefix("bedrock/"), custom_llm_provider="bedrock"
+            )
             if not isinstance(profile_info, ModelInfoLookupMiss):
-                explicit_info: Final = _MODEL_INFO_ADAPTER.validate_python(model_info)
-                priced_info: Final = model_info_with_pricing_overrides(profile_info, explicit_info)
                 model_info.update(
-                    {key: value for key, value in priced_info.items() if is_server_derived_pricing_key(key)}
+                    pricing_with_overrides(
+                        cost_map_key_declared_prices(profile_info["key"]),
+                        _MODEL_INFO_ADAPTER.validate_python(model_info),
+                    )
                 )
+        rates_model: Final = (
+            deployment.litellm_params.model
+            if profile_backend and contains_bedrock_arn(backend_model)
+            else backend_model
+        )
         Router._inherit_builtin_base_rates_for_off_peak(
             model_info=model_info,
-            backend_model=backend_model,
+            backend_model=rates_model,
             custom_llm_provider=deployment.litellm_params.custom_llm_provider,
         )
         if model_info.get("input_cost_per_token") is not None:
             Router._inherit_builtin_cache_pricing(
                 model_info=model_info,
-                backend_model=backend_model,
+                backend_model=rates_model,
                 custom_llm_provider=deployment.litellm_params.custom_llm_provider,
             )
         Router._inherit_builtin_service_tier_pricing(
             model_info=model_info,
-            backend_model=backend_model,
+            backend_model=rates_model,
             custom_llm_provider=deployment.litellm_params.custom_llm_provider,
         )
         Router._inherit_builtin_tiered_output_rate(
             model_info=model_info,
-            backend_model=backend_model,
+            backend_model=rates_model,
             custom_llm_provider=deployment.litellm_params.custom_llm_provider,
         )
         return model_info
@@ -11774,7 +11792,7 @@ class Router:
         try:
             if custom_model_info is not None:
                 base_model: Final = custom_model_info.get("base_model", None)
-                if base_model is not None:
+                if isinstance(base_model, str) and not unpriced_bedrock_arn(base_model):
                     ## update litellm model info with base model info
                     base_model_info: Final = copy.deepcopy(litellm.get_model_info(model=base_model))
                     if base_model_info is not None:
@@ -13549,6 +13567,62 @@ class Router:
         return cast(_RouteDeploymentsT, filtered_deployments)  # cast-ok: same list shape as the input candidates
 
     @staticmethod
+    def _deployment_refuses_json_input(
+        deployment: DeploymentTypedDict,
+        group: str,
+        sent_kwargs: Mapping[str, object],
+        decision_input: DecisionsIRState | DecisionsIRMessages,
+    ) -> bool:
+        from litellm.decisions.call import deployment_refuses_json_input
+
+        if "litellm_params" not in deployment:
+            return False
+        try:
+            model, custom_llm_provider = Router._capability_model_and_provider(deployment["litellm_params"], group)
+            return deployment_refuses_json_input(
+                model, custom_llm_provider, {**deployment["litellm_params"], **sent_kwargs}, decision_input
+            )
+        except Exception as e:  # noqa: BLE001  # best-effort filter: a deployment it cannot resolve answers for itself
+            verbose_router_logger.debug(
+                "litellm.router.py::_deployment_refuses_json_input: keeping deployment for model=%s. Got - %s",
+                group,
+                e,
+            )
+            return False
+
+    def _without_deployments_refusing_json_input(
+        self, healthy_deployments: _RouteDeploymentsT, group: str, request_kwargs: object
+    ) -> _RouteDeploymentsT:
+        from litellm.decisions.call import request_carries_json_input, routed_decision_input
+
+        if _routed_call_type.get() not in _DECISIONS_CALL_TYPES or isinstance(healthy_deployments, Mapping):
+            return healthy_deployments
+        sent_request: Final = _LITELLM_PARAMS_ADAPTER.validate_python(request_kwargs)
+        if not request_carries_json_input(sent_request.get("input")):
+            return healthy_deployments
+        decision_input: Final = routed_decision_input(sent_request.get("input"))
+        if decision_input is None:
+            return healthy_deployments
+        defaults: Final = _LITELLM_PARAMS_ADAPTER.validate_python(
+            self.default_litellm_params  # pyright: ignore[reportUnknownMemberType]  # untyped dict set in __init__
+        )
+        set_defaults: Final = {key: value for key, value in defaults.items() if value is not None}
+        sent_kwargs: Final[Mapping[str, object]] = {**set_defaults, **sent_request}
+        accepting: Final = [
+            deployment
+            for deployment in healthy_deployments
+            if not Router._deployment_refuses_json_input(
+                cast(DeploymentTypedDict, deployment),  # cast-ok: router candidates use the deployment shape
+                group,
+                sent_kwargs,
+                decision_input,
+            )
+        ]
+        if not accepting:
+            return healthy_deployments
+        return cast(_RouteDeploymentsT, accepting)  # cast-ok: same list shape as the input candidates
+
+    @staticmethod
     def _pre_call_check_requested_chat_params(request_kwargs: Mapping[str, object]) -> frozenset[str]:
         requested: Final = litellm.utils.get_non_default_params(passed_params=dict(request_kwargs))
         return frozenset(
@@ -14159,9 +14233,13 @@ class Router:
             verbose_router_logger.debug("healthy_deployments after web search filter: %s", healthy_deployments)
 
         healthy_deployments = (  # pyright: ignore[reportUnknownVariableType]  # rebind-ok: route filter narrows
-            self._without_deployments_that_cannot_serve_route(
-                healthy_deployments,  # pyright: ignore[reportUnknownArgumentType]  # legacy selector type
+            self._without_deployments_refusing_json_input(
+                self._without_deployments_that_cannot_serve_route(
+                    healthy_deployments,  # pyright: ignore[reportUnknownArgumentType]  # legacy selector type
+                    model,
+                ),
                 model,
+                request_kwargs or {},  # pyright: ignore[reportUnknownArgumentType]  # legacy untyped request kwargs
             )
         )
 
@@ -15392,9 +15470,13 @@ class Router:
             request_kwargs=request_kwargs,
         )
         healthy_deployments = (  # pyright: ignore[reportUnknownVariableType]  # rebind-ok: route filter narrows
-            self._without_deployments_that_cannot_serve_route(
-                healthy_deployments,  # pyright: ignore[reportUnknownArgumentType]  # legacy selector type
+            self._without_deployments_refusing_json_input(
+                self._without_deployments_that_cannot_serve_route(
+                    healthy_deployments,  # pyright: ignore[reportUnknownArgumentType]  # legacy selector type
+                    model,
+                ),
                 model,
+                request_kwargs or {},  # pyright: ignore[reportUnknownArgumentType]  # legacy untyped request kwargs
             )
         )
         strategy, strategy_selector = self._get_routing_context(model, request_kwargs)

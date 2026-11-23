@@ -987,6 +987,44 @@ class TestEstimateCostPeriodTotals:
         assert response.daily_cost == pytest.approx(0.22)
 
 
+class TestEstimateCostBedrockProfileBaseModel:
+    @pytest.mark.asyncio
+    async def test_a_bedrock_profile_base_model_without_prices_estimates_at_the_served_model_rates(self, monkeypatch):
+        from litellm import Router
+
+        model = "anthropic.estimate-unpriced-profile-test"
+        profile = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/estimate-test"
+        monkeypatch.setattr(
+            litellm,
+            "model_cost",
+            {
+                **litellm.model_cost,
+                model: {
+                    "litellm_provider": "bedrock",
+                    "mode": "chat",
+                    "input_cost_per_token": 0.03,
+                    "output_cost_per_token": 0.04,
+                },
+            },
+        )
+        llm_router = Router(
+            model_list=[
+                {"model_name": "by-arn", "litellm_params": {"model": f"bedrock/{profile}"}},
+                {
+                    "model_name": AN_ALIAS,
+                    "litellm_params": {"model": f"bedrock/converse/{model}", "model_id": profile},
+                    "model_info": {"base_model": f"bedrock/{profile}"},
+                },
+            ]
+        )
+
+        response = await _estimate(llm_router)
+
+        assert response.input_cost_per_token == pytest.approx(0.03)
+        assert response.output_cost_per_token == pytest.approx(0.04)
+        assert response.cost_per_request == pytest.approx(INPUT_TOKENS * 0.03 + OUTPUT_TOKENS * 0.04)
+
+
 CACHE_READ_TOKENS = 800
 CACHE_CREATION_TOKENS = 100
 REASONING_TOKENS = 200
