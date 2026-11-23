@@ -2,7 +2,6 @@
 Handler for transforming /chat/completions api requests to litellm.responses requests
 """
 
-from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final
 
 from typing_extensions import TypedDict
@@ -17,11 +16,11 @@ if TYPE_CHECKING:
 class SpeechToCompletionBridgeHandlerInputKwargs(TypedDict):
     model: str
     input: str
-    voice: object
-    optional_params: Mapping[str, object]
-    litellm_params: Mapping[str, object]
+    voice: str | dict | None
+    optional_params: dict
+    litellm_params: dict
     logging_obj: "LiteLLMLoggingObj"
-    headers: dict[str, object]
+    headers: dict
     custom_llm_provider: str
 
 
@@ -32,7 +31,7 @@ class SpeechToCompletionBridgeHandler:
         super().__init__()
         self.transformation_handler = SpeechToCompletionBridgeTransformationHandler()
 
-    def validate_input_kwargs(self, kwargs: Mapping[str, object]) -> SpeechToCompletionBridgeHandlerInputKwargs:
+    def validate_input_kwargs(self, kwargs: dict) -> SpeechToCompletionBridgeHandlerInputKwargs:
         from litellm import LiteLLMLoggingObj
 
         model: Final = kwargs.get("model")
@@ -82,10 +81,10 @@ class SpeechToCompletionBridgeHandler:
         self,
         model: str,
         input: str,
-        voice: str | Mapping[str, object] | None,
-        optional_params: Mapping[str, object],
-        litellm_params: Mapping[str, object],
-        headers: Mapping[str, object],
+        voice: str | dict | None,
+        optional_params: dict,
+        litellm_params: dict,
+        headers: dict,
         logging_obj: "LiteLLMLoggingObj",
         custom_llm_provider: str,
     ) -> "HttpxBinaryResponseContent":
@@ -101,6 +100,7 @@ class SpeechToCompletionBridgeHandler:
         headers = validated_kwargs["headers"]
         logging_obj = validated_kwargs["logging_obj"]
         custom_llm_provider = validated_kwargs["custom_llm_provider"]
+        voice = validated_kwargs["voice"]
 
         request_data: Final = self.transformation_handler.transform_request(
             model=model,
