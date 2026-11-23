@@ -80,7 +80,7 @@ class GradientAIConfig(OpenAILikeChatConfig):
 
     def validate_environment(
         self,
-        headers: dict[str, object],
+        headers: dict,
         model: str,
         messages: list[AllMessageValues],
         optional_params: Mapping[str, object],
@@ -137,7 +137,7 @@ class GradientAIConfig(OpenAILikeChatConfig):
     def map_openai_params(
         self,
         non_default_params: Mapping[str, object],
-        optional_params: dict[str, object],
+        optional_params: dict,
         model: str,
         drop_params: bool = False,
         replace_max_completion_tokens_with_max_tokens: bool = False,

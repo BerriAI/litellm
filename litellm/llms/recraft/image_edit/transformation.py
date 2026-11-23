@@ -95,7 +95,7 @@ class RecraftImageEditConfig(BaseImageEditConfig):
 
     def validate_environment(
         self,
-        headers: dict[str, object],
+        headers: dict,
         model: str,
         api_key: str | None = None,
         litellm_params: Mapping[str, object] | None = None,
