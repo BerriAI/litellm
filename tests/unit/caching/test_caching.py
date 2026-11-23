@@ -7,7 +7,7 @@ import traceback
 import tracemalloc
 import uuid
 from collections import OrderedDict
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager
 from datetime import timedelta
 from enum import Enum
@@ -144,6 +144,40 @@ def test_get_per_item_prompt_tokens_distributes_with_remainder():
     per_item = [cache._get_per_item_prompt_tokens(result, i) for i in range(3)]
     assert sum(per_item) == 10  # 4 + 3 + 3
     assert per_item == [4, 3, 3]
+
+
+@pytest.mark.asyncio
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.parametrize("item_usage", [[{"prompt_tokens": 1}, {"prompt_tokens": 2}], None])
+async def test_an_upstream_item_usage_key_still_caches_each_embedding_input(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, item_usage: object
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL))
+    route: Final = respx_mock.post("http://upstream.test/v1/embeddings").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "object": "list",
+                "data": [{"object": "embedding", "index": index, "embedding": [0.1, 0.2]} for index in range(2)],
+                "model": "m",
+                "usage": {"prompt_tokens": 3, "total_tokens": 3},
+                "item_usage": item_usage,
+            },
+        )
+    )
+
+    async def embed(input: Sequence[str]) -> EmbeddingResponse:
+        return await aembedding(
+            model="openai_like/m", input=input, api_base="http://upstream.test/v1", api_key="upstream-test-key"
+        )
+
+    await embed(["alpha", "beta"])
+    await asyncio.gather(*_PENDING_CACHE_WRITES)
+    hit: Final = await embed(["alpha"])
+
+    assert route.call_count == 1
+    assert hit.usage.prompt_tokens == 2
 
 
 def _semantic_cache(**cache_kwargs):
@@ -1105,6 +1139,17 @@ _FILE_BLOCK_ITEM: Final = {"type": "file", "file": {"file_data": "data:video/mp4
         pytest.param({"input": "one prompt"}, True, id="string-input-is-one-message"),
         pytest.param({"input": ["a", "b", "c", "d", "e"]}, True, id="embedding-strings-are-not-messages"),
         pytest.param({"input": [_FILE_BLOCK_ITEM] * 5}, True, id="embedding-file-blocks-are-not-messages"),
+        pytest.param(
+            {"input": [{"type": "text", "text": "chunk"}] * 5}, True, id="embedding-text-blocks-are-not-messages"
+        ),
+        pytest.param(
+            {"input": [{"type": ["message"], "content": "hi"}] * 5}, False, id="unhashable-item-types-still-count"
+        ),
+        pytest.param(
+            {"input": [{"type": "message", "role": "user", "content": "hi"}] * 5},
+            False,
+            id="five-typed-responses-messages-skip-the-cache",
+        ),
     ],
 )
 def test_should_use_cache_stops_past_the_default_max_messages(kwargs: dict[str, object], expected: bool) -> None:

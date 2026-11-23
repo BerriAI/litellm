@@ -2,13 +2,8 @@ import { useTranslation } from "react-i18next";
 import { $api } from "@/lib/http/api";
 import { ErrorState } from "@/components/shared/ErrorState";
 import { CustomerBudgetEditor } from "./CustomerLimitsFields";
-import { CustomerBudgetFields } from "./CustomerBudgetFields";
-import {
-  BUDGET_FIELDS,
-  customerHierarchyFields,
-  type CustomerHierarchyFields,
-  type Organization,
-} from "./customerHierarchyForms";
+import { BUDGET_EDITOR_FIELDS, type BudgetEditorFields } from "./customerBudgetForm";
+import { customerHierarchyFields, type CustomerHierarchyFields, type Organization } from "./customerHierarchyForms";
 
 export default function CustomerOrganizationBudgetFields({
   organization,
@@ -31,9 +26,9 @@ export default function CustomerOrganizationBudgetFields({
       ? originalGroup
       : profiles.some((group) => group.budget_id === fields.templateId);
   const budgetReady = !organization.budget_id || organization.budget_is_shared === false || Boolean(groups.data);
-  const updateCustom = <K extends keyof CustomerHierarchyFields>(key: K, value: CustomerHierarchyFields[K]) => {
+  const updateBudgetFields = (next: BudgetEditorFields) => {
+    for (const key of BUDGET_EDITOR_FIELDS) onChange(key, next[key]);
     onChange("budgetEnabled", true);
-    onChange(key, value);
   };
   const selectSource = (value: string | null) => {
     if (value === "custom") {
@@ -46,7 +41,7 @@ export default function CustomerOrganizationBudgetFields({
     const profile = profiles.find((group) => `profile:${group.budget_id}` === value);
     if (!profile) return;
     const initial = customerHierarchyFields({ kind: "organization", record: organization });
-    for (const key of [...BUDGET_FIELDS, "allowedModels"] as const) onChange(key, initial[key]);
+    for (const key of BUDGET_EDITOR_FIELDS) onChange(key, initial[key]);
     onChange("templateId", profile.budget_id);
   };
   return (
@@ -63,22 +58,22 @@ export default function CustomerOrganizationBudgetFields({
         loading: groups.isPending,
       }}
       error={groups.isError && <ErrorState onRetry={() => void groups.refetch()} />}
-    >
-      {budgetReady && (
-        <CustomerBudgetFields
-          layout="scalar"
-          fields={{
-            ...fields,
-            maxBudget: fields.budgetEnabled ? fields.maxBudget : "",
-            softBudget: fields.budgetEnabled ? fields.softBudget : "",
-            tpm: fields.budgetEnabled ? fields.tpm : "",
-            rpm: fields.budgetEnabled ? fields.rpm : "",
-            allowedModels: fields.budgetEnabled ? fields.allowedModels : [],
-          }}
-          idPrefix={idPrefix}
-          onChange={updateCustom}
-        />
-      )}
-    </CustomerBudgetEditor>
+      budget={
+        budgetReady
+          ? {
+              fields: {
+                ...fields,
+                maxBudget: fields.budgetEnabled ? fields.maxBudget : "",
+                softBudget: fields.budgetEnabled ? fields.softBudget : "",
+                tpm: fields.budgetEnabled ? fields.tpm : "",
+                rpm: fields.budgetEnabled ? fields.rpm : "",
+                allowedModels: fields.budgetEnabled ? fields.allowedModels : [],
+              },
+              disabled: false,
+              onChange: updateBudgetFields,
+            }
+          : null
+      }
+    />
   );
 }

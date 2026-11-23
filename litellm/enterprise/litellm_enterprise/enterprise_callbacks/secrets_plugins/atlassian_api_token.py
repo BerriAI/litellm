@@ -15,7 +15,7 @@ class AtlassianApiTokenDetector(RegexBasedDetector):
         return "Atlassian API token"
 
     @property
-    def denylist(self) -> list[re.Pattern]:
+    def denylist(self) -> list[re.Pattern[str]]:
         return [
             # For Atlassian API token
             re.compile(

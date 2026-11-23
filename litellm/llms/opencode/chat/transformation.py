@@ -7,7 +7,8 @@ from pydantic import TypeAdapter
 import litellm
 from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.anthropic.chat.handler import ModelResponseIterator as AnthropicModelResponseIterator
-from litellm.llms.anthropic.chat.transformation import AnthropicConfig, JsonModeRequest
+from litellm.llms.anthropic.chat.transformation import AnthropicConfig, JsonModeRequest, request_extra_body
+from litellm.llms.anthropic.common_utils import AnthropicError
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
@@ -202,6 +203,29 @@ class OpenCodeGoMessagesChatConfig(_GoReportedCostMixin, AnthropicConfig):
             dict(headers),
         )
         return TypeAdapter(dict[str, object]).validate_python(raw)
+
+    def transform_extra_body(
+        self,
+        extra_body: Mapping[str, object],
+        request: Mapping[str, object],
+        model: str,
+        litellm_params: Mapping[str, object],
+    ) -> Mapping[str, object]:
+        fields: Final = request_extra_body(extra_body)
+        if isinstance(fields, AnthropicError):
+            raise fields
+        system_kwarg: Final = (
+            {} if "system" in request else {key: value for key, value in fields.items() if key == "system"}
+        )
+        return {
+            **system_kwarg,
+            **super().transform_extra_body(
+                extra_body={key: value for key, value in fields.items() if key != "system"},
+                request=request,
+                model=model,
+                litellm_params=litellm_params,
+            ),
+        }
 
 
 class OpenCodeGoGeminiChatConfig(_GoReportedCostMixin, GoogleAIStudioGeminiConfig):

@@ -1,5 +1,7 @@
 "use client";
 
+import type { BudgetGroupCatalogScope } from "./CustomerBudgetCatalog";
+
 import { useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
@@ -23,15 +25,19 @@ type Props =
       organization: BudgetGroups;
       onSaved: (groups: BudgetGroups) => void | Promise<void>;
       global: true;
-      scope?: "organization" | "app";
+      scope?: BudgetGroupCatalogScope;
     };
 
 export default function CustomerBudgetGroups(props: Props) {
   const { organization } = props;
-  const globalEndpoint =
-    props.global && props.scope === "app"
-      ? "/management/v1/app_customer_organization_budget_groups"
-      : "/management/v1/customer_organization_budget_groups";
+  const endpoints = {
+    "overall-app": "/management/v1/app_budget_groups",
+    "app-group": "/management/v1/app_group_budget_groups",
+    app: "/management/v1/app_customer_organization_budget_groups",
+    "app-member": "/management/v1/app_customer_member_budget_groups",
+    organization: "/management/v1/customer_organization_budget_groups",
+  } as const;
+  const globalEndpoint = endpoints[(props.global && props.scope) || "organization"];
   const onSaved = async (data: BudgetGroups | Organization | undefined) => {
     if (!data) {
       setError(t("customerPortal.hierarchy.error"));
@@ -85,11 +91,11 @@ export default function CustomerBudgetGroups(props: Props) {
     });
   };
   return (
-    <form onSubmit={save} className="w-full space-y-5">
+    <form onSubmit={save} aria-label={t("customerPortal.budgetGroups.title")} className="w-full space-y-5">
       <fieldset disabled={pending} className="min-w-0">
         <CustomerBudgetGroupsEditor
           memberGroups={!props.global}
-          appGroups={props.global && props.scope === "app"}
+          scope={props.global ? props.scope : undefined}
           groups={groups}
           defaultGroupId={defaultGroupId}
           disabled={pending}

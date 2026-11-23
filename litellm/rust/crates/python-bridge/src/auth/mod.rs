@@ -12,8 +12,8 @@ pub(crate) use call::{
     MappingView, PlanView, TeamGrantView,
 };
 pub(crate) use jwt::{
-    MappedClaimsView, jwt_claims, jwt_is_allowed_domain, jwt_is_jwt, jwt_key_mapping_cache_key,
-    jwt_presents_claims, jwt_unverified_claims,
+    MappedClaimsView, jwt_claims, jwt_is_allowed_domain, jwt_is_jwt, jwt_presents_claims,
+    jwt_unverified_claims,
 };
 pub(crate) use passthrough::{
     auth_allowed_routes_grant, auth_first_denied_route, auth_jwt_team_routes_grant,

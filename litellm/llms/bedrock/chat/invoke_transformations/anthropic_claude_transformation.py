@@ -66,6 +66,7 @@ else:
 
 _NON_DEFAULT_PARAMS: Final = TypeAdapter(Mapping[str, object])
 _LITELLM_PARAMS: Final = TypeAdapter(Mapping[str, object])
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def _anthropic_config_max_tokens() -> int | None:
@@ -291,6 +292,25 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
                 provider="bedrock_invoke",
             )
         )
+
+    def transform_extra_body(
+        self,
+        extra_body: Mapping[str, object],
+        request: Mapping[str, object],
+        model: str,
+        litellm_params: Mapping[str, object],
+    ) -> Mapping[str, object]:
+        unguarded: Final = AnthropicConfig.transform_extra_body(
+            self, extra_body=extra_body, request=request, model=model, litellm_params=litellm_params
+        )
+        stripped: Final = strip_beta_gated_request_body(
+            {**request, **unguarded},
+            {},
+            drop_params=litellm_params.get("drop_params"),
+            model=model,
+            provider="bedrock_invoke",
+        )
+        return {key: stripped[key] for key in unguarded if key in stripped}
 
     @property
     def uses_async_transform_request(self) -> bool:
@@ -529,7 +549,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             api_key=api_key,
             json_mode=json_mode,
         )
-        body: Final = object_mapping(raw_response.json()) or {}
+        body: Final = object_mapping(_DECODED_JSON.validate_python(raw_response.json())) or {}
         trace: Final = object_mapping(body.get(BEDROCK_INVOKE_TRACE_FIELD))
         if trace is not None:
             setattr(response, BEDROCK_INVOKE_TRACE_FIELD, trace)

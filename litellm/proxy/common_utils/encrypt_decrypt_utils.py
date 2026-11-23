@@ -1,8 +1,9 @@
 import base64
+import binascii
 import ctypes
 import os
 from collections.abc import Mapping
-from typing import Final, Literal, TypeVar, cast, overload
+from typing import Final, Literal, Protocol, TypeVar, cast, overload
 
 from pydantic import TypeAdapter, ValidationError
 
@@ -52,6 +53,14 @@ _DERIVED_KEY_BYTES: Final = 32
 _FIPS_PROPERTIES: Final = b"fips=yes"
 
 
+class _KdfFetch(Protocol):
+    def __call__(self, libctx: None, algorithm: bytes, properties: bytes, /) -> int | None: ...
+
+
+class _KdfCtxNew(Protocol):
+    def __call__(self, kdf: int | None, /) -> int | None: ...
+
+
 class _OsslParam(ctypes.Structure):
     _fields_ = (
         ("key", ctypes.c_char_p),
@@ -66,14 +75,22 @@ def _param(name: bytes, data_type: int, data: bytes) -> _OsslParam:
     return _OsslParam(name, data_type, data, len(data), _OSSL_PARAM_UNMODIFIED)
 
 
+def _kdf_fetch_function(libcrypto: ctypes.CDLL) -> _KdfFetch:
+    return ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_char_p, ctypes.c_char_p)(
+        ("EVP_KDF_fetch", libcrypto)
+    )
+
+
+def _kdf_ctx_new_function(libcrypto: ctypes.CDLL) -> _KdfCtxNew:
+    return ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p)(("EVP_KDF_CTX_new", libcrypto))
+
+
 def _kbkdf_hmac_sha256(key: bytes, label: bytes, context: bytes) -> bytes:
     import _hashlib
 
     libcrypto: Final = ctypes.CDLL(_hashlib.__file__)
-    kdf_fetch: Final = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_char_p, ctypes.c_char_p)(
-        ("EVP_KDF_fetch", libcrypto)
-    )
-    ctx_new: Final = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p)(("EVP_KDF_CTX_new", libcrypto))
+    kdf_fetch: Final = _kdf_fetch_function(libcrypto)
+    ctx_new: Final = _kdf_ctx_new_function(libcrypto)
     derive: Final = ctypes.CFUNCTYPE(
         ctypes.c_int, ctypes.c_void_p, ctypes.c_char_p, ctypes.c_size_t, ctypes.POINTER(_OsslParam)
     )(("EVP_KDF_derive", libcrypto))
@@ -282,7 +299,7 @@ def decrypt_bearer_token(token: str, prefix: str) -> str | None:
         return None
 
 
-_Passthrough: Final = TypeVar("_Passthrough")
+_Passthrough = TypeVar("_Passthrough")
 
 
 @overload
@@ -441,6 +458,13 @@ class SecretMapDecodeError(RuntimeError):
 _SECRET_MAP: Final = TypeAdapter(Mapping[str, str])
 _STORED_SECRET_MAP: Final = TypeAdapter(Mapping[str, str] | str)
 _SECRET_STRING: Final = TypeAdapter(str)
+
+
+def decode_legacy_mcp_user_credential(stored: str) -> str | None:
+    try:
+        return base64.urlsafe_b64decode(stored).decode()
+    except (binascii.Error, UnicodeDecodeError, ValueError, TypeError):
+        return None
 
 
 def encrypt_secret_map(value: Mapping[str, str], new_encryption_key: str | None = None) -> str:

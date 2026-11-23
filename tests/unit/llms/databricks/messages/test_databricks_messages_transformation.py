@@ -851,3 +851,45 @@ async def test_streamed_message_stop_drops_the_bedrock_invocation_metrics(chunk_
         json.loads(line.removeprefix(b"data:")) for line in relayed.splitlines() if line.startswith(b"data:")
     ]
     assert relayed_events == [*(payload for _, payload in events[:-1]), {"type": "message_stop"}], relayed.decode()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "undecodable_metrics", ["[" * 100_000 + "]" * 100_000, "9" * 5000], ids=["nested-too-deep", "number-too-long"]
+)
+async def test_streamed_metrics_line_json_cannot_decode_is_relayed_as_sent(undecodable_metrics: str) -> None:
+    message_start: Final = {"type": "message_start", "message": {**MESSAGE, "content": [], "stop_reason": None}}
+    undecodable_frame: Final = f'event: ping\ndata: {{"amazon-bedrock-invocationMetrics": {undecodable_metrics}}}\n\n'
+    message_stop: Final = {"type": "message_stop", "amazon-bedrock-invocationMetrics": {"inputTokenCount": 18}}
+    sse_body: Final = (
+        f"event: message_start\ndata: {json.dumps(message_start)}\n\n"
+        + undecodable_frame
+        + f"event: message_stop\ndata: {json.dumps(message_stop)}\n\n"
+    ).encode()
+
+    def workspace_streams(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            status_code=200,
+            headers={"content-type": "text/event-stream"},
+            stream=_ChunkedStream(sse_body, 4096),
+            request=request,
+        )
+
+    upstream: Final = AsyncHTTPHandler(transport=httpx.MockTransport(workspace_streams))
+    try:
+        stream = await litellm.anthropic.messages.acreate(
+            max_tokens=64,
+            messages=USER_TURN,
+            model=f"databricks/{CLAUDE_MODEL}",
+            api_key=DATABRICKS_API_KEY,
+            api_base=DATABRICKS_API_BASE,
+            stream=True,
+            client=upstream,
+        )
+        relayed_chunks: Final[list[bytes]] = [chunk async for chunk in stream]
+    finally:
+        await upstream.close()
+
+    relayed: Final = b"".join(relayed_chunks)
+    assert undecodable_frame.encode() in relayed
+    assert relayed.rstrip().splitlines()[-1] == b'data: {"type":"message_stop"}'
