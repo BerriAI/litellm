@@ -3505,10 +3505,12 @@ class LiteLLMCompletionResponsesConfig:
     def namespace_tool_name_map(
         tools: ResponseTools, request_input: str | ResponseInputParam | None = None
     ) -> NamespaceNameMap:
-        """The namespace tool behind each name the provider may call, the one lookup every bridged step reads.
+        """The namespace tool the caller gets back for each name the provider may call.
 
-        Namespaced calls in the history count too, since a resumed turn can replay a call to a tool the
-        client has not listed again yet.
+        This is the one answer the response conversion and the tool permission guardrail both read. Namespaced
+        calls in the history count too, since a resumed turn can replay a call to a tool the client has not
+        listed again yet, and a custom tool's name never maps to a namespace tool because it comes back as that
+        custom tool.
         """
         namespace_entries: Final = LiteLLMCompletionResponsesConfig._namespace_entries(tools)
         top_level_function_names: Final = frozenset(
@@ -3538,8 +3540,10 @@ class LiteLLMCompletionResponsesConfig:
             for namespace, tool_name in LiteLLMCompletionResponsesConfig._history_namespace_calls(request_input)
             if (chat_name := chat_member_name(namespace, tool_name)) not in top_level_function_names
         )
+        entries: Final = dict(history_entries + unambiguous_entries + qualified_entries + deferred_top_level_entries)
+        custom_tool_names: Final = extract_custom_tool_names(tools)
         return MappingProxyType(
-            dict(history_entries + unambiguous_entries + qualified_entries + deferred_top_level_entries)
+            {sent_name: tool for sent_name, tool in entries.items() if sent_name not in custom_tool_names}
         )
 
     @staticmethod

@@ -203,6 +203,7 @@ from litellm.litellm_core_utils.tool_fields import (
     BRIDGED_TOOL_NAMES_KWARG,
     BridgedTool,
     BridgedToolNames,
+    shortened_full_names,
     with_renamed_tool_calls,
 )
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
@@ -4013,9 +4014,7 @@ class Logging(LiteLLMLoggingBaseClass):
     def _with_full_tool_names(self, response: _LoggedResponse) -> _LoggedResponse | ModelResponse | ModelResponseStream:
         if not isinstance(response, ModelResponse | ModelResponseStream):
             return response
-        return with_renamed_tool_calls(
-            response, {sent_name: tool.full_name for sent_name, tool in self.bridged_tools.items()}
-        )
+        return with_renamed_tool_calls(response, shortened_full_names(self.bridged_tools))
 
     def _as_served_chat_response(
         self, response: _LoggedResponse

@@ -34,6 +34,7 @@ from litellm.litellm_core_utils.tool_fields import (
     BridgedTool,
     BridgedToolNames,
     qualified_member_name,
+    shortened_full_names,
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.responses.litellm_completion_transformation.compaction_trigger import SUMMARY_PROMPT
@@ -624,7 +625,7 @@ async def test_bridged_turn_logs_the_full_name_of_a_namespace_member_sent_under_
     logged: Final = logging_obj.model_call_details.get(BRIDGED_TOOL_NAMES_KWARG)
     assert full_name not in sent_names
     assert isinstance(logged, BridgedToolNames)
-    assert logged.as_mapping() == {sent_name: full_name for sent_name in sent_names}
+    assert shortened_full_names(logged.tools()) == {sent_name: full_name for sent_name in sent_names}
 
 
 @pytest.mark.asyncio

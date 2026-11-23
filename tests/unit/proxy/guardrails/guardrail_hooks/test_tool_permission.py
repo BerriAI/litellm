@@ -5255,3 +5255,127 @@ class TestToolPermissionOnBridgedNamespaceTools:
             await guardrail.async_pre_call_hook(
                 user_api_key_dict=UserAPIKeyAuth(), cache=DualCache(), data=forged, call_type="acompletion"
             )
+
+
+class _CapturedBridgedCall(Exception):
+    def __init__(self, kwargs: dict[str, object]) -> None:
+        super().__init__("bridged call captured")
+        self.kwargs = kwargs
+
+
+def _bridged_completion_kwargs(
+    request_input: list[dict[str, object]], tools: list[dict[str, object]]
+) -> dict[str, object]:
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.responses.litellm_completion_transformation.handler import LiteLLMCompletionTransformationHandler
+
+    def capture(**kwargs: object) -> None:
+        raise _CapturedBridgedCall(dict(kwargs))
+
+    logging_obj: Final = Logging(
+        model="anthropic/claude-sonnet-5-5",
+        messages=[],
+        stream=False,
+        call_type="responses",
+        start_time=1.0,
+        litellm_call_id="bridged-identity",
+        function_id="test",
+    )
+    with (
+        patch("litellm.completion", capture),  # test-quality-ok: no DI seam; the bridge calls litellm.completion
+        pytest.raises(_CapturedBridgedCall) as captured,
+    ):
+        LiteLLMCompletionTransformationHandler().response_api_handler(
+            model="anthropic/claude-sonnet-5-5",
+            input=request_input,
+            responses_api_request={"tools": tools},
+            custom_llm_provider="anthropic",
+            _is_async=False,
+            litellm_logging_obj=logging_obj,
+        )
+    return captured.value.kwargs
+
+
+def _history_call(namespace: str, name: str) -> list[dict[str, object]]:
+    return [
+        {"type": "message", "role": "user", "content": "go on"},
+        {"type": "function_call", "call_id": "call_earlier", "namespace": namespace, "name": name, "arguments": "{}"},
+        {"type": "function_call_output", "call_id": "call_earlier", "output": "done"},
+    ]
+
+
+def _returns_a_call_to(name: str) -> ModelResponse:
+    return ModelResponse(
+        choices=[
+            Choices(
+                finish_reason="tool_calls",
+                message={
+                    "tool_calls": [
+                        {"id": "call_now", "type": "function", "function": Function(name=name, arguments="{}")}
+                    ]
+                },
+            )
+        ]
+    )
+
+
+_JUDGED_AS_RETURNED: Final = {
+    "a namespace tool known only from history": (
+        _history_call("exec", "run"),
+        [],
+        "exec__run",
+        "^exec$",
+        {"type": "function_call", "namespace": "exec", "name": "run"},
+    ),
+    "a custom tool named like a shortened tool in history": (
+        _history_call(_VAULT_NAMESPACE, _VAULT_TOOL),
+        [{"type": "custom", "name": _VAULT_SENT_NAME}],
+        _VAULT_SENT_NAME,
+        f"^{_VAULT_SENT_NAME}$",
+        {"type": "custom_tool_call", "name": _VAULT_SENT_NAME},
+    ),
+}
+
+
+@pytest.mark.parametrize(
+    ("request_input", "tools", "returned_name", "denied_pattern", "caller_sees"),
+    _JUDGED_AS_RETURNED.values(),
+    ids=_JUDGED_AS_RETURNED.keys(),
+)
+@pytest.mark.asyncio
+async def test_a_bridged_call_is_judged_as_the_tool_the_caller_gets_back(
+    request_input: list[dict[str, object]],
+    tools: list[dict[str, object]],
+    returned_name: str,
+    denied_pattern: str,
+    caller_sees: dict[str, str],
+) -> None:
+    from litellm.responses.litellm_completion_transformation.transformation import LiteLLMCompletionResponsesConfig
+
+    completion_kwargs: Final = _bridged_completion_kwargs(request_input, tools)
+    returned_items: Final = LiteLLMCompletionResponsesConfig.transform_chat_completion_tools_to_responses_tools(
+        _returns_a_call_to(returned_name), {"tools": tools}, request_input
+    )
+    assert [{key: getattr(item, key, None) for key in caller_sees} for item in returned_items] == [caller_sees]
+
+    guardrail: Final = ToolPermissionGuardrail(
+        guardrail_name="bridged-identity",
+        rules=[
+            {"id": "deny_what_the_caller_gets", "tool_name": denied_pattern, "decision": "deny"},
+            {"id": "allow_everything_else", "tool_name": "^.*$", "decision": "allow"},
+        ],
+        default_action="deny",
+        on_disallowed_action="rewrite",
+        event_hook=GuardrailEventHooks.post_call,
+    )
+    response: Final = _returns_a_call_to(returned_name)
+
+    await guardrail.async_post_call_success_hook(
+        data={**completion_kwargs, "guardrails": ["bridged-identity"]},
+        user_api_key_dict=UserAPIKeyAuth(),
+        response=response,
+    )
+
+    message: Final = response.choices[0].message
+    assert message.tool_calls in (None, [])
+    assert "deny_what_the_caller_gets" in (message.content or "")

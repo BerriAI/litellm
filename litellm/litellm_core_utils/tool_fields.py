@@ -107,7 +107,7 @@ class BridgedTool:
 
 @dataclass(frozen=True, slots=True)
 class BridgedToolNames:
-    """The namespace tool behind each shortened name a bridged request sent the provider."""
+    """The namespace tool the caller gets back for each name a bridged request let the provider call."""
 
     tool_by_sent_name: tuple[tuple[str, BridgedTool], ...]
 
@@ -119,6 +119,17 @@ class BridgedToolNames:
 
 
 _NO_BRIDGED_TOOLS: Final = MappingProxyType[str, BridgedTool]({})
+
+
+def shortened_full_names(tools: Mapping[str, BridgedTool]) -> Mapping[str, str]:
+    """The full name behind each name the bridge had to shorten, which is all logs and spend tracking rename."""
+    return MappingProxyType(
+        {
+            sent_name: tool.full_name
+            for sent_name, tool in tools.items()
+            if sent_name == chat_member_name(tool.namespace, tool.name) != tool.full_name
+        }
+    )
 
 
 def recorded_bridged_tools(call_details: object) -> Mapping[str, BridgedTool]:
