@@ -104,9 +104,9 @@ class _SharedProfiles(BaseModel):
 _DEFINITION_PARAM: Final = "customer_app_definition"
 _DEFINITION: Final = AuthObject.customer_app_definition()
 _PARENT_ORG_ID: Final = TypeAdapter(str)
-AppEntity: Final = TypeVar("AppEntity", App, AppOrganization, AppMember, AppGroup, AppGroupOrganization)
-AppAssociation: Final = TypeVar("AppAssociation", AppOrganization, AppMember)
-CachedModel: Final = TypeVar("CachedModel", bound=BaseModel)
+AppEntity = TypeVar("AppEntity", App, AppOrganization, AppMember, AppGroup, AppGroupOrganization)
+AppAssociation = TypeVar("AppAssociation", AppOrganization, AppMember)
+CachedModel = TypeVar("CachedModel", bound=BaseModel)
 
 
 class AppRepository(PrismaTableRepository[PrismaRecord]):
