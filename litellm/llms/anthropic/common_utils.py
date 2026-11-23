@@ -2299,6 +2299,19 @@ def strip_unsigned_thinking_from_anthropic_messages(
     return [message for message in stripped if message is not None]
 
 
+def _json_block_without_provider_specific_fields(block: JsonValue) -> JsonValue:
+    if not isinstance(block, dict) or "provider_specific_fields" not in block:
+        return block
+    return {key: value for key, value in block.items() if key != "provider_specific_fields"}
+
+
+def json_message_without_provider_specific_fields(message: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
+    content: Final = message.get("content")
+    if not isinstance(content, list):
+        return message
+    return {**message, "content": [_json_block_without_provider_specific_fields(block) for block in content]}
+
+
 def anthropic_message_objects(messages: Sequence[JsonValue]) -> Sequence[Mapping[str, JsonValue]] | None:
     objects: Final = tuple(message for message in messages if isinstance(message, dict))
     return objects if len(objects) == len(messages) else None

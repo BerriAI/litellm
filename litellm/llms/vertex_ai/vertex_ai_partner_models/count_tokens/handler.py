@@ -27,6 +27,7 @@ from litellm.llms.anthropic.common_utils import (
     context_management_betas,
     count_tokens_feature_betas,
     is_claude_model_target,
+    json_message_without_provider_specific_fields,
     strip_unsigned_thinking_from_anthropic_messages,
     tools_without_custom_field,
 )
@@ -64,7 +65,12 @@ def count_tokens_request_body(
         **(
             {}
             if claude_messages is None
-            else {"messages": strip_unsigned_thinking_from_anthropic_messages(claude_messages)}
+            else {
+                "messages": [
+                    json_message_without_provider_specific_fields(message)
+                    for message in strip_unsigned_thinking_from_anthropic_messages(claude_messages)
+                ]
+            }
         ),
         **(
             {

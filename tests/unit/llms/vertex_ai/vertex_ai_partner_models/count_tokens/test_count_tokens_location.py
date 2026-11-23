@@ -420,3 +420,37 @@ def test_count_tokens_sends_a_message_that_is_not_an_object_as_it_came():
     body: Final = count_tokens_request_body({"model": model, "messages": messages}, model, False)
 
     assert body["messages"] == messages
+
+
+GEMINI_TOOL_TURN: Final = [
+    {"role": "user", "content": "What is the weather in Oslo?"},
+    {
+        "role": "assistant",
+        "content": [
+            {
+                "type": "tool_use",
+                "id": "toolu_01",
+                "name": "get_weather",
+                "input": {"city": "Oslo"},
+                "provider_specific_fields": {"signature": "gemini-thought-signature"},
+            }
+        ],
+    },
+    {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_01", "content": "4 C"}]},
+]
+GEMINI_TOOL_TURN_AS_SENT: Final = [
+    {"role": "user", "content": "What is the weather in Oslo?"},
+    {
+        "role": "assistant",
+        "content": [{"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": {"city": "Oslo"}}],
+    },
+    {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_01", "content": "4 C"}]},
+]
+
+
+def test_count_tokens_drops_the_provider_specific_fields_litellm_puts_on_a_returned_block():
+    model: Final = "claude-sonnet-5-5"
+
+    body: Final = count_tokens_request_body({"model": model, "messages": GEMINI_TOOL_TURN}, model, False)
+
+    assert body["messages"] == GEMINI_TOOL_TURN_AS_SENT
