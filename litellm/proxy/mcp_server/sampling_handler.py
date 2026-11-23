@@ -98,7 +98,7 @@ def _resolve_model_from_preferences(
                 name = entry.get("model_name")
                 if name:
                     available_model_names.append(name)
-            elif isinstance(entry, str):
+            else:
                 available_model_names.append(entry)
     if model_preferences and model_preferences.hints:
         for hint in model_preferences.hints:

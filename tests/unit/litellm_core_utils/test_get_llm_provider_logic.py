@@ -327,6 +327,41 @@ def test_get_llm_provider_vertex_ai_image_models(monkeypatch):
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
+def test_add_known_models_adds_a_new_model_to_the_model_list_and_its_set_in_place():
+    model: Final = "lit-model-list-follows-a-reload"
+    model_list: Final = litellm.model_list
+    model_list_set: Final = litellm.model_list_set
+    try:
+        litellm.add_known_models(model_cost_map={model: {"litellm_provider": "openai", "mode": "chat"}})
+        assert (model_list.count(model), model in model_list_set) == (1, True)
+
+        litellm.add_known_models(model_cost_map={})
+
+        assert model_list.count(model) == 1
+    finally:
+        litellm.open_ai_chat_completion_models.discard(model)
+        model_list_set.discard(model)
+        if model in model_list:
+            model_list.remove(model)
+        litellm.add_known_models({})
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
+def test_add_known_models_adds_a_new_embedding_model_to_all_embedding_models_in_place():
+    model: Final = "lit-embedding-list-follows-a-reload"
+    all_embedding_models: Final = litellm.all_embedding_models
+    try:
+        litellm.add_known_models(
+            model_cost_map={model: {"litellm_provider": "vertex_ai-embedding-models", "mode": "embedding"}}
+        )
+
+        assert model in all_embedding_models
+    finally:
+        litellm.vertex_embedding_models.discard(model)
+        all_embedding_models.discard(model)
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 def test_get_llm_provider_ai21_chat():
     model, custom_llm_provider, dynamic_api_key, api_base = litellm.get_llm_provider(
         model="jamba-1.5-large",
