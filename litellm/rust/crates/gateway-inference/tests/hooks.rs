@@ -229,6 +229,20 @@ async fn a_stream_is_logged_when_its_body_ends_and_never_reaches_post_call_succe
 
 #[rstest]
 #[tokio::test]
+async fn a_stream_the_client_drops_before_its_end_tells_neither_log() {
+    let upstream =
+        answering(ResponseTemplate::new(200).set_body_raw(STREAM, "text/event-stream")).await;
+    let recording = Recording::silent();
+
+    drop(ask(app(&upstream, &recording), true).await);
+
+    assert_eq!(
+        hooks(&recording.seen(3).await),
+        vec![Hook::PreCall, Hook::ResponseHeaders]
+    );
+}
+
+#[tokio::test]
 async fn what_the_hooks_change_reaches_the_provider_and_the_client() {
     let upstream = MockServer::start().await;
     Mock::given(body_partial_json(json!({"max_tokens": 5})))
