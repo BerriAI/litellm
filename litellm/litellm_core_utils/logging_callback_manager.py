@@ -86,7 +86,7 @@ class LoggingCallbackManager:
                 parent_list=litellm.callbacks,
             )
 
-    def add_litellm_success_callback(self, callback: CustomLogger | str | Callable[..., object] | CustomLoggerV2):
+    def add_litellm_success_callback(self, callback: object):
         """
         Add a success callback to `litellm.success_callback`.
         Auto-routes async callbacks to litellm._async_success_callback.
@@ -103,7 +103,7 @@ class LoggingCallbackManager:
             else:
                 self._safe_add_callback_to_list(callback=callback, parent_list=litellm.success_callback)
 
-    def add_litellm_failure_callback(self, callback: CustomLogger | str | Callable[..., object] | CustomLoggerV2):
+    def add_litellm_failure_callback(self, callback: object):
         """
         Add a failure callback to `litellm.failure_callback`.
         Auto-routes async callbacks to litellm._async_failure_callback.
@@ -291,7 +291,7 @@ class LoggingCallbackManager:
 
     def _safe_add_callback_to_list(
         self,
-        callback: CustomLogger | CustomLoggerV2 | Callable[..., object] | str,
+        callback: object,
         parent_list: list[CustomLogger | Callable[..., object] | str],
     ):
         """

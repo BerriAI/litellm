@@ -5937,6 +5937,18 @@
               }
             },
             {
+              "description": "Add key_metadata and user_metadata for admin callers. Ignored for everyone else.",
+              "in": "query",
+              "name": "include_metadata",
+              "required": false,
+              "schema": {
+                "default": false,
+                "description": "Add key_metadata and user_metadata for admin callers. Ignored for everyone else.",
+                "title": "Include Metadata",
+                "type": "boolean"
+              }
+            },
+            {
               "in": "query",
               "name": "agent_ids",
               "required": false,
@@ -12109,6 +12121,38 @@
                                           ],
                                           "title": "OpenAIDecisionInputImage",
                                           "type": "object"
+                                        },
+                                        {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "data": {
+                                              "anyOf": [
+                                                {
+                                                  "additionalProperties": true,
+                                                  "type": "object"
+                                                },
+                                                {
+                                                  "items": {
+                                                    "additionalProperties": true,
+                                                    "type": "object"
+                                                  },
+                                                  "type": "array"
+                                                }
+                                              ],
+                                              "title": "Data"
+                                            },
+                                            "type": {
+                                              "const": "input_json",
+                                              "title": "Type",
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [
+                                            "type",
+                                            "data"
+                                          ],
+                                          "title": "OpenAIDecisionInputJSON",
+                                          "type": "object"
                                         }
                                       ]
                                     },
@@ -12143,7 +12187,7 @@
                           "type": "array"
                         }
                       ],
-                      "description": "The text being judged, or user, developer, and system messages. Developer and system messages are input text. User messages can mix input text and images.",
+                      "description": "The text being judged, or user, developer, and system messages. Developer and system messages are input text. User messages can mix input text, images, and JSON.",
                       "title": "Input"
                     },
                     "model": {
@@ -13633,6 +13677,38 @@
                                           ],
                                           "title": "OpenAIDecisionInputImage",
                                           "type": "object"
+                                        },
+                                        {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "data": {
+                                              "anyOf": [
+                                                {
+                                                  "additionalProperties": true,
+                                                  "type": "object"
+                                                },
+                                                {
+                                                  "items": {
+                                                    "additionalProperties": true,
+                                                    "type": "object"
+                                                  },
+                                                  "type": "array"
+                                                }
+                                              ],
+                                              "title": "Data"
+                                            },
+                                            "type": {
+                                              "const": "input_json",
+                                              "title": "Type",
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [
+                                            "type",
+                                            "data"
+                                          ],
+                                          "title": "OpenAIDecisionInputJSON",
+                                          "type": "object"
                                         }
                                       ]
                                     },
@@ -13667,7 +13743,7 @@
                           "type": "array"
                         }
                       ],
-                      "description": "The text being judged, or user, developer, and system messages. Developer and system messages are input text. User messages can mix input text and images.",
+                      "description": "The text being judged, or user, developer, and system messages. Developer and system messages are input text. User messages can mix input text, images, and JSON.",
                       "title": "Input"
                     },
                     "model": {
@@ -17270,6 +17346,30 @@
               "description": "When True, this pre_call guardrail always evaluates the request as it was before any guardrail in this hook ran, regardless of its position in the guardrails list -- so the YAML order of guardrails can never change whether this one blocks. Use only for block-only guardrails: any data this guardrail returns is discarded, same contract as run_in_parallel, since an earlier guardrail's masking must not be undone by this one.",
               "title": "Scan Raw Request"
             },
+            "scan_tool_calls_as_text": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "For the bedrock guardrail, whose ApplyGuardrail API has no tool-call content type. When True, the name and arguments of every tool call are also scanned as text: tool calls in the request history as input, tool calls generated by the model as output. A blocked tool call blocks the request or response. A tool call the policy masks is blocked too: masked text is never written into the arguments, so they stay valid JSON. Costs one extra guardrail call when tool calls are present.",
+              "title": "Scan Tool Calls As Text"
+            },
+            "scan_tool_descriptions_as_text": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "For text-only guardrails (panw_prisma_airs, presidio, bedrock). Guardrails whose APIs accept the request's tools[] already scan it natively. When True, a pre_call guardrail also scans every description string in tools[] (tool and parameter descriptions) as text, blocking or masking them like message text. Costs one extra guardrail call per tool that has a description.",
+              "title": "Scan Tool Descriptions As Text"
+            },
             "sensitive_data_route_to_model": {
               "anyOf": [
                 {
@@ -20319,6 +20419,30 @@
               ],
               "description": "When True, this pre_call guardrail always evaluates the request as it was before any guardrail in this hook ran, regardless of its position in the guardrails list -- so the YAML order of guardrails can never change whether this one blocks. Use only for block-only guardrails: any data this guardrail returns is discarded, same contract as run_in_parallel, since an earlier guardrail's masking must not be undone by this one.",
               "title": "Scan Raw Request"
+            },
+            "scan_tool_calls_as_text": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "For the bedrock guardrail, whose ApplyGuardrail API has no tool-call content type. When True, the name and arguments of every tool call are also scanned as text: tool calls in the request history as input, tool calls generated by the model as output. A blocked tool call blocks the request or response. A tool call the policy masks is blocked too: masked text is never written into the arguments, so they stay valid JSON. Costs one extra guardrail call when tool calls are present.",
+              "title": "Scan Tool Calls As Text"
+            },
+            "scan_tool_descriptions_as_text": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "For text-only guardrails (panw_prisma_airs, presidio, bedrock). Guardrails whose APIs accept the request's tools[] already scan it natively. When True, a pre_call guardrail also scans every description string in tools[] (tool and parameter descriptions) as text, blocking or masking them like message text. Costs one extra guardrail call per tool that has a description.",
+              "title": "Scan Tool Descriptions As Text"
             },
             "send_user_api_key_alias": {
               "anyOf": [
@@ -23858,6 +23982,38 @@
           "summary": "Langfuse Proxy Route",
           "tags": [
             "langfuse_passthrough"
+          ]
+        }
+      }
+    }
+  },
+  "live_sessions": {
+    "components": {
+      "schemas": {}
+    },
+    "paths": {
+      "/v1/live/sessions": {
+        "post": {
+          "description": "Create a GPT-Live session over WebRTC. The body carries the session and the browser's SDP offer,\nand the response carries the SDP answer. The returned `session.id` attaches a sideband on\n`/v1/live/sessions/{session_id}/attach`.",
+          "operationId": "create_live_session_v1_live_sessions_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Create Live Session",
+          "tags": [
+            "live_sessions"
           ]
         }
       }
@@ -35880,6 +36036,61 @@
               "required": true,
               "schema": {
                 "title": "Response Id",
+                "type": "string"
+              }
+            },
+            {
+              "description": "An item ID to list items after, used in pagination",
+              "in": "query",
+              "name": "after",
+              "required": false,
+              "schema": {
+                "type": "string"
+              }
+            },
+            {
+              "description": "An item ID to list items before, used in pagination",
+              "in": "query",
+              "name": "before",
+              "required": false,
+              "schema": {
+                "type": "string"
+              }
+            },
+            {
+              "description": "Additional fields to include in the response, forwarded to the provider",
+              "in": "query",
+              "name": "include",
+              "required": false,
+              "schema": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            {
+              "description": "How many items to return, with the range enforced by the provider",
+              "in": "query",
+              "name": "limit",
+              "required": false,
+              "schema": {
+                "default": 20,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            {
+              "description": "The order to return the input items in",
+              "in": "query",
+              "name": "order",
+              "required": false,
+              "schema": {
+                "default": "desc",
+                "enum": [
+                  "asc",
+                  "desc"
+                ],
                 "type": "string"
               }
             }
@@ -62689,6 +62900,54 @@
             }
           },
           "summary": "Skill Content",
+          "tags": [
+            "skill_hub"
+          ]
+        }
+      },
+      "/skill-hub/skills/{name}/downloads/export": {
+        "get": {
+          "description": "Export all recorded authenticated downloads. Anonymous downloads remain totals-only.",
+          "operationId": "export_skill_downloads_skill_hub_skills__name__downloads_export_get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "name",
+              "required": true,
+              "schema": {
+                "title": "Name",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "text/csv": {
+                  "schema": {
+                    "type": "string"
+                  }
+                }
+              },
+              "description": "Authenticated download history as CSV"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Export Skill Downloads",
           "tags": [
             "skill_hub"
           ]

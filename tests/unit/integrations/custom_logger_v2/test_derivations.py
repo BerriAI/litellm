@@ -1121,7 +1121,7 @@ def test_prometheus_parity_values_cross_as_python_holds_them() -> None:
             hash_error="unhashable type: 'list'",
         ),
     )
-    assert cost == Cost(response_cost=0.5, zero_cost=ZeroCost(reason_present=False))
+    assert cost == Cost(response_cost=0.5, zero_cost=ZeroCost(reason_present=False), cost_finalized=False)
     assert timing is not None
     assert (timing.queue_seconds, timing.overhead_ms) == ("slow", "slow")
     assert state == RateLimitState(
