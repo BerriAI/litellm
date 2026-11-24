@@ -5,7 +5,7 @@ import datetime
 import json
 import os
 import unittest
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Final, List, Literal, Optional, Tuple, cast, get_args
 from unittest.mock import ANY, MagicMock, Mock, patch
 
@@ -14,9 +14,11 @@ import pytest
 import respx
 from openai.types.responses import (
     ResponseFunctionToolCall,
+    ResponseFunctionWebSearch,
     ResponseOutputMessage,
     ResponseOutputText,
 )
+from openai.types.responses.response_output_item import McpApprovalRequest, McpListTools
 from openai.types.responses.response_reasoning_item import (
     ResponseReasoningItem,
     Summary,
@@ -4587,7 +4589,7 @@ async def test_acompletion_bridge_normalizes_tool_choice_on_the_wire(
 def _make_incomplete_responses_api_response(
     incomplete_reason: Optional[str],
     output: "List[ResponseOutputItem]",
-    status: Literal["completed", "incomplete"] = "incomplete",
+    status: Literal["completed", "incomplete", "failed"] = "incomplete",
     empty_incomplete_details: bool = False,
 ) -> "ResponsesAPIResponse":
     from litellm.types.llms.openai import (
@@ -4920,6 +4922,64 @@ def test_transform_response_completed_reasoning_only_returns_empty_stop_choice()
     assert result.usage.prompt_tokens == 37
     assert result.usage.completion_tokens == 16
     assert result.usage.completion_tokens_details.reasoning_tokens == 16
+
+
+def _make_web_search_output_item() -> ResponseFunctionWebSearch:
+    return ResponseFunctionWebSearch.model_validate(
+        {"id": "ws_1", "status": "completed", "type": "web_search_call", "action": {"type": "search", "query": "weather"}}
+    )
+
+
+def _make_mcp_list_tools_output_item() -> McpListTools:
+    return McpListTools.model_validate({"id": "mcpl_1", "server_label": "docs", "tools": [], "type": "mcp_list_tools"})
+
+
+def _make_mcp_approval_request_output_item() -> McpApprovalRequest:
+    return McpApprovalRequest.model_validate(
+        {"id": "mcpr_1", "arguments": "{}", "name": "search", "server_label": "docs", "type": "mcp_approval_request"}
+    )
+
+
+@pytest.mark.parametrize(
+    "make_output",
+    [
+        lambda: [_make_reasoning_only_output_item(), _make_web_search_output_item()],
+        lambda: [_make_web_search_output_item(), _make_reasoning_only_output_item()],
+        lambda: [_make_mcp_list_tools_output_item(), _make_reasoning_only_output_item()],
+    ],
+    ids=["reasoning_then_web_search", "web_search_then_reasoning", "mcp_list_tools_then_reasoning"],
+)
+def test_transform_response_completed_reasoning_with_hosted_lookups_returns_empty_stop_choice(
+    make_output: "Callable[[], List[ResponseOutputItem]]",
+) -> None:
+    raw_response: Final = _make_incomplete_responses_api_response(None, make_output(), status="completed")
+
+    result: Final = _call_transform_response(LiteLLMResponsesTransformationHandler(), raw_response)
+
+    assert len(result.choices) == 1
+    choice: Final = result.choices[0]
+    assert choice.finish_reason == "stop"
+    assert choice.message.content == ""
+    assert choice.message.tool_calls is None
+    assert [item["encrypted_content"] for item in choice.message.reasoning_items] == ["enc_abc"]
+
+
+@pytest.mark.parametrize(
+    ("make_output", "status"),
+    [
+        (lambda: [_make_reasoning_only_output_item(), _make_mcp_approval_request_output_item()], "completed"),
+        (lambda: [_make_web_search_output_item()], "completed"),
+        (lambda: [_make_reasoning_only_output_item()], "failed"),
+    ],
+    ids=["approval_request_needs_the_caller", "lookup_without_reasoning", "failed_response"],
+)
+def test_transform_response_reply_outside_the_empty_turn_rule_still_raises(
+    make_output: "Callable[[], List[ResponseOutputItem]]", status: Literal["completed", "failed"]
+) -> None:
+    raw_response: Final = _make_incomplete_responses_api_response(None, make_output(), status=status)
+
+    with pytest.raises(ValueError, match="Unknown items"):
+        _call_transform_response(LiteLLMResponsesTransformationHandler(), raw_response)
 
 
 def test_transform_response_zero_choices_not_incomplete_still_raises():
