@@ -374,14 +374,14 @@ export default function CustomerHierarchyManager() {
 
   if (hierarchy.isLoading)
     return (
-      <p role="status" className="px-8 py-12 text-sm text-muted-foreground">
+      <p role="status" className="text-sm text-muted-foreground">
         {t("customerPortal.hierarchy.loading")}
       </p>
     );
   if (!hierarchy.canManage) return <ErrorState message={t("customerPortal.hierarchy.adminOnly")} />;
   if (!scope)
     return (
-      <div className="space-y-3 px-8 py-12">
+      <div className="space-y-3">
         <h1 className="text-xl font-semibold">{t("customerPortal.hierarchy.title")}</h1>
         <p className="text-sm text-muted-foreground">{t("customerPortal.hierarchy.missingOrganization")}</p>
         <a href={customersHref} className="text-sm text-primary hover:underline">
@@ -399,7 +399,7 @@ export default function CustomerHierarchyManager() {
     );
   if (!selected)
     return (
-      <p role="status" className="px-8 py-12 text-sm text-muted-foreground">
+      <p role="status" className="text-sm text-muted-foreground">
         {t("customerPortal.hierarchy.loading")}
       </p>
     );

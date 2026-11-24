@@ -1,8 +1,9 @@
 import json
 import asyncio
+import math
 import datetime
 import time
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from pathlib import Path
 from types import MappingProxyType, SimpleNamespace
 from typing import Final, Literal, cast
@@ -24,6 +25,7 @@ from litellm.litellm_core_utils.fallback_generalizations import (
     set_fallback_generalizations,
 )
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.litellm_core_utils.model_cost_table import published
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     convert_to_model_response_object,
@@ -37,7 +39,7 @@ from litellm.types.llms.base import CachedTokensDetails
 from litellm.types.llms.openai import HttpxBinaryResponseContent, OpenAIRealtimeStreamList, ResponseAPIUsage, ResponsesAPIResponse
 from litellm.types.llms.xai import RealtimeMeteredUsage
 from litellm.types.rerank import RerankResponse
-from litellm.types.utils import CacheCreationTokenDetails, CallTypes, Choices, CompletionTokensDetailsWrapper, CostPerToken, EmbeddingResponse, ImageObject, ImageResponse, ImageUsage, ImageUsageInputTokensDetails, LiteLLMRealtimeStreamLoggingObject, Message, ModelInfo, ModelResponse, PromptTokensDetails, PromptTokensDetailsWrapper, Usage
+from litellm.types.utils import CacheCreationTokenDetails, CallTypes, Choices, CompletionTokensDetailsWrapper, CostPerToken, EmbeddingResponse, ImageObject, ImageResponse, ImageUsage, ImageUsageInputTokensDetails, LiteLLMRealtimeStreamLoggingObject, Message, ModelInfo, ModelResponse, PromptTokensDetails, PromptTokensDetailsWrapper, StandardBuiltInToolsParams, Usage
 from litellm.types.videos.main import VideoObject
 from litellm.utils import cached_get_model_info_helper, supports_prompt_caching
 from litellm.litellm_core_utils.model_cost_table import publish
@@ -13115,3 +13117,225 @@ def test_router_jamba_deployments_keep_their_own_prices(_local_model_cost_map: N
     assert response._hidden_params["response_cost"] == pytest.approx(
         _billed_at(response, *_JAMBA_DEPLOYMENT_RATES[deployment])
     )
+
+
+_TOKENS_PARITY: Final = Path(__file__).parents[2] / "litellm/rust/crates/cost/fixtures/tokens_parity.json"
+
+
+def _parity_case(name: str) -> Mapping[str, object]:
+    cases: Final = json.loads(_TOKENS_PARITY.read_text())["cases"]
+    return next(case for case in cases if case["name"] == name)
+
+
+def _cost_map_row(case: Mapping[str, object]) -> dict[str, object]:
+    """The fixture's row as the cost map writes it: the web search prices sit under ``search_context_cost_per_query``."""
+    row: Final = cast(Mapping[str, object], case["row"])
+    return {
+        **{key: value for key, value in row.items() if not key.startswith("search_context_size_")},
+        "litellm_provider": case["provider"],
+        "mode": "chat",
+        "search_context_cost_per_query": {
+            key: value for key, value in row.items() if key.startswith("search_context_size_")
+        },
+    }
+
+
+def _billed_usage(case: Mapping[str, object]) -> Usage:
+    """A Usage whose billed quantities are the fixture's."""
+    billed: Final = cast(Mapping[str, object], case["usage"])
+    writes: Final = cast(Mapping[str, int], billed["cache_write"])
+    reads: Final = cast(Mapping[str, int], billed["cache_read"])["text"]
+    output: Final = cast(Mapping[str, int], billed["output"])["text"]
+    prompt_tokens: Final = cast(int, billed["prompt_tokens"])
+    web_search: Final = cast(Mapping[str, int] | None, billed.get("web_search"))
+    return Usage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=output,
+        total_tokens=prompt_tokens + output,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=reads,
+            cache_creation_tokens=writes["default"] + writes["one_hour"],
+            cache_creation_token_details=CacheCreationTokenDetails(
+                ephemeral_5m_input_tokens=writes["default"], ephemeral_1h_input_tokens=writes["one_hour"]
+            ),
+        ),
+        server_tool_use=None if web_search is None else {"web_search_requests": web_search["requests"]},
+        speed=billed.get("speed"),
+        inference_geo=billed.get("inference_geo"),
+    )
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "anthropic_cache_mixed",
+        "anthropic_speed_fast_geo_us",
+        "anthropic_discount_and_fixed_margin",
+        "bedrock_claude_platform_geo_us",
+        "vertex_regional",
+        "azure_ai_plain",
+    ],
+)
+def test_completion_cost_prices_claude_token_calls_in_rust_at_mains_values(
+    name: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A Claude token call on the /v1/messages providers returns the total and stored breakdown main computed for
+    the same call."""
+    case: Final = _parity_case(name)
+    expected: Final = cast(Mapping[str, Mapping[str, float]], case["expected"])
+    monkeypatch.setattr(litellm, "model_cost", {**litellm.model_cost, cast(str, case["row_key"]): _cost_map_row(case)})
+    monkeypatch.setattr(litellm, "cost_discount_config", dict(cast(Mapping[str, float], case["discount"])))
+    monkeypatch.setattr(litellm, "cost_margin_config", dict(cast(Mapping[str, object], case["margin"])))
+    logging_obj: Final = Logging(
+        model=cast(str, case["model"]),
+        messages=[],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.datetime.now(),
+        litellm_call_id=f"rust-priced-{name}",
+        function_id="rust-priced",
+    )
+
+    cost: Final = completion_cost(
+        completion_response=ModelResponse(model=cast(str, case["model"]), usage=_billed_usage(case)),
+        model=cast(str, case["model"]),
+        custom_llm_provider=cast(str, case["provider"]),
+        vertex_location=cast(str | None, case["vertex_location"]),
+        litellm_logging_obj=logging_obj,
+    )
+
+    stored: Final = expected["breakdown"]
+    breakdown: Final = logging_obj.cost_breakdown
+    assert cost == expected["total"]
+    assert breakdown is not None
+    assert (
+        breakdown["input_cost"],
+        breakdown["output_cost"],
+        breakdown["total_cost"],
+        breakdown.get("discount_amount", 0.0),
+        breakdown.get("margin_total_amount", 0.0),
+    ) == (
+        stored["input_cost"],
+        stored["output_cost"],
+        stored["total_cost"],
+        stored["discount_amount"],
+        stored["margin_total_amount"],
+    )
+
+
+def test_completion_cost_falls_back_to_python_for_a_provider_rust_does_not_price(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A call the Rust core leaves to Python, here an OpenAI model, still prices at its row's rates."""
+    row: Final = {
+        "litellm_provider": "openai",
+        "mode": "chat",
+        "input_cost_per_token": 1e-6,
+        "output_cost_per_token": 2e-6,
+    }
+    monkeypatch.setattr(litellm, "model_cost", {**litellm.model_cost, "openai-probe-model": row})
+
+    cost: Final = completion_cost(
+        completion_response=ModelResponse(
+            model="openai-probe-model", usage=Usage(prompt_tokens=10, completion_tokens=5)
+        ),
+        model="openai-probe-model",
+        custom_llm_provider="openai",
+    )
+
+    assert cost == pytest.approx(10 * 1e-6 + 5 * 2e-6)
+
+
+def _claude_response(
+    hidden_params: Mapping[str, object] | None = None,
+    annotations: Sequence[Mapping[str, object]] | None = None,
+    prompt_details: PromptTokensDetailsWrapper | None = None,
+) -> ModelResponse:
+    response: Final = ModelResponse(
+        model="claude-opus-5-5",
+        choices=[{"message": {"role": "assistant", "content": "hi", "annotations": annotations}}],
+        usage=Usage(prompt_tokens=1000, completion_tokens=200, prompt_tokens_details=prompt_details),
+    )
+    response.hidden_params = {**response.hidden_params, **(hidden_params or {})}
+    return response
+
+
+def _rust_priced(
+    response: ModelResponse,
+    tools_params: StandardBuiltInToolsParams | None = None,
+    reported_cost_applies: bool = False,
+) -> float | None:
+    from litellm.cost_calculator import rust_priced_cost
+
+    return rust_priced_cost(
+        completion_response=response,
+        model="claude-opus-5-5",
+        call_type="completion",
+        custom_llm_provider="anthropic",
+        usage=response.usage,
+        region_name=None,
+        base_model=None,
+        custom_pricing=None,
+        router_model_id=None,
+        invoked_model_id=None,
+        service_tier=None,
+        data_residency=None,
+        vertex_location=None,
+        standard_built_in_tools_params=tools_params,
+        litellm_logging_obj=None,
+        reported_cost_applies=reported_cost_applies,
+    )
+
+
+def test_rust_prices_the_plain_claude_call_the_deferral_cases_vary(local_model_cost_map: None) -> None:
+    priced: Final = _rust_priced(_claude_response())
+
+    assert priced is not None and priced > 0
+
+
+def test_rust_bills_a_price_edited_in_place_on_the_next_call(local_model_cost_map: None) -> None:
+    row: Final = cast(dict[str, object], published()["claude-opus-5-5"])
+    input_rate: Final = row["input_cost_per_token"]
+    assert isinstance(input_rate, float)
+    before: Final = _rust_priced(_claude_response())
+
+    row["input_cost_per_token"] = 2 * input_rate
+    try:
+        after: Final = _rust_priced(_claude_response())
+    finally:
+        row["input_cost_per_token"] = input_rate
+
+    assert before is not None and after is not None
+    assert math.isclose(after - before, 1000 * input_rate, rel_tol=1e-9)
+
+
+@pytest.mark.parametrize(
+    ("response", "tools_params", "reported_cost_applies"),
+    [
+        pytest.param(
+            _claude_response(hidden_params={"custom_llm_provider": "bedrock"}), None, False, id="hidden-provider"
+        ),
+        pytest.param(
+            _claude_response(annotations=[{"type": "url_citation", "url_citation": {"url": "https://example.com"}}]),
+            None,
+            False,
+            id="url-citation",
+        ),
+        pytest.param(
+            _claude_response(prompt_details=PromptTokensDetailsWrapper(web_search_requests=1)),
+            None,
+            False,
+            id="prompt-details-web-search",
+        ),
+        pytest.param(_claude_response(), {"file_search": {"type": "file_search"}}, False, id="file-search-tool"),
+        pytest.param(_claude_response(hidden_params={"model": "azure-model-router"}), None, False, id="model-router"),
+        pytest.param(_claude_response(hidden_params={"upstream_usage_cost": 0.5}), None, True, id="provider-billed"),
+    ],
+)
+def test_completion_cost_leaves_to_python_a_claude_call_main_prices_another_way(
+    local_model_cost_map: None,
+    response: ModelResponse,
+    tools_params: StandardBuiltInToolsParams | None,
+    reported_cost_applies: bool,
+) -> None:
+    assert _rust_priced(response, tools_params, reported_cost_applies) is None

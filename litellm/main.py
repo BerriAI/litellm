@@ -13,6 +13,7 @@ import asyncio
 import contextvars
 import datetime
 import inspect
+import itertools
 import json
 import os
 import random
@@ -268,6 +269,7 @@ from .litellm_core_utils.fallback_utils import (
 from .litellm_core_utils.prompt_templates.common_utils import (
     add_system_prompt_to_messages,
     get_completion_messages,
+    is_empty_user_message,
     update_messages_with_model_file_ids,
 )
 from .litellm_core_utils.prompt_templates.factory import (
@@ -580,12 +582,29 @@ def _messages_without_unreadable_pdfs(
     return readable_messages
 
 
+def _messages_without_empty_last_user_turns(
+    messages: Sequence[AllMessageValues],
+    model: str,
+    custom_llm_provider: str,
+    route_params: Mapping[str, object],
+) -> tuple[AllMessageValues, ...] | None:
+    kept_messages: Final = tuple(itertools.dropwhile(is_empty_user_message, reversed(messages)))[::-1]
+    if not kept_messages or len(kept_messages) == len(messages):
+        return None
+    from litellm.responses.bridge_check import target_rejects_model_turn_end
+
+    if not target_rejects_model_turn_end(model, custom_llm_provider, route_params):
+        return None
+    return kept_messages
+
+
 def _messages_readable_by_model(
     messages: Sequence[AllMessageValues],
     model: str,
     custom_llm_provider: str,
     model_info: Mapping[str, object] | None,
     base_model: str | None,
+    api_base: str | None,
     drop_params: bool,
     ensure_alternating_roles: bool | None,
     user_continue_message: ChatCompletionUserMessage | None,
@@ -599,11 +618,22 @@ def _messages_readable_by_model(
         base_model=base_model,
         drop_params=drop_params,
     )
-    if pdf_free_messages is None:
+    sent_messages: Final = messages if pdf_free_messages is None else pdf_free_messages
+    alternating_messages: Final = (
+        _messages_without_empty_last_user_turns(
+            sent_messages,
+            model,
+            custom_llm_provider,
+            {"model_info": model_info, "base_model": base_model, "api_base": api_base},
+        )
+        if ensure_alternating_roles
+        else None
+    )
+    if pdf_free_messages is None and alternating_messages is None:
         return None
     return tuple(
         get_completion_messages(
-            messages=list(pdf_free_messages),
+            messages=list(sent_messages if alternating_messages is None else alternating_messages),
             ensure_alternating_roles=ensure_alternating_roles or False,
             user_continue_message=user_continue_message,
             assistant_continue_message=assistant_continue_message,
@@ -6418,6 +6448,7 @@ def completion(
             custom_llm_provider=custom_llm_provider,
             model_info=validated_model_info,
             base_model=deployment_base_model,
+            api_base=api_base,
             drop_params=drop_unsupported_reasoning,
             ensure_alternating_roles=ensure_alternating_roles,
             user_continue_message=user_continue_message,

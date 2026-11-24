@@ -1,4 +1,5 @@
 import json
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 from litellm.litellm_core_utils.safe_json_dumps import jsonable_or_str
@@ -37,7 +38,7 @@ class LangtraceAttributes:
         self.set_response_attributes(span, response_obj)
         self.set_usage_attributes(span, response_obj)
 
-    def set_request_attributes(self, span: Span, kwargs, vendor):
+    def set_request_attributes(self, span: Span, kwargs: Mapping[str, object], vendor: object):
         """
         This function is used to get span attributes for the LLM request
         """
