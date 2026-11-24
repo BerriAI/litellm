@@ -403,12 +403,12 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
 
     def validate_environment(
         self,
-        headers: dict[str, str],
+        headers: dict,
         model: str,
         api_key: str | None = None,
-        litellm_params: dict[str, object] | None = None,
+        litellm_params: dict | None = None,
         api_base: str | None = None,
-    ) -> dict[str, str]:
+    ) -> dict:
         """
         Validate environment for Bedrock Stability image edit.
 
