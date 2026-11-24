@@ -166,3 +166,9 @@ def test_build_realtime_wss_url_pins_the_provider_path(api_base: str | None, exp
 def test_build_realtime_wss_url_rejects_insecure_or_ambiguous_bases(api_base: str):
     with pytest.raises(ValueError, match="Example api_base must be"):
         build_realtime_wss_url(api_base, default_url=_DEFAULT_WSS_URL, path="/v1/stream", provider="Example")
+
+
+@pytest.mark.parametrize("api_base", ["https://example.com:abc", "https://example.com:99999"])
+def test_build_realtime_wss_url_names_the_port_it_could_not_read(api_base: str):
+    with pytest.raises(ValueError, match=r"Example api_base must be .*[Pp]ort"):
+        build_realtime_wss_url(api_base, default_url=_DEFAULT_WSS_URL, path="/v1/stream", provider="Example")

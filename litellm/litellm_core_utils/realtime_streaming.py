@@ -1553,7 +1553,7 @@ class RealTimeStreaming:
             await self._report_pre_setup_buffer_full()
 
     async def _report_pre_setup_buffer_full(self) -> None:
-        if self._pre_setup_buffer_full_reported:
+        if self._pre_setup_buffer_full_reported or self._backend_setup_complete:
             return
         self._pre_setup_buffer_full_reported = True
         await self.websocket.send_text(json.dumps(_pre_setup_buffer_full_error_event()))
@@ -1699,28 +1699,31 @@ class RealTimeStreaming:
         await asyncio.sleep(REALTIME_OVER_LIMIT_USAGE_WAIT_SECONDS)
         await self.backend_ws.close()
 
-    async def _dropped_after_token_limit_end(self, frame: object) -> bool:
+    async def _dropped_after_token_limit_end(self, frame: object, *, logged: bool = False) -> bool:
         if not self._ended_over_token_limit:
             return False
         event: Final = as_str_mapping(frame)
         if event is None:
             return True
         if self._turn_limits is not None:
-            await self._count_billed_frame(event, self._turn_limits)
+            await self._count_billed_frame(event, self._turn_limits, logged=logged)
         if self._over_limit_usage_wait is not None and event.get("type") == "response.done":
             await self.backend_ws.close()
         return True
 
-    async def _count_billed_frame(self, event: Mapping[str, object], turn_limits: RealtimeTurnLimits) -> None:
+    async def _count_billed_frame(
+        self, event: Mapping[str, object], turn_limits: RealtimeTurnLimits, *, logged: bool = False
+    ) -> None:
         event_type: Final = event.get("type")
         is_transcription: Final = (
             self._is_transcription_session and event_type == "conversation.item.input_audio_transcription.completed"
         )
         if event_type != "response.done" and not is_transcription:
             return
-        self.store_message(dict(event))
-        if is_transcription:
-            self._capture_transcription_usage(dict(event))
+        if not logged:
+            self.store_message(dict(event))
+            if is_transcription:
+                self._capture_transcription_usage(dict(event))
         await turn_limits.charge(event)
 
     async def _forward_unparsed_backend_frame(self, raw_response: str) -> None:
@@ -2029,8 +2032,11 @@ class RealTimeStreaming:
         self.current_delta_type = returned_object["current_delta_type"]
         self.session_configuration_request = returned_object["session_configuration_request"]
         events: Final = transformed_response if isinstance(transformed_response, list) else [transformed_response]
-        for event in events:
-            if await self._dropped_after_token_limit_end(event) or self._should_drop_event_from_client(event):
+        logged_before_send: Final = self._log_transcriptions_before_sending(events)
+        for index, event in enumerate(events):
+            if await self._dropped_after_token_limit_end(
+                event, logged=index in logged_before_send
+            ) or self._should_drop_event_from_client(event):
                 continue
             if isinstance(event, dict):
                 self._detect_transcription_session_from_backend(event)
@@ -2073,9 +2079,6 @@ class RealTimeStreaming:
             ## GUARDRAIL: run on transcription events in provider_config path too
             if isinstance(event, dict) and event.get("type") == "conversation.item.input_audio_transcription.completed":
                 transcript = event.get("transcript", "")
-                self._collect_user_input_from_backend_event(cast(dict, event))
-                self.store_message(event_str)
-                self._capture_transcription_usage(event)
                 await self._send_event_to_client(event, event_str)
                 if await self._session_ended_by_transcription_limits(event):
                     continue
@@ -2087,6 +2090,23 @@ class RealTimeStreaming:
             self.store_message(event_str)
             await self._charge_finished_turn(event)
             await self._send_event_to_client(event, event_str)
+
+    def _log_transcriptions_before_sending(self, events: Sequence[object]) -> frozenset[int]:
+        if self._ended_over_token_limit:
+            return frozenset()
+        mappings: Final = tuple((index, as_str_mapping(event)) for index, event in enumerate(events))
+        transcriptions: Final = tuple(
+            (index, event)
+            for index, event in mappings
+            if event is not None
+            and event.get("type") == "conversation.item.input_audio_transcription.completed"
+            and not self._should_drop_event_from_client(event)
+        )
+        for _, transcription in transcriptions:
+            self._collect_user_input_from_backend_event(transcription)
+            self.store_message(dict(transcription))
+            self._capture_transcription_usage(transcription)
+        return frozenset(index for index, _ in transcriptions)
 
     async def _complete_deferred_backend_setup(self) -> None:
         if not self._uses_deferred_backend_setup() or self._backend_setup_complete:

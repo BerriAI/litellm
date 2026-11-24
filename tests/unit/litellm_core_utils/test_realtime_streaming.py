@@ -3942,6 +3942,34 @@ async def test_deferred_setup_caps_non_audio_buffered_messages(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_a_full_buffer_after_setup_does_not_ask_the_client_for_session_update(monkeypatch):
+    monkeypatch.setattr(litellm, "gemini_live_defer_setup", True, raising=False)
+    from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
+
+    cap: Final = RealTimeStreaming._MAX_BUFFERED_MESSAGES
+    audio_msg: Final = json.dumps({"type": "input_audio_buffer.append", "audio": "AA=="})
+    client_ws: Final = MagicMock()
+    client_ws.receive_text = AsyncMock(side_effect=[*([audio_msg] * (cap + 5)), ConnectionClosed(None, None)])
+    client_ws.send_text = AsyncMock()
+    backend_ws: Final = MagicMock()
+    backend_ws.send = AsyncMock(side_effect=ConnectionError("upstream unavailable"))
+    streaming: Final = RealTimeStreaming(
+        client_ws,
+        backend_ws,
+        _mock_logging(),
+        provider_config=GeminiRealtimeConfig(),
+        model="gemini-live-2.5-flash-native-audio",
+    )
+    streaming._backend_setup_complete = True
+    streaming._pending_messages_until_setup.append(audio_msg)
+
+    await streaming.client_ack_messages()
+
+    sent: Final = [json.loads(call.args[0]) for call in client_ws.send_text.await_args_list]
+    assert [event["error"].get("code") for event in sent if event["type"] == "error"] == []
+
+
+@pytest.mark.asyncio
 async def test_deferred_setup_caps_non_audio_buffered_bytes(monkeypatch):
     """Non-audio frames appended after the first audio frame honor the byte budget."""
     monkeypatch.setattr(litellm, "gemini_live_defer_setup", True, raising=False)
@@ -7669,6 +7697,81 @@ async def test_frames_buffered_when_the_session_ends_are_counted_and_never_reach
         "conversation.item.input_audio_transcription.completed",
         "error",
     ]
+
+
+class _BatchRealtimeConfig(_PassthroughRealtimeConfig):
+    def transform_realtime_response(
+        self,
+        message: str | bytes,
+        model: str,
+        logging_obj: LiteLLMLoggingObj,
+        realtime_response_transform_input: RealtimeResponseTransformInput,
+    ) -> RealtimeResponseTypedDict:
+        passthrough: Final = super().transform_realtime_response(
+            message, model, logging_obj, realtime_response_transform_input
+        )
+        return {**passthrough, "response": json.loads(message)}
+
+
+def _billed_transcriptions(streaming: RealTimeStreaming) -> tuple[object, ...]:
+    return tuple(
+        message
+        for message in streaming.messages
+        if isinstance(message, dict)
+        and message.get("type") == "conversation.item.input_audio_transcription.completed"
+        and "usage" in message
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_client_that_drops_mid_batch_still_has_the_batch_transcription_billed() -> None:
+    usage: Final = {"type": "duration", "seconds": 90.0}
+    batch: Final = json.dumps(
+        [
+            {"type": "input_audio_buffer.speech_stopped", "item_id": "item_1", "audio_end_ms": 0},
+            json.loads(_transcription_completed(usage)),
+        ]
+    )
+    client_ws: Final = _ga_client_ws()
+    client_ws.send_text = AsyncMock(side_effect=RuntimeError("client went away"))
+    backend_ws: Final = MagicMock(send=AsyncMock(), close=AsyncMock())
+    backend_ws.recv = AsyncMock(side_effect=[batch, ConnectionClosed(None, None)])
+    streaming: Final = RealTimeStreaming(
+        client_ws, backend_ws, _mock_logging(), provider_config=_BatchRealtimeConfig(), model="scribe_v2_realtime"
+    )
+
+    await streaming.backend_to_client_send_messages()
+
+    assert [message["usage"] for message in _billed_transcriptions(streaming)] == [usage]
+
+
+@pytest.mark.asyncio
+async def test_a_batch_that_crosses_the_limit_bills_each_transcription_once() -> None:
+    limiter: Final = _ScriptedTurnLimiter(
+        check_error=RateLimitError(message="tpm limit reached", llm_provider="litellm_proxy", model="m")
+    )
+    batch: Final = json.dumps(
+        [json.loads(_transcription_completed(_TRANSCRIPTION_TOKEN_USAGE)) for _ in range(2)]
+    )
+    client_ws: Final = _ga_client_ws()
+    client_ws.close = AsyncMock()
+    backend_ws: Final = MagicMock(send=AsyncMock(), close=AsyncMock())
+    backend_ws.recv = AsyncMock(side_effect=[batch, ConnectionClosed(None, None)])
+    streaming: Final = RealTimeStreaming(
+        client_ws,
+        backend_ws,
+        _mock_logging(),
+        provider_config=_BatchRealtimeConfig(),
+        model="gpt-4o-transcribe",
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        turn_limiters=lambda: (limiter,),
+        force_transcription_model="gpt-4o-transcribe",
+    )
+
+    await streaming.backend_to_client_send_messages()
+
+    assert [charge[1] for charge in limiter.charges] == [120, 120]
+    assert len(_billed_transcriptions(streaming)) == 2
 
 
 @pytest.mark.asyncio
