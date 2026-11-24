@@ -6,7 +6,7 @@ and lives in `litellm.integrations.lens.exporter` and `tracing_endpoints`; none 
 """
 
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from types import MappingProxyType
 from typing import Final
 from urllib.parse import quote
@@ -50,8 +50,9 @@ _UI_RESPONSE_HEADERS: Final = frozenset({"content-type", "cache-control", "x-con
 _UI_FRAME: Final = "frame-ancestors 'self'"
 
 
-def _framed_policy(upstream: str | None) -> str:
+def _framed_policy(upstream_headers: Mapping[str, str]) -> str:
     """Lens's own content policy with its framing rule replaced by one that lets only the dashboard frame it."""
+    upstream: Final = upstream_headers.get("content-security-policy")
     kept: Final = tuple(
         directive.strip()
         for directive in (upstream or "").split(";")
@@ -114,7 +115,7 @@ async def lens_ui_asset(
                 headers={
                     **{name: value for name, value in response.headers.items() if name in _UI_RESPONSE_HEADERS},
                     "x-frame-options": "SAMEORIGIN",
-                    "content-security-policy": _framed_policy(response.headers.get("content-security-policy")),
+                    "content-security-policy": _framed_policy(response.headers),
                 },
                 reservation=reservation,
             )
