@@ -21,15 +21,17 @@ import random
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from itertools import groupby
+from itertools import chain, groupby
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, NamedTuple
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
+from litellm.litellm_core_utils.core_helpers import attribute_or_none
 from litellm.proxy._types import DB_RETRY_SAFE_ERROR_TYPES
 from litellm.proxy.db.create_views import SupportsExecuteRaw
 from litellm.proxy.db.db_span import db_span
+from litellm.proxy.db.exception_handler import db_write_never_sent
 
 if TYPE_CHECKING:
     from litellm.proxy._types import SpendLogsPayload
@@ -104,6 +106,8 @@ days AS (
         router_name,
         router_type,
         SUM(turns)::int AS turns,
+        CASE WHEN SUM(token_recorded_turns) = SUM(turns)
+            THEN SUM(total_tokens)::bigint END AS day_total_tokens,
         SUM(spend)::float8 AS spend,
         SUM(saved_spend)::float8 AS saved_spend,
         SUM(savings_estimated_turns)::int AS savings_estimated_turns,
@@ -139,6 +143,7 @@ SELECT
     COALESCE(sessions.total_tokens, 0) AS total_tokens,
     COALESCE(sessions.session_seconds, 0) AS session_seconds,
     COALESCE(days.turns, 0) AS turns,
+    CASE WHEN days.turns IS NULL THEN 0 ELSE days.day_total_tokens END AS day_total_tokens,
     COALESCE(days.spend, 0) AS spend,
     COALESCE(days.saved_spend, 0) AS saved_spend,
     COALESCE(days.savings_estimated_turns, 0) AS savings_estimated_turns,
@@ -175,6 +180,7 @@ class AutoRouterTurnTransaction:
     savings_estimated_actual_spend: float = 0.0
     savings_estimated_saved_spend: float = 0.0
     user_id: str = ""
+    token_counts_recorded: bool = False
 
 
 class TurnCacheFacts(NamedTuple):
@@ -215,6 +221,12 @@ def _turn_time_utc(start_time_iso: str) -> datetime | None:
     return parsed.astimezone(timezone.utc).replace(tzinfo=None)
 
 
+def _mapping_or_none(value: object) -> Mapping[object, object] | None:
+    if isinstance(value, Mapping):
+        return value
+    return None
+
+
 def _write_ttl_seconds(usage_object: Mapping[str, object] | None) -> int | None:
     """The TTL this turn's cache write used, or None when nothing was written.
 
@@ -225,9 +237,9 @@ def _write_ttl_seconds(usage_object: Mapping[str, object] | None) -> int | None:
 
     if not usage_object:
         return None
-    details: Final = usage_object.get("prompt_tokens_details")
-    creation: Final = details.get("cache_creation_token_details") if isinstance(details, Mapping) else None
-    if isinstance(creation, Mapping):
+    details: Final = _mapping_or_none(usage_object.get("prompt_tokens_details"))
+    creation: Final = _mapping_or_none(details.get("cache_creation_token_details")) if details is not None else None
+    if creation is not None:
         if creation.get("ephemeral_1h_input_tokens"):
             return CACHE_TTL_1H_SECONDS
         if creation.get("ephemeral_5m_input_tokens"):
@@ -294,6 +306,11 @@ def build_autorouter_turn_transaction(
     )
 
     usage_object_raw: Final = metadata.get("usage_object")
+    token_counts: Final = (
+        (usage_object_raw.get("prompt_tokens"), usage_object_raw.get("completion_tokens"))
+        if isinstance(usage_object_raw, Mapping)
+        else ()
+    )
     cache: Final = turn_cache_facts(usage_object_raw if isinstance(usage_object_raw, Mapping) else None)
     tier_raw: Final = routing_decision.get("tier")
     baseline_raw: Final = routing_decision.get("savings_baseline_model")
@@ -311,6 +328,8 @@ def build_autorouter_turn_transaction(
         model=model,
         turn_at=turn_at,
         total_tokens=int(payload.get("prompt_tokens") or 0) + int(payload.get("completion_tokens") or 0),
+        token_counts_recorded=len(token_counts) == 2
+        and all(isinstance(value, int) and not isinstance(value, bool) and value >= 0 for value in token_counts),
         spend=actual_spend,
         saved_spend=saved_spend,
         classifier_cost=classifier_cost or 0.0,
@@ -435,17 +454,21 @@ ON CONFLICT ({user_column}api_key, session_id, router_name) DO UPDATE SET
 _DAY_UPSERT_SQL: Final = f"""
 day_rollup AS (
     INSERT INTO "LiteLLM_AutoRouterDailySpend" AS d (
-        date, api_key, user_id, router_name, router_type, turns, spend, saved_spend, savings_estimated_turns,
+        date, api_key, user_id, router_name, router_type, turns, total_tokens, token_recorded_turns,
+        spend, saved_spend, savings_estimated_turns,
         savings_estimated_actual_spend, savings_estimated_saved_spend, classifier_cost, classifier_cost_recorded_turns
     )
     VALUES (
         ({_TURN_AT}::timestamp)::date::text, {_p("api_key")}::text, {_p("user_id")}::text, {_p("router_name")},
-        {_p("router_type")}, 1, {_p("spend")}::float8, {_p("saved_spend")}::float8, {_p("savings_estimated_turns")}::int,
+        {_p("router_type")}, 1, {_p("total_tokens")}::bigint, {_p("token_counts_recorded")}::int,
+        {_p("spend")}::float8, {_p("saved_spend")}::float8, {_p("savings_estimated_turns")}::int,
         {_p("savings_estimated_actual_spend")}::float8, {_p("savings_estimated_saved_spend")}::float8,
         {_p("classifier_cost")}::float8, 1
     )
     ON CONFLICT (date, api_key, user_id, router_name, router_type) DO UPDATE SET
         turns = d.turns + 1,
+        total_tokens = d.total_tokens + EXCLUDED.total_tokens,
+        token_recorded_turns = d.token_recorded_turns + EXCLUDED.token_recorded_turns,
         spend = d.spend + EXCLUDED.spend,
         saved_spend = d.saved_spend + EXCLUDED.saved_spend,
         savings_estimated_turns = d.savings_estimated_turns + EXCLUDED.savings_estimated_turns,
@@ -478,7 +501,7 @@ _SESSION_TABLE_BY_STATEMENT: Final[Mapping[str, str]] = MappingProxyType(
 )
 
 
-def _as_sql_param(value: str | float | bool | datetime | None) -> str | float | None:
+def _as_sql_param(value: object) -> object:
     if isinstance(value, bool):
         return int(value)
     if isinstance(value, datetime):
@@ -486,8 +509,8 @@ def _as_sql_param(value: str | float | bool | datetime | None) -> str | float | 
     return value
 
 
-def _upsert_params(transaction: AutoRouterTurnTransaction) -> tuple[str | float | None, ...]:
-    return tuple(_as_sql_param(getattr(transaction, name)) for name in _UPSERT_PARAM_FIELDS)
+def _upsert_params(transaction: AutoRouterTurnTransaction) -> tuple[object, ...]:
+    return tuple(_as_sql_param(attribute_or_none(transaction, name)) for name in _UPSERT_PARAM_FIELDS)
 
 
 async def write_autorouter_turn(
@@ -511,7 +534,7 @@ async def _upsert_turn_with_retry(
         except DB_RETRY_SAFE_ERROR_TYPES:
             if attempt >= n_retry_times:
                 raise
-            await asyncio.sleep(2**attempt + random.uniform(0, 1))
+            await asyncio.sleep(2.0**attempt + random.uniform(0, 1))
         else:
             return
 
@@ -521,77 +544,110 @@ def _session_partition(transaction: AutoRouterTurnTransaction) -> tuple[str, str
     return (*identity, transaction.session_id, transaction.router_name)
 
 
+class UnwrittenTurns(NamedTuple):
+    """Turns the database provably never received, and the error that proved it."""
+
+    turns: tuple[AutoRouterTurnTransaction, ...]
+    error: Exception
+
+
+class _StoppedPartition(NamedTuple):
+    turns: tuple[AutoRouterTurnTransaction, ...]
+    error: Exception
+
+
 async def _drain_session_partition(
     prisma_client: PrismaClient,
     transactions: tuple[AutoRouterTurnTransaction, ...],
     n_retry_times: int,
     statement: str,
-) -> tuple[AutoRouterTurnTransaction, ...]:
+) -> _StoppedPartition | None:
     for position, transaction in enumerate(transactions):
         try:
             await _upsert_turn_with_retry(prisma_client, transaction, n_retry_times, statement)
-        except Exception as flush_err:  # noqa: BLE001  # stop dependent turns without retrying an ambiguous write
-            verbose_proxy_logger.error(
-                "Spend tracking - auto-router session rollup flush failed for router %s; "
-                "%s of %s turn writes stopped in this partition: %s",
-                transaction.router_name,
-                len(transactions) - position,
-                len(transactions),
-                flush_err,
-            )
-            return transactions[position:]
-    return ()
+        except Exception as flush_err:  # noqa: BLE001  # the caller keeps or drops the stopped turns
+            return _StoppedPartition(transactions[position:], flush_err)
+    return None
+
+
+def _log_dropped_turns(stopped: _StoppedPartition, partition_size: int) -> None:
+    verbose_proxy_logger.error(
+        "Spend tracking - auto-router session rollup flush failed for router %s; "
+        "%s of %s turn writes stopped in this partition: %s",
+        stopped.turns[0].router_name,
+        len(stopped.turns),
+        partition_size,
+        stopped.error,
+    )
 
 
 async def _flush_session_partition(
     prisma_client: PrismaClient,
     transactions: tuple[AutoRouterTurnTransaction, ...],
     n_retry_times: int,
-) -> None:
-    failed_suffix: Final = await _drain_session_partition(
+) -> UnwrittenTurns | None:
+    stopped: Final = await _drain_session_partition(
         prisma_client, transactions, n_retry_times, UPSERT_AUTOROUTER_SESSION_SQL
     )
-    if not failed_suffix or not failed_suffix[0].api_key:
-        return
-    failed_user: Final = failed_suffix[0].user_id
+    if stopped is None:
+        return None
+    if db_write_never_sent(stopped.error):
+        return UnwrittenTurns(stopped.turns, stopped.error)
+    _log_dropped_turns(stopped, len(transactions))
+    if not stopped.turns[0].api_key:
+        return None
+    failed_user: Final = stopped.turns[0].user_id
     other_users: Final = sorted(
         (
             transaction
-            for transaction in failed_suffix[1:]
+            for transaction in stopped.turns[1:]
             if transaction.user_id and transaction.user_id != failed_user
         ),
         key=lambda transaction: transaction.user_id,
     )
-    for _, user_turns in groupby(other_users, key=lambda transaction: transaction.user_id):
-        await _drain_session_partition(
-            prisma_client, tuple(user_turns), n_retry_times, UPSERT_AUTOROUTER_USER_SESSION_SQL
-        )
+    user_partitions: Final = tuple(
+        tuple(user_turns) for _, user_turns in groupby(other_users, key=lambda transaction: transaction.user_id)
+    )
+    for user_partition in user_partitions:
+        if (
+            projection_stopped := await _drain_session_partition(
+                prisma_client, user_partition, n_retry_times, UPSERT_AUTOROUTER_USER_SESSION_SQL
+            )
+        ) is not None:
+            _log_dropped_turns(projection_stopped, len(user_partition))
+    return None
 
 
 async def flush_autorouter_turn_transactions(
     prisma_client: PrismaClient,
     transactions: Sequence[AutoRouterTurnTransaction],
     n_retry_times: int = 3,
-) -> None:
+) -> UnwrittenTurns | None:
     """Drain a queue batch into the rollup, one upsert per turn.
 
     Statements run sequentially in per-session event order: a turn's classification
     depends on the turns before it, and Postgres rejects one multi-row INSERT touching
     the same key twice. Only ConnectError is retried, per statement, because it proves
-    that statement never reached the database. A failed write stops its key and user
-    histories for this batch. Other users sharing that key can still advance their
-    independent user histories, with the key projection disabled and the real key
-    identity preserved. The failed turn is never replayed. Callers must not add their
-    own retry around this function.
+    that statement never reached the database. When a failure proves the database could
+    not take the write at all, the flush stops and returns that turn, the rest of its
+    session and every session not yet attempted, so the caller can queue them again;
+    turns already written are never returned. Any other failed write stops its key and
+    user histories for this batch and is never replayed. Other users sharing that key can
+    still advance their independent user histories, with the key projection disabled and
+    the real key identity preserved. Callers must not add their own retry around this
+    function.
     """
     if not transactions:
-        return
+        return None
     ordered: Final = sorted(
         transactions,
         key=lambda transaction: (*_session_partition(transaction), transaction.turn_at),
     )
-    for _, session_group in groupby(
-        ordered,
-        key=_session_partition,
-    ):
-        await _flush_session_partition(prisma_client, tuple(session_group), n_retry_times)
+    partitions: Final = tuple(tuple(group) for _, group in groupby(ordered, key=_session_partition))
+    for position, partition in enumerate(partitions):
+        if (unwritten := await _flush_session_partition(prisma_client, partition, n_retry_times)) is not None:
+            return UnwrittenTurns(
+                (*unwritten.turns, *chain.from_iterable(partitions[position + 1 :])),
+                unwritten.error,
+            )
+    return None

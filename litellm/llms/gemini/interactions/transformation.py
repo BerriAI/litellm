@@ -9,14 +9,21 @@ Per OpenAPI spec (https://ai.google.dev/static/api/interactions.openapi.json):
 Requests use Api-Revision 2026-05-20 (`steps` schema).
 """
 
+from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Any, Final, Protocol, TypeAlias
 
 import httpx
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.core_helpers import process_response_headers
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
+    drops_unsupported_params,
+    has_attributes,
+    process_response_headers,
+    without,
+)
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.base_llm.interactions.transformation import BaseInteractionsAPIConfig
 from litellm.llms.gemini.common_utils import GeminiError, GeminiModelInfo
 from litellm.types.interactions import (
@@ -39,6 +46,14 @@ else:
 
 
 _JsonObject: TypeAlias = dict[str, object]
+
+
+def _has_agent_config_type(agent_config: object) -> bool:
+    match agent_config:
+        case {"type": str()}:
+            return True
+        case _:
+            return False
 
 
 class _InteractionPayload(TypedDict, total=False):
@@ -75,6 +90,18 @@ class _CancelPayloadSource(Protocol):
     def json(self) -> _CancelPayload: ...
 
 
+class _ImageConfigItems(Protocol):
+    def keys(self) -> Iterable[str]: ...
+
+    def __getitem__(self, key: str, /) -> object: ...
+
+
+def _image_config_items(image_config: object) -> _ImageConfigItems:
+    if has_attributes(image_config, _ImageConfigItems, "keys"):
+        return image_config
+    raise TypeError(f"'{type(image_config).__name__}' object is not a mapping")
+
+
 def _interaction_body(response: _InteractionPayloadSource) -> _InteractionPayload:
     """Decode the body of an Interactions API interaction response."""
     return response.json()
@@ -105,6 +132,7 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
         return [
             "model",
             "agent",
+            "agent_config",
             "input",
             "tools",
             "system_instruction",
@@ -117,14 +145,15 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
             "response_format",
             "response_mime_type",
             "previous_interaction_id",
+            "continuation_token",
         ]
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, str],
         model: str,
         litellm_params: GenericLiteLLMParams | None,
-    ) -> dict:
+    ) -> dict[str, str]:
         """Google AI Studio uses x-goog-api-key header for authentication."""
         headers = headers or {}
         headers["Content-Type"] = "application/json"
@@ -153,10 +182,8 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
         if not api_key:
             raise ValueError("Google API key is required. Set GOOGLE_API_KEY or GEMINI_API_KEY environment variable.")
 
-        if stream:
-            return f"{api_base}/{self.api_version}/interactions?alt=sse"
-
-        return f"{api_base}/{self.api_version}/interactions"
+        collection_url: Final = join_api_base(api_base, f"{self.api_version}/interactions")
+        return f"{collection_url}?alt=sse" if stream else collection_url
 
     def transform_request(
         self,
@@ -165,8 +192,8 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
         input: InteractionInput | None,
         optional_params: InteractionsAPIOptionalRequestParams,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> dict:
+        headers: Mapping[str, str],
+    ) -> dict[str, object]:
         """
         Build request body per OpenAPI spec.
 
@@ -177,11 +204,10 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
         """
         request_body: Final[dict[str, object]] = {}
 
-        # Model or Agent (one required)
-        if model:
-            request_body["model"] = GeminiModelInfo.get_base_model(model) or model
-        elif agent:
+        if agent:
             request_body["agent"] = agent
+        elif model:
+            request_body["model"] = GeminiModelInfo.get_base_model(model) or model
         else:
             raise ValueError("Either 'model' or 'agent' must be provided")
 
@@ -190,6 +216,7 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
             request_body["input"] = input
 
         optional_keys: Final = [
+            "agent_config",
             "tools",
             "system_instruction",
             "stream",
@@ -198,9 +225,16 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
             "environment",
             "response_modalities",
             "previous_interaction_id",
+            "continuation_token",
         ]
+        dropped_keys: Final[frozenset[str]] = (
+            frozenset({"agent_config"})
+            if drops_unsupported_params(litellm_params.get("drop_params"))
+            and (not agent or not _has_agent_config_type(optional_params.get("agent_config")))
+            else frozenset()
+        )
         for key in optional_keys:
-            if optional_params.get(key) is not None:
+            if key not in dropped_keys and optional_params.get(key) is not None:
                 request_body[key] = optional_params[key]
 
         # response_mime_type is removed — fold it into response_format.
@@ -225,21 +259,20 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
             request_body["response_format"] = response_format
 
         # image_config moves out of generation_config into response_format.
-        generation_config: dict[str, Any] | None = optional_params.get("generation_config")
+        generation_config: object = optional_params.get("generation_config")
         if generation_config is not None:
             image_config = None
-            if isinstance(generation_config, dict):
-                generation_config = dict(generation_config)  # avoid mutating the caller's dict
-                image_config = generation_config.pop("image_config", None)
-                if not generation_config:
-                    generation_config = None
+            generation_config_mapping: Final = as_str_mapping(generation_config)
+            if isinstance(generation_config_mapping, dict):
+                image_config = generation_config_mapping.get("image_config")
+                generation_config = without(generation_config_mapping, "image_config") or None
 
             if generation_config is not None:
                 request_body["generation_config"] = generation_config
 
             if image_config is not None:
                 # Move image_config to response_format with type=image.
-                image_rf: Final[_JsonObject] = {"type": "image", **image_config}
+                image_rf: Final[_JsonObject] = {"type": "image", **_image_config_items(image_config)}
                 existing_rf: Final = request_body.get("response_format")
                 if existing_rf is None:
                     request_body["response_format"] = image_rf
@@ -274,20 +307,20 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
         verbose_logger.debug("Google AI Interactions response: %s", raw_json)
 
         response: Final = InteractionsAPIResponse(**raw_json)
-        response._hidden_params["headers"] = dict(raw_response.headers)
-        response._hidden_params["additional_headers"] = process_response_headers(dict(raw_response.headers))
+        response.hidden_params["headers"] = dict(raw_response.headers)
+        response.hidden_params["additional_headers"] = process_response_headers(dict(raw_response.headers))
 
         return response
 
     def transform_streaming_response(
         self,
         model: str | None,
-        parsed_chunk: dict,
+        parsed_chunk: Mapping[str, object],
         logging_obj: LiteLLMLoggingObj,
     ) -> InteractionsAPIStreamingResponse:
         """Parse streaming chunk."""
         verbose_logger.debug("Google AI Interactions streaming chunk: %s", parsed_chunk)
-        return InteractionsAPIStreamingResponse(**parsed_chunk)
+        return InteractionsAPIStreamingResponse.model_validate(parsed_chunk)
 
     # GET / DELETE / CANCEL - just build URLs, responses match spec directly
 
@@ -296,15 +329,15 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
         interaction_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[str, dict]:
+        headers: Mapping[str, str],
+    ) -> tuple[str, dict[str, object]]:
         """GET /{api_version}/interactions/{interaction_id}"""
         resolved_api_base: Final = GeminiModelInfo.get_api_base(api_base)
         if not GeminiModelInfo.get_api_key(litellm_params.api_key):
             raise ValueError("Google API key is required")
         encoded_interaction_id: Final = encode_url_path_segment(interaction_id, field_name="interaction_id")
         return (
-            f"{resolved_api_base}/{self.api_version}/interactions/{encoded_interaction_id}",
+            join_api_base(resolved_api_base, f"{self.api_version}/interactions/{encoded_interaction_id}"),
             {},
         )
 
@@ -328,7 +361,7 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
                 headers=dict(raw_response.headers),
             )
         response: Final = InteractionsAPIResponse(**raw_json)
-        response._hidden_params["headers"] = dict(raw_response.headers)
+        response.hidden_params["headers"] = dict(raw_response.headers)
         return response
 
     def transform_delete_interaction_request(
@@ -336,15 +369,15 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
         interaction_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[str, dict]:
+        headers: Mapping[str, str],
+    ) -> tuple[str, dict[str, object]]:
         """DELETE /{api_version}/interactions/{interaction_id}"""
         resolved_api_base: Final = GeminiModelInfo.get_api_base(api_base)
         if not GeminiModelInfo.get_api_key(litellm_params.api_key):
             raise ValueError("Google API key is required")
         encoded_interaction_id: Final = encode_url_path_segment(interaction_id, field_name="interaction_id")
         return (
-            f"{resolved_api_base}/{self.api_version}/interactions/{encoded_interaction_id}",
+            join_api_base(resolved_api_base, f"{self.api_version}/interactions/{encoded_interaction_id}"),
             {},
         )
 
@@ -367,15 +400,15 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
         interaction_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[str, dict]:
-        """POST /{api_version}/interactions/{interaction_id}:cancel (if supported)"""
+        headers: Mapping[str, str],
+    ) -> tuple[str, dict[str, object]]:
+        """POST /{api_version}/interactions/{interaction_id}/cancel"""
         resolved_api_base: Final = GeminiModelInfo.get_api_base(api_base)
         if not GeminiModelInfo.get_api_key(litellm_params.api_key):
             raise ValueError("Google API key is required")
         encoded_interaction_id: Final = encode_url_path_segment(interaction_id, field_name="interaction_id")
         return (
-            f"{resolved_api_base}/{self.api_version}/interactions/{encoded_interaction_id}:cancel",
+            join_api_base(resolved_api_base, f"{self.api_version}/interactions/{encoded_interaction_id}/cancel"),
             {},
         )
 

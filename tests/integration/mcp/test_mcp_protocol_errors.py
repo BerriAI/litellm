@@ -1,17 +1,34 @@
 import json
 import queue
 import uuid
+from collections.abc import Callable, Mapping
 from typing import Final
 
 import pytest
-
 from integration._support.client import Gateway
-from integration._support.mcp import McpPeer, call_tool, register_mcp, tool_names
+from integration._support.mcp import McpCaller, McpPeer, call_tool, register_mcp, tool_names
 from integration._support.wire import Reply, Request, wire_server
 
+pytestmark: Final = pytest.mark.shares_worker_state
 
-@pytest.mark.covers("other.mcp.errors.protocol_and_malformed_results_cannot_be_empty_success")
-def test_jsonrpc_error_and_malformed_tool_result_remain_errors(gateway: Gateway) -> None:
+
+URL_ELICITATION_ERROR: Final = {
+    "code": -32042,
+    "message": "This request requires more information.",
+    "data": {
+        "elicitations": [
+            {
+                "mode": "url",
+                "elicitationId": "el-1",
+                "url": "https://consent.example.invalid/oauth2/authorize?request_uri=FAKE",
+                "message": "Authorize to continue.",
+            }
+        ]
+    },
+}
+
+
+def _protocol_peer(fail_error: Mapping[str, object]) -> Callable[[Request], Reply]:
     def provider(request: Request) -> Reply:
         if request.method != "POST":
             return Reply(status=405)
@@ -50,9 +67,7 @@ def test_jsonrpc_error_and_malformed_tool_result_remain_errors(gateway: Gateway)
         assert method == "tools/call"
         name: Final = body["params"]["name"]
         if name == "fail":
-            return Reply(
-                body=json.dumps({**base, "error": {"code": -32042, "message": "synthetic JSON-RPC error"}}).encode()
-            )
+            return Reply(body=json.dumps({**base, "error": fail_error}).encode())
         result: Final = (
             {"content": "synthetic malformed content"}
             if name == "multiply"
@@ -60,6 +75,12 @@ def test_jsonrpc_error_and_malformed_tool_result_remain_errors(gateway: Gateway)
         )
         return Reply(body=json.dumps({**base, "result": result}).encode())
 
+    return provider
+
+
+@pytest.mark.covers("other.mcp.errors.protocol_and_malformed_results_cannot_be_empty_success")
+def test_jsonrpc_error_and_malformed_tool_result_remain_errors(gateway: Gateway) -> None:
+    provider: Final = _protocol_peer({"code": -32042, "message": "synthetic JSON-RPC error"})
     with wire_server(provider) as wire, gateway.scenario() as scenario:
         identity: Final = register_mcp(
             scenario, McpPeer(wire.url + "/mcp", queue.Queue()), "integration" + uuid.uuid4().hex
@@ -86,6 +107,20 @@ def test_jsonrpc_error_and_malformed_tool_result_remain_errors(gateway: Gateway)
             assert control.json()["content"][0]["text"] == "8"
 
 
+def test_upstream_url_elicitation_required_reaches_mcp_client_as_jsonrpc_error(gateway: Gateway) -> None:
+    with wire_server(_protocol_peer(URL_ELICITATION_ERROR)) as upstream, gateway.scenario() as scenario:
+        alias: Final = "elicit" + uuid.uuid4().hex[:8]
+        identity: Final = register_mcp(scenario, McpPeer(upstream.url + "/mcp", queue.Queue()), alias)
+        key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
+        caller: Final = McpCaller(gateway, key, "mcp")
+        assert caller.initialize().ok
+        elicitation: Final = caller.call(f"{alias}-fail", {})
+        assert elicitation.status == 200 and elicitation.text is None and elicitation.error, elicitation.raw
+        assert json.loads(elicitation.error) == URL_ELICITATION_ERROR, elicitation.raw
+        control: Final = caller.call(f"{alias}-add", {"a": 3, "b": 5})
+        assert control.ok and control.text == "8", control.raw
+
+
 @pytest.mark.parametrize("ingress", ("http", "sse"))
 def test_configured_revision_blocks_unadvertised_handshake_and_keeps_allowed_control(
     gateway: Gateway, tmp_path, ingress: str
@@ -96,10 +131,11 @@ def test_configured_revision_blocks_unadvertised_handshake_and_keeps_allowed_con
     import yaml
     from integration._support.mcp import mcp_peer
     from integration._support.process import owned_proxy
-    from litellm.experimental_mcp_client.client import MCPClient
-    from litellm.types.mcp import MCPTransport
     from mcp import MCPError
     from mcp.types import CallToolRequestParams
+
+    from litellm.mcp_client.client import MCPClient
+    from litellm.types.mcp import MCPTransport
 
     with mcp_peer() as upstream, gateway.scenario() as scenario:
         alias: Final = "restricted" + uuid.uuid4().hex[:8]
@@ -123,3 +159,21 @@ def test_configured_revision_blocks_unadvertised_handshake_and_keeps_allowed_con
                 assert result.is_error is False and result.content[0].text == "7"
 
             asyncio.run(exercise())
+
+
+def test_virtual_tool_call_url_elicitation_is_a_rest_error_result_and_an_mcp_jsonrpc_error(gateway: Gateway) -> None:
+    with wire_server(_protocol_peer(URL_ELICITATION_ERROR)) as upstream, gateway.scenario() as scenario:
+        alias: Final = "elicit" + uuid.uuid4().hex[:8]
+        identity: Final = register_mcp(scenario, McpPeer(upstream.url + "/mcp", queue.Queue()), alias)
+        key: Final = scenario.key(object_permission={"mcp_servers": [identity], "mcp_tool_search_enabled": True})
+        caller: Final = McpCaller(gateway, key, "rest")
+        elicitation: Final = caller.call("mcp_tool_call", {"tool_name": f"{alias}-fail", "arguments": {}})
+        assert elicitation.status == 200, elicitation.raw
+        assert elicitation.error == f"MCPError: {URL_ELICITATION_ERROR['message']}", elicitation.raw
+        control: Final = caller.call("mcp_tool_call", {"tool_name": f"{alias}-add", "arguments": {"a": 3, "b": 5}})
+        assert control.ok and control.text == "8", control.raw
+        mcp_caller: Final = McpCaller(gateway, key, "mcp")
+        assert mcp_caller.initialize().ok
+        relayed: Final = mcp_caller.call("mcp_tool_call", {"tool_name": f"{alias}-fail", "arguments": {}})
+        assert relayed.status == 200 and relayed.text is None and relayed.error, relayed.raw
+        assert json.loads(relayed.error) == URL_ELICITATION_ERROR, relayed.raw

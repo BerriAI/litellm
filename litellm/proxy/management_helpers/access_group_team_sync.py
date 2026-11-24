@@ -18,27 +18,46 @@ import asyncio
 from collections.abc import Mapping, Sequence
 from typing import Final, Protocol
 
-from pydantic import BaseModel, TypeAdapter
+from pydantic import TypeAdapter
 
-from litellm.proxy.auth.auth_checks import _delete_cache_access_object
+from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module exports
+    _delete_cache_access_object,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    delete_cache_access_object,
+)
 from litellm.proxy.db.db_span import db_span
+from litellm.types.llms.base import LiteLLMBaseModel
 
-# hashtext collisions only cost two unrelated teams a little serialization, and the
-# lock is never taken by the access-group endpoints as a SELECT ... FOR UPDATE row lock,
-# so it cannot join their access-group-then-team lock order to form a cycle. team_endpoints
-# reuses this exact statement to serialize /team/member_add and /team/delete against each
-# other and against this mirror, rather than defining a second, divergent lock on the same key.
+# Team-side writers take this advisory lock before reconciling. Both assignment routes
+# lock team rows before group rows, in ID order within each set.
 TEAM_ADVISORY_LOCK_SQL: Final = "SELECT pg_advisory_xact_lock(hashtext($1)) IS NULL AS locked"
 
-_READ_TEAM_SQL: Final = 'SELECT access_group_ids FROM "LiteLLM_TeamTable" WHERE team_id = $1'
+# Every transaction that writes several user rows locks them through this first, so all of
+# them take user row locks in one shared order and none can wait on another in a cycle.
+USER_ROWS_LOCK_SQL: Final = (
+    'SELECT user_id FROM "LiteLLM_UserTable" WHERE user_id = ANY($1::text[]) ORDER BY user_id COLLATE "C" FOR UPDATE'
+)
+
+DETACH_TEAM_FROM_USERS_SQL: Final = (
+    "UPDATE \"LiteLLM_UserTable\" SET teams = array_remove(teams, $1), updated_at = (NOW() AT TIME ZONE 'UTC')"
+    " WHERE user_id = ANY($2::text[])"
+)
+
+_READ_TEAM_SQL: Final = 'SELECT access_group_ids FROM "LiteLLM_TeamTable" WHERE team_id = $1 FOR UPDATE'
 
 # The groups the team is on either side of the reconcile, so the cache step is driven by
 # desired state rather than by which rows this attempt happened to change. A retry after a
 # failed invalidation finds the same set even though its statements are already no-ops.
 _AFFECTED_SQL: Final = """
-SELECT access_group_id FROM "LiteLLM_AccessGroupTable"
+SELECT access_group_id, ($1 = ANY(COALESCE(assigned_team_ids, ARRAY[]::TEXT[]))) IS TRUE AS attached
+FROM "LiteLLM_AccessGroupTable"
 WHERE access_group_id = ANY($2::TEXT[])
    OR $1 = ANY(COALESCE(assigned_team_ids, ARRAY[]::TEXT[]))
+"""
+
+_LOCK_GROUPS_SQL: Final = """
+SELECT access_group_id FROM "LiteLLM_AccessGroupTable"
+WHERE access_group_id = ANY($1::TEXT[])
+ORDER BY access_group_id COLLATE "C" FOR UPDATE
 """
 
 _ATTACH_SQL: Final = """
@@ -53,16 +72,17 @@ _DETACH_SQL: Final = """
 UPDATE "LiteLLM_AccessGroupTable"
 SET assigned_team_ids = array_remove(assigned_team_ids, $1)
 WHERE $1 = ANY(COALESCE(assigned_team_ids, ARRAY[]::TEXT[]))
-  AND NOT (access_group_id = ANY($2::TEXT[]))
+  AND access_group_id = ANY($2::TEXT[])
 RETURNING access_group_id
 """
 
 
-class _AffectedGroup(BaseModel):
+class _AffectedGroup(LiteLLMBaseModel):
     access_group_id: str
+    attached: bool
 
 
-class _TeamGroups(BaseModel):
+class _TeamGroups(LiteLLMBaseModel):
     access_group_ids: tuple[str, ...] | None = None
 
 
@@ -98,7 +118,7 @@ async def invalidate_access_group_cache(access_group_id: str) -> None:
     """
     from litellm.proxy.proxy_server import proxy_logging_obj, user_api_key_cache
 
-    await _delete_cache_access_object(
+    await delete_cache_access_object(
         access_group_id=access_group_id,
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
@@ -145,8 +165,15 @@ async def reconcile_team_access_group_membership(tx: AccessGroupSyncTx, team_id:
     team_rows: Final = _TeamRows.validate_python(await tx.query_raw(_READ_TEAM_SQL, team_id))
     desired: Final = (team_rows[0].access_group_ids or ()) if team_rows else ()
     affected: Final = _AffectedGroups.validate_python(await tx.query_raw(_AFFECTED_SQL, team_id, desired))
-    await tx.query_raw(_ATTACH_SQL, team_id, desired)
-    await tx.query_raw(_DETACH_SQL, team_id, desired)
+    wanted: Final = frozenset(desired)
+    additions: Final = tuple(group.access_group_id for group in affected if not group.attached)
+    removals: Final = tuple(group.access_group_id for group in affected if group.access_group_id not in wanted)
+    if additions or removals:
+        await tx.query_raw(_LOCK_GROUPS_SQL, (*additions, *removals))
+    if additions:
+        await tx.query_raw(_ATTACH_SQL, team_id, additions)
+    if removals:
+        await tx.query_raw(_DETACH_SQL, team_id, removals)
     return tuple(group.access_group_id for group in affected)
 
 

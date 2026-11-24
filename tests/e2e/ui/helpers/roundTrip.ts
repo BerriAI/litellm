@@ -7,18 +7,18 @@ import { masterKey } from "./traffic";
  * `action` is a callback so the listener is armed before the click; awaiting the
  * click first lets the request go by, and the test then hangs until timeout.
  */
-export async function captureRequestBody(
+export async function captureRequestBody<T = Record<string, any>>(
   page: Page,
   match: { method: string; urlIncludes: string },
   action: () => Promise<void>,
-): Promise<Record<string, any>> {
+): Promise<T> {
   const pending = page.waitForRequest(
     (req) =>
       req.method() === match.method && req.url().includes(match.urlIncludes),
   );
   await action();
   const request = await pending;
-  return JSON.parse(request.postData() ?? "{}") as Record<string, any>;
+  return JSON.parse(request.postData() ?? "{}") as T;
 }
 
 /** Reads an endpoint as the master key, so a failure is bad data and not an expired UI token. */

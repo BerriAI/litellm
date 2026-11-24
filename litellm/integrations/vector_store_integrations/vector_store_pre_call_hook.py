@@ -6,12 +6,12 @@ It searches the vector store for relevant context, runs the request's pre-call g
 over that context, and appends it to the messages.
 """
 
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import chain
 from typing import TYPE_CHECKING, Any, Final, Protocol, cast, get_args
 
-from pydantic import TypeAdapter, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import assert_never
 
 import litellm
@@ -35,6 +35,7 @@ from litellm.types.vector_stores import (
     VectorStoreSearchResponse,
     VectorStoreSearchResult,
 )
+from litellm.vector_stores.search_query import store_search_params
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -44,10 +45,12 @@ else:
     LiteLLMLoggingObj = Any
 
 SEARCH_FAILURES_FIELD: Final = "vector_store_search_failures"
+_PROVIDER_FIELDS_ATTRIBUTE: Final = "provider_specific_fields"
 _DEFAULT_FAILURE_MODE: Final[VectorStoreSearchFailureMode] = "annotate"
-_FAILURE_MODE_ADAPTER: Final = TypeAdapter(VectorStoreSearchFailureMode)
+_FAILURE_MODE_ADAPTER: Final[TypeAdapter[VectorStoreSearchFailureMode]] = TypeAdapter(VectorStoreSearchFailureMode)
 _OBJECT_ADAPTER: Final = TypeAdapter(object)
 _STR_KEYED_ADAPTER: Final = TypeAdapter(dict[str, object])
+_ITERABLE_ADAPTER: Final = TypeAdapter(Iterable[object], config=ConfigDict(hide_input_in_errors=True))
 _GUARDRAIL_KEYS_THE_PROXY_MERGES_INTO_METADATA: Final = frozenset(
     {"guardrails", "guardrail_config", "policies", "include_guardrail_response"}
 )
@@ -130,18 +133,18 @@ class VectorStorePreCallHook(CustomLogger):
         self,
         model: str,
         messages: list[AllMessageValues],
-        non_default_params: dict,
+        non_default_params: dict[str, object],
         prompt_id: str | None,
-        prompt_variables: dict | None,
+        prompt_variables: dict[str, object] | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
         litellm_logging_obj: LiteLLMLoggingObj,
         prompt_spec: PromptSpec | None = None,
-        tools: list[dict] | None = None,
+        tools: list[dict[str, object]] | None = None,
         prompt_label: str | None = None,
         prompt_version: int | None = None,
         ignore_prompt_manager_model: bool | None = False,
         ignore_prompt_manager_optional_params: bool | None = False,
-    ) -> tuple[str, list[AllMessageValues], dict]:
+    ) -> tuple[str, list[AllMessageValues], dict[str, object]]:
         """
         Perform vector store search and append results as context to messages.
 
@@ -242,8 +245,8 @@ class VectorStorePreCallHook(CustomLogger):
     async def _augment_messages(
         self,
         messages: Sequence[AllMessageValues],
-        non_default_params: dict,
-        tools: list[dict] | None,
+        non_default_params: dict[str, object],
+        tools: list[dict[str, object]] | None,
         litellm_logging_obj: LiteLLMLoggingObj,
     ) -> VectorStoreAugmentation | None:
         if litellm.vector_store_registry is None:
@@ -325,7 +328,7 @@ class VectorStorePreCallHook(CustomLogger):
                     "query": query,
                     "custom_llm_provider": custom_llm_provider,
                     "metadata": request_metadata,
-                    **litellm_params_for_vector_store,
+                    **store_search_params(litellm_params_for_vector_store),
                 },
             )
         except Exception as search_error:
@@ -475,7 +478,7 @@ class VectorStorePreCallHook(CustomLogger):
     async def async_post_call_streaming_deployment_hook(
         self,
         request_data: dict,
-        response_chunk: Any,
+        response_chunk: object,
         call_type: CallTypes | None,
     ) -> object | None:
         """
@@ -496,15 +499,17 @@ class VectorStorePreCallHook(CustomLogger):
                 return response_chunk
 
             # Add search results to streaming chunk
-            if hasattr(response_chunk, "choices") and response_chunk.choices:
-                for choice in response_chunk.choices:
-                    if hasattr(choice, "delta") and choice.delta:
-                        provider_fields = getattr(choice.delta, "provider_specific_fields", None) or {}
+            choices: Final[object] = getattr(response_chunk, "choices", None)
+            if choices:
+                for choice in _ITERABLE_ADAPTER.validate_python(choices):
+                    delta: object = getattr(choice, "delta", None)
+                    if delta:
+                        provider_fields = getattr(delta, _PROVIDER_FIELDS_ATTRIBUTE, None) or {}
                         if search_results:
                             provider_fields["search_results"] = search_results
                         if search_failures:
                             provider_fields[SEARCH_FAILURES_FIELD] = search_failures
-                        choice.delta.provider_specific_fields = provider_fields
+                        setattr(delta, _PROVIDER_FIELDS_ATTRIBUTE, provider_fields)
 
             # Return modified chunk
             return response_chunk

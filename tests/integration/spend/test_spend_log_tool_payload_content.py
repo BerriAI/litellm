@@ -15,12 +15,14 @@ import openai
 import pytest
 from integration._support.client import Gateway, eventually, object_value, string_value
 from integration._support.database import read_rows
-from integration._support.process import owned_proxy
+from integration._support.process import graceful_stop_seconds, owned_proxy
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue, TypeAdapter
 
 from litellm.constants import LITELLM_TRUNCATED_PAYLOAD_FIELD, LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE
 from litellm.responses.utils import ResponsesAPIRequestUtils
+
+pytestmark: Final = pytest.mark.shares_worker_state
 
 JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 REDACTED: Final = "REDACTED_BY_LITELM"
@@ -32,6 +34,7 @@ def _prompt_storage_config(
     tmp_path: Path,
     *,
     store_prompts: bool = True,
+    redact_tokens: bool = False,
     local_cache: bool = False,
     model_list: tuple[dict[str, JsonValue], ...] = (),
 ) -> Path:
@@ -47,6 +50,7 @@ def _prompt_storage_config(
                     "disable_responses_id_security": True,
                     "store_model_in_db": True,
                     "store_prompts_in_spend_logs": store_prompts,
+                    "redact_tokens_in_spend_logs": redact_tokens,
                     "proxy_batch_write_at": 1,
                     "proxy_batch_polling_interval": 1,
                 },
@@ -91,7 +95,7 @@ def _sse_events(body: str) -> tuple[dict[str, JsonValue], ...]:
 def _spend_request_id(response_id: str, *, responses_api: bool = False) -> str:
     if not responses_api:
         return response_id
-    decoded: Final = ResponsesAPIRequestUtils._decode_responses_api_response_id(response_id)
+    decoded: Final = ResponsesAPIRequestUtils.decode_responses_api_response_id(response_id)
     request_id: Final = decoded.get("response_id")
     return string_value(request_id) if isinstance(request_id, str) else response_id
 
@@ -325,7 +329,7 @@ def test_stored_chat_response_keeps_logprob_tokens(gateway: Gateway, tmp_path: P
 
     with (
         wire_server(_answering_model_listing(respond)) as wire,
-        owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path), workers=2) as isolated,
+        owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path)) as isolated,
         isolated.scenario() as scenario,
     ):
         model: Final = scenario.model(
@@ -418,7 +422,7 @@ def test_stored_messages_keep_tool_use_input(gateway: Gateway, tmp_path: Path) -
 
     with (
         wire_server(_answering_model_listing(respond)) as wire,
-        owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path), workers=2) as isolated,
+        owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path)) as isolated,
         isolated.scenario() as scenario,
     ):
         model: Final = scenario.model(
@@ -477,6 +481,109 @@ def test_stored_messages_keep_tool_use_input(gateway: Gateway, tmp_path: Path) -
         observed: Final = _provider_calls(wire.drain())
         assert len(observed) == 1
         assert _json_object(observed[0].body)["messages"][1]["content"][0]["input"] == tool_input
+
+
+def test_stored_messages_mask_a_github_token_inside_tool_output(gateway: Gateway, tmp_path: Path) -> None:
+    github_token: Final = f"ghp_{uuid4().hex}Ab12"
+    tool_output: Final = json.dumps(
+        {"stdout": f"Cloning into 'r'...\nremote: https://x-access-token:{github_token}@github.com/o/r.git\ndone"}
+    )
+    clone_command: Final = f"git push https://{github_token}@github.com/o/r HEAD"
+    response_body: Final = {
+        "id": f"msg-github-token-{uuid4()}",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-4-5-20250929",
+        "content": [{"type": "tool_use", "id": "toolu_02", "name": "bash", "input": {"cmd": clone_command}}],
+        "stop_reason": "tool_use",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 8, "output_tokens": 4},
+    }
+
+    def respond(request: Request) -> Reply:
+        assert request.method == "POST"
+        return Reply(body=json.dumps(response_body).encode())
+
+    with (
+        wire_server(_answering_model_listing(respond)) as wire,
+        owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path, redact_tokens=True)) as isolated,
+        isolated.scenario() as scenario,
+    ):
+        model: Final = scenario.model(model=ANTHROPIC_MODEL, api_base=wire.url, api_key="synthetic-anthropic-key")
+        response: Final = isolated.request(
+            "POST",
+            "/v1/messages",
+            {
+                "model": model,
+                "max_tokens": 64,
+                "messages": [
+                    {"role": "user", "content": "Clone the repo."},
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {"type": "tool_use", "id": "toolu_01", "name": "bash", "input": {"cmd": "git clone"}}
+                        ],
+                    },
+                    {
+                        "role": "user",
+                        "content": [{"type": "tool_result", "tool_use_id": "toolu_01", "content": tool_output}],
+                    },
+                ],
+            },
+        )
+        assert response.status_code == 200, response.text
+        caller_response: Final = _json_object(response.content)
+        assert _objects(caller_response["content"])[0]["input"] == {"cmd": clone_command}
+        observed: Final = _provider_calls(wire.drain())
+        assert len(observed) == 1
+        assert _json_object(observed[0].body)["messages"][2]["content"][0]["content"] == tool_output
+        row: Final = _stored_row(string_value(caller_response["id"]))
+        stored_request: Final = object_value(row["proxy_server_request"])
+        stored_response: Final = object_value(row["response"])
+        assert github_token not in json.dumps(row)
+        assert json.loads(string_value(stored_request["messages"][2]["content"][0]["content"])) == {
+            "stdout": f"Cloning into 'r'...\nremote: https://x-access-token:{REDACTED}@github.com/o/r.git\ndone"
+        }
+        stored_arguments: Final = stored_response["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"]
+        assert json.loads(string_value(stored_arguments)) == {"cmd": f"git push https://{REDACTED}@github.com/o/r HEAD"}
+
+
+def test_malformed_jwt_text_preserves_nested_key_redaction(gateway: Gateway, tmp_path: Path) -> None:
+    access_key: Final = "AKIA" + "A" * 16
+    content: Final = (f"eyJaaaaaaaaaa-{access_key}-" * 20) + ".body."
+    redacted: Final = ((f"eyJaaaaaaaaaa-{REDACTED}-") * 20) + ".body."
+    response_id: Final = f"chatcmpl-jwt-{uuid4()}"
+
+    def respond(request: Request) -> Reply:
+        assert request.method == "POST"
+        assert _json_object(request.body)["messages"] == [{"role": "user", "content": content}]
+        return Reply(body=json.dumps(_chat_completion(response_id, content)).encode())
+
+    with (
+        wire_server(_answering_model_listing(respond)) as wire,
+        owned_proxy(
+            gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path, redact_tokens=True), workers=2
+        ) as isolated,
+        isolated.scenario() as scenario,
+    ):
+        model: Final = scenario.model(
+            model="openai/synthetic-redaction-model",
+            api_base=wire.url,
+            api_key="synthetic-openai-key",
+            input_cost_per_token=0.001,
+            output_cost_per_token=0.002,
+        )
+        response: Final = isolated.request(
+            "POST", "/v1/chat/completions", {"model": model, "messages": [{"role": "user", "content": content}]}
+        )
+        assert response.status_code == 200, response.text
+        caller_choice: Final = _objects(_json_object(response.content)["choices"])[0]
+        assert object_value(caller_choice["message"])["content"] == content
+        assert len(_provider_calls(wire.drain())) == 1
+        row: Final = _stored_row(response_id)
+        assert object_value(row["proxy_server_request"])["messages"] == [{"role": "user", "content": redacted}]
+        stored_choice: Final = _objects(object_value(row["response"])["choices"])[0]
+        assert object_value(stored_choice["message"])["content"] == redacted
 
 
 def test_previous_response_id_replay_sends_real_tool_payloads(gateway: Gateway, tmp_path: Path) -> None:
@@ -650,7 +757,7 @@ def test_chat_sdk_keeps_logprob_tokens(gateway: Gateway, tmp_path: Path, client_
 
     with (
         wire_server(_answering_model_listing(respond)) as wire,
-        owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path), workers=2) as isolated,
+        owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path)) as isolated,
         isolated.scenario() as scenario,
     ):
         model: Final = scenario.model(
@@ -702,7 +809,7 @@ def test_chat_sdk_stream_include_usage_masks_request_fields(gateway: Gateway, tm
 
     with (
         wire_server(_answering_model_listing(respond)) as wire,
-        owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path), workers=2) as isolated,
+        owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path)) as isolated,
         isolated.scenario() as scenario,
     ):
         model: Final = scenario.model(
@@ -719,6 +826,33 @@ def test_chat_sdk_stream_include_usage_masks_request_fields(gateway: Gateway, tm
         observed: Final = _provider_calls(wire.drain())
         post_requests: Final = tuple(request for request in observed if request.method == "POST")
         assert len(post_requests) == 1
+
+
+@pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
+def test_chat_stream_usage_the_proxy_adds_keeps_its_marker_out_of_the_stored_request(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    response_id: Final = f"chatcmpl-proxy-usage-{uuid4()}"
+    with (
+        wire_server(
+            _answering_model_listing(lambda request: _chat_stream(response_id, "sort_key", include_usage=True))
+        ) as wire,
+        owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path)) as isolated,
+        isolated.scenario() as scenario,
+    ):
+        model: Final = scenario.model(model="openai/gpt-4o-mini", api_base=wire.url, api_key="synthetic-openai-key")
+        response: Final = isolated.request(
+            "POST",
+            "/v1/chat/completions",
+            {"model": model, "messages": [{"role": "user", "content": "stream marker"}], "stream": True},
+        )
+        assert response.status_code == 200, response.text
+        assert {string_value(event["id"]) for event in _sse_events(response.text)} == {response_id}, response.text
+        stored_request: Final = object_value(_stored_row(response_id)["proxy_server_request"])
+        assert stored_request["messages"] == [{"role": "user", "content": "stream marker"}], stored_request
+        assert "_litellm_stream_usage_injected" not in stored_request, stored_request
+        observed: Final = _provider_calls(wire.drain())
+        assert [_json_object(request.body)["stream_options"] for request in observed] == [{"include_usage": True}]
 
 
 def test_chat_history_keeps_string_tool_arguments_and_tool_content(gateway: Gateway, tmp_path: Path) -> None:
@@ -747,7 +881,7 @@ def test_chat_history_keeps_string_tool_arguments_and_tool_content(gateway: Gate
 
     with (
         wire_server(_answering_model_listing(respond)) as wire,
-        owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path), workers=2) as isolated,
+        owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path)) as isolated,
         isolated.scenario() as scenario,
     ):
         model: Final = scenario.model(model="openai/gpt-4o-mini", api_base=wire.url, api_key="synthetic-openai-key")
@@ -833,7 +967,7 @@ def test_messages_sdk_keeps_tool_use_input(gateway: Gateway, tmp_path: Path, cli
 
     with (
         wire_server(_answering_model_listing(respond)) as wire,
-        owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path), workers=2) as isolated,
+        owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path)) as isolated,
         isolated.scenario() as scenario,
     ):
         model: Final = scenario.model(model=ANTHROPIC_MODEL, api_base=wire.url, api_key="synthetic-anthropic-key")
@@ -879,7 +1013,7 @@ def test_messages_stream_keeps_tool_use_input(gateway: Gateway, tmp_path: Path) 
 
     with (
         wire_server(_answering_model_listing(respond)) as wire,
-        owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path), workers=2) as isolated,
+        owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path)) as isolated,
         isolated.scenario() as scenario,
     ):
         model: Final = scenario.model(model=ANTHROPIC_MODEL, api_base=wire.url, api_key="synthetic-anthropic-key")
@@ -925,7 +1059,7 @@ def test_responses_stream_keeps_function_call_arguments(gateway: Gateway, tmp_pa
 
     with (
         wire_server(_answering_model_listing(respond)) as wire,
-        owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path), workers=2) as isolated,
+        owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path)) as isolated,
         isolated.scenario() as scenario,
     ):
         model: Final = scenario.model(model=ANTHROPIC_MODEL, api_base=wire.url, api_key="synthetic-anthropic-key")
@@ -1006,7 +1140,7 @@ def test_native_responses_keeps_logprob_tokens(gateway: Gateway, tmp_path: Path)
 
     with (
         wire_server(_answering_model_listing(respond)) as wire,
-        owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path), workers=2) as isolated,
+        owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path)) as isolated,
         isolated.scenario() as scenario,
     ):
         model: Final = scenario.model(model="openai/gpt-4o-mini", api_base=wire.url, api_key="synthetic-openai-key")
@@ -1052,7 +1186,7 @@ def test_malformed_tool_blocks_keep_only_recognized_content(gateway: Gateway, tm
 
     with (
         wire_server(_answering_model_listing(respond)) as wire,
-        owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path), workers=2) as isolated,
+        owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path)) as isolated,
         isolated.scenario() as scenario,
     ):
         model: Final = scenario.model(model="openai/gpt-4o-mini", api_base=wire.url, api_key="synthetic-openai-key")
@@ -1097,7 +1231,7 @@ def test_messages_tool_input_handles_mixed_values_and_truncation(gateway: Gatewa
 
     with (
         wire_server(_answering_model_listing(respond)) as wire,
-        owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path), workers=2) as isolated,
+        owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path)) as isolated,
         isolated.scenario() as scenario,
     ):
         model: Final = scenario.model(model=ANTHROPIC_MODEL, api_base=wire.url, api_key="synthetic-anthropic-key")
@@ -1143,7 +1277,7 @@ def test_messages_without_auth_create_no_spend_row(gateway: Gateway, tmp_path: P
 
     with (
         wire_server(respond) as wire,
-        owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path), workers=2) as isolated,
+        owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path)) as isolated,
     ):
         response: Final = isolated.client.post(
             "/v1/messages",
@@ -1182,7 +1316,7 @@ def test_messages_upstream_error_keeps_tool_input(gateway: Gateway, tmp_path: Pa
 
     with (
         wire_server(_answering_model_listing(respond)) as wire,
-        owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path), workers=2) as isolated,
+        owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path)) as isolated,
         isolated.scenario() as scenario,
     ):
         model: Final = scenario.model(model=ANTHROPIC_MODEL, api_base=wire.url, api_key="synthetic-anthropic-key")
@@ -1235,7 +1369,6 @@ def test_store_prompts_off_keeps_chat_and_messages_representation_equal(gateway:
             tmp_path,
             {},
             config=_prompt_storage_config(tmp_path, store_prompts=False),
-            workers=2,
         ) as isolated,
         isolated.scenario() as scenario,
     ):
@@ -1283,7 +1416,7 @@ def test_identical_messages_requests_have_distinct_spend_rows(gateway: Gateway, 
 
     with (
         wire_server(_answering_model_listing(respond)) as wire,
-        owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path), workers=2) as isolated,
+        owned_proxy(gateway, tmp_path, {}, config=_prompt_storage_config(tmp_path)) as isolated,
         isolated.scenario() as scenario,
     ):
         model: Final = scenario.model(model=ANTHROPIC_MODEL, api_base=wire.url, api_key="synthetic-anthropic-key")

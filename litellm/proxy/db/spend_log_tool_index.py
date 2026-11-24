@@ -15,15 +15,23 @@ from __future__ import annotations
 
 import asyncio
 import random
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from itertools import groupby
-from typing import TYPE_CHECKING, Any, Final
+from itertools import chain, groupby
+from types import MappingProxyType, TracebackType
+from typing import TYPE_CHECKING, Final, Literal, Protocol
 
-from litellm.constants import SPEND_LOG_WRITE_BATCH_MAX_BYTES, SPEND_LOG_WRITE_BATCH_MAX_ROWS
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from typing_extensions import LiteralString
+
+from litellm._logging import verbose_proxy_logger
+from litellm.constants import SPEND_LOG_WRITE_BATCH_MAX_BYTES, SPEND_LOG_WRITE_BATCH_MAX_ROWS, TOOL_NAME_MAX_UTF8_BYTES
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.tool_fields import BRIDGED_TOOL_NAMES_KWARG, BridgedToolNames
 from litellm.proxy._types import DB_RETRY_SAFE_ERROR_TYPES
 from litellm.proxy.db.db_span import db_span
+from litellm.proxy.db.rollup_lock_timeout import ROLLUP_LOCK_TIMEOUT_SQL, rollup_lock_timeout_setting
 from litellm.proxy.db.spend_log_batching import spend_log_write_batches
 from litellm.repositories.table_repositories import SpendLogToolIndexRepository
 
@@ -41,22 +49,116 @@ class ToolUsageTransaction:
     total_tokens: int
 
 
-def response_tool_call_names(completion_response: object) -> tuple[str, ...]:
+_NO_FULL_TOOL_NAMES: Final[Mapping[str, str]] = MappingProxyType({})
+
+
+def logged_full_tool_names(call_kwargs: object) -> Mapping[str, str]:
+    fields: Final = as_str_mapping(call_kwargs)
+    logged: Final = None if fields is None else fields.get(BRIDGED_TOOL_NAMES_KWARG)
+    return logged.as_mapping() if isinstance(logged, BridgedToolNames) else _NO_FULL_TOOL_NAMES
+
+
+def response_tool_call_names(
+    completion_response: object, full_names: Mapping[str, str] = _NO_FULL_TOOL_NAMES
+) -> tuple[str, ...]:
     """Tool names invoked in a completion response, in call order, for any response
     surface get_tool_calls_from_response understands (chat completions, Responses
-    API output items, Anthropic Messages tool_use blocks). Reads every choice of
-    an ``n>1`` chat response: each choice cost money and its tool calls ran."""
+    API output items, Anthropic Messages tool_use blocks), plus the MCP tools an
+    auto-executed Responses API call ran. Reads every choice of an ``n>1`` chat
+    response: each choice cost money and its tool calls ran."""
     if completion_response is None or isinstance(completion_response, Exception):
         return ()
     from litellm.litellm_core_utils.prompt_templates.factory import (
         get_tool_calls_from_response,
     )
 
-    return tuple(
-        stripped
+    called_names: Final = (
+        tool_call.get("name")
         for tool_call in get_tool_calls_from_response(completion_response, include_all_choices=True)
-        if isinstance(name := tool_call.get("name"), str) and (stripped := name.strip())
     )
+    return tuple(
+        full_names.get(stripped, stripped)
+        for name in chain(
+            _server_tool_call_names(completion_response),
+            called_names,
+            _auto_executed_mcp_tool_names(completion_response),
+        )
+        if isinstance(name, str) and (stripped := name.strip())
+    )
+
+
+def _server_tool_call_names(completion_response: object) -> tuple[str | None, ...]:
+    from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field, parts_of
+    from litellm.llms.anthropic.common_utils import anthropic_server_tool_call_params
+
+    server_tool_calls: Final = chain.from_iterable(
+        anthropic_server_tool_call_params(message_field(choice, "message"))
+        for choice in parts_of(message_field(completion_response, "choices"))
+    )
+    return tuple(server_tool_call["function"].get("name") for server_tool_call in server_tool_calls)
+
+
+class _ExecutedTool(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    name: str | None = None
+
+
+class _OutputText(BaseModel):
+    model_config = ConfigDict(frozen=True, from_attributes=True)
+
+    text: str
+
+
+class _ToolExecutionResults(BaseModel):
+    model_config = ConfigDict(frozen=True, from_attributes=True)
+
+    type: Literal["tool_execution_results"]
+    content: tuple[_OutputText, ...]
+
+
+class _ResponsesApiOutput(BaseModel):
+    model_config = ConfigDict(frozen=True, from_attributes=True)
+
+    output: tuple[object, ...]
+
+
+_EXECUTED_TOOLS: Final = TypeAdapter(tuple[_ExecutedTool, ...])
+
+
+def _auto_executed_mcp_tool_names(completion_response: object) -> tuple[str | None, ...]:
+    try:
+        response: Final = _ResponsesApiOutput.model_validate(completion_response)
+    except ValidationError:
+        return ()
+    return tuple(chain.from_iterable(_executed_tool_names(item) for item in response.output))
+
+
+def _executed_tool_names(output_item: object) -> tuple[str | None, ...]:
+    try:
+        results: Final = _ToolExecutionResults.model_validate(output_item)
+        executed: Final = tuple(
+            chain.from_iterable(_EXECUTED_TOOLS.validate_json(content.text) for content in results.content)
+        )
+    except ValidationError:
+        return ()
+    return tuple(tool.name for tool in executed)
+
+
+def tool_name_fits_index(tool_name: object, key_alias: str | None) -> bool:
+    if not isinstance(tool_name, str) or not tool_name:
+        return False
+    try:
+        if len(tool_name.encode("utf-8")) <= TOOL_NAME_MAX_UTF8_BYTES:
+            return True
+    except UnicodeEncodeError:
+        pass
+    verbose_proxy_logger.warning(
+        "Skipping tool name that is not valid UTF-8 within %d bytes for key alias %r",
+        TOOL_NAME_MAX_UTF8_BYTES,
+        key_alias,
+    )
+    return False
 
 
 def build_tool_usage_transaction(
@@ -66,7 +168,10 @@ def build_tool_usage_transaction(
     spend: float,
     total_tokens: int,
     completion_response: object,
-    realtime_tool_calls: Any = None,
+    realtime_tool_calls: object = None,
+    full_names: Mapping[str, str] = _NO_FULL_TOOL_NAMES,
+    *,
+    key_alias: str | None = None,
 ) -> ToolUsageTransaction | None:
     """None when the request invoked no tools. Realtime sessions carry invoked
     tools in kwargs["realtime_tool_calls"] (OpenAI tool_calls shape) rather than
@@ -82,7 +187,13 @@ def build_tool_usage_transaction(
         if realtime_tool_calls
         else ()
     )
-    tool_names: Final = tuple(dict.fromkeys(mcp_names + response_tool_call_names(completion_response) + realtime_names))
+    tool_names: Final = tuple(
+        name
+        for name in dict.fromkeys(
+            mcp_names + response_tool_call_names(completion_response, full_names) + realtime_names
+        )
+        if tool_name_fits_index(name, key_alias)
+    )
     if not tool_names:
         return None
     try:
@@ -97,6 +208,34 @@ def build_tool_usage_transaction(
         spend=spend,
         total_tokens=total_tokens,
     )
+
+
+class _ToolRollupTable(Protocol):
+    def upsert(self, *, where: Mapping[str, object], data: Mapping[str, object]) -> None: ...
+
+
+class _ToolRollupBatch(Protocol):
+    @property
+    def litellm_dailytoolspend(self) -> _ToolRollupTable: ...
+
+    def execute_raw(self, query: LiteralString, *args: object) -> None: ...
+
+
+class _ToolRollupBatchManager(Protocol):
+    async def __aenter__(self) -> _ToolRollupBatch: ...
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+        /,
+    ) -> bool | None: ...
+
+
+def _tool_rollup_batch(prisma_client: PrismaClient) -> _ToolRollupBatchManager:
+    batch: Final[_ToolRollupBatchManager] = prisma_client.db.batch_()
+    return batch
 
 
 async def flush_tool_usage_transactions(
@@ -140,8 +279,9 @@ async def flush_tool_usage_transactions(
                     await index_table.create_many(data=statement_rows, skip_duplicates=True)
             async with (
                 db_span("commit_daily_tool_spend", "LiteLLM_DailyToolSpend"),
-                prisma_client.db.batch_() as batcher,
+                _tool_rollup_batch(prisma_client) as batcher,
             ):
+                batcher.execute_raw(ROLLUP_LOCK_TIMEOUT_SQL, rollup_lock_timeout_setting())
                 for (date_key, tool_name), grouped in groupby(per_tool_day, key=lambda entry: (entry[0], entry[1])):
                     entries = tuple(grouped)
                     spend = sum(entry[2] for entry in entries)

@@ -10,7 +10,7 @@ import pytest
 import litellm
 from litellm.llms.bedrock.chat import BedrockConverseLLM
 from litellm.llms.bedrock.chat.converse_handler import make_sync_call
-from litellm.llms.bedrock.common_utils import _get_all_bedrock_regions
+from litellm.llms.bedrock.common_utils import get_all_bedrock_regions
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from tests._support.stream_chunk_size import DEFAULT_CHUNKING_REQUESTS, ROUTER_CHUNK_SIZE_CASES, keys_at_every_depth
 
@@ -90,7 +90,7 @@ class TestBedrockRegionInModelPath:
 
         _region_from_model = None
         _potential_region = _stripped.split("/", 1)[0]
-        if _potential_region in _get_all_bedrock_regions() and "/" in _stripped:
+        if _potential_region in get_all_bedrock_regions() and "/" in _stripped:
             _region_from_model = _potential_region
             _stripped = _stripped.split("/", 1)[1]
             _model_for_id = _stripped
@@ -127,7 +127,7 @@ class TestBedrockRegionInModelPath:
         _stripped = model
         _region_from_model = None
         _potential_region = _stripped.split("/", 1)[0]
-        if _potential_region in _get_all_bedrock_regions() and "/" in _stripped:
+        if _potential_region in get_all_bedrock_regions() and "/" in _stripped:
             _region_from_model = _potential_region
             _stripped = _stripped.split("/", 1)[1]
             _model_for_id = _stripped
@@ -417,15 +417,18 @@ def test_router_deployment_stream_chunk_size_reaches_iter_bytes(
     client: Final = HTTPHandler()
     client.post = MagicMock(return_value=mock_response)
     router: Final = litellm.Router(
-        model_list=[{"model_name": "converse-chunked", "litellm_params": {**CONVERSE_DEPLOYMENT, **deployment_extras}}]
+        model_list=[{"model_name": "converse-chunked", "litellm_params": {**CONVERSE_DEPLOYMENT, **deployment_extras}}],
+        num_retries=0,
     )
 
-    router.completion(
-        model="converse-chunked",
-        messages=[{"role": "user", "content": "hi"}],
-        stream=True,
-        client=client,
-    )
+    # the empty body is a stream that ends before its first chunk, which the Router now reports from the call
+    with pytest.raises(litellm.BadGatewayError):
+        router.completion(
+            model="converse-chunked",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            client=client,
+        )
 
     mock_response.iter_bytes.assert_called_once_with(chunk_size=expected_chunk_size)
     data: Final = client.post.call_args.kwargs["data"]

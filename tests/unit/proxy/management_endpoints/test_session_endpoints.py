@@ -65,7 +65,7 @@ async def test_session_logout_revokes_presented_session():
         p2,
         p3,
         patch(
-            "litellm.proxy.management_endpoints.session_endpoints._persist_deleted_verification_tokens",
+            "litellm.proxy.management_endpoints.session_endpoints.persist_deleted_verification_tokens",
             persist_mock,
         ),
         patch(
@@ -100,7 +100,7 @@ async def test_session_logout_clears_token_cookie():
         p2,
         p3,
         patch(
-            "litellm.proxy.management_endpoints.session_endpoints._persist_deleted_verification_tokens",
+            "litellm.proxy.management_endpoints.session_endpoints.persist_deleted_verification_tokens",
             AsyncMock(),
         ),
         patch(
@@ -194,7 +194,7 @@ async def test_revoke_ui_session_keys_revokes_all_and_broadcasts():
         p2,
         p3,
         patch(
-            "litellm.proxy.management_endpoints.session_endpoints._persist_deleted_verification_tokens",
+            "litellm.proxy.management_endpoints.session_endpoints.persist_deleted_verification_tokens",
             persist_mock,
         ),
         patch(
@@ -228,7 +228,7 @@ async def test_revoke_ui_session_keys_keeps_callers_session():
         p2,
         p3,
         patch(
-            "litellm.proxy.management_endpoints.session_endpoints._persist_deleted_verification_tokens",
+            "litellm.proxy.management_endpoints.session_endpoints.persist_deleted_verification_tokens",
             AsyncMock(),
         ),
         patch(
@@ -275,7 +275,7 @@ async def test_revoke_ui_session_keys_failure_is_swallowed():
         p2,
         p3,
         patch(
-            "litellm.proxy.management_endpoints.session_endpoints._persist_deleted_verification_tokens",
+            "litellm.proxy.management_endpoints.session_endpoints.persist_deleted_verification_tokens",
             AsyncMock(),
         ),
     ):

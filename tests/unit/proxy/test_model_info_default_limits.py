@@ -11,6 +11,7 @@ import pytest
 
 from litellm.proxy.proxy_server import _get_proxy_model_info
 from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
 
 def _make_deployment(
@@ -114,7 +115,7 @@ class TestModelInfoEndpointWithRouter:
 
         deployment = _make_deployment("model1", default_tpm=100, default_rpm=200)
 
-        mock_router = MagicMock()
+        mock_router = route_entry_points_to_stubs(MagicMock())
         mock_router.get_deployment.return_value = deployment
 
         user_api_key_dict = UserAPIKeyAuth(api_key="sk-test")
@@ -147,7 +148,7 @@ class TestModelInfoEndpointWithRouter:
         deployment = _make_deployment("model1", default_tpm=100, default_rpm=200)
         deployment_dict = deployment.model_dump(exclude_none=True)
 
-        mock_router = MagicMock()
+        mock_router = route_entry_points_to_stubs(MagicMock())
         mock_router.model_list = [deployment_dict]
         mock_router.get_model_names.return_value = ["model1"]
         mock_router.get_model_access_groups.return_value = {}

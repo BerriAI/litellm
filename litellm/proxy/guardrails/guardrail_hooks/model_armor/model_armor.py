@@ -1,10 +1,14 @@
+import contextlib
 import time
-from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterable, Awaitable, Callable, Generator, Iterable, Mapping, Sequence
 from enum import Enum, auto
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal
+from itertools import accumulate, chain, repeat
+from typing import TYPE_CHECKING, ClassVar, Final, Literal, Protocol, runtime_checkable
 
 import httpx
 from fastapi import HTTPException
+from pydantic import ConfigDict, RootModel, TypeAdapter, with_config
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -32,8 +36,11 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.anthropic_sse import (
+    anthropic_sse_assembles_every_tool_input,
+    anthropic_sse_chunks_as_scanned,
     anthropic_sse_chunks_from_response,
     anthropic_sse_error_frames,
+    anthropic_sse_reads_alike,
     assemble_anthropic_sse_stream,
     is_anthropic_sse_stream,
     is_raw_sse_stream,
@@ -57,6 +64,7 @@ from litellm.types.utils import (
     Choices,
     GenericGuardrailAPIInputs,
     GuardrailStatus,
+    LLMResponseTypes,
     ModelResponse,
     ModelResponseStream,
     StandardLoggingGuardrailInformation,
@@ -64,6 +72,89 @@ from litellm.types.utils import (
 )
 
 GUARDRAIL_NAME: Final = "model_armor"
+_RESPONSE_JSON: Final = TypeAdapter(object)
+_FILTER_RESULT_FIELDS: Final = TypeAdapter(Mapping[str, object])
+
+
+def _first_difference(original: Iterable[str], redacted: Iterable[str], default: int) -> int:
+    return next((index for index, (line, other) in enumerate(zip(original, redacted)) if line != other), default)
+
+
+def _changed_line_indexes(original: Sequence[str], redacted: Sequence[str]) -> range:
+    prefix: Final = _first_difference(original, redacted, min(len(original), len(redacted)))
+    suffix: Final = _first_difference(
+        reversed(original[prefix:]), reversed(redacted[prefix:]), min(len(original), len(redacted)) - prefix
+    )
+    return range(prefix, len(original) - suffix)
+
+
+def _redaction_by_text(texts: Sequence[str], redaction: str) -> Mapping[str, str] | None:
+    lines: Final = redaction.split("\n")
+    counts: Final = tuple(text.count("\n") + 1 for text in texts)
+    if len(lines) != sum(counts):
+        return None
+    starts: Final = accumulate(counts, initial=0)
+    return {text: "\n".join(lines[start : start + count]) for text, start, count in zip(texts, starts, counts)}
+
+
+def _texts_changed_by(texts: Sequence[str], redacted: str) -> frozenset[str]:
+    owners: Final = tuple(chain.from_iterable(repeat(text, text.count("\n") + 1) for text in texts))
+    changed: Final = _changed_line_indexes(tuple("\n".join(texts).split("\n")), tuple(redacted.split("\n")))
+    return frozenset(owners[index] for index in changed)
+
+
+@runtime_checkable
+class _AwaitableJSON(Protocol):
+    def __await__(self) -> Generator[object, None, object]: ...
+
+
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
+class _MatchResult(TypedDict):
+    matchState: NotRequired[ReadOnly[str]]
+
+
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
+class _DeidentifyData(TypedDict):
+    text: NotRequired[ReadOnly[str]]
+
+
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
+class _DeidentifyResult(TypedDict):
+    matchState: NotRequired[ReadOnly[str]]
+    data: NotRequired[ReadOnly[_DeidentifyData]]
+
+
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
+class _SdpResult(TypedDict):
+    inspectResult: NotRequired[ReadOnly[_MatchResult]]
+    deidentifyResult: NotRequired[ReadOnly[_DeidentifyResult]]
+
+
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
+class _Filter(TypedDict):
+    raiFilterResult: NotRequired[ReadOnly[_MatchResult]]
+    piAndJailbreakFilterResult: NotRequired[ReadOnly[_MatchResult]]
+    maliciousUriFilterResult: NotRequired[ReadOnly[_MatchResult]]
+    csamFilterFilterResult: NotRequired[ReadOnly[_MatchResult]]
+    virusScanFilterResult: NotRequired[ReadOnly[_MatchResult]]
+    sdpFilterResult: NotRequired[ReadOnly[_SdpResult | None]]
+
+
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
+class _SanitizationResult(TypedDict):
+    filterResults: NotRequired[ReadOnly[Mapping[str, _Filter] | Sequence[_Filter] | str | int | float | bool | None]]
+
+
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
+class _ModelArmorResponse(TypedDict):
+    sanitizationResult: NotRequired[ReadOnly[_SanitizationResult]]
+    sanitizedText: NotRequired[ReadOnly[str | None]]
+    text: NotRequired[ReadOnly[str | None]]
+
+
+class _ModelArmorResponseRoot(RootModel[_ModelArmorResponse]):
+    model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
+
 
 # Only these carry the finished output; response.created carries an empty body
 _RESPONSES_TERMINAL_EVENT_TYPES: Final = frozenset({"response.completed", "response.incomplete", "response.failed"})
@@ -99,10 +190,8 @@ class ModelArmorAPIError(Exception):
 
 _SCANNED_CONTENT_KEYS: Final = frozenset({"text", "sanitizedText", "findings", "maliciousUriMatchedItems"})
 
-RedactablePayload = dict | list | str | int | float | bool | None
 
-
-def _redact_scanned_content(payload: RedactablePayload, depth: int = 0) -> RedactablePayload:
+def _redact_scanned_content(payload: object, depth: int = 0) -> object:
     if depth >= DEFAULT_MAX_RECURSE_DEPTH:
         return "[REDACTED]"
     if isinstance(payload, dict):
@@ -136,6 +225,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             GuardrailEventHooks.post_call,
             GuardrailEventHooks.pre_mcp_call,
             GuardrailEventHooks.during_mcp_call,
+            GuardrailEventHooks.post_mcp_call,
             GuardrailEventHooks.logging_only,
         ]
 
@@ -192,7 +282,9 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             return self.api_endpoint
         return f"https://modelarmor.{self.location}.rep.googleapis.com"
 
-    def _create_sanitize_request(self, content: str, source: Literal["user_prompt", "model_response"]) -> dict:
+    def _create_sanitize_request(
+        self, content: str, source: Literal["user_prompt", "model_response"]
+    ) -> dict[str, object]:
         """Create request body for Model Armor API with correct camelCase field names."""
         if source == "user_prompt":
             return {"userPromptData": {"text": content}}
@@ -223,12 +315,12 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             return f"Model Armor API error (upstream {status_code})"
         return f"Model Armor API error (upstream {status_code}): {response_text}"
 
-    def _build_block_error_detail(self, message: str, armor_response: RedactablePayload) -> dict:
+    def _build_block_error_detail(self, message: str, armor_response: Mapping[str, object]) -> dict[str, object]:
         if self.sanitize_error_detail:
             return {"error": message}
         return {"error": message, "model_armor_response": armor_response}
 
-    def _build_logging_response(self, armor_response: RedactablePayload) -> RedactablePayload:
+    def _build_logging_response(self, armor_response: Mapping[str, object]) -> object:
         if self.sanitize_error_detail:
             return _redact_scanned_content(armor_response)
         return armor_response
@@ -244,7 +336,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
     def _log_request_debug(
         self,
         url: str,
-        body: dict,
+        body: Mapping[str, object],
         file_bytes: "bytes | None",
         file_type: "str | None",
     ) -> None:
@@ -283,10 +375,10 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         self,
         content: str | None = None,
         source: Literal["user_prompt", "model_response"] = "user_prompt",
-        request_data: dict | None = None,
+        request_data: Mapping[str, object] | None = None,
         file_bytes: bytes | None = None,
         file_type: str | None = None,
-    ) -> dict:
+    ) -> _ModelArmorResponse:
         """
         Make request to Model Armor API. Supports both text and file prompt sanitization.
         If file_bytes and file_type are provided, file prompt sanitization is performed.
@@ -359,12 +451,12 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             )
             raise ModelArmorAPIError(detail)
 
-        json_response: Final = response.json()
-        if hasattr(json_response, "__await__"):
-            return await json_response
-        return json_response
+        json_response: Final = _RESPONSE_JSON.validate_python(response.json())
+        return _ModelArmorResponseRoot.model_validate(
+            await json_response if isinstance(json_response, _AwaitableJSON) else json_response
+        ).root
 
-    def sanitize_file_prompt(self, file_bytes: bytes, file_type: str, source: str = "user_prompt") -> dict:
+    def sanitize_file_prompt(self, file_bytes: bytes, file_type: str, source: str = "user_prompt") -> dict[str, object]:
         """
         Helper to build the request body for file prompt sanitization for Model Armor.
         file_type should be one of: PLAINTEXT_UTF8, PDF, WORD_DOCUMENT, EXCEL_DOCUMENT, POWERPOINT_DOCUMENT, TXT, CSV
@@ -378,7 +470,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         else:
             return {"modelResponseData": {"byteItem": {"byteDataType": file_type, "byteData": base64_data}}}
 
-    def _should_block_content(self, armor_response: Mapping[str, object], allow_sanitization: bool = False) -> bool:
+    def _should_block_content(self, armor_response: _ModelArmorResponse, allow_sanitization: bool = False) -> bool:
         """Check if Model Armor response indicates content should be blocked, including both inspectResult and deidentifyResult."""
         for filt in self._filter_result_items(armor_response):
             # Check RAI, PI/Jailbreak, Malicious URI, CSAM, Virus scan as before
@@ -404,7 +496,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         # Fallback dict code removed; all cases handled above
         return False
 
-    def _get_sanitized_content(self, armor_response: Mapping[str, Any]) -> str | None:
+    def _get_sanitized_content(self, armor_response: _ModelArmorResponse) -> str | None:
         """
         Get the sanitized content from a Model Armor response, if available.
         Looks for sanitized text in deidentifyResult, and falls back to root-level fields if not found.
@@ -434,7 +526,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         return armor_response.get("sanitizedText") or armor_response.get("text")
 
     @staticmethod
-    def _filter_result_items(armor_response: Mapping[str, Any]) -> Sequence[Any]:
+    def _filter_result_items(armor_response: _ModelArmorResponse) -> Sequence[_Filter]:
         """Every filter result in a scan response.
 
         filterResults is a dict of named filters on most templates and a list on some, so both
@@ -447,7 +539,30 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             return filter_results
         return []
 
-    def _has_deidentify_match(self, armor_response: Mapping[str, object]) -> bool:
+    @staticmethod
+    def _execution_skipped(result: object) -> bool:
+        if not isinstance(result, Mapping):
+            return False
+        fields: Final = _FILTER_RESULT_FIELDS.validate_python(result)
+        return fields.get("executionState") == "EXECUTION_SKIPPED" or any(
+            map(ModelArmorGuardrail._execution_skipped, fields.values())
+        )
+
+    def _skipped_a_filter(self, armor_response: _ModelArmorResponse) -> bool:
+        return any(map(self._execution_skipped, self._filter_result_items(armor_response)))
+
+    def _incomplete_scan_error(
+        self, scan: _ModelArmorResponse, *, skipped_filter_fails: bool, owes_a_rewrite: bool
+    ) -> ModelArmorAPIError | None:
+        if self._should_block_content(scan, allow_sanitization=True):
+            return None
+        if skipped_filter_fails and self._skipped_a_filter(scan):
+            return ModelArmorAPIError("Model Armor skipped a filter, so the content was not fully scanned")
+        if owes_a_rewrite and not self._get_sanitized_content(scan) and self._has_deidentify_match(scan):
+            return ModelArmorAPIError("Model Armor matched sensitive data but returned no rewrite")
+        return None
+
+    def _has_deidentify_match(self, armor_response: _ModelArmorResponse) -> bool:
         """Whether an SDP de-identify filter matched, i.e. Model Armor owes this response a redaction."""
         for filter_entry in self._filter_result_items(armor_response):
             sdp = filter_entry.get("sdpFilterResult")
@@ -457,7 +572,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
 
     def _resolve_streaming_outcome(
         self,
-        armor_response: Mapping[str, object],
+        armor_response: _ModelArmorResponse,
         assembled_response: object,
         content: str,
     ) -> tuple[bool, str | None]:
@@ -489,7 +604,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         return False, sanitized_content
 
     @staticmethod
-    def _append_armor_response(existing: object, armor_response: Mapping[str, object]) -> object:
+    def _append_armor_response(existing: object, armor_response: object) -> object:
         """Accumulate scan responses so a later text scan does not drop an earlier file scan.
 
         Returns the single response on its own (backward compatible) and a list once a request
@@ -838,7 +953,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        response,
+        response: LLMResponseTypes,
     ):
         """Post-call hook to sanitize model responses."""
         from litellm.proxy.common_utils.callback_utils import (
@@ -1062,14 +1177,35 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
     def _assemble_stream(
         self, all_chunks: Sequence[object], surface: _StreamSurface
     ) -> ModelResponse | TextCompletionResponse | ResponsesAPIResponse | None:
-        """Assemble the buffered stream into the scannable response its surface produces."""
+        """Assemble the buffered stream into the scannable response its surface produces.
+
+        A ``/v1/messages`` stream some client reads differently from assembly cannot be scanned in full,
+        since that client could read text the scan never saw. Failing open still scans what it can.
+        """
         if surface is _StreamSurface.ANTHROPIC_MESSAGES:
-            return assemble_anthropic_sse_stream(all_chunks, restore_identity=True)
+            scans_every_text: Final = anthropic_sse_reads_alike(
+                all_chunks
+            ) and anthropic_sse_assembles_every_tool_input(all_chunks)
+            return (
+                assemble_anthropic_sse_stream(all_chunks, restore_identity=True)
+                if scans_every_text or not self.optional_params.get("fail_on_error", True)
+                else None
+            )
         if surface is _StreamSurface.RESPONSES:
             return self._final_responses_api_response(all_chunks)
         if surface is _StreamSurface.OPAQUE_SSE:
             return None
         return self._assemble_chat_completion_stream(list(all_chunks))
+
+    @staticmethod
+    def _unsanitized_stream(
+        all_chunks: Sequence[object],
+        assembled_response: ModelResponse | TextCompletionResponse | ResponsesAPIResponse,
+        surface: _StreamSurface,
+    ) -> Sequence[object]:
+        if surface is _StreamSurface.ANTHROPIC_MESSAGES and isinstance(assembled_response, ModelResponse):
+            return anthropic_sse_chunks_as_scanned(assembled_response, all_chunks)
+        return all_chunks
 
     @staticmethod
     def _error_payload(exc: HTTPException) -> Mapping[str, object]:
@@ -1104,11 +1240,17 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
     async def async_post_call_streaming_iterator_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
-        response: Any,
-        request_data: dict,
+        response: AsyncIterable[object],
+        request_data: dict[str, object],
     ) -> AsyncGenerator[ModelResponseStream, None]:
         """Process streaming response chunks."""
+        async with contextlib.aclosing(self._moderated_stream(response, request_data)) as moderated:
+            async for moderated_item in moderated:
+                yield moderated_item
 
+    async def _moderated_stream(
+        self, response: AsyncIterable[object], request_data: dict[str, object]
+    ) -> AsyncGenerator[object, None]:
         from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
         from litellm.proxy.common_utils.callback_utils import (
             add_guardrail_to_applied_guardrails_header,
@@ -1160,7 +1302,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
 
         if not content:
             verbose_proxy_logger.debug("Model Armor: No text content in streaming response, skipping guardrail")
-            for chunk in all_chunks:
+            for chunk in self._unsanitized_stream(all_chunks, assembled_response, surface):
                 yield chunk
             return
 
@@ -1205,7 +1347,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
 
                 # Return sanitized stream
                 if surface is _StreamSurface.ANTHROPIC_MESSAGES:
-                    for sse_chunk in anthropic_sse_chunks_from_response(assembled_response):
+                    for sse_chunk in anthropic_sse_chunks_from_response(assembled_response, all_chunks):
                         yield sse_chunk
                     return
                 mock_response: Final = MockResponseIterator(model_response=assembled_response)
@@ -1233,7 +1375,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                 raise
 
         # Return original chunks if no sanitization needed
-        for chunk in all_chunks:
+        for chunk in self._unsanitized_stream(all_chunks, assembled_response, surface):
             yield chunk
 
     @log_guardrail_information
@@ -1244,7 +1386,8 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         input_type: Literal["request", "response"],
         logging_obj: "LiteLLMLoggingObj | None" = None,
     ) -> GenericGuardrailAPIInputs:
-        content: Final = "\n".join(text for text in inputs.get("texts") or () if text)
+        unique_texts: Final = tuple(dict.fromkeys(text for text in inputs.get("texts") or () if text.strip()))
+        content: Final = "\n".join(unique_texts)
         if not content:
             return inputs
 
@@ -1252,14 +1395,12 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             "user_prompt" if input_type == "request" else "model_response"
         )
         start_time: Final = time.time()
-        try:
-            armor_response: Final = await self.make_model_armor_request(
-                content=content, source=source, request_data=request_data
-            )
-        except (ModelArmorAPIError, httpx.HTTPError) as e:
+        fails_open_on_error: Final = not self.optional_params.get("fail_on_error", True)
+
+        def fails_open(error: Exception) -> bool:
             error_end_time: Final = time.time()
             self.add_standard_logging_guardrail_information_to_request_data(
-                guardrail_json_response=str(e),
+                guardrail_json_response=str(error),
                 request_data=request_data,
                 guardrail_status="guardrail_failed_to_respond",
                 guardrail_provider="model_armor",
@@ -1267,20 +1408,52 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                 end_time=error_end_time,
                 duration=error_end_time - start_time,
             )
+            return fails_open_on_error or self._event_hook_is_event_type(GuardrailEventHooks.logging_only)
+
+        fails_on_a_skipped_filter: Final = input_type == "response" and self._event_hook_is_event_type(
+            GuardrailEventHooks.post_mcp_call
+        )
+
+        logging_only: Final = self._event_hook_is_event_type(GuardrailEventHooks.logging_only)
+        mask: Final = input_type == "response" and self.mask_response_content and not logging_only
+
+        async def scanned(text: str, *, rescan: bool = False) -> _ModelArmorResponse:
+            scan: Final = await self.make_model_armor_request(content=text, source=source, request_data=request_data)
+            incomplete: Final = self._incomplete_scan_error(
+                scan,
+                skipped_filter_fails=fails_on_a_skipped_filter
+                and not (fails_open_on_error and (rescan or self._has_deidentify_match(scan))),
+                owes_a_rewrite=mask and not rescan,
+            )
+            if incomplete is not None:
+                verbose_proxy_logger.error(str(incomplete))
+                raise incomplete
+            return scan
+
+        try:
+            armor_response: Final = await scanned(content)
+        except Exception as e:
+            if not fails_open(e):
+                raise
             return inputs
 
-        flagged: Final = self._should_block_content(armor_response, allow_sanitization=False)
+        flagged: Final = self._should_block_content(armor_response, allow_sanitization=mask)
+        partly_scanned: Final = fails_on_a_skipped_filter and self._skipped_a_filter(armor_response)
         end_time: Final = time.time()
         self.add_standard_logging_guardrail_information_to_request_data(
             guardrail_json_response=self._build_logging_response(armor_response),
             request_data=request_data,
-            guardrail_status="guardrail_flagged" if flagged else "success",
+            guardrail_status="guardrail_flagged"
+            if flagged
+            else "guardrail_failed_to_respond"
+            if partly_scanned
+            else "success",
             guardrail_provider="model_armor",
             start_time=start_time,
             end_time=end_time,
             duration=end_time - start_time,
         )
-        if flagged and not self._event_hook_is_event_type(GuardrailEventHooks.logging_only):
+        if flagged and not logging_only:
             raise HTTPException(
                 status_code=400,
                 detail=self._build_block_error_detail(
@@ -1288,7 +1461,40 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                     armor_response,
                 ),
             )
-        return inputs
+        redaction: Final = self._get_sanitized_content(armor_response) or content
+        if flagged or not mask or redaction == content:
+            return inputs
+
+        async def sanitized(text: str) -> str:
+            return self._get_sanitized_content(await scanned(text, rescan=True)) or text
+
+        sliced: Final = _redaction_by_text(unique_texts, redaction)
+        if sliced is not None:
+            return {**inputs, "texts": [sliced.get(text, text) for text in inputs.get("texts") or ()]}
+
+        rescanned: Final = _texts_changed_by(unique_texts, redaction)
+        try:
+            rewrites: Final = {text: await sanitized(text) if text in rescanned else text for text in unique_texts}
+        except Exception as e:
+            if not fails_open(e):
+                raise
+            return inputs
+        if "\n".join(rewrites.values()) != redaction:
+            mismatch_end_time: Final = time.time()
+            self.add_standard_logging_guardrail_information_to_request_data(
+                guardrail_json_response=self._build_logging_response(armor_response),
+                request_data=request_data,
+                guardrail_status="guardrail_flagged",
+                guardrail_provider="model_armor",
+                start_time=start_time,
+                end_time=mismatch_end_time,
+                duration=mismatch_end_time - start_time,
+            )
+            raise HTTPException(
+                status_code=400,
+                detail=self._build_block_error_detail("Response blocked by Model Armor", armor_response),
+            )
+        return {**inputs, "texts": [rewrites.get(text, text) for text in inputs.get("texts") or ()]}
 
     @staticmethod
     def get_config_model() -> type["GuardrailConfigModel"] | None:

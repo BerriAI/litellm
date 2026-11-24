@@ -101,7 +101,8 @@ ROUTE_DENY_LIST: Final = MappingProxyType(
         "/sso/saml/login": "starts an external SAML redirect flow",
         "/sso/debug/login": "starts an external SSO redirect flow",
         "/sso/debug/callback": "external SSO redirect target",
-        "/fallback/login": "HTML login page",
+        "/fallback/login": "redirects to the dashboard login page",
+        "/login/resume": "redirects a signed-in browser to its stored return_to",
         "/plugin-proxy/{plugin_name}/{path:path}": "reverse proxy to a plugin process",
         "/openai_passthrough/{endpoint:path}": "forwards to a provider, not a proxy read",
         "/get/latest_release_info": "fetches the latest release from api.github.com",
@@ -134,6 +135,9 @@ PARAMETER_ALIASES: Final = MappingProxyType(
     {
         "/models/{model_id}": {"model_id": "model"},
         "/v1/models/{model_id}": {"model_id": "model"},
+        "/management/v1/customer_budget_increase_requests/{request_id}": {
+            "request_id": "budget_increase_request_id"
+        },
     }
 )
 NOT_FOUND_EXPECTED: Final = MappingProxyType(
@@ -371,7 +375,10 @@ def get_routes() -> tuple[str, ...]:
 def _route_ids(route: str, ids: Mapping[str, str]) -> Mapping[str, str]:
     """``ids`` with the route's ``PARAMETER_ALIASES`` applied (``/v1/models/{model_id}`` takes a model name)."""
     aliases: Final = PARAMETER_ALIASES.get(route, {})
-    return {**ids, **{name: ids[source] for name, source in aliases.items() if source in ids}}
+    return {
+        **{name: value for name, value in ids.items() if name not in aliases},
+        **{name: ids[source] for name, source in aliases.items() if source in ids},
+    }
 
 
 def _filled(route: str, ids: Mapping[str, str]) -> tuple[str, bool]:
@@ -414,14 +421,17 @@ def sweep_routes(
     )
     who: Final = callers if callers is not None else {"admin": gateway.key}
     base_url: Final = str(gateway.client.base_url)
+    verification: Final = httpx.create_ssl_context(trust_env=False) if httpx.URL(base_url).scheme == "http" else True
 
     def call(route: str, label: str, key: str, path: str) -> _RouteCall:
         location: Final = f"GET {path} as {label}"
         try:
-            with httpx.Client(base_url=base_url, timeout=_ROUTE_TIMEOUT, trust_env=False) as client:
+            with httpx.Client(
+                base_url=base_url, timeout=_ROUTE_TIMEOUT, trust_env=False, verify=verification
+            ) as client:
                 response = client.get(path, headers={"Authorization": f"Bearer {key}"})
         except httpx.HTTPError as error:
-            return _RouteCall((), (), None, f"{location}: {type(error).__name__}", location)
+            return _RouteCall((), (), None, f"{location}: {type(error).__name__}: {error}", location)
         headers = "\n".join(f"{name}: {value}" for name, value in response.headers.items())
         found = _hits(
             "S2", f"{location} -> {response.status_code}", response.content + b"\n" + headers.encode(), canaries
@@ -476,7 +486,7 @@ def sweep_routes(
 
 
 def record_route_sweep(routes: RouteSweep, node: str) -> None:
-    """Append the route sweep's errors and unfilled routes to the results directory, when set."""
+    """Append a passed or failed S2 report to its results ledger, when set."""
     destination: Final = os.environ.get("INTEGRATION_RESULTS_DIR")
     if not destination:
         return
@@ -490,7 +500,12 @@ def record_route_sweep(routes: RouteSweep, node: str) -> None:
         "not_found": routes.not_found,
         "rejected": routes.rejected,
     }
-    with (Path(destination) / "security-route-sweep.jsonl").open("a") as report:
+    filename: Final = (
+        "security-route-sweep-failures.jsonl"
+        if routes.unreachable or routes.rejected or routes.not_found
+        else "security-route-sweep.jsonl"
+    )
+    with (Path(destination) / filename).open("a") as report:
         report.write(json.dumps(entry) + "\n")
 
 
@@ -584,6 +599,8 @@ def sweep_all(
     """
     redis: Final = sweep_redis(canaries)
     routes: Final = sweep_routes(gateway, canaries, ids, callers=callers, since=since)
+    if routes.unreachable or routes.rejected or routes.not_found:
+        record_route_sweep(routes, os.environ.get("PYTEST_CURRENT_TEST", "unknown"))
     assert not routes.unreachable, f"GET routes returned no response, so S2 did not check them: {routes.unreachable}"
     assert not routes.rejected, (
         f"Scoped list routes rejected the scenario's query, so S2 saw no rows: {routes.rejected}"

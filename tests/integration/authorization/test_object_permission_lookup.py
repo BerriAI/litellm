@@ -57,18 +57,18 @@ def _assert_forbidden_vector_store_denied(gateway: Gateway, model: str, key: str
 
 
 @pytest.mark.covers("authorization.vector_store.plain_request_skips_object_permission_lookup")
-def test_chat_request_without_vector_stores_does_not_read_object_permission_table(gateway: Gateway) -> None:
+def test_requests_do_not_read_object_permission_table_once_the_grant_is_cached(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
         model: Final = scenario.model()
         key: Final = scenario.key(models=[model], object_permission={"vector_stores": ["vs_allowed"]})
-        _assert_plain_chat_served(gateway, model, key)
-        before_control: Final = _object_permission_reads()
+        before_first_use: Final = _object_permission_reads()
         _assert_forbidden_vector_store_denied(gateway, model, key)
-        eventually(_object_permission_reads, lambda reads: reads > before_control, seconds=15)
+        eventually(_object_permission_reads, lambda reads: reads > before_first_use, seconds=15)
         baseline: Final = _settled_object_permission_reads(_object_permission_reads(), time.monotonic())
         for _ in range(PLAIN_REQUESTS):
             _assert_plain_chat_served(gateway, model, key)
+            _assert_forbidden_vector_store_denied(gateway, model, key)
         after: Final = _settled_object_permission_reads(_object_permission_reads(), time.monotonic())
         assert after - baseline < PLAIN_REQUESTS, (
-            f"{PLAIN_REQUESTS} plain chat requests added {after - baseline} object permission reads"
+            f"{2 * PLAIN_REQUESTS} requests after the first added {after - baseline} object permission reads"
         )

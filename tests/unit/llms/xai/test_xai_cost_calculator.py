@@ -102,8 +102,8 @@ class TestXAICostCalculator:
     def test_reported_cost_is_preferred_over_token_math(self):
         """The amount xAI reported, carried on usage.cost by the transformation, is billed.
 
-        It lands entirely on completion cost because xAI does not split its total by
-        direction, the same shape the perplexity calculator returns.
+        xAI does not split its total by direction, so the split follows the ratio our
+        own token math gives for the same usage while the sum stays xAI's number.
         """
         usage = Usage(
             prompt_tokens=100,
@@ -111,11 +111,15 @@ class TestXAICostCalculator:
             total_tokens=300,
             cost=0.0037756,
         )
+        priced_prompt, priced_completion = cost_per_token(
+            model="grok-4.7", usage=Usage(prompt_tokens=100, completion_tokens=200, total_tokens=300)
+        )
 
-        prompt_cost, completion_cost = cost_per_token(model="grok-4-latest", usage=usage)
+        prompt_cost, completion_cost = cost_per_token(model="grok-4.7", usage=usage)
 
-        assert prompt_cost == 0.0
-        assert math.isclose(completion_cost, 0.0037756, rel_tol=1e-10)
+        assert math.isclose(prompt_cost + completion_cost, 0.0037756, rel_tol=1e-10)
+        assert math.isclose(prompt_cost / completion_cost, priced_prompt / priced_completion, rel_tol=1e-10)
+        assert not math.isclose(prompt_cost + completion_cost, priced_prompt + priced_completion, rel_tol=1e-3)
 
     def test_reported_cost_suppresses_web_search_surcharge(self):
         """The reported total already covers server-side tool calls.

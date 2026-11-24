@@ -27,7 +27,7 @@ User: Hello {{name}}, how are you?"""
 
         # Parse the dotprompt
         prompt_manager = PromptManager()
-        frontmatter, template_content = prompt_manager._parse_frontmatter(
+        frontmatter, template_content = prompt_manager.parse_frontmatter(
             content=dotprompt_content
         )
 
@@ -126,7 +126,7 @@ temperature: 0.7
 User: Hello"""
 
         prompt_manager = PromptManager()
-        frontmatter, _ = prompt_manager._parse_frontmatter(content=dotprompt_content)
+        frontmatter, _ = prompt_manager.parse_frontmatter(content=dotprompt_content)
 
         model = frontmatter.get("model")
         assert model is None

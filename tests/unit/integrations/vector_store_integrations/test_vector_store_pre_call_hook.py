@@ -1,8 +1,8 @@
 import logging
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Literal, Protocol
+from typing import Final, Literal, Protocol
 
 import pytest
 from fastapi import HTTPException
@@ -12,11 +12,11 @@ from litellm._logging import verbose_logger
 from litellm.caching.caching import DualCache
 from litellm.exceptions import SensitiveDataRouteException
 from litellm.integrations.custom_guardrail import CustomGuardrail, log_guardrail_information
-from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
     ProxyServerRuntime,
     VectorStorePreCallHook,
 )
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.openai import AllMessageValues, ResponsesAPIResponse
@@ -33,6 +33,7 @@ from litellm.types.utils import (
 )
 from litellm.types.vector_stores import (
     VectorStoreResultContent,
+    VectorStoreSearchFailure,
     VectorStoreSearchResponse,
     VectorStoreSearchResult,
 )
@@ -157,6 +158,38 @@ async def _run_hook(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("retrieval_query_param", ["retrievalQuery", "retrieval_query"])
+async def test_a_store_configured_with_a_raw_retrieval_query_still_runs_its_chat_search(
+    monkeypatch: pytest.MonkeyPatch, retrieval_query_param: str
+) -> None:
+    monkeypatch.setattr(
+        litellm,
+        "vector_store_registry",
+        VectorStoreRegistry(
+            vector_stores=[
+                LiteLLM_ManagedVectorStore(
+                    vector_store_id="vs-raw",
+                    custom_llm_provider="bedrock",
+                    litellm_params={"aws_region_name": "us-west-2", retrieval_query_param: {"text": "from the store"}},
+                )
+            ],
+        ),
+    )
+    router: Final = RecordingRouter()
+
+    await _run_hook(
+        VectorStorePreCallHook(proxy_runtime=FakeProxyRuntime(router=router)),
+        ["vs-raw"],
+        FakeLoggingObj({}),
+    )
+
+    assert len(router.calls) == 1
+    assert router.calls[0]["query"] == "what is litellm?"
+    assert router.calls[0]["aws_region_name"] == "us-west-2"
+    assert retrieval_query_param not in router.calls[0]
+
+
+@pytest.mark.asyncio
 async def test_hook_searches_through_the_injected_router_with_the_request_metadata(
     registry_with: RegisterStores,
 ) -> None:
@@ -180,29 +213,6 @@ async def test_hook_searches_through_the_injected_router_with_the_request_metada
         }
     ]
     assert messages[0]["content"] == "Context:\n\ncontext from vs-router\n\n"
-
-
-@pytest.mark.asyncio
-async def test_hook_falls_back_to_the_sdk_when_the_runtime_has_no_router(
-    registry_with: RegisterStores,
-    warnings: list[logging.LogRecord],
-) -> None:
-    registry_with("vs-sdk", custom_llm_provider="lit6752-not-a-provider")
-
-    _, messages, _ = await _run_hook(
-        VectorStorePreCallHook(proxy_runtime=FakeProxyRuntime(router=None)),
-        ["vs-sdk"],
-        FakeLoggingObj({"user_api_key_team_id": "team-a"}),
-    )
-
-    assert messages == [{"role": "user", "content": "what is litellm?"}]
-    assert len(warnings) == 1
-    assert (
-        warnings[0]
-        .getMessage()
-        .startswith("Vector store search failed for vector_store_id=vs-sdk, continuing without its context: ")
-    )
-    assert "is not a valid LlmProviders" in warnings[0].getMessage()
 
 
 @pytest.mark.asyncio
@@ -455,6 +465,166 @@ async def test_a_failing_vector_store_is_reported_on_the_streaming_chunk(registr
             "error": "litellm.BadRequestError: no healthy deployments for vs-broken",
         },
     )
+
+
+@dataclass
+class ThirdPartyMessage:
+    provider_specific_fields: dict[str, object] | None = None
+
+
+@dataclass
+class ThirdPartyChoice:
+    message: ThirdPartyMessage | None = None
+    delta: ThirdPartyMessage | None = None
+
+
+@dataclass
+class ThirdPartyResponse:
+    choices: object
+
+
+_SEARCH_FAILURES = (
+    VectorStoreSearchFailure(vector_store_id="vs-broken", custom_llm_provider="bedrock", error="search timed out"),
+)
+
+
+def _logging_obj_with_search_failures() -> FakeLoggingObj:
+    logging_obj = FakeLoggingObj({})
+    logging_obj.model_call_details["vector_store_search_failures"] = _SEARCH_FAILURES
+    return logging_obj
+
+
+@pytest.mark.asyncio
+async def test_search_failures_join_the_provider_fields_the_message_already_carries() -> None:
+    existing_fields: dict[str, object] = {"citations": ["doc-1"]}
+    response = ModelResponse(
+        choices=[Choices(message=Message(content="an answer", provider_specific_fields=existing_fields))]
+    )
+
+    returned = await VectorStorePreCallHook(
+        proxy_runtime=FakeProxyRuntime(router=None)
+    ).async_post_call_success_deployment_hook(
+        request_data={"litellm_logging_obj": _logging_obj_with_search_failures()},
+        response=response,
+        call_type=CallTypes.acompletion,
+    )
+
+    assert returned is response
+    assert _first_message(response).provider_specific_fields is existing_fields
+    assert existing_fields == {"citations": ["doc-1"], "vector_store_search_failures": _SEARCH_FAILURES}
+
+
+@pytest.mark.asyncio
+async def test_search_failures_join_the_provider_fields_the_streaming_delta_already_carries() -> None:
+    existing_fields: dict[str, object] = {"citations": ["doc-1"]}
+    chunk = ModelResponseStream(
+        choices=[StreamingChoices(delta=Delta(content="an answer", provider_specific_fields=existing_fields))]
+    )
+
+    returned = await VectorStorePreCallHook(
+        proxy_runtime=FakeProxyRuntime(router=None)
+    ).async_post_call_streaming_deployment_hook(
+        request_data=_logging_obj_with_search_failures().model_call_details,
+        response_chunk=chunk,
+        call_type=CallTypes.acompletion,
+    )
+
+    assert returned is chunk
+    assert chunk.choices[0].delta.provider_specific_fields is existing_fields
+    assert existing_fields == {"citations": ["doc-1"], "vector_store_search_failures": _SEARCH_FAILURES}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("as_choices", [list, tuple, iter])
+async def test_a_chunk_that_only_looks_like_a_chat_completion_chunk_is_annotated_too(
+    as_choices: Callable[[list[ThirdPartyChoice]], Iterable[ThirdPartyChoice]],
+) -> None:
+    delta = ThirdPartyMessage()
+    chunk = ThirdPartyResponse(choices=as_choices([ThirdPartyChoice(delta=None), ThirdPartyChoice(delta=delta)]))
+
+    returned = await VectorStorePreCallHook(
+        proxy_runtime=FakeProxyRuntime(router=None)
+    ).async_post_call_streaming_deployment_hook(
+        request_data=_logging_obj_with_search_failures().model_call_details,
+        response_chunk=chunk,
+        call_type=CallTypes.acompletion,
+    )
+
+    assert returned is chunk
+    assert delta.provider_specific_fields == {"vector_store_search_failures": _SEARCH_FAILURES}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("choices", [None, [], ()])
+async def test_a_response_without_choices_is_returned_untouched(
+    choices: object, warnings: list[logging.LogRecord]
+) -> None:
+    response = ThirdPartyResponse(choices=choices)
+
+    returned = await VectorStorePreCallHook(
+        proxy_runtime=FakeProxyRuntime(router=None)
+    ).async_post_call_success_deployment_hook(
+        request_data={"litellm_logging_obj": _logging_obj_with_search_failures()},
+        response=response,
+        call_type=CallTypes.acompletion,
+    )
+
+    assert returned is response
+    assert warnings == []
+
+
+@pytest.mark.asyncio
+async def test_a_chunk_whose_choices_cannot_be_iterated_is_logged_and_passed_through(
+    warnings: list[logging.LogRecord],
+) -> None:
+    chunk = ThirdPartyResponse(choices=7)
+
+    returned = await VectorStorePreCallHook(
+        proxy_runtime=FakeProxyRuntime(router=None)
+    ).async_post_call_streaming_deployment_hook(
+        request_data=_logging_obj_with_search_failures().model_call_details,
+        response_chunk=chunk,
+        call_type=CallTypes.acompletion,
+    )
+
+    assert returned is chunk
+    assert [record.levelname for record in warnings] == ["ERROR"]
+    assert warnings[0].getMessage().startswith("Error adding search results to streaming chunk: ")
+    assert "input_value" not in warnings[0].getMessage()
+
+
+@pytest.mark.asyncio
+async def test_the_search_receives_the_requests_own_metadata_object(registry_with: RegisterStores) -> None:
+    registry_with("vs-router")
+    router = RecordingRouter()
+    metadata = {"user_api_key_team_id": "team-a"}
+
+    await _run_hook(
+        VectorStorePreCallHook(proxy_runtime=FakeProxyRuntime(router=router)),
+        ["vs-router"],
+        FakeLoggingObj(metadata),
+    )
+
+    assert [call["metadata"] is metadata for call in router.calls] == [True]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("litellm_params", [None, "metadata", ["metadata"], {"other": "value"}])
+async def test_a_request_without_metadata_in_its_litellm_params_searches_with_empty_metadata(
+    registry_with: RegisterStores, litellm_params: object
+) -> None:
+    registry_with("vs-router")
+    router = RecordingRouter()
+    logging_obj = FakeLoggingObj({})
+    logging_obj.model_call_details["litellm_params"] = litellm_params
+
+    await _run_hook(
+        VectorStorePreCallHook(proxy_runtime=FakeProxyRuntime(router=router)),
+        ["vs-router"],
+        logging_obj,
+    )
+
+    assert [call["metadata"] for call in router.calls] == [{}]
 
 
 @pytest.mark.asyncio

@@ -1,9 +1,13 @@
 import json
-from collections.abc import Callable
+from collections.abc import Sequence, Sized
 from typing import TYPE_CHECKING, Final
 
+from pydantic import TypeAdapter
+
 import litellm
-from litellm.llms.custom_httpx.http_handler import _get_httpx_client
+from litellm.litellm_core_utils.url_utils import join_api_base
+from litellm.llms.custom_httpx.http_handler import get_httpx_client
+from litellm.llms.custom_httpx.sse_lines import iter_sse_lines
 from litellm.utils import EmbeddingResponse, ModelResponse, Usage
 
 from ..common_utils import OobaboogaError
@@ -11,24 +15,33 @@ from .transformation import OobaboogaConfig
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
+    from litellm.types.llms.openai import AllMessageValues
 
 oobabooga_config: Final = OobaboogaConfig()
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
+def _json_len(value: object) -> int:
+    if isinstance(value, Sized):
+        return len(value)
+    raise TypeError(f"object of type '{type(value).__name__}' has no len()")
 
 
 def completion(
     model: str,
-    messages: list,
+    messages: "list[AllMessageValues]",
     api_base: str | None,
     model_response: ModelResponse,
-    print_verbose: Callable,
-    encoding,
-    api_key,
-    logging_obj,
+    print_verbose: object,
+    encoding: "Tokenizer | None",
+    api_key: str | None,
+    logging_obj: "LiteLLMLoggingObj",
     optional_params: dict,
     litellm_params: dict,
-    custom_prompt_dict={},
-    logger_fn=None,
-    default_max_tokens_to_sample=None,
+    custom_prompt_dict: object = {},
+    logger_fn: object = None,
+    default_max_tokens_to_sample: object = None,
 ):
     headers: Final = oobabooga_config.validate_environment(
         api_key=api_key,
@@ -49,7 +62,7 @@ def completion(
         )
     model = model
 
-    completion_url = completion_url + "/v1/chat/completions"
+    completion_url = join_api_base(completion_url, "v1/chat/completions")
     data: Final = oobabooga_config.transform_request(
         model=model,
         messages=messages,
@@ -65,7 +78,7 @@ def completion(
         additional_args={"complete_input_dict": data},
     )
     ## COMPLETION CALL
-    client: Final = _get_httpx_client()
+    client: Final = get_httpx_client()
     response: Final = client.post(
         completion_url,
         headers=headers,
@@ -73,7 +86,7 @@ def completion(
         stream=optional_params["stream"] if "stream" in optional_params else False,
     )
     if "stream" in optional_params and optional_params["stream"] is True:
-        return response.iter_lines()
+        return iter_sse_lines(response.iter_text())
     else:
         return oobabooga_config.transform_response(
             model=model,
@@ -91,19 +104,19 @@ def completion(
 
 def embedding(
     model: str,
-    input: list,
+    input: Sequence[object],
     model_response: EmbeddingResponse,
     api_key: str | None,
     api_base: str | None,
     logging_obj: "LiteLLMLoggingObj",
     optional_params: dict,
-    encoding=None,
+    encoding: object = None,
 ):
     # Create completion URL
     if model.startswith(("http://", "https://")):
         embeddings_url = model
     elif api_base:
-        embeddings_url = f"{api_base}/v1/embeddings"
+        embeddings_url = join_api_base(api_base, "v1/embeddings")
     else:
         raise OobaboogaError(
             status_code=404,
@@ -147,7 +160,7 @@ def embedding(
         }
     ]
 
-    num_tokens: Final = len(completion_response["data"][0]["embedding"])
+    num_tokens: Final = _json_len(_DECODED_JSON.validate_python(completion_response["data"][0]["embedding"]))
     # Adding metadata to response
     setattr(
         model_response,

@@ -9,11 +9,13 @@ hooks, proxy SERVER span lifecycle (start + setters), parent-context resolution
 import ast
 import asyncio
 import contextlib
+import contextvars
 import os
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final
 from unittest.mock import patch
 
@@ -43,7 +45,8 @@ from litellm.integrations.otel import (  # noqa: E402
     OpenTelemetryV2Config,
 )
 from litellm.integrations.otel.logger import OpenTelemetryV2  # noqa: E402
-from litellm.integrations.otel.model.config import ExporterSpec  # noqa: E402
+from litellm.integrations.otel.model.config import CaptureMessageContent, ExporterSpec  # noqa: E402
+from litellm.integrations.otel.model.destination import OtelDestination  # noqa: E402
 from litellm.integrations.otel.model.spans import (  # noqa: E402
     LITELLM_PROXY_REQUEST_SPAN_NAME,
     SpanRole,
@@ -55,6 +58,7 @@ from litellm.integrations.otel.plumbing.context import (  # noqa: E402
     reset_mcp_message_transport_span,
     set_mcp_message_trace_carrier,
     set_mcp_message_transport_span,
+    set_request_destinations,
     set_request_root_span,
 )
 from litellm.types.utils import AUTOROUTER_CLASSIFIER_CALL_ORIGIN  # noqa: E402
@@ -182,8 +186,66 @@ def test_async_log_success_event_emits_llm_call_span():
     assert span.attributes[GenAI.OPERATION_NAME] == "chat"
     assert span.attributes[GenAI.REQUEST_MODEL] == "gpt-4o"
     assert span.attributes[LiteLLM.CALL_ID] == "call_1"
+    assert not any(key.startswith("litellm.routing.") for key in span.attributes)
     # Success leaves status UNSET (semconv default), not forced OK.
     assert span.status.status_code is StatusCode.UNSET
+
+
+@pytest.mark.parametrize("fail", [False, True])
+@pytest.mark.parametrize("legacy_compat", [False, True])
+def test_routing_diagnostics_reach_llm_spans_without_promoting_prompt_text(fail: bool, legacy_compat: bool) -> None:
+    logger, exporter = _logger(legacy_compat=legacy_compat)
+    decision: Final = {
+        "router_model_name": "auto-router",
+        "router_type": "complexity",
+        "router_config_id": "definition-1",
+        "router_config_updated_at": "2026-10-06T00:00:00Z",
+        "router_config_fingerprint": "definition-hash",
+        "routed_model": "answer",
+        "cause": "heuristic",
+        "score": 0.25,
+        "classifier_cost": 0.001,
+        "classifier_failure_reason": "timeout",
+        "classifier_error_type": "TimeoutError",
+        "classifier_input_budget_tokens": 24576,
+        "classifier_input_tokens": 23000,
+        "classifier_input_count_method": "estimated_tokens",
+        "classifier_input_truncated": True,
+        "classifier_input_budget_status": "truncated",
+        "escalated": False,
+    }
+    payload: Final = _payload(
+        metadata={
+            "routing_decision": {
+                **decision,
+                "signals": ["private prompt"],
+                "matched_keyword": "private prompt",
+                "escalation_keyword": "private prompt",
+                "classifier_crux": "private prompt",
+                "tier_litellm_params": {"api_key": "private key"},
+                "classifier_probabilities": {"easy": 0.25},
+                "unknown_field": "private config",
+                "tier_label": {"invalid": "scalar field"},
+            }
+        },
+        status="failure" if fail else "success",
+    )
+    _emit_llm(logger, _kwargs(payload), fail=fail)
+    (span,) = exporter.get_finished_spans()
+    actual: Final = {key: value for key, value in span.attributes.items() if key.startswith("litellm.routing.")}
+    assert actual == {f"litellm.routing.{key}": value for key, value in decision.items()}
+    assert isinstance(actual["litellm.routing.score"], float)
+    assert actual["litellm.routing.escalated"] is False
+
+
+@pytest.mark.parametrize("decision", ["custom", 42, ["custom"]])
+def test_malformed_routing_metadata_preserves_the_completed_llm_span(decision: object) -> None:
+    logger, exporter = _logger()
+    _emit_llm(logger, _kwargs(_payload(metadata={"routing_decision": decision})))
+    (span,) = exporter.get_finished_spans()
+    assert span.attributes[GenAI.REQUEST_MODEL] == "gpt-4o"
+    assert span.attributes[LiteLLM.CALL_ID] == "call_1"
+    assert not any(key.startswith("litellm.routing.") for key in span.attributes)
 
 
 def test_llm_call_span_carries_the_callers_conversation_id():
@@ -349,6 +411,44 @@ def test_async_log_failure_event_marks_error_status():
     assert span.attributes["error.type"] == "RateLimitError"
 
 
+@pytest.mark.parametrize("boundary", [True, False])
+def test_retried_call_emits_distinct_failure_spans_with_each_destination(boundary: bool) -> None:
+    logger, exporter = _logger()
+    root: Final = logger._emitter.start_span(SpanRole.PROXY_REQUEST, "test root")
+    for index in range(3):
+        start: Final = 100.0 + index
+        kwargs: Final = {
+            **_kwargs(
+                _payload(
+                    status="failure",
+                    api_base=f"https://region-{index}.example/v1",
+                    error_information={"error_class": "ServiceUnavailableError", "error_message": f"outage-{index}"},
+                )
+            ),
+            "api_call_start_time": start,
+        }
+        if boundary:
+            with trace.use_span(root, end_on_exit=False):
+                logger.log_pre_api_call("gpt-4o", [], kwargs)
+        asyncio.run(logger.async_log_failure_event(kwargs, None, start, start + 0.5))
+        asyncio.run(logger.async_log_failure_event(kwargs, None, start, start + 0.5))
+    spans: Final = exporter.get_finished_spans()
+    assert len(spans) == 3
+    assert len({s.context.span_id for s in spans}) == 3
+    assert [s.attributes["server.address"] for s in spans] == [f"region-{i}.example" for i in range(3)]
+    assert [s.attributes["error.message"] for s in spans] == [f"outage-{i}" for i in range(3)]
+    assert all(s.status.status_code is StatusCode.ERROR for s in spans)
+    success_start: Final = 104.0
+    success_kwargs: Final = {**_kwargs(), "api_call_start_time": success_start}
+    with trace.use_span(root, end_on_exit=False):
+        logger.log_pre_api_call("gpt-4o", [], success_kwargs)
+    asyncio.run(logger.async_log_success_event(success_kwargs, None, success_start, success_start + 0.5))
+    success: Final = exporter.get_finished_spans()[-1]
+    assert success.start_time == to_ns(success_start)
+    assert success.status.status_code is not StatusCode.ERROR
+    root.end()
+
+
 def _logger_with_events(enable_events):
     from opentelemetry.sdk._logs.export import InMemoryLogExporter
 
@@ -435,6 +535,49 @@ def test_no_span_when_pre_call_never_ran():
     # No log_pre_api_call: the call never started.
     asyncio.run(logger.async_log_failure_event(_kwargs(payload=payload), None, None, None))
     assert exporter.get_finished_spans() == ()  # no phantom LLM span
+
+
+def test_cache_hit_without_pre_call_emits_zero_cost_span():
+    """A response served from the litellm cache never hands off to a provider,
+    so ``pre_call`` never runs and ``api_call_start_time`` is never stamped,
+    but the completed call's payload still warrants a span, carrying the cache
+    attributes rather than being dropped like a gate rejection."""
+    logger, exporter = _logger()
+    payload: Final = _payload(
+        cache_hit=True,
+        response_cost=0.0,
+        saved_cache_cost=0.002,
+        cost_breakdown={"input_cost": 0.0, "output_cost": 0.0, "total_cost": 0.0, "tool_usage_cost": 0.0},
+    )
+    asyncio.run(
+        logger.async_log_success_event(_kwargs(payload=payload), None, None, None)
+    )
+    (span,) = exporter.get_finished_spans()
+    assert span.attributes[LiteLLM.CACHE_HIT] is True
+    assert span.attributes[LiteLLM.SAVED_CACHE_COST] == 0.002
+    assert {
+        name: span.attributes[f"{LiteLLM.COST_PREFIX}{name}"] for name in ("total", "input", "output", "tool_usage")
+    } == {"total": 0.0, "input": 0.0, "output": 0.0, "tool_usage": 0.0}
+    assert "server.address" not in span.attributes
+
+
+def test_cache_miss_span_reports_cache_hit_false():
+    logger, exporter = _logger()
+    _emit_llm(logger, _kwargs(payload=_payload(cache_hit=False, saved_cache_cost=0.0)))
+    (span,) = exporter.get_finished_spans()
+    assert span.attributes[LiteLLM.CACHE_HIT] is False
+    assert LiteLLM.SAVED_CACHE_COST not in span.attributes
+
+
+def test_cache_miss_without_pre_call_still_emits_no_span():
+    """The cache-hit relaxation is not a general loosening: a success callback
+    with no ``pre_call`` carrier and no cache hit still emits nothing."""
+    logger, exporter = _logger()
+    payload: Final = _payload(cache_hit=False, response_cost=0.002)
+    asyncio.run(
+        logger.async_log_success_event(_kwargs(payload=payload), None, None, None)
+    )
+    assert exporter.get_finished_spans() == ()
 
 
 def test_real_llm_failure_still_emitted():
@@ -564,8 +707,6 @@ def _mcp_payload(**overrides):
 
 
 def _logger_capturing():
-    from litellm.integrations.otel.model.config import CaptureMessageContent
-
     cfg = OpenTelemetryV2Config(
         exporter="in_memory",
         legacy_compat=False,
@@ -629,6 +770,57 @@ def test_mcp_tool_call_captures_io_when_enabled():
     (span,) = exporter.get_finished_spans()
     assert '"Paris"' in span.attributes["gen_ai.tool.call.arguments"]
     assert "21" in span.attributes["gen_ai.tool.call.result"]
+
+
+@pytest.mark.parametrize(
+    ("capture_mode", "captures_content"),
+    [
+        (None, False),
+        (CaptureMessageContent.NO_CONTENT, False),
+        (CaptureMessageContent.SPAN_ONLY, True),
+        (CaptureMessageContent.EVENT_ONLY, False),
+        (CaptureMessageContent.SPAN_AND_EVENT, True),
+    ],
+)
+def test_only_a_request_destination_can_turn_on_llm_payload_content(
+    capture_mode: CaptureMessageContent | None, captures_content: bool
+) -> None:
+    config: Final = OpenTelemetryV2Config(
+        exporter="in_memory",
+        capture_message_content=CaptureMessageContent.NO_CONTENT,
+    )
+    exporter: Final = InMemorySpanExporter()
+    logger: Final = OpenTelemetryV2(
+        config=config, tracer_provider=providers.build_tracer_provider(config, exporter=exporter)
+    )
+    payload: Final = _payload(
+        messages=[{"role": "user", "content": "prompt marker"}],
+        response={
+            "id": "resp_1",
+            "model": "gpt-4o-2024",
+            "choices": [{"finish_reason": "stop", "message": {"role": "assistant", "content": "answer marker"}}],
+        },
+    )
+    kwargs: Final = {
+        **_kwargs(payload),
+        "standard_callback_dynamic_params": {"capture_message_content": "span_only"},
+    }
+    destination: Final = OtelDestination(
+        endpoint="http://team.local/api/public/otel",
+        headers=MappingProxyType({"Authorization": "Basic dA=="}),
+        callback_name="langfuse_otel",
+        capture_message_content=capture_mode,
+    )
+
+    def emit() -> None:
+        set_request_destinations((destination,))
+        _emit_llm(logger, kwargs)
+
+    contextvars.copy_context().run(emit)
+
+    (span,) = exporter.get_finished_spans()
+    assert ("gen_ai.input.messages" in span.attributes) is captures_content
+    assert ("gen_ai.output.messages" in span.attributes) is captures_content
 
 
 def test_mcp_tool_call_failure_marks_error():
@@ -1101,6 +1293,29 @@ def test_phase_event_lands_on_root_span_even_inside_active_phase_span():
     ]
     assert dict(root_events[2].attributes or {}) == {"litellm.deployment.attempt": 1}
     assert by_name["auth /chat/completions"].events == ()
+
+
+def test_routing_attributes_stay_on_the_active_phase_while_retry_events_stay_on_root() -> None:
+    logger, exporter = _logger()
+    root: Final = logger.tracer.start_span("request", kind=SpanKind.SERVER)
+    set_request_root_span(root)
+    with trace.use_span(root, end_on_exit=True):
+        logger.set_phase_attributes({"litellm.routing.cause": "outside phase"})
+        with logger.start_phase_span("route auto-router"):
+            logger.set_phase_attributes({"litellm.routing.router_config_id": "definition-1"})
+            with logger.tracer.start_as_current_span("classifier transport"):
+                logger.set_phase_attributes({"litellm.routing.cause": "heuristic"})
+                logger.add_phase_event("litellm.request.retry", {"error.type": "TimeoutError"})
+        logger.set_phase_attributes({"litellm.routing.cause": "after phase"})
+    by_name: Final = {span.name: span for span in exporter.get_finished_spans()}
+    route: Final = by_name["route auto-router"]
+    assert route.attributes["litellm.routing.router_config_id"] == "definition-1"
+    assert route.attributes["litellm.routing.cause"] == "heuristic"
+    assert route.parent.span_id == root.get_span_context().span_id
+    assert route.events == ()
+    assert "litellm.routing.cause" not in by_name["request"].attributes
+    assert "litellm.routing.cause" not in by_name["classifier transport"].attributes
+    assert by_name["request"].events[0].attributes["error.type"] == "TimeoutError"
 
 
 def test_live_llm_span_anchors_to_root_with_no_active_span():
@@ -1616,6 +1831,54 @@ def test_pre_call_hook_seeds_baggage_onto_server_and_child_spans():
     )
 
 
+@pytest.mark.parametrize("guardrails_only", [False, True])
+def test_proxy_pre_call_hook_seeds_request_metadata_without_a_listed_otel_callback(monkeypatch, guardrails_only):
+    """A V2 logger that is registered but not in ``litellm.callbacks`` (a team-only destination) still gets the
+    caller's allowlisted ``requester_metadata`` from the proxy pre-call hook, keeps the model auth seeded, and a
+    ``guardrails_only`` scan seeds nothing."""
+    import litellm
+    from litellm.caching.caching import DualCache
+    from litellm.proxy import proxy_server
+    from litellm.proxy.utils import ProxyLogging
+
+    cfg: Final = OpenTelemetryV2Config(exporter="in_memory", baggage_metadata_keys=["requester_metadata.trace_id"])
+    exporter: Final = InMemorySpanExporter()
+    logger: Final = OpenTelemetryV2(config=cfg, tracer_provider=providers.build_tracer_provider(cfg, exporter=exporter))
+    monkeypatch.setattr(proxy_server, "open_telemetry_logger", logger)
+    monkeypatch.setattr(litellm, "callbacks", [])
+    server: Final = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
+    data: Final = {
+        "model": "resolved-deployment",
+        "metadata": {"requester_metadata": {"trace_id": "abc", "other": "x"}},
+    }
+
+    async def _flow():
+        logger.seed_request_identity(_Auth(), model="client-alias")
+        await ProxyLogging(user_api_key_cache=DualCache()).pre_call_hook(
+            user_api_key_dict=_Auth(), data=data, call_type="completion", guardrails_only=guardrails_only
+        )
+        await logger.async_service_success_hook(payload=_ServicePayload("redis", "set"), parent_otel_span=server)
+
+    with trace.use_span(server, end_on_exit=False):
+        asyncio.run(_flow())
+    server.end()
+
+    spans: Final = {s.name: s for s in exporter.get_finished_spans()}
+    seeded: Final = None if guardrails_only else "abc"
+    observed: Final = {
+        name: (
+            spans[name].attributes.get(f"{LiteLLM.METADATA_PREFIX}trace_id"),
+            spans[name].attributes.get("gen_ai.request.model"),
+        )
+        for name in (LITELLM_PROXY_REQUEST_SPAN_NAME, "redis set")
+    }
+    assert observed == {
+        LITELLM_PROXY_REQUEST_SPAN_NAME: (seeded, "client-alias"),
+        "redis set": (seeded, "client-alias"),
+    }, observed
+    assert not any(any(k.endswith("other") for k in s.attributes) for s in spans.values()), sorted(spans)
+
+
 def test_pre_call_hook_promotes_nested_request_metadata_key():
     """``baggage_metadata_keys: [requester_metadata.trace_id]`` reads the caller's
     ``metadata.trace_id`` (snapshotted by the proxy under ``requester_metadata``)
@@ -1756,6 +2019,7 @@ def test_service_span_is_named_by_purpose_when_the_producer_declares_a_target():
         ("async_batch_get_cache", "redis.mget auth_objects", "redis.mget"),
         ("async_set_cache_pipeline_with_ttls", "redis.set auth_objects", "redis.set"),
         ("async_increment_pipeline", "redis.incr auth_objects", "redis.incr"),
+        ("async_increment_if_present", "redis.incr auth_objects", "redis.incr"),
         ("async_delete_cache", "redis.delete auth_objects", "redis.delete"),
         ("async_scan_iter", "redis.scan auth_objects", "redis.scan"),
         ("request_redis_batch", "redis.pipeline auth_objects", "redis.pipeline"),
@@ -3311,20 +3575,21 @@ _REDIS_CACHE_MODULES = (
     "litellm/caching/redis_cluster_cache.py",
     "litellm/caching/redis_semantic_cache.py",
     "litellm/caching/dual_cache.py",
-    "litellm/caching/redis_batch.py",
 )
+_NATIVE_REQUEST_BATCHES = "litellm/rust/crates/python-bridge/src/redis/store/request.rs"
 
 
 def _redis_call_types_emitted_by_the_cache_layer():
     """Every ``call_type`` literal the Redis cache layer hands to the service logger, plus the
-    two ``RedisBatch`` names it passes as ``call_type=self.name``."""
+    names the native request batches report their flushes under."""
     import re
     from pathlib import Path
 
     repo = Path(__file__).resolve().parents[4]
     sources = "\n".join((repo / module).read_text() for module in _REDIS_CACHE_MODULES)
     literal = frozenset(re.findall(r'call_type="([a-z_]+)"', sources))
-    batch_names = frozenset(re.findall(r'RedisBatch\([^)]*name="([a-z_]+)"', sources))
+    native_request = (repo / _NATIVE_REQUEST_BATCHES).read_text()
+    batch_names = frozenset(re.findall(r'call\(py, "([a-z_]+)"\)', native_request))
     return sorted(literal | batch_names)
 
 
@@ -3345,31 +3610,6 @@ def test_no_call_type_the_redis_cache_layer_emits_can_fall_back_to_the_raw_metho
         if not service_span_name(ServiceSpanData(service_name="redis", call_type=call_type)).startswith("redis.")
     ]
     assert fallbacks == []
-
-
-def test_mixed_pipeline_families_land_on_their_own_bounded_attribute():
-    """A flush that carried several owners' ops is ``redis.pipeline mixed``; the sorted family
-    list goes to ``litellm.redis.families`` (not under ``litellm.metadata.``) while ``op_count``
-    stays an int on ``litellm.metadata.op_count``, and the legacy vocabulary keeps the bare keys."""
-    logger, exporter = _logger()
-    parent = _service_parent(logger)
-    try:
-        asyncio.run(
-            logger.async_service_success_hook(
-                payload=_ServicePayload("redis", "request_redis_batch", target="mixed"),
-                parent_otel_span=parent,
-                event_metadata={"op_count": 3, "families": "auth_objects,spend_counters"},
-            )
-        )
-    finally:
-        parent.end()
-    (span,) = [s for s in exporter.get_finished_spans() if s.name.startswith("redis")]
-    assert span.name == "redis.pipeline mixed"
-    assert span.attributes[LiteLLM.REDIS_FAMILIES] == "auth_objects,spend_counters"
-    assert span.attributes["families"] == "auth_objects,spend_counters"
-    assert f"{LiteLLM.METADATA_PREFIX}families" not in span.attributes
-    assert span.attributes[f"{LiteLLM.METADATA_PREFIX}op_count"] == 3
-    assert type(span.attributes[f"{LiteLLM.METADATA_PREFIX}op_count"]) is int
 
 
 def test_deferred_close_starts_at_the_provider_handoff_not_the_logging_objects_birth():
@@ -3507,7 +3747,8 @@ def test_every_prisma_crud_call_site_names_a_known_table_so_no_half_named_postgr
     repo = Path(__file__).resolve().parents[4]
     per_file = (_crud_call_sites_in(path, repo) for path in _source_files(repo))
     sites = tuple(site for sites_in_file in per_file for site in sites_in_file)  # comprehension-ok: flatten
-    assert len(sites) >= 40, f"the scan lost the PrismaClient call sites: {sites}"
+    found_helpers: Final = {site.call_type for site in sites}
+    assert found_helpers == _GENERIC_CRUD_HELPERS, f"the scan lost the PrismaClient call sites: {sites}"
 
     unresolved = [site for site in sites if site.table_name not in _PRISMA_MODEL_BY_TABLE_NAME]
     assert unresolved == [], f"PrismaClient CRUD calls whose table the schema cannot resolve: {unresolved}"
@@ -3526,3 +3767,46 @@ def test_every_prisma_crud_call_site_names_a_known_table_so_no_half_named_postgr
         if re.fullmatch(r"postgres\.(select|insert|update|delete) LiteLLM_\w+", name) is None
     }
     assert half_named == {}, half_named
+
+
+def test_the_prisma_crud_scan_finds_every_receiver_and_table_form_and_reports_a_missing_table(tmp_path: Path) -> None:
+    from litellm.integrations.otel.model.spans import _PRISMA_MODEL_BY_TABLE_NAME
+
+    sources: Final = {
+        "litellm/proxy/calls.py": (
+            'prisma_client.get_data(token="t")\n'
+            'self.update_data(team_id="t", data={})\n'
+            'db.delete_data(user_id="u")\n'
+            'proxy_server.prisma_client.insert_data(data={}, table_name="spend")\n'
+            'prisma_client.get_generic_data(key="k", value="v", table_name="config")\n'
+            "prisma_client.insert_data(data={})\n"
+            'self.get_data(query_type="find_all")\n'
+            'cache.get_data(token="t")\n'
+            "prisma_client.connect()\n"
+        ),
+        "enterprise/hooks.py": 'prisma_client.get_data(user_id="u")\n',
+        "litellm-proxy-extras/extras.py": 'db.update_data(token="t", data={})\n',
+        "litellm/tests/ignored.py": "prisma_client.insert_data(data={})\n",
+        "litellm/ui/node_modules/ignored.py": "prisma_client.insert_data(data={})\n",
+    }
+    for relative, text in sources.items():
+        path: Final = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+
+    per_file: Final = (_crud_call_sites_in(path, tmp_path) for path in _source_files(tmp_path))
+    sites: Final = tuple(site for sites_in_file in per_file for site in sites_in_file)  # comprehension-ok: flatten
+
+    assert {(site.location, site.call_type, site.table_name) for site in sites} == {
+        ("litellm/proxy/calls.py:1", "get_data", "key"),
+        ("litellm/proxy/calls.py:2", "update_data", "team"),
+        ("litellm/proxy/calls.py:3", "delete_data", "user"),
+        ("litellm/proxy/calls.py:4", "insert_data", "spend"),
+        ("litellm/proxy/calls.py:5", "get_generic_data", "config"),
+        ("litellm/proxy/calls.py:6", "insert_data", None),
+        ("litellm/proxy/calls.py:7", "get_data", None),
+        ("enterprise/hooks.py:1", "get_data", "user"),
+        ("litellm-proxy-extras/extras.py:1", "update_data", "key"),
+    }
+    unresolved: Final = sorted(site.location for site in sites if site.table_name not in _PRISMA_MODEL_BY_TABLE_NAME)
+    assert unresolved == ["litellm/proxy/calls.py:6", "litellm/proxy/calls.py:7"]

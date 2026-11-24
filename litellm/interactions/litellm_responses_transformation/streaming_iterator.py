@@ -3,8 +3,8 @@ Streaming iterator for transforming Responses API stream to Interactions API str
 """
 
 from collections import deque
-from collections.abc import AsyncIterator, Iterator
-from typing import Any, Final, cast
+from collections.abc import AsyncIterator, Iterator, Mapping
+from typing import Final, cast
 
 from litellm.responses.streaming_iterator import (
     BaseResponsesAPIStreamingIterator,
@@ -20,6 +20,7 @@ from litellm.types.llms.openai import (
     OutputTextDeltaEvent,
     ResponseCompletedEvent,
     ResponseCreatedEvent,
+    ResponseIncompleteEvent,
     ResponseInProgressEvent,
     ResponsesAPIStreamingResponse,
 )
@@ -44,7 +45,7 @@ class LiteLLMResponsesInteractionsStreamingIterator:
         request_input: InteractionInput | None,
         optional_params: InteractionsAPIOptionalRequestParams,
         custom_llm_provider: str | None = None,
-        litellm_metadata: dict[str, Any] | None = None,
+        litellm_metadata: Mapping[str, object] | None = None,
     ):
         self.model = model
         self.responses_stream_iterator = litellm_custom_stream_wrapper
@@ -104,12 +105,12 @@ class LiteLLMResponsesInteractionsStreamingIterator:
             index=0,
         )
 
-    def _build_completion_event(self, response_id: str) -> InteractionsAPIStreamingResponse:
+    def _build_completion_event(self, response_id: str, status: str = "completed") -> InteractionsAPIStreamingResponse:
         return InteractionsAPIStreamingResponse(
             event_type="interaction.completed",
             id=response_id,
             object="interaction",
-            status="completed",
+            status=status,
             model=self.model,
             steps=[
                 {
@@ -174,7 +175,7 @@ class LiteLLMResponsesInteractionsStreamingIterator:
         # and completion events by id (response.id may differ from the item_id
         # used to derive the initial id when the stream starts directly with a
         # text delta).
-        if isinstance(responses_chunk, ResponseCompletedEvent):
+        if isinstance(responses_chunk, (ResponseCompletedEvent, ResponseIncompleteEvent)):
             self.finished = True
             response: Final = responses_chunk.response
             response_id = self._interaction_id or getattr(response, "id", None) or f"interaction_{id(self)}"
@@ -182,7 +183,12 @@ class LiteLLMResponsesInteractionsStreamingIterator:
             terminal: Final[list[InteractionsAPIStreamingResponse]] = []
             if self.sent_content_start:
                 terminal.append(self._build_content_stop_event(response_id))
-            terminal.append(self._build_completion_event(response_id))
+            terminal.append(
+                self._build_completion_event(
+                    response_id,
+                    status="incomplete" if isinstance(responses_chunk, ResponseIncompleteEvent) else "completed",
+                )
+            )
             self._sent_completion_event = True
             return terminal
 

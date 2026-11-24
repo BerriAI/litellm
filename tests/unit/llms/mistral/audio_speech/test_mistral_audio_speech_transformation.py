@@ -1,9 +1,11 @@
 import base64
+import json
 from typing import Final
 from unittest.mock import MagicMock
 
 import httpx
 import pytest
+from pydantic import ValidationError
 
 import litellm
 from litellm.llms.base_llm.text_to_speech.transformation import BaseTextToSpeechConfig
@@ -191,6 +193,116 @@ def test_transform_response_invalid_base64_raises():
     )
     with pytest.raises(MistralTextToSpeechException, match="base64"):
         config.transform_text_to_speech_response(
+            model="voxtral-mini-tts-2603",
+            raw_response=raw_response,
+            logging_obj=MagicMock(),
+        )
+
+
+_SPEECH_AUDIO: Final = b"ID3-fake-mp3-bytes"
+_SPEECH_AUDIO_B64: Final = base64.b64encode(_SPEECH_AUDIO).decode()
+
+
+@pytest.mark.parametrize(
+    ("request_body", "expected_content_type"),
+    [
+        pytest.param(b'{"input": "hi", "response_format": "opus"}', "audio/ogg", id="known-format"),
+        pytest.param(b'{"input": "hi", "response_format": "aac"}', "audio/mpeg", id="unknown-format"),
+        pytest.param(b'{"input": "hi", "response_format": null}', "audio/mpeg", id="null-format"),
+        pytest.param(b'{"input": "hi", "response_format": ["wav"]}', "audio/mpeg", id="non-string-format"),
+        pytest.param(b'{"input": "hi", "ref_audio": "bXktdm9pY2Utc2FtcGxl"}', "audio/mpeg", id="format-omitted"),
+        pytest.param(b"", "audio/mpeg", id="request-without-body"),
+    ],
+)
+def test_transform_response_labels_audio_with_the_requested_format(request_body: bytes, expected_content_type: str):
+    raw_response: Final = httpx.Response(
+        200,
+        json={"id": None, "audio_data": _SPEECH_AUDIO_B64, "usage": {"characters": 2}, "voices": ["en_paul_neutral"]},
+        request=httpx.Request("POST", SPEECH_URL, content=request_body),
+    )
+    result: Final = MistralTextToSpeechConfig().transform_text_to_speech_response(
+        model="voxtral-mini-tts-2603",
+        raw_response=raw_response,
+        logging_obj=MagicMock(),
+    )
+    assert result.content == _SPEECH_AUDIO
+    assert result.response.headers["content-type"] == expected_content_type
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected_keys"),
+    [
+        pytest.param({}, "()", id="empty-object"),
+        pytest.param({"audio_data": None}, "('audio_data',)", id="null-audio"),
+        pytest.param({"audio_data": ""}, "('audio_data',)", id="empty-audio"),
+        pytest.param({"id": "tts-1", "audio_data": 7}, "('id', 'audio_data')", id="numeric-audio"),
+        pytest.param({"audio_data": [_SPEECH_AUDIO_B64], "id": "tts-1"}, "('audio_data', 'id')", id="list-audio"),
+    ],
+)
+def test_transform_response_without_usable_audio_reports_the_response_keys(
+    payload: dict[str, object], expected_keys: str
+):
+    raw_response: Final = httpx.Response(200, json=payload, request=httpx.Request("POST", SPEECH_URL))
+    with pytest.raises(MistralTextToSpeechException) as exc_info:
+        MistralTextToSpeechConfig().transform_text_to_speech_response(
+            model="voxtral-mini-tts-2603",
+            raw_response=raw_response,
+            logging_obj=MagicMock(),
+        )
+    assert exc_info.value.status_code == 500
+    assert exc_info.value.message == f"No audio_data in Mistral speech response. Response keys: {expected_keys}"
+
+
+def test_transform_response_non_json_body_raises_provider_error_with_upstream_status():
+    raw_response: Final = httpx.Response(
+        502,
+        text="<html>bad gateway</html>",
+        request=httpx.Request("POST", SPEECH_URL),
+    )
+    with pytest.raises(MistralTextToSpeechException) as exc_info:
+        MistralTextToSpeechConfig().transform_text_to_speech_response(
+            model="voxtral-mini-tts-2603",
+            raw_response=raw_response,
+            logging_obj=MagicMock(),
+        )
+    assert exc_info.value.status_code == 502
+    assert exc_info.value.message == "Non-JSON response from Mistral speech API: <html>bad gateway</html>"
+
+
+@pytest.mark.parametrize(
+    "response_body",
+    [b'["secret-audio-payload"]', b'"secret-audio-payload"', b"7", b"null", b"true"],
+)
+def test_transform_response_json_body_that_is_not_an_object_is_rejected_without_echoing_it(response_body: bytes):
+    raw_response: Final = httpx.Response(200, content=response_body, request=httpx.Request("POST", SPEECH_URL))
+    with pytest.raises(ValidationError) as exc_info:
+        MistralTextToSpeechConfig().transform_text_to_speech_response(
+            model="voxtral-mini-tts-2603",
+            raw_response=raw_response,
+            logging_obj=MagicMock(),
+        )
+    assert "secret-audio-payload" not in str(exc_info.value)
+    assert "input_value" not in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    ("request_body", "expected_error"),
+    [
+        pytest.param(b'["wav"]', ValidationError, id="json-array-body"),
+        pytest.param(b'"wav"', ValidationError, id="json-string-body"),
+        pytest.param(b"response_format=wav", json.JSONDecodeError, id="form-encoded-body"),
+    ],
+)
+def test_transform_response_rejects_a_request_body_that_is_not_a_json_object(
+    request_body: bytes, expected_error: type[Exception]
+):
+    raw_response: Final = httpx.Response(
+        200,
+        json={"audio_data": _SPEECH_AUDIO_B64},
+        request=httpx.Request("POST", SPEECH_URL, content=request_body),
+    )
+    with pytest.raises(expected_error):
+        MistralTextToSpeechConfig().transform_text_to_speech_response(
             model="voxtral-mini-tts-2603",
             raw_response=raw_response,
             logging_obj=MagicMock(),

@@ -17,7 +17,7 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     ModifyResponseException,
 )
-from litellm.proxy._types import ProxyException
+from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 
 _PT_MOD = "litellm.proxy.pass_through_endpoints.pass_through_endpoints"
 _COLLECT = "litellm.proxy.pass_through_endpoints.passthrough_guardrails.PassthroughGuardrailHandler.collect_guardrails"
@@ -35,7 +35,7 @@ _GEMINI_RESPONSE = {
 
 
 def _make_user_api_key_dict(**overrides):
-    d = MagicMock()
+    d = UserAPIKeyAuth()
     d.api_key = "sk-test"
     d.user_id = "user-1"
     d.team_id = "team-1"
@@ -78,6 +78,7 @@ def _common_patches(mock_proxy_logging, mock_response):
 
     mock_pt_logging = MagicMock()
     mock_pt_logging.pass_through_async_success_handler = AsyncMock()
+    mock_pt_logging.settle_background_response_before_delete = AsyncMock()
 
     patches = [
         patch(
@@ -89,8 +90,8 @@ def _common_patches(mock_proxy_logging, mock_response):
         patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging),
         patch(f"{_PT_MOD}.pass_through_endpoint_logging", mock_pt_logging),
         patch(f"{_PT_MOD}.get_async_httpx_client", return_value=mock_async_client_obj),
-        patch(f"{_PT_MOD}._read_request_body", new_callable=AsyncMock, return_value={}),
-        patch(f"{_PT_MOD}._safe_get_request_headers", return_value={}),
+        patch(f"{_PT_MOD}.read_request_body", new_callable=AsyncMock, return_value={}),
+        patch(f"{_PT_MOD}.safe_get_request_headers", return_value={}),
     ]
 
     stack = ExitStack()

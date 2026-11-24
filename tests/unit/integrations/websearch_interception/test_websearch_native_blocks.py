@@ -531,7 +531,7 @@ class TestShortCircuitEmitsNativeBlocks:
             new=AsyncMock(return_value=("Title: x\nURL: y", _make_search_response())),
         ):
             result = await logger.try_short_circuit_search(
-                model="github_copilot/claude-sonnet-4",
+                model="github_copilot/claude-sonnet-5.5",
                 messages=[{"role": "user", "content": "search query"}],
                 tools=[
                     {
@@ -569,7 +569,7 @@ class TestShortCircuitEmitsNativeBlocks:
             new=AsyncMock(return_value=("Title: x\nURL: y", _make_search_response())),
         ):
             result = await logger.try_short_circuit_search(
-                model="github_copilot/claude-sonnet-4",
+                model="github_copilot/claude-sonnet-5.5",
                 messages=[{"role": "user", "content": "search query"}],
                 tools=[
                     {
@@ -601,7 +601,7 @@ class TestShortCircuitEmitsNativeBlocks:
             side_effect=RateLimitError("slow down", llm_provider="tavily", model="tavily"),
         ):
             result = await logger.try_short_circuit_search(
-                model="github_copilot/claude-sonnet-4",
+                model="github_copilot/claude-sonnet-5.5",
                 messages=[{"role": "user", "content": "search query"}],
                 tools=[{"type": "web_search_20250305", "name": "web_search"}],
                 custom_llm_provider="github_copilot",
@@ -670,3 +670,61 @@ class TestLegacyPathMatchesNewPath:
             "text",
         ]
         assert out["content"][1]["tool_use_id"] == out["content"][0]["id"]
+
+
+@pytest.mark.parametrize(
+    ("response", "expected_text"),
+    [
+        (SearchResponse(results=[], object="search"), "results=[] object='search'"),
+        (
+            SearchResponse.model_validate(
+                {
+                    "results": [],
+                    "object": "search",
+                    "provider_metadata": {"requestId": "exa-request", "costDollars": {"total": 0.005}},
+                }
+            ),
+            "results=[] object='search'",
+        ),
+        (
+            SearchResponse.model_validate(
+                {
+                    "results": [],
+                    "object": "search",
+                    "search_id": "search-1",
+                    "provider_metadata": {"requestId": "exa-request"},
+                }
+            ),
+            "results=[] object='search' search_id='search-1'",
+        ),
+        (
+            SearchResponse.model_validate({"results": [], "object": "search", "query": "q", "cls": 1}),
+            "results=[] object='search' query='q' cls=1",
+        ),
+        (
+            SearchResponse.model_validate(
+                {
+                    "results": [
+                        SearchResult.model_validate(
+                            {
+                                "title": "T",
+                                "url": "https://example.com",
+                                "snippet": "S",
+                                "highlights": ["S"],
+                                "highlight_scores": [0.5],
+                                "score": 0.9,
+                            }
+                        )
+                    ],
+                    "object": "search",
+                    "provider_metadata": {"requestId": "exa-request"},
+                }
+            ),
+            "Title: T\nURL: https://example.com\nSnippet: S",
+        ),
+    ],
+)
+def test_format_search_response_keeps_the_provider_metadata_out_of_the_model_text(
+    response: SearchResponse, expected_text: str
+):
+    assert WebSearchTransformation.format_search_response(response) == expected_text

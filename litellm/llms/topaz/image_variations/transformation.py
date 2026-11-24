@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Final
 from aiohttp import ClientResponse
 from httpx import Headers, Response
 
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import (
     BaseLLMException,
     LiteLLMLoggingObj,
@@ -35,12 +36,11 @@ class TopazImageVariationConfig(TopazModelInfo, BaseImageVariationConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
-        api_base = api_base or "https://api.topazlabs.com"
-        return f"{api_base}/image/v1/enhance"
+        return join_api_base(api_base or "https://api.topazlabs.com", "image/v1/enhance")
 
     def map_openai_params(
         self,
@@ -100,7 +100,7 @@ class TopazImageVariationConfig(TopazModelInfo, BaseImageVariationConfig):
         model: str | None,
         image: FileTypes,
         optional_params: dict,
-        headers: dict,
+        headers: Mapping[str, object],
     ) -> HttpHandlerRequestFields:
         request_params: Final = HttpHandlerRequestFields(
             files={"image": self.prepare_file_tuple(image)},
@@ -135,10 +135,10 @@ class TopazImageVariationConfig(TopazModelInfo, BaseImageVariationConfig):
         raw_response: ClientResponse,
         model_response: ImageResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
+        request_data: Mapping[str, object],
         image: FileTypes,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
     ) -> ImageResponse:
@@ -154,10 +154,10 @@ class TopazImageVariationConfig(TopazModelInfo, BaseImageVariationConfig):
         raw_response: Response,
         model_response: ImageResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
+        request_data: Mapping[str, object],
         image: FileTypes,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
     ) -> ImageResponse:

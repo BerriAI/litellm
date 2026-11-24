@@ -7,6 +7,7 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Final
 
+import httpx
 import pytest
 import yaml
 from pydantic import JsonValue
@@ -16,8 +17,11 @@ from tests.integration._support.client import Gateway, eventually, object_value,
 from tests.integration._support.database import read_rows
 from tests.integration._support.process import owned_proxy
 from tests.integration._support.upstream import delete_scenario, register_scenario
+from tests.integration._support.wire import Reply, Request, wire_server
 from tests.integration.cost_calculation.cost_tracking_case import RealtimeResponse
 from tests.integration.pricing.test_realtime_cached_audio_pricing import one_realtime_turn
+
+pytestmark: Final = pytest.mark.shares_worker_state
 
 REALTIME_MODEL: Final = "gpt-realtime-2"
 REALTIME_INPUT_TEXT_TOKENS: Final = 10
@@ -358,3 +362,178 @@ def test_loaded_router_preserves_cached_defaults_during_real_requests(gateway: G
                 assert info["output_cost_per_token"] == (0.0 if alias == aliases[2] else 0.0000006)
         finally:
             router.reset()
+
+
+def _bounded_chat(gateway: Gateway, model: str, key: str, content: str) -> httpx.Response:
+    return gateway.request(
+        "POST",
+        "/v1/chat/completions",
+        {"model": model, "max_tokens": 20, "messages": [{"role": "user", "content": content}]},
+        key=key,
+    )
+
+
+def _observed(upstream: httpx.Client) -> list[JsonValue]:
+    response: Final = upstream.get("/__observations")
+    response.raise_for_status()
+    requests: Final = object_value(response.json())["requests"]
+    assert isinstance(requests, list), response.text
+    return requests
+
+
+def _upstream_chat(upstream_model: str, content: str) -> dict[str, JsonValue]:
+    return {
+        "path": "/v1/chat/completions",
+        "authorization": "Bearer integration-provider-key",
+        "body": {"model": upstream_model, "max_tokens": 20, "messages": [{"role": "user", "content": content}]},
+        "method": "POST",
+        "api_key": "",
+    }
+
+
+def _block_unpriced(gateway: Gateway, enabled: bool) -> httpx.Response:
+    return gateway.request("PATCH", "/config/block_requests_for_models_without_pricing", {"enabled": enabled})
+
+
+def test_block_requests_for_models_without_pricing_refuses_unpriced_deployments(gateway: Gateway) -> None:
+    with (
+        gateway.scenario() as scenario,
+        httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream,
+    ):
+        original: Final = gateway.get("/config/block_requests_for_models_without_pricing")["enabled"]
+        scenario.cleanups.callback(_block_unpriced, gateway, bool(original))
+        enabled: Final = _block_unpriced(gateway, True)
+        assert enabled.status_code == 200, enabled.text
+        assert enabled.json() == {"enabled": True}, enabled.text
+        assert gateway.get("/config/block_requests_for_models_without_pricing") == {"enabled": True}
+        settings_rows: Final = read_rows(
+            'SELECT param_value FROM "LiteLLM_Config" WHERE param_name = %s', ("litellm_settings",)
+        )
+        settings: Final = object_value(settings_rows[0]["param_value"])
+        assert settings["block_requests_for_models_without_pricing"] is True, settings
+
+        unpriced_upstream_model: Final = f"integration-unpriced-{uuid.uuid4().hex}"
+        unpriced: Final = scenario.model(model=f"openai/{unpriced_upstream_model}")
+        priced: Final = scenario.model(input_cost_per_token=0.001, output_cost_per_token=0.002)
+        key: Final = scenario.key(models=[unpriced, priced])
+        entries: Final = gateway.get("/model/info")["data"]
+        assert isinstance(entries, list)
+        unpriced_info: Final = next(
+            object_value(entry) for entry in entries if object_value(entry)["model_name"] == unpriced
+        )
+        unpriced_model_info: Final = object_value(unpriced_info["model_info"])
+        assert unpriced_model_info["input_cost_per_token"] is None, unpriced_model_info
+        assert unpriced_model_info["output_cost_per_token"] is None, unpriced_model_info
+
+        upstream.delete("/__observations").raise_for_status()
+        blocked: Final = _bounded_chat(gateway, unpriced, key, f"unpriced {uuid.uuid4().hex}")
+        assert blocked.status_code == 403, blocked.text
+        assert blocked.json() == {
+            "error": {
+                "message": f"Model '{unpriced}' has no pricing in the cost map, so litellm cannot price the request. "
+                "Requests for unpriced models are blocked because 'block_requests_for_models_without_pricing' is "
+                "enabled. Add pricing (input_cost_per_token/output_cost_per_token) to allow the request.",
+                "type": "model_cost_map_missing",
+                "param": "model",
+                "code": "403",
+            }
+        }, blocked.text
+        assert _observed(upstream) == [], blocked.text
+
+        priced_content: Final = f"priced {uuid.uuid4().hex}"
+        served: Final = _bounded_chat(gateway, priced, key, priced_content)
+        assert served.status_code == 200, served.text
+        assert float(served.headers["x-litellm-response-cost"]) == pytest.approx(0.06), served.text
+        assert _observed(upstream) == [_upstream_chat("gpt-4o-mini", priced_content)], served.text
+
+        disabled: Final = _block_unpriced(gateway, False)
+        assert disabled.status_code == 200, disabled.text
+        assert disabled.json() == {"enabled": False}, disabled.text
+        assert gateway.get("/config/block_requests_for_models_without_pricing") == {"enabled": False}
+        settings_rows: Final = read_rows(
+            'SELECT param_value FROM "LiteLLM_Config" WHERE param_name = %s', ("litellm_settings",)
+        )
+        disabled_settings: Final = object_value(settings_rows[0]["param_value"])
+        assert disabled_settings["block_requests_for_models_without_pricing"] is False, disabled_settings
+        upstream.delete("/__observations").raise_for_status()
+        unpriced_content: Final = f"unpriced {uuid.uuid4().hex}"
+        now_served: Final = _bounded_chat(gateway, unpriced, key, unpriced_content)
+        assert now_served.status_code == 200, now_served.text
+        assert _observed(upstream) == [_upstream_chat(unpriced_upstream_model, unpriced_content)], now_served.text
+
+
+FORWARDED_OAUTH_TOKEN: Final = "sk-ant-oat01-integration-forwarded-credential"
+FORWARDED_INPUT_TOKENS: Final = 1000
+FORWARDED_OUTPUT_TOKENS: Final = 100
+
+
+def _client_header_forwarding_config(directory: Path) -> Path:
+    configuration: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+    configuration["general_settings"]["forward_client_headers_to_llm_api"] = True
+    path: Final = directory / "forwarding.yaml"
+    path.write_text(yaml.safe_dump(configuration))
+    return path
+
+
+def _anthropic_message(request: Request) -> Reply:
+    assert request.headers["authorization"] == f"Bearer {FORWARDED_OAUTH_TOKEN}", dict(request.headers)
+    return Reply(
+        body=json.dumps(
+            {
+                "id": f"msg_{uuid.uuid4().hex}",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-opus-4-7",
+                "content": [{"type": "text", "text": "forwarded credential control"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": FORWARDED_INPUT_TOKENS, "output_tokens": FORWARDED_OUTPUT_TOKENS},
+            }
+        ).encode()
+    )
+
+
+@pytest.mark.parametrize(
+    ("input_rate", "output_rate"),
+    ((0.001, 0.002), (0.0, 0.0)),
+    ids=("custom_rates", "zero_rated"),
+)
+def test_messages_with_a_forwarded_client_credential_is_charged_at_the_deployment_configured_rates(
+    gateway: Gateway, tmp_path: Path, input_rate: float, output_rate: float
+) -> None:
+    with (
+        wire_server(_anthropic_message) as wire,
+        owned_proxy(gateway, tmp_path, {}, config=_client_header_forwarding_config(tmp_path)) as candidate,
+        candidate.scenario() as scenario,
+    ):
+        model: Final = scenario.model(
+            model="anthropic/claude-opus-4-7",
+            api_base=wire.url,
+            api_key="integration-anthropic-key",
+            input_cost_per_token=input_rate,
+            output_cost_per_token=output_rate,
+        )
+        key: Final = scenario.key(models=[model])
+        response: Final = candidate.request(
+            "POST",
+            "/v1/messages",
+            {"model": model, "max_tokens": 16, "messages": [{"role": "user", "content": "forwarded credential"}]},
+            headers={
+                "x-litellm-api-key": f"Bearer {key}",
+                "Authorization": f"Bearer {FORWARDED_OAUTH_TOKEN}",
+                "anthropic-version": "2023-06-01",
+            },
+        )
+        assert response.status_code == 200, response.text
+        expected: Final = FORWARDED_INPUT_TOKENS * input_rate + FORWARDED_OUTPUT_TOKENS * output_rate
+        assert float(response.headers["x-litellm-response-cost"]) == pytest.approx(expected, abs=1e-12), dict(
+            response.headers
+        )
+        rows: Final = eventually(
+            lambda: candidate.rows(
+                'SELECT spend FROM "LiteLLM_SpendLogs" WHERE api_key = %s', (sha256(key.encode()).hexdigest(),)
+            ),
+            lambda values: len(values) == 1,
+            seconds=70,
+        )
+        assert float(str(rows[0]["spend"])) == pytest.approx(expected, abs=1e-12), rows

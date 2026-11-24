@@ -15,6 +15,7 @@ from litellm.llms.openai.chat.gpt_transformation import (
 )
 from litellm.llms.together_ai.chat.transformation import TogetherAIChatConfig
 from litellm.types.utils import LlmProviders, ModelResponse
+import os
 
 TOOL_CALLING_MODEL = "openai/gpt-oss-20b"
 REASONING_MODEL = "deepseek-ai/DeepSeek-V3.1"
@@ -485,6 +486,46 @@ def test_transform_request_keeps_reasoning_content_strips_internal_fields():
     )
 
     _assert_internal_fields_stripped_reasoning_kept(request["messages"])
+
+
+def test_tool_search_reply_sent_to_together_drops_litellm_response_fields():
+    tool_search_reply = {
+        "role": "assistant",
+        "content": "",
+        "reasoning_items": [{"type": "reasoning", "id": "rs_1", "summary": []}],
+        "provider_specific_fields": {"tool_search_items": [{"type": "tool_search_call", "id": "ts_1"}]},
+        "tool_calls": [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+                "provider_specific_fields": {"namespace": "weather"},
+            }
+        ],
+    }
+    request = TogetherAIChatConfig().transform_request(
+        model="openai/gpt-oss-120b",
+        messages=[
+            {"role": "user", "content": "Weather in Paris?"},
+            tool_search_reply,
+            {"role": "tool", "tool_call_id": "call_1", "content": "sunny"},
+        ],
+        optional_params={},
+        litellm_params={"custom_llm_provider": "together_ai"},
+        headers={},
+    )
+
+    assert request["messages"][1] == {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+            }
+        ],
+    }
 
 
 async def test_async_transform_request_keeps_reasoning_content_strips_internal_fields():
@@ -1074,12 +1115,14 @@ def test_anthropic_messages_streams_together_tool_call_as_input_json_delta():
 DECLARED_LEVELS_MODEL = "moonshotai/Kimi-K3"
 
 
+@pytest.mark.parametrize("model", [DECLARED_LEVELS_MODEL, "moonshotai/Kimi-K3.1-Pro"])
 @pytest.mark.parametrize("effort", ["low", "high", "max"])
-def test_declared_level_is_sent_unchanged(effort):
-    """Kimi K3 declares low, high and max in the model map and Together accepts all three, but the
-    per-model clamp below only spares deepseek-ai/DeepSeek-V4-Pro, so max used to arrive as high and
-    the caller silently lost half the reasoning budget they asked for."""
-    mapped = _map_reasoning_effort(DECLARED_LEVELS_MODEL, effort)
+def test_declared_level_is_sent_unchanged(model, effort):
+    """Kimi K3 and K3.1 Pro declare low, high and max in the model map and Together accepts all three
+    (K3.1 Pro checked live against api.together.xyz on 2026-11-17, Pylon #11992), but the per-model
+    clamp below only spares deepseek-ai/DeepSeek-V4-Pro, so max used to arrive as high and the
+    caller silently lost half the reasoning budget they asked for."""
+    mapped = _map_reasoning_effort(model, effort)
 
     assert mapped["reasoning_effort"] == effort
 
@@ -1157,3 +1200,21 @@ def test_custom_role_wrappers_never_reach_the_request():
     assert request_body["messages"] == messages
     assert "prompt" not in request_body
     assert "roles" not in request_body
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo",
+        "nvidia/Llama-3.1-Nemotron-70B-Instruct-HF",
+    ],
+)
+def test_get_supported_response_format_together_ai(model: str) -> None:
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    optional_params = litellm.get_supported_openai_params(
+        model, custom_llm_provider="together_ai"
+    )
+    assert isinstance(optional_params, list)
+    assert "response_format" in optional_params
+    assert "tools" in optional_params

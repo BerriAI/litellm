@@ -16,9 +16,9 @@ from .types.services import ServiceLoggerPayload, ServiceTypes
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
-    Span = _Span | Any
+    Span = _Span
     OTELClass = OpenTelemetry
 else:
     Span = Any
@@ -152,6 +152,11 @@ class ServiceLogging(CustomLogger):
         except Exception as e:
             verbose_logger.exception("Error dispatching service event - %s", e)
 
+    def redis_breaker_hook(self, transitions_to: str | None, failure_class: str | None) -> None:
+        prometheus_logger: Final[PrometheusServicesLogger | None] = getattr(self, "prometheusServicesLogger", None)
+        if prometheus_logger is not None:
+            prometheus_logger.redis_breaker_hook(transitions_to=transitions_to, failure_class=failure_class)
+
     def service_success_hook(
         self,
         service: ServiceTypes,
@@ -245,7 +250,7 @@ class ServiceLogging(CustomLogger):
         # (the V2 logger self-registers its instance even when the string is
         # present, unlike V1). Without this guard each such reference emits its own
         # span, so a single DB call shows up as duplicate ``postgres ...`` spans.
-        emitted_otel_logger_ids: Final[set] = set()
+        emitted_otel_logger_ids: Final[set[int]] = set()
         for callback in litellm.service_callback:
             if callback == "prometheus_system":
                 await self.init_prometheus_services_logger_if_none()
@@ -348,7 +353,7 @@ class ServiceLogging(CustomLogger):
 
         # Dedupe OTel loggers per event — see ``async_service_success_hook`` for why
         # the same logger can be referenced twice in ``service_callback``.
-        emitted_otel_logger_ids: Final[set] = set()
+        emitted_otel_logger_ids: Final[set[int]] = set()
         for callback in litellm.service_callback:
             if callback == "prometheus_system":
                 await self.init_prometheus_services_logger_if_none()
@@ -401,7 +406,7 @@ class ServiceLogging(CustomLogger):
             user_api_key_dict,
         )
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(self, kwargs, response_obj: object, start_time, end_time):
         """
         Hook to track latency for litellm proxy llm api calls
         """

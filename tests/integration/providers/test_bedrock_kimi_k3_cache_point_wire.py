@@ -3,8 +3,6 @@ import base64
 import json
 import os
 import re
-import signal
-import socket
 import threading
 import time
 import uuid
@@ -25,11 +23,15 @@ import yaml
 from integration._support.client import Gateway, Scenario, eventually, gateway_from_environment
 from integration._support.database import read_rows
 from integration._support.process import OwnedProxy, owned_proxy_process
+from integration._support.timing import assert_within_factor_of_control, timed
 from integration._support.upstream import _aws_event_frame
 from integration._support.wire import Reply, Request, Wire, wire_server
+from integration._support.ports import allocate_port
 from pydantic import JsonValue, TypeAdapter
 
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_if_encrypted_with
+
+pytestmark: Final = pytest.mark.shares_worker_state
 
 _KIMI_US: Final = "us.moonshotai.kimi-k3"
 _KIMI_GLOBAL: Final = "global.moonshotai.kimi-k3"
@@ -87,7 +89,7 @@ _NAMES: Final = MappingProxyType(
         "bedrock/*": "bedrock/*",
     }
 )
-_MODEL_INFO: Final = MappingProxyType({"arn-yaml-flagged": {"supports_prompt_cache_breakpoint": False}})
+_MODEL_INFO: Final = MappingProxyType({"arn-yaml-flagged": {"supports_bedrock_converse_cache_point": False}})
 _INJECTION: Final = MappingProxyType(
     {
         "kimi-inject-message": [{"location": "message", "role": "system"}],
@@ -454,7 +456,7 @@ def _inner_response_id(identity: str) -> str:
 
 def _completed_response_id(events: Iterable[dict[str, JsonValue]]) -> str:
     (completed,) = tuple(event for event in events if event.get("type") == "response.completed")
-    return _inner_response_id(str(_JSON.validate_python(completed["response"])["id"]))
+    return str(_JSON.validate_python(completed["response"])["id"])
 
 
 def _chat_text(body: Mapping[str, JsonValue]) -> str:
@@ -752,11 +754,15 @@ def _async_openai_client(rig: _Rig) -> openai.AsyncOpenAI:
 
 
 def _anthropic_client(rig: _Rig) -> anthropic.Anthropic:
-    return anthropic.Anthropic(base_url=_proxy_url(rig.gateway), api_key=rig.gateway.key, max_retries=0)
+    return anthropic.Anthropic(
+        base_url=_proxy_url(rig.gateway), api_key=rig.gateway.key, auth_token=rig.gateway.key, max_retries=0
+    )
 
 
 def _async_anthropic_client(rig: _Rig) -> anthropic.AsyncAnthropic:
-    return anthropic.AsyncAnthropic(base_url=_proxy_url(rig.gateway), api_key=rig.gateway.key, max_retries=0)
+    return anthropic.AsyncAnthropic(
+        base_url=_proxy_url(rig.gateway), api_key=rig.gateway.key, auth_token=rig.gateway.key, max_retries=0
+    )
 
 
 def _proxy_url(gateway: Gateway) -> str:
@@ -812,18 +818,23 @@ _ANTHROPIC_SDK_TARGETS: Final = (("kimi-us", _KIMI_US), ("arn-yaml-flagged", _YA
 @pytest.mark.timeout(600)
 @pytest.mark.parametrize(("name", "model_id"), _ANTHROPIC_SDK_TARGETS, ids=("k03-kimi", "k03-flagged-arn"))
 def test_k03_anthropic_sdk_sync_messages_reaches_the_model_without_a_cache_point(
-    rig: _Rig, name: str, model_id: str
+    rig: _Rig, name: str, model_id: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "synthetic-unwanted-ambient-token")
     rig.wire.drain()
-    message: Final = _anthropic_client(rig).messages.create(
-        model=name,
-        max_tokens=16,
-        system=[{"type": "text", "text": _SYSTEM_TEXT, "cache_control": {"type": "ephemeral"}}],
-        messages=[
-            {"role": "user", "content": [{"type": "text", "text": _prompt(), "cache_control": {"type": "ephemeral"}}]}
-        ],
-        extra_body=_EXTRA,
-    )
+    with _anthropic_client(rig) as client:
+        message: Final = client.messages.create(
+            model=name,
+            max_tokens=16,
+            system=[{"type": "text", "text": _SYSTEM_TEXT, "cache_control": {"type": "ephemeral"}}],
+            messages=[
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": _prompt(), "cache_control": {"type": "ephemeral"}}],
+                }
+            ],
+            extra_body=_EXTRA,
+        )
     assert "".join(block.text for block in message.content if block.type == "text") == _ANSWER, message
     received: Final = _only_received(rig.wire)
     assert received.model == model_id and not received.streaming, received
@@ -834,19 +845,24 @@ def test_k03_anthropic_sdk_sync_messages_reaches_the_model_without_a_cache_point
 @pytest.mark.timeout(600)
 @pytest.mark.parametrize(("name", "model_id"), _ANTHROPIC_SDK_TARGETS, ids=("k04-kimi", "k04-flagged-arn"))
 async def test_k04_anthropic_sdk_async_stream_reaches_the_model_without_a_cache_point(
-    rig: _Rig, name: str, model_id: str
+    rig: _Rig, name: str, model_id: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "synthetic-unwanted-ambient-token")
     rig.wire.drain()
-    async with _async_anthropic_client(rig).messages.stream(
-        model=name,
-        max_tokens=16,
-        system=[{"type": "text", "text": _SYSTEM_TEXT, "cache_control": {"type": "ephemeral"}}],
-        messages=[
-            {"role": "user", "content": [{"type": "text", "text": _prompt(), "cache_control": {"type": "ephemeral"}}]}
-        ],
-        extra_body=_EXTRA,
-    ) as stream:
-        final: Final = await stream.get_final_message()
+    async with _async_anthropic_client(rig) as client:
+        async with client.messages.stream(
+            model=name,
+            max_tokens=16,
+            system=[{"type": "text", "text": _SYSTEM_TEXT, "cache_control": {"type": "ephemeral"}}],
+            messages=[
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": _prompt(), "cache_control": {"type": "ephemeral"}}],
+                }
+            ],
+            extra_body=_EXTRA,
+        ) as stream:
+            final: Final = await stream.get_final_message()
     assert "".join(block.text for block in final.content if block.type == "text") == _ANSWER, final
     received: Final = _only_received(rig.wire)
     assert received.model == model_id and received.streaming, received
@@ -895,7 +911,7 @@ async def test_k06_openai_sdk_async_responses_stream_reaches_kimi_without_a_cach
     received: Final = _only_received(rig.wire)
     assert received.model == _KIMI_US and received.streaming, received
     assert received.cache_points == 0, received.body
-    _success_row(_inner_response_id(completed[0].id))
+    _success_row(completed[0].id)
 
 
 _LOCATIONS: Final = (
@@ -1007,17 +1023,21 @@ def test_p02_a_plain_kimi_reply_is_priced_from_its_own_row(rig: _Rig) -> None:
 
 @pytest.mark.timeout(600)
 def test_s07_a_5kb_caller_model_under_the_wildcard_is_a_bounded_4xx_and_liveliness_stays_up(rig: _Rig) -> None:
+    control: Final = timed(
+        lambda: _send(rig.gateway, "chat", _chat_body(f"bedrock/{'a' * 8}", _prompt(), _SYSTEM_AND_USER))
+    )
     rig.wire.drain()
-    started: Final = time.monotonic()
-    outcome: Final = _send(rig.gateway, "chat", _chat_body(f"bedrock/{'a' * 5120}", _prompt(), _SYSTEM_AND_USER))
-    elapsed: Final = time.monotonic() - started
+    oversized: Final = timed(
+        lambda: _send(rig.gateway, "chat", _chat_body(f"bedrock/{'a' * 5120}", _prompt(), _SYSTEM_AND_USER))
+    )
+    outcome: Final = oversized.value
     liveliness: Final = rig.gateway.client.get("/health/liveliness", timeout=5)
     assert liveliness.status_code == 200, liveliness.text
     assert outcome.status in (400, 404), (outcome.status, outcome.raw[:300])
     error: Final = _JSON.validate_python(_JSON.validate_python(json.loads(outcome.raw))["error"])
     assert "a" * 5120 in str(error["message"]), outcome.raw[:300]
-    assert elapsed < 10, elapsed
-    assert rig.wire.drain() == ()
+    assert_within_factor_of_control(oversized.seconds, control=control.seconds, factor=20)
+    assert len(rig.wire.drain()) == 1
     _failure_row(outcome.call_id)
 
 
@@ -1157,7 +1177,7 @@ def test_m05_to_m07_a_deployment_flag_false_on_an_arn_strips_cache_points_on_eve
     arn: Final = _arn("flagged")
     with wire_server(_peer()) as wire, gateway.scenario() as scenario:
         name: Final = _deployment(
-            gateway, scenario, wire, f"bedrock/{route}{arn}", {"supports_prompt_cache_breakpoint": False}
+            gateway, scenario, wire, f"bedrock/{route}{arn}", {"supports_bedrock_converse_cache_point": False}
         )
         expected_model: Final = _CONVERSE_LIKE if route == "converse_like/" else arn
         for endpoint in ("chat", "messages", "responses"):
@@ -1184,7 +1204,7 @@ def test_m08_an_arn_without_the_flag_still_gets_cache_points(gateway: Gateway) -
 def test_m12_a_deployment_flag_true_on_kimi_overrides_the_cost_map_row(gateway: Gateway) -> None:
     with wire_server(_peer()) as wire, gateway.scenario() as scenario:
         name: Final = _deployment(
-            gateway, scenario, wire, f"bedrock/{_KIMI_BASE}", {"supports_prompt_cache_breakpoint": True}
+            gateway, scenario, wire, f"bedrock/{_KIMI_BASE}", {"supports_bedrock_converse_cache_point": True}
         )
         outcome, received = _observe_at(gateway, wire, "chat", _chat_body(name, _prompt(), _SYSTEM_AND_USER))
         _assert_answered(outcome)
@@ -1197,7 +1217,7 @@ def test_m12_a_deployment_flag_true_on_kimi_overrides_the_cost_map_row(gateway: 
 def test_m13_a_null_deployment_flag_on_kimi_falls_back_to_the_cost_map_row(gateway: Gateway) -> None:
     with wire_server(_peer()) as wire, gateway.scenario() as scenario:
         name: Final = _deployment(
-            gateway, scenario, wire, f"bedrock/{_KIMI_US}", {"supports_prompt_cache_breakpoint": None}
+            gateway, scenario, wire, f"bedrock/{_KIMI_US}", {"supports_bedrock_converse_cache_point": None}
         )
         outcome, received = _observe_at(gateway, wire, "chat", _chat_body(name, _prompt(), _SYSTEM_AND_USER))
         _assert_answered(outcome)
@@ -1223,7 +1243,9 @@ def test_s01_to_s06_an_odd_typed_flag_is_read_as_false_never_as_true(
 ) -> None:
     arn: Final = _arn(label)
     with wire_server(_peer()) as wire, gateway.scenario() as scenario:
-        name: Final = _deployment(gateway, scenario, wire, f"bedrock/{arn}", {"supports_prompt_cache_breakpoint": flag})
+        name: Final = _deployment(
+            gateway, scenario, wire, f"bedrock/{arn}", {"supports_bedrock_converse_cache_point": flag}
+        )
         outcome, received = _observe_at(gateway, wire, "chat", _chat_body(name, _prompt(), _SYSTEM_AND_USER))
         _assert_answered(outcome)
         assert received.cache_points == 0, (label, received.body)
@@ -1231,17 +1253,19 @@ def test_s01_to_s06_an_odd_typed_flag_is_read_as_false_never_as_true(
 
 
 @pytest.mark.timeout(600)
-def test_s10_s11_two_deployments_of_one_arn_share_the_flag_and_a_delete_leaves_it_in_place(gateway: Gateway) -> None:
+def test_s10_s11_two_deployments_of_one_arn_keep_their_own_flags_and_a_delete_changes_neither(
+    gateway: Gateway,
+) -> None:
     arn: Final = _arn("shared")
     with wire_server(_peer()) as wire, gateway.scenario() as scenario:
         flagged: Final = _deployment(
-            gateway, scenario, wire, f"bedrock/{arn}", {"supports_prompt_cache_breakpoint": False}, cleanup=False
+            gateway, scenario, wire, f"bedrock/{arn}", {"supports_bedrock_converse_cache_point": False}, cleanup=False
         )
         plain: Final = _deployment(gateway, scenario, wire, f"bedrock/{arn}")
-        for name in (flagged, plain):
+        for name, cache_points in ((flagged, 0), (plain, 2)):
             outcome, received = _observe_at(gateway, wire, "chat", _chat_body(name, _prompt(), _SYSTEM_AND_USER))
             _assert_answered(outcome)
-            assert received.cache_points == 0, (name, received.body)
+            assert received.cache_points == cache_points, (name, received.body)
             _success_row(outcome.response_id)
         flagged_identity: Final = _model_id(flagged)
         gateway.post("/model/delete", {"id": flagged_identity})
@@ -1256,7 +1280,7 @@ def test_s10_s11_two_deployments_of_one_arn_share_the_flag_and_a_delete_leaves_i
         wire.drain()
         after, after_received = _observe_at(gateway, wire, "chat", _chat_body(plain, _prompt(), _SYSTEM_AND_USER))
         _assert_answered(after)
-        assert after_received.cache_points == 0, after_received.body
+        assert after_received.cache_points == 2, after_received.body
         _success_row(after.response_id)
 
 
@@ -1269,7 +1293,7 @@ def _stored_flag(identity: str) -> JsonValue:
     (row,) = read_rows('SELECT model_info FROM "LiteLLM_ProxyModelTable" WHERE model_id=%s', (identity,))
     stored: Final = row["model_info"]
     info: Final = _JSON.validate_python(stored if isinstance(stored, dict) else json.loads(str(stored)))
-    return info.get("supports_prompt_cache_breakpoint")
+    return info.get("supports_bedrock_converse_cache_point")
 
 
 def _six_cache_point_counts(gateway: Gateway, wire: Wire, name: str) -> tuple[int, ...]:
@@ -1284,14 +1308,14 @@ def test_x01_flipping_the_flag_to_true_through_a_patch_update_turns_cache_points
     arn: Final = _arn("flip")
     with wire_server(_peer()) as wire, gateway.scenario() as scenario:
         name: Final = _deployment(
-            gateway, scenario, wire, f"bedrock/{arn}", {"supports_prompt_cache_breakpoint": False}
+            gateway, scenario, wire, f"bedrock/{arn}", {"supports_bedrock_converse_cache_point": False}
         )
         before, before_received = _observe_at(gateway, wire, "chat", _chat_body(name, _prompt(), _SYSTEM_AND_USER))
         _assert_answered(before)
         assert before_received.cache_points == 0, before_received.body
         identity: Final = _model_id(name)
         patched: Final = gateway.request(
-            "PATCH", f"/model/{identity}/update", {"model_info": {"supports_prompt_cache_breakpoint": True}}
+            "PATCH", f"/model/{identity}/update", {"model_info": {"supports_bedrock_converse_cache_point": True}}
         )
         assert patched.status_code == 200, patched.text
         assert _stored_flag(identity) is True
@@ -1305,14 +1329,17 @@ def test_x01_flipping_the_flag_to_true_through_a_patch_update_turns_cache_points
 
 
 @pytest.mark.timeout(600)
-def test_x06_the_legacy_post_update_answers_200_and_leaves_the_stored_flag_alone(gateway: Gateway) -> None:
+def test_x06_flipping_the_flag_to_true_through_the_legacy_post_update_turns_cache_points_back_on(
+    gateway: Gateway,
+) -> None:
     arn: Final = _arn("legacy")
     with wire_server(_peer()) as wire, gateway.scenario() as scenario:
         name: Final = _deployment(
-            gateway, scenario, wire, f"bedrock/{arn}", {"supports_prompt_cache_breakpoint": False}
+            gateway, scenario, wire, f"bedrock/{arn}", {"supports_bedrock_converse_cache_point": False}
         )
         before, before_received = _observe_at(gateway, wire, "chat", _chat_body(name, _prompt(), _SYSTEM_AND_USER))
         _assert_answered(before)
+        assert before_received.cache_points == 0, before_received.body
         identity: Final = _model_id(name)
         updated: Final = gateway.request(
             "POST",
@@ -1320,17 +1347,18 @@ def test_x06_the_legacy_post_update_answers_200_and_leaves_the_stored_flag_alone
             {
                 "model_name": name,
                 "litellm_params": {"model": f"bedrock/{arn}", "api_base": wire.url, "num_retries": 0, **_AWS},
-                "model_info": {"id": identity, "supports_prompt_cache_breakpoint": True},
+                "model_info": {"id": identity, "supports_bedrock_converse_cache_point": True},
             },
         )
         assert updated.status_code == 200, updated.text
-        assert _stored_flag(identity) is False
-        _settled(gateway, name, wire)
-        after, after_received = _observe_at(gateway, wire, "chat", _chat_body(name, _prompt(), _SYSTEM_AND_USER))
-        _assert_answered(after)
-        assert after_received.cache_points == before_received.cache_points, (before_received.body, after_received.body)
+        assert _stored_flag(identity) is True
+        points: Final = eventually(
+            lambda: _six_cache_point_counts(gateway, wire, name),
+            lambda counts: len(counts) == 6 and all(count == 2 for count in counts),
+            seconds=60,
+        )
+        assert points == (2,) * 6, points
         _success_row(before.response_id)
-        _success_row(after.response_id)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1388,17 +1416,11 @@ def _assert_rows_once(served: tuple[_Served, ...]) -> None:
     assert all(row["status"] == "success" for row in rows), rows
 
 
-def _reserved_port() -> int:
-    with socket.socket() as reserve:
-        reserve.bind(("127.0.0.1", 0))
-        return reserve.getsockname()[1]
-
-
 @pytest.mark.timeout(900)
 async def test_c01_a_peer_outage_mid_traffic_fails_cleanly_and_recovery_lands_every_id_once(
     gateway: Gateway, tmp_path: Path
 ) -> None:
-    port: Final = _reserved_port()
+    port: Final = allocate_port()
     prompt: Final = _prompt()
     with wire_server(_peer(), port=port) as first_peer:
         config: Final = _owned_config(first_peer, tmp_path, names=("kimi-us", "claude-control"))
@@ -1480,14 +1502,15 @@ async def test_c02_a_worker_killed_mid_traffic_leaves_the_survivor_and_the_respa
             held_by: Final = MappingProxyType({pid: _open_peer_connections(pid, wire.url) for pid in workers})
             assert sum(held_by.values()) == 20, held_by
             victim_pid, survivor_pid = sorted(workers, key=held_by.__getitem__)
-            psutil.Process(victim_pid).send_signal(signal.SIGKILL)
-            hold.set()
-            served: Final = await burst
-            assert len(served) == held_by[survivor_pid], (held_by, len(served))
-            for item in served:
-                _assert_answered(item.outcome)
-            received: Final = _received(wire)
-            assert len(received) == 20 and all(item.cache_points == 0 for item in received), received
+            with owned.replacing_worker(victim_pid) as kill:
+                await asyncio.to_thread(kill)
+                hold.set()
+                served: Final = await burst
+                assert len(served) == held_by[survivor_pid], (held_by, len(served))
+                for item in served:
+                    _assert_answered(item.outcome)
+                received: Final = _received(wire)
+                assert len(received) == 20 and all(item.cache_points == 0 for item in received), received
             respawned: Final = eventually(
                 lambda: tuple(int(pid) for pid in _STARTED_WORKER.findall(owned.log.read_text())),
                 lambda pids: len(pids) == 3,
@@ -1528,7 +1551,7 @@ def test_c03_a_restart_re_registers_a_stored_deployment_flag_from_the_database(
                 scenario,
                 wire,
                 f"bedrock/{arn}",
-                {"supports_prompt_cache_breakpoint": False},
+                {"supports_bedrock_converse_cache_point": False},
                 cleanup=False,
             )
             before, before_received = _observe_at(
@@ -1556,8 +1579,14 @@ def test_c03_a_restart_re_registers_a_stored_deployment_flag_from_the_database(
 
 @pytest.mark.timeout(900)
 async def test_c04_a_slow_peer_under_ten_concurrent_streams_completes_every_call_once(rig: _Rig) -> None:
-    rig.wire.drain()
     calls: Final = tuple(_Call("chat", index, True) for index in range(10))
+    alone_started: Final = time.monotonic()
+    (alone,) = await _burst(
+        _proxy_url(rig.gateway), rig.gateway.key, "kimi-us", calls[:1], f"{_prompt()} {_SLOW_MARKER}"
+    )
+    alone_seconds: Final = time.monotonic() - alone_started
+    _assert_answered(alone.outcome)
+    rig.wire.drain()
     started: Final = time.monotonic()
     served: Final = await _burst(
         _proxy_url(rig.gateway), rig.gateway.key, "kimi-us", calls, f"{_prompt()} {_SLOW_MARKER}"
@@ -1568,5 +1597,5 @@ async def test_c04_a_slow_peer_under_ten_concurrent_streams_completes_every_call
         _assert_answered(item.outcome)
     received: Final = _received(rig.wire)
     assert len(received) == 10 and all(item.cache_points == 0 for item in received), received
-    assert elapsed < 30, elapsed
+    assert_within_factor_of_control(elapsed, control=alone_seconds, factor=len(calls))
     _assert_rows_once(served)

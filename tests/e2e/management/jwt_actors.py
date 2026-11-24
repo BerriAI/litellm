@@ -5,6 +5,7 @@ from typing import Final, Literal
 
 from e2e_config import unique_marker
 from e2e_http import NoBody, unwrap
+from e2e_metadata import step
 from idp import ADMIN_CLIENT_ID, TESTS_CLIENT_ID, Identity, Keycloak
 from lifecycle import ResourceManager
 from management.management_client import ManagementClient
@@ -53,6 +54,7 @@ class Actor:
     profile: ActorProfile
     tenants: tuple[Tenant, ...]
 
+    @step("Get a JWT from the identity provider for the actor in the {self.role} role")
     def mint_caller(self, idp: Keycloak) -> Caller:
         return Caller(
             credential=idp.access_token(
@@ -74,6 +76,7 @@ class ActorFactory:
         if self.bootstrap.proxy.caller is not None:
             raise ValueError("Actor bootstrap requires a separately held master client")
 
+    @step("Generate a virtual key as the proxy admin")
     def key(self, tenant: Tenant | None = None, *, user_id: str | None = None) -> KeyGenerateResponse:
         created: Final = unwrap(
             self.bootstrap.generate_key(
@@ -87,6 +90,7 @@ class ActorFactory:
         self.resources.defer(lambda: self.bootstrap.delete_key_strict(created.key, missing_ok=True))
         return created
 
+    @step("Create an organization, a team in it and a matching identity provider group")
     def tenant(self) -> Tenant:
         marker: Final = unique_marker()
         organization_id: Final = self.bootstrap.create_org(OrgNewBody(organization_alias=f"e2e-organization-{marker}"))
@@ -118,6 +122,7 @@ class ActorFactory:
         self.resources.defer(lambda: self.idp.with_strict_cleanup().delete_group(group_id))
         return Tenant(organization_id=organization_id, team_id=team_id, group_id=group_id)
 
+    @step("Create an actor in the {role} role, with its identity provider user, internal user and any tenant memberships")
     def create(
         self, role: ActorRole, *, tenants: tuple[Tenant, ...] = (), profile: ActorProfile = "database_role"
     ) -> Actor:

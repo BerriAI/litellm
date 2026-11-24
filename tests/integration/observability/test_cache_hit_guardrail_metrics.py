@@ -1,6 +1,5 @@
 import asyncio
 import json
-import subprocess
 import uuid
 from collections.abc import Callable, Generator, Mapping
 from contextlib import contextmanager
@@ -15,9 +14,11 @@ import pytest
 import yaml
 from integration._support.client import Gateway, Scenario, eventually, object_value, string_value
 from integration._support.database import read_rows
-from integration._support.process import owned_proxy_process
+from integration._support.process import OwnedProxy, owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
 from prometheus_client.parser import text_string_to_metric_families
+
+pytestmark: Final = pytest.mark.shares_worker_state
 
 GUARDRAIL_PATH: Final = "/beta/litellm_basic_guardrail_api"
 DEPLOYMENT_FAILURE: Final = "litellm_deployment_failure_responses_total"
@@ -178,7 +179,7 @@ class Rig:
     guardrail_name: str
     policy: Wire
     provider: Wire
-    process: subprocess.Popen[bytes]
+    owned: OwnedProxy
 
 
 @contextmanager
@@ -228,7 +229,7 @@ def _rig(
                 identity,
                 policy,
                 provider,
-                owned.process,
+                owned,
             )
 
 
@@ -249,6 +250,16 @@ def _metric_samples(candidate: Gateway, model_name: str) -> tuple:
 def _count(samples: tuple, name: str, model_id: str) -> float:
     return float(
         sum(sample.value for sample in samples if sample.name == name and sample.labels.get("model_id") == model_id)
+    )
+
+
+def _deployment_states(rig: Rig) -> tuple[float, ...]:
+    return tuple(
+        sample.value
+        for sample in _metric_samples(rig.candidate, rig.model_name)
+        if sample.name == DEPLOYMENT_STATE
+        and sample.labels.get("model_id") == rig.deployment_id
+        and sample.labels.get("api_base") == rig.provider.url + "/v1"
     )
 
 
@@ -413,7 +424,7 @@ def test_cache_hit_post_call_reject_keeps_deployment_labels_anthropic(gateway: G
             raised = True
         assert raised, "cache-hit post_call guardrail did not reject /v1/messages"
         assert rig.provider.received.qsize() == 1, rig.provider.drain()
-        _expect_metrics(rig, 1, 0, api_provider="anthropic", pf_id="None")
+        _expect_metrics(rig, 1, 0, api_provider="anthropic")
 
 
 def test_cache_hit_post_call_reject_keeps_deployment_labels_responses(gateway: Gateway, tmp_path: Path) -> None:
@@ -430,7 +441,7 @@ def test_cache_hit_post_call_reject_keeps_deployment_labels_responses(gateway: G
         )
         assert reject.status_code == 400, reject.text
         assert rig.provider.received.qsize() == 1, rig.provider.drain()
-        _expect_metrics(rig, 1, 0, pf_id="None")
+        _expect_metrics(rig, 1, 0)
         _assert_spend(_call_id(reject), rig)
 
 
@@ -557,7 +568,8 @@ def test_cache_hit_post_call_guardrail_outage_keeps_deployment_labels(
         )
         assert reject.status_code >= 400, reject.text
         assert rig.provider.received.qsize() == 1, rig.provider.drain()
-        _expect_metrics(rig, 0, 0, pf_populated=1, pf_blank=0)
+        _expect_metrics(rig, 1, 0)
+        _assert_spend(_call_id(reject), rig)
 
 
 def test_two_identical_cache_hit_rejects_increment_populated_series(gateway: Gateway, tmp_path: Path) -> None:
@@ -578,7 +590,6 @@ def test_two_identical_cache_hit_rejects_increment_populated_series(gateway: Gat
 
 def test_two_identical_cache_hit_rejects_write_matching_spend_rows(gateway: Gateway, tmp_path: Path) -> None:
     """E1b: both cache-hit rejects land a failure spend row."""
-    pytest.skip("BUG: roughly one in four back-to-back cache-hit rejects never lands its LiteLLM_SpendLogs row")
     marker: Final = uuid.uuid4().hex
     with _rig(gateway, tmp_path, marker) as rig:
         text: Final = "cache hit control e1b " + marker
@@ -635,6 +646,7 @@ def test_cache_hit_reject_deployment_metric_set_diff(gateway: Gateway, tmp_path:
         text: Final = "cache hit control e4 " + marker
         warm: Final = rig.candidate.request("POST", "/v1/chat/completions", _chat_body(rig.model_name, text, None))
         assert warm.status_code == 200, warm.text
+        eventually(lambda: _deployment_states(rig), lambda states: states == (0.0,))
         reject: Final = rig.candidate.request(
             "POST", "/v1/chat/completions", _chat_body(rig.model_name, text, rig.guardrail_name)
         )
@@ -642,11 +654,4 @@ def test_cache_hit_reject_deployment_metric_set_diff(gateway: Gateway, tmp_path:
         samples: Final = _expect_metrics(rig, 1, 0)
         blank: Final = tuple(sample for sample in samples if sample.labels.get("model_id") == "")
         assert blank == (), blank
-        states: Final = tuple(
-            sample.value
-            for sample in samples
-            if sample.name == DEPLOYMENT_STATE
-            and sample.labels.get("model_id") == rig.deployment_id
-            and sample.labels.get("api_base") == ""
-        )
-        assert states == (1.0,), states
+        eventually(lambda: _deployment_states(rig), lambda states: states == (1.0,))

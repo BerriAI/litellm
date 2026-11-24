@@ -4,6 +4,7 @@ Support for OpenAI's `/v1/chat/completions` endpoint.
 Calls done in OpenAI/openai.py as DataRobot is openai-compatible.
 """
 
+from collections.abc import Mapping
 from typing import Final
 from urllib.parse import urlparse, urlunparse
 
@@ -69,13 +70,20 @@ class DataRobotConfig(OpenAILikeChatConfig):
 
         return api_base, dynamic_api_key
 
+    def get_openai_compatible_provider_info(
+        self,
+        api_base: str | None,
+        api_key: str | None,
+    ) -> tuple[str | None, str | None]:
+        return self._get_openai_compatible_provider_info(api_base, api_key)
+
     def get_complete_url(
         self,
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         """

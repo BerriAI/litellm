@@ -3,7 +3,7 @@
 Run against a proxy started with the gateway config. Coverage rationale:
 SPEND_TRACKING_COVERAGE_MATRIX.md.
 
-Model names are literals from that config: chat tests hit "gemini-2.5-flash",
+Model names are literals from that config: chat tests hit "gemini-3.8-flash",
 embedding tests hit "openai-text-embedding-3-small".
 
 Every test: fresh scoped key (isolation) -> real provider call -> unwrap (hard
@@ -37,11 +37,12 @@ from spend_reconciliation import BACKEND as TRAFFIC_BACKEND
 
 pytestmark = pytest.mark.e2e
 
-GEMINI_MODEL = "gemini-2.5-flash"
+GEMINI_MODEL = "gemini-3.8-flash"
 CLAUDE_MODEL = "claude-haiku-4-5"
 CODEX_MODEL = "openai-responses-codex"
 EMBEDDING_MODEL = "openai-text-embedding-3-small"
 OPENAI_BACKEND = "openai/gpt-5.5"
+ANTHROPIC_BACKEND: Final = "anthropic/claude-haiku-4-5"
 
 
 def _approx_equal(actual: float, expected: float) -> bool:
@@ -286,8 +287,12 @@ def test_cache_hit_is_zero_cost_and_suffixed(
     # populated. The marker keeps each run isolated - a fixed prompt would persist
     # in the shared response cache across runs and make both calls hit (flaky).
     prompt = f"What is the capital of France? Answer in one word. {unique_marker()}"
-    _ = unwrap(client.chat(scoped_key, GEMINI_MODEL, prompt, max_tokens=16, cache=None))
-    _ = unwrap(client.chat(scoped_key, GEMINI_MODEL, prompt, max_tokens=16, cache=None))
+    first = unwrap(client.chat(scoped_key, GEMINI_MODEL, prompt, max_tokens=512, cache=None))
+    answered = first.choices and first.choices[0].message and first.choices[0].message.content
+    assert answered, (
+        f"{GEMINI_MODEL} returned no text, and a reply with no output is never cached: {first}"
+    )
+    _ = unwrap(client.chat(scoped_key, GEMINI_MODEL, prompt, max_tokens=512, cache=None))
 
     rows = client.poll_logs_for_key(
         scoped_key,
@@ -534,6 +539,15 @@ def test_end_user_spend_attributed_on_row(
 
 
 @pytest.mark.covers("quota_management.spend_tracking.end_user.attributes_responses_header")
+@meta(
+    Subject(
+        domain=Domain.SPEND_BUDGETS,
+        route=Route.RESPONSES,
+        providers=(Provider.OPENAI,),
+        models=(CODEX_MODEL,),
+        mode=Mode.NONSTREAM,
+    )
+)
 @pytest.mark.parametrize("header", ["x-litellm-customer-id", "x-litellm-end-user-id"])
 def test_end_user_header_attributes_responses_row(
     client: SpendClient, scoped_key: str, resources: ResourceManager, header: str
@@ -659,6 +673,14 @@ def test_failure_call_writes_failure_status_row(
 
 
 @pytest.mark.covers("quota_management.spend_tracking.failure.writes_normalized_error")
+@meta(
+    Subject(
+        domain=Domain.SPEND_BUDGETS,
+        providers=(Provider.ANTHROPIC, Provider.OPENAI),
+        models=(OPENAI_BACKEND, ANTHROPIC_BACKEND),
+        mode=Mode.NONSTREAM,
+    )
+)
 def test_failure_rows_share_normalized_error_across_provider_wording(
     client: SpendClient, resources: ResourceManager, scoped_key: str
 ) -> None:
@@ -668,7 +690,7 @@ def test_failure_rows_share_normalized_error_across_provider_wording(
     marker = unique_marker()
     deployments: Final = (
         (f"e2e-norm-openai-{marker}", OPENAI_BACKEND),
-        (f"e2e-norm-anthropic-{marker}", "anthropic/claude-haiku-4-5"),
+        (f"e2e-norm-anthropic-{marker}", ANTHROPIC_BACKEND),
     )
     for name, provider_model in deployments:
         model_id = client.proxy.create_model(
@@ -700,6 +722,14 @@ def test_failure_rows_share_normalized_error_across_provider_wording(
 
 
 @pytest.mark.covers("quota_management.spend_tracking.failure.attributes_provider")
+@meta(
+    Subject(
+        domain=Domain.SPEND_BUDGETS,
+        providers=(Provider.OPENAI,),
+        models=(OPENAI_BACKEND,),
+        mode=Mode.NONSTREAM,
+    )
+)
 def test_pre_call_rejection_row_attributes_provider_and_model_id(
     client: SpendClient, resources: ResourceManager
 ) -> None:
@@ -754,7 +784,7 @@ def test_spend_calculate_returns_nonzero_cost(client: SpendClient) -> None:
         GEMINI_MODEL, "estimate the cost of this request"
     )
     assert cost > 0, (
-        "/spend/calculate returned 0 for gemini-2.5-flash; "
+        "/spend/calculate returned 0 for gemini-3.8-flash; "
         "cost map may be missing this model"
     )
 

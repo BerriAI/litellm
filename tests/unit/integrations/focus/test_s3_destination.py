@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any, Dict
 
+import boto3
 import pytest
 
 import litellm.integrations.focus.destinations.s3_destination as s3_module
@@ -81,7 +82,7 @@ def test_should_upload_with_configured_client(monkeypatch: pytest.MonkeyPatch):
 
         return SimpleNamespace(put_object=put_object)
 
-    monkeypatch.setattr(s3_module.boto3, "client", fake_client)
+    monkeypatch.setattr(boto3, "client", fake_client)
 
     dest._upload(content=b"payload", object_key="path/file.bin")
 

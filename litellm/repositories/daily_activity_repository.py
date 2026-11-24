@@ -1,33 +1,41 @@
 import asyncio
+import re
 from collections.abc import AsyncIterator, Mapping, Sequence
+from dataclasses import dataclass, replace
 from datetime import datetime
 from itertools import groupby
 from types import MappingProxyType
 from typing import Final, Protocol
 
-from pydantic import StrictStr, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, StrictStr, TypeAdapter, ValidationError
 from typing_extensions import assert_never
 
 from litellm import constants
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy.db.db_span import db_span
-from litellm.proxy.db.prisma_query_span import sql_relation
+from litellm.constants import UNKNOWN_MODEL_SPEND_LOG_MODEL
+from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker, redact_credentials_in_payload
 from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.daily_activity_sql import (
+    EXPORT_METADATA_DROPPED_KEYS,
     ExportCursor,
     SqlQuery,
     adjust_dates_for_timezone,
     build_aggregated_sql,
     build_cache_leakage_keys_sql,
+    build_customer_daily_rows_sql,
+    build_customer_team_rollup_sql,
     build_entity_rollup_sql,
     build_export_sql,
+    build_guardrail_spend_sql,
     build_key_page_sql,
     build_key_search_sql,
     build_model_top_keys_sql,
+    build_user_page_sql,
 )
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.types.repositories.daily_activity import (
     AggregatedRows,
+    CustomerTeamRollupRow,
     DailyActivityProxyReads,
     DailyActivityRow,
     DailyActivityScope,
@@ -37,11 +45,21 @@ from litellm.types.repositories.daily_activity import (
     ExportRow,
     ExportType,
     GroupingSetsRow,
+    GuardrailSpendRow,
     KeyMetadataRow,
     KeyPage,
     KeySpendRow,
     SpendLogsWindow,
+    UserMetadataRow,
+    UserPage,
+    UserSpendRow,
 )
+
+
+class _UserTableRow(Protocol):
+    user_id: str
+    user_email: str | None
+    user_alias: str | None
 
 
 class _VerificationTokenRow(Protocol):
@@ -62,6 +80,7 @@ class _QueryRaw(Protocol):
 
 class _DailyActivityDatabase(Protocol):
     query_raw: _QueryRaw
+    litellm_usertable: TableActions[_UserTableRow]
     litellm_verificationtoken: TableActions[_VerificationTokenRow]
     litellm_deletedverificationtoken: TableActions[_DeletedVerificationTokenRow]
 
@@ -81,6 +100,9 @@ class _DailyActivityDatabase(Protocol):
     def litellm_dailyenduserspend(self) -> TableActions[DailyActivityRow]: ...
 
     @property
+    def litellm_dailycustomermemberspend(self) -> TableActions[DailyActivityRow]: ...
+
+    @property
     def litellm_dailyagentspend(self) -> TableActions[DailyActivityRow]: ...
 
 
@@ -90,11 +112,54 @@ class DailyActivityDatabase(Protocol):
 
 
 _GROUPING_ADAPTER: Final = TypeAdapter(tuple[GroupingSetsRow, ...])
+_CUSTOMER_TEAM_ADAPTER: Final = TypeAdapter(tuple[CustomerTeamRollupRow, ...])
 _ENTITY_ADAPTER: Final = TypeAdapter(tuple[EntityRollupRow, ...])
+_GUARDRAIL_SPEND_ADAPTER: Final = TypeAdapter(tuple[GuardrailSpendRow, ...])
 _KEY_SPEND_ADAPTER: Final = TypeAdapter(tuple[KeySpendRow, ...])
 _KEY_PAGE_TOTAL_ADAPTER: Final[TypeAdapter[int]] = TypeAdapter(int)
+_USER_SPEND_ADAPTER: Final = TypeAdapter(tuple[UserSpendRow, ...])
 _EXPORT_ADAPTER: Final = TypeAdapter(tuple[ExportRow, ...])
 _METADATA_TAGS_ADAPTER: Final = TypeAdapter(list[StrictStr])
+
+
+class _CustomerDailyRow(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+    date: str
+    api_key: str
+    end_user_id: str | None
+    prompt_tokens: int
+    completion_tokens: int
+    cache_read_input_tokens: int
+    cache_creation_input_tokens: int
+    compression_saved_tokens: int
+    compression_savings_spend: float
+    prompt_caching_savings_spend: float
+    gateway_injected_caching_savings_spend: float
+    autorouter_savings_spend: float
+    guardrail_spend: float
+    customer_margin_spend: float
+    spend: float
+    api_requests: int
+    successful_requests: int
+    failed_requests: int
+    total_response_time_ms: int
+    timed_requests: int
+    model: str | None = None
+    model_group: str | None = None
+    custom_llm_provider: str | None = None
+    mcp_namespaced_tool_name: str | None = None
+    endpoint: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _CustomerDailyRowsResult:
+    total_count: int
+    rows: tuple[_CustomerDailyRow, ...]
+
+
+_CUSTOMER_DAILY_ROWS_ADAPTER: Final = TypeAdapter(tuple[_CustomerDailyRowsResult])
 
 
 def _metadata_tags(value: object) -> tuple[str, ...]:
@@ -120,10 +185,86 @@ def _daily_rows_table(
         return prisma_client.db.litellm_dailyorganizationspend
     if table is DailyActivityTable.CUSTOMER:
         return prisma_client.db.litellm_dailyenduserspend
+    if table is DailyActivityTable.CUSTOMER_MEMBER:
+        return prisma_client.db.litellm_dailycustomermemberspend
     if table is DailyActivityTable.AGENT:
         return prisma_client.db.litellm_dailyagentspend
     assert_never(table)
     raise AssertionError("unreachable")
+
+
+_EXPORT_UNSEPARATED_CREDENTIAL_NAMES: Final[frozenset[str]] = frozenset(
+    {
+        "apikey",
+        "apitoken",
+        "accesskey",
+        "accesstoken",
+        "authkey",
+        "authtoken",
+        "bearertoken",
+        "clientsecret",
+        "passwd",
+        "privatekey",
+        "pwd",
+        "refreshtoken",
+        "secretkey",
+        "sessiontoken",
+        "signingkey",
+        "webhooksecret",
+    }
+)
+_EXPORT_METADATA_MASKER: Final = SensitiveDataMasker(
+    non_sensitive_overrides=frozenset(),
+    extra_sensitive_patterns=_EXPORT_UNSEPARATED_CREDENTIAL_NAMES,
+    split_camel_case=True,
+)
+
+
+_EXPORT_CREDENTIAL_KEYS: Final[frozenset[str]] = frozenset(
+    {"apikeys", "bearer", "credentials", "jwt", "passphrase", "secrets", "tokens"}
+)
+_EXPORT_CREDENTIAL_KEY_SUFFIXES: Final = ("connectionstring", "databaseurl", "dsn", "passphrase", "webhookurl")
+_CREDENTIAL_VALUE: Final = re.compile(
+    r"^\s*(?i:bearer|basic)\s+[A-Za-z0-9._~+/=-]{8,}\s*$"
+    r"|(?<![A-Za-z0-9])[sr]k_(?:live|test)_[A-Za-z0-9]{10,}"
+    r"|(?<![A-Za-z0-9])(?:AKIA|ASIA)[A-Z0-9]{16}\b"
+    r"|(?<![A-Za-z0-9])(?:gh[pousr]|github_pat)_[A-Za-z0-9_]{20,}"
+    r"|(?<![A-Za-z0-9])xox[abposr]-[A-Za-z0-9-]{10,}"
+    r"|(?<![A-Za-z0-9])eyJ[A-Za-z0-9_-]{10,}"
+    r"|\b(?i:[a-z][a-z0-9+.-]{0,31})://[^\s/:@]*:[^\s/@]+@"
+    r"|(?i:authorization)\\?[\"']?\s*[:=]\s*\S"
+    r"|(?i:https?://hooks\.slack\.com/)"
+    r"|(?i:https?://(?:[a-z0-9-]+\.)?(?:discord|discordapp)\.com/api/(?:v\d+/)?webhooks/)"
+)
+_SK_KEY_RUN: Final = re.compile(r"(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{10,}")
+
+
+def _has_sk_key(value: str) -> bool:
+    return any(any(char.isdigit() for char in run.group()) for run in _SK_KEY_RUN.finditer(value))
+
+
+def _is_export_credential(key: str, value: object) -> bool:
+    normalized_key: Final = key.lower().replace("_", "").replace("-", "")
+    if normalized_key in _EXPORT_CREDENTIAL_KEYS or normalized_key.endswith(_EXPORT_CREDENTIAL_KEY_SUFFIXES):
+        return True
+    return isinstance(value, str) and (_CREDENTIAL_VALUE.search(value) is not None or _has_sk_key(value))
+
+
+def _redacted_metadata(metadata: Mapping[str, object]) -> Mapping[str, object]:
+    return redact_credentials_in_payload(
+        metadata,
+        _EXPORT_METADATA_MASKER,
+        dropped_keys=EXPORT_METADATA_DROPPED_KEYS,
+        is_credential=_is_export_credential,
+    )
+
+
+def _with_redacted_metadata(row: ExportRow) -> ExportRow:
+    if not row.key_metadata and not row.user_metadata:
+        return row
+    return replace(
+        row, key_metadata=_redacted_metadata(row.key_metadata), user_metadata=_redacted_metadata(row.user_metadata)
+    )
 
 
 def _next_export_cursor(batch: tuple[ExportRow, ...], export_type: ExportType) -> ExportCursor:
@@ -146,6 +287,9 @@ class DailyActivityRepository:
         self._proxy_reads = proxy_reads
 
     async def _query(self, query: SqlQuery) -> tuple[Mapping[str, object], ...]:
+        from litellm.proxy.db.db_span import db_span
+        from litellm.proxy.db.prisma_query_span import sql_relation
+
         first_line: Final = query.sql.lstrip().splitlines()[0].lstrip("(").strip()
         verbose_proxy_logger.debug("DailyActivityRepository query: %s", first_line)
         async with db_span("daily_activity_query", sql_relation(query.sql)):
@@ -178,6 +322,9 @@ class DailyActivityRepository:
             distinct_api_keys=distinct_api_keys,
         )
 
+    async def guardrail_spend(self, scope: DailyActivityScope) -> tuple[GuardrailSpendRow, ...]:
+        return _GUARDRAIL_SPEND_ADAPTER.validate_python(await self._query(build_guardrail_spend_sql(scope)))
+
     async def search_keys(self, scope: DailyActivityScope, *, search: str, limit: int) -> tuple[str, ...]:
         if not 1 <= limit <= constants.USAGE_KEY_SEARCH_MAX:
             raise ValueError(f"limit must be between 1 and {constants.USAGE_KEY_SEARCH_MAX}")
@@ -194,6 +341,30 @@ class DailyActivityRepository:
         )
         rows: Final = _KEY_SPEND_ADAPTER.validate_python(tuple(row for row in result if row.get("api_key") is not None))
         return KeyPage(rows=rows, total_api_keys=total_api_keys)
+
+    async def user_page(self, scope: DailyActivityScope, *, offset: int, limit: int) -> UserPage:
+        query: Final = build_user_page_sql(scope, offset=offset, limit=limit)
+        result: Final = await self._query(query)
+        total_users_value: Final = result[0].get("total_users") if result else 0
+        total_users: Final = (
+            _KEY_PAGE_TOTAL_ADAPTER.validate_python(total_users_value) if total_users_value is not None else 0
+        )
+        rows: Final = _USER_SPEND_ADAPTER.validate_python(
+            tuple(
+                {**row, "user_id": None} if row.get("user_id") in (None, "") else row
+                for row in result
+                if row.get("spend") is not None
+            )
+        )
+        return UserPage(rows=rows, total_users=total_users)
+
+    async def user_metadata(self, user_ids: frozenset[str]) -> Mapping[str, UserMetadataRow]:
+        if not user_ids:
+            return {}
+        rows: Final = await find_many_in(self._prisma_client.db.litellm_usertable, "user_id", tuple(user_ids))
+        return MappingProxyType(
+            {row.user_id: UserMetadataRow(user_email=row.user_email, user_alias=row.user_alias) for row in rows}
+        )
 
     async def model_top_keys(
         self, scope: DailyActivityScope, *, model_group: str, by_model_group: bool, limit: int
@@ -214,15 +385,25 @@ class DailyActivityRepository:
         query: Final = build_cache_leakage_keys_sql(scope, limit=limit)
         return _KEY_SPEND_ADAPTER.validate_python(await self._query(query))
 
-    async def export_rows(self, scope: DailyActivityScope, *, export_type: ExportType) -> AsyncIterator[ExportRow]:
+    async def export_rows(
+        self, scope: DailyActivityScope, *, export_type: ExportType, include_metadata: bool = False
+    ) -> AsyncIterator[ExportRow]:
         batch_size: Final = constants.USAGE_EXPORT_BATCH_SIZE
         cursor: ExportCursor | None = None  # rebind-ok: each page advances the export keyset cursor
         while True:
             batch: tuple[ExportRow, ...] = _EXPORT_ADAPTER.validate_python(
-                await self._query(build_export_sql(scope, export_type=export_type, after=cursor, batch_size=batch_size))
+                await self._query(
+                    build_export_sql(
+                        scope,
+                        export_type=export_type,
+                        after=cursor,
+                        batch_size=batch_size,
+                        include_metadata=include_metadata,
+                    )
+                )
             )
             for row in batch:
-                yield row
+                yield _with_redacted_metadata(row)
             if len(batch) < batch_size:
                 return
             cursor = _next_export_cursor(batch, export_type)
@@ -280,6 +461,11 @@ class DailyActivityRepository:
         )
 
     async def daily_rows(self, scope: DailyActivityScope, *, page: int, page_size: int) -> DailyRowsPage:
+        if scope.table is DailyActivityTable.CUSTOMER and scope.team_ids is not None:
+            result: Final = _CUSTOMER_DAILY_ROWS_ADAPTER.validate_python(
+                await self._query(build_customer_daily_rows_sql(scope, page=page, page_size=page_size))
+            )[0]
+            return DailyRowsPage(total_count=result.total_count, rows=result.rows)
         table: Final = _daily_rows_table(self._prisma_client, scope.table)
         adjusted_start, adjusted_end = adjust_dates_for_timezone(
             scope.start_date,
@@ -299,9 +485,17 @@ class DailyActivityRepository:
         )
         conditions: Final = {
             "date": {"gte": adjusted_start, "lte": adjusted_end},
+            **({"app_id": scope.app_id} if scope.app_id is not None else {}),
+            **({"app_group_id": scope.app_group_id} if scope.app_group_id is not None else {}),
             **({scope.entity_id_field: {"in": list(scope.entity_ids)}} if scope.entity_ids is not None else {}),
             **exclusion_filter,
-            **({"model": scope.model} if scope.model else {}),
+            **(
+                {"AND": [{"OR": [{"model": None}, {"model": ""}, {"model": scope.model}]}]}
+                if scope.model == UNKNOWN_MODEL_SPEND_LOG_MODEL
+                else {"model": scope.model}
+                if scope.model
+                else {}
+            ),
             **({"api_key": {"in": list(scope.api_keys)}} if scope.api_keys is not None else {}),
         }
         count, rows = await asyncio.gather(
@@ -314,3 +508,10 @@ class DailyActivityRepository:
             ),
         )
         return DailyRowsPage(total_count=count, rows=tuple(rows))
+
+    async def customer_team_spend(
+        self, scope: DailyActivityScope, *, row_ids: tuple[str, ...] | None = None
+    ) -> tuple[CustomerTeamRollupRow, ...]:
+        return _CUSTOMER_TEAM_ADAPTER.validate_python(
+            await self._query(build_customer_team_rollup_sql(scope, row_ids=row_ids))
+        )

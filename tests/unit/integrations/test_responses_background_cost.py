@@ -282,6 +282,12 @@ class TestCheckResponsesCost:
         client = MagicMock()
         client.db = MagicMock()
         client.db.litellm_managedobjecttable = MagicMock()
+        client.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=None)
+        client.db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
+        client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+        client.db.litellm_deprecatedverificationtoken.find_unique = AsyncMock(return_value=None)
+        client.db.litellm_deletedverificationtoken.find_first = AsyncMock(return_value=None)
+        client.db.litellm_deletedteamtable.find_first = AsyncMock(return_value=None)
         return client
 
     @pytest.fixture
@@ -360,14 +366,14 @@ class TestCheckResponsesCost:
         mock_job.id = "job-123"
         mock_job.unified_object_id = "resp_test_id"
         mock_job.created_by = "test-user"
+        mock_job.file_object = {"model": "gpt-4o", "id": "resp_test_id"}
 
         # Mock find_many to return the job
         mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
             return_value=[mock_job]
         )
 
-        # Mock update_many
-        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock()
+        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(return_value=1)
 
         # Create a completed response
         completed_response = ResponsesAPIResponse(
@@ -406,7 +412,10 @@ class TestCheckResponsesCost:
                 if c.kwargs.get("where", {}).get("id") is not None
             ]
             assert len(completion_calls) == 1
-            assert completion_calls[0].kwargs["where"]["id"]["in"] == ["job-123"]
+            assert completion_calls[0].kwargs["where"] == {
+                "id": "job-123",
+                "status": {"in": ["queued", "in_progress"]},
+            }
             assert completion_calls[0].kwargs["data"]["status"] == "completed"
 
     @pytest.mark.asyncio
@@ -423,6 +432,7 @@ class TestCheckResponsesCost:
         mock_job.id = "job-456"
         mock_job.unified_object_id = "resp_failed"
         mock_job.created_by = "test-user"
+        mock_job.file_object = {"model": "gpt-4o", "id": "resp_failed"}
 
         mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
             return_value=[mock_job]

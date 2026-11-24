@@ -5,12 +5,13 @@ import * as path from "node:path";
 import { Page } from "../../fixtures/pages";
 import { navigateToPage, openKeyDetail } from "../../helpers/navigation";
 import { captureRequestBody, readBack } from "../../helpers/roundTrip";
+import { masterKey } from "../../helpers/traffic";
 
 test("project creation and explicit detachment preserve saved scope and restore serving", async ({
   page,
   request,
 }) => {
-  const master = process.env.LITELLM_MASTER_KEY ?? "sk-integration-master";
+  const master = masterKey();
   const headers = { Authorization: `Bearer ${master}` };
   const prefix = `integration-browser-${randomUUID()}`;
   // rebind-ok: Register cleanup after each acquisition so partial setup always unwinds in reverse order.
@@ -38,27 +39,11 @@ test("project creation and explicit detachment preserve saved scope and restore 
       ),
     );
   try {
-    const previous = await request.get("/get/ui_settings", { headers });
-    expect(previous.ok(), await previous.text()).toBe(true);
-    const priorEnabled =
-      (await previous.json()).values.enable_projects_ui ?? false;
-    resources.push(async () => {
-      const response = await request.patch("/update/ui_settings", {
-        headers,
-        data: { enable_projects_ui: priorEnabled },
-      });
-      expect(response.ok(), await response.text()).toBe(true);
-    });
-    const settings = await request.patch("/update/ui_settings", {
-      headers,
-      data: { enable_projects_ui: true },
-    });
-    expect(settings.ok(), await settings.text()).toBe(true);
     for (const alias of [prefix, `${prefix}-outside`]) {
       const model = await post("/model/new", {
         model_name: alias,
         litellm_params: {
-          model: "openai/gpt-4o-mini",
+          model: "openai/gpt-6-luna",
           api_key: "synthetic-provider-key",
           api_base: `${process.env.INTEGRATION_UPSTREAM_URL}/v1`,
         },

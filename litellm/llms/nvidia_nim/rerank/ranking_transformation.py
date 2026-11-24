@@ -6,11 +6,13 @@ Use this by passing "nvidia_nim/ranking/<model>" to force the /v1/ranking endpoi
 Reference: https://build.nvidia.com/nvidia/llama-3_2-nv-rerankqa-1b-v2/deploy
 """
 
+from collections.abc import Mapping
 from typing import Final
 
 import httpx
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.nvidia_nim.rerank.transformation import NvidiaNimRerankConfig
 from litellm.types.rerank import RerankResponse
 
@@ -59,7 +61,7 @@ class NvidiaNimRankingConfig(NvidiaNimRerankConfig):
         self,
         api_base: str | None,
         model: str,
-        optional_params: dict | None = None,
+        optional_params: Mapping[str, object] | None = None,
     ) -> str:
         """
         Construct the Nvidia NIM ranking URL.
@@ -76,7 +78,7 @@ class NvidiaNimRankingConfig(NvidiaNimRerankConfig):
 
         api_base = api_base.removesuffix("/v1")
 
-        return f"{api_base}/v1/ranking"
+        return join_api_base(api_base, "v1/ranking")
 
     def map_cohere_rerank_params(
         self,
@@ -92,7 +94,7 @@ class NvidiaNimRankingConfig(NvidiaNimRerankConfig):
         max_chunks_per_doc: int | None = None,
         max_tokens_per_doc: int | None = None,
         instruction: str | None = None,
-    ) -> dict:  # mutable-ok: LiteLLM provider transforms return mutable request dictionaries
+    ) -> dict[str, object]:  # mutable-ok: LiteLLM provider transforms return mutable request dictionaries
         """
         Keep Cohere's top_n as-is instead of mapping it to top_k.
 
@@ -122,10 +124,10 @@ class NvidiaNimRankingConfig(NvidiaNimRerankConfig):
     def transform_rerank_request(
         self,
         model: str,
-        optional_rerank_params: dict,
+        optional_rerank_params: Mapping[str, object],
         headers: dict,
         litellm_params: dict | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Transform request, using clean model name without 'ranking/' prefix.
 

@@ -11,7 +11,9 @@ import base64
 import json
 import re
 import traceback
-from typing import Final
+from typing import ClassVar, Final
+
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
@@ -23,6 +25,7 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, run_aws_signing
+from litellm.llms.bedrock.web_identity_session_policy import SQS_LOGGING_SESSION_POLICY, WebIdentitySessionPolicy
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -32,6 +35,7 @@ from litellm.types.utils import StandardLoggingPayload
 
 from .custom_batch_logger import CustomBatchLogger
 
+_DECODED_JSON: Final = TypeAdapter(object)
 _BASE64_INLINE_PATTERN: Final = re.compile(
     r"data:(?:application|image|audio|video)/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=\s]+",
     re.MULTILINE,
@@ -40,6 +44,8 @@ _BASE64_INLINE_PATTERN: Final = re.compile(
 
 class SQSLogger(CustomBatchLogger, BaseAWSLLM):
     """Batching logger that writes logs to an AWS SQS queue, optionally encrypting the payload."""
+
+    _web_identity_session_policy: ClassVar[WebIdentitySessionPolicy] = SQS_LOGGING_SESSION_POLICY
 
     def __init__(
         self,
@@ -60,7 +66,7 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
         sqs_aws_sts_endpoint: str | None = None,
         sqs_flush_interval: int | None = DEFAULT_SQS_FLUSH_INTERVAL_SECONDS,
         sqs_batch_size: int | None = DEFAULT_SQS_BATCH_SIZE,
-        sqs_config=None,
+        sqs_config: object = None,
         sqs_strip_base64_files: bool = False,
         # --- 🔐 Application-level encryption params ---
         sqs_aws_use_application_level_encryption: bool = False,
@@ -137,7 +143,7 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
         sqs_aws_use_application_level_encryption: bool = False,
         sqs_app_encryption_key_b64: str | None = None,
         sqs_app_encryption_aad: str | None = None,
-        sqs_config=None,
+        sqs_config: object = None,
     ) -> None:
         litellm.aws_sqs_callback_params = litellm.aws_sqs_callback_params or {}
 
@@ -200,7 +206,7 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
             verbose_logger.debug("SQSLogger: Application-level encryption enabled.")
         self.sqs_config = litellm.aws_sqs_callback_params.get("sqs_config") or sqs_config
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+    async def async_log_success_event(self, kwargs, response_obj: object, start_time: object, end_time: object) -> None:
         try:
             verbose_logger.debug("SQS Logging - Enters logging function for model %s", kwargs)
             standard_logging_payload = kwargs.get("standard_logging_object")
@@ -218,7 +224,7 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
         except Exception as e:
             verbose_logger.exception("sqs Layer Error - %s", e)
 
-    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_failure_event(self, kwargs, response_obj: object, start_time: object, end_time: object) -> None:
         try:
             standard_logging_payload = kwargs.get("standard_logging_object")
             if standard_logging_payload is None:
@@ -270,7 +276,7 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
             if self.sqs_queue_url is None:
                 raise ValueError("sqs_queue_url not set")
 
-            json_data: Final = json.loads(safe_dumps(payload))
+            json_data: Final = _DECODED_JSON.validate_python(json.loads(safe_dumps(payload)))
             if self.app_crypto:
                 aad_bytes: Final = self.sqs_app_encryption_aad.encode("utf-8") if self.sqs_app_encryption_aad else None
                 encrypted: Final = self.app_crypto.encrypt_json(json_data, aad=aad_bytes)

@@ -8,7 +8,10 @@ from InquirerPy import inquirer
 from InquirerPy.base.control import Choice
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
+from litellm.litellm_core_utils.core_helpers import as_object_list
+
 from .... import Client
+from ..auth import cli_context_obj
 from .config import (
     DEFAULT_KEYWORD_TIER_RULES,
     TIER_NAMES,
@@ -108,16 +111,17 @@ def _load_persisted_master_key(config_path: Path) -> str | None:
 
 def run_configure_wizard(ctx: click.Context) -> Path:
     """Discover the caller's accessible models, walk them through tier assignment, write config."""
-    base_url: Final = ctx.obj["base_url"]
+    base_url: Final = cli_context_obj(ctx)["base_url"]
     api_key: Final = ctx.obj["api_key"]
     client: Final = Client(base_url=base_url, api_key=api_key)
 
     raw_models: Final = client.models.list()
-    if not isinstance(raw_models, list):
+    model_listings: Final = as_object_list(raw_models)
+    if model_listings is None:
         raise click.ClickException(
             f"Unexpected response from /v1/models: expected a list, got {type(raw_models).__name__}"
         )
-    discovered: Final = parse_discovered_models(raw_models)
+    discovered: Final = parse_discovered_models(model_listings)
     chat_pool: Final = chat_models(discovered)
     embedding_pool: Final = embedding_models(discovered)
 

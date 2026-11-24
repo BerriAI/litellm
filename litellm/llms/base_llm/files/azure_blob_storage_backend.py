@@ -8,15 +8,18 @@ to reuse all authentication and Azure Storage operations.
 
 import time
 from pathlib import Path
-from typing import Final
+from typing import TYPE_CHECKING, Final
 from urllib.parse import quote, urlparse
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.integrations.azure_storage.azure_storage import AzureBlobStorageLogger
-from litellm.proxy.common_utils.path_utils import safe_filename
+from litellm.litellm_core_utils.path_utils import safe_filename
 
 from .storage_backend import BaseFileStorageBackend
+
+if TYPE_CHECKING:
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
 
 def _safe_basename(original_filename: str) -> str:
@@ -86,13 +89,13 @@ class AzureBlobStorageBackend(BaseFileStorageBackend, AzureBlobStorageLogger):
         # Do nothing - this class is used for file storage, not logging
         return
 
-    async def async_log_success_event(self, *args, **kwargs):
+    async def async_log_success_event(self, *args: object, **kwargs: object):
         """
         Override to do nothing - we're not using this as a logger.
         """
         # Do nothing - this class is used for file storage, not logging
 
-    async def async_log_failure_event(self, *args, **kwargs):
+    async def async_log_failure_event(self, *args: object, **kwargs: object):
         """
         Override to do nothing - we're not using this as a logger.
         """
@@ -222,7 +225,7 @@ class AzureBlobStorageBackend(BaseFileStorageBackend, AzureBlobStorageLogger):
         blob_url = f"{self.azure_storage_blob_endpoint}/{self.azure_storage_file_system}/{full_path}"
         return blob_url
 
-    async def _append_data_bytes(self, client, base_url: str, file_content: bytes):
+    async def _append_data_bytes(self, client: "AsyncHTTPHandler", base_url: str, file_content: bytes):
         """Append binary data to file using REST API."""
         from litellm.constants import AZURE_STORAGE_MSFT_VERSION
 

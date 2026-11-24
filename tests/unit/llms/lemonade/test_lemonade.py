@@ -27,9 +27,7 @@ def test_get_openai_compatible_provider_info(monkeypatch):
     monkeypatch.setattr(litellm, "api_key", None)
     config = LemonadeChatConfig()
 
-    api_base, key = config._get_openai_compatible_provider_info(
-        api_base=None, api_key=None
-    )
+    api_base, key = config.get_openai_compatible_provider_info(api_base=None, api_key=None)
 
     assert api_base == "http://localhost:8000/api/v1"
     assert key == "lemonade"
@@ -43,9 +41,7 @@ def test_get_openai_compatible_provider_info_with_custom_base(monkeypatch):
     config = LemonadeChatConfig()
 
     custom_api_base = "https://custom.lemonade.ai/v1"
-    api_base, key = config._get_openai_compatible_provider_info(
-        api_base=custom_api_base, api_key=None
-    )
+    api_base, key = config.get_openai_compatible_provider_info(api_base=custom_api_base, api_key=None)
 
     assert api_base == custom_api_base
     assert key == "lemonade"
@@ -58,9 +54,7 @@ def test_get_openai_compatible_provider_info_with_api_key_env(monkeypatch):
     monkeypatch.setattr(litellm, "api_key", None)
     config = LemonadeChatConfig()
 
-    api_base, key = config._get_openai_compatible_provider_info(
-        api_base=None, api_key=None
-    )
+    api_base, key = config.get_openai_compatible_provider_info(api_base=None, api_key=None)
 
     assert api_base == "http://localhost:8000/api/v1"
     assert key == "test-key"
@@ -75,9 +69,7 @@ def test_get_openai_compatible_provider_info_skips_env_key_for_custom_base(
     monkeypatch.setattr(litellm, "api_key", None)
     config = LemonadeChatConfig()
 
-    api_base, key = config._get_openai_compatible_provider_info(
-        api_base="https://attacker.example/v1", api_key=None
-    )
+    api_base, key = config.get_openai_compatible_provider_info(api_base="https://attacker.example/v1", api_key=None)
 
     assert api_base == "https://attacker.example/v1"
     assert key == "lemonade"
@@ -93,15 +85,13 @@ def test_get_openai_compatible_provider_info_uses_explicit_key_for_custom_base(
     monkeypatch.setattr(litellm, "api_key", None)
     config = LemonadeChatConfig()
 
-    api_base, key = config._get_openai_compatible_provider_info(
+    api_base, key = config.get_openai_compatible_provider_info(
         api_base="https://lemonade.example/v1", api_key="explicit-lemonade-key"
     )
 
     assert api_base == "https://lemonade.example/v1"
     assert key == "explicit-lemonade-key"
-    assert config._get_auth_headers(key) == {
-        "Authorization": "Bearer explicit-lemonade-key"
-    }
+    assert config._get_auth_headers(key) == {"Authorization": "Bearer explicit-lemonade-key"}
 
 
 def test_get_openai_compatible_provider_info_empty_key_does_not_leak_to_custom_base(
@@ -113,9 +103,7 @@ def test_get_openai_compatible_provider_info_empty_key_does_not_leak_to_custom_b
     monkeypatch.setattr(litellm, "api_key", None)
     config = LemonadeChatConfig()
 
-    api_base, key = config._get_openai_compatible_provider_info(
-        api_base="https://attacker.example/v1", api_key=""
-    )
+    api_base, key = config.get_openai_compatible_provider_info(api_base="https://attacker.example/v1", api_key="")
 
     assert api_base == "https://attacker.example/v1"
     assert key == "lemonade"
@@ -129,9 +117,7 @@ def test_get_openai_compatible_provider_info_ignores_global_api_key(monkeypatch)
     monkeypatch.setattr(litellm, "api_key", "global-openai-key")
     config = LemonadeChatConfig()
 
-    api_base, key = config._get_openai_compatible_provider_info(
-        api_base="http://lemonade.test/v1", api_key=None
-    )
+    api_base, key = config.get_openai_compatible_provider_info(api_base="http://lemonade.test/v1", api_key=None)
 
     assert api_base == "http://lemonade.test/v1"
     assert key == "lemonade"
@@ -393,9 +379,7 @@ def test_transform_response():
     model_response = ModelResponse()
 
     # Mock the parent class transform_response method
-    with patch.object(
-        config.__class__.__bases__[0], "transform_response"
-    ) as mock_parent:
+    with patch.object(config.__class__.__bases__[0], "transform_response") as mock_parent:
         mock_parent.return_value = model_response
 
         result = config.transform_response(

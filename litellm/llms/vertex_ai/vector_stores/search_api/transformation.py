@@ -234,6 +234,9 @@ class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
     def __init__(self):
         super().__init__()
 
+    def get_async_httpx_client_params(self) -> Mapping[str, object]:
+        return MappingProxyType({"http2": True})
+
     @staticmethod
     def get_supported_extra_body_fields(is_engine: bool = False) -> frozenset[str]:
         """
@@ -290,7 +293,7 @@ class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
 
         return filtered
 
-    def get_auth_credentials(self, litellm_params: dict) -> BaseVectorStoreAuthCredentials:
+    def get_auth_credentials(self, litellm_params: Mapping[str, object]) -> BaseVectorStoreAuthCredentials:
         # Get credentials and project info
         vertex_credentials: Final = self.get_vertex_ai_credentials(dict(litellm_params))
         vertex_project: Final = self.get_vertex_ai_project(dict(litellm_params))
@@ -369,7 +372,7 @@ class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
         vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
         api_base: str,
         litellm_logging_obj: LiteLLMLoggingObj,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
         extra_body: Mapping[str, object] | None = None,
     ) -> tuple[str, dict[str, object]]:
         """
@@ -442,7 +445,7 @@ class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
         self,
         vector_store_create_optional_params: VectorStoreCreateOptionalRequestParams,
         api_base: str,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         raise NotImplementedError
 
     def transform_create_vector_store_response(self, response: httpx.Response) -> VectorStoreCreateResponse:
@@ -458,3 +461,6 @@ class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
 
         input_cost_per_query: Final = model_info.get("input_cost_per_query") or 0.0
         return input_cost_per_query, 0.0
+
+
+vertex_search_api_vector_store_config: Final = VertexSearchAPIVectorStoreConfig()

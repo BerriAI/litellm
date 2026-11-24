@@ -7,13 +7,94 @@ Simplified handler leveraging existing LiteLLM Bedrock infrastructure.
 from typing import Any, Final
 
 import httpx
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.llms.bedrock.base_aws_llm import run_aws_signing
+from litellm.litellm_core_utils.core_helpers import decoded_json_object
+from litellm.litellm_core_utils.optional_imports import ensure_optional_import
+from litellm.llms.bedrock.base_aws_llm import AwsAuthError, run_aws_signing
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.bedrock.count_tokens.transformation import BedrockCountTokensConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_async_httpx_client
+
+_DECODED_JSON: Final = TypeAdapter(object)
+_CANNOT_COUNT_MODEL_MESSAGE: Final = "The provided model doesn't support counting tokens."
+_SSO_LOGIN_FIX: Final = (
+    "Run `aws sso login` for the deployment's aws_profile_name on the proxy host, or set other AWS credentials on "
+    "the deployment."
+)
+
+
+class BedrockCountTokensRequestError(BedrockError):
+    def __init__(self, problem: str) -> None:
+        super().__init__(status_code=400, message=problem)
+
+
+class _BedrockErrorBody(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    message: str
+
+
+def _bedrock_error_message(body: str) -> str | None:
+    try:
+        return _BedrockErrorBody.model_validate_json(body).message
+    except ValidationError:
+        return None
+
+
+def is_caller_refusal(status_code: int, body: str, invalid_request: bool) -> bool:
+    return invalid_request or status_code == 429 or _bedrock_error_message(body) == _CANNOT_COUNT_MODEL_MESSAGE
+
+
+class BedrockCountTokensCredentialsError(BedrockError):
+    def __init__(self, status_code: int, problem: str) -> None:
+        super().__init__(status_code=status_code, message=problem)
+
+
+def aws_credentials_error(error: Exception) -> BedrockCountTokensCredentialsError | None:
+    ensure_optional_import("botocore")
+    from botocore.exceptions import (
+        NoCredentialsError,
+        PartialCredentialsError,
+        ProfileNotFound,
+        SSOTokenLoadError,
+        TokenRetrievalError,
+        UnauthorizedSSOTokenError,
+    )
+
+    match error:
+        case AwsAuthError():
+            return BedrockCountTokensCredentialsError(error.status_code, error.message)
+        case ProfileNotFound():
+            return _missing_aws_credentials(
+                error, "Add that profile to the proxy's AWS config file, or set aws_profile_name to one that exists."
+            )
+        case SSOTokenLoadError() | UnauthorizedSSOTokenError():
+            return _missing_aws_credentials(error, _SSO_LOGIN_FIX)
+        case TokenRetrievalError():
+            return _missing_aws_credentials(
+                error,
+                f"{_SSO_LOGIN_FIX} If that login is still valid, retry, since an SSO token refresh that failed for a "
+                "moment raises the same error.",
+            )
+        case NoCredentialsError() | PartialCredentialsError():
+            return _missing_aws_credentials(
+                error,
+                "Give the deployment aws_access_key_id and aws_secret_access_key, an aws_profile_name whose profile "
+                "holds credentials, or api_key, or set AWS credentials in the proxy environment. aws_role_name needs "
+                "one of these to assume the role from. On EC2, check that the instance has a role and its instance "
+                "metadata service answers.",
+            )
+        case _:
+            return None
+
+
+def _missing_aws_credentials(error: Exception, fix: str) -> BedrockCountTokensCredentialsError:
+    return BedrockCountTokensCredentialsError(
+        401, f"No usable AWS credentials are set, so Bedrock can't count tokens ({error}). {fix}"
+    )
 
 
 class BedrockCountTokensHandler(BedrockCountTokensConfig):
@@ -29,7 +110,7 @@ class BedrockCountTokensHandler(BedrockCountTokensConfig):
         litellm_params: dict[str, Any],
         resolved_model: str,
         client: AsyncHTTPHandler | None = None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """
         Handle a CountTokens request using existing LiteLLM patterns.
 
@@ -41,14 +122,15 @@ class BedrockCountTokensHandler(BedrockCountTokensConfig):
         Returns:
             Dictionary containing token count response
         """
+        problem: Final = self.count_tokens_request_problem(request_data)
+        if problem is not None:
+            raise BedrockCountTokensRequestError(problem)
         try:
-            # Validate the request
-            self.validate_count_tokens_request(request_data)
-
             verbose_logger.debug("Processing CountTokens request for resolved model: %s", resolved_model)
 
             # Get AWS region using existing LiteLLM function
-            aws_region_name: Final = self._get_aws_region_name(
+            aws_region_name: Final = await run_aws_signing(
+                self.get_aws_region_name,
                 optional_params=litellm_params,
                 model=resolved_model,
                 model_id=None,
@@ -64,7 +146,8 @@ class BedrockCountTokensHandler(BedrockCountTokensConfig):
             # Get endpoint URL using simplified function
             api_base: Final = litellm_params.get("api_base", None)
             aws_bedrock_runtime_endpoint: Final = litellm_params.get("aws_bedrock_runtime_endpoint", None)
-            endpoint_url: Final = self.get_bedrock_count_tokens_endpoint(
+            endpoint_url: Final = await run_aws_signing(
+                self.get_bedrock_count_tokens_endpoint,
                 model=resolved_model,
                 aws_region_name=aws_region_name,
                 api_base=api_base,
@@ -109,12 +192,12 @@ class BedrockCountTokensHandler(BedrockCountTokensConfig):
                     response=response,
                 )
 
-            bedrock_response: Final = response.json()
+            bedrock_response: Final = _DECODED_JSON.validate_python(response.json())
 
             verbose_logger.debug("Bedrock response: %s", bedrock_response)
 
             # Transform response back to expected format
-            final_response: Final = self.transform_bedrock_response_to_anthropic(bedrock_response)
+            final_response: Final = self.transform_bedrock_response_to_anthropic(decoded_json_object(bedrock_response))
 
             verbose_logger.debug("Final response: %s", final_response)
 
@@ -125,7 +208,7 @@ class BedrockCountTokensHandler(BedrockCountTokensConfig):
             raise
         except httpx.HTTPStatusError as e:
             # HTTP errors - preserve the actual status code
-            verbose_logger.error("HTTP error in CountTokens handler: %s", e)
+            verbose_logger.debug("HTTP error in CountTokens handler: %s", e)
             raise BedrockError(
                 status_code=e.response.status_code,
                 message=e.response.text,
@@ -134,6 +217,9 @@ class BedrockCountTokensHandler(BedrockCountTokensConfig):
             )
         except Exception as e:
             verbose_logger.error("Error in CountTokens handler: %s", e)
+            credentials_error: Final = aws_credentials_error(e)
+            if credentials_error is not None:
+                raise credentials_error from e
             raise BedrockError(
                 status_code=500,
                 message=f"CountTokens processing error: {e}",

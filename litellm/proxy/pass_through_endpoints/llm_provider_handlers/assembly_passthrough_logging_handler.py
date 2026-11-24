@@ -7,10 +7,12 @@ from typing import Final, Literal
 from urllib.parse import urlparse
 
 import httpx
+from pydantic import TypeAdapter
 from typing_extensions import TypedDict
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import (
     get_standard_logging_object_payload,
@@ -23,6 +25,8 @@ from litellm.types.passthrough_endpoints.assembly_ai import (
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     PassthroughStandardLoggingPayload,
 )
+
+_TRANSCRIPT_JSON: Final = TypeAdapter(object)
 
 
 class AssemblyAITranscriptResponse(TypedDict, total=False):
@@ -147,7 +151,7 @@ class AssemblyAIPassthroughLoggingHandler:
         logging_obj.model_call_details["response_cost"] = response_cost
 
         asyncio.run(
-            pass_through_endpoint_logging._handle_logging(
+            pass_through_endpoint_logging.handle_logging(
                 logging_obj=logging_obj,
                 standard_logging_response_object=self._get_response_to_log(transcript_response),
                 result=result,
@@ -158,7 +162,7 @@ class AssemblyAIPassthroughLoggingHandler:
             )
         )
 
-    def _get_response_to_log(self, transcript_response: AssemblyAITranscriptResponse | None) -> dict:
+    def _get_response_to_log(self, transcript_response: AssemblyAITranscriptResponse | None) -> dict[str, object]:
         if transcript_response is None:
             return {}
         return dict(transcript_response)
@@ -201,10 +205,13 @@ class AssemblyAIPassthroughLoggingHandler:
             response: Final = httpx.get(url, headers=headers)
             response.raise_for_status()
 
-            return response.json()
+            transcript: Final = _TRANSCRIPT_JSON.validate_python(response.json())
         except Exception as e:
             verbose_proxy_logger.exception("[Non blocking logging error] Error getting AssemblyAI transcript: %s", e)
             return None
+        if transcript is None:
+            return None
+        return require_attributes(transcript, dict[str, object], "get")
 
     def _poll_assembly_for_transcript_response(
         self,
@@ -216,7 +223,7 @@ class AssemblyAIPassthroughLoggingHandler:
         """
         for _ in range(self.max_polling_attempts):  # 180 attempts * 10s = 30 minutes max
             transcript = self._get_assembly_transcript(
-                request_region=AssemblyAIPassthroughLoggingHandler._get_assembly_region_from_url(url=url_route),
+                request_region=AssemblyAIPassthroughLoggingHandler.get_assembly_region_from_url(url=url_route),
                 transcript_id=transcript_id,
             )
             if transcript is None:
@@ -279,14 +286,16 @@ class AssemblyAIPassthroughLoggingHandler:
             return None
 
     @staticmethod
-    def _should_log_request(request_method: str) -> bool:
+    def should_log_request(request_method: str) -> bool:
         """
         only POST transcription jobs are logged. litellm will POLL assembly to wait for the transcription to complete to log the complete response / cost
         """
         return request_method == "POST"
 
+    _should_log_request = should_log_request
+
     @staticmethod
-    def _get_assembly_region_from_url(url: str | None) -> Literal["eu"] | None:
+    def get_assembly_region_from_url(url: str | None) -> Literal["eu"] | None:
         """
         Get the region from the URL
         """
@@ -296,8 +305,10 @@ class AssemblyAIPassthroughLoggingHandler:
             return "eu"
         return None
 
+    _get_assembly_region_from_url = get_assembly_region_from_url
+
     @staticmethod
-    def _get_assembly_base_url_from_region(region: Literal["eu"] | None) -> str:
+    def get_assembly_base_url_from_region(region: Literal["eu"] | None) -> str:
         """
         Get the base URL for the AssemblyAI API
         if region == "eu", return "https://api.eu.assemblyai.com"
@@ -306,3 +317,5 @@ class AssemblyAIPassthroughLoggingHandler:
         if region == "eu":
             return "https://api.eu.assemblyai.com"
         return "https://api.assemblyai.com"
+
+    _get_assembly_base_url_from_region = get_assembly_base_url_from_region

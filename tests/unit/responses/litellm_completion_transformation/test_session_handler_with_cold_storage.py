@@ -10,20 +10,21 @@ Tests for the changes to integrate cold storage handling across different compon
 """
 
 import json
-from datetime import datetime, timezone
-from typing import Optional
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
+import litellm
+
 from litellm.integrations.s3_v2 import S3Logger
-from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload
+from litellm.proxy._types import SpendLogsMetadata
 from litellm.proxy.spend_tracking.cold_storage_handler import ColdStorageHandler
 from litellm.proxy.spend_tracking.spend_tracking_utils import _get_spend_logs_metadata
 from litellm.responses.litellm_completion_transformation.session_handler import (
     ResponsesSessionHandler,
 )
-from litellm.types.utils import StandardLoggingMetadata, StandardLoggingPayload
+from litellm.types.utils import StandardLoggingMetadata
+from tests.unit.integrations.s3_v2_rust_support import scripted_bucket
 
 
 class TestColdStorageObjectKeyIntegration:
@@ -57,7 +58,9 @@ class TestColdStorageObjectKeyIntegration:
         """
         # Create a SpendLogsMetadata instance with cold_storage_object_key
         metadata = SpendLogsMetadata(
-            user_api_key="test_key", cold_storage_object_key="test/path/to/object.json"
+            user_api_key="test_key",
+            user_api_key_user_email=None,
+            cold_storage_object_key="test/path/to/object.json",
         )
 
         # Verify the field can be set and accessed
@@ -172,24 +175,29 @@ class TestColdStorageObjectKeyIntegration:
             )
 
     @pytest.mark.asyncio
-    @patch("asyncio.create_task")  # Mock asyncio.create_task to avoid event loop issues
-    async def test_s3_logger_supports_object_key_retrieval(self, mock_create_task):
+    async def test_s3_logger_supports_object_key_retrieval(self, monkeypatch: pytest.MonkeyPatch):
         """
         Test: S3Logger supports retrieval using provided object key.
 
         This test verifies that the S3Logger can retrieve objects using
         the object key directly without generating it from request_id and start_time.
         """
-        # Create S3Logger instance
-        s3_logger = S3Logger(s3_bucket_name="test-bucket")
+        monkeypatch.setattr(litellm, "s3_callback_params", None)
+        with scripted_bucket() as bucket:
+            bucket.objects["/test-bucket/test/path/to/object.json"] = b'{"test": "data"}'
+            s3_logger = S3Logger(
+                s3_bucket_name="test-bucket",
+                s3_region_name="us-east-1",
+                s3_endpoint_url=bucket.url,
+                s3_aws_access_key_id="test-key",
+                s3_aws_secret_access_key="test-secret",
+            )
 
-        # Mock the _download_object_from_s3 method
-        with patch.object(
-            s3_logger, "_download_object_from_s3", return_value={"test": "data"}
-        ) as mock_download:
             result = await s3_logger.get_proxy_server_request_from_cold_storage_with_object_key(
                 object_key="test/path/to/object.json"
             )
 
             assert result == {"test": "data"}
-            mock_download.assert_called_once_with("test/path/to/object.json")
+            assert [(request.method, request.path) for request in bucket.received] == [
+                ("GET", "/test-bucket/test/path/to/object.json")
+            ]

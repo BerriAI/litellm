@@ -1,4 +1,4 @@
-"""Refreshable credentials whose refresh only completes while the event loop keeps serving."""
+"""Credential refreshes and Vault reads that only complete while the event loop keeps serving."""
 
 from __future__ import annotations
 
@@ -8,7 +8,11 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Final
 
+import pytest
 from botocore.credentials import RefreshableCredentials
+
+import litellm
+from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagementSystem
 
 REFRESH_RELEASE_TIMEOUT_SECONDS: Final = 2.0
 REFRESH_START_TIMEOUT_SECONDS: Final = 10.0
@@ -55,3 +59,29 @@ class EventLoopProbe:
                 raise TimeoutError("signing finished without ever starting a credential refresh")
             await asyncio.sleep(0.005)
         self.loop_served.set()
+
+
+class LoopProbingVault:
+    """A Vault with no hosted secrets that records reads on the event-loop thread."""
+
+    def __init__(self) -> None:
+        self._loop_thread_id: Final = threading.get_ident()
+        self.read: Final = threading.Event()
+        self.read_on_loop: Final = threading.Event()
+
+    def sync_read_secret(self, secret_name: str) -> None:
+        self.read.set()
+        if threading.get_ident() == self._loop_thread_id:
+            self.read_on_loop.set()
+
+
+def host_in_loop_probing_vault(monkeypatch: pytest.MonkeyPatch, *secret_names: str) -> LoopProbingVault:
+    vault: Final = LoopProbingVault()
+    monkeypatch.setattr(litellm, "secret_manager_client", vault)
+    monkeypatch.setattr(litellm, "_key_management_system", KeyManagementSystem.HASHICORP_VAULT)
+    monkeypatch.setattr(
+        litellm,
+        "_key_management_settings",
+        KeyManagementSettings(access_mode="read_only", hosted_keys=list(secret_names)),
+    )
+    return vault

@@ -24,12 +24,13 @@ import pytest
 from prometheus_client.parser import text_string_to_metric_families
 
 from e2e_config import unique_marker
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from logging_client import LoggingClient
 
 pytestmark = pytest.mark.e2e
 
-DRIVER_MODEL = "gemini-2.5-flash"
+DRIVER_MODEL = "gemini-3.8-flash"
 REQUESTS_METRIC = "litellm_requests_metric_total"
 ALIAS_LABEL = "api_key_alias"
 DISTINCT_KEYS = 3
@@ -47,6 +48,15 @@ def _aliases_in_metric(exposition: str, metric: str, label: str) -> frozenset[st
 
 class TestPrometheusPerKeyCardinality:
     @pytest.mark.covers("logging.prometheus.success.exports_metric", exercised_on=[])
+    @meta(
+        Subject(
+            domain=Domain.OBSERVABILITY,
+            route=Route.METRICS,
+            providers=(Provider.GEMINI,),
+            models=(DRIVER_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_distinct_key_aliases_produce_distinct_series(
         self, client: LoggingClient, resources: ResourceManager
     ) -> None:

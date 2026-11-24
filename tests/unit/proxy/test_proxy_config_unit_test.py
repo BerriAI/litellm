@@ -1,4 +1,6 @@
 import os
+from pathlib import Path
+from typing import Final
 import traceback
 from unittest import mock
 import pytest
@@ -16,6 +18,9 @@ import io
 import asyncio
 import logging
 
+import yaml
+
+import litellm
 from litellm.proxy.proxy_server import ProxyConfig
 
 INVALID_FILES = ["config_with_missing_include.yaml"]
@@ -240,7 +245,7 @@ def test_add_callbacks_invalid_input():
 @pytest.mark.asyncio
 async def test_json_logs_calls_turn_on_json():
     """
-    Test that json_logs: true in litellm_settings calls litellm._turn_on_json()
+    Test that json_logs: true in litellm_settings calls litellm.turn_on_json()
 
     This is a regression test for the bug where json_logs in config file
     would only set the attribute but not actually enable JSON logging.
@@ -269,7 +274,7 @@ async def test_json_logs_calls_turn_on_json():
         proxy_config = ProxyConfig()
 
         # Mock _turn_on_json to track if it gets called
-        with mock.patch("litellm._turn_on_json") as mock_turn_on_json:
+        with mock.patch("litellm.turn_on_json") as mock_turn_on_json:
             await proxy_config.load_config(
                 router=None,
                 config_file_path=temp_file_path,
@@ -340,3 +345,36 @@ class TestYamlStorePromptsDbOverride:
         proxy_config = ProxyConfig()
 
         assert proxy_config.settings.source("store_prompts_in_spend_logs") == "unset"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("disabled", [["prompt"], "prompts", ["prompts", "tools"]])
+async def test_load_config_rejects_unknown_mcp_disabled_capability(tmp_path: Path, disabled: object) -> None:
+    import yaml
+    from pydantic import ValidationError
+
+    config_path: Final = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump({"general_settings": {"mcp_disabled_capabilities": disabled}}))
+
+    with pytest.raises(ValidationError):
+        await ProxyConfig().load_config(router=None, config_file_path=str(config_path))
+
+
+@pytest.mark.asyncio
+async def test_proxy_config_model_fallbacks_never_becomes_the_sdk_global_fallback_list(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "model_fallbacks", None)
+    config_file: Final = tmp_path / "config.yaml"
+    _ = config_file.write_text(
+        yaml.safe_dump(
+            {
+                "model_list": [{"model_name": "gpt-5.4-nano", "litellm_params": {"model": "openai/gpt-5.4-nano"}}],
+                "litellm_settings": {"model_fallbacks": ["anthropic/claude-haiku-5-5"]},
+            }
+        )
+    )
+
+    _ = await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
+
+    assert litellm.model_fallbacks is None

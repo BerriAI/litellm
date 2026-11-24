@@ -1,4 +1,5 @@
-from typing import Any, Literal
+from dataclasses import dataclass
+from typing import Final, Literal
 
 from typing_extensions import TypedDict
 
@@ -20,7 +21,7 @@ class ImageEditOptionalRequestParams(TypedDict, total=False):
     response_format: Literal["url", "b64_json"] | None
     size: str | None
     user: str | None
-    imageConfig: dict[str, Any] | None
+    imageConfig: dict[str, object] | None
 
 
 class ImageEditRequestParams(ImageEditOptionalRequestParams, total=False):
@@ -33,3 +34,12 @@ class ImageEditRequestParams(ImageEditOptionalRequestParams, total=False):
     image: FileTypes
     prompt: str
     model: str | None
+
+
+IMAGE_CONFIG_FIELDS: Final = ("imageConfig", "image_config")
+
+
+@dataclass(frozen=True, slots=True)
+class UnsupportedImageParam:
+    param: str
+    reason: str

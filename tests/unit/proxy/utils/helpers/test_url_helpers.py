@@ -1,9 +1,8 @@
 import pytest
 
 from litellm.proxy.utils import (
-    _get_docs_url,
-    _get_openapi_url,
-    _get_redoc_url,
+    get_docs_url,
+    get_openapi_url,
     get_custom_url,
     get_proxy_base_url,
     get_server_root_path,
@@ -18,8 +17,6 @@ def normalize(value):
 
 def _clear_url_env(monkeypatch):
     for var in (
-        "REDOC_URL",
-        "NO_REDOC",
         "DOCS_URL",
         "NO_DOCS",
         "OPENAPI_URL",
@@ -30,45 +27,10 @@ def _clear_url_env(monkeypatch):
         monkeypatch.delenv(var, raising=False)
 
 
-def test_get_redoc_url_default(monkeypatch):
-    _clear_url_env(monkeypatch)
-    summary = {
-        "result": _get_redoc_url(),
-        "redoc_url_env": None,
-        "no_redoc_env": None,
-    }
-    assert summary == {
-        "result": "/redoc",
-        "redoc_url_env": None,
-        "no_redoc_env": None,
-    }
-
-
-def test_get_redoc_url_custom_env(monkeypatch):
-    _clear_url_env(monkeypatch)
-    monkeypatch.setenv("REDOC_URL", "/custom-redoc")
-    summary = {
-        "result": _get_redoc_url(),
-        "redoc_url_env": "/custom-redoc",
-        "default_overridden": True,
-    }
-    assert summary == {
-        "result": "/custom-redoc",
-        "redoc_url_env": "/custom-redoc",
-        "default_overridden": True,
-    }
-
-
-def test_get_redoc_url_disabled_returns_none_error_path(monkeypatch):
-    _clear_url_env(monkeypatch)
-    monkeypatch.setenv("NO_REDOC", "True")
-    assert _get_redoc_url() is None
-
-
 def test_get_docs_url_default(monkeypatch):
     _clear_url_env(monkeypatch)
     summary = {
-        "result": _get_docs_url(),
+        "result": get_docs_url(),
         "no_docs": None,
         "docs_url": None,
     }
@@ -83,7 +45,7 @@ def test_get_docs_url_custom_env(monkeypatch):
     _clear_url_env(monkeypatch)
     monkeypatch.setenv("DOCS_URL", "/api-docs")
     summary = {
-        "result": _get_docs_url(),
+        "result": get_docs_url(),
         "env": "/api-docs",
         "default_overridden": True,
     }
@@ -97,13 +59,13 @@ def test_get_docs_url_custom_env(monkeypatch):
 def test_get_docs_url_disabled_returns_none_error_path(monkeypatch):
     _clear_url_env(monkeypatch)
     monkeypatch.setenv("NO_DOCS", "True")
-    assert _get_docs_url() is None
+    assert get_docs_url() is None
 
 
 def test_get_openapi_url_default(monkeypatch):
     _clear_url_env(monkeypatch)
     summary = {
-        "result": _get_openapi_url(),
+        "result": get_openapi_url(),
         "no_openapi": None,
         "openapi_url": None,
     }
@@ -118,7 +80,7 @@ def test_get_openapi_url_custom_env(monkeypatch):
     _clear_url_env(monkeypatch)
     monkeypatch.setenv("OPENAPI_URL", "/api-schema")
     summary = {
-        "result": _get_openapi_url(),
+        "result": get_openapi_url(),
         "env": "/api-schema",
         "default_overridden": True,
     }
@@ -132,7 +94,7 @@ def test_get_openapi_url_custom_env(monkeypatch):
 def test_get_openapi_url_disabled_returns_none_error_path(monkeypatch):
     _clear_url_env(monkeypatch)
     monkeypatch.setenv("NO_OPENAPI", "True")
-    assert _get_openapi_url() is None
+    assert get_openapi_url() is None
 
 
 @pytest.mark.parametrize(

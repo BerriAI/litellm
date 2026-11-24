@@ -24,14 +24,15 @@ def get_fireworks_session_id(litellm_params: Mapping[str, object]) -> str | None
     pins every request to a different Fireworks node and prompt caching never hits.
     """
     params: Final = litellm_params
-    metadata: Final = params.get("metadata")
-    if isinstance(metadata, Mapping) and metadata.get(SESSION_ID_GENERATED_METADATA_KEY):
+    raw_metadata: Final = params.get("metadata")
+    metadata: Final[Mapping[object, object] | None] = raw_metadata if isinstance(raw_metadata, Mapping) else None
+    if metadata is not None and metadata.get(SESSION_ID_GENERATED_METADATA_KEY):
         return None
     for key in ("litellm_session_id", "session_id"):
         value = params.get(key)
         if value:
             return str(value)
-    if isinstance(metadata, Mapping):
+    if metadata is not None:
         value = metadata.get("session_id")
         if value:
             return str(value)
@@ -47,6 +48,34 @@ def with_fireworks_session_affinity(
     if not session_id:
         return headers
     return MappingProxyType({**headers, "x-session-affinity": session_id})
+
+
+FIREWORKS_FORWARD_USER_ID_PARAM: Final = "fireworks_forward_user_id"
+
+
+def _authenticated_user_id(metadata: object) -> str | None:
+    mapping: Final[Mapping[object, object] | None] = metadata if isinstance(metadata, Mapping) else None
+    user_id: Final = mapping.get("user_api_key_user_id") if mapping is not None else None
+    return user_id if isinstance(user_id, str) and user_id else None
+
+
+def get_fireworks_forwarded_user_id(litellm_params: Mapping[str, object]) -> str | None:
+    if litellm_params.get(FIREWORKS_FORWARD_USER_ID_PARAM) is not True:
+        return None
+    return next(
+        (
+            user_id
+            for key in ("metadata", "litellm_metadata")
+            if (user_id := _authenticated_user_id(litellm_params.get(key))) is not None
+        ),
+        None,
+    )
+
+
+def without_caller_user(extra_body: Mapping[str, object], forwarded_user_id: str | None) -> Mapping[str, object]:
+    if forwarded_user_id is None:
+        return extra_body
+    return MappingProxyType({key: value for key, value in extra_body.items() if key != "user"})
 
 
 def resolve_fireworks_api_key(api_key: str | None) -> str | None:

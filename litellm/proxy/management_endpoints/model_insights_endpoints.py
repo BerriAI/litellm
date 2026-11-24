@@ -5,13 +5,14 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Annotated, Final
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field, TypeAdapter
+from pydantic import Field, TypeAdapter
 
 from litellm.constants import MODEL_INSIGHTS_DEFAULT_TASK, MODEL_INSIGHTS_MAX_RANGE_DAYS, MODEL_INSIGHTS_TOP_MODELS
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.db.model_insights_tasks import load_model_insight_tasks
 from litellm.repositories.table_repositories import DailyModelUsageRepository
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.model_insights import (
     ModelInsightDailyMetric,
     ModelInsightDailyTotal,
@@ -26,7 +27,7 @@ from litellm.types.model_insights import (
 router: Final = APIRouter()
 
 
-class _Sums(BaseModel):
+class _Sums(LiteLLMBaseModel):
     spend: float = 0.0
     prompt_tokens: int = 0
     completion_tokens: int = 0
@@ -35,7 +36,7 @@ class _Sums(BaseModel):
     failed_requests: int = 0
 
 
-class _GroupedModel(BaseModel):
+class _GroupedModel(LiteLLMBaseModel):
     model_group: str
     model: str
     custom_llm_provider: str
@@ -46,7 +47,7 @@ class _GroupedDaily(_GroupedModel):
     date: str
 
 
-class _GroupedDate(BaseModel):
+class _GroupedDate(LiteLLMBaseModel):
     date: str
     sums: _Sums = Field(alias="_sum")
 
@@ -115,7 +116,7 @@ def _deployment_filter(rows: list[_GroupedModel]) -> list[dict[str, str]]:
 
 
 def _daily_metric(row: _GroupedDaily) -> ModelInsightDailyMetric:
-    return ModelInsightDailyMetric(date=row.date, **_metric(row).model_dump())
+    return ModelInsightDailyMetric.model_validate({**_metric(row).model_dump(), "date": row.date})
 
 
 def _daily_total(row: _GroupedDate) -> ModelInsightDailyTotal:
@@ -146,12 +147,14 @@ def _summarize_tasks(rows: list[_GroupedTask], metric: ModelInsightsMetric) -> l
     }
     grand: Final = sum(totals.values())
     return [
-        ModelInsightTaskSummary(
-            **(catalog.get(task) or _UNCATEGORIZED_TASK).model_copy(update={"task_type": task}).model_dump(),
-            value=value,
-            share=value / grand * 100 if grand else 0.0,
-            leader=leaders[task].model_group,
-            provider=leaders[task].custom_llm_provider,
+        ModelInsightTaskSummary.model_validate(
+            {
+                **(catalog.get(task) or _UNCATEGORIZED_TASK).model_copy(update={"task_type": task}).model_dump(),
+                "value": value,
+                "share": value / grand * 100 if grand else 0.0,
+                "leader": leaders[task].model_group,
+                "provider": leaders[task].custom_llm_provider,
+            }
         )
         for task, value in sorted(totals.items(), key=lambda item: item[1], reverse=True)
     ]

@@ -3,18 +3,19 @@ from typing import Final
 
 import httpx
 
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.utils import CustomStreamingDecoder, ModelResponse
 
 from ...openai_like.chat.handler import OpenAILikeChatHandler
-from ..common_utils import _get_api_params
+from ..common_utils import get_api_params
 from .transformation import IBMWatsonXChatConfig
 
 watsonx_chat_transformation: Final = IBMWatsonXChatConfig()
 
 
 class WatsonXChatHandler(OpenAILikeChatHandler):
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs: object):
         super().__init__(**kwargs)
 
     def completion(
@@ -26,14 +27,14 @@ class WatsonXChatHandler(OpenAILikeChatHandler):
         custom_llm_provider: str,
         custom_prompt_dict: dict,
         model_response: ModelResponse,
-        print_verbose: Callable,
-        encoding,
+        print_verbose: Callable[..., object],
+        encoding: object,
         api_key: str | None,
-        logging_obj,
+        logging_obj: LiteLLMLoggingObj,
         optional_params: dict,
-        acompletion=None,
-        litellm_params: dict = {},
-        headers: dict | None = None,
+        acompletion: object = None,
+        litellm_params: dict[str, object] = {},
+        headers: dict[str, object] | None = None,
         logger_fn=None,
         timeout: float | httpx.Timeout | None = None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
@@ -41,7 +42,7 @@ class WatsonXChatHandler(OpenAILikeChatHandler):
         streaming_decoder: CustomStreamingDecoder | None = None,
         fake_stream: bool = False,
     ):
-        api_params: Final = _get_api_params(params=optional_params, model=model)
+        api_params: Final = get_api_params(params=optional_params, model=model)
 
         ## UPDATE HEADERS
         headers = watsonx_chat_transformation.validate_environment(
@@ -54,7 +55,7 @@ class WatsonXChatHandler(OpenAILikeChatHandler):
         )
 
         ## UPDATE PAYLOAD (optional params and special cases for models deployed in spaces)
-        watsonx_auth_payload: Final = watsonx_chat_transformation._prepare_payload(
+        watsonx_auth_payload: Final = watsonx_chat_transformation.prepare_payload(
             model=model,
             api_params=api_params,
         )

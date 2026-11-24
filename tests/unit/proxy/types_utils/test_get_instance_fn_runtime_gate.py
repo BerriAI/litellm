@@ -151,7 +151,7 @@ def test_mcp_tool_registry_threads_config_file_path():
     # MCP tool handlers declared in ``config.yaml`` mcp_tools[].handler
     # may legitimately be ``s3://...``; the YAML-load path must thread
     # ``config_file_path`` so they resolve.
-    from litellm.proxy._experimental.mcp_server import tool_registry as tr
+    from litellm.proxy.mcp_server import tool_registry as tr
 
     fake_handler = lambda **kwargs: None  # noqa: E731 — registry requires callable
     with patch.object(tr, "get_instance_fn", return_value=fake_handler) as mock_get:

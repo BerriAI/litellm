@@ -6,7 +6,9 @@ from pathlib import Path
 
 import httpx
 import pytest
+from pydantic import ValidationError
 
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.fal_ai.image_edit import FalAIImageEditConfig
 from litellm.types.images.main import ImageEditOptionalRequestParams
 from litellm.types.router import GenericLiteLLMParams
@@ -156,3 +158,69 @@ def test_transform_request_requires_an_image(image):
             litellm_params=GenericLiteLLMParams(),
             headers={},
         )
+
+
+def _transform_response(payload: object) -> ImageResponse:
+    return FalAIImageEditConfig().transform_image_edit_response(
+        model="openai/gpt-image-2.5/flare/edit", raw_response=httpx.Response(200, json=payload), logging_obj=None
+    )
+
+
+def test_transform_response_maps_image_objects_and_bare_urls_in_provider_order():
+    response = _transform_response(
+        {
+            "images": [
+                "https://fal.media/a.png",
+                {"b64_json": "QUJD", "width": 0, "height": "768", "content_type": 5},
+                7,
+                None,
+                {"url": "https://fal.media/b.png", "width": 512},
+            ],
+            "seed": 42,
+        }
+    )
+
+    assert [(image.url, image.b64_json, image.provider_specific_fields) for image in response.data] == [
+        ("https://fal.media/a.png", None, None),
+        (None, "QUJD", None),
+        ("https://fal.media/b.png", None, {"width": 512}),
+    ]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        {"detail": "rate limit exceeded"},
+        {"images": None},
+        {"images": "https://fal.media/a.png"},
+        {"images": {"url": "https://fal.media/a.png"}},
+        {"images": 429},
+    ],
+)
+def test_transform_response_without_an_image_list_is_empty(payload):
+    assert _transform_response(payload).data == []
+
+
+@pytest.mark.parametrize(
+    "payload", [7, True, "https://fal.media/a.png", [{"url": "https://fal.media/a.png"}], [{"images": []}]]
+)
+def test_transform_response_rejects_non_object_bodies_without_echoing_them(payload):
+    with pytest.raises(ValidationError) as exc_info:
+        _transform_response(payload)
+
+    assert [(error["type"], error["loc"]) for error in exc_info.value.errors()] == [("dict_type", ())]
+    assert "input_value" not in str(exc_info.value)
+    assert "fal.media" not in str(exc_info.value)
+
+
+def test_transform_response_reports_a_body_that_is_not_json_as_a_provider_error():
+    with pytest.raises(BaseLLMException) as exc_info:
+        FalAIImageEditConfig().transform_image_edit_response(
+            model="openai/gpt-image-2.5/flare/edit",
+            raw_response=httpx.Response(502, content=b"<html>502 Bad Gateway</html>"),
+            logging_obj=None,
+        )
+
+    assert exc_info.value.status_code == 502
+    assert str(exc_info.value).startswith("Error parsing Fal AI image edit response: ")

@@ -14,13 +14,15 @@ Flow:
 import json
 import time
 import uuid
-from collections.abc import Iterable, Sequence
-from typing import TYPE_CHECKING, Any, Final, TypeAlias, cast  # noqa: TID251  # see kwargs-ok / cast-ok markers
+from collections.abc import Iterable, Mapping, Sequence
+from typing import TYPE_CHECKING, Final, TypeAlias, cast  # noqa: TID251  # see cast-ok markers
 
+from pydantic import TypeAdapter
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm._internal_context import is_internal_call
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.types.llms.openai import ResponseOutputItem, ResponsesAPIResponse
 from litellm.types.vector_stores import VectorStoreSearchResult
 
@@ -31,6 +33,8 @@ if TYPE_CHECKING:
 ToolParam: TypeAlias = object
 
 FILE_SEARCH_FUNCTION_NAME: Final = "litellm_file_search"
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class FileSearchToolCallArgs(TypedDict):
@@ -45,7 +49,7 @@ class FileSearchToolCallArgs(TypedDict):
 
 
 def should_use_emulated_file_search(
-    tools: Iterable[ToolParam] | None,
+    tools: Iterable[object] | None,
     provider_config: "BaseResponsesAPIConfig | None",
 ) -> bool:
     """Return True when there is a file_search tool and the provider can't handle it natively."""
@@ -105,7 +109,7 @@ def _build_function_tool(vector_store_ids: list[str]) -> dict[str, object]:
     }
 
 
-def _replace_file_search_tools(
+def replace_file_search_tools(
     tools: Iterable[ToolParam] | None,
 ) -> tuple[list[object], list[str]]:
     """
@@ -380,7 +384,7 @@ def _synthesize_responses_api_response(
             if first_cost is not None:
                 current_cost: Final = hidden.get("response_cost") if isinstance(hidden, dict) else 0
                 hidden["response_cost"] = (current_cost or 0) + first_cost
-        synthesized._hidden_params = hidden
+        synthesized.hidden_params = hidden
     return synthesized
 
 
@@ -389,7 +393,7 @@ def _synthesize_responses_api_response(
 # ---------------------------------------------------------------------------
 
 
-async def _call_aresponses(input, model, tools, **kwargs):  # pragma: no cover – thin wrapper for patching in tests
+async def _call_aresponses(input, model: str, tools, **kwargs):  # pragma: no cover – thin wrapper for patching in tests
     from litellm.responses.main import aresponses  # noqa: TID251  # inner call must not re-enter file-search emulation
 
     return await aresponses(input=input, model=model, tools=tools, **kwargs)
@@ -425,7 +429,7 @@ def _extract_tool_call_fields(tool_call: object, fallback_call_id: str) -> tuple
     return call_id, raw_args
 
 
-def _resolve_queries_from_args(args: FileSearchToolCallArgs, input: object) -> list[str]:
+def _resolve_queries_from_args(args: Mapping[str, object], input: object) -> list[str]:
     """Pull the queries list out of parsed tool-call arguments, with backward-compat fallbacks."""
     queries_from_call: Final = args.get("queries")
     if not queries_from_call:
@@ -452,7 +456,11 @@ async def _execute_file_search_tool_calls(
         call_id, raw_args = _extract_tool_call_fields(tool_call, fallback_call_id=file_search_call_id)
 
         try:
-            args: FileSearchToolCallArgs = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+            args: Mapping[str, object] = (
+                require_attributes(_DECODED_JSON.validate_python(json.loads(raw_args)), dict[str, object], "get")
+                if isinstance(raw_args, str)
+                else raw_args
+            )
         except json.JSONDecodeError:
             args = {}
 
@@ -517,7 +525,7 @@ async def aresponses_with_emulated_file_search(
     model: str,
     tools: Iterable[ToolParam] | None = None,
     # Pass-through params — forwarded as-is to the underlying aresponses call
-    **kwargs: Any,  # kwargs-ok: `object` would surface the caller's partially-unknown dict at its call site
+    **kwargs: object,  # kwargs-ok: pass-through params forwarded as-is to the underlying aresponses call
 ) -> ResponsesAPIResponse:
     """
     Emulated file_search for providers that don't support it natively.
@@ -529,7 +537,7 @@ async def aresponses_with_emulated_file_search(
     _include_search_results, call_kwargs = _prepare_emulated_file_search_call(kwargs=kwargs)
 
     # 1. Replace file_search tools with function tool
-    transformed_tools, all_vs_ids = _replace_file_search_tools(tools)
+    transformed_tools, all_vs_ids = replace_file_search_tools(tools)
 
     # 2. First provider call — provider will call the file_search function.
     # Mark as an internal sub-call so wrapper_async skips billing callbacks;

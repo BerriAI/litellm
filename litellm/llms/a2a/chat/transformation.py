@@ -3,10 +3,11 @@ A2A Protocol Transformation for LiteLLM
 """
 
 import uuid
-from collections.abc import Iterator, Mapping
-from typing import TYPE_CHECKING, Any, Final
+from collections.abc import AsyncIterator, Iterator, Mapping
+from typing import TYPE_CHECKING, Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.llms.azure_ai.common_utils import AZURE_ENTRA_LITELLM_PARAM_KEYS, get_azure_ai_agent_entra_token
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
@@ -30,6 +31,7 @@ if TYPE_CHECKING:
 _REGISTRY_PARAMS_KEPT_OUT_OF_OPTIONAL_PARAMS: Final = (
     frozenset({"api_key", "api_base", "headers", "model"}) | AZURE_ENTRA_LITELLM_PARAM_KEYS
 )
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
 def _card_declares_no_streaming(agent_card_params: Mapping[str, object]) -> bool:
@@ -72,9 +74,9 @@ class A2AConfig(BaseConfig):
         agent_name: str,
         api_base: str | None,
         api_key: str | None,
-        headers: dict[str, Any] | None,
-        optional_params: dict[str, Any],
-    ) -> tuple[str | None, str | None, dict[str, Any] | None]:
+        headers: dict[str, object] | None,
+        optional_params: dict[str, object],
+    ) -> tuple[str | None, str | None, dict[str, object] | None]:
         """
         Resolve agent configuration from the registry for a registered agent.
 
@@ -141,7 +143,7 @@ class A2AConfig(BaseConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
+        non_default_params: Mapping[str, object],
         optional_params: dict,
         model: str,
         drop_params: bool,
@@ -161,14 +163,14 @@ class A2AConfig(BaseConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: Mapping[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Validate environment and set headers for A2A requests.
 
@@ -195,8 +197,8 @@ class A2AConfig(BaseConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         """
@@ -228,10 +230,10 @@ class A2AConfig(BaseConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
+        headers: Mapping[str, object],
+    ) -> dict[str, object]:
         """
         Transform OpenAI request to A2A JSON-RPC 2.0 format.
 
@@ -272,7 +274,7 @@ class A2AConfig(BaseConfig):
         params: Final = (
             {"message": a2a_message} if stream else {"message": a2a_message, "configuration": {"blocking": True}}
         )
-        request_data: Final = {
+        request_data: Final[dict[str, object]] = {
             "jsonrpc": "2.0",
             "id": request_id,
             "method": method,
@@ -287,10 +289,10 @@ class A2AConfig(BaseConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: "LiteLLMLoggingObj",
-        request_data: dict,
+        request_data: Mapping[str, object],
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
@@ -325,7 +327,7 @@ class A2AConfig(BaseConfig):
 
         # Check for JSON-RPC error
         if "error" in response_json:
-            error: Final = response_json["error"]
+            error: Final = _JSON_OBJECT.validate_python(response_json["error"])
             raise A2AError(
                 status_code=raw_response.status_code,
                 message=f"A2A error: {error.get('message', 'Unknown error')}",
@@ -333,7 +335,7 @@ class A2AConfig(BaseConfig):
             )
 
         # Extract text from A2A response
-        text: Final = extract_text_from_a2a_response(response_json)
+        text: Final = extract_text_from_a2a_response(_JSON_OBJECT.validate_python(response_json))
 
         # Populate model response
         model_response.choices = [
@@ -376,7 +378,7 @@ class A2AConfig(BaseConfig):
 
     def get_model_response_iterator(
         self,
-        streaming_response: Iterator | Any,
+        streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
         sync_stream: bool,
         json_mode: bool | None = False,
     ) -> BaseModelResponseIterator:
@@ -397,7 +399,7 @@ class A2AConfig(BaseConfig):
             json_mode=json_mode,
         )
 
-    def _openai_message_to_a2a_message(self, message: dict[str, Any]) -> dict[str, Any]:
+    def _openai_message_to_a2a_message(self, message: Mapping[str, object]) -> dict[str, object]:
         """
         Convert OpenAI message to A2A message format.
 

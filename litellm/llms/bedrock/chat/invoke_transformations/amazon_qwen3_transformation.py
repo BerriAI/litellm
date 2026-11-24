@@ -6,9 +6,11 @@ Inherits from `AmazonInvokeConfig`
 Qwen3 + Invoke API Tutorial: https://docs.aws.amazon.com/bedrock/latest/userguide/invoke-imported-model.html
 """
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
@@ -20,6 +22,9 @@ from litellm.types.utils import ModelResponse, Usage
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_TEXT: Final = TypeAdapter(str, config=ConfigDict(strict=True, hide_input_in_errors=True))
 
 
 class AmazonQwen3Config(AmazonInvokeConfig, BaseConfig):
@@ -43,7 +48,7 @@ class AmazonQwen3Config(AmazonInvokeConfig, BaseConfig):
         top_k: int | None = None,
         stop: list[str] | None = None,
     ) -> None:
-        locals_: Final = locals().copy()
+        locals_: Final[Mapping[str, object]] = dict(locals())
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -61,7 +66,7 @@ class AmazonQwen3Config(AmazonInvokeConfig, BaseConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
+        non_default_params: Mapping[str, object],
         optional_params: dict,
         model: str,
         drop_params: bool,
@@ -85,10 +90,10 @@ class AmazonQwen3Config(AmazonInvokeConfig, BaseConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
+        headers: Mapping[str, object],
+    ) -> dict[str, object]:
         """
         Transform OpenAI format to Qwen3 Bedrock invoke format
         """
@@ -96,7 +101,7 @@ class AmazonQwen3Config(AmazonInvokeConfig, BaseConfig):
         prompt: Final = self._convert_messages_to_prompt(messages)
 
         # Build the request body
-        request_body: Final = {
+        request_body: Final[dict[str, object]] = {
             "prompt": prompt,
         }
 
@@ -119,7 +124,7 @@ class AmazonQwen3Config(AmazonInvokeConfig, BaseConfig):
         Convert OpenAI messages format to Qwen3 prompt format
         Supports tool calls, multimodal content, and various message types
         """
-        prompt_parts: Final = []
+        prompt_parts: Final[list[str]] = []
 
         for message in messages:
             role = message.get("role", "")
@@ -131,7 +136,7 @@ class AmazonQwen3Config(AmazonInvokeConfig, BaseConfig):
             elif role == "user":
                 # Handle multimodal content
                 if isinstance(content, list):
-                    text_content = []
+                    text_content: list[str] = []
                     for item in content:
                         if item.get("type") == "text":
                             text_content.append(item.get("text", ""))
@@ -178,10 +183,10 @@ class AmazonQwen3Config(AmazonInvokeConfig, BaseConfig):
         Transform Qwen3 Bedrock response to OpenAI format
         """
         try:
-            response_data: Final = raw_response.json()
+            response_data: Final = _JSON_OBJECT.validate_python(raw_response.json())
 
             # Extract the generated text - Qwen3 uses "generation" field
-            generated_text = response_data.get("generation", "")
+            generated_text = _TEXT.validate_python(response_data.get("generation", ""))
 
             # Clean up the response (remove assistant start token if present)
             generated_text = generated_text.removeprefix("<|im_start|>assistant\n")
@@ -195,14 +200,16 @@ class AmazonQwen3Config(AmazonInvokeConfig, BaseConfig):
 
             # Set usage information if available in response
             if "usage" in response_data:
-                usage_data: Final = response_data["usage"]
+                usage_data: Final = _JSON_OBJECT.validate_python(response_data["usage"])
                 setattr(
                     model_response,
                     "usage",
-                    Usage(
-                        prompt_tokens=usage_data.get("prompt_tokens", 0),
-                        completion_tokens=usage_data.get("completion_tokens", 0),
-                        total_tokens=usage_data.get("total_tokens", 0),
+                    Usage.model_validate(
+                        {
+                            "prompt_tokens": usage_data.get("prompt_tokens", 0),
+                            "completion_tokens": usage_data.get("completion_tokens", 0),
+                            "total_tokens": usage_data.get("total_tokens", 0),
+                        }
                     ),
                 )
 

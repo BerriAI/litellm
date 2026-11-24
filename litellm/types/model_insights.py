@@ -1,11 +1,11 @@
 from typing import Literal
 
-from pydantic import BaseModel
+from litellm.types.llms.base import LiteLLMBaseModel
 
 ModelInsightsMetric = Literal["requests", "spend", "tokens"]
 
 
-class ModelInsightMetric(BaseModel):
+class ModelInsightMetric(LiteLLMBaseModel):
     model_group: str
     model: str
     provider: str
@@ -21,7 +21,7 @@ class ModelInsightDailyMetric(ModelInsightMetric):
     date: str
 
 
-class ModelInsightDailyTotal(BaseModel):
+class ModelInsightDailyTotal(LiteLLMBaseModel):
     date: str
     spend: float
     prompt_tokens: int
@@ -29,7 +29,7 @@ class ModelInsightDailyTotal(BaseModel):
     requests: int
 
 
-class ModelInsightTask(BaseModel):
+class ModelInsightTask(LiteLLMBaseModel):
     task_type: str
     label: str
     category: str
@@ -42,7 +42,7 @@ class ModelInsightTaskSummary(ModelInsightTask):
     provider: str
 
 
-class ModelInsightsResponse(BaseModel):
+class ModelInsightsResponse(LiteLLMBaseModel):
     start_date: str
     end_date: str
     daily: list[ModelInsightDailyMetric]
@@ -50,7 +50,7 @@ class ModelInsightsResponse(BaseModel):
     top_models: list[ModelInsightMetric]
 
 
-class ModelInsightTasksResponse(BaseModel):
+class ModelInsightTasksResponse(LiteLLMBaseModel):
     start_date: str
     end_date: str
     tasks: list[ModelInsightTaskSummary]

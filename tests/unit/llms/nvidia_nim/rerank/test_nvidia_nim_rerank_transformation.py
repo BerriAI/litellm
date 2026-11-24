@@ -10,7 +10,9 @@ truncate. Two defects are covered here:
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
+from pydantic import ValidationError
 
 import litellm
 from litellm.llms.nvidia_nim.rerank.ranking_transformation import (
@@ -239,3 +241,87 @@ class TestNvidiaNimRetrievalRerankRequestTransform:
         doc = {"title": "no supported fields here"}
         request_data = self._build_request([doc])
         assert request_data["passages"] == [{"text": json.dumps(doc)}]
+
+
+def _transform_retrieval_response(payload: object) -> RerankResponse:
+    return NvidiaNimRerankConfig().transform_rerank_response(
+        model="nvidia/llama-3_2-nv-rerankqa-1b-v2",
+        raw_response=httpx.Response(200, json=payload),
+        model_response=RerankResponse(),
+        logging_obj=MagicMock(),
+        request_data={"passages": [{"text": "first"}, {"text": "second"}]},
+    )
+
+
+@pytest.mark.parametrize(
+    ("usage", "expected_total_tokens"),
+    [
+        ({"total_tokens": 42}, 42),
+        ({"total_tokens": 0}, 2),
+        ({}, 2),
+    ],
+)
+def test_transform_rerank_response_bills_reported_tokens_or_falls_back_to_result_count(
+    usage: dict[str, object], expected_total_tokens: int
+):
+    response = _transform_retrieval_response(
+        {"rankings": [{"index": 1, "logit": 2.5}, {"index": 0, "logit": -1}], "usage": usage}
+    )
+
+    assert response.meta == {"billed_units": {"total_tokens": expected_total_tokens}}
+    assert response.results == [
+        {"index": 1, "relevance_score": 2.5, "document": {"text": "second"}},
+        {"index": 0, "relevance_score": -1.0, "document": {"text": "first"}},
+    ]
+
+
+def test_transform_rerank_response_keeps_provider_id_and_bills_one_token_per_result_without_usage():
+    response = _transform_retrieval_response({"id": "rank-1", "rankings": [{"index": 0, "logit": 0.5}]})
+
+    assert response.id == "rank-1"
+    assert response.meta == {"billed_units": {"total_tokens": 1}}
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"rankings": [], "usage": None},
+        {"rankings": [], "usage": {"total_tokens": None}},
+        {"rankings": [], "usage": {"total_tokens": "42"}},
+        {"rankings": [], "usage": {"total_tokens": 1.5}},
+        {"rankings": [], "id": 7},
+    ],
+)
+def test_transform_rerank_response_rejects_malformed_usage_and_id(payload: dict[str, object]):
+    with pytest.raises(ValidationError):
+        _transform_retrieval_response(payload)
+
+
+def test_transform_rerank_response_non_object_body_raises_attribute_error():
+    with pytest.raises(AttributeError):
+        _transform_retrieval_response(["not", "an", "object"])
+
+
+def test_transform_rerank_response_usage_shape_errors_do_not_echo_the_payload():
+    with pytest.raises(ValidationError) as exc_info:
+        _transform_retrieval_response({"rankings": [], "usage": {"total_tokens": "leaked usage text"}})
+
+    assert "leaked usage text" not in str(exc_info.value)
+
+
+def test_map_cohere_rerank_params_passes_provider_params_through_and_maps_top_n():
+    params = NvidiaNimRerankConfig().map_cohere_rerank_params(
+        non_default_params={"truncate": "END"},
+        model="nvidia/llama-3_2-nv-rerankqa-1b-v2",
+        drop_params=False,
+        query="which passage shows a cat?",
+        documents=["a", {"text": "b"}],
+        top_n=1,
+    )
+
+    assert params == {
+        "query": "which passage shows a cat?",
+        "documents": ["a", {"text": "b"}],
+        "top_k": 1,
+        "truncate": "END",
+    }

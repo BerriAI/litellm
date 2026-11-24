@@ -6,6 +6,7 @@ from collections.abc import Mapping, Sequence
 from typing import Final, Protocol
 
 import httpx
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._uuid import uuid
@@ -23,6 +24,8 @@ from litellm.types.rerank import (
     RerankResponseResult,
     RerankTokens,
 )
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class _DeepinfraInferenceStatus(TypedDict, total=False):
@@ -64,7 +67,7 @@ class DeepinfraRerankConfig(BaseRerankConfig):
         self,
         api_base: str | None,
         model: str,
-        optional_params: dict | None = None,
+        optional_params: Mapping[str, object] | None = None,
     ) -> str:
         """
         Constructs the complete DeepInfra inference endpoint URL for rerank.
@@ -95,12 +98,12 @@ class DeepinfraRerankConfig(BaseRerankConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: Mapping[str, str],
         model: str,
         api_key: str | None = None,
-        optional_params: dict | None = None,
+        optional_params: Mapping[str, object] | None = None,
         litellm_params: Mapping[str, object] | None = None,
-    ) -> dict:
+    ) -> dict[str, str]:
         if api_key is None:
             api_key = get_secret_str("DEEPINFRA_API_KEY")
 
@@ -122,7 +125,7 @@ class DeepinfraRerankConfig(BaseRerankConfig):
 
     def map_cohere_rerank_params(
         self,
-        non_default_params: dict,
+        non_default_params: Mapping[str, object],
         model: str,
         drop_params: bool,
         query: str,
@@ -134,7 +137,7 @@ class DeepinfraRerankConfig(BaseRerankConfig):
         max_chunks_per_doc: int | None = None,
         max_tokens_per_doc: int | None = None,
         instruction: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         # Start with the basic parameters
         optional_rerank_params: Final = {}
         if query:
@@ -160,10 +163,10 @@ class DeepinfraRerankConfig(BaseRerankConfig):
     def transform_rerank_request(
         self,
         model: str,
-        optional_rerank_params: dict,
-        headers: dict,
-        litellm_params: dict | None = None,
-    ) -> dict:
+        optional_rerank_params: Mapping[str, object],
+        headers: Mapping[str, object],
+        litellm_params: Mapping[str, object] | None = None,
+    ) -> dict[str, object]:
         # Convert OptionalRerankParams to dict as expected by parent class
         if optional_rerank_params is None:
             return {}
@@ -198,7 +201,7 @@ class DeepinfraRerankConfig(BaseRerankConfig):
             tokens_input: Final = inference_status.get("tokens_input", 0)
 
             # Create RerankResponse
-            results: Final = []
+            results: Final[list[RerankResponseResult]] = []
             for i, score in enumerate(scores):
                 results.append(RerankResponseResult(index=i, relevance_score=float(score)))
 
@@ -213,7 +216,7 @@ class DeepinfraRerankConfig(BaseRerankConfig):
             rerank_response = RerankResponse(id=request_id or str(uuid.uuid4()), results=results, meta=meta)
 
             # Store additional information in hidden params
-            rerank_response._hidden_params = {
+            rerank_response.hidden_params = {
                 "status": status,
                 "runtime_ms": runtime_ms,
                 "cost": cost,
@@ -237,10 +240,10 @@ class DeepinfraRerankConfig(BaseRerankConfig):
                 litellm_params=litellm_params,
             )
 
-            rerank_response._hidden_params["model"] = model
+            rerank_response.hidden_params["model"] = model
             return rerank_response
 
-    def get_supported_cohere_rerank_params(self, model: str) -> list:
+    def get_supported_cohere_rerank_params(self, model: str) -> list[str]:
         return ["query", "documents"]
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
@@ -251,7 +254,7 @@ class DeepinfraRerankConfig(BaseRerankConfig):
         try:
             error_data = error_message
             if isinstance(error_message, str):
-                error_data = json.loads(error_message)
+                error_data = _DECODED_JSON.validate_python(json.loads(error_message))
             if isinstance(error_data, dict):
                 # Check for {"detail": {"error": "..."}}
                 detail: Final = error_data.get("detail")

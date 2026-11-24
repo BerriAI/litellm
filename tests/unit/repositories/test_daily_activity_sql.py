@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Final
 
@@ -15,6 +16,7 @@ from litellm.repositories.daily_activity_sql import (
     build_key_page_sql,
     build_key_search_sql,
     build_model_top_keys_sql,
+    build_user_page_sql,
     build_where_clause,
 )
 from litellm.types.proxy.management_endpoints.common_daily_activity import SpendMetrics
@@ -122,7 +124,6 @@ def test_key_page_sql_orders_exact_spend_and_binds_scope_before_page() -> None:
         7,
     )
     assert "SUM(spend::numeric) AS rank_spend" in query.sql
-    assert "ORDER BY rank_spend DESC, api_key" in query.sql
     assert "(SELECT COUNT(*) FROM ranked)::bigint AS total_api_keys" in query.sql
 
 
@@ -137,6 +138,55 @@ def test_key_page_sql_orders_exact_spend_and_binds_scope_before_page() -> None:
 def test_key_page_sql_rejects_invalid_page_bounds(offset: int, limit: int, error: str) -> None:
     with pytest.raises(ValueError, match=error):
         build_key_page_sql(_scope(), offset=offset, limit=limit)
+
+
+def test_user_page_sql_groups_by_user_id_with_deterministic_spend_order() -> None:
+    query: Final = build_user_page_sql(_scope(), offset=7, limit=3)
+
+    assert query.params == ("2026-01-01", "2026-01-31", ["user-1"], 3, 7)
+    assert "NULLIF(\"user_id\", '') AS user_id" in query.sql
+    assert "GROUP BY NULLIF(\"user_id\", '')" in query.sql
+    assert "SUM(spend::numeric) AS rank_spend" in query.sql
+    assert "ORDER BY rank_spend DESC, user_id ASC NULLS LAST" in query.sql
+    assert "(SELECT COUNT(*) FROM ranked)::bigint AS total_users" in query.sql
+    assert "LIMIT $4 OFFSET $5" in query.sql
+    assert "api_key <>" not in query.sql
+
+
+def test_user_page_sql_reuses_the_scope_filters() -> None:
+    query: Final = build_user_page_sql(
+        _scope(entity_ids=("u-1", "u-2"), exclude_entity_ids=("u-9",), api_keys=("k-1",), model="m-1"),
+        offset=0,
+        limit=5,
+    )
+
+    assert '"user_id" = ANY($3::text[])' in query.sql
+    assert 'NOT ("user_id" = ANY($4::text[]))' in query.sql
+    assert "model = $5" in query.sql
+    assert "api_key = ANY($6::text[])" in query.sql
+    assert query.params == (
+        "2026-01-01",
+        "2026-01-31",
+        ["u-1", "u-2"],
+        ["u-9"],
+        "m-1",
+        ["k-1"],
+        5,
+        0,
+    )
+
+
+@pytest.mark.parametrize(
+    ("offset", "limit", "error"),
+    (
+        (0, 0, "limit must be between"),
+        (0, constants.USAGE_USER_PAGE_MAX + 1, "limit must be between"),
+        (-1, 1, "offset must be non-negative"),
+    ),
+)
+def test_user_page_sql_rejects_invalid_page_bounds(offset: int, limit: int, error: str) -> None:
+    with pytest.raises(ValueError, match=error):
+        build_user_page_sql(_scope(), offset=offset, limit=limit)
 
 
 def test_scope_rejects_an_entity_field_not_allowed_for_its_table() -> None:
@@ -235,6 +285,7 @@ def test_aggregated_query_uses_the_caller_date_bounds(offset_minutes: int | None
 def test_aggregate_query_sums_all_savings_drivers_and_response_time() -> None:
     query = build_aggregated_sql(_scope(), api_key_limit=constants.USAGE_TOP_API_KEYS_DEFAULT)
     fields: Final = tuple(field for field in SpendMetrics.model_fields if field.endswith("_savings_spend")) + (
+        "guardrail_spend",
         "total_response_time_ms",
         "timed_requests",
     )
@@ -279,7 +330,6 @@ def test_entity_rollup_bounds_keys_and_reuses_scope_filters() -> None:
     assert "api_key = ANY($3::text[])" in query.sql
     assert query.sql.count("api_key = ANY($3::text[])") == 4
     assert query.sql.count("api_key <> $4") == 2
-    assert query.sql.count("ORDER BY SUM(spend::numeric) DESC, api_key") == 1
     assert "k.entity_id = e.entity_id" in query.sql
     assert "LIMIT $5" in query.sql
     assert query.params == ("2026-01-01", "2026-01-31", ["key-1", "key-2"], PTU_SENTINEL_API_KEY, 3)
@@ -301,13 +351,11 @@ def test_search_query_escapes_pattern_metacharacters_and_binds_limit() -> None:
     assert 'LEFT JOIN "LiteLLM_UserTable" u ON u.user_id = d.user_id' in query.sql
     assert "d.key_alias ILIKE $3 ESCAPE" in query.sql
     assert "d.user_id ILIKE $3 ESCAPE" in query.sql
-    assert "api_key ILIKE $3 ESCAPE" in query.sql
     assert "v.key_alias ILIKE $3 ESCAPE" in query.sql
     assert "v.user_id ILIKE $3 ESCAPE" in query.sql
     assert "u.user_email ILIKE $3 ESCAPE" in query.sql
     assert query.sql.count("ILIKE $3 ESCAPE") == 7
     assert "api_key <> $4" in query.sql
-    assert "ORDER BY SUM(spend::numeric) DESC, api_key" in query.sql
     assert "LIMIT $5" in query.sql
     assert query.params == (
         "2026-01-01",
@@ -324,12 +372,9 @@ def test_model_and_cache_key_queries_bind_filters_sentinel_and_limits() -> None:
     )
     leakage_query = build_cache_leakage_keys_sql(_scope(entity_ids=None), limit=20)
 
-    assert "COALESCE(NULLIF(model_group, ''), model) = $3" in model_query.sql
     assert "api_key <> $4" in model_query.sql
-    assert "ORDER BY SUM(spend::numeric) DESC, api_key" in model_query.sql
     assert model_query.params == ("2026-01-01", "2026-01-31", "public-model", PTU_SENTINEL_API_KEY, 5)
     assert "HAVING SUM(prompt_tokens) - SUM(cache_read_input_tokens) > 0" in leakage_query.sql
-    assert "ORDER BY SUM(prompt_tokens) - SUM(cache_read_input_tokens) DESC, api_key" in leakage_query.sql
     assert leakage_query.params == ("2026-01-01", "2026-01-31", PTU_SENTINEL_API_KEY, 20)
 
 
@@ -351,8 +396,14 @@ def test_query_builders_reject_nonpositive_limits(builder) -> None:
     ("export_type", "group_key", "key_filter", "joins"),
     [
         (ExportType.DAILY, "''", "", ""),
-        (ExportType.DAILY_WITH_KEYS, "scoped.api_key", "api_key <> $3", 'LEFT JOIN "LiteLLM_VerificationToken"'),
-        (ExportType.DAILY_WITH_MODELS, "COALESCE(scoped.model, '')", "api_key <> $3", ""),
+        (
+            ExportType.DAILY_WITH_KEYS,
+            "CASE WHEN api_key = '' THEN 'unattributed' "
+            "WHEN api_key = 'unattributed' OR api_key LIKE 'raw:%' THEN 'raw:' || api_key ELSE api_key END",
+            "api_key <> $3",
+            'LEFT JOIN "LiteLLM_VerificationToken"',
+        ),
+        (ExportType.DAILY_WITH_MODELS, "COALESCE(NULLIF(model, ''), 'unknown-model')", "api_key <> $3", ""),
         (
             ExportType.DAILY_WITH_USERS,
             "COALESCE(vt.user_id, dvt.user_id, '')",
@@ -364,7 +415,7 @@ def test_query_builders_reject_nonpositive_limits(builder) -> None:
 def test_export_groups_by_requested_key_and_binds_cursor_after_scope(
     export_type: ExportType, group_key: str, key_filter: str, joins: str
 ) -> None:
-    query = build_export_sql(
+    query: Final = build_export_sql(
         _scope(entity_ids=None),
         export_type=export_type,
         after=ExportCursor(date="2026-01-12", entity_id="user-2", group_key="group-3"),
@@ -395,16 +446,62 @@ def test_export_groups_by_requested_key_and_binds_cursor_after_scope(
 
 @pytest.mark.parametrize("export_type", [ExportType.DAILY_WITH_KEYS, ExportType.DAILY_WITH_USERS])
 def test_export_uses_latest_deleted_key_metadata(export_type: ExportType) -> None:
-    query = build_export_sql(_scope(entity_ids=None), export_type=export_type, after=None, batch_size=2)
+    query: Final = build_export_sql(_scope(entity_ids=None), export_type=export_type, after=None, batch_size=2)
 
     assert 'FROM "LiteLLM_DeletedVerificationToken"' in query.sql
     assert "ORDER BY deleted_at DESC" in query.sql
     assert "COALESCE(vt.user_id, dvt.user_id)" in query.sql
 
 
+_DROPPED_KEYS: Final = (
+    "- 'callback_settings' - 'logging' - 'scim_enterprise' - 'scim_entitlements' - 'scim_roles' "
+    "- 'secret_manager_settings'"
+)
+_REDACTED_KEY_METADATA: Final = (
+    f"THEN (COALESCE(vt.metadata, dvt.metadata) {_DROPPED_KEYS})::text END), '{{}}')::jsonb AS key_metadata"
+)
+_REDACTED_USER_METADATA: Final = f"THEN (u.metadata {_DROPPED_KEYS})::text END), '{{}}')::jsonb AS user_metadata"
+_EMPTY_KEY_METADATA: Final = "'{}'::jsonb AS key_metadata"
+_EMPTY_USER_METADATA: Final = "'{}'::jsonb AS user_metadata"
+
+
+@pytest.mark.parametrize(
+    ("export_type", "key_metadata", "user_metadata"),
+    [
+        (ExportType.DAILY_WITH_KEYS, _REDACTED_KEY_METADATA, _REDACTED_USER_METADATA),
+        (ExportType.DAILY_WITH_USERS, _EMPTY_KEY_METADATA, _REDACTED_USER_METADATA),
+        (ExportType.DAILY, _EMPTY_KEY_METADATA, _EMPTY_USER_METADATA),
+        (ExportType.DAILY_WITH_MODELS, _EMPTY_KEY_METADATA, _EMPTY_USER_METADATA),
+    ],
+)
+def test_export_selects_redacted_key_and_user_metadata_objects_for_admin_view(
+    export_type: ExportType, key_metadata: str, user_metadata: str
+) -> None:
+    query: Final = build_export_sql(
+        _scope(entity_ids=None), export_type=export_type, after=None, batch_size=2, include_metadata=True
+    )
+
+    assert key_metadata in query.sql
+    assert user_metadata in query.sql
+    if export_type is ExportType.DAILY_WITH_KEYS:
+        assert "SELECT key_alias, user_id, metadata" in query.sql
+
+
+@pytest.mark.parametrize("export_type", tuple(ExportType))
+def test_export_without_metadata_selects_empty_objects_and_never_reads_metadata_columns(
+    export_type: ExportType,
+) -> None:
+    query: Final = build_export_sql(_scope(entity_ids=None), export_type=export_type, after=None, batch_size=2)
+
+    assert _EMPTY_KEY_METADATA in query.sql
+    assert _EMPTY_USER_METADATA in query.sql
+    assert "u.metadata" not in query.sql
+    assert "vt.metadata" not in query.sql
+
+
 @pytest.mark.parametrize("export_type", tuple(ExportType))
 def test_export_without_cursor_omits_cursor_predicate_and_parameters(export_type: ExportType) -> None:
-    query = build_export_sql(
+    query: Final = build_export_sql(
         _scope(entity_ids=None),
         export_type=export_type,
         after=None,
@@ -418,3 +515,26 @@ def test_export_without_cursor_omits_cursor_predicate_and_parameters(export_type
         *((PTU_SENTINEL_API_KEY,) if export_type is not ExportType.DAILY else ()),
         2,
     )
+
+
+def test_customer_app_filter_is_bound_without_replacing_customer_model_or_key_filters() -> None:
+    app_id: Final = "app-value-with-quote'"
+    scope: Final = replace(
+        _scope(entity_ids=("customer-a",), exclude_entity_ids=("excluded",), api_keys=("key-a",), model="model-a"),
+        table=DailyActivityTable.CUSTOMER_MEMBER,
+        entity_id_field="customer_org_id",
+        app_id=app_id,
+    )
+    clause, params = build_where_clause(scope, start_index=4)
+    assert '"customer_org_id" = ANY($6::text[])' in clause
+    assert "model = $8" in clause and "api_key = ANY($9::text[])" in clause
+    assert '"app_id" = $10' in clause and app_id not in clause
+    assert params == ("2026-01-01", "2026-01-31", ["customer-a"], ["excluded"], "model-a", ["key-a"], app_id)
+    query: Final = build_aggregated_sql(scope, api_key_limit=1)
+    assert '"app_id" = $7' in query.sql and app_id not in query.sql
+    assert query.params[-3:] == (app_id, PTU_SENTINEL_API_KEY, 1)
+
+
+def test_app_filter_cannot_be_applied_to_a_table_without_app_attribution() -> None:
+    with pytest.raises(ValueError, match="App filtering"):
+        replace(_scope(), app_id="app-a")

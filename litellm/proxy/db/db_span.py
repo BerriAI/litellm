@@ -22,12 +22,17 @@ from typing import Final, TypeVar
 
 from litellm._logging import verbose_proxy_logger
 from litellm._service_logger import ServiceLogging, ServiceTypes
-from litellm.proxy.db.log_db_metrics import _is_exception_related_to_db, claim_db_io, db_io_claimed
+from litellm.proxy.db.log_db_metrics import (  # noqa: F401  # legacy module exports
+    _is_exception_related_to_db,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    claim_db_io,
+    db_io_claimed,
+    is_exception_related_to_db,
+)
 
 _T = TypeVar("_T")
 
 
-def _service_logging() -> ServiceLogging | None:
+def proxy_service_logging() -> ServiceLogging | None:
     try:
         from litellm.proxy.proxy_server import proxy_logging_obj
     except ImportError:
@@ -35,7 +40,9 @@ def _service_logging() -> ServiceLogging | None:
     return proxy_logging_obj.service_logging_obj
 
 
-def _event_metadata(table: str | None, operation: str | None) -> dict[str, str]:
+def db_event_metadata(
+    table: str | None, operation: str | None
+) -> dict[str, str]:  # mutable-ok: ServiceLogging hooks take event_metadata as a dict
     pairs: Final = (("table_name", table), ("db_operation", operation))
     return {key: value for key, value in pairs if value is not None}
 
@@ -68,14 +75,14 @@ async def db_span(call_type: str, table: str | None, operation: str | None = Non
     if db_io_claimed():
         yield
         return
-    service_logging: Final = _service_logging()
+    service_logging: Final = proxy_service_logging()
     start_time: Final = datetime.now()
-    event_metadata: Final = _event_metadata(table, operation)
+    event_metadata: Final = db_event_metadata(table, operation)
     with claim_db_io() as witness:
         try:
             yield
         except Exception as e:
-            if service_logging is not None and _is_exception_related_to_db(e):
+            if service_logging is not None and is_exception_related_to_db(e):
                 await _emit_failure(service_logging, call_type, event_metadata, start_time, e)
             raise
     if service_logging is None or not witness.touched:

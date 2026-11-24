@@ -1,11 +1,15 @@
 import json
+from dataclasses import dataclass
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 
+from litellm.litellm_core_utils import dd_tracing
 from litellm.litellm_core_utils.dd_tracing import (
-    _should_use_dd_profiler,
+    set_active_span_tag,
+    should_use_dd_profiler,
     _should_use_dd_tracer,
 )
 from litellm.litellm_core_utils.dd_tracing import tracer as dd_tracer
@@ -87,7 +91,7 @@ def test_should_use_dd_profiler():
         # Test when USE_DDPROFILER is True
 
         mock_get_secret.return_value = True
-        assert _should_use_dd_profiler() is True
+        assert should_use_dd_profiler() is True
         mock_get_secret.assert_called_once_with("USE_DDPROFILER", False)
 
         # Reset the mock for the next test
@@ -95,5 +99,35 @@ def test_should_use_dd_profiler():
 
         # Test when USE_DDPROFILER is False
         mock_get_secret.return_value = False
-        assert _should_use_dd_profiler() is False
+        assert should_use_dd_profiler() is False
         mock_get_secret.assert_called_once_with("USE_DDPROFILER", False)
+
+
+@dataclass(frozen=True)
+class _CurrentSpanTracer:
+    span: object
+
+    def current_span(self) -> object:
+        return self.span
+
+
+class _SetTagOnlySpan:
+    def __init__(self) -> None:
+        self.tags: dict[str, str] = {}
+
+    def set_tag(self, key: str, value: str) -> None:
+        self.tags[key] = value
+
+
+def test_set_active_span_tag_uses_set_tag_on_a_span_without_set_tag_str(monkeypatch: pytest.MonkeyPatch) -> None:
+    span: Final = _SetTagOnlySpan()
+    monkeypatch.setattr(dd_tracing, "tracer", _CurrentSpanTracer(span))
+
+    assert set_active_span_tag("litellm.call_id", "call-1") is True
+    assert span.tags == {"litellm.call_id": "call-1"}
+
+
+def test_set_active_span_tag_reports_false_for_a_span_that_takes_no_tags(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(dd_tracing, "tracer", _CurrentSpanTracer(object()))
+
+    assert set_active_span_tag("litellm.call_id", "call-1") is False

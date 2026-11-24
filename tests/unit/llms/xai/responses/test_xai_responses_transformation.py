@@ -426,7 +426,7 @@ class TestXAIResponsesWebSearchBilling:
     def test_bridged_usage_keeps_tool_details_for_billing(self):
         response = self._transform(include_web_search=True)
 
-        bridged = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(response.usage)
+        bridged = ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(response.usage)
 
         assert isinstance(bridged, Usage)
         assert bridged.prompt_tokens == 100
@@ -448,7 +448,7 @@ class TestXAIResponsesWebSearchBilling:
         assert isinstance(event.response.usage, ResponseAPIUsage)
         assert event.response.usage.input_tokens == 100
 
-        bridged = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(event.response.usage)
+        bridged = ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(event.response.usage)
         assert getattr(bridged, "server_side_tool_usage_details") == self._TOOL_DETAILS
 
 
@@ -497,7 +497,7 @@ class TestXAIResponsesReportedCost:
 
         assert usage.cost == 0.0037756
 
-        chat_usage = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(usage)
+        chat_usage = ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(usage)
         assert cost_per_token(model="grok-4-latest", usage=chat_usage) == (0.0, 0.0037756)
 
     def test_streamed_reported_cost_reaches_the_cost_calculator(self):
@@ -519,7 +519,7 @@ class TestXAIResponsesReportedCost:
         )
 
         assert isinstance(event, ResponseCompletedEvent)
-        chat_usage = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(event.response.usage)
+        chat_usage = ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(event.response.usage)
         assert cost_per_token(model="grok-4-latest", usage=chat_usage) == (0.0, 0.0037756)
 
     def test_usage_without_a_reported_cost_is_left_alone(self):

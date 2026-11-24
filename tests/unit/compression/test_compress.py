@@ -6,6 +6,13 @@ never rewrite. It is consumed by compress() and by the Headroom guardrail, so
 the two agree on what "never compress this" means.
 """
 
+import json
+from typing import Final
+
+import httpx
+import pytest
+import respx
+
 from litellm.compression.compress import compress, get_protected_indices
 from litellm.types.utils import CallTypes
 
@@ -217,3 +224,59 @@ def test_compress_keeps_part_level_cache_control_row_verbatim():
     assert result["messages"][0] == pinned
     assert result["messages"][2] != stale_log
     assert len(result["cache"]) >= 1
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_embedding_scorer(respx_mock: respx.MockRouter) -> None:
+    auth_context: Final = "Authentication code " * 2000
+    recipe_context: Final = "Unrelated cooking recipes " * 2000
+    route: Final = respx_mock.post("https://api.openai.com/v1/embeddings").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "object": "list",
+                "model": "text-embedding-3-small",
+                "data": [
+                    {"object": "embedding", "index": 0, "embedding": [1.0, 0.0]},
+                    {"object": "embedding", "index": 1, "embedding": [0.9, 0.1]},
+                    {"object": "embedding", "index": 2, "embedding": [0.0, 1.0]},
+                    {"object": "embedding", "index": 3, "embedding": [1.0, 0.0]},
+                ],
+                "usage": {"prompt_tokens": 4, "total_tokens": 4},
+            },
+        )
+    )
+
+    result: Final = compress(
+        [
+            {"role": "user", "content": auth_context},
+            {"role": "user", "content": recipe_context},
+            {"role": "user", "content": "Fix auth"},
+        ],
+        model="gpt-4o",
+        call_type=CallTypes.completion,
+        compression_trigger=1000,
+        embedding_model="text-embedding-3-small",
+        embedding_model_params={"api_key": "sk-test"},
+    )
+
+    assert json.loads(route.calls.last.request.content) == {
+        "model": "text-embedding-3-small",
+        "input": [
+            "Fix auth",
+            auth_context[:15000] + "\n...\n" + auth_context[-15000:],
+            recipe_context[:15000] + "\n...\n" + recipe_context[-15000:],
+            "Fix auth",
+        ],
+    }
+    assert result["messages"] == [
+        {"role": "user", "content": auth_context},
+        {
+            "role": "user",
+            "content": (
+                "[Compressed: message_1 — 1 lines, text. Use litellm_content_retrieve tool to get full content.]"
+            ),
+        },
+        {"role": "user", "content": "Fix auth"},
+    ]
+    assert result["cache"] == {"message_1": recipe_context}

@@ -3,7 +3,7 @@ Native OpenAI Chat Completions on Amazon Bedrock Runtime.
 
 AWS serves this surface at
 ``https://bedrock-runtime.{region}.amazonaws.com/openai/v1/chat/completions``
-for Grok 4.6, gpt-oss and GPT 5.6 and newer. GPT 5.6 and newer take it by default
+for Grok, gpt-oss and GPT 5.6 and newer. Grok and GPT 5.6 and newer take it by default
 (``bedrock_runtime_chat_completions_is_default`` in ``common_utils``), so their chat
 completions stay chat completions instead of being rewritten to Converse; the
 ``chat_completions/`` route prefix opts any other model in, and ``converse/`` pins a
@@ -15,6 +15,8 @@ Converse-only feature (``bedrock_request_needs_converse`` in ``common_utils``) i
 still served by Converse.
 """
 
+import re
+import uuid
 from collections.abc import AsyncIterator, Iterator, Mapping
 from dataclasses import dataclass, replace
 from types import MappingProxyType
@@ -31,12 +33,19 @@ from litellm.litellm_core_utils.prompt_templates.image_handling import (
     inline_remote_image_urls,
     inline_remote_media,
 )
+from litellm.litellm_core_utils.reasoning_effort_utils import warn_dropped_reasoning
+from litellm.litellm_core_utils.url_utils import ensure_api_route, join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, bedrock_bearer_token
 from litellm.llms.bedrock.common_utils import (
+    BEDROCK_RUNTIME_OPENAI_RESPONSES_ROUTE_SUFFIXES,
     BedrockError,
     bedrock_model_is_openai_gpt,
+    bedrock_rejects_stop_sequences,
+    bedrock_runtime_chat_completions_serves_reasoning_inline,
     split_bedrock_region_path,
+    strip_bedrock_routing_prefix,
+    strip_bedrock_runtime_route_suffix,
 )
 from litellm.llms.openai.chat.gpt_transformation import OpenAIChatCompletionStreamingHandler
 from litellm.llms.openai_like.chat.transformation import OpenAILikeChatConfig
@@ -44,12 +53,12 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import Choices, ModelResponse, ModelResponseStream
 
 if TYPE_CHECKING:
-    import tiktoken
-
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
 REASONING_OPEN_TAG: Final = "<reasoning>"
 REASONING_CLOSE_TAG: Final = "</reasoning>"
+POSITIONAL_TOOL_CALL_ID: Final = re.compile(r"call_\d+")
 
 _PARAMS_DICT_ADAPTER: Final = TypeAdapter(dict[str, object])
 _PARAMS_LIST_ADAPTER: Final = TypeAdapter(list[str])
@@ -72,7 +81,7 @@ def chat_completions_params_refused_for(model: str) -> frozenset[str]:
     them out of its supported params and litellm refuses them, or drops them under ``drop_params``, before sending.
     """
     model_id: Final = split_bedrock_region_path(model)[1]
-    return frozenset().union(
+    return frozenset[str]().union(
         *(refused for family, refused in CHAT_COMPLETIONS_REFUSED_PARAMS_BY_FAMILY.items() if family in model_id)
     )
 
@@ -102,7 +111,7 @@ def chat_completions_reasoning_efforts_refused_for(model: str) -> frozenset[str]
     ``reasoning_effort`` for it, so the native config drops the value and AWS applies its default effort as before.
     """
     model_id: Final = split_bedrock_region_path(model)[1]
-    return frozenset().union(
+    return frozenset[str]().union(
         *(
             refused
             for family, refused in CHAT_COMPLETIONS_REFUSED_REASONING_EFFORTS_BY_FAMILY.items()
@@ -115,6 +124,13 @@ def without_refused_reasoning_effort(model: str, params: Mapping[str, object]) -
     effort: Final = params.get("reasoning_effort")
     if not isinstance(effort, str) or effort not in chat_completions_reasoning_efforts_refused_for(model):
         return params
+    warn_dropped_reasoning(
+        "reasoning_effort",
+        effort,
+        strip_bedrock_routing_prefix(model),
+        "AWS's Chat Completions endpoint rejects that level for this model family, so AWS applies its default effort.",
+        drop_params_gated=False,
+    )
     return _without_params(params, frozenset(("reasoning_effort",)))
 
 
@@ -190,6 +206,30 @@ class ReasoningTagSplitter:
         return drained, "", self.pending
 
 
+def is_positional_tool_call_id(tool_call_id: str | None) -> bool:
+    return tool_call_id is not None and POSITIONAL_TOOL_CALL_ID.fullmatch(tool_call_id) is not None
+
+
+def mint_tool_call_id() -> str:
+    return f"call_{uuid.uuid4().hex}"
+
+
+def _mint_unique_tool_call_ids(response: ModelResponse) -> None:
+    """Replace AWS's positional tool call ids with unique ones.
+
+    bedrock-runtime's native Chat Completions numbers the tool calls of a response from zero (``call_0``,
+    ``call_1``), seen live on Grok 4.6, Grok 4.7 and GPT 5.6 (2026-10-09; GPT 5.6 returned unique ids
+    earlier the same day, so the format is not fixed per model). A multi-turn history then holds the same
+    id for different calls, and clients that match ``tool_result`` ids against it, Claude Code among them,
+    pair results with the wrong call. Ids that are already unique (``call_<32 hex>``, ``chatcmpl-tool-...``)
+    do not match ``POSITIONAL_TOOL_CALL_ID`` and pass through.
+    """
+    for choice in response.choices:
+        for tool_call in choice.message.tool_calls or ():
+            if is_positional_tool_call_id(tool_call.id):
+                tool_call.id = mint_tool_call_id()
+
+
 def _split_streamed_content(
     splitter: ReasoningTagSplitter, content: str | None, finished: bool
 ) -> tuple[ReasoningTagSplitter, str, str]:
@@ -213,7 +253,12 @@ def split_reasoning_tag(content: str) -> tuple[str | None, str]:
 
 
 class BedrockRuntimeChatCompletionsStreamingHandler(OpenAIChatCompletionStreamingHandler):
-    """OpenAI chunk parsing plus the ``<reasoning>`` split, tracked per choice index."""
+    """OpenAI chunk parsing plus the inline ``<reasoning>`` split, tracked per choice index.
+
+    Every chunk echoes the model id litellm sent, so the split engages only when that id's price-map
+    row carries ``supports_bedrock_runtime_chat_completions_inline_reasoning`` (gpt-oss); a GPT 5.6 or Grok
+    answer that starts with a literal ``<reasoning>`` tag streams as content.
+    """
 
     def __init__(
         self,
@@ -223,9 +268,28 @@ class BedrockRuntimeChatCompletionsStreamingHandler(OpenAIChatCompletionStreamin
     ) -> None:
         super().__init__(streaming_response=streaming_response, sync_stream=sync_stream, json_mode=json_mode)
         self._splitters: Mapping[int, ReasoningTagSplitter] = MappingProxyType({})
+        self._minted_tool_call_ids: Mapping[tuple[int, int], str] = MappingProxyType({})
 
-    def chunk_parser(self, chunk: dict) -> ModelResponseStream:  # mutable-ok: BaseModelResponseIterator signature
+    def _minted_tool_call_id(self, choice_index: int, tool_call_index: int) -> str:
+        key: Final = (choice_index, tool_call_index)
+        minted: Final = self._minted_tool_call_ids.get(key) or mint_tool_call_id()
+        self._minted_tool_call_ids = MappingProxyType({**self._minted_tool_call_ids, key: minted})
+        return minted
+
+    def _mint_streamed_tool_call_ids(self, parsed: ModelResponseStream) -> None:
+        for choice in parsed.choices:
+            for tool_call in choice.delta.tool_calls or ():
+                if is_positional_tool_call_id(tool_call.id):
+                    tool_call.id = self._minted_tool_call_id(choice.index, tool_call.index)
+
+    def chunk_parser(
+        self,
+        chunk: dict[str, object],  # mutable-ok: BaseModelResponseIterator signature
+    ) -> ModelResponseStream:
         parsed: Final = super().chunk_parser(chunk)
+        self._mint_streamed_tool_call_ids(parsed)
+        if not bedrock_runtime_chat_completions_serves_reasoning_inline(parsed.model or ""):
+            return parsed
         for choice in parsed.choices:
             next_state, reasoning, content = _split_streamed_content(
                 self._splitters.get(choice.index, ReasoningTagSplitter()),
@@ -281,11 +345,11 @@ class AmazonBedrockRuntimeChatCompletionsConfig(OpenAILikeChatConfig):
 
     def validate_environment(
         self,
-        headers: dict,  # mutable-ok: BaseConfig signature
+        headers: dict[str, object],  # mutable-ok: BaseConfig signature
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,  # mutable-ok: BaseConfig signature
-        litellm_params: dict,  # mutable-ok: BaseConfig signature
+        optional_params: dict[str, object],  # mutable-ok: BaseConfig signature
+        litellm_params: dict[str, object],  # mutable-ok: BaseConfig signature
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:  # mutable-ok: BaseConfig signature
@@ -304,33 +368,42 @@ class AmazonBedrockRuntimeChatCompletionsConfig(OpenAILikeChatConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,  # mutable-ok: BaseConfig signature
-        litellm_params: dict,  # mutable-ok: BaseConfig signature
+        optional_params: dict[str, object],  # mutable-ok: BaseConfig signature
+        litellm_params: dict[str, object],  # mutable-ok: BaseConfig signature
         stream: bool | None = None,
     ) -> str:
-        if api_base is not None and "chat/completions" in api_base:
-            return api_base.rstrip("/")
-        aws_region_name: Final = self._aws_signer._get_aws_region_name(  # pyright: ignore[reportPrivateUsage]  # BaseAWSLLM has no public region resolver
-            optional_params=self._params_with_region_from_path(optional_params, model), model=model
-        )
         configured_runtime_endpoint: Final = optional_params.get("aws_bedrock_runtime_endpoint")
+        runtime_endpoint: Final = (
+            configured_runtime_endpoint
+            if isinstance(configured_runtime_endpoint, str) and configured_runtime_endpoint
+            else None
+        )
+        if runtime_endpoint is None and api_base is not None and "chat/completions" in api_base:
+            return api_base.rstrip("/")
+        default_endpoint_region: Final = (
+            ""
+            if api_base is not None
+            else self._aws_signer._get_aws_region_name(  # pyright: ignore[reportPrivateUsage]  # BaseAWSLLM has no public region resolver
+                optional_params=self._params_with_region_from_path(optional_params, model), model=model
+            )
+        )
         _, proxy_endpoint_url = self._aws_signer.get_runtime_endpoint(
             api_base=api_base,
-            aws_bedrock_runtime_endpoint=(
-                configured_runtime_endpoint if isinstance(configured_runtime_endpoint, str) else None
-            ),
-            aws_region_name=aws_region_name,
+            aws_bedrock_runtime_endpoint=runtime_endpoint,
+            aws_region_name=default_endpoint_region,
         )
-        base: Final = proxy_endpoint_url.rstrip("/")
-        if base.endswith("/openai/v1/chat/completions"):
-            return base
-        if base.endswith("/openai/v1"):
-            return f"{base}/chat/completions"
-        return f"{base}/openai/v1/chat/completions"
+        if "chat/completions" in proxy_endpoint_url:
+            return proxy_endpoint_url.rstrip("/")
+        openai_base: Final = strip_bedrock_runtime_route_suffix(
+            proxy_endpoint_url, BEDROCK_RUNTIME_OPENAI_RESPONSES_ROUTE_SUFFIXES
+        )
+        if openai_base.endswith("/openai/v1"):
+            return join_api_base(openai_base, "chat/completions")
+        return ensure_api_route(openai_base, "openai/v1/chat/completions")
 
     def _params_with_region_from_path(
-        self, optional_params: dict, model: str | None
-    ) -> dict:  # mutable-ok: BaseAWSLLM's region resolver and signer take a plain dict
+        self, optional_params: dict[str, object], model: str | None
+    ) -> dict[str, object]:  # mutable-ok: BaseAWSLLM's region resolver and signer take a plain dict
         region_from_path, _ = split_bedrock_region_path(model or "")
         if region_from_path is None or optional_params.get("aws_region_name") is not None:
             return optional_params
@@ -338,9 +411,9 @@ class AmazonBedrockRuntimeChatCompletionsConfig(OpenAILikeChatConfig):
 
     def sign_request(
         self,
-        headers: dict,  # mutable-ok: BaseConfig signature
-        optional_params: dict,  # mutable-ok: BaseConfig signature
-        request_data: dict,  # mutable-ok: BaseConfig signature
+        headers: dict[str, object],  # mutable-ok: BaseConfig signature
+        optional_params: dict[str, object],  # mutable-ok: BaseConfig signature
+        request_data: dict[str, object],  # mutable-ok: BaseConfig signature
         api_base: str,
         api_key: str | None = None,
         model: str | None = None,
@@ -366,7 +439,7 @@ class AmazonBedrockRuntimeChatCompletionsConfig(OpenAILikeChatConfig):
         model: str,
         drop_params: bool,
         replace_max_completion_tokens_with_max_tokens: bool = False,
-    ) -> dict:  # mutable-ok: BaseConfig signature
+    ) -> dict[str, object]:  # mutable-ok: BaseConfig signature
         mapped: Final = _PARAMS_DICT_ADAPTER.validate_python(
             super().map_openai_params(
                 non_default_params=non_default_params,
@@ -397,12 +470,29 @@ class AmazonBedrockRuntimeChatCompletionsConfig(OpenAILikeChatConfig):
                 ),
                 status_code=400,
             )
+        if malformed_effort:
+            warn_dropped_reasoning(
+                "reasoning_effort",
+                raw_params["reasoning_effort"],
+                strip_bedrock_routing_prefix(model),
+                "Bedrock's Chat Completions endpoint takes it only as a string, so AWS applies its default effort.",
+                drop_params_gated=True,
+            )
+        rejected_stop: Final = frozenset(("stop",)) if bedrock_rejects_stop_sequences(model) else frozenset[str]()
         return dict(
             without_refused_reasoning_effort(
                 model,
-                with_max_completion_tokens(_without_params(mapped, refused_while_reasoning | malformed_effort)),
+                with_max_completion_tokens(
+                    _without_params(mapped, refused_while_reasoning | malformed_effort | rejected_stop)
+                ),
             )
         )
+
+    def _keeps_content_part_prompt_cache_breakpoints(self, model: str, litellm_params: Mapping[str, object]) -> bool:
+        """Keep native content-part breakpoints when the deployment or catalog declares support."""
+        from litellm.integrations.anthropic_cache_control_hook import deployment_prompt_cache_breakpoint_support
+
+        return deployment_prompt_cache_breakpoint_support(model, "bedrock", litellm_params) is True
 
     def _inference_params(
         self, optional_params: Mapping[str, object]
@@ -417,9 +507,9 @@ class AmazonBedrockRuntimeChatCompletionsConfig(OpenAILikeChatConfig):
         self,
         model: str,
         messages: list[AllMessageValues],  # mutable-ok: BaseConfig signature
-        optional_params: dict,  # mutable-ok: BaseConfig signature
-        litellm_params: dict,  # mutable-ok: BaseConfig signature
-        headers: dict,  # mutable-ok: BaseConfig signature
+        optional_params: dict[str, object],  # mutable-ok: BaseConfig signature
+        litellm_params: dict[str, object],  # mutable-ok: BaseConfig signature
+        headers: dict[str, object],  # mutable-ok: BaseConfig signature
     ) -> dict:  # mutable-ok: BaseConfig signature
         optional_params_view: Final = _PARAMS_DICT_ADAPTER.validate_python(optional_params)
         return super().transform_request(
@@ -434,9 +524,9 @@ class AmazonBedrockRuntimeChatCompletionsConfig(OpenAILikeChatConfig):
         self,
         model: str,
         messages: list[AllMessageValues],  # mutable-ok: BaseConfig signature
-        optional_params: dict,  # mutable-ok: BaseConfig signature
-        litellm_params: dict,  # mutable-ok: BaseConfig signature
-        headers: dict,  # mutable-ok: BaseConfig signature
+        optional_params: dict[str, object],  # mutable-ok: BaseConfig signature
+        litellm_params: dict[str, object],  # mutable-ok: BaseConfig signature
+        headers: dict[str, object],  # mutable-ok: BaseConfig signature
     ) -> dict:  # mutable-ok: BaseConfig signature
         optional_params_view: Final = _PARAMS_DICT_ADAPTER.validate_python(optional_params)
         return await super().async_transform_request(
@@ -453,11 +543,11 @@ class AmazonBedrockRuntimeChatCompletionsConfig(OpenAILikeChatConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: "LiteLLMLoggingObj",
-        request_data: dict,  # mutable-ok: BaseConfig signature
+        request_data: dict[str, object],  # mutable-ok: BaseConfig signature
         messages: list[AllMessageValues],  # mutable-ok: BaseConfig signature
-        optional_params: dict,  # mutable-ok: BaseConfig signature
-        litellm_params: dict,  # mutable-ok: BaseConfig signature
-        encoding: "tiktoken.Encoding | None",
+        optional_params: dict[str, object],  # mutable-ok: BaseConfig signature
+        litellm_params: dict[str, object],  # mutable-ok: BaseConfig signature
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -475,6 +565,9 @@ class AmazonBedrockRuntimeChatCompletionsConfig(OpenAILikeChatConfig):
             json_mode=json_mode,
         )
         set_provider_response_headers_in_hidden_params(response, raw_response.headers)
+        _mint_unique_tool_call_ids(response)
+        if not bedrock_runtime_chat_completions_serves_reasoning_inline(model):
+            return response
         for choice in response.choices:
             if not isinstance(choice, Choices) or not isinstance(choice.message.content, str):
                 continue
@@ -486,7 +579,7 @@ class AmazonBedrockRuntimeChatCompletionsConfig(OpenAILikeChatConfig):
             choice.message.content = content
         return response
 
-    def get_supported_openai_params(self, model: str) -> list:  # mutable-ok: BaseConfig signature
+    def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: BaseConfig signature
         refused: Final = frozenset(("n", *chat_completions_params_refused_for(model)))
         base_params: Final = tuple(
             param

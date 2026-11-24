@@ -214,6 +214,7 @@ _SERVICE_VERB_BY_CALL_TYPE: Final[dict[str, str]] = {
     "increment_cache": "incr",
     "async_increment": "incr",
     "async_increment_pipeline": "incr",
+    "async_increment_if_present": "incr",
     "delete_cache": "delete",
     "async_delete_cache": "delete",
     "async_rpush": "rpush",
@@ -259,7 +260,18 @@ _PRISMA_VIEWS: Final[frozenset[str]] = frozenset(
 )
 _PRISMA_MODELS: Final[frozenset[str]] = frozenset(
     (
+        "LiteLLM_Alert",
+        "LiteLLM_PerformanceAlertState",
         "LiteLLM_BudgetTable",
+        "LiteLLM_CustomerOrganizationTable",
+        "LiteLLM_CustomerTeamTable",
+        "LiteLLM_CustomerMemberTable",
+        "LiteLLM_CustomerBudgetIncreaseRequest",
+        "LiteLLM_AppTable",
+        "LiteLLM_AppGroupTable",
+        "LiteLLM_AppGroupCustomerOrgTable",
+        "LiteLLM_AppCustomerOrgTable",
+        "LiteLLM_AppCustomerMemberTable",
         "LiteLLM_CredentialsTable",
         "LiteLLM_ProxyModelTable",
         "LiteLLM_AgentsTable",
@@ -291,8 +303,11 @@ _PRISMA_MODELS: Final[frozenset[str]] = frozenset(
         "LiteLLM_SpendLogs",
         "LiteLLM_BudgetWindowSpend",
         "LiteLLM_BackgroundInteractionSettlement",
+        "LiteLLM_BackgroundResponseSettlement",
+        "LiteLLM_BackgroundResponseCreator",
         "LiteLLM_ErrorLogs",
         "LiteLLM_UserNotifications",
+        "LiteLLM_UserProviderCredentials",
         "LiteLLM_TeamMembership",
         "LiteLLM_OrganizationMembership",
         "LiteLLM_InvitationLink",
@@ -300,9 +315,11 @@ _PRISMA_MODELS: Final[frozenset[str]] = frozenset(
         "LiteLLM_DailyUserSpend",
         "LiteLLM_DailyGlobalSpend",
         "LiteLLM_DailyOrganizationSpend",
+        "LiteLLM_DailyCustomerMemberSpend",
         "LiteLLM_DailyEndUserSpend",
         "LiteLLM_DailyAgentSpend",
         "LiteLLM_DailyTeamSpend",
+        "LiteLLM_DailyCustomerMemberSpend",
         "LiteLLM_DailyTagSpend",
         "LiteLLM_ProxyWorkerHeartbeat",
         "LiteLLM_CronJob",
@@ -320,9 +337,12 @@ _PRISMA_MODELS: Final[frozenset[str]] = frozenset(
         "LiteLLM_DailyToolSpend",
         "LiteLLM_DailyModelUsage",
         "LiteLLM_DailyGatewayRequests",
+        "LiteLLM_DailyGatewayFailedRequests",
+        "LiteLLM_DailyRequestErrors",
         "LiteLLM_PromptTable",
         "LiteLLM_HealthCheckTable",
         "LiteLLM_SearchToolsTable",
+        "LiteLLM_ScheduledJobRun",
         "LiteLLM_SSOConfig",
         "LiteLLM_ManagedVectorStoreIndexTable",
         "LiteLLM_CacheConfig",
@@ -332,8 +352,14 @@ _PRISMA_MODELS: Final[frozenset[str]] = frozenset(
         "LiteLLM_PolicyTable",
         "LiteLLM_PolicyAttachmentTable",
         "LiteLLM_ToolTable",
+        "LiteLLM_TelemetryReport",
         "LiteLLM_AccessGroupTable",
+        "LiteLLM_SpendLogDelivery",
         "LiteLLM_ClaudeCodePluginTable",
+        "LiteLLM_ClaudeCodePluginUpload",
+        "LiteLLM_ClaudeCodePluginVersion",
+        "LiteLLM_SkillSubmission",
+        "LiteLLM_ClaudeCodePluginDownload",
         "LiteLLM_MemoryTable",
         "LiteLLM_AdaptiveRouterState",
         "LiteLLM_AdaptiveRouterSession",
@@ -349,8 +375,14 @@ _PRISMA_MODELS: Final[frozenset[str]] = frozenset(
         "LiteLLM_WorkflowEvent",
         "LiteLLM_WorkflowMessage",
         "LiteLLM_Lens",
+        "LiteLLM_LensDataset",
         "LiteLLM_LensRun",
+        "LiteLLM_LensReview",
+        "LiteLLM_LensIngestionKey",
         "LiteLLM_LensWorker",
+        "LiteLLM_SubscriptionAccountTable",
+        "LiteLLM_LensSignalConfig",
+        "LiteLLM_LensTraceSignal",
     )
 )
 PRISMA_RELATIONS: Final[frozenset[str]] = _PRISMA_MODELS | _PRISMA_VIEWS
@@ -424,6 +456,7 @@ _POSTGRES_OPERATION_BY_CALL_TYPE: Final[Mapping[str, PostgresOperation]] = Mappi
         "reset_budget_windows": PostgresOperation("select", None),
         "write_budget_windows": PostgresOperation("update", None),
         "roll_window_spend_row": PostgresOperation("update", None),
+        "open_window_spend_row": PostgresOperation("upsert", None),
         "seed_window_spend": PostgresOperation("select", None),
         "select_window_spend_rows": PostgresOperation("select", None),
         "commit_window_spend_updates": PostgresOperation("upsert", None),
@@ -470,7 +503,7 @@ _POSTGRES_OPERATION_BY_CALL_TYPE: Final[Mapping[str, PostgresOperation]] = Mappi
 _RAW_PRISMA_CALL_TYPES: Final[frozenset[str]] = frozenset(("query_raw", "execute_raw"))
 _DB_OPERATION_METADATA_KEY: Final = "db_operation"
 _POSTGRES_VERBS: Final[frozenset[str]] = frozenset(
-    ("select", "insert", "update", "delete", "upsert", "ddl", "set", "ping")
+    ("select", "insert", "update", "delete", "upsert", "ddl", "set", "ping", "lock")
 )
 _TARGETLESS_VERBS: Final[frozenset[str]] = frozenset(("ping",))
 _SETTING_NAME: Final = re.compile(r"[a-z_][a-z0-9_.]*")

@@ -46,7 +46,7 @@ class TestRouterSettingsEndpoints:
         """
         # Make request to router fields endpoint
         response = client.get(
-            "/router/fields", headers={"Authorization": "Bearer sk-1234"}
+            "/router/fields", headers={"Authorization": "Bearer sk-9876"}
         )
 
         # Verify response

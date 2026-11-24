@@ -1,7 +1,0 @@
-- Normalize one decoded span at a time: `format/` extracts recorded facts, then `instrumentation/` applies SDK semantics
-- Own normalized span types, role and call evidence, shared message conversion in `messages.rs`, and metadata extraction in `metadata.rs`
-- Keep wire-format parsing in `format/` and SDK-specific interpretation in `instrumentation/`; share message helpers instead of duplicating payload parsing
-- Preserve format precedence, attribute alias precedence, token validation, and consumed-attribute tracking
-- Leave wrapper resolution, cross-span ownership, and spend attribution to `resolve/`; related spans can arrive in separate exports
-- Keep OTLP decoding in `otlp/`, storage in `traces-clickhouse`, and Python conversion in `python-bridge`
-- Test observable normalization through the public API in `tests/normalize.rs` and `tests/normalization_formats.rs`; keep private-helper tests inline

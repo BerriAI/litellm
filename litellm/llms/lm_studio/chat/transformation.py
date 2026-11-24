@@ -19,13 +19,20 @@ class LMStudioChatConfig(OpenAIGPTConfig):
         )  # LM Studio does not require an api key, but OpenAI client requires non-None value
         return api_base, dynamic_api_key
 
+    def get_openai_compatible_provider_info(
+        self,
+        api_base: str | None,
+        api_key: str | None,
+    ) -> tuple[str | None, str | None]:
+        return self._get_openai_compatible_provider_info(api_base, api_key)
+
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: dict[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         for param, value in list(non_default_params.items()):
             if param == "response_format" and isinstance(value, dict):
                 if value.get("type") == "json_schema":

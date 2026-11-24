@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from functools import reduce
 from itertools import groupby
+from time import monotonic
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, Protocol, cast
 
@@ -35,19 +36,20 @@ from litellm.proxy.spend_tracking.baseline_accounting import (
     advance_baseline_history,
 )
 from litellm.proxy.spend_tracking.savings import BaselineCosts, BaselineCostSnapshot, price_baseline_comparison
+from litellm.types.llms.base import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
 
 
-class DailyBaselineTarget(BaseModel):
+class DailyBaselineTarget(LiteLLMBaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     entity: DailySpendEntity
     entity_id: str | None
 
 
-class DailyBaselineAttribution(BaseModel):
+class DailyBaselineAttribution(LiteLLMBaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     date: str
@@ -77,7 +79,7 @@ class DailyBaselineAttribution(BaseModel):
         )
 
 
-class BaselineAccountingRecord(BaseModel):
+class BaselineAccountingRecord(LiteLLMBaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     scope: str = Field(pattern=r"^autorouter-baseline:v3:[a-f0-9]{64}$")
@@ -110,7 +112,7 @@ class BaselineAccountingRecord(BaseModel):
         return self
 
 
-class BaselinePublication(BaseModel):
+class BaselinePublication(LiteLLMBaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     version: Literal[3] = 3
@@ -154,7 +156,7 @@ def baseline_publication(
     )
 
 
-class _Comparison(BaseModel):
+class _Comparison(LiteLLMBaseModel):
     revision: int
     published_revision: int
     initial_equivalent: bool
@@ -162,14 +164,14 @@ class _Comparison(BaseModel):
     history: str | None
 
 
-class _StoredRecord(BaseModel):
+class _StoredRecord(LiteLLMBaseModel):
     data: str
     publication: str | None
     conflicted: bool
     started_at: float
 
 
-class _Change(BaseModel):
+class _Change(LiteLLMBaseModel):
     request_id: str
     publication: BaselinePublication
     api_key: str
@@ -222,7 +224,8 @@ ON CONFLICT (request_id) DO NOTHING
 _MARK_CONFLICT: Final = """
 UPDATE "LiteLLM_AutoRouterBaselineObservation"
 SET conflicted = TRUE, revision = $4::bigint
-WHERE request_id = $1 AND scope = $2 AND data <> $3 AND NOT conflicted
+WHERE request_id = $1 AND scope = $2 AND NOT conflicted
+  AND (data::jsonb #- '{turn,turn_at}') <> ($3::jsonb #- '{turn,turn_at}')
 """
 _READ_PAGE: Final = """
 WITH times AS (
@@ -241,18 +244,19 @@ WHERE scope = $1 AND revision > $2::bigint
   AND ($5::float8 IS NULL OR publication::jsonb->>'status' = 'estimated')
 ORDER BY started_at, request_id
 """
+_PUBLISHED_LOG_FIELDS: Final = ("autorouter_savings_estimate", "autorouter_savings")
 _UPDATE_LOGS: Final = """
 WITH changes AS (
     SELECT request_id, publication::jsonb AS publication
     FROM jsonb_to_recordset($1::jsonb) AS x(request_id text, publication jsonb)
 )
 UPDATE "LiteLLM_SpendLogs" AS logs
-SET metadata = (COALESCE(logs.metadata::jsonb, '{}'::jsonb) - 'autorouter_baseline_observation') || jsonb_build_object(
+SET metadata = (COALESCE(logs.metadata::jsonb, '{}'::jsonb) - 'autorouter_baseline_observation') || (jsonb_build_object(
     'autorouter_savings_estimate', changes.publication,
     'autorouter_savings', CASE WHEN changes.publication->>'status' = 'estimated' THEN
         (changes.publication->>'baseline_spend')::float8 - (changes.publication->>'actual_spend')::float8
         ELSE NULL END
-)
+) - ARRAY(SELECT jsonb_array_elements_text($2::jsonb)))
 FROM changes WHERE logs.request_id = changes.request_id
 """
 _UPDATE_PUBLICATIONS: Final = """
@@ -395,7 +399,11 @@ async def _publish(db: SupportsRawQueries, changes: Sequence[_Change]) -> None:
     if not changes:
         return
     serialized: Final = json.dumps(tuple(change.model_dump(mode="json") for change in changes), separators=(",", ":"))
-    await db.execute_raw(_UPDATE_LOGS, serialized)
+    from litellm.proxy.spend_tracking.spend_tracking_utils import configured_spend_logs_metadata_fields
+
+    fields: Final = configured_spend_logs_metadata_fields()
+    unstored: Final = tuple(name for name in _PUBLISHED_LOG_FIELDS if fields is not None and not fields.keeps(name))
+    await db.execute_raw(_UPDATE_LOGS, serialized, json.dumps(unstored))
     await db.execute_raw(_UPDATE_SESSIONS, serialized)
     if any(change.user_id for change in changes):
         await db.execute_raw(_UPDATE_USER_SESSIONS, serialized)
@@ -618,11 +626,12 @@ class BaselineAccountingStore:
             return "unavailable"
 
 
-class _Scope(BaseModel):
+class _Scope(LiteLLMBaseModel):
     scope: str
 
 
 _SCOPES: Final = TypeAdapter(tuple[_Scope, ...])
+_RECOVERY_INTERVAL_SECONDS: Final = 5.0
 _CLAIM_DIRTY: Final = """
 WITH candidates AS (
     SELECT scope FROM "LiteLLM_AutoRouterBaselineComparison"
@@ -655,6 +664,12 @@ async def flush_baseline_accounting(client: PrismaClient) -> None:
     store: Final = BaselineAccountingStore.for_client(client)
     async with client.baseline_accounting_lock:
         batch: Final = tuple(client.baseline_accounting_transactions[:32])
+        now: Final = monotonic()
+        if not batch and now < client.baseline_accounting_recovery_due_at:
+            return
+        client.baseline_accounting_recovery_due_at = (  # rebind-ok: each claim delays redundant polling
+            now + _RECOVERY_INTERVAL_SECONDS
+        )
         client.baseline_accounting_transactions = client.baseline_accounting_transactions[32:]
         more_queued: Final = bool(client.baseline_accounting_transactions)
     try:
@@ -681,6 +696,8 @@ async def flush_baseline_accounting(client: PrismaClient) -> None:
 
         outcomes: Final = await asyncio.wait_for(asyncio.gather(*(project(item) for item in scopes)), timeout=5)
         if len(scopes) == 32 and "published" in outcomes:
+            async with client.baseline_accounting_lock:
+                client.baseline_accounting_recovery_due_at = 0.0  # rebind-ok: a full claim may have more work ready
             request_spend_log_flush(client)
     except Exception:  # noqa: BLE001  # durable dirty comparisons remain eligible after the retry interval
         verbose_proxy_logger.warning("Auto-router baseline projection will retry on a later spend flush")

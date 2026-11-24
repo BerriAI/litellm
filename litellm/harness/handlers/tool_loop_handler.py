@@ -6,16 +6,16 @@ import asyncio
 import copy
 import inspect
 import json
-import math
 from collections.abc import AsyncIterator, Awaitable, Callable, Generator, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final, Protocol, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm.harness.context import SessionContext
+from litellm.harness.endpoint import response_cost
 from litellm.harness.errors import CapabilityUnsupported
 from litellm.harness.handlers.base import BaseHarnessHandler
 from litellm.harness.types import Approval, Event, Reasoning, Text, ToolCall, ToolResult
@@ -28,6 +28,7 @@ from litellm.llms.tool_loop.harness.transformation import (
     function_tool,
 )
 from litellm.types.completion import ChatCompletionMessageParam
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.utils import (
     ChatCompletionMessageCustomToolCall,
     ChatCompletionMessageToolCall,
@@ -52,7 +53,7 @@ _JSON_DECODER: Final = json.JSONDecoder()
 _HISTORY_ADAPTER: Final = TypeAdapter(list[dict[str, object]])
 
 
-class _Usage(BaseModel):
+class _Usage(LiteLLMBaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     prompt_tokens: int | None = None
@@ -106,44 +107,6 @@ def _parse_arguments(raw: str) -> tuple[dict[str, object], str | None]:  # mutab
     return arguments, None
 
 
-def _cost_value(value: object) -> float | None:
-    if isinstance(value, bool):
-        return None
-    if not isinstance(value, str | int | float):
-        return None
-    try:
-        cost: Final = float(value)
-    except (OverflowError, TypeError, ValueError):
-        return None
-    return cost if math.isfinite(cost) else None
-
-
-def _as_mapping(value: object) -> Mapping[str, object] | None:
-    try:
-        return _MAPPING_ADAPTER.validate_python(value)
-    except ValidationError:
-        return None
-
-
-def _response_cost(response: ModelResponse) -> float:
-    hidden_params_value: Final[object] = getattr(response, "_hidden_params", {})
-    hidden_params: Final = _as_mapping(hidden_params_value)
-    if hidden_params is not None:
-        additional_headers: Final = _as_mapping(hidden_params.get("additional_headers"))
-        if additional_headers is not None:
-            header_cost: Final = _cost_value(additional_headers.get("llm_provider-x-litellm-response-cost"))
-            if header_cost is not None:
-                return header_cost
-        hidden_cost: Final = _cost_value(hidden_params.get("response_cost"))
-        if hidden_cost is not None:
-            return hidden_cost
-    try:
-        calculated_cost: Final = litellm.completion_cost(completion_response=response)
-    except Exception:
-        return 0.0
-    return _cost_value(calculated_cost) or 0.0
-
-
 async def _approval_error(approval: Approval | None) -> str | None:
     if approval is None:
         return None
@@ -181,7 +144,7 @@ def _record_usage(ctx: SessionContext, response: ModelResponse) -> None:
         ctx.calls += 1  # rebind-ok: SessionContext is the runtime's per-session usage sink
         ctx.input_tokens += input_tokens  # rebind-ok: SessionContext is the runtime's per-session usage sink
         ctx.output_tokens += output_tokens  # rebind-ok: SessionContext is the runtime's per-session usage sink
-        ctx.cost += _response_cost(response)  # rebind-ok: SessionContext is the runtime's per-session usage sink
+        ctx.costs.add(response_cost(response))
     except Exception:
         return
 

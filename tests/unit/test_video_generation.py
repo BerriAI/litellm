@@ -2,6 +2,8 @@ import asyncio
 import io
 import json
 import os
+from datetime import datetime
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -16,7 +18,10 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.gemini.videos.transformation import GeminiVideoConfig
 from litellm.llms.openai.videos.transformation import OpenAIVideoConfig
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.videos.main import VideoObject, VideoResponse
+from litellm.types.utils import ModelInfo
+from litellm.llms.openai.cost_calculation import video_generation_cost
 from litellm.videos import main as videos_main
 from litellm.videos.main import (
     avideo_generation,
@@ -24,6 +29,136 @@ from litellm.videos.main import (
     video_generation,
     video_status,
 )
+from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
+
+
+@pytest.mark.parametrize("duration", [0.0, 5.0, 30.0])
+@pytest.mark.parametrize("price", [0.0, 0.37])
+def test_flat_video_price_takes_precedence_over_duration(duration: float, price: float) -> None:
+    pricing: Final[ModelInfo] = {"output_cost_per_video": price, "output_cost_per_video_per_second": 0.12}
+    assert video_generation_cost("test-flat-video", duration, model_info=pricing) == price
+    assert default_video_cost_calculator("test-flat-video", duration, model_info=pricing) == price
+
+
+@pytest.mark.parametrize("duration", [None, 0.0, 12.0])
+@pytest.mark.parametrize("count", [1, 3])
+def test_completion_cost_flat_video_deployment_override_counts_videos(
+    monkeypatch: pytest.MonkeyPatch, duration: float | None, count: int
+) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "openai/test-flat-video",
+        {"litellm_provider": "openai", "mode": "video_generation", "output_cost_per_video": 0.91},
+    )
+    response: Final = VideoObject(
+        id="vid-flat", object="video", status="completed", usage={"duration_seconds": duration, "video_count": count}
+    )
+    logging_obj: Final = LitellmLogging(
+        model="openai/test-flat-video",
+        messages=[],
+        stream=False,
+        call_type="create_video",
+        start_time=datetime(2026, 1, 1),
+        litellm_call_id="flat-video",
+        function_id="flat-video",
+    )
+    logging_obj.litellm_params = {"metadata": {"model_info": {"output_cost_per_video": 0.37}}}
+    cost: Final = litellm.completion_cost(
+        completion_response=response,
+        model="openai/test-flat-video",
+        call_type="create_video",
+        custom_llm_provider="openai",
+        custom_pricing=True,
+        litellm_logging_obj=logging_obj,
+    )
+    assert cost == pytest.approx(0.37 * count)
+
+
+_OFF_PEAK: Final = {"hours_utc": "00:00-00:00", "output_cost_per_second": 0.05}
+
+
+@pytest.mark.parametrize(
+    "model_info",
+    [
+        pytest.param({"output_cost_per_second": 0.1, "off_peak_pricing": _OFF_PEAK}, id="with_off_peak_pricing"),
+        pytest.param({"output_cost_per_second": 0.1, "id": "openai/test-flat-video-row"}, id="id_is_the_catalog_key"),
+        pytest.param(
+            {"output_cost_per_video_per_second": 0.1, "id": "openai/test-flat-video-row"},
+            id="video_per_second_key_on_the_catalog_key",
+        ),
+    ],
+)
+def test_deployment_per_second_video_price_beats_the_catalog_rows_flat_price(model_info: dict[str, object]) -> None:
+    catalog_key: Final = "openai/test-flat-video-row"
+    litellm.register_model(
+        {catalog_key: {"litellm_provider": "openai", "mode": "video_generation", "output_cost_per_video": 0.91}}
+    )
+    try:
+        router: Final = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "flat-row-per-second",
+                    "litellm_params": {"model": catalog_key, "api_key": "synthetic"},
+                    "model_info": model_info,
+                }
+            ]
+        )
+        deployment: Final = router.get_deployment_by_model_group_name("flat-row-per-second")
+        assert deployment is not None
+        logging_obj: Final = LitellmLogging(
+            model=catalog_key,
+            messages=[],
+            stream=False,
+            call_type="create_video",
+            start_time=datetime(2026, 1, 1),
+            litellm_call_id="flat-row-per-second",
+            function_id="flat-row-per-second",
+        )
+        logging_obj.litellm_params = {"metadata": {"model_info": deployment.model_info.model_dump()}}
+        cost: Final = litellm.completion_cost(
+            completion_response=VideoObject(
+                id="vid",
+                object="video",
+                status="completed",
+                usage={"duration_seconds": 5.0, "video_resolution": "720p"},
+            ),
+            model=catalog_key,
+            call_type="create_video",
+            custom_llm_provider="openai",
+            custom_pricing=True,
+            litellm_logging_obj=logging_obj,
+            router_model_id=deployment.model_info.id,
+        )
+        assert cost == pytest.approx(0.5)
+    finally:
+        litellm.model_cost.pop(catalog_key, None)
+
+
+def test_resolution_only_per_second_price_keeps_the_flat_price_for_other_resolutions() -> None:
+    catalog_key: Final = "openai/test-flat-video-tiered"
+    litellm.register_model(
+        {catalog_key: {"litellm_provider": "openai", "mode": "video_generation", "output_cost_per_video": 0.91}}
+    )
+    try:
+        litellm.register_model({catalog_key: {"output_cost_per_second_720p": 0.1}})
+        cost: Final = default_video_cost_calculator(
+            catalog_key, 5.0, custom_llm_provider="openai", video_resolution="1080p"
+        )
+        assert cost == pytest.approx(0.91)
+    finally:
+        litellm.model_cost.pop(catalog_key, None)
+
+
+def test_deployment_flat_video_price_still_wins_beside_its_own_per_second_price() -> None:
+    catalog_key: Final = "openai/test-flat-video-kept"
+    litellm.register_model(
+        {catalog_key: {"litellm_provider": "openai", "mode": "video_generation", "output_cost_per_video": 0.91}}
+    )
+    try:
+        litellm.register_model({catalog_key: {"output_cost_per_video": 0.37, "output_cost_per_second": 0.1}})
+        assert default_video_cost_calculator(catalog_key, 5.0, custom_llm_provider="openai") == pytest.approx(0.37)
+    finally:
+        litellm.model_cost.pop(catalog_key, None)
 
 
 class TestVideoGeneration:
@@ -553,7 +688,7 @@ class TestVideoGeneration:
                     mock_client.post.return_value = mock_response
 
                     with patch(
-                        "litellm.llms.custom_httpx.llm_http_handler._get_httpx_client",
+                        "litellm.llms.custom_httpx.llm_http_handler.get_httpx_client",
                         return_value=mock_client,
                     ):
                         result = handler.video_generation_handler(
@@ -1113,7 +1248,7 @@ def test_video_content_handler_passes_variant_to_url():
     mock_client.get.return_value = mock_response
 
     with patch(
-        "litellm.llms.custom_httpx.llm_http_handler._get_httpx_client",
+        "litellm.llms.custom_httpx.llm_http_handler.get_httpx_client",
         return_value=mock_client,
     ):
         result = handler.video_content_handler(
@@ -1158,11 +1293,9 @@ def test_video_content_handler_uses_get_for_openai():
     mock_response.status_code = 200
     mock_client.get.return_value = mock_response
 
-    # Patch _get_httpx_client to ensure no real HTTP client is created
+    # Patch get_httpx_client to ensure no real HTTP client is created
     # This prevents test isolation issues where isinstance check might fail
-    with patch(
-        "litellm.llms.custom_httpx.llm_http_handler._get_httpx_client"
-    ) as mock_get_client:
+    with patch("litellm.llms.custom_httpx.llm_http_handler.get_httpx_client") as mock_get_client:
         mock_get_client.return_value = mock_client
 
         result = handler.video_content_handler(
@@ -1269,6 +1402,35 @@ def test_encode_video_id_with_provider_handles_azure_video_prefix():
         video_id=encoded_id, provider=provider, model_id=model_id
     )
     assert encoded_twice == encoded_id  # Should return the same encoded ID
+
+
+@pytest.mark.parametrize(
+    "served_model, deployment_id, expected_extras",
+    [
+        ("seedance-east", "dep-1", {"served_model": "seedance-east", "deployment_id": "dep-1"}),
+        (None, "dep-1", {"deployment_id": "dep-1"}),
+        ("seedance-east", None, {"served_model": "seedance-east"}),
+        (None, None, {}),
+    ],
+)
+def test_video_id_round_trips_served_model_and_deployment_id(
+    served_model: str | None, deployment_id: str | None, expected_extras: dict[str, str]
+) -> None:
+    from litellm.types.videos.utils import (
+        decode_video_id_with_provider,
+        encode_video_id_with_provider,
+    )
+
+    encoded: Final = encode_video_id_with_provider(
+        "task_1", "volcengine", "seedance-group", served_model=served_model, deployment_id=deployment_id
+    )
+
+    assert decode_video_id_with_provider(encoded) == {
+        "custom_llm_provider": "volcengine",
+        "model_id": "seedance-group",
+        "video_id": "task_1",
+        **expected_extras,
+    }
 
 
 class TestVideoListTransformation:
@@ -1577,7 +1739,7 @@ class TestVideoEndpointsProxyLitellmParams:
         encoded_video_id = mock_video_generation_response.id
 
         # Mock the router instance
-        mock_router_instance = MagicMock()
+        mock_router_instance = route_entry_points_to_stubs(MagicMock())
         mock_router_instance.resolve_model_name_from_model_id.return_value = (
             "vertex-ai-sora-2"
         )
@@ -1601,7 +1763,7 @@ class TestVideoEndpointsProxyLitellmParams:
                 # Make request to video_status endpoint
                 response = client_with_vertex_config.get(
                     f"/v1/videos/{encoded_video_id}",
-                    headers={"Authorization": "Bearer sk-1234"},
+                    headers={"Authorization": "Bearer sk-9876"},
                 )
 
                 # Verify the endpoint was called
@@ -1646,7 +1808,7 @@ class TestVideoEndpointsProxyLitellmParams:
         encoded_video_id = mock_video_generation_response.id
 
         # Mock the router instance
-        mock_router_instance = MagicMock()
+        mock_router_instance = route_entry_points_to_stubs(MagicMock())
         mock_router_instance.resolve_model_name_from_model_id.return_value = (
             "vertex-ai-sora-2"
         )
@@ -1670,7 +1832,7 @@ class TestVideoEndpointsProxyLitellmParams:
                 # Make request to video_content endpoint
                 response = client_with_vertex_config.get(
                     f"/v1/videos/{encoded_video_id}/content",
-                    headers={"Authorization": "Bearer sk-1234"},
+                    headers={"Authorization": "Bearer sk-9876"},
                 )
 
                 # Verify the endpoint was called
@@ -1715,7 +1877,7 @@ class TestVideoEndpointsProxyLitellmParams:
         encoded_video_id = mock_video_generation_response.id
 
         # Mock the router instance
-        mock_router_instance = MagicMock()
+        mock_router_instance = route_entry_points_to_stubs(MagicMock())
         mock_router_instance.resolve_model_name_from_model_id.return_value = (
             "vertex-ai-sora-2"
         )
@@ -1739,7 +1901,7 @@ class TestVideoEndpointsProxyLitellmParams:
                 # Make request to video_content endpoint
                 response = client_with_vertex_config.get(
                     f"/v1/videos/{encoded_video_id}/content",
-                    headers={"Authorization": "Bearer sk-1234"},
+                    headers={"Authorization": "Bearer sk-9876"},
                 )
 
                 # Verify the endpoint was called
@@ -1789,7 +1951,7 @@ def test_video_remix_handler_uses_api_key_from_litellm_params():
                 mock_client.post.return_value = MagicMock(status_code=200)
 
                 with patch(
-                    "litellm.llms.custom_httpx.llm_http_handler._get_httpx_client",
+                    "litellm.llms.custom_httpx.llm_http_handler.get_httpx_client",
                     return_value=mock_client,
                 ):
                     handler.video_remix_handler(
@@ -1876,7 +2038,7 @@ def test_video_remix_handler_prefers_explicit_api_key():
                 mock_client.post.return_value = MagicMock(status_code=200)
 
                 with patch(
-                    "litellm.llms.custom_httpx.llm_http_handler._get_httpx_client",
+                    "litellm.llms.custom_httpx.llm_http_handler.get_httpx_client",
                     return_value=mock_client,
                 ):
                     handler.video_remix_handler(
@@ -2203,7 +2365,7 @@ def video_proxy_test_client():
 
     app = FastAPI()
     app.include_router(video_router)
-    app.dependency_overrides[user_api_key_auth] = lambda: MagicMock()
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(api_key="sk-9876")
     return TestClient(app)
 
 
@@ -2268,7 +2430,7 @@ def test_video_create_character_target_model_names_returns_encoded_id(
     ):
         response = video_proxy_test_client.post(
             "/v1/videos/characters",
-            headers={"Authorization": "Bearer sk-1234"},
+            headers={"Authorization": "Bearer sk-9876"},
             files={"video": ("character.mp4", b"fake-video", "video/mp4")},
             data={
                 "name": "hero",
@@ -2310,7 +2472,7 @@ def test_video_get_character_accepts_encoded_character_id(video_proxy_test_clien
         provider="vertex_ai",
         model_id="veo-2.0-generate-001",
     )
-    mock_router = MagicMock()
+    mock_router = route_entry_points_to_stubs(MagicMock())
     mock_router.resolve_model_name_from_model_id.return_value = "vertex-ai-sora-2"
 
     with patch("litellm.proxy.proxy_server.llm_router", mock_router):
@@ -2321,7 +2483,7 @@ def test_video_get_character_accepts_encoded_character_id(video_proxy_test_clien
         ):
             response = video_proxy_test_client.get(
                 f"/v1/videos/characters/{encoded_character_id}",
-                headers={"Authorization": "Bearer sk-1234"},
+                headers={"Authorization": "Bearer sk-9876"},
             )
 
     assert response.status_code == 200, response.text
@@ -2366,7 +2528,7 @@ def test_edit_and_extension_support_custom_provider_from_extra_body(
     ):
         response = video_proxy_test_client.post(
             endpoint,
-            headers={"Authorization": "Bearer sk-1234"},
+            headers={"Authorization": "Bearer sk-9876"},
             json=payload,
         )
 
@@ -2400,7 +2562,7 @@ async def test_edit_and_extension_read_cached_body_after_auth_consumes_stream(
 
     import litellm.proxy.video_endpoints.endpoints as endpoints
     from litellm.proxy._types import ProxyException, UserAPIKeyAuth
-    from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+    from litellm.proxy.common_utils.http_parsing_utils import read_request_body
 
     body = urlencode(form).encode()
     stream = {"sent": False}
@@ -2425,14 +2587,14 @@ async def test_edit_and_extension_read_cached_body_after_auth_consumes_stream(
         receive,
     )
 
-    await _read_request_body(request=request)
+    await read_request_body(request=request)
 
     handler = getattr(endpoints, handler_name)
     with pytest.raises(ProxyException) as exc_info:
         await handler(
             request=request,
             fastapi_response=Response(),
-            user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234"),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-9876"),
         )
 
     message = str(exc_info.value)
@@ -2467,7 +2629,7 @@ def test_edit_and_extension_route_with_encoded_video_ids(
     if endpoint.endswith("extensions"):
         payload["seconds"] = "4"
 
-    mock_router = MagicMock()
+    mock_router = route_entry_points_to_stubs(MagicMock())
     mock_router.resolve_model_name_from_model_id.return_value = "vertex-ai-sora-2"
 
     with patch("litellm.proxy.proxy_server.llm_router", mock_router):
@@ -2478,7 +2640,7 @@ def test_edit_and_extension_route_with_encoded_video_ids(
         ):
             response = video_proxy_test_client.post(
                 endpoint,
-                headers={"Authorization": "Bearer sk-1234"},
+                headers={"Authorization": "Bearer sk-9876"},
                 json=payload,
             )
 

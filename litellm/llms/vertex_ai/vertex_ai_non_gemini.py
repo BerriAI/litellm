@@ -1,21 +1,28 @@
-import json
 import os
 import time
-from collections.abc import Callable
+import types
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Final, cast
 
 import httpx
 
 import litellm
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.bedrock.common_utils import ModelResponseIterator
 from litellm.llms.custom_httpx.http_handler import _DEFAULT_TTL_FOR_HTTPX_CLIENTS
+from litellm.llms.vertex_ai.credentials_source import (
+    VertexCredentialsJson,
+    build_vertex_credentials,
+    load_vertex_credentials_source,
+    raise_vertex_credentials_failure,
+)
 from litellm.types.llms.vertex_ai import *
 from litellm.utils import CustomStreamWrapper, ModelResponse, Usage
 
 
 class VertexAIError(Exception):
-    def __init__(self, status_code, message):
+    def __init__(self, status_code: int, message: str):
         self.status_code = status_code
         self.message = message
         self.request = httpx.Request(method="POST", url=" https://cloud.google.com/vertex-ai/")
@@ -55,16 +62,16 @@ class TextStreamer:
             raise StopAsyncIteration  # once we run out of data to stream, we raise this error
 
 
-def _get_client_cache_key(model: str, vertex_project: str | None, vertex_location: str | None):
+def _get_client_cache_key(model: str, vertex_project: str | None, vertex_location: object) -> str:
     _cache_key: Final = f"{model}-{vertex_project}-{vertex_location}"
     return _cache_key
 
 
-def _get_client_from_cache(client_cache_key: str):
+def _get_client_from_cache(client_cache_key: str) -> object:
     return litellm.in_memory_llm_clients_cache.get_cache(client_cache_key)
 
 
-def _set_client_in_cache(client_cache_key: str, vertex_llm_model: object):
+def _set_client_in_cache(client_cache_key: str, vertex_llm_model: object) -> None:
     litellm.in_memory_llm_clients_cache.set_cache(
         key=client_cache_key,
         value=vertex_llm_model,
@@ -76,15 +83,15 @@ def completion(
     model: str,
     messages: list,
     model_response: ModelResponse,
-    print_verbose: Callable,
+    print_verbose: Callable[[str], object],
     encoding,
-    logging_obj,
+    logging_obj: Logging,
     optional_params: dict,
     vertex_project=None,
-    vertex_location=None,
-    vertex_credentials=None,
-    litellm_params=None,
-    logger_fn=None,
+    vertex_location: object = None,
+    vertex_credentials: object = None,
+    litellm_params: object = None,
+    logger_fn: object = None,
     acompletion: bool = False,
 ):
     """
@@ -132,11 +139,15 @@ def completion(
         if vertex_credentials is not None and isinstance(vertex_credentials, str):
             import google.oauth2.service_account
 
-            json_obj: Final = json.loads(vertex_credentials)
+            source: Final = load_vertex_credentials_source(vertex_credentials)
+            if not isinstance(source, VertexCredentialsJson):
+                raise_vertex_credentials_failure(source)
 
-            creds = google.oauth2.service_account.Credentials.from_service_account_info(
-                json_obj,
-                scopes=["https://www.googleapis.com/auth/cloud-platform"],
+            creds = build_vertex_credentials(
+                source,
+                lambda info: google.oauth2.service_account.Credentials.from_service_account_info(
+                    info, scopes=["https://www.googleapis.com/auth/cloud-platform"]
+                ),
             )
         else:
             creds, _ = google.auth.default(quota_project_id=vertex_project)
@@ -152,7 +163,7 @@ def completion(
             )
 
         ## Load Config
-        config: Final = litellm.VertexAIConfig.get_config()
+        config: Final[Mapping[str, object]] = types.MappingProxyType(litellm.VertexAIConfig.get_config())
         for k, v in config.items():
             if k not in optional_params:
                 optional_params[k] = v
@@ -404,7 +415,7 @@ def completion(
                     completion_tokens = response_obj.usage_metadata.candidates_token_count
             else:
                 prompt_tokens = len(encoding.encode(prompt))
-                completion_tokens = len(encoding.encode(model_response["choices"][0]["message"].get("content", "")))
+                completion_tokens = len(encoding.encode(model_response.choices[0].message.content))
 
             usage = Usage(
                 prompt_tokens=prompt_tokens,
@@ -427,19 +438,19 @@ async def async_completion(
     mode: str,
     prompt: str,
     model: str,
-    messages: list,
+    messages: Sequence[object],
     model_response: ModelResponse,
     request_str: str,
-    print_verbose: Callable,
+    print_verbose: Callable[[str], object],
     logging_obj,
     encoding,
-    client_options=None,
-    instances=None,
-    vertex_project=None,
-    vertex_location=None,
-    vertex_credentials=None,
-    safety_settings=None,
-    **optional_params,
+    client_options: object = None,
+    instances: object = None,
+    vertex_project: object = None,
+    vertex_location: object = None,
+    vertex_credentials: object = None,
+    safety_settings: object = None,
+    **optional_params: object,
 ):
     """
     Add support for acompletion calls for gemini-pro
@@ -550,7 +561,7 @@ async def async_completion(
                 completion_tokens = response_obj.usage_metadata.candidates_token_count
             else:
                 prompt_tokens = len(encoding.encode(prompt))
-                completion_tokens = len(encoding.encode(model_response["choices"][0]["message"].get("content", "")))
+                completion_tokens = len(encoding.encode(model_response.choices[0].message.content))
 
             # set usage
             usage = Usage(
@@ -570,23 +581,23 @@ async def async_streaming(
     prompt: str,
     model: str,
     model_response: ModelResponse,
-    messages: list,
-    print_verbose: Callable,
+    messages: Sequence[object],
+    print_verbose: Callable[[str], object],
     logging_obj,
     request_str: str,
-    encoding=None,
-    client_options=None,
+    encoding: object = None,
+    client_options: object = None,
     instances=None,
-    vertex_project=None,
-    vertex_location=None,
-    vertex_credentials=None,
-    safety_settings=None,
-    **optional_params,
+    vertex_project: object = None,
+    vertex_location: object = None,
+    vertex_credentials: object = None,
+    safety_settings: object = None,
+    **optional_params: object,
 ):
     """
     Add support for async streaming calls for gemini-pro
     """
-    response: Any = None
+    response = None
     if mode == "chat":
         chat: Final = llm_model.start_chat()
         optional_params.pop("stream", None)  # vertex ai raises an error when passing stream in optional params

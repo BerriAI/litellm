@@ -11,14 +11,14 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
 
-
 import litellm
-from litellm.router_utils.cooldown_handlers import _async_get_cooldown_deployments
+from litellm.llms.custom_httpx import llm_http_handler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
 
 @pytest.mark.asyncio
 async def test_responses_api_rate_limit_marks_deployment_for_cooldown():
-    failing_deployment_id = "deployment-rate-limited"
+    deployment_ids = {"mock-api-key-1": "deployment-a", "mock-api-key-2": "deployment-b"}
 
     router = litellm.Router(
         model_list=[
@@ -28,7 +28,7 @@ async def test_responses_api_rate_limit_marks_deployment_for_cooldown():
                     "model": "openai/gpt-5.1-codex",
                     "api_key": "mock-api-key-1",
                 },
-                "model_info": {"id": failing_deployment_id},
+                "model_info": {"id": "deployment-a"},
             },
             {
                 "model_name": "openai.gpt-5.1-codex",
@@ -36,7 +36,7 @@ async def test_responses_api_rate_limit_marks_deployment_for_cooldown():
                     "model": "openai/gpt-5.1-codex",
                     "api_key": "mock-api-key-2",
                 },
-                "model_info": {"id": "deployment-healthy"},
+                "model_info": {"id": "deployment-b"},
             },
         ],
         num_retries=0,
@@ -53,22 +53,16 @@ async def test_responses_api_rate_limit_marks_deployment_for_cooldown():
         ),
     )
 
-    def pin_to_failing_deployment(seq):
-        for d in seq:
-            if d["model_info"]["id"] == failing_deployment_id:
-                return d
-        return seq[0]
+    called_api_keys = []
 
-    with (
-        patch(
-            "litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler.async_response_api_handler",
-            new_callable=AsyncMock,
-            side_effect=rate_limit_error,
-        ),
-        patch(
-            "litellm.router_strategy.simple_shuffle.random.choice",
-            side_effect=pin_to_failing_deployment,
-        ),
+    async def fail_and_record(*args, **kwargs):
+        called_api_keys.append(kwargs["litellm_params"].api_key)
+        raise rate_limit_error
+
+    with patch(
+        "litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler.async_response_api_handler",
+        new_callable=AsyncMock,
+        side_effect=fail_and_record,
     ):
         with pytest.raises(litellm.RateLimitError):
             await router.aresponses(
@@ -76,10 +70,59 @@ async def test_responses_api_rate_limit_marks_deployment_for_cooldown():
                 input="hi",
             )
 
-    cooldown_ids = await _async_get_cooldown_deployments(
-        litellm_router_instance=router, parent_otel_span=None
+    # num_retries=0: exactly one deployment took the request and failed.
+    (called_api_key,) = called_api_keys
+    failed_id = deployment_ids[called_api_key]
+    cooldown_ids = [
+        model_id
+        for model_id, _ in await router.cooldown_cache.async_get_active_cooldowns(
+            model_ids=list(deployment_ids.values()), parent_otel_span=None
+        )
+    ]
+    assert cooldown_ids == [failed_id], (
+        f"Responses API failure callback did not register cooldown for {failed_id!r}; cooldown set was {cooldown_ids}"
     )
-    assert failing_deployment_id in cooldown_ids, (
-        f"Responses API failure callback did not register cooldown for "
-        f"{failing_deployment_id!r}; cooldown set was {cooldown_ids}"
+
+
+
+@pytest.mark.asyncio
+async def test_openrouter_responses_connection_failure_cools_down_the_deployment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def refuse_connection(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("refused by the test transport", request=request)
+
+    class RefusingHandler(AsyncHTTPHandler):
+        """Also refuses on the fresh client the handler builds to retry a connection error."""
+
+        def create_client(self, *_args: object, **_kwargs: object) -> httpx.AsyncClient:
+            return httpx.AsyncClient(transport=httpx.MockTransport(refuse_connection))
+
+    # The router does not forward a caller's client, so the handler's client factory supplies it.
+    monkeypatch.setattr(llm_http_handler, "get_async_httpx_client", lambda **_kwargs: RefusingHandler())
+    deployment_ids = ("deployment-a", "deployment-b")
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "openrouter-responses",
+                "litellm_params": {
+                    "model": "openrouter/openai/gpt-6.2-sol",
+                    "api_key": "sk-or-test",
+                    "api_base": "https://backend.example.test/api/v1",
+                },
+                "model_info": {"id": deployment_id},
+            }
+            for deployment_id in deployment_ids
+        ],
+        num_retries=0,
+        allowed_fails=0,
+        cooldown_time=60,
     )
+
+    with pytest.raises(litellm.APIError, match="refused by the test transport"):
+        await router.aresponses(model="openrouter-responses", input="hi")
+
+    cooldowns = await router.cooldown_cache.async_get_active_cooldowns(
+        model_ids=list(deployment_ids), parent_otel_span=None
+    )
+    assert len(cooldowns) == 1

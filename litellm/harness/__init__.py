@@ -1,4 +1,4 @@
-"""Agent harnesses: run Claude Code, Codex, OpenCode, Deep Agents or Tool Loop on any LiteLLM model.
+"""Agent harnesses: run Claude Code, Codex, OpenCode, pi, Deep Agents or Tool Loop on any LiteLLM model.
 
 The entrypoints live on the top-level package:
 
@@ -25,11 +25,32 @@ from litellm.harness.errors import (
     SessionClosed,
     StateIncompatible,
 )
+from litellm.harness.evaluation import (
+    AgentInput,
+    AgentOutput,
+    CheckResult,
+    CommandCheck,
+    EvalAgent,
+    EvalCheck,
+    EvalOutput,
+    EvalRun,
+    EvalScorecard,
+    EvalStatus,
+    EvalSummary,
+    EvalTarget,
+    EvalTask,
+    JudgeCheck,
+    PredicateCheck,
+    aagent_eval,
+    aagent_eval_attempt,
+    agent_eval,
+)
 from litellm.harness.options import (
     ClaudeCodeOptions,
     CodexOptions,
     DeepAgentsOptions,
     OpenCodeOptions,
+    PiOptions,
     ToolLoopOptions,
 )
 from litellm.harness.runtime import (
@@ -59,25 +80,41 @@ from litellm.harness.types import (
 )
 
 __all__ = (
+    "AgentInput",
+    "AgentOutput",
     "Approval",
     "AsyncEventStream",
     "AsyncSession",
     "Capabilities",
     "CapabilityUnsupported",
+    "CheckResult",
     "ClaudeCodeOptions",
     "CodexOptions",
+    "CommandCheck",
     "Compaction",
     "DeepAgentsOptions",
     "Done",
+    "EvalAgent",
+    "EvalCheck",
+    "EvalOutput",
+    "EvalRun",
+    "EvalScorecard",
+    "EvalStatus",
+    "EvalSummary",
+    "EvalTarget",
+    "EvalTask",
     "Event",
     "EventStream",
     "FileChange",
     "Harness",
     "HarnessError",
     "HarnessInstallFailed",
+    "JudgeCheck",
     "OpenCodeOptions",
     "OptionsMismatch",
     "OutputInvalid",
+    "PiOptions",
+    "PredicateCheck",
     "Reasoning",
     "Result",
     "SandboxError",
@@ -91,10 +128,13 @@ __all__ = (
     "ToolResult",
     "Usage",
     "aagent",
+    "aagent_eval",
+    "aagent_eval_attempt",
     "aagent_resume",
     "aagent_session",
     "agent",
     "agent_capabilities",
+    "agent_eval",
     "agent_resume",
     "agent_session",
 )

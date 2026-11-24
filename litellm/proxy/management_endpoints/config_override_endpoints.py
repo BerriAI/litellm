@@ -4,15 +4,17 @@ import os
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Protocol
+from typing import TYPE_CHECKING, Final, Literal, Protocol, overload
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._uuid import uuid
+from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
+from litellm.proxy.management_helpers.audit_logs import with_audit_actor
 
 try:
     from prisma.errors import RecordNotFoundError
@@ -116,16 +118,19 @@ async def _emit_config_override_audit_log(
 
     task: Final = asyncio.create_task(
         create_audit_log_for_update(
-            request_data=LiteLLM_AuditLogs(
-                id=str(uuid.uuid4()),
-                updated_at=datetime.now(timezone.utc),
-                changed_by=litellm_changed_by or user_api_key_dict.user_id or litellm_proxy_admin_name,
-                changed_by_api_key=user_api_key_dict.api_key,
-                table_name=LitellmTableNames.CONFIG_OVERRIDES_TABLE_NAME,
-                object_id=object_id,
-                action=action,
-                updated_values=json.dumps({"config": _redact_config(after_config)}, default=str),
-                before_value=json.dumps({"config": _redact_config(before_config)}, default=str),
+            request_data=with_audit_actor(
+                LiteLLM_AuditLogs(
+                    id=str(uuid.uuid4()),
+                    updated_at=datetime.now(timezone.utc),
+                    changed_by=litellm_changed_by or user_api_key_dict.user_id or litellm_proxy_admin_name,
+                    changed_by_api_key=user_api_key_dict.api_key,
+                    table_name=LitellmTableNames.CONFIG_OVERRIDES_TABLE_NAME,
+                    object_id=object_id,
+                    action=action,
+                    updated_values=json.dumps({"config": _redact_config(after_config)}, default=str),
+                    before_value=json.dumps({"config": _redact_config(before_config)}, default=str),
+                ),
+                user_api_key_dict,
             )
         )
     )
@@ -185,25 +190,34 @@ def _mask_sensitive_fields(data: Mapping[str, object], sensitive_fields: set[str
     masked: Final[dict[str, object]] = {}
     for key, value in data.items():
         if value is not None and key in sensitive_fields and isinstance(value, str):
-            masked[key] = _sensitive_masker._mask_value(value)
+            masked[key] = _sensitive_masker.mask_value(value)
         else:
             masked[key] = value
     return masked
 
 
-def _get_current_env_values(env_var_mapping: dict[str, str]) -> dict[str, str | None]:
+def get_current_env_values(env_var_mapping: dict[str, str]) -> dict[str, str | None]:
     """Read current env var values as fallback when no DB record exists."""
-    values: Final = {}
-    for field_name, env_var_name in env_var_mapping.items():
-        env_value = os.environ.get(env_var_name)
-        values[field_name] = env_value
-    return values
+    return {field_name: os.environ.get(env_var_name) for field_name, env_var_name in env_var_mapping.items()}
+
+
+_get_current_env_values: Final = get_current_env_values
 
 
 class _JsonSchemaField(TypedDict, total=False):
     type: ReadOnly[str]
     anyOf: ReadOnly[Sequence["_JsonSchemaField"]]
     description: ReadOnly[str]
+
+
+class _ModelJsonSchema(Protocol):
+    @overload
+    def get(
+        self, key: Literal["properties"], default: Mapping[str, _JsonSchemaField]
+    ) -> Mapping[str, _JsonSchemaField]: ...
+
+    @overload
+    def get(self, key: Literal["description"], default: str) -> str: ...
 
 
 def _extract_field_type(field_info: _JsonSchemaField) -> str:
@@ -218,8 +232,8 @@ def _extract_field_type(field_info: _JsonSchemaField) -> str:
 
 def _build_field_schema(model_class: type[BaseModel]) -> dict[str, object]:
     """Build field_schema dict from a Pydantic model for UI rendering."""
-    schema: Final = TypeAdapter(model_class).json_schema(by_alias=True)
-    raw_properties: Final[Mapping[str, _JsonSchemaField]] = schema.get("properties", {})
+    schema: Final = require_attributes(TypeAdapter(model_class).json_schema(by_alias=True), _ModelJsonSchema, "get")
+    raw_properties: Final = schema.get("properties", {})
     properties: Final = {}
     for field_name, field_info in raw_properties.items():
         properties[field_name] = {
@@ -232,14 +246,17 @@ def _build_field_schema(model_class: type[BaseModel]) -> dict[str, object]:
     }
 
 
-def _parse_config_value(raw: str | Mapping[str, object]) -> dict[str, object]:
+def parse_config_value(raw: str | Mapping[str, object]) -> dict[str, object]:
     """Parse a config_value from DB (may be JSON string or dict)."""
     if isinstance(raw, str):
         return safe_json_loads(raw, default={})
     return dict(raw)
 
 
-def _set_env_vars(
+_parse_config_value: Final = parse_config_value
+
+
+def set_env_vars(
     config_data: Mapping[str, object],
     env_var_mapping: Mapping[str, str] = HASHICORP_ENV_VAR_MAPPING,
 ) -> None:
@@ -252,24 +269,30 @@ def _set_env_vars(
             os.environ.pop(env_var_name, None)
 
 
-def _clear_hashicorp_vault_state(proxy_config: "ProxyConfig") -> None:
+_set_env_vars: Final = set_env_vars
+
+
+def clear_hashicorp_vault_state(proxy_config: "ProxyConfig") -> None:
     """Clear all Hashicorp Vault state: env vars, secret manager, and change-detection cache."""
-    _set_env_vars({})
+    set_env_vars({})
     if litellm._key_management_system == KeyManagementSystem.HASHICORP_VAULT:
         litellm.secret_manager_client = None
         litellm._key_management_system = None
     proxy_config._last_hashicorp_vault_config = None  # pyright: ignore[reportPrivateUsage]  # proxy-internal change-detection cache
 
 
+_clear_hashicorp_vault_state: Final = clear_hashicorp_vault_state
+
+
 def _snapshot_cyberark_boot_env(proxy_config: "ProxyConfig") -> None:
     """Capture deployment-provided CYBERARK_* env vars once, before the first DB-driven overwrite."""
     if proxy_config._cyberark_boot_env is None:  # pyright: ignore[reportPrivateUsage]  # proxy-internal boot snapshot
-        proxy_config._cyberark_boot_env = _get_current_env_values(CYBERARK_ENV_VAR_MAPPING)  # pyright: ignore[reportPrivateUsage]  # proxy-internal boot snapshot
+        proxy_config._cyberark_boot_env = get_current_env_values(CYBERARK_ENV_VAR_MAPPING)  # pyright: ignore[reportPrivateUsage]  # proxy-internal boot snapshot
 
 
 def _restore_cyberark_runtime(proxy_config: "ProxyConfig", env_values: Mapping[str, str | None]) -> None:
     """Restore CYBERARK_* env vars and reinitialize (or drop) the secret manager to match them."""
-    _set_env_vars(env_values, CYBERARK_ENV_VAR_MAPPING)
+    set_env_vars(env_values, CYBERARK_ENV_VAR_MAPPING)
     if env_values.get("cyberark_api_base"):
         try:
             proxy_config.initialize_secret_manager(key_management_system="cyberark")
@@ -299,6 +322,9 @@ def _clear_cyberark_state(proxy_config: "ProxyConfig") -> None:
     proxy_config._last_cyberark_config = None  # pyright: ignore[reportPrivateUsage]  # proxy-internal helper, mirrors hashicorp endpoint usage
 
 
+_STORED_CONFIG_VALUE: Final = TypeAdapter(dict[str, object])
+
+
 async def _persist_cyberark_config(
     prisma_client: "PrismaClient",
     proxy_config: "ProxyConfig",
@@ -319,7 +345,7 @@ async def _persist_cyberark_config(
             },
         },
     )
-    return safe_json_loads(config_value)
+    return _STORED_CONFIG_VALUE.validate_python(safe_json_loads(config_value))
 
 
 # --- Hashicorp Vault endpoints ---
@@ -367,15 +393,19 @@ async def update_hashicorp_vault_config(
     existing_decrypted: dict[str, object] | None = None
     env_values: dict[str, str | None] = {}
     if existing_record is not None and existing_record.config_value is not None:
-        existing_data: Final = _parse_config_value(existing_record.config_value)
-        existing_decrypted = proxy_config._decrypt_db_variables(existing_data)
+        existing_data: Final = parse_config_value(existing_record.config_value)
+        existing_decrypted = (  # rebind-ok: pre-existing rebinding on a rename-only line
+            proxy_config.decrypt_db_variables(existing_data)
+        )
         for field in HASHICORP_ENV_VAR_MAPPING:
             if field not in config_data and existing_decrypted.get(field):
                 config_data[field] = existing_decrypted[field]
     else:
         # No DB record (or DB record with null config_value) — merge from
         # current env vars instead.
-        env_values = _get_current_env_values(HASHICORP_ENV_VAR_MAPPING)
+        env_values = get_current_env_values(  # rebind-ok: pre-existing rebinding on a rename-only line
+            HASHICORP_ENV_VAR_MAPPING
+        )
         for field in HASHICORP_ENV_VAR_MAPPING:
             if field not in config_data and env_values.get(field):
                 config_data[field] = env_values[field]
@@ -404,15 +434,15 @@ async def update_hashicorp_vault_config(
         )
 
     # Snapshot current env vars so we can restore on failure
-    previous_env: Final = _get_current_env_values(HASHICORP_ENV_VAR_MAPPING)
+    previous_env: Final = get_current_env_values(HASHICORP_ENV_VAR_MAPPING)
 
     # Set env vars and verify the secret manager can initialize before persisting
-    _set_env_vars(config_data)
+    set_env_vars(config_data)
 
     try:
         proxy_config.initialize_secret_manager(key_management_system="hashicorp_vault")
     except Exception as e:
-        _set_env_vars(previous_env)
+        set_env_vars(previous_env)
         verbose_proxy_logger.exception("Error reinitializing Hashicorp Vault secret manager: %s", str(e))
         raise HTTPException(
             status_code=500,
@@ -420,7 +450,7 @@ async def update_hashicorp_vault_config(
         )
 
     # Only persist to DB after successful init
-    encrypted_data: Final = proxy_config._encrypt_env_variables(config_data)
+    encrypted_data: Final = proxy_config.encrypt_env_variables(config_data)
     config_value: Final = safe_dumps(encrypted_data)
     await _config_overrides_table(prisma_client).upsert(
         where={"config_type": "hashicorp_vault"},
@@ -474,11 +504,11 @@ async def get_hashicorp_vault_config(
     Get current Hashicorp Vault configuration.
     Returns decrypted values from DB, or falls back to current env vars.
     """
-    from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
+    from litellm.proxy.management_endpoints.common_utils import user_api_key_has_admin_view
     from litellm.proxy.proxy_server import prisma_client, proxy_config
 
     # Admin Viewer follows the read-parity rule.
-    if not _user_has_admin_view(user_api_key_dict):
+    if not user_api_key_has_admin_view(user_api_key_dict):
         raise HTTPException(
             status_code=403,
             detail="Only admin users can view config overrides",
@@ -498,10 +528,10 @@ async def get_hashicorp_vault_config(
     )
 
     if db_record is not None and db_record.config_value is not None:
-        config_data: Final = _parse_config_value(db_record.config_value)
+        config_data: Final = parse_config_value(db_record.config_value)
 
         # Decrypt then mask sensitive fields so plaintext secrets are never sent to the UI
-        decrypted_data: Final[Mapping[str, object]] = proxy_config._decrypt_db_variables(config_data)
+        decrypted_data: Final[Mapping[str, object]] = proxy_config.decrypt_db_variables(config_data)
         masked_data: Final = _mask_sensitive_fields(decrypted_data, HASHICORP_SENSITIVE_FIELDS)
 
         return ConfigOverrideSettingsResponse(
@@ -511,7 +541,7 @@ async def get_hashicorp_vault_config(
         )
 
     # Fallback to env vars — also mask sensitive values
-    env_values: Final = _get_current_env_values(HASHICORP_ENV_VAR_MAPPING)
+    env_values: Final = get_current_env_values(HASHICORP_ENV_VAR_MAPPING)
     masked_env_values: Final = _mask_sensitive_fields(env_values, HASHICORP_SENSITIVE_FIELDS)
 
     return ConfigOverrideSettingsResponse(
@@ -556,7 +586,9 @@ async def delete_hashicorp_vault_config(
     before_config: dict[str, object] | None = None
     if existing_record is not None and existing_record.config_value is not None:
         try:
-            before_config = proxy_config._decrypt_db_variables(_parse_config_value(existing_record.config_value))
+            before_config = (  # rebind-ok: pre-existing rebinding on a rename-only line
+                proxy_config.decrypt_db_variables(parse_config_value(existing_record.config_value))
+            )
         except Exception:
             before_config = None
 
@@ -568,7 +600,7 @@ async def delete_hashicorp_vault_config(
     except RecordNotFoundError:
         verbose_proxy_logger.debug("No existing Hashicorp Vault config record to delete")
 
-    _clear_hashicorp_vault_state(proxy_config)
+    clear_hashicorp_vault_state(proxy_config)
 
     # Only emit audit log if a row was actually removed; an idempotent
     # delete on a non-existent row produces no security-relevant change.
@@ -688,13 +720,13 @@ async def update_cyberark_config(
     existing_decrypted: dict[str, object] | None = None  # mutable-ok: DB payload  # rebind-ok: set when record exists
     env_values: dict[str, str | None] = {}  # mutable-ok: env snapshot  # rebind-ok: populated when no DB record exists
     if existing_record is not None and existing_record.config_value is not None:
-        existing_data: Final = _parse_config_value(existing_record.config_value)
+        existing_data: Final = parse_config_value(existing_record.config_value)
         existing_decrypted = proxy_config._decrypt_db_variables(existing_data)  # pyright: ignore[reportPrivateUsage]  # rebind-ok: populated when a prior record decrypts
         for field in CYBERARK_ENV_VAR_MAPPING:
             if field not in config_data and existing_decrypted.get(field):
                 config_data[field] = existing_decrypted[field]
     else:
-        env_values = _get_current_env_values(CYBERARK_ENV_VAR_MAPPING)  # rebind-ok: populated when no DB record exists
+        env_values = get_current_env_values(CYBERARK_ENV_VAR_MAPPING)  # rebind-ok: populated when no DB record exists
         for field in CYBERARK_ENV_VAR_MAPPING:
             if field not in config_data and env_values.get(field):
                 config_data[field] = env_values[field]
@@ -719,13 +751,13 @@ async def update_cyberark_config(
         )
 
     _snapshot_cyberark_boot_env(proxy_config)
-    previous_env: Final = _get_current_env_values(CYBERARK_ENV_VAR_MAPPING)
-    _set_env_vars(config_data, CYBERARK_ENV_VAR_MAPPING)
+    previous_env: Final = get_current_env_values(CYBERARK_ENV_VAR_MAPPING)
+    set_env_vars(config_data, CYBERARK_ENV_VAR_MAPPING)
 
     try:
         proxy_config.initialize_secret_manager(key_management_system="cyberark")
     except Exception as e:  # noqa: BLE001  # any init failure must roll back env vars
-        _set_env_vars(previous_env, CYBERARK_ENV_VAR_MAPPING)
+        set_env_vars(previous_env, CYBERARK_ENV_VAR_MAPPING)
         verbose_proxy_logger.exception("Error reinitializing CyberArk secret manager: %s", str(e))
         raise HTTPException(
             status_code=500,
@@ -776,11 +808,11 @@ async def get_cyberark_config(
     Sensitive fields are masked before leaving the server.
     """
     from litellm.proxy.management_endpoints.common_utils import (
-        _user_has_admin_view,  # pyright: ignore[reportPrivateUsage]  # proxy-internal helper, mirrors hashicorp endpoint usage
+        user_api_key_has_admin_view,  # pyright: ignore[reportPrivateUsage]  # proxy-internal helper, mirrors hashicorp endpoint usage
     )
     from litellm.proxy.proxy_server import prisma_client, proxy_config
 
-    if not _user_has_admin_view(user_api_key_dict):
+    if not user_api_key_has_admin_view(user_api_key_dict):
         raise HTTPException(
             status_code=403,
             detail="Only admin users can view config overrides",
@@ -797,7 +829,7 @@ async def get_cyberark_config(
     db_record: Final = await _config_overrides_table(prisma_client).find_unique(where={"config_type": "cyberark"})
 
     if db_record is not None and db_record.config_value is not None:
-        config_data: Final = _parse_config_value(db_record.config_value)
+        config_data: Final = parse_config_value(db_record.config_value)
         decrypted_data: Final[Mapping[str, object]] = proxy_config._decrypt_db_variables(config_data)  # pyright: ignore[reportPrivateUsage]  # proxy-internal helper, mirrors hashicorp endpoint usage
         masked_data: Final = _mask_sensitive_fields(decrypted_data, CYBERARK_SENSITIVE_FIELDS)
 
@@ -807,7 +839,7 @@ async def get_cyberark_config(
             field_schema=field_schema,
         )
 
-    env_values: Final = _get_current_env_values(CYBERARK_ENV_VAR_MAPPING)
+    env_values: Final = get_current_env_values(CYBERARK_ENV_VAR_MAPPING)
     masked_env_values: Final = _mask_sensitive_fields(env_values, CYBERARK_SENSITIVE_FIELDS)
 
     return ConfigOverrideSettingsResponse(
@@ -848,7 +880,7 @@ async def delete_cyberark_config(
     before_config: dict[str, object] | None = None  # mutable-ok: audit snapshot  # rebind-ok: set when decrypts
     if existing_record is not None and existing_record.config_value is not None:
         try:
-            before_config = proxy_config._decrypt_db_variables(_parse_config_value(existing_record.config_value))  # pyright: ignore[reportPrivateUsage]  # rebind-ok: populated when the prior record decrypts
+            before_config = proxy_config._decrypt_db_variables(parse_config_value(existing_record.config_value))  # pyright: ignore[reportPrivateUsage]  # rebind-ok: populated when the prior record decrypts
         except Exception:  # noqa: BLE001  # undecryptable prior config must not block deletion
             before_config = None  # rebind-ok: reset when decryption fails
 

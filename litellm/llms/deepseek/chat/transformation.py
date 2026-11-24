@@ -3,63 +3,108 @@ Translates from OpenAI's `/v1/chat/completions` to DeepSeek's `/v1/chat/completi
 """
 
 from collections.abc import Coroutine, Mapping, Sequence
-from typing import Any, Final, Literal, cast, overload
+from types import MappingProxyType
+from typing import Final, Literal, cast, overload
 
 import litellm
+from litellm.litellm_core_utils.allowed_tools_tool_choice import HostedMcpToolHandling
+from litellm.litellm_core_utils.core_helpers import SupportsGet, as_object_list, as_str_mapping, require_get
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
     extract_search_results_text,
 )
+from litellm.litellm_core_utils.reasoning_effort_utils import OPAQUE_VALUE, warn_dropped_reasoning
+from litellm.litellm_core_utils.tool_fields import tool_params_without_hosted_mcp
+from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.utils import supports_reasoning, supports_vision
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
+SUPPORTED_REASONING_EFFORTS: Final = ("minimal", "low", "medium", "high", "xhigh", "max", "ultra")
+_NO_BUDGET_REASON: Final = "DeepSeek takes thinking only as enabled or disabled, with no budget."
+
+
+def _warn_on_dropped_budget(thinking: object, model: str) -> None:
+    fields: Final = as_str_mapping(thinking)
+    if fields is None or fields.get("type") != "enabled" or "budget_tokens" not in fields:
+        return
+    warn_dropped_reasoning(
+        "thinking.budget_tokens", fields["budget_tokens"], model, _NO_BUDGET_REASON, drop_params_gated=False
+    )
+
+
+def _thinking_type(thinking: object, reasoning_effort: object) -> str | None:
+    requested: Final = as_str_mapping(thinking)
+    requested_type: Final = None if requested is None else requested.get("type")
+    if isinstance(requested_type, str) and requested_type in ("enabled", "disabled"):
+        return requested_type
+    if reasoning_effort is None:
+        return None
+    return "disabled" if reasoning_effort == "none" else "enabled"
+
+
+def deepseek_reasoning_params(thinking: object, reasoning_effort: object) -> Mapping[str, object]:
+    """DeepSeek takes `{"type": "enabled"}` or `{"type": "disabled"}` with no budget_tokens. A thinking
+    param wins. Otherwise `reasoning_effort="none"` turns thinking off and any other effort turns it on,
+    and a supported effort is sent only while thinking is on.
+
+    Reference: https://api-docs.deepseek.com/guides/thinking_mode
+    """
+    thinking_type: Final = _thinking_type(thinking, reasoning_effort)
+    if thinking_type is None:
+        return MappingProxyType({})
+    if (
+        thinking_type == "enabled"
+        and isinstance(reasoning_effort, str)
+        and reasoning_effort in SUPPORTED_REASONING_EFFORTS
+    ):
+        return MappingProxyType({"thinking": {"type": thinking_type}, "reasoning_effort": reasoning_effort})
+    return MappingProxyType({"thinking": {"type": thinking_type}})
+
+
+def _getter_of(value: object, kind: type[object]) -> SupportsGet | None:
+    """The value's key reader when it is an instance of kind, else None."""
+    return require_get(value) if isinstance(value, kind) else None
+
 
 class DeepSeekChatConfig(OpenAIGPTConfig):
-    def get_supported_openai_params(self, model: str) -> list:
+    def _flattens_content_lists(self) -> bool:
+        return True
+
+    def get_supported_openai_params(self, model: str) -> list[str]:
         """
         DeepSeek reasoner models support thinking parameter.
         """
-        params: Final = super().get_supported_openai_params(model)
-        params.extend(["thinking", "reasoning_effort"])
-        return params
+        return [*super().get_supported_openai_params(model), "thinking", "reasoning_effort"]
+
+    def hosted_mcp_tool_handling(self, model: str) -> HostedMcpToolHandling:
+        return "drops"
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: dict[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
-        """
-        Map OpenAI params to DeepSeek params.
-
-        Handles `thinking` and `reasoning_effort` parameters for DeepSeek reasoner models.
-        DeepSeek supports `{"type": "enabled"}` and `{"type": "disabled"}` - no budget_tokens
-        like Anthropic. `reasoning_effort="none"` is the OpenAI-style way to ask for thinking
-        off, so it maps to `{"type": "disabled"}`; any other effort keeps thinking on.
-
-        Reference: https://api-docs.deepseek.com/guides/thinking_mode
-        """
-        # Let parent handle standard params first
-        optional_params = super().map_openai_params(non_default_params, optional_params, model, drop_params)
-
-        # Pop thinking/reasoning_effort from optional_params first (parent may have added them)
-        # Then re-add only if valid for DeepSeek
+    ) -> dict[str, object]:
+        optional_params = super().map_openai_params(
+            tool_params_without_hosted_mcp(
+                non_default_params,
+                model=model,
+                route="deepseek",
+                drop_params=drop_params,
+                handling=self.hosted_mcp_tool_handling(model),
+            ),
+            optional_params,
+            model,
+            drop_params,
+        )
         thinking_value: Final = optional_params.pop("thinking", None)
         reasoning_effort: Final = optional_params.pop("reasoning_effort", None)
-
-        # Handle thinking parameter - accept both enabled and disabled, ignore budget_tokens
-        if isinstance(thinking_value, dict) and thinking_value.get("type") in ("enabled", "disabled"):
-            optional_params["thinking"] = {"type": thinking_value["type"]}
-
-        # Otherwise fall back to reasoning_effort: "none" disables, anything else enables
-        elif reasoning_effort is not None:
-            optional_params["thinking"] = {"type": "disabled" if reasoning_effort == "none" else "enabled"}
-
-        return optional_params
+        _warn_on_dropped_budget(OPAQUE_VALUE.validate_python(thinking_value), model)
+        return {**optional_params, **deepseek_reasoning_params(thinking_value, reasoning_effort)}
 
     def _fill_reasoning_content(self, messages: list[AllMessageValues]) -> list[AllMessageValues]:
         """
@@ -104,7 +149,7 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
     @overload
     def _transform_messages(
         self, messages: list[AllMessageValues], model: str, is_async: Literal[True]
-    ) -> Coroutine[Any, Any, list[AllMessageValues]]: ...
+    ) -> Coroutine[object, object, list[AllMessageValues]]: ...
 
     @overload
     def _transform_messages(
@@ -116,7 +161,7 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
 
     def _transform_messages(
         self, messages: list[AllMessageValues], model: str, is_async: bool = False
-    ) -> list[AllMessageValues] | Coroutine[Any, Any, list[AllMessageValues]]:
+    ) -> list[AllMessageValues] | Coroutine[object, object, list[AllMessageValues]]:
         """
         DeepSeek vision models accept image_url content blocks in user
         messages (https://api-docs.deepseek.com/guides/vision), so those
@@ -170,18 +215,20 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
             return False
         if not all(self._is_forwardable_block(block) for block in content):
             return False
-        return any(isinstance(block, dict) and block.get("type") == "image_url" for block in content)
+        block_fields: Final = (_getter_of(block, dict) for block in content)
+        return any(fields is not None and fields.get("type") == "image_url" for fields in block_fields)
 
     @staticmethod
     def _is_forwardable_block(block: object) -> bool:
         """A dict block typed text or image_url that carries its payload."""
-        if not isinstance(block, dict):
+        fields: Final = _getter_of(block, dict)
+        if fields is None:
             return False
-        block_type: Final = block.get("type")
+        block_type: Final = fields.get("type")
         if block_type == "image_url":
-            return DeepSeekChatConfig._is_image_url_payload(block.get("image_url"))
+            return DeepSeekChatConfig._is_image_url_payload(fields.get("image_url"))
         if block_type == "text":
-            return isinstance(block.get("text"), str)
+            return isinstance(fields.get("text"), str)
         return False
 
     @staticmethod
@@ -189,9 +236,10 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         """A url string or an object carrying one, per the OpenAI image_url shape."""
         if isinstance(payload, str):
             return bool(payload)
-        if not isinstance(payload, Mapping):
+        fields: Final = _getter_of(payload, Mapping)
+        if fields is None:
             return False
-        url: Final = payload.get("url")
+        url: Final = fields.get("url")
         return isinstance(url, str) and bool(url)
 
     def _with_search_results_text_block(self, message: AllMessageValues, content: Sequence[object]) -> AllMessageValues:
@@ -211,21 +259,21 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         }
         return cast(AllMessageValues, forwarded)  # cast-ok: TypedDict spread narrows to dict
 
-    def _thinking_mode_active(self, model: str, optional_params: dict) -> bool:
+    def _thinking_mode_active(self, model: str, optional_params: Mapping[str, object]) -> bool:
         """
         Returns True only when thinking mode is actually active for this request:
           - model supports reasoning (capability check)
           - user explicitly passed thinking={"type": "enabled"} (opt-in check)
         """
-        thinking: Final = optional_params.get("thinking")
+        thinking: Final = _getter_of(optional_params.get("thinking"), dict)
         return (
             supports_reasoning(model=model, custom_llm_provider="deepseek")
-            and isinstance(thinking, dict)
+            and thinking is not None
             and thinking.get("type") == "enabled"
         )
 
     @staticmethod
-    def _drop_unsupported_tools(optional_params: dict) -> dict:
+    def drop_unsupported_tools(optional_params: dict[str, object]) -> dict[str, object]:
         """
         DeepSeek's /chat/completions only accepts tools of type "function".
 
@@ -239,41 +287,45 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         When a specific `tool_choice` points at a dropped tool, clear it so the
         sanitized request does not reference a tool DeepSeek will never receive.
         """
-        tools: Final = optional_params.get("tools")
-        if not isinstance(tools, list) or not tools:
+        tools: Final = as_object_list(optional_params.get("tools"))
+        if not tools:
             return optional_params
+        sent_tools: Final[tuple[object, ...]] = tuple(tools)
 
         def _is_function_tool(tool: object) -> bool:
-            return isinstance(tool, dict) and tool.get("type") == "function"
+            fields: Final = _getter_of(tool, dict)
+            return fields is not None and fields.get("type") == "function"
 
         def _get_function_tool_name(tool: object) -> str | None:
-            if not isinstance(tool, dict):
+            fields: Final = _getter_of(tool, dict)
+            if fields is None:
                 return None
-            function: Final = tool.get("function")
-            if not isinstance(function, dict):
+            function: Final = _getter_of(fields.get("function"), dict)
+            if function is None:
                 return None
             name: Final = function.get("name")
             return name if isinstance(name, str) else None
 
         def _tool_choice_matches_function_tool(tool_choice: object, function_tool_names: set[str]) -> bool:
-            if not isinstance(tool_choice, dict):
+            fields: Final = _getter_of(tool_choice, dict)
+            if fields is None:
                 return True
-            if tool_choice.get("type") != "function":
+            if fields.get("type") != "function":
                 return False
-            function: Final = tool_choice.get("function")
-            if not isinstance(function, dict):
+            function: Final = _getter_of(fields.get("function"), dict)
+            if function is None:
                 return False
             name: Final = function.get("name")
             return isinstance(name, str) and name in function_tool_names
 
-        function_tools: Final = [tool for tool in tools if _is_function_tool(tool)]
-        if len(function_tools) == len(tools):
+        function_tools: Final = [tool for tool in sent_tools if _is_function_tool(tool)]
+        if len(function_tools) == len(sent_tools):
             return optional_params
 
         dropped_types: Final = sorted(
             {
-                str(tool.get("type")) if isinstance(tool, dict) else type(tool).__name__
-                for tool in tools
+                type(tool).__name__ if fields is None else str(fields.get("type"))
+                for tool, fields in ((tool, _getter_of(tool, dict)) for tool in sent_tools)
                 if not _is_function_tool(tool)
             }
         )
@@ -297,10 +349,10 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
+        headers: dict[str, object],
+    ) -> dict[str, object]:
         """
         Ensures `reasoning_content` is forwarded on assistant messages for
         multi-turn thinking-mode conversations (issue #28045).
@@ -310,7 +362,7 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         (user explicitly enabled it), preventing spurious injection on models
         like deepseek-v3.2 that support thinking as opt-in but not always-on.
         """
-        optional_params = self._drop_unsupported_tools(optional_params)
+        optional_params = self.drop_unsupported_tools(optional_params)
         if self._thinking_mode_active(model=model, optional_params=optional_params):
             messages = self._fill_reasoning_content(messages)
         return super().transform_request(
@@ -325,15 +377,15 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
+        headers: dict[str, object],
+    ) -> dict[str, object]:
         """
         Async equivalent of transform_request — applies the same reasoning_content
         fix for multi-turn thinking-mode conversations.
         """
-        optional_params = self._drop_unsupported_tools(optional_params)
+        optional_params = self.drop_unsupported_tools(optional_params)
         if self._thinking_mode_active(model=model, optional_params=optional_params):
             messages = self._fill_reasoning_content(messages)
         return await super().async_transform_request(
@@ -356,17 +408,11 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         """
         If api_base is not provided, use the default DeepSeek /chat/completions endpoint.
         """
-        if not api_base:
-            api_base = "https://api.deepseek.com/beta"
-
-        if not api_base.endswith("/chat/completions"):
-            api_base = f"{api_base}/chat/completions"
-
-        return api_base
+        return ensure_api_route(api_base or "https://api.deepseek.com/beta", "chat/completions")

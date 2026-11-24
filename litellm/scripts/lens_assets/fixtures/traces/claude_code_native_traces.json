@@ -1,0 +1,2147 @@
+{
+  "resourceSpans": [
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "claude-code"
+            }
+          },
+          {
+            "key": "lens.session.capture",
+            "value": {
+              "stringValue": "true"
+            }
+          }
+        ]
+      },
+      "scopeSpans": [
+        {
+          "scope": {
+            "name": "com.anthropic.claude_code.tracing",
+            "version": "1.0.0"
+          },
+          "spans": [
+            {
+              "traceId": "ced683bb1985e31a6a67d7180245ad0a",
+              "spanId": "ccceaaa5c0206f1d",
+              "parentSpanId": "7602ccb75a2365b7",
+              "name": "claude_code.llm_request",
+              "kind": 1,
+              "startTimeUnixNano": "1791241292721000000",
+              "endTimeUnixNano": "1791241295512978500",
+              "attributes": [
+                {
+                  "key": "session.id",
+                  "value": {
+                    "stringValue": "session-native-fixture"
+                  }
+                },
+                {
+                  "key": "span.type",
+                  "value": {
+                    "stringValue": "llm_request"
+                  }
+                },
+                {
+                  "key": "model",
+                  "value": {
+                    "stringValue": "claude-opus-5-5"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "claude-opus-5-5"
+                  }
+                },
+                {
+                  "key": "query_source_safe",
+                  "value": {
+                    "stringValue": "repl_main_thread"
+                  }
+                },
+                {
+                  "key": "duration_ms",
+                  "value": {
+                    "intValue": "2792"
+                  }
+                },
+                {
+                  "key": "input_tokens",
+                  "value": {
+                    "intValue": "2"
+                  }
+                },
+                {
+                  "key": "output_tokens",
+                  "value": {
+                    "intValue": "180"
+                  }
+                },
+                {
+                  "key": "success",
+                  "value": {
+                    "boolValue": true
+                  }
+                },
+                {
+                  "key": "first_content_ms",
+                  "value": {
+                    "intValue": "1541"
+                  }
+                }
+              ],
+              "events": [
+                {
+                  "timeUnixNano": "1791241292933618166",
+                  "name": "gen_ai.request.attempt",
+                  "attributes": []
+                }
+              ],
+              "status": {},
+              "flags": 257
+            },
+            {
+              "traceId": "ced683bb1985e31a6a67d7180245ad0a",
+              "spanId": "d6db221c3ceb82c8",
+              "parentSpanId": "7602ccb75a2365b7",
+              "name": "claude_code.llm_request",
+              "kind": 1,
+              "startTimeUnixNano": "1791241292354000000",
+              "endTimeUnixNano": "1791241295580363750",
+              "attributes": [
+                {
+                  "key": "session.id",
+                  "value": {
+                    "stringValue": "session-native-fixture"
+                  }
+                },
+                {
+                  "key": "span.type",
+                  "value": {
+                    "stringValue": "llm_request"
+                  }
+                },
+                {
+                  "key": "model",
+                  "value": {
+                    "stringValue": "claude-opus-5-5"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "claude-opus-5-5"
+                  }
+                },
+                {
+                  "key": "query_source_safe",
+                  "value": {
+                    "stringValue": "generate_session_title"
+                  }
+                },
+                {
+                  "key": "duration_ms",
+                  "value": {
+                    "intValue": "3226"
+                  }
+                },
+                {
+                  "key": "input_tokens",
+                  "value": {
+                    "intValue": "4"
+                  }
+                },
+                {
+                  "key": "output_tokens",
+                  "value": {
+                    "intValue": "26"
+                  }
+                },
+                {
+                  "key": "success",
+                  "value": {
+                    "boolValue": true
+                  }
+                },
+                {
+                  "key": "first_content_ms",
+                  "value": {
+                    "intValue": "2570"
+                  }
+                }
+              ],
+              "events": [
+                {
+                  "timeUnixNano": "1791241292927035916",
+                  "name": "gen_ai.request.attempt",
+                  "attributes": []
+                }
+              ],
+              "status": {},
+              "flags": 257
+            },
+            {
+              "traceId": "ced683bb1985e31a6a67d7180245ad0a",
+              "spanId": "9ecb187e93e4004c",
+              "parentSpanId": "cd517ce2bd6e13db",
+              "name": "claude_code.tool.execution",
+              "kind": 1,
+              "startTimeUnixNano": "1791241295575000000",
+              "endTimeUnixNano": "1791241295607946167",
+              "attributes": [
+                {
+                  "key": "session.id",
+                  "value": {
+                    "stringValue": "session-native-fixture"
+                  }
+                },
+                {
+                  "key": "span.type",
+                  "value": {
+                    "stringValue": "tool.execution"
+                  }
+                },
+                {
+                  "key": "tool_use_id",
+                  "value": {
+                    "stringValue": "toolu_01DjFLM1ADPfr66bDxajk3qr"
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.call.id",
+                  "value": {
+                    "stringValue": "toolu_01DjFLM1ADPfr66bDxajk3qr"
+                  }
+                },
+                {
+                  "key": "duration_ms",
+                  "value": {
+                    "intValue": "33"
+                  }
+                },
+                {
+                  "key": "success",
+                  "value": {
+                    "boolValue": true
+                  }
+                }
+              ],
+              "status": {},
+              "flags": 257
+            },
+            {
+              "traceId": "ced683bb1985e31a6a67d7180245ad0a",
+              "spanId": "cd517ce2bd6e13db",
+              "parentSpanId": "7602ccb75a2365b7",
+              "name": "claude_code.tool",
+              "kind": 1,
+              "startTimeUnixNano": "1791241295417000000",
+              "endTimeUnixNano": "1791241295608620166",
+              "attributes": [
+                {
+                  "key": "session.id",
+                  "value": {
+                    "stringValue": "session-native-fixture"
+                  }
+                },
+                {
+                  "key": "span.type",
+                  "value": {
+                    "stringValue": "tool"
+                  }
+                },
+                {
+                  "key": "tool_name",
+                  "value": {
+                    "stringValue": "Read"
+                  }
+                },
+                {
+                  "key": "file_path",
+                  "value": {
+                    "stringValue": "/workspace/README.txt"
+                  }
+                },
+                {
+                  "key": "tool_use_id",
+                  "value": {
+                    "stringValue": "toolu_01DjFLM1ADPfr66bDxajk3qr"
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.call.id",
+                  "value": {
+                    "stringValue": "toolu_01DjFLM1ADPfr66bDxajk3qr"
+                  }
+                },
+                {
+                  "key": "duration_ms",
+                  "value": {
+                    "intValue": "191"
+                  }
+                }
+              ],
+              "events": [
+                {
+                  "timeUnixNano": "1791241295606849208",
+                  "name": "tool.output",
+                  "attributes": [
+                    {
+                      "key": "file_path",
+                      "value": {
+                        "stringValue": "/workspace/README.txt"
+                      }
+                    },
+                    {
+                      "key": "content",
+                      "value": {
+                        "stringValue": "This is a synthetic fixture for testing coding-session capture.\nMarker: LENS-REPLAY-ALPHA\nNo external services or user files should be accessed.\n"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "status": {},
+              "flags": 257
+            },
+            {
+              "traceId": "ced683bb1985e31a6a67d7180245ad0a",
+              "spanId": "5ab9054910115fe2",
+              "parentSpanId": "cdb2d18f0d8dc5f6",
+              "name": "claude_code.tool.execution",
+              "kind": 1,
+              "startTimeUnixNano": "1791241295649000000",
+              "endTimeUnixNano": "1791241297950476917",
+              "attributes": [
+                {
+                  "key": "session.id",
+                  "value": {
+                    "stringValue": "session-native-fixture"
+                  }
+                },
+                {
+                  "key": "span.type",
+                  "value": {
+                    "stringValue": "tool.execution"
+                  }
+                },
+                {
+                  "key": "tool_use_id",
+                  "value": {
+                    "stringValue": "toolu_01JZbrSq8dWChvycxmKia6T8"
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.call.id",
+                  "value": {
+                    "stringValue": "toolu_01JZbrSq8dWChvycxmKia6T8"
+                  }
+                },
+                {
+                  "key": "duration_ms",
+                  "value": {
+                    "intValue": "2300"
+                  }
+                },
+                {
+                  "key": "success",
+                  "value": {
+                    "boolValue": false
+                  }
+                },
+                {
+                  "key": "error",
+                  "value": {
+                    "stringValue": "Shell command failed"
+                  }
+                }
+              ],
+              "status": {
+                "message": "Shell command failed",
+                "code": 2
+              },
+              "flags": 257
+            },
+            {
+              "traceId": "ced683bb1985e31a6a67d7180245ad0a",
+              "spanId": "cdb2d18f0d8dc5f6",
+              "parentSpanId": "7602ccb75a2365b7",
+              "name": "claude_code.tool",
+              "kind": 1,
+              "startTimeUnixNano": "1791241295631000000",
+              "endTimeUnixNano": "1791241297951963375",
+              "attributes": [
+                {
+                  "key": "session.id",
+                  "value": {
+                    "stringValue": "session-native-fixture"
+                  }
+                },
+                {
+                  "key": "span.type",
+                  "value": {
+                    "stringValue": "tool"
+                  }
+                },
+                {
+                  "key": "tool_name",
+                  "value": {
+                    "stringValue": "Bash"
+                  }
+                },
+                {
+                  "key": "full_command",
+                  "value": {
+                    "stringValue": "echo MINIMAL-EXPECTED; exit 3"
+                  }
+                },
+                {
+                  "key": "tool_use_id",
+                  "value": {
+                    "stringValue": "toolu_01JZbrSq8dWChvycxmKia6T8"
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.call.id",
+                  "value": {
+                    "stringValue": "toolu_01JZbrSq8dWChvycxmKia6T8"
+                  }
+                },
+                {
+                  "key": "duration_ms",
+                  "value": {
+                    "intValue": "2321"
+                  }
+                }
+              ],
+              "status": {},
+              "flags": 257
+            },
+            {
+              "traceId": "ced683bb1985e31a6a67d7180245ad0a",
+              "spanId": "30821b86f9343690",
+              "parentSpanId": "7602ccb75a2365b7",
+              "name": "claude_code.llm_request",
+              "kind": 1,
+              "startTimeUnixNano": "1791241298027000000",
+              "endTimeUnixNano": "1791241300183680708",
+              "attributes": [
+                {
+                  "key": "session.id",
+                  "value": {
+                    "stringValue": "session-native-fixture"
+                  }
+                },
+                {
+                  "key": "span.type",
+                  "value": {
+                    "stringValue": "llm_request"
+                  }
+                },
+                {
+                  "key": "model",
+                  "value": {
+                    "stringValue": "claude-opus-5-5"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "claude-opus-5-5"
+                  }
+                },
+                {
+                  "key": "query_source_safe",
+                  "value": {
+                    "stringValue": "repl_main_thread"
+                  }
+                },
+                {
+                  "key": "duration_ms",
+                  "value": {
+                    "intValue": "2152"
+                  }
+                },
+                {
+                  "key": "input_tokens",
+                  "value": {
+                    "intValue": "2"
+                  }
+                },
+                {
+                  "key": "output_tokens",
+                  "value": {
+                    "intValue": "113"
+                  }
+                },
+                {
+                  "key": "success",
+                  "value": {
+                    "boolValue": true
+                  }
+                },
+                {
+                  "key": "first_content_ms",
+                  "value": {
+                    "intValue": "1280"
+                  }
+                }
+              ],
+              "events": [
+                {
+                  "timeUnixNano": "1791241298033957291",
+                  "name": "gen_ai.request.attempt",
+                  "attributes": []
+                }
+              ],
+              "status": {},
+              "flags": 257
+            },
+            {
+              "traceId": "ced683bb1985e31a6a67d7180245ad0a",
+              "spanId": "7602ccb75a2365b7",
+              "name": "claude_code.interaction",
+              "kind": 1,
+              "startTimeUnixNano": "1791241291954000000",
+              "endTimeUnixNano": "1791241300311987000",
+              "attributes": [
+                {
+                  "key": "session.id",
+                  "value": {
+                    "stringValue": "session-native-fixture"
+                  }
+                },
+                {
+                  "key": "span.type",
+                  "value": {
+                    "stringValue": "interaction"
+                  }
+                },
+                {
+                  "key": "user_prompt",
+                  "value": {
+                    "stringValue": "Say MINIMAL-COMMENTARY, read README.txt, run a Bash command printing MINIMAL-EXPECTED that exits 3 without retrying, then reply MINIMAL-FINAL."
+                  }
+                }
+              ],
+              "status": {},
+              "flags": 257
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "claude-code"
+            }
+          },
+          {
+            "key": "lens.session.capture",
+            "value": {
+              "stringValue": "true"
+            }
+          }
+        ]
+      },
+      "scopeSpans": [
+        {
+          "scope": {
+            "name": "com.anthropic.claude_code.tracing",
+            "version": "1.0.0"
+          },
+          "spans": [
+            {
+              "traceId": "ced683bb1985e31a6a67d7180245ad0a",
+              "spanId": "998d14f24e18c2a7",
+              "parentSpanId": "7602ccb75a2365b7",
+              "name": "claude_code.llm_request",
+              "kind": 1,
+              "startTimeUnixNano": "1791241300347000000",
+              "endTimeUnixNano": "1791241302154505542",
+              "attributes": [
+                {
+                  "key": "session.id",
+                  "value": {
+                    "stringValue": "session-native-fixture"
+                  }
+                },
+                {
+                  "key": "span.type",
+                  "value": {
+                    "stringValue": "llm_request"
+                  }
+                },
+                {
+                  "key": "model",
+                  "value": {
+                    "stringValue": "claude-opus-5-5"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "claude-opus-5-5"
+                  }
+                },
+                {
+                  "key": "query_source_safe",
+                  "value": {
+                    "stringValue": "prompt_suggestion"
+                  }
+                },
+                {
+                  "key": "duration_ms",
+                  "value": {
+                    "intValue": "1807"
+                  }
+                },
+                {
+                  "key": "input_tokens",
+                  "value": {
+                    "intValue": "506"
+                  }
+                },
+                {
+                  "key": "output_tokens",
+                  "value": {
+                    "intValue": "28"
+                  }
+                },
+                {
+                  "key": "success",
+                  "value": {
+                    "boolValue": true
+                  }
+                },
+                {
+                  "key": "first_content_ms",
+                  "value": {
+                    "intValue": "1517"
+                  }
+                }
+              ],
+              "events": [
+                {
+                  "timeUnixNano": "1791241300381819667",
+                  "name": "gen_ai.request.attempt",
+                  "attributes": []
+                }
+              ],
+              "status": {},
+              "flags": 257
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "claude-code"
+            }
+          },
+          {
+            "key": "lens.session.capture",
+            "value": {
+              "stringValue": "true"
+            }
+          }
+        ]
+      },
+      "scopeSpans": [
+        {
+          "scope": {
+            "name": "com.anthropic.claude_code.tracing",
+            "version": "1.0.0"
+          },
+          "spans": [
+            {
+              "traceId": "dc9069174bf4ed50dbcd0088f5544c4b",
+              "spanId": "1016ee3f27ec48a1",
+              "parentSpanId": "2f6363c980a810b4",
+              "name": "claude_code.tool.execution",
+              "kind": 1,
+              "startTimeUnixNano": "1791241514102000000",
+              "endTimeUnixNano": "1791241514249635916",
+              "attributes": [
+                {
+                  "key": "session.id",
+                  "value": {
+                    "stringValue": "session-native-fixture"
+                  }
+                },
+                {
+                  "key": "span.type",
+                  "value": {
+                    "stringValue": "tool.execution"
+                  }
+                },
+                {
+                  "key": "tool_use_id",
+                  "value": {
+                    "stringValue": "toolu_01PMEeKX3HiU11a8X9wPE8Xr"
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.call.id",
+                  "value": {
+                    "stringValue": "toolu_01PMEeKX3HiU11a8X9wPE8Xr"
+                  }
+                },
+                {
+                  "key": "duration_ms",
+                  "value": {
+                    "intValue": "147"
+                  }
+                },
+                {
+                  "key": "success",
+                  "value": {
+                    "boolValue": true
+                  }
+                }
+              ],
+              "status": {},
+              "flags": 257
+            },
+            {
+              "traceId": "dc9069174bf4ed50dbcd0088f5544c4b",
+              "spanId": "2f6363c980a810b4",
+              "parentSpanId": "f6836a39a95b89d0",
+              "name": "claude_code.tool",
+              "kind": 1,
+              "startTimeUnixNano": "1791241514076000000",
+              "endTimeUnixNano": "1791241514249832167",
+              "attributes": [
+                {
+                  "key": "session.id",
+                  "value": {
+                    "stringValue": "session-native-fixture"
+                  }
+                },
+                {
+                  "key": "span.type",
+                  "value": {
+                    "stringValue": "tool"
+                  }
+                },
+                {
+                  "key": "tool_name",
+                  "value": {
+                    "stringValue": "Agent"
+                  }
+                },
+                {
+                  "key": "tool_use_id",
+                  "value": {
+                    "stringValue": "toolu_01PMEeKX3HiU11a8X9wPE8Xr"
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.call.id",
+                  "value": {
+                    "stringValue": "toolu_01PMEeKX3HiU11a8X9wPE8Xr"
+                  }
+                },
+                {
+                  "key": "duration_ms",
+                  "value": {
+                    "intValue": "173"
+                  }
+                }
+              ],
+              "status": {},
+              "flags": 257
+            },
+            {
+              "traceId": "dc9069174bf4ed50dbcd0088f5544c4b",
+              "spanId": "069ab83e9b2f1d80",
+              "parentSpanId": "3c7d547132993a53",
+              "name": "claude_code.tool.execution",
+              "kind": 1,
+              "startTimeUnixNano": "1791241514920000000",
+              "endTimeUnixNano": "1791241514933541791",
+              "attributes": [
+                {
+                  "key": "session.id",
+                  "value": {
+                    "stringValue": "session-native-fixture"
+                  }
+                },
+                {
+                  "key": "span.type",
+                  "value": {
+                    "stringValue": "tool.execution"
+                  }
+                },
+                {
+                  "key": "tool_use_id",
+                  "value": {
+                    "stringValue": "toolu_01UKzEYzdeLjt96rM9jhJY4a"
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.call.id",
+                  "value": {
+                    "stringValue": "toolu_01UKzEYzdeLjt96rM9jhJY4a"
+                  }
+                },
+                {
+                  "key": "duration_ms",
+                  "value": {
+                    "intValue": "13"
+                  }
+                },
+                {
+                  "key": "success",
+                  "value": {
+                    "boolValue": true
+                  }
+                }
+              ],
+              "status": {},
+              "flags": 257
+            },
+            {
+              "traceId": "dc9069174bf4ed50dbcd0088f5544c4b",
+              "spanId": "3c7d547132993a53",
+              "parentSpanId": "f6836a39a95b89d0",
+              "name": "claude_code.tool",
+              "kind": 1,
+              "startTimeUnixNano": "1791241514917000000",
+              "endTimeUnixNano": "1791241514933186792",
+              "attributes": [
+                {
+                  "key": "session.id",
+                  "value": {
+                    "stringValue": "session-native-fixture"
+                  }
+                },
+                {
+                  "key": "span.type",
+                  "value": {
+                    "stringValue": "tool"
+                  }
+                },
+                {
+                  "key": "tool_name",
+                  "value": {
+                    "stringValue": "Agent"
+                  }
+                },
+                {
+                  "key": "tool_use_id",
+                  "value": {
+                    "stringValue": "toolu_01UKzEYzdeLjt96rM9jhJY4a"
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.call.id",
+                  "value": {
+                    "stringValue": "toolu_01UKzEYzdeLjt96rM9jhJY4a"
+                  }
+                },
+                {
+                  "key": "duration_ms",
+                  "value": {
+                    "intValue": "16"
+                  }
+                }
+              ],
+              "status": {},
+              "flags": 257
+            },
+            {
+              "traceId": "dc9069174bf4ed50dbcd0088f5544c4b",
+              "spanId": "8fd9b3d94feaee00",
+              "parentSpanId": "f6836a39a95b89d0",
+              "name": "claude_code.llm_request",
+              "kind": 1,
+              "startTimeUnixNano": "1791241510696000000",
+              "endTimeUnixNano": "1791241514960079667",
+              "attributes": [
+                {
+                  "key": "session.id",
+                  "value": {
+                    "stringValue": "session-native-fixture"
+                  }
+                },
+                {
+                  "key": "span.type",
+                  "value": {
+                    "stringValue": "llm_request"
+                  }
+                },
+                {
+                  "key": "model",
+                  "value": {
+                    "stringValue": "claude-opus-5-5"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "claude-opus-5-5"
+                  }
+                },
+                {
+                  "key": "query_source_safe",
+                  "value": {
+                    "stringValue": "repl_main_thread"
+                  }
+                },
+                {
+                  "key": "duration_ms",
+                  "value": {
+                    "intValue": "4264"
+                  }
+                },
+                {
+                  "key": "input_tokens",
+                  "value": {
+                    "intValue": "4"
+                  }
+                },
+                {
+                  "key": "output_tokens",
+                  "value": {
+                    "intValue": "358"
+                  }
+                },
+                {
+                  "key": "success",
+                  "value": {
+                    "boolValue": true
+                  }
+                },
+                {
+                  "key": "first_content_ms",
+                  "value": {
+                    "intValue": "1324"
+                  }
+                }
+              ],
+              "events": [
+                {
+                  "timeUnixNano": "1791241511035845958",
+                  "name": "gen_ai.request.attempt",
+                  "attributes": []
+                }
+              ],
+              "status": {},
+              "flags": 257
+            },
+            {
+              "traceId": "dc9069174bf4ed50dbcd0088f5544c4b",
+              "spanId": "80bd7e70345faca6",
+              "parentSpanId": "1016ee3f27ec48a1",
+              "name": "claude_code.llm_request",
+              "kind": 1,
+              "startTimeUnixNano": "1791241514378000000",
+              "endTimeUnixNano": "1791241516807487000",
+              "attributes": [
+                {
+                  "key": "session.id",
+                  "value": {
+                    "stringValue": "session-native-fixture"
+                  }
+                },
+                {
+                  "key": "span.type",
+                  "value": {
+                    "stringValue": "llm_request"
+                  }
+                },
+                {
+                  "key": "model",
+                  "value": {
+                    "stringValue": "claude-opus-5-5"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "claude-opus-5-5"
+                  }
+                },
+                {
+                  "key": "query_source_safe",
+                  "value": {
+                    "stringValue": "agent.builtin.general-purpose"
+                  }
+                },
+                {
+                  "key": "agent_id",
+                  "value": {
+                    "stringValue": "af81764a6c199556e"
+                  }
+                },
+                {
+                  "key": "duration_ms",
+                  "value": {
+                    "intValue": "2429"
+                  }
+                },
+                {
+                  "key": "input_tokens",
+                  "value": {
+                    "intValue": "2"
+                  }
+                },
+                {
+                  "key": "output_tokens",
+                  "value": {
+                    "intValue": "71"
+                  }
+                },
+                {
+                  "key": "success",
+                  "value": {
+                    "boolValue": true
+                  }
+                },
+                {
+                  "key": "first_content_ms",
+                  "value": {
+                    "intValue": "2024"
+                  }
+                }
+              ],
+              "events": [
+                {
+                  "timeUnixNano": "1791241514395366792",
+                  "name": "gen_ai.request.attempt",
+                  "attributes": []
+                }
+              ],
+              "status": {},
+              "flags": 257
+            },
+            {
+              "traceId": "dc9069174bf4ed50dbcd0088f5544c4b",
+              "spanId": "2d11007eba83c0d9",
+              "parentSpanId": "1ecd90fdabddbb45",
+              "name": "claude_code.tool.execution",
+              "kind": 1,
+              "startTimeUnixNano": "1791241516838000000",
+              "endTimeUnixNano": "1791241516846542375",
+              "attributes": [
+                {
+                  "key": "session.id",
+                  "value": {
+                    "stringValue": "session-native-fixture"
+                  }
+                },
+                {
+                  "key": "span.type",
+                  "value": {
+                    "stringValue": "tool.execution"
+                  }
+                },
+                {
+                  "key": "tool_use_id",
+                  "value": {
+                    "stringValue": "toolu_014jb1af8UGARUkSHK4XaW5v"
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.call.id",
+                  "value": {
+                    "stringValue": "toolu_014jb1af8UGARUkSHK4XaW5v"
+                  }
+                },
+                {
+                  "key": "duration_ms",
+                  "value": {
+                    "intValue": "9"
+                  }
+                },
+                {
+                  "key": "success",
+                  "value": {
+                    "boolValue": true
+                  }
+                }
+              ],
+              "status": {},
+              "flags": 257
+            },
+            {
+              "traceId": "dc9069174bf4ed50dbcd0088f5544c4b",
+              "spanId": "1ecd90fdabddbb45",
+              "parentSpanId": "1016ee3f27ec48a1",
+              "name": "claude_code.tool",
+              "kind": 1,
+              "startTimeUnixNano": "1791241516800000000",
+              "endTimeUnixNano": "1791241516846250791",
+              "attributes": [
+                {
+                  "key": "session.id",
+                  "value": {
+                    "stringValue": "session-native-fixture"
+                  }
+                },
+                {
+                  "key": "span.type",
+                  "value": {
+                    "stringValue": "tool"
+                  }
+                },
+                {
+                  "key": "tool_name",
+                  "value": {
+                    "stringValue": "Read"
+                  }
+                },
+                {
+                  "key": "file_path",
+                  "value": {
+                    "stringValue": "/workspace/README.txt"
+                  }
+                },
+                {
+                  "key": "agent_id",
+                  "value": {
+                    "stringValue": "af81764a6c199556e"
+                  }
+                },
+                {
+                  "key": "tool_use_id",
+                  "value": {
+                    "stringValue": "toolu_014jb1af8UGARUkSHK4XaW5v"
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.call.id",
+                  "value": {
+                    "stringValue": "toolu_014jb1af8UGARUkSHK4XaW5v"
+                  }
+                },
+                {
+                  "key": "duration_ms",
+                  "value": {
+                    "intValue": "46"
+                  }
+                }
+              ],
+              "events": [
+                {
+                  "timeUnixNano": "1791241516846140416",
+                  "name": "tool.output",
+                  "attributes": [
+                    {
+                      "key": "file_path",
+                      "value": {
+                        "stringValue": "/workspace/README.txt"
+                      }
+                    },
+                    {
+                      "key": "content",
+                      "value": {
+                        "stringValue": "This is a synthetic fixture for testing coding-session capture.\nMarker: LENS-REPLAY-ALPHA\nNo external services or user files should be accessed.\n"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "status": {},
+              "flags": 257
+            },
+            {
+              "traceId": "dc9069174bf4ed50dbcd0088f5544c4b",
+              "spanId": "0aaa399ea6049668",
+              "parentSpanId": "f6836a39a95b89d0",
+              "name": "claude_code.llm_request",
+              "kind": 1,
+              "startTimeUnixNano": "1791241515021000000",
+              "endTimeUnixNano": "1791241516987185292",
+              "attributes": [
+                {
+                  "key": "session.id",
+                  "value": {
+                    "stringValue": "session-native-fixture"
+                  }
+                },
+                {
+                  "key": "span.type",
+                  "value": {
+                    "stringValue": "llm_request"
+                  }
+                },
+                {
+                  "key": "model",
+                  "value": {
+                    "stringValue": "claude-opus-5-5"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "claude-opus-5-5"
+                  }
+                },
+                {
+                  "key": "query_source_safe",
+                  "value": {
+                    "stringValue": "repl_main_thread"
+                  }
+                },
+                {
+                  "key": "duration_ms",
+                  "value": {
+                    "intValue": "1966"
+                  }
+                },
+                {
+                  "key": "input_tokens",
+                  "value": {
+                    "intValue": "2"
+                  }
+                },
+                {
+                  "key": "output_tokens",
+                  "value": {
+                    "intValue": "91"
+                  }
+                },
+                {
+                  "key": "success",
+                  "value": {
+                    "boolValue": true
+                  }
+                },
+                {
+                  "key": "first_content_ms",
+                  "value": {
+                    "intValue": "1281"
+                  }
+                }
+              ],
+              "events": [
+                {
+                  "timeUnixNano": "1791241515024268292",
+                  "name": "gen_ai.request.attempt",
+                  "attributes": []
+                }
+              ],
+              "status": {},
+              "flags": 257
+            },
+            {
+              "traceId": "dc9069174bf4ed50dbcd0088f5544c4b",
+              "spanId": "f6836a39a95b89d0",
+              "name": "claude_code.interaction",
+              "kind": 1,
+              "startTimeUnixNano": "1791241510005000000",
+              "endTimeUnixNano": "1791241517035674791",
+              "attributes": [
+                {
+                  "key": "session.id",
+                  "value": {
+                    "stringValue": "session-native-fixture"
+                  }
+                },
+                {
+                  "key": "span.type",
+                  "value": {
+                    "stringValue": "interaction"
+                  }
+                },
+                {
+                  "key": "user_prompt",
+                  "value": {
+                    "stringValue": "Use two general-purpose subagents in parallel, one in the background. Reader should read README.txt and return NATIVE-READER with its marker. Checker should run python3 to calculate 7+8 and return NATIVE-CHECKER. Wait for both and finish with NATIVE-AGENTS-FINAL."
+                  }
+                }
+              ],
+              "status": {},
+              "flags": 257
+            },
+            {
+              "traceId": "dc9069174bf4ed50dbcd0088f5544c4b",
+              "spanId": "5ae42ed9b71ad3b4",
+              "parentSpanId": "069ab83e9b2f1d80",
+              "name": "claude_code.llm_request",
+              "kind": 1,
+              "startTimeUnixNano": "1791241514978000000",
+              "endTimeUnixNano": "1791241517209824666",
+              "attributes": [
+                {
+                  "key": "session.id",
+                  "value": {
+                    "stringValue": "session-native-fixture"
+                  }
+                },
+                {
+                  "key": "span.type",
+                  "value": {
+                    "stringValue": "llm_request"
+                  }
+                },
+                {
+                  "key": "model",
+                  "value": {
+                    "stringValue": "claude-opus-5-5"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "claude-opus-5-5"
+                  }
+                },
+                {
+                  "key": "query_source_safe",
+                  "value": {
+                    "stringValue": "agent.builtin.general-purpose"
+                  }
+                },
+                {
+                  "key": "agent_id",
+                  "value": {
+                    "stringValue": "a12e066bf2bbfb0d0"
+                  }
+                },
+                {
+                  "key": "duration_ms",
+                  "value": {
+                    "intValue": "2231"
+                  }
+                },
+                {
+                  "key": "input_tokens",
+                  "value": {
+                    "intValue": "2"
+                  }
+                },
+                {
+                  "key": "output_tokens",
+                  "value": {
+                    "intValue": "90"
+                  }
+                },
+                {
+                  "key": "success",
+                  "value": {
+                    "boolValue": true
+                  }
+                },
+                {
+                  "key": "first_content_ms",
+                  "value": {
+                    "intValue": "1074"
+                  }
+                }
+              ],
+              "events": [
+                {
+                  "timeUnixNano": "1791241514981977541",
+                  "name": "gen_ai.request.attempt",
+                  "attributes": []
+                }
+              ],
+              "status": {},
+              "flags": 257
+            },
+            {
+              "traceId": "dc9069174bf4ed50dbcd0088f5544c4b",
+              "spanId": "041a814716674be4",
+              "parentSpanId": "f05b19e130ce76bd",
+              "name": "claude_code.tool.execution",
+              "kind": 1,
+              "startTimeUnixNano": "1791241517198000000",
+              "endTimeUnixNano": "1791241517288576292",
+              "attributes": [
+                {
+                  "key": "session.id",
+                  "value": {
+                    "stringValue": "session-native-fixture"
+                  }
+                },
+                {
+                  "key": "span.type",
+                  "value": {
+                    "stringValue": "tool.execution"
+                  }
+                },
+                {
+                  "key": "tool_use_id",
+                  "value": {
+                    "stringValue": "toolu_01J7ag4NZT5yQzk13aMf51tU"
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.call.id",
+                  "value": {
+                    "stringValue": "toolu_01J7ag4NZT5yQzk13aMf51tU"
+                  }
+                },
+                {
+                  "key": "duration_ms",
+                  "value": {
+                    "intValue": "91"
+                  }
+                },
+                {
+                  "key": "success",
+                  "value": {
+                    "boolValue": true
+                  }
+                }
+              ],
+              "status": {},
+              "flags": 257
+            },
+            {
+              "traceId": "dc9069174bf4ed50dbcd0088f5544c4b",
+              "spanId": "f05b19e130ce76bd",
+              "parentSpanId": "069ab83e9b2f1d80",
+              "name": "claude_code.tool",
+              "kind": 1,
+              "startTimeUnixNano": "1791241517189000000",
+              "endTimeUnixNano": "1791241517292313750",
+              "attributes": [
+                {
+                  "key": "session.id",
+                  "value": {
+                    "stringValue": "session-native-fixture"
+                  }
+                },
+                {
+                  "key": "span.type",
+                  "value": {
+                    "stringValue": "tool"
+                  }
+                },
+                {
+                  "key": "tool_name",
+                  "value": {
+                    "stringValue": "Bash"
+                  }
+                },
+                {
+                  "key": "full_command",
+                  "value": {
+                    "stringValue": "python3 -c \"print(7+8)\""
+                  }
+                },
+                {
+                  "key": "agent_id",
+                  "value": {
+                    "stringValue": "a12e066bf2bbfb0d0"
+                  }
+                },
+                {
+                  "key": "tool_use_id",
+                  "value": {
+                    "stringValue": "toolu_01J7ag4NZT5yQzk13aMf51tU"
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.call.id",
+                  "value": {
+                    "stringValue": "toolu_01J7ag4NZT5yQzk13aMf51tU"
+                  }
+                },
+                {
+                  "key": "duration_ms",
+                  "value": {
+                    "intValue": "103"
+                  }
+                }
+              ],
+              "events": [
+                {
+                  "timeUnixNano": "1791241517288684917",
+                  "name": "tool.output",
+                  "attributes": [
+                    {
+                      "key": "output",
+                      "value": {
+                        "stringValue": "15"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "status": {},
+              "flags": 257
+            },
+            {
+              "traceId": "dc9069174bf4ed50dbcd0088f5544c4b",
+              "spanId": "4c0024ddff96e515",
+              "parentSpanId": "1016ee3f27ec48a1",
+              "name": "claude_code.llm_request",
+              "kind": 1,
+              "startTimeUnixNano": "1791241516871000000",
+              "endTimeUnixNano": "1791241518190976583",
+              "attributes": [
+                {
+                  "key": "session.id",
+                  "value": {
+                    "stringValue": "session-native-fixture"
+                  }
+                },
+                {
+                  "key": "span.type",
+                  "value": {
+                    "stringValue": "llm_request"
+                  }
+                },
+                {
+                  "key": "model",
+                  "value": {
+                    "stringValue": "claude-opus-5-5"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "claude-opus-5-5"
+                  }
+                },
+                {
+                  "key": "query_source_safe",
+                  "value": {
+                    "stringValue": "agent.builtin.general-purpose"
+                  }
+                },
+                {
+                  "key": "agent_id",
+                  "value": {
+                    "stringValue": "af81764a6c199556e"
+                  }
+                },
+                {
+                  "key": "duration_ms",
+                  "value": {
+                    "intValue": "1320"
+                  }
+                },
+                {
+                  "key": "input_tokens",
+                  "value": {
+                    "intValue": "2"
+                  }
+                },
+                {
+                  "key": "output_tokens",
+                  "value": {
+                    "intValue": "25"
+                  }
+                },
+                {
+                  "key": "success",
+                  "value": {
+                    "boolValue": true
+                  }
+                },
+                {
+                  "key": "first_content_ms",
+                  "value": {
+                    "intValue": "1311"
+                  }
+                }
+              ],
+              "events": [
+                {
+                  "timeUnixNano": "1791241516872795833",
+                  "name": "gen_ai.request.attempt",
+                  "attributes": []
+                }
+              ],
+              "status": {},
+              "flags": 257
+            },
+            {
+              "traceId": "dc9069174bf4ed50dbcd0088f5544c4b",
+              "spanId": "b909d1cdcf0d03fe",
+              "parentSpanId": "069ab83e9b2f1d80",
+              "name": "claude_code.llm_request",
+              "kind": 1,
+              "startTimeUnixNano": "1791241517310000000",
+              "endTimeUnixNano": "1791241518342676875",
+              "attributes": [
+                {
+                  "key": "session.id",
+                  "value": {
+                    "stringValue": "session-native-fixture"
+                  }
+                },
+                {
+                  "key": "span.type",
+                  "value": {
+                    "stringValue": "llm_request"
+                  }
+                },
+                {
+                  "key": "model",
+                  "value": {
+                    "stringValue": "claude-opus-5-5"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "claude-opus-5-5"
+                  }
+                },
+                {
+                  "key": "query_source_safe",
+                  "value": {
+                    "stringValue": "agent.builtin.general-purpose"
+                  }
+                },
+                {
+                  "key": "agent_id",
+                  "value": {
+                    "stringValue": "a12e066bf2bbfb0d0"
+                  }
+                },
+                {
+                  "key": "duration_ms",
+                  "value": {
+                    "intValue": "1033"
+                  }
+                },
+                {
+                  "key": "input_tokens",
+                  "value": {
+                    "intValue": "2"
+                  }
+                },
+                {
+                  "key": "output_tokens",
+                  "value": {
+                    "intValue": "15"
+                  }
+                },
+                {
+                  "key": "success",
+                  "value": {
+                    "boolValue": true
+                  }
+                },
+                {
+                  "key": "first_content_ms",
+                  "value": {
+                    "intValue": "1017"
+                  }
+                }
+              ],
+              "events": [
+                {
+                  "timeUnixNano": "1791241517312224500",
+                  "name": "gen_ai.request.attempt",
+                  "attributes": []
+                }
+              ],
+              "status": {},
+              "flags": 257
+            },
+            {
+              "traceId": "dc9069174bf4ed50dbcd0088f5544c4b",
+              "spanId": "58ebf6bce3f19dbc",
+              "parentSpanId": "f6836a39a95b89d0",
+              "name": "claude_code.llm_request",
+              "kind": 1,
+              "startTimeUnixNano": "1791241517064000000",
+              "endTimeUnixNano": "1791241518843341542",
+              "attributes": [
+                {
+                  "key": "session.id",
+                  "value": {
+                    "stringValue": "session-native-fixture"
+                  }
+                },
+                {
+                  "key": "span.type",
+                  "value": {
+                    "stringValue": "llm_request"
+                  }
+                },
+                {
+                  "key": "model",
+                  "value": {
+                    "stringValue": "claude-opus-5-5"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "claude-opus-5-5"
+                  }
+                },
+                {
+                  "key": "query_source_safe",
+                  "value": {
+                    "stringValue": "prompt_suggestion"
+                  }
+                },
+                {
+                  "key": "duration_ms",
+                  "value": {
+                    "intValue": "1779"
+                  }
+                },
+                {
+                  "key": "input_tokens",
+                  "value": {
+                    "intValue": "506"
+                  }
+                },
+                {
+                  "key": "output_tokens",
+                  "value": {
+                    "intValue": "29"
+                  }
+                },
+                {
+                  "key": "success",
+                  "value": {
+                    "boolValue": true
+                  }
+                },
+                {
+                  "key": "first_content_ms",
+                  "value": {
+                    "intValue": "1483"
+                  }
+                }
+              ],
+              "events": [
+                {
+                  "timeUnixNano": "1791241517080650834",
+                  "name": "gen_ai.request.attempt",
+                  "attributes": []
+                }
+              ],
+              "status": {},
+              "flags": 257
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "claude-code"
+            }
+          },
+          {
+            "key": "lens.session.capture",
+            "value": {
+              "stringValue": "true"
+            }
+          }
+        ]
+      },
+      "scopeSpans": [
+        {
+          "scope": {
+            "name": "com.anthropic.claude_code.tracing",
+            "version": "1.0.0"
+          },
+          "spans": [
+            {
+              "traceId": "b08f665a8a47e055a82cf882ae69d83b",
+              "spanId": "ac3328853e9d5838",
+              "parentSpanId": "23211831eeb7496c",
+              "name": "claude_code.llm_request",
+              "kind": 1,
+              "startTimeUnixNano": "1791241518298000000",
+              "endTimeUnixNano": "1791241519849141875",
+              "attributes": [
+                {
+                  "key": "session.id",
+                  "value": {
+                    "stringValue": "session-native-fixture"
+                  }
+                },
+                {
+                  "key": "span.type",
+                  "value": {
+                    "stringValue": "llm_request"
+                  }
+                },
+                {
+                  "key": "model",
+                  "value": {
+                    "stringValue": "claude-opus-5-5"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "claude-opus-5-5"
+                  }
+                },
+                {
+                  "key": "query_source_safe",
+                  "value": {
+                    "stringValue": "repl_main_thread"
+                  }
+                },
+                {
+                  "key": "duration_ms",
+                  "value": {
+                    "intValue": "1551"
+                  }
+                },
+                {
+                  "key": "input_tokens",
+                  "value": {
+                    "intValue": "4"
+                  }
+                },
+                {
+                  "key": "output_tokens",
+                  "value": {
+                    "intValue": "39"
+                  }
+                },
+                {
+                  "key": "success",
+                  "value": {
+                    "boolValue": true
+                  }
+                },
+                {
+                  "key": "first_content_ms",
+                  "value": {
+                    "intValue": "1348"
+                  }
+                }
+              ],
+              "events": [
+                {
+                  "timeUnixNano": "1791241518301840292",
+                  "name": "gen_ai.request.attempt",
+                  "attributes": []
+                }
+              ],
+              "status": {},
+              "flags": 257
+            },
+            {
+              "traceId": "b08f665a8a47e055a82cf882ae69d83b",
+              "spanId": "23211831eeb7496c",
+              "name": "claude_code.interaction",
+              "kind": 1,
+              "startTimeUnixNano": "1791241518252000000",
+              "endTimeUnixNano": "1791241519853949209",
+              "attributes": [
+                {
+                  "key": "session.id",
+                  "value": {
+                    "stringValue": "session-native-fixture"
+                  }
+                },
+                {
+                  "key": "span.type",
+                  "value": {
+                    "stringValue": "interaction"
+                  }
+                },
+                {
+                  "key": "user_prompt",
+                  "value": {
+                    "stringValue": "<task-notification>\n<task-id>af81764a6c199556e</task-id>\n<tool-use-id>toolu_01PMEeKX3HiU11a8X9wPE8Xr</tool-use-id>\n<output-file>/tmp/claude/workspace/session-native-fixture/tasks/af81764a6c199556e.output</output-file>\n<status>completed</status>\n<summary>Agent \"Reader reads README marker\" finished</summary>\n<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>\n<result>NATIVE-READER LENS-REPLAY-ALPHA</result>\n<usage><subagent_tokens>32356</subagent_tokens><tool_uses>1</tool_uses><duration_ms>4111</duration_ms></usage>\n</task-notification>"
+                  }
+                }
+              ],
+              "status": {},
+              "flags": 257
+            },
+            {
+              "traceId": "b08f665a8a47e055a82cf882ae69d83b",
+              "spanId": "e19c2c28307f73d8",
+              "parentSpanId": "23211831eeb7496c",
+              "name": "claude_code.llm_request",
+              "kind": 1,
+              "startTimeUnixNano": "1791241519857000000",
+              "endTimeUnixNano": "1791241521681804916",
+              "attributes": [
+                {
+                  "key": "session.id",
+                  "value": {
+                    "stringValue": "session-native-fixture"
+                  }
+                },
+                {
+                  "key": "span.type",
+                  "value": {
+                    "stringValue": "llm_request"
+                  }
+                },
+                {
+                  "key": "model",
+                  "value": {
+                    "stringValue": "claude-opus-5-5"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "claude-opus-5-5"
+                  }
+                },
+                {
+                  "key": "query_source_safe",
+                  "value": {
+                    "stringValue": "prompt_suggestion"
+                  }
+                },
+                {
+                  "key": "duration_ms",
+                  "value": {
+                    "intValue": "1825"
+                  }
+                },
+                {
+                  "key": "input_tokens",
+                  "value": {
+                    "intValue": "506"
+                  }
+                },
+                {
+                  "key": "output_tokens",
+                  "value": {
+                    "intValue": "58"
+                  }
+                },
+                {
+                  "key": "success",
+                  "value": {
+                    "boolValue": true
+                  }
+                },
+                {
+                  "key": "first_content_ms",
+                  "value": {
+                    "intValue": "1181"
+                  }
+                }
+              ],
+              "events": [
+                {
+                  "timeUnixNano": "1791241519859087125",
+                  "name": "gen_ai.request.attempt",
+                  "attributes": []
+                }
+              ],
+              "status": {},
+              "flags": 257
+            },
+            {
+              "traceId": "e5ef60574ada78a199ad0c5cc09aac4f",
+              "spanId": "90b44ed017208850",
+              "parentSpanId": "1b43d99139cabb38",
+              "name": "claude_code.llm_request",
+              "kind": 1,
+              "startTimeUnixNano": "1791241519885000000",
+              "endTimeUnixNano": "1791241522476429958",
+              "attributes": [
+                {
+                  "key": "session.id",
+                  "value": {
+                    "stringValue": "session-native-fixture"
+                  }
+                },
+                {
+                  "key": "span.type",
+                  "value": {
+                    "stringValue": "llm_request"
+                  }
+                },
+                {
+                  "key": "model",
+                  "value": {
+                    "stringValue": "claude-opus-5-5"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "claude-opus-5-5"
+                  }
+                },
+                {
+                  "key": "query_source_safe",
+                  "value": {
+                    "stringValue": "repl_main_thread"
+                  }
+                },
+                {
+                  "key": "duration_ms",
+                  "value": {
+                    "intValue": "2591"
+                  }
+                },
+                {
+                  "key": "input_tokens",
+                  "value": {
+                    "intValue": "4"
+                  }
+                },
+                {
+                  "key": "output_tokens",
+                  "value": {
+                    "intValue": "153"
+                  }
+                },
+                {
+                  "key": "success",
+                  "value": {
+                    "boolValue": true
+                  }
+                },
+                {
+                  "key": "first_content_ms",
+                  "value": {
+                    "intValue": "1749"
+                  }
+                }
+              ],
+              "events": [
+                {
+                  "timeUnixNano": "1791241519886265042",
+                  "name": "gen_ai.request.attempt",
+                  "attributes": []
+                }
+              ],
+              "status": {},
+              "flags": 257
+            },
+            {
+              "traceId": "e5ef60574ada78a199ad0c5cc09aac4f",
+              "spanId": "1b43d99139cabb38",
+              "name": "claude_code.interaction",
+              "kind": 1,
+              "startTimeUnixNano": "1791241519869000000",
+              "endTimeUnixNano": "1791241522481578417",
+              "attributes": [
+                {
+                  "key": "session.id",
+                  "value": {
+                    "stringValue": "session-native-fixture"
+                  }
+                },
+                {
+                  "key": "span.type",
+                  "value": {
+                    "stringValue": "interaction"
+                  }
+                },
+                {
+                  "key": "user_prompt",
+                  "value": {
+                    "stringValue": "<task-notification>\n<task-id>a12e066bf2bbfb0d0</task-id>\n<tool-use-id>toolu_01UKzEYzdeLjt96rM9jhJY4a</tool-use-id>\n<output-file>/tmp/claude/workspace/session-native-fixture/tasks/a12e066bf2bbfb0d0.output</output-file>\n<status>completed</status>\n<summary>Agent \"Checker computes 7+8\" finished</summary>\n<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>\n<result>NATIVE-CHECKER 15</result>\n<usage><subagent_tokens>32287</subagent_tokens><tool_uses>1</tool_uses><duration_ms>3426</duration_ms></usage>\n</task-notification>"
+                  }
+                }
+              ],
+              "status": {},
+              "flags": 257
+            },
+            {
+              "traceId": "e5ef60574ada78a199ad0c5cc09aac4f",
+              "spanId": "874e694189b09b43",
+              "parentSpanId": "1b43d99139cabb38",
+              "name": "claude_code.llm_request",
+              "kind": 1,
+              "startTimeUnixNano": "1791241522486000000",
+              "endTimeUnixNano": "1791241524298275084",
+              "attributes": [
+                {
+                  "key": "session.id",
+                  "value": {
+                    "stringValue": "session-native-fixture"
+                  }
+                },
+                {
+                  "key": "span.type",
+                  "value": {
+                    "stringValue": "llm_request"
+                  }
+                },
+                {
+                  "key": "model",
+                  "value": {
+                    "stringValue": "claude-opus-5-5"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "claude-opus-5-5"
+                  }
+                },
+                {
+                  "key": "query_source_safe",
+                  "value": {
+                    "stringValue": "prompt_suggestion"
+                  }
+                },
+                {
+                  "key": "duration_ms",
+                  "value": {
+                    "intValue": "1812"
+                  }
+                },
+                {
+                  "key": "input_tokens",
+                  "value": {
+                    "intValue": "506"
+                  }
+                },
+                {
+                  "key": "output_tokens",
+                  "value": {
+                    "intValue": "31"
+                  }
+                },
+                {
+                  "key": "success",
+                  "value": {
+                    "boolValue": true
+                  }
+                },
+                {
+                  "key": "first_content_ms",
+                  "value": {
+                    "intValue": "1467"
+                  }
+                }
+              ],
+              "events": [
+                {
+                  "timeUnixNano": "1791241522487487209",
+                  "name": "gen_ai.request.attempt",
+                  "attributes": []
+                }
+              ],
+              "status": {},
+              "flags": 257
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -12,7 +12,7 @@ import pytest
 
 from litellm._logging import (
     JsonFormatter,
-    _redact_string,
+    redact_string,
     _secret_filter,
     redact_internal_details_from_client_message,
     verbose_logger,
@@ -21,11 +21,142 @@ from litellm._logging import (
 )
 from litellm.litellm_core_utils.secret_redaction import (
     redact_internal_details,
-    redact_string,
     redact_structured_value,
+    redact_tokens,
 )
 
 SECRET = "sk-proj-abc123def456ghi789jklmnopqrst"
+
+
+@pytest.mark.timeout(10)
+@pytest.mark.parametrize("header", ("-----BEGIN PRIVATE KEY-----\n", "-----BEGIN PRIVATE KEY----- ", "-----BEGIN A"))
+def test_token_redaction_preserves_many_unterminated_pem_blocks(header: str) -> None:
+    text: Final = header * 24_000
+    assert redact_tokens(text) == text
+
+
+@pytest.mark.timeout(10)
+def test_token_redaction_preserves_many_failed_jwt_starts_and_finds_an_inner_key() -> None:
+    text: Final = "eyJaaaaaaaaaa-" * 24_000
+    assert redact_tokens(text + "sk-" + "a" * 20) == text + "REDACTED"
+
+
+@pytest.mark.parametrize(
+    "token",
+    (
+        "ya29." + "a" * 20,
+        "AKIA" + "A" * 16,
+        "sk-" + "a" * 50_000,
+        "sk_live_" + "a" * 24,
+        "rk_test_" + "a" * 24,
+        "AIza" + "a" * 35,
+        "dapi" + "a" * 32,
+        "ghp_" + "a" * 36,
+        "github_pat_" + "a" * 82,
+        "glpat-" + "a" * 20,
+        "lin_api_" + "a" * 40,
+        "xoxb-" + "a" * 10,
+        "hf_" + "a" * 34,
+        "npm_" + "a" * 36,
+        "pypi-AgEIcHlwaS5vcmc" + "a" * 50,
+        "SG." + "a" * 22 + "." + "a" * 43,
+        "eyJ" + "a" * 50_000 + ".eyJ" + "b" * 50_000 + ".c",
+        "-----BEGIN " + "A" * 50_000 + " PRIVATE KEY-----\nbody\n-----END PRIVATE KEY-----",
+    ),
+)
+def test_token_redaction_masks_known_token_shapes(token: str) -> None:
+    assert redact_tokens("credential=" + token + " !") == "credential=REDACTED !"
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    (
+        ("", ""),
+        ("password: ordinary text", "password: ordinary text"),
+        ("sk-short", "sk-short"),
+        ("eyJ" + "a" * 12 + ".e30.fake_signature", "REDACTED"),
+        ("eyJ" + "a" * 12 + ".x.fake_signature", "REDACTED"),
+        ("not_a_json_header.e30.fake_signature", "not_a_json_header.e30.fake_signature"),
+        ("eyJ" + "a" * 12 + "..fake_signature", "eyJ" + "a" * 12 + "..fake_signature"),
+        ("SG." + "a" * 22 + "." + "b" * 42 + "- ", "REDACTED "),
+        ("SG." + "a" * 22 + "." + "b" * 42 + "_ ", "REDACTED "),
+        ("SG." + "a" * 22 + "." + "b" * 43 + "-x", "SG." + "a" * 22 + "." + "b" * 43 + "-x"),
+        ("eyJ" + "a" * 12 + "-SG." + "a" * 22 + "." + "b" * 43, "REDACTED"),
+        ("wordghp_" + "a" * 36, "wordghp_" + "a" * 36),
+        ("éghp_" + "a" * 36, "éghp_" + "a" * 36),
+        (r"\nghp_" + "a" * 36, r"\nREDACTED"),
+        ("AKIA" + "A" * 17, "AKIA" + "A" * 17),
+        ("-----BEGIN PRIVATE KEY-----\nmissing end", "-----BEGIN PRIVATE KEY-----\nmissing end"),
+        ("-----BEGIN PRIVATE KEY----- -----END PRIVATE KEY-----", "REDACTED"),
+        ("-----BEGIN PRIVATE KEY-----\n-----END RSA PRIVATE KEY-----", "REDACTED"),
+        (
+            "-----BEGIN PRIVATE KEY-----\n-----BEGIN PRIVATE KEY-----\n-----END PRIVATE KEY-----",
+            "-----BEGIN PRIVATE KEY-----\nREDACTED",
+        ),
+        ("-----BEGIN BAD-----\n-----END PRIVATE KEY-----", "-----BEGIN BAD-----\n-----END PRIVATE KEY-----"),
+        (
+            "eyJa-sk-short-----BEGIN PRIVATE KEY-----x-----END PRIVATE KEY-----",
+            "eyJa-sk-shortREDACTED",
+        ),
+    ),
+)
+def test_token_redaction_preserves_matching_rules(text: str, expected: str) -> None:
+    assert redact_tokens(text) == expected
+
+
+@pytest.mark.parametrize("character", ("é", "²", "\u0301", "\U00014153", "\u1c89"))
+def test_token_boundaries_follow_python_unicode_version(character: str) -> None:
+    token: Final = "ghp_" + "A" * 36
+    key: Final = "AKIA" + "A" * 16
+    expected_token: Final = token if character.isalnum() else "REDACTED"
+    expected_key: Final = key if character.isalnum() else "REDACTED"
+    assert redact_tokens(character + token) == character + expected_token
+    assert redact_tokens(key + character) == expected_key + character
+
+
+@pytest.mark.parametrize(
+    "content,expected",
+    (
+        ("-----BEGIN RSA PRIVATE KEY-----\nbody\n-----END RSA PRIVATE KEY-----", "REDACTED"),
+        ("ya29." + "a" * 20, "REDACTED"),
+        ("SG." + "a" * 22 + "." + "b" * 42 + "-", "REDACTED"),
+        ("AKIA" + "A" * 16 + "é", "AKIA" + "A" * 16 + "é"),
+        (
+            "SG." + "a" * 22 + "." + "b" * 43 + "!eyJ" + "a" * 12 + ".eyJ" + "b" * 12 + ".c",
+            "REDACTED!REDACTED",
+        ),
+        (
+            "sk-" + "a" * 20,
+            "REDACTED",
+        ),
+    ),
+)
+def test_failed_jwt_header_does_not_hide_other_tokens(content: str, expected: str) -> None:
+    prefix: Final = "eyJa-"
+    assert redact_tokens(prefix + content) == prefix + expected
+
+
+@pytest.mark.parametrize("suffix", ("", "..signature", ".body."))
+def test_failed_jwt_run_masks_each_embedded_bounded_key(suffix: str) -> None:
+    run: Final = "eyJaaaaaaaaaa-AKIA" + "A" * 16 + "-"
+    expected: Final = "eyJaaaaaaaaaa-REDACTED-"
+    assert redact_tokens(run * 24_000 + suffix) == expected * 24_000 + suffix
+
+
+@pytest.mark.parametrize(
+    "text, replacement, expected",
+    (
+        ("\u0301sk-" + "a" * 20, "hidden", "\u0301hidden"),
+        ("²sk-" + "a" * 20, "hidden", "²sk-" + "a" * 20),
+        ("\ud800sk-" + "a" * 20, "hidden", "\ud800hidden"),
+        ("sk-" + "a" * 20, r"\n", "\n"),
+        ("sk-" + "a" * 20, "", ""),
+    ),
+)
+def test_token_redaction_preserves_unicode_and_replacement_semantics(
+    text: str, replacement: str, expected: str
+) -> None:
+    assert redact_tokens(text, replacement) == expected
 
 
 @pytest.fixture(autouse=True)
@@ -77,13 +208,32 @@ def test_redact_string_catches_secret_patterns():
 
 @pytest.mark.parametrize("native", (False, True), ids=("python", "rust"))
 def test_diagnostic_redaction_policy_matches_across_backends(monkeypatch: pytest.MonkeyPatch, native: bool) -> None:
-    if native:
-        pytest.importorskip("litellm.rust_bridge._native")
     monkeypatch.setenv("LITELLM_RUST", "1" if native else "0")
 
     assert redact_string("GET /v1?api_key=abcdefgh12345&page=2") == "GET /v1?REDACTED&page=2"
     assert redact_structured_value("db_url", "postgresql://reader@example.org/database") == "REDACTED"
     assert redact_internal_details("failed at /etc/service/keys on db.internal") == "failed at REDACTED on REDACTED"
+
+
+@pytest.mark.parametrize("native", (False, True), ids=("python", "rust"))
+def test_an_mcp_authorization_token_is_redacted_by_its_key_name(monkeypatch: pytest.MonkeyPatch, native: bool) -> None:
+    monkeypatch.setenv("LITELLM_RUST", "1" if native else "0")
+    body: Final = '{"mcp_servers": [{"name": "docs", "authorization_token": "opaque-mcp-credential"}]}'
+
+    assert redact_string(body) == '{"mcp_servers": [{"name": "docs", "REDACTED"}]}'
+    assert redact_structured_value("authorization_token", "opaque-mcp-credential") == "REDACTED"
+    assert redact_structured_value("authorization_note", "opaque-mcp-credential") == "opaque-mcp-credential"
+
+
+@pytest.mark.parametrize("native", (False, True), ids=("python", "rust"))
+@pytest.mark.parametrize("scheme", ("Bearer", "Basic", "bearer"))
+def test_a_value_with_an_auth_scheme_is_redacted_whole_under_a_secret_key_name(
+    monkeypatch: pytest.MonkeyPatch, native: bool, scheme: str
+) -> None:
+    monkeypatch.setenv("LITELLM_RUST", "1" if native else "0")
+    line: Final = f'data: "authorization_token": "{scheme} opaque-mcp-credential", "name": "docs"'
+
+    assert redact_string(line) == 'data: "REDACTED", "name": "docs"'
 
 
 @pytest.mark.parametrize(
@@ -467,15 +617,31 @@ def test_service_account_blob_fully_redacted():
 
 
 def test_vertex_error_message_no_credential_leak():
-    """The old Vertex error format leaked the full credential JSON.
-    The new format must not contain any credential material."""
-    new_msg = (
-        "Unable to load vertex credentials from environment. "
-        "Ensure the JSON is valid (check for unescaped newlines in private_key). "
-        "Parse error: JSONDecodeError"
+    """The old Vertex error format leaked the full credential JSON. Every message the
+    credential loader raises today must survive redaction unchanged, which it only can
+    if it never carried credential material in the first place."""
+    from litellm.llms.vertex_ai.credentials_source import (
+        VertexCredentialsFileInvalid,
+        VertexCredentialsFileUnreadable,
+        VertexCredentialsInlineNotJson,
+        raise_vertex_credentials_failure,
     )
-    result = _redact_string(new_msg)
-    assert result == new_msg  # nothing to redact
+
+    path = "/etc/litellm/vertexai.json"
+    failures = (
+        VertexCredentialsFileUnreadable(path, "No such file or directory (FileNotFoundError)"),
+        VertexCredentialsFileInvalid(path, "Invalid control character at: line 1 column 55"),
+        VertexCredentialsInlineNotJson(
+            "Expecting value: line 1 column 1 (char 0)", "Check for unescaped newlines in private_key."
+        ),
+    )
+
+    for failure in failures:
+        with pytest.raises(ValueError, match="vertex") as exc_info:
+            raise_vertex_credentials_failure(failure)
+        message = str(exc_info.value)
+        assert path not in message  # the path goes to the log, not to the API caller
+        assert redact_string(message) == message  # nothing to redact
 
 
 def test_vertex_traceback_redacts_pem():

@@ -24,22 +24,24 @@ model, spend > 0), correlated by the x-litellm-call-id header.
 
 import os
 import time
+from typing import Final
 
 import pytest
 from pydantic import BaseModel
 
 from e2e_config import settle_propagation, unique_marker
 from e2e_http import NoBody, require_successful_call, unwrap
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from models import SpendLogRow
 from passthrough_client import PassthroughClient
 
 pytestmark = pytest.mark.e2e
 
-VERTEX_MODEL = "gemini-2.5-flash"
+VERTEX_MODEL = "gemini-3.8-flash"
 # The added deployment's region and the passthrough URL's region are the same constant,
 # so they always agree; the proxy registers passthrough credentials per project+region.
-VERTEX_LOCATION = os.environ.get("VERTEXAI_LOCATION", "us-central1")
+VERTEX_LOCATION: Final = "global"
 
 
 @pytest.fixture(scope="session")
@@ -149,6 +151,15 @@ def _costed_row(client: PassthroughClient, call_id: str | None) -> SpendLogRow:
 
 
 class TestVertexPassthroughSpendTracking:
+    @meta(
+        Subject(
+            domain=Domain.SPEND_BUDGETS,
+            route=Route.PASSTHROUGH,
+            providers=(Provider.VERTEX_AI,),
+            models=(VERTEX_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_vertex_passthrough_via_managed_model_logs_cost(
         self,
         client: PassthroughClient,

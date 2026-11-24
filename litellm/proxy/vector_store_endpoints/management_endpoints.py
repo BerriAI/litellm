@@ -10,9 +10,11 @@ All /vector_store management endpoints
 
 import copy
 import json
-from typing import TYPE_CHECKING, Any, Final
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Final, Literal, overload
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 if TYPE_CHECKING:
@@ -22,6 +24,7 @@ if TYPE_CHECKING:
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import REDACTED_BY_LITELM_STRING
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.proxy._types import (
@@ -53,8 +56,16 @@ def _vector_store_table(prisma_client: "PrismaClient") -> "TableActions[_VectorS
     return ManagedVectorStoresRepository(prisma_client).table
 
 
+class _VectorStoreRowFields(TypedDict, total=False, extra_items=object):
+    pass
+
+
+def _dumped_row(row: "_VectorStoreRow") -> Mapping[str, object]:
+    return row.model_dump()
+
+
 def _row_to_vector_store(row: "_VectorStoreRow") -> LiteLLM_ManagedVectorStore:
-    return LiteLLM_ManagedVectorStore(**row.model_dump())
+    return LiteLLM_ManagedVectorStore(**_VectorStoreRowFields(**_dumped_row(row)))
 
 
 class _ConfigOwnedDetail(TypedDict):
@@ -88,8 +99,20 @@ _LITELLM_PARAMS_MASKER: Final = SensitiveDataMasker(extra_sensitive_patterns=fro
 
 _REDACT_LITELLM_PARAMS_MAX_DEPTH: Final = 10
 
+_DECODED_JSON: Final = TypeAdapter(object)
 
-def _redact_sensitive_litellm_params(litellm_params: object, _depth: int = 0) -> Any:
+
+@overload
+def _redact_sensitive_litellm_params(
+    litellm_params: dict[str, object] | None, _depth: Literal[0] = 0
+) -> dict[str, object] | None: ...
+
+
+@overload
+def _redact_sensitive_litellm_params(litellm_params: object, _depth: int = 0) -> object: ...
+
+
+def _redact_sensitive_litellm_params(litellm_params: object, _depth: int = 0) -> object:
     """
     Replace credential-bearing values in ``litellm_params`` with
     ``REDACTED_BY_LITELM`` while preserving non-secret keys (``api_base``,
@@ -115,21 +138,23 @@ def _redact_sensitive_litellm_params(litellm_params: object, _depth: int = 0) ->
         return None
     if isinstance(litellm_params, str):
         try:
-            parsed: Final[object] = json.loads(litellm_params)
+            parsed: Final = _DECODED_JSON.validate_python(json.loads(litellm_params))
         except (TypeError, ValueError):
             return REDACTED_BY_LITELM_STRING
         return json.dumps(_redact_sensitive_litellm_params(parsed, _depth + 1))
-    if not isinstance(litellm_params, dict):
+    fields: Final = as_str_mapping(litellm_params)
+    if fields is None or not isinstance(litellm_params, dict):
         return litellm_params
-    out: Final[dict[str, object]] = {}
-    for k, v in litellm_params.items():
-        if _LITELLM_PARAMS_MASKER.is_sensitive_key(k):
-            out[k] = REDACTED_BY_LITELM_STRING
-        elif isinstance(v, dict):
-            out[k] = _redact_sensitive_litellm_params(v, _depth + 1)
-        else:
-            out[k] = v
-    return out
+    return {
+        key: (
+            REDACTED_BY_LITELM_STRING
+            if _LITELLM_PARAMS_MASKER.is_sensitive_key(key)
+            else _redact_sensitive_litellm_params(value, _depth + 1)
+            if isinstance(value, dict)
+            else value
+        )
+        for key, value in fields.items()
+    }
 
 
 async def _fetch_and_authorize_vector_store(
@@ -182,8 +207,8 @@ async def create_vector_store_in_db(
     prisma_client: "PrismaClient | None",
     vector_store_name: str | None = None,
     vector_store_description: str | None = None,
-    vector_store_metadata: dict | None = None,
-    litellm_params: dict | None = None,
+    vector_store_metadata: Mapping[str, object] | None = None,
+    litellm_params: Mapping[str, object] | None = None,
     litellm_credential_name: str | None = None,
     team_id: str | None = None,
     user_id: str | None = None,
@@ -305,9 +330,7 @@ async def new_vector_store(
 
         # Extract and validate metadata
         metadata: Final = vector_store.get("vector_store_metadata")
-        validated_metadata: dict | None = None
-        if metadata is not None and isinstance(metadata, dict):
-            validated_metadata = metadata
+        validated_metadata: Final = metadata if isinstance(metadata, dict) else None
 
         new_vector_store: Final = await create_vector_store_in_db(
             vector_store_id=vector_store_id,
@@ -379,18 +402,17 @@ async def list_vector_stores(
     from litellm.proxy.proxy_server import prisma_client
 
     vector_store_map: Final[dict[str, LiteLLM_ManagedVectorStore]] = {}
-    db_vector_store_ids: Final[set] = set()
 
     try:
         # Get vector stores from database first (source of truth)
-        vector_stores_from_db: Final = await VectorStoreRegistry._get_vector_stores_from_db(prisma_client=prisma_client)
+        vector_stores_from_db: Final = await VectorStoreRegistry.get_vector_stores_from_db(prisma_client=prisma_client)
 
         # Build map from database vector stores
         for vector_store in vector_stores_from_db:
             vector_store_id = vector_store.get("vector_store_id", None)
             if vector_store_id:
                 vector_store_map[vector_store_id] = vector_store
-                db_vector_store_ids.add(vector_store_id)
+        db_vector_store_ids: Final = frozenset(vector_store_map)
 
         # Process in-memory vector stores
         if litellm.vector_store_registry is not None:
@@ -431,7 +453,7 @@ async def list_vector_stores(
                     )
 
         # Filter vector stores based on access control
-        accessible_vector_stores: Final = []
+        accessible_vector_stores: Final[list[LiteLLM_ManagedVectorStore]] = []
         for vs in await filter_listable_vector_stores(vector_store_map.values(), user_api_key_dict):
             redacted = _with_ownership(vs)
             redacted["litellm_params"] = _redact_sensitive_litellm_params(vs.get("litellm_params"))
@@ -566,26 +588,29 @@ async def get_vector_store_info(
                     )
 
                 vector_store_metadata: Final = vector_store.get("vector_store_metadata")
-                # Parse metadata if it's a JSON string
-                parsed_metadata: dict | None = None
-                if isinstance(vector_store_metadata, str):
-                    parsed_metadata = json.loads(vector_store_metadata)
-                elif isinstance(vector_store_metadata, dict):
-                    parsed_metadata = vector_store_metadata
+                parsed_metadata: Final = (
+                    _DECODED_JSON.validate_python(json.loads(vector_store_metadata))
+                    if isinstance(vector_store_metadata, str)
+                    else vector_store_metadata
+                    if isinstance(vector_store_metadata, dict)
+                    else None
+                )
 
-                vector_store_pydantic_obj: Final = LiteLLM_ManagedVectorStoresTable(
-                    vector_store_id=vector_store.get("vector_store_id") or "",
-                    custom_llm_provider=vector_store.get("custom_llm_provider") or "",
-                    vector_store_name=vector_store.get("vector_store_name") or None,
-                    vector_store_description=vector_store.get("vector_store_description") or None,
-                    vector_store_metadata=parsed_metadata,
-                    created_at=vector_store.get("created_at") or None,
-                    updated_at=vector_store.get("updated_at") or None,
-                    litellm_credential_name=vector_store.get("litellm_credential_name"),
-                    litellm_params=_redact_sensitive_litellm_params(vector_store.get("litellm_params")),
-                    team_id=vector_store.get("team_id") or None,
-                    user_id=vector_store.get("user_id") or None,
-                    is_config=vector_store.get("is_config", False),
+                vector_store_pydantic_obj: Final = LiteLLM_ManagedVectorStoresTable.model_validate(
+                    {
+                        "vector_store_id": vector_store.get("vector_store_id") or "",
+                        "custom_llm_provider": vector_store.get("custom_llm_provider") or "",
+                        "vector_store_name": vector_store.get("vector_store_name") or None,
+                        "vector_store_description": vector_store.get("vector_store_description") or None,
+                        "vector_store_metadata": parsed_metadata,
+                        "created_at": vector_store.get("created_at") or None,
+                        "updated_at": vector_store.get("updated_at") or None,
+                        "litellm_credential_name": vector_store.get("litellm_credential_name"),
+                        "litellm_params": _redact_sensitive_litellm_params(vector_store.get("litellm_params")),
+                        "team_id": vector_store.get("team_id") or None,
+                        "user_id": vector_store.get("user_id") or None,
+                        "is_config": vector_store.get("is_config", False),
+                    }
                 )
                 return {"vector_store": vector_store_pydantic_obj}
 
@@ -644,8 +669,9 @@ async def update_vector_store(
         )
 
         # Handle metadata serialization
-        if update_data.get("vector_store_metadata") is not None:
-            update_data["vector_store_metadata"] = safe_dumps(update_data["vector_store_metadata"])
+        submitted_metadata: Final[object] = update_data.get("vector_store_metadata")
+        if submitted_metadata is not None:
+            update_data["vector_store_metadata"] = safe_dumps(submitted_metadata)
 
         # Handle litellm_params if provided. As with the create path, the
         # embedding-config auto-resolve previously persisted cleartext

@@ -41,7 +41,7 @@ async def test_delete_prompt_success():
 
     # Mock user auth
     mock_user_auth = UserAPIKeyAuth(
-        api_key="sk-1234", user_role=LitellmUserRoles.PROXY_ADMIN
+        api_key="sk-9876", user_role=LitellmUserRoles.PROXY_ADMIN
     )
 
     # Mock DB Client
@@ -96,7 +96,7 @@ async def test_delete_prompt_by_base_id_success():
 
     # Mock user auth
     mock_user_auth = UserAPIKeyAuth(
-        api_key="sk-1234", user_role=LitellmUserRoles.PROXY_ADMIN
+        api_key="sk-9876", user_role=LitellmUserRoles.PROXY_ADMIN
     )
 
     # Mock DB Client
@@ -144,7 +144,7 @@ async def test_delete_prompt_by_base_id_success():
 async def test_delete_prompt_environment_scope_reaches_db_and_registry():
     from litellm.proxy.prompts.prompt_endpoints import delete_prompt
 
-    mock_user_auth = UserAPIKeyAuth(api_key="sk-1234", user_role=LitellmUserRoles.PROXY_ADMIN)
+    mock_user_auth = UserAPIKeyAuth(api_key="sk-9876", user_role=LitellmUserRoles.PROXY_ADMIN)
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_prompttable.delete_many = AsyncMock(return_value=None)
 
@@ -181,7 +181,7 @@ async def test_get_prompt_info_by_base_id():
 
     # Mock user auth
     mock_user_auth = UserAPIKeyAuth(
-        api_key="sk-1234", user_role=LitellmUserRoles.PROXY_ADMIN
+        api_key="sk-9876", user_role=LitellmUserRoles.PROXY_ADMIN
     )
 
     # Mock In-Memory Registry
@@ -226,7 +226,7 @@ async def test_patch_prompt_row_deleted_mid_update_returns_404():
     from litellm.proxy.prompts.prompt_endpoints import PatchPromptRequest, patch_prompt
 
     mock_user_auth = UserAPIKeyAuth(
-        api_key="sk-1234", user_role=LitellmUserRoles.PROXY_ADMIN
+        api_key="sk-9876", user_role=LitellmUserRoles.PROXY_ADMIN
     )
 
     target_row = _db_row("Begin every reply with AHOY")
@@ -271,7 +271,7 @@ async def test_patch_prompt_row_deleted_mid_update_returns_404():
 async def test_patch_prompt_merges_unsent_fields_from_db_row_not_stale_memory():
     from litellm.proxy.prompts.prompt_endpoints import PatchPromptRequest, patch_prompt
 
-    mock_user_auth = UserAPIKeyAuth(api_key="sk-1234", user_role=LitellmUserRoles.PROXY_ADMIN)
+    mock_user_auth = UserAPIKeyAuth(api_key="sk-9876", user_role=LitellmUserRoles.PROXY_ADMIN)
     db_row = _db_row("Begin every reply with HOWDY")
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_prompttable.find_many = AsyncMock(return_value=[db_row])
@@ -351,7 +351,7 @@ async def test_create_prompt_rejects_keyed_prompt_data_with_prompt_id():
     )
 
     mock_user_auth = UserAPIKeyAuth(
-        api_key="sk-1234", user_role=LitellmUserRoles.PROXY_ADMIN
+        api_key="sk-9876", user_role=LitellmUserRoles.PROXY_ADMIN
     )
     request = Prompt(
         prompt_id="agent-prompt",
@@ -381,7 +381,7 @@ async def test_patch_prompt_rejects_keyed_prompt_data_with_prompt_id():
     )
 
     mock_user_auth = UserAPIKeyAuth(
-        api_key="sk-1234", user_role=LitellmUserRoles.PROXY_ADMIN
+        api_key="sk-9876", user_role=LitellmUserRoles.PROXY_ADMIN
     )
     request = PatchPromptRequest(
         litellm_params=PromptLiteLLMParams(
@@ -408,7 +408,7 @@ async def test_patch_prompt_info_only_keeps_legacy_keyed_row_patchable():
     from litellm.proxy.prompts.prompt_endpoints import PatchPromptRequest, patch_prompt
 
     mock_user_auth = UserAPIKeyAuth(
-        api_key="sk-1234", user_role=LitellmUserRoles.PROXY_ADMIN
+        api_key="sk-9876", user_role=LitellmUserRoles.PROXY_ADMIN
     )
     legacy_params = PromptLiteLLMParams(
         prompt_id="agent-prompt",
@@ -481,7 +481,7 @@ async def test_update_prompt_rejects_keyed_prompt_data_with_prompt_id():
     )
 
     mock_user_auth = UserAPIKeyAuth(
-        api_key="sk-1234", user_role=LitellmUserRoles.PROXY_ADMIN
+        api_key="sk-9876", user_role=LitellmUserRoles.PROXY_ADMIN
     )
     request = Prompt(
         prompt_id="agent-prompt",

@@ -11,9 +11,11 @@ dict at call time.
 Reference: https://docs.nvidia.com/deeplearning/riva/user-guide/docs/asr/asr-overview.html
 """
 
-from typing import Any, Final
+from collections.abc import Mapping, Sequence
+from typing import Final, TypedDict
 
 from httpx import Headers, Response
+from typing_extensions import ReadOnly
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.openai import (
@@ -34,6 +36,17 @@ RIVA_TARGET_NUM_CHANNELS: Final = 1
 RIVA_TARGET_ENCODING: Final = "LINEAR_PCM"
 
 
+class RivaWordTiming(TypedDict):
+    word: ReadOnly[str]
+    start_time_ms: ReadOnly[int]
+    end_time_ms: ReadOnly[int]
+
+
+class RivaFinalResult(TypedDict):
+    transcript: ReadOnly[str]
+    words: ReadOnly[Sequence[RivaWordTiming]]
+
+
 class NvidiaRivaAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
     """
     Config for NVIDIA Riva ASR (gRPC).
@@ -50,11 +63,11 @@ class NvidiaRivaAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: dict[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         for key, value in non_default_params.items():
             if value is None:
                 continue
@@ -84,8 +97,8 @@ class NvidiaRivaAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         self,
         model: str,
         audio_file: FileTypes,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
     ) -> AudioTranscriptionRequestData:
         """
         Build a structured dict that the gRPC handler consumes. We do *not*
@@ -102,7 +115,7 @@ class NvidiaRivaAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         if endpointing_config is not None:
             recognition_config["endpointing_config"] = endpointing_config
 
-        request_payload: Final[dict[str, Any]] = {
+        request_payload: Final[dict[str, object]] = {
             "recognition_config": recognition_config,
             "response_format": optional_params.get("response_format") or "json",
             "timestamp_granularities": optional_params.get("timestamp_granularities"),
@@ -135,7 +148,7 @@ class NvidiaRivaAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         # gRPC auth is constructed in the handler, not via HTTP headers.
         return headers
 
-    def _build_recognition_config_dict(self, model: str, optional_params: dict) -> dict[str, Any]:
+    def _build_recognition_config_dict(self, model: str, optional_params: Mapping[str, object]) -> dict[str, object]:
         """
         Build the Riva ``RecognitionConfig`` shape as a plain dict.
 
@@ -159,7 +172,7 @@ class NvidiaRivaAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             "profanity_filter": optional_params.get("profanity_filter", False),
         }
 
-    def _build_endpointing_config_dict(self, optional_params: dict) -> dict[str, Any] | None:
+    def _build_endpointing_config_dict(self, optional_params: Mapping[str, object]) -> dict[str, object] | None:
         """
         Translate an OpenAI-style ``chunking_strategy`` into Riva's
         ``EndpointingConfig`` shape, or pass through an explicit
@@ -177,7 +190,7 @@ class NvidiaRivaAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             return None
 
         if isinstance(chunking, dict) and chunking.get("type") == "server_vad":
-            config: Final[dict[str, Any]] = {}
+            config: Final[dict[str, object]] = {}
             if "threshold" in chunking:
                 threshold: Final = float(chunking["threshold"])
                 config["start_threshold"] = threshold
@@ -191,7 +204,7 @@ class NvidiaRivaAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         return None
 
     @staticmethod
-    def _normalize_language_code(language: str) -> str:
+    def _normalize_language_code(language: object) -> str:
         """
         OpenAI accepts bare ISO-639 codes like ``en``; Riva requires BCP-47
         like ``en-US``. Normalize the most common bare codes; pass through
@@ -219,7 +232,7 @@ class NvidiaRivaAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
 
     @staticmethod
     def build_transcription_response(
-        final_results: list[dict[str, Any]],
+        final_results: Sequence[RivaFinalResult],
         response_format: str,
         duration_seconds: float | None,
         timestamp_granularities: list[str] | None,
@@ -245,7 +258,7 @@ class NvidiaRivaAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         response["task"] = "transcribe"
 
         if response_format == "verbose_json":
-            words: Final[list[dict[str, Any]]] = []
+            words: Final[list[dict[str, object]]] = []
             if timestamp_granularities and "word" in timestamp_granularities:
                 for item in final_results:
                     for word in item.get("words", []) or []:

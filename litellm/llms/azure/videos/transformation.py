@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from litellm.llms.azure.common_utils import BaseAzureLLM
@@ -28,7 +29,7 @@ class AzureVideoConfig(OpenAIVideoConfig):
     def __init__(self):
         super().__init__()
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         """
         Get the list of supported OpenAI parameters for video generation.
         """
@@ -47,17 +48,17 @@ class AzureVideoConfig(OpenAIVideoConfig):
         video_create_optional_params: VideoCreateOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         """No mapping applied since inputs are in OpenAI spec already"""
         return dict(video_create_optional_params)
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, str],
         model: str,
         api_key: str | None = None,
         litellm_params: GenericLiteLLMParams | None = None,
-    ) -> dict:
+    ) -> dict[str, str]:
         """
         Validate Azure environment and set up authentication headers.
         Uses _base_validate_azure_environment to properly handle credentials from litellm_credential_name.
@@ -72,18 +73,18 @@ class AzureVideoConfig(OpenAIVideoConfig):
         # Use the base Azure validation method which properly handles:
         # 1. Credentials from litellm_credential_name via litellm_params
         # 2. Sets the correct "api-key" header (not "Authorization: Bearer")
-        return BaseAzureLLM._base_validate_azure_environment(headers=headers, litellm_params=litellm_params)
+        return BaseAzureLLM.base_validate_azure_environment(headers=headers, litellm_params=litellm_params)
 
     def get_complete_url(
         self,
         model: str,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> str:
         """
         Constructs a complete URL for the API request.
         """
-        return BaseAzureLLM._get_base_azure_url(
+        return BaseAzureLLM.get_base_azure_url(
             api_base=api_base,
             litellm_params=litellm_params,
             route="/openai/v1/videos",

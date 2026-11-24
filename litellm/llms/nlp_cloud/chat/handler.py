@@ -3,11 +3,14 @@ from collections.abc import Callable
 from typing import Final
 
 import litellm
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    _get_httpx_client,
+    get_httpx_client,
 )
+from litellm.types.llms.openai import AllMessageValues
 from litellm.utils import ModelResponse
 
 from .transformation import NLPCloudConfig
@@ -17,17 +20,17 @@ nlp_config: Final = NLPCloudConfig()
 
 def completion(
     model: str,
-    messages: list,
+    messages: list[AllMessageValues],
     api_base: str,
     model_response: ModelResponse,
-    print_verbose: Callable,
-    encoding,
+    print_verbose: Callable[..., object],
+    encoding: Tokenizer,
     api_key,
-    logging_obj,
+    logging_obj: LiteLLMLoggingObj,
     optional_params: dict,
     litellm_params: dict,
-    logger_fn=None,
-    default_max_tokens_to_sample=None,
+    logger_fn: object = None,
+    default_max_tokens_to_sample: object = None,
     client: HTTPHandler | AsyncHTTPHandler | None = None,
     headers={},
 ):
@@ -73,7 +76,7 @@ def completion(
     )
     ## COMPLETION CALL
     if client is None or not isinstance(client, HTTPHandler):
-        client = _get_httpx_client()
+        client = get_httpx_client()
 
     response: Final = client.post(
         completion_url,

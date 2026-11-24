@@ -1,28 +1,34 @@
 """
 Supports writing files to Google AI Studio Files API.
 
-For vertex ai, check out the vertex_ai/files/handler.py file.
+For vertex ai, check out the vertex_ai/files/transformation.py file.
 """
 
+import re
 import time
 from collections.abc import Mapping
-from typing import Final, Literal, TypedDict
-from urllib.parse import urlparse
+from datetime import datetime
+from typing import Final, Literal, Protocol
 
 import httpx
 from openai.types.file_deleted import FileDeleted
-from typing_extensions import ReadOnly, Required
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.litellm_core_utils.core_helpers import int_of, require_attributes, require_get, subscript
+from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
+    extract_file_data,
+)
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.base_llm.files.transformation import (
     BaseFilesConfig,
     LiteLLMLoggingObj,
 )
+from litellm.llms.gemini.files.utils import gemini_file_id
 from litellm.types.llms.openai import (
     AllMessageValues,
     CreateFileRequest,
+    FileContentRequest,
     HttpxBinaryResponseContent,
     OpenAICreateFileRequestOptionalParams,
     OpenAIFileObject,
@@ -31,24 +37,37 @@ from litellm.types.utils import LlmProviders
 
 from ..common_utils import GeminiModelInfo
 
-
-class _GeminiFileMetadata(TypedDict, total=False):
-    name: ReadOnly[str]
-    uri: ReadOnly[Required[str]]
-    displayName: ReadOnly[Required[str]]
-    mimeType: ReadOnly[str]
-    sizeBytes: ReadOnly[Required[str]]
-    createTime: ReadOnly[Required[str]]
-    updateTime: ReadOnly[str]
-    expirationTime: ReadOnly[str]
-    sha256Hash: ReadOnly[str]
-    state: ReadOnly[str]
-    source: ReadOnly[str]
-    error: ReadOnly[Mapping[str, object]]
+_DECODED_JSON: Final = TypeAdapter(object)
+_RFC3339_PARTS: Final = re.compile(r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(\.\d+)?([+-]\d{2}:\d{2})")
 
 
-class _GeminiCreateFileResponse(TypedDict):
-    file: ReadOnly[_GeminiFileMetadata]
+class _ReplaceableText(Protocol):
+    def replace(self, old: str, new: str, /) -> str: ...
+
+
+def _gemini_timestamp(rfc3339: object) -> int:
+    """Gemini stamps files with up to nine fractional digits and a Z suffix; Python 3.10's
+    fromisoformat takes neither, so trim the fraction to microseconds and spell out UTC."""
+    parts: Final = _RFC3339_PARTS.fullmatch(
+        require_attributes(rfc3339, _ReplaceableText, "replace").replace("Z", "+00:00")
+    )
+    if parts is None:
+        raise ValueError(f"Unrecognized Gemini timestamp: {rfc3339}")
+    seconds, fraction, offset = parts.groups()
+    return int(datetime.fromisoformat(f"{seconds}{(fraction or '')[:7]}{offset}").timestamp())
+
+
+def gemini_file_name(file_id: str) -> str:
+    """
+    Normalize a file identifier into Gemini's `files/{id}` resource name.
+
+    Supports:
+    - `abc123`
+    - `files/abc123`
+    - `https://generativelanguage.googleapis.com/v1beta/files/abc123`
+    """
+    bare_id: Final = gemini_file_id(file_id)
+    return f"files/{encode_url_path_segment(bare_id, field_name='file_id')}"
 
 
 class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
@@ -106,8 +125,7 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
         if not final_api_key:
             raise ValueError("api_key is required")
 
-        url: Final = f"{api_base}/{endpoint}"
-        return url
+        return join_api_base(api_base, endpoint)
 
     def get_supported_openai_params(self, model: str) -> list[OpenAICreateFileRequestOptionalParams]:
         return []
@@ -184,28 +202,21 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
         Transform Gemini's file upload response into OpenAI-style FileObject
         """
         try:
-            response_json: Final[_GeminiCreateFileResponse] = raw_response.json()
-
-            response_object: Final = response_json["file"]
+            response_object: Final = subscript(_DECODED_JSON.validate_python(raw_response.json()), "file")
 
             # Extract file information from Gemini response
 
-            return OpenAIFileObject(
-                id=response_object["uri"],  # Gemini uses URI as identifier
-                bytes=int(response_object["sizeBytes"]),  # Gemini doesn't return file size
-                created_at=int(
-                    time.mktime(
-                        time.strptime(
-                            response_object["createTime"].replace("Z", "+00:00"),
-                            "%Y-%m-%dT%H:%M:%S.%f%z",
-                        )
-                    )
-                ),
-                filename=response_object["displayName"],
-                object="file",
-                purpose="user_data",  # Default to assistants as that's the main use case
-                status="uploaded",
-                status_details=None,
+            return OpenAIFileObject.model_validate(
+                {
+                    "id": subscript(response_object, "uri"),  # Gemini uses URI as identifier
+                    "bytes": int_of(subscript(response_object, "sizeBytes")),  # Gemini doesn't return file size
+                    "created_at": _gemini_timestamp(subscript(response_object, "createTime")),
+                    "filename": subscript(response_object, "displayName"),
+                    "object": "file",
+                    "purpose": "user_data",  # Default to assistants as that's the main use case
+                    "status": "uploaded",
+                    "status_details": None,
+                }
             )
         except Exception as e:
             verbose_logger.exception("Error parsing file upload response: %s", e)
@@ -235,41 +246,17 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
 
         file_part: Final = self._normalize_gemini_file_id(file_id)
 
-        api_base = self.get_api_base(litellm_params.get("api_base")) or "https://generativelanguage.googleapis.com"
-        api_base = api_base.rstrip("/")
+        api_base: Final = (
+            self.get_api_base(litellm_params.get("api_base")) or "https://generativelanguage.googleapis.com"
+        )
 
-        url: Final = f"{api_base}/v1beta/{file_part}"
+        url: Final = join_api_base(api_base, f"v1beta/{file_part}")
 
         # API key is passed via x-goog-api-key header (set in validate_environment)
         return url, {}
 
     def _normalize_gemini_file_id(self, file_id: str) -> str:
-        """
-        Normalize file identifier into `files/{id}` form.
-
-        Supports:
-        - `abc123`
-        - `files/abc123`
-        - `https://generativelanguage.googleapis.com/v1beta/files/abc123`
-        """
-        if file_id.startswith(("http://", "https://")):
-            parsed: Final = urlparse(file_id)
-            path: Final = parsed.path.lstrip("/")
-            files_index: Final = path.find("files/")
-            if files_index != -1:
-                normalized_file_id = path[files_index:]
-            else:
-                normalized_file_id = path
-        else:
-            normalized_file_id = file_id
-
-        normalized_file_id = normalized_file_id.strip("/")
-        if normalized_file_id.startswith("files/"):
-            normalized_file_id = normalized_file_id.removeprefix("files/")
-
-        encoded_file_id: Final = encode_url_path_segment(normalized_file_id, field_name="file_id")
-
-        return f"files/{encoded_file_id}"
+        return gemini_file_name(file_id)
 
     def transform_retrieve_file_response(
         self,
@@ -282,8 +269,9 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
         """
         try:
             verbose_logger.debug("Retrieve file response: %s", raw_response.text)
-            response_json: Final[_GeminiFileMetadata] = raw_response.json()
-            verbose_logger.debug("Response JSON: %s", response_json)
+            decoded_response: Final = _DECODED_JSON.validate_python(raw_response.json())
+            verbose_logger.debug("Response JSON: %s", decoded_response)
+            response_json: Final = require_get(decoded_response)
             # Map Gemini state to OpenAI status
             gemini_state: Final = response_json.get("state", "STATE_UNSPECIFIED")
             # Explicitly type status as the Literal union
@@ -294,22 +282,17 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
             else:
                 status = "uploaded"
 
-            return OpenAIFileObject(
-                id=response_json.get("uri", ""),
-                bytes=int(response_json.get("sizeBytes", 0)),
-                created_at=int(
-                    time.mktime(
-                        time.strptime(
-                            response_json["createTime"].replace("Z", "+00:00"),
-                            "%Y-%m-%dT%H:%M:%S.%f%z",
-                        )
-                    )
-                ),
-                filename=response_json.get("displayName", ""),
-                object="file",
-                purpose="user_data",
-                status=status,
-                status_details=(str(response_json.get("error", "")) if gemini_state == "FAILED" else None),
+            return OpenAIFileObject.model_validate(
+                {
+                    "id": response_json.get("uri", ""),
+                    "bytes": int_of(response_json.get("sizeBytes", 0)),
+                    "created_at": _gemini_timestamp(subscript(response_json, "createTime")),
+                    "filename": response_json.get("displayName", ""),
+                    "object": "file",
+                    "purpose": "user_data",
+                    "status": status,
+                    "status_details": (str(response_json.get("error", "")) if gemini_state == "FAILED" else None),
+                }
             )
         except Exception as e:
             verbose_logger.exception("Error parsing file retrieve response: %s", e)
@@ -345,7 +328,7 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
         file_name: Final = self._normalize_gemini_file_id(file_id)
 
         # Construct the delete URL
-        url: Final = f"{api_base}/v1beta/{file_name}"
+        url: Final = join_api_base(api_base, f"v1beta/{file_name}")
 
         # Add API key as header (Google AI Studio uses x-goog-api-key header)
         params: Final[dict] = {}
@@ -401,11 +384,19 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
 
     def transform_file_content_request(
         self,
-        file_content_request,
-        optional_params: dict,
-        litellm_params: dict,
-    ) -> tuple[str, dict]:
-        raise NotImplementedError("GoogleAIStudioFilesHandler does not support file content retrieval")
+        file_content_request: FileContentRequest,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
+    ) -> tuple[str, dict[str, str]]:  # mutable-ok: BaseFilesConfig signature
+        file_id: Final = file_content_request.get("file_id")
+        if file_id is None:
+            raise ValueError("file_id is required to download file content")
+        api_base: Final = litellm_params.get("api_base")
+        url: Final = join_api_base(
+            self.get_api_base(api_base if isinstance(api_base, str) else None),
+            f"download/v1beta/{gemini_file_name(file_id)}:download",
+        )
+        return url, {"alt": "media"}
 
     def transform_file_content_response(
         self,
@@ -413,4 +404,4 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
         logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
     ) -> HttpxBinaryResponseContent:
-        raise NotImplementedError("GoogleAIStudioFilesHandler does not support file content retrieval")
+        return HttpxBinaryResponseContent(response=raw_response)

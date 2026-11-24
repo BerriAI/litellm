@@ -3,10 +3,13 @@ from datetime import datetime, timezone
 from typing import Final
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
+import respx
 
 # langfuse_client_init imports this lazily; cache it before any test mocks
 # sys.modules["langfuse"], or a single-file run dies on the real import
+import litellm
 import litellm.integrations.langfuse.langfuse_sdk  # noqa: F401
 from litellm.integrations.langfuse.langfuse_prompt_management import (
     LangfusePromptManagement,
@@ -68,14 +71,14 @@ class TestLangfusePromptManagement:
     def test_langfuse_client_init_passes_dedicated_httpx_client(self):
         import httpx
 
-        from litellm.llms.custom_httpx.http_handler import _get_httpx_client
+        from litellm.llms.custom_httpx.http_handler import get_httpx_client
 
-        shared_client = _get_httpx_client().client
+        shared_client = get_httpx_client().client
         built = MagicMock()
         with (
             patch(
                 "litellm.integrations.langfuse.langfuse_prompt_management.resolve_langfuse_credentials",
-                return_value=("pk-1234", "sk-1234", "https://localhost"),
+                return_value=("pk-1234", "sk-9876", "https://localhost"),
             ),
             patch(
                 "litellm.integrations.langfuse.langfuse_sdk.build_langfuse_client", built
@@ -87,7 +90,7 @@ class TestLangfusePromptManagement:
         ):
             langfuse_client_init(
                 langfuse_public_key="pk-1234",
-                langfuse_secret="sk-1234",
+                langfuse_secret="sk-9876",
                 langfuse_host="https://localhost",
             )
 
@@ -278,3 +281,45 @@ def test_prompt_cache_ttl_typo_is_named_instead_of_reported_as_not_installed(mon
 
     assert "not installed" not in str(raised.value)
     assert repr(raw) in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    ("otel_v2", "allowed_hosts", "expected_error"),
+    [
+        ("true", [], ValueError),
+        ("true", ["tenant.langfuse.example"], litellm.integrations.langfuse.langfuse_sdk.LangfusePromptError),
+        ("false", [], litellm.integrations.langfuse.langfuse_sdk.LangfusePromptError),
+    ],
+    ids=["v2-refused", "v2-allowlisted", "v1-unchecked"],
+)
+def test_prompt_fetch_never_reaches_a_key_langfuse_host_refused_by_otel_v2(
+    monkeypatch: pytest.MonkeyPatch, otel_v2: str, allowed_hosts: list[str], expected_error: type[Exception]
+) -> None:
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled
+
+    monkeypatch.setenv("LITELLM_OTEL_V2", otel_v2)
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "operator_public")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "operator_secret")
+    monkeypatch.setattr(litellm, "provider_url_destination_allowed_hosts", allowed_hosts)
+    is_otel_v2_enabled.cache_clear()
+    langfuse_client_init.cache_clear()
+    try:
+        with respx.mock(assert_all_called=False) as router:
+            key_host: Final = router.route(host="tenant.langfuse.example").mock(
+                return_value=httpx.Response(404, json={"message": "not found"})
+            )
+            with pytest.raises(expected_error):
+                LangfusePromptManagement().should_run_prompt_management(
+                    prompt_id="tenant-prompt",
+                    prompt_spec=None,
+                    dynamic_callback_params={
+                        "langfuse_public_key": "tenant_public",
+                        "langfuse_secret_key": "tenant_secret",
+                        "langfuse_host": "https://tenant.langfuse.example",
+                    },
+                )
+    finally:
+        is_otel_v2_enabled.cache_clear()
+        langfuse_client_init.cache_clear()
+
+    assert key_host.called is (expected_error is not ValueError)

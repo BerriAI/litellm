@@ -5,9 +5,9 @@ from typing import Final, Literal
 import litellm
 from litellm import verbose_logger
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
-    _is_above_128k,
     generic_cost_per_token,
     get_vertex_regional_endpoint_uplift,
+    is_above_128k,
 )
 from litellm.types.utils import ModelInfo, Usage
 
@@ -100,7 +100,7 @@ def cost_per_character(
     else:
         try:
             if (
-                _is_above_128k(tokens=prompt_characters * 4)  # 1 token = 4 char
+                is_above_128k(tokens=prompt_characters * 4)  # 1 token = 4 char
                 and model not in models_without_dynamic_pricing
             ):
                 ## check if character pricing, else default to token pricing
@@ -142,7 +142,7 @@ def cost_per_character(
         completion_tokens: Final = usage.completion_tokens
         try:
             if (
-                _is_above_128k(tokens=completion_characters * 4)  # 1 token = 4 char
+                is_above_128k(tokens=completion_characters * 4)  # 1 token = 4 char
                 and model not in models_without_dynamic_pricing
             ):
                 assert (
@@ -186,14 +186,14 @@ def _handle_128k_pricing(
     prompt_tokens: Final = usage.prompt_tokens
     completion_tokens: Final = usage.completion_tokens
 
-    if _is_above_128k(tokens=prompt_tokens) and input_cost_per_token_above_128k_tokens is not None:
+    if is_above_128k(tokens=prompt_tokens) and input_cost_per_token_above_128k_tokens is not None:
         prompt_cost = prompt_tokens * input_cost_per_token_above_128k_tokens
     else:
         prompt_cost = prompt_tokens * (model_info["input_cost_per_token"] or 0.0)
 
     ## CALCULATE OUTPUT COST
     output_cost_per_token_above_128k_tokens = model_info.get("output_cost_per_token_above_128k_tokens")
-    if _is_above_128k(tokens=completion_tokens) and output_cost_per_token_above_128k_tokens is not None:
+    if is_above_128k(tokens=completion_tokens) and output_cost_per_token_above_128k_tokens is not None:
         completion_cost = completion_tokens * output_cost_per_token_above_128k_tokens
     else:
         completion_cost = completion_tokens * (model_info["output_cost_per_token"] or 0.0)

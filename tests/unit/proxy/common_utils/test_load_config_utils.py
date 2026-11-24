@@ -13,16 +13,16 @@ from litellm.proxy.common_utils.load_config_utils import (
     get_file_contents_from_s3,
     resolve_bucket_includes,
 )
+from tests._master_key import MASTER_KEY
 
 
 class TestGetFileContentsFromS3:
     """Test suite for S3 config loading functionality."""
 
     @patch("boto3.client")
-    @patch("litellm.main.bedrock_converse_chat_completion")
     @patch("yaml.safe_load")
     def test_get_file_contents_from_s3_no_temp_file_creation(
-        self, mock_yaml_load, mock_bedrock, mock_boto3_client
+        self, mock_yaml_load, mock_boto3_client, monkeypatch
     ):
         """
         Test that get_file_contents_from_s3 doesn't create temporary files
@@ -32,12 +32,9 @@ class TestGetFileContentsFromS3:
 
         Relevant issue/PR: https://github.com/BerriAI/litellm/pull/12078
         """
-        # Mock credentials
-        mock_credentials = MagicMock()
-        mock_credentials.access_key = "test_access_key"
-        mock_credentials.secret_key = "test_secret_key"
-        mock_credentials.token = "test_token"
-        mock_bedrock.get_credentials.return_value = mock_credentials
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "test_access_key")
+        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "test_secret_key")
+        monkeypatch.setenv("AWS_SESSION_TOKEN", "test_token")
 
         # Mock S3 client and response
         mock_s3_client = MagicMock()
@@ -106,7 +103,7 @@ class TestBucketConfigIncludes:
     @pytest.mark.asyncio
     async def test_include_resolves_against_the_config_objects_prefix(self):
         merged = await resolve_bucket_includes(
-            config={"include": ["model_config.yaml"], "general_settings": {"master_key": "sk-1234"}},
+            config={"include": ["model_config.yaml"], "general_settings": {"master_key": MASTER_KEY}},
             object_key="configs/prod/config.yaml",
             fetch=self._bucket(
                 {"configs/prod/model_config.yaml": {"model_list": [{"model_name": "gpt-4o-mini"}]}}
@@ -114,7 +111,7 @@ class TestBucketConfigIncludes:
         )
 
         assert merged == {
-            "general_settings": {"master_key": "sk-1234"},
+            "general_settings": {"master_key": MASTER_KEY},
             "model_list": [{"model_name": "gpt-4o-mini"}],
         }
 
@@ -256,7 +253,7 @@ class TestBucketConfigIncludes:
         objects = {
             "lit6982/config.yaml": {
                 "include": ["model_config.yaml"],
-                "general_settings": {"master_key": "sk-1234"},
+                "general_settings": {"master_key": MASTER_KEY},
             },
             "lit6982/model_config.yaml": {"model_list": [{"model_name": "included-model"}]},
         }
@@ -270,7 +267,7 @@ class TestBucketConfigIncludes:
         )
 
         assert config == {
-            "general_settings": {"master_key": "sk-1234"},
+            "general_settings": {"master_key": MASTER_KEY},
             "model_list": [{"model_name": "included-model"}],
         }
 
@@ -347,7 +344,7 @@ class TestBucketConfigIncludes:
         objects = {
             "lit6982/config.yaml": {
                 "include": ["model_config.yaml"],
-                "general_settings": {"master_key": "sk-1234"},
+                "general_settings": {"master_key": MASTER_KEY},
             },
             "lit6982/model_config.yaml": {"model_list": [{"model_name": "included-model"}]},
         }
@@ -373,7 +370,7 @@ class TestBucketConfigIncludes:
         )
 
         assert config == {
-            "general_settings": {"master_key": "sk-1234"},
+            "general_settings": {"master_key": MASTER_KEY},
             "model_list": [{"model_name": "included-model"}],
         }
         assert [bucket.requested for bucket in buckets] == [

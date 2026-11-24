@@ -6,6 +6,7 @@ Why separate file? Make it easy to see how transformation works
 Docs - https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-titan-embed-mm.html
 """
 
+from collections.abc import Mapping
 from typing import Final
 
 from litellm.types.llms.bedrock import (
@@ -33,13 +34,15 @@ class AmazonTitanMultimodalEmbeddingG1Config:
     def get_supported_openai_params(self) -> list[str]:
         return ["dimensions"]
 
-    def map_openai_params(self, non_default_params: dict, optional_params: dict) -> dict:
+    def map_openai_params(self, non_default_params: dict, optional_params: dict[str, object]) -> dict[str, object]:
         for k, v in non_default_params.items():
             if k == "dimensions":
                 optional_params["embeddingConfig"] = AmazonTitanMultimodalEmbeddingConfig(outputEmbeddingLength=v)
         return optional_params
 
-    def _transform_request(self, input: str, inference_params: dict) -> AmazonTitanMultimodalEmbeddingRequest:
+    def _transform_request(
+        self, input: str, inference_params: Mapping[str, object]
+    ) -> AmazonTitanMultimodalEmbeddingRequest:
         ## check if b64 encoded str or not ##
         is_encoded: Final = is_base64_encoded(input)
         if is_encoded:  # check if string is b64 encoded image or not
@@ -52,11 +55,18 @@ class AmazonTitanMultimodalEmbeddingG1Config:
             transformed_request[k] = v
         return transformed_request
 
+    def transform_request(
+        self,
+        input: str,
+        inference_params: dict[str, object],  # mutable-ok: mirrors override contract
+    ) -> AmazonTitanMultimodalEmbeddingRequest:
+        return self._transform_request(input, inference_params)
+
     def _transform_response(
         self,
         response_list: list[dict],
         model: str,
-        batch_data: list[dict] | None = None,
+        batch_data: list[dict[str, object]] | None = None,
     ) -> EmbeddingResponse:
         total_prompt_tokens = 0
         transformed_responses: Final[list[Embedding]] = []
@@ -91,3 +101,11 @@ class AmazonTitanMultimodalEmbeddingG1Config:
             prompt_tokens_details=prompt_tokens_details,
         )
         return EmbeddingResponse(model=model, usage=usage, data=transformed_responses)
+
+    def transform_response(
+        self,
+        response_list: list[dict[str, object]],  # mutable-ok: mirrors override contract
+        model: str,
+        batch_data: list[dict[str, object]] | None = None,  # mutable-ok: mirrors override contract
+    ) -> EmbeddingResponse:
+        return self._transform_response(response_list, model, batch_data)

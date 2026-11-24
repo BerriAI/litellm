@@ -61,8 +61,8 @@ def chat(candidate: Gateway, model: str, key: str, marker: str, *, stream: bool 
 
 def upstream_observations(gateway: Gateway) -> tuple[dict[str, JsonValue], ...]:
     with httpx.Client(timeout=5, trust_env=False) as client:
-        drained: Final = object_value(client.get(f"{gateway.upstream_url}/__observations").json())
-    requests: Final = drained["requests"]
+        observed: Final = object_value(client.get(f"{gateway.upstream_url}/__observations").json())
+    requests: Final = observed["requests"]
     assert isinstance(requests, list)
     return tuple(object_value(entry) for entry in requests)
 

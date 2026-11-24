@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionRequest
 
 if TYPE_CHECKING:
@@ -16,11 +17,15 @@ else:
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
-from ..common_utils import HuggingFaceError, _fetch_inference_provider_mapping
+from ..common_utils import HuggingFaceError, fetch_inference_provider_mapping
 
 logger: Final = logging.getLogger(__name__)
 
 BASE_URL: Final = "https://router.huggingface.co"
+
+
+def _api_base_from_env() -> str | None:
+    return os.getenv("HF_API_BASE") or os.getenv("HUGGINGFACE_API_BASE")
 
 
 def _build_chat_completion_url(model_url: str) -> str:
@@ -29,11 +34,11 @@ def _build_chat_completion_url(model_url: str) -> str:
 
     # Append /chat/completions if not already present
     if model_url.endswith("/v1"):
-        model_url += "/chat/completions"
+        model_url = join_api_base(model_url, "chat/completions")
 
     # Append /v1/chat/completions if not already present
     if not model_url.endswith("/chat/completions"):
-        model_url += "/v1/chat/completions"
+        model_url = join_api_base(model_url, "v1/chat/completions")
 
     return model_url
 
@@ -95,8 +100,8 @@ class HuggingFaceChatConfig(OpenAIGPTConfig):
         if api_base is not None:
             complete_url = api_base
             complete_url = _build_chat_completion_url(complete_url)
-        elif os.getenv("HF_API_BASE") or os.getenv("HUGGINGFACE_API_BASE"):
-            complete_url = str(os.getenv("HF_API_BASE")) or str(os.getenv("HUGGINGFACE_API_BASE"))
+        elif env_api_base := _api_base_from_env():
+            complete_url = env_api_base
         elif model.startswith(("http://", "https://")):
             complete_url = model
             complete_url = _build_chat_completion_url(complete_url)
@@ -127,9 +132,13 @@ class HuggingFaceChatConfig(OpenAIGPTConfig):
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
-    ) -> dict:
-        if litellm_params.get("api_base"):
-            return dict(ChatCompletionRequest(model=model, messages=messages, **optional_params))
+    ) -> dict[str, object]:
+        lacks_explicit_api_base: Final = not litellm_params.get("api_base")
+        if not lacks_explicit_api_base or _api_base_from_env():
+            endpoint_messages: Final = (
+                self._transform_messages(messages=messages, model=model) if lacks_explicit_api_base else messages
+            )
+            return dict(ChatCompletionRequest(model=model, messages=endpoint_messages, **optional_params))
         if "max_retries" in optional_params:
             logger.warning("`max_retries` is not supported. It will be ignored.")
             optional_params.pop("max_retries", None)
@@ -138,7 +147,7 @@ class HuggingFaceChatConfig(OpenAIGPTConfig):
         if "/" in remaining:
             provider: Final = first_part
             model_id: Final = remaining
-            provider_mapping = _fetch_inference_provider_mapping(model_id)
+            provider_mapping = fetch_inference_provider_mapping(model_id)
             if provider not in provider_mapping:
                 raise HuggingFaceError(
                     message=f"Model {model_id} is not supported for provider {provider}",

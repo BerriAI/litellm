@@ -940,10 +940,10 @@ async def test_a_real_non_guardrail_enforcement_hook_drops_its_record(monkeypatc
     pins that, because the other tests raise their own exceptions.
     """
     import litellm
-    from litellm.proxy.hooks.prompt_injection_detection import _OPTIONAL_PromptInjectionDetection
+    from litellm.proxy.hooks.prompt_injection_detection import OPTIONAL_PromptInjectionDetection
     from litellm.proxy._types import LiteLLMPromptInjectionParams
 
-    hook = _OPTIONAL_PromptInjectionDetection(
+    hook = OPTIONAL_PromptInjectionDetection(
         prompt_injection_params=LiteLLMPromptInjectionParams(heuristics_check=True)
     )
     monkeypatch.setattr(litellm, "callbacks", [hook])

@@ -21,6 +21,7 @@ The API uses these endpoints:
 See: https://learn.microsoft.com/en-us/azure/ai-foundry/agents/quickstart
 """
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
@@ -184,13 +185,20 @@ class AzureAIAgentsConfig(BaseConfig):
         # Extract from model name using the static method
         return self.get_agent_id_from_model(model)
 
+    def get_agent_id(
+        self,
+        model: str,
+        optional_params: dict[str, object],  # mutable-ok: mirrors override contract
+    ) -> str:
+        return self._get_agent_id(model, optional_params)
+
     def transform_request(
         self,
         model: str,
         messages: list[AllMessageValues],
         optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
+        litellm_params: Mapping[str, object],
+        headers: Mapping[str, object],
     ) -> dict:
         """
         Transform the request for Azure Agents.
@@ -201,7 +209,7 @@ class AzureAIAgentsConfig(BaseConfig):
         agent_id: Final = self._get_agent_id(model, optional_params)
 
         # Convert messages to a format we can use
-        converted_messages: Final = []
+        converted_messages: Final[list[dict[str, object]]] = []
         for msg in messages:
             role = msg.get("role", "user")
             content = msg.get("content", "")
@@ -216,7 +224,7 @@ class AzureAIAgentsConfig(BaseConfig):
 
             converted_messages.append({"role": role, "content": content})
 
-        payload: Final[dict[str, Any]] = {
+        payload: Final[dict[str, object]] = {
             "agent_id": agent_id,
             "messages": converted_messages,
             "api_version": self._get_api_version(optional_params),
@@ -260,7 +268,9 @@ class AzureAIAgentsConfig(BaseConfig):
 
         return headers
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: Mapping[str, object] | httpx.Headers
+    ) -> BaseLLMException:
         return AzureAIAgentsError(status_code=status_code, message=error_message)
 
     def should_fake_stream(
@@ -292,10 +302,10 @@ class AzureAIAgentsConfig(BaseConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
+        request_data: Mapping[str, object],
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
@@ -316,7 +326,7 @@ class AzureAIAgentsConfig(BaseConfig):
         logging_obj: LiteLLMLoggingObj,
         optional_params: dict,
         litellm_params: dict,
-        timeout: float | Any,
+        timeout: float | str | httpx.Timeout | None,
         acompletion: bool,
         stream: bool | None = False,
         headers: dict | None = None,

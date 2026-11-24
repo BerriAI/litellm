@@ -2,14 +2,31 @@
 Support for gpt model family
 """
 
-from typing import Final
+from collections.abc import Mapping
+from typing import Final, Protocol
 
+from litellm.litellm_core_utils.core_helpers import iter_items, require_attributes, subscript
+from litellm.litellm_core_utils.hidden_params import set_hidden_param
 from litellm.llms.base_llm.completion.transformation import BaseTextCompletionConfig
 from litellm.types.llms.openai import AllMessageValues, OpenAITextCompletionUserMessage
-from litellm.types.utils import Choices, Message, ModelResponse, TextCompletionResponse
+from litellm.types.utils import Choices, ModelResponse, TextCompletionResponse
 
 from ..chat.gpt_transformation import OpenAIGPTConfig
-from .utils import _transform_prompt
+from .utils import transform_prompt
+
+
+class _SupportsGetWithDefault(Protocol):
+    def get(self, key: str, default: None, /) -> object: ...
+
+
+def _chat_choice(text_choice: object, index: int) -> Choices:
+    message: Final = Choices(message={"content": subscript(text_choice, "text"), "role": "assistant"}).message
+    return Choices(
+        finish_reason=subscript(text_choice, "finish_reason"),
+        index=index,
+        message=message,
+        logprobs=require_attributes(text_choice, _SupportsGetWithDefault, "get").get("logprobs", None),
+    )
 
 
 class OpenAITextCompletionConfig(BaseTextCompletionConfig, OpenAIGPTConfig):
@@ -69,7 +86,7 @@ class OpenAITextCompletionConfig(BaseTextCompletionConfig, OpenAIGPTConfig):
         temperature: float | None = None,
         top_p: float | None = None,
     ) -> None:
-        locals_: Final = locals().copy()
+        locals_: Final[Mapping[str, object]] = dict(locals())
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -87,19 +104,10 @@ class OpenAITextCompletionConfig(BaseTextCompletionConfig, OpenAIGPTConfig):
             ## RESPONSE OBJECT
             if response_object is None or model_response_object is None:
                 raise ValueError("Error in response object format")
-            choice_list: Final[list[Choices]] = []
-            for idx, choice in enumerate(response_object["choices"]):
-                message = Message(
-                    content=choice["text"],
-                    role="assistant",
-                )
-                choice = Choices(
-                    finish_reason=choice["finish_reason"],
-                    index=idx,
-                    message=message,
-                    logprobs=choice.get("logprobs", None),
-                )
-                choice_list.append(choice)
+            choice_list: Final[list[Choices]] = [
+                _chat_choice(choice, idx)
+                for idx, choice in enumerate(iter_items(subscript(response_object, "choices")))
+            ]
             model_response_object.choices = choice_list
 
             if "usage" in response_object:
@@ -111,14 +119,16 @@ class OpenAITextCompletionConfig(BaseTextCompletionConfig, OpenAIGPTConfig):
             if "model" in response_object:
                 model_response_object.model = response_object["model"]
 
-            model_response_object._hidden_params["original_response"] = (
-                response_object  # track original response, if users make a litellm.text_completion() request, we can return the original response
+            set_hidden_param(
+                model_response_object,
+                "original_response",
+                response_object,
             )
             return model_response_object
         except Exception as e:
             raise e
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         return [
             "functions",
             "function_call",
@@ -149,8 +159,8 @@ class OpenAITextCompletionConfig(BaseTextCompletionConfig, OpenAIGPTConfig):
         messages: list[AllMessageValues] | list[OpenAITextCompletionUserMessage],
         optional_params: dict,
         headers: dict,
-    ) -> dict:
-        prompt: Final = _transform_prompt(messages)
+    ) -> dict[str, object]:
+        prompt: Final = transform_prompt(messages)
         return {
             "model": model,
             "prompt": prompt,

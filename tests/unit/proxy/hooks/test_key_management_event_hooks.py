@@ -6,13 +6,67 @@ Validates that email and secret manager operations are independent and non-block
 
 import asyncio
 import json
+from collections.abc import Sequence
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-
+from litellm.proxy._types import (
+    GenerateKeyRequest,
+    GenerateKeyResponse,
+    LiteLLM_VerificationToken,
+    UpdateKeyRequest,
+    UserAPIKeyAuth,
+)
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
+from litellm.proxy.management_helpers.audit_logs import drain_audit_tasks
+from litellm.proxy.utils import hash_token
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["created", "updated", "rotated", "deleted"])
+async def test_impersonated_key_writes_preserve_actor_attribution(action: str) -> None:
+    actor_hash: Final = hash_token("sk-original-audit-actor")
+    auth: Final = UserAPIKeyAuth(api_key=None, token=actor_hash, user_id="subject").model_copy(
+        update={"impersonated_by": "service-key"}
+    )
+    database: Final = MagicMock()
+    database.db.litellm_auditlog.create = AsyncMock()
+    database.db.litellm_auditlog.create_many = AsyncMock()
+    existing: Final = LiteLLM_VerificationToken(token="target-hash")
+    response: Final = GenerateKeyResponse(key="sk-new", token_id="new-hash")
+    with (
+        patch("litellm.store_audit_logs", True),
+        patch("litellm.proxy.proxy_server.premium_user", True),
+        patch("litellm.proxy.proxy_server.prisma_client", database),
+        patch("litellm.audit_log_callbacks", []),
+    ):
+        if action == "created":
+            await KeyManagementEventHooks.async_key_generated_hook(GenerateKeyRequest(), response, auth)
+        elif action == "updated":
+            await KeyManagementEventHooks.async_key_updated_hook(
+                UpdateKeyRequest(key="target-hash", max_budget=42), existing, None, auth
+            )
+        elif action == "rotated":
+            await KeyManagementEventHooks.async_key_rotated_hook(None, existing, response, auth)
+        else:
+            KeyManagementEventHooks.create_key_deleted_audit_logs((existing,), auth)
+        await asyncio.sleep(0)
+        await drain_audit_tasks()
+    row: Final = (
+        database.db.litellm_auditlog.create_many.call_args.kwargs["data"][0]
+        if action == "deleted"
+        else database.db.litellm_auditlog.create.call_args.kwargs["data"]
+    )
+    assert row["action"] == action
+    assert row["changed_by_api_key"] == actor_hash
+    assert row["changed_by"] == "subject"
+    assert json.loads(row["updated_values"])["_litellm_impersonation"] == {
+        "impersonated_by": "service-key",
+        "subject": "subject",
+    }
+    assert auth.api_key is None
 
 
 class TestKeyManagementEventHooksIndependentOperations:
@@ -199,12 +253,12 @@ class TestRotateVirtualKeyInSecretManager:
     @pytest.mark.asyncio
     async def test_rotate_virtual_key_with_team_id(self):
         """Test that team_id is passed to async_rotate_secret."""
-        from litellm.types.secret_managers.main import (
-            KeyManagementSystem,
-            KeyManagementSettings,
-        )
-        from litellm.secret_managers.base_secret_manager import BaseSecretManager
         import litellm
+        from litellm.secret_managers.base_secret_manager import BaseSecretManager
+        from litellm.types.secret_managers.main import (
+            KeyManagementSettings,
+            KeyManagementSystem,
+        )
 
         # Setup - Create a mock that inherits from BaseSecretManager
         mock_secret_manager = MagicMock(spec=BaseSecretManager)
@@ -275,12 +329,12 @@ class TestRotateVirtualKeyInSecretManager:
     @pytest.mark.asyncio
     async def test_rotate_virtual_key_without_team_id(self):
         """Test that None team_id is handled correctly."""
-        from litellm.types.secret_managers.main import (
-            KeyManagementSystem,
-            KeyManagementSettings,
-        )
-        from litellm.secret_managers.base_secret_manager import BaseSecretManager
         import litellm
+        from litellm.secret_managers.base_secret_manager import BaseSecretManager
+        from litellm.types.secret_managers.main import (
+            KeyManagementSettings,
+            KeyManagementSystem,
+        )
 
         # Setup - Create a mock that inherits from BaseSecretManager
         mock_secret_manager = MagicMock(spec=BaseSecretManager)
@@ -339,16 +393,16 @@ class TestRotateVirtualKeyInSecretManager:
     @pytest.mark.asyncio
     async def test_rotate_virtual_key_in_key_rotated_hook(self):
         """Test that async_key_rotated_hook passes team_id to _rotate_virtual_key_in_secret_manager."""
+        import litellm
         from litellm.proxy._types import (
-            LiteLLM_VerificationToken,
             GenerateKeyResponse,
+            LiteLLM_VerificationToken,
             RegenerateKeyRequest,
         )
         from litellm.types.secret_managers.main import (
-            KeyManagementSystem,
             KeyManagementSettings,
+            KeyManagementSystem,
         )
-        import litellm
 
         # Setup
         mock_secret_manager = MagicMock()
@@ -458,11 +512,11 @@ class TestRotateVirtualKeyInSecretManager:
     @pytest.mark.asyncio
     async def test_rotate_virtual_key_when_store_virtual_keys_disabled(self):
         """Test that rotation is skipped when store_virtual_keys is False."""
-        from litellm.types.secret_managers.main import (
-            KeyManagementSystem,
-            KeyManagementSettings,
-        )
         import litellm
+        from litellm.types.secret_managers.main import (
+            KeyManagementSettings,
+            KeyManagementSystem,
+        )
 
         # Setup
         mock_secret_manager = MagicMock()
@@ -488,8 +542,8 @@ class TestRotateVirtualKeyInSecretManager:
     @pytest.mark.asyncio
     async def test_rotate_virtual_key_when_secret_manager_not_set(self):
         """Test that rotation is skipped when secret_manager_client is None."""
-        from litellm.types.secret_managers.main import KeyManagementSettings
         import litellm
+        from litellm.types.secret_managers.main import KeyManagementSettings
 
         # Setup
         litellm.secret_manager_client = None
@@ -715,14 +769,14 @@ async def test_key_deleted_hook_writes_audit_log_for_alias_deletion():
 
     captured: Final[list[LiteLLM_AuditLogs]] = []
 
-    async def capture_audit_log(request_data: LiteLLM_AuditLogs) -> None:
-        captured.append(request_data)
+    async def capture_audit_logs(rows: Sequence[LiteLLM_AuditLogs]) -> None:
+        captured.extend(rows)
 
     with (
         patch("litellm.store_audit_logs", True),
         patch(
-            "litellm.proxy.management_helpers.audit_logs.create_audit_log_for_update",
-            new=capture_audit_log,
+            "litellm.proxy.management_helpers.audit_logs.create_audit_logs_for_updates",
+            new=capture_audit_logs,
         ),
         patch.object(
             KeyManagementEventHooks,
@@ -747,3 +801,65 @@ async def test_key_deleted_hook_writes_audit_log_for_alias_deletion():
     assert audit_row.object_id == "hashed"
     assert audit_row.table_name == LitellmTableNames.KEY_TABLE_NAME
     assert audit_row.changed_by == "admin"
+
+
+@pytest.mark.asyncio
+async def test_deleting_many_keys_writes_every_audit_row_in_one_insert():
+    from litellm.proxy._types import LiteLLM_VerificationToken, LitellmTableNames, UserAPIKeyAuth
+    from litellm.proxy.management_helpers.audit_logs import drain_audit_tasks
+
+    tokens: Final = tuple(f"hashed-{index}" for index in range(50))
+    prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_auditlog.create = AsyncMock()
+    prisma_client.db.litellm_auditlog.create_many = AsyncMock(return_value=len(tokens))
+
+    with (
+        patch("litellm.store_audit_logs", True),
+        patch("litellm.proxy.proxy_server.premium_user", True),
+        patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
+    ):
+        KeyManagementEventHooks.create_key_deleted_audit_logs(
+            keys_being_deleted=[LiteLLM_VerificationToken(token=token) for token in tokens],
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin", token="callertok"),
+        )
+        await drain_audit_tasks()
+
+    prisma_client.db.litellm_auditlog.create.assert_not_called()
+    prisma_client.db.litellm_auditlog.create_many.assert_awaited_once()
+    rows: Final = prisma_client.db.litellm_auditlog.create_many.await_args.kwargs["data"]
+    assert [row["object_id"] for row in rows] == list(tokens)
+    assert [json.loads(row["before_value"])["token"] for row in rows] == list(tokens)
+    assert {(row["table_name"], row["action"], row["changed_by"]) for row in rows} == {
+        (LitellmTableNames.KEY_TABLE_NAME, "deleted", "admin")
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("team_metadata", "expected"),
+    [
+        ({"secret_manager_settings": {"prefix": "team-a/"}}, {"prefix": "team-a/"}),
+        ({"secret_manager_settings": {}}, None),
+        ({"owner": "platform"}, None),
+        (None, None),
+    ],
+    ids=["team_settings", "empty_settings", "no_settings_key", "no_metadata"],
+)
+async def test_secret_manager_optional_params_come_from_the_team_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+    team_metadata: dict[str, object] | None,
+    expected: dict[str, object] | None,
+) -> None:
+    from litellm.models.team import LiteLLM_TeamTable
+    from litellm.proxy import proxy_server
+
+    async def fake_get_team_object(
+        team_id: str, prisma_client: object, user_api_key_cache: object
+    ) -> LiteLLM_TeamTable:
+        return LiteLLM_TeamTable(team_id=team_id, metadata=team_metadata)
+
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", MagicMock())
+    monkeypatch.setattr("litellm.proxy.auth.auth_checks.get_team_object", fake_get_team_object)
+
+    assert await KeyManagementEventHooks._get_secret_manager_optional_params("team-a") == expected

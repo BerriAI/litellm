@@ -1,12 +1,20 @@
-from datetime import datetime, time, timezone
+from collections.abc import Mapping
+from datetime import datetime, time, timedelta, timezone
+from types import MappingProxyType
+from typing import Final
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import ConfigDict
 
 import litellm
-from litellm.litellm_core_utils.duration_parser import get_next_standardized_reset_time
+from litellm.litellm_core_utils.duration_parser import (
+    get_budget_window_start,
+    get_next_standardized_reset_time,
+    normalize_budget_window_start,
+)
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
-class BudgetResetSettings(BaseModel):
+class BudgetResetSettings(LiteLLMBaseModel):
     """Immutable, validated settings that govern when budgets reset.
 
     Parsed once from `litellm_settings` and injected into consumers (the reset
@@ -61,13 +69,20 @@ def get_budget_reset_settings() -> BudgetResetSettings:
     )
 
 
-def compute_budget_reset_at(budget_duration: str, settings: BudgetResetSettings) -> datetime:
+def compute_budget_reset_at(
+    budget_duration: str,
+    settings: BudgetResetSettings,
+    now: datetime | None = None,
+    *,
+    previous_reset: datetime | None = None,
+) -> datetime:
     """Compute the next reset time for a budget duration using injected settings."""
     return get_next_standardized_reset_time(
         duration=budget_duration,
-        current_time=datetime.now(timezone.utc),
+        current_time=now if now is not None else datetime.now(timezone.utc),
         timezone_str=settings.timezone,
         reset_time_of_day=settings.reset_time_of_day,
+        elapsed_anchor=previous_reset,
     )
 
 
@@ -80,16 +95,41 @@ def get_budget_reset_time(budget_duration: str) -> datetime:
     return compute_budget_reset_at(budget_duration, get_budget_reset_settings())
 
 
+def get_budget_window_reset_fields(
+    budget_duration: str,
+    *,
+    reset_at: datetime | None = None,
+    settings: BudgetResetSettings | None = None,
+    now: datetime | None = None,
+) -> Mapping[str, str]:
+    configured: Final = settings or get_budget_reset_settings()
+    current: Final = now if now is not None else datetime.now(timezone.utc)
+    end: Final = reset_at if reset_at is not None else compute_budget_reset_at(budget_duration, configured, current)
+    scheduled: Final = get_budget_window_start(budget_duration, end, configured.timezone, configured.reset_time_of_day)
+    start: Final = normalize_budget_window_start(scheduled if reset_at is not None else min(scheduled, current))
+    return MappingProxyType(
+        {
+            "reset_at": end.astimezone(timezone.utc).isoformat(),
+            "window_start": start.astimezone(timezone.utc).isoformat(),
+        }
+    )
+
+
+def keeps_budget_reset(requested_duration: str, stored_duration: str | None, stored_reset_at: datetime | None) -> bool:
+    return stored_reset_at is not None and requested_duration == stored_duration
+
+
 def _is_persistable_budget_duration(budget_duration: str) -> bool:
     from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 
     try:
-        if duration_in_seconds(budget_duration) <= 0:
+        seconds: Final = duration_in_seconds(budget_duration)
+        if seconds <= 0:
             return False
-        get_budget_reset_time(budget_duration=budget_duration)
+        reset_at: Final = get_budget_reset_time(budget_duration=budget_duration)
+        return reset_at - timedelta(seconds=seconds) < reset_at
     except (ValueError, OverflowError):
         return False
-    return True
 
 
 def budget_duration_error(budget_duration: str | None) -> str | None:

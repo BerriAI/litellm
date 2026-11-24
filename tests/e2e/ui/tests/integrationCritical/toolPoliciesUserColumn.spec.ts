@@ -4,6 +4,7 @@ import { execFileSync } from "node:child_process";
 import * as path from "node:path";
 import { Page } from "../../fixtures/pages";
 import { dismissFeedbackPopup, navigateToPage } from "../../helpers/navigation";
+import { masterKey } from "../../helpers/traffic";
 
 /**
  * The Tool Policies table gets a User column: the owner of the key that discovered the tool, shown
@@ -32,7 +33,7 @@ test("the Tool Policies page names the user behind the key that discovered a too
   page,
   request,
 }) => {
-  const master = process.env.LITELLM_MASTER_KEY ?? "sk-integration-master";
+  const master = masterKey();
   const upstream = (
     process.env.INTEGRATION_UPSTREAM_URL ?? "http://127.0.0.1:8190"
   ).replace(/\/+$/, "");

@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 
 from e2e_config import unique_marker
 from e2e_http import AuthHeaders, NoBody, require_successful_call, unwrap
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from models import AnthropicMessagesResponse, ChatMessage, KeyGenerateBody
 from passthrough_client import PassthroughClient
@@ -135,6 +136,15 @@ class TestPassthroughHeaders:
     @pytest.mark.covers(
         "other.config.passthrough.headers_forwarded",
         exercised_on=[],
+    )
+    @meta(
+        Subject(
+            domain=Domain.PASSTHROUGH,
+            route=Route.PASSTHROUGH,
+            providers=(Provider.ANTHROPIC,),
+            models=(MODEL,),
+            mode=Mode.NONSTREAM,
+        )
     )
     def test_static_and_x_pass_headers_reach_upstream(
         self, client: PassthroughClient, resources: ResourceManager

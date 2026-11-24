@@ -13,26 +13,33 @@ import json
 import logging
 import time
 import traceback
-from collections.abc import Generator, Mapping
+from collections.abc import Awaitable, Callable, Generator, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from enum import Enum
+from itertools import chain
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal
+from typing import Final, Literal, Protocol, cast
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, TypeAdapter
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._internal_context import current_service_target, service_target
 from litellm._logging import verbose_logger
-from litellm.constants import CACHED_STREAMING_CHUNK_DELAY
+from litellm.constants import CACHED_STREAMING_CHUNK_DELAY, SEMANTIC_CACHE_POLICY_KEY
 from litellm.integrations.otel.runtime import phase_span
-from litellm.litellm_core_utils.model_param_helper import ModelParamHelper
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, has_attributes, require_attributes
+from litellm.litellm_core_utils.model_param_helper import (
+    ModelParamHelper,
+    embeds_thought_signature_in_tool_call_id,
+    peek_reasoning_summary_aliases,
+)
 from litellm.types.caching import *
-from litellm.types.utils import EmbeddingResponse, is_litellm_owned_kwarg
+from litellm.types.semantic_cache import semantic_cache_policy
+from litellm.types.utils import EmbeddingResponse, Usage, is_litellm_owned_kwarg
 
 from .azure_blob_cache import AzureBlobCache
 from .base_cache import BaseCache
-from .disk_cache import DiskCache
 from .dual_cache import DualCache  # noqa: F401  # re-exported, callers import DualCache from litellm.caching.caching
 from .gcs_cache import GCSCache
 from .in_memory_cache import InMemoryCache
@@ -42,27 +49,238 @@ from .redis_cluster_cache import RedisClusterCache
 from .redis_semantic_cache import RedisSemanticCache
 from .s3_cache import S3Cache
 
-if TYPE_CHECKING:
-    from litellm.rust_bridge.response_cache import NativeCacheRequest, ResponseCacheRuntime
-
-
-def _native_response(result: object) -> object:
-    """The value Python's own reader would return for `result` once it is cached.
-
-    Python stores a model as its JSON text and `json.loads` a string response on read, so the
-    native store receives the decoded value and writes the envelope shape Python reads.
-    """
-    if isinstance(result, BaseModel):
-        return json.loads(result.model_dump_json())
-    if isinstance(result, str):
-        try:
-            return json.loads(result)
-        except ValueError:
-            return result
-    return result
-
-
 RESPONSE_CACHE_TARGET: Final = "llm_response"
+_ALWAYS_KEYED_PROVIDER_PARAMS: Final = frozenset({"continuation_token", "return_token_ids"})
+_DECODED_LITERAL: Final = TypeAdapter(object)
+_REDIS_STARTUP_NODES_ADAPTER: Final = TypeAdapter(
+    list[dict[str, object]], config=ConfigDict(strict=True, hide_input_in_errors=True)
+)
+
+
+class _SupportsAsyncPing(Protocol):
+    @property
+    def ping(self) -> Callable[[], Awaitable[object]] | None: ...
+
+
+class _SupportsAsyncDeleteCacheKeys(Protocol):
+    @property
+    def delete_cache_keys(self) -> Callable[[object], Awaitable[object]] | None: ...
+
+
+class _SupportsModelDump(Protocol):
+    def model_dump(self) -> object: ...
+
+
+class _SupportsFieldLookup(Protocol):
+    def get(self, key: str, /) -> object: ...
+
+
+class _SupportsEmbeddingData(Protocol):
+    @property
+    def data(self) -> Sequence[object]: ...
+
+
+class _UnvalidatedCachedEmbedding(TypedDict):
+    embedding: ReadOnly[object]
+    index: ReadOnly[object]
+    model: ReadOnly[str | None]
+    prompt_tokens: ReadOnly[int | None]
+    prompt_tokens_details: ReadOnly[Mapping[str, object] | None]
+    format_version: ReadOnly[int]
+    object: ReadOnly[object]
+
+
+def _embedding_item(response: _SupportsEmbeddingData, index: int) -> object:
+    return response.data[index]
+
+
+def _embedding_fields(embedding_response: object) -> _SupportsFieldLookup:
+    mapping: Final = as_str_mapping(embedding_response)
+    if mapping is not None and isinstance(embedding_response, dict):
+        return mapping
+    if has_attributes(embedding_response, _SupportsModelDump, "model_dump"):
+        return require_attributes(embedding_response.model_dump(), _SupportsFieldLookup, "get")
+    return vars(embedding_response)
+
+
+def _extra_body_mapping(raw_extra_body: object) -> Mapping[str, object] | None:
+    mapping: Final = as_str_mapping(raw_extra_body)
+    return mapping if isinstance(raw_extra_body, dict) else None
+
+
+def _concrete_sequence(value: object) -> Sequence[object] | None:
+    if not isinstance(value, (list, tuple)):
+        return None
+    return cast(Sequence[object], value)  # cast-ok: isinstance leaves the item type unknown
+
+
+def _extra_body_pair(item: object) -> tuple[str, object] | None:
+    pair: Final = item if isinstance(item, str) else _concrete_sequence(item)
+    if pair is None or len(pair) != 2:
+        return None
+    key: Final = pair[0]
+    return (key, pair[1]) if isinstance(key, str) else None
+
+
+def _extra_body_from_pairs(raw_extra_body: object) -> Mapping[str, object] | None:
+    items: Final = _concrete_sequence(raw_extra_body)
+    if items is None:
+        return None
+    pairs: Final = tuple(pair for pair in map(_extra_body_pair, items) if pair is not None)
+    return dict(pairs) if len(pairs) == len(items) else None
+
+
+def _extra_body_beyond_always_keyed_params(raw_extra_body: object) -> Mapping[str, object]:
+    mapping: Final = as_str_mapping(raw_extra_body)
+    extra_body: Final = mapping if mapping is not None else _extra_body_from_pairs(raw_extra_body)
+    if extra_body is None:
+        return {}
+    token_ids_keyed_separately: Final = isinstance(raw_extra_body, dict)
+    return {
+        key: value
+        for key, value in extra_body.items()
+        if key not in _ALWAYS_KEYED_PROVIDER_PARAMS or (not token_ids_keyed_separately and value)
+    }
+
+
+def _keyed_provider_params_in_extra_body(kwargs: Mapping[str, object]) -> str:
+    extra_body: Final = _extra_body_mapping(kwargs.get("extra_body"))
+    if extra_body is None:
+        return ""
+    return "".join(
+        f"extra_body.{param}: {extra_body[param]}"
+        for param in sorted(_ALWAYS_KEYED_PROVIDER_PARAMS)
+        if extra_body.get(param)
+    )
+
+
+_REPR_WALK_MAX_DEPTH: Final = 32
+_LARGE_STR_CHARS: Final = 64 * 1024
+_RECURSIVE_REPR_PLACEHOLDERS: Final[Mapping[type, str]] = MappingProxyType(
+    {dict: "{...}", list: "[...]", tuple: "(...)"}
+)
+_WALKED_TYPES: Final = frozenset(_RECURSIVE_REPR_PLACEHOLDERS)
+_NO_IDS: Final[frozenset[int]] = frozenset()
+
+
+def _container_children(value: object) -> Iterable[object]:
+    match value:
+        case dict():
+            return cast(dict[object, object], value).values()  # cast-ok: an exact dict of unknown key/value types
+        case list() | tuple():
+            return cast(Iterable[object], value)  # cast-ok: an exact list or tuple of unknown items
+        case _:
+            return ()
+
+
+def _ids_to_walk(value: object, path: frozenset[int], depth: int) -> frozenset[int]:
+    value_type: Final = type(value)
+    if value_type is str:
+        return frozenset((id(value),)) if len(cast(str, value)) > _LARGE_STR_CHARS else _NO_IDS  # cast-ok: exact str
+    if value_type not in _WALKED_TYPES or depth >= _REPR_WALK_MAX_DEPTH:
+        return _NO_IDS
+    if id(value) in path:
+        return frozenset((id(value),))
+    inner_path: Final = path | frozenset((id(value),))
+    below: Final = _NO_IDS.union(*(_ids_to_walk(child, inner_path, depth + 1) for child in _container_children(value)))
+    return below | frozenset((id(value),)) if below else _NO_IDS
+
+
+def _repr_items_fragments(
+    items: Iterable[object], walk: frozenset[int], seen: frozenset[int], depth: int
+) -> Iterator[str]:
+    for index, item in enumerate(items):
+        if index:
+            yield ", "
+        yield from _repr_fragments(item, walk, seen, depth)
+
+
+def _repr_entries_fragments(
+    entries: Iterable[tuple[object, object]], walk: frozenset[int], seen: frozenset[int], depth: int
+) -> Iterator[str]:
+    for index, (key, item) in enumerate(entries):
+        if index:
+            yield ", "
+        yield repr(key)
+        yield ": "
+        yield from _repr_fragments(item, walk, seen, depth)
+
+
+def _repr_fragments(value: object, walk: frozenset[int], seen: frozenset[int], depth: int) -> Iterator[str]:
+    """Yields repr(value) in pieces, byte for byte, so cache keys stay stable without building one huge string"""
+    placeholder: Final = _RECURSIVE_REPR_PLACEHOLDERS.get(type(value))
+    if placeholder is None:
+        yield repr(value)
+        return
+    if id(value) in seen:
+        yield placeholder
+        return
+    if id(value) not in walk or depth >= _REPR_WALK_MAX_DEPTH:
+        yield repr(value)
+        return
+    inner_seen: Final = seen | frozenset((id(value),))
+    match value:
+        case dict():
+            yield "{"
+            yield from _repr_entries_fragments(
+                cast(dict[object, object], value).items(),  # cast-ok: an exact dict of unknown key/value types
+                walk,
+                inner_seen,
+                depth + 1,
+            )
+            yield "}"
+        case list():
+            yield "["
+            yield from _repr_items_fragments(
+                cast(list[object], value),  # cast-ok: an exact list of unknown items
+                walk,
+                inner_seen,
+                depth + 1,
+            )
+            yield "]"
+        case tuple():
+            items: Final = cast(tuple[object, ...], value)  # cast-ok: an exact tuple of unknown items
+            yield "("
+            yield from _repr_items_fragments(items, walk, inner_seen, depth + 1)
+            yield ",)" if len(items) == 1 else ")"
+        case _:
+            yield repr(value)
+
+
+def _level_holds_large_str(level: tuple[object, ...], visited: frozenset[int], depth: int) -> bool:
+    if not level or depth > _REPR_WALK_MAX_DEPTH:
+        return False
+    if any(type(item) is str and len(item) > _LARGE_STR_CHARS for item in level):
+        return True
+    fresh: Final = {id(item): item for item in level if type(item) in _WALKED_TYPES and id(item) not in visited}
+    dicts: Final = cast(  # cast-ok: the comprehension keeps only exact dicts
+        "Iterable[dict[object, object]]", [item for item in fresh.values() if type(item) is dict]
+    )
+    sequences: Final = [item for item in fresh.values() if type(item) is not dict]
+    children: Final = (
+        *chain.from_iterable(map(dict[object, object].values, dicts)),
+        *chain.from_iterable(cast(list[Iterable[object]], sequences)),  # cast-ok: exact lists and tuples
+    )
+    return _level_holds_large_str(children, visited.union(fresh), depth + 1)
+
+
+def _format_fragments(value: object) -> Iterator[str]:
+    if type(value) not in _WALKED_TYPES:
+        yield f"{value}"
+        return
+    if not _level_holds_large_str((value,), _NO_IDS, 0):
+        yield repr(value)
+        return
+    yield from _repr_fragments(value, _ids_to_walk(value, _NO_IDS, 0), _NO_IDS, 0)
+
+
+def _hash_cache_key_fragments(fragments: Iterable[str]) -> str:
+    digest: Final = hashlib.sha256()
+    for fragment in fragments:
+        digest.update(fragment.encode())
+    hash_hex: Final = digest.hexdigest()
+    verbose_logger.debug("Hashed cache key (SHA-256): %s", hash_hex)
+    return hash_hex
 
 
 @contextmanager
@@ -77,7 +295,7 @@ def response_cache_phase(operation: Literal["get", "set"]) -> Generator[None]:
         yield
 
 
-def print_verbose(print_statement):
+def print_verbose(print_statement: object):
     try:
         verbose_logger.debug(print_statement)
         if litellm.set_verbose:
@@ -92,9 +310,28 @@ class CacheMode(str, Enum):
 
 
 #### LiteLLM.Completion / Embedding Cache ####
-class Cache:
-    _native_cache: "ResponseCacheRuntime | None" = None
+def _is_conversation_item(item: object) -> bool:
+    if isinstance(item, BaseModel):
+        return True
+    if not isinstance(item, Mapping):
+        return False
+    block: Final = cast(Mapping[str, object], item)  # cast-ok: isinstance leaves the key and value types unknown
+    return block.get("type") not in ("file", "text")
 
+
+def _request_message_count(kwargs: Mapping[str, object]) -> int:
+    """Chat and Messages API `messages`, else Responses API `input` items; embedding strings and blocks count as none"""
+    messages: Final = kwargs.get("messages")
+    if isinstance(messages, list):
+        return len(messages)
+    input_items: Final = kwargs.get("input")
+    if not isinstance(input_items, list):
+        return 0
+    items: Final = cast(list[object], input_items)  # cast-ok: isinstance leaves the element type unknown
+    return sum(1 for item in items if _is_conversation_item(item))
+
+
+class Cache:
     def __init__(
         self,
         type: LiteLLMCacheType | None = LiteLLMCacheType.LOCAL,
@@ -142,17 +379,19 @@ class Cache:
         semantic_cache_embedding_max_input_tokens: int | None = None,
         semantic_cache_embedding_timeout: float | None = None,
         semantic_cache_scope: str = SemanticCacheScope.KEY.value,
+        max_messages: int | None = 4,
         # GCP IAM authentication parameters
         gcp_service_account: str | None = None,
         gcp_ssl_ca_certs: str | None = None,
         _backend: BaseCache | None = None,
+        excluded_call_types: Sequence[CachingSupportedCallTypes] | None = None,
         **kwargs,
     ):
         """
         Initializes the cache based on the given type.
 
         Args:
-            type (str, optional): The type of cache to initialize. Can be "local", "redis", "redis-semantic", "qdrant-semantic", "s3" or "disk". Defaults to "local".
+            type (str, optional): The type of cache to initialize. Can be "local", "redis", "redis-semantic", "qdrant-semantic" or "s3". Defaults to "local".
 
             # Redis Cache Args
             host (str, optional): The host address for the Redis cache. Required if type is "redis".
@@ -171,9 +410,7 @@ class Cache:
             semantic_cache_embedding_max_input_tokens (int, optional): Truncate prompts to this many tokens before embedding them for semantic caching. Defaults to the embedding deployment's configured max_input_tokens.
             semantic_cache_embedding_timeout (float, optional): Seconds a semantic-cache lookup may spend embedding the prompt before it gives up and lets the request continue to the LLM. Defaults to SEMANTIC_CACHE_EMBEDDING_TIMEOUT_SECONDS.
             semantic_cache_scope (str, optional): "key" isolates semantic-cache buckets per key/team/org. "end_user" additionally isolates per end user (falls back to the key scope when the request carries no end-user id). Defaults to "key".
-
-            # Disk Cache Args
-            disk_cache_dir (str, optional): The directory for the disk cache. Defaults to None.
+            max_messages (int, optional): Requests with more `messages` (or Responses API `input` items) than this are neither looked up nor stored, so long agent conversations never serve or create a cache entry. None disables the limit. Defaults to 4.
 
             # S3 Cache Args
             s3_bucket_name (str, optional): The bucket name for the s3 cache. Defaults to None.
@@ -194,6 +431,7 @@ class Cache:
 
             # Common Cache Args
             supported_call_types (list, optional): List of call types to cache for. Defaults to cache == on for all call types.
+            excluded_call_types (Sequence, optional): Call types to drop from supported_call_types. Defaults to None.
             **kwargs: Additional keyword arguments for redis.Redis() cache
 
         Raises:
@@ -209,7 +447,7 @@ class Cache:
             if not redis_startup_nodes:
                 _env_cluster_nodes: Final = litellm.get_secret("REDIS_CLUSTER_NODES")
                 if _env_cluster_nodes is not None and isinstance(_env_cluster_nodes, str):
-                    redis_startup_nodes = json.loads(_env_cluster_nodes)
+                    redis_startup_nodes = _REDIS_STARTUP_NODES_ADAPTER.validate_python(json.loads(_env_cluster_nodes))
 
             if redis_startup_nodes:
                 # Only pass GCP parameters if they are provided
@@ -304,8 +542,11 @@ class Cache:
                 account_url=azure_account_url,
                 container=azure_blob_container,
             )
-        elif type == LiteLLMCacheType.DISK:
-            self.cache = DiskCache(disk_cache_dir=disk_cache_dir)
+        else:
+            supported_types: Final = ", ".join(member.value for member in LiteLLMCacheType)
+            raise ValueError(f"Unsupported cache type {type!r}. Supported types: {supported_types}")
+        if disk_cache_dir is not None:
+            verbose_logger.warning("Ignoring disk_cache_dir, the disk cache backend was removed")
         if "cache" not in litellm.input_callback:
             litellm.input_callback.append("cache")
         if "cache" not in litellm.success_callback:
@@ -313,7 +554,9 @@ class Cache:
         if "cache" not in litellm._async_success_callback:
             litellm.logging_callback_manager.add_litellm_async_success_callback("cache")
         self.supported_call_types = (
-            supported_call_types  # default to ["completion", "acompletion", "embedding", "aembedding"]
+            supported_call_types
+            if supported_call_types is None or not excluded_call_types
+            else [call_type for call_type in supported_call_types if call_type not in excluded_call_types]
         )
         self.type = type
         self.namespace = namespace
@@ -321,6 +564,7 @@ class Cache:
         self.ttl = ttl
         self.mode: CacheMode = mode or CacheMode.default_on
         self.semantic_cache_scope: str = SemanticCacheScope(semantic_cache_scope).value
+        self.max_messages: int | None = max_messages
 
         if self.type == LiteLLMCacheType.LOCAL and default_in_memory_ttl is not None:
             self.ttl = default_in_memory_ttl
@@ -338,7 +582,7 @@ class Cache:
     # Params whose values carry prompt content. Excluded from semantic-cache
     # scope keys so differently worded prompts share a bucket and match via
     # vector similarity rather than being split into per-wording buckets.
-    _SEMANTIC_CACHE_SCOPE_EXCLUDED_PARAMS: frozenset = frozenset({"messages", "prompt", "input"})
+    _SEMANTIC_CACHE_SCOPE_EXCLUDED_PARAMS: frozenset[str] = frozenset({"messages", "prompt", "input"})
 
     # Server-set identity (from proxy auth) used to isolate semantic-cache
     # buckets per tenant. Required once the prompt is out of the scope key, so a
@@ -357,15 +601,21 @@ class Cache:
             LiteLLMCacheType.VALKEY_SEMANTIC,
         )
 
+    is_semantic_cache: Final = _is_semantic_cache
+
     def _semantic_cache_scope_fields(self) -> tuple[str, ...]:
         if self.semantic_cache_scope == SemanticCacheScope.END_USER:
             return (*self._SEMANTIC_CACHE_TENANT_SCOPE_FIELDS, self._SEMANTIC_CACHE_END_USER_SCOPE_FIELD)
         return self._SEMANTIC_CACHE_TENANT_SCOPE_FIELDS
 
-    def _get_semantic_cache_tenant_scope(self, kwargs: dict) -> str:
-        litellm_params: Final[dict] = kwargs.get("litellm_params") or {}
-        metadata_sources: Final[tuple[dict, ...]] = tuple(
-            source.get(key) or {} for source in (kwargs, litellm_params) for key in ("metadata", "litellm_metadata")
+    def _get_semantic_cache_tenant_scope(self, kwargs: Mapping[str, object]) -> str:
+        litellm_params: Final = cast(  # cast-ok: the request's untyped litellm_params dict, or empty
+            Mapping[str, object], kwargs.get("litellm_params") or {}
+        )
+        metadata_sources: Final = tuple(
+            cast(Mapping[str, object], source.get(key) or {})  # cast-ok: an untyped request metadata dict, or empty
+            for source in (kwargs, litellm_params)
+            for key in ("metadata", "litellm_metadata")
         )
         scope_values: Final = (
             (field, next((source[field] for source in metadata_sources if source.get(field) is not None), None))
@@ -373,7 +623,7 @@ class Cache:
         )
         return "".join(f"{field}: {value}" for field, value in scope_values if value is not None)
 
-    def get_cache_key(self, **kwargs) -> str:
+    def get_cache_key(self, **kwargs: object) -> str:
         """
         Get the cache key for the given arguments.
 
@@ -383,46 +633,54 @@ class Cache:
         Returns:
             str: The cache key generated from the arguments, or None if no cache key could be generated.
         """
-        cache_key = ""
-        # verbose_logger.debug("\nGetting Cache key. Kwargs: %s", kwargs)
-
-        preset_cache_key: Final = self._get_preset_cache_key_from_kwargs(**kwargs)
+        preset_cache_key: Final = self.get_preset_cache_key_from_kwargs(**kwargs)
         if preset_cache_key is not None:
             verbose_logger.debug("\nReturning preset cache key: %s", preset_cache_key)
             return preset_cache_key
 
-        combined_kwargs: Final = ModelParamHelper._get_all_llm_api_params()
-        is_semantic_cache: Final = self._is_semantic_cache()
-        scope_excluded_params: Final = self._SEMANTIC_CACHE_SCOPE_EXCLUDED_PARAMS if is_semantic_cache else frozenset()
-        for param in kwargs:
-            if param in scope_excluded_params:
-                continue
-            if param in combined_kwargs:
-                param_value: str | None = self._get_param_value(param, kwargs)
-                if param_value is not None:
-                    cache_key += f"{param}: {param_value}"
-            elif not is_litellm_owned_kwarg(param):
-                if litellm.enable_caching_on_provider_specific_optional_params is True:  # feature flagged for now
-                    if kwargs[param] is None:
-                        continue  # ignore None params
-                    param_value = kwargs[param]
-                    cache_key += f"{param}: {param_value}"
-
-        if is_semantic_cache:
-            cache_key += self._get_semantic_cache_tenant_scope(kwargs)
-
-        hashed_cache_key = Cache._get_hashed_cache_key(cache_key)
-        hashed_cache_key = self._add_namespace_to_cache_key(hashed_cache_key, **kwargs)
-        verbose_logger.debug(
-            "\nCreated cache key: %s (source material length: %d)",
-            hashed_cache_key,
-            len(cache_key),
+        hashed_cache_key: Final = self._add_namespace_to_cache_key(
+            _hash_cache_key_fragments(self._cache_key_fragments(kwargs)), **kwargs
         )
+        verbose_logger.debug("\nCreated cache key: %s", hashed_cache_key)
         # Remove preset_cache_key from kwargs to avoid "got multiple values" TypeError
         # when kwargs already contains preset_cache_key from upstream callers
         kwargs_for_preset: Final = {k: v for k, v in kwargs.items() if k != "preset_cache_key"}
         self._set_preset_cache_key_in_kwargs(preset_cache_key=hashed_cache_key, **kwargs_for_preset)
         return hashed_cache_key
+
+    def _keyed_param_values(self, kwargs: dict[str, object], is_semantic_cache: bool) -> Iterator[tuple[str, object]]:
+        combined_kwargs: Final = ModelParamHelper.get_all_llm_api_params()
+        scope_excluded_params: Final = self._SEMANTIC_CACHE_SCOPE_EXCLUDED_PARAMS if is_semantic_cache else frozenset()
+        for param in kwargs:
+            if param in scope_excluded_params:
+                continue
+            if param in combined_kwargs or param in _ALWAYS_KEYED_PROVIDER_PARAMS:
+                if (param_value := self._get_param_value(param, kwargs)) is not None and (
+                    param not in _ALWAYS_KEYED_PROVIDER_PARAMS or param_value
+                ):
+                    yield param, param_value
+            elif (
+                not is_litellm_owned_kwarg(param)
+                and litellm.enable_caching_on_provider_specific_optional_params is True
+                and kwargs[param] is not None
+            ):
+                yield param, kwargs[param]
+            elif param == "extra_body" and (forwarded := _extra_body_beyond_always_keyed_params(kwargs[param])):
+                yield param, forwarded
+
+    def _cache_key_fragments(self, kwargs: dict[str, object]) -> Iterator[str]:
+        is_semantic_cache: Final = self._is_semantic_cache()
+        for param, param_value in self._keyed_param_values(kwargs, is_semantic_cache):
+            yield f"{param}: "
+            yield from _format_fragments(param_value)
+        if is_semantic_cache:
+            yield self._get_semantic_cache_tenant_scope(kwargs)
+        yield _keyed_provider_params_in_extra_body(kwargs)
+        reasoning_summary: Final = peek_reasoning_summary_aliases(kwargs)
+        if reasoning_summary is not None:
+            yield f"reasoning_summary: {reasoning_summary}"
+        if not embeds_thought_signature_in_tool_call_id(kwargs):
+            yield "thought_signature_in_tool_call_id: False"
 
     def _get_param_value(
         self,
@@ -444,14 +702,41 @@ class Cache:
 
         1. If caching groups are set, then return the caching group as the model https://docs.litellm.ai/docs/routing#caching-across-model-groups
         2. Else if a model_group is set, then return the model_group as the model. This is used for all requests sent through the litellm.Router()
-        3. Else use the `model` passed in kwargs
+        3. Else use the `model` passed in kwargs, plus `model_id` when set (e.g. a SageMaker inference component)
         """
-        metadata: Final[dict] = kwargs.get("metadata", {}) or {}
         litellm_params: Final[dict] = kwargs.get("litellm_params", {}) or {}
-        metadata_in_litellm_params: Final[dict] = litellm_params.get("metadata", {}) or {}
-        model_group: Final[str | None] = metadata.get("model_group") or metadata_in_litellm_params.get("model_group")
-        caching_group: Final = self._get_caching_group(metadata, model_group)
-        return caching_group or model_group or kwargs["model"]
+        metadata_sources: Final = cast(  # cast-ok: each source is the untyped request's metadata dict or empty
+            "tuple[dict[str, object], dict[str, object], dict[str, object], dict[str, object]]",
+            (
+                kwargs.get("metadata") or {},
+                kwargs.get("litellm_metadata") or {},
+                litellm_params.get("metadata") or {},
+                litellm_params.get("litellm_metadata") or {},
+            ),
+        )
+        metadata, litellm_metadata, params_metadata, params_litellm_metadata = metadata_sources
+        call_model_info: Final[object] = kwargs.get("model_info")
+        routed_source: Final = next(
+            (
+                source
+                for source in (litellm_metadata, metadata, params_litellm_metadata, params_metadata)
+                if call_model_info and source.get("model_group") and source.get("model_info") == call_model_info
+            ),
+            None,
+        )
+        model_group: Final = (
+            str(routed_source["model_group"])
+            if routed_source is not None
+            else next((str(source["model_group"]) for source in metadata_sources if source.get("model_group")), None)
+        )
+        caching_group_sources: Final = (routed_source,) if routed_source is not None else metadata_sources
+        caching_group: Final = next(
+            (group for source in caching_group_sources if (group := self._get_caching_group(source, model_group))), None
+        )
+        model_id_suffix: Final = (
+            f" model_id: {kwargs['model_id']}" if "model_id" in kwargs and kwargs["model_id"] is not None else ""
+        )
+        return caching_group or model_group or f"{kwargs['model']}{model_id_suffix}"
 
     def _get_caching_group(self, metadata: dict, model_group: str | None) -> str | None:
         caching_groups: Final[list | None] = metadata.get("caching_groups", [])
@@ -475,7 +760,7 @@ class Cache:
             or litellm_params.get("file_name")
         )
 
-    def _get_preset_cache_key_from_kwargs(self, **kwargs) -> str | None:
+    def get_preset_cache_key_from_kwargs(self, **kwargs: object) -> str | None:
         """
         Get the preset cache key from kwargs["litellm_params"]
 
@@ -484,10 +769,16 @@ class Cache:
         1. optional params like max_tokens, get transformed for bedrock -> max_new_tokens
         2. avoid doing duplicate / repeated work
         """
-        if kwargs:
-            if "litellm_params" in kwargs:
-                return kwargs["litellm_params"].get("preset_cache_key", None)
+        if "litellm_params" in kwargs:
+            litellm_params: Final = cast(  # cast-ok: cache kwargs retain dynamic caller values
+                Mapping[str, object], kwargs["litellm_params"]
+            )
+            return cast(  # cast-ok: preserve dynamically supplied cache keys
+                str | None, litellm_params.get("preset_cache_key", None)
+            )
         return None
+
+    _get_preset_cache_key_from_kwargs = get_preset_cache_key_from_kwargs
 
     def _set_preset_cache_key_in_kwargs(self, preset_cache_key: str, **kwargs) -> None:
         """
@@ -514,11 +805,7 @@ class Cache:
         Returns:
             str: The hashed cache key.
         """
-        hash_object: Final = hashlib.sha256(cache_key.encode())
-        # Hexadecimal representation of the hash
-        hash_hex: Final = hash_object.hexdigest()
-        verbose_logger.debug("Hashed cache key (SHA-256): %s", hash_hex)
-        return hash_hex
+        return _hash_cache_key_fragments((cache_key,))
 
     def _add_namespace_to_cache_key(self, hash_hex: str, **kwargs) -> str:
         """
@@ -554,11 +841,11 @@ class Cache:
             }
             time.sleep(CACHED_STREAMING_CHUNK_DELAY)
 
-    def _get_cache_logic(
+    def get_cache_logic(
         self,
         cached_result: object | None,
         max_age: float | None,
-    ):
+    ) -> object | None:
         """
         Common get cache logic across sync + async implementations
         """
@@ -581,11 +868,15 @@ class Cache:
                 if isinstance(cached_response, dict):
                     pass
                 else:
-                    cached_response = json.loads(cached_response)  # Convert string to dictionary
+                    cached_response = _DECODED_LITERAL.validate_python(
+                        json.loads(cached_response)
+                    )  # Convert string to dictionary
             except Exception:
-                cached_response = ast.literal_eval(cached_response)
+                cached_response = _DECODED_LITERAL.validate_python(ast.literal_eval(cached_response))
             return cached_response
         return cached_result
+
+    _get_cache_logic = get_cache_logic
 
     @staticmethod
     def _get_safe_cache_lookup_kwargs(kwargs: Mapping[str, object]) -> dict[str, object]:
@@ -597,6 +888,10 @@ class Cache:
         metadata: Final = kwargs.get("metadata")
         if isinstance(metadata, dict):
             cache_lookup_kwargs["metadata"] = dict(metadata)
+
+        policy: Final = semantic_cache_policy(kwargs)
+        if policy is not None:
+            cache_lookup_kwargs["cache"] = {SEMANTIC_CACHE_POLICY_KEY: policy}
 
         return cache_lookup_kwargs
 
@@ -611,13 +906,6 @@ class Cache:
 
         if "semantic-similarity" in cache_lookup_metadata:
             original_metadata["semantic-similarity"] = cache_lookup_metadata["semantic-similarity"]
-
-    @staticmethod
-    def _stamp_semantic_similarity(kwargs: Mapping[str, object], similarity: float | None) -> None:
-        """Write a native semantic lookup's similarity where the Python backends put it."""
-        metadata: Final = kwargs.get("metadata")
-        if similarity is not None and isinstance(metadata, dict):
-            metadata["semantic-similarity"] = similarity
 
     def get_cache(self, dynamic_cache_object: BaseCache | None = None, **kwargs):
         """
@@ -638,15 +926,6 @@ class Cache:
                     cache_key = kwargs["cache_key"]
                 else:
                     cache_key = self.get_cache_key(**kwargs)
-                if cache_key is not None and self._native_cache is not None:
-                    request = self._native_cache.request(self, MappingProxyType({**kwargs, "cache_key": cache_key}))
-                    if request is None:
-                        return None
-                    if not self._is_semantic_cache():
-                        return self._native_cache.lookup(request)
-                    response, similarity = self._native_cache.lookup_semantic(request)
-                    self._stamp_semantic_similarity(kwargs, similarity)
-                    return response
                 if cache_key is not None:
                     cache_control_args: Final[DynamicCacheControl] = kwargs.get("cache", {})
                     max_age = cache_control_args.get("s-maxage") or cache_control_args.get("s-max-age") or float("inf")
@@ -659,7 +938,7 @@ class Cache:
                         original_kwargs=kwargs,
                         cache_lookup_kwargs=cache_lookup_kwargs,
                     )
-                    return self._get_cache_logic(cached_result=cached_result, max_age=max_age)
+                    return self.get_cache_logic(cached_result=cached_result, max_age=max_age)
         except Exception:
             print_verbose(f"An exception occurred: {traceback.format_exc()}")
             return None
@@ -680,15 +959,6 @@ class Cache:
                     cache_key = kwargs["cache_key"]
                 else:
                     cache_key = self.get_cache_key(**kwargs)
-                if cache_key is not None and self._native_cache is not None:
-                    request = self._native_cache.request(self, MappingProxyType({**kwargs, "cache_key": cache_key}))
-                    if request is None:
-                        return None
-                    if not self._is_semantic_cache():
-                        return await self._native_cache.async_lookup(request)
-                    response, similarity = await self._native_cache.async_lookup_semantic(request)
-                    self._stamp_semantic_similarity(kwargs, similarity)
-                    return response
                 if cache_key is not None:
                     cache_control_args: Final = kwargs.get("cache", {})
                     max_age: Final = cache_control_args.get(
@@ -698,12 +968,12 @@ class Cache:
                         cached_result = await dynamic_cache_object.async_get_cache(cache_key, **kwargs)
                     else:
                         cached_result = await self.cache.async_get_cache(cache_key, **kwargs)
-                    return self._get_cache_logic(cached_result=cached_result, max_age=max_age)
+                    return self.get_cache_logic(cached_result=cached_result, max_age=max_age)
         except Exception:
             print_verbose(f"An exception occurred: {traceback.format_exc()}")
             return None
 
-    def _add_cache_logic(self, result, **kwargs):
+    def _add_cache_logic(self, result: object, **kwargs: object):
         """
         Common implementation across sync + async add_cache functions
         """
@@ -714,26 +984,29 @@ class Cache:
                 cache_key = self.get_cache_key(**kwargs)
             if cache_key is not None:
                 if isinstance(result, BaseModel):
-                    result = result.model_dump_json()
+                    result = result.model_dump_json(exclude_unset=True)
 
                 ## DEFAULT TTL ##
                 if self.ttl is not None:
                     kwargs["ttl"] = self.ttl
                 ## Get Cache-Controls ##
-                _cache_kwargs: Final = kwargs.get("cache", None)
-                if isinstance(_cache_kwargs, dict):
+                _cache_kwargs: Final = as_str_mapping(kwargs.get("cache"))
+                if _cache_kwargs is not None:
                     for k, v in _cache_kwargs.items():
                         if k == "ttl":
                             kwargs["ttl"] = v
 
                 cached_data: Final = {"timestamp": time.time(), "response": result}
+                policy: Final = semantic_cache_policy(kwargs) if self._is_semantic_cache() else None
+                if policy is not None and policy.params is not None and policy.params.ttl is not None:
+                    return cache_key, cached_data, {**kwargs, "ttl": policy.params.ttl}
                 return cache_key, cached_data, kwargs
             else:
                 raise Exception("cache key is None")
         except Exception as e:
             raise e
 
-    def add_cache(self, result, **kwargs):
+    def add_cache(self, result: object, **kwargs: object):
         """
         Adds a result to the cache.
 
@@ -748,11 +1021,6 @@ class Cache:
             if self.should_use_cache(**kwargs) is not True:
                 return
             with response_cache_phase("set"):
-                if self._native_cache is not None:
-                    request = self._native_request(kwargs)
-                    if request is not None:
-                        self._native_cache.store(request, _native_response(result))
-                    return
                 cache_key, cached_data, kwargs = self._add_cache_logic(result=result, **kwargs)
                 self.cache.set_cache(cache_key, cached_data, **kwargs)
         except Exception as e:
@@ -765,7 +1033,7 @@ class Cache:
             return
         verbose_logger.error("%s: %s", message, exc)
 
-    async def async_add_cache(self, result, dynamic_cache_object: BaseCache | None = None, **kwargs):
+    async def async_add_cache(self, result: object, dynamic_cache_object: BaseCache | None = None, **kwargs: object):
         """
         Async implementation of add_cache
         """
@@ -773,11 +1041,6 @@ class Cache:
             if self.should_use_cache(**kwargs) is not True:
                 return
             with response_cache_phase("set"):
-                if self._native_cache is not None:
-                    request = self._native_request(kwargs)
-                    if request is not None:
-                        await self._native_cache.async_store(request, _native_response(result))
-                    return
                 if self.type == "redis" and self.redis_flush_size is not None:
                     # high traffic - fill in results in memory and then flush
                     await self.batch_cache_write(result, **kwargs)
@@ -792,23 +1055,17 @@ class Cache:
 
     def _convert_to_cached_embedding(
         self,
-        embedding_response: Any,
+        embedding_response: object,
         model: str | None,
         prompt_tokens: int | None = None,
-        prompt_tokens_details: dict | None = None,
-    ) -> CachedEmbedding:
+        prompt_tokens_details: Mapping[str, object] | None = None,
+    ) -> _UnvalidatedCachedEmbedding:
         """
         Convert any embedding response into the standardized CachedEmbedding TypedDict format.
         """
         try:
-            data: Final = (
-                embedding_response
-                if isinstance(embedding_response, dict)
-                else embedding_response.model_dump()
-                if hasattr(embedding_response, "model_dump")
-                else vars(embedding_response)
-            )
-            cached: Final[CachedEmbedding] = {
+            data: Final = _embedding_fields(embedding_response)
+            cached: Final[_UnvalidatedCachedEmbedding] = {
                 "embedding": data.get("embedding"),
                 "index": data.get("index"),
                 "object": data.get("object"),
@@ -821,19 +1078,29 @@ class Cache:
         except KeyError as e:
             raise ValueError(f"Missing expected key in embedding response: {e}")
 
+    @staticmethod
+    def _provider_item_usage(result: EmbeddingResponse, idx_in_result_data: int, num_items: int) -> Usage | None:
+        item_usages: Final = result.item_usage
+        return item_usages[idx_in_result_data] if len(item_usages) == num_items else None
+
     def _get_per_item_prompt_tokens_details(
         self,
         result: EmbeddingResponse,
         idx_in_result_data: int,
-    ) -> dict | None:
+    ) -> dict[str, object] | None:
         """
         Extract per-item prompt_tokens_details from a response for caching.
 
         For single-item responses (common for multimodal providers like Bedrock Titan,
         Nova, Vertex AI), returns the full prompt_tokens_details.
-        For multi-item responses, distributes integer fields evenly across items
-        so that summing all per-item details reconstructs the original totals.
+        For multi-item responses, uses the per-item usage the provider attributed when it
+        set one, else distributes integer fields evenly across items so that summing all
+        per-item details reconstructs the original totals.
         """
+        num_items: Final = len(result.data)
+        item_usage: Final = self._provider_item_usage(result, idx_in_result_data, num_items)
+        if item_usage is not None and item_usage.prompt_tokens_details is not None:
+            return item_usage.prompt_tokens_details.model_dump(exclude_none=True)
         if result.usage is None or result.usage.prompt_tokens_details is None:
             return None
 
@@ -848,12 +1115,11 @@ class Cache:
         if not details_dict:
             return None
 
-        num_items: Final = len(result.data)
         if num_items <= 1:
             return details_dict
 
         # Distribute integer/float fields evenly across items
-        per_item: Final[dict] = {}
+        per_item: Final[dict[str, object]] = {}
         for key, value in details_dict.items():
             if isinstance(value, int):
                 quotient, remainder = divmod(value, num_items)
@@ -873,14 +1139,18 @@ class Cache:
         Extract the per-item prompt_tokens from a response for caching.
 
         Single-item responses store the full usage.prompt_tokens. Multi-item
-        responses distribute it evenly (with remainder) so that summing all
+        responses use the provider's per-item usage when it set one, else
+        distribute it evenly (with remainder) so that summing all
         per-item values on retrieval reconstructs the original total.
         """
+        num_items: Final = len(result.data)
+        item_usage: Final = self._provider_item_usage(result, idx_in_result_data, num_items)
+        if item_usage is not None:
+            return item_usage.prompt_tokens
         if result.usage is None or result.usage.prompt_tokens is None:
             return None
 
         total: Final = result.usage.prompt_tokens
-        num_items: Final = len(result.data)
         if num_items <= 1:
             return total
 
@@ -893,10 +1163,10 @@ class Cache:
         input: str,
         kwargs: dict,
         idx_in_result_data: int = 0,
-    ) -> tuple[str, dict, dict]:
+    ) -> tuple[str, dict[str, object], dict[str, object]]:
         preset_cache_key: Final = self.get_cache_key(**{**kwargs, "input": input})
         kwargs["cache_key"] = preset_cache_key
-        embedding_response: Final = result.data[idx_in_result_data]
+        embedding_response: Final = _embedding_item(result, idx_in_result_data)
 
         # Extract per-item prompt_tokens + details from response usage
         prompt_tokens: Final = self._get_per_item_prompt_tokens(
@@ -910,18 +1180,18 @@ class Cache:
 
         # Always convert to properly typed CachedEmbedding
         model_name: Final = result.model
-        embedding_dict: Final[CachedEmbedding] = self._convert_to_cached_embedding(
+        embedding_dict: Final = self._convert_to_cached_embedding(
             embedding_response,
             model_name,
             prompt_tokens=prompt_tokens,
             prompt_tokens_details=prompt_tokens_details,
         )
 
-        cache_key, cached_data, kwargs = self._add_cache_logic(
+        _, cached_data, kwargs = self._add_cache_logic(
             result=embedding_dict,
             **kwargs,
         )
-        return cache_key, cached_data, kwargs
+        return preset_cache_key, cached_data, kwargs
 
     async def async_add_cache_pipeline(self, result, dynamic_cache_object: BaseCache | None = None, **kwargs):
         """
@@ -962,42 +1232,26 @@ class Cache:
                     )
                     cache_list.append((cache_key, cached_data))
 
-                if self._native_cache is not None:
-                    entries: Final = tuple(
-                        (request, cached_data["response"])
-                        for cache_key, cached_data in cache_list
-                        if (request := self._native_request(MappingProxyType({**kwargs, "cache_key": cache_key})))
-                        is not None
-                    )
-                    await self._native_cache.async_store_batch(
-                        tuple(request for request, _ in entries),
-                        tuple(response for _, response in entries),
-                    )
-                elif dynamic_cache_object is not None:
+                if dynamic_cache_object is not None:
                     await dynamic_cache_object.async_set_cache_pipeline(cache_list=cache_list, **kwargs)
                 else:
                     await self.cache.async_set_cache_pipeline(cache_list=cache_list, **kwargs)
         except Exception as e:
             self._log_add_cache_failure(e)
 
-    def _native_request(self, kwargs: Mapping[str, object]) -> "NativeCacheRequest | None":
-        if self._native_cache is None:
-            return None
-        cache_key: Final = kwargs.get("cache_key")
-        return self._native_cache.request(
-            self,
-            kwargs
-            if isinstance(cache_key, str)
-            else MappingProxyType({**kwargs, "cache_key": self.get_cache_key(**kwargs)}),
-        )
-
-    def should_use_cache(self, **kwargs):
+    def should_use_cache(self, **kwargs: object) -> bool:
         """
         Returns true if we should use the cache for LLM API calls
 
         If cache is default_on then this is True
         If cache is default_off then this is only true when user has opted in to use cache
+        Always False once the request carries more than `max_messages` messages
         """
+        if self.max_messages is not None and _request_message_count(kwargs) > self.max_messages:
+            return False
+        policy: Final = semantic_cache_policy(kwargs) if self._is_semantic_cache() else None
+        if policy is not None and policy.params is not None and policy.params.enabled is False:
+            return False
         if self.mode == CacheMode.default_on:
             return True
 
@@ -1007,20 +1261,22 @@ class Cache:
         if _cache and isinstance(_cache, dict):
             if _cache.get("use-cache", False) is True:
                 return True
-        return False
+        return policy is not None and policy.params is not None and policy.params.enabled is True
 
-    async def batch_cache_write(self, result, **kwargs):
+    async def batch_cache_write(self, result: object, **kwargs: object):
         cache_key, cached_data, kwargs = self._add_cache_logic(result=result, **kwargs)
         await self.cache.batch_cache_write(cache_key, cached_data, **kwargs)
 
-    async def ping(self):
-        cache_ping: Final = getattr(self.cache, "ping")
+    async def ping(self) -> object:
+        cache_ping: Final = require_attributes(self.cache, _SupportsAsyncPing, "ping").ping
         if cache_ping:
             return await cache_ping()
         return None
 
-    async def delete_cache_keys(self, keys):
-        cache_delete_cache_keys: Final = getattr(self.cache, "delete_cache_keys")
+    async def delete_cache_keys(self, keys: object) -> object:
+        cache_delete_cache_keys: Final = require_attributes(
+            self.cache, _SupportsAsyncDeleteCacheKeys, "delete_cache_keys"
+        ).delete_cache_keys
         if cache_delete_cache_keys:
             return await cache_delete_cache_keys(keys)
         return None
@@ -1029,7 +1285,7 @@ class Cache:
         if hasattr(self.cache, "disconnect"):
             await self.cache.disconnect()
 
-    def _supports_async(self) -> bool:
+    def supports_async(self) -> bool:
         """
         Internal method to check if the cache type supports async get/set operations
 
@@ -1038,6 +1294,8 @@ class Cache:
         """
         return True
 
+    _supports_async = supports_async
+
 
 def enable_cache(
     type: LiteLLMCacheType | None = LiteLLMCacheType.LOCAL,
@@ -1045,25 +1303,27 @@ def enable_cache(
     port: str | None = None,
     password: str | None = None,
     supported_call_types: list[CachingSupportedCallTypes] | None = list(DEFAULT_CACHING_SUPPORTED_CALL_TYPES),
+    excluded_call_types: Sequence[CachingSupportedCallTypes] | None = None,
     **kwargs,
 ):
     """
     Enable cache with the specified configuration.
 
     Args:
-        type (Optional[Literal["local", "redis", "s3", "disk"]]): The type of cache to enable. Defaults to "local".
+        type (Optional[Literal["local", "redis", "s3"]]): The type of cache to enable. Defaults to "local".
         host (Optional[str]): The host address of the cache server. Defaults to None.
         port (Optional[str]): The port number of the cache server. Defaults to None.
         password (Optional[str]): The password for the cache server. Defaults to None.
         supported_call_types (Optional[List[Literal["completion", "acompletion", "embedding", "aembedding"]]]):
             The supported call types for the cache. Defaults to ["completion", "acompletion", "embedding", "aembedding"].
+        excluded_call_types (Optional[Sequence[str]]): Call types to drop from supported_call_types.
         **kwargs: Additional keyword arguments.
 
     Returns:
         None
 
     Raises:
-        None
+        ValueError: If no cache is set yet and the cache type is unsupported.
     """
     print_verbose("LiteLLM: Enabling Cache")
     if "cache" not in litellm.input_callback:
@@ -1080,6 +1340,7 @@ def enable_cache(
             port=port,
             password=password,
             supported_call_types=supported_call_types,
+            excluded_call_types=excluded_call_types,
             **kwargs,
         )
     print_verbose(f"LiteLLM: Cache enabled, litellm.cache={litellm.cache}")
@@ -1092,18 +1353,20 @@ def update_cache(
     port: str | None = None,
     password: str | None = None,
     supported_call_types: list[CachingSupportedCallTypes] | None = list(DEFAULT_CACHING_SUPPORTED_CALL_TYPES),
+    excluded_call_types: Sequence[CachingSupportedCallTypes] | None = None,
     **kwargs,
 ):
     """
     Update the cache for LiteLLM.
 
     Args:
-        type (Optional[Literal["local", "redis", "s3", "disk"]]): The type of cache. Defaults to "local".
+        type (Optional[Literal["local", "redis", "s3"]]): The type of cache. Defaults to "local".
         host (Optional[str]): The host of the cache. Defaults to None.
         port (Optional[str]): The port of the cache. Defaults to None.
         password (Optional[str]): The password for the cache. Defaults to None.
         supported_call_types (Optional[List[Literal["completion", "acompletion", "embedding", "aembedding"]]]):
             The supported call types for the cache. Defaults to ["completion", "acompletion", "embedding", "aembedding"].
+        excluded_call_types (Optional[Sequence[str]]): Call types to drop from supported_call_types.
         **kwargs: Additional keyword arguments for the cache.
 
     Returns:
@@ -1117,6 +1380,7 @@ def update_cache(
         port=port,
         password=password,
         supported_call_types=supported_call_types,
+        excluded_call_types=excluded_call_types,
         **kwargs,
     )
     print_verbose(f"LiteLLM: Cache Updated, litellm.cache={litellm.cache}")

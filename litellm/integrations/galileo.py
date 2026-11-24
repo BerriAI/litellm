@@ -4,17 +4,18 @@ import json
 import os
 import re
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timezone, tzinfo
-from typing import Any, Final, Protocol, cast
+from typing import Final, Protocol, cast
 
 import httpx
-from pydantic import BaseModel, Field
+from pydantic import ConfigDict, Field, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import as_object_list, iter_items, joined, require_attributes, subscript
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
     get_content_from_model_response,
@@ -24,6 +25,7 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.types.integrations.base_health_check import IntegrationHealthCheckStatus
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import (
     AllMessageValues,
     HttpxBinaryResponseContent,
@@ -34,6 +36,11 @@ GALILEO_CLOUD_API_BASE_URL: Final = "https://api.galileo.ai"
 # Cap the in-memory buffer so persistent flush failures (e.g. Galileo
 # unavailable, invalid credentials) cannot leak memory unboundedly.
 GALILEO_MAX_IN_MEMORY_RECORDS: Final = 1000
+
+_UNTYPED_VALUE: Final = TypeAdapter(object)
+_ZERO_ARGUMENT_CALLABLE: Final[TypeAdapter[Callable[[], object]]] = TypeAdapter(
+    Callable[[], object], config=ConfigDict(hide_input_in_errors=True)
+)
 
 
 class _GalileoLoginBody(TypedDict):
@@ -52,6 +59,10 @@ class _JsonResponse(Protocol):
     """An HTTP response read only for whatever JSON body it decodes to."""
 
     def json(self) -> object: ...
+
+
+class _SupportsGet(Protocol):
+    def get(self, key: str, /) -> object: ...
 
 
 def _login_access_token(response: _GalileoLoginResponse) -> str:
@@ -75,7 +86,7 @@ class GalileoStandardLoggingFields(TypedDict, total=False):
     endTime: float
 
 
-class LLMResponse(BaseModel):
+class LLMResponse(LiteLLMBaseModel):
     latency_ms: int
     status_code: int
     input_text: str
@@ -98,9 +109,73 @@ class LLMResponse(BaseModel):
     user_metadata: dict[str, object] | None = None
 
 
+class _GalileoRecord(TypedDict, total=False):
+    latency_ms: ReadOnly[int]
+    status_code: ReadOnly[int]
+    input_text: ReadOnly[str]
+    output_text: ReadOnly[str]
+    node_type: ReadOnly[str]
+    model: ReadOnly[str]
+    num_input_tokens: ReadOnly[int]
+    num_output_tokens: ReadOnly[int]
+    num_total_tokens: ReadOnly[int]
+    cost: ReadOnly[float | None]
+    output_logprobs: ReadOnly[Mapping[str, object] | None]
+    created_at: ReadOnly[str]
+    tags: ReadOnly[Sequence[str] | None]
+    user_metadata: ReadOnly[Mapping[str, object] | None]
+    messages: ReadOnly[Sequence[object]]
+
+
+class _GalileoLoggingKwargs(TypedDict, total=False, extra_items=object):
+    standard_logging_object: ReadOnly[GalileoStandardLoggingFields | None]
+
+
+def _as_dict(value: object) -> Mapping[object, object] | None:
+    return value if isinstance(value, dict) else None
+
+
+def _record_messages(messages: object) -> object:
+    fields: Final = _as_dict(messages)
+    return fields.get("messages") if fields is not None else messages
+
+
+def _block_text(block: object) -> object:
+    fields: Final = _as_dict(block)
+    return fields.get("text", "") if fields is not None else str(block)
+
+
+def _content_text(content: object) -> object:
+    blocks: Final = as_object_list(content)
+    return content if blocks is None else joined(" ", (_block_text(block) for block in blocks))
+
+
+def _galileo_record(response: LLMResponse, messages: object) -> _GalileoRecord:
+    record: Final[_GalileoRecord] = {
+        "latency_ms": response.latency_ms,
+        "status_code": response.status_code,
+        "input_text": response.input_text,
+        "output_text": response.output_text,
+        "node_type": response.node_type,
+        "model": response.model,
+        "num_input_tokens": response.num_input_tokens,
+        "num_output_tokens": response.num_output_tokens,
+        "num_total_tokens": response.num_total_tokens,
+        "cost": response.cost,
+        "output_logprobs": response.output_logprobs,
+        "created_at": response.created_at,
+        "tags": response.tags,
+        "user_metadata": response.user_metadata,
+    }
+    record_messages: Final = _record_messages(messages)
+    if isinstance(record_messages, list) and record_messages:
+        return {**record, "messages": record_messages}
+    return record
+
+
 class GalileoObserve(CustomLogger):
     def __init__(self) -> None:
-        self.in_memory_records: list[Mapping[str, object]] = []
+        self.in_memory_records: list[_GalileoRecord] = []
         self.batch_size = 1
         self.api_key = os.getenv("GALILEO_API_KEY")
         self.project_id = os.getenv("GALILEO_PROJECT_ID")
@@ -218,18 +293,19 @@ class GalileoObserve(CustomLogger):
 
     @staticmethod
     def _galileo_input_messages(messages: object, input_text: str) -> list[dict[str, str]]:
-        if isinstance(messages, dict):
-            messages = messages.get("messages")
-        if not messages:
+        record_messages: Final = _record_messages(messages)
+        if not record_messages:
             return [{"role": "user", "content": input_text}]
-        if not isinstance(messages, list):
+        listed: Final = as_object_list(record_messages)
+        if listed is None:
             return [{"role": "user", "content": input_text}]
 
         galileo_messages: Final[list[dict[str, str]]] = []
-        for message in messages:
-            if not isinstance(message, dict):
+        for message in listed:
+            fields = _as_dict(message)
+            if fields is None:
                 continue
-            role = message.get("role")
+            role = fields.get("role")
             if not role:
                 continue
             galileo_messages.append(
@@ -267,7 +343,7 @@ class GalileoObserve(CustomLogger):
         return created_at
 
     @staticmethod
-    def _token_metrics_from_record(record: Mapping[str, Any]) -> dict[str, object]:
+    def _token_metrics_from_record(record: _GalileoRecord) -> dict[str, object]:
         num_input_tokens: Final = int(record.get("num_input_tokens") or 0)
         num_output_tokens: Final = int(record.get("num_output_tokens") or 0)
         num_total_tokens = int(record.get("num_total_tokens") or 0)
@@ -285,7 +361,7 @@ class GalileoObserve(CustomLogger):
 
     @staticmethod
     def _record_to_v2_span(
-        record: Mapping[str, Any],
+        record: _GalileoRecord,
         *,
         trace_id: str,
         span_id: str,
@@ -311,12 +387,13 @@ class GalileoObserve(CustomLogger):
                 **GalileoObserve._token_metrics_from_record(record),
             },
         }
-        if record.get("tags"):
-            span["tags"] = record["tags"]
+        tags: Final = record.get("tags")
+        if tags:
+            span["tags"] = tags
         return span
 
     @staticmethod
-    def _record_to_v2_trace(record: Mapping[str, Any]) -> dict[str, object]:
+    def _record_to_v2_trace(record: _GalileoRecord) -> dict[str, object]:
         trace_id: Final = str(uuid.uuid4())
         span_id: Final = str(uuid.uuid4())
         created_at: Final = GalileoObserve._normalize_created_at(record.get("created_at", ""))
@@ -336,7 +413,7 @@ class GalileoObserve(CustomLogger):
             "spans": [GalileoObserve._record_to_v2_span(record, trace_id=trace_id, span_id=span_id)],
         }
 
-    def _build_traces_payload(self, records: Sequence[Mapping[str, object]]) -> dict[str, object]:
+    def _build_traces_payload(self, records: Sequence[_GalileoRecord]) -> dict[str, object]:
         payload: Final[dict[str, object]] = {
             "traces": [self._record_to_v2_trace(record) for record in records],
             "logging_method": "api_direct",
@@ -402,17 +479,19 @@ class GalileoObserve(CustomLogger):
         if not traces_value:
             missing_fields.append("traces")
 
-        traces: Final[Sequence[object]] = traces_value if isinstance(traces_value, list) else []
-        for trace_index, trace in enumerate(traces):
-            if not isinstance(trace, dict):
+        traces: Final[Sequence[object]] = as_object_list(traces_value) or []
+        for trace_index, trace_value in enumerate(traces):
+            trace = _as_dict(trace_value)
+            if trace is None:
                 continue
             for field in ("id", "type", "spans"):
                 if field not in trace:
                     missing_fields.append(f"traces[{trace_index}].{field}")
 
             trace_id = trace.get("id")
-            for span_index, span in enumerate(trace.get("spans", [])):
-                if not isinstance(span, dict):
+            for span_index, span_value in enumerate(iter_items(trace.get("spans", []))):
+                span = _as_dict(span_value)
+                if span is None:
                     continue
                 for field in ("id", "trace_id", "parent_id"):
                     if field not in span:
@@ -427,11 +506,11 @@ class GalileoObserve(CustomLogger):
             )
 
     def _log_flush_payload(self, url: str, payload: dict[str, object]) -> None:
-        traces: Final = payload.get("traces")
+        traces: Final = as_object_list(payload.get("traces"))
         verbose_logger.debug(
             "Galileo Logger flush URL: %s trace_count=%s",
             url,
-            len(traces) if isinstance(traces, list) else 0,
+            len(traces) if traces is not None else 0,
         )
         if self.use_v2_api and "/ingest/traces/" in url:
             self._log_v2_payload_validation(payload)
@@ -457,13 +536,13 @@ class GalileoObserve(CustomLogger):
             pass
 
     @staticmethod
-    def _build_prompt(kwargs: Mapping[str, Any]) -> dict[str, object]:
-        optional_params: Final[Mapping[str, object]] = kwargs.get("optional_params", {}) or {}
+    def _build_prompt(kwargs: Mapping[str, object]) -> dict[str, object]:
+        optional_params: Final = require_attributes(kwargs.get("optional_params", {}) or {}, _SupportsGet, "get")
         prompt: Final[dict[str, object]] = {"messages": kwargs.get("messages")}
         if optional_params.get("functions") is not None:
-            prompt["functions"] = optional_params["functions"]
+            prompt["functions"] = subscript(optional_params, "functions")
         if optional_params.get("tools") is not None:
-            prompt["tools"] = optional_params["tools"]
+            prompt["tools"] = subscript(optional_params, "tools")
         return prompt
 
     @staticmethod
@@ -473,9 +552,9 @@ class GalileoObserve(CustomLogger):
         if isinstance(value, str):
             return value
 
-        def _json_default(obj: Any) -> object:
+        def _json_default(obj: object) -> object:
             if hasattr(obj, "model_dump"):
-                return obj.model_dump()
+                return _ZERO_ARGUMENT_CALLABLE.validate_python(getattr(obj, "model_dump", None))()
             return str(obj)
 
         return json.dumps(value, default=_json_default)
@@ -496,7 +575,7 @@ class GalileoObserve(CustomLogger):
             if hasattr(message, "json"):
                 message_json: Final[object] = message.json()
                 if isinstance(message_json, str):
-                    return json.loads(message_json)
+                    return _UNTYPED_VALUE.validate_python(json.loads(message_json))
                 return message_json
             return message
         return None
@@ -633,31 +712,30 @@ class GalileoObserve(CustomLogger):
         """Return a plain-string summary of the input suitable for the trace-level input field."""
         if isinstance(messages, str):
             return messages
-        if not isinstance(messages, list):
+        listed: Final = as_object_list(messages)
+        if listed is None:
             return ""
         # Use the last user/human message so the trace table shows the actual prompt
-        for msg in reversed(messages):
-            if not isinstance(msg, dict):
+        for msg in reversed(listed):
+            fields = _as_dict(msg)
+            if fields is None:
                 continue
-            if str(msg.get("role", "")).lower() in ("user", "human"):
-                content = msg.get("content") or ""
-                if isinstance(content, list):
-                    content = " ".join(b.get("text", "") if isinstance(b, dict) else str(b) for b in content)
+            if str(fields.get("role", "")).lower() in ("user", "human"):
+                content = _content_text(fields.get("content") or "")
                 if content:
                     return str(content)
         # Fallback: first non-empty content of any role
-        for msg in messages:
-            if isinstance(msg, dict):
-                content = msg.get("content") or ""
-                if isinstance(content, list):
-                    content = " ".join(b.get("text", "") if isinstance(b, dict) else str(b) for b in content)
+        for msg in listed:
+            fields = _as_dict(msg)
+            if fields is not None:
+                content = _content_text(fields.get("content") or "")
                 if content:
                     return str(content)
         return ""
 
     async def async_log_success_event(
         self,
-        kwargs: Mapping[str, object],
+        kwargs: _GalileoLoggingKwargs,
         response_obj: object,
         start_time: object,
         end_time: object,
@@ -675,7 +753,7 @@ class GalileoObserve(CustomLogger):
 
     async def _async_log_success_event_impl(
         self,
-        kwargs: Mapping[str, Any],
+        kwargs: _GalileoLoggingKwargs,
         response_obj: object,
         start_time: object,
         end_time: object,
@@ -741,12 +819,7 @@ class GalileoObserve(CustomLogger):
             created_at=GalileoObserve._format_created_at(start_ts),
         )
 
-        request_dict: Final = request_record.model_dump()
-        if isinstance(messages, dict):
-            messages = messages.get("messages")
-        if isinstance(messages, list) and messages:
-            request_dict["messages"] = messages
-        self.in_memory_records.append(request_dict)
+        self.in_memory_records.append(_galileo_record(request_record, messages))
         verbose_logger.debug("Galileo Logger: queued record, in_memory=%d", len(self.in_memory_records))
 
         # Bound the buffer so persistent flush failures cannot grow it

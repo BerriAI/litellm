@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Final, TypeAlias
 from urllib.parse import quote, quote_plus, urlencode
 
 import httpx
-from pydantic import BaseModel, SecretStr, ValidationError
+from pydantic import SecretStr, ValidationError
 from typing_extensions import assert_never
 
 from litellm.llms.base_llm.auth.identity_source import KeycloakSource, ref_for_error_message
@@ -30,6 +30,7 @@ from litellm.llms.base_llm.auth.token_exchange import (
     validate_token_endpoint_url,
 )
 from litellm.llms.base_llm.auth.types import InsecureTokenUrl, SyncTokenPoster
+from litellm.types.llms.base import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
@@ -41,7 +42,7 @@ _TIMEOUT_SECONDS: Final = 30.0
 _FORM_CONTENT_TYPE: Final = "application/x-www-form-urlencoded"
 
 
-class _ClientCredentialsResponse(BaseModel):
+class _ClientCredentialsResponse(LiteLLMBaseModel):
     access_token: str
 
 

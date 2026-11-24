@@ -1,32 +1,47 @@
 import ast
 import contextvars
 import functools
+import inspect
 import itertools
+import json
 import logging
 import os
 import re
 import sys
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from datetime import datetime
 from logging import Formatter
-from typing import Final, TextIO
+from types import FrameType, MappingProxyType, TracebackType
+from typing import Final, Protocol, TextIO
 from urllib.parse import unquote
+
+from pydantic import TypeAdapter
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm.constants import (
+    CREDENTIAL_FIELD_NAME_FRAGMENTS,
+    CREDENTIAL_FIELD_NAME_WORDS,
+    CREDENTIAL_HEADER_NAMES,
+    DEFAULT_MAX_RECURSE_DEPTH,
     LITELLM_TRUNCATED_PAYLOAD_FIELD,
     LITELLM_TRUNCATION_STDOUT_SAFEGUARD_NOTE,
     MAX_BASE64_LENGTH_STDOUT_LOG,
     MAX_STRING_LENGTH_STDOUT_LOG,
+    QUANTITY_FIELD_NAME_WORDS,
 )
 from litellm.litellm_core_utils.env_utils import get_env_int
 from litellm.litellm_core_utils.safe_json_dumps import UNSERIALIZABLE_OBJECT, safe_dumps, safe_json_structure
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.secret_redaction import (
-    _python_redact_string,
-    _python_redact_structured_value,
+    REDACTED,
+    python_redact_string,
+    python_redact_structured_value,
     redact_internal_details,
-    redact_string,
+    redact_structured_value,
+)
+from litellm.litellm_core_utils.secret_redaction import (
+    redact_string as redact_secret_string,
 )
 from litellm.rust_bridge import diagnostics
 
@@ -52,7 +67,7 @@ def _sanitize_correlation_id(value: str) -> str:
     pass through credential redaction.
     """
     stripped: Final = "".join(ch for ch in value if ch.isprintable())
-    return _redact_string(stripped)[:_MAX_CORRELATION_ID_LENGTH]
+    return redact_string(stripped)[:_MAX_CORRELATION_ID_LENGTH]
 
 
 def set_session_id(session_id: str) -> "contextvars.Token[str]":
@@ -71,19 +86,29 @@ if set_verbose is True:
 _ENABLE_SECRET_REDACTION: Final = os.getenv("LITELLM_DISABLE_REDACT_SECRETS", "").lower() != "true"
 
 
-def _redact_string(value: str) -> str:
+def redact_string(value: str) -> str:
     if not _ENABLE_SECRET_REDACTION:
         return value
-    return redact_string(value)
+    return redact_secret_string(value)
+
+
+_redact_string = redact_string
 
 
 _REDACTED_RECORD_ATTR: Final = "litellm_redacted"
 _REDACTED_STAMP: Final = object()
+_CALLER_ERROR_RECORD_ATTR: Final = "litellm_caller_error"
+CALLER_ERROR_LOG_EXTRA: Final = MappingProxyType({_CALLER_ERROR_RECORD_ATTR: True})
+_DECODED_LOG_PAYLOAD: Final = TypeAdapter(object)
 _UNREDACTED_SCALAR_TYPES: Final = (bool, int, float, type(None))
 
 
 def _is_redacted(record: logging.LogRecord) -> bool:
     return getattr(record, _REDACTED_RECORD_ATTR, None) is _REDACTED_STAMP
+
+
+def _record_attributes(record: logging.LogRecord) -> Mapping[str, object]:
+    return record.__dict__
 
 
 def _scrubbing_changed_nothing(scrubbed: object, original: object) -> bool:
@@ -114,7 +139,7 @@ def redact_secrets(value: str) -> str:
     """
     if not _ENABLE_SECRET_REDACTION:
         return value
-    return _redact_string(value)
+    return redact_string(value)
 
 
 def redact_internal_details_from_client_message(value: str) -> str:
@@ -123,6 +148,85 @@ def redact_internal_details_from_client_message(value: str) -> str:
     if not _ENABLE_SECRET_REDACTION:
         return value
     return redact_internal_details(value)
+
+
+_CLIENT_FIELDS: Final = TypeAdapter(dict[str, object])
+_CLIENT_ITEMS: Final = TypeAdapter(list[object])
+_CREDENTIAL_KEY_PROBE: Final = "key-name-probe"
+_FIELD_NAME_BOUNDARY: Final = re.compile(r"(?<=[a-z])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])|[^A-Za-z]+")
+
+
+def _redacted_client_key(key: str) -> str:
+    return redact_internal_details(redact_structured_value(None, key))
+
+
+def _names_a_credential(key: str | None) -> bool:
+    return redact_structured_value(key, _CREDENTIAL_KEY_PROBE) != _CREDENTIAL_KEY_PROBE
+
+
+def _names_a_credential_header(key: str | None) -> bool:
+    return key is not None and key.strip().lower().replace("_", "-") in CREDENTIAL_HEADER_NAMES
+
+
+def _names_a_credential_field(key: str | None) -> bool:
+    if key is None:
+        return False
+    words: Final = frozenset(_FIELD_NAME_BOUNDARY.sub(" ", key).lower().split())
+    if words & QUANTITY_FIELD_NAME_WORDS:
+        return False
+    compact: Final = "".join(character for character in key.lower() if character.isalnum())
+    return bool(words & CREDENTIAL_FIELD_NAME_WORDS) or any(
+        fragment in compact for fragment in CREDENTIAL_FIELD_NAME_FRAGMENTS
+    )
+
+
+def _embedded_json(value: str) -> object:
+    adapter: Final = _CLIENT_FIELDS if value.lstrip().startswith("{") else _CLIENT_ITEMS
+    try:
+        return adapter.validate_json(value)
+    except (ValueError, RecursionError):
+        return None
+
+
+def _redacted_embedded_json(key: str | None, value: str, depth: int) -> str:
+    """A string holding a JSON object or array has its fields redacted like the structured form."""
+    if not value.lstrip().startswith(("{", "[")):
+        return value
+    embedded: Final = _embedded_json(value)
+    if embedded is None:
+        return value
+    redacted: Final = _redacted_client_field(key, embedded, depth + 1)
+    return value if redacted == embedded else json.dumps(redacted, separators=(",", ":"))
+
+
+def _redacted_client_field(key: str | None, value: object, depth: int = 0) -> object:
+    if _names_a_credential_header(key) or _names_a_credential_field(key):
+        return REDACTED
+    if isinstance(value, str):
+        return redact_internal_details(redact_structured_value(key, _redacted_embedded_json(key, value, depth)))
+    if isinstance(value, (dict, list, tuple)) and (depth > DEFAULT_MAX_RECURSE_DEPTH or _names_a_credential(key)):
+        return REDACTED
+    if isinstance(value, dict):
+        return {
+            _redacted_client_key(child_key): _redacted_client_field(child_key, child, depth + 1)
+            for child_key, child in _CLIENT_FIELDS.validate_python(value).items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_redacted_client_field(key, child, depth + 1) for child in _CLIENT_ITEMS.validate_python(value)]
+    if not isinstance(value, (int, float)):
+        return value
+    text: Final = str(value)
+    return value if redact_structured_value(key, text) == text else REDACTED
+
+
+def redact_internal_details_from_client_value(value: object) -> object:
+    if not _ENABLE_SECRET_REDACTION:
+        return value
+    return _redacted_client_field(None, value)
+
+
+def redact_internal_details_from_client_fields(fields: Mapping[str, object]) -> object:
+    return redact_internal_details_from_client_value(dict(fields))
 
 
 def _substituted_color_message(record: logging.LogRecord) -> str | None:
@@ -165,7 +269,7 @@ _REDACTION_PLACEHOLDER: Final = "REDACTED"
 def _hides_a_credential(value: str) -> bool:
     """Whether *value* only looks clean until it is percent-decoded."""
     decoded: Final = unquote(value)
-    return _python_redact_string(decoded) != decoded
+    return python_redact_string(decoded) != decoded
 
 
 def _drop_encoded_credential(scrubbed: str) -> str:
@@ -193,10 +297,10 @@ def _scrub_access_arg(value: str) -> str:
     pattern and would then be logged raw.
     """
     if len(value) <= _MAX_SCRUBBED_ACCESS_ARG:
-        return _drop_encoded_credential(_python_redact_string(value))
+        return _drop_encoded_credential(python_redact_string(value))
     head: Final = value[:_MAX_SCRUBBED_ACCESS_ARG]
     kept: Final = head[: max(head.rfind("?"), head.rfind("&"))] if "?" in head else head
-    scrubbed: Final = _drop_encoded_credential(_python_redact_string(kept))
+    scrubbed: Final = _drop_encoded_credential(python_redact_string(kept))
     return f"{scrubbed}... ({len(value) - len(kept)} more chars truncated) ..."
 
 
@@ -383,14 +487,14 @@ def _python_process_diagnostic(
 ) -> tuple[str, str | None, str | None, tuple[str, ...], bool]:
     def process_text(text: str) -> str:
         collapsed: Final = _collapse_base64_runs(text, base64_limit) if base64_limit > 0 else text
-        scrubbed: Final = _python_redact_string(collapsed) if redact else collapsed
+        scrubbed: Final = python_redact_string(collapsed) if redact else collapsed
         return _truncate_for_stdout_log(scrubbed, text_limit) if 0 < text_limit < len(scrubbed) else scrubbed
 
     processed_message: Final = process_text(message)
     processed_exception: Final = process_text(exception) if exception is not None else None
-    processed_stack: Final = _python_redact_string(stack) if redact and stack is not None else stack
+    processed_stack: Final = python_redact_string(stack) if redact and stack is not None else stack
     processed_leaves: Final = tuple(
-        _python_redact_structured_value(key, text) if redact else text for key, text in leaves
+        python_redact_structured_value(key, text) if redact else text for key, text in leaves
     )
     changed: Final = (
         processed_message != message
@@ -433,7 +537,7 @@ def _process_record(record: logging.LogRecord, *, base64_limit: int, text_limit:
                     key, substituted_color if key == "color_message" and substituted_color is not None else value
                 ),
             )
-            for key, value in record.__dict__.items()
+            for key, value in _record_attributes(record).items()
             if key not in _STANDARD_RECORD_ATTRS
             and key != _REDACTED_RECORD_ATTR
             and not isinstance(value, _UNREDACTED_SCALAR_TYPES)
@@ -472,7 +576,7 @@ def _process_record(record: logging.LogRecord, *, base64_limit: int, text_limit:
         record.stack_info = processed_stack  # rebind-ok: the Filter interface mutates the record
     processed_values: Final = iter(processed_leaves[: len(extra_leaves)])
     for key, original, prepared in extras:
-        replacement: Final = _sort_processed_sets(original, _replace_string_leaves(prepared, processed_values))
+        replacement = _sort_processed_sets(original, _replace_string_leaves(prepared, processed_values))
         if not _scrubbing_changed_nothing(replacement, original):
             setattr(record, key, replacement)
     raw_color_changed: Final = (
@@ -489,12 +593,12 @@ def _redact_json_record(value: object) -> object:
     leaves: Final = tuple(_string_leaves(None, prepared))
     candidate: Final = diagnostics.run(
         lambda native: native.process_diagnostic("", None, None, leaves, (True, 0, 0))[3],
-        lambda: tuple(_python_redact_structured_value(key, text) for key, text in leaves),
+        lambda: tuple(python_redact_structured_value(key, text) for key, text in leaves),
     )
     replacements: Final = (
         candidate
         if len(candidate) == len(leaves)
-        else tuple(_python_redact_structured_value(key, text) for key, text in leaves)
+        else tuple(python_redact_structured_value(key, text) for key, text in leaves)
     )
     return _sort_processed_sets(value, _replace_string_leaves(prepared, iter(replacements)))
 
@@ -585,6 +689,7 @@ _LOG_FORMAT_PREFIX: Final = "%(asctime)s - %(name)s:%(levelname)s"
 _LOG_FORMAT_SUFFIX: Final = ": %(filename)s:%(lineno)s - %(message)s"
 _PLAIN_LOG_FORMAT: Final = _LOG_FORMAT_PREFIX + _LOG_FORMAT_SUFFIX
 _COLOR_LOG_FORMAT: Final = f"\033[92m{_LOG_FORMAT_PREFIX}\033[0m{_LOG_FORMAT_SUFFIX}"
+_ANSI_ESCAPE: Final = re.compile(r"\x1b\[[0-9;]*m")
 
 
 def _stream_is_tty(stream: TextIO | None) -> bool:
@@ -599,27 +704,45 @@ def _stream_is_tty(stream: TextIO | None) -> bool:
         return False
 
 
-def _plain_log_format(stdout: TextIO | None, stderr: TextIO | None) -> str:
-    """The plain-text log format, colorized only when both streams are an interactive terminal.
+def _color_enabled(stream: TextIO | None) -> bool:
+    """True when ANSI colors written to the stream reach an interactive terminal.
 
     Honors the NO_COLOR convention from no-color.org: color is disabled when
     NO_COLOR is present with a non-empty value.
     """
-    if os.environ.get("NO_COLOR"):
-        return _PLAIN_LOG_FORMAT
-    return _COLOR_LOG_FORMAT if _stream_is_tty(stdout) and _stream_is_tty(stderr) else _PLAIN_LOG_FORMAT
+    return not os.environ.get("NO_COLOR") and _stream_is_tty(stream)
+
+
+def _terminal_colors(stdout: TextIO | None, stderr: TextIO | None) -> bool:
+    """True when both streams are an interactive color terminal, the one rule for log lines and startup prints."""
+    return _color_enabled(stdout) and _color_enabled(stderr)
+
+
+def terminal_text(message: str) -> str:
+    """The message with its ANSI colors kept only on a color terminal, by the rule the plain log format uses."""
+    return message if _terminal_colors(sys.stdout, sys.stderr) else _ANSI_ESCAPE.sub("", message)
+
+
+def _plain_log_format(stdout: TextIO | None, stderr: TextIO | None) -> str:
+    """The plain-text log format, colorized only when both streams are an interactive terminal."""
+    return _COLOR_LOG_FORMAT if _terminal_colors(stdout, stderr) else _PLAIN_LOG_FORMAT
 
 
 class LevelRoutingStreamHandler(logging.StreamHandler):
-    """Writes records below WARNING and invalid-key warnings to stdout, others to stderr.
+    """Writes records below WARNING and caller-error warnings to stdout, others to stderr.
 
     Collectors that derive severity from the stream report every stderr line as an error.
-    Invalid-key warnings route to stdout so LITELLM_LOG=ERROR can suppress them.
+    Caller-error warnings (a malformed virtual key, a token count the provider refused) route
+    to stdout so LITELLM_LOG=ERROR can suppress them.
     """
 
     def emit(self, record: logging.LogRecord) -> None:
         is_stdout_record: Final = record.levelno < logging.WARNING or (
-            record.levelno == logging.WARNING and record.name == verbose_proxy_stdout_logger.name
+            record.levelno == logging.WARNING
+            and (
+                record.name == verbose_proxy_stdout_logger.name
+                or getattr(record, _CALLER_ERROR_RECORD_ATTR, False) is True
+            )
         )
         preferred: Final = sys.stdout if is_stdout_record else sys.stderr
         if preferred is None or getattr(preferred, "closed", False):
@@ -629,10 +752,10 @@ class LevelRoutingStreamHandler(logging.StreamHandler):
         super().emit(record)
 
 
-def _parse_json_logs_env(value: str | None) -> bool:
-    """Strict opt-in parse for the JSON_LOGS env var: only "true" (any case) enables JSON logs.
+def _parse_env_flag(value: str | None) -> bool:
+    """Strict opt-in parse for a boolean env var such as JSON_LOGS: only "true" (any case) enables it.
 
-    Matches the reader in litellm-proxy-extras/_logging.py. The previous
+    Matches the reader in litellm/proxy-extras/_logging.py. The previous
     bool(os.getenv(...)) treated any non-empty value, including "false" and "0",
     as enabled.
     """
@@ -643,7 +766,18 @@ def resolve_log_level(log_level: str) -> int:
     return getattr(logging, log_level.upper())
 
 
-json_logs: Final = _parse_json_logs_env(os.getenv("JSON_LOGS"))
+json_logs: Final = _parse_env_flag(os.getenv("JSON_LOGS"))
+suppress_startup_output: Final = _parse_env_flag(os.getenv("LITELLM_SUPPRESS_STARTUP_OUTPUT"))
+
+
+class StartupOutputSettings(TypedDict, total=False):
+    json_logs: ReadOnly[object]
+    suppress_startup_output: ReadOnly[object]
+
+
+STARTUP_OUTPUT_SETTINGS: Final = TypeAdapter(StartupOutputSettings)
+
+
 # Create a handler for the logger (you may need to adapt this based on your needs)
 log_level: Final = os.getenv("LITELLM_LOG", "DEBUG")
 numeric_level: Final[int] = resolve_log_level(log_level)
@@ -664,7 +798,7 @@ def _try_parse_json_message(message: str) -> dict[str, object] | None:
     msg_stripped: Final = message.strip()
     if not (msg_stripped.startswith("{") or msg_stripped.startswith("[")):
         return None
-    parsed: Final[object] = safe_json_loads(message, default=None)
+    parsed: Final = _DECODED_LOG_PAYLOAD.validate_python(safe_json_loads(message, default=None))
     if parsed is None or not isinstance(parsed, dict):
         return None
     return parsed
@@ -694,7 +828,7 @@ def _try_parse_embedded_python_dict(message: str) -> dict[str, object] | None:
                 if depth == 0:
                     substr = message[start : j + 1]
                     try:
-                        result: object = ast.literal_eval(substr)
+                        result: object = _DECODED_LOG_PAYLOAD.validate_python(ast.literal_eval(substr))
                         if isinstance(result, dict) and len(result) > 0:
                             return result
                     except (ValueError, SyntaxError, TypeError):
@@ -706,13 +840,13 @@ def _try_parse_embedded_python_dict(message: str) -> dict[str, object] | None:
 
 # Standard LogRecord attribute names - used to identify 'extra' fields.
 # Derived at runtime so we automatically include version-specific attrs (e.g. taskName).
-def _get_standard_record_attrs() -> frozenset:
+def _get_standard_record_attrs() -> frozenset[str]:
     """Standard LogRecord attribute names - excludes extra keys from logger.debug(..., extra={...})."""
     return frozenset(logging.LogRecord("", 0, "", 0, "", (), None).__dict__.keys())
 
 
 _STANDARD_RECORD_ATTRS: Final = _get_standard_record_attrs()
-_NON_EXTRA_RECORD_ATTRS: Final = _STANDARD_RECORD_ATTRS | {_REDACTED_RECORD_ATTR}
+_NON_EXTRA_RECORD_ATTRS: Final = _STANDARD_RECORD_ATTRS | {_REDACTED_RECORD_ATTR, _CALLER_ERROR_RECORD_ATTR}
 
 # CorrelationContextFilter is the only legitimate source for these two JSON fields;
 # see JsonFormatter.format() for why they're excluded from the generic message-content
@@ -724,13 +858,13 @@ class JsonFormatter(Formatter):
     def __init__(self):
         super().__init__()
 
-    def formatTime(self, record, datefmt=None):
+    def formatTime(self, record: logging.LogRecord, datefmt: str | None = None):
         # Use datetime to format the timestamp in ISO 8601 format
         dt: Final = datetime.fromtimestamp(record.created)
         return dt.isoformat()
 
-    def format(self, record):
-        message_str: Final = record.getMessage()
+    def format(self, record: logging.LogRecord):
+        message_str: Final = _ANSI_ESCAPE.sub("", record.getMessage())
         json_record: Final[dict[str, object]] = {
             "message": message_str,
             "level": record.levelname,
@@ -752,7 +886,7 @@ class JsonFormatter(Formatter):
                     json_record[key] = value
 
         # Include extra attributes passed via logger.debug("msg", extra={...})
-        for key, value in record.__dict__.items():
+        for key, value in _record_attributes(record).items():
             if key not in _NON_EXTRA_RECORD_ATTRS and key not in json_record:
                 json_record[key] = value
 
@@ -782,16 +916,38 @@ class JsonFormatter(Formatter):
         )
 
 
+RUST_FIELDS_RECORD_ATTR: Final = "rust_fields"
+_RUST_FIELDS: Final = TypeAdapter(dict[str, object])
+
+
+def _rust_fields_suffix(record: logging.LogRecord) -> str:
+    """The fields as ``[name=value ...]``. Each value is JSON, so a newline or control code in it cannot start a
+    line, and the fields together are held to the base64 and length limits a message is."""
+    fields: Final = _record_attributes(record).get(RUST_FIELDS_RECORD_ATTR)
+    if not isinstance(fields, dict) or not fields:
+        return ""
+    named: Final = _RUST_FIELDS.validate_python(fields)
+    rendered: Final = " ".join(f"{name}={safe_dumps(value)}" for name, value in named.items())
+    base64_limit: Final = _get_max_base64_length_stdout_log()
+    collapsed: Final = _collapse_base64_runs(rendered, base64_limit) if base64_limit > 0 else rendered
+    text_limit: Final = _get_max_string_length_stdout_log() if record.levelno >= logging.INFO else 0
+    bounded: Final = _truncate_for_stdout_log(collapsed, text_limit) if 0 < text_limit < len(collapsed) else collapsed
+    return f" [{bounded}]"
+
+
 class CorrelationPlainFormatter(logging.Formatter):
     """Appends trace_id/session_id to plain-text log lines stamped by CorrelationContextFilter.
 
     Mirrors JsonFormatter's handling of these two fields so request_correlation_in_logs
-    behaves the same whether or not json_logs is enabled.
+    behaves the same whether or not json_logs is enabled. Unless it was built with the color format,
+    it also drops the ANSI color codes a message carries, which a piped log would store as text.
     """
 
     def format(self, record: logging.LogRecord) -> str:
         rendered: Final = super().format(record)
-        formatted: Final = rendered if _is_redacted(record) else _redact_string(rendered)
+        uncolored: Final = rendered if self._fmt == _COLOR_LOG_FORMAT else _ANSI_ESCAPE.sub("", rendered)
+        with_fields: Final = uncolored + _rust_fields_suffix(record)
+        formatted: Final = with_fields if _is_redacted(record) else redact_string(with_fields)
         trace_id: Final = getattr(record, "trace_id", None)
         session_id: Final = getattr(record, "session_id", None)
         if not trace_id and not session_id:
@@ -805,7 +961,7 @@ class CorrelationPlainFormatter(logging.Formatter):
 
 
 # Function to set up exception handlers for JSON logging
-def _setup_json_exception_handlers(formatter):
+def _setup_json_exception_handlers(formatter: Formatter):
     # Create a handler with JSON formatting for exceptions
     error_handler: Final = logging.StreamHandler()
     error_handler.setFormatter(formatter)
@@ -814,7 +970,7 @@ def _setup_json_exception_handlers(formatter):
     error_handler.addFilter(_correlation_filter)
 
     # Setup excepthook for uncaught exceptions
-    def json_excepthook(exc_type, exc_value, exc_traceback):
+    def json_excepthook(exc_type: type[BaseException], exc_value: BaseException, exc_traceback: TracebackType | None):
         record: Final = logging.LogRecord(
             name="LiteLLM",
             level=logging.ERROR,
@@ -832,7 +988,7 @@ def _setup_json_exception_handlers(formatter):
     try:
         import asyncio
 
-        def async_json_exception_handler(loop, context):
+        def async_json_exception_handler(loop: asyncio.AbstractEventLoop, context):
             exception: Final = context.get("exception")
             if exception:
                 exc_type: Final = type(exception)
@@ -866,9 +1022,12 @@ else:
 
     handler.setFormatter(formatter)
 
+
+class WarningLogger(Protocol):
+    def warning(self, msg: str, /, *args: object) -> None: ...
+
+
 verbose_proxy_logger = logging.getLogger("LiteLLM Proxy")
-# Malformed virtual key rejections log through this child; LevelRoutingStreamHandler
-# writes its WARNING records to stdout. It has no handler or level of its own.
 verbose_proxy_stdout_logger: Final = verbose_proxy_logger.getChild("stdout")
 verbose_router_logger = logging.getLogger("LiteLLM Router")
 verbose_logger = logging.getLogger("LiteLLM")
@@ -884,6 +1043,66 @@ verbose_router_logger.addFilter(_diagnostic_filter)
 verbose_proxy_logger.addFilter(_diagnostic_filter)
 verbose_proxy_stdout_logger.addFilter(_diagnostic_filter)
 verbose_logger.addFilter(_diagnostic_filter)
+
+
+def print_startup_message(message: str) -> None:
+    """Write a boot-time message meant for the operator's terminal.
+
+    LITELLM_SUPPRESS_STARTUP_OUTPUT or litellm_settings.suppress_startup_output turns every one of them
+    off; a warning goes through print_startup_warning instead. Plain mode prints it with its spacing,
+    keeping the ANSI colors only on a color terminal by the same check as the plain log format, so a
+    container log never stores escape codes.
+    With JSON logs on, every line of stdout is read by a log pipeline, so the message goes out as one
+    INFO record of the proxy logger instead, on stdout like the print whatever handlers the logging
+    config gave that logger, with the ANSI color codes and surrounding blank lines removed, located at
+    the caller and emitted at any log level, whole and unredacted as the print showed it; a blank
+    spacer produces no record.
+    """
+    if litellm.suppress_startup_output is True:
+        return
+    frame: Final = inspect.currentframe()
+    _write_startup_message(message, frame.f_back if frame is not None else None, logging.INFO)
+
+
+def print_startup_warning(message: str) -> None:
+    """Write a boot-time warning as print_startup_message writes a message, even with suppress_startup_output
+    on, since it names something the operator has to fix. With JSON logs on it is a WARNING record, on
+    stdout where the print put it, so a collector that filters on the level field keeps it."""
+    frame: Final = inspect.currentframe()
+    _write_startup_message(message, frame.f_back if frame is not None else None, logging.WARNING)
+
+
+def _write_startup_message(message: str, caller: FrameType | None, level: int) -> None:
+    if not litellm.json_logs:
+        import click
+
+        click.echo(terminal_text(message))
+        return
+    text: Final = _ANSI_ESCAPE.sub("", message).strip("\n")
+    if not text:
+        return
+    record: Final = verbose_proxy_logger.makeRecord(
+        verbose_proxy_logger.name,
+        level,
+        caller.f_code.co_filename if caller is not None else __file__,
+        caller.f_lineno if caller is not None else 0,
+        text,
+        (),
+        None,
+        func=caller.f_code.co_name if caller is not None else None,
+    )
+    if not _process_record(record, base64_limit=_get_max_base64_length_stdout_log(), text_limit=0, redact=False):
+        return
+    _startup_json_handler().handle(record)
+
+
+def _startup_json_handler() -> logging.Handler:
+    """The proxy's JSON handler on stdout, filters included, for one startup message or warning."""
+    handler: Final = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(JsonFormatter())
+    handler.addFilter(_secret_filter)
+    handler.addFilter(_correlation_filter)
+    return handler
 
 
 def _suppress_loggers():
@@ -988,9 +1207,11 @@ def _initialize_loggers_with_handler(handler: logging.Handler):
         lg.handlers.clear()  # remove any existing handlers
         lg.addHandler(handler)  # add JSON formatter handler
         lg.propagate = False  # prevent bubbling to parent/root
+    if (configured_level := os.getenv("LITELLM_LOG")) is not None:
+        logging.getLogger().setLevel(resolve_log_level(configured_level))
 
 
-def _get_uvicorn_json_log_config():
+def _get_uvicorn_json_log_config() -> Mapping[str, object]:
     """
     Generate a uvicorn log_config dictionary that applies JSON formatting to all loggers.
 
@@ -1050,7 +1271,7 @@ def _get_uvicorn_json_log_config():
     return log_config
 
 
-def _turn_on_json():
+def turn_on_json() -> None:
     """
     Turn on JSON logging
 
@@ -1064,10 +1285,16 @@ def _turn_on_json():
     _setup_json_exception_handlers(JsonFormatter())
 
 
-def _turn_on_debug():
+_turn_on_json = turn_on_json
+
+
+def turn_on_debug() -> None:
     verbose_logger.setLevel(level=logging.DEBUG)  # set package log to debug
     verbose_router_logger.setLevel(level=logging.DEBUG)  # set router logs to debug
     verbose_proxy_logger.setLevel(level=logging.DEBUG)  # set proxy logs to debug
+
+
+_turn_on_debug = turn_on_debug
 
 
 def _disable_debugging():
@@ -1085,16 +1312,21 @@ def _enable_debugging():
     verbose_proxy_stdout_logger.disabled = False
 
 
-def print_verbose(print_statement):
+def print_verbose(print_statement: object, *args: object) -> None:
     try:
-        if set_verbose:
-            print(redact_secrets(str(print_statement)))  # noqa: T201
+        if not set_verbose:
+            return
+        message: Final = str(print_statement) % args if args else str(print_statement)
+        print(redact_secrets(message))  # noqa: T201
     except Exception:
         pass
 
 
-def _is_debugging_on() -> bool:
+def is_debugging_on() -> bool:
     """
     Returns True if debugging is on
     """
     return verbose_logger.isEnabledFor(logging.DEBUG) or set_verbose is True
+
+
+_is_debugging_on = is_debugging_on

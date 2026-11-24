@@ -10,7 +10,7 @@ Marengo 3.0 docs - https://docs.aws.amazon.com/bedrock/latest/userguide/model-pa
 from collections.abc import Mapping
 from typing import Final, cast
 
-from pydantic import BaseModel, ConfigDict, TypeAdapter
+from pydantic import ConfigDict, TypeAdapter
 from typing_extensions import assert_never
 
 import litellm
@@ -19,6 +19,7 @@ from litellm.llms.bedrock.embed.twelvelabs_marengo_3_transformation import (
     build_marengo_3_request,
     is_marengo_3_model,
 )
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.bedrock import (
     TWELVELABS_EMBEDDING_INPUT_TYPES,
     TWELVELABS_MARENGO_3_INPUT_TYPES,
@@ -32,13 +33,13 @@ from litellm.types.llms.bedrock import (
 from litellm.types.utils import Embedding, EmbeddingResponse, PromptTokensDetailsWrapper, Usage
 
 
-class MarengoEmbeddingItem(BaseModel):
+class MarengoEmbeddingItem(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     embedding: tuple[float, ...] | None = None
 
 
-class MarengoInvokeResponse(BaseModel):
+class MarengoInvokeResponse(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     data: tuple[MarengoEmbeddingItem, ...] = ()
@@ -53,14 +54,14 @@ class MarengoInvokeResponse(BaseModel):
         return tuple(item.embedding for item in self.embeddings if item.embedding is not None)
 
 
-class MarengoBilledMultiInput(BaseModel):
+class MarengoBilledMultiInput(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     inputText: str | None = None
     mediaSources: tuple[Mapping[str, object], ...] = ()
 
 
-class MarengoBilledRequest(BaseModel):
+class MarengoBilledRequest(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     inputType: TWELVELABS_MARENGO_3_INPUT_TYPES | None = None
@@ -89,7 +90,7 @@ def _billed_units(request: MarengoBilledRequest) -> tuple[int, int]:
             assert_never(input_type)
 
 
-def _billed_usage(batch_data: list[dict] | None) -> Usage:
+def _billed_usage(batch_data: list[dict[str, object]] | None) -> Usage:
     units: Final = tuple(_billed_units(request) for request in BILLED_REQUESTS.validate_python(batch_data or ()))
     query_count: Final = sum(text_requests for text_requests, _ in units)
     image_count: Final = sum(images for _, images in units)
@@ -140,7 +141,9 @@ class TwelveLabsMarengoEmbeddingConfig:
             return list(MARENGO_SHARED_PARAMS)
         return [*MARENGO_SHARED_PARAMS, *MARENGO_2_7_ONLY_PARAMS]
 
-    def map_openai_params(self, non_default_params: dict, optional_params: dict) -> dict:
+    def map_openai_params(
+        self, non_default_params: dict[str, object], optional_params: dict[str, object]
+    ) -> dict[str, object]:
         for k, v in non_default_params.items():
             if k == "encoding_format":
                 # TwelveLabs doesn't have encoding_format, but we can map it to embeddingOption
@@ -182,7 +185,7 @@ class TwelveLabsMarengoEmbeddingConfig:
     def _transform_request(
         self,
         input: str,
-        inference_params: dict,
+        inference_params: dict[str, object],
         async_invoke_route: bool = False,
         model_id: str | None = None,
         output_s3_uri: str | None = None,
@@ -271,6 +274,19 @@ class TwelveLabsMarengoEmbeddingConfig:
 
         return transformed_request
 
+    def transform_request(
+        self,
+        input: str,
+        inference_params: dict[str, object],  # mutable-ok: mirrors override contract
+        async_invoke_route: bool = False,
+        model_id: str | None = None,
+        output_s3_uri: str | None = None,
+        drop_params: bool = False,
+    ) -> TwelveLabsMarengoEmbeddingRequest | TwelveLabsMarengo3EmbeddingRequest | TwelveLabsAsyncInvokeRequest:
+        return self._transform_request(
+            input, inference_params, async_invoke_route, model_id, output_s3_uri, drop_params
+        )
+
     def _wrap_async_invoke_request(
         self,
         model_input: TwelveLabsMarengoEmbeddingRequest | TwelveLabsMarengo3EmbeddingRequest,
@@ -308,7 +324,7 @@ class TwelveLabsMarengoEmbeddingConfig:
         )
 
     def _transform_response(
-        self, response_list: list[dict], model: str, batch_data: list[dict] | None = None
+        self, response_list: list[dict[str, object]], model: str, batch_data: list[dict[str, object]] | None = None
     ) -> EmbeddingResponse:
         vectors: Final = tuple(
             vector for response in INVOKE_RESPONSES.validate_python(response_list) for vector in response.vectors()
@@ -318,7 +334,15 @@ class TwelveLabsMarengoEmbeddingConfig:
         ]
         return EmbeddingResponse(data=embeddings, model=model, usage=_billed_usage(batch_data))
 
-    def _transform_async_invoke_response(self, response: dict, model: str) -> EmbeddingResponse:
+    def transform_response(
+        self,
+        response_list: list[dict[str, object]],  # mutable-ok: mirrors override contract
+        model: str,
+        batch_data: list[dict[str, object]] | None = None,  # mutable-ok: mirrors override contract
+    ) -> EmbeddingResponse:
+        return self._transform_response(response_list, model, batch_data)
+
+    def _transform_async_invoke_response(self, response: dict[str, object], model: str) -> EmbeddingResponse:
         """
         Transform async invoke response (invocation ARN) to OpenAI format.
 
@@ -365,3 +389,10 @@ class TwelveLabsMarengoEmbeddingConfig:
             usage=usage,
             hidden_params=hidden_params,
         )
+
+    def transform_async_invoke_response(
+        self,
+        response: dict[str, object],  # mutable-ok: mirrors override contract
+        model: str,
+    ) -> EmbeddingResponse:
+        return self._transform_async_invoke_response(response, model)

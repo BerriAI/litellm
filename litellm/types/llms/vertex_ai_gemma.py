@@ -1,9 +1,11 @@
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import ConfigDict, Field
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
-class VertexGemmaContainerError(BaseModel):
+class VertexGemmaContainerError(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
     object: Literal["error"]
     message: str

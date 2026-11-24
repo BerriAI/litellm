@@ -11,11 +11,8 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-from litellm.proxy.auth.auth_utils import iter_request_fallback_targets
-from litellm.proxy.auth.user_api_key_auth import (
-    _enforce_key_and_fallback_model_access,
-    _fallback_target_model_name,
-)
+from litellm.proxy.auth.auth_utils import fallback_target_model_name, iter_request_fallback_targets
+from litellm.proxy.auth.user_api_key_auth import enforce_key_and_fallback_model_access
 
 
 def _fallback_model_names(fallbacks):
@@ -23,7 +20,7 @@ def _fallback_model_names(fallbacks):
     return [
         name
         for target in iter_request_fallback_targets({"fallbacks": fallbacks})
-        if (name := _fallback_target_model_name(target)) is not None
+        if (name := fallback_target_model_name(target)) is not None
     ]
 
 
@@ -103,7 +100,7 @@ async def test_router_override_fallbacks_validated_against_key_allowlist():
             new=AsyncMock(),
         ),
     ):
-        await _enforce_key_and_fallback_model_access(
+        await enforce_key_and_fallback_model_access(
             valid_token=valid_token,
             request_data=request_data,
             route="/v1/chat/completions",
@@ -154,7 +151,7 @@ async def test_router_override_all_fallback_fields_validated(fallback_field):
             new=AsyncMock(),
         ),
     ):
-        await _enforce_key_and_fallback_model_access(
+        await enforce_key_and_fallback_model_access(
             valid_token=valid_token,
             request_data=request_data,
             route="/v1/chat/completions",
@@ -201,7 +198,7 @@ async def test_top_level_fallback_fields_validated(fallback_field):
             new=AsyncMock(),
         ),
     ):
-        await _enforce_key_and_fallback_model_access(
+        await enforce_key_and_fallback_model_access(
             valid_token=valid_token,
             request_data=request_data,
             route="/v1/chat/completions",
@@ -247,7 +244,7 @@ async def test_nested_deployment_fallback_inner_model_validated():
             new=AsyncMock(),
         ),
     ):
-        await _enforce_key_and_fallback_model_access(
+        await enforce_key_and_fallback_model_access(
             valid_token=valid_token,
             request_data=request_data,
             route="/v1/chat/completions",
@@ -292,7 +289,7 @@ async def test_model_less_fallback_dict_is_skipped_never_passed_as_none():
             new=AsyncMock(),
         ),
     ):
-        await _enforce_key_and_fallback_model_access(
+        await enforce_key_and_fallback_model_access(
             valid_token=valid_token,
             request_data=request_data,
             route="/v1/chat/completions",
@@ -330,7 +327,7 @@ async def test_router_override_without_fallbacks_does_not_break_auth():
             new=AsyncMock(),
         ),
     ):
-        await _enforce_key_and_fallback_model_access(
+        await enforce_key_and_fallback_model_access(
             valid_token=valid_token,
             request_data=request_data,
             route="/v1/chat/completions",

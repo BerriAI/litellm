@@ -1,8 +1,19 @@
-import asyncio
+import aiohttp as aiohttp_aiohttp_handler, asyncio, importlib, litellm
 import concurrent.futures
+import datetime
+import gc
 import socket
+import ssl
 import sys
+import struct
+import threading
+import weakref
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from collections.abc import Awaitable, Callable
+from contextlib import asynccontextmanager
 from typing import Final
+from unittest.mock import Mock
 
 import aiohttp
 import aiohttp.abc
@@ -10,6 +21,11 @@ import aiohttp.client_exceptions
 import aiohttp.http_exceptions
 import httpx
 import pytest
+import uvloop
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.x509.oid import NameOID
 
 
 from litellm.llms.custom_httpx.aiohttp_transport import (
@@ -17,6 +33,10 @@ from litellm.llms.custom_httpx.aiohttp_transport import (
     AiohttpTransport,
     LiteLLMAiohttpTransport,
 )
+from aiohttp import ClientSession
+from litellm.llms.custom_httpx.stream_close import aclose_if_supported
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 
 @pytest.mark.asyncio
@@ -64,6 +84,7 @@ class MockAiohttpResponse:
         self.status = status
         self.headers = headers or {}
         self.closed = False
+        self.connection = None
         self.content = MockContent(
             content_chunks, exception_to_raise, exception_at_chunk
         )
@@ -135,6 +156,49 @@ async def test_client_payload_error_mid_stream_raises_read_error():
 
     assert received_chunks == [b"chunk1"]
     assert mock_response.closed is True
+
+
+@pytest.mark.asyncio
+async def test_bytes_buffered_before_a_dropped_connection_are_yielded_before_the_read_error():
+    loop: Final = asyncio.get_running_loop()
+    content: Final = aiohttp.StreamReader(aiohttp.base_protocol.BaseProtocol(loop), 2**16, loop=loop)
+    content.feed_data(b"event: message_start\n\n")
+    content.set_exception(aiohttp.ClientPayloadError("Response payload is not completed"))
+    mock_response: Final = MockAiohttpResponse()
+    mock_response.content = content
+    received: Final[list[bytes]] = []
+
+    async def _drain() -> None:
+        async for chunk in AiohttpResponseStream(mock_response):  # pyright: ignore[reportArgumentType]  # mock response
+            received.append(chunk)
+
+    with pytest.raises(httpx.ReadError):
+        await _drain()
+
+    assert received == [b"event: message_start\n\n"]
+    assert mock_response.closed is True
+
+
+@pytest.mark.asyncio
+async def test_bytes_already_read_before_a_dropped_connection_are_not_yielded_again():
+    loop: Final = asyncio.get_running_loop()
+    content: Final = aiohttp.StreamReader(aiohttp.base_protocol.BaseProtocol(loop), 2**16, loop=loop)
+    content.feed_data(b"event: message_start\n\n")
+    content.feed_data(b"event: ping\n\n")
+    assert await content.read(7) == b"event: "
+    content.set_exception(aiohttp.ClientPayloadError("Response payload is not completed"))
+    mock_response: Final = MockAiohttpResponse()
+    mock_response.content = content
+    received: Final[list[bytes]] = []
+
+    async def _drain() -> None:
+        async for chunk in AiohttpResponseStream(mock_response):  # pyright: ignore[reportArgumentType]  # mock response
+            received.append(chunk)
+
+    with pytest.raises(httpx.ReadError):
+        await _drain()
+
+    assert received == [b"message_start\n\nevent: ping\n\n"]
 
 
 @pytest.mark.asyncio
@@ -546,74 +610,31 @@ async def test_handle_async_request_sock_read_timeout_triggers():
 
 
 @pytest.mark.asyncio
-async def test_handle_async_request_streaming_does_not_timeout_on_total_duration():
-    """
-    Ensure that LiteLLMAiohttpTransport does NOT timeout on long-running
-    streaming responses as long as individual chunks arrive within the sock_read timeout.
-    This is the fix for issue #19184 - stream_timeout should only control the timeout
-    for individual chunks, not the total stream duration.
-    """
-    import asyncio
-    from aiohttp import web
+async def test_handle_async_request_streaming_does_not_timeout_on_total_duration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    @asynccontextmanager
+    async def upstream_response():
+        yield MockAiohttpResponse(content_chunks=[b"first\n", b"second\n", b"last\n"])
 
-    async def streaming_handler(request):
-        # Simulate a streaming response that takes longer than a single timeout
-        # but each chunk arrives quickly
-        response = web.StreamResponse()
-        await response.prepare(request)
+    async with aiohttp.ClientSession() as session:
+        upstream_request: Final = Mock(side_effect=lambda **kwargs: upstream_response())
+        monkeypatch.setattr(session, "request", upstream_request)
+        transport: Final = LiteLLMAiohttpTransport(client=session, owns_session=False)
+        request: Final = httpx.Request(
+            "GET", "http://upstream.test/stream", extensions={"timeout": {"connect": 5.0, "read": 0.15, "pool": 4.0}}
+        )
+        response: Final = await transport.handle_async_request(request)
+        try:
+            assert response.status_code == 200
+            assert await response.aread() == b"first\nsecond\nlast\n"
+        finally:
+            await response.aclose()
 
-        # Send 5 chunks over 0.5 seconds total (0.1s between chunks)
-        for i in range(5):
-            await asyncio.sleep(0.05)  # Less than sock_read timeout
-            await response.write(f"chunk{i}\n".encode())
-
-        await response.write_eof()
-        return response
-
-    app = web.Application()
-    app.router.add_get("/stream", streaming_handler)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "127.0.0.1", 0)
-    await site.start()
-
-    port = site._server.sockets[0].getsockname()[1]
-
-    def factory():
-        return aiohttp.ClientSession()
-
-    transport = LiteLLMAiohttpTransport(client=factory)  # type: ignore
-
-    request = httpx.Request("GET", f"http://127.0.0.1:{port}/stream")
-
-    # Set sock_read timeout that's longer than individual chunk delays
-    # but shorter than total stream duration
-    # Total duration: ~0.25s, sock_read timeout: 0.15s per chunk
-    # This should NOT timeout because each chunk arrives within 0.15s
-    request.extensions["timeout"] = {
-        "connect": 5.0,
-        "read": 0.15,  # Timeout for individual reads
-        "pool": 5.0,
-        # Note: total is NOT set - this is the fix!
-    }
-
-    try:
-        # This should succeed without timing out
-        response = await transport.handle_async_request(request)
-        assert response.status_code == 200
-
-        # Read the streaming response
-        chunks = []
-        async for chunk in response.aiter_bytes():
-            chunks.append(chunk)
-
-        # Verify we got all chunks
-        full_response = b"".join(chunks).decode()
-        assert "chunk0" in full_response
-        assert "chunk4" in full_response
-    finally:
-        await transport.aclose()
-        await runner.cleanup()
+    upstream_request.assert_called_once()
+    assert upstream_request.call_args.kwargs["timeout"] == aiohttp.ClientTimeout(
+        total=None, sock_read=0.15, sock_connect=5.0, connect=4.0
+    )
 
 
 def _make_mock_session(closed=False):
@@ -768,7 +789,7 @@ async def test_closed_shared_session_rebuild_uses_injected_session_factory():
         session_factory=session_factory,  # type: ignore
     )
 
-    assert transport._get_valid_client_session() in rebuilt
+    assert transport.get_valid_client_session() in rebuilt
 
 
 def test_rebuild_without_running_loop_uses_injected_session_factory():
@@ -789,7 +810,7 @@ def test_rebuild_without_running_loop_uses_injected_session_factory():
         session_factory=session_factory,  # type: ignore
     )
 
-    assert transport._get_valid_client_session() in rebuilt
+    assert transport.get_valid_client_session() in rebuilt
 
 
 @pytest.mark.asyncio
@@ -808,7 +829,7 @@ async def test_rebuilt_session_becomes_transport_owned():
         session_factory=lambda: replacement,
     )
 
-    assert transport._get_valid_client_session() is replacement
+    assert transport.get_valid_client_session() is replacement
 
     await transport.aclose()
 
@@ -834,7 +855,7 @@ async def test_stale_loop_rebuild_does_not_close_unowned_session():
 
     try:
         shared_session._loop = other_loop
-        assert transport._get_valid_client_session() is replacement
+        assert transport.get_valid_client_session() is replacement
         shared_session._loop = running_loop
         await asyncio.sleep(0.05)
         assert not shared_session.closed
@@ -880,7 +901,7 @@ def _flaky_get_running_loop_factory():
     """get_running_loop stand-in that fails once, then delegates.
 
     Reproduces #24230: a transient loop-inspection failure sends
-    _get_valid_client_session into its (RuntimeError, AttributeError)
+    get_valid_client_session into its (RuntimeError, AttributeError)
     fallback branch.
     """
     real_get_running_loop = asyncio.get_running_loop
@@ -912,7 +933,7 @@ async def test_fallback_recreate_closes_previous_session():
         "litellm.llms.custom_httpx.aiohttp_transport.asyncio.get_running_loop",
         side_effect=_flaky_get_running_loop_factory(),
     ):
-        new_session = transport._get_valid_client_session()
+        new_session = transport.get_valid_client_session()
 
     try:
         assert new_session is not old_session
@@ -944,7 +965,7 @@ async def test_replaced_session_emits_no_unclosed_warnings():
         "litellm.llms.custom_httpx.aiohttp_transport.asyncio.get_running_loop",
         side_effect=_flaky_get_running_loop_factory(),
     ):
-        new_session = transport._get_valid_client_session()
+        new_session = transport.get_valid_client_session()
 
     try:
         for _ in range(3):
@@ -977,7 +998,7 @@ async def test_dead_loop_session_closed_synchronously_on_recycle():
     transport = LiteLLMAiohttpTransport(client=lambda: aiohttp.ClientSession())
     transport.client = old_session
 
-    new_session = transport._get_valid_client_session()
+    new_session = transport.get_valid_client_session()
 
     try:
         assert new_session is not old_session
@@ -1037,7 +1058,7 @@ async def test_session_from_other_running_loop_closed_threadsafe():
     transport = LiteLLMAiohttpTransport(client=lambda: aiohttp.ClientSession())
     transport.client = holder["session"]
 
-    new_session = transport._get_valid_client_session()
+    new_session = transport.get_valid_client_session()
 
     try:
         deadline = time.monotonic() + 5
@@ -1061,7 +1082,7 @@ def test_threadsafe_close_done_callback_tolerates_cancelled_future():
     future: "concurrent.futures.Future[None]" = concurrent.futures.Future()
     future.cancel()
 
-    LiteLLMAiohttpTransport._on_threadsafe_close_done(future)
+    assert LiteLLMAiohttpTransport._on_threadsafe_close_done(future) is None
 
 
 @pytest.mark.asyncio
@@ -1136,7 +1157,7 @@ async def test_stopped_loop_session_disposed_synchronously_on_recycle():
     transport = LiteLLMAiohttpTransport(client=lambda: aiohttp.ClientSession())
     transport.client = old_session
 
-    new_session = transport._get_valid_client_session()
+    new_session = transport.get_valid_client_session()
 
     try:
         assert new_session is not old_session
@@ -1196,3 +1217,379 @@ async def test_genuine_request_cancellation_still_propagates():
         if sys.version_info >= (3, 11):
             current.uncancel()
         await transport.aclose()
+
+
+@pytest.fixture()
+def _vcr_outcome_gate(request, vcr):
+    install_live_call_probe(request, vcr)
+    yield
+    record_vcr_outcome(request, vcr)
+
+@pytest.fixture(scope="function")
+def setup_and_teardown():
+    """
+    This fixture reloads litellm before every function. To speed up testing by removing callbacks being chained.
+    """
+    importlib.reload(litellm)
+    loop = asyncio.get_event_loop_policy().new_event_loop()
+    asyncio.set_event_loop(loop)
+    yield
+    loop.close()
+    asyncio.set_event_loop(None)
+
+def _closed_local_port() -> int:
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return probe.getsockname()[1]
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+async def test_client_session_helper() -> None:
+    transport: Final = AsyncHTTPHandler.create_aiohttp_transport()
+    assert isinstance(transport, LiteLLMAiohttpTransport)
+    session1: Final = transport.get_valid_client_session()
+    assert isinstance(session1, ClientSession)
+    assert session1.closed is False
+    assert getattr(session1, "_loop") is asyncio.get_running_loop()
+    session2: Final = transport.get_valid_client_session()
+    assert session2 is session1
+    await session1.close()
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+async def test_event_loop_robustness() -> None:
+    transport: Final = AsyncHTTPHandler.create_aiohttp_transport()
+    session: Final = transport.get_valid_client_session()
+    assert isinstance(session, ClientSession)
+    await session.close()
+    session_after_close: Final = transport.get_valid_client_session()
+    assert isinstance(session_after_close, ClientSession)
+    assert session_after_close is not session
+    assert session_after_close.closed is False
+    transport.client = lambda: ClientSession()
+    session_after_factory: Final = transport.get_valid_client_session()
+    assert isinstance(session_after_factory, ClientSession)
+    assert session_after_factory is not session_after_close
+    assert session_after_factory.closed is False
+    assert transport.client is session_after_factory
+    await session_after_close.close()
+    await session_after_factory.close()
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+@pytest.mark.parametrize(("ssl_verify", "expected_ssl"), [(False, False), (None, True)])
+async def test_refused_connection_maps_to_httpx_connect_error(
+    ssl_verify: bool | None, expected_ssl: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1")
+    transport: Final = AsyncHTTPHandler.create_aiohttp_transport(ssl_verify=ssl_verify)
+    port: Final = _closed_local_port()
+    request: Final = httpx.Request("GET", f"https://127.0.0.1:{port}/")
+    try:
+        with pytest.raises(httpx.ConnectError) as raised:
+            await transport.handle_async_request(request)
+    finally:
+        await transport.get_valid_client_session().close()
+    cause: Final = raised.value.__cause__
+    assert isinstance(cause, aiohttp_aiohttp_handler.ClientConnectorError)
+    assert cause.ssl is expected_ssl
+    assert (cause.host, cause.port) == ("127.0.0.1", port)
+
+
+@pytest.mark.asyncio
+async def test_reset_after_request_is_not_replayed(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1")
+    monkeypatch.setenv("no_proxy", "127.0.0.1")
+    received_requests: Final[list[bytes]] = []  # mutable-ok: local server captures requests
+
+    async def reset_after_request(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        headers: Final = await reader.readuntil(b"\r\n\r\n")
+        content_length: Final = next(
+            (
+                int(header.split(b":", 1)[1])
+                for header in headers.split(b"\r\n")
+                if header.lower().startswith(b"content-length:")
+            ),
+            0,
+        )
+        await reader.readexactly(content_length)
+        received_requests.append(headers)
+        transport_socket: Final = writer.get_extra_info("socket")
+        assert transport_socket is not None
+        transport_socket.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+        writer.transport.abort()
+
+    server: Final = await asyncio.start_server(reset_after_request, "127.0.0.1", 0)
+    port: Final = server.sockets[0].getsockname()[1]
+    handler: Final = AsyncHTTPHandler()
+    try:
+        async with server:
+            with pytest.raises(httpx.ReadError):
+                await handler.post(f"http://127.0.0.1:{port}/", content=b'{"a":1}')
+
+            assert len(received_requests) == 1
+    finally:
+        await handler.close()
+
+
+async def _new_session() -> aiohttp.ClientSession:
+    return aiohttp.ClientSession()
+
+
+async def _until_closed(session: aiohttp.ClientSession) -> None:
+    while not session.closed:
+        await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_a_collected_transport_closes_the_session_it_owns():
+    """An SDK client evicted from the cache is collected long before the closer's grace window ends."""
+    session = aiohttp.ClientSession()
+    transport = LiteLLMAiohttpTransport(client=session)
+
+    del transport
+    gc.collect()
+    await asyncio.gather(*LiteLLMAiohttpTransport._background_close_tasks)
+
+    assert session.closed, "the owned session outlived the transport that was collected before closing it"
+
+
+class _SelfReferencingHolder:
+    def __init__(self, transport: LiteLLMAiohttpTransport) -> None:
+        self.transport = transport
+        self.itself = self
+
+
+def _transport_handed_an_owned_session() -> LiteLLMAiohttpTransport:
+    return LiteLLMAiohttpTransport(client=aiohttp.ClientSession())
+
+
+def _transport_that_built_its_session_from_a_factory() -> LiteLLMAiohttpTransport:
+    transport: Final = LiteLLMAiohttpTransport(client=aiohttp.ClientSession)
+    transport.get_valid_client_session()
+    return transport
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "build_transport",
+    [_transport_handed_an_owned_session, _transport_that_built_its_session_from_a_factory],
+)
+async def test_a_transport_freed_by_the_cycle_collector_closes_its_session_without_an_unclosed_report(
+    build_transport: Callable[[], LiteLLMAiohttpTransport],
+):
+    """OpenAI SDK clients cache resource objects that point back at them, so an evicted client is cyclic garbage."""
+    loop: Final = asyncio.get_running_loop()
+    previous_handler: Final = loop.get_exception_handler()
+    reports: Final[list[object]] = []  # mutable-ok: collects exception handler reports
+    loop.set_exception_handler(lambda _loop, context: reports.append(context))
+    try:
+        holder = _SelfReferencingHolder(build_transport())
+        session = holder.transport.client
+        assert isinstance(session, aiohttp.ClientSession)
+        connector: Final = session.connector
+        assert connector is not None
+        del holder, session
+
+        gc.collect()
+        await asyncio.gather(*LiteLLMAiohttpTransport._background_close_tasks)
+        gc.collect()
+
+        assert reports == [], reports
+        assert connector.closed, "the session owned by the collected transport was never closed"
+    finally:
+        loop.set_exception_handler(previous_handler)
+
+
+@pytest.mark.asyncio
+async def test_a_replaced_session_is_freed_while_its_transport_is_still_alive():
+    transport: Final = LiteLLMAiohttpTransport(client=aiohttp.ClientSession)
+    replaced = transport.get_valid_client_session()
+    await replaced.close()
+    current: Final = transport.get_valid_client_session()
+    replaced_ref: Final = weakref.ref(replaced)
+    del replaced
+    try:
+        gc.collect()
+
+        assert transport.client is current
+        assert replaced_ref() is None, "the transport kept a session it already replaced alive"
+    finally:
+        await current.close()
+
+
+@pytest.mark.asyncio
+async def test_a_collected_transport_leaves_a_shared_session_open():
+    session = aiohttp.ClientSession()
+    try:
+        transport = LiteLLMAiohttpTransport(client=session, owns_session=False)
+
+        del transport
+        gc.collect()
+        await asyncio.gather(*LiteLLMAiohttpTransport._background_close_tasks)
+
+        assert not session.closed, "a transport closed a session it does not own"
+    finally:
+        await session.close()
+
+
+def test_a_transport_collected_after_its_loop_closed_still_closes_its_session(caplog: pytest.LogCaptureFixture):
+    """asyncio.run() closes the loop the session lives on before the evicted client is collected."""
+    loop = asyncio.new_event_loop()
+    session = loop.run_until_complete(_new_session())
+    loop.close()
+    transport = LiteLLMAiohttpTransport(client=session)
+
+    del transport
+    gc.collect()
+
+    assert session.closed, "the owned session stayed open after its transport was collected on a closed loop"
+    del session
+    gc.collect()
+    assert "Unclosed client session" not in caplog.text, caplog.text
+
+
+def test_a_transport_collected_while_its_loop_runs_elsewhere_closes_its_session_on_that_loop():
+    loop = asyncio.new_event_loop()
+    thread = threading.Thread(target=loop.run_forever, daemon=True)
+    thread.start()
+    session = asyncio.run_coroutine_threadsafe(_new_session(), loop).result(timeout=10)
+    transport = LiteLLMAiohttpTransport(client=session)
+    try:
+        del transport
+        gc.collect()
+        asyncio.run_coroutine_threadsafe(_until_closed(session), loop).result(timeout=10)
+
+        assert session.closed, "the owned session stayed open after its transport was collected from another thread"
+    finally:
+        loop.call_soon_threadsafe(loop.stop)
+        thread.join(timeout=10)
+        loop.close()
+
+
+@pytest.mark.asyncio
+async def test_a_stream_keeps_reading_after_the_client_that_opened_it_is_collected():
+    from aiohttp import web
+
+    release: Final = asyncio.Event()
+    body: Final = tuple(f"chunk{i}\n".encode() for i in range(4))
+
+    async def handler(request: web.Request) -> web.StreamResponse:
+        response: Final = web.StreamResponse()
+        await response.prepare(request)
+        await response.write(body[0])
+        await release.wait()
+        for chunk in body[1:]:
+            await response.write(chunk)
+        await response.write_eof()
+        return response
+
+    app: Final = web.Application()
+    app.router.add_get("/stream", handler)
+    runner: Final = web.AppRunner(app)
+    await runner.setup()
+    sock: Final = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    port: Final[int] = sock.getsockname()[1]
+    await web.SockSite(runner, sock).start()
+
+    transport: Final = LiteLLMAiohttpTransport(client=aiohttp.ClientSession)
+    client: Final = httpx.AsyncClient(transport=transport)
+    transport_ref: Final = weakref.ref(transport)
+    try:
+        response: Final = await client.send(client.build_request("GET", f"http://127.0.0.1:{port}/stream"), stream=True)
+        session: Final = transport.client
+        assert isinstance(session, aiohttp.ClientSession)
+        chunks: Final = response.aiter_bytes()
+        first: Final = await chunks.__anext__()
+
+        del client, transport
+        gc.collect()
+        await asyncio.gather(*LiteLLMAiohttpTransport._background_close_tasks)
+        release.set()
+
+        rest: Final = [chunk async for chunk in chunks]
+        assert first + b"".join(rest) == b"".join(body), (first, rest)
+        assert not session.closed, "the session was closed under a stream that was still being read"
+
+        del response, chunks
+        gc.collect()
+        await asyncio.gather(*LiteLLMAiohttpTransport._background_close_tasks)
+        assert transport_ref() is None, "the finished stream kept the transport alive"
+        assert session.closed, "the owned session stayed open after its last stream finished"
+    finally:
+        await runner.cleanup()
+
+
+def _self_signed_server_context(directory: Path) -> ssl.SSLContext:
+    key: Final = ec.generate_private_key(ec.SECP256R1())
+    name: Final = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "127.0.0.1")])
+    cert: Final = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc))
+        .not_valid_after(datetime.datetime(2027, 1, 1, tzinfo=datetime.timezone.utc))
+        .sign(key, hashes.SHA256())
+    )
+    cert_path: Final = directory / "cert.pem"
+    key_path: Final = directory / "key.pem"
+    cert_path.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+    key_path.write_bytes(
+        key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
+    )
+    context: Final = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(cert_path, key_path)
+    return context
+
+
+def _endless_body_handler(peer_dropped: threading.Event) -> type[BaseHTTPRequestHandler]:
+    chunk: Final = b"4000\r\n" + b"x" * 0x4000 + b"\r\n"
+
+    class EndlessBody(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            self.send_response(200)
+            self.send_header("Transfer-Encoding", "chunked")
+            self.end_headers()
+            try:
+                while True:
+                    self.wfile.write(chunk)
+            except OSError:
+                peer_dropped.set()
+
+    return EndlessBody
+
+
+async def _close_by_ending_iteration(stream: AiohttpResponseStream) -> None:
+    chunks: Final = aiter(stream)
+    await anext(chunks)
+    await aclose_if_supported(chunks)
+
+
+async def _close_by_stream_aclose(stream: AiohttpResponseStream) -> None:
+    await anext(aiter(stream))
+    await stream.aclose()
+
+
+@pytest.mark.parametrize("close_stream", [_close_by_ending_iteration, _close_by_stream_aclose])
+def test_closing_a_tls_stream_mid_body_on_uvloop_drops_the_connection_at_once(
+    tmp_path: Path, close_stream: Callable[[AiohttpResponseStream], Awaitable[None]]
+) -> None:
+    peer_dropped: Final = threading.Event()
+    server: Final = ThreadingHTTPServer(("127.0.0.1", 0), _endless_body_handler(peer_dropped))
+    server.socket = _self_signed_server_context(tmp_path).wrap_socket(server.socket, server_side=True)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+
+    async def scenario() -> bool:
+        session: Final = aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=False))
+        try:
+            response: Final = await session.get(f"https://127.0.0.1:{server.server_port}/")
+            await close_stream(AiohttpResponseStream(response))
+            return await asyncio.to_thread(peer_dropped.wait, 5)
+        finally:
+            await session.close()
+
+    try:
+        assert uvloop.run(scenario()), "the closed stream kept reading the server's body"
+    finally:
+        server.shutdown()
+        server.server_close()

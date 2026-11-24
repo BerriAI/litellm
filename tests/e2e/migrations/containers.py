@@ -11,6 +11,7 @@ from typing import Final
 from uuid import uuid4
 
 from e2e_http import NoBody, Success, unwrap
+from e2e_metadata import step
 from models import KeyGenerateBody, KeyGenerateResponse, KeyInfoParams, KeyInfoResponse
 from transport import HttpTransport
 
@@ -20,12 +21,14 @@ from .startup_models import ContainerState, Migration, Observation, Readiness
 MASTER_KEY: Final = "sk-migration-ci-fixture"
 
 
+@step("Run a docker command")
 def docker(*args: str) -> str:
     result: Final = subprocess.run(("docker", *args), capture_output=True, text=True, timeout=90)
     assert result.returncode == 0, f"Docker operation failed: {result.stderr}"
     return result.stdout.strip()
 
 
+@step("Wait for {description}")
 def until(description: str, condition: Callable[[], bool], seconds: float = 150) -> None:
     deadline: Final = time.monotonic() + seconds
     while time.monotonic() < deadline:
@@ -38,12 +41,15 @@ def until(description: str, condition: Callable[[], bool], seconds: float = 150)
 @dataclass(frozen=True, slots=True)
 class Replica:
     name: str
+    identity: str
     transport: HttpTransport
     output: Path
 
+    @step("Read the proxy container's state from docker inspect")
     def state(self) -> ContainerState:
         return ContainerState.model_validate_json(docker("inspect", "--format", "{{json .State}}", self.name))
 
+    @step("Check whether the proxy container is running and ready on /health/readiness")
     def observe(self) -> Observation:
         state: Final = self.state()
         result: Final = self.transport.get(
@@ -52,15 +58,18 @@ class Replica:
         ready: Final = isinstance(result, Success) and result.data.status == "healthy" and result.data.db == "connected"
         return Observation(None if state.Running else state.ExitCode, ready)
 
+    @step("Read the proxy container's logs")
     def logs(self) -> str:
         result: Final = subprocess.run(("docker", "logs", self.name), capture_output=True, text=True, timeout=30)
         assert result.returncode == 0, result.stderr
         return result.stdout + result.stderr
 
+    @step("Kill the proxy container")
     def kill(self) -> None:
         if self.state().Running:
             docker("kill", self.name)
 
+    @step("Generate a virtual key on the proxy container and read it back from /key/info and the database")
     def usable(self, database: Database) -> None:
         alias: Final = f"migration-{uuid4().hex}"
         key: Final = unwrap(
@@ -86,6 +95,7 @@ class Replica:
         ) == ((alias,),)
 
 
+@step("Wait for every proxy container to be ready, then generate and read back a virtual key on each")
 def ready(replicas: tuple[Replica, ...], database: Database) -> None:
     def all_ready() -> bool:
         observations: Final = tuple(replica.observe() for replica in replicas)
@@ -97,6 +107,7 @@ def ready(replicas: tuple[Replica, ...], database: Database) -> None:
         replica.usable(database)
 
 
+@step("Wait for the seed proxy container to be ready and finish building its request-log indexes")
 def seeded(seed: Replica, database: Database) -> None:
     ready((seed,), database)
     until("the seed replica to finish its request-log indexes", lambda: request_log_indexes_built(database))
@@ -110,6 +121,7 @@ def request_log_indexes_built(database: Database) -> bool:
     ) == ((2,),)
 
 
+@step('Wait for every proxy container to refuse to start, logging "{marker}"')
 def failed(replicas: tuple[Replica, ...], marker: str) -> None:
     def all_stopped() -> bool:
         observations: Final = tuple(replica.observe() for replica in replicas)
@@ -122,6 +134,7 @@ def failed(replicas: tuple[Replica, ...], marker: str) -> None:
         assert marker in replica.logs(), f"Startup failed outside the expected migration: {marker}"
 
 
+@step("Check that every proxy container keeps waiting without serving for {seconds}s")
 def waiting(replicas: tuple[Replica, ...], seconds: float) -> None:
     deadline: Final = time.monotonic() + seconds
     while time.monotonic() < deadline:
@@ -139,6 +152,7 @@ class Containers:
     def using(self, image: str) -> "Containers":
         return replace(self, image=image)
 
+    @step("Start a proxy container on the test database")
     @contextmanager
     def start(
         self,
@@ -158,7 +172,7 @@ class Containers:
             "model_list: []\ngeneral_settings:\n  master_key: os.environ/LITELLM_MASTER_KEY\n"
         )
         env: Final = {
-            "DATABASE_URL": prisma_url(database.container_url, database.schema),
+            "DATABASE_URL": prisma_url(database.container_url, database.schema, application_name=name),
             "LITELLM_MASTER_KEY": MASTER_KEY,
             "LITELLM_SALT_KEY": MASTER_KEY,
             "LITELLM_LOCAL_MODEL_COST_MAP": "True",
@@ -196,7 +210,12 @@ class Containers:
                 "4000",
             )
             port: Final = int(docker("port", name, "4000/tcp").rsplit(":", 1)[1])
-            replica: Final = Replica(name, HttpTransport(f"http://127.0.0.1:{port}", MASTER_KEY, 15), directory)
+            replica: Final = Replica(
+                name=name,
+                identity=name,
+                transport=HttpTransport(f"http://127.0.0.1:{port}", MASTER_KEY, 15),
+                output=directory,
+            )
             yield replica
         finally:
             try:
@@ -213,6 +232,7 @@ class Containers:
                 subprocess.run(("docker", "rm", "-f", name), capture_output=True, text=True, timeout=30, check=True)
 
 
+@step("Write the migration {migration.name} into the proxy container's migration directory")
 def write_migration(directory: Path, migration: Migration) -> None:
     path: Final = directory / "prisma" / "migrations" / migration.name
     path.mkdir(parents=True)

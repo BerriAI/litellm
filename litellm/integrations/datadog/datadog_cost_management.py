@@ -1,9 +1,11 @@
 import asyncio
 import os
 import time
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import Any, Final, cast
+from typing import Final
+
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
@@ -29,7 +31,7 @@ from litellm.types.utils import StandardLoggingPayload
 # request_tags / metadata cannot overwrite these, even when the key is
 # allowlisted via cost_tag_keys, because that would let an authenticated caller
 # spoof cost attribution (e.g. request_tags=["team:victim-team"]).
-_RESERVED_TAG_KEYS: Final[frozenset] = frozenset(
+_RESERVED_TAG_KEYS: Final[frozenset[str]] = frozenset(
     {
         "env",
         "service",
@@ -43,6 +45,16 @@ _RESERVED_TAG_KEYS: Final[frozenset] = frozenset(
         "model_group",
     }
 )
+
+
+class _DatadogCostLoggingKwargs(TypedDict, total=False, extra_items=object):
+    """The logging kwargs this logger reads its standard logging payload from."""
+
+    standard_logging_object: ReadOnly[StandardLoggingPayload | None]
+
+
+def _as_mapping(metadata: Mapping[str, object]) -> Mapping[str, object]:
+    return metadata
 
 
 class DatadogCostManagementLogger(CustomBatchLogger):
@@ -71,7 +83,9 @@ class DatadogCostManagementLogger(CustomBatchLogger):
 
         super().__init__(**kwargs)
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(
+        self, kwargs: _DatadogCostLoggingKwargs, response_obj: object, start_time: object, end_time: object
+    ) -> None:
         try:
             standard_logging_object: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object", None)
 
@@ -180,9 +194,7 @@ class DatadogCostManagementLogger(CustomBatchLogger):
         self._add_tag(tags, "model", log.get("model"))
         self._add_tag(tags, "model_id", log.get("model_id"))
 
-        # cast because StandardLoggingMetadata is a TypedDict; we iterate it
-        # as a generic mapping below.
-        metadata: Final[Mapping[str, object]] = cast(dict[str, Any], log.get("metadata") or {})
+        metadata: Final = _as_mapping(log.get("metadata") or {})
 
         # Backwards-compat: team/user/model_group preserved regardless of allowlist.
         if metadata.get("user_api_key_alias"):
@@ -203,11 +215,12 @@ class DatadogCostManagementLogger(CustomBatchLogger):
         # see _RESERVED_TAG_KEYS for the rationale.
         if self.cost_tag_keys:
             allow: Final = set(self.cost_tag_keys)
+            client_allow: Final = allow - {"is_silent_experiment"}
             for rt in log.get("request_tags") or []:
                 if not isinstance(rt, str) or ":" not in rt:
                     continue
                 k, _, v = rt.partition(":")
-                if k in allow and v:
+                if k in client_allow and v:
                     self._set_custom_tag(tags, k, v)
             for k, v in metadata.items():
                 if k in allow and v is not None and not isinstance(v, (dict, list)):
@@ -216,7 +229,7 @@ class DatadogCostManagementLogger(CustomBatchLogger):
                 nested = metadata.get(nested_key)
                 if isinstance(nested, dict):
                     for k, v in nested.items():
-                        if k in allow and v is not None and not isinstance(v, (dict, list)):
+                        if k in client_allow and v is not None and not isinstance(v, (dict, list)):
                             self._set_custom_tag(tags, k, str(v))
 
         return tags
@@ -238,7 +251,7 @@ class DatadogCostManagementLogger(CustomBatchLogger):
         if value:
             tags[key] = str(value)
 
-    async def _upload_to_datadog(self, payload: list[dict]):
+    async def _upload_to_datadog(self, payload: Sequence[DatadogFOCUSCostEntry]) -> None:
         if not self.dd_api_key or not self.dd_app_key:
             return
 

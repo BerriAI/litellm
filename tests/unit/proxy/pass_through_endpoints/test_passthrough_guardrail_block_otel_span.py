@@ -27,7 +27,6 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (  # noqa: E4
 )
 
 import litellm  # noqa: E402
-from litellm.caching.dual_cache import DualCache  # noqa: E402
 from litellm.integrations.custom_guardrail import (  # noqa: E402
     CustomGuardrail,
     log_guardrail_information,
@@ -122,10 +121,8 @@ async def _drive(response_text: str):
     """Run the real pass_through_request with the block-demo guardrail + otel V2
     logger registered, returning (status_code, guardrail_span_names)."""
     otel, exporter = _otel_logger_with_exporter()
-    guardrail = _BlockOnTextGuardrail(
-        guardrail_name="block-demo", event_hook=[GuardrailEventHooks.post_call]
-    )
-    proxy_logging = ProxyLogging(user_api_key_cache=UserApiKeyCache(DualCache()))
+    guardrail = _BlockOnTextGuardrail(guardrail_name="block-demo", event_hook=[GuardrailEventHooks.post_call])
+    proxy_logging = ProxyLogging(user_api_key_cache=UserApiKeyCache())
 
     saved_callbacks = list(litellm.callbacks)
     litellm.callbacks = [guardrail, otel]
@@ -134,6 +131,7 @@ async def _drive(response_text: str):
     mock_async_client_obj.client = AsyncMock()
     mock_pt_logging = MagicMock()
     mock_pt_logging.pass_through_async_success_handler = AsyncMock()
+    mock_pt_logging.settle_background_response_before_delete = AsyncMock()
 
     patches = [
         patch(
@@ -147,8 +145,8 @@ async def _drive(response_text: str):
         patch("litellm.proxy.proxy_server.llm_router", None),
         patch(f"{_PT_MOD}.pass_through_endpoint_logging", mock_pt_logging),
         patch(f"{_PT_MOD}.get_async_httpx_client", return_value=mock_async_client_obj),
-        patch(f"{_PT_MOD}._read_request_body", new_callable=AsyncMock, return_value={}),
-        patch(f"{_PT_MOD}._safe_get_request_headers", return_value={}),
+        patch(f"{_PT_MOD}.read_request_body", new_callable=AsyncMock, return_value={}),
+        patch(f"{_PT_MOD}.safe_get_request_headers", return_value={}),
         patch(_COLLECT, return_value=["block-demo"]),
     ]
     try:

@@ -24,10 +24,12 @@ from __future__ import annotations
 import math
 import re
 import time
+from typing import Final
 
 import pytest
 
 from e2e_config import CHEAP_ANTHROPIC_MODEL, S3_PARTITION_GRANULARITY, unique_marker
+from e2e_metadata import Domain, Mode, Provider, Subject, meta
 from lifecycle import ResourceManager
 from logging_client import (
     INVALID_UPSTREAM_API_KEY,
@@ -43,6 +45,7 @@ pytestmark = pytest.mark.e2e
 
 #: The active s3_v2 callback's name in /health/readiness/details success_callbacks.
 S3_LOGGER_NAME = "S3Logger"
+UNREACHABLE_ANTHROPIC_BACKEND: Final = "anthropic/claude-haiku-4-5"
 
 
 @pytest.fixture(scope="session")
@@ -64,6 +67,14 @@ def _assert_s3_configured(client: LoggingClient) -> None:
 
 class TestS3LogDelivery:
     @pytest.mark.covers("logging.s3.success.writes_object", exercised_on=["chat_completions"])
+    @meta(
+        Subject(
+            domain=Domain.OBSERVABILITY,
+            providers=(Provider.ANTHROPIC,),
+            models=(CHEAP_ANTHROPIC_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_chat_completions_writes_one_success_object(
         self, client: LoggingClient, s3_logs: S3LogReader, resources: ResourceManager
     ) -> None:
@@ -108,6 +119,14 @@ class TestS3LogDelivery:
         ), f"payload response_cost {record.response_cost!r} must equal the header cost {outcome.response_cost}"
 
     @pytest.mark.covers("logging.s3.success.partition_layout", exercised_on=["chat_completions"])
+    @meta(
+        Subject(
+            domain=Domain.OBSERVABILITY,
+            providers=(Provider.ANTHROPIC,),
+            models=(CHEAP_ANTHROPIC_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_chat_completions_object_key_follows_the_partition_granularity(
         self, client: LoggingClient, s3_logs: S3LogReader, resources: ResourceManager
     ) -> None:
@@ -148,6 +167,14 @@ class TestS3LogDelivery:
         )
 
     @pytest.mark.covers("logging.s3.failure.writes_object", exercised_on=["chat_completions"])
+    @meta(
+        Subject(
+            domain=Domain.OBSERVABILITY,
+            providers=(Provider.ANTHROPIC,),
+            models=(UNREACHABLE_ANTHROPIC_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_chat_completions_failure_writes_one_object(
         self, client: LoggingClient, s3_logs: S3LogReader, resources: ResourceManager
     ) -> None:
@@ -167,7 +194,7 @@ class TestS3LogDelivery:
         model_name = f"s3-err-{unique_marker()}"
         model_id = client.create_model(
             model_name,
-            LiteLLMParamsBody(model="anthropic/claude-haiku-4-5", api_key=INVALID_UPSTREAM_API_KEY),
+            LiteLLMParamsBody(model=UNREACHABLE_ANTHROPIC_BACKEND, api_key=INVALID_UPSTREAM_API_KEY),
         )
         resources.defer(lambda: client.delete_model(model_id))
         alias = f"s3-err-key-{unique_marker()}"

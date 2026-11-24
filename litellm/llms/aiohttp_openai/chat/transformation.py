@@ -7,10 +7,14 @@ https://github.com/BerriAI/litellm/issues/6592
 New config to ensure we introduce this without causing breaking changes for users
 """
 
+from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 from aiohttp import ClientResponse
+from pydantic import ConfigDict, JsonValue, TypeAdapter
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
+from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.openai_like.chat.transformation import OpenAILikeChatConfig
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import Choices, ModelResponse
@@ -23,6 +27,20 @@ if TYPE_CHECKING:
 else:
     LiteLLMLoggingObj = Any
 
+_JSON_OBJECTS: Final = TypeAdapter(
+    Iterable[Mapping[str, object]], config=ConfigDict(strict=True, hide_input_in_errors=True)
+)
+
+
+class _ChatCompletionBody(TypedDict, extra_items=object):
+    id: ReadOnly[str]
+    created: ReadOnly[int]
+    model: ReadOnly[str]
+    object: ReadOnly[str]
+    choices: ReadOnly[JsonValue]
+    system_fingerprint: ReadOnly[NotRequired[str | None]]
+    service_tier: ReadOnly[NotRequired[str | None]]
+
 
 class AiohttpOpenAIChatConfig(OpenAILikeChatConfig):
     def get_complete_url(
@@ -30,31 +48,26 @@ class AiohttpOpenAIChatConfig(OpenAILikeChatConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: object,
+        litellm_params: object,
         stream: bool | None = None,
     ) -> str:
         """
         Ensure - /v1/chat/completions is at the end of the url
 
         """
-        if api_base is None:
-            api_base = "https://api.openai.com"
-
-        if not api_base.endswith("/chat/completions"):
-            api_base += "/chat/completions"
-        return api_base
+        return ensure_api_route("https://api.openai.com" if api_base is None else api_base, "chat/completions")
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: object,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: object,
+        litellm_params: object,
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, str]:
         return {"Authorization": f"Bearer {api_key}"}
 
     async def transform_response(
@@ -63,19 +76,23 @@ class AiohttpOpenAIChatConfig(OpenAILikeChatConfig):
         raw_response: ClientResponse,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
+        request_data: object,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: object,
+        litellm_params: object,
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
-        _json_response: Final = await raw_response.json()
+        _json_response: Final[_ChatCompletionBody] = await raw_response.json()
         model_response.id = _json_response.get("id")
-        model_response.choices = [Choices(**choice) for choice in _json_response.get("choices")]
+        model_response.choices = [
+            Choices.model_validate(choice) for choice in _JSON_OBJECTS.validate_python(_json_response.get("choices"))
+        ]
         model_response.created = _json_response.get("created")
         model_response.model = _json_response.get("model")
         model_response.object = _json_response.get("object")
         model_response.system_fingerprint = _json_response.get("system_fingerprint")
+        if "service_tier" in _json_response:
+            return model_response.model_copy(update={"service_tier": _json_response.get("service_tier")})
         return model_response

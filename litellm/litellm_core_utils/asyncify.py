@@ -1,5 +1,6 @@
 import asyncio
 import functools
+import threading
 from collections.abc import Awaitable, Callable
 from typing import Final
 
@@ -7,11 +8,11 @@ import anyio
 import anyio.to_thread
 from typing_extensions import ParamSpec, TypeVar
 
-T_ParamSpec: Final = ParamSpec("T_ParamSpec")
+T_ParamSpec = ParamSpec("T_ParamSpec")
 T_Retval = TypeVar("T_Retval")
 
 
-def function_has_argument(function: Callable, arg_name: str) -> bool:
+def function_has_argument(function: Callable[..., object], arg_name: str) -> bool:
     """Helper function to check if a function has a specific argument."""
     import inspect
 
@@ -68,7 +69,19 @@ def asyncify(
     return wrapper
 
 
-def run_async_function(async_function, *args, **kwargs):
+def is_event_loop_running() -> bool:
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return False
+    return True
+
+
+def can_block_current_thread() -> bool:
+    return threading.current_thread() is threading.main_thread() and not is_event_loop_running()
+
+
+def run_async_function(async_function: Callable[..., Awaitable[T_Retval]], *args: object, **kwargs: object) -> T_Retval:
     """
     Helper utility to run an async function in a sync context.
     Handles the case where there is an existing event loop running.
@@ -91,7 +104,7 @@ def run_async_function(async_function, *args, **kwargs):
     """
     from concurrent.futures import ThreadPoolExecutor
 
-    def run_in_new_loop():
+    def run_in_new_loop() -> T_Retval:
         """Run the coroutine in a new event loop within this thread."""
         new_loop: Final = asyncio.new_event_loop()
         try:

@@ -8,10 +8,11 @@ This module handles transforming between:
 
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
-from typing import Any, Final, cast
+from typing import Final, Protocol, cast
 
 from pydantic import BaseModel
 
+from litellm.litellm_core_utils.core_helpers import attribute_or_none, billed_usage_cost, has_attributes
 from litellm.types.interactions import (
     InteractionInput,
     InteractionsAPIOptionalRequestParams,
@@ -24,6 +25,10 @@ from litellm.types.llms.openai import (
 )
 
 _STEP_TYPE_ROLES: Final = MappingProxyType({"user_input": "user", "model_output": "assistant"})
+
+
+class _IsoFormattable(Protocol):
+    def isoformat(self) -> object: ...
 
 
 class LiteLLMResponsesInteractionsConfig:
@@ -190,6 +195,7 @@ class LiteLLMResponsesInteractionsConfig:
     def transform_responses_response_to_interactions_response(
         responses_response: ResponsesAPIResponse,
         model: str | None = None,
+        custom_llm_provider: str | None = None,
     ) -> InteractionsAPIResponse:
         """
         Transform a Responses API response to an Interactions API response.
@@ -230,12 +236,12 @@ class LiteLLMResponsesInteractionsConfig:
                         )
 
         # Convert created_at to ISO string
-        created_at: Final = getattr(responses_response, "created_at", None)
+        created_at: Final = attribute_or_none(responses_response, "created_at")
         if isinstance(created_at, int):
             from datetime import datetime
 
             created = datetime.fromtimestamp(created_at).isoformat()
-        elif created_at is not None and hasattr(created_at, "isoformat"):
+        elif created_at is not None and has_attributes(created_at, _IsoFormattable, "isoformat"):
             created = created_at.isoformat()
         else:
             created = None
@@ -251,7 +257,7 @@ class LiteLLMResponsesInteractionsConfig:
 
         # Build interactions response — populate both `outputs` (legacy schema) and
         # `steps` (new schema) so callers work regardless of which schema they expect.
-        interactions_response_dict: Final[dict[str, Any]] = {
+        interactions_response_dict: Final[dict[str, object]] = {
             "id": getattr(responses_response, "id", ""),
             "object": "interaction",
             "status": interactions_status,
@@ -266,12 +272,14 @@ class LiteLLMResponsesInteractionsConfig:
         # (total_input_tokens, total_output_tokens)
         usage: Final[object] = getattr(responses_response, "usage", None)
         if usage:
+            reported_cost: Final = billed_usage_cost(responses_response, custom_llm_provider)
             interactions_response_dict["usage"] = {
                 "total_input_tokens": getattr(usage, "input_tokens", 0),
                 "total_output_tokens": getattr(usage, "output_tokens", 0),
+                **({} if reported_cost is None else {"cost": reported_cost}),
             }
 
         # Add updated (same as created for now)
         interactions_response_dict["updated"] = created
 
-        return InteractionsAPIResponse(**interactions_response_dict)
+        return InteractionsAPIResponse.model_validate(interactions_response_dict)

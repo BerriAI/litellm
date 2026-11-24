@@ -4,13 +4,15 @@ Common base config for all LLM providers
 
 import types
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator, Iterator, Mapping
+from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Union
 
 import httpx
-from pydantic import BaseModel
+import openai
+from pydantic import BaseModel, TypeAdapter
 
 from litellm.constants import DEFAULT_MAX_TOKENS, RESPONSE_FORMAT_TOOL_NAME
+from litellm.litellm_core_utils.allowed_tools_tool_choice import HostedMcpToolHandling
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -36,6 +38,9 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+REQUEST_PARAMS: Final = TypeAdapter(Mapping[str, object])
 
 
 class BaseLLMException(Exception):
@@ -65,15 +70,53 @@ class BaseLLMException(Exception):
         super().__init__(self.message)  # Call the base class constructor with the parameters it needs
 
 
+class RelayOnlyBodyLLMException(BaseLLMException):
+    pass
+
+
+_NO_ATTRIBUTION_HEADERS: Final[Mapping[str, str]] = types.MappingProxyType({})
+
+
+def _client_header_names(client: openai.OpenAI | openai.AsyncOpenAI | None) -> frozenset[str]:
+    if client is None:
+        return frozenset()
+    sdk_user_agent: Final = f"{type(client).__name__}/Python {openai.__version__}"
+    return frozenset(
+        name.lower()
+        for name, value in client.default_headers.items()
+        if name != "User-Agent" or value != sdk_user_agent
+    )
+
+
+def with_attribution_headers(
+    attribution_headers: Mapping[str, str],
+    headers: dict[str, object] | None,  # mutable-ok: returned as-is when there is nothing to add
+    client: openai.OpenAI | openai.AsyncOpenAI | None = None,
+) -> dict[str, object] | None:  # mutable-ok: becomes the request's outbound headers
+    """
+    `headers` plus any attribution header the caller didn't already set, on the
+    request or as a default header of its own OpenAI client (names compared
+    case-insensitively). Builds a new dict; `headers` is never mutated.
+    """
+    if not attribution_headers:
+        return headers
+    caller_names: Final = {name.lower() for name in headers or {}} | _client_header_names(client)
+    return {
+        **{name: value for name, value in attribution_headers.items() if name.lower() not in caller_names},
+        **(headers or {}),
+    }
+
+
 class BaseConfig(ABC):
     def __init__(self):
         pass
 
     @classmethod
     def get_config(cls):
+        class_attributes: Final[Mapping[str, object]] = types.MappingProxyType(cls.__dict__)
         return {
             k: v
-            for k, v in cls.__dict__.items()
+            for k, v in class_attributes.items()
             if not k.startswith("_")
             and not isinstance(
                 v,
@@ -89,21 +132,43 @@ class BaseConfig(ABC):
             and not callable(v)  # Filter out any callable objects including mocks
         }
 
+    def get_attribution_headers(self) -> Mapping[str, str]:
+        """
+        Headers that tell the provider a request came through LiteLLM.
+
+        Sent by default on every request; a caller header with the same name
+        (any casing) wins. Override in a provider config to opt in.
+        """
+        return _NO_ATTRIBUTION_HEADERS
+
     def get_json_schema_from_pydantic_object(self, response_format: type[BaseModel] | dict | None) -> dict | None:
         return type_to_response_format_param(response_format=response_format)
 
-    def is_thinking_enabled(self, non_default_params: dict) -> bool:
+    def is_thinking_enabled(self, non_default_params: Mapping[str, object]) -> bool:
         thinking: Final = non_default_params.get("thinking")
         thinking_type: Final = thinking.get("type") if isinstance(thinking, dict) else None
         return thinking is True or thinking_type == "enabled" or non_default_params.get("reasoning_effort") is not None
 
-    def is_max_tokens_in_request(self, non_default_params: dict) -> bool:
+    def is_thinking_requested(self, non_default_params: Mapping[str, object]) -> bool:
+        match non_default_params:
+            case {"thinking": True | {"type": "enabled" | "adaptive"}}:
+                return True
+            case {"reasoning_effort": None | "none"}:
+                return False
+            case {"reasoning_effort": object()}:
+                return True
+            case _:
+                return False
+
+    def is_max_tokens_in_request(self, non_default_params: Mapping[str, object]) -> bool:
         """
         OpenAI spec allows max_tokens or max_completion_tokens to be specified.
         """
         return "max_tokens" in non_default_params or "max_completion_tokens" in non_default_params
 
-    def update_optional_params_with_thinking_tokens(self, non_default_params: dict, optional_params: dict):
+    def update_optional_params_with_thinking_tokens(
+        self, non_default_params: dict[str, object], optional_params: dict[str, object]
+    ):
         """
         Handles scenario where max tokens is not specified. For anthropic models (anthropic api/bedrock/vertex ai), this requires having the max tokens being set and being greater than the thinking token budget.
 
@@ -133,7 +198,7 @@ class BaseConfig(ABC):
         """
         return False
 
-    def _add_tools_to_optional_params(self, optional_params: dict, tools: list) -> dict:
+    def _add_tools_to_optional_params(self, optional_params: dict, tools: Sequence[object]) -> dict:
         """
         Helper util to add tools to optional_params.
         """
@@ -146,19 +211,33 @@ class BaseConfig(ABC):
             ]
         return optional_params
 
+    def add_tools_to_optional_params(
+        self,
+        optional_params: dict[str, object],  # mutable-ok: mirrors override contract
+        tools: list[ChatCompletionToolParam],  # mutable-ok: mirrors override contract
+    ) -> dict[str, object]:  # mutable-ok: mirrors override contract
+        return self._add_tools_to_optional_params(optional_params, tools)
+
     def translate_developer_role_to_system_role(
         self,
-        messages: list[AllMessageValues],
-    ) -> list[AllMessageValues]:
+        messages: Sequence[AllMessageValues],
+        *,
+        model: str,
+        custom_llm_provider: str | None,
+        api_base: str | None,
+        model_info: object,
+    ) -> Sequence[AllMessageValues]:
         """
         Translate `developer` role to `system` role for non-OpenAI providers.
 
-        Overriden by OpenAI/Azure
+        Overridden by OpenAI, which also places the instructions in one leading system
+        message for an OpenAI-compatible model declared to reject a later system
+        message, and by the o-series and Azure configs.
         """
         return map_developer_role_to_system_role(messages=messages)
 
     def should_retry_llm_api_inside_llm_translation_on_http_error(
-        self, e: httpx.HTTPStatusError, litellm_params: dict
+        self, e: httpx.HTTPStatusError, litellm_params: dict[str, object]
     ) -> bool:
         """
         Returns True if the model/provider should retry the LLM API on UnprocessableEntityError
@@ -167,7 +246,9 @@ class BaseConfig(ABC):
         """
         return False
 
-    def transform_request_on_unprocessable_entity_error(self, e: httpx.HTTPStatusError, request_data: dict) -> dict:
+    def transform_request_on_unprocessable_entity_error(
+        self, e: httpx.HTTPStatusError, request_data: dict[str, object]
+    ) -> dict[str, object]:
         """
         Transform the request data on UnprocessableEntityError
         """
@@ -358,7 +439,7 @@ class BaseConfig(ABC):
     ) -> "ModelResponse":
         pass
 
-    def transform_parsed_response_dict(self, parsed_response: dict) -> dict:
+    def transform_parsed_response_dict(self, parsed_response: dict[str, object]) -> dict[str, object]:
         """
         Repair a parsed OpenAI-format response dict before generic conversion.
 
@@ -378,8 +459,23 @@ class BaseConfig(ABC):
         streaming_response: Union[Iterator[str], AsyncIterator[str], "ModelResponse"],
         sync_stream: bool,
         json_mode: bool | None = False,
-    ) -> Any:
+    ) -> object:
         pass
+
+    def get_model_response_iterator_for_request(
+        self,
+        streaming_response: "Iterator[str] | AsyncIterator[str] | ModelResponse",
+        sync_stream: bool,
+        json_mode: bool | None,
+        optional_params: Mapping[str, object],
+        logging_obj: LiteLLMLoggingObj | None = None,
+    ) -> object:
+        if sync_stream:
+            return self.get_model_response_iterator(
+                streaming_response=streaming_response, sync_stream=True, json_mode=json_mode
+            )
+        # FIXME: async streams never got json_mode, passing it changes every provider whose iterator reads it
+        return self.get_model_response_iterator(streaming_response=streaming_response, sync_stream=False)
 
     async def get_async_custom_stream_wrapper(
         self,
@@ -438,14 +534,24 @@ class BaseConfig(ABC):
         """
         return True
 
-    def post_stream_processing(self, stream: Any) -> Any:
+    @property
+    def accepts_reasoning_summary_in_reasoning_effort(self) -> bool:
+        return False
+
+    def hosted_mcp_tool_handling(self, model: str) -> HostedMcpToolHandling:
+        return "forwards"
+
+    def refuses_reasoning_effort(self, model: str, reasoning_effort: object, *, base_model: str | None) -> bool:
+        return False
+
+    def post_stream_processing(self, stream: object) -> object:
         """Hook for providers to post-process streaming responses. Default: pass-through."""
         return stream
 
     def apply_assembled_streaming_response_metadata(
         self,
         response: "ModelResponse",
-        chunks: list[Any],
+        chunks: list[object],
     ) -> None:
         """Hook for providers to merge chunk metadata into assembled streaming responses."""
         return

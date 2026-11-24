@@ -5,10 +5,12 @@ from enum import Enum
 from types import MappingProxyType
 from typing import Any, ClassVar, Final, Literal, cast
 
-import litellm
+from pydantic import TypeAdapter
+
+_METRIC_LABELS: Final = TypeAdapter(Sequence[object])
 
 
-def _sanitize_prometheus_label_name(label: str) -> str:
+def sanitize_prometheus_label_name(label: str) -> str:
     """
     Sanitize a label name to comply with Prometheus label name requirements.
 
@@ -40,11 +42,14 @@ def _sanitize_prometheus_label_name(label: str) -> str:
     return sanitized
 
 
+_sanitize_prometheus_label_name = sanitize_prometheus_label_name
+
+
 # v1: single translate pass + escape loop (avoids chained str.replace allocations).
 _PROMETHEUS_LABEL_VALUE_TRANSLATE_V1: Final = str.maketrans("\n", " ", "\r\u2028\u2029")
 
 
-def _sanitize_prometheus_label_value(value: object | None) -> str | None:
+def sanitize_prometheus_label_value(value: object | None) -> str | None:
     """
     Same semantics as :func:`_sanitize_prometheus_label_value`, implemented with
     ``str.translate`` plus a single escape pass instead of chained ``replace``.
@@ -70,6 +75,9 @@ def _sanitize_prometheus_label_value(value: object | None) -> str | None:
     return "".join(parts)
 
 
+_sanitize_prometheus_label_value = sanitize_prometheus_label_value
+
+
 @dataclass
 class MetricValidationError:
     """Error for invalid metric name"""
@@ -92,6 +100,8 @@ class LabelValidationError:
 
     @property
     def message(self) -> str:
+        import litellm
+
         base_message: Final = f"Invalid labels for metric '{self.metric_name}': {self.invalid_labels}"
         if self.metric_name in PROMETHEUS_DEPLOYMENT_AND_LATENCY_CALLER_IDENTITY_METRICS and any(
             label in ("api_key_alias", "user_email") for label in self.invalid_labels
@@ -198,6 +208,8 @@ class UserAPIKeyLabelNames(Enum):
     API_KEY_ALIAS = "api_key_alias"
     TEAM = "team"
     TEAM_ALIAS = "team_alias"
+    PROJECT_ID = "project_id"
+    PROJECT_ALIAS = "project_alias"
     REQUESTED_MODEL = REQUESTED_MODEL
     v1_LITELLM_MODEL_NAME = "model"
     v2_LITELLM_MODEL_NAME = "litellm_model_name"
@@ -209,6 +221,8 @@ class UserAPIKeyLabelNames(Enum):
     EXCEPTION_CLASS = EXCEPTION_CLASS
     RATE_LIMIT_CATEGORY = RATE_LIMIT_CATEGORY
     RATE_LIMIT_TYPE = RATE_LIMIT_TYPE
+    REASON = "reason"
+    PRIORITY = "priority"
     STATUS_CODE = "status_code"
     FALLBACK_MODEL = "fallback_model"
     ROUTE = "route"
@@ -219,6 +233,8 @@ class UserAPIKeyLabelNames(Enum):
     STREAM = "stream"
     ORG_ID = "org_id"
     ORG_ALIAS = "org_alias"
+    CUSTOMER_ORG_ID = "customer_org_id"
+    CUSTOMER_ORG_ALIAS = "customer_org_alias"
     MCP_TOOL_NAME = "mcp_tool_name"
     MCP_SERVER_NAME = "mcp_server_name"
     SERVICE_TIER = "service_tier"
@@ -250,6 +266,9 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     "litellm_images_generated_metric",
     "litellm_deployment_successful_fallbacks",
     "litellm_deployment_failed_fallbacks",
+    "litellm_dynamic_limiter_share_tokens",
+    "litellm_dynamic_limiter_borrowed_tokens",
+    "litellm_dynamic_limiter_throttled_total",
     "litellm_remaining_team_budget_metric",
     "litellm_team_max_budget_metric",
     "litellm_team_budget_remaining_hours_metric",
@@ -297,6 +316,8 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     "litellm_api_key_rate_limit_used_metric",
     "litellm_team_rate_limit_allowed_metric",
     "litellm_team_rate_limit_used_metric",
+    "litellm_project_model_rate_limit_allowed_metric",
+    "litellm_project_model_rate_limit_used_metric",
     "litellm_llm_api_failed_requests_metric",
     "litellm_callback_logging_failures_metric",
     "litellm_in_flight_requests",
@@ -339,6 +360,8 @@ PROMETHEUS_DEPLOYMENT_AND_LATENCY_CALLER_IDENTITY_VALUES: Final[tuple[str, ...]]
 
 def validate_prometheus_deployment_and_latency_caller_identity() -> str:
     """Return the configured caller-identity mode, raising on an invalid value."""
+    import litellm
+
     caller_identity: Final[object] = getattr(
         litellm,
         "prometheus_deployment_and_latency_caller_identity",
@@ -357,6 +380,8 @@ def validate_caller_identity_settings(litellm_settings: Mapping[str, object]) ->
     """Store the caller-identity mode from litellm_settings and validate it together
     with prometheus_metrics_config, raising on an invalid value or on include_labels
     that request a label the selected mode removes."""
+    import litellm
+
     if "prometheus_deployment_and_latency_caller_identity" not in litellm_settings:
         return
     litellm.prometheus_deployment_and_latency_caller_identity = (
@@ -410,6 +435,7 @@ def _resolve_deployment_and_latency_caller_identity_labels(
 
 class PrometheusMetricLabels:
     litellm_llm_api_latency_metric = [
+        UserAPIKeyLabelNames.MODEL_GROUP.value,
         UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
         UserAPIKeyLabelNames.API_KEY_HASH.value,
         UserAPIKeyLabelNames.API_KEY_ALIAS.value,
@@ -424,6 +450,7 @@ class PrometheusMetricLabels:
     ]
 
     litellm_llm_api_time_to_first_token_metric = [
+        UserAPIKeyLabelNames.MODEL_GROUP.value,
         UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
         UserAPIKeyLabelNames.API_KEY_HASH.value,
         UserAPIKeyLabelNames.API_KEY_ALIAS.value,
@@ -438,6 +465,7 @@ class PrometheusMetricLabels:
     ]
 
     litellm_request_total_latency_metric = [
+        UserAPIKeyLabelNames.MODEL_GROUP.value,
         UserAPIKeyLabelNames.END_USER.value,
         UserAPIKeyLabelNames.API_KEY_HASH.value,
         UserAPIKeyLabelNames.API_KEY_ALIAS.value,
@@ -510,6 +538,7 @@ class PrometheusMetricLabels:
     ]
 
     litellm_deployment_latency_per_output_token = [
+        UserAPIKeyLabelNames.MODEL_GROUP.value,
         UserAPIKeyLabelNames.v2_LITELLM_MODEL_NAME.value,
         UserAPIKeyLabelNames.MODEL_ID.value,
         UserAPIKeyLabelNames.API_BASE.value,
@@ -698,6 +727,25 @@ class PrometheusMetricLabels:
 
     litellm_deployment_failed_fallbacks = litellm_deployment_successful_fallbacks
 
+    litellm_dynamic_limiter_share_tokens: ClassVar[tuple[str, ...]] = (
+        UserAPIKeyLabelNames.MODEL_GROUP.value,
+        UserAPIKeyLabelNames.TEAM.value,
+        UserAPIKeyLabelNames.TEAM_ALIAS.value,
+        UserAPIKeyLabelNames.API_KEY_HASH.value,
+        UserAPIKeyLabelNames.API_KEY_ALIAS.value,
+        UserAPIKeyLabelNames.CUSTOMER_ORG_ID.value,
+        UserAPIKeyLabelNames.CUSTOMER_ORG_ALIAS.value,
+        UserAPIKeyLabelNames.PRIORITY.value,
+    )
+
+    litellm_dynamic_limiter_borrowed_tokens = litellm_dynamic_limiter_share_tokens
+
+    litellm_dynamic_limiter_throttled_total: ClassVar[tuple[str, ...]] = (
+        *litellm_dynamic_limiter_share_tokens,
+        UserAPIKeyLabelNames.RATE_LIMIT_TYPE.value,
+        UserAPIKeyLabelNames.REASON.value,
+    )
+
     litellm_remaining_team_budget_metric = [
         UserAPIKeyLabelNames.TEAM.value,
         UserAPIKeyLabelNames.TEAM_ALIAS.value,
@@ -837,6 +885,15 @@ class PrometheusMetricLabels:
 
     litellm_team_rate_limit_used_metric = litellm_team_rate_limit_allowed_metric
 
+    litellm_project_model_rate_limit_allowed_metric: ClassVar[tuple[str, ...]] = (
+        UserAPIKeyLabelNames.PROJECT_ID.value,
+        UserAPIKeyLabelNames.PROJECT_ALIAS.value,
+        UserAPIKeyLabelNames.REQUESTED_MODEL.value,
+        UserAPIKeyLabelNames.RATE_LIMIT_TYPE.value,
+    )
+
+    litellm_project_model_rate_limit_used_metric = litellm_project_model_rate_limit_allowed_metric
+
     litellm_llm_api_failed_requests_metric = [
         UserAPIKeyLabelNames.END_USER.value,
         UserAPIKeyLabelNames.API_KEY_HASH.value,
@@ -955,19 +1012,23 @@ class PrometheusMetricLabels:
 
     @staticmethod
     def get_labels(label_name: DEFINED_PROMETHEUS_METRICS) -> list[str]:
+        import litellm
+
         default_labels: Final = _resolve_deployment_and_latency_caller_identity_labels(
             metric_name=label_name,
-            labels=getattr(PrometheusMetricLabels, label_name),
+            labels=_METRIC_LABELS.validate_python(getattr(PrometheusMetricLabels, label_name)),
         )
         custom_labels: Final = []
 
         # Add custom metadata labels
         custom_labels.extend(
-            [_sanitize_prometheus_label_name(metric) for metric in litellm.custom_prometheus_metadata_labels]
+            label
+            for label in map(sanitize_prometheus_label_name, litellm.custom_prometheus_metadata_labels)
+            if label not in default_labels
         )
 
         # Add custom tags labels
-        custom_labels.extend([_sanitize_prometheus_label_name(f"tag_{tag}") for tag in litellm.custom_prometheus_tags])
+        custom_labels.extend([sanitize_prometheus_label_name(f"tag_{tag}") for tag in litellm.custom_prometheus_tags])
 
         # Conditionally add stream label to litellm_proxy_total_requests_metric
         if (
@@ -1048,6 +1109,8 @@ class UserAPIKeyLabelValues:
     api_key_alias: str | None = None
     team: str | None = None
     team_alias: str | None = None
+    project_id: str | None = None
+    project_alias: str | None = None
     model_group: str | None = None
     requested_model: str | None = None
     model: str | None = None
@@ -1062,6 +1125,8 @@ class UserAPIKeyLabelValues:
     exception_class: str | None = None
     rate_limit_category: str | None = None
     rate_limit_type: str | None = None
+    reason: str | None = None
+    priority: str | None = None
     status_code: str | None = None
     fallback_model: str | None = None
     route: str | None = None
@@ -1070,6 +1135,8 @@ class UserAPIKeyLabelValues:
     stream: str | None = None
     org_id: str | None = None
     org_alias: str | None = None
+    customer_org_id: str | None = None
+    customer_org_alias: str | None = None
     mcp_tool_name: str | None = None
     mcp_server_name: str | None = None
     service_tier: str | None = None
@@ -1089,7 +1156,7 @@ class UserAPIKeyLabelValues:
             else:
                 merged[f.name] = f.default
 
-        for k, v in kwargs.items():
+        for k, v in dict[str, object](kwargs).items():
             if k in field_names:
                 merged[k] = v
                 continue

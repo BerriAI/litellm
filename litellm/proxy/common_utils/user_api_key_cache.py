@@ -1,414 +1,366 @@
 from __future__ import annotations
 
-import asyncio
-import re
-from collections.abc import Sequence
-from typing import TYPE_CHECKING, Any, Final, TypeVar, cast, overload
+from collections.abc import Awaitable, Callable, Sequence
+from dataclasses import dataclass
+from typing import Any, Final, TypeAlias, TypeVar, overload
+from weakref import WeakValueDictionary
 
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
-from litellm.caching.dual_cache import DualCache
-from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.caching.in_memory_cache import DEFAULT_MAX_SIZE_IN_MEMORY
 from litellm.caching.redis_cache import RedisCache
 from litellm.constants import DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
-from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
-
-if TYPE_CHECKING:
-    from opentelemetry.trace import Span
-
-    from litellm.caching.redis_batch import BatchResult
+from litellm.models.team import LiteLLM_TeamTableCachedObj
+from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec, CacheValue
+from litellm.redis.stores.auth_cache import AuthCacheSettings, AuthCacheStore, AuthObject
+from litellm.redis.stores.auth_cache.handle import TeamRoster
+from litellm.redis.stores.connection import connect
+from litellm.rust_bridge._native import NativeRedisStoreError
 
 T = TypeVar("T", bound=BaseModel)
 
-AUTH_OBJECTS_TARGET: Final = "auth_objects"
+from litellm.constants import AUTH_OBJECTS_TARGET as AUTH_OBJECTS_TARGET  # noqa: E402, PLC0414  # public re-export
 
-_HASHED_TOKEN_CACHE_KEY: Final = re.compile(r"[0-9a-f]{64}")
+_CACHED_VALUE: Final = TypeAdapter(object)
 
-
-def is_user_key_cache_key(key: str) -> bool:
-    """Only user-key objects are cached under a bare ``hash_token`` digest; every other object uses a prefixed key."""
-    return _HASHED_TOKEN_CACHE_KEY.fullmatch(key) is not None
+AuthCacheFactory: TypeAlias = Callable[[AuthCacheSettings], AuthCacheStore]
 
 
-_PIPELINED_SET_OPTIONS: Final = frozenset(("ttl",))
+def _native_auth_cache(settings: AuthCacheSettings) -> AuthCacheStore:
+    return AuthCacheStore(connect(None).auth_cache(settings))
 
 
-class UserApiKeyCache(DualCache):
+@dataclass(frozen=True, slots=True)
+class _DecodedModel:
+    payload: object
+    model_type: type[BaseModel]
+    model: BaseModel
+
+
+class CacheLease:
+    __slots__ = ("__weakref__", "key", "shared")
+
+    def __init__(self, key: AuthObject, shared: str | None) -> None:
+        self.key: Final = key
+        self.shared: Final = shared
+
+
+class UserApiKeyCache:
     """
-    DualCache wrapper for UserAPIKeyAuth-like payloads.
+    The proxy's auth objects (keys, users, teams, memberships, orgs, ...), always on the native ``AuthCacheStore``:
+    memory only until ``enable_redis_auth_cache`` attaches the Redis every worker shares. Reads and writes name an
+    ``AuthObject``; evictions carry wire keys, since a broadcast carries nothing else.
 
-    Stores a Redis-safe JSON payload in BOTH in-memory and Redis to avoid
-    "memory returns BaseModel, Redis returns dict" format drift.
-
-    When ``model_type`` is provided:
-    - writes are serialized via ``CacheCodec.serialize(..., model_type=...)``
-    - reads are deserialized via ``CacheCodec.deserialize(..., model_type)``
-      and return ``Optional[T]``: the model on success, ``None`` on cache miss
-      **or** if the cached payload fails validation (schema drift). On
-      validation failure after a cache hit, an error line is emitted via
-      ``verbose_proxy_logger``.
-
-    When ``model_type`` is omitted, the interface behaves like ``DualCache``:
-    raw cached payload is returned (dict/str/etc.).
-
-    ``async_set_cache_pipeline`` applies the same untyped Codec pass as omitting
-    ``model_type`` on ``async_set_cache`` (so ``BaseModel`` rows are dumped before Redis).
-
-    User-key objects (see ``is_user_key_cache_key``) live in their own in-memory partition,
-    ``key_object_cache``, so churn in the other management objects cannot evict them. Both
-    partitions share the same Redis backend and TTL settings.
-
-    ``get_cache`` / ``async_get_cache`` overloads and implementations must be contiguous
-    (no other methods in between) so mypy resolves ``@overload`` + implementation correctly.
+    Values are stored as a Redis-safe JSON payload so memory and Redis never drift in format. With ``model_type``,
+    writes serialize through ``CacheCodec`` and reads return the model, or None on a miss or when the cached payload no
+    longer validates (logged). Without it, the raw payload comes back. A read the store failed is a miss and a failed
+    write is logged, as ``DualCache`` does. A read with a key that is not an ``AuthObject`` raises.
     """
 
     def __init__(
         self,
-        in_memory_cache: InMemoryCache | None = None,
-        redis_cache: RedisCache | None = None,
         default_in_memory_ttl: float | None = None,
-        default_redis_ttl: float | None = None,
-        key_object_in_memory_cache: InMemoryCache | None = None,
+        max_size_in_memory: int = DEFAULT_MAX_SIZE_IN_MEMORY,
+        auth_cache: AuthCacheFactory = _native_auth_cache,
     ) -> None:
-        super().__init__(
-            in_memory_cache=in_memory_cache,
-            redis_cache=redis_cache,
-            default_in_memory_ttl=default_in_memory_ttl,
-            default_redis_ttl=default_redis_ttl,
-        )
-        self.key_object_cache: Final = DualCache(
-            in_memory_cache=key_object_in_memory_cache or InMemoryCache(),
-            redis_cache=redis_cache,
-            default_in_memory_ttl=default_in_memory_ttl,
-            default_redis_ttl=default_redis_ttl,
-        )
+        self.default_in_memory_ttl: float | None = default_in_memory_ttl
+        self.max_size_in_memory: int = max_size_in_memory
+        self._store: Final = auth_cache(self._settings())
+        self._redis_connection: RedisCache | None = None
+        self._leases: Final[WeakValueDictionary[str, CacheLease]] = WeakValueDictionary()
+        self._decoded_models: Final[dict[str, _DecodedModel]] = {}  # mutable-ok: per-key memo of validated reads
 
-    def in_memory_cache_for(self, key: str) -> InMemoryCache:
-        return self.key_object_cache.in_memory_cache if is_user_key_cache_key(key) else self.in_memory_cache
+    @property
+    def store(self) -> AuthCacheStore:
+        return self._store
 
-    def update_cache_ttl(self, default_in_memory_ttl: float | None, default_redis_ttl: float | None) -> None:
-        super().update_cache_ttl(default_in_memory_ttl=default_in_memory_ttl, default_redis_ttl=default_redis_ttl)
-        self.key_object_cache.update_cache_ttl(
-            default_in_memory_ttl=default_in_memory_ttl, default_redis_ttl=default_redis_ttl
-        )
+    @property
+    def has_redis(self) -> bool:
+        return self._store.has_redis
+
+    @property
+    def redis_connection(self) -> RedisCache | None:
+        """The Redis the auth cache was attached to, for features that share it under keys of their own."""
+        return self._redis_connection
+
+    def _settings(self) -> AuthCacheSettings:
+        return AuthCacheSettings(memory_entries=self.max_size_in_memory, memory_ttl=self.default_in_memory_ttl)
+
+    def update_cache_ttl(self, default_in_memory_ttl: float | None) -> None:
+        """Memory entries keep what they hold. A write without a TTL takes this one in Redis too."""
+        self.default_in_memory_ttl = default_in_memory_ttl
+        self._store.reconfigure(self._settings())
 
     def update_in_memory_max_size(self, max_size: int | None) -> None:
-        super().update_in_memory_max_size(max_size)
-        self.key_object_cache.update_in_memory_max_size(max_size)
+        """None restores the default size, as ``DualCache.update_in_memory_max_size`` does."""
+        self.max_size_in_memory = DEFAULT_MAX_SIZE_IN_MEMORY if max_size is None else max_size
+        self._store.reconfigure(self._settings())
 
-    def attach_redis_cache(
-        self, redis_cache: RedisCache | None = None, *, default_redis_ttl: float | None = None
+    def attach_redis_cache(self, redis_cache: RedisCache) -> None:
+        if self._redis_connection is not None:
+            return
+        self._redis_connection = redis_cache
+        self._store.attach_redis(connect(redis_cache))
+
+    def get_local(self, key: AuthObject) -> object:
+        """This worker's memory copy alone."""
+        return self._store.get_local(key)
+
+    def has_local_team(self, key: AuthObject) -> bool:
+        return self._store.has_local_team(key)
+
+    async def get_team_fields(
+        self, key: AuthObject, fields: Sequence[str] | None = None, *, user_id: str | None = None
+    ) -> object:
+        try:
+            return await self._store.team_fields(key, fields, user_id)
+        except NativeRedisStoreError as e:
+            verbose_proxy_logger.error("UserApiKeyCache.get_team_fields failed for key=%r: %s", key.key, e)
+            return None
+
+    async def get_auth_team(self, key: AuthObject, user_id: str | None) -> LiteLLM_TeamTableCachedObj | None:
+        cached: Final = await self.get_team_fields(key, user_id=user_id)
+        if cached is None:
+            return None
+        decoded: Final = _validated(cached, key, LiteLLM_TeamTableCachedObj, "get_auth_team")
+        return decoded if isinstance(decoded, LiteLLM_TeamTableCachedObj) else None
+
+    async def get_team_snapshot(self, key: AuthObject) -> tuple[LiteLLM_TeamTableCachedObj, TeamRoster | None] | None:
+        try:
+            snapshot: Final = await self._store.team_snapshot(key)
+        except NativeRedisStoreError as e:
+            verbose_proxy_logger.error("UserApiKeyCache.get_team_snapshot failed for key=%r: %s", key.key, e)
+            return None
+        if snapshot is None:
+            return None
+        cached, roster = snapshot
+        decoded: Final = _validated(cached, key, LiteLLM_TeamTableCachedObj, "get_team_snapshot")
+        return (decoded, roster) if isinstance(decoded, LiteLLM_TeamTableCachedObj) else None
+
+    def add_local_team_spend(self, key: AuthObject, delta: float) -> None:
+        _ = self._store.add_local_team_spend(key, delta)
+
+    def get_local_by_key(self, key: str) -> object:
+        """This worker's memory copy under a wire key, for a hook that names no object."""
+        return self._store.get_local_by_key(key)
+
+    def set_local(self, key: AuthObject, value: object, ttl: float | None) -> None:
+        """A memory write alone, with ``default_in_memory_ttl`` when ``ttl`` is None."""
+        self._store.set_local(key, value, ttl)
+
+    async def lease(self, key: AuthObject) -> CacheLease:
+        """Taken on a cache miss, before the database read that will fill ``key``, and handed to
+        ``async_set_leased``. Evicting the key voids it: the rows read under it may predate the write behind
+        that eviction. With ``enable_redis_auth_cache`` an eviction on any worker voids it. Loads of one key
+        on this worker share a lease until an eviction, and it is dropped once none holds it."""
+        held: Final = self._leases.get(key.key)
+        if held is not None:
+            return held
+        shared: Final = await self._store.lease(key)
+        return self._leases.setdefault(key.key, CacheLease(key, shared))
+
+    async def async_set_leased(self, lease: CacheLease, value: CacheValue, ttl: float | None) -> bool:
+        """Caches ``value`` unless the lease's key was evicted since it was taken; False when refused."""
+        wire_key: Final = lease.key.key
+        if self._leases.get(wire_key) is not lease:
+            return False
+        payload: Final[object] = CacheCodec.serialize(value, model_type=None)
+        written: Final = await self._store.set_leased(lease.key, lease.shared, payload, ttl)
+        if self._leases.get(wire_key) is not lease:
+            return False
+        if not written:
+            self._void_leases((wire_key,))
+            return False
+        self._store.set_local(lease.key, payload, ttl)
+        return True
+
+    def _decoded(self, cached: object, key: AuthObject, model_type: type[BaseModel] | None, method: str) -> object:
+        """Without Redis, a read of a payload equal to the one a previous read validated returns a shallow copy of
+        that model instead of validating again, so a caller that sets a field cannot change what the next reader
+        gets. With Redis every read validates, since another worker may have written the entry."""
+        if model_type is None or cached is None:
+            return cached
+        if self._store.has_redis:
+            return _validated(cached, key, model_type, method)
+        memo: Final = self._decoded_models.get(key.key)
+        if memo is not None and memo.model_type is model_type and memo.payload == cached:
+            return memo.model.model_copy()
+        decoded: Final = _validated(cached, key, model_type, method)
+        if decoded is None:
+            return None
+        _ = self._decoded_models.pop(key.key, None)
+        self._decoded_models[key.key] = _DecodedModel(payload=cached, model_type=model_type, model=decoded)
+        if len(self._decoded_models) > 2 * self.max_size_in_memory:
+            _ = self._decoded_models.pop(next(iter(self._decoded_models)))
+        return decoded.model_copy()
+
+    def void_lease(self, key: str) -> None:
+        """Another worker evicted ``key``; the store already dropped this worker's copy."""
+        self._void_leases((key,))
+
+    def _void_leases(self, keys: Sequence[str]) -> None:
+        for key in keys:
+            _ = self._leases.pop(key, None)
+            _ = self._decoded_models.pop(key, None)
+
+    def delete_local(self, key: str) -> None:
+        """Drops this worker's memory copy alone, as a cross-worker eviction broadcast does."""
+        self._void_leases((key,))
+        self._store.delete_local(key)
+
+    @overload
+    def get_cache(self, key: AuthObject, *, local_only: bool = False, model_type: type[T]) -> T | None: ...
+
+    @overload
+    def get_cache(self, key: AuthObject, *, local_only: bool = False, model_type: None = None) -> Any: ...
+
+    def get_cache(
+        self, key: AuthObject, *, local_only: bool = False, model_type: type[BaseModel] | None = None
+    ) -> object:
+        try:
+            cached: Final = self._store.get_local(key) if local_only else self._store.get_sync(key)
+        except NativeRedisStoreError as e:
+            verbose_proxy_logger.error("UserApiKeyCache.get_cache failed for key=%r: %s", key.key, e)
+            return None
+        return self._decoded(_CACHED_VALUE.validate_python(cached), key, model_type, "get_cache")
+
+    @overload
+    async def async_get_cache(self, key: AuthObject, *, local_only: bool = False, model_type: type[T]) -> T | None: ...
+
+    @overload
+    async def async_get_cache(self, key: AuthObject, *, local_only: bool = False, model_type: None = None) -> Any: ...
+
+    async def async_get_cache(
+        self, key: AuthObject, *, local_only: bool = False, model_type: type[BaseModel] | None = None
+    ) -> object:
+        store: Final = self._store
+        try:
+            cached: Final = store.get_local(key) if local_only or not store.has_redis else await store.get(key)
+        except NativeRedisStoreError as e:
+            verbose_proxy_logger.error("UserApiKeyCache.async_get_cache failed for key=%r: %s", key.key, e)
+            return None
+        return self._decoded(_CACHED_VALUE.validate_python(cached), key, model_type, "async_get_cache")
+
+    def set_cache(
+        self,
+        key: AuthObject,
+        value: CacheValue,
+        *,
+        ttl: float | None = None,
+        local_only: bool = False,
+        model_type: type[BaseModel] | None = None,
     ) -> None:
-        super().attach_redis_cache(redis_cache, default_redis_ttl=default_redis_ttl)
-        self.key_object_cache.attach_redis_cache(redis_cache, default_redis_ttl=default_redis_ttl)
+        payload: Final = CacheCodec.serialize(value, model_type=model_type)
+        try:
+            if local_only:
+                self._store.set_local(key, payload, ttl)
+            else:
+                self._store.set_sync(key, payload, ttl)
+        except Exception as e:  # noqa: BLE001  # DualCache.set_cache swallows a failed write
+            verbose_proxy_logger.error("UserApiKeyCache.set_cache failed for key=%r: %s", key.key, e)
 
-    @overload
-    def get_cache(
+    async def async_set_cache(
         self,
-        key: str,
-        parent_otel_span: Span | None = None,
-        local_only: bool = False,
+        key: AuthObject,
+        value: CacheValue,
         *,
-        model_type: type[T],
-        **kwargs: object,
-    ) -> T | None: ...
-
-    @overload
-    def get_cache(
-        self,
-        key: str,
-        parent_otel_span: Span | None = None,
-        local_only: bool = False,
-        model_type: None = None,
-        **kwargs: object,
-    ) -> Any: ...
-
-    def get_cache(
-        self,
-        key: str,
-        parent_otel_span: Span | None = None,
+        ttl: float | None = None,
         local_only: bool = False,
         model_type: type[BaseModel] | None = None,
-        **kwargs: object,
-    ) -> object:
-        if model_type is None and "model_type" in kwargs:
-            model_type = cast(type[BaseModel] | None, kwargs.pop("model_type", None))
-        cached: Final = (
-            self.key_object_cache.get_cache(key=key, parent_otel_span=parent_otel_span, local_only=local_only, **kwargs)
-            if is_user_key_cache_key(key)
-            else super().get_cache(key=key, parent_otel_span=parent_otel_span, local_only=local_only, **kwargs)
-        )
-        if model_type is None:
-            return cached
-        if cached is None:
-            return None
-        decoded: Final = CacheCodec.deserialize(cached, model_type=model_type)
-        if decoded is None:
-            verbose_proxy_logger.error(
-                "UserApiKeyCache.get_cache failed to deserialize cached value for key=%r model_type=%s",
-                key,
-                getattr(model_type, "__name__", str(model_type)),
-            )
-            return None
-        return decoded
-
-    @overload
-    async def async_get_cache(
-        self,
-        key: str,
-        parent_otel_span: Span | None = None,
-        local_only: bool = False,
-        *,
-        model_type: type[T],
-        **kwargs: object,
-    ) -> T | None: ...
-
-    @overload
-    async def async_get_cache(
-        self,
-        key: str,
-        parent_otel_span: Span | None = None,
-        local_only: bool = False,
-        model_type: None = None,
-        **kwargs: object,
-    ) -> Any: ...
-
-    async def async_get_cache(
-        self,
-        key: str,
-        parent_otel_span: Span | None = None,
-        local_only: bool = False,
-        model_type: type[BaseModel] | None = None,
-        **kwargs: object,
-    ) -> object:
-        if model_type is None and "model_type" in kwargs:
-            model_type = cast(type[BaseModel] | None, kwargs.pop("model_type", None))
-        cached: Final = (
-            await self.key_object_cache.async_get_cache(
-                key=key, parent_otel_span=parent_otel_span, local_only=local_only, **kwargs
-            )
-            if is_user_key_cache_key(key)
-            else await super().async_get_cache(
-                key=key, parent_otel_span=parent_otel_span, local_only=local_only, **kwargs
-            )
-        )
-        if model_type is None:
-            return cached
-        if cached is None:
-            return None
-        decoded: Final = CacheCodec.deserialize(cached, model_type=model_type)
-        if decoded is None:
-            verbose_proxy_logger.error(
-                "UserApiKeyCache.async_get_cache failed to deserialize cached value for key=%r model_type=%s",
-                key,
-                getattr(model_type, "__name__", str(model_type)),
-            )
-            return None
-        return decoded
-
-    def set_cache(self, key: str | None, value: object, local_only: bool = False, **kwargs: object):
-        model_type: Final = cast(type[BaseModel] | None, kwargs.pop("model_type", None))
-        payload: Final[object] = CacheCodec.serialize(value, model_type=model_type)
-        if key is not None and is_user_key_cache_key(key):
-            return self.key_object_cache.set_cache(key=key, value=payload, local_only=local_only, **kwargs)
-        return super().set_cache(key=key, value=payload, local_only=local_only, **kwargs)
-
-    async def async_set_cache(self, key: str | None, value: object, local_only: bool = False, **kwargs: object):
-        """Inside a request the Redis SET rides the request's pipeline (memory is written at once); anywhere
-        else, or with options the pipeline does not carry, it goes to Redis directly as before."""
-        model_type: Final = cast(type[BaseModel] | None, kwargs.pop("model_type", None))
-        payload: Final[object] = CacheCodec.serialize(value, model_type=model_type)
-        ttl: Final = kwargs.get("ttl")
-        pipelined: Final = (
-            key is not None
-            and not local_only
-            and kwargs.keys() <= _PIPELINED_SET_OPTIONS
-            and (ttl is None or isinstance(ttl, (int, float)))
-        )
-        if key is not None and is_user_key_cache_key(key):
-            if pipelined and await self.key_object_cache.async_set_cache_pre_call(key, payload, ttl) is not None:
-                return None
-            return await self.key_object_cache.async_set_cache(key=key, value=payload, local_only=local_only, **kwargs)
-        if pipelined and await super().async_set_cache_pre_call(key, payload, ttl) is not None:
-            return None
-        return await super().async_set_cache(key=key, value=payload, local_only=local_only, **kwargs)
-
-    def delete_cache(self, key: str) -> None:
-        if is_user_key_cache_key(key):
-            self.key_object_cache.delete_cache(key)
-            return
-        super().delete_cache(key)
-
-    async def async_delete_cache(self, key: str) -> None:
-        if is_user_key_cache_key(key):
-            await self.key_object_cache.async_delete_cache(key)
-            return
-        await super().async_delete_cache(key)
-
-    async def async_delete_cache_pre_call(self, key: str) -> BatchResult[None] | None:
-        if is_user_key_cache_key(key):
-            return await self.key_object_cache.async_delete_cache_pre_call(key)
-        return await super().async_delete_cache_pre_call(key)
-
-    async def async_delete_cache_keys(self, keys: Sequence[str]) -> None:
-        """Batch twin of ``async_delete_cache``, partitioned like
-        ``async_set_cache_pipeline``.
-
-        Both partitions are cleared even when one raises, because a caller
-        batching these has already committed the rows they cache.
-        """
-        key_object_keys: Final = tuple(key for key in keys if is_user_key_cache_key(key))
-        other_keys: Final = tuple(key for key in keys if not is_user_key_cache_key(key))
-        outcomes: Final = await asyncio.gather(
-            self.key_object_cache.async_delete_cache_keys(key_object_keys),
-            super().async_delete_cache_keys(other_keys),
-            return_exceptions=True,
-        )
-        failed: Final = tuple(outcome for outcome in outcomes if isinstance(outcome, BaseException))
-        if failed:
-            raise failed[0]
-
-    def flush_cache(self) -> None:
-        super().flush_cache()
-        self.key_object_cache.in_memory_cache.flush_cache()
+    ) -> None:
+        """Inside a request the Redis SET rides the request's pipeline (memory is written at once); anywhere else it
+        goes to Redis directly."""
+        payload: Final = CacheCodec.serialize(value, model_type=model_type)
+        try:
+            if local_only:
+                self._store.set_local(key, payload, ttl)
+            elif self._store.declare_set(key, payload, ttl) is None:
+                await self._store.set(key, payload, ttl)
+        except Exception as e:  # noqa: BLE001  # DualCache.async_set_cache swallows a failed write
+            verbose_proxy_logger.error("UserApiKeyCache.async_set_cache failed for key=%r: %s", key.key, e)
 
     async def async_set_cache_pipeline(
-        self, cache_list: Sequence[tuple[str, object]], local_only: bool = False, **kwargs: object
+        self, cache_list: Sequence[tuple[AuthObject, CacheValue]], *, ttl: float | None = None
     ) -> None:
-        """
-        Batch writes with the same Codec boundary as ``async_set_cache`` without
-        ``model_type``: ``BaseModel`` values become JSON-safe dicts; dicts/scalars unchanged.
-        """
-        normalized: Final = tuple((key, CacheCodec.serialize(value, model_type=None)) for key, value in cache_list)
-        key_object_entries: Final = tuple(entry for entry in normalized if is_user_key_cache_key(entry[0]))
-        other_entries: Final = tuple(entry for entry in normalized if not is_user_key_cache_key(entry[0]))
-        if key_object_entries:
-            await self.key_object_cache.async_set_cache_pipeline(
-                cache_list=key_object_entries, local_only=local_only, **kwargs
-            )
-        if other_entries:
-            await super().async_set_cache_pipeline(cache_list=other_entries, local_only=local_only, **kwargs)
+        """Batch writes with the same codec boundary as ``async_set_cache`` without ``model_type``."""
+        entries: Final = tuple((key, CacheCodec.serialize(value, model_type=None)) for key, value in cache_list)
+        try:
+            await self._store.set_many(entries, ttl)
+        except Exception as e:  # noqa: BLE001  # DualCache.async_set_cache_pipeline swallows a failed write
+            verbose_proxy_logger.error("UserApiKeyCache.async_set_cache_pipeline failed: %s", e)
+
+    def delete_cache(self, key: str) -> None:
+        self._void_leases((key,))
+        self._store.delete_sync((key,))
+
+    async def async_delete_cache(self, key: str) -> None:
+        self._void_leases((key,))
+        await self._store.delete((key,))
+
+    def declare_delete(self, key: str) -> Awaitable[None] | None:
+        """The DEL on the request's pre-call batch; None outside a request, so the caller deletes."""
+        self._void_leases((key,))
+        return self._store.declare_delete(key)
+
+    async def async_delete_cache_keys(self, keys: Sequence[str]) -> None:
+        """Both partitions drop every key, then Redis; raises when Redis failed, with memory already dropped."""
+        self._void_leases(keys)
+        if keys:
+            await self._store.delete(keys)
+
+    def flush_cache(self) -> None:
+        self._leases.clear()
+        self._decoded_models.clear()
+        self._store.flush_local()
+
+    async def increment_if_present(self, key: AuthObject, amount: float) -> float | None:
+        """``INCRBYFLOAT`` of an entry Redis still holds; None without Redis or when Redis lacks the entry. Raises
+        when Redis failed."""
+        return await self._store.increment_if_present(key, amount)
 
 
-#: Value cached under ``user_object_permission_id_cache_key`` when the user links no permission row,
-#: so a human without an entitlement costs no DB read per request. Lives beside the key builder
-#: because it is part of the same cache protocol: a reader that knows the key must know this value.
+def _validated(cached: object, key: AuthObject, model_type: type[BaseModel], method: str) -> BaseModel | None:
+    decoded: Final = CacheCodec.deserialize(cached, model_type=model_type)
+    if decoded is None:
+        verbose_proxy_logger.error(
+            "UserApiKeyCache.%s failed to deserialize cached value for key=%r model_type=%s",
+            method,
+            key.key,
+            getattr(model_type, "__name__", str(model_type)),
+        )
+    return decoded
+
+
+#: Cached under ``AuthObject.user_object_permission`` when the user links no permission row, so a human without an
+#: entitlement costs no DB read per request.
 USER_NO_MCP_PERMISSION_SENTINEL: Final = "__user_no_mcp_permission__"
 
-
-def user_object_permission_id_cache_key(user_id: str) -> str:
-    """Cache key for the ``user_id -> object_permission_id`` link.
-
-    Lives here rather than next to either user because two modules own the two halves: the MCP auth
-    resolver writes it on read, and ``/user/update`` deletes it after changing the link. A key format
-    duplicated across those two drifts silently, and the failure is an entitlement change that never
-    takes effect.
-    """
-    return f"user_object_permission_id:{user_id}"
-
-
-def object_permission_cache_key(object_permission_id: str) -> str:
-    """Cache key ``get_object_permission`` stores a permission row under."""
-    return f"object_permission_id:{object_permission_id}"
-
-
-#: Cached under ``tag_registry_cache_key`` when the table exceeds ``TAG_REGISTRY_MAX_SIZE``:
-#: registry unusable, fall back to the per-tag lookup.
+#: Cached under ``AuthObject.tag_registry`` when the table exceeds ``TAG_REGISTRY_MAX_SIZE``: registry unusable, fall
+#: back to the per-tag lookup.
 TAG_REGISTRY_OVERFLOW_SENTINEL: Final = "__tag_registry_overflow__"
 
-
-def tag_cache_key(tag_name: str) -> str:
-    """Cache key one tag row is stored under; shared so its five reader/writer modules cannot drift."""
-    return f"tag:{tag_name}"
-
-
-def tag_registry_cache_key() -> str:
-    """Cache key for the set of tag names that exist in ``LiteLLM_TagTable``."""
-    return "tag_registry"
-
-
-#: Cached under ``model_access_group_registry_cache_key`` when the table exceeds
+#: Cached under ``AuthObject.model_access_group_registry`` when the table exceeds
 #: ``MODEL_ACCESS_GROUP_REGISTRY_MAX_SIZE``: registry unusable, fall back to the per-group lookup.
 MODEL_ACCESS_GROUP_REGISTRY_OVERFLOW_SENTINEL: Final = "__model_access_group_registry_overflow__"
 
-
-def model_access_group_cache_key(access_group_name: str) -> str:
-    """Cache key one model access group budget row is stored under; shared so auth, spend tracking and the management endpoints cannot drift."""
-    return f"model_access_group:{access_group_name}"
-
-
-def model_access_group_registry_cache_key() -> str:
-    """Cache key for the set of model access group names that have a budget row."""
-    return "model_access_group_registry"
-
-
-def model_access_group_spend_counter_key(access_group_name: str) -> str:
-    """Spend counter key for one model access group; shared so its four owners cannot drift.
-
-    The reservation path writes it up front, the cost callback writes it after the call, auth
-    reads it to enforce ``max_budget``, and the reset job clears it on rollover. A copy that
-    drifts in any one of them silently resets or reads a counter nobody else touches, which shows
-    up as a budget that never trips or never resets.
-    """
-    return f"spend:model_access_group:{access_group_name}"
-
-
-def project_cache_key(project_id: str) -> str:
-    return f"project_id:{project_id}"
-
-
-def project_spend_counter_key(project_id: str) -> str:
-    return f"spend:project:{project_id}"
-
-
-#: Cached under ``end_user_restricted_registry_cache_key`` when the restricted set exceeds
+#: Cached under ``AuthObject.end_user_restricted_registry`` when the restricted set exceeds
 #: ``END_USER_RESTRICTED_REGISTRY_MAX_SIZE``: registry unusable, fall back to the per-id fetch.
 END_USER_RESTRICTED_REGISTRY_OVERFLOW_SENTINEL: Final = "__end_user_restricted_registry_overflow__"
 
-
-def end_user_cache_key(end_user_id: str) -> str:
-    """Cache key one end-user row is stored under; shared so auth and spend tracking cannot drift."""
-    return f"end_user_id:{end_user_id}"
-
-
-def end_user_restricted_registry_cache_key() -> str:
-    """Cache key for the set of end-user ids whose row carries a restriction auth enforces."""
-    return "end_user_restricted_registry"
-
-
-def team_membership_auth_cache_key(team_id: str, user_id: str) -> str:
-    """Cache key one team member's ``LiteLLM_TeamMembership`` row is stored under for the admission check."""
-    return f"{team_id}_{user_id}"
-
-
-def team_membership_reservation_cache_key(user_id: str, team_id: str) -> str:
-    """Cache key the pre-call budget reservation stores the same ``LiteLLM_TeamMembership`` row under.
-
-    Deliberately not unified with ``team_membership_auth_cache_key``: the two readers wrote independent
-    keys before this file existed, so a fix that invalidates one must invalidate both explicitly rather
-    than assume a single write is visible to both.
-    """
-    return f"team_membership:{user_id}:{team_id}"
-
-
-#: Cached under ``team_membership_reservation_cache_key`` when a member has no ``LiteLLM_TeamMembership``
-#: row, so a session-token member without a per-member budget costs no DB read per request. Lives beside
-#: the key builder because it is part of the same cache protocol: every reader of the key must know that
-#: a plain string here means "no row", distinct from a serialized membership. The two budget readers
-#: already treat a non-model value as "no row", so they need no change to stay correct.
+#: Cached under ``AuthObject.team_membership_reservation`` when a member has no ``LiteLLM_TeamMembership`` row, so a
+#: session-token member without a per-member budget costs no DB read per request. The budget readers treat any
+#: non-model value as "no row".
 NO_TEAM_MEMBERSHIP_SENTINEL: Final = "__no_team_membership__"
 
 
-def get_management_object_ttl(cache: DualCache) -> float:
+def get_management_object_ttl(cache: UserApiKeyCache) -> float:
     """
     In-memory TTL for management-object cache writes (keys, teams, users, budgets, ...).
 
-    Honors ``general_settings.user_api_key_cache_ttl``, which ``proxy_server``
-    propagates onto ``default_in_memory_ttl`` at startup, and falls back to
-    ``DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL`` when no default is configured.
+    Honors ``general_settings.user_api_key_cache_ttl``, which ``proxy_server`` propagates onto
+    ``default_in_memory_ttl`` at startup, and falls back to ``DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL``.
     """
-    configured: Final[float | None] = getattr(cache, "default_in_memory_ttl", None)
-    if configured is not None:
-        return configured
+    if cache.default_in_memory_ttl is not None:
+        return cache.default_in_memory_ttl
     return DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL

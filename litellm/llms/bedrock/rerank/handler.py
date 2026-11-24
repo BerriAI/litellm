@@ -1,15 +1,19 @@
 import json
-from typing import TYPE_CHECKING, Any, Final, cast
+from collections.abc import Mapping
+from typing import Final, cast
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    _get_httpx_client,
     get_async_httpx_client,
+    get_httpx_client,
 )
 from litellm.types.llms.bedrock import BedrockPreparedRequest
 from litellm.types.rerank import RerankRequest
@@ -19,10 +23,7 @@ from ..base_aws_llm import BaseAWSLLM
 from ..common_utils import BedrockError
 from .transformation import BedrockRerankConfig
 
-if TYPE_CHECKING:
-    from botocore.awsrequest import AWSPreparedRequest
-else:
-    AWSPreparedRequest = Any
+_JSON_DICT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
 class BedrockRerankHandler(BaseAWSLLM):
@@ -55,13 +56,13 @@ class BedrockRerankHandler(BaseAWSLLM):
         except httpx.TimeoutException:
             raise BedrockError(status_code=408, message="Timeout error occurred.")
 
-        return BedrockRerankConfig()._transform_response(response.json())
+        return BedrockRerankConfig().transform_response(_JSON_DICT.validate_python(response.json()))
 
     def rerank(
         self,
         model: str,
         query: str,
-        documents: list[str | dict[str, Any]],
+        documents: list[str | dict[str, object]],
         optional_params: dict,
         logging_obj: LitellmLogging,
         top_n: int | None = None,
@@ -82,7 +83,7 @@ class BedrockRerankHandler(BaseAWSLLM):
             rank_fields=rank_fields,
             return_documents=return_documents,
         )
-        data: Final = BedrockRerankConfig()._transform_request(request_data)
+        data: Final = BedrockRerankConfig().transform_request(request_data)
 
         prepared_request: Final = self._prepare_request(
             model=model,
@@ -90,6 +91,7 @@ class BedrockRerankHandler(BaseAWSLLM):
             api_base=api_base,
             extra_headers=extra_headers,
             data=cast(dict, data),
+            litellm_params=as_str_mapping(getattr(logging_obj, "litellm_params", None)),
         )
 
         logging_obj.pre_call(
@@ -111,7 +113,7 @@ class BedrockRerankHandler(BaseAWSLLM):
             )
 
         if client is None or not isinstance(client, HTTPHandler):
-            client = _get_httpx_client()
+            client = get_httpx_client()
         try:
             response: Final = client.post(
                 url=prepared_request["endpoint_url"],
@@ -136,19 +138,22 @@ class BedrockRerankHandler(BaseAWSLLM):
             api_key="",
         )
 
-        response_json: Final = response.json()
+        response_json: Final = _JSON_DICT.validate_python(response.json())
 
-        return BedrockRerankConfig()._transform_response(response_json)
+        return BedrockRerankConfig().transform_response(response_json)
 
     def _prepare_request(
         self,
         model: str,
         api_base: str | None,
-        extra_headers: dict | None,
-        data: dict,
-        optional_params: dict,
+        extra_headers: dict[str, object] | None,
+        data: dict[str, object],
+        optional_params: dict[str, object],
+        litellm_params: Mapping[str, object] | None = None,
     ) -> BedrockPreparedRequest:
-        boto3_credentials_info: Final = self._get_boto_credentials_from_optional_params(optional_params, model)
+        boto3_credentials_info: Final = self._get_boto_credentials_from_optional_params(
+            optional_params, model, litellm_params=litellm_params
+        )
 
         ### SET RUNTIME ENDPOINT ###
         _, proxy_endpoint_url = self.get_runtime_endpoint(
@@ -157,7 +162,7 @@ class BedrockRerankHandler(BaseAWSLLM):
             aws_region_name=boto3_credentials_info.aws_region_name,
         )
         proxy_endpoint_url = proxy_endpoint_url.replace("bedrock-runtime", "bedrock-agent-runtime")
-        proxy_endpoint_url = f"{proxy_endpoint_url}/rerank"
+        proxy_endpoint_url = join_api_base(proxy_endpoint_url, "rerank")
 
         body: Final = json.dumps(data).encode("utf-8")
         headers = {"Content-Type": "application/json"}

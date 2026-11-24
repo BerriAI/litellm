@@ -9,10 +9,17 @@ Tests cover:
 - merge_agent_headers utility
 """
 
+import base64
+import json
 import sys
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
+import respx
+
+import litellm
 
 # ---------------------------------------------------------------------------
 # Helper: build a minimal mock agent
@@ -378,6 +385,72 @@ async def test_databricks_oauth_overrides_static_authorization():
     assert headers.get("Authorization") == "Bearer oauth-wins"
 
 
+@respx.mock
+@pytest.mark.asyncio
+async def test_databricks_agent_flat_oauth_send_reaches_the_endpoint_with_the_minted_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.agent_endpoints.a2a_endpoints import invoke_agent_a2a
+    from litellm.proxy.agent_endpoints.agent_registry import AgentRegistry
+    from litellm.proxy.agent_endpoints.databricks_oauth import databricks_app_oauth_token_cache
+    from litellm.types.agents import AgentResponse
+
+    workspace: Final = "https://adb-1.azuredatabricks.net"
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    databricks_app_oauth_token_cache.flush_cache()
+    registry: Final = AgentRegistry()
+    registry.register_agent(
+        AgentResponse(
+            agent_id="dbx-agent-id",
+            agent_name="dbx-agent",
+            agent_card_params={"url": workspace},
+            litellm_params={
+                "custom_llm_provider": "databricks_agent",
+                "model": "my-agent",
+                "api_base": workspace,
+                "client_id": "cid",
+                "client_secret": "secret",
+            },
+        )
+    )
+    token: Final = respx.post(f"{workspace}/oidc/v1/token").mock(
+        return_value=httpx.Response(200, json={"access_token": "flat-minted", "expires_in": 3600})
+    )
+    endpoint: Final = respx.post(f"{workspace}/serving-endpoints/my-agent/invocations").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "output": [
+                    {
+                        "type": "message",
+                        "id": "msg_1",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "pong"}],
+                    }
+                ]
+            },
+        )
+    )
+
+    with (
+        patch("litellm.proxy.agent_endpoints.agent_registry.global_agent_registry", registry),
+    ):
+        response = await invoke_agent_a2a(
+            agent_id="dbx-agent",
+            request=_make_mock_request(),
+            fastapi_response=MagicMock(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", user_id="u1"),
+        )
+
+    basic: Final = base64.b64encode(b"cid:secret").decode()
+    assert token.calls.last.request.headers["Authorization"] == f"Basic {basic}"
+    sent: Final = endpoint.calls.last.request
+    assert sent.headers["Authorization"] == "Bearer flat-minted"
+    assert json.loads(sent.content) == {"input": [{"role": "user", "content": "Hello"}]}
+    assert json.loads(response.body)["result"]["parts"][0]["text"] == "pong"
+
+
 @pytest.mark.asyncio
 async def test_non_databricks_agent_skips_oauth_resolution():
     """Agents without a databricks_oauth block never enter the OAuth path."""
@@ -385,13 +458,10 @@ async def test_non_databricks_agent_skips_oauth_resolution():
     mock_agent.litellm_params = {"require_trace_id_on_calls_to_agent": False}
     mock_request = _make_mock_request()
 
-    with patch(
-        "litellm.proxy.agent_endpoints.a2a_endpoints.resolve_databricks_app_auth_header",
-        new_callable=AsyncMock,
-    ) as mock_resolve:
+    with patch("litellm.proxy.agent_endpoints.databricks_oauth.get_async_httpx_client") as mock_token_client:
         mock_asend = await _invoke(mock_agent, mock_request, None)
 
-    mock_resolve.assert_not_called()
+    mock_token_client.assert_not_called()
     headers = mock_asend.call_args.kwargs.get("agent_extra_headers")
     assert headers == {"x-custom": "v", "X-LiteLLM-User-Id": "u1"}
     assert "Authorization" not in headers

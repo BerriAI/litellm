@@ -13,6 +13,7 @@ from psycopg import sql
 from .checks import COMPLETE, assert_completed
 from .containers import Containers, docker, ready, until
 from .database import Database, Databases, prisma_url, restricted_user
+from e2e_metadata import Domain, Subject, meta
 
 POOL_IMAGE: Final = (
     "ghcr.io/cloudnative-pg/pgbouncer@sha256:e6ddfe22d845e603825e235dd8334b21ecd125abea2a2172478f556b8dee2bb8"
@@ -94,6 +95,11 @@ def pool(database: Database, output: Path) -> Generator[str]:
 
 class TestMigrationPooling:
     @pytest.mark.parametrize("scenario,replica_count", (("fresh", 3), ("upgrade", 3), ("legacy", 3), ("upgrade", 6)))
+    @meta(
+        Subject(
+            domain=Domain.DB,
+        )
+    )
     def test_direct_migrations_with_one_application_backend(
         self,
         containers: Containers,

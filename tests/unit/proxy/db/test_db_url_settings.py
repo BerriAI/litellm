@@ -2,7 +2,7 @@
 
 The model assembles ``DATABASE_URL`` (and optionally
 ``DATABASE_URL_READ_REPLICA``) from the discrete ``DATABASE_*`` env vars
-emitted by the ``helm/litellm`` chart, before Prisma initializes. It covers
+emitted by the ``litellm/deploy/helm/litellm`` chart, before Prisma initializes. It covers
 both token auth (mint a short-lived AWS RDS IAM or Microsoft Entra ID token)
 and password auth, for both the writer and the read replica.
 
@@ -34,6 +34,8 @@ from pydantic import ValidationError
 from litellm.proxy.db.db_url_settings import (
     PG_SSL_REQUEST,
     DatabaseURLSettings,
+    add_missing_query_params,
+    prisma_default_params,
     token_refresh_params_from_url,
     translate_libpq_ssl_params,
     unsupported_db_scheme,
@@ -192,6 +194,71 @@ def test_reader_url_assembled_when_host_set_and_url_unset(monkeypatch):
         os.environ["DATABASE_URL_READ_REPLICA"]
         == "postgresql://litellm:READER_TOKEN@reader.example.com:5432/litellm_db?max_idle_connection_lifetime=60"
     )
+
+
+@pytest.mark.parametrize(
+    ("writer_override", "reader_override", "writer_region", "reader_region"),
+    [
+        (None, None, "us-east-1", "ap-northeast-1"),
+        ("eu-west-1", "us-west-2", "eu-west-1", "us-west-2"),
+        ("eu-west-1", None, "eu-west-1", "ap-northeast-1"),
+        (None, "us-west-2", "us-east-1", "us-west-2"),
+        ("  ", "", "us-east-1", "ap-northeast-1"),
+        (" eu-west-1 ", " us-west-2 ", "eu-west-1", "us-west-2"),
+    ],
+)
+def test_writer_and_reader_urls_sign_in_their_endpoint_regions(
+    monkeypatch: pytest.MonkeyPatch,
+    writer_override: str | None,
+    reader_override: str | None,
+    writer_region: str,
+    reader_region: str,
+) -> None:
+    for key, value in (("AWS_RDS_REGION", writer_override), ("AWS_RDS_READ_REPLICA_REGION", reader_override)):
+        if value is None:
+            monkeypatch.delenv(key, raising=False)
+        else:
+            monkeypatch.setenv(key, value)
+    monkeypatch.setenv("IAM_TOKEN_DB_AUTH", "true")
+    monkeypatch.setenv("AWS_REGION", "ap-northeast-1")
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIDEXAMPLE")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "secret")
+    monkeypatch.delenv("AWS_PROFILE", raising=False)
+    monkeypatch.delenv("AWS_DEFAULT_PROFILE", raising=False)
+    monkeypatch.delenv("AWS_REGION_NAME", raising=False)
+    monkeypatch.delenv("AWS_PROFILE_NAME", raising=False)
+    monkeypatch.delenv("AWS_ROLE_NAME", raising=False)
+    monkeypatch.delenv("AWS_ROLE_ARN", raising=False)
+    monkeypatch.delenv("AWS_SESSION_NAME", raising=False)
+    monkeypatch.delenv("AWS_WEB_IDENTITY_TOKEN", raising=False)
+    monkeypatch.delenv("AWS_WEB_IDENTITY_TOKEN_FILE", raising=False)
+    monkeypatch.delenv("AWS_SESSION_TOKEN", raising=False)
+    monkeypatch.setenv("DATABASE_HOST", "writer.abc123.us-east-1.rds.amazonaws.com")
+    monkeypatch.setenv("DATABASE_HOST_READ_REPLICA", "reader.abc123.ap-northeast-1.rds.amazonaws.com")
+    monkeypatch.setenv("DATABASE_USER", "litellm_rds")
+    monkeypatch.setenv("DATABASE_NAME", "litellm_db")
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("DATABASE_URL_READ_REPLICA", raising=False)
+
+    settings: Final = DatabaseURLSettings.from_env()
+    writer_url: Final = settings.build_writer_url()
+    reader_url: Final = settings.build_reader_url()
+
+    assert writer_url is not None
+    assert reader_url is not None
+    writer_password: Final = urllib.parse.urlsplit(writer_url).password
+    reader_password: Final = urllib.parse.urlsplit(reader_url).password
+    assert writer_password is not None
+    assert reader_password is not None
+    writer_token: Final = urllib.parse.unquote(writer_password)
+    reader_token: Final = urllib.parse.unquote(reader_password)
+    writer_query: Final = urllib.parse.urlsplit(writer_token).query
+    reader_query: Final = urllib.parse.urlsplit(reader_token).query
+    writer_credential: Final = urllib.parse.parse_qs(writer_query)["X-Amz-Credential"][0]
+    reader_credential: Final = urllib.parse.parse_qs(reader_query)["X-Amz-Credential"][0]
+
+    assert writer_credential.split("/")[2] == writer_region
+    assert reader_credential.split("/")[2] == reader_region
 
 
 def test_reader_url_not_clobbered_when_already_set(monkeypatch):
@@ -1213,32 +1280,53 @@ def test_reader_keeps_its_own_pinned_idle_lifetime(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "writer_limit, reader_limit, num_workers, expected",
+    "writer_limit, rust_writer_limit, reader_limit, num_workers, expected",
     [
-        ("10", None, "4", "4 worker(s) x writer connection_limit 10 = up to 40 connections"),
+        ("10", 0, None, "4", "4 worker(s) x writer connection_limit 10 = up to 40 connections"),
         (
             "10",
+            0,
             "10",
             "4",
             "4 worker(s) x (writer connection_limit 10 + reader connection_limit 10) = up to 80 connections",
         ),
+        ("8", 2, None, "4", "4 worker(s) x (writer connection_limit 8 + rust writer pool 2) = up to 40 connections"),
         (
-            "10",
+            "8",
+            2,
+            "8",
+            "4",
+            "4 worker(s) x (writer connection_limit 8 + rust writer pool 2 + reader connection_limit 8 + rust reader pool 2) = up to 80 connections",
+        ),
+        (
+            "8",
+            2,
             "50",
             "4",
-            "4 worker(s) x (writer connection_limit 10 + reader connection_limit 50) = up to 240 connections",
+            "4 worker(s) x (writer connection_limit 8 + rust writer pool 2 + reader connection_limit 50 + rust reader pool 2) = up to 248 connections",
         ),
-        ("10", None, "0", "1 worker(s) x writer connection_limit 10 = up to 10 connections"),
+        ("8", 2, None, "0", "1 worker(s) x (writer connection_limit 8 + rust writer pool 2) = up to 10 connections"),
     ],
-    ids=["writer_only", "reader_doubles_engines", "reader_pins_its_own_limit", "worker_floor"],
+    ids=[
+        "no_rust_share_writer_only",
+        "no_rust_share_with_reader",
+        "writer_only",
+        "reader_adds_an_engine",
+        "reader_pins_its_own_limit",
+        "worker_floor",
+    ],
 )
 def test_connection_budget_message_sums_the_engines_each_worker_owns(
-    writer_limit: str, reader_limit: str | None, num_workers: str, expected: str
+    writer_limit: str, rust_writer_limit: int, reader_limit: str | None, num_workers: str, expected: str
 ) -> None:
     from litellm.proxy.db.db_url_settings import postgres_connection_budget_message
 
     message: Final = postgres_connection_budget_message(
-        writer_limit=writer_limit, reader_limit=reader_limit, num_workers=num_workers
+        writer_limit=writer_limit,
+        rust_writer_limit=rust_writer_limit,
+        reader_limit=reader_limit,
+        rust_reader_limit=rust_writer_limit,
+        num_workers=num_workers,
     )
     assert expected in message
     assert "max_connections minus superuser_reserved_connections" in message
@@ -1247,5 +1335,30 @@ def test_connection_budget_message_sums_the_engines_each_worker_owns(
 def test_connection_budget_message_survives_an_unparseable_limit() -> None:
     from litellm.proxy.db.db_url_settings import postgres_connection_budget_message
 
-    message: Final = postgres_connection_budget_message(writer_limit="ten", reader_limit=None, num_workers="2")
+    message: Final = postgres_connection_budget_message(
+        writer_limit="ten", rust_writer_limit=2, reader_limit=None, rust_reader_limit=0, num_workers="2"
+    )
     assert "writer='ten'" in message
+
+
+@pytest.mark.parametrize(
+    ("url", "native_connections", "expected_name"),
+    [
+        ("postgresql://u:p@db:5432/proxy", 0, None),
+        ("postgresql://u:p@db:5432/proxy", 2, "litellm-prisma"),
+        ("postgresql://u:p@db:5432/proxy?application_name=ops", 2, "ops"),
+    ],
+    ids=["untagged_without_native_pool", "tagged_beside_native_pool", "operator_name_wins"],
+)
+def test_prisma_is_tagged_only_beside_a_native_pool(
+    url: str, native_connections: int, expected_name: str | None
+) -> None:
+    final_url: Final = add_missing_query_params(
+        url, prisma_default_params({"max_idle_connection_lifetime": 60}, native_connections)
+    )
+
+    query: Final = urllib.parse.parse_qs(urllib.parse.urlsplit(final_url).query)
+    assert (query.get("application_name"), query["max_idle_connection_lifetime"]) == (
+        None if expected_name is None else [expected_name],
+        ["60"],
+    )

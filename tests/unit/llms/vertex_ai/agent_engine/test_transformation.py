@@ -5,13 +5,22 @@ Tests the request transformation and streaming chunk parsing without making real
 """
 
 
+import json
+from datetime import datetime
+from typing import Final
+
+import httpx
 import pytest
 
 
+from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler, get_async_httpx_client
 from litellm.llms.vertex_ai.agent_engine.sse_iterator import (
     VertexAgentEngineResponseIterator,
 )
 from litellm.llms.vertex_ai.agent_engine.transformation import VertexAgentEngineConfig
+from litellm.types.utils import LlmProviders
+from litellm.utils import CustomStreamWrapper
 
 
 class TestVertexAgentEngineTransformRequest:
@@ -125,3 +134,84 @@ class TestVertexAgentEngineChunkParser:
         assert result.choices[0].delta.content == "Partial response..."
         assert result.choices[0].finish_reason is None
         assert result.usage is None
+
+
+async def test_async_stream_wrapper_without_a_client_posts_through_the_cached_vertex_ai_client():
+    api_base: Final = "https://us-central1-aiplatform.googleapis.com/v1/reasoningEngines/123:streamQuery"
+    sent_requests: Final[list[httpx.Request]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        sent_requests.append(request)
+        return httpx.Response(200, text='{"content": {"parts": [{"text": "hi"}], "role": "model"}}')
+
+    cached_client: Final = get_async_httpx_client(llm_provider=LlmProviders.VERTEX_AI, params={})
+    cached_client.client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    messages: Final = [{"role": "user", "content": "hi"}]
+
+    wrapper: Final = await VertexAgentEngineConfig().get_async_custom_stream_wrapper(
+        model="agent_engine/123",
+        custom_llm_provider="vertex_ai",
+        logging_obj=Logging(
+            model="agent_engine/123",
+            messages=messages,
+            stream=True,
+            call_type="acompletion",
+            start_time=datetime(2026, 1, 1),
+            litellm_call_id="call-1",
+            function_id="fn-1",
+        ),
+        api_base=api_base,
+        headers={},
+        data={"class_method": "stream_query"},
+        messages=messages,
+        litellm_params={},
+    )
+
+    assert type(wrapper) is CustomStreamWrapper
+    assert [str(request.url) for request in sent_requests] == [api_base]
+    assert json.loads(sent_requests[0].content) == {"class_method": "stream_query"}
+
+
+_LINE_SEPARATED_TEXT: Final = "before\u2028between\u2029after"
+
+
+def _separated_text_reply(request: httpx.Request) -> httpx.Response:
+    chunk: Final = {"content": {"parts": [{"text": _LINE_SEPARATED_TEXT}], "role": "model"}, "finish_reason": "STOP"}
+    return httpx.Response(200, stream=httpx.ByteStream(f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n".encode()))
+
+
+async def _streamed_text(sync_stream: bool) -> str:
+    messages: Final = [{"role": "user", "content": "hi"}]
+    call_args: Final = {
+        "model": "agent_engine/123",
+        "custom_llm_provider": "vertex_ai",
+        "logging_obj": Logging(
+            model="agent_engine/123",
+            messages=messages,
+            stream=True,
+            call_type="completion" if sync_stream else "acompletion",
+            start_time=datetime(2026, 1, 1),
+            litellm_call_id="call-separators",
+            function_id="fn-separators",
+        ),
+        "api_base": "https://us-central1-aiplatform.googleapis.com/v1/reasoningEngines/123:streamQuery",
+        "headers": {},
+        "data": {"class_method": "stream_query"},
+        "messages": messages,
+        "litellm_params": {},
+    }
+    transport: Final = httpx.MockTransport(_separated_text_reply)
+    if sync_stream:
+        sync_wrapper: Final = VertexAgentEngineConfig().get_sync_custom_stream_wrapper(
+            client=HTTPHandler(client=httpx.Client(transport=transport)), **call_args
+        )
+        return "".join(chunk.choices[0].delta.content or "" for chunk in sync_wrapper)
+    async_wrapper: Final = await VertexAgentEngineConfig().get_async_custom_stream_wrapper(
+        client=AsyncHTTPHandler(transport=transport), **call_args
+    )
+    return "".join([chunk.choices[0].delta.content or "" async for chunk in async_wrapper])
+
+
+@pytest.mark.parametrize("sync_stream", [True, False])
+async def test_stream_keeps_unicode_line_separators_inside_the_text(sync_stream: bool) -> None:
+    assert await _streamed_text(sync_stream) == _LINE_SEPARATED_TEXT

@@ -5,8 +5,6 @@ from typing import Final
 import fakeredis
 import pytest
 
-from tests.test_litellm_rust.support.s3_stub import S3Stub
-
 
 @pytest.fixture
 def redis_url() -> Generator[str]:
@@ -19,12 +17,3 @@ def redis_url() -> Generator[str]:
         server.shutdown()
         server.server_close()
         worker.join(timeout=5)
-
-
-@pytest.fixture
-def s3_stub() -> Generator[S3Stub]:
-    stub: Final = S3Stub()
-    try:
-        yield stub
-    finally:
-        stub.close()

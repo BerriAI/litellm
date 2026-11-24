@@ -16,6 +16,8 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
+from pydantic import ConfigDict, TypeAdapter
+
 from litellm.harness.errors import HarnessError, OptionsMismatch
 from litellm.harness.options import ClaudeCodeOptions
 from litellm.harness.types import (
@@ -28,6 +30,7 @@ from litellm.harness.types import (
     ToolCall,
     ToolResult,
 )
+from litellm.litellm_core_utils.core_helpers import as_object_list, iter_items
 from litellm.llms.base_llm.harness.transformation import (
     BaseCLIHarnessConfig,
     HarnessSessionSetup,
@@ -48,6 +51,7 @@ if TYPE_CHECKING:
 
 CLAUDE_BINARY: Final = "claude"
 SYNTHETIC_MODEL: Final = "<synthetic>"
+_BLOCK: Final = TypeAdapter(Mapping[object, object], config=ConfigDict(hide_input_in_errors=True))
 
 BASE_COMMAND: Final = ("-p", "--output-format", "stream-json", "--verbose", "--input-format", "text")
 
@@ -144,8 +148,9 @@ def stringify_tool_output(content: object) -> str:
         return ""
     if isinstance(content, str):
         return content
-    if isinstance(content, list):
-        return "\n".join(_stringify_block(block) for block in content)
+    listed: Final = as_object_list(content)
+    if listed is not None:
+        return "\n".join(_stringify_block(block) for block in listed)
     return json.dumps(content, ensure_ascii=False)
 
 
@@ -157,12 +162,17 @@ def _stringify_block(block: object) -> str:
     return json.dumps(block, ensure_ascii=False)
 
 
-def _message_blocks(event: Mapping[str, object]) -> Sequence[Any]:
+def _message_blocks(event: Mapping[str, object]) -> Sequence[object]:
     message: Final = event.get("message")
     content: Final = message.get("content") if isinstance(message, Mapping) else None
     if isinstance(content, str):
         return ({"type": "text", "text": content},)  # mutable-ok: JSON content block, like the stream's
-    return content if isinstance(content, list) else ()
+    listed: Final = as_object_list(content)
+    return listed if listed is not None else ()
+
+
+def _str_field(block: Mapping[str, object], key: str) -> str:
+    return str(block.get(key, ""))
 
 
 def _assistant_block_events(block: Mapping[str, Any], state: ClaudeCodeStreamState) -> tuple[Event, ...]:
@@ -173,10 +183,10 @@ def _assistant_block_events(block: Mapping[str, Any], state: ClaudeCodeStreamSta
     if kind == "thinking" and block.get("thinking"):
         return (Reasoning(delta=block["thinking"]),)
     if kind == "tool_use":
-        native = str(block.get("name", ""))
+        native: Final = _str_field(block, "name")
         return (
             ToolCall(
-                id=str(block.get("id", "")),
+                id=_str_field(block, "id"),
                 name=normalize_tool_name(native, NATIVE_TO_NORMALIZED),
                 native_name=native,
                 input=block.get("input")
@@ -211,8 +221,7 @@ def _user_events(event: Mapping[str, object]) -> Sequence[Event]:
                 output=stringify_tool_output(block.get("content")),
                 is_error=bool(block.get("is_error", False)),
             )
-            for block in _message_blocks(event)
-            if _is_tool_result(block)
+            for block in map(_BLOCK.validate_python, filter(_is_tool_result, _message_blocks(event)))
         )
     )
 
@@ -229,12 +238,12 @@ def _system_events(event: Mapping[str, object], state: ClaudeCodeStreamState) ->
     return event_list()
 
 
-def _record_result(event: Mapping[str, Any], state: ClaudeCodeStreamState) -> Sequence[Event]:
+def _record_result(event: Mapping[str, object], state: ClaudeCodeStreamState) -> Sequence[Event]:
     state.result_seen = True
     state.is_error = bool(event.get("is_error", False))
     result = event.get("result")
     state.result_text = result if isinstance(result, str) else None
-    state.errors = [str(e) for e in event.get("errors") or ()]  # mutable-ok: mirrors the JSON errors array
+    state.errors = [str(e) for e in iter_items(event.get("errors") or ())]  # mutable-ok: mirrors the JSON errors array
     state.structured_output = event.get("structured_output")
     if event.get("session_id"):
         state.session_id = str(event["session_id"])
@@ -261,7 +270,7 @@ def build_system_prompt(instructions: str | None, output_schema: Mapping[str, ob
     return "\n\n".join(parts) if parts else None
 
 
-class ClaudeCodeHarnessConfig(BaseCLIHarnessConfig):
+class ClaudeCodeHarnessConfig(BaseCLIHarnessConfig[ClaudeCodeOptions, ClaudeCodeStreamState]):
     harness = Harness.CLAUDE_CODE
     options_type = ClaudeCodeOptions
     capabilities = Capabilities(
@@ -299,7 +308,7 @@ class ClaudeCodeHarnessConfig(BaseCLIHarnessConfig):
         options: ClaudeCodeOptions = self.get_options(ctx)
         model = ctx.model
         # Background calls (titles, summaries) use the same model group, like OpenCode.
-        model_env: Final = (
+        model_env: Final[Mapping[str, str]] = (
             MappingProxyType({"ANTHROPIC_MODEL": model, "ANTHROPIC_SMALL_FAST_MODEL": model})
             if model
             else MappingProxyType({})

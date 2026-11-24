@@ -177,11 +177,11 @@ test.describe("Proxy Admin - Teams", () => {
     // Restore the seeded models via API in case a prior run (or a CI retry)
     // left this team mutated — the assertion below requires fake-anthropic-claude
     // to be present.
-    const masterKey = process.env.LITELLM_MASTER_KEY || "sk-1234";
+    const key = masterKey();
     const seededModels = ["fake-openai-gpt-4", "fake-anthropic-claude"];
     const restore = async () => {
       const res = await request.post("/team/update", {
-        headers: { Authorization: `Bearer ${masterKey}` },
+        headers: { Authorization: `Bearer ${key}` },
         data: { team_id: E2E_TEAM_CRUD_ID, models: seededModels },
       });
       expect(res.ok(), `restore failed: ${res.status()} ${await res.text()}`).toBeTruthy();

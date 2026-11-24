@@ -161,7 +161,7 @@ async def _listed_ids(user_api_key_dict: UserAPIKeyAuth) -> list[str]:
     )
 
     with patch(  # test-quality-ok: the list route reads rows through this module-level DB helper, no injection seam
-        "litellm.proxy.vector_store_endpoints.management_endpoints.VectorStoreRegistry._get_vector_stores_from_db",
+        "litellm.proxy.vector_store_endpoints.management_endpoints.VectorStoreRegistry.get_vector_stores_from_db",
         new=AsyncMock(return_value=[_UNSCOPED, _TEAM_A_OWNED, _UI_CREATED]),
     ):
         response = await list_vector_stores(user_api_key_dict=user_api_key_dict)

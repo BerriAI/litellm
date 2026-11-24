@@ -7,15 +7,14 @@ All values are configurable via proxy config.yaml.
 
 import math
 import re
-import warnings
-from collections.abc import Iterable, Mapping
+import sys
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from types import MappingProxyType
-from typing import Annotated, Final, Literal, NamedTuple
+from typing import TYPE_CHECKING, Annotated, Final, Literal, NamedTuple
 
 from pydantic import (
-    BaseModel,
     ConfigDict,
     Field,
     SkipValidation,
@@ -26,8 +25,15 @@ from pydantic import (
     model_validator,
 )
 
-with warnings.catch_warnings():
-    warnings.simplefilter("ignore", DeprecationWarning)
+from litellm.types.llms.base import LiteLLMBaseModel
+
+if TYPE_CHECKING:
+    import sre_constants
+    import sre_parse
+elif sys.version_info >= (3, 11):
+    from re import _constants as sre_constants
+    from re import _parser as sre_parse
+else:
     import sre_constants
     import sre_parse
 
@@ -73,6 +79,15 @@ DEFAULT_CLASSIFICATION_RUBRIC: Final[ClassificationRubric] = ClassificationRubri
 LLM_CLASSIFIER_TYPES: Final[frozenset[str]] = frozenset({"llm", "capability", "llm_v2", "heuristic_first", "hybrid"})
 
 
+def configured_local_heuristic(config: Mapping[str, object]) -> Literal["heuristic", "heuristic_v2"] | None:
+    classifier_type: Final = config.get("classifier_type", "heuristic")
+    if classifier_type == "heuristic" or classifier_type == "heuristic_v2":
+        return classifier_type
+    if classifier_type in ("heuristic_first", "hybrid"):
+        return "heuristic_v2" if config.get("local_heuristic") == "heuristic_v2" else "heuristic"
+    return None
+
+
 TIER_SEVERITY_ORDER: Final[tuple[ComplexityTier, ...]] = (
     ComplexityTier.SIMPLE,
     ComplexityTier.MEDIUM,
@@ -96,7 +111,7 @@ DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE: Final[int] = 3
 DEFAULT_CLASSIFIER_CONTEXT_BUDGET_CHARS: Final[int] = 8000
 
 
-class KeywordTierRule(BaseModel):
+class KeywordTierRule(LiteLLMBaseModel):
     """A deterministic override: if any keyword matches, route to this tier."""
 
     keywords: list[str] = Field(
@@ -173,7 +188,7 @@ def normalize_classification_examples(value: str | None) -> str | None:
 _BUILT_IN_TIER_NAMES: Final[str] = ", ".join(ComplexityTier.__members__)
 
 
-class TierDefinition(BaseModel):
+class TierDefinition(LiteLLMBaseModel):
     """An operator-defined tier: the name the LLM classifier must return and its rubric description."""
 
     name: str = Field(
@@ -217,7 +232,7 @@ class TierDefinition(BaseModel):
         return self
 
 
-class ReminderMarkerPair(BaseModel):
+class ReminderMarkerPair(LiteLLMBaseModel):
     """One open/close delimiter pair a harness wraps injected context in.
 
     Normalizing here rather than at the scan is what makes matching case-insensitive: markers reach
@@ -241,7 +256,7 @@ class ReminderMarkerPair(BaseModel):
         return self
 
 
-class ComplexityTierModel(BaseModel):
+class ComplexityTierModel(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     model_name: str
@@ -259,11 +274,20 @@ class ComplexityTierModel(BaseModel):
         return dict(value)
 
 
+def _as_dict(value: object) -> Mapping[object, object] | None:
+    return value if isinstance(value, dict) else None
+
+
+def _as_list_or_tuple(value: object) -> Sequence[object] | None:
+    return value if isinstance(value, (list, tuple)) else None
+
+
 def _normalize_tier_entries(
     raw_value: object,
-    tier: str,
+    tier: object,
 ) -> tuple[str | list[str], tuple[ComplexityTierModel, ...]]:
-    raw_entries: Final = raw_value if isinstance(raw_value, (list, tuple)) else (raw_value,)
+    sequence: Final = _as_list_or_tuple(raw_value)
+    raw_entries: Final = sequence if sequence is not None else (raw_value,)
     entries: Final = tuple(
         ComplexityTierModel(model_name=entry) if isinstance(entry, str) else ComplexityTierModel.model_validate(entry)
         for entry in raw_entries
@@ -271,7 +295,7 @@ def _normalize_tier_entries(
     model_names: Final = tuple(entry.model_name for entry in entries)
     if len(model_names) != len(frozenset(model_names)):
         raise ValueError(f"tier {tier} contains duplicate model_name values; each pool entry needs distinct parameters")
-    normalized: Final = entries[0].model_name if not isinstance(raw_value, (list, tuple)) else list(model_names)
+    normalized: Final = entries[0].model_name if sequence is None else list(model_names)
     return normalized, entries
 
 
@@ -399,9 +423,14 @@ PLAN_MODE_SYSTEM_SENTINELS: Final[tuple[str, ...]] = ('You are currently running
 # never a paraphrase: a sentinel that matches nothing costs a substring scan per request and reads
 # as coverage the router does not have. These are client-owned strings that drift with client
 # releases, so operators extend coverage via housekeeping_patterns rather than editing these.
+# The agent progress summary and the next-prompt suggestion were captured from Claude Code 2.1.316
+# on 2026-11-09 (#50444). Both ride the conversation they describe, so only the sentinel tells them
+# apart when the client does not send the x-claude-code-request-class hint.
 HOUSEKEEPING_ASK_SENTINELS: Final[tuple[str, ...]] = (
     "Write the title in the predominant language of the session",
     "You are coming up with a succinct title for a coding session",
+    "Describe your most recent action in 3-5 words using present tense",
+    "[SUGGESTION MODE: Suggest what the user might naturally type next into Claude Code.]",
 )
 PLAN_MODE_TOOL_NAME: Final[str] = "exit_plan_mode"
 
@@ -477,7 +506,7 @@ DEFAULT_TIER_MODELS: Final[dict[str, str]] = {
 }
 
 
-class ClassifierVisionConfig(BaseModel):
+class ClassifierVisionConfig(LiteLLMBaseModel):
     """Whether the LLM classifier sees the images on the request it is classifying.
 
     Off by default because images cost far more than the text ask they arrive with, and the
@@ -508,7 +537,7 @@ class ClassifierVisionConfig(BaseModel):
     )
 
 
-class ClassifierLLMConfig(BaseModel):
+class ClassifierLLMConfig(LiteLLMBaseModel):
     """Configuration for the LLM-based complexity classifier."""
 
     model: str = Field(
@@ -528,6 +557,15 @@ class ClassifierLLMConfig(BaseModel):
     timeout_ms: int = Field(
         default=3000,
         description="Timeout budget for the classification call, in milliseconds",
+    )
+    max_output_tokens: int | None = Field(
+        default=None,
+        ge=1,
+        description=(
+            "Optional output token limit for LLM classifier calls. Leave unset to keep the classifier "
+            "deployment or provider default. When set, overrides the deployment limit. "
+            "Leave room for reasoning tokens when reasoning_effort is set."
+        ),
     )
     circuit_breaker_enabled: bool = Field(
         default=True,
@@ -604,7 +642,7 @@ class ClassifierLLMConfig(BaseModel):
         return self
 
 
-class CapabilityCalibrationConfig(BaseModel):
+class CapabilityCalibrationConfig(LiteLLMBaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     version: str = Field(min_length=1, max_length=128, pattern=r"^\S(?:.*\S)?$")
@@ -617,7 +655,7 @@ class CapabilityCalibrationConfig(BaseModel):
         return 1.0 / (1.0 + math.exp(-log_odds))
 
 
-class CapabilityClassifierConfig(BaseModel):
+class CapabilityClassifierConfig(LiteLLMBaseModel):
     """Switchyard-compatible probability threshold policy for two model tiers."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -695,10 +733,19 @@ def normalize_classifier_config_aliases(config: Mapping[str, object]) -> Mapping
     return normalized
 
 
-class OpenSourceClassifierConfig(BaseModel):
+_ENVIRONMENT_KEY_SCOPE: Final = MappingProxyType(
+    {
+        "jev": "TYPESAFE_API_KEY is only sent to TYPESAFE_API_BASE or https://api.typesafe.ai",
+        "databricks": "DATABRICKS_API_KEY or DATABRICKS_TOKEN is only sent to DATABRICKS_API_BASE",
+    }
+)
+
+
+class OpenSourceClassifierConfig(LiteLLMBaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    provider: Literal["jev", "laya", "bespoke"] = "jev"
+    deployment_name: str | None = Field(default=None, min_length=1)
+    provider: Literal["jev", "laya", "bespoke", "databricks"] = "jev"
     model: str = "jev-latest"
     api_key: str | None = Field(default=None, description="Provider API key; optional for self-hosted providers")
     api_base: str | None = Field(
@@ -736,6 +783,12 @@ class OpenSourceClassifierConfig(BaseModel):
 
     @model_validator(mode="after")
     def _keep_the_environment_key_on_the_environment_base(self) -> "OpenSourceClassifierConfig":
+        if self.deployment_name is not None:
+            if not self.deployment_name.strip():
+                raise ValueError("deployment_name must name a configured decision model")
+            if self.api_key is not None or self.api_base is not None:
+                raise ValueError("deployment_name uses the deployment connection; omit api_key and api_base")
+            return self
         if self.provider in ("laya", "bespoke"):
             from litellm.llms.oss_decision import validate_oss_api_base, validate_oss_model
 
@@ -743,10 +796,22 @@ class OpenSourceClassifierConfig(BaseModel):
             if self.api_base is not None:
                 _ = validate_oss_api_base(self.provider, self.api_base)
             return self
+        if self.provider == "databricks":
+            from litellm.llms.databricks.decisions.transformation import (
+                DATABRICKS_AI_DECIDE_MODEL,
+                validate_databricks_decisions_model,
+            )
+
+            if "model" not in self.model_fields_set:
+                raise ValueError(
+                    "opensource_classifier_config.model is required for provider 'databricks': "
+                    f"{DATABRICKS_AI_DECIDE_MODEL!r} or a serving endpoint name, e.g. databricks-openjev-qwen35-4b"
+                )
+            _ = validate_databricks_decisions_model(self.model)
         if self.api_base is not None and self.api_key is None:
             raise ValueError(
-                "opensource_classifier_config.api_base requires opensource_classifier_config.api_key: TYPESAFE_API_KEY is only sent "
-                "to TYPESAFE_API_BASE or https://api.typesafe.ai"
+                "opensource_classifier_config.api_base requires opensource_classifier_config.api_key: "
+                f"{_ENVIRONMENT_KEY_SCOPE[self.provider]}"
             )
         return self
 
@@ -806,7 +871,10 @@ def _resolve_normalized_complexity_router_config_write(
         {
             key: value
             for key, value in existing.items()
-            if same_provider and key in ("api_key", "api_base") and (key != "api_key" or same_base)
+            if same_provider
+            and not classifier.get("deployment_name")
+            and key in ("api_key", "api_base")
+            and (key != "api_key" or same_base)
         }
     )
     return ComplexityRouterConfigWrite(
@@ -904,7 +972,7 @@ def custom_pattern_work(pattern: str) -> int | str:
     return cost if isinstance(cost, str) else cost.steps
 
 
-class CustomDimension(BaseModel):
+class CustomDimension(LiteLLMBaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     name: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z][A-Za-z0-9_]*$")
@@ -940,7 +1008,7 @@ class CustomDimension(BaseModel):
         )
 
 
-class ContextCompactionConfig(BaseModel):
+class ContextCompactionConfig(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     model: str | None = Field(default=None, min_length=1)
@@ -949,7 +1017,7 @@ class ContextCompactionConfig(BaseModel):
     timeout_seconds: float = Field(default=120, gt=0)
 
 
-class ComplexityRouterConfig(BaseModel):
+class ComplexityRouterConfig(LiteLLMBaseModel):
     """Configuration for the ComplexityRouter."""
 
     @model_validator(mode="before")
@@ -1159,10 +1227,17 @@ class ComplexityRouterConfig(BaseModel):
         default=None,
         description="Experimental joint task-demand and solver-capability forecasting for classifier_type llm_v2.",
     )
+    local_heuristic: Literal["heuristic", "heuristic_v2"] | None = Field(
+        default=None,
+        description=(
+            "Local scorer for heuristic_first or hybrid. Omitted or null keeps heuristic v1; "
+            "heuristic_v2 uses the trained success predictor. Rejected for other classifier types."
+        ),
+    )
     heuristic_v2_artifact: TrainedTierArtifact | Literal["ultrafeedback"] = Field(
         default="ultrafeedback",
         description=(
-            "Success-probability artifact used by classifier_type 'heuristic_v2'. The bundled "
+            "Success-probability artifact used by standalone or chained heuristic_v2. The bundled "
             "UltraFeedback artifact is selected by default; an inline trained artifact may replace it"
         ),
     )
@@ -1172,10 +1247,11 @@ class ComplexityRouterConfig(BaseModel):
         ge=0.0,
         le=1.0,
         description=(
-            "Minimum predicted success probability for classifier_type 'heuristic_v2' to select a tier. "
-            "The first tier meeting this threshold is selected, or REASONING if none meets it. "
+            "Minimum predicted success probability for standalone or chained heuristic_v2 to select a tier. "
+            "The first tier meeting this threshold is selected. When none meets it, standalone heuristic_v2 "
+            "selects REASONING and chained heuristic_v2 defers to the LLM judge. "
             "When omitted or null, uses the artifact's routing_threshold (0.75 for the bundled artifact). "
-            "Other classifier types ignore this setting"
+            "Ignored when heuristic_v2 is not selected"
         ),
     )
     classifier_llm_config: ClassifierLLMConfig | None = Field(
@@ -1202,9 +1278,19 @@ class ComplexityRouterConfig(BaseModel):
             "one skips the LLM classifier and routes straight to that heuristic tier, so the classifier "
             "call is only paid for on traffic the scorer could not place cheaply. The scorer must also "
             "have produced at least one signal: a prompt where no dimension fired scores 0.0 and would "
-            "otherwise land SIMPLE by default rather than by evidence, which is how a chained router "
-            "would silently send unclassified traffic to the cheapest model. Names a built-in tier, and "
+            "otherwise land SIMPLE by default rather than by evidence. With local_heuristic 'heuristic_v2', "
+            "the predicted tier must meet its success threshold. Names a built-in tier, and "
             "may not name the highest one, since that would make the LLM classifier unreachable."
+        ),
+    )
+    heuristic_first_max_context_tokens: int | None = Field(
+        default=None,
+        gt=0,
+        strict=True,
+        description=(
+            "Optional conversation-size limit for heuristic_first. Above this estimate, call the LLM classifier "
+            "even for a short current ask. Counts text and tool-result bodies at roughly four characters per token. "
+            "Unset preserves the local shortcut. Existing session and user-turn pins still take precedence."
         ),
     )
     hybrid_boundary_margin: float | None = Field(
@@ -1217,7 +1303,9 @@ class ComplexityRouterConfig(BaseModel):
             "this from every active boundary routes on the scorer's own tier with no classifier call, at any "
             "tier, which is what separates 'hybrid' from 'heuristic_first' and its cheap-tier ceiling. A "
             "prompt where no dimension fired still goes to the classifier, since the scorer has no opinion "
-            "to be near a boundary with. 0 escalates only scores sitting exactly on a boundary."
+            "to be near a boundary with. With local_heuristic 'heuristic_v2', a tier must meet its success "
+            "threshold and its probability and all lower-tier probabilities must be further than this margin "
+            "from that threshold. 0 escalates only scores or probabilities exactly on a boundary."
         ),
     )
     classifier_plugin: ClassifierPlugin | None = Field(
@@ -1407,7 +1495,7 @@ class ComplexityRouterConfig(BaseModel):
             "wording the built-ins don't cover, or after a client release changes its strings."
         ),
     )
-    max_tokens_from_tier_model: bool = Field(
+    max_tokens_from_tier_model: bool | Literal["clamp"] = Field(
         default=True,
         description=(
             "Set max_tokens on every routed request to the output ceiling of the tier model it "
@@ -1418,7 +1506,8 @@ class ComplexityRouterConfig(BaseModel):
             "from each deployment's model_info and then the model cost map; a tier model with a "
             "deployment whose ceiling is unknown keeps the caller's value. A max_tokens, "
             "max_completion_tokens or max_output_tokens in the tier's own litellm_params still "
-            "wins. Set false to forward the caller's value unchanged."
+            'wins. Set "clamp" to keep a smaller positive caller value and cap a larger one at '
+            "the ceiling. Set false to forward the caller's value unchanged."
         ),
     )
     route_housekeeping_to_cheapest_tier: bool = Field(
@@ -1440,8 +1529,9 @@ class ComplexityRouterConfig(BaseModel):
         default=None,
         description=(
             "Additional case-sensitive literal sentinels that mark a request as client "
-            "housekeeping, on top of the built-in conversation-title ones. For clients whose "
-            "wording the built-ins don't cover, or after a client release changes its strings."
+            "housekeeping, on top of the built-in conversation-title, agent-summary and "
+            "prompt-suggestion ones. For clients whose wording the built-ins don't cover, or "
+            "after a client release changes its strings."
         ),
     )
 
@@ -1595,6 +1685,29 @@ class ComplexityRouterConfig(BaseModel):
             "idle time for the session's routing decisions rather than total session length"
         ),
     )
+    conversation_header: str | None = Field(
+        default=None,
+        description=(
+            "Request header whose value names the application conversation for session_affinity, "
+            "deployment_affinity and user_turn pin reuse, instead of the request's session_id. The name "
+            "matches case-insensitively and the value is used as-is, so short and case-sensitive ids work. "
+            "A request without a usable value (header missing, empty, or a redacted credential header, and "
+            "any SDK call without proxy request headers) gets no conversation-based reuse from this router and "
+            "never falls back to its session_id. A separately enabled Router-level session_affinity pre-call "
+            "check keeps its own session_id behavior. Spend logs and traces keep the request's own session_id. "
+            "Unset keeps the session_id behavior"
+        ),
+    )
+
+    @field_validator("conversation_header")
+    @classmethod
+    def _normalize_conversation_header(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        name: Final = value.strip().lower()
+        if not name:
+            raise ValueError("conversation_header must be a non-empty header name")
+        return name
 
     plugins: list[RoutingPlugin] | None = Field(
         default=None,
@@ -1619,14 +1732,16 @@ class ComplexityRouterConfig(BaseModel):
     @field_validator("tiers", mode="before")
     @classmethod
     def _coerce_tier_values(cls, value: object) -> object:
-        if not isinstance(value, dict):
+        mapping: Final = _as_dict(value)
+        if mapping is None:
             return value
-        coerced: Final[dict[str, object]] = {}
-        for key, item in value.items():
+        coerced: Final[dict[object, object]] = {}
+        for key, item in mapping.items():
+            sequence = _as_list_or_tuple(item)
             if isinstance(item, str):
                 coerced[key] = item
-            elif isinstance(item, (list, tuple)):
-                coerced[key] = list(item)
+            elif sequence is not None:
+                coerced[key] = list(sequence)
             else:
                 coerced[key] = item
         return coerced
@@ -1634,12 +1749,13 @@ class ComplexityRouterConfig(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _normalize_tier_model_configs(cls, value: object) -> object:
-        if not isinstance(value, dict):
+        mapping: Final = _as_dict(value)
+        if mapping is None:
             return value
-        raw_tiers: Final = value.get("tiers")
-        if not isinstance(raw_tiers, dict):
+        raw_tiers: Final = _as_dict(mapping.get("tiers"))
+        if raw_tiers is None:
             return value
-        existing_configs: Final = value.get("tier_model_configs")
+        existing_configs: Final = mapping.get("tier_model_configs")
         normalized_entries: Final = MappingProxyType(
             {tier: _normalize_tier_entries(raw_value, tier) for tier, raw_value in raw_tiers.items()}
         )
@@ -1675,7 +1791,7 @@ class ComplexityRouterConfig(BaseModel):
             }
         )
         return {
-            **value,
+            **mapping,
             "tiers": normalized_tiers,
             "tier_model_configs": tier_model_configs,
         }
@@ -1855,11 +1971,24 @@ class ComplexityRouterConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def _validate_local_heuristic(self) -> "ComplexityRouterConfig":
+        if self.local_heuristic is not None and self.classifier_type not in ("heuristic_first", "hybrid"):
+            raise ValueError("local_heuristic requires classifier_type heuristic_first or hybrid")
+        return self
+
+    @model_validator(mode="after")
     def _validate_custom_dimensions(self) -> "ComplexityRouterConfig":
         if not self.custom_dimensions:
             return self
-        if self.classifier_type not in ("heuristic", "heuristic_first", "hybrid"):
-            raise ValueError("custom_dimensions requires classifier_type heuristic, heuristic_first or hybrid")
+        if (
+            configured_local_heuristic(
+                {"classifier_type": self.classifier_type, "local_heuristic": self.local_heuristic}
+            )
+            != "heuristic"
+        ):
+            raise ValueError(
+                "custom_dimensions requires classifier_type heuristic, heuristic_first or hybrid using heuristic v1"
+            )
         names: Final = tuple(dimension.name.casefold() for dimension in self.custom_dimensions)
         reserved: Final = frozenset(name.casefold() for name in DEFAULT_DIMENSION_WEIGHTS)
         weighted: Final = frozenset(name.casefold() for name in self.dimension_weights)
@@ -1873,6 +2002,12 @@ class ComplexityRouterConfig(BaseModel):
                 f"custom_dimensions regex work estimate is {work}; the limit across the router is "
                 f"{MAX_CUSTOM_DIMENSIONS_WORK}"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_heuristic_first_context_limit(self) -> "ComplexityRouterConfig":
+        if self.heuristic_first_max_context_tokens is not None and self.classifier_type != "heuristic_first":
+            raise ValueError("heuristic_first_max_context_tokens requires classifier_type 'heuristic_first'")
         return self
 
     @field_validator("heuristic_first_max_tier", mode="before")
@@ -1955,10 +2090,26 @@ class ComplexityRouterConfig(BaseModel):
     def _normalize_classification_examples_field(cls, value: str | None) -> str | None:
         return normalize_classification_examples(value)
 
+    def resolve_default_model(self, default_model: str | None = None) -> str | None:
+        if default_model is not None:
+            return default_model
+        if self.default_model is not None:
+            return self.default_model
+        derived: Final = (
+            (self.tiers.get(self.fallback_tier) if self.fallback_tier is not None else None)
+            or self.tiers.get("MEDIUM")
+            or self.tiers.get("SIMPLE")
+        )
+        if isinstance(derived, list):
+            return derived[0] if derived else None
+        return derived
+
     @property
     def has_custom_tiers(self) -> bool:
-        """True when the operator replaced the built-in tier set via tier_definitions."""
-        return self.tier_definitions is not None
+        """Whether routing uses names outside the built-in complexity ladder."""
+        return self.tier_definitions is not None or (
+            self.classifier_type == "custom" and any(name not in ComplexityTier.__members__ for name in self.tiers)
+        )
 
     @property
     def uses_llm_classifier(self) -> bool:
@@ -1976,6 +2127,8 @@ class ComplexityRouterConfig(BaseModel):
         """The active tier names: the defined names, or the built-in set in severity order."""
         if self.tier_definitions is not None:
             return tuple(definition.name for definition in self.tier_definitions)
+        if self.has_custom_tiers:
+            return tuple(self.tiers)
         return tuple(tier.value for tier in self.active_tier_severity_order())
 
     def classifier_wire_labels(self) -> tuple[str, ...]:
@@ -1986,7 +2139,7 @@ class ComplexityRouterConfig(BaseModel):
 
     def resolve_classified_tier(self, label: str) -> ComplexityTier | str | None:
         """Resolve a classifier reply to the active tier it names, or None when it names none."""
-        if self.tier_definitions is None:
+        if not self.has_custom_tiers:
             return self.tier_for_label(label)
         folded: Final = label.strip().casefold()
         return next((name for name in self.tier_names() if name.casefold() == folded), None)
@@ -2055,7 +2208,7 @@ class ComplexityRouterConfig(BaseModel):
                     "set replaces",
                 ),
                 (
-                    self.classifier_fallback == "default_model",
+                    self.classifier_fallback == "default_model" and self.classifier_type != "custom",
                     "classifier_fallback 'default_model' cannot be combined with tier_definitions: fallback_tier "
                     "is where a custom-tier router routes when the classifier fails",
                 ),
@@ -2100,17 +2253,19 @@ class ComplexityRouterConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_tier_definitions(self) -> "ComplexityRouterConfig":
-        if self.tier_definitions is None:
+        if self.tier_definitions is None and not self.has_custom_tiers:
             if self.fallback_tier is not None:
                 raise ValueError("fallback_tier requires tier_definitions")
             for message in self._built_in_opening_conflicts():
                 raise ValueError(message)
             return self
-        names: Final = tuple(definition.name for definition in self.tier_definitions)
-        if not 2 <= len(names) <= MAX_TIER_DEFINITIONS:
+        names: Final = self.tier_names()
+        if self.tier_definitions is not None and not 2 <= len(names) <= MAX_TIER_DEFINITIONS:
             raise ValueError(
                 f"tier_definitions must define between 2 and {MAX_TIER_DEFINITIONS} tiers, got {len(names)}"
             )
+        if any(not name.strip() or name != name.strip() or "\n" in name or "\r" in name for name in names):
+            raise ValueError("tier names must be non-empty and contain no surrounding whitespace or newlines")
         folded: Final = tuple(name.casefold() for name in names)
         duplicated: Final = tuple(
             sorted(frozenset(name for name, fold in zip(names, folded) if folded.count(fold) > 1))
@@ -2138,9 +2293,11 @@ class ComplexityRouterConfig(BaseModel):
                 f"tiers must map every defined tier to at least one model; empty: {', '.join(empty_pools)}"
             )
         if self.fallback_tier is None:
+            if self.classifier_type == "custom" and self.classifier_fallback == "default_model":
+                return self
             raise ValueError(
                 "fallback_tier is required with tier_definitions: it is where requests route when the "
-                "LLM classifier fails"
+                "LLM classifier fails. Custom classifiers can instead use classifier_fallback='default_model'"
             )
         if self.fallback_tier not in defined:
             raise ValueError(

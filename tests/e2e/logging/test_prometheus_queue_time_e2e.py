@@ -6,12 +6,13 @@ import pytest
 from prometheus_client.parser import text_string_to_metric_families
 
 from e2e_config import unique_marker
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from logging_client import LoggingClient
 
 pytestmark = pytest.mark.e2e
 
-DRIVER_MODEL = "gemini-2.5-flash"
+DRIVER_MODEL = "gemini-3.8-flash"
 QUEUE_TIME_METRIC = "litellm_request_queue_time_seconds"
 ALIAS_LABEL = "api_key_alias"
 
@@ -30,6 +31,15 @@ def _observation_count(exposition: str, alias: str) -> float | None:
 
 class TestPrometheusRequestQueueTime:
     @pytest.mark.covers("logging.prometheus.success.records_queue_time")
+    @meta(
+        Subject(
+            domain=Domain.OBSERVABILITY,
+            route=Route.METRICS,
+            providers=(Provider.GEMINI,),
+            models=(DRIVER_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_queue_time_histogram_records_an_observation(
         self, client: LoggingClient, resources: ResourceManager
     ) -> None:

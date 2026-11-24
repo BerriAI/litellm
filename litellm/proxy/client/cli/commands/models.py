@@ -1,20 +1,35 @@
 # stdlib imports
 import re
 from collections import defaultdict
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Final, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol
 
 # third party imports
 import click
 import rich
 import yaml
+from pydantic import TypeAdapter
 from typing_extensions import NotRequired, ReadOnly, TypedDict
+
+from litellm.litellm_core_utils.core_helpers import (
+    SupportsGet,
+    as_object_list,
+    float_of,
+    iter_items,
+    json_contains,
+    require_attributes,
+    require_get,
+    subscript,
+)
 
 # local imports
 from ... import Client
 from ._cli_context import cli_context_values
+from .auth import joined_names
+
+_DECODED_YAML: Final = TypeAdapter(object)
 
 if TYPE_CHECKING:
     from rich.console import JustifyMethod
@@ -26,48 +41,57 @@ class _ModelInfoColumnConfig(TypedDict):
     header: ReadOnly[str]
     style: ReadOnly[str]
     justify: NotRequired[ReadOnly["JustifyMethod"]]
-    get_value: ReadOnly[Callable[..., str]]
+    get_value: ReadOnly[Callable[[SupportsGet], str]]
 
 
 @dataclass
 class ModelYamlInfo:
     model_name: str
-    model_params: dict[str, object]
-    model_info: dict[str, object]
+    model_params: Mapping[str, object]
+    model_info: Mapping[str, object]
     model_id: str
-    access_groups: list[str]
+    access_groups: object
     provider: str
 
     @property
     def access_groups_str(self) -> str:
-        return ", ".join(self.access_groups) if self.access_groups else ""
+        return joined_names(self.access_groups) if self.access_groups else ""
 
 
-def _get_model_info_obj_from_yaml(model: dict[str, Any]) -> ModelYamlInfo:
+def _get_model_info_obj_from_yaml(model: dict[str, Any], model_id: str) -> ModelYamlInfo:
     """Extract model info from a model dict and return as ModelYamlInfo dataclass."""
     model_name: Final[str] = model["model_name"]
-    model_params: Final[dict[str, Any]] = model["litellm_params"]
-    model_info: Final[dict[str, Any]] = model.get("model_info", {})
-    model_id: Final[str] = model_params["model"]
-    access_groups: Final = model_info.get("access_groups", [])
+    model_params: Final = _DECODED_YAML.validate_python(model["litellm_params"])
+    model_info: Final = _DECODED_YAML.validate_python(model.get("model_info", {}))
+    access_groups: Final = require_get(model_info).get("access_groups", [])
     provider: Final = model_id.split("/", 1)[0] if "/" in model_id else model_id
     return ModelYamlInfo(
         model_name=model_name,
-        model_params=model_params,
-        model_info=model_info,
+        model_params=model_params,  # pyright: ignore[reportArgumentType]  # main kept the raw YAML value
+        model_info=model_info,  # pyright: ignore[reportArgumentType]  # main kept the raw YAML value
         model_id=model_id,
         access_groups=access_groups,
         provider=provider,
     )
 
 
-def format_iso_datetime_str(iso_datetime_str: str | None) -> str:
+def _str_field(model: SupportsGet, key: str, default: str) -> str:
+    return str(model.get(key, default))
+
+
+class _IsoDatetimeText(Protocol):
+    def replace(self, old: str, new: str, /) -> str: ...
+
+
+def format_iso_datetime_str(iso_datetime_str: object) -> str:
     """Format an ISO format datetime string to human-readable date with minute resolution."""
     if not iso_datetime_str:
         return ""
     try:
         # Parse ISO format datetime string
-        dt: Final = datetime.fromisoformat(iso_datetime_str.replace("Z", "+00:00"))
+        dt: Final = datetime.fromisoformat(
+            require_attributes(iso_datetime_str, _IsoDatetimeText, "replace").replace("Z", "+00:00")
+        )
         return dt.strftime("%Y-%m-%d %H:%M")
     except (TypeError, ValueError):
         return str(iso_datetime_str)
@@ -84,13 +108,13 @@ def format_timestamp(timestamp: int | None) -> str:
         return str(timestamp)
 
 
-def format_cost_per_1k_tokens(cost: float | None) -> str:
+def format_cost_per_1k_tokens(cost: object) -> str:
     """Format a per-token cost to cost per 1000 tokens."""
     if cost is None:
         return ""
     try:
         # Convert string to float if needed
-        cost_float: Final = float(cost)
+        cost_float: Final = float_of(cost)
         # Multiply by 1000 and format to 4 decimal places
         return f"${cost_float * 1000:.4f}"
     except (TypeError, ValueError):
@@ -121,7 +145,7 @@ def list_models(ctx: click.Context, output_format: Literal["table", "json"]) -> 
     """List all available models"""
     client: Final = create_client(ctx)
     models_list: Final = client.models.list()
-    assert isinstance(models_list, list)
+    assert as_object_list(models_list) is not None
 
     if output_format == "json":
         rich.print_json(data=models_list)
@@ -135,17 +159,18 @@ def list_models(ctx: click.Context, output_format: Literal["table", "json"]) -> 
         table.add_column("Owned By", style="yellow")
 
         # Add rows
-        for model in models_list:
-            created = model.get("created")
+        for model in iter_items(models_list):
+            entry = require_get(model)
+            created = entry.get("created")
             # Convert string timestamp to integer if needed
             if isinstance(created, str) and created.isdigit():
                 created = int(created)
 
             table.add_row(
-                str(model.get("id", "")),
-                str(model.get("object", "model")),
+                _str_field(entry, "id", ""),
+                _str_field(entry, "object", "model"),
                 (format_timestamp(created) if isinstance(created, int) else format_iso_datetime_str(created)),
-                str(model.get("owned_by", "")),
+                _str_field(entry, "owned_by", ""),
             )
 
         rich.print(table)
@@ -224,7 +249,7 @@ def get_models_info(ctx: click.Context, output_format: Literal["table", "json"],
     """Get detailed information about all models"""
     client: Final = create_client(ctx)
     models_info: Final = client.models.info()
-    assert isinstance(models_info, list)
+    assert as_object_list(models_info) is not None
 
     if output_format == "json":
         rich.print_json(data=models_info)
@@ -241,39 +266,43 @@ def get_models_info(ctx: click.Context, output_format: Literal["table", "json"],
             "upstream_model": {
                 "header": "Upstream Model",
                 "style": "green",
-                "get_value": lambda m: str(m.get("litellm_params", {}).get("model", "")),
+                "get_value": lambda m: str(require_get(m.get("litellm_params", {})).get("model", "")),
             },
             "credential_name": {
                 "header": "Credential Name",
                 "style": "yellow",
-                "get_value": lambda m: str(m.get("litellm_params", {}).get("litellm_credential_name", "")),
+                "get_value": lambda m: str(require_get(m.get("litellm_params", {})).get("litellm_credential_name", "")),
             },
             "created_at": {
                 "header": "Created At",
                 "style": "magenta",
-                "get_value": lambda m: format_iso_datetime_str(m.get("model_info", {}).get("created_at")),
+                "get_value": lambda m: format_iso_datetime_str(require_get(m.get("model_info", {})).get("created_at")),
             },
             "updated_at": {
                 "header": "Updated At",
                 "style": "magenta",
-                "get_value": lambda m: format_iso_datetime_str(m.get("model_info", {}).get("updated_at")),
+                "get_value": lambda m: format_iso_datetime_str(require_get(m.get("model_info", {})).get("updated_at")),
             },
             "id": {
                 "header": "ID",
                 "style": "blue",
-                "get_value": lambda m: str(m.get("model_info", {}).get("id", "")),
+                "get_value": lambda m: str(require_get(m.get("model_info", {})).get("id", "")),
             },
             "input_cost": {
                 "header": "Input Cost",
                 "style": "green",
                 "justify": "right",
-                "get_value": lambda m: format_cost_per_1k_tokens(m.get("model_info", {}).get("input_cost_per_token")),
+                "get_value": lambda m: format_cost_per_1k_tokens(
+                    require_get(m.get("model_info", {})).get("input_cost_per_token")
+                ),
             },
             "output_cost": {
                 "header": "Output Cost",
                 "style": "green",
                 "justify": "right",
-                "get_value": lambda m: format_cost_per_1k_tokens(m.get("model_info", {}).get("output_cost_per_token")),
+                "get_value": lambda m: format_cost_per_1k_tokens(
+                    require_get(m.get("model_info", {})).get("output_cost_per_token")
+                ),
             },
         }
 
@@ -291,11 +320,11 @@ def get_models_info(ctx: click.Context, output_format: Literal["table", "json"],
                 click.echo(f"Warning: Unknown column '{col_name}'", err=True)
 
         # Add rows with only the requested columns
-        for model in models_info:
-            row_values = []
+        for model in iter_items(models_info):
+            row_values = list[str]()
             for col_name in requested_columns:
                 if col_name in column_configs:
-                    row_values.append(column_configs[col_name]["get_value"](model))
+                    row_values.append(column_configs[col_name]["get_value"](require_get(model)))
             if row_values:
                 table.add_row(*row_values)
 
@@ -332,24 +361,28 @@ def update_model(ctx: click.Context, model_id: str, param: tuple[str, ...], info
     rich.print_json(data=result)
 
 
-def _filter_model(model, model_regex, access_group_regex):
+def _filter_model(
+    model: Mapping[str, object],
+    model_regex: re.Pattern[str] | None,
+    access_group_regex: re.Pattern[str] | None,
+) -> str | None:
     model_name: Final = model.get("model_name")
     model_params: Final = model.get("litellm_params")
     model_info: Final = model.get("model_info", {})
     if not model_name or not model_params:
-        return False
-    model_id: Final = model_params.get("model")
+        return None
+    model_id: Final = require_get(model_params).get("model")
     if not model_id or not isinstance(model_id, str):
-        return False
+        return None
     if model_regex and not model_regex.search(model_id):
-        return False
-    access_groups: Final = model_info.get("access_groups", [])
+        return None
+    access_groups: Final = as_object_list(require_get(model_info).get("access_groups", []))
     if access_group_regex:
-        if not isinstance(access_groups, list):
-            return False
+        if access_groups is None:
+            return None
         if not any(isinstance(group, str) and access_group_regex.search(group) for group in access_groups):
-            return False
-    return True
+            return None
+    return model_id
 
 
 def _print_models_table(added_models: list[ModelYamlInfo], table_title: str):
@@ -364,7 +397,7 @@ def _print_models_table(added_models: list[ModelYamlInfo], table_title: str):
     rich.print(table)
 
 
-def _print_summary_table(provider_counts):
+def _print_summary_table(provider_counts: Mapping[str, int]):
     summary_table: Final = rich.table.Table(title="Model Import Summary")
     summary_table.add_column("Provider", style="cyan")
     summary_table.add_column("Count", style="green")
@@ -378,23 +411,31 @@ def _print_summary_table(provider_counts):
     rich.print(summary_table)
 
 
-def get_model_list_from_yaml_file(yaml_file: str) -> list[dict[str, Any]]:
+def get_model_list_from_yaml_file(yaml_file: str) -> list[dict[str, object]]:
     """Load and validate the model list from a YAML file."""
     with open(yaml_file, "r") as f:
-        data: Final = yaml.safe_load(f)
-    if not data or "model_list" not in data:
+        data: Final = _DECODED_YAML.validate_python(yaml.safe_load(f))
+    if not data or not json_contains(data, "model_list"):
         raise click.ClickException("YAML file must contain a 'model_list' key with a list of models.")
-    model_list: Final = data["model_list"]
+    model_list: Final = subscript(data, "model_list")
     if not isinstance(model_list, list):
         raise click.ClickException("'model_list' must be a list of model definitions.")
     return model_list
 
 
-def _get_filtered_model_list(model_list, only_models_matching_regex, only_access_groups_matching_regex):
-    """Return a list of models that pass the filter criteria."""
+def _get_filtered_model_list(
+    model_list: list[dict[str, object]],
+    only_models_matching_regex: str | None,
+    only_access_groups_matching_regex: str | None,
+) -> list[tuple[dict[str, object], str]]:
+    """Return (model, model_id) pairs for the models that pass the filter criteria."""
     model_regex: Final = re.compile(only_models_matching_regex) if only_models_matching_regex else None
     access_group_regex = re.compile(only_access_groups_matching_regex) if only_access_groups_matching_regex else None
-    return [model for model in model_list if _filter_model(model, model_regex, access_group_regex)]
+    return [
+        (model, model_id)
+        for model in model_list
+        if (model_id := _filter_model(model, model_regex, access_group_regex)) is not None
+    ]
 
 
 def _import_models_get_table_title(dry_run: bool) -> str:
@@ -440,8 +481,8 @@ def import_models(
     if not dry_run:
         client: Final = create_client(ctx)
 
-    for model in filtered_model_list:
-        model_info_obj = _get_model_info_obj_from_yaml(model)
+    for model, model_id in filtered_model_list:
+        model_info_obj = _get_model_info_obj_from_yaml(model, model_id)
         if not dry_run:
             try:
                 client.models.new(

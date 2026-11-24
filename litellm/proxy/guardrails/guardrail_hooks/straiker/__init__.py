@@ -1,10 +1,12 @@
 from typing import TYPE_CHECKING, Final, Literal
 
-from pydantic import BaseModel, field_validator
+from pydantic import TypeAdapter, ValidationError, field_validator
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.types.guardrails import SupportedGuardrailIntegrations
+from litellm.types.llms.base import LiteLLMBaseModel
+from litellm.types.proxy.guardrails.guardrail_hooks.straiker import StraikerStreamMode
 
 from .straiker import StraikerGuardrail
 
@@ -12,7 +14,7 @@ if TYPE_CHECKING:
     from litellm.types.guardrails import Guardrail, LitellmParams
 
 
-class _V3Routing(BaseModel):
+class _V3Routing(LiteLLMBaseModel):
     api_version: Literal["v1", "v3"] | None = None
     agent_ref: str | None = None
     client: str | None = None
@@ -31,6 +33,9 @@ class _V3Routing(BaseModel):
         return None
 
 
+_STREAM_MODE: Final[TypeAdapter[StraikerStreamMode]] = TypeAdapter(StraikerStreamMode)
+_HOLD_TOOL_CALLS: Final[TypeAdapter[bool | None]] = TypeAdapter(bool | None)
+
 _OPTIONAL_INIT_FIELDS: Final = (
     "timeout",
     "max_retries",
@@ -43,6 +48,17 @@ _OPTIONAL_INIT_FIELDS: Final = (
     "metadata",
     "verbose",
 )
+
+
+def _hold_tool_calls(value: object) -> bool | None:
+    """An unreadable value keeps the hold. Raising here would start the proxy without this guardrail."""
+    try:
+        return _HOLD_TOOL_CALLS.validate_python(value)
+    except ValidationError:
+        verbose_proxy_logger.warning(
+            "Straiker guardrail: ignoring hold_tool_calls %r, expected true or false; tool calls are held", value
+        )
+        return None
 
 
 def _get_config_value(litellm_params: "LitellmParams", optional_params: object, attribute_name: str) -> object:
@@ -88,6 +104,10 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         agent_ref=routing.agent_ref,
         client=routing.client,
         format_hint=routing.format_hint,
+        stream_mode=_STREAM_MODE.validate_python(
+            _get_config_value(litellm_params, optional_params, "stream_mode") or "buffered"
+        ),
+        hold_tool_calls=_hold_tool_calls(_get_config_value(litellm_params, optional_params, "hold_tool_calls")),
         **kwargs,
     )
 

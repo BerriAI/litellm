@@ -16,6 +16,7 @@ construction time (see ``handler.py``) so all normalization is isolated here
 and ``RealTimeStreaming`` stays provider-agnostic.
 """
 
+from collections.abc import Mapping
 from typing import Final
 
 
@@ -58,7 +59,7 @@ class XAIRealtimeNormalizer:
         # Cache content-part objects keyed by (response_id, item_id, content_index)
         # so that ``response.content_part.done`` events missing ``part`` can be
         # back-filled from earlier ``content_part.added`` / delta-done events.
-        self._content_part_by_key: dict[tuple, dict[str, object]] = {}
+        self._content_part_by_key: dict[tuple[object, object, object], dict[str, object]] = {}
 
     # ---------------------------------------------------------------------------
     # Public interface consumed by RealTimeStreaming
@@ -77,7 +78,19 @@ class XAIRealtimeNormalizer:
         event = self._normalize_response_usage_event(event, event_type)
         return event
 
-    def patch_outgoing_session(self, session: dict) -> dict:
+    def gate_turn_detection(self, _turn_detection: object, /) -> Mapping[str, object]:
+        """xAI auto-answers under ``server_vad`` even with ``create_response`` off, so the gate is always untyped."""
+        return {"create_response": False}
+
+    @property
+    def deletes_conversation_items(self) -> bool:
+        """xAI answers ``conversation.item.delete`` with ``Item not found`` until it commits the audio item.
+
+        The guardrail blocks on an interim transcript, before that commit.
+        """
+        return False
+
+    def patch_outgoing_session(self, session: dict[str, object]) -> dict[str, object]:
         """Patch a client ``session.update`` payload before forwarding to xAI.
 
         Unlike OpenAI, xAI does not default ``turn_detection.create_response``
@@ -90,7 +103,7 @@ class XAIRealtimeNormalizer:
         return session
 
     @staticmethod
-    def _default_server_vad_create_response(session: dict) -> None:
+    def _default_server_vad_create_response(session: dict[str, object]) -> None:
         turn_detection: Final = session.get("turn_detection")
         if isinstance(turn_detection, dict):
             XAIRealtimeNormalizer._ensure_server_vad_create_response(turn_detection)
@@ -104,7 +117,7 @@ class XAIRealtimeNormalizer:
                     XAIRealtimeNormalizer._ensure_server_vad_create_response(nested_td)
 
     @staticmethod
-    def _ensure_server_vad_create_response(turn_detection: dict) -> None:
+    def _ensure_server_vad_create_response(turn_detection: dict[str, object]) -> None:
         if turn_detection.get("type") == "server_vad" and "create_response" not in turn_detection:
             turn_detection["create_response"] = True
 
@@ -113,19 +126,21 @@ class XAIRealtimeNormalizer:
     # ---------------------------------------------------------------------------
 
     @staticmethod
-    def _content_part_key(event: dict) -> tuple:
+    def _content_part_key(event: dict[str, object]) -> tuple[object, object, object]:
         return (
             event.get("response_id"),
             event.get("item_id"),
             event.get("content_index", 0),
         )
 
-    def _remember_content_part(self, event: dict) -> None:
+    def _remember_content_part(self, event: dict[str, object]) -> None:
         part: Final = event.get("part")
         if isinstance(part, dict):
             self._content_part_by_key[self._content_part_key(event)] = part
 
-    def _update_content_part_field(self, event: dict, *, part_type: str, field: str, value: object) -> None:
+    def _update_content_part_field(
+        self, event: dict[str, object], *, part_type: str, field: str, value: object
+    ) -> None:
         if value is None:
             return
         key: Final = self._content_part_key(event)
@@ -140,7 +155,7 @@ class XAIRealtimeNormalizer:
             }
         self._content_part_by_key[key] = updated
 
-    def _resolve_content_part(self, event: dict) -> dict[str, object]:
+    def _resolve_content_part(self, event: dict[str, object]) -> dict[str, object]:
         part: Final = event.get("part")
         if isinstance(part, dict):
             return part
@@ -149,7 +164,7 @@ class XAIRealtimeNormalizer:
             return cached
         return {"type": "audio", "transcript": ""}
 
-    def _normalize_content_part_events(self, event: dict) -> dict:
+    def _normalize_content_part_events(self, event: dict[str, object]) -> dict[str, object]:
         event_type: Final = event.get("type")
 
         if event_type == "response.content_part.added":
@@ -184,7 +199,7 @@ class XAIRealtimeNormalizer:
     # ---------------------------------------------------------------------------
 
     @staticmethod
-    def _normalize_conversation_item_added(event: dict, event_type: str) -> dict:
+    def _normalize_conversation_item_added(event: dict[str, object], event_type: object) -> dict[str, object]:
         """Map ``role: "tool"`` → ``role: "assistant"`` on function_call items.
 
         xAI uses ``role: "tool"`` which is not in the GA-allowed set
@@ -203,7 +218,7 @@ class XAIRealtimeNormalizer:
     # Pass 3: inject missing output_index / content_index
     # ---------------------------------------------------------------------------
 
-    def _inject_missing_indices(self, event: dict, event_type: str) -> dict:
+    def _inject_missing_indices(self, event: dict[str, object], event_type: object) -> dict[str, object]:
         """Inject ``output_index`` / ``content_index`` defaults when absent.
 
         xAI omits both fields on every streaming response event; pydantic GA
@@ -271,7 +286,7 @@ class XAIRealtimeNormalizer:
                 normalized[key] = {**default_details, **details}
         return normalized
 
-    def _normalize_response_usage_event(self, event: dict, event_type: str) -> dict:
+    def _normalize_response_usage_event(self, event: dict[str, object], event_type: object) -> dict[str, object]:
         if event_type not in ("response.created", "response.done"):
             return event
         response: Final = event.get("response")

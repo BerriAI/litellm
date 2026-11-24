@@ -77,7 +77,7 @@ def test_vercel_ai_gateway_get_openai_compatible_provider_info():
             "VERCEL_AI_GATEWAY_API_KEY": "env_api_key",
         },
     ):
-        api_base, api_key = config._get_openai_compatible_provider_info(None, None)
+        api_base, api_key = config.get_openai_compatible_provider_info(None, None)
         assert api_base == "https://env.vercel.sh/v1"
         assert api_key == "env_api_key"
 

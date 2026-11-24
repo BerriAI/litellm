@@ -1,5 +1,6 @@
 import asyncio
 import json
+import threading
 from datetime import datetime
 from unittest.mock import MagicMock, patch
 
@@ -19,7 +20,13 @@ async def test_mlflow_logging_functionality():
     mock_span = MagicMock()
     mock_span.parent_id = None  # Simulate root trace
     mock_span.request_id = "test_trace_id"
-    mock_client.start_trace.return_value = mock_span
+    trace_started = threading.Event()
+
+    def start_trace(*args: object, **kwargs: object) -> MagicMock:
+        trace_started.set()
+        return mock_span
+
+    mock_client.start_trace.side_effect = start_trace
 
     # Mock all MLflow-related imports to avoid requiring MLflow as a dependency
     mock_mlflow_tracking = MagicMock()
@@ -67,8 +74,7 @@ async def test_mlflow_logging_functionality():
             },
         )
 
-        # Allow time for async processing
-        await asyncio.sleep(1)
+        assert await asyncio.to_thread(trace_started.wait, 5)
 
         # Verify start_trace was called with tags parameter
         assert mock_client.start_trace.called, "start_trace should have been called"

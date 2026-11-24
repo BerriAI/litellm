@@ -77,6 +77,10 @@ class Route(str, Enum):
     METRICS = "metrics"
     PROXY_CONFIG = "proxy_config"
     ADMIN_UI = "admin_ui"
+    CONTAINERS = "containers"
+    COUNT_TOKENS = "count_tokens"
+    GOOGLE_GENAI = "google_genai"
+    TAG_MANAGEMENT = "tag_management"
 
 
 class Provider(str, Enum):
@@ -115,6 +119,9 @@ class Provider(str, Enum):
     ELEVENLABS = "elevenlabs"
     ASSEMBLYAI = "assemblyai"
     LITELLM_PROXY = "litellm_proxy"
+    BEDROCK_MANTLE = "bedrock_mantle"
+    AWS_POLLY = "aws_polly"
+    SAIL = "sail"
 
 
 class Capability(str, Enum):
@@ -132,6 +139,7 @@ class Capability(str, Enum):
     PROMPT_CACHING = "prompt_caching"
     RESPONSE_SCHEMA = "response_schema"
     MID_CONVERSATION_SYSTEM = "mid_conversation_system"
+    AUDIO_OUTPUT = "audio_output"
 
 
 class Mode(str, Enum):

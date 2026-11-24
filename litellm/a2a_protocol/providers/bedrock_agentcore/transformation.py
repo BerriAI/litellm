@@ -7,7 +7,7 @@ and signs requests via AmazonAgentCoreConfig (SigV4 or JWT).
 
 import json
 from collections.abc import AsyncIterator, Mapping
-from typing import Any, Final, Protocol
+from typing import Final, Protocol
 
 from litellm._logging import verbose_logger
 from litellm.a2a_protocol.litellm_completion_bridge.handler import (
@@ -19,6 +19,7 @@ from litellm.a2a_protocol.utils import (
 )
 from litellm.exceptions import BadRequestError
 from litellm.llms.bedrock.chat.agentcore.transformation import AmazonAgentCoreConfig
+from litellm.llms.custom_httpx.sse_lines import aiter_sse_lines
 
 RUNTIME_SESSION_ID_MIN_LENGTH: Final = 33
 RUNTIME_SESSION_ID_MAX_LENGTH: Final = 256
@@ -50,7 +51,7 @@ _RESERVED_PREFIX_HEADERS: Final[tuple[str, ...]] = (
 class _SSELineSource(Protocol):
     """Minimal streaming-response surface used to read SSE lines."""
 
-    def aiter_lines(self) -> AsyncIterator[str]: ...
+    def aiter_text(self) -> AsyncIterator[str]: ...
 
 
 def _filter_reserved_headers(
@@ -66,7 +67,7 @@ def _filter_reserved_headers(
         return None
 
     filtered: Final[dict[str, str]] = {}
-    dropped: Final[list] = []
+    dropped: Final[list[str]] = []
     for k, v in agent_extra_headers.items():
         k_lower = k.lower()
         if k_lower in _RESERVED_EXACT_HEADERS or any(k_lower.startswith(prefix) for prefix in _RESERVED_PREFIX_HEADERS):
@@ -84,14 +85,23 @@ def _filter_reserved_headers(
     return filtered or None
 
 
+def _calling_key_hash(litellm_params: Mapping[str, object]) -> str | None:
+    principal: Final = litellm_params.get(A2A_USER_API_KEY_HASH_PARAM)
+    if principal is None or isinstance(principal, str):
+        return principal
+    if not principal:
+        return None
+    raise AttributeError(f"{type(principal).__name__!r} object has no attribute 'encode'", name="encode", obj=principal)
+
+
 def _request_scoped_runtime_session_id(
     params: Mapping[str, object],
-    litellm_params: Mapping[str, Any],
+    litellm_params: Mapping[str, object],
 ) -> str | None:
     context_id: Final = get_session_id_from_a2a_params(params)
     if not isinstance(context_id, str) or not context_id:
         return None
-    return scope_session_to_principal(context_id, litellm_params.get(A2A_USER_API_KEY_HASH_PARAM))
+    return scope_session_to_principal(context_id, _calling_key_hash(litellm_params))
 
 
 def _validate_runtime_session_id(session_id: str, model: str) -> str:
@@ -109,6 +119,13 @@ def _validate_runtime_session_id(session_id: str, model: str) -> str:
     )
 
 
+def _agentcore_model_name(litellm_params: Mapping[str, object]) -> str:
+    model: Final = litellm_params.get("model", "")
+    if isinstance(model, str):
+        return model
+    raise AttributeError(f"{type(model).__name__!r} object has no attribute 'startswith'", name="startswith", obj=model)
+
+
 class BedrockAgentCoreA2ATransformation:
     """
     Request/response transformation for Bedrock AgentCore A2A agents.
@@ -121,10 +138,10 @@ class BedrockAgentCoreA2ATransformation:
     def get_url_and_signed_request(
         request_id: str,
         params: Mapping[str, object],
-        litellm_params: dict[str, Any],
+        litellm_params: dict[str, object],
         method: str = "message/send",
         stream: bool = False,
-        agent_extra_headers: dict[str, str] | None = None,
+        agent_extra_headers: Mapping[str, str] | None = None,
     ) -> tuple[str, dict, bytes]:
         """
         Build the AgentCore URL, construct a JSON-RPC envelope, and sign the request.
@@ -152,21 +169,24 @@ class BedrockAgentCoreA2ATransformation:
         """
         # Extract model and strip the "bedrock/" prefix
         # "bedrock/agentcore/arn:aws:..." → "agentcore/arn:aws:..."
-        model: Final = litellm_params.get("model", "")
-        if model.startswith("bedrock/"):
-            agentcore_model = model[len("bedrock/") :]
-        else:
-            agentcore_model = model
+        model: Final = _agentcore_model_name(litellm_params)
+        agentcore_model: Final = model.removeprefix("bedrock/")
 
         # Build optional_params from litellm_params (everything except model and custom_llm_provider)
         optional_params: Final = {k: v for k, v in litellm_params.items() if k not in ("model", "custom_llm_provider")}
+
+        configured_api_base: Final = optional_params.get("api_base")
+        configured_api_key: Final = optional_params.get("api_key")
+        signing_api_key: Final = (
+            configured_api_key if configured_api_key is None or isinstance(configured_api_key, str) else ""
+        )
 
         agentcore_config: Final = AmazonAgentCoreConfig()
 
         # Derive URL from ARN
         url: Final = agentcore_config.get_complete_url(
-            api_base=optional_params.get("api_base"),
-            api_key=optional_params.get("api_key"),
+            api_base=configured_api_base if isinstance(configured_api_base, str) else None,
+            api_key=signing_api_key,
             model=agentcore_model,
             optional_params=optional_params,
             litellm_params=litellm_params,
@@ -183,14 +203,14 @@ class BedrockAgentCoreA2ATransformation:
 
         # Set required AgentCore session headers (normally set by transform_request,
         # which we skip because it also builds {"prompt": "..."})
-        headers: Final[dict] = {}
+        headers: Final[dict[str, str]] = {}
         session_id: Final = _validate_runtime_session_id(
             _request_scoped_runtime_session_id(params, litellm_params)
-            or agentcore_config._get_runtime_session_id(optional_params),
+            or agentcore_config.get_runtime_session_id(optional_params),
             model=model,
         )
         headers["X-Amzn-Bedrock-AgentCore-Runtime-Session-Id"] = session_id
-        runtime_user_id: Final = agentcore_config._get_runtime_user_id(optional_params)
+        runtime_user_id: Final = agentcore_config.get_runtime_user_id(optional_params)
         if runtime_user_id:
             headers["X-Amzn-Bedrock-AgentCore-Runtime-User-Id"] = runtime_user_id
 
@@ -207,7 +227,7 @@ class BedrockAgentCoreA2ATransformation:
             optional_params=optional_params,
             request_data=json_rpc_body,
             api_base=url,
-            api_key=optional_params.get("api_key"),
+            api_key=signing_api_key,
             model=agentcore_model,
             stream=stream,
         )
@@ -219,7 +239,7 @@ class BedrockAgentCoreA2ATransformation:
         return url, signed_headers, signed_body
 
     @staticmethod
-    async def parse_sse_events(response: _SSELineSource) -> AsyncIterator[dict[str, Any]]:
+    async def parse_sse_events(response: _SSELineSource) -> AsyncIterator[dict[str, object]]:
         """
         Parse SSE events from an httpx streaming response.
 
@@ -231,7 +251,7 @@ class BedrockAgentCoreA2ATransformation:
         Yields:
             Parsed JSON dicts from SSE data lines
         """
-        async for line in response.aiter_lines():
+        async for line in aiter_sse_lines(response.aiter_text()):
             line = line.strip()
             if not line:
                 continue

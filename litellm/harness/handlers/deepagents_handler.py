@@ -11,10 +11,12 @@ from __future__ import annotations
 
 import asyncio
 import importlib
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType, ModuleType
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Final, Protocol
+
+from pydantic import TypeAdapter
 
 from litellm.harness.context import SessionContext
 from litellm.harness.errors import HarnessError, HarnessInstallFailed
@@ -22,6 +24,7 @@ from litellm.harness.handlers.base import BaseHarnessHandler
 from litellm.harness.handlers.cli_handler import copy_skills
 from litellm.harness.options import DeepAgentsOptions
 from litellm.harness.types import Approval, Event
+from litellm.litellm_core_utils.core_helpers import callable_of, require_attributes, subscript, unpackable_mapping
 from litellm.llms.deepagents.harness.transformation import (
     EXECUTE_TOOLS,
     INSTALL_HINT,
@@ -44,28 +47,55 @@ from litellm.llms.deepagents.harness.transformation import (
 
 if TYPE_CHECKING:
     from langchain_core.callbacks import BaseCallbackHandler
-    from langchain_core.language_models import BaseChatModel
     from langchain_core.runnables import RunnableConfig
-    from langgraph.checkpoint.base import BaseCheckpointSaver
     from langgraph.graph.state import CompiledStateGraph
-    from langgraph.types import Command
 
     from litellm.llms.base_llm.harness.transformation import BaseHarnessConfig
+    from litellm.llms.deepagents.harness.sandbox_backend import SandboxBackend, ToolFilterMiddleware, UsageCallback
 
 _MODEL_NODE = "model"
+
+
+class _SandboxBackendModule(Protocol):
+    SandboxBackend: type[SandboxBackend]
+    UsageCallback: type[UsageCallback]
+    ToolFilterMiddleware: type[ToolFilterMiddleware]
+
+
+class _SubagentsModule(Protocol):
+    GENERAL_PURPOSE_SUBAGENT: object
+
+
+class _MemoryModule(Protocol):
+    InMemorySaver: object
+
+
+class _ChatModule(Protocol):
+    ChatLiteLLM: object
+
+
+class _LangGraphTypesModule(Protocol):
+    Command: object
+
+
+class _MessagesModule(Protocol):
+    convert_to_openai_messages: object
+
+
+_OPENAI_MESSAGES: Final = TypeAdapter(list[dict[str, object]])
 
 
 @dataclass(frozen=True)
 class DeepAgentsDeps:
     """The optional-dependency entrypoints this handler uses."""
 
-    create_deep_agent: Any
-    chat_litellm: Any
-    checkpointer_cls: Any
-    command_cls: Any
-    subagent_defaults: Mapping[str, Any]
-    convert_to_openai_messages: Any
-    backend: ModuleType
+    create_deep_agent: Callable[..., CompiledStateGraph]
+    chat_litellm: object
+    checkpointer_cls: object
+    command_cls: object
+    subagent_defaults: object
+    convert_to_openai_messages: object
+    backend: _SandboxBackendModule
 
 
 def load_deps() -> DeepAgentsDeps:
@@ -77,42 +107,63 @@ def load_deps() -> DeepAgentsDeps:
         memory = importlib.import_module("langgraph.checkpoint.memory")
         lg_types = importlib.import_module("langgraph.types")
         messages = importlib.import_module("langchain_core.messages")
-        backend = importlib.import_module("litellm.llms.deepagents.harness.sandbox_backend")
+        from litellm.llms.deepagents.harness import sandbox_backend as backend
     except ImportError as e:
         raise HarnessInstallFailed(f"{INSTALL_HINT} ({e})") from e
     return DeepAgentsDeps(
         create_deep_agent=deepagents.create_deep_agent,
-        chat_litellm=chat.ChatLiteLLM,
-        checkpointer_cls=memory.InMemorySaver,
-        command_cls=lg_types.Command,
-        subagent_defaults=subagents.GENERAL_PURPOSE_SUBAGENT,
-        convert_to_openai_messages=messages.convert_to_openai_messages,
+        chat_litellm=_chat_litellm(chat),
+        checkpointer_cls=_in_memory_saver(memory),
+        command_cls=_command_cls(lg_types),
+        subagent_defaults=_general_purpose_subagent(subagents),
+        convert_to_openai_messages=_convert_to_openai_messages(messages),
         backend=backend,
     )
 
 
-_SHARED_CHECKPOINTER: dict[str, Any] = {}  # mutable-ok: process-wide lazy singleton slot for the in-memory checkpointer
+def _in_memory_saver(memory: ModuleType) -> object:
+    return require_attributes(memory, _MemoryModule, "InMemorySaver").InMemorySaver
 
 
-def shared_checkpointer(deps: DeepAgentsDeps) -> BaseCheckpointSaver:
+def _general_purpose_subagent(subagents: ModuleType) -> object:
+    return require_attributes(subagents, _SubagentsModule, "GENERAL_PURPOSE_SUBAGENT").GENERAL_PURPOSE_SUBAGENT
+
+
+def _chat_litellm(chat: ModuleType) -> object:
+    return require_attributes(chat, _ChatModule, "ChatLiteLLM").ChatLiteLLM
+
+
+def _command_cls(lg_types: ModuleType) -> object:
+    return require_attributes(lg_types, _LangGraphTypesModule, "Command").Command
+
+
+def _convert_to_openai_messages(messages: ModuleType) -> object:
+    return require_attributes(messages, _MessagesModule, "convert_to_openai_messages").convert_to_openai_messages
+
+
+_SHARED_CHECKPOINTER: dict[str, object] = {}  # mutable-ok: process-wide lazy singleton slot for the checkpointer
+
+
+def shared_checkpointer(deps: DeepAgentsDeps) -> object:
     """One in-memory checkpointer per process, so resume() works across sessions in-process."""
     saver = _SHARED_CHECKPOINTER.get("saver")
     if saver is None:
-        saver = deps.checkpointer_cls()
+        saver = callable_of(deps.checkpointer_cls)()
         _SHARED_CHECKPOINTER["saver"] = saver
     return saver
 
 
-def build_chat_model(ctx: SessionContext, deps: DeepAgentsDeps) -> BaseChatModel:
+def build_chat_model(ctx: SessionContext, deps: DeepAgentsDeps) -> object:
     """The LangChain chat model for this session. Tests monkeypatch this."""
-    return deps.chat_litellm(**chat_model_kwargs(ctx))
+    kwargs: Final = chat_model_kwargs(ctx)
+    return callable_of(deps.chat_litellm)(**kwargs)
 
 
 class DeepAgentsHandler(BaseHarnessHandler):
     def __init__(self, config: BaseHarnessConfig) -> None:
         super().__init__(config)
         self._deps: DeepAgentsDeps | None = None
-        self._agent: Any = None
+        self._agent: CompiledStateGraph | None = None
         self._thread_id: str | None = None
         self._skip_tools: frozenset[str] = frozenset()
 
@@ -154,29 +205,27 @@ class DeepAgentsHandler(BaseHarnessHandler):
 
     async def history(
         self, ctx: SessionContext
-    ) -> list[dict[str, Any]]:  # mutable-ok: BaseHarnessHandler.history API returns OpenAI message dicts
+    ) -> list[dict[str, object]]:  # mutable-ok: BaseHarnessHandler.history API returns OpenAI message dicts
         agent, deps = self._require_agent()
         snapshot = await agent.aget_state(self._run_config(ctx, None))
         messages = (snapshot.values or MappingProxyType({})).get("messages") or ()
-        converted: list[dict[str, Any]] = deps.convert_to_openai_messages(  # mutable-ok: LangChain returns a list
-            messages
-        )
-        return converted
+        converted: Final = callable_of(deps.convert_to_openai_messages)(messages)
+        return _OPENAI_MESSAGES.validate_python(converted)
 
     async def turn(self, ctx: SessionContext, prompt: str) -> AsyncIterator[Event]:
         agent, deps = self._require_agent()
         run_config = self._run_config(ctx, deps.backend.UsageCallback(ctx, ctx.model))
         user_message = {"role": "user", "content": prompt}  # mutable-ok: LangGraph input message dict
-        payload: dict[str, object] | Command = {"messages": [user_message]}  # mutable-ok: LangGraph input state
+        payload: object = {"messages": [user_message]}
         while True:
             state = TurnState()
             async for event in self._stream_pass(agent, payload, run_config, state):
                 yield event
             if not state.interrupts:
                 break
-            resume: dict[str, Any] = {}  # mutable-ok: Command(resume=) payload, filled per answered approval
+            resume: dict[str, object] = {}  # mutable-ok: Command(resume=) payload, filled per answered approval
             for interrupt in state.interrupts:
-                decisions: list[dict[str, Any]] = []  # mutable-ok: HITL decisions collected across awaited approvals
+                decisions: list[dict[str, str]] = []  # mutable-ok: HITL decisions collected across awaited approvals
                 for request in approval_requests(getattr(interrupt, "value", None)):
                     approval = Approval(
                         tool=normalized_tool_name(str(request.get("name") or "")),
@@ -185,13 +234,13 @@ class DeepAgentsHandler(BaseHarnessHandler):
                     yield approval
                     decisions.append(decision(*await approval.wait()))
                 resume[interrupt.id] = {"decisions": decisions}  # mutable-ok: LangGraph HITL resume payload
-            payload = deps.command_cls(resume=resume)
+            payload = callable_of(deps.command_cls)(resume=resume)
         await self._finish_turn(ctx, agent, run_config)
 
     async def _stream_pass(
         self,
         agent: CompiledStateGraph,
-        payload: dict[str, object] | Command,  # mutable-ok: LangGraph astream input type
+        payload: object,
         run_config: RunnableConfig,
         state: TurnState,
     ) -> AsyncIterator[Event]:
@@ -221,7 +270,7 @@ class DeepAgentsHandler(BaseHarnessHandler):
         if ctx.output is not None:
             ctx.output_json = structured_json(values.get("structured_response"))
 
-    def _require_agent(self) -> tuple[Any, DeepAgentsDeps]:
+    def _require_agent(self) -> tuple[CompiledStateGraph, DeepAgentsDeps]:
         if self._agent is None or self._deps is None:
             raise HarnessError("Deep Agents session is not started")
         return self._agent, self._deps
@@ -236,20 +285,24 @@ class DeepAgentsHandler(BaseHarnessHandler):
         return run_config
 
     @staticmethod
-    def _middleware(deps: DeepAgentsDeps, blocked: frozenset[str]) -> list[Any]:  # mutable-ok: deepagents API
+    def _middleware(deps: DeepAgentsDeps, blocked: frozenset[str]) -> list[object]:  # mutable-ok: deepagents API
         filters = (deps.backend.ToolFilterMiddleware(blocked),) if blocked else ()
         return list(filters)  # mutable-ok: deepagents create_deep_agent(middleware=) takes a list
 
     def _subagents(
         self, ctx: SessionContext, deps: DeepAgentsDeps, blocked: frozenset[str]
-    ) -> list[Any]:  # mutable-ok: deepagents create_deep_agent(subagents=) takes a list
+    ) -> list[object]:  # mutable-ok: deepagents create_deep_agent(subagents=) takes a list
         """User subagents, plus a general-purpose one that honours disable_tools when set."""
         options = ctx.options if isinstance(ctx.options, DeepAgentsOptions) else None
         user_subagents = tuple(options.subagents) if options is not None else ()
+        defaults: Final = deps.subagent_defaults
         has_general = any(
-            isinstance(s, Mapping) and s.get("name") == deps.subagent_defaults["name"] for s in user_subagents
+            isinstance(s, Mapping) and s.get("name") == subscript(defaults, "name") for s in user_subagents
         )
-        spec = {**deps.subagent_defaults, "middleware": self._middleware(deps, blocked)}  # mutable-ok: SubAgent dict
+        spec = {
+            **unpackable_mapping(defaults),
+            "middleware": self._middleware(deps, blocked),
+        }  # mutable-ok: SubAgent dict
         general = (spec,) if blocked and not has_general else ()
         return [*general, *user_subagents]  # mutable-ok: deepagents create_deep_agent(subagents=) takes a list
 

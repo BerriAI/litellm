@@ -2,11 +2,16 @@
 Translate from OpenAI's `/v1/chat/completions` to VLLM's `/v1/chat/completions`
 """
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final
 
-from litellm.constants import OPENAI_CHAT_COMPLETION_PARAMS
+from pydantic import BaseModel, ConfigDict
+
+import litellm
+from litellm.constants import NON_LLM_CONNECTION_TIMEOUT, OPENAI_CHAT_COMPLETION_PARAMS
 from litellm.secret_managers.main import get_secret_bool, get_secret_str
 from litellm.types.router import LiteLLM_Params
+from litellm.utils import add_path_to_api_base
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
@@ -14,15 +19,27 @@ if TYPE_CHECKING:
     from litellm.types.llms.openai import AllMessageValues
 
 
+class _ProxyModel(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+
+
+class _ProxyModelList(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    data: tuple[_ProxyModel, ...]
+
+
 class LiteLLMProxyChatConfig(OpenAIGPTConfig):
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         params_list: Final = super().get_supported_openai_params(model)
         params_list.extend(OPENAI_CHAT_COMPLETION_PARAMS)
         return params_list
 
     def _map_openai_params(
         self,
-        non_default_params: dict,
+        non_default_params: Mapping[str, object],
         optional_params: dict,
         model: str,
         drop_params: bool,
@@ -42,12 +59,24 @@ class LiteLLMProxyChatConfig(OpenAIGPTConfig):
         dynamic_api_key: Final = api_key or get_secret_str("LITELLM_PROXY_API_KEY")
         return api_base, dynamic_api_key
 
+    def get_openai_compatible_provider_info(
+        self,
+        api_base: str | None,
+        api_key: str | None,
+    ) -> tuple[str | None, str | None]:
+        return self._get_openai_compatible_provider_info(api_base, api_key)
+
     def get_models(self, api_key: str | None = None, api_base: str | None = None) -> list[str]:
         api_base, api_key = self._get_openai_compatible_provider_info(api_base, api_key)
         if api_base is None:
             raise ValueError("api_base not set for LiteLLM Proxy route. Set in env via `LITELLM_PROXY_API_BASE`")
-        models: Final = super().get_models(api_key=api_key, api_base=api_base)
-        return [f"litellm_proxy/{model}" for model in models]
+        response: Final = litellm.module_level_client.client.get(
+            url=add_path_to_api_base(api_base, "/v1/models"),
+            headers={"Authorization": f"Bearer {api_key}"},
+            timeout=NON_LLM_CONNECTION_TIMEOUT,
+        )
+        response.raise_for_status()
+        return [f"litellm_proxy/{model.id}" for model in _ProxyModelList.model_validate_json(response.content).data]
 
     @staticmethod
     def get_api_key(api_key: str | None = None) -> str | None:
@@ -115,10 +144,10 @@ class LiteLLMProxyChatConfig(OpenAIGPTConfig):
         self,
         model: str,
         messages: list["AllMessageValues"],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
+        headers: Mapping[str, object],
+    ) -> dict[str, object]:
         # don't transform the request
         return {
             "model": model,
@@ -130,10 +159,10 @@ class LiteLLMProxyChatConfig(OpenAIGPTConfig):
         self,
         model: str,
         messages: list["AllMessageValues"],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
+        headers: Mapping[str, object],
+    ) -> dict[str, object]:
         # don't transform the request
         return {
             "model": model,

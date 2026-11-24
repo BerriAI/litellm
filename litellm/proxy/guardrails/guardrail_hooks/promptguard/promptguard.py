@@ -30,8 +30,8 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import (
         Logging as LiteLLMLoggingObj,
     )
-    from litellm.types.proxy.guardrails.guardrail_hooks.base import (
-        GuardrailConfigModel,
+    from litellm.types.proxy.guardrails.guardrail_hooks.promptguard import (
+        PromptGuardConfigModel,
     )
 
 _DEFAULT_API_BASE: Final = "https://api.promptguard.co"
@@ -105,7 +105,7 @@ class PromptGuardGuardrail(CustomGuardrail):
         super().__init__(**options)
 
     @staticmethod
-    def get_config_model() -> type["GuardrailConfigModel"] | None:
+    def get_config_model() -> type["PromptGuardConfigModel"] | None:
         from litellm.types.proxy.guardrails.guardrail_hooks.promptguard import (
             PromptGuardConfigModel,
         )
@@ -118,6 +118,9 @@ class PromptGuardGuardrail(CustomGuardrail):
             GuardrailEventHooks.pre_call,
             GuardrailEventHooks.post_call,
         ]
+
+    def supports_structured_messages(self) -> bool:
+        return False
 
     @log_guardrail_information
     async def apply_guardrail(

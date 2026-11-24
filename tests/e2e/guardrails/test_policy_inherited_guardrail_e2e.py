@@ -16,6 +16,7 @@ from __future__ import annotations
 import pytest
 from e2e_config import CHEAP_OPENAI_MODEL, unique_marker
 from e2e_http import StreamingResponse
+from e2e_metadata import Domain, Mode, Provider, Subject, meta
 from guardrails_client import (
     GuardrailsClient,
     PolicyConditionBody,
@@ -73,6 +74,14 @@ def _setup_child_policy_attached_to_tag(
 
 
 class TestPolicyInheritedGuardrail:
+    @meta(
+        Subject(
+            domain=Domain.GUARDRAILS,
+            providers=(Provider.OPENAI,),
+            models=(MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_child_condition_miss_still_applies_inherited_parent_guardrail(
         self, client: GuardrailsClient, resources: ResourceManager, scoped_key: str
     ) -> None:
@@ -101,6 +110,14 @@ class TestPolicyInheritedGuardrail:
             f"the child's own guardrail must not run when its condition fails; got {outcome.headers}"
         )
 
+    @meta(
+        Subject(
+            domain=Domain.GUARDRAILS,
+            providers=(Provider.OPENAI,),
+            models=(MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_child_condition_match_applies_child_and_inherited_parent_guardrails(
         self, client: GuardrailsClient, resources: ResourceManager, scoped_key: str
     ) -> None:

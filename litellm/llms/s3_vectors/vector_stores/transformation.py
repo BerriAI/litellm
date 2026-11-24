@@ -1,18 +1,21 @@
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, ClassVar, Final, NoReturn
 
 import httpx
 
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.vector_store.transformation import (
     BaseQueryEmbeddingVectorStoreConfig,
     VectorStoreEmbeddingExecutor,
 )
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+from litellm.llms.bedrock.web_identity_session_policy import S3_VECTORS_QUERY_SESSION_POLICY, WebIdentitySessionPolicy
 from litellm.types.rag import RAGIngestEmbeddingOptions
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.vector_stores import (
     VECTOR_STORE_OPENAI_PARAMS,
     BaseVectorStoreAuthCredentials,
+    VectorStoreCreateOptionalRequestParams,
     VectorStoreIndexEndpoints,
     VectorStoreResultContent,
     VectorStoreSearchOptionalRequestParams,
@@ -76,6 +79,8 @@ def s3_vectors_ingest_embedding_options(
 class S3VectorsVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig, BaseAWSLLM):
     """Vector store configuration for AWS S3 Vectors."""
 
+    _web_identity_session_policy: ClassVar[WebIdentitySessionPolicy] = S3_VECTORS_QUERY_SESSION_POLICY
+
     def __init__(self) -> None:
         BaseQueryEmbeddingVectorStoreConfig.__init__(self)
         BaseAWSLLM.__init__(self)
@@ -131,7 +136,7 @@ class S3VectorsVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig, BaseAWSLLM
         litellm_logging_obj: LiteLLMLoggingObj,
     ) -> tuple[str, dict[str, object]]:
         litellm_logging_obj.model_call_details["query"] = query_text
-        return f"{api_base}/QueryVectors", {
+        return join_api_base(api_base, "QueryVectors"), {
             "vectorBucketName": bucket_name,
             "indexName": index_name,
             "queryVector": {"float32": list(query_vector)},
@@ -252,10 +257,10 @@ class S3VectorsVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig, BaseAWSLLM
 
     def transform_create_vector_store_request(
         self,
-        vector_store_create_optional_params,
+        vector_store_create_optional_params: VectorStoreCreateOptionalRequestParams,
         api_base: str,
-    ) -> tuple[str, dict]:
+    ) -> NoReturn:
         raise NotImplementedError
 
-    def transform_create_vector_store_response(self, response: httpx.Response):
+    def transform_create_vector_store_response(self, response: httpx.Response) -> NoReturn:
         raise NotImplementedError

@@ -1,17 +1,38 @@
+from collections.abc import Mapping, Sequence
 from enum import Enum
-from typing import Any, Final, Literal, Protocol
+from typing import Final, Literal, Protocol
 
+from pydantic import JsonValue
 from typing_extensions import (
+    NotRequired,
+    ReadOnly,
     Required,
     TypedDict,
 )
 
-from litellm.types.llms.openai import EmbeddingInput
+from litellm.types.llms.openai import (
+    ChatCompletionFileObject,
+    EmbeddingInput,
+    ImageURLListItem,
+    OpenAIChatCompletionTextObject,
+)
+from litellm.types.token_count import TokenCountSourceFields
 
 # Gemini supports nested-list inputs (e.g. [["text", "image"]]) as an explicit
 # opt-in for combined embeddings — a provider-specific extension of the
 # OpenAI-faithful EmbeddingInput shape.
-GeminiEmbeddingInput = EmbeddingInput | list[list[str]]
+GeminiEmbeddingElement = str | ChatCompletionFileObject | OpenAIChatCompletionTextObject
+GeminiEmbeddingInput = (
+    EmbeddingInput | list[GeminiEmbeddingElement] | list[list[str]] | list[list[GeminiEmbeddingElement]]
+)
+
+
+class GeminiImageProviderSpecificFields(TypedDict, total=False):
+    thought_signature: ReadOnly[str]
+
+
+class GeminiImageURLListItem(ImageURLListItem):
+    provider_specific_fields: ReadOnly[GeminiImageProviderSpecificFields]
 
 
 class FunctionResponse(TypedDict, total=False):
@@ -41,12 +62,25 @@ class BlobType(TypedDict, total=False):
     data: Required[str]
 
 
-class FunctionResponsePartType(TypedDict, total=False):
+class GeminiFileInspectionMetadata(TypedDict, total=False):
+    document_metadata: ReadOnly[Mapping[str, object]]
+    spreadsheet_metadata: ReadOnly[Mapping[str, object]]
+    media_resolution: ReadOnly[Mapping[str, str]]
+
+
+class VideoMetadataType(TypedDict, total=False):
+    fps: ReadOnly[float]
+    startOffset: ReadOnly[str]
+    endOffset: ReadOnly[str]
+
+
+class FunctionResponsePartType(GeminiFileInspectionMetadata, total=False):
     inline_data: BlobType
     file_data: FileDataType
+    video_metadata: ReadOnly[VideoMetadataType]
 
 
-class PartType(TypedDict, total=False):
+class PartType(GeminiFileInspectionMetadata, total=False):
     text: str
     inline_data: BlobType
     file_data: FileDataType
@@ -54,7 +88,7 @@ class PartType(TypedDict, total=False):
     function_response: FunctionResponse
     thought: bool
     thoughtSignature: str
-    media_resolution: Literal["low", "medium", "high"]
+    video_metadata: ReadOnly[VideoMetadataType]
 
 
 class HttpxFunctionCall(TypedDict, total=False):
@@ -127,7 +161,7 @@ class Schema(TypedDict, total=False):
     title: str
     description: str
     nullable: bool
-    default: Any
+    default: ReadOnly[object]
     items: "Schema"
     minItems: str
     maxItems: str
@@ -142,7 +176,7 @@ class Schema(TypedDict, total=False):
     minLength: str
     maxLength: str
     pattern: str
-    example: Any
+    example: ReadOnly[object]
     anyOf: list["Schema"]
 
 
@@ -150,6 +184,7 @@ class FunctionDeclaration(TypedDict, total=False):
     name: Required[str]
     description: str
     parameters: Schema | dict
+    parametersJsonSchema: ReadOnly[Mapping[str, JsonValue]]
     response: Schema
 
 
@@ -203,7 +238,7 @@ class SafetSettingsConfig(TypedDict, total=False):
 class GeminiThinkingConfig(TypedDict, total=False):
     includeThoughts: bool
     thinkingBudget: int
-    thinkingLevel: Literal["minimal", "low", "medium", "high"]
+    thinkingLevel: ReadOnly[Literal["minimal", "low", "medium", "high", "xhigh"]]
 
 
 GeminiResponseModalities = Literal["TEXT", "IMAGE", "AUDIO", "VIDEO"]
@@ -226,8 +261,18 @@ class VoiceConfig(TypedDict):
     prebuiltVoiceConfig: PrebuiltVoiceConfig
 
 
+class SpeakerVoiceConfig(TypedDict):
+    speaker: ReadOnly[str]
+    voiceConfig: ReadOnly[VoiceConfig]
+
+
+class MultiSpeakerVoiceConfig(TypedDict):
+    speakerVoiceConfigs: ReadOnly[Sequence[SpeakerVoiceConfig]]
+
+
 class SpeechConfig(TypedDict, total=False):
     voiceConfig: VoiceConfig
+    multiSpeakerVoiceConfig: ReadOnly[MultiSpeakerVoiceConfig]
     languageCode: str
 
 
@@ -289,8 +334,8 @@ class TTL(TypedDict, total=False):
 
 
 class PromptTokensDetails(TypedDict):
-    modality: Literal["TEXT", "AUDIO", "IMAGE", "VIDEO"]
-    tokenCount: int
+    modality: ReadOnly[str]
+    tokenCount: ReadOnly[int]
 
 
 class UsageMetadata(TypedDict, total=False):
@@ -308,12 +353,13 @@ class UsageMetadata(TypedDict, total=False):
     candidatesTokensDetails: list[PromptTokensDetails]  # Alternative key name used in some responses
 
 
-class TokenCountDetailsResponse(TypedDict):
+class TokenCountDetailsResponse(TokenCountSourceFields):
     """
     Response structure for token count details with modality breakdown.
 
     Example:
-        {'totalTokens': 12, 'promptTokensDetails': [{'modality': 'TEXT', 'tokenCount': 12}]}
+        {'totalTokens': 12, 'promptTokensDetails': [{'modality': 'TEXT', 'tokenCount': 12}],
+         'litellm_count_source': 'provider'}
     """
 
     totalTokens: int
@@ -346,12 +392,13 @@ class RequestBody(TypedDict, total=False):
     cachedContent: str
     labels: dict[str, str]
     serviceTier: str
+    continuationToken: str  # writable-ok: transform_request_body fills the body field by field
 
 
 class CachedContentRequestBody(TypedDict, total=False):
     contents: Required[list[ContentType]]
     system_instruction: SystemInstructions
-    tools: Tools
+    tools: Tools | None
     toolConfig: ToolConfig
     model: Required[str]  # Format: models/{model}
     ttl: str  # ending in 's' - Example: "3.5s".
@@ -386,8 +433,9 @@ class Citation(TypedDict):
     publicationDate: Date
 
 
-class CitationMetadata(TypedDict):
-    citations: list[Citation]
+class CitationMetadata(TypedDict, total=False):
+    citations: ReadOnly[Sequence[Citation]]
+    citationSources: ReadOnly[Sequence[Citation]]
 
 
 class SearchEntryPoint(TypedDict, total=False):
@@ -395,10 +443,24 @@ class SearchEntryPoint(TypedDict, total=False):
     sdkBlob: str
 
 
+class GroundingSegment(TypedDict, total=False):
+    partIndex: ReadOnly[int]
+    startIndex: ReadOnly[int]
+    endIndex: ReadOnly[int]
+    text: ReadOnly[str]
+
+
+class GroundingSupport(TypedDict, total=False):
+    segment: ReadOnly[GroundingSegment]
+    groundingChunkIndices: ReadOnly[Sequence[int]]
+    confidenceScores: ReadOnly[Sequence[float]]
+
+
 class GroundingMetadata(TypedDict, total=False):
     webSearchQueries: list[str]
     searchEntryPoint: SearchEntryPoint
     groundingAttributions: list[dict]
+    groundingSupports: ReadOnly[Sequence[GroundingSupport]]
 
 
 class LogprobsCandidate(TypedDict):
@@ -429,6 +491,7 @@ GeminiFinishReason = Literal[
     "FINISH_REASON_UNSPECIFIED",
     "STOP",
     "MAX_TOKENS",
+    "CONTINUATION",
     "SAFETY",
     "RECITATION",
     "LANGUAGE",
@@ -455,11 +518,12 @@ class Candidates(TypedDict, total=False):
     content: HttpxContentType
     finishReason: GeminiFinishReason
     safetyRatings: list[SafetyRatings]
-    citationMetadata: CitationMetadata
-    groundingMetadata: GroundingMetadata
+    citationMetadata: CitationMetadata | tuple[CitationMetadata, ...]
+    groundingMetadata: GroundingMetadata | tuple[GroundingMetadata, ...]
     finishMessage: str
     logprobsResult: LogprobsResult
-    urlContextMetadata: UrlContextMetadata
+    urlContextMetadata: UrlContextMetadata | tuple[UrlContextMetadata, ...]
+    continuationToken: ReadOnly[str]
 
 
 class PromptFeedback(TypedDict):
@@ -549,6 +613,7 @@ class Instance(TypedDict, total=False):
 class VertexMultimodalEmbeddingRequest(TypedDict, total=False):
     instances: Required[list[Instance]]
     parameters: dict
+    labels: ReadOnly[Mapping[str, str]]
 
 
 class VideoEmbedding(TypedDict):
@@ -608,6 +673,7 @@ class VertexAIBatchEmbeddingsRequestBody(TypedDict, total=False):
 
 class VertexAIBatchEmbeddingsResponseObject(TypedDict):
     embeddings: list[ContentEmbeddings]
+    usageMetadata: NotRequired[ReadOnly[object]]
 
 
 class GeminiEmbedContentRequestBody(TypedDict, total=False):
@@ -696,6 +762,7 @@ class VertexAIBatchPredictionJob(TypedDict):
     model: str
     inputConfig: InputConfig
     outputConfig: OutputConfig
+    labels: NotRequired[ReadOnly[Mapping[str, str]]]
 
 
 class VertexBatchPredictionResponse(TypedDict, total=False):
@@ -752,9 +819,9 @@ class VertexVideoGenerationResponse(TypedDict, total=False):
 
     name: str
     done: bool
-    response: dict[str, Any]
-    metadata: dict[str, Any]
-    error: dict[str, Any]
+    response: ReadOnly[dict[str, object]]
+    metadata: ReadOnly[dict[str, object]]
+    error: ReadOnly[dict[str, object]]
 
 
 VERTEX_CREDENTIALS_TYPES = str | dict[str, str]

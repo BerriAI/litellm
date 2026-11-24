@@ -21,7 +21,7 @@ class _PROXY_AzureContentSafety(
 
     enforces_request_content: bool = True
 
-    def __init__(self, endpoint, api_key, thresholds=None):
+    def __init__(self, endpoint: object, api_key: str, thresholds=None):
         try:
             from azure.ai.contentsafety.aio import ContentSafetyClient
             from azure.ai.contentsafety.models import (
@@ -77,7 +77,7 @@ class _PROXY_AzureContentSafety(
 
         return result
 
-    async def test_violation(self, content: str, source: str | None = None):
+    async def test_violation(self, content: str, source: str | None = None) -> None:
         verbose_proxy_logger.debug("Testing Azure Content-Safety for: %s", content)
 
         # Construct a request
@@ -115,7 +115,7 @@ class _PROXY_AzureContentSafety(
         cache: DualCache,
         data: dict,
         call_type: str,  # "completion", "embeddings", "image_generation", "moderation"
-    ):
+    ) -> None:
         verbose_proxy_logger.debug("Inside Azure Content-Safety Pre-Call Hook")
         try:
             if is_text_content_call_type(call_type):
@@ -134,8 +134,8 @@ class _PROXY_AzureContentSafety(
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        response,
-    ):
+        response: object,
+    ) -> None:
         verbose_proxy_logger.debug("Inside Azure Content-Safety Post-Call Hook")
         if not isinstance(response, litellm.ModelResponse):
             return
@@ -148,10 +148,13 @@ class _PROXY_AzureContentSafety(
             if isinstance(content, str):
                 await self.test_violation(content=content, source="output")
 
-    # async def async_post_call_streaming_hook(
-    #    self,
-    #    user_api_key_dict: UserAPIKeyAuth,
-    #    response: str,
-    # ):
-    #    verbose_proxy_logger.debug("Inside Azure Content-Safety Call-Stream Hook")
-    #    await self.test_violation(content=response, source="output")
+
+PROXY_AzureContentSafety: Final = _PROXY_AzureContentSafety
+
+# async def async_post_call_streaming_hook(
+#    self,
+#    user_api_key_dict: UserAPIKeyAuth,
+#    response: str,
+# ):
+#    verbose_proxy_logger.debug("Inside Azure Content-Safety Call-Stream Hook")
+#    await self.test_violation(content=response, source="output")

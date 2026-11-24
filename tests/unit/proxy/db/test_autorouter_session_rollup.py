@@ -2,7 +2,7 @@
 Unit tests for the auto-router per-session benchmarks rollup writer.
 
 The classification SQL itself runs against a real Postgres in
-tests/proxy_behavior/spend/test_autorouter_session_rollup.py; these tests cover the
+tests/integration/spend/test_autorouter_session_rollup.py; these tests cover the
 request-time transaction builder and the flush contract with an injected fake client.
 """
 
@@ -14,6 +14,7 @@ from typing import Final
 
 import httpx
 import pytest
+from pydantic import TypeAdapter
 
 from litellm.proxy.db.autorouter_session_rollup import (
     UPSERT_AUTOROUTER_SESSION_SQL,
@@ -24,6 +25,13 @@ from litellm.proxy.db.autorouter_session_rollup import (
     write_autorouter_turn,
 )
 from tests.unit.proxy.db.fake_prisma_engine import engine_call
+
+
+def _client_not_connected() -> Exception:
+    from prisma.errors import ClientNotConnectedError
+
+    return ClientNotConnectedError()
+
 
 ROUTING_DECISION = {"router_model_name": "live-auto", "router_type": "complexity", "routed_model": "haiku"}
 
@@ -45,7 +53,10 @@ def _payload(**overrides: object) -> dict:
 
 
 def _metadata(**overrides: object) -> dict:
-    base: dict = {"routing_decision": dict(ROUTING_DECISION), "usage_object": {"prompt_tokens": 90}}
+    base: dict = {
+        "routing_decision": dict(ROUTING_DECISION),
+        "usage_object": {"prompt_tokens": 90, "completion_tokens": 10},
+    }
     base.update(overrides)
     return base
 
@@ -88,7 +99,10 @@ class TestBuildTransaction:
         transaction = _build(
             metadata=_metadata(
                 routing_decision={**ROUTING_DECISION, "savings_baseline_model": "anthropic/claude-opus-5"},
-                usage_object={"prompt_tokens": 90, "cache_read_input_tokens": 5, "cache_creation_input_tokens": 7},
+                usage_object={
+                    "prompt_tokens": 90, "completion_tokens": 10,
+                    "cache_read_input_tokens": 5, "cache_creation_input_tokens": 7,
+                },
             )
         )
         assert transaction == AutoRouterTurnTransaction(
@@ -99,6 +113,7 @@ class TestBuildTransaction:
             model="bedrock/haiku",
             turn_at=datetime(2026, 8, 1, 12, 0, 0),
             total_tokens=100,
+            token_counts_recorded=True,
             spend=0.01,
             saved_spend=0.02,
             classifier_cost=0.0,
@@ -213,6 +228,30 @@ class TestBuildTransaction:
         assert transaction.cache_ttl_seconds is None
         assert transaction.cache_touched is True
 
+    @pytest.mark.parametrize(
+        "usage, recorded",
+        [
+            (None, False), ({}, False), ({"prompt_tokens": 90}, False),
+            ({"prompt_tokens": 90, "completion_tokens": 10}, True),
+            ({"prompt_tokens": 0, "completion_tokens": 0}, True),
+            ({"prompt_tokens": -1, "completion_tokens": 10}, False),
+            ({"prompt_tokens": True, "completion_tokens": 10}, False),
+            ({"prompt_tokens": "90", "completion_tokens": 10}, False),
+        ],
+    )
+    def test_token_coverage_requires_complete_reported_counts(self, usage: object, recorded: bool) -> None:
+        transaction: Final = _build(metadata=_metadata(usage_object=usage))
+        assert transaction is not None
+        assert transaction.token_counts_recorded is recorded
+
+    def test_persisted_turns_preserve_coverage_and_default_old_records_to_unknown(self) -> None:
+        transaction: Final = _build()
+        adapter: Final = TypeAdapter(AutoRouterTurnTransaction)
+        assert transaction is not None
+        assert adapter.validate_json(adapter.dump_json(transaction)).token_counts_recorded is True
+        legacy: Final = adapter.dump_json(transaction, exclude={"token_counts_recorded"})
+        assert adapter.validate_json(legacy).token_counts_recorded is False
+
     def test_a_covered_turn_that_neither_read_nor_wrote_did_not_touch_the_cache(self):
         transaction = _build()
         assert transaction is not None
@@ -240,7 +279,7 @@ class TestBuildTransaction:
 class _FakeDB:
     def __init__(
         self,
-        failures: "list[Exception] | None" = None,
+        failures: "list[Exception | None] | None" = None,
         poison_session: str | None = None,
         poison_user: str | None = None,
         commit_then_error_users: frozenset[str] = frozenset(),
@@ -258,8 +297,8 @@ class _FakeDB:
             raise RuntimeError("index row size exceeds btree maximum")
         if self._poison_user is not None and params[19] == self._poison_user:
             raise RuntimeError("index row size exceeds btree maximum")
-        if self._failures:
-            raise self._failures.pop(0)
+        if self._failures and (failure := self._failures.pop(0)) is not None:
+            raise failure
         self.calls.append((sql, params))
         if params[19] in self._commit_then_error_users:
             raise RuntimeError("commit succeeded but acknowledgement was lost")
@@ -269,7 +308,7 @@ class _FakeDB:
 class _FakeClient:
     def __init__(
         self,
-        failures: "list[Exception] | None" = None,
+        failures: "list[Exception | None] | None" = None,
         poison_session: str | None = None,
         poison_user: str | None = None,
         commit_then_error_users: frozenset[str] = frozenset(),
@@ -341,6 +380,7 @@ class TestFlush:
             0.0,
             0.0,
             "canonical-user",
+            0,
         )
 
     def test_a_keys_turns_stay_chronological_when_its_canonical_user_changes(self) -> None:
@@ -378,7 +418,7 @@ class TestFlush:
                 ("z-other", 10, "k2"),
             )
         )
-        asyncio.run(flush_autorouter_turn_transactions(client, tuple(reversed(turns))))
+        assert asyncio.run(flush_autorouter_turn_transactions(client, tuple(reversed(turns)))) is None
 
         assert client.db.attempts == client.db.calls
         assert [
@@ -411,8 +451,37 @@ class TestFlush:
             _transaction(session_id="s1", at=datetime(2026, 8, 1, 12, 0, 10)),
             _transaction(session_id="s2", at=datetime(2026, 8, 1, 12, 0, 5)),
         ]
-        asyncio.run(flush_autorouter_turn_transactions(client, transactions))
+        assert asyncio.run(flush_autorouter_turn_transactions(client, transactions)) is None
         assert [params[1] for _, params in client.db.calls] == ["s2"]
+
+    @pytest.mark.parametrize(
+        "error",
+        [_client_not_connected(), httpx.ConnectError("connection refused")],
+        ids=["client-not-connected", "connect-error-retries-exhausted"],
+    )
+    def test_an_unsent_turn_is_returned_with_every_turn_after_it_and_never_double_counts(
+        self, error: Exception
+    ) -> None:
+        client: Final = _FakeClient(failures=[None, error])
+        written: Final = _transaction(user_id="a-user", at=datetime(2026, 8, 1, 12, 0, 0))
+        unsent: Final = _transaction(user_id="b-user", at=datetime(2026, 8, 1, 12, 0, 1))
+        same_key_other_user: Final = _transaction(user_id="a-user", at=datetime(2026, 8, 1, 12, 0, 2))
+        other_key: Final = _transaction(api_key="k2", user_id="c-user", at=datetime(2026, 8, 1, 12, 0, 3))
+
+        unwritten: Final = asyncio.run(
+            flush_autorouter_turn_transactions(
+                client, [other_key, same_key_other_user, unsent, written], n_retry_times=0
+            )
+        )
+
+        assert unwritten is not None
+        assert (unwritten.turns, unwritten.error) == ((unsent, same_key_other_user, other_key), error)
+        assert [params[5] for _, params in client.db.calls] == ["2026-08-01T12:00:00"]
+
+        assert asyncio.run(flush_autorouter_turn_transactions(client, unwritten.turns)) is None
+        assert [(sql, params[0], params[5]) for sql, params in client.db.calls] == [
+            (UPSERT_AUTOROUTER_SESSION_SQL, "k1", f"2026-08-01T12:00:0{second}") for second in range(3)
+        ] + [(UPSERT_AUTOROUTER_SESSION_SQL, "k2", "2026-08-01T12:00:03")]
 
     def test_an_empty_batch_writes_nothing(self):
         client = _FakeClient()

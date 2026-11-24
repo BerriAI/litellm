@@ -1,4 +1,5 @@
 import asyncio
+from typing import Literal
 from unittest.mock import patch
 
 import pytest
@@ -19,7 +20,44 @@ from litellm.proxy.management_helpers.team_metadata_validation import (
     run_team_metadata_validation,
     validate_team_metadata_if_configured,
 )
-from pydantic import ValidationError
+from pydantic import JsonValue, ValidationError
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("value", ("false", 0, 1, [], {}))
+@pytest.mark.parametrize("operation", ("create", "update"))
+async def test_lens_policy_rejects_non_boolean_values_without_a_custom_validator(
+    value: JsonValue, operation: Literal["create", "update"]
+) -> None:
+    with pytest.raises(HTTPException) as error:
+        await validate_team_metadata_if_configured(
+            operation=operation,
+            metadata={"lens_enabled": value},
+            existing_metadata=None,
+            team_id="team-1",
+            team_alias=None,
+            user_api_key_dict=UserAPIKeyAuth(),
+            registry=TeamMetadataValidatorRegistry(),
+        )
+    assert error.value.status_code == 400
+    assert error.value.detail == {"error": "metadata.lens_enabled must be a boolean or null"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enabled", (False, True, None))
+@pytest.mark.parametrize("operation", ("create", "update"))
+async def test_valid_lens_policy_is_accepted_for_team_creation_and_updates(
+    enabled: bool | None, operation: Literal["create", "update"]
+) -> None:
+    assert await validate_team_metadata_if_configured(
+        operation=operation,
+        metadata={"lens_enabled": enabled},
+        existing_metadata=None,
+        team_id="team-1",
+        team_alias=None,
+        user_api_key_dict=UserAPIKeyAuth(),
+        registry=TeamMetadataValidatorRegistry(),
+    ) is None
 
 
 def _registry_with(validator):
@@ -405,7 +443,7 @@ async def _drive_update(kind, existing_metadata, payload):
         patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
         patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
         patch(
-            "litellm.proxy.management_endpoints.team_endpoints._refresh_cached_team",
+            "litellm.proxy.management_endpoints.team_endpoints.refresh_cached_team",
             new=AsyncMock(),
         ),
     ):

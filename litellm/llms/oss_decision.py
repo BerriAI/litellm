@@ -2,6 +2,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Final, Literal, TypeAlias
+from urllib.parse import urlsplit
 
 from pydantic import AnyHttpUrl, TypeAdapter, ValidationError
 
@@ -46,11 +47,29 @@ def validate_oss_api_base(provider: OssDecisionProvider, value: str) -> str:
     return str(url).rstrip("/")
 
 
+def _server_root(provider: OssDecisionProvider, base: str) -> str:
+    parts: Final = urlsplit(validate_oss_api_base(provider, base))
+    return parts._replace(path=parts.path.removesuffix("/v1")).geturl()
+
+
+def _is_env_server(provider: OssDecisionProvider, server: str, env_base: str | None) -> bool:
+    if not env_base:
+        return False
+    try:
+        return _server_root(provider, env_base) == server
+    except ValueError:
+        return False
+
+
 def oss_connection(
     provider: OssDecisionProvider, api_base: str | None = None, api_key: str | None = None
 ) -> OssDecisionConnection:
-    base: Final = api_base if api_base is not None else get_secret_str(f"{provider.upper()}_API_BASE")
+    env_base: Final = get_secret_str(f"{provider.upper()}_API_BASE")
+    base: Final = api_base if api_base is not None else env_base
     if not base:
         raise ValueError(f"{provider} requires api_base or {provider.upper()}_API_BASE pointing to its server")
-    key: Final = api_key if api_base is not None else api_key or get_secret_str(f"{provider.upper()}_API_KEY")
-    return OssDecisionConnection(api_base=validate_oss_api_base(provider, base), api_key=key)
+    server: Final = _server_root(provider, base)
+    env_key: Final = (
+        get_secret_str(f"{provider.upper()}_API_KEY") if _is_env_server(provider, server, env_base) else None
+    )
+    return OssDecisionConnection(api_base=server, api_key=api_key or env_key or None)
