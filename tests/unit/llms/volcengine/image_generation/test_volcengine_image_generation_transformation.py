@@ -97,6 +97,8 @@ def test_generation_sends_every_ark_param_and_maps_user_to_safety_identifier() -
     assert (response.size, response.output_format, response.background) == ("2048x2048", "png", "transparent")
     assert response.usage is not None
     assert (response.usage.output_tokens, response.usage.total_tokens) == (32768, 32768)
+    assert response.usage.model_dump()["input_images"] == 1
+    assert response.usage.model_dump()["generated_images"] == 2
 
 
 def test_generation_returns_base64_images() -> None:
