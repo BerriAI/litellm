@@ -57,6 +57,7 @@ def patched_models(monkeypatch):
     router.get_deployment_by_model_group_name = MagicMock(return_value=deployment)
     router.get_routable_upstream_model = MagicMock(return_value="gpt-4")
     router.get_routable_upstream_provider = MagicMock(return_value=None)
+    router.get_routable_upstreams = MagicMock(return_value=())
     router.get_configured_display_name = MagicMock(return_value=None)
     router.get_configured_service_tiers = MagicMock(return_value=())
     router.get_configured_max_input_tokens = MagicMock(return_value=())
@@ -199,6 +200,44 @@ def test_anthropic_format_carries_router_configured_token_limits(client, auth_as
     gpt_4, claude = response.json()["data"]
     assert (gpt_4["max_input_tokens"], gpt_4["max_tokens"]) == (300000, 32000)
     assert (claude["max_input_tokens"], claude["max_tokens"]) == (500000, 4096)
+
+
+@pytest.mark.parametrize(
+    ("path", "params", "role"),
+    [
+        ("/v1/models", {}, None),
+        ("/v1/models", {"scope": "expand"}, LitellmUserRoles.PROXY_ADMIN),
+        ("/v1/models/gpt-4", {}, None),
+    ],
+)
+def test_token_limits_are_read_for_the_key_team(client, auth_as, patched_models, monkeypatch, path, params, role):
+    """Two teams can route one wildcard name to different deployments, so the limits a listing
+    shows come from the deployments the key's team routes to, and no team for a key without one."""
+    patched_models.get_model_listing_info = MagicMock(
+        side_effect=lambda model_name, team_id=None: (
+            DeploymentModelListingInfo(cost_map_keys=(), max_input_tokens=4096, max_output_tokens=1024)
+            if team_id == "team-1"
+            else None
+        )
+    )
+    monkeypatch.setattr(
+        proxy_utils,
+        "create_model_info_response",
+        lambda **kwargs: create_model_info_response(
+            **kwargs, get_model_info=lambda _model: {"max_input_tokens": 100, "max_output_tokens": 10}
+        ),
+    )
+
+    with auth_as(role, team_id="team-1"):
+        team_body = client.get(path, params=params).json()
+    with auth_as(role):
+        teamless_body = client.get(path, params=params).json()
+
+    def _limits(body):
+        return {(m["max_input_tokens"], m["max_output_tokens"]) for m in body.get("data", [body])}
+
+    assert _limits(team_body) == {(4096, 1024)}
+    assert _limits(teamless_body) == {(100, 10)}
 
 
 @pytest.mark.parametrize("path", ["/v1/models", "/models"])

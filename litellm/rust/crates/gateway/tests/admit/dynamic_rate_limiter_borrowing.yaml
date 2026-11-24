@@ -1,0 +1,24 @@
+# A per-model limit that borrows a model's idle capacity holds tokens before the call, which the
+# native app does not do, so a config that lists who borrows goes to Python.
+config:
+  model_list:
+    - model_name: claude
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+        tpm: 100000
+  litellm_settings:
+    callbacks: [dynamic_rate_limiter_v3]
+    priority_reservation_settings:
+      model_limit_borrowing_config:
+        borrow_idle_capacity: [key]
+  general_settings:
+    master_key: gateway-key
+
+requests:
+  - name: plain
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: settings
+    over: litellm_settings.priority_reservation_settings

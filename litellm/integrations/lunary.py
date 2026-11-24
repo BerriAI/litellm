@@ -2,16 +2,23 @@
 #    On success + failure, log events to lunary.ai
 import importlib
 import traceback
+from collections.abc import Callable, Sequence
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Final
 
 import packaging
+
 from litellm.llms.anthropic.common_utils import tool_calls_with_server_tool_calls
 
 if TYPE_CHECKING:
     from openai.types.chat.chat_completion_message_custom_tool_call import Custom
 
-    from litellm.types.utils import ChatCompletionCustomToolCallPayload, ChatCompletionDeltaCustomToolCallPayload
+    from litellm.types.utils import (
+        ChatCompletionCustomToolCallPayload,
+        ChatCompletionDeltaCustomToolCallPayload,
+        ChatCompletionMessageCustomToolCall,
+        ChatCompletionMessageToolCall,
+    )
 
 
 # convert to {completion: xx, tokens: xx}
@@ -22,7 +29,9 @@ def parse_usage(usage):
     }
 
 
-def parse_tool_calls(tool_calls):
+def parse_tool_calls(
+    tool_calls: "Sequence[ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall] | None",
+):
     if tool_calls is None:
         return None
 
@@ -50,7 +59,7 @@ def parse_tool_calls(tool_calls):
     ]
 
 
-def parse_messages(input):
+def parse_messages(input: object):
     if input is None:
         return None
 
@@ -106,18 +115,18 @@ class LunaryLogger:
     def log_event(
         self,
         kwargs,
-        type,
-        event,
-        run_id,
-        model,
-        print_verbose,
+        type: object,
+        event: object,
+        run_id: object,
+        model: object,
+        print_verbose: Callable[[str], object],
         extra={},
-        input=None,
-        user_id=None,
+        input: object = None,
+        user_id: object = None,
         response_obj=None,
-        start_time=datetime.now(timezone.utc),
+        start_time: datetime = datetime.now(timezone.utc),
         end_time=datetime.now(timezone.utc),
-        error=None,
+        error: object = None,
     ):
         try:
             print_verbose(f"Lunary Logging - Logging request for model {model}")

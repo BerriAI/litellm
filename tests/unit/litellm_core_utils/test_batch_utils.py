@@ -1,7 +1,7 @@
 import asyncio
 import importlib
 import json
-from io import BytesIO
+from io import BytesIO, UnsupportedOperation
 from typing import Dict, Final, List
 
 import pytest
@@ -18,6 +18,7 @@ from litellm.litellm_core_utils.batch_utils import (
     get_router_metadata_variable_name,
     parse_jsonl_with_embedded_newlines,
     replace_model_in_jsonl,
+    rewrite_rows_naming_model,
 )
 from litellm.types.utils import LiteLLMBatch
 from litellm.types.videos.utils import POLLED_VIDEO_STATUS_KWARG, encode_video_id_with_provider
@@ -318,6 +319,142 @@ def test_replace_model_in_jsonl_rewrites_rows_that_start_with_a_bom(content):
     assert [(row["custom_id"], row["body"]["model"]) for row in rows] == [("a", "new-model"), ("b", "new-model")]
 
 
+def _compact_row(custom_id: str, model: str) -> bytes:
+    return json.dumps(
+        {"custom_id": custom_id, "body": {"model": model, "messages": [{"role": "user", "content": "日本語"}]}},
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode()
+
+
+def test_rewrite_rows_naming_model_changes_only_the_model_of_rows_naming_it_and_keeps_every_other_byte():
+    other_row: Final = b'{"custom_id": "other",  "body": {"model": "other"}}'
+    unparseable_row: Final = b'{"custom_id":"bad","body":{"model":"alias","messages":[{"content":"\\ud800"}]}}'
+    truncated_row: Final = b'{"custom_id":"truncated","body":{"model":"alias"'
+    output: Final = BytesIO()
+
+    result: Final = rewrite_rows_naming_model(
+        _compact_row("a", "alias")
+        + b"\r\n\r\n"
+        + other_row
+        + b"\r\n\xef\xbb\xbf"
+        + _compact_row("b", "alias")
+        + b"\n"
+        + unparseable_row
+        + b"\n"
+        + truncated_row,
+        "alias",
+        "real",
+        output,
+    )
+
+    assert result is output
+    assert output.read() == (
+        _compact_row("a", "real")
+        + b"\r\n\r\n"
+        + other_row
+        + b"\r\n\xef\xbb\xbf"
+        + _compact_row("b", "real")
+        + b"\n"
+        + unparseable_row
+        + b"\n"
+        + truncated_row
+    )
+
+
+def test_rewrite_rows_naming_model_keeps_a_row_whose_numbers_json_cannot_write_back():
+    out_of_range_row: Final = b'{"custom_id":"huge","body":{"model":"alias","temperature":1e400}}'
+    output: Final = BytesIO()
+
+    result: Final = rewrite_rows_naming_model(
+        _compact_row("a", "alias") + b"\n" + out_of_range_row + b"\n", "alias", "real", output
+    )
+
+    assert result is output
+    assert output.read() == _compact_row("a", "real") + b"\n" + out_of_range_row + b"\n"
+
+
+@pytest.mark.parametrize(
+    "model, row",
+    [
+        ("team/batch", b'{"body":{"model":"team\\/batch"}}\n'),
+        ("日本-batch", b'{"body":{"model":"\\u65e5\\u672c-batch"}}\n'),
+        ("日本-batch", b'{"body":{"model":"\\u65E5\\u672C-batch"}}\n'),
+        ("batch", b'{"body":{"model":"\\u0062atch"}}\n'),
+        ("日本-batch", '{"body":{"model":"日本-batch"}}\n'.encode()),
+    ],
+    ids=["escaped slash", "escaped non-ascii", "uppercase escaped non-ascii", "escaped ascii", "raw non-ascii"],
+)
+def test_rewrite_rows_naming_model_finds_every_json_spelling_of_the_model(model: str, row: bytes):
+    output: Final = BytesIO()
+
+    result: Final = rewrite_rows_naming_model(row, model, "real", output)
+
+    assert result is output
+    assert output.read() == b'{"body":{"model":"real"}}\n'
+
+
+@pytest.mark.parametrize(
+    "model, new_model, content",
+    [
+        ("alias", "real", b'{"body": {"model": "other", "messages": [{"content": "alias"}]}}\n'),
+        ("same", "same", b'{"body": {"model": "same"}}\n'),
+    ],
+    ids=["model named only in a message", "model already the deployment's"],
+)
+def test_rewrite_rows_naming_model_returns_the_rewound_original_when_no_row_changes(
+    model: str, new_model: str, content: bytes
+):
+    handle: Final = BytesIO(content)
+
+    result: Final = rewrite_rows_naming_model(handle, model, new_model, BytesIO())
+
+    assert result is handle
+    assert handle.read() == content
+
+
+def test_rewrite_rows_naming_model_copies_nothing_when_no_line_names_the_model():
+    content: Final = _compact_row("a", "other") + b"\n" + _compact_row("b", "other-alias") + b"\n"
+    handle: Final = BytesIO(content)
+    output: Final = BytesIO()
+
+    result: Final = rewrite_rows_naming_model(("batch.jsonl", handle, "application/jsonl"), "alias", "real", output)
+
+    assert result == ("batch.jsonl", handle, "application/jsonl")
+    assert output.getvalue() == b""
+    assert handle.read() == content
+
+
+def test_rewrite_rows_naming_model_leaves_a_stream_it_cannot_reread_untouched():
+    class Unseekable(BytesIO):
+        def seek(self, offset: int, whence: int = 0) -> int:
+            raise UnsupportedOperation("not seekable")
+
+    content: Final = _compact_row("a", "alias") + b"\n"
+    stream: Final = Unseekable(content)
+
+    result: Final = rewrite_rows_naming_model(stream, "alias", "real", BytesIO())
+
+    assert result is stream
+    assert stream.read() == content
+
+
+def test_rewrite_rows_naming_model_rewrites_an_upload_whose_file_has_no_seekable_method():
+    class SpooledFileWithoutSeekable(BytesIO):
+        def __getattribute__(self, name: str) -> object:
+            if name == "seekable":
+                raise AttributeError(name)
+            return super().__getattribute__(name)
+
+    output: Final = BytesIO()
+    upload: Final = SpooledFileWithoutSeekable(_compact_row("a", "alias") + b"\n")
+
+    result: Final = rewrite_rows_naming_model(("batch.jsonl", upload, "application/jsonl"), "alias", "real", output)
+
+    assert result is output
+    assert output.read() == _compact_row("a", "real") + b"\n"
+
+
 def test_replace_model_in_jsonl_with_embedded_newlines():
     """Test that replace_model_in_jsonl works correctly with embedded newlines in content"""
     # Create a JSONL with embedded newlines in the message content
@@ -360,6 +497,37 @@ def test_is_batch_retrieve_call_type_matches_only_batch_retrieves():
         assert is_batch_retrieve_call_type(call_type.value) is False
 
     assert is_batch_retrieve_call_type(None) is False
+
+
+@pytest.mark.parametrize(
+    ("call_type", "expected"),
+    [
+        ("aretrieve_batch", True),
+        ("acreate_batch", True),
+        ("acancel_batch", True),
+        ("acreate_file", True),
+        ("afile_content", True),
+        ("afile_delete", True),
+        ("file_list", True),
+        ("acreate_fine_tuning_job", True),
+        ("alist_fine_tuning_jobs", True),
+        ("vector_store_file_content", True),
+        ("avector_store_create", True),
+        ("acreate_container", True),
+        ("aretrieve_container_file_content", True),
+        ("acompletion", False),
+        ("aembedding", False),
+        ("aresponses", False),
+        ("anthropic_messages", False),
+        ("aimage_generation", False),
+        (None, False),
+        (["acreate_file"], False),
+    ],
+)
+def test_is_batch_api_call_type_matches_calls_azure_scopes_to_the_resource(call_type, expected):
+    from litellm.litellm_core_utils.batch_utils import is_batch_api_call_type
+
+    assert is_batch_api_call_type(call_type) is expected
 
 
 @pytest.fixture(autouse=True)

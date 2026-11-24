@@ -54,9 +54,11 @@ class DotpromptManager(CustomPromptManagement):
         prompt_file: str | None = None,
         prompt_data: dict | str | None = None,
         prompt_id: str | None = None,
+        ignore_prompt_manager_optional_params: bool | None = False,
     ):
         import litellm
 
+        self.ignore_prompt_manager_optional_params = ignore_prompt_manager_optional_params
         self.prompt_directory = prompt_directory or litellm.global_prompt_directory
         # Support for JSON-based prompts stored in memory/database
         if isinstance(prompt_data, str):
@@ -113,7 +115,7 @@ class DotpromptManager(CustomPromptManagement):
         self,
         prompt_id: str | None,
         prompt_spec: PromptSpec | None,
-        prompt_variables: dict | None,
+        prompt_variables: Mapping[str, object] | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
         prompt_label: str | None = None,
         prompt_version: int | None = None,
@@ -168,7 +170,7 @@ class DotpromptManager(CustomPromptManagement):
     async def async_compile_prompt_helper(
         self,
         prompt_id: str | None,
-        prompt_variables: dict | None,
+        prompt_variables: Mapping[str, object] | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
         prompt_spec: PromptSpec | None = None,
         prompt_label: str | None = None,
@@ -194,7 +196,7 @@ class DotpromptManager(CustomPromptManagement):
         self,
         model: str,
         messages: list[AllMessageValues],
-        non_default_params: dict,
+        non_default_params: dict[str, object],
         prompt_id: str | None,
         prompt_variables: dict | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
@@ -225,7 +227,7 @@ class DotpromptManager(CustomPromptManagement):
         self,
         model: str,
         messages: list[AllMessageValues],
-        non_default_params: dict,
+        non_default_params: dict[str, object],
         prompt_id: str | None,
         prompt_variables: dict | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
@@ -272,7 +274,7 @@ class DotpromptManager(CustomPromptManagement):
         content: Final = rendered_content.strip()
 
         # Try to parse role-based format (System: ..., User: ..., etc.)
-        messages: Final = []
+        messages: Final[list[AllMessageValues]] = []
         current_role = None
         current_content = []
 
@@ -325,13 +327,13 @@ class DotpromptManager(CustomPromptManagement):
             "content": content,
         }
 
-    def _extract_optional_params(self, template: PromptTemplate) -> dict:
+    def _extract_optional_params(self, template: PromptTemplate) -> dict[str, object]:
         """
         Extract optional parameters from the prompt template metadata.
 
         Includes parameters like temperature, max_tokens, etc.
         """
-        optional_params: Final = {}
+        optional_params: Final[dict[str, object]] = {}
 
         # Extract common parameters from metadata
         if template.optional_params is not None:

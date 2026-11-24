@@ -10,6 +10,7 @@ from collections.abc import Iterable, Mapping
 from typing import Any, Final, Literal, Optional
 
 import pytest
+from fastapi import HTTPException
 from openai.types.responses import ResponseFunctionWebSearch
 
 
@@ -24,10 +25,13 @@ from litellm.types.responses.main import build_web_search_call
 from litellm.types.utils import (
     ChatCompletionMessageToolCall,
     Choices,
+    Delta,
     Function,
     GenericGuardrailAPIInputs,
     Message,
     ModelResponse,
+    ModelResponseStream,
+    StreamingChoices,
 )
 
 
@@ -1559,7 +1563,7 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
         assert chunks[4].usage.completion_tokens == 7
 
     @staticmethod
-    def _two_choice_tool_call_stream_chunks() -> list:
+    def _two_choice_tool_call_stream_chunks(leading_texts: tuple[str, str] | None = None) -> list:
         from litellm.types.utils import (
             ChatCompletionDeltaToolCall,
             Delta,
@@ -1569,7 +1573,10 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
         )
 
         def chunk(
-            choice_index: int, tool_call: ChatCompletionDeltaToolCall | None, finish_reason: Optional[str] = None
+            choice_index: int,
+            tool_call: ChatCompletionDeltaToolCall | None,
+            finish_reason: Optional[str] = None,
+            content: str | None = None,
         ) -> ModelResponseStream:
             return ModelResponseStream(
                 id="chatcmpl-123",
@@ -1579,7 +1586,7 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
                 choices=[
                     StreamingChoices(
                         index=choice_index,
-                        delta=Delta(tool_calls=[tool_call] if tool_call else None),
+                        delta=Delta(content=content, tool_calls=[tool_call] if tool_call else None),
                         finish_reason=finish_reason,
                     )
                 ],
@@ -1590,7 +1597,11 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
                 id=call_id, index=0, type="function", function=Function(name=name, arguments=arguments)
             )
 
+        text_chunks: Final = (
+            [chunk(index, None, content=text) for index, text in enumerate(leading_texts)] if leading_texts else []
+        )
         return [
+            *text_chunks,
             chunk(0, fragment("", name="lookup_fruit", call_id="call_1")),
             chunk(1, fragment("", name="lookup_fruit", call_id="call_2")),
             chunk(0, fragment('{"fruit": "pers')),
@@ -1639,24 +1650,36 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
         ] == [("call_1", '{"fruit": "persimmon"}'), ("call_2", '{"fruit": "durian"}')]
 
     @pytest.mark.asyncio
-    async def test_deliver_ended_stream_tool_call_rewrite_on_multi_choice_stream_fails_closed(self):
-        from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
-
+    async def test_deliver_ended_stream_rewrites_each_choices_text_and_tool_call(self):
         handler = OpenAIChatCompletionsHandler()
-        chunks = self._two_choice_tool_call_stream_chunks()
+        chunks = self._two_choice_tool_call_stream_chunks(leading_texts=("look up ", "check "))
 
-        with pytest.raises(UndeliverableStreamRewrite, match="the stream carries 2 choices") as raised:
-            await handler.process_output_streaming_response(
-                responses_so_far=chunks,
-                guardrail_to_apply=MockGuardrail(guardrail_name="test"),
-                litellm_logging_obj=None,
-                deliver_ended_stream_rewrites=True,
-            )
-
-        assert raised.value.guardrail_name == "test"
-        assert raised.value.reason == (
-            "the stream carries 2 choices and tool-call rewrites are only written back on single-choice streams"
+        await handler.process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=MockGuardrail(guardrail_name="test"),
+            litellm_logging_obj=None,
+            deliver_ended_stream_rewrites=True,
         )
+
+        assert [
+            (
+                c.choices[0].index,
+                c.choices[0].delta.content,
+                [t.function.arguments for t in c.choices[0].delta.tool_calls or ()],
+            )
+            for c in chunks
+        ] == [
+            (0, "LOOK UP ", []),
+            (1, "CHECK ", []),
+            (0, None, ['{"fruit": "PERSIMMON"}']),
+            (1, None, ['{"fruit": "DURIAN"}']),
+            (0, None, [""]),
+            (1, None, [""]),
+            (0, None, [""]),
+            (1, None, [""]),
+            (0, None, []),
+            (1, None, []),
+        ]
 
     @pytest.mark.asyncio
     async def test_deliver_ended_stream_clean_multi_choice_stream_released_untouched(self):
@@ -2757,3 +2780,166 @@ class TestStreamingScanKey:
         for released in (text_only, finished_tool_call):
             ended = handler.released_stream_as_ended(released)
             assert len(ended) == len(released) and all(a is b for a, b in zip(ended, released, strict=True))
+
+
+class _EmailMaskingGuardrail(CustomGuardrail):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        return {**inputs, "texts": [text.replace("alice@example.com", "<EMAIL>") for text in inputs.get("texts", [])]}
+
+
+class _EmailClearingGuardrail(CustomGuardrail):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        return {**inputs, "texts": ["" if "alice@example.com" in text else text for text in inputs.get("texts", [])]}
+
+
+class _EmailBlockingGuardrail(CustomGuardrail):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        if any("alice@example.com" in text for text in inputs.get("texts", [])):
+            raise HTTPException(status_code=400, detail="blocked")
+        return inputs
+
+
+class TestRefusalText:
+    @staticmethod
+    def _response(content: str | None) -> ModelResponse:
+        return ModelResponse(
+            id="chatcmpl-refusal",
+            created=1,
+            model="gpt-4",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    index=0,
+                    finish_reason="stop",
+                    message=Message(role="assistant", content=content, refusal="I cannot help alice@example.com"),
+                )
+            ],
+        )
+
+    @staticmethod
+    def _stream_chunk(delta: Delta, finish_reason: str | None = None) -> ModelResponseStream:
+        return ModelResponseStream(
+            id="chatcmpl-refusal",
+            created=1,
+            model="gpt-4",
+            object="chat.completion.chunk",
+            choices=[StreamingChoices(index=0, delta=delta, finish_reason=finish_reason)],
+        )
+
+    def _ended_stream(self) -> list[ModelResponseStream]:
+        return [
+            self._stream_chunk(Delta(refusal="I cannot help ")),
+            self._stream_chunk(Delta(refusal="alice@example.com")),
+            self._stream_chunk(Delta(), finish_reason="stop"),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_a_masking_guardrail_masks_a_refusal_with_no_content(self):
+        response: Final = self._response(content=None)
+
+        await OpenAIChatCompletionsHandler().process_output_response(
+            response=response, guardrail_to_apply=_EmailMaskingGuardrail(guardrail_name="mask")
+        )
+
+        assert response.choices[0].message.refusal == "I cannot help <EMAIL>"
+        assert response.choices[0].message.content is None
+
+    @pytest.mark.asyncio
+    async def test_a_masking_guardrail_keeps_content_and_refusal_in_their_own_fields(self):
+        response: Final = self._response(content="Write to alice@example.com")
+
+        await OpenAIChatCompletionsHandler().process_output_response(
+            response=response, guardrail_to_apply=_EmailMaskingGuardrail(guardrail_name="mask")
+        )
+
+        assert response.choices[0].message.content == "Write to <EMAIL>"
+        assert response.choices[0].message.refusal == "I cannot help <EMAIL>"
+
+    @pytest.mark.asyncio
+    async def test_a_blocking_guardrail_blocks_on_a_refusal(self):
+        with pytest.raises(HTTPException):
+            await OpenAIChatCompletionsHandler().process_output_response(
+                response=self._response(content=None),
+                guardrail_to_apply=_EmailBlockingGuardrail(guardrail_name="block"),
+            )
+
+    @pytest.mark.asyncio
+    async def test_an_ended_stream_delivers_the_masked_refusal_over_its_deltas(self):
+        chunks: Final = self._ended_stream()
+
+        await OpenAIChatCompletionsHandler().process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=_EmailMaskingGuardrail(guardrail_name="mask"),
+            litellm_logging_obj=None,
+            deliver_ended_stream_rewrites=True,
+        )
+
+        delivered: Final = (getattr(chunk.choices[0].delta, "refusal", None) or "" for chunk in chunks)
+        assert "".join(delivered) == "I cannot help <EMAIL>"
+        assert "alice@example.com" not in "".join(chunk.model_dump_json() for chunk in chunks)
+
+    @pytest.mark.asyncio
+    async def test_an_ended_stream_clears_a_refusal_the_guardrail_empties(self):
+        chunks: Final = self._ended_stream()
+
+        await OpenAIChatCompletionsHandler().process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=_EmailClearingGuardrail(guardrail_name="clear"),
+            litellm_logging_obj=None,
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert "".join(getattr(chunk.choices[0].delta, "refusal", None) or "" for chunk in chunks) == ""
+        assert "alice@example.com" not in "".join(chunk.model_dump_json() for chunk in chunks)
+
+    @pytest.mark.asyncio
+    async def test_a_blocking_guardrail_blocks_on_a_streamed_refusal(self):
+        with pytest.raises(HTTPException):
+            await OpenAIChatCompletionsHandler().process_output_streaming_response(
+                responses_so_far=self._ended_stream(),
+                guardrail_to_apply=_EmailBlockingGuardrail(guardrail_name="block"),
+                litellm_logging_obj=None,
+            )
+
+    @pytest.mark.asyncio
+    async def test_a_mid_stream_scan_masks_the_refusal_on_the_chunk_it_scanned(self):
+        chunk: Final = self._stream_chunk(Delta(refusal="write to alice@example.com"))
+
+        await OpenAIChatCompletionsHandler().process_output_streaming_response(
+            responses_so_far=[chunk],
+            guardrail_to_apply=_EmailMaskingGuardrail(guardrail_name="mask"),
+            litellm_logging_obj=None,
+        )
+
+        assert chunk.choices[0].delta.refusal == "write to <EMAIL>"
+
+    @pytest.mark.asyncio
+    async def test_a_mid_stream_scan_masks_a_refusal_beside_a_relayed_error_string(self):
+        chunk: Final = self._stream_chunk(Delta(refusal="write to alice@example.com"))
+        relayed_error: Final = 'data: {"error": {"message": "upstream failed"}}'
+
+        await OpenAIChatCompletionsHandler().process_output_streaming_response(
+            responses_so_far=[chunk, relayed_error],  # pyright: ignore[reportArgumentType]  # the proxy relays raw SSE error strings beside chunks
+            guardrail_to_apply=_EmailMaskingGuardrail(guardrail_name="mask"),
+            litellm_logging_obj=None,
+        )
+
+        assert chunk.choices[0].delta.refusal == "write to <EMAIL>"

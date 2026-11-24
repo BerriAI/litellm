@@ -767,6 +767,44 @@ class TestResponsesAPIHooks:
             assert result is response
 
     @pytest.mark.asyncio
+    async def test_post_call_responses_api_scans_a_compaction_summary(self):
+        """A compaction item's summary is model output too, so it must be DLP-scanned."""
+        from litellm.responses.litellm_completion_transformation.compaction_items import (
+            summary_only_compaction_content,
+        )
+        from litellm.types.llms.openai import ResponsesAPIResponse
+
+        guardrail = _make_guardrail()
+        response = ResponsesAPIResponse(
+            id="resp-compaction",
+            created_at=0,
+            output=[
+                {
+                    "type": "compaction",
+                    "id": "cmp_1",
+                    "encrypted_content": summary_only_compaction_content(
+                        "The user shared card 4111-1111-1111-1111."
+                    ),
+                }
+            ],
+        )
+
+        async def block_card_numbers(**kwargs: object) -> dict[str, object]:
+            if "4111-1111-1111-1111" in str(kwargs["text"]):
+                raise HTTPException(status_code=400, detail="blocked by Purview")
+            return {"policyActions": []}
+
+        with patch.object(guardrail, "_check_content", side_effect=block_card_numbers):
+            with pytest.raises(HTTPException) as exc_info:
+                await guardrail.async_post_call_success_hook(
+                    data={},
+                    user_api_key_dict=UserAPIKeyAuth(api_key="test", user_id="user-123"),
+                    response=response,
+                )
+
+        assert exc_info.value.status_code == 400
+
+    @pytest.mark.asyncio
     async def test_post_call_responses_api_empty_output_skips(self):
         """Post-call hook must not call _check_content when output has no text."""
         from litellm.types.llms.openai import ResponsesAPIResponse
@@ -2727,6 +2765,62 @@ class TestStreamingIteratorHook:
             assert chunks == [created_event, completed_event]
 
     @pytest.mark.asyncio
+    async def test_streaming_responses_api_scans_a_compaction_summary(self):
+        """A streamed compaction item's summary must be DLP-scanned before any event is released."""
+        from litellm.responses.litellm_completion_transformation.compaction_items import (
+            summary_only_compaction_content,
+        )
+        from litellm.types.llms.openai import (
+            ResponseCompletedEvent,
+            ResponsesAPIResponse,
+            ResponsesAPIStreamEvents,
+        )
+
+        guardrail = _make_guardrail()
+        completed_event = ResponseCompletedEvent(
+            type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+            response=ResponsesAPIResponse(
+                id="resp-compaction-stream",
+                created_at=0,
+                output=[
+                    {
+                        "type": "compaction",
+                        "id": "cmp_2",
+                        "encrypted_content": summary_only_compaction_content(
+                            "The user shared card 4111-1111-1111-1111."
+                        ),
+                    }
+                ],
+            ),
+        )
+
+        async def fake_response_stream():
+            yield completed_event
+
+        with patch.object(
+            guardrail, "_check_content", new_callable=AsyncMock
+        ) as mock_check:
+            mock_check.return_value = {"policyActions": []}
+
+            chunks = [
+                chunk
+                async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+                    user_api_key_dict=UserAPIKeyAuth(
+                        api_key="test", user_id="user-123"
+                    ),
+                    response=fake_response_stream(),
+                    request_data={},
+                )
+            ]
+
+            mock_check.assert_called_once()
+            assert (
+                mock_check.call_args.kwargs["text"]
+                == "The user shared card 4111-1111-1111-1111."
+            )
+            assert chunks == [completed_event]
+
+    @pytest.mark.asyncio
     async def test_streaming_responses_api_violation_blocks_before_yield(self):
         """Responses API stream with a DLP violation must raise before any chunk is yielded."""
         from litellm.types.llms.openai import (
@@ -2803,6 +2897,46 @@ class TestRegistration:
             guardrail_class_registry["microsoft_purview"]
             is MicrosoftPurviewDLPGuardrail
         )
+
+
+def test_responses_input_scan_includes_the_arguments_of_a_replayed_claude_tool_search():
+    guardrail = _make_guardrail()
+    data = {
+        "model": "claude-sonnet-5-5",
+        "input": [
+            {"role": "user", "content": "What is the weather?"},
+            {
+                "type": "tool_search_call",
+                "id": "tsc_srvtoolu_01Search",
+                "call_id": "srvtoolu_01Search",
+                "arguments": {"pattern": "ssn 123-45-6789"},
+                "execution": "server",
+                "status": "completed",
+            },
+            {
+                "type": "tool_search_output",
+                "id": "tso_01Search",
+                "call_id": "srvtoolu_01Search",
+                "tools": [{"type": "function", "name": "get_weather"}],
+                "status": "completed",
+            },
+            {
+                "type": "function_call",
+                "id": "fc_01Weather",
+                "call_id": "toolu_01Weather",
+                "name": "get_weather",
+                "arguments": '{"city": "Paris"}',
+                "status": "completed",
+            },
+            {"type": "function_call_output", "call_id": "toolu_01Weather", "output": "14C"},
+        ],
+    }
+
+    scanned = guardrail._responses_api_input_to_str(data)
+
+    assert scanned is not None
+    assert "123-45-6789" in scanned
+    assert "Paris" in scanned
 
 
 @pytest.mark.parametrize("odata_type", [None, 7], ids=["null", "number"])

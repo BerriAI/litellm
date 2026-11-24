@@ -191,3 +191,45 @@ def test_fal_queue_submit_prices_string_resolution_like_the_integer(gateway: Gat
             ("POST", f"/{_MODEL}"),
         ]
         assert [json.loads(request.body) for request in forwarded] == [numeric_body, string_body]
+
+
+@pytest.mark.parametrize(
+    "path",
+    (
+        "/fal_ai/synthetic-vendor/unpriced-endpoint",
+        "/fal_ai/synthetic-vendor/x/requests/%2e%2e/%2e%2e/unpriced-endpoint",
+        "/fal_ai/synthetic-vendor/unpriced-endpoint%3Fa=/requests/x",
+        "/fal_ai/synthetic-vendor/unpriced-endpoint%23/requests/x",
+    ),
+)
+def test_fal_queue_submit_to_unpriced_endpoint_is_rejected_however_the_path_is_spelled(
+    gateway: Gateway, tmp_path: Path, path: str
+) -> None:
+    def respond(request: Request) -> Reply:
+        return Reply(body=json.dumps({"request_id": "req-1", "status": "IN_QUEUE"}).encode())
+
+    config: Final = tmp_path / "proxy_config.yaml"
+    config.write_text(
+        "model_list: []\n"
+        "general_settings:\n"
+        "  master_key: os.environ/LITELLM_MASTER_KEY\n"
+        "  database_url: os.environ/DATABASE_URL\n"
+        "  store_model_in_db: true\n"
+        "  disable_spend_logs: false\n"
+        "  proxy_batch_write_at: 1\n"
+        "router_settings:\n"
+        "  disable_cooldowns: true\n"
+    )
+    with wire_server(respond) as wire:
+        with owned_proxy(
+            gateway,
+            tmp_path,
+            {"FAL_AI_QUEUE_API_BASE": wire.url, "FAL_AI_API_KEY": "synthetic-fal-key"},
+            config=config,
+        ) as candidate:
+            submit: Final = candidate.request("POST", path, {"prompt": "a red boat"})
+            assert submit.status_code == 400, submit.text
+            assert "pricing" in submit.text
+            priced: Final = candidate.request("POST", f"/fal_ai/{_MODEL}", _REQUEST_BODY)
+            assert priced.status_code == 200, priced.text
+        assert [(request.method, request.target) for request in wire.drain()] == [("POST", f"/{_MODEL}")]

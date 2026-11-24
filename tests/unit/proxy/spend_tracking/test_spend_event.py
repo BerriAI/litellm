@@ -16,6 +16,10 @@ from litellm.proxy.spend_tracking.spend_event import (
     is_offloadable_success,
     spend_event_callback_args,
 )
+from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+    SETTLES_BACKGROUND_RESPONSE_KWARG,
+    BackgroundResponseSettlement,
+)
 from litellm.types.utils import LiteLLMBatch, ModelResponse, Usage
 
 _BIG_PROMPT: Final = "x" * 20_000
@@ -194,11 +198,23 @@ def test_undecodable_line_is_an_error_value():
     assert isinstance(decode_spend_event(b"not json\n"), SpendEventDecodeError)
 
 
+@pytest.mark.parametrize(
+    ("settlement", "offloadable"),
+    [(BackgroundResponseSettlement.SETTLES, False), (None, True), ("settles", True)],
+    ids=["settling_read_stays_in_process", "other_read_is_offloaded", "lookalike_string_is_offloaded"],
+)
+def test_only_a_background_response_settling_read_stays_in_process(
+    settlement: BackgroundResponseSettlement | str | None, offloadable: bool
+) -> None:
+    kwargs: Final = {"call_type": "pass_through_endpoint", SETTLES_BACKGROUND_RESPONSE_KWARG: settlement}
+    assert is_offloadable_success(None, kwargs) is offloadable
+
+
 def test_batch_retrieves_and_video_status_polls_stay_in_process():
-    assert is_offloadable_success(_response(), "acompletion") is True
-    assert is_offloadable_success(None, None) is True
-    assert is_offloadable_success(None, "avideo_generation") is True
-    assert is_offloadable_success(None, "avideo_status") is False
+    assert is_offloadable_success(_response(), {"call_type": "acompletion"}) is True
+    assert is_offloadable_success(None, {}) is True
+    assert is_offloadable_success(None, {"call_type": "avideo_generation"}) is True
+    assert is_offloadable_success(None, {"call_type": "avideo_status"}) is False
     assert (
         is_offloadable_success(
             LiteLLMBatch(
@@ -210,7 +226,7 @@ def test_batch_retrieves_and_video_status_polls_stay_in_process():
                 object="batch",
                 status="completed",
             ),
-            "aretrieve_batch",
+            {"call_type": "aretrieve_batch"},
         )
         is False
     )

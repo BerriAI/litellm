@@ -15,8 +15,9 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Final, TypeAlias
 
+import httpx
 from openai.lib import _parsing, _pydantic  # pyright: ignore[reportPrivateUsage]  # SDK parser internals
-from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
+from pydantic import BaseModel, JsonValue, PositiveFloat, TypeAdapter, ValidationError
 from typing_extensions import TypeIs  # noqa: TID251  # narrows a message to its system member by the role literal
 
 from litellm._logging import verbose_logger
@@ -38,6 +39,27 @@ from litellm.types.utils import (
     TokenCountResponse,
 )
 
+_SECONDS: Final[TypeAdapter[float]] = TypeAdapter(PositiveFloat)
+
+
+def deployment_timeout(litellm_params: Mapping[str, object]) -> float | httpx.Timeout | None:
+    timeout: Final = litellm_params.get("timeout")
+    if timeout is None or isinstance(timeout, httpx.Timeout):
+        return timeout
+    try:
+        return _SECONDS.validate_python(timeout)
+    except ValidationError:
+        return None
+
+
+def deployment_litellm_params(deployment: Mapping[str, object] | None) -> Mapping[str, object]:
+    params: Final = None if deployment is None else as_str_mapping(deployment.get("litellm_params"))
+    return MappingProxyType({}) if params is None else params
+
+
+def optional_str(value: object) -> str | None:
+    return value if isinstance(value, str) else None
+
 
 class BaseTokenCounter(ABC):
     @abstractmethod
@@ -54,6 +76,7 @@ class BaseTokenCounter(ABC):
         output_format: JsonValue = None,
         context_management: CountContextManagement | None = None,
         chat_params: Mapping[str, JsonValue] = MappingProxyType({}),
+        count_options: Mapping[str, JsonValue] = MappingProxyType({}),
     ) -> TokenCountResponse | None:
         pass
 
@@ -127,8 +150,8 @@ class BaseLLMModelInfo(ABC):
         headers: dict,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
@@ -450,9 +473,9 @@ def _dict_to_response_format_helper(response_format: dict, ref_template: str | N
         schema: Final = modified_format["json_schema"]["schema"]
 
         # Update all $ref values in the schema
-        def update_refs(schema):
-            stack: Final = [(schema, [])]
-            visited: Final = set()
+        def update_refs(schema: object) -> None:
+            stack: Final[list[tuple[object, list[object]]]] = [(schema, [])]
+            visited: Final[set[int]] = set()
 
             while stack:
                 obj, path = stack.pop()

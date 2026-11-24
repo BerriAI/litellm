@@ -13,7 +13,7 @@ class CustomPromptManagement(CustomLogger, PromptManagementBase):
         self,
         ignore_prompt_manager_model: bool | None = False,
         ignore_prompt_manager_optional_params: bool | None = False,
-        **kwargs,
+        **kwargs: object,
     ):
         self.ignore_prompt_manager_model = ignore_prompt_manager_model
         self.ignore_prompt_manager_optional_params = ignore_prompt_manager_optional_params

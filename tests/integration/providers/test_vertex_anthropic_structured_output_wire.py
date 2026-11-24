@@ -24,11 +24,11 @@ import pytest
 import yaml
 from integration._support.client import Gateway, Scenario, eventually, list_value, object_value, string_value
 from integration._support.database import read_rows
+from integration._support.ports import allocate_port
 from integration._support.process import OwnedProxy, graceful_stop_seconds, owned_proxy_process
 from integration._support.upstream import aws_event_stream_frame
-from integration._support.vertex import service_account_json
+from integration._support.vertex import assert_vertex_authorization, service_account_json
 from integration._support.wire import Reply, Request, Wire, wire_server
-from integration._support.ports import allocate_port
 from pydantic import JsonValue, TypeAdapter
 
 pytestmark: Final = pytest.mark.shares_worker_state
@@ -561,7 +561,7 @@ def _structured(body: Mapping[str, JsonValue]) -> bool:
 def _peer(request: Request) -> Reply:
     vertex: Final = request.target.startswith(_VERTEX_MODELS)
     if vertex:
-        assert request.headers["authorization"] == "Bearer scripted-token", request.headers
+        assert_vertex_authorization(request.headers["authorization"], _PROJECT)
     elif not _scripted_target(request):
         return _error(404, f"unscripted target {request.target}")
     body: Final = _JSON_OBJECT.validate_json(request.body)
@@ -605,6 +605,7 @@ def _delivered(wire: Wire) -> tuple[_Delivery, ...]:
     return tuple(
         _Delivery(request.target, request.headers.get("anthropic-beta"), _JSON_OBJECT.validate_json(request.body))
         for request in wire.drain()
+        if _scripted_target(request)
     )
 
 

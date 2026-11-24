@@ -43,7 +43,6 @@ from litellm.litellm_core_utils.batch_utils import (
     job_to_charge_once,
 )
 from litellm.litellm_core_utils.core_helpers import (
-    get_metadata_variable_name_from_kwargs,
     require_attributes,
 )
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds_from
@@ -204,7 +203,7 @@ class RouterBudgetLimiting(CustomLogger):
         model: str,
         healthy_deployments: list,
         messages: list[AllMessageValues] | None,
-        request_kwargs: dict | None = None,
+        request_kwargs: dict[str, object] | None = None,
         parent_otel_span: Span | None = None,
     ) -> list[dict]:
         """
@@ -262,7 +261,6 @@ class RouterBudgetLimiting(CustomLogger):
                 potential_deployments=potential_deployments,
                 request_tags=get_tags_from_request_kwargs(
                     request_kwargs=request_kwargs,
-                    metadata_variable_name=get_metadata_variable_name_from_kwargs(request_kwargs or {}),
                 ),
             )
 
@@ -362,7 +360,7 @@ class RouterBudgetLimiting(CustomLogger):
     async def _async_get_cache_keys_for_router_budget_limiting(
         self,
         healthy_deployments: Sequence[Mapping[str, object]],
-        request_kwargs: dict | None = None,
+        request_kwargs: Mapping[str, object] | None = None,
     ) -> tuple[
         list[str],
         dict[str, GenericBudgetInfo],
@@ -389,7 +387,6 @@ class RouterBudgetLimiting(CustomLogger):
         if self.tag_budget_config:
             _request_tags = get_tags_from_request_kwargs(
                 request_kwargs=request_kwargs,
-                metadata_variable_name=get_metadata_variable_name_from_kwargs(request_kwargs or {}),
             )
 
         for deployment in healthy_deployments:
@@ -567,7 +564,7 @@ class RouterBudgetLimiting(CustomLogger):
         return True
 
     @with_service_target("router_budgets")
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(self, kwargs, response_obj: object, start_time: object, end_time: object):
         """Original method now uses helper functions"""
         verbose_router_logger.debug("in RouterBudgetLimiting.async_log_success_event")
         callback_fields: Final = _CALLBACK_FIELDS.validate_python(kwargs)
@@ -618,7 +615,6 @@ class RouterBudgetLimiting(CustomLogger):
 
         request_tags: Final = get_tags_from_request_kwargs(
             callback_fields,
-            metadata_variable_name=get_metadata_variable_name_from_kwargs(callback_fields),
         )
         if len(request_tags) > 0:
             for _tag in request_tags:
@@ -758,7 +754,7 @@ class RouterBudgetLimiting(CustomLogger):
         if redis_cache is None or not await self._flush_queued_increment_operations(redis_cache):
             return
 
-        cache_keys: Final = []
+        cache_keys: Final[list[str]] = []
 
         if self.provider_budget_config is not None:
             for provider, config in self.provider_budget_config.items():
@@ -919,7 +915,7 @@ class RouterBudgetLimiting(CustomLogger):
 
     @staticmethod
     def should_init_router_budget_limiter(
-        provider_budget_config: dict | None,
+        provider_budget_config: Mapping[str, object] | None,
         model_list: Sequence[Mapping[str, object]] | None = None,
     ):
         """
