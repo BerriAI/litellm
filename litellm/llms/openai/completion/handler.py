@@ -45,7 +45,7 @@ class OpenAITextCompletion(BaseLLM):
         api_base: str | None = None,
         acompletion: bool = False,
         litellm_params: Mapping[str, object] | None = None,
-        logger_fn: object = None,
+        logger_fn=None,
         client=None,
         organization: str | None = None,
         headers: dict | None = None,
