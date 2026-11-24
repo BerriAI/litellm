@@ -26,6 +26,7 @@ from litellm.constants import (
     BEDROCK_REALTIME_SDK_DISTRIBUTION,
     BEDROCK_REALTIME_SDK_SUPPORTED_RANGE,
     BEDROCK_REALTIME_SESSION_COMMITTED_SCOPE_KEY,
+    REALTIME_OVER_TOKEN_LIMIT_CLOSE_CODE,
     REALTIME_SESSION_ENDED_ABNORMALLY_KEY,
     REALTIME_SESSION_SUCCESS_LOGGED_KEY,
 )
@@ -312,7 +313,7 @@ async def _ended_turn_over_limit(
     with contextlib.suppress(Exception):
         await client_ws.send_text(refusal)
     with contextlib.suppress(Exception):
-        await client_ws.close()
+        await client_ws.close(code=REALTIME_OVER_TOKEN_LIMIT_CLOSE_CODE, reason="session ended at its token rate limit")
     return True
 
 

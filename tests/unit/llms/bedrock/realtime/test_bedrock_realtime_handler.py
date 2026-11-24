@@ -277,6 +277,7 @@ class EndedBedrockStream:
 class RealtimeClientWS:
     def __init__(self, messages=()):
         self.closed = False
+        self.close_code = None
         self.sent_to_client = []
         self.scope = {}
         self._messages = list(messages)
@@ -291,6 +292,7 @@ class RealtimeClientWS:
 
     async def close(self, code=None, reason=None):
         self.closed = True
+        self.close_code = code
 
 
 class ConnectedClientWS(RealtimeClientWS):
@@ -2511,6 +2513,7 @@ class TestBedrockRealtimeTurnLimits:
         events: Final = [json.loads(message) for message in client_ws.sent_to_client]
         assert [event["error"]["type"] for event in events if event["type"] == "error"] == ["rate_limit_exceeded"]
         assert not any(event["type"].endswith(".delta") for event in events)
+        assert client_ws.close_code == 1013
 
     @pytest.mark.asyncio
     async def test_a_guardrail_voice_reply_over_the_limit_is_not_sent_to_bedrock(self, stub_aws_models: None) -> None:

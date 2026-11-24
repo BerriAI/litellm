@@ -21,6 +21,8 @@ from litellm.constants import (
     REALTIME_LAZY_SETUP_CONTENT_GRACE_SECONDS,
     REALTIME_LAZY_SETUP_DEADLINE_SECONDS,
     REALTIME_METERED_USAGE_KEY,
+    REALTIME_OVER_LIMIT_USAGE_WAIT_SECONDS,
+    REALTIME_OVER_TOKEN_LIMIT_CLOSE_CODE,
     REALTIME_SESSION_ENDED_ABNORMALLY_KEY,
     REALTIME_SESSION_FAILURE_LOGGED_KEY,
     REALTIME_SESSION_SUCCESS_LOGGED_KEY,
@@ -109,6 +111,11 @@ class ClientLoopExit(Enum):
     CLIENT_DISCONNECTED = auto()
     BACKEND_CLOSED = auto()
     RELAY_FAILED = auto()
+
+
+OVER_TOKEN_LIMIT_CLOSE: Final = BackendClose(
+    code=REALTIME_OVER_TOKEN_LIMIT_CLOSE_CODE, reason="session ended at its token rate limit"
+)
 
 
 def backend_close_from(error: "ConnectionClosed") -> BackendClose:
@@ -567,6 +574,8 @@ class RealTimeStreaming:
             turn_limiters, user_api_key_dict, logging_obj.model_call_details, model
         )
         self._ended_over_token_limit: bool = False
+        self._turn_refusal_sent: bool = False
+        self._over_limit_usage_wait: asyncio.Task[None] | None = None
         # Violation counter for end_session_after_n_fails support
         self._violation_count: int = 0
         # When a text message is blocked, hold the guardrail reason so the next
@@ -789,15 +798,16 @@ class RealTimeStreaming:
         except (AttributeError, TypeError):
             pass
 
-    def _flush_unbilled_transcription_usage(self) -> None:
+    def _flush_unbilled_session_usage(self) -> tuple[Mapping[str, object], ...]:
         if self.provider_config is None:
-            return
+            return ()
         unbilled_response: Final = self.provider_config.unbilled_response_on_session_close(self.model)
         if unbilled_response is not None:
             self.store_message(unbilled_response)
+        flushed_response: Final = () if unbilled_response is None else (unbilled_response,)
         usage: Final = self.provider_config.unbilled_usage_on_session_close(self.model)
         if usage is None:
-            return
+            return flushed_response
         flush_event: Final = (
             cast(  # cast-ok: usage-only partial event, the same shape _capture_transcription_usage logs
                 OpenAIRealtimeEvents,
@@ -809,6 +819,7 @@ class RealTimeStreaming:
         )
         self.store_message(flush_event)
         self._capture_transcription_usage(flush_event)
+        return (*flushed_response, flush_event)
 
     def _collect_tool_calls_from_response_done(self, event_obj: Mapping[str, object] | OpenAIRealtimeEvents) -> None:
         """Extract function_call items from response.done events for spend logging."""
@@ -1613,6 +1624,7 @@ class RealTimeStreaming:
         refusal: Final = await self._turn_limits.refusal()
         if refusal is None:
             return False
+        self._turn_refusal_sent = True
         await self.websocket.send_text(refusal)
         return True
 
@@ -1627,12 +1639,26 @@ class RealTimeStreaming:
         await self.websocket.send_text(refusal)
         await self.backend_ws.close()
 
+    async def _end_session_after_refused_response(self, refusal: str) -> None:
+        self._ended_over_token_limit = True
+        if not self._turn_refusal_sent:
+            await self.websocket.send_text(refusal)
+        self._over_limit_usage_wait = asyncio.create_task(self._close_backend_after_usage_wait())
+
+    async def _close_backend_after_usage_wait(self) -> None:
+        await asyncio.sleep(REALTIME_OVER_LIMIT_USAGE_WAIT_SECONDS)
+        await self.backend_ws.close()
+
     async def _dropped_after_token_limit_end(self, frame: object) -> bool:
         if not self._ended_over_token_limit:
             return False
         event: Final = as_str_mapping(frame)
-        if event is not None and self._turn_limits is not None:
+        if event is None:
+            return True
+        if self._turn_limits is not None:
             await self._count_billed_frame(event, self._turn_limits)
+        if self._over_limit_usage_wait is not None and event.get("type") == "response.done":
+            await self.backend_ws.close()
         return True
 
     async def _count_billed_frame(self, event: Mapping[str, object], turn_limits: RealtimeTurnLimits) -> None:
@@ -1655,6 +1681,7 @@ class RealTimeStreaming:
         if self._turn_limits is None:
             return False
         if event.get("type") == "response.done":
+            self._turn_refusal_sent = False
             await self._turn_limits.charge(event)
             return False
         if self._listens_only or event.get("type") != "response.created":
@@ -1665,7 +1692,7 @@ class RealTimeStreaming:
         if await self._send_guardrail_cancel(realtime_response_id(event)):
             await self.websocket.send_text(refusal)
             return False
-        await self._end_session_over_token_limit(refusal)
+        await self._end_session_after_refused_response(refusal)
         return True
 
     async def _session_ended_by_transcription_limits(self, event: Mapping[str, object]) -> bool:
@@ -2118,17 +2145,14 @@ class RealTimeStreaming:
             else:
                 verbose_logger.exception("Connection closed in backend to client send messages - %s", e)
             close: Final = backend_close_from(e)
-            self._flush_unbilled_transcription_usage()
-            await self._log_session_end(e if self._backend_refused_session(close) else None)
-            return close
+            await self._end_backend_session(e if self._backend_refused_session(close) else None)
+            return OVER_TOKEN_LIMIT_CLOSE if self._ended_over_token_limit else close
         except asyncio.CancelledError:
-            self._flush_unbilled_transcription_usage()
-            await self._log_session_end(None)
+            await self._end_backend_session(None)
             raise
         except Exception as e:
             verbose_logger.exception("Error in backend to client send messages: %s", e)
-            self._flush_unbilled_transcription_usage()
-            await self._log_session_end(None)
+            await self._end_backend_session(None)
             return BackendClose(code=1011, reason="proxy failed while relaying the upstream websocket")
 
     def _backend_refused_session(self, close: BackendClose) -> bool:
@@ -2142,6 +2166,16 @@ class RealTimeStreaming:
             and (close.code != 1000 or self._backend_sent_frames)
             and not self._holds_session_updates_until_first_content()
         )
+
+    async def _end_backend_session(self, transport_refusal: Exception | None) -> None:
+        if self._over_limit_usage_wait is not None:
+            self._over_limit_usage_wait.cancel()
+        flushed: Final = self._flush_unbilled_session_usage()
+        await self._log_session_end(transport_refusal)
+        if self._turn_limits is None:
+            return
+        for event in flushed:
+            await self._turn_limits.charge(event)
 
     async def _log_session_end(self, transport_refusal: Exception | None) -> None:
         provider_refusal: Final = None if self.provider_config is None else self.provider_config.session_refusal()
@@ -2541,8 +2575,13 @@ class RealTimeStreaming:
                     await self._refuse_unscreened_audio(msg_type, message)
                     continue
 
-                if msg_type == "response.create" and await self._refuses_turn_over_token_limit():
+                if self._ended_over_token_limit:
                     continue
+
+                if msg_type == "response.create":
+                    if await self._refuses_turn_over_token_limit():
+                        continue
+                    self._turn_refusal_sent = False
 
                 ## LOGGING
                 # Log after any in-place modifications (GA remap, guardrail

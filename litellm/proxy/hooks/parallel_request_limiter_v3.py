@@ -459,6 +459,7 @@ EMBEDDING_API_CALL_TYPES: Final = ("aembedding", "embedding")
 TEXT_COMPLETION_API_CALL_TYPES: Final = ("atext_completion", "text_completion")
 RERANK_API_CALL_TYPES: Final = (CallTypes.rerank.value, CallTypes.arerank.value)
 EXTRACTION_API_CALL_TYPES: Final = (CallTypes.extraction.value, CallTypes.aextraction.value)
+REALTIME_API_CALL_TYPES: Final = (CallTypes.arealtime.value,)
 GOOGLE_GENAI_NATIVE_CALL_TYPES: Final = (
     CallTypes.generate_content.value,
     CallTypes.agenerate_content.value,
@@ -1013,6 +1014,7 @@ def _apply_implicit_output_cap(
         or is_embedding
         or endpoint_type == EndpointType.DECISIONS
         or call_type in EXTRACTION_API_CALL_TYPES
+        or call_type in REALTIME_API_CALL_TYPES
     ):
         return
     write_implicit_output_cap(data, call_type, max(capped_floor, configured_output_tokens or 0))
@@ -2615,7 +2617,11 @@ def estimate_input_and_output_tokens(
     ) + media_tokens
 
     explicit_max_tokens: Final = _get_explicit_output_cap(data, call_type)
-    generates_no_output: Final = _is_embedding_request(data, call_type) or call_type in EXTRACTION_API_CALL_TYPES
+    generates_no_output: Final = (
+        _is_embedding_request(data, call_type)
+        or call_type in EXTRACTION_API_CALL_TYPES
+        or call_type in REALTIME_API_CALL_TYPES
+    )
 
     base_output_floor: Final = no_max_tokens_output_floor(min_configured_tpm_limit)
     output_floor: Final = (

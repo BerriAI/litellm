@@ -11,7 +11,7 @@ use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 
 use crate::{
-    capacity::{Engine, Frame, PreCall, Request, SaturationFallback, Settlement},
+    capacity::{Engine, Frame, PreCall, Request, SaturationFallback, Settlement, TurnCharge},
     error::CapacityError,
     host::{CapacityHost, CounterStore, Facts},
     model::{KeyFacts, KeyGaps, LoggedGroup, UsageTokens},
@@ -465,6 +465,31 @@ impl ModelCapacity {
             facts,
         };
         self.engine.enforce_frame(&request, model, connection).await
+    }
+
+    pub async fn charge_turn(
+        &self,
+        connection: Option<&SharedStash>,
+        key: &KeyFacts,
+        model: &str,
+        used: &UsageTokens,
+        redis: Option<&RequestRedis>,
+        facts: &Facts,
+    ) -> Result<(), CapacityError> {
+        let Some(connection) = connection else {
+            return Ok(());
+        };
+        let settings = facts.settings()?;
+        let priority = key.priority_value();
+        let turn = TurnCharge {
+            model_group: model,
+            priority: priority.as_ref().and_then(Value::as_str),
+            team_id: key.team_str(),
+            tokens: UsageTokens::settled(Some(used), settings.rate_limit_type),
+        };
+        self.engine
+            .charge_turn(&settings, connection, &turn, redis)
+            .await
     }
 }
 

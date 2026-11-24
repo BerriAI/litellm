@@ -3,6 +3,8 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Final, Protocol, TypeAlias, runtime_checkable
 
+from pydantic import ValidationError
+
 import litellm
 from litellm._logging import verbose_logger
 from litellm.exceptions import RateLimitError, ServiceUnavailableError
@@ -33,6 +35,14 @@ class RealtimeCapacityCheck(Protocol):
     ) -> None: ...
 
 
+@runtime_checkable
+class RealtimeCapacityCharge(Protocol):
+    async def charge_realtime_capacity_turn(
+        self, user_api_key_dict: UserAPIKeyAuth, requested_model: str | None, usage: Usage
+    ) -> None: ...
+
+
+RealtimeTurnCharge: TypeAlias = RealtimeTurnLimiter | RealtimeCapacityCharge
 RealtimeTurnLimiterSource: TypeAlias = Callable[[], Sequence[object]]
 
 
@@ -65,7 +75,11 @@ def turn_token_usage(event: Mapping[str, object]) -> Usage | None:
     usage: Final = _reported_usage(event)
     if usage is None:
         return None
-    converted: Final = ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(usage)
+    try:
+        converted: Final = ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(usage)
+    except ValidationError as error:
+        verbose_logger.warning("Ignoring realtime usage the provider reported in an unexpected shape: %s", error)
+        return None
     return converted if converted.total_tokens or converted.prompt_tokens or converted.completion_tokens else None
 
 
@@ -77,7 +91,7 @@ def realtime_response_id(event: Mapping[str, object]) -> str | None:
 
 @dataclass(frozen=True, slots=True)
 class _UnchargedTurn:
-    limiter: RealtimeTurnLimiter
+    charger: RealtimeTurnCharge
     usage: Usage
 
 
@@ -87,6 +101,7 @@ class RealtimeTurnLimits:
     user_api_key_dict: UserAPIKeyAuth
     requested_model: str
     capacity_checks: tuple[RealtimeCapacityCheck, ...] = ()
+    capacity_charges: tuple[RealtimeCapacityCharge, ...] = ()
     _charged_response_ids: frozenset[str] = field(default=frozenset(), init=False)
     _uncharged: tuple[_UnchargedTurn, ...] = field(default=(), init=False)
 
@@ -117,12 +132,19 @@ class RealtimeTurnLimits:
             return
         if response_id is not None:
             self._charged_response_ids = self._charged_response_ids | {response_id}
-        self._uncharged = (*self._uncharged, *(_UnchargedTurn(limiter, usage) for limiter in self.limiters))
+        chargers: Final = (*self.limiters, *self.capacity_charges)
+        self._uncharged = (*self._uncharged, *(_UnchargedTurn(charger, usage) for charger in chargers))
         await self._settle_uncharged()
 
     async def _still_uncharged(self, turn: _UnchargedTurn) -> bool:
         try:
-            await turn.limiter.charge_realtime_turn_usage(self.user_api_key_dict, self.requested_model, turn.usage)
+            match turn.charger:
+                case RealtimeTurnLimiter() as limiter:
+                    await limiter.charge_realtime_turn_usage(self.user_api_key_dict, self.requested_model, turn.usage)
+                case capacity:
+                    await capacity.charge_realtime_capacity_turn(
+                        self.user_api_key_dict, self.requested_model, turn.usage
+                    )
         except Exception as error:  # noqa: BLE001  # the response already ran, so a failed charge must not end the session
             verbose_logger.exception("Realtime turn token charge failed: %s", error)
             return True
@@ -160,6 +182,7 @@ def realtime_turn_limits(
     )
     if not limiters and not capacity_checks:
         return None
+    capacity_charges: Final = tuple(check for check in capacity_checks if isinstance(check, RealtimeCapacityCharge))
     return RealtimeTurnLimits(
-        limiters, user_api_key_dict, _session_model_group(model_call_details, model), capacity_checks
+        limiters, user_api_key_dict, _session_model_group(model_call_details, model), capacity_checks, capacity_charges
     )

@@ -51,6 +51,7 @@ from litellm.proxy.v2_proxy_fields import (
 from litellm.redis.stores.rate_limits import RateLimitCounter, RateLimitScope, RateLimitStore
 from litellm.types.integrations.custom_logger_v2 import Outcome as AttemptOutcome
 from litellm.types.router import ModelGroupInfo
+from litellm.types.utils import Usage
 
 
 @dataclass(frozen=True, slots=True)
@@ -458,6 +459,14 @@ class NativeDynamicRateLimitHandler:
         self._touched = True  # rebind-ok: the handler has counted on its store
         await self.logger.enforce_token_limits_for_frame(
             user_api_key_dict=user_api_key_dict, requested_model=requested_model
+        )
+
+    async def charge_realtime_capacity_turn(
+        self, user_api_key_dict: UserAPIKeyAuth, requested_model: str | None, usage: Usage
+    ) -> None:
+        self._touched = True  # rebind-ok: the handler has counted on its store
+        await self.logger.charge_realtime_capacity_turn(
+            user_api_key_dict=user_api_key_dict, requested_model=requested_model, usage=usage
         )
 
 
