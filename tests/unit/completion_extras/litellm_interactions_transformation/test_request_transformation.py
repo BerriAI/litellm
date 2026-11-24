@@ -826,6 +826,59 @@ def test_forced_bridge_is_rejected_while_global_safety_settings_are_configured_s
         )
 
 
+def test_global_safety_settings_reach_interactions_in_its_own_shape_ahead_of_the_request_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        litellm,
+        "vertex_ai_safety_settings",
+        [{"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"}],
+    )
+
+    prepared: Final = transform_chat_to_interactions_request(
+        messages=[{"role": "user", "content": "hi"}],
+        model="gemini-4-neon",
+        optional_params={
+            "safety_settings": [{"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_LOW_AND_ABOVE"}]
+        },
+        litellm_params={},
+        custom_llm_provider="vertex_ai",
+    )
+
+    assert prepared.optional_params == {"safety_settings": [{"type": "hate_speech", "threshold": "block_none"}]}
+
+
+@pytest.mark.parametrize(
+    ("file_part", "expected"),
+    (
+        (
+            {"file_id": "https://www.youtube.com/watch?v=abc", "format": "video/mp4"},
+            {"type": "video", "uri": "https://www.youtube.com/watch?v=abc"},
+        ),
+        (
+            {"file_data": "data:audio/mp3;base64,QUJD"},
+            {"type": "audio", "mime_type": "audio/mp3", "data": "QUJD"},
+        ),
+        (
+            {"file_data": "data:application/pdf;base64,QUJD"},
+            {"type": "document", "mime_type": "application/pdf", "data": "QUJD"},
+        ),
+    ),
+    ids=("video_uri", "inline_audio", "inline_pdf"),
+)
+def test_file_part_is_sent_as_the_media_kind_its_mime_type_names(
+    file_part: Mapping[str, str], expected: Mapping[str, str]
+) -> None:
+    prepared: Final = transform_chat_to_interactions_request(
+        messages=[{"role": "user", "content": [{"type": "file", "file": file_part}]}],
+        model="gemini-4-neon",
+        optional_params={},
+        litellm_params={},
+    )
+
+    assert prepared.input_steps == [{"type": "user_input", "content": [expected]}]
+
+
 @pytest.mark.parametrize("blank", ("", None, [{"type": "text", "text": ""}]))
 def test_blank_final_user_turn_after_an_assistant_reply_still_ends_the_request_on_a_user_turn(blank: object) -> None:
     prepared = transform_chat_to_interactions_request(

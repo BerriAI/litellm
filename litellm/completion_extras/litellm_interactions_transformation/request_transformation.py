@@ -10,6 +10,7 @@ from typing import Final, TypeAlias
 from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.constants import MAX_IMAGE_URL_DOWNLOAD_SIZE_MB
 from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.allowed_tools_tool_choice import (
@@ -27,7 +28,6 @@ from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     OPENAI_TO_GEMINI_TTS_VOICES,
     VertexGeminiConfig,
 )
-from litellm._logging import verbose_logger
 from litellm.responses.bridge_check import interactions_safety_settings, requested_safety_settings
 
 MediaFetcher: TypeAlias = Callable[[str, str | None], tuple[str, str]]
