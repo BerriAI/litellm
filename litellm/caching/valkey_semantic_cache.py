@@ -17,7 +17,7 @@ RedisSemanticCache since those are backend agnostic.
 import asyncio
 import hashlib
 import os
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Final
 
@@ -147,7 +147,7 @@ class ValkeySemanticCache(RedisSemanticCache):
         return "already exists" in str(exc).lower()
 
     @staticmethod
-    def _extract_index_dim(info: Mapping[str, Iterable[object] | None]) -> int | None:
+    def _extract_index_dim(info: dict) -> int | None:
         # FT.INFO nests the vector field's "dimensions" one level inside its
         # "index" block, so flatten each field descriptor a single level and
         # scan for the dimensions marker.
@@ -160,7 +160,7 @@ class ValkeySemanticCache(RedisSemanticCache):
                     return int(flat[i + 1])
         return None
 
-    def _assert_dim_matches(self, info: Mapping[str, Iterable[object] | None], dim: int) -> None:
+    def _assert_dim_matches(self, info: dict, dim: int) -> None:
         existing_dim: Final = self._extract_index_dim(info)
         if existing_dim is not None and existing_dim != dim:
             raise ValueError(
