@@ -86,8 +86,8 @@ class OpenAIImageVariationsHandler:
         max_retries: int,
         logging_obj: LiteLLMLoggingObj,
         model_response: ImageResponse,
-        optional_params: dict[str, object],
-        litellm_params: dict[str, object],
+        optional_params: dict,
+        litellm_params: dict,
         image: FileTypes,
         provider_config: BaseImageVariationConfig,
     ) -> ImageResponse:
@@ -157,12 +157,12 @@ class OpenAIImageVariationsHandler:
         custom_llm_provider: str,
         logging_obj: LiteLLMLoggingObj,
         optional_params: dict,
-        litellm_params: dict[str, object],
+        litellm_params: dict,
         print_verbose: Callable[..., object] | None = None,
         logger_fn: object = None,
         client=None,
         organization: str | None = None,
-        headers: dict[str, object] | None = None,
+        headers: dict | None = None,
     ) -> ImageResponse:
         try:
             provider_config: Final = ProviderConfigManager.get_provider_image_variation_config(
