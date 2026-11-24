@@ -8608,6 +8608,39 @@ async def test_oidc_google_api_key_fails_closed_when_the_metadata_server_fails_a
 
 
 @pytest.mark.asyncio
+async def test_a_finished_oidc_google_metadata_fetch_is_not_reused_on_the_next_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.secret_managers.main import UnresolvableSecretReference
+    from litellm.utils import _google_token_fetch
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(time, "time", lambda: _CLOCK_START)
+    audience, reference = _google_reference()
+    monkeypatch.setattr(litellm, "credential_list", [_vllm_credential(reference)])
+    recovered_token: Final = _google_id_token(audience, _CLOCK_START)
+    loop: Final = asyncio.get_running_loop()
+    finished: Final = loop.create_future()
+    finished.set_result(
+        UnresolvableSecretReference(
+            kind="oidc/google",
+            reason="the metadata server did not return an ID token",
+            retryable=True,
+        )
+    )
+    _google_token_fetch(loop, reference).in_flight = finished
+
+    with respx.mock(assert_all_called=True) as upstream:
+        metadata: Final = upstream.get(_GOOGLE_METADATA_IDENTITY).respond(200, text=recovered_token)
+        chat: Final = upstream.post(_VLLM_CHAT_URL).respond(200, json=_VLLM_REPLY)
+        await _ping_vllm_through("async", "vllm-sa")
+        sent: Final = [call.request.headers["Authorization"] for call in chat.calls]
+
+    assert metadata.call_count == 1
+    assert sent == [f"Bearer {recovered_token}"]
+
+
+@pytest.mark.asyncio
 async def test_an_oidc_google_api_key_token_cached_when_the_call_starts_is_sent_though_it_expires_mid_call(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
