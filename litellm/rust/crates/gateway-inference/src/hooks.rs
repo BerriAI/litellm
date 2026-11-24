@@ -211,7 +211,7 @@ impl StreamSeen {
 /// ends, through the same `stream_outcome::watched` the router hears it from.
 pub(crate) async fn post_call<E: Endpoint, K: CallHooks>(
     hooks: &Arc<K>,
-    outcome: &mut E::Outcome,
+    outcome: &mut E::Output,
     served: ServedBy,
 ) -> Result<PostCall, Ended> {
     let ServedBy {

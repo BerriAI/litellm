@@ -3,8 +3,10 @@
 //! every layer inside it and the response body with it in a task-local, so code reaches the call's
 //! record through [`read`] and [`write`] and never takes it as a parameter. The record lives in
 //! `litellm_call_scope`'s task-local, so a task any crate spawns for the call through
-//! `litellm_call_scope::spawn_in_call` keeps it.
+//! `litellm_call_scope::spawn_in_call` keeps it. Each attempt runs in its own [`AttemptRecord`]
+//! through [`attempt`], which [`Recorder`] writes, and the route hands the served one to the record.
 
+mod attempt;
 mod entries;
 mod trace;
 
@@ -27,7 +29,14 @@ use parking_lot::Mutex;
 use serde_json::Value;
 use tokio::task::futures::TaskLocalFuture;
 
-pub use self::entries::{CallState, Charged, Ended, unix};
+pub use self::{
+    attempt::{AttemptRecord, Recorder, ServedDeployment},
+    entries::{CallState, Charged, Ended, unix},
+};
+
+tokio::task_local! {
+    static ATTEMPT: Arc<Mutex<AttemptRecord>>;
+}
 
 /// One call as it stands. Every access is one short lock, never held across an await.
 pub struct CallRecord(Mutex<CallState>);
@@ -50,14 +59,14 @@ pub fn scope<F: Future>(record: Arc<CallRecord>, future: F) -> TaskLocalFuture<C
 /// Changes the record of the call this code runs in. `None` outside a call, which is a bug.
 pub fn write<R>(change: impl FnOnce(&mut CallState) -> R) -> Option<R> {
     litellm_call_scope::with(|record: &CallRecord| change(&mut record.0.lock()))
-        .map_err(missed)
+        .map_err(|error| missed("call record", error))
         .ok()
 }
 
 /// Reads the record of the call this code runs in. `None` outside a call, which is a bug.
 pub fn read<R>(look: impl FnOnce(&CallState) -> R) -> Option<R> {
     litellm_call_scope::with(|record: &CallRecord| look(&record.0.lock()))
-        .map_err(missed)
+        .map_err(|error| missed("call record", error))
         .ok()
 }
 
@@ -66,13 +75,45 @@ pub fn add_header(name: impl Into<String>, value: impl Into<Value>) {
     write(|entries| entries.add_header(name.into(), value.into()));
 }
 
-/// A read or write with no record in scope: a spawn that skipped `litellm_call_scope::spawn_in_call`,
-/// or code run outside a call.
-fn missed(error: litellm_call_scope::Error) {
-    if cfg!(debug_assertions) {
-        panic!("no call record in scope: {error}");
+/// Runs `future` as one attempt of the call, and hands back what it recorded next to its output.
+/// The call's record stays in scope. A failed attempt's record also goes into the call's
+/// `failed_attempts`, with the provider's answer its error carries, since the core hands no
+/// interceptor a failed response.
+pub async fn attempt<T, F>(future: F) -> (Result<T, crate::Error>, AttemptRecord)
+where
+    F: Future<Output = Result<T, crate::Error>>,
+{
+    let record = Arc::new(Mutex::new(AttemptRecord::default()));
+    let output = ATTEMPT.scope(record.clone(), future).await;
+    let mut record = std::mem::take(&mut *record.lock());
+    if let Err(error) = &output {
+        record.record_failure(error);
+        write(|state| state.failed(record.clone()));
     }
-    tracing::error!(%error, "no call record in scope");
+    (output, record)
+}
+
+/// The headers a stream's head carried, which its encoder does not pass on, into the attempt in
+/// scope.
+pub(crate) fn stream_head(headers: Vec<(String, String)>) {
+    note(|record| record.provider_headers = headers);
+}
+
+/// Changes what the attempt this code runs in recorded. Outside an attempt, which is a bug, it
+/// does nothing.
+fn note(change: impl FnOnce(&mut AttemptRecord)) {
+    let _ = ATTEMPT
+        .try_with(|record| change(&mut record.lock()))
+        .map_err(|error| missed("attempt", error));
+}
+
+/// A read or write with no `what` in scope: a spawn that skipped
+/// `litellm_call_scope::spawn_in_call`, or code run outside a call or an attempt.
+fn missed(what: &str, error: impl std::fmt::Display) {
+    if cfg!(debug_assertions) {
+        panic!("no {what} in scope: {error}");
+    }
+    tracing::error!(%error, "no {what} in scope");
 }
 
 /// The layer outermost on the inference routes. It makes the request's record, under the trace

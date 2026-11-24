@@ -4403,6 +4403,7 @@ dependencies = [
  "tower-http",
  "tracing",
  "uuid",
+ "veil",
  "wiremock",
 ]
 

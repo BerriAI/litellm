@@ -48,14 +48,14 @@ pub struct NativeRouterHost<'a, A> {
 }
 
 impl<A: RouteAttempt> RouterHost for NativeRouterHost<'_, A> {
-    type Response = A::Outcome;
+    type Response = routing::Attempted<A::Output>;
     type Failure = Error;
     type Cache = RoutingCache;
 
     async fn attempt(
         &self,
         attempt: &Attempt,
-    ) -> Result<Served<A::Outcome>, AttemptFailure<Error>> {
+    ) -> Result<Served<routing::Attempted<A::Output>>, AttemptFailure<Error>> {
         routing::attempt(self.gateway, self.route, attempt).await
     }
 

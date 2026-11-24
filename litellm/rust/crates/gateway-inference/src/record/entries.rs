@@ -5,7 +5,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::{Map, Value};
 
-use crate::{CallType, ServedCall};
+use super::{AttemptRecord, ServedDeployment};
+use crate::{CallType, ServedCall, headers::Routing};
 
 const MODEL: &str = "model";
 const STREAM: &str = "stream";
@@ -77,6 +78,10 @@ pub struct CallState {
     response_headers: Map<String, Value>,
     served: Option<ServedCall>,
     ended: Option<Ended>,
+    routing: Option<Routing>,
+    served_deployment: Option<ServedDeployment>,
+    attempt: Option<AttemptRecord>,
+    failed_attempts: Vec<AttemptRecord>,
 }
 
 /// `at` in seconds since the Unix epoch.
@@ -104,7 +109,49 @@ impl CallState {
             response_headers: Map::new(),
             served: None,
             ended: None,
+            routing: None,
+            served_deployment: None,
+            attempt: None,
+            failed_attempts: Vec::new(),
         }
+    }
+
+    /// What the router did for the call once it served it, the deployment that served it and
+    /// what the served attempt recorded. An attempt that failed is in [`Self::failed_attempts`]
+    /// instead, a held stream that failed before it sent content among them.
+    pub fn routed(
+        &mut self,
+        routing: Routing,
+        deployment: Option<ServedDeployment>,
+        attempt: AttemptRecord,
+    ) {
+        self.routing = Some(routing);
+        self.served_deployment = deployment;
+        self.attempt = Some(attempt);
+    }
+
+    pub fn routing(&self) -> Option<&Routing> {
+        self.routing.as_ref()
+    }
+
+    pub fn served_deployment(&self) -> Option<&ServedDeployment> {
+        self.served_deployment.as_ref()
+    }
+
+    /// What the attempt that served the call recorded.
+    pub fn attempt(&self) -> Option<&AttemptRecord> {
+        self.attempt.as_ref()
+    }
+
+    /// What each attempt that failed recorded, in the order they failed. A call that ended on an
+    /// error has every attempt here.
+    pub fn failed_attempts(&self) -> &[AttemptRecord] {
+        &self.failed_attempts
+    }
+
+    /// Keeps the record of an attempt that failed.
+    pub(crate) fn failed(&mut self, attempt: AttemptRecord) {
+        self.failed_attempts.push(attempt);
     }
 
     /// The route the call came in on, which the route names once it runs.
