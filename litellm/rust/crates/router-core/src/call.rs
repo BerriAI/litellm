@@ -24,7 +24,7 @@ use crate::{
     lookup::Lookup,
     mock::MockFailure,
     outcome::{OutcomeCallbacks, OutcomeWrite},
-    precall::deployment_model,
+    precall::named_model,
     prerouting::{PreRoute, PreRouted},
     registry::{Deployment, ResolveKind, ResolveScope},
     retry::{RetryContext, RetryState, RetryStep, resolve_retry_policy, retry_step},
@@ -307,16 +307,16 @@ fn serving_the_refused_model<'a>(
     let model = healthy
         .iter()
         .find(|d| d.id == refused)
-        .map(|d| deployment_model(d))
+        .map(|d| named_model(d))
         .or_else(|| {
             snapshot
                 .registry
                 .deployment(refused)
-                .map(|deployment| deployment_model(&deployment))
+                .map(|deployment| named_model(&deployment))
         });
     healthy
         .iter()
-        .filter(move |d| d.id == refused || model.as_ref() == Some(&deployment_model(d)))
+        .filter(move |d| d.id == refused || model.as_ref() == Some(&named_model(d)))
         .map(|d| d.id.clone())
 }
 

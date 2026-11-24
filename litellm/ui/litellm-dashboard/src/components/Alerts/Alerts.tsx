@@ -5,7 +5,7 @@ import { RefreshCw } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useQueryClient } from "@tanstack/react-query";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import { Page, PageContent, PageTabs, PageTabsList, PageTabsTrigger } from "@/components/shared/Page";
+import { PageContent, PageTabs, PageTabsList, PageTabsTrigger } from "@/components/shared/Page";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { isProxyAdminTierRole } from "@/utils/roles";
@@ -44,29 +44,15 @@ export default function Alerts() {
   const auth = useAuthorized();
   const [params, setParams] = useQueryStates(parsers);
   const allowed = Boolean(auth.isAuthorized && isProxyAdminTierRole(auth.userRole));
-  if (auth.isLoading)
-    return (
-      <Page>
-        <p role="status">{t("alerts.unified.loading")}</p>
-      </Page>
-    );
-  if (!allowed)
-    return (
-      <Page>
-        <p>{t("alerts.unified.adminRequired")}</p>
-      </Page>
-    );
-  return (
-    <Page>
-      {params.alert || params.model ? (
-        <SelectedAlert
-          auth={auth}
-          onBack={() => void setParams({ alert: null, model: null, migration: null }, { history: "push" })}
-        />
-      ) : (
-        <AlertsInbox auth={auth} />
-      )}
-    </Page>
+  if (auth.isLoading) return <p role="status">{t("alerts.unified.loading")}</p>;
+  if (!allowed) return <p>{t("alerts.unified.adminRequired")}</p>;
+  return params.alert || params.model ? (
+    <SelectedAlert
+      auth={auth}
+      onBack={() => void setParams({ alert: null, model: null, migration: null }, { history: "push" })}
+    />
+  ) : (
+    <AlertsInbox auth={auth} />
   );
 }
 

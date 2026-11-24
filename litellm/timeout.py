@@ -12,6 +12,7 @@ Module containing "timeout" decorator for sync and async callables.
 """
 
 import asyncio
+from collections.abc import Callable
 from concurrent import futures
 from functools import wraps
 from inspect import iscoroutinefunction
@@ -21,7 +22,7 @@ from typing import Final
 from litellm.exceptions import Timeout
 
 
-def timeout(timeout_duration: float = 0.0, exception_to_raise=Timeout):
+def timeout(timeout_duration: float = 0.0, exception_to_raise: Callable[..., BaseException] = Timeout):
     """
     Wraps a function to raise the specified exception if execution time
     is greater than the specified timeout.
@@ -38,7 +39,7 @@ def timeout(timeout_duration: float = 0.0, exception_to_raise=Timeout):
 
     def decorator(func):
         @wraps(func)
-        def wrapper(*args, **kwargs):
+        def wrapper(*args: object, **kwargs):
             async def async_func():
                 return func(*args, **kwargs)
 
@@ -64,7 +65,7 @@ def timeout(timeout_duration: float = 0.0, exception_to_raise=Timeout):
             return result
 
         @wraps(func)
-        async def async_wrapper(*args, **kwargs):
+        async def async_wrapper(*args: object, **kwargs):
             local_timeout_duration = timeout_duration
             if "force_timeout" in kwargs:
                 local_timeout_duration = kwargs["force_timeout"]
@@ -96,7 +97,7 @@ class _LoopWrapper(Thread):
     timeout via :func:`asyncio.run_coroutine_threadsafe`.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__(daemon=True)
         self.loop = asyncio.new_event_loop()
 
@@ -111,7 +112,7 @@ class _LoopWrapper(Thread):
             self.loop.close()
             asyncio.set_event_loop(None)
 
-    def stop_loop(self):
+    def stop_loop(self) -> None:
         for task in asyncio.all_tasks(self.loop):
             task.cancel()
         self.loop.call_soon_threadsafe(self.loop.stop)

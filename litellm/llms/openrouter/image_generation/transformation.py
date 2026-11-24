@@ -260,8 +260,8 @@ class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         """
@@ -277,14 +277,14 @@ class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         api_key = api_key or litellm.api_key or get_secret_str("OPENROUTER_API_KEY")
         headers.update(
             {
@@ -297,10 +297,10 @@ class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
         self,
         model: str,
         prompt: str,
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
+        headers: Mapping[str, object],
+    ) -> dict[str, object]:
         """
         Transform image generation request to OpenRouter chat completion format.
 
@@ -314,7 +314,7 @@ class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
         Returns:
             dict: Request body in chat completion format with image_config
         """
-        request_body: Final = {
+        request_body: Final[dict[str, object]] = {
             "model": model,
             "messages": [{"role": "user", "content": prompt}],
         }
@@ -332,9 +332,9 @@ class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
         raw_response: httpx.Response,
         model_response: ImageResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
-        optional_params: dict,
-        litellm_params: dict,
+        request_data: Mapping[str, object],
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,

@@ -32,6 +32,12 @@ MANTLE_AUTH_FAILED: Final = (
     "(IAM role / access key / profile / web identity) for SigV4."
 )
 
+
+class BedrockMantleAuthError(ValueError):
+    def __init__(self) -> None:
+        super().__init__(MANTLE_AUTH_FAILED)
+
+
 # Standard Mantle host: https://bedrock-mantle.<region>.api.aws (group 1 = region).
 MANTLE_HOST_RE: Final = re.compile(r"^https?://bedrock-mantle\.([^/.]+)\.api\.aws(?=/|$)", re.IGNORECASE)
 
@@ -79,9 +85,9 @@ class BedrockMantleAuthMixin(SignsRequestsWithAWS):
 
     def sign_request(
         self,
-        headers: dict,
-        optional_params: dict,
-        request_data: dict,
+        headers: dict[str, object],
+        optional_params: dict[str, object],
+        request_data: dict[str, object],
         api_base: str,
         api_key: str | None = None,
         model: str | None = None,
@@ -122,12 +128,9 @@ class BedrockMantleAuthMixin(SignsRequestsWithAWS):
         headers = {k: v for k, v in headers.items() if k.lower() != "authorization"}
         try:
             return sign(headers=headers, optional_params=optional_params)
-        except (
-            NoCredentialsError,
-            PartialCredentialsError,
-            ProfileNotFound,
-            CredentialRetrievalError,
-        ) as e:
+        except (NoCredentialsError, PartialCredentialsError, ProfileNotFound) as e:
+            raise BedrockMantleAuthError() from e
+        except CredentialRetrievalError as e:
             raise ValueError(MANTLE_AUTH_FAILED) from e
 
 

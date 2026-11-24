@@ -57,7 +57,9 @@ _RESERVED_KEY_HEADERS: Final = (
     | frozenset(name.decode("ascii") for name in _REQUEST_HEADERS - {b"authorization"})
 )
 _SETTINGS: Final = TypeAdapter(Mapping[str, object])
-_IDENTITY_MAPPINGS: Final = TypeAdapter(tuple[dict[str, object], ...] | dict[str, object] | None)
+_IDENTITY_MAPPINGS: Final[TypeAdapter[tuple[dict[str, object], ...] | dict[str, object] | None]] = TypeAdapter(
+    tuple[dict[str, object], ...] | dict[str, object] | None
+)
 _OAUTH_MAPPINGS: Final = TypeAdapter(dict[str, str])
 _ROUTE_GRANTS: Final = TypeAdapter(tuple[str, ...])
 

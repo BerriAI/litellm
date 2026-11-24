@@ -58,6 +58,7 @@ _JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=Tr
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
 
 def _sign_get_request(
@@ -271,7 +272,7 @@ class BedrockEmbedding(BaseAWSLLM):
 
     def _load_credentials(
         self,
-        optional_params: dict,
+        optional_params: dict[str, object],
         bearer_token: str | None = None,
         region_from_model: str | None = None,
         litellm_params: Mapping[str, object] | None = None,
@@ -462,7 +463,7 @@ class BedrockEmbedding(BaseAWSLLM):
         timeout: float | httpx.Timeout | None,
         batch_data: list[dict[str, object]],
         credentials: Credentials | None,
-        extra_headers: dict | None,
+        extra_headers: dict[str, object] | None,
         endpoint_url: str,
         aws_region_name: str,
         model: str,
@@ -536,7 +537,7 @@ class BedrockEmbedding(BaseAWSLLM):
         timeout: float | httpx.Timeout | None,
         batch_data: list[dict[str, object]],
         credentials: Credentials | None,
-        extra_headers: dict | None,
+        extra_headers: dict[str, object] | None,
         endpoint_url: str,
         aws_region_name: str,
         model: str,
@@ -613,13 +614,13 @@ class BedrockEmbedding(BaseAWSLLM):
         input: list[str],
         api_base: str | None,
         model_response: EmbeddingResponse,
-        print_verbose: Callable,
-        encoding,
+        print_verbose: Callable[..., object],
+        encoding: "Tokenizer | None",
         logging_obj: "LiteLLMLoggingObj",
         client: HTTPHandler | AsyncHTTPHandler | None,
         timeout: float | httpx.Timeout | None,
         aembedding: bool | None,
-        extra_headers: dict | None,
+        extra_headers: dict[str, object] | None,
         optional_params: dict,
         litellm_params: dict,
         api_key: str | None = None,

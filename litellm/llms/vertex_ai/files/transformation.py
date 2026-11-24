@@ -76,6 +76,7 @@ from litellm.llms.vertex_ai.gemini.transformation import transform_request_body
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VERTEX_SHARED_REQUEST_TIERS,
     VertexGeminiConfig,
+    malformed_without_output_message,
 )
 from litellm.llms.vertex_ai.gemini_embeddings.batch_embed_content_transformation import (
     embed_content_config_fields,
@@ -88,6 +89,7 @@ from litellm.types.llms.openai import (
     BatchInputFormat,
     CreateFileRequest,
     FileContent,
+    FileContentRequest,
     FileTypes,
     HttpxBinaryResponseContent,
     OpenAICreateFileRequestOptionalParams,
@@ -236,7 +238,7 @@ def _encode_gcp_label_value_chunks(value: str) -> list[str]:
 
 def _decode_gcp_label_value_chunks(values: list[str]) -> str | None:
     """Decode values produced by _encode_gcp_label_value_chunks."""
-    encoded_parts: Final = []
+    encoded_parts: Final[list[str]] = []
     for value in values:
         if not value.startswith(_CUSTOM_ID_RAW_LABEL_PREFIX):
             return None
@@ -293,7 +295,7 @@ def _get_litellm_batch_custom_id_from_labels(labels: Mapping[str, object] | None
     if raw:
         raw_chunks: Final = [str(raw)]
         chunk_prefix: Final = "litellm_custom_id_raw_"
-        indexed_chunks: Final = []
+        indexed_chunks: Final[list[tuple[int, str]]] = []
         for key, value in labels.items():
             if key.startswith(chunk_prefix) and key[len(chunk_prefix) :].isdigit():
                 indexed_chunks.append((int(key[len(chunk_prefix) :]), str(value)))
@@ -461,6 +463,25 @@ def _openai_batch_output_row(
             "body": body,
         },
         "error": None if error_code is None else {"code": error_code, "message": error_message},
+    }
+
+
+def _openai_batch_http_error_row(
+    custom_id: str, response: Mapping[str, object], error: _OpenAIBatchOutputError
+) -> _OpenAIBatchOutputRow:
+    """
+    A row for a request the provider ran and billed but that failed, in OpenAI's shape for an HTTP error:
+    `response.status_code` 500 with the error and the billed `usage` in `response.body`, and `error` null.
+    """
+    return {
+        "id": f"batch_req_{uuid.uuid4()}",
+        "custom_id": custom_id,
+        "response": {
+            "status_code": 500,
+            "request_id": response.get("id", ""),
+            "body": {"error": error, "model": response.get("model"), "usage": response.get("usage")},
+        },
+        "error": None,
     }
 
 
@@ -1355,14 +1376,14 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
+        optional_params: Mapping[str, object],
         litellm_params: dict,
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         if not api_key:
             api_key, _ = self.get_access_token(
                 credentials=litellm_params.get("vertex_credentials"),
@@ -1458,7 +1479,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
+        optional_params: Mapping[str, object],
         litellm_params: Mapping[str, object],
         data: CreateFileRequest,
     ) -> str:
@@ -1504,11 +1525,11 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: Mapping[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         return optional_params
 
     def _map_openai_to_vertex_params(
@@ -1566,9 +1587,9 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         self,
         model: str,
         create_file_data: CreateFileRequest,
-        optional_params: dict,
+        optional_params: Mapping[str, object],
         litellm_params: Mapping[str, object],
-    ) -> bytes | str | dict:
+    ) -> bytes | str | dict[str, object]:
         """
         2 Cases:
         1. Handle basic file upload
@@ -1616,7 +1637,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         model: str | None,
         raw_response: Response,
         logging_obj: LiteLLMLoggingObj,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> OpenAIFileObject:
         """
         Transform VertexAI File upload response into OpenAI-style FileObject
@@ -1648,7 +1669,9 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             object="file",
         )
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | Headers
+    ) -> BaseLLMException:
         return VertexAIError(status_code=status_code, message=error_message, headers=headers)
 
     def _parse_gcs_uri(self, file_id: str, litellm_params: Mapping[str, object] | None = None) -> tuple[str, str]:
@@ -1668,9 +1691,9 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
     def transform_retrieve_file_request(
         self,
         file_id: str,
-        optional_params: dict,
+        optional_params: Mapping[str, object],
         litellm_params: Mapping[str, object],
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         bucket, encoded_object = self._parse_gcs_uri(file_id, litellm_params)
         url: Final = f"https://storage.googleapis.com/storage/v1/b/{bucket}/o/{encoded_object}"
         return url, {}
@@ -1679,7 +1702,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         self,
         raw_response: Response,
         logging_obj: LiteLLMLoggingObj,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> OpenAIFileObject:
         response_json: Final[_GcsObjectJson] = raw_response.json()
         gcs_id = response_json.get("id", "")
@@ -1698,9 +1721,9 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
     def transform_delete_file_request(
         self,
         file_id: str,
-        optional_params: dict,
+        optional_params: Mapping[str, object],
         litellm_params: Mapping[str, object],
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         bucket, encoded_object = self._parse_gcs_uri(file_id, litellm_params)
         url: Final = f"https://storage.googleapis.com/storage/v1/b/{bucket}/o/{encoded_object}"
         return url, {}
@@ -1709,7 +1732,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         self,
         raw_response: Response,
         logging_obj: LiteLLMLoggingObj,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> FileDeleted:
         file_id = "deleted"
         if hasattr(raw_response, "request") and raw_response.request:
@@ -1725,25 +1748,25 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
     def transform_list_files_request(
         self,
         purpose: str | None,
-        optional_params: dict,
-        litellm_params: dict,
-    ) -> tuple[str, dict]:
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
+    ) -> tuple[str, dict[str, object]]:
         raise NotImplementedError("VertexAIFilesConfig does not support file listing")
 
     def transform_list_files_response(
         self,
         raw_response: Response,
         logging_obj: LiteLLMLoggingObj,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> list[OpenAIFileObject]:
         raise NotImplementedError("VertexAIFilesConfig does not support file listing")
 
     def transform_file_content_request(
         self,
-        file_content_request,
-        optional_params: dict,
+        file_content_request: FileContentRequest,
+        optional_params: Mapping[str, object],
         litellm_params: Mapping[str, object],
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         file_id: Final = file_content_request.get("file_id", "")
         bucket, encoded_object = self._parse_gcs_uri(file_id, litellm_params)
         url: Final = f"https://storage.googleapis.com/storage/v1/b/{bucket}/o/{encoded_object}?alt=media"
@@ -1753,7 +1776,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         self,
         raw_response: Response,
         logging_obj: LiteLLMLoggingObj,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> HttpxBinaryResponseContent:
         """
         Transform file content response, converting Vertex AI batch output to OpenAI format if applicable.
@@ -1806,7 +1829,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         headers: Mapping[str, str],
         request_url: str,
         logging_obj: LiteLLMLoggingObj,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> FileContentStreamingResult:
         """
         Streams file content, converting a Vertex AI batch output to OpenAI format row by
@@ -2015,10 +2038,14 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
                 raw_response=mock_httpx_response,
             )
 
-            # Convert ModelResponse to dict
+            malformed: Final = malformed_without_output_message(transformed_response)
             response_dict: Final = transformed_response.model_dump()
-
-            # Return in OpenAI batch format
+            if malformed is not None:
+                return _openai_batch_http_error_row(
+                    custom_id=custom_id,
+                    response=response_dict,
+                    error={"code": "vertex_ai_error", "message": malformed},
+                )
             return _openai_batch_output_row(custom_id=custom_id, body=response_dict)
 
         except Exception as e:

@@ -296,7 +296,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         )
         return usage_dict
 
-    def validate_environment(self, headers: dict, model: str, api_key: str | None = None) -> dict:
+    def validate_environment(self, headers: dict[str, str], model: str, api_key: str | None = None) -> dict[str, str]:
         return headers
 
     def get_complete_url(self, api_base: str | None, model: str, api_key: str | None = None) -> str:
