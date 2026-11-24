@@ -118,9 +118,18 @@ class _RewriteEveryStreamedReply(CustomGuardrail):
             yield ModelResponseStream(choices=[])
 
 
-def _messages_request(body: Mapping[str, object], call_id: str = _BLOCK_CALL_ID) -> Request:
+def _messages_request(
+    body: Mapping[str, object], call_id: str = _BLOCK_CALL_ID, disconnected: asyncio.Event | None = None
+) -> Request:
+    pending: Final = iter(({"type": "http.request", "body": json.dumps(body).encode(), "more_body": False},))
+
     async def receive() -> Message:
-        return {"type": "http.request", "body": json.dumps(body).encode(), "more_body": False}
+        if disconnected is None:
+            return {"type": "http.request", "body": json.dumps(body).encode(), "more_body": False}
+        if (message := next(pending, None)) is not None:
+            return message
+        await disconnected.wait()
+        return {"type": "http.disconnect"}
 
     return Request(
         {
@@ -1682,6 +1691,7 @@ class _CountingProviderDispatch:
 class _CachedProxy:
     store: InMemoryCache
     provider: _CountingProviderDispatch
+    disconnected: asyncio.Event
 
 
 @pytest_asyncio.fixture
@@ -1704,20 +1714,24 @@ async def cached_proxy(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[_Cached
         ),
     )
     monkeypatch.setattr(proxy_server, "proxy_logging_obj", ProxyLogging(user_api_key_cache=DualCache()))
+    disconnected: Final = asyncio.Event()
     try:
-        yield _CachedProxy(store=cache.cache, provider=provider)
+        yield _CachedProxy(store=cache.cache, provider=provider, disconnected=disconnected)
     finally:
+        disconnected.set()
         await asyncio.gather(*_PENDING_CACHE_WRITES)
         await GLOBAL_LOGGING_WORKER.flush()
 
 
-async def _answer_messages(body: Mapping[str, object], call_id: str) -> tuple[Mapping[str, str], object]:
+async def _answer_messages(
+    cached_proxy: _CachedProxy, body: Mapping[str, object], call_id: str
+) -> tuple[Mapping[str, str], object]:
     import litellm.proxy.anthropic_endpoints.endpoints as ep
 
     fastapi_response: Final = Response()
     response: Final = await ep.anthropic_response(
         fastapi_response=fastapi_response,
-        request=_messages_request(body, call_id),
+        request=_messages_request(body, call_id, cached_proxy.disconnected),
         user_api_key_dict=UserAPIKeyAuth(),
     )
     if not isinstance(response, StreamingResponse):
@@ -1747,7 +1761,7 @@ async def test_repeated_messages_request_answers_the_cache_key_it_was_served_fro
         **({} if caller_cache_key is None else {"cache_key": caller_cache_key}),
     }
 
-    replies: Final = [await _answer_messages(body, f"cache-hit-{turn}") for turn in range(3)]
+    replies: Final = [await _answer_messages(cached_proxy, body, f"cache-hit-{turn}") for turn in range(3)]
 
     stored_keys: Final = tuple(cached_proxy.store.cache_dict)
     assert len(cached_proxy.provider.calls) == 1, "repeats must be served from the response cache"
@@ -1777,8 +1791,12 @@ async def test_messages_request_not_served_from_cache_sends_no_cache_key(
     first_extra: Mapping[str, object],
     repeat_extra: Mapping[str, object],
 ) -> None:
-    first: Final = await _answer_messages({**_HIT_TEST_BODY, "stream": stream, **first_extra}, "cache-miss-0")
-    repeat: Final = await _answer_messages({**_HIT_TEST_BODY, "stream": stream, **repeat_extra}, "cache-miss-1")
+    first: Final = await _answer_messages(
+        cached_proxy, {**_HIT_TEST_BODY, "stream": stream, **first_extra}, "cache-miss-0"
+    )
+    repeat: Final = await _answer_messages(
+        cached_proxy, {**_HIT_TEST_BODY, "stream": stream, **repeat_extra}, "cache-miss-1"
+    )
 
     assert len(cached_proxy.provider.calls) == 2, "a bypassed cache must reach the provider every time"
     assert first[0].get("x-litellm-cache-key") is None
