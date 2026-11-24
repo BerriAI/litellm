@@ -497,7 +497,9 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         """Agent Engine does not allow passing `stream` in the request body."""
         return False
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: Mapping[str, object] | httpx.Headers
+    ) -> BaseLLMException:
         return VertexAgentEngineError(status_code=status_code, message=error_message)
 
     def should_fake_stream(

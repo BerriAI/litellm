@@ -73,7 +73,7 @@ def openrouter_model_supports_cache_control(model: str) -> bool:
 
 
 class OpenrouterConfig(OpenAIGPTConfig):
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         """
         Include reasoning parameters regardless of model-map capabilities.
         """
@@ -83,10 +83,10 @@ class OpenrouterConfig(OpenAIGPTConfig):
     def map_openai_params(
         self,
         non_default_params: dict[str, object],
-        optional_params: dict,
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         # OpenRouter expects "xhigh" instead of "max" for reasoning_effort.
         if non_default_params.get("reasoning_effort") == "max":
             non_default_params = {**non_default_params, "reasoning_effort": "xhigh"}
@@ -174,9 +174,9 @@ class OpenrouterConfig(OpenAIGPTConfig):
         model: str,
         messages: list[AllMessageValues],
         optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        litellm_params: dict[str, object],
+        headers: dict[str, object],
+    ) -> dict[str, object]:
         """
         Transform the overall request to be sent to the API.
 
@@ -203,10 +203,10 @@ class OpenrouterConfig(OpenAIGPTConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: "LiteLLMLoggingObj",
-        request_data: dict,
+        request_data: dict[str, object],
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
@@ -316,6 +316,7 @@ class OpenRouterChatCompletionStreamingHandler(BaseModelResponseIterator):
                     message=error_message["message"],
                     status_code=error_message["code"],
                     headers=error_message["metadata"].get("headers", {}),
+                    body=error_chunk if isinstance(error_chunk, dict) else None,
                 )
 
             new_choices: Final = []

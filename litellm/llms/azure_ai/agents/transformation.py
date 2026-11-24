@@ -75,7 +75,7 @@ class AzureAIAgentsConfig(BaseConfig):
     MAX_POLL_ATTEMPTS = 60
     POLL_INTERVAL_SECONDS = 1.0
 
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs: object):
         super().__init__(**kwargs)
 
     @staticmethod
@@ -128,7 +128,7 @@ class AzureAIAgentsConfig(BaseConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
+        non_default_params: Mapping[str, object],
         optional_params: dict,
         model: str,
         drop_params: bool,
@@ -147,8 +147,8 @@ class AzureAIAgentsConfig(BaseConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         """
@@ -199,7 +199,7 @@ class AzureAIAgentsConfig(BaseConfig):
         optional_params: dict,
         litellm_params: Mapping[str, object],
         headers: Mapping[str, object],
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Transform the request for Azure Agents.
 
@@ -246,8 +246,8 @@ class AzureAIAgentsConfig(BaseConfig):
         headers: dict,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
@@ -319,13 +319,13 @@ class AzureAIAgentsConfig(BaseConfig):
     @staticmethod
     def completion(
         model: str,
-        messages: list,
+        messages: list[dict[str, object]],
         api_base: str,
         api_key: str | None,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         optional_params: dict,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
         timeout: float | str | httpx.Timeout | None,
         acompletion: bool,
         stream: bool | None = False,

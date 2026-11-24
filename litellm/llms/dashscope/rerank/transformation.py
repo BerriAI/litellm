@@ -85,7 +85,7 @@ class DashScopeRerankConfig(BaseRerankConfig):
         self,
         api_base: str | None,
         model: str,
-        optional_params: dict | None = None,
+        optional_params: Mapping[str, object] | None = None,
     ) -> str:
         resolved_api_base: Final = self._resolve_rerank_api_base(api_base)
         if resolved_api_base == DEFAULT_RERANK_URL:
@@ -103,12 +103,12 @@ class DashScopeRerankConfig(BaseRerankConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: Mapping[str, object],
         model: str,
         api_key: str | None = None,
-        optional_params: dict | None = None,
+        optional_params: Mapping[str, object] | None = None,
         litellm_params: Mapping[str, object] | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         return {
             "Authorization": f"Bearer {self._resolve_api_key(api_key)}",
             "accept": "application/json",
@@ -116,12 +116,12 @@ class DashScopeRerankConfig(BaseRerankConfig):
             **headers,
         }
 
-    def get_supported_cohere_rerank_params(self, model: str) -> list:
+    def get_supported_cohere_rerank_params(self, model: str) -> list[str]:
         return ["query", "documents", "top_n", "return_documents"]
 
     def map_cohere_rerank_params(
         self,
-        non_default_params: dict | None,
+        non_default_params: Mapping[str, object] | None,
         model: str,
         drop_params: bool,
         query: str,
@@ -133,7 +133,7 @@ class DashScopeRerankConfig(BaseRerankConfig):
         max_chunks_per_doc: int | None = None,
         max_tokens_per_doc: int | None = None,
         instruction: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         # qwen3-rerank accepts query/documents/top_n/return_documents. The
         # rest (rank_fields, max_*_per_doc) are silently dropped.
         params: Final[OptionalRerankParams] = OptionalRerankParams(
@@ -149,10 +149,10 @@ class DashScopeRerankConfig(BaseRerankConfig):
     def transform_rerank_request(
         self,
         model: str,
-        optional_rerank_params: dict,
-        headers: dict,
-        litellm_params: dict | None = None,
-    ) -> dict:
+        optional_rerank_params: Mapping[str, object],
+        headers: Mapping[str, object],
+        litellm_params: Mapping[str, object] | None = None,
+    ) -> dict[str, object]:
         if "query" not in optional_rerank_params:
             raise ValueError("query is required for DashScope rerank")
         if "documents" not in optional_rerank_params:
@@ -176,9 +176,9 @@ class DashScopeRerankConfig(BaseRerankConfig):
         model_response: RerankResponse,
         logging_obj: LiteLLMLoggingObj,
         api_key: str | None = None,
-        request_data: dict | None = None,
-        optional_params: dict | None = None,
-        litellm_params: dict | None = None,
+        request_data: Mapping[str, object] | None = None,
+        optional_params: Mapping[str, object] | None = None,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> RerankResponse:
         request_data = request_data or {}
         optional_params = optional_params or {}
