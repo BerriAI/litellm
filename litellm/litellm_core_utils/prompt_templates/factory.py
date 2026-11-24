@@ -164,7 +164,7 @@ def map_system_message_pt(messages: list) -> list:
 
 
 # alpaca prompt template - for models like mythomax, etc.
-def alpaca_pt(messages: list[AllMessageValues]):
+def alpaca_pt(messages):
     prompt: Final = custom_prompt(
         role_dict={
             "system": {
@@ -185,7 +185,7 @@ def alpaca_pt(messages: list[AllMessageValues]):
 
 
 # Llama2 prompt template
-def llama_2_chat_pt(messages: list[AllMessageValues]):
+def llama_2_chat_pt(messages):
     prompt: Final = custom_prompt(
         role_dict={
             "system": {

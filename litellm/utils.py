@@ -9345,7 +9345,7 @@ def process_system_message(system_message: object, max_tokens: float, model: str
     return system_message_event, max_tokens - system_message_tokens
 
 
-def process_messages(messages: list[AllMessageValues], max_tokens: float, model: str | None):
+def process_messages(messages, max_tokens: float, model: str | None):
     # Process messages from older to more recent
     messages = messages[::-1]
     final_messages = []
@@ -9392,7 +9392,7 @@ def attempt_message_addition(final_messages, message, available_tokens: float, m
     return final_messages
 
 
-def can_add_message(message, messages: list[AllMessageValues], max_tokens: float, model: str | None):
+def can_add_message(message, messages, max_tokens: float, model: str | None):
     if get_token_count(messages + [message], model) <= max_tokens:
         return True
     return False
