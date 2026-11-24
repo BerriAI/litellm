@@ -73257,6 +73257,8 @@
         "input_cost_per_token": 3e-07,
         "output_cost_per_token": 1.2e-06,
         "cache_read_input_token_cost": 6e-09,
+        "deprecation_date": "2027-03-06",
+        "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/concepts/model-lifecycle-retirement",
         "litellm_provider": "azure_ai",
         "mode": "chat",
         "max_input_tokens": 1000000,
