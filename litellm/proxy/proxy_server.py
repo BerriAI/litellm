@@ -15734,7 +15734,7 @@ class _TokenizerLoads:
 
 
 _TOKENIZER_LOADS: Final = anyio.lowlevel.RunVar[_TokenizerLoads]("litellm_proxy_tokenizer_loads")
-_BASE_MODEL_TOKENIZER_LOADS: Final = anyio.lowlevel.RunVar[_TokenizerLoads]("litellm_proxy_base_model_tokenizer_loads")
+_HUB_TOKENIZER_LOADS: Final = anyio.lowlevel.RunVar[_TokenizerLoads]("litellm_proxy_hub_tokenizer_loads")
 
 
 def _tokenizer_loads_for_this_loop(loads: anyio.lowlevel.RunVar[_TokenizerLoads]) -> _TokenizerLoads:
@@ -15772,9 +15772,7 @@ def _tokenizer_load_slot(
 
 
 @lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)
-def _base_model_tokenizer_load_slot(
-    kind: HuggingFaceTokenizerKind, loop: asyncio.AbstractEventLoop
-) -> _TokenizerLoadSlot:
+def _hub_tokenizer_load_slot(kind: HuggingFaceTokenizerKind, loop: asyncio.AbstractEventLoop) -> _TokenizerLoadSlot:
     return _TokenizerLoadSlot()
 
 
@@ -15815,15 +15813,26 @@ async def _tokenizer_within_load_wait(
 
 
 async def _tokenizer_loaded_within_wait(
-    model: str, custom_tokenizer: CustomHuggingfaceTokenizer | None, provider_failure: ProviderCountFailure | None
+    model: str,
+    custom_tokenizer: CustomHuggingfaceTokenizer | None,
+    hub_kind: HuggingFaceTokenizerKind | None,
+    provider_failure: ProviderCountFailure | None,
 ) -> SelectTokenizerResponse:
-    tokenizer: Final = await _tokenizer_within_load_wait(
-        model,
-        custom_tokenizer,
-        _tokenizer_loads_for_this_loop(_TOKENIZER_LOADS),
-        partial(_model_tokenizer_load_slot, model, custom_tokenizer),
+    tokenizer: Final = await (
+        _tokenizer_within_load_wait(
+            model,
+            custom_tokenizer,
+            _tokenizer_loads_for_this_loop(_TOKENIZER_LOADS),
+            partial(_model_tokenizer_load_slot, model, custom_tokenizer),
+        )
+        if hub_kind is None
+        else _tokenizer_within_load_wait(
+            model,
+            None,
+            _tokenizer_loads_for_this_loop(_HUB_TOKENIZER_LOADS),
+            partial(_hub_tokenizer_load_slot, hub_kind),
+        )
     )
-    hub_kind: Final = None if custom_tokenizer is not None else litellm.utils.huggingface_hub_tokenizer_kind(model)
     match tokenizer:
         case HuggingFaceTokenizerUnavailable():
             raise _tokenizer_unavailable_error(tokenizer, provider_failure)
@@ -15849,8 +15858,8 @@ async def _tokenizer_model(
     loaded: Final = await _tokenizer_within_load_wait(
         base_model,
         None,
-        _tokenizer_loads_for_this_loop(_BASE_MODEL_TOKENIZER_LOADS),
-        partial(_base_model_tokenizer_load_slot, base_kind),
+        _tokenizer_loads_for_this_loop(_HUB_TOKENIZER_LOADS),
+        partial(_hub_tokenizer_load_slot, base_kind),
     )
     match loaded:
         case asyncio.TimeoutError() | _TokenizerLoadsBusy() if call_endpoint:
@@ -15908,11 +15917,9 @@ async def _estimate_tokenizer(
     provider_failure: ProviderCountFailure | None,
     call_endpoint: bool,
 ) -> SelectTokenizerResponse:
-    downloads_from_the_hub: Final = (
-        custom_tokenizer is None and litellm.utils.huggingface_hub_tokenizer_kind(model) is not None
-    )
-    if provider_failure is not None or (call_endpoint and downloads_from_the_hub):
-        return await _tokenizer_loaded_within_wait(model, custom_tokenizer, provider_failure)
+    hub_kind: Final = None if custom_tokenizer is not None else litellm.utils.huggingface_tokenizer_download_kind(model)
+    if provider_failure is not None or (call_endpoint and hub_kind is not None):
+        return await _tokenizer_loaded_within_wait(model, custom_tokenizer, hub_kind, provider_failure)
     if not call_endpoint:
         return await asyncify(litellm.utils.select_tokenizer)(model=model, custom_tokenizer=custom_tokenizer)
     selected: Final = await asyncify(litellm.utils.select_tokenizer_or_unavailable)(

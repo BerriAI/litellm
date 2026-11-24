@@ -3442,6 +3442,16 @@ def huggingface_tokenizer_may_download(
     return kind is not None and (kind, _huggingface_tokenizer_backend()) not in outcomes.by_tokenizer
 
 
+def huggingface_tokenizer_download_kind(
+    model: str, outcomes: _HuggingFaceTokenizerLoadOutcomes = _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES
+) -> HuggingFaceTokenizerKind | None:
+    kind: Final = huggingface_hub_tokenizer_kind(model)
+    if kind is None or litellm.disable_hf_tokenizer_download is True or is_offline_mode():
+        return None
+    known: Final = outcomes.by_tokenizer.get((kind, _huggingface_tokenizer_backend()))
+    return None if isinstance(known, _HuggingFaceTokenizerLoaded) else kind
+
+
 def _load_huggingface_tokenizer(kind: HuggingFaceTokenizerKind) -> HuggingFace:
     name: Final = HUGGINGFACE_TOKENIZER_NAMES[kind]
     match kind:

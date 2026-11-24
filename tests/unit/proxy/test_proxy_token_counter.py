@@ -7736,6 +7736,146 @@ def test_count_says_still_loading_while_its_hub_tokenizer_download_runs_past_the
     )
 
 
+def _script_one_provider_count(
+    monkeypatch: pytest.MonkeyPatch, model: str, reply: TokenCountResponse, provider: str
+) -> None:
+    counter: Final = _ScriptedCounter({model: reply})
+    provider_counter: Final = litellm.proxy.proxy_server._get_provider_token_counter
+
+    def scripted_for_one_model(
+        deployment: dict, model_to_use: str
+    ) -> tuple[BaseTokenCounter | None, str | None, str | None]:
+        if model_to_use == model:
+            return counter, model_to_use, provider
+        return provider_counter(deployment, model_to_use)
+
+    monkeypatch.setattr(litellm.proxy.proxy_server, "_get_provider_token_counter", scripted_for_one_model)
+
+
+@pytest.mark.usefixtures("no_huggingface_tokenizer_loaded")
+def test_counts_on_other_tokenizers_answer_while_four_llama_3_deployments_wait_on_one_hanging_download(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    llama_3_names: Final = tuple(f"llama-3-{n}" for n in range(4))
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.llm_router",
+        Router(
+            model_list=[
+                *(
+                    {"model_name": name, "litellm_params": {"model": f"databricks/databricks-meta-{name}-instruct"}}
+                    for name in llama_3_names
+                ),
+                {"model_name": "llama-2", "litellm_params": {"model": "databricks/databricks-llama-2-70b-chat"}},
+                {
+                    "model_name": "gpt",
+                    "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-test"},
+                    "model_info": {"token_count_framing": 100},
+                },
+            ]
+        ),
+    )
+    _script_one_provider_count(monkeypatch, "gpt-4o", _provider_reply("gpt", status_code=404), "openai")
+    download_started: Final = threading.Event()
+    hub_released: Final = threading.Event()
+    llama_3_downloads: Final[list[str]] = []
+
+    def llama_3_download_hangs(identifier: str) -> None:
+        if identifier == _LLAMA_3_HUB_TOKENIZER:
+            llama_3_downloads.append(identifier)
+            download_started.set()
+            hub_released.wait(10)
+
+    _stub_hub_downloads(monkeypatch, llama_3_download_hangs)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "TOKENIZER_LOAD_WAIT_SECONDS", 30)
+
+    async def counts_while_the_llama_3_download_hangs(loop: _SkippableClockLoop) -> tuple[str, ...]:
+        llama_2_before: Final = await _count_status("llama-2")
+        try:
+            llama_3: Final = asyncio.gather(*(_count_status(name) for name in llama_3_names))
+            await asyncio.to_thread(download_started.wait, 10)
+            loop.skip(31)
+            llama_3_statuses: Final = await asyncio.wait_for(llama_3, 8)
+            others: Final = await asyncio.wait_for(asyncio.gather(_count_status("llama-2"), _count_status("gpt")), 5)
+            return llama_2_before, *llama_3_statuses, *others
+        finally:
+            hub_released.set()
+
+    assert _run_on_skippable_clock(counts_while_the_llama_3_download_hangs) == (
+        "local_estimate",
+        "503",
+        "503",
+        "503",
+        "503",
+        "local_estimate",
+        "local_estimate",
+    )
+    assert llama_3_downloads == [_LLAMA_3_HUB_TOKENIZER]
+
+
+@pytest.mark.usefixtures("no_huggingface_tokenizer_loaded")
+@pytest.mark.parametrize(
+    "turn_downloads_off",
+    [
+        lambda monkeypatch: monkeypatch.setattr(litellm, "disable_hf_tokenizer_download", True),
+        lambda monkeypatch: monkeypatch.setenv("LITELLM_OFFLINE_MODE", "true"),
+    ],
+    ids=["disable_hf_tokenizer_download", "LITELLM_OFFLINE_MODE"],
+)
+def test_llama_3_count_answers_with_tiktoken_while_a_custom_tokenizer_load_fills_the_slots_with_downloads_off(
+    monkeypatch: pytest.MonkeyPatch, turn_downloads_off: Callable[[pytest.MonkeyPatch], None]
+) -> None:
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "custom",
+                    "litellm_params": {"model": "databricks/databricks-dbrx-instruct"},
+                    "model_info": {
+                        "token_count_framing": 100,
+                        "custom_tokenizer": {
+                            "identifier": "lit-tests/hanging-tokenizer",
+                            "revision": "main",
+                            "auth_token": None,
+                        },
+                    },
+                },
+                {"model_name": "llama", "litellm_params": {"model": "databricks/databricks-meta-llama-3-3-70b-instruct"}},
+            ]
+        ),
+    )
+    _script_one_provider_count(
+        monkeypatch, "databricks-dbrx-instruct", _provider_reply("dbrx", status_code=400), "databricks"
+    )
+    real_select_tokenizer: Final = litellm.utils.select_tokenizer
+    load_started: Final = threading.Event()
+    load_released: Final = threading.Event()
+
+    def custom_tokenizer_load_hangs(model: str, custom_tokenizer: object = None) -> SelectTokenizerResponse:
+        if custom_tokenizer is not None:
+            load_started.set()
+            load_released.wait(10)
+        return real_select_tokenizer(model=model)
+
+    monkeypatch.setattr(litellm.utils, "select_tokenizer", custom_tokenizer_load_hangs)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "TOKENIZER_LOAD_MAX_RUNNING", 1)
+    turn_downloads_off(monkeypatch)
+
+    async def llama_while_the_custom_tokenizer_load_hangs() -> tuple[object, ...]:
+        custom: Final = asyncio.ensure_future(_count_status("custom"))
+        try:
+            started: Final = await asyncio.to_thread(load_started.wait, 10)
+            llama: Final = await asyncio.wait_for(
+                count_request_tokens(request=_LLAMA_COUNT_REQUEST, call_endpoint=True), 5
+            )
+            return started, llama.count_source, llama.tokenizer_type
+        finally:
+            load_released.set()
+            await custom
+
+    assert asyncio.run(llama_while_the_custom_tokenizer_load_hangs()) == (True, "local_estimate", "openai_tokenizer")
+
+
 @pytest.mark.usefixtures("no_huggingface_tokenizer_loaded")
 def test_count_that_finds_the_hub_tokenizer_retry_due_loads_it_once_the_hub_is_back(
     monkeypatch: pytest.MonkeyPatch,
