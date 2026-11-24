@@ -75,7 +75,7 @@ class AzureAIAgentsConfig(BaseConfig):
     MAX_POLL_ATTEMPTS = 60
     POLL_INTERVAL_SECONDS = 1.0
 
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs: object):
         super().__init__(**kwargs)
 
     @staticmethod

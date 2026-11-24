@@ -269,7 +269,7 @@ def get_response_body(response: httpx.Response) -> dict | None:
         return None
 
 
-async def set_env_variables_in_header(custom_headers: dict | None) -> dict | None:
+async def set_env_variables_in_header(custom_headers: Mapping[str, object] | None) -> dict[str, object] | None:
     """
     checks if any headers on config.yaml are defined as os.environ/COHERE_API_KEY etc
 
@@ -281,7 +281,7 @@ async def set_env_variables_in_header(custom_headers: dict | None) -> dict | Non
     """
     if custom_headers is None:
         return None
-    headers: Final = {}
+    headers: Final[dict[str, object]] = {}
     for key, value in custom_headers.items():
         # langfuse Api requires base64 encoded headers - it's simpleer to just ask litellm users to set their langfuse public and secret keys
         # we can then get the b64 encoded keys here
@@ -506,7 +506,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         headers: httpx.Headers,
         litellm_call_id: str | None = None,
         custom_headers: Mapping[str, str] | None = None,
-    ) -> dict:
+    ) -> dict[str, str]:
         # Exclude headers that uvicorn writes itself (server, date) and
         # encoding/length headers that don't survive re-serialization.
         # If we forward the upstream's Server header, uvicorn adds its
@@ -1052,7 +1052,7 @@ def _passthrough_google_model(url_route: str, google_provider: str | None) -> st
 
 def _build_passthrough_failure_request_payload(
     parsed_body: dict[str, object] | None,
-    kwargs: dict | None,
+    kwargs: Mapping[str, object] | None,
     logging_obj: LiteLLMLoggingObj | None,
     custom_llm_provider: str | None,
     upstream_usage: UpstreamReportedUsage | None = None,
@@ -2609,14 +2609,14 @@ def _apply_key_team_project_controls(
 _METADATA_ADAPTER: Final = TypeAdapter(dict[str, object])
 
 
-def _update_metadata_with_tags_in_header(request: Request, metadata: dict) -> dict:
+def _update_metadata_with_tags_in_header(request: Request, metadata: dict) -> dict[str, object]:
     """
     If tags are in the request headers, add them to the metadata
 
     Used for google and vertex JS SDKs, and Azure passthrough
     Checks both 'tags' and 'x-litellm-tags' headers
     """
-    tags_to_add: Final = []
+    tags_to_add: Final[list[str]] = []
 
     # Check for 'tags' header first
     _tags = request.headers.get("tags")
@@ -3559,7 +3559,7 @@ async def websocket_passthrough_request(
     # Create a dummy request object for WebSocket connections to maintain compatibility
     # with the existing _init_kwargs_for_pass_through_endpoint function
     class DummyRequest:
-        def __init__(self, url: str, method: str = "WEBSOCKET", headers: dict | None = None):
+        def __init__(self, url: str, method: str = "WEBSOCKET", headers: dict[str, str] | None = None):
             self.url = httpx.URL(url)
             self.scope = websocket.scope
             self.query_params = websocket.query_params
@@ -4300,7 +4300,7 @@ class InitPassThroughEndpointHelpers:
         app: FastAPI,
         path: str,
         target: str,
-        custom_headers: dict | None,
+        custom_headers: Mapping[str, object] | None,
         forward_headers: bool | None,
         merge_query_params: bool | None,
         dependencies: Sequence[params.Depends] | None,
@@ -4384,7 +4384,7 @@ class InitPassThroughEndpointHelpers:
         app: FastAPI,
         path: str,
         target: str,
-        custom_headers: dict | None,
+        custom_headers: Mapping[str, object] | None,
         forward_headers: bool | None,
         merge_query_params: bool | None,
         dependencies: Sequence[params.Depends] | None,
@@ -4659,8 +4659,8 @@ class YieldsToConfiguredPassThroughRoute(APIRoute):
 
 
 def _get_combined_pass_through_endpoints(
-    pass_through_endpoints: list[dict] | list[PassThroughGenericEndpoint],
-    config_pass_through_endpoints: list[dict],
+    pass_through_endpoints: list[dict[str, object]] | list[PassThroughGenericEndpoint],
+    config_pass_through_endpoints: list[dict[str, object]],
 ):
     """Get combined pass-through endpoints from db + config"""
     return pass_through_endpoints + config_pass_through_endpoints
@@ -4794,7 +4794,7 @@ async def initialize_pass_through_endpoints(
     )
 
     ## get combined pass-through endpoints from db + config
-    combined_pass_through_endpoints: list[dict | PassThroughGenericEndpoint]
+    combined_pass_through_endpoints: list[dict[str, object] | PassThroughGenericEndpoint]
 
     if config_passthrough_endpoints is not None:
         combined_pass_through_endpoints = _get_combined_pass_through_endpoints(
@@ -5137,7 +5137,7 @@ async def update_pass_through_endpoints(
     await update_config_general_settings(data=updated_data, user_api_key_dict=user_api_key_dict)
 
     # Re-register the route with updated headers
-    _custom_headers: dict | None = updated_endpoint.headers or {}
+    _custom_headers: dict[str, object] | None = updated_endpoint.headers or {}
     _custom_headers = await set_env_variables_in_header(custom_headers=_custom_headers)
 
     route_app: Final = _request_app(request)
@@ -5234,7 +5234,7 @@ async def create_pass_through_endpoints(
     created_endpoint: Final = PassThroughGenericEndpoint.model_validate(data_dict)
 
     # Register the new route
-    _custom_headers: dict | None = created_endpoint.headers or {}
+    _custom_headers: dict[str, object] | None = created_endpoint.headers or {}
     _custom_headers = await set_env_variables_in_header(custom_headers=_custom_headers)
 
     route_app: Final = _request_app(request)

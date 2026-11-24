@@ -46,6 +46,7 @@ from litellm.types.utils import (
     EmbeddingResponse,
     ImageResponse,
     LlmProviders,
+    ModelResponseStream,
     PassthroughCallTypes,
     StandardPassThroughResponseObject,
 )
@@ -185,7 +186,7 @@ class _AgentsApiSessionEvent(BaseModel):
     session: _AgentsApiBody
 
 
-_AGENTS_API_BODY: Final = TypeAdapter(_AgentsApiBody | _AgentConfig)
+_AGENTS_API_BODY: Final[TypeAdapter[_AgentsApiBody | _AgentConfig]] = TypeAdapter(_AgentsApiBody | _AgentConfig)
 
 
 def _agent_model(body: Mapping[str, object]) -> str | None:
@@ -839,7 +840,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                 sync_stream=False,
             )
 
-            all_openai_chunks: Final = []
+            all_openai_chunks: Final[list[ModelResponseStream]] = []
             for chunk_str in all_chunks:
                 try:
                     # Parse the string chunk using the base iterator's string parser

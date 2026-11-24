@@ -173,7 +173,7 @@ class AnthropicFilesConfig(BaseFilesConfig):
         create_file_data: CreateFileRequest,
         optional_params: Mapping[str, object],
         litellm_params: Mapping[str, object],
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Transform to multipart form data for Anthropic file upload.
 
@@ -225,7 +225,7 @@ class AnthropicFilesConfig(BaseFilesConfig):
         file_id: str,
         optional_params: Mapping[str, object],
         litellm_params: dict,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, str]]:
         api_base: Final = AnthropicModelInfo.get_api_base(litellm_params.get("api_base")) or ANTHROPIC_FILES_API_BASE
         encoded_file_id: Final = encode_url_path_segment(file_id, field_name="file_id")
         return join_api_base(api_base, f"v1/files/{encoded_file_id}"), {}
@@ -244,7 +244,7 @@ class AnthropicFilesConfig(BaseFilesConfig):
         file_id: str,
         optional_params: Mapping[str, object],
         litellm_params: dict,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, str]]:
         api_base: Final = AnthropicModelInfo.get_api_base(litellm_params.get("api_base")) or ANTHROPIC_FILES_API_BASE
         encoded_file_id: Final = encode_url_path_segment(file_id, field_name="file_id")
         return join_api_base(api_base, f"v1/files/{encoded_file_id}"), {}
@@ -264,7 +264,7 @@ class AnthropicFilesConfig(BaseFilesConfig):
         purpose: str | None,
         optional_params: Mapping[str, object],
         litellm_params: dict,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, str]]:
         api_base: Final = AnthropicModelInfo.get_api_base(litellm_params.get("api_base")) or ANTHROPIC_FILES_API_BASE
         url: Final = join_api_base(api_base, "v1/files")
         params: Final[dict[str, str]] = {}
@@ -296,7 +296,7 @@ class AnthropicFilesConfig(BaseFilesConfig):
         file_content_request: FileContentRequest,
         optional_params: Mapping[str, object],
         litellm_params: dict,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, str]]:
         file_id: Final = file_content_request.get("file_id")
         api_base: Final = AnthropicModelInfo.get_api_base(litellm_params.get("api_base")) or ANTHROPIC_FILES_API_BASE
         encoded_file_id: Final = encode_url_path_segment(file_id, field_name="file_id")
