@@ -61,6 +61,13 @@ impl Document {
             );
         }
         let merged = models::merge(document, resolved, credentials)?;
+        for withheld in &merged.withheld_secrets {
+            tracing::warn!(
+                model_name = withheld.model_name,
+                credential_name = withheld.credential_name,
+                "a model calls a host its credential's oidc/ api_key is not bound to, so the key is left out and python answers the model"
+            );
+        }
         Ok((typed(merged.document, process)?, merged.missing_credentials))
     }
 

@@ -797,4 +797,46 @@ mod tests {
             Some("general_settings.forward_client_headers_to_llm_api")
         );
     }
+
+    #[rstest]
+    #[tokio::test]
+    async fn a_model_its_credentials_oidc_key_may_not_reach_is_left_to_python() {
+        let rows = Rows {
+            models: Some(vec![model(
+                "bound",
+                r#"{"model": "anthropic/claude", "litellm_credential_name": "shared", "api_base": "https://elsewhere.example"}"#,
+            )]),
+            credentials: Some(vec![credential(
+                "shared",
+                r#"{"api_key": "oidc/env/TOKEN", "api_base": "https://bound.example"}"#,
+            )]),
+            ..rows_with(None, true, true)
+        };
+        let loaded =
+            layered_over(&format!("{FILE}{ON}  master_key: sk-gateway\n"), &rows, &[]).await;
+        let stored = &loaded.config.model_list[1];
+        let admit = std::sync::Arc::new(crate::admit::Admit::over(&loaded.config, vec![]));
+        let request = axum::extract::Request::builder()
+            .method("POST")
+            .uri("/v1/messages")
+            .header("authorization", "Bearer sk-gateway")
+            .body(axum::body::Body::from(r#"{"model": "bound"}"#))
+            .unwrap();
+
+        let refused = admit
+            .admit(request)
+            .await
+            .err()
+            .map(|(_, reason)| (reason.why, reason.over));
+
+        assert_eq!(stored.model_name, "bound");
+        assert!(stored.litellm_params.api_key.is_none());
+        assert_eq!(
+            refused,
+            Some((
+                crate::admit::Refused::Model,
+                "model_list.litellm_params.litellm_credential_name".into()
+            ))
+        );
+    }
 }
