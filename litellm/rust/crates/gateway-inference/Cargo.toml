@@ -31,6 +31,7 @@ litellm-cache.workspace = true
 litellm-core-utils.workspace = true
 litellm-router-types.workspace = true
 litellm-secrets.workspace = true
+parking_lot.workspace = true
 litellm-llms-types.workspace = true
 serde.workspace = true
 serde_json = { workspace = true, features = ["preserve_order"] }
@@ -43,7 +44,6 @@ tracing.workspace = true
 [dev-dependencies]
 litellm-redis-client.workspace = true
 litellm-redis-testing.workspace = true
-parking_lot.workspace = true
 litellm-callbacks.workspace = true
 litellm-gateway.workspace = true
 litellm-cache-memory.workspace = true

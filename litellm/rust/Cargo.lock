@@ -3207,6 +3207,7 @@ dependencies = [
  "jiff-core",
  "jiff-static",
  "jiff-tzdb",
+ "jiff-tzdb-platform",
  "log",
  "portable-atomic",
  "portable-atomic-util",
@@ -3241,6 +3242,15 @@ name = "jiff-tzdb"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fa8377070c6bae868759445e5a77f66d84f0b72f3a054bfb00e6d038b8282da7"
+
+[[package]]
+name = "jiff-tzdb-platform"
+version = "0.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "875a5a69ac2bab1a891711cf5eccbec1ce0341ea805560dcd90b7a2e925132e8"
+dependencies = [
+ "jiff-tzdb",
+]
 
 [[package]]
 name = "jni"
@@ -3776,6 +3786,7 @@ dependencies = [
 name = "litellm-callbacks-legacy-python"
 version = "0.1.0"
 dependencies = [
+ "litellm-cost",
  "litellm-error",
  "litellm-host",
  "litellm-host-python",
@@ -4001,10 +4012,12 @@ name = "litellm-cost"
 version = "0.1.0"
 dependencies = [
  "jiff",
+ "litellm-fnmatch",
  "rstest",
  "schemars 1.2.2",
  "serde",
  "serde_json",
+ "serde_with",
  "strum",
  "thiserror 2.0.21",
 ]
@@ -4287,6 +4300,7 @@ dependencies = [
  "bytes",
  "futures-util",
  "litellm-coroutine",
+ "litellm-cost",
  "litellm-secret-value",
  "rstest",
  "serde",
@@ -4439,6 +4453,7 @@ dependencies = [
  "flate2",
  "futures-util",
  "http 1.4.2",
+ "jiff",
  "litellm-auth",
  "litellm-auth-aws",
  "litellm-auth-gcp",
@@ -4446,6 +4461,7 @@ dependencies = [
  "litellm-cache-memory",
  "litellm-cache-response",
  "litellm-core-utils",
+ "litellm-cost",
  "litellm-env",
  "litellm-error",
  "litellm-framer",
@@ -4666,6 +4682,7 @@ dependencies = [
  "indexmap 2.14.0",
  "jiff",
  "jsonschema",
+ "litellm-auth-aws",
  "litellm-cost",
  "litellm-error",
  "litellm-python-compat",
@@ -4739,6 +4756,7 @@ dependencies = [
  "litellm-config",
  "litellm-core-utils",
  "litellm-coroutine",
+ "litellm-cost",
  "litellm-db",
  "litellm-db-resolve",
  "litellm-env",
@@ -6241,6 +6259,7 @@ checksum = "4688ddedf473e32662b9b067670129a8afb8c18e351482c70d62ba4a88171e8b"
 dependencies = [
  "chrono",
  "indexmap 2.14.0",
+ "jiff",
  "libc",
  "once_cell",
  "portable-atomic",

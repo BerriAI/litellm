@@ -9343,6 +9343,15 @@
     }
   },
   "shared": {
+    "semanticCaching": {
+      "title": "Semantic cache",
+      "mode": "Cache mode",
+      "inherit": "Inherit",
+      "enabled": "Enabled",
+      "disabled": "Disabled",
+      "threshold": "Similarity threshold",
+      "ttl": "TTL in seconds"
+    },
     "fieldInformation": "{{label}} information",
     "resourceActivity": {
       "title": "Activity",

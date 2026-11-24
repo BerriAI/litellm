@@ -29,6 +29,7 @@ import httpx
 from aiohttp import ClientPayloadError
 from aiohttp.http_exceptions import ContentLengthError, TransferEncodingError
 from pydantic import JsonValue, TypeAdapter, ValidationError
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm import anthropic_beta_headers_manager
@@ -53,6 +54,10 @@ from litellm.litellm_core_utils.exception_mapping_utils import is_aws_credential
 from litellm.litellm_core_utils.get_llm_provider_logic import get_provider_affinity_header
 from litellm.litellm_core_utils.get_provider_specific_headers import ProviderSpecificHeaderUtils, deployment_base_model
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.litellm_logging import (
+    _resolve_mantle_region_for_cost,  # pyright: ignore[reportPrivateUsage]  # the region Logging prices a Mantle call under
+    resolve_vertex_location_for_cost,
+)
 from litellm.litellm_core_utils.model_latest_aliases import is_model_latest_alias
 from litellm.litellm_core_utils.provider_affinity import add_provider_affinity_header
 from litellm.litellm_core_utils.reasoning_effort_capability import deployment_reasoning_effort_levels
@@ -128,7 +133,7 @@ from litellm.types.integrations.custom_logger import WEBSEARCH_CONVERTED_STREAM_
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import CallTypes, ProviderSpecificHeader, anthropic_wif_litellm_params
-from litellm.utils import clamp_max_tokens
+from litellm.utils import clamp_max_tokens, get_base_model_from_metadata
 
 _RaisedT = TypeVar("_RaisedT", bound=Exception)
 _METADATA: Final = TypeAdapter(dict[str, object])
@@ -155,6 +160,17 @@ class MessagesSettings:
     detached_drain_timeout: float | None = None
     detached_drain_limit: int | None = None
     connect_retry: bool = False
+    pricing: PricingIdentity | None = None
+
+
+class PricingIdentity(TypedDict):
+    """The deployment facts ``Logging.response_cost_calculator`` prices a call with, read where it reads them."""
+
+    deployment_id: ReadOnly[str | None]
+    base_model: ReadOnly[str | None]
+    region: ReadOnly[str | None]
+    vertex_location: ReadOnly[str | None]
+    data_residency: ReadOnly[str | None]
 
 
 def response(value: Mapping[str, object]) -> AnthropicMessagesResponse:
@@ -743,7 +759,7 @@ def _rejection(error: Exception, request: Mapping[str, object], request_provider
     model: Final = _provider_model(error, request, request_provider)
     if isinstance(provider_rejection, str):
         # Python's handler logs the route model before its provider config's transform refuses the call.
-        _log_resolved_call(request, request_provider, optional_str(getattr(error, "messages_logged_model", None)))
+        log_resolved_call(request, request_provider, optional_str(getattr(error, "messages_logged_model", None)))
         _flag_messages_call(request.get("litellm_logging_obj"), asynchronous)
         rejection: Final = _provider_rejection(
             provider_rejection,
@@ -1188,7 +1204,7 @@ def _provider_model(error: Exception, request: Mapping[str, object], request_pro
     return named if named is not None else str(request["model"]).removeprefix(f"{request_provider}/")
 
 
-def _log_resolved_call(request: Mapping[str, object], request_provider: str, model: str | None = None) -> None:
+def log_resolved_call(request: Mapping[str, object], request_provider: str, model: str | None = None) -> None:
     """Tells the logger the resolved call, as Python's handler does before its provider config
     transforms the request: under `model` when Rust names it, else the request's own."""
     logger: Final = request.get("litellm_logging_obj")
@@ -1323,7 +1339,7 @@ def map_failure(
         chained: Final = transport_timeout(str(error))
         error.__context__ = chained  # rebind-ok: Python chains the transport timeout as the exception context
     if getattr(error, "messages_late_rejection", False):
-        _log_resolved_call(request, request_provider, _provider_model(error, request, request_provider))
+        log_resolved_call(request, request_provider, _provider_model(error, request, request_provider))
     if getattr(error, "messages_python_raised", False):
         # Python's request transform raises this builtin exception unmapped, e.g. the TypeError
         # of comparing a string max_tokens while capping the thinking budget.
@@ -1358,7 +1374,7 @@ def map_failure(
         else None
     )
     if credential_failure is not None:
-        _log_resolved_call(request, request_provider, _provider_model(error, request, request_provider))
+        log_resolved_call(request, request_provider, _provider_model(error, request, request_provider))
         return map_token_failure(credential_failure, request, request_provider, asynchronous)
     provider_error: Final = _provider_error(error, request, request_provider, secrets_read or [])
     if provider_error is None:
@@ -1457,7 +1473,7 @@ def _raise_as_python_does(request: Mapping[str, object], asynchronous: bool) -> 
     try:
         _python_messages_url(api_base)
     except ValueError:
-        _log_resolved_call(request, "anthropic")
+        log_resolved_call(request, "anthropic")
         _flag_messages_call(logger, asynchronous)
         raise
 
@@ -1620,6 +1636,34 @@ def _with_call_settings(
         stream_cost_model=_stream_cost_model(request),
         extra_headers=_affinity_extra_headers(request, model, explicit_provider),
         mcp_gateway=_takes_mcp_gateway(request),
+        pricing=_pricing_identity(request, logger),
+    )
+
+
+def _pricing_identity(request: Mapping[str, object], logger: object) -> PricingIdentity | None:
+    """What the Rust route prices the call with, or ``None`` for a call ``completion_cost`` prices another way: custom
+    pricing, a pricing provider override or an invoked Bedrock model id."""
+    if not isinstance(logger, LiteLLMLoggingObj) or request.get("model_id") is not None:
+        return None
+    if logger.custom_pricing_for(None) or logger.get_router_pricing_provider() is not None:
+        return None
+    provider: Final = _resolved_provider(request)
+    litellm_params: Final = as_str_mapping(logger.model_call_details.get("litellm_params")) or {}
+    data_residency: Final = litellm_params.get("data_residency")
+    model: Final = _requested_model(request)
+    return PricingIdentity(
+        deployment_id=logger.get_router_model_id(),
+        base_model=get_base_model_from_metadata(model_call_details=logger.model_call_details),
+        region=_resolve_mantle_region_for_cost(
+            custom_llm_provider=provider, litellm_params=litellm_params, model=model
+        ),
+        vertex_location=resolve_vertex_location_for_cost(
+            custom_llm_provider=provider,
+            litellm_params=litellm_params,
+            optional_params=request,
+            model=model,
+        ),
+        data_residency=data_residency if isinstance(data_residency, str) else None,
     )
 
 

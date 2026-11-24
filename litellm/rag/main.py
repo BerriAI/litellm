@@ -151,7 +151,7 @@ async def aingest(
     file_url: str | None = None,
     file_id: str | None = None,
     timeout: float | httpx.Timeout | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> RAGIngestResponse:
     """
     Async: Ingest a document into a vector store.
@@ -355,7 +355,7 @@ async def aquery(
     rerank: Mapping[str, object] | None = None,
     stream: bool = False,
     vector_store_params: Mapping[str, object] | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> ModelResponse:
     """
     Async: Query a RAG pipeline.
@@ -404,7 +404,7 @@ def query(
     rerank: Mapping[str, object] | None = None,
     stream: bool = False,
     vector_store_params: Mapping[str, object] | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> ModelResponse | Coroutine[None, None, ModelResponse]:
     """
     Query a RAG pipeline.
