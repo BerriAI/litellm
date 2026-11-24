@@ -11,6 +11,7 @@ from types import MappingProxyType
 from typing import Annotated, Final, Literal, TypeAlias, cast
 
 from pydantic import ConfigDict, Field, TypeAdapter, ValidationError, model_validator
+from pydantic_core import PydanticCustomError
 from typing_extensions import Self
 
 from litellm.exceptions import BadRequestError
@@ -176,7 +177,11 @@ class _EmbeddingVideoMetadata(LiteLLMBaseModel):
     def _window_ends_after_it_starts(self) -> Self:
         window: Final = _window_seconds(self.start_offset, self.end_offset)
         if window is not None and window[1] <= window[0]:
-            raise ValueError(f"end_offset ({self.end_offset}) must be later than the window start ({window[0]:g}s)")
+            raise PydanticCustomError(
+                "window_ends_before_it_starts",
+                "end_offset ({end_offset}) must be later than the window start ({start})",
+                {"end_offset": self.end_offset, "start": f"{window[0]:g}s"},
+            )
         return self
 
 
@@ -460,7 +465,6 @@ def _build_part_for_input(
     element: GeminiEmbeddingElement,
     resolved_files: Mapping[str, Mapping[str, str]] | None = None,
     drop_params: bool = False,
-    audio_track_extraction: bool = False,
 ) -> PartType:
     """
     Build a single PartType for an input element, handling text, data URIs,
@@ -479,8 +483,7 @@ def _build_part_for_input(
     part: Final = _media_part(_file_block_source(block), block.file.format, files)
     if block.file.video_metadata is None:
         return part
-    samples_frames: Final = _is_video_part(part) and not audio_track_extraction
-    frame_error: Final = _video_frame_error(block.file.video_metadata) if samples_frames else None
+    frame_error: Final = _video_frame_error(block.file.video_metadata) if _is_video_part(part) else None
     if frame_error is not None:
         raise _invalid_input(f"Invalid file content block in embedding input: {frame_error}")
     video_metadata: Final = _gemini_video_metadata(block.file.video_metadata)
@@ -590,16 +593,17 @@ def transform_openai_input_gemini_content(
     extra_body: Final = extra_body_fields(optional_params)
 
     input_list: Final = _top_level_elements(input)
-    audio_track_extraction: Final = audio_track_extraction_enabled(optional_params)
     requests: Final[list[EmbedContentRequest]] = []
 
     for element in input_list:
         if isinstance(element, list):
             if not element:
                 raise ValueError("Nested input list must not be empty")
-            parts = [_build_part_for_input(sub, resolved_files, drop_params, audio_track_extraction) for sub in element]
+            parts = [
+                _build_part_for_input(sub, resolved_files=resolved_files, drop_params=drop_params) for sub in element
+            ]
         else:
-            parts = [_build_part_for_input(element, resolved_files, drop_params, audio_track_extraction)]
+            parts = [_build_part_for_input(element, resolved_files=resolved_files, drop_params=drop_params)]
         request = EmbedContentRequest(
             model=gemini_model_name,
             content=ContentType(parts=parts),
@@ -638,7 +642,6 @@ def transform_openai_input_gemini_embed_content(
     gemini_params: Final = _filter_embed_params(optional_params)
 
     input_list: Final = _top_level_elements(input)
-    audio_track_extraction: Final = audio_track_extraction_enabled(optional_params)
     parts: Final[list[PartType]] = []
 
     for element in input_list:
@@ -647,7 +650,7 @@ def transform_openai_input_gemini_embed_content(
                 "Nested (combined) embeddings are not supported on the embedContent path. "
                 "Use the batchEmbedContents path or pass a flat list instead."
             )
-        parts.append(_build_part_for_input(element, resolved_files, drop_params, audio_track_extraction))
+        parts.append(_build_part_for_input(element, resolved_files=resolved_files, drop_params=drop_params))
 
     request_body: Final[dict[str, object]] = {
         **extra_body_fields(optional_params),

@@ -650,9 +650,9 @@ class TestFileContentBlocks:
             ({"end_offset": "0.4s"}, r"\(0\.4s\) at 1 fps rounds to 0 frames"),
             ({"start_offset": "-10s", "end_offset": " 0.3s"}, r"\(0\.3s\) at 1 fps rounds to 0 frames"),
             ({"start_offset": "5.s", "end_offset": "+5.2s"}, r"\(0\.2s\) at 1 fps rounds to 0 frames"),
-            ({"start_offset": "0s", "end_offset": "0s"}, r"end_offset \(0s\) must be later than the window start \(0s\)"),
-            ({"start_offset": "10s", "end_offset": "0s"}, r"must be later than the window start \(10s\)"),
-            ({"start_offset": "-0s", "end_offset": "-1s"}, r"end_offset \(-1s\) must be later than the window start \(0s\)"),
+            ({"start_offset": "0s", "end_offset": "0s"}, r": end_offset \(0s\) must be later than the window start \(0s\)"),
+            ({"start_offset": "10s", "end_offset": "0s"}, r": end_offset \(0s\) must be later than the window start \(10s\)"),
+            ({"start_offset": "-0s", "end_offset": "-1s"}, r": end_offset \(-1s\) must be later than the window start \(0s\)"),
             ({"fps": 0, "start_offset": "0s", "end_offset": "10s"}, r"\.fps: must be greater than 0, got 0"),
             ({"fps": -1}, r"\.fps: must be greater than 0, got -1"),
             ({"fps": float("nan")}, r"\.fps: Input should be a finite number"),
@@ -694,33 +694,36 @@ class TestFileContentBlocks:
 
     def test_a_window_that_ends_before_it_starts_answers_400_on_audio_too(self) -> None:
         block: Final = _file_block(file_data=AUDIO_DATA_URI, video_metadata={"start_offset": "5s", "end_offset": "2s"})
-        with pytest.raises(BadRequestError, match=r"end_offset \(2s\) must be later than the window start \(5s\)"):
+        with pytest.raises(
+            BadRequestError, match=r"file\.video_metadata: end_offset \(2s\) must be later than the window start \(5s\)"
+        ):
             _build_part_for_input(block)
 
     @pytest.mark.parametrize(
-        ("transform", "parts_of"),
-        [
-            (transform_openai_input_gemini_content, lambda request: request["requests"][0]["content"]["parts"]),
-            (transform_openai_input_gemini_embed_content, lambda request: request["content"]["parts"]),
-        ],
+        "transform", [transform_openai_input_gemini_content, transform_openai_input_gemini_embed_content]
     )
     @pytest.mark.parametrize(
         "optional_params",
         [{"audio_track_extraction": True}, {"extra_body": {"embedContentConfig": {"audioTrackExtraction": True}}}],
     )
     @pytest.mark.parametrize(
-        "video_metadata", [{"fps": 0.2, "start_offset": "0s", "end_offset": "1s"}, {"fps": 0, "end_offset": "10s"}]
+        ("video_metadata", "named_in_error"),
+        [
+            ({"fps": 0.2, "start_offset": "0s", "end_offset": "1s"}, r"\(1s\) at 0\.2 fps rounds to 0 frames"),
+            ({"fps": 1, "start_offset": "0s", "end_offset": "0.3s"}, r"\(0\.3s\) at 1 fps rounds to 0 frames"),
+            ({"fps": 0, "end_offset": "10s"}, r"\.fps: must be greater than 0, got 0"),
+        ],
     )
-    def test_audio_track_extraction_lets_a_window_with_no_frames_through(
+    def test_audio_track_extraction_still_answers_400_for_a_window_with_no_frames(
         self,
-        transform: Callable[..., Mapping[str, object]],
-        parts_of: Callable[[Mapping[str, object]], list[Mapping[str, object]]],
+        transform: Callable[..., object],
         optional_params: dict[str, object],
         video_metadata: dict[str, object],
+        named_in_error: str,
     ) -> None:
         block: Final = _file_block(file_data=VIDEO_DATA_URI, video_metadata=video_metadata)
-        request: Final = transform(input=[block], model=self.MODEL, optional_params=optional_params)
-        assert parts_of(request)[0]["video_metadata"] == gemini_video_metadata_from_openai(video_metadata)
+        with pytest.raises(BadRequestError, match=named_in_error):
+            transform(input=[block], model=self.MODEL, optional_params=optional_params)
 
     @pytest.mark.parametrize(
         "transform", [transform_openai_input_gemini_content, transform_openai_input_gemini_embed_content]
