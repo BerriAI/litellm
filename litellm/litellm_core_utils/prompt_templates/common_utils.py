@@ -8,7 +8,7 @@ import sys
 import warnings
 from collections.abc import Hashable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from itertools import chain, filterfalse, groupby
+from itertools import chain, groupby
 from types import MappingProxyType, ModuleType
 from typing import TYPE_CHECKING, Final, Literal, TypeAlias, cast
 
@@ -490,6 +490,11 @@ def is_unrendered_block(block: object) -> bool:
     return isinstance(block_type, str) and block_type in ANTHROPIC_UNRENDERED_BLOCK_TYPES
 
 
+def is_unrendered_block_without_text(block: object) -> bool:
+    fields: Final = as_str_mapping(block)
+    return fields is not None and is_unrendered_block(fields) and "text" not in fields
+
+
 def convert_content_list_to_str(
     message: AllMessageValues | ChatCompletionResponseMessage,
 ) -> str:
@@ -503,7 +508,7 @@ def convert_content_list_to_str(
     message_content: Final = message.get("content")
     if message_content:
         if message_content is not None and isinstance(message_content, list):
-            for c in filterfalse(is_unrendered_block, message_content):
+            for c in message_content:
                 text_content = c.get("text")
                 if text_content:
                     texts += text_content
@@ -539,10 +544,9 @@ def get_semantic_cache_prompt_from_messages(messages: Sequence[Mapping[str, obje
 def _semantic_cache_content_text(content: object) -> str:
     if isinstance(content, str):
         return content
-    blocks: Final = as_object_list(content)
-    if blocks is None:
+    if not isinstance(content, list):
         return ""
-    return "".join(_semantic_cache_block_text(block) for block in map(as_str_mapping, blocks) if block is not None)
+    return "".join(_semantic_cache_block_text(block) for block in content if isinstance(block, Mapping))
 
 
 def _semantic_cache_block_text(block: Mapping[str, object]) -> str:

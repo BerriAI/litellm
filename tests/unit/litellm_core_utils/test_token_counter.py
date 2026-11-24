@@ -2105,6 +2105,17 @@ def test_token_counter_counts_nothing_for_a_fallback_block(model: str) -> None:
     assert token_counter(model=model, messages=with_block) == token_counter(model=model, messages=without_block)
 
 
+@pytest.mark.parametrize("model", ("anthropic/claude-sonnet-5-5", "gpt-5.4-mini", "deepseek/deepseek-v4-flash"))
+def test_token_counter_counts_the_text_a_fallback_block_carries_like_a_text_block(model: str) -> None:
+    user_turn: Final = {"role": "user", "content": "hi"}
+    carried: Final = "Text a caller put on the block. " * 20
+
+    with_fallback: Final = [user_turn, {"role": "assistant", "content": [{"type": "fallback", "text": carried}]}]
+    with_text: Final = [user_turn, {"role": "assistant", "content": [{"type": "text", "text": carried}]}]
+
+    assert token_counter(model=model, messages=with_fallback) == token_counter(model=model, messages=with_text)
+
+
 def test_token_counter_counts_chat_compaction_blocks_like_their_summary_text():
     """
     Chat clients replay a compaction block in the assistant message's provider_specific_fields, and inference

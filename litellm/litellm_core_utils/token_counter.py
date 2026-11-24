@@ -11,7 +11,7 @@ from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import cached_property
-from itertools import accumulate, chain, filterfalse, islice
+from itertools import accumulate, chain, islice
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias, cast
 
@@ -58,7 +58,6 @@ from litellm.litellm_core_utils.prompt_templates.chat_template_tools import (
     chat_template_tool_choice_tokens,
     chat_template_tool_section,
 )
-from litellm.litellm_core_utils.prompt_templates.common_utils import is_unrendered_block
 from litellm.litellm_core_utils.tokenizer import HuggingFaceTokenizer, OpenAIEncoding
 
 if TYPE_CHECKING:
@@ -1948,7 +1947,13 @@ def _count_anthropic_content(
 
 
 _TEXT_FIELD_BY_BLOCK_TYPE: Final = MappingProxyType(
-    {"text": "text", "thinking": "thinking", "redacted_thinking": "thinking", "compaction": "content"}
+    {
+        "text": "text",
+        "thinking": "thinking",
+        "redacted_thinking": "thinking",
+        "compaction": "content",
+        "fallback": "text",
+    }
 )
 
 
@@ -1975,25 +1980,19 @@ def has_only_text_content(messages: Sequence[object]) -> bool:
     return all(_has_only_text_content(message) for message in messages)
 
 
-_ContentListBlock: TypeAlias = (
-    OpenAIMessageContentListBlock
-    | ChatCompletionThinkingBlock
-    | ChatCompletionRedactedThinkingBlock
-    | AnthropicMessagesTextParam
-    | AnthropicMessagesImageParam
-    | AnthropicMessagesDocumentParam
-    | AnthropicSearchResultParam
-    | CompactionBlock
-)
-
-
-def _rendered_blocks(content_list: str | Iterable[_ContentListBlock]) -> Iterable[str | _ContentListBlock]:
-    return filterfalse(is_unrendered_block, content_list)
-
-
 def _count_content_list(
     count_function: TokenCounterFunction,
-    content_list: str | Iterable[_ContentListBlock],
+    content_list: str
+    | Iterable[
+        OpenAIMessageContentListBlock
+        | ChatCompletionThinkingBlock
+        | ChatCompletionRedactedThinkingBlock
+        | AnthropicMessagesTextParam
+        | AnthropicMessagesImageParam
+        | AnthropicMessagesDocumentParam
+        | AnthropicSearchResultParam
+        | CompactionBlock
+    ],
     use_default_image_token_count: bool,
     default_token_count: int | None,
     pdf_pricing: PdfPagePricing = "claude",
@@ -2001,7 +2000,7 @@ def _count_content_list(
     """Recursively count tokens from a list of content blocks."""
     try:
         num_tokens = 0
-        for c in _rendered_blocks(content_list):
+        for c in content_list:
             if isinstance(c, str):
                 num_tokens += count_function(c)
             elif c["type"] in _TEXT_FIELD_BY_BLOCK_TYPE:
