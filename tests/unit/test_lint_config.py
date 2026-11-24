@@ -256,6 +256,13 @@ def _model_entry(litellm_params: str, model_info: str = "") -> str:
                 "unexpected value: must not be negative, got -1"
             ],
         ),
+        (
+            '{input_cost_per_token: "-1"}',
+            [
+                "config.yaml:4: warning: model_list[0].model_info.input_cost_per_token: "
+                "unexpected value: must not be negative, got '-1'"
+            ],
+        ),
         ("[max_output_tokens]", ["config.yaml:4: error: model_list[0].model_info: must be a mapping"]),
         ("{my_team_label: blue, max_output_tokens: 100, input_cost_per_token: os.environ/OPENAI_API_KEY}", []),
     ],
@@ -295,6 +302,14 @@ def test_model_missing_from_cost_map_needs_its_price_and_limits(
 ) -> None:
     params: Final = "{model: azure/my-deployment, api_key: k, api_base: https://example.com, api_version: v}"
     assert _lint(tmp_path, _model_entry(params, model_info)) == expected
+
+
+def test_prices_under_litellm_params_count_for_a_model_missing_from_the_cost_map(tmp_path: Path) -> None:
+    params: Final = (
+        "{model: azure/my-deployment, api_key: k, api_base: https://example.com, api_version: v, "
+        "input_cost_per_token: 0.1, output_cost_per_token: 0.2}"
+    )
+    assert _lint(tmp_path, _model_entry(params, "{max_input_tokens: 1000, max_output_tokens: 100}")) == []
 
 
 def test_wildcard_model_is_not_checked_against_the_cost_map(tmp_path: Path) -> None:
@@ -337,6 +352,19 @@ def test_wildcard_model_is_not_checked_against_the_cost_map(tmp_path: Path) -> N
             ],
         ),
         ("{model: bedrock/anthropic.claude-sonnet-4-5-20250929-v1:0, aws_role_name: role}", {}, []),
+        (
+            "{model: bedrock/anthropic.claude-sonnet-4-5-20250929-v1:0, aws_session_token: t}",
+            {},
+            [
+                "config.yaml:3: warning: model_list[0].litellm_params: "
+                "bedrock/anthropic.claude-sonnet-4-5-20250929-v1:0 needs "
+                "AWS_ACCESS_KEY_ID in the environment or litellm_params.aws_access_key_id",
+                "config.yaml:3: warning: model_list[0].litellm_params: "
+                "bedrock/anthropic.claude-sonnet-4-5-20250929-v1:0 needs "
+                "AWS_SECRET_ACCESS_KEY in the environment or litellm_params.aws_secret_access_key",
+            ],
+        ),
+        ("{model: vertex_ai/gemini-2.5-pro, vertex_location: us-central1}", {"VERTEXAI_PROJECT": "demo"}, []),
     ],
 )
 def test_provider_setting_missing_from_params_and_environment_is_reported(
@@ -348,6 +376,23 @@ def test_provider_setting_missing_from_params_and_environment_is_reported(
 def test_provider_key_declared_under_environment_variables_is_accepted(tmp_path: Path) -> None:
     text: Final = _model_entry("{model: openai/gpt-5}") + "environment_variables:\n  OPENAI_API_KEY: sk-test\n"
     assert _lint(tmp_path, text, {}) == []
+
+
+def test_provider_key_value_declared_under_environment_variables_is_used(tmp_path: Path) -> None:
+    text: Final = _model_entry("{model: gnani/prisma-v2.5}") + "environment_variables:\n  GNANI_API_KEY: test\n"
+    assert _lint(tmp_path, text, {}) == []
+
+
+@pytest.mark.parametrize("model", ["chatgpt/gpt-5", "github_copilot/gpt-4"])
+def test_linting_never_resolves_a_provider_that_logs_in(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, model: str
+) -> None:
+    def fail(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("lint resolved a provider that starts a login")
+
+    monkeypatch.setattr("litellm.utils.litellm_utils.get_llm_provider", fail)
+    full: Final = "{input_cost_per_token: 0, output_cost_per_token: 0, max_input_tokens: 1, max_output_tokens: 1}"
+    assert _lint(tmp_path, _model_entry(f"{{model: {model}}}", full), {}) == []
 
 
 def test_linting_leaves_the_process_environment_unchanged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
