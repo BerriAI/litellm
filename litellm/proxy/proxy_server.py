@@ -58,6 +58,7 @@ import websockets
 import websockets.exceptions
 from pydantic import BaseModel, ConfigDict, Json, JsonValue, TypeAdapter, ValidationError, with_config
 from pydantic.fields import FieldInfo, PydanticUndefined
+from pydantic_core import to_json
 from typing_extensions import NotRequired, ReadOnly, TypedDict, assert_never
 
 from litellm._uuid import uuid
@@ -9715,10 +9716,11 @@ def _fast_serialize_simple_model_response_stream(
     if content is not None:
         delta_dict["content"] = content
 
-    choice_dict: Final = {"index": getattr(choice, "index", 0), "delta": delta_dict}
-    finish_reason: Final = getattr(choice, "finish_reason", None)
-    if finish_reason is not None:
-        choice_dict["finish_reason"] = finish_reason
+    choice_dict: Final = {
+        "index": getattr(choice, "index", 0),
+        "delta": delta_dict,
+        "finish_reason": getattr(choice, "finish_reason", None),
+    }
 
     # Match the canonical ``model_dump_json(exclude_none=True)`` shape — if a
     # field is None, omit it entirely rather than emitting ``"key": null``.
@@ -9744,12 +9746,41 @@ def _fast_serialize_simple_model_response_stream(
     return orjson.dumps(payload)
 
 
+_JSON_OBJECTS: Final = TypeAdapter(tuple[dict[str, object], ...])
+
+
+def _has_null_finish_reason(choice: StreamingChoices) -> bool:
+    choice_extras: Final = choice.model_extra or {}
+    return "finish_reason" in choice_extras and choice_extras["finish_reason"] is None
+
+
+def _serialize_model_response_stream(chunk: ModelResponseStream) -> str | bytes:
+    serialized_chunk: Final = _fast_serialize_simple_model_response_stream(chunk)
+    if serialized_chunk is not None:
+        return serialized_chunk
+    null_finish_reasons: Final = tuple(_has_null_finish_reason(choice) for choice in chunk.choices)
+    if not any(null_finish_reasons):
+        return chunk.model_dump_json(exclude_none=True, exclude_unset=True)
+    return _dump_json_with_null_finish_reasons(chunk, null_finish_reasons)
+
+
+def _dump_json_with_null_finish_reasons(chunk: BaseModel, null_finish_reasons: tuple[bool, ...]) -> bytes:
+    payload: Final = chunk.model_dump(mode="json", exclude_none=True, exclude_unset=True)
+    choices: Final = _JSON_OBJECTS.validate_python(payload.get("choices", ()))
+    return to_json(
+        {
+            **payload,
+            "choices": [
+                {**choice, "finish_reason": None} if null_finish_reason else choice
+                for choice, null_finish_reason in zip(choices, null_finish_reasons, strict=True)
+            ],
+        }
+    )
+
+
 def _serialize_streaming_chunk(chunk: BaseModel) -> str | bytes:
     if isinstance(chunk, ModelResponseStream):
-        serialized_chunk: Final = _fast_serialize_simple_model_response_stream(chunk)
-        if serialized_chunk is not None:
-            return serialized_chunk
-
+        return _serialize_model_response_stream(chunk)
     return chunk.model_dump_json(exclude_none=True, exclude_unset=True)
 
 

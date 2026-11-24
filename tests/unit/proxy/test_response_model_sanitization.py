@@ -85,14 +85,16 @@ def test_restamp_streaming_chunk_skips_matching_model():
     assert model_mismatch_logged is False
 
 
-def test_fast_serialize_simple_streaming_chunk_matches_model_dump_json():
+def test_fast_serialize_simple_streaming_chunk_matches_model_dump_json_plus_a_null_finish_reason():
     from litellm.proxy.proxy_server import _serialize_streaming_chunk
 
     chunk = _make_model_response_stream_chunk("client-model")
+    canonical = json.loads(chunk.model_dump_json(exclude_none=True, exclude_unset=True))
 
-    assert json.loads(_serialize_streaming_chunk(chunk)) == json.loads(
-        chunk.model_dump_json(exclude_none=True, exclude_unset=True)
-    )
+    assert json.loads(_serialize_streaming_chunk(chunk)) == {
+        **canonical,
+        "choices": [{**canonical["choices"][0], "finish_reason": None}],
+    }
 
 
 def test_fast_serialize_returns_none_when_model_field_is_missing():
@@ -122,9 +124,11 @@ def test_fast_serialize_returns_none_when_model_field_is_missing():
     )
     assert '"model": null' not in payload_str
     assert '"model":null' not in payload_str
-    assert json.loads(payload_str) == json.loads(
-        chunk.model_dump_json(exclude_none=True, exclude_unset=True)
-    )
+    canonical = json.loads(chunk.model_dump_json(exclude_none=True, exclude_unset=True))
+    assert json.loads(payload_str) == {
+        **canonical,
+        "choices": [{**canonical["choices"][0], "finish_reason": None}],
+    }
 
 
 def test_proxy_chat_completion_does_not_return_provider_prefixed_model(

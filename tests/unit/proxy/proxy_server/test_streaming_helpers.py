@@ -536,6 +536,7 @@ def test_fast_serialize_simple_model_response_stream_returns_bytes_payload():
             {
                 "index": 0,
                 "delta": {"role": "assistant", "content": "hi"},
+                "finish_reason": None,
             }
         ],
     }
@@ -568,9 +569,95 @@ def test_serialize_streaming_chunk_simple_uses_fast_path_bytes():
             {
                 "index": 0,
                 "delta": {"role": "assistant", "content": "hi"},
+                "finish_reason": None,
             }
         ],
     }
+
+
+def _stream_chunk(delta: Delta, finish_reason: str | None = None, usage: Usage | None = None) -> ModelResponseStream:
+    return ModelResponseStream(
+        id="chatcmpl-test",
+        choices=[StreamingChoices(finish_reason=finish_reason, index=0, delta=delta)],
+        created=0,
+        model="gpt-4",
+        object="chat.completion.chunk",
+        usage=usage,
+    )
+
+
+@pytest.mark.parametrize(
+    "delta",
+    [
+        pytest.param(Delta(content="hi", role="assistant"), id="text"),
+        pytest.param(
+            Delta(
+                tool_calls=[
+                    {"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": ""}, "index": 0}
+                ]
+            ),
+            id="tool-call",
+        ),
+        pytest.param(Delta(reasoning_content="plan"), id="reasoning"),
+    ],
+)
+def test_serialize_streaming_chunk_sends_a_null_finish_reason_on_an_in_progress_chunk(delta: Delta) -> None:
+    chunk: Final = _stream_chunk(delta)
+    canonical: Final = json.loads(chunk.model_dump_json(exclude_none=True, exclude_unset=True))
+
+    assert json.loads(_serialize_streaming_chunk(chunk)) == {
+        **canonical,
+        "choices": [{**canonical["choices"][0], "finish_reason": None}],
+    }
+
+
+@pytest.mark.parametrize(
+    "usage",
+    [
+        pytest.param(None, id="text"),
+        pytest.param(Usage(prompt_tokens=3, completion_tokens=2, total_tokens=5), id="with-usage"),
+    ],
+)
+def test_serialize_streaming_chunk_keeps_the_finish_reason_of_the_final_chunk(usage: Usage | None) -> None:
+    chunk: Final = _stream_chunk(Delta(), finish_reason="stop", usage=usage)
+
+    assert json.loads(_serialize_streaming_chunk(chunk)) == json.loads(
+        chunk.model_dump_json(exclude_none=True, exclude_unset=True)
+    )
+    assert json.loads(_serialize_streaming_chunk(chunk))["choices"][0]["finish_reason"] == "stop"
+
+
+def test_serialize_streaming_chunk_sends_a_null_finish_reason_on_every_choice() -> None:
+    chunk: Final = ModelResponseStream(
+        id="chatcmpl-n",
+        choices=[
+            StreamingChoices(index=0, delta=Delta(content="a")),
+            StreamingChoices(index=1, delta=Delta(), finish_reason="stop"),
+        ],
+        created=0,
+        model="gpt-4",
+        object="chat.completion.chunk",
+    )
+
+    assert [choice["finish_reason"] for choice in json.loads(_serialize_streaming_chunk(chunk))["choices"]] == [
+        None,
+        "stop",
+    ]
+
+
+def test_serialize_streaming_chunk_sends_no_finish_reason_on_a_choiceless_usage_chunk() -> None:
+    chunk: Final = ModelResponseStream(
+        id="chatcmpl-usage",
+        choices=[],
+        created=0,
+        model="gpt-4",
+        object="chat.completion.chunk",
+        usage=Usage(prompt_tokens=3, completion_tokens=2, total_tokens=5),
+    )
+
+    assert json.loads(_serialize_streaming_chunk(chunk)) == json.loads(
+        chunk.model_dump_json(exclude_none=True, exclude_unset=True)
+    )
 
 
 def test_serialize_streaming_chunk_invalid_input_raises_attribute_error():
@@ -710,6 +797,7 @@ async def test_async_data_generator_yields_sse_chunks_and_done(monkeypatch):
             {
                 "index": 0,
                 "delta": {"role": "assistant", "content": "hello"},
+                "finish_reason": None,
             }
         ],
     }
