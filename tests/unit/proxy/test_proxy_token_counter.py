@@ -7743,7 +7743,7 @@ def _script_one_provider_count(
     provider_counter: Final = litellm.proxy.proxy_server._get_provider_token_counter
 
     def scripted_for_one_model(
-        deployment: dict, model_to_use: str
+        deployment: dict[str, JsonValue], model_to_use: str
     ) -> tuple[BaseTokenCounter | None, str | None, str | None]:
         if model_to_use == model:
             return counter, model_to_use, provider
