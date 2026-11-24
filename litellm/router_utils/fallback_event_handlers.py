@@ -18,6 +18,7 @@ from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_f
 from litellm.litellm_core_utils.get_llm_provider_logic import inferred_provider
 from litellm.litellm_core_utils.litellm_logging import Logging, configured_callbacks
 from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_structure
+from litellm.llms.gemini.empty_image_response import IMAGE_ANSWER_ERRORS
 from litellm.router_utils.add_retry_fallback_headers import (
     add_fallback_headers_to_response,
     get_fallback_error_info,
@@ -153,6 +154,12 @@ def _trigger_cooldown_for_failed_deployment(
             verbose_router_logger.debug(
                 "Not triggering cooldown for fallback deployment: failure originated "
                 "from advisor orchestration, not the selected deployment."
+            )
+            return
+
+        if isinstance(exception, IMAGE_ANSWER_ERRORS):
+            verbose_router_logger.debug(
+                "Not triggering cooldown for fallback deployment: it answered without an image."
             )
             return
 

@@ -1,12 +1,16 @@
 import asyncio
 import time
 from collections.abc import Callable, Mapping
+from datetime import datetime
 from types import MappingProxyType
 from typing import Final
 
+import httpx
 import pytest
+import respx
 
 import litellm
+from litellm import Router
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import Litellm_EntityType
 from litellm.proxy.hooks.model_max_budget_limiter import (
@@ -311,3 +315,93 @@ async def test_a_batch_polled_within_every_budget_window_is_never_charged_again(
     await _poll(limiter, finished, BATCH_COST)
 
     assert _local_spend(limiter, KEY_SPEND_KEY) == pytest.approx(BATCH_COST)
+
+
+_IMAGE_USAGE: Final = {"promptTokenCount": 777, "candidatesTokenCount": 333, "totalTokenCount": 1110}
+
+
+async def _key_spend_after_falling_back_from(primary: str, monkeypatch: pytest.MonkeyPatch) -> tuple[float, float]:
+    limiter: Final = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
+    monkeypatch.setattr(litellm, "callbacks", [limiter])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": group,
+                "litellm_params": {
+                    "model": "gemini/gemini-3.1-flash-image",
+                    "api_key": "test-key",
+                    "api_base": f"https://{host}.example",
+                },
+            }
+            for group, host in (("primary", primary), ("backup", "backup"))
+        ],
+        content_policy_fallbacks=[{"primary": ["backup"]}],
+        fallbacks=[{"primary": ["backup"]}],
+        num_retries=0,
+    )
+    budget: Final = {"budget_limit": 100.0, "time_period": "1d"}
+    metadata: Final = {
+        "user_api_key_hash": KEY_HASH,
+        "user_api_key_model_max_budget": {"primary": budget, "backup": budget},
+    }
+    logging_obj, _ = litellm.utils.function_setup(
+        original_function="aimage_generation",
+        rules_obj=litellm.utils.Rules(),
+        start_time=datetime.now(),
+        model="primary",
+        prompt="draw a circle",
+        metadata=metadata,
+        litellm_call_id=f"key-budget-{primary}",
+    )
+    await router.aimage_generation(
+        model="primary",
+        prompt="draw a circle",
+        metadata=metadata,
+        litellm_logging_obj=logging_obj,
+        litellm_call_id=f"key-budget-{primary}",
+    )
+    backup_key: Final = f"virtual_key_spend:{KEY_HASH}:backup:1d"
+    for _ in range(300):
+        if await _spend(limiter, backup_key):
+            break
+        await asyncio.sleep(0.05)
+    await asyncio.sleep(0.2)
+    return await _spend(limiter, f"virtual_key_spend:{KEY_HASH}:primary:1d"), await _spend(limiter, backup_key)
+
+
+@pytest.mark.asyncio
+async def test_a_billed_image_refusal_counts_once_toward_the_key_budget_of_the_model_that_refused(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post(url__startswith="https://refuses.example/").mock(
+        return_value=httpx.Response(
+            200, json={"candidates": [{"finishReason": "IMAGE_PROHIBITED_CONTENT"}], "usageMetadata": _IMAGE_USAGE}
+        )
+    )
+    respx_mock.post(url__startswith="https://rejects-the-key.example/").mock(
+        return_value=httpx.Response(401, json={"error": {"code": 401, "message": "bad key"}})
+    )
+    respx_mock.post(url__startswith="https://backup.example/").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "candidates": [
+                    {"content": {"parts": [{"inlineData": {"mimeType": "image/png", "data": "aW1hZ2U="}}]}}
+                ],
+                "usageMetadata": _IMAGE_USAGE,
+            },
+        )
+    )
+
+    refused_spend, served_spend = await _key_spend_after_falling_back_from("refuses", monkeypatch)
+    unbilled_spend, served_after_unbilled_spend = await _key_spend_after_falling_back_from(
+        "rejects-the-key", monkeypatch
+    )
+
+    assert refused_spend > 0
+    assert served_spend > 0
+    assert (unbilled_spend, served_after_unbilled_spend) == (0.0, pytest.approx(served_spend))

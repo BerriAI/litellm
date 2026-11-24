@@ -126,6 +126,7 @@ from litellm.litellm_core_utils.served_output_texts import (
 from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.llms.base_llm.search.transformation import SearchResponse
+from litellm.llms.gemini.empty_image_response import IMAGE_ANSWERS_BILLED_ON_FAILURE, image_answer_cost_on_failure
 from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.types.agents import LiteLLMSendMessageResponse
 from litellm.types.containers.main import ContainerObject
@@ -784,6 +785,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self.billed_token_rates: BilledTokenRates | None = None
         self._provider_reported_cost: float | None = None
         self._failed_attempts_owed_on_success: tuple[tuple[Usage, float], ...] = ()
+        self._image_answers_billed_on_failure: float = 0.0
 
         # Init Caching related details
         self.caching_details: CachingDetails | None = None
@@ -912,11 +914,12 @@ class Logging(LiteLLMLoggingBaseClass):
         for failure_detail in _PREVIOUS_ATTEMPT_FAILURE_DETAILS:
             self.model_call_details.pop(failure_detail, None)
         previous_params: Final[Mapping[str, object]] = self.litellm_params
+        attempt_api_base: Final = attempt_fields.get("api_base")
         attempt_params: Final[dict[str, object]] = {
             **get_litellm_params(
                 **attempt_fields,  # pyright: ignore[reportArgumentType]  # the same loose kwargs __init__ passes
             ),
-            "api_base": previous_params.get("api_base"),
+            "api_base": self._get_masked_api_base(attempt_api_base if isinstance(attempt_api_base, str) else None),
             "_langfuse_masking_function": previous_params.get("_langfuse_masking_function"),
         }
         scrubbed_params: Final = scrub_sensitive_keys_in_metadata(attempt_params)
@@ -2447,6 +2450,7 @@ class Logging(LiteLLMLoggingBaseClass):
         own_cost: Final = stored_cost if isinstance(stored_cost, (int, float)) else 0.0
         failed_attempts_cost: Final = sum(cost for _, cost in failed_attempts)
         self.model_call_details["failed_attempts_billed_on_success"] = failed_attempts
+        self.model_call_details[IMAGE_ANSWERS_BILLED_ON_FAILURE] = self._image_answers_billed_on_failure
         self.model_call_details["combined_usage_object"] = BaseTokenUsageProcessor.combine_usage_objects(
             usage_objects=[own_usage, *(usage for usage, _ in failed_attempts)]
         )
@@ -4361,6 +4365,7 @@ class Logging(LiteLLMLoggingBaseClass):
         result: Final = None  # result sent to all loggers, init this to None incase it's not created
 
         self.mark_logging_complete(event_type="async_failure")
+        self._image_answers_billed_on_failure += image_answer_cost_on_failure(self.model_call_details)
         for callback in callbacks:
             try:
                 litellm_params = self.model_call_details.get("litellm_params", {})

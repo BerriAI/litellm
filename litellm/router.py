@@ -9064,6 +9064,13 @@ class Router:
                 )
                 return False
 
+            if isinstance(exception, IMAGE_ANSWER_ERRORS):
+                verbose_router_logger.debug(
+                    "Router: Exiting 'deployment_callback_on_failure' without cooldown. "
+                    "The deployment answered without an image, which is not a deployment failure."
+                )
+                return False
+
             # Cache litellm_params to avoid repeated dict lookups
             litellm_params: Final = kwargs.get("litellm_params", {})
             _model_info: Final = litellm_params.get("model_info", {})

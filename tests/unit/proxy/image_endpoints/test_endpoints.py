@@ -1,8 +1,10 @@
 import asyncio
 import copy
+import itertools
 import json
 import logging
 import threading
+import time
 from collections.abc import Callable, Iterator, Mapping
 from types import SimpleNamespace
 from typing import Any, Dict, Final
@@ -21,6 +23,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.gemini.empty_image_response import ImageRefusalError
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
@@ -1258,3 +1261,115 @@ def test_an_image_timeout_writes_no_estimated_usage_to_its_spend_row(monkeypatch
         end_time=db_call["end_time"],
     )
     assert (db_call["response_cost"], payload["prompt_tokens"]) == (0, 0)
+
+
+class _BilledImageRefusalHandler(litellm.CustomLLM):
+    async def aimage_generation(
+        self,
+        model: str,
+        prompt: str,
+        model_response: ImageResponse,
+        api_key: str | None,
+        api_base: str | None,
+        optional_params: Mapping[str, object],
+        logging_obj: object,
+        timeout: object | None = None,
+        client: object | None = None,
+    ) -> ImageResponse:
+        assert isinstance(logging_obj, LiteLLMLoggingObj)
+        logging_obj.pre_call(input=prompt, api_key=api_key)
+        logging_obj.record_partial_usage_for_failure(
+            litellm.Usage(prompt_tokens=16, completion_tokens=2240, total_tokens=2256), 0.25
+        )
+        raise ImageRefusalError(
+            message="Gemini refused to return an image, finishReason=IMAGE_SAFETY",
+            model=model,
+            llm_provider="image-regression",
+            response=httpx.Response(400, request=httpx.Request("POST", "https://google.invalid")),
+            provider_specific_fields={},
+        )
+
+
+class _RejectingPostCallHook(CustomLogger):
+    async def async_post_call_success_hook(
+        self, data: dict[str, object], user_api_key_dict: UserAPIKeyAuth, response: object
+    ) -> object:
+        raise HTTPException(status_code=400, detail="the served image broke a post-call rule")
+
+
+@pytest.fixture
+def fresh_prometheus_registry() -> Iterator[None]:
+    from prometheus_client import REGISTRY
+
+    def unregister_all() -> None:
+        for collector in tuple(REGISTRY._collector_to_names):
+            REGISTRY.unregister(collector)
+
+    unregister_all()
+    yield
+    unregister_all()
+
+
+def _spend_by_model() -> Mapping[str, float]:
+    from prometheus_client import REGISTRY
+
+    samples: Final = itertools.chain.from_iterable(metric.samples for metric in REGISTRY.collect())
+    return {sample.labels["model"]: sample.value for sample in samples if sample.name == "litellm_spend_metric_total"}
+
+
+def _spend_once_settled(expected: Mapping[str, float], timeout: float = 5.0) -> Mapping[str, float]:
+    deadline: Final = time.monotonic() + timeout
+    while time.monotonic() < deadline and _spend_by_model() != expected:
+        time.sleep(0.05)
+    return _spend_by_model()
+
+
+@pytest.mark.usefixtures("fresh_prometheus_registry")
+@pytest.mark.parametrize(
+    ("handlers", "fallbacks", "rejected_after_serving", "spend"),
+    (
+        pytest.param({"A": _PricedImageHandler(0.5)}, (), True, {"image-model": 0.5}, id="served_then_rejected"),
+        pytest.param(
+            {"A": _BilledImageRefusalHandler(), "B": _PricedImageHandler(0.5)},
+            ({"A": ["B"]},),
+            True,
+            {"image-model": 0.75},
+            id="refused_then_served_by_fallback_then_rejected",
+        ),
+        pytest.param(
+            {"A": _BilledImageRefusalHandler()},
+            (),
+            False,
+            {"image-regression-A/image-model": 0.25},
+            id="refused_without_a_served_answer",
+        ),
+    ),
+)
+def test_an_image_rejected_after_serving_keeps_its_spend_under_the_served_model_counted_once(
+    monkeypatch: pytest.MonkeyPatch,
+    handlers: Mapping[str, litellm.CustomLLM],
+    fallbacks: tuple[Mapping[str, list[str]], ...],
+    rejected_after_serving: bool,
+    spend: Mapping[str, float],
+) -> None:
+    from litellm.integrations.prometheus import PrometheusLogger
+
+    monkeypatch.setattr(
+        litellm, "callbacks", [PrometheusLogger(), *((_RejectingPostCallHook(),) if rejected_after_serving else ())]
+    )
+    app: Final = _image_regression_app(
+        monkeypatch,
+        UserAPIKeyAuth(api_key="sk-test", request_route="/v1/images/generations"),
+        handlers,
+        fallbacks=fallbacks,
+    )
+
+    try:
+        with TestClient(app, raise_server_exceptions=False) as client:
+            response: Final = _send_generation(client)
+            settled: Final = _spend_once_settled(spend)
+    finally:
+        ProxyLogging._callback_capabilities_cache.clear()
+
+    assert response.status_code == 400, response.text
+    assert settled == pytest.approx(spend)

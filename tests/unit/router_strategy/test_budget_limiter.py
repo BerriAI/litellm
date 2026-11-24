@@ -9,8 +9,10 @@ the callback raise before any spend was recorded, so those budgets never moved.
 from datetime import datetime, timezone
 from typing import Final
 
+import httpx
 import litellm
 import pytest
+import respx
 
 from litellm import Router
 from litellm.caching.caching import DualCache
@@ -537,3 +539,98 @@ async def test_batch_charge_is_shared_across_workers_and_requires_redis_confirma
     await second._push_in_memory_increments_to_redis()
     assert float(await client.get("provider_spend:openai:1d")) == 0.5
     await client.aclose()
+
+
+_IMAGE_USAGE: Final = {"promptTokenCount": 777, "candidatesTokenCount": 333, "totalTokenCount": 1110}
+_SERVED_IMAGE: Final = {
+    "candidates": [{"content": {"parts": [{"inlineData": {"mimeType": "image/png", "data": "aW1hZ2U="}}]}}],
+    "usageMetadata": _IMAGE_USAGE,
+}
+
+
+async def _settled_spend(cache: DualCache, keys: tuple[str, ...], settled_key: str) -> tuple[object, ...]:
+    for _ in range(300):
+        if await cache.async_get_cache(settled_key):
+            await asyncio.sleep(0.2)
+            return tuple([await cache.async_get_cache(key) for key in keys])
+        await asyncio.sleep(0.05)
+    raise AssertionError(f"{settled_key} never moved")
+
+
+
+async def _budget_spend_after_falling_back_from(
+    primary: str, monkeypatch: pytest.MonkeyPatch
+) -> tuple[float, float, float]:
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": group,
+                "litellm_params": {
+                    "model": "gemini/gemini-3.1-flash-image",
+                    "api_key": "test-key",
+                    "api_base": f"https://{host}.example",
+                    "max_budget": 100.0,
+                    "budget_duration": "1d",
+                },
+                "model_info": {"id": f"{group}-id"},
+            }
+            for group, host in (("primary", primary), ("backup", "backup"))
+        ],
+        provider_budget_config={"gemini": {"budget_limit": 100.0, "time_period": "1d"}},
+        content_policy_fallbacks=[{"primary": ["backup"]}],
+        fallbacks=[{"primary": ["backup"]}],
+        num_retries=0,
+    )
+    logging_obj, _ = litellm.utils.function_setup(
+        original_function="aimage_generation",
+        rules_obj=litellm.utils.Rules(),
+        start_time=datetime.now(),
+        model="primary",
+        prompt="draw a circle",
+        litellm_call_id=f"budget-{primary}",
+    )
+    await router.aimage_generation(
+        model="primary", prompt="draw a circle", litellm_logging_obj=logging_obj, litellm_call_id=f"budget-{primary}"
+    )
+    primary_spend, backup_spend, provider_spend = await _settled_spend(
+        router.cache,
+        ("deployment_spend:primary-id:1d", "deployment_spend:backup-id:1d", "provider_spend:gemini:1d"),
+        settled_key="deployment_spend:backup-id:1d",
+    )
+    assert isinstance(backup_spend, float) and isinstance(provider_spend, float)
+    return float(primary_spend or 0.0), backup_spend, provider_spend
+
+
+@pytest.mark.asyncio
+async def test_a_billed_image_refusal_counts_once_toward_the_budgets_of_the_deployment_that_refused(
+    disable_budget_sync: None,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post(url__startswith="https://refuses.example/").mock(
+        return_value=httpx.Response(
+            200, json={"candidates": [{"finishReason": "IMAGE_PROHIBITED_CONTENT"}], "usageMetadata": _IMAGE_USAGE}
+        )
+    )
+    respx_mock.post(url__startswith="https://rejects-the-key.example/").mock(
+        return_value=httpx.Response(401, json={"error": {"code": 401, "message": "bad key"}})
+    )
+    respx_mock.post(url__startswith="https://times-out.example/").mock(side_effect=httpx.ReadTimeout("timed out"))
+    respx_mock.post(url__startswith="https://backup.example/").mock(return_value=httpx.Response(200, json=_SERVED_IMAGE))
+
+    refused: Final = await _budget_spend_after_falling_back_from("refuses", monkeypatch)
+    unbilled_failures: Final = (
+        await _budget_spend_after_falling_back_from("rejects-the-key", monkeypatch),
+        await _budget_spend_after_falling_back_from("times-out", monkeypatch),
+    )
+
+    refused_spend, served_spend, provider_spend = refused
+    assert refused_spend > 0
+    assert provider_spend == pytest.approx(refused_spend + served_spend)
+    assert [(primary, backup, provider) for primary, backup, provider in unbilled_failures] == [
+        (0.0, pytest.approx(served_spend), pytest.approx(served_spend))
+    ] * 2

@@ -27,6 +27,22 @@ class ImageRefusalError(ContentPolicyViolationError):
 
 
 IMAGE_ANSWER_ERRORS: Final = (ImageRefusalError, UnservedImageError)
+IMAGE_ANSWERS_BILLED_ON_FAILURE: Final = "image_answers_billed_on_failure"
+
+
+def image_answer_cost_on_failure(call_details: Mapping[str, object]) -> float:
+    exception: Final = call_details.get("exception")
+    response_cost: Final = call_details.get("response_cost")
+    if not isinstance(exception, IMAGE_ANSWER_ERRORS) or not isinstance(response_cost, (int, float)):
+        return 0.0
+    return max(float(response_cost), 0.0)
+
+
+def success_cost_without_failed_image_answers(call_details: Mapping[str, object], response_cost: float) -> float:
+    billed_on_failure: Final = call_details.get(IMAGE_ANSWERS_BILLED_ON_FAILURE)
+    if not isinstance(billed_on_failure, (int, float)):
+        return response_cost
+    return max(response_cost - billed_on_failure, 0.0)
 
 
 class FailedImageBilling(Protocol):

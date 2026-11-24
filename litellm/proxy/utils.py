@@ -58,6 +58,7 @@ from litellm import _custom_logger_compatible_callbacks_literal
 from litellm.constants import (
     DEFAULT_MODEL_CREATED_AT_TIME,
     FILE_USAGE_MAX_TRACKED_COUNTERS,
+    IMAGE_CALL_TYPES,
     LITELLM_CONFIG_CACHE_TTL_SECONDS,
     LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED,
     LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL,
@@ -1375,6 +1376,15 @@ def _estimated_input_cost(
 _EMPTY_LIFT: Final = MappingProxyType({})
 
 
+def _served_image_call_type(litellm_logging_obj: object) -> str | None:
+    if not isinstance(litellm_logging_obj, Logging) or not litellm_logging_obj.async_success_log_enqueued:
+        return None
+    return next(
+        (call_type for call_type in IMAGE_CALL_TYPES if call_type == litellm_logging_obj.call_type),  # pyright: ignore[reportUnknownMemberType]  # Logging.call_type is untyped
+        None,
+    )
+
+
 def _reached_deployment(litellm_logging_obj: Logging) -> bool:
     """A provider handoff or a cached response both mean the router selected a deployment."""
     caching_details: Final = litellm_logging_obj.caching_details
@@ -1609,13 +1619,17 @@ def _failure_fields_to_lift(request_data: Mapping[str, object], provider_billed:
     if isinstance(_logging_obj, Logging) and not _success_already_logged:
         _logging_obj.bill_failed_attempts_owed_on_failure()
     _billed: Final = provider_billed and not _success_already_logged
-    _usage_to_lift: Final = _failure_usage_to_lift(
-        model_call_details=_model_call_details,
-        request_body=request_data,
-        dispatched=_first_handoff is not None,
-        provider_billed=_billed,
-        deployment_id=_deployment_id,
-        base_model=_base_model,
+    _usage_to_lift: Final = (
+        None
+        if _success_already_logged
+        else _failure_usage_to_lift(
+            model_call_details=_model_call_details,
+            request_body=request_data,
+            dispatched=_first_handoff is not None,
+            provider_billed=_billed,
+            deployment_id=_deployment_id,
+            base_model=_base_model,
+        )
     )
     _prompt_estimate: Final = (
         _estimated_prompt_usage(_model_call_details, request_data)
@@ -3984,13 +3998,14 @@ class ProxyLogging:
         litellm_logging_obj: Logging | None = request_data.get("litellm_logging_obj", None)
         set_up_by_request: Final = litellm_logging_obj is not None
         request_fields: Final = cast(Mapping[str, object], request_data)  # cast-ok: request bodies are str-keyed JSON
+        served_image_call_type: Final = _served_image_call_type(request_fields.get("litellm_logging_obj"))
         logged_metadata_keys: Final = _proxy_only_error_logged_metadata_keys(
             authenticated=error_type != ProxyErrorTypes.auth_error, past_pre_call=set_up_by_request
         )
         user_api_key_logged_metadata: Final = LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(
             user_api_key_dict=user_api_key_dict
         )
-        if litellm_logging_obj is None:
+        if litellm_logging_obj is None or served_image_call_type is not None:
             from litellm._uuid import uuid
             from litellm.proxy.litellm_pre_call_utils import key_and_team_logging_fields
             from litellm.proxy.proxy_server import proxy_config
@@ -3998,7 +4013,7 @@ class ProxyLogging:
             request_data.setdefault("litellm_call_id", str(uuid.uuid4()))
 
             litellm_logging_obj, data = litellm.utils.function_setup(
-                original_function=route or "IGNORE_THIS",
+                original_function=route or served_image_call_type or "IGNORE_THIS",
                 rules_obj=litellm.utils.Rules(),
                 start_time=datetime.now(),
                 **_proxy_only_error_log_fields(  # pyright: ignore[reportArgumentType]  # the allowlist never carries is_async_call

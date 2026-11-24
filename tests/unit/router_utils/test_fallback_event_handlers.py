@@ -16,6 +16,7 @@ import litellm
 from litellm import Router
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils import get_llm_provider_logic
+from litellm.llms.gemini.empty_image_response import ImageRefusalError
 from litellm.proxy.utils import _failure_fields_to_lift
 from litellm.router_utils.cooldown_handlers import mark_advisor_orchestration_failure
 from litellm.router_utils.fallback_event_handlers import (
@@ -2808,3 +2809,157 @@ def test_a_request_whose_success_was_logged_does_not_bill_its_set_aside_attempts
 
     assert "combined_usage_object" not in lifted
     assert "response_cost" not in lifted
+
+
+class _SuccessBillingCapture(CustomLogger):
+    billed_cost: object = None
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.logged: Final = asyncio.Event()
+
+    async def async_log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        payload: Final = kwargs.get("standard_logging_object")
+        assert isinstance(payload, dict)
+        self.billed_cost = payload.get("response_cost")
+        self.logged.set()
+
+
+@pytest.mark.asyncio
+async def test_a_failure_after_a_logged_fallback_success_charges_nothing_the_success_already_billed(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.hooks.proxy_track_cost_callback import failure_row_response_cost
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    capture: Final = _SuccessBillingCapture()
+    monkeypatch.setattr(litellm, "callbacks", [capture])
+    usage_metadata: Final = {"promptTokenCount": 777, "candidatesTokenCount": 333, "totalTokenCount": 1110}
+    respx_mock.post(url__startswith="https://primary.example/").mock(
+        return_value=httpx.Response(
+            200,
+            json={"candidates": [{"finishReason": "IMAGE_PROHIBITED_CONTENT", "index": 0}], "usageMetadata": usage_metadata},
+        )
+    )
+    respx_mock.post(url__startswith="https://backup.example/").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "candidates": [
+                    {"content": {"parts": [{"inlineData": {"mimeType": "image/png", "data": "aW1hZ2U="}}]}}
+                ],
+                "usageMetadata": usage_metadata,
+            },
+        )
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": group,
+                "litellm_params": {
+                    "model": "gemini/gemini-3.1-flash-image",
+                    "api_key": "test-key",
+                    "api_base": f"https://{group}.example",
+                },
+            }
+            for group in ("primary", "backup")
+        ],
+        content_policy_fallbacks=[{"primary": ["backup"]}],
+        num_retries=0,
+    )
+    logging_obj, _ = litellm.utils.function_setup(
+        original_function="aimage_generation",
+        rules_obj=litellm.utils.Rules(),
+        start_time=datetime.now(),
+        model="primary",
+        prompt="draw a circle",
+        litellm_call_id="served-then-rejected",
+    )
+
+    await router.aimage_generation(
+        model="primary", prompt="draw a circle", litellm_logging_obj=logging_obj, litellm_call_id="served-then-rejected"
+    )
+    await asyncio.wait_for(capture.logged.wait(), timeout=30)
+    request: Final = {"litellm_logging_obj": logging_obj}
+    lifted: Final = _failure_fields_to_lift(request, provider_billed=True)
+
+    assert isinstance(capture.billed_cost, float) and capture.billed_cost > 0
+    assert failure_row_response_cost({**request, **lifted}) == 0
+
+
+class _FailureApiBaseCapture(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.api_base_by_error: Final[dict[str, object]] = {}
+        self.unsupported_logged: Final = asyncio.Event()
+
+    async def async_log_failure_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        payload: Final = kwargs.get("standard_logging_object")
+        assert isinstance(payload, dict)
+        self.api_base_by_error[type(kwargs.get("exception")).__name__] = payload.get("api_base")
+        if isinstance(kwargs.get("exception"), litellm.UnsupportedParamsError):
+            self.unsupported_logged.set()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("backup_fields", "logged_api_base"),
+    [({"api_base": "https://backup.example/v1beta"}, "https://backup.example/v1beta"), ({}, "")],
+    ids=["backup_with_its_own_api_base", "backup_that_never_resolved_one"],
+)
+async def test_a_fallback_attempt_that_fails_before_sending_logs_its_own_api_base(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    backup_fields: dict[str, str],
+    logged_api_base: str,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    capture: Final = _FailureApiBaseCapture()
+    monkeypatch.setattr(litellm, "callbacks", [capture])
+    respx_mock.post(url__startswith="https://primary.example/").mock(
+        return_value=httpx.Response(200, json={"candidates": [{"finishReason": "IMAGE_PROHIBITED_CONTENT", "index": 0}]})
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "primary",
+                "litellm_params": {
+                    "model": "gemini/gemini-3.1-flash-image",
+                    "api_key": "test-key",
+                    "api_base": "https://primary.example/v1beta",
+                    "drop_params": True,
+                },
+            },
+            {
+                "model_name": "backup",
+                "litellm_params": {"model": "gemini/gemini-3.1-flash-image", "api_key": "test-key", **backup_fields},
+            },
+        ],
+        content_policy_fallbacks=[{"primary": ["backup"]}],
+        num_retries=0,
+    )
+    logging_obj, _ = litellm.utils.function_setup(
+        original_function="aimage_generation",
+        rules_obj=litellm.utils.Rules(),
+        start_time=datetime.now(),
+        model="primary",
+        prompt="draw a circle",
+        litellm_call_id="stale-api-base",
+    )
+
+    with pytest.raises(ImageRefusalError):
+        await router.aimage_generation(
+            model="primary",
+            prompt="draw a circle",
+            quality="low",
+            litellm_logging_obj=logging_obj,
+            litellm_call_id="stale-api-base",
+        )
+    await asyncio.wait_for(capture.unsupported_logged.wait(), timeout=30)
+
+    assert capture.api_base_by_error.get("UnsupportedParamsError") == logged_api_base
