@@ -14,6 +14,7 @@ from litellm.utils import (
     get_requester_metadata,
     validate_openai_optional_params,
 )
+from litellm.exceptions import UnsupportedParamsError
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.prompt_templates.factory import map_system_message_pt
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
@@ -326,6 +327,63 @@ def test_bedrock_optional_params_embeddings_dimension(model, expected_dimensions
 
     if dimensions_kwarg is not None:
         assert dimensions_kwarg in optional_params
+
+
+NOVA_EMBEDDING_MODELS: Final = (
+    "amazon.nova-2-multimodal-embeddings-v1:0",
+    "async_invoke/amazon.nova-2-multimodal-embeddings-v1:0",
+)
+
+
+@pytest.mark.parametrize("model", NOVA_EMBEDDING_MODELS)
+@pytest.mark.parametrize("drop_params", [False, True])
+@pytest.mark.parametrize(
+    ("encoding_format", "expected_params"),
+    [
+        ("float", {"embedding_dimension": 256}),
+        ("base64", {"embedding_dimension": 256, "encoding_format": "base64"}),
+    ],
+)
+def test_bedrock_nova_embeddings_accept_the_encoding_formats_openai_serves(
+    model: str, drop_params: bool, encoding_format: str, expected_params: dict[str, object]
+) -> None:
+    optional_params: Final = get_optional_params_embeddings(
+        model=model,
+        encoding_format=encoding_format,
+        dimensions=256,
+        custom_llm_provider="bedrock",
+        drop_params=drop_params,
+    )
+
+    assert optional_params == expected_params
+
+
+NOVA_UNSERVABLE_ENCODING_FORMATS: Final = ("int8", ["float"])
+
+
+@pytest.mark.parametrize("model", NOVA_EMBEDDING_MODELS)
+@pytest.mark.parametrize("encoding_format", NOVA_UNSERVABLE_ENCODING_FORMATS)
+def test_bedrock_nova_embeddings_reject_an_encoding_format_nova_cannot_produce(
+    model: str, encoding_format: str
+) -> None:
+    with pytest.raises(UnsupportedParamsError, match="encoding_format"):
+        get_optional_params_embeddings(model=model, encoding_format=encoding_format, custom_llm_provider="bedrock")
+
+
+@pytest.mark.parametrize("model", NOVA_EMBEDDING_MODELS)
+@pytest.mark.parametrize("encoding_format", NOVA_UNSERVABLE_ENCODING_FORMATS)
+def test_bedrock_nova_embeddings_drop_an_encoding_format_nova_cannot_produce_under_drop_params(
+    model: str, encoding_format: str
+) -> None:
+    optional_params: Final = get_optional_params_embeddings(
+        model=model,
+        encoding_format=encoding_format,
+        dimensions=256,
+        custom_llm_provider="bedrock",
+        drop_params=True,
+    )
+
+    assert optional_params == {"embedding_dimension": 256}
 
 
 def test_google_ai_studio_optional_params_embeddings():

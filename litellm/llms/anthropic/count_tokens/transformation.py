@@ -15,7 +15,12 @@ from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import 
     anthropic_system_blocks,
     split_leading_system_run,
 )
-from litellm.llms.anthropic.common_utils import merge_anthropic_beta_headers
+from litellm.llms.anthropic.common_utils import (
+    json_message_without_provider_specific_fields,
+    merge_anthropic_beta_headers,
+    strip_unsigned_thinking_from_anthropic_messages,
+    verifies_claude_thinking_signatures,
+)
 from litellm.llms.anthropic.wif import resolve_anthropic_base
 from litellm.types.llms.anthropic import ANTHROPIC_USER_PROFILE_ID_HEADER
 from litellm.types.llms.openai import ChatCompletionImageObject
@@ -112,6 +117,8 @@ class AnthropicCountTokensConfig:
         tools: list[dict[str, JsonValue]] | None = None,
         system: JsonValue = None,
         optional_params: Mapping[str, JsonValue] | None = None,
+        custom_llm_provider: str = "anthropic",
+        api_base: str | None = None,
     ) -> dict[str, JsonValue]:  # mutable-ok: provider transport requires JSON dictionaries
         """
         Transform request to Anthropic CountTokens format.
@@ -120,7 +127,13 @@ class AnthropicCountTokensConfig:
         system-role messages is counted through ``system``, the only place count_tokens accepts it.
         """
         options: Final[Mapping[str, JsonValue]] = optional_params or MappingProxyType({})
-        counted_messages, counted_system = _lift_leading_system(messages, system)
+        replayed_messages: Final[Sequence[Mapping[str, JsonValue]]] = (
+            strip_unsigned_thinking_from_anthropic_messages(messages)
+            if verifies_claude_thinking_signatures(custom_llm_provider, model, api_base)
+            else messages
+        )
+        sent_messages: Final = tuple(map(json_message_without_provider_specific_fields, replayed_messages))
+        counted_messages, counted_system = _lift_leading_system(sent_messages, system)
         return _COUNT_REQUEST.validate_python(
             MappingProxyType(
                 {

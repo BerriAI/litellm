@@ -108,6 +108,8 @@ fn prepare_provider_request(
                 .base_model
                 .as_deref()
                 .is_some_and(is_claude_model),
+            keeps_unsigned_thinking: !config
+                .checks_claude_signatures(api_base.as_deref(), &env_lookup),
             ..MessagesTransformContext::new(shaping.capabilities, shaping.settings.drop_params)
         },
     )?;

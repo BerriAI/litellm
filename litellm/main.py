@@ -13,6 +13,7 @@ import asyncio
 import contextvars
 import datetime
 import inspect
+import itertools
 import json
 import os
 import random
@@ -130,6 +131,7 @@ from litellm.litellm_core_utils.request_timeout_resolver import (
     get_configured_request_timeout,
 )
 from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
+from litellm.litellm_core_utils.tool_fields import raise_if_a_forced_hosted_tool_stays
 from litellm.llms.base_llm import BaseConfig, BaseImageGenerationConfig
 from litellm.llms.base_llm.base_model_iterator import (
     MockResponseIterator,
@@ -232,6 +234,7 @@ from .litellm_core_utils.fallback_utils import (
 from .litellm_core_utils.prompt_templates.common_utils import (
     add_system_prompt_to_messages,
     get_completion_messages,
+    is_empty_user_message,
     update_messages_with_model_file_ids,
 )
 from .litellm_core_utils.prompt_templates.factory import (
@@ -400,6 +403,22 @@ def _resolve_control_options(kwargs: Mapping[str, object], model: str) -> Contro
             raise litellm.BadRequestError(message=message, model=model, llm_provider=None, body={"param": param})
         case _:
             return assert_never(control)
+
+
+def _messages_without_empty_last_user_turns(
+    messages: Sequence[AllMessageValues],
+    model: str,
+    custom_llm_provider: str | None,
+    route_params: Mapping[str, object],
+) -> tuple[AllMessageValues, ...] | None:
+    kept_messages: Final = tuple(itertools.dropwhile(is_empty_user_message, reversed(messages)))[::-1]
+    if not kept_messages or len(kept_messages) == len(messages):
+        return None
+    from litellm.responses.bridge_check import target_rejects_model_turn_end
+
+    if not target_rejects_model_turn_end(model, custom_llm_provider, route_params):
+        return None
+    return kept_messages
 
 
 class _EmbeddingResponseFields(ExtraItemsTypedDict, total=False, extra_items=object):
@@ -5629,9 +5648,21 @@ def completion(
     prompt_id: Final = cast(str | None, kwargs.get("prompt_id", None))
     prompt_variables: Final = cast(dict | None, kwargs.get("prompt_variables", None))
     litellm_system_prompt: Final = kwargs.get("litellm_system_prompt", None)
+    alternating_messages: Final = (
+        _messages_without_empty_last_user_turns(
+            cast(list[AllMessageValues], messages),  # cast-ok: completion types messages as a bare List
+            model,
+            cast(str | None, custom_llm_provider),  # cast-ok: read from untyped kwargs
+            cast(  # cast-ok: model_info, base_model and api_base are read from untyped kwargs
+                Mapping[str, object], {"model_info": model_info, "base_model": base_model, "api_base": api_base}
+            ),
+        )
+        if ensure_alternating_roles
+        else None
+    )
     ### COPY MESSAGES ### - related issue https://github.com/BerriAI/litellm/discussions/4489
     messages = get_completion_messages(
-        messages=messages,
+        messages=messages if alternating_messages is None else list(alternating_messages),
         ensure_alternating_roles=ensure_alternating_roles or False,
         user_continue_message=user_continue_message,
         assistant_continue_message=assistant_continue_message,
@@ -5643,7 +5674,6 @@ def completion(
     from litellm.integrations.anthropic_cache_control_hook import (
         AnthropicCacheControlHook,
     )
-    from litellm.types.llms.openai import AllMessageValues
 
     AnthropicCacheControlHook.maybe_seed_default_injection_points(
         non_default_params=non_default_params,
@@ -5834,6 +5864,16 @@ def completion(
                 provider=LlmProviders(custom_llm_provider),
                 base_model=base_model,
             )
+        raise_if_a_forced_hosted_tool_stays(
+            cast(  # cast-ok: widening untyped tool kwargs to object is always sound, the helper validates them
+                Mapping[str, object],
+                {"tools": tools, "tool_choice": tool_choice},
+            ),
+            model=model,
+            route=custom_llm_provider,
+            drop_params=drops_unsupported,
+            provider_config=provider_config,
+        )
 
         if provider_config is not None:
             translated_messages: Final = provider_config.translate_developer_role_to_system_role(messages=messages)

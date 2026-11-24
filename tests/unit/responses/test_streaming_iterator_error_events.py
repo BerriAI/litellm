@@ -23,6 +23,7 @@ import json
 from datetime import datetime
 from importlib import import_module
 from typing import Final
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import httpx
@@ -33,6 +34,7 @@ from litellm.exceptions import MidStreamFallbackError
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import _get_provider_request_id
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
+from litellm.proxy.common_utils.openai_error_payload import openai_error_param, relayed_provider_specific_fields
 from litellm.responses.streaming_iterator import (
     _ERROR_CODE_HTTP_STATUS,
     BaseResponsesAPIStreamingIterator,
@@ -112,6 +114,59 @@ def test_stream_error_preserves_provider_request_id(provider: str, header: str |
         assert str(raised.value.response.request.url) == f"https://{provider}.com/v1/"
         assert raised.value.generated_content == ""
         assert raised.value.is_pre_first_chunk is True
+
+
+@pytest.mark.parametrize(
+    ("chunk", "relayed"),
+    [
+        (
+            ErrorEvent(
+                type=ResponsesAPIStreamEvents.ERROR,
+                sequence_number=1,
+                code="upstream_boom",
+                message="upstream broke",
+                param="temperature",
+            ),
+            {"code": "upstream_boom"},
+        ),
+        (
+            ErrorEvent(
+                type=ResponsesAPIStreamEvents.ERROR,
+                sequence_number=1,
+                error=ErrorEventError(
+                    type="server_error",
+                    code="upstream_boom",
+                    message="upstream broke",
+                    param="temperature",
+                    trace_ref="trace_mid",
+                ),
+            ),
+            {"code": "upstream_boom", "trace_ref": "trace_mid"},
+        ),
+        (
+            SimpleNamespace(
+                type="response.failed",
+                response=SimpleNamespace(
+                    error={
+                        "type": "server_error",
+                        "code": "upstream_boom",
+                        "message": "upstream broke",
+                        "param": "temperature",
+                        "trace_ref": "trace_mid",
+                    }
+                ),
+            ),
+            {"code": "upstream_boom", "trace_ref": "trace_mid"},
+        ),
+    ],
+)
+def test_error_event_relays_the_provider_param_and_extra_fields(chunk: object, relayed: dict[str, str]) -> None:
+    with pytest.raises(MidStreamFallbackError) as caught:
+        _make_iterator()._maybe_raise_for_error_event(chunk)
+
+    mapped: Final = caught.value.original_exception
+    assert openai_error_param(mapped) == "temperature"
+    assert dict(relayed_provider_specific_fields(mapped) or {}) == relayed
 
 
 def test_maybe_raise_for_error_event_wraps_unknown_error_in_mid_stream_fallback():

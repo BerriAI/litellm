@@ -11,6 +11,7 @@ from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
+import openai
 import pytest
 import respx
 from fastapi import FastAPI
@@ -20,6 +21,7 @@ import litellm
 import litellm.proxy.proxy_server as proxy_server
 from litellm import Router
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.exception_mapping_utils import exception_type
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.anthropic_endpoints.endpoints import router as messages_router
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -923,3 +925,40 @@ class TestStripTotalTokensFeatureFlag(unittest.TestCase):
         import litellm
 
         assert litellm.strip_anthropic_total_tokens is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status_code", [429, 503])
+async def test_messages_error_relays_the_provider_code(status_code: int) -> None:
+    import litellm.proxy.anthropic_endpoints.endpoints as ep
+
+    upstream: Final = httpx.Response(
+        status_code,
+        json={"error": {"message": "rejected"}},
+        request=httpx.Request("POST", "https://backend.example.test/v1/chat/completions"),
+    )
+    rejected: Final = openai.APIStatusError(
+        message="rejected",
+        response=upstream,
+        body={"message": "rejected", "code": "provider_code", "param": "temperature"},
+    )
+    with pytest.raises(openai.APIError) as mapped:
+        exception_type(model="qwen", original_exception=rejected, custom_llm_provider="hosted_vllm")
+
+    with (
+        patch.object(ep, "read_request_body", new=AsyncMock(return_value={})),
+        patch.object(
+            ep.ProxyBaseLLMRequestProcessing, "base_process_llm_request", new=AsyncMock(side_effect=mapped.value)
+        ),
+        patch.object(proxy_server, "proxy_logging_obj") as logging_obj,
+    ):
+        logging_obj.post_call_failure_hook = AsyncMock()
+        response: Final = await ep.anthropic_response(
+            fastapi_response=MagicMock(),
+            request=MagicMock(headers={}),
+            user_api_key_dict=UserAPIKeyAuth(),
+        )
+
+    error: Final = json.loads(response.body)["error"]
+    assert response.status_code == status_code
+    assert error["provider_specific_fields"] == {"code": "provider_code"}

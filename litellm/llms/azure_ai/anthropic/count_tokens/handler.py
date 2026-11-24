@@ -69,6 +69,8 @@ class AzureAIAnthropicCountTokensHandler(AzureAIAnthropicCountTokensConfig):
                 messages=messages,
                 tools=tools,
                 system=system,
+                custom_llm_provider="azure_ai",
+                api_base=api_base,
             )
 
             verbose_logger.debug("Transformed request: %s", request_body)

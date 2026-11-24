@@ -10,6 +10,14 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Any, Final
 
+from pydantic import JsonValue, TypeAdapter
+
+from litellm.llms.anthropic.common_utils import (
+    anthropic_message_objects,
+    is_claude_model_target,
+    json_message_without_provider_specific_fields,
+    strip_unsigned_thinking_from_anthropic_messages,
+)
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
@@ -21,8 +29,29 @@ _COUNT_TOKENS_PUBLISHERS: Final = (
 )
 
 
+_JSON_LIST: Final = TypeAdapter(list[JsonValue])
+
+
 def count_tokens_publisher(model: str) -> str | None:
     return next((publisher for marker, publisher in _COUNT_TOKENS_PUBLISHERS if marker in model), None)
+
+
+def count_tokens_request_body(request_data: Mapping[str, object], model: str) -> Mapping[str, object]:
+    messages: Final = request_data.get("messages")
+    claude_messages: Final = (
+        anthropic_message_objects(_JSON_LIST.validate_python(messages))
+        if is_claude_model_target("vertex_ai", model) and isinstance(messages, list)
+        else None
+    )
+    if claude_messages is None:
+        return request_data
+    return {
+        **request_data,
+        "messages": [
+            json_message_without_provider_specific_fields(message)
+            for message in strip_unsigned_thinking_from_anthropic_messages(claude_messages)
+        ],
+    }
 
 
 class VertexAIPartnerModelsTokenCounter(VertexBase):
@@ -174,7 +203,7 @@ class VertexAIPartnerModelsTokenCounter(VertexBase):
         response: Final = await async_client.post(
             endpoint_url,
             headers=headers,
-            json=request_data,
+            json=dict(count_tokens_request_body(request_data, model)),
             timeout=30.0,
         )
 

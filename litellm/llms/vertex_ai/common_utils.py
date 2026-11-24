@@ -1,3 +1,4 @@
+import math
 import re
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from copy import deepcopy
@@ -16,9 +17,15 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+from litellm.litellm_core_utils.fallback_generalizations import match_fill_missing_generalizations
 from litellm.litellm_core_utils.prompt_templates.common_utils import unpack_defs
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.gemini.common_utils import (
+    GEMINI_IMAGE_ASPECT_RATIOS,
+    GEMINI_IMAGE_SIZE_TO_ASPECT_RATIO,
+    map_openai_size_to_gemini_image_config,
+)
 from litellm.llms.vertex_ai.request_labels import (
     VERTEX_REQUEST_LABELS_MAX,
     resolve_vertex_request_labels,
@@ -42,6 +49,47 @@ GEMINI_VIDEO_METADATA_KEYS: Final = MappingProxyType(
 
 
 GEMINI_FILES_API_URI_PREFIX: Final = "https://generativelanguage.googleapis.com/v1beta/files/"
+GEMINI_FILES_API_V1_URI_PREFIX: Final = "https://generativelanguage.googleapis.com/v1/files/"
+GEMINI_FILES_API_URI_PREFIXES: Final = (
+    GEMINI_FILES_API_URI_PREFIX,
+    GEMINI_FILES_API_V1_URI_PREFIX,
+)
+
+
+def gemini_media_capability(
+    model: str,
+    key: Literal["supports_part_media_resolution", "supports_media_in_tool_response"],
+    *,
+    custom_llm_provider: str | None = None,
+) -> bool:
+    name: Final = model.rsplit("/", 1)[-1]
+    qualified_name: Final = f"gemini/{name}"
+    catalog: Final = cast(  # cast-ok: the live model-cost table contains model rows
+        Mapping[str, Mapping[str, object]], litellm.model_cost
+    )
+    candidates: Final = (
+        (model, qualified_name, f"vertex_ai/{name}", name)
+        if custom_llm_provider is None
+        else (f"{custom_llm_provider}/{name}", name)
+    )
+    for candidate in candidates:
+        row = catalog.get(candidate)
+        if row is None:
+            continue
+        flag = row.get(key)
+        if isinstance(flag, bool):
+            return flag
+    defaults: Final = match_fill_missing_generalizations(qualified_name, custom_llm_provider or "gemini")
+    default_flag: Final = defaults.get(key) if defaults is not None else None
+    if isinstance(default_flag, bool):
+        return default_flag
+
+    from .gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+
+    # Older cost maps lack these flags, including for models no longer listed in the catalog.
+    return VertexGeminiConfig.is_gemini_3_or_newer(model)
+
+
 _YOUTUBE_VIDEO_URL: Final = re.compile(
     r"(?i:https?://(?:(?:www|m)\.)?youtube\.com(?::443)?/)(?:watch\?(?:[^#]*&)?v=|shorts/|embed/)[\w-]"
     r"|(?i:https?://youtu\.be(?::443)?/)[\w-]"
@@ -49,7 +97,7 @@ _YOUTUBE_VIDEO_URL: Final = re.compile(
 
 
 def gemini_fetches_url_itself(url: str) -> bool:
-    return url.startswith(GEMINI_FILES_API_URI_PREFIX) or _YOUTUBE_VIDEO_URL.match(url) is not None
+    return url.startswith(GEMINI_FILES_API_URI_PREFIXES) or _YOUTUBE_VIDEO_URL.match(url) is not None
 
 
 def youtube_video_mime_type(url: str) -> str | None:
@@ -61,6 +109,20 @@ def normalize_youtube_url(url: str) -> str:
         return url
     parts: Final = urlsplit(url)
     return urlunsplit(parts._replace(scheme=parts.scheme.lower(), netloc=parts.hostname or parts.netloc))
+
+
+def map_vertex_image_size(size: object, model: str) -> Mapping[str, str] | None:
+    if not isinstance(size, str) or (image_config := map_openai_size_to_gemini_image_config(size, model)) is None:
+        return None
+
+    width, height = map(int, size.lower().split("x"))
+    aspect_ratio: Final = image_config["aspectRatio"]
+    if (
+        not math.isclose(GEMINI_IMAGE_ASPECT_RATIOS[aspect_ratio], width / height)
+        and GEMINI_IMAGE_SIZE_TO_ASPECT_RATIO.get((width, height)) != aspect_ratio
+    ):
+        verbose_logger.warning("Vertex AI size %s is approximated with aspectRatio %s", size, aspect_ratio)
+    return MappingProxyType(image_config)
 
 
 def gemini_video_metadata_from_openai(video_metadata: Mapping[str, object]) -> dict[str, object]:
