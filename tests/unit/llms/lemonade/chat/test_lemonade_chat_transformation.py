@@ -243,3 +243,49 @@ def test_init_called_again_with_none_keeps_the_value_stored_earlier() -> None:
     ScopedLemonadeConfig(top_k=None, n=2)
 
     assert ScopedLemonadeConfig.get_config() == {"top_k": 40, "n": 2}
+
+
+@pytest.mark.respx(assert_all_called=False)
+def test_the_max_token_check_looks_up_a_mapped_model_at_the_call_api_base(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    from litellm.utils import cached_get_model_info_helper
+
+    mapped_model: Final = next(
+        name.removeprefix("lemonade/")
+        for name, entry in litellm.model_cost.items()
+        if entry.get("litellm_provider") == "lemonade" and entry.get("max_output_tokens")
+    )
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    monkeypatch.setenv("LEMONADE_API_BASE", "http://lemonade-default.test/api/v1")
+    monkeypatch.setattr(litellm, "modify_params", True)
+    respx_mock.post(f"{LEMONADE_BASE}/chat/completions").respond(
+        200,
+        json={
+            "id": "chatcmpl-lemonade",
+            "object": "chat.completion",
+            "created": 0,
+            "model": mapped_model,
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4},
+        },
+    )
+    respx_mock.get(url__regex=r"/models/").respond(200, json={"max_input_tokens": 4096})
+    litellm.get_model_info.cache_clear()
+    cached_get_model_info_helper.cache_clear()
+    try:
+        with ThreadPoolExecutor(max_workers=1) as success_logging:
+            monkeypatch.setattr("litellm.utils.executor", success_logging)
+            litellm.completion(
+                model=f"lemonade/{mapped_model}",
+                messages=[{"role": "user", "content": "hi"}],
+                api_base=LEMONADE_BASE,
+                max_tokens=16,
+            )
+    finally:
+        litellm.get_model_info.cache_clear()
+        cached_get_model_info_helper.cache_clear()
+
+    assert {call.request.url.host for call in respx_mock.calls} == {"lemonade.test"}

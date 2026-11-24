@@ -283,6 +283,7 @@ from litellm.utils import (
     get_model_info_for_call,
     model_info_lookup_api_key,
     print_verbose,
+    sent_bearer_credential,
 )
 
 from ..integrations.argilla import ArgillaLogger
@@ -491,27 +492,6 @@ in_memory_dynamic_logger_cache: Final = DynamicLoggingCache()
 _ORIGINAL_RESPONSE_NOT_RETAINED: Final = '{"litellm_note":"raw response not retained"}'
 _ORIGINAL_RESPONSE_READER_CALLBACK_NAMES: Final = frozenset({"athina", "sentry", "wandb"})
 _FIRST_PARTY_PACKAGES: Final = frozenset({"litellm", "litellm_enterprise"})
-
-
-def _sent_credential(headers: object, api_key: object) -> str | None:
-    authorization: Final = (
-        next(
-            (
-                value
-                for name, value in _REQUEST_MAPPING.validate_python(headers).items()
-                if name.lower() == "authorization"
-            ),
-            None,
-        )
-        if isinstance(headers, Mapping)
-        else None
-    )
-    if authorization is None:
-        return api_key if isinstance(api_key, str) and api_key else None
-    if not isinstance(authorization, str):
-        return None
-    scheme, _, token = authorization.partition(" ")
-    return token.strip() or None if scheme.lower() == "bearer" else None
 
 
 def _attribute_defined_on(owner: object, name: str) -> object:
@@ -2094,11 +2074,14 @@ class Logging(LiteLLMLoggingBaseClass):
     def _get_masked_api_base(self, api_base: str | None) -> str:
         return str(mask_api_base_credentials(api_base or ""))
 
-    def record_call_target(self, api_base: str | None, api_key: object, headers: object) -> None:
+    def record_call_credential(self, api_key: object, headers: object) -> None:
         provider: Final = self.model_call_details.get("custom_llm_provider")
         self.model_info_api_key = model_info_lookup_api_key(
-            self.model, provider if isinstance(provider, str) else None, _sent_credential(headers, api_key)
+            self.model, provider if isinstance(provider, str) else None, sent_bearer_credential(headers, api_key)
         )
+
+    def record_call_target(self, api_base: str | None, api_key: object, headers: object) -> None:
+        self.record_call_credential(api_key, headers)
         self.model_call_details["litellm_params"]["api_base"] = self._get_masked_api_base(api_base)
 
     def _pre_call(self, input, api_key, model=None, additional_args={}):
@@ -2120,10 +2103,12 @@ class Logging(LiteLLMLoggingBaseClass):
             )
         if model:  # if model name was changes pre-call, overwrite the initial model call name with the new one
             self.model_call_details["model"] = model
+        request: Final = _REQUEST_MAPPING.validate_python(additional_args)
+        api_base: Final = request.get("api_base")
         self.record_call_target(
-            additional_args.get("api_base", ""),
-            api_key,
-            _REQUEST_MAPPING.validate_python(additional_args).get("headers"),
+            str(api_base) if api_base else None,
+            api_key if isinstance(api_key, str) else None,
+            request.get("headers"),
         )
 
     def pre_call(self, input, api_key, model=None, additional_args={}):

@@ -2404,6 +2404,8 @@ def clamp_max_tokens(
                 messages = args[1]
             elif kwargs.get("messages", None):
                 messages = kwargs["messages"]
+            api_base: Final = kwargs.get("api_base")
+            provider: Final = kwargs.get("custom_llm_provider")
             kwargs["max_tokens"] = _get_modified_max_tokens()(
                 model=model,
                 base_model=base_model,
@@ -2411,6 +2413,12 @@ def clamp_max_tokens(
                 user_max_tokens=kwargs.get("max_tokens"),
                 buffer_num=None,
                 buffer_perc=None,
+                api_base=api_base if isinstance(api_base, str) and api_base else None,
+                api_key=model_info_lookup_api_key(
+                    str(model),
+                    provider if isinstance(provider, str) else None,
+                    sent_bearer_credential(call_headers(kwargs), kwargs.get("api_key")),
+                ),
             )
         except Exception as e:
             print_verbose(f"Error while checking max token limit: {e}")
@@ -8185,6 +8193,30 @@ def looks_up_model_info_at_runtime(model: str | None, custom_llm_provider: str |
 
 def model_info_lookup_api_key(model: str | None, custom_llm_provider: str | None, api_key: str | None) -> str | None:
     return api_key if looks_up_model_info_at_runtime(model, custom_llm_provider) else None
+
+
+_REQUEST_HEADERS: Final = TypeAdapter(Mapping[str, object])
+
+
+def _header_mapping(headers: object) -> Mapping[str, object]:
+    return _REQUEST_HEADERS.validate_python(headers) if isinstance(headers, Mapping) else {}
+
+
+def call_headers(request_kwargs: Mapping[str, object]) -> Mapping[str, object]:
+    return {**_header_mapping(request_kwargs.get("headers")), **_header_mapping(request_kwargs.get("extra_headers"))}
+
+
+def sent_bearer_credential(headers: object, api_key: object) -> str | None:
+    authorizations: Final = tuple(
+        value for name, value in _header_mapping(headers).items() if name.lower() == "authorization"
+    )
+    if not authorizations:
+        return api_key if isinstance(api_key, str) and api_key else None
+    authorization: Final = authorizations[-1]
+    if not isinstance(authorization, str):
+        return None
+    scheme, _, token = authorization.partition(" ")
+    return token.strip() or None if scheme.lower() == "bearer" else None
 
 
 @VersionCached

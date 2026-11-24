@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Callable, Mapping
+from collections import OrderedDict
+from collections.abc import Callable, Hashable, Mapping
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Final, Generic, ParamSpec, TypeVar
@@ -78,16 +79,22 @@ def changed_in_place() -> None:
 
 @dataclass(frozen=True, slots=True)
 class FailedLookup(Generic[R]):
-    """The default a failed lookup answered with, which ``VersionCached`` keeps only until the current
-    ``FAILED_MODEL_INFO_LOOKUP_RETRY_SECONDS`` window ends, so the lookup is sent again at most once per window."""
+    """The default a failed lookup answered with, which ``VersionCached`` keeps for
+    ``FAILED_MODEL_INFO_LOOKUP_RETRY_SECONDS`` after the failure, so the lookup is sent again at most that often."""
 
     value: R
+
+
+@dataclass(frozen=True, slots=True)
+class _Failure(Generic[R]):
+    value: R
+    failed_at: float
 
 
 class VersionCached(Generic[P, R]):
     """Decorates ``function`` with an ``lru_cache`` keyed on the ``litellm.model_cost`` version each call read, and
     exposes that cache's ``cache_clear`` and ``cache_info``. A result ``function`` wraps in ``FailedLookup`` is returned
-    unwrapped and kept for the rest of the current retry window only."""
+    unwrapped and kept for ``FAILED_MODEL_INFO_LOOKUP_RETRY_SECONDS`` after the call that failed returned."""
 
     __slots__ = ("_call", "cache_clear", "cache_info")
 
@@ -108,27 +115,26 @@ class VersionCached(Generic[P, R]):
             return result
 
         lasting: Final = lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)(at)
+        failures: Final = OrderedDict[Hashable, _Failure[R]]()
 
-        def in_window(
-            version: ModelCostVersion,
-            _window: int,
-            *args: P.args,
-            **kwargs: P.kwargs,  # kwargs-ok: forwards a ParamSpec unchanged
-        ) -> R:
+        def call(*args: P.args, **kwargs: P.kwargs) -> R:  # kwargs-ok: forwards a ParamSpec unchanged
+            version: Final = model_cost_version()
+            key: Final = (version, args, tuple(sorted(kwargs.items())))
+            recent: Final = failures.get(key)
+            if recent is not None and time.monotonic() - recent.failed_at < FAILED_MODEL_INFO_LOOKUP_RETRY_SECONDS:
+                return recent.value
             try:
                 return lasting(version, *args, **kwargs)
             except Failed as failed:
+                failures.pop(key, None)
+                failures[key] = _Failure(failed.value, time.monotonic())
+                if len(failures) > DEFAULT_MAX_LRU_CACHE_SIZE:
+                    failures.popitem(last=False)
                 return failed.value
-
-        windowed: Final = lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)(in_window)
-
-        def call(*args: P.args, **kwargs: P.kwargs) -> R:  # kwargs-ok: forwards a ParamSpec unchanged
-            window: Final = int(time.monotonic() // FAILED_MODEL_INFO_LOOKUP_RETRY_SECONDS)
-            return windowed(model_cost_version(), window, *args, **kwargs)
 
         def cache_clear() -> None:
             lasting.cache_clear()
-            windowed.cache_clear()
+            failures.clear()
 
         self._call: Final = call
         self.cache_clear: Final = cache_clear
