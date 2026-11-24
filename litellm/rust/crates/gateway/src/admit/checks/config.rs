@@ -18,7 +18,7 @@ use crate::StoredConfig;
 
 const STORE_MODEL_IN_DB: &str = "store_model_in_db";
 /// The `general_settings` keys the config types do not name that the native app honors.
-const HONORED_GENERAL_SETTINGS: [&str; 1] = ["supported_db_objects"];
+const HONORED_GENERAL_SETTINGS: [&str; 2] = ["supported_db_objects", "encryption_algorithm"];
 
 /// The `litellm_settings` keys a variable can fill, as `Config::with_environment` layers them.
 const LAYERED: [&str; 12] = [
@@ -187,7 +187,8 @@ fn variables(environment: &Environment) -> impl Iterator<Item = Box<str>> + use<
 /// The database settings are read as the proxy reads them, and what the proxy holds in its
 /// database beyond keys is not checked here. `store_model_in_db` and `supported_db_objects` are
 /// honored, since boot layers the stored config in, and [`settings`] checks what it could not
-/// load. The JWT settings shape only a caller whose token is a JWT, and the public routes only one
+/// load. `encryption_algorithm` only picks the format Python writes a secret in, and the at-rest
+/// crate reads either format. The JWT settings shape only a caller whose token is a JWT, and the public routes only one
 /// who sends no key.
 fn general(config: &Config) -> impl Iterator<Item = Box<str>> + '_ {
     let GeneralSettings {
@@ -518,6 +519,10 @@ mod tests {
         "router_settings:\n  provider_budget_config: {}\n",
         "router_settings.provider_budget_config"
     )]
+    #[case::an_unknown_general_setting_beside_the_encryption_algorithm(
+        "general_settings:\n  encryption_algorithm: aes-256-gcm\n  future_setting: true\n",
+        "general_settings.future_setting"
+    )]
     #[case::a_section_the_config_types_do_not_name("future_section: {}\n", "future_section")]
     #[case::a_callback_beside_the_dynamic_rate_limiter(
         "litellm_settings:\n  callbacks: [dynamic_rate_limiter_v3, prometheus]\n",
@@ -537,6 +542,18 @@ mod tests {
                 messages_only(&Config::from_yaml(yaml).unwrap())
             ),
             (vec![], None)
+        );
+    }
+
+    #[rstest]
+    #[case::aes_256_gcm("aes-256-gcm")]
+    #[case::xsalsa20_poly1305("xsalsa20-poly1305")]
+    fn the_encryption_algorithm_python_writes_with_is_honored(#[case] algorithm: &str) {
+        assert_eq!(
+            written(&format!(
+                "general_settings:\n  encryption_algorithm: {algorithm}\n"
+            )),
+            Vec::<String>::new()
         );
     }
 
