@@ -2585,7 +2585,11 @@ class LiteLLMProxyRequestSetup:
         )
         if key_opts_out or request_cache.get("use-cache") is not True or not request_is_allowed:
             return MappingProxyType({})
-        return {k: v for k, v in request_cache.items() if not (k == "s-max-age" and "s-maxage" in key_cache)}
+        return {
+            k: v
+            for k, v in request_cache.items()
+            if k != "namespace" and not (k == "s-max-age" and "s-maxage" in key_cache)
+        }
 
     @staticmethod
     def add_key_level_controls(
