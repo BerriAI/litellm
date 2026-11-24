@@ -729,7 +729,24 @@ def _matching_builtin_tool(tool: JsonMapping) -> JsonValue:
     if len(tool) != 1:
         return None
     matched: Final = next((mapped for raw_key, mapped in _BUILTIN_TOOL_TYPES.items() if raw_key in tool), None)
-    return {"type": matched} if matched is not None else None
+    if matched is None:
+        return None
+    options: Final = next(iter(tool.values()))
+    return {"type": matched, **(_maps_options(options) if matched == "google_maps" else {})}
+
+
+def _maps_options(options: JsonValue) -> JsonMapping:
+    if not isinstance(options, dict):
+        return {}
+    nested: Final = options.get("retrievalConfig")
+    placed: Final = {**options, **(nested if isinstance(nested, dict) else {})}
+    widget: Final = placed.get("enableWidget", placed.get("enable_widget"))
+    return {
+        **{axis: placed[axis] for axis in ("latitude", "longitude") if isinstance(placed.get(axis), (int, float))},
+        **(
+            {"enable_widget": widget not in (False, "false", "ENABLE_WIDGET_UNSPECIFIED")} if widget is not None else {}
+        ),
+    }
 
 
 def _convert_single_tool(tool: JsonValue) -> tuple[JsonValue, ...]:

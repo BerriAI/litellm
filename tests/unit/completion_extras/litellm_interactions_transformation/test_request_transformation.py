@@ -850,3 +850,26 @@ def test_blank_final_user_turn_after_an_assistant_reply_still_ends_the_request_o
         {"type": "model_output", "content": [{"type": "text", "text": "hi there"}]},
         {"type": "user_input", "content": [{"type": "text", "text": " "}]},
     ]
+
+
+@pytest.mark.parametrize(
+    ("maps_options", "expected_tool"),
+    [
+        ({}, {"type": "google_maps"}),
+        (
+            {"enableWidget": "ENABLE_WIDGET", "retrievalConfig": {"latitude": 37.42, "longitude": -122.08}},
+            {"type": "google_maps", "latitude": 37.42, "longitude": -122.08, "enable_widget": True},
+        ),
+        ({"latitude": 48, "longitude": 2.35}, {"type": "google_maps", "latitude": 48, "longitude": 2.35}),
+    ],
+)
+def test_google_maps_tool_keeps_the_caller_location_on_interactions(
+    maps_options: dict[str, object], expected_tool: dict[str, object]
+) -> None:
+    sent: Final = transform_chat_to_interactions_request(
+        messages=[{"role": "user", "content": "coffee near me"}],
+        model="gemini/gemini-3.1-flash-lite-preview",
+        optional_params={"tools": [{"googleMaps": maps_options}]},
+        litellm_params={},
+    )
+    assert sent.optional_params["tools"] == [expected_tool]

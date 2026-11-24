@@ -188,6 +188,7 @@ def test_gemini_4_chat_answer_continued_across_hops_cites_each_source_at_its_joi
         {
             **hop,
             "steps": [
+                *searched,
                 {
                     "type": "model_output",
                     "content": [
@@ -205,12 +206,17 @@ def test_gemini_4_chat_answer_continued_across_hops_cites_each_source_at_its_joi
                             ],
                         }
                     ],
-                }
+                },
             ],
         }
-        for hop, text, url in (
-            ({**_FIRST_HOP, "id": _fresh_answer_id()}, first_text, "https://tokyo.example"),
-            (_SECOND_HOP, second_text, "https://zurich.example"),
+        for hop, text, url, searched in (
+            (
+                {**_FIRST_HOP, "id": _fresh_answer_id()},
+                first_text,
+                "https://tokyo.example",
+                ({"type": "google_search_call", "id": "search-1", "arguments": {"queries": ["greetings"]}},),
+            ),
+            (_SECOND_HOP, second_text, "https://zurich.example", ()),
         )
     )
 
