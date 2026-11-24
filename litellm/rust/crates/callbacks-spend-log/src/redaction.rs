@@ -207,11 +207,11 @@ fn with_redacted_provider_fields(holder: &Value) -> Value {
     }
 }
 
-/// The message or delta of a choice with its content, reasoning, audio, images and tool
-/// arguments redacted.
+/// The message or delta of a choice with its content, refusal, reasoning, audio, images and
+/// tool arguments redacted.
 fn redacted_choice_body(body: &Value) -> Value {
     edited(body, |source, copy| {
-        for field in ["content", "reasoning_content"] {
+        for field in ["content", "reasoning_content", "refusal"] {
             if is_set(source, field) {
                 copy.set(field, redacted());
             }

@@ -1,6 +1,6 @@
 import asyncio
 import json
-from collections.abc import Coroutine, Mapping, Sequence
+from collections.abc import Awaitable, Coroutine, Mapping, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -16,7 +16,7 @@ from litellm.integrations.custom_logger_v2.enums import Field, Hook
 from litellm.integrations.custom_logger_v2.field_sources import HookArgs, with_sources
 from litellm.integrations.custom_logger_v2.legacy import Admit, hook_subscribers
 from litellm.integrations.custom_logger_v2.outcomes import Abort, Patch
-from litellm.integrations.custom_logger_v2.rust import RustLogger, rust_logger
+from litellm.integrations.custom_logger_v2.rust import RustHandle, RustLogger, rust_logger
 from litellm.litellm_core_utils.core_helpers import get_parent_otel_span_from_kwargs
 from litellm.litellm_core_utils.safe_json_dumps import safe_json_structure
 from litellm.litellm_core_utils.secret_redaction import (
@@ -30,6 +30,7 @@ from litellm.proxy.db.db_spend_update_writer import (
 )
 from litellm.proxy.db.rust_spend_log_writer import rust_spend_log_writer
 from litellm.proxy.hooks.proxy_track_cost_callback import (
+    FAILURE_SPEND_COUNTER_WAIT_SECONDS,
     ProxyDBLogger,
     _batch_accounting_for,  # pyright: ignore[reportPrivateUsage]  # the cost callback's batch costing outcome
 )
@@ -37,17 +38,21 @@ from litellm.proxy.hooks.search_free_tier import record_freed_cost
 from litellm.proxy.spend_tracking.customer_cost_margin import apply_callback_customer_cost_margin
 from litellm.proxy.spend_tracking.rust_spend_counters import (
     _CounterHost,  # pyright: ignore[reportPrivateUsage]  # the counter step's host, which the callback's host delegates to
+    charge_counter_steps,
 )
 from litellm.proxy.spend_tracking.rust_spend_log_inputs import SpendLogCall, spend_log_document
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_request_model_access_groups
+from litellm.redis.stores._route import post_call_request
 from litellm.responses.streaming_iterator import spawn_logging_task
 from litellm.rust_bridge._native import NativeSpendCounters, RustSpendLog, RustSpendLogWriter
+from litellm.rust_bridge.execution import Execution
 from litellm.types.proxy.auth.customer_hierarchy import (
     customer_budget_scopes_from_request,
     customer_hierarchy_ids_from_request,
 )
 
 _FIELDS: Final = TypeAdapter(dict[str, object])
+_STEPS: Final = TypeAdapter(list[dict[str, object]])
 _KEY_IDENTITY: Final = (
     ("key_alias", "user_api_key_alias"),
     ("user_id", "user_api_key_user_id"),
@@ -58,6 +63,7 @@ _KEY_IDENTITY: Final = (
 )
 _ROW_TIMES: Final = ("completionStartTime",)
 _SPEND_LOG_CALL: Final[ContextVar[SpendLogCall | None]] = ContextVar("rust_spend_log_call", default=None)
+_FAILURE_COUNTER_STEPS: Final[set[asyncio.Task[None]]] = set()  # mutable-ok: holds each running step until it ends
 
 
 def _mapping(value: object) -> Mapping[str, object]:
@@ -142,6 +148,12 @@ async def _committed_tracked(request: Mapping[str, object]) -> Sequence[str]:
     return list(warmed.tracked())
 
 
+def _log_failed_counter_steps(increment: "asyncio.Task[None]") -> None:
+    error: Final = None if increment.cancelled() else increment.exception()
+    if error is not None:
+        verbose_proxy_logger.error("Failed to raise spend counters for a failure spend row: %s", error, exc_info=error)
+
+
 @dataclass(frozen=True, slots=True)
 class SpendLogHost:
     """The callback's host calls, with the counter step's own calls answered by its host."""
@@ -156,6 +168,22 @@ class SpendLogHost:
 
     async def cached_spend(self, request: object) -> tuple[float, ...]:
         return await self.counters.cached_spend(request)
+
+    async def charge_failure_counters(self, request: Mapping[str, object]) -> None:
+        """``_increment_failure_spend_counters``: the failure rows' counter steps, sent before the client sees the
+        error. A counter store slower than ``FAILURE_SPEND_COUNTER_WAIT_SECONDS`` finishes them in the background, in a
+        task of this proxy's own, so their host calls are still answered after the hook returned.
+        """
+        increment: Final = asyncio.create_task(charge_counter_steps(_STEPS.validate_python(request.get("steps", []))))
+        _FAILURE_COUNTER_STEPS.add(increment)
+        increment.add_done_callback(_FAILURE_COUNTER_STEPS.discard)
+        increment.add_done_callback(_log_failed_counter_steps)
+        finished, _ = await asyncio.wait((increment,), timeout=FAILURE_SPEND_COUNTER_WAIT_SECONDS)
+        if not finished:
+            verbose_proxy_logger.warning(
+                "Spend counters for failure spend rows took over %ss, finishing them in the background",
+                FAILURE_SPEND_COUNTER_WAIT_SECONDS,
+            )
 
     async def enrich_key_identity(self, request: Mapping[str, object]) -> Mapping[str, object]:
         metadata: Final[dict[str, object]] = {  # mutable-ok: the enrichment fills it in place
@@ -339,10 +367,39 @@ class _SpendLogRustLogger(RustLogger):
             _SPEND_LOG_CALL.reset(token)
 
 
+@dataclass(frozen=True, slots=True)
+class _OnRequestBatch:
+    """Starts each hook with the request's post-call Redis batch, so the counter increments ride it and a later
+    reader in the request, such as the Prometheus budget gauges, can tell whether its own charge has landed."""
+
+    spend_log: RustSpendLog
+    callback: RustHandle
+
+    def manifest(self) -> str:
+        return self.callback.manifest()
+
+    def request_state(self) -> object:
+        return self.callback.request_state()
+
+    def handle(
+        self, hook: str, fields: Mapping[str, object], call: Mapping[str, object] | None, state: object, /
+    ) -> Awaitable[object]:
+        return self.callback.handle(hook, fields, call, state)
+
+    def start(
+        self, hook: str, fields: Mapping[str, object], call: Mapping[str, object] | None, state: object, host: object, /
+    ) -> Execution:
+        from litellm.proxy.proxy_server import spend_counter_store
+
+        return self.spend_log.start(
+            hook, fields, call, host, post_call_request() if spend_counter_store.has_redis else None
+        )
+
+
 def spend_logger(writer: RustSpendLogWriter, spend_counters: NativeSpendCounters) -> RustLogger:
-    rust: Final = RustSpendLog(writer, spend_counters, _token_redactor()).callback()
+    spend_log: Final = RustSpendLog(writer, spend_counters, _token_redactor())
     return rust_logger(
-        rust,
+        _OnRequestBatch(spend_log, spend_log.callback()),
         projections=MappingProxyType({Field.spend_log_input: spend_log_document}),
         host=SpendLogHost(),
         base=_SpendLogRustLogger,

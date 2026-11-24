@@ -7,7 +7,7 @@ import sys
 import threading
 import time
 import uuid
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Awaitable, Iterable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from itertools import chain
 from types import MappingProxyType
@@ -22,6 +22,7 @@ if TYPE_CHECKING:
 
 logger: Final = logging.getLogger(__name__)
 _DeploymentT = TypeVar("_DeploymentT", bound=Mapping[str, object])
+_ResultT = TypeVar("_ResultT")
 from litellm.constants import (
     BACKGROUND_HEALTH_CHECK_MAX_TOKENS,
     BACKGROUND_HEALTH_CHECK_MAX_TOKENS_REASONING,
@@ -228,8 +229,8 @@ _clean_endpoint_data: Final = clean_endpoint_data
 
 
 def health_check_filter_kwargs_from_general_settings(
-    general_settings: dict | None,
-) -> dict:
+    general_settings: Mapping[str, object] | None,
+) -> dict[str, bool]:
     """
     Build kwargs for ``perform_health_check`` from ``general_settings``.
 
@@ -279,9 +280,9 @@ def filter_deployments_to_model_groups(
 
 def filter_deployments_by_id(
     model_list: Sequence[Mapping[str, object]],
-) -> list:
-    seen_ids: Final = set()
-    filtered_deployments: Final = []
+) -> list[Mapping[str, object]]:
+    seen_ids: Final[set[object]] = set()
+    filtered_deployments: Final[list[Mapping[str, object]]] = []
 
     for deployment in model_list:
         _model_info = deployment.get("model_info") or {}
@@ -296,7 +297,9 @@ def filter_deployments_by_id(
     return filtered_deployments
 
 
-async def run_with_timeout(task, timeout):
+async def run_with_timeout(
+    task: Awaitable[_ResultT], timeout: float | None
+) -> _ResultT | dict[str, str | litellm.Timeout]:
     try:
         return await asyncio.wait_for(task, timeout)
     except asyncio.TimeoutError:
@@ -433,9 +436,11 @@ def _as_mapping(value: object) -> Mapping[str, object]:
         return MappingProxyType({})
 
 
-def _wildcard_child(public_name: str, wildcard_id: str, row: Mapping[str, object]) -> Mapping[str, object]:
+def _wildcard_child(
+    public_name: str, wildcard_id: str, row: Mapping[str, object], configured: Mapping[str, object]
+) -> Mapping[str, object]:
     """``row`` checked as ``public_name``, its id stable per wildcard and routed model across pods and cycles."""
-    params: Final = _as_mapping(row.get("litellm_params"))
+    params: Final = {**_as_mapping(row.get("litellm_params")), **configured}
     info: Final = _as_mapping(row.get("model_info"))
     child_id: Final = uuid.uuid5(_WILDCARD_CHILD_ID_NAMESPACE, f"{wildcard_id}|{params.get('model')}")
     return {
@@ -444,6 +449,11 @@ def _wildcard_child(public_name: str, wildcard_id: str, row: Mapping[str, object
         "litellm_params": dict(params),
         "model_info": {**{k: v for k, v in info.items() if not _is_probe_tuning(k)}, "id": str(child_id)},
     }
+
+
+def _configured_params(router: "Router", wildcard_id: str) -> Mapping[str, object]:
+    stored: Final = _as_mapping(router.registry().deployment_dict(wildcard_id))
+    return {key: value for key, value in _as_mapping(stored.get("litellm_params")).items() if key != "model"}
 
 
 def _in_model_groups(public_name: str, row: Mapping[str, object], model_groups: AbstractSet[str] | None) -> bool:
@@ -462,7 +472,7 @@ def _wildcard_children_for(
         (row, wildcard_id) for row, wildcard_id in zip(rows, ids) if wildcard_id and not _skips_health_checks(row)
     )
     return tuple(
-        _wildcard_child(public_name, wildcard_id, row)
+        _wildcard_child(public_name, wildcard_id, row, _configured_params(router, wildcard_id))
         for row, wildcard_id in eligible
         if _in_model_groups(public_name, row, model_groups)
     )
@@ -706,12 +716,12 @@ async def _run_model_health_check(model: dict):
     )
 
 
-async def _run_health_checks_with_bounded_concurrency(models: list, concurrency_limit: int) -> tuple[list, int]:
+async def _run_health_checks_with_bounded_concurrency(models: list, concurrency_limit: int) -> tuple[list[object], int]:
     """
     Run health checks with at most `concurrency_limit` active tasks.
     Preserves result ordering to match `models`.
     """
-    results: Final[list] = [None] * len(models)
+    results: Final[list[object]] = [None] * len(models)
     tasks_to_index: Final[dict[asyncio.Task, int]] = {}
     model_iter: Final = iter(enumerate(models))
     peak_in_flight = 0
@@ -750,7 +760,7 @@ async def _perform_health_check(
     model_list: list,
     details: bool | None = True,
     max_concurrency: int | None = None,
-    instrumentation_context: dict | None = None,
+    instrumentation_context: Mapping[str, object] | None = None,
 ):
     """
     Perform a health check for each model in the list.
@@ -826,8 +836,8 @@ async def _perform_health_check(
 
 
 def build_deployment_health_states(
-    healthy_endpoints: list,
-    unhealthy_endpoints: list,
+    healthy_endpoints: Sequence[Mapping[str, object]],
+    unhealthy_endpoints: Sequence[Mapping[str, object]],
 ) -> dict:
     """
     Build a dict mapping deployment_id -> DeploymentHealthStateValue from
@@ -945,7 +955,7 @@ def _same_health_check_model(deployment_model: str | None, probe_params: Mapping
 
 def update_litellm_params_for_health_check(
     model_info: dict, litellm_params: dict, deployment_model: str | None = None
-) -> dict:
+) -> dict[str, object]:
     """
     Update the litellm params for health check.
 
@@ -1076,13 +1086,13 @@ _update_litellm_params_for_health_check: Final = update_litellm_params_for_healt
 
 
 async def perform_health_check(
-    model_list: list,
+    model_list: Sequence[Mapping[str, object]],
     model: str | None = None,
     cli_model: str | None = None,
     details: bool | None = True,
     model_id: str | None = None,
     max_concurrency: int | None = None,
-    instrumentation_context: dict | None = None,
+    instrumentation_context: Mapping[str, object] | None = None,
     health_check_skip_disabled_background_models: bool = False,
     router: "Router | None" = None,
     team_id: str | None = None,

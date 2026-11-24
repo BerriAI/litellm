@@ -9365,6 +9365,7 @@ export interface paths {
          *     - router_settings: Optional[UpdateRouterConfig] - key-specific router settings. Example - {"model_group_retry_policy": {"gpt-4": {"RateLimitErrorRetries": 5}}}. IF null or {} then no router settings.
          *     - access_group_ids: Optional[List[str]] - List of access group IDs to associate with the key. Access groups define which models a key can access. Example - ["access_group_1", "access_group_2"].
          *     - budget_limits: Optional[list] - List of concurrent budget windows for the key. Each window specifies a budget_limit, time_period, and optional budget_duration. Example - [{"budget_limit": 10.0, "time_period": "1d"}, {"budget_limit": 50.0, "time_period": "7d"}].
+         *     - lens_enabled: Optional[bool] - Whether this key's requests are sent to Lens. `null` inherits the team default, which is on when unset.
          *
          *     Example:
          *     ```bash
@@ -9566,6 +9567,28 @@ export interface paths {
         head?: never;
         /** Lens Request */
         patch: operations["lens_request_lens_patch"];
+        trace?: never;
+    };
+    "/lens/admin/gateway/connect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Connect Model Gateway
+         * @description Connect this gateway's models to Lens using a dedicated virtual key.
+         *
+         *     Requires a proxy administrator. Existing Lens model settings are preserved.
+         */
+        post: operations["connect_model_gateway_lens_admin_gateway_connect_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/lens/login": {
@@ -24850,6 +24873,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/traces/{trace_id}/conversation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Agent Trace Conversation */
+        get: operations["get_agent_trace_conversation_v1_traces__trace_id__conversation_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/traces/{trace_id}/spans/{span_id}": {
         parameters: {
             query?: never;
@@ -33399,6 +33439,37 @@ export interface components {
              */
             mcp_disabled_capabilities?: ("prompts" | "resources")[] | null;
             /**
+             * Mcp Event Max Events Per Minute
+             * @description Events delivered to one caller per minute before events are dropped. Defaults to 600.
+             */
+            mcp_event_max_events_per_minute?: number | null;
+            /**
+             * Mcp Event Max Streams
+             * @description Concurrent events/stream requests one replica serves. Defaults to 512.
+             */
+            mcp_event_max_streams?: number | null;
+            /**
+             * Mcp Event Max Streams Per Caller
+             * @description Concurrent events/stream requests one caller may hold on a replica. Defaults to 50.
+             */
+            mcp_event_max_streams_per_caller?: number | null;
+            /**
+             * Mcp Event Max Subscriptions Per Key
+             * @description Webhook event subscriptions one caller may hold. Defaults to 50.
+             */
+            mcp_event_max_subscriptions_per_key?: number | null;
+            /**
+             * Mcp Events Enabled
+             * @description Serve the MCP Events extension (io.modelcontextprotocol/events) on /mcp for 2026-07-28 clients. Each upstream server also needs events.enabled. Off by default.
+             * @default false
+             */
+            mcp_events_enabled: boolean;
+            /**
+             * Mcp Events Public Base Url
+             * @description Public https base URL of this proxy that upstream MCP servers can reach, used to build the callback URL for webhook event subscriptions. Webhook delivery is unavailable while unset.
+             */
+            mcp_events_public_base_url?: string | null;
+            /**
              * Mcp Internal Ip Ranges
              * @description Custom CIDR ranges that define internal/private networks for MCP access control. When set, only these ranges are treated as internal. Defaults to RFC 1918 private ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8).
              */
@@ -36284,6 +36355,41 @@ export interface components {
             /** Status Code */
             status_code: number;
         };
+        /** GatewaySetupRequest */
+        GatewaySetupRequest: Record<string, never>;
+        /** GatewayStatus */
+        GatewayStatus: {
+            /**
+             * Analysis Models
+             * @default 0
+             */
+            analysis_models: number;
+            /** Api Base */
+            api_base?: string | null;
+            /** Configured */
+            configured: boolean;
+            /** Connected */
+            connected: boolean;
+            /** Error */
+            error?: string | null;
+            /**
+             * Evaluation Models
+             * @default 0
+             */
+            evaluation_models: number;
+            /** Last Refreshed */
+            last_refreshed?: string | null;
+            /**
+             * Login Connected
+             * @default false
+             */
+            login_connected: boolean;
+            /**
+             * Supports Gateway Connect
+             * @default false
+             */
+            supports_gateway_connect: boolean;
+        };
         /** GenerateKeyRequest */
         GenerateKeyRequest: {
             /** Access Group Ids */
@@ -38338,6 +38444,7 @@ export interface components {
             };
             /** Env Vars */
             env_vars?: components["schemas"]["MCPEnvVar"][] | null;
+            events?: components["schemas"]["MCPServerEventsConfig"] | null;
             /** Extra Headers */
             extra_headers?: string[];
             /** Has User Credential */
@@ -41614,6 +41721,29 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /** MCPServerEventsConfig */
+        MCPServerEventsConfig: {
+            /**
+             * Allowed Events
+             * @description Event names or globs this server may publish. Omit for every event; set enabled false for none.
+             */
+            allowed_events?: string[] | null;
+            /**
+             * Enabled
+             * @default false
+             */
+            enabled: boolean;
+            /**
+             * Legacy Webhook Id Equals Event Id
+             * @default false
+             */
+            legacy_webhook_id_equals_event_id: boolean;
+            /**
+             * Min Poll Interval Ms
+             * @default 1000
+             */
+            min_poll_interval_ms: number;
+        };
         /**
          * MCPServerUserCredentialListItem
          * @description One user's stored credential for an MCP server, as an admin sees it. Never carries the secret.
@@ -42862,6 +42992,7 @@ export interface components {
             };
             /** Env Vars */
             env_vars?: components["schemas"]["MCPEnvVar"][] | null;
+            events?: components["schemas"]["MCPServerEventsConfig"] | null;
             /** Extra Headers */
             extra_headers?: string[] | null;
             /** Instructions */
@@ -48607,6 +48738,16 @@ export interface components {
              */
             type: "tool_search_output";
         };
+        /** ResponsesAPIBackgroundOptions */
+        ResponsesAPIBackgroundOptions: {
+            /**
+             * Completion Window
+             * @enum {string}
+             */
+            completion_window?: "soonest" | "2h" | "8h";
+            /** Continuation Id */
+            continuation_id?: string;
+        };
         /** ResponsesAPIModeration */
         ResponsesAPIModeration: {
             /** Model */
@@ -48619,6 +48760,7 @@ export interface components {
         ResponsesAPIRequestParams: {
             /** Background */
             background?: boolean | null;
+            background_options?: components["schemas"]["ResponsesAPIBackgroundOptions"] | null;
             /** Context Management */
             context_management?: components["schemas"]["ContextManagementEntry"][] | null;
             /** Include */
@@ -53197,6 +53339,32 @@ export interface components {
             /** Agents */
             agents: components["schemas"]["TraceAgent"][];
         };
+        /** TraceConversationPage */
+        TraceConversationPage: {
+            /** Next Cursor */
+            next_cursor: string | null;
+            /** Turns */
+            turns: components["schemas"]["TraceConversationTurn"][];
+        };
+        /** TraceConversationTurn */
+        TraceConversationTurn: {
+            /** Input */
+            input: string;
+            /** Input Ui */
+            input_ui: components["schemas"]["UIMessages"] | components["schemas"]["UIFields"] | components["schemas"]["UIText"];
+            /** Output */
+            output: string;
+            /** Output Ui */
+            output_ui: components["schemas"]["UIMessages"] | components["schemas"]["UIFields"] | components["schemas"]["UIText"];
+            /** Span Id */
+            span_id: string;
+            /** Start Time */
+            start_time: string;
+            /** Trace Id */
+            trace_id: string;
+            /** Trace Ref */
+            trace_ref: string;
+        };
         /** TracePage */
         TracePage: {
             /** Data */
@@ -53232,7 +53400,7 @@ export interface components {
              * Table
              * @enum {string}
              */
-            table: "otel_traces" | "agent_traces_by_key" | "spend_logs";
+            table: "otel_traces" | "otel_logs" | "agent_traces_by_key" | "spend_logs" | "lens_task_profiles";
             /** Truncated */
             truncated: boolean;
         };
@@ -53296,7 +53464,7 @@ export interface components {
              * Table
              * @enum {string}
              */
-            table: "otel_traces" | "agent_traces_by_key" | "spend_logs";
+            table: "otel_traces" | "otel_logs" | "agent_traces_by_key" | "spend_logs" | "lens_task_profiles";
             /** Truncated */
             truncated: boolean;
         };
@@ -53321,7 +53489,7 @@ export interface components {
              * Table
              * @enum {string}
              */
-            table: "otel_traces" | "agent_traces_by_key" | "spend_logs";
+            table: "otel_traces" | "otel_logs" | "agent_traces_by_key" | "spend_logs" | "lens_task_profiles";
             /** Type */
             type: string;
         };
@@ -53349,7 +53517,7 @@ export interface components {
              * Name
              * @enum {string}
              */
-            name: "otel_traces" | "agent_traces_by_key" | "spend_logs";
+            name: "otel_traces" | "otel_logs" | "agent_traces_by_key" | "spend_logs" | "lens_task_profiles";
         };
         /** TraceSQLResponse */
         TraceSQLResponse: {
@@ -53868,6 +54036,11 @@ export interface components {
             key?: string | null;
             /** Key Alias */
             key_alias?: string | null;
+            /**
+             * Lens Enabled
+             * @description Enable or disable Lens tracing for this key. Omit to retain its policy or send null to inherit the team policy. This updates only metadata.lens_enabled and preserves other stored metadata. When metadata is also supplied, this field takes precedence over metadata.lens_enabled.
+             */
+            lens_enabled?: boolean | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Max Parallel Requests */
@@ -53999,6 +54172,7 @@ export interface components {
             };
             /** Env Vars */
             env_vars?: components["schemas"]["MCPEnvVar"][] | null;
+            events?: components["schemas"]["MCPServerEventsConfig"] | null;
             /** Extra Headers */
             extra_headers?: string[] | null;
             /** Instructions */
@@ -54030,6 +54204,12 @@ export interface components {
              * @default false
              */
             per_server_oauth_discovery: boolean;
+            /**
+             * Preserve Explicit Oauth Settings
+             * @description Keep explicitly supplied OAuth settings on upstream or auth changes, even when their values match the saved settings.
+             * @default false
+             */
+            preserve_explicit_oauth_settings: boolean;
             /** Registration Url */
             registration_url?: string | null;
             /** Rpm */
@@ -58846,6 +59026,7 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["TranscriptionResponse"];
                     "text/event-stream": string;
+                    "text/plain": string;
                 };
             };
             /** @description Validation Error */
@@ -70546,6 +70727,39 @@ export interface operations {
             };
         };
     };
+    connect_model_gateway_lens_admin_gateway_connect_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GatewaySetupRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GatewayStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     lens_login_lens_login_get: {
         parameters: {
             query?: never;
@@ -75637,6 +75851,7 @@ export interface operations {
                 "application/json": {
                     /** Background */
                     background?: boolean | null;
+                    background_options?: components["schemas"]["ResponsesAPIBackgroundOptions"] | null;
                     /** Context Management */
                     context_management?: components["schemas"]["ContextManagementEntry"][] | null;
                     /** Include */
@@ -79534,6 +79749,7 @@ export interface operations {
                 "application/json": {
                     /** Background */
                     background?: boolean | null;
+                    background_options?: components["schemas"]["ResponsesAPIBackgroundOptions"] | null;
                     /** Context Management */
                     context_management?: components["schemas"]["ContextManagementEntry"][] | null;
                     /** Include */
@@ -87798,6 +88014,7 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["TranscriptionResponse"];
                     "text/event-stream": string;
+                    "text/plain": string;
                 };
             };
             /** @description Validation Error */
@@ -91735,6 +91952,7 @@ export interface operations {
                 "application/json": {
                     /** Background */
                     background?: boolean | null;
+                    background_options?: components["schemas"]["ResponsesAPIBackgroundOptions"] | null;
                     /** Context Management */
                     context_management?: components["schemas"]["ContextManagementEntry"][] | null;
                     /** Include */
@@ -92905,11 +93123,14 @@ export interface operations {
     list_agent_traces_v1_traces_get: {
         parameters: {
             query?: {
-                cursor?: string | null;
-                /** @description Window end, unix ms. Default: now */
-                end_ms?: number | null;
+                team_id?: string | null;
+                api_key_hash?: string | null;
                 /** @description Window start, unix ms. Default: 24h ago */
                 start_ms?: number | null;
+                /** @description Window end, unix ms. Default: now */
+                end_ms?: number | null;
+                agent?: string | null;
+                cursor?: string | null;
             };
             header?: never;
             path?: never;
@@ -92960,6 +93181,8 @@ export interface operations {
     list_trace_agents_v1_traces_agents_get: {
         parameters: {
             query?: {
+                team_id?: string | null;
+                api_key_hash?: string | null;
                 start_ms?: number | null;
                 end_ms?: number | null;
             };
@@ -93045,9 +93268,11 @@ export interface operations {
     get_agent_trace_v1_traces__trace_id__get: {
         parameters: {
             query?: {
+                team_id?: string | null;
+                api_key_hash?: string | null;
+                trace_ref?: string;
                 cursor?: string | null;
                 page_size?: number | null;
-                trace_ref?: string;
             };
             header?: never;
             path: {
@@ -93077,9 +93302,48 @@ export interface operations {
             };
         };
     };
+    get_agent_trace_conversation_v1_traces__trace_id__conversation_get: {
+        parameters: {
+            query?: {
+                team_id?: string | null;
+                api_key_hash?: string | null;
+                trace_ref?: string;
+                cursor?: string | null;
+                page_size?: number | null;
+            };
+            header?: never;
+            path: {
+                trace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TraceConversationPage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_agent_trace_span_v1_traces__trace_id__spans__span_id__get: {
         parameters: {
             query?: {
+                team_id?: string | null;
+                api_key_hash?: string | null;
                 trace_ref?: string;
             };
             header?: never;
@@ -93114,8 +93378,10 @@ export interface operations {
     get_agent_trace_span_error_v1_traces__trace_id__spans__span_id__error_get: {
         parameters: {
             query?: {
-                cursor?: string | null;
+                team_id?: string | null;
+                api_key_hash?: string | null;
                 trace_ref?: string;
+                cursor?: string | null;
             };
             header?: never;
             path: {

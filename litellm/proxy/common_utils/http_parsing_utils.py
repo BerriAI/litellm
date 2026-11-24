@@ -334,7 +334,7 @@ async def read_request_body(request: Request | None) -> dict:
             return {}
 
         # Check if we already read and parsed the body
-        _cached_request_body: Final[dict | None] = _safe_get_request_parsed_body(request=request)
+        _cached_request_body: Final[dict[str, object] | None] = _safe_get_request_parsed_body(request=request)
         if _cached_request_body is not None:
             return _cached_request_body
 
@@ -344,7 +344,7 @@ async def read_request_body(request: Request | None) -> dict:
             binary_body: Final = await _receive_body(request)
             parsed_body = _parse_binary_body(binary_body)
         elif is_form_content_type(content_type):
-            form_body: Final = dict(await _read_form_data(request))
+            form_body: Final[dict[str, object]] = dict(await _read_form_data(request))
             raw_metadata: Final = form_body.get("metadata")
             parsed_body = (
                 {**form_body, "metadata": _parse_form_metadata(raw_metadata)}
@@ -698,7 +698,7 @@ async def convert_upload_files_to_file_data(
         if values is not None:
             # Check if it's a list of UploadFile objects
             if values and has_attributes(values[0], _ReadableUpload, "read"):
-                files = []
+                files: list[tuple[str | None, bytes, str | None]] = []
                 for f in values:
                     file_content = await require_attributes(f, _ReadableUpload, "read").read()
                     file_info = require_attributes(f, _UploadedFileInfo, "filename", "content_type")
@@ -901,7 +901,7 @@ def populate_request_with_path_params(request_data: dict, request: Request) -> d
     return request_data
 
 
-def _add_vector_store_id_from_path(request_data: dict, request: Request) -> None:
+def _add_vector_store_id_from_path(request_data: dict[str, object], request: Request) -> None:
     """
     Parse the request path to find /vector_stores/{vector_store_id}/... segments.
 

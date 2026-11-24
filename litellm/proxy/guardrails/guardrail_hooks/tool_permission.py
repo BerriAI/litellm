@@ -40,6 +40,7 @@ from litellm.proxy.common_utils.callback_utils import (
     add_guardrail_to_applied_guardrails_header,
 )
 from litellm.proxy.guardrails.anthropic_sse import (
+    anthropic_sse_chunks_as_scanned,
     anthropic_sse_chunks_from_response,
     anthropic_sse_error_events,
     assemble_anthropic_sse_stream,
@@ -1568,9 +1569,9 @@ class ToolPermissionGuardrail(CustomGuardrail):
         self,
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
-        data: dict,
+        data: dict[str, object],
         call_type: CallTypesLiteral,
-    ) -> Exception | str | dict | None:
+    ) -> Exception | str | dict[str, object] | None:
         """ """
         verbose_proxy_logger.debug("Tool Permission Guardrail Pre-Call Hook")
 
@@ -1621,7 +1622,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
     @log_guardrail_information
     async def async_post_call_success_hook(
         self,
-        data: dict,
+        data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth,
         response: LLMResponseTypes,
     ):
@@ -1674,7 +1675,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
         self,
         user_api_key_dict: UserAPIKeyAuth,
         response: AsyncIterable[ModelResponseStream],
-        request_data: dict,
+        request_data: Mapping[str, object],
     ) -> AsyncGenerator[ModelResponseStream, None]:
         """
         Check tool usage permissions after the LLM stream call
@@ -1719,8 +1720,9 @@ class ToolPermissionGuardrail(CustomGuardrail):
     ) -> Sequence[object]:
         if is_raw_sse_stream(source_chunks) and _is_generate_content_stream_route(route):
             return self._generate_content_stream_to_deliver(source_chunks, self._returned_call_names(request_data))
+        upstream_errors: Final = anthropic_sse_error_events(source_chunks)
         anthropic_response: Final = assemble_anthropic_sse_stream(
-            source_chunks, restore_identity=bool(anthropic_sse_error_events(source_chunks)), through_upstream_error=True
+            source_chunks, restore_identity=bool(upstream_errors), through_upstream_error=True
         )
         if anthropic_response is None:
             if is_raw_sse_stream(source_chunks) and not is_sse_error_stream(source_chunks):
@@ -1774,16 +1776,10 @@ class ToolPermissionGuardrail(CustomGuardrail):
         source_chunks: Sequence[object],
         judged_names: _JudgedCalls,
     ) -> Sequence[object]:
-        """The frames the client gets: on a failed upstream only what the check read, never the upstream's own.
-
-        Assembly reads past an upstream error, and a client can read a frame of a broken stream that assembly
-        does not, so forwarding those frames would pass a tool call nobody checked.
-        """
         denials: Final = self._check_assembled_stream(anthropic_response, judged_names)
-        if denials:
-            self._modify_response_with_permission_errors(anthropic_response, denials)
-        elif not anthropic_sse_error_events(source_chunks):
-            return source_chunks
+        if not denials:
+            return anthropic_sse_chunks_as_scanned(anthropic_response, source_chunks)
+        self._modify_response_with_permission_errors(anthropic_response, denials)
         return anthropic_sse_chunks_from_response(anthropic_response, source_chunks, keep_explanations=True)
 
     def _check_assembled_stream(

@@ -49,7 +49,7 @@ def convert_messages_to_prompt(messages: list[AllMessageValues]) -> str:
     Returns:
         Formatted prompt string with full conversation context
     """
-    conversation_parts: Final = []
+    conversation_parts: Final[list[str]] = []
     for msg in messages:
         # Use LiteLLM's helper to extract text from content (handles both str and list)
         content_text = convert_content_list_to_str(message=msg)
