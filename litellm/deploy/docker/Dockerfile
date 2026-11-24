@@ -25,7 +25,7 @@ RUN curl -fsSL -o pgbouncer.tar.gz "https://www.pgbouncer.org/downloads/files/${
     tar xzf pgbouncer.tar.gz --strip-components=1 && \
     ./configure --prefix=/usr/local --with-openssl=/usr && \
     make -j"$(nproc)" pgbouncer && \
-    install -s -m 0755 pgbouncer /usr/local/bin/pgbouncer
+    install -m 0755 pgbouncer /usr/local/bin/pgbouncer
 
 # Admin UI builder. Pinned to the build platform so the architecture-independent
 # Next.js static export compiles once natively even in a multi-arch build,
@@ -105,8 +105,20 @@ RUN sed -i 's/\r$//' litellm/deploy/docker/build_admin_ui.sh && chmod +x litellm
 
 # Install project and workspace packages (fast - deps already cached)
 ARG MATURIN_PEP517_ARGS=""
-RUN uv build --package litellm-proxy --wheel --out-dir /wheels
-RUN uv sync --frozen --no-install-package litellm-proxy --no-default-groups --no-editable \
+ARG TARGETARCH
+ARG CARGO_BUILD_JOBS=2
+ARG CARGO_PROFILE_RELEASE_LTO=fat
+ENV CARGO_TARGET_DIR=/var/cache/cargo-target \
+    CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS} \
+    CARGO_PROFILE_RELEASE_LTO=${CARGO_PROFILE_RELEASE_LTO}
+RUN --mount=type=cache,id=litellm-target-${TARGETARCH},target=/var/cache/cargo-target,sharing=locked \
+    --mount=type=cache,id=litellm-registry,target=/root/.cargo/registry,sharing=locked \
+    --mount=type=cache,id=litellm-git,target=/root/.cargo/git,sharing=locked \
+    uv build --package litellm-proxy --wheel --out-dir /wheels
+RUN --mount=type=cache,id=litellm-target-${TARGETARCH},target=/var/cache/cargo-target,sharing=locked \
+    --mount=type=cache,id=litellm-registry,target=/root/.cargo/registry,sharing=locked \
+    --mount=type=cache,id=litellm-git,target=/root/.cargo/git,sharing=locked \
+    uv sync --frozen --no-install-package litellm-proxy --no-default-groups --no-editable \
     --extra proxy \
     --extra proxy-runtime \
     --group admin-mcp \
@@ -131,15 +143,12 @@ RUN mkdir -p /var/lib/litellm/ui /var/lib/litellm/assets && \
     cp litellm/proxy/logo.png /var/lib/litellm/assets/logo.png && \
     touch /var/lib/litellm/ui/.litellm_ui_ready
 
-# Prepare the exported files before COPY into runtime. Deleting or changing
-# permissions after the runtime COPY would retain old bytes in earlier layers.
-# Preserve the original runtime permission policy.
-RUN export PYTHONDONTWRITEBYTECODE=1 && \
-    find /app/.venv -depth -type d -path "*/tornado/test" -exec rm -rf {} + && \
+RUN find /app/.venv -depth -type d -path "*/tornado/test" -exec rm -rf {} + && \
     PRISMA_PATH="$(python -c 'import os, prisma; print(os.path.dirname(prisma.__file__))')" && \
     PROXY_EXTRAS_PATH="$(python -c 'import os, litellm_proxy_extras; print(os.path.dirname(litellm_proxy_extras.__file__))')" && \
-    chmod -R g=u,g+w "$PRISMA_PATH" "$PROXY_EXTRAS_PATH" /var/lib/litellm && \
+    chmod -R g=u,g+w "$PRISMA_PATH" "$PROXY_EXTRAS_PATH" && \
     chmod -R a+rX /opt/prisma
+RUN chmod -R g=u,g+w /var/lib/litellm
 
 FROM $LITELLM_BUILD_IMAGE AS liteadmin-builder
 COPY --from=uvbin /uv /usr/local/bin/uv
@@ -188,31 +197,28 @@ ENV PATH="/app/.venv/bin:${PATH}" \
     PRISMA_ENGINES_CHECKSUM_IGNORE_MISSING=1 \
     PRISMA_OFFLINE_MODE=true
 
-# Set ownership on empty parent directories before copying large payloads.
-RUN mkdir -p /app/.cache /app/litellm/proxy /app/ui/docker-entrypoint.d /var/run/litellm && \
-    chown -R 65532:0 /app /var/run/litellm && \
-    chmod -R g=u,g+w /app/.cache /var/run/litellm
-
 # Copy only what runtime needs. The application is installed inside the venv;
 # the rest of the builder's /app is source and build metadata that must not
 # ship (manifest-scanning tools attribute everything in it to this image).
-COPY --chown=65532:0 --from=builder /app/.venv /app/.venv
+COPY --from=builder --chown=65532:0 /app/.venv /app/.venv
 COPY --from=liteadmin-builder /opt/liteadmin /opt/liteadmin
-COPY --chown=65532:0 --from=builder /app/litellm/deploy/docker/docker-entrypoint.sh /app/docker-entrypoint.sh
-COPY --chown=65532:0 --from=builder /app/litellm/schema.prisma /app/litellm/schema.prisma
-COPY --chown=65532:0 --from=builder /app/litellm/schema.prisma /app/schema.prisma
-COPY --chown=65532:0 --from=builder /app/litellm/runtime/gateway /app/gateway
-COPY --chown=65532:0 --from=builder /app/litellm/proxy/prisma_migration.py /app/litellm/proxy/prisma_migration.py
+COPY --from=builder --chown=65532:0 /app/litellm/deploy/docker/docker-entrypoint.sh /app/docker-entrypoint.sh
+COPY --from=builder --chown=65532:0 /app/litellm/schema.prisma /app/litellm/schema.prisma
+COPY --from=builder --chown=65532:0 /app/litellm/schema.prisma /app/schema.prisma
+COPY --from=builder --chown=65532:0 /app/litellm/runtime/gateway /app/gateway
+COPY --from=builder --chown=65532:0 /app/litellm/proxy/prisma_migration.py /app/litellm/proxy/prisma_migration.py
 # enterprise/ is imported by source path at runtime (proxy_cli puts the
 # working directory on sys.path; litellm/proxy/hooks resolves
 # litellm.enterprise.enterprise_hooks from it)
 COPY --from=builder /opt/prisma /opt/prisma
-COPY --chown=65532:0 --from=builder /var/lib/litellm /var/lib/litellm
+COPY --from=builder --chown=65532:0 /var/lib/litellm /var/lib/litellm
 COPY litellm/ui/nginx.conf /etc/nginx/nginx.conf
 COPY --chown=65532:0 litellm/ui/docker-entrypoint.d/40-litellm-runtime-config.sh /app/ui/docker-entrypoint.d/40-litellm-runtime-config.sh
 
-# Validate the final assembled runtime image.
-RUN test -x /opt/prisma/binaries/node_modules/.bin/prisma && \
+RUN mkdir -p /app/.cache /var/run/litellm && \
+    chown 65532:0 /app /app/.cache /app/litellm /app/litellm/proxy /app/ui /app/ui/docker-entrypoint.d /var/run/litellm && \
+    chmod g=u,g+w /app/.cache /var/run/litellm && \
+    test -x /opt/prisma/binaries/node_modules/.bin/prisma && \
     test -f /opt/prisma/binaries/node_modules/prisma/build/index.js && \
     ls /opt/prisma/binaries/node_modules/@prisma/engines/query-engine-* >/dev/null && \
     python -c "from prisma.client import BINARY_PATHS; paths = list(BINARY_PATHS.query_engine.values()); assert paths and all(p.startswith('/opt/prisma/') for p in paths), paths" && \
