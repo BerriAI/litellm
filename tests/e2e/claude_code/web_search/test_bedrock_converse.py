@@ -130,7 +130,8 @@ def test_web_search_bedrock_converse(compat_result):
             error = (
                 f"[{model}] no `tool_use` block with name=WebSearch observed; "
                 "the proxy may have stripped the WebSearch tool definition from "
-                "the request or the tool_use block from the response"
+                "the request or the tool_use block from the response. "
+                f"What the CLI returned instead: {failure_diagnostic(outcome)}"
             )
             compat_result.add({"status": "fail", "error": error})
             failures.append(error)
