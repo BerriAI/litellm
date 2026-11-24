@@ -388,7 +388,7 @@ def image_generation(
                 **{
                     field: kwargs[field]
                     for field in CustomPricingLiteLLMParams.model_fields
-                    if kwargs.get(field) is not None
+                    if field in kwargs and kwargs[field] is not None
                 },
             },
             custom_llm_provider=custom_llm_provider,
