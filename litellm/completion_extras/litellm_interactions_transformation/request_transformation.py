@@ -66,6 +66,8 @@ _BUILTIN_TOOL_TYPES: Final[Mapping[str, str]] = MappingProxyType(
         "urlContext": "url_context",
         "code_execution": "code_execution",
         "codeExecution": "code_execution",
+        "web_search": "google_search",
+        "web_search_preview": "google_search",
     }
 )
 
@@ -923,7 +925,11 @@ def _convert_response_format(params: JsonMapping) -> JsonValue:
     if isinstance(response_schema, dict):
         return {"type": "text", "mime_type": "application/json", "schema": response_schema}
 
-    base_format: Final = _base_response_format(params.get("response_format"))
+    base_format: Final = _base_response_format(params.get("response_format")) or (
+        {"type": "text", "mime_type": "application/json"}
+        if params.get("response_mime_type") == "application/json"
+        else None
+    )
     modalities: Final = params.get("modalities")
     has_audio_param: Final = isinstance(params.get("audio"), dict)
     if isinstance(modalities, list):

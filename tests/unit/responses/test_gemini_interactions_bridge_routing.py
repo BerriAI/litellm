@@ -880,3 +880,73 @@ def test_gemini_4_completion_reaches_one_interactions_path_whether_or_not_the_ap
         )
 
     assert [str(req.url) for req in captured] == ["https://gateway.example/v1beta/interactions"]
+
+
+_SECRET_NAMED_SCHEMA: Final = {
+    "type": "object",
+    "properties": {"api_key": {"type": "string"}, "access_token": {"type": "string"}, "user": {"type": "string"}},
+    "required": ["api_key", "access_token", "user"],
+}
+_JSON_TEXT_FORMAT: Final = {"type": "text", "mime_type": "application/json"}
+
+
+@pytest.mark.parametrize(
+    ("chat_params", "expected_in_body"),
+    [
+        pytest.param(
+            {"response_format": {"type": "json_schema", "json_schema": {"name": "x", "schema": _SECRET_NAMED_SCHEMA}}},
+            {"response_format": {**_JSON_TEXT_FORMAT, "schema": _SECRET_NAMED_SCHEMA}},
+            id="schema-properties-named-like-secrets-survive",
+        ),
+        pytest.param(
+            {"tools": [{"type": "web_search"}]},
+            {"tools": [{"type": "google_search"}]},
+            id="web-search-tool-becomes-google-search",
+        ),
+        pytest.param(
+            {"tools": [{"type": "web_search_preview"}]},
+            {"tools": [{"type": "google_search"}]},
+            id="web-search-preview-tool-becomes-google-search",
+        ),
+        pytest.param(
+            {"response_mime_type": "application/json"},
+            {"response_format": _JSON_TEXT_FORMAT},
+            id="json-mime-type-becomes-a-json-text-format",
+        ),
+    ],
+)
+def test_bridged_chat_request_carries_the_callers_schema_search_tool_and_json_mime_type(
+    chat_params: dict[str, object], expected_in_body: dict[str, object]
+) -> None:
+    captured: Final[list[httpx.Request]] = []  # mutable-ok: transport spy
+
+    def responder(req: httpx.Request) -> httpx.Response:
+        captured.append(req)
+        return httpx.Response(
+            200,
+            json={
+                "id": "v1_unit_carry",
+                "status": "completed",
+                "steps": [{"type": "model_output", "content": [{"type": "text", "text": "{}"}]}],
+                "usage": {"total_input_tokens": 8, "total_output_tokens": 3, "total_tokens": 11},
+            },
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(responder)) as raw_client:
+        litellm.completion(
+            model="gemini/gemini-3-flash-preview",
+            messages=[{"role": "user", "content": "hi"}],
+            use_interactions=True,
+            store=False,
+            api_key="unit-gemini-key",
+            api_base="https://generativelanguage.googleapis.com",
+            client=HTTPHandler(client=raw_client),
+            **chat_params,
+        )
+
+    assert json.loads(captured[0].content) == {
+        "model": "gemini-3-flash-preview",
+        "input": [{"type": "user_input", "content": [{"type": "text", "text": "hi"}]}],
+        "store": False,
+        **expected_in_body,
+    }

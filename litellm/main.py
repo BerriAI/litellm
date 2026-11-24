@@ -6707,7 +6707,16 @@ def completion(
                     api_base=api_base,  # pyright: ignore[reportUnknownArgumentType]  # untyped api_base local
                     acompletion=acompletion,  # pyright: ignore[reportUnknownArgumentType]  # untyped acompletion local
                     logging_obj=logging,  # pyright: ignore[reportUnknownArgumentType]  # untyped logging local
-                    processed_params=processed_non_default_params,  # pyright: ignore[reportUnknownArgumentType]  # untyped params local
+                    processed_params=pre_process_non_default_params(
+                        model=model,
+                        passed_params=optional_param_args,
+                        special_params=dict(cleaned_provider_params),
+                        custom_llm_provider=custom_llm_provider,
+                        additional_drop_params=kwargs.get("additional_drop_params"),
+                        remove_sensitive_keys=False,
+                        add_provider_specific_params=True,
+                        provider_config=provider_config,
+                    ),
                     stream_options=None if replays_stream else stream_options,  # pyright: ignore[reportUnknownArgumentType]  # untyped stream_options local
                     litellm_params=litellm_params,  # pyright: ignore[reportUnknownArgumentType]  # untyped litellm_params local
                     raw_kwargs=kwargs,  # pyright: ignore[reportUnknownArgumentType]  # untyped kwargs local
