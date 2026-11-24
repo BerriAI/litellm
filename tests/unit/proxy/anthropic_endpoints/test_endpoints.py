@@ -32,10 +32,8 @@ from litellm.caching.caching_handler import _PENDING_CACHE_WRITES
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
-from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.exception_mapping_utils import exception_type
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.anthropic_endpoints.endpoints import router as messages_router
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -910,15 +908,14 @@ class TestCountTokensCompactedHistory:
         assert counted["input_tokens"] > 0
         assert counted == await count(as_text)
 
-def _claude_router(cache_responses: bool = False) -> Router:
+def _claude_router() -> Router:
     return Router(
         model_list=[
             {
                 "model_name": "claude-sonnet",
                 "litellm_params": {"model": "anthropic/claude-sonnet-5-5", "api_key": "sk-test"},
             }
-        ],
-        cache_responses=cache_responses,
+        ]
     )
 
 
@@ -1649,8 +1646,8 @@ _UPSTREAM_MESSAGE: Final = MappingProxyType(
         "usage": {"input_tokens": 10, "output_tokens": 3},
     }
 )
-_UPSTREAM_EVENTS: Final = "".join(
-    f"event: {event['type']}\ndata: {json.dumps(event)}\n\n"
+_UPSTREAM_EVENTS: Final = tuple(
+    f"event: {event['type']}\ndata: {json.dumps(event)}\n\n".encode()
     for event in (
         {
             "type": "message_start",
@@ -1665,57 +1662,53 @@ _UPSTREAM_EVENTS: Final = "".join(
 )
 
 
-def _anthropic_upstream_reply(request: httpx.Request) -> httpx.Response:
-    if json.loads(request.content).get("stream") is True:
-        return httpx.Response(200, text=_UPSTREAM_EVENTS, headers={"content-type": "text/event-stream"})
-    return httpx.Response(200, json=dict(_UPSTREAM_MESSAGE))
+async def _upstream_event_stream() -> AsyncIterator[bytes]:
+    for event in _UPSTREAM_EVENTS:
+        yield event
 
 
-class _ScriptedAnthropic:
+class _CountingProviderDispatch:
     def __init__(self) -> None:
-        self.sent: Final[list[httpx.Request]] = []  # mutable-ok: records each request the proxy sends upstream
+        self.calls: Final[list[Mapping[str, object]]] = []  # mutable-ok: records each provider dispatch a miss makes
 
-    def __call__(self, request: httpx.Request) -> httpx.Response:
-        self.sent.append(request)
-        return _anthropic_upstream_reply(request)
-
-
-class _SendsThroughClient(CustomLogger):
-    def __init__(self, client: AsyncHTTPHandler) -> None:
-        super().__init__()
-        self.client: Final = client
-
-    async def async_pre_call_hook(
-        self, user_api_key_dict: UserAPIKeyAuth, cache: DualCache, data: Mapping[str, object], call_type: str
-    ) -> dict[str, object]:  # mutable-ok: the proxy only replaces its request with a returned dict
-        return {**data, "client": self.client}
+    def __call__(self, **kwargs: object) -> object:  # kwargs-ok: stands in for the handler's full keyword call
+        self.calls.append(kwargs)
+        if kwargs.get("stream") is True:
+            return _upstream_event_stream()
+        return json.loads(json.dumps(dict(_UPSTREAM_MESSAGE)))
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class _CachedProxy:
     store: InMemoryCache
-    upstream: _ScriptedAnthropic
-
-    def upstream_paths(self) -> tuple[str, ...]:
-        return tuple(str(request.url) for request in self.upstream.sent)
+    provider: _CountingProviderDispatch
 
 
 @pytest_asyncio.fixture
 async def cached_proxy(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[_CachedProxy]:
+    from litellm.llms.anthropic.messages.native import handler as native_messages
+
     cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
     assert isinstance(cache.cache, InMemoryCache)
-    upstream: Final = _ScriptedAnthropic()
-    client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(upstream))
+    provider: Final = _CountingProviderDispatch()
     monkeypatch.setattr(litellm, "cache", cache)
-    monkeypatch.setattr(litellm, "callbacks", [_SendsThroughClient(client)])
-    monkeypatch.setattr(proxy_server, "llm_router", _claude_router(cache_responses=True))
+    monkeypatch.setattr(native_messages, "anthropic_messages_handler", provider)
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {"model_name": "claude-sonnet", "litellm_params": {"model": "openai/gpt-6.2-sol", "api_key": "sk-test"}}
+            ],
+            cache_responses=True,
+        ),
+    )
     monkeypatch.setattr(proxy_server, "proxy_logging_obj", ProxyLogging(user_api_key_cache=DualCache()))
     try:
-        yield _CachedProxy(store=cache.cache, upstream=upstream)
+        yield _CachedProxy(store=cache.cache, provider=provider)
     finally:
         await asyncio.gather(*_PENDING_CACHE_WRITES)
         await GLOBAL_LOGGING_WORKER.flush()
-        await client.close()
 
 
 async def _answer_messages(body: Mapping[str, object], call_id: str) -> tuple[Mapping[str, str], object]:
@@ -1757,7 +1750,7 @@ async def test_repeated_messages_request_answers_the_cache_key_it_was_served_fro
     replies: Final = [await _answer_messages(body, f"cache-hit-{turn}") for turn in range(3)]
 
     stored_keys: Final = tuple(cached_proxy.store.cache_dict)
-    assert cached_proxy.upstream_paths() == ("https://api.anthropic.com/v1/messages",)
+    assert len(cached_proxy.provider.calls) == 1, "repeats must be served from the response cache"
     assert len(stored_keys) == 1
     if caller_cache_key is not None:
         assert stored_keys == (caller_cache_key,)
@@ -1787,6 +1780,6 @@ async def test_messages_request_not_served_from_cache_sends_no_cache_key(
     first: Final = await _answer_messages({**_HIT_TEST_BODY, "stream": stream, **first_extra}, "cache-miss-0")
     repeat: Final = await _answer_messages({**_HIT_TEST_BODY, "stream": stream, **repeat_extra}, "cache-miss-1")
 
-    assert cached_proxy.upstream_paths() == ("https://api.anthropic.com/v1/messages",) * 2
+    assert len(cached_proxy.provider.calls) == 2, "a bypassed cache must reach the provider every time"
     assert first[0].get("x-litellm-cache-key") is None
     assert repeat[0].get("x-litellm-cache-key") is None
