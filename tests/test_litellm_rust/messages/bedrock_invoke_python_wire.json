@@ -1,5 +1,5 @@
 {
- "_source": "What Python's Bedrock Invoke Messages config sent, logged and raised, captured once at 0445fbaf before its Messages handler code was removed. The stream-failure entries for an error event the provider sent raise the mapped public error instead of Python's raw BedrockError (#49935)",
+ "_source": "What Python's Bedrock Invoke Messages config sent, logged and raised, captured once at 0445fbaf before its Messages handler code was removed. The stream-failure entries for an error event the provider sent raise the mapped public error with the status Bedrock sent instead of Python's raw BedrockError",
  "detached": [
   "success",
   {
@@ -237,7 +237,7 @@
   "raised": [
    [
     "ServiceUnavailableError",
-    503
+    500
    ]
   ]
  },

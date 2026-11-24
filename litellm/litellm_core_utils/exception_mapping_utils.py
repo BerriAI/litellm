@@ -5,7 +5,7 @@ import traceback
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Final, Literal, Protocol, cast
+from typing import Final, Literal, Protocol, TypeVar, cast
 
 import httpx
 from pydantic import TypeAdapter, ValidationError
@@ -2925,6 +2925,21 @@ def provider_origin_status(error: BaseException) -> int | None:
     """The provider's own HTTP status for an error mapped from its response, or None when litellm raised it."""
     status: Final = getattr(error, PROVIDER_ORIGIN_STATUS_ATTRIBUTE, None)
     return status if isinstance(status, int) and not isinstance(status, bool) else None
+
+
+ROUTING_CLASSIFICATION_ATTRIBUTE: Final = "litellm_routing_classification"
+_ErrorT = TypeVar("_ErrorT", bound=BaseException)
+
+
+def keep_routing_classification(mapped: BaseException, classified_as: Exception) -> None:
+    """The router keeps classifying ``mapped`` as ``classified_as``, the error it raised before it was mapped."""
+    setattr(mapped, ROUTING_CLASSIFICATION_ATTRIBUTE, classified_as)
+
+
+def routing_classification(error: _ErrorT) -> _ErrorT | Exception:
+    """The error the router classifies ``error`` as: the one kept by ``keep_routing_classification``, else itself."""
+    kept: Final = getattr(error, ROUTING_CLASSIFICATION_ATTRIBUTE, None)
+    return kept if isinstance(kept, Exception) else error
 
 
 def exception_type(

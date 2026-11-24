@@ -179,10 +179,11 @@ def router_policy_retries(
 ) -> int | None:
     """``get_num_retries_from_retry_policy`` for a router ``model_group_retry_policy`` that is not
     a mapping of policies, read as the Python router reads it (raising as it raises)."""
+    from litellm.litellm_core_utils.exception_mapping_utils import routing_classification
     from litellm.litellm_core_utils.get_retry_from_policy import get_num_retries_from_retry_policy
 
     return get_num_retries_from_retry_policy(
-        exception=exception,
+        exception=routing_classification(exception),
         retry_policy=retry_policy,  # pyright: ignore[reportArgumentType]  # the router's resolved policy
         model_group=model_group,
         model_group_retry_policy=policies,  # pyright: ignore[reportArgumentType]  # read as the Python router reads it

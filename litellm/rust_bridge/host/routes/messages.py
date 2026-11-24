@@ -50,7 +50,11 @@ from litellm.litellm_core_utils.core_helpers import (
     require_attributes,
     stream_cost_injection_requested,
 )
-from litellm.litellm_core_utils.exception_mapping_utils import is_aws_credential_error, with_deployment_debug_info
+from litellm.litellm_core_utils.exception_mapping_utils import (
+    is_aws_credential_error,
+    keep_routing_classification,
+    with_deployment_debug_info,
+)
 from litellm.litellm_core_utils.get_llm_provider_logic import get_provider_affinity_header
 from litellm.litellm_core_utils.get_provider_specific_headers import ProviderSpecificHeaderUtils
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -1306,6 +1310,19 @@ def _bedrock_stream_error(error: Exception, request: Mapping[str, object]) -> Ex
     return _config_error(status, text, headers, request, "bedrock")
 
 
+def _bedrock_stream_event_error(
+    stream_error: Exception, error: Exception, request: Mapping[str, object], request_provider: str
+) -> Exception:
+    """An error event Bedrock sent mid-stream raises its mapped public class with the status Bedrock sent,
+    while the router keeps classifying it as the raw `BedrockError` it raised before."""
+    mapped: Final = _public_provider_error(stream_error, error, request, request_provider)
+    status: Final = getattr(stream_error, "status_code", None)
+    if isinstance(status, int):
+        mapped.status_code = status  # pyright: ignore[reportAttributeAccessIssue]  # every mapped litellm error has one
+    keep_routing_classification(mapped, stream_error)
+    return mapped
+
+
 def map_failure(
     error: Exception,
     request: Mapping[str, object],
@@ -1318,7 +1335,7 @@ def map_failure(
     if request_provider == "bedrock" and getattr(error, "messages_stream_failure", False):
         stream_error: Final = _bedrock_stream_error(error, request)
         if stream_error is not None and getattr(error, "messages_stream_event", False):
-            return _public_provider_error(stream_error, error, request, request_provider)
+            return _bedrock_stream_event_error(stream_error, error, request, request_provider)
         if stream_error is not None:
             return stream_error
     if getattr(error, "messages_timeout", None) == "Body":

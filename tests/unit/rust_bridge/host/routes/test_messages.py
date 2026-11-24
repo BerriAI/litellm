@@ -641,10 +641,11 @@ def _bedrock_upstream(status: int, body: str, *, stream_failure: bool, stream_ev
         (503, "serviceUnavailableException"),
     ],
 )
-def test_a_bedrock_stream_error_event_maps_as_the_same_failure_before_the_stream_opened(
+def test_a_bedrock_stream_error_event_maps_to_the_pre_stream_class_keeping_the_status_bedrock_sent(
     status: int, exception_type: str
 ) -> None:
-    from litellm.litellm_core_utils.exception_mapping_utils import provider_origin_status
+    from litellm.litellm_core_utils.exception_mapping_utils import provider_origin_status, routing_classification
+    from litellm.llms.bedrock.common_utils import BedrockError
 
     body: Final = f'{exception_type} {{"message":"boom"}}'
     request: Final = {"model": _BEDROCK_INVOKE}
@@ -655,16 +656,21 @@ def test_a_bedrock_stream_error_event_maps_as_the_same_failure_before_the_stream
         _bedrock_upstream(status, body, stream_failure=False, stream_event=False), request, "bedrock"
     )
 
+    routed_as: Final = routing_classification(mapped)
     assert isinstance(mapped, openai.APIError)
     assert type(mapped) is type(before_the_stream)
-    assert getattr(mapped, "status_code", None) == getattr(before_the_stream, "status_code", None)
+    assert getattr(mapped, "status_code", None) == status
     assert provider_origin_status(mapped) == status
     assert body in str(mapped)
     assert mapped.__context__ is event
+    assert type(routed_as) is BedrockError
+    assert (routed_as.status_code, routed_as.message) == (status, body)
+    assert routing_classification(before_the_stream) is before_the_stream
 
 
 @pytest.mark.parametrize("status", [502, 500])
 def test_a_bedrock_stream_failure_the_decoder_made_up_still_raises_the_raw_bedrock_error(status: int) -> None:
+    from litellm.litellm_core_utils.exception_mapping_utils import routing_classification
     from litellm.llms.bedrock.common_utils import BedrockError
 
     made_up: Final = _bedrock_upstream(
@@ -678,6 +684,7 @@ def test_a_bedrock_stream_failure_the_decoder_made_up_still_raises_the_raw_bedro
 
     assert type(mapped) is BedrockError
     assert mapped.status_code == status
+    assert routing_classification(mapped) is mapped
 
 
 @pytest.mark.parametrize(

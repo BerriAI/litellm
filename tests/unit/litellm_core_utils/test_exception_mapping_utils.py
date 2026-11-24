@@ -17,13 +17,16 @@ from litellm import completion
 from litellm.anthropic_interface.exceptions.exception_mapping_utils import AnthropicExceptionMapping
 from litellm.exceptions import GuardrailRaisedException
 from litellm.litellm_core_utils.exception_mapping_utils import (
+    ROUTING_CLASSIFICATION_ATTRIBUTE,
     ExceptionCheckers,
     _get_body_error_code,
     _get_response_headers,
     exception_type,
     extract_and_raise_litellm_exception,
     get_error_message,
+    keep_routing_classification,
     provider_origin_status,
+    routing_classification,
 )
 from litellm.llms.anthropic.common_utils import AnthropicError
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
@@ -4310,6 +4313,21 @@ def test_an_error_litellm_raised_itself_carries_no_provider_status(quiet_excepti
 
     assert returned is synthetic
     assert provider_origin_status(returned) is None
+
+
+def test_a_mapped_error_is_routed_as_the_error_it_keeps_and_any_other_error_as_itself() -> None:
+    raw: Final = BedrockError(status_code=500, message="internalServerException {}")
+    mapped: Final = litellm.ServiceUnavailableError(message="mapped", llm_provider="bedrock", model="m")
+    unmapped: Final = litellm.RateLimitError(message="unmapped", llm_provider="bedrock", model="m")
+    not_an_error: Final = litellm.RateLimitError(message="not an error kept", llm_provider="bedrock", model="m")
+    setattr(not_an_error, ROUTING_CLASSIFICATION_ATTRIBUTE, "BedrockError")
+
+    keep_routing_classification(mapped, raw)
+
+    assert routing_classification(mapped) is raw
+    assert routing_classification(raw) is raw
+    assert routing_classification(unmapped) is unmapped
+    assert routing_classification(not_an_error) is not_an_error
 
 
 def test_a_status_litellm_made_up_for_a_provider_error_is_not_kept_as_the_providers(

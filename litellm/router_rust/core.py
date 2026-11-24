@@ -586,7 +586,12 @@ def retry_after_seconds(error: BaseException) -> float | None:
 
 
 def attempt_failure(error: BaseException) -> Mapping[str, object]:
-    status: Final = getattr(error, "status_code", None)
+    """The failure the router decides on. It classifies the error a mapped one keeps for routing, and reads
+    what the router stamps on the raised error (retry count, deployment id, agentic follow-up) off that error."""
+    from litellm.litellm_core_utils.exception_mapping_utils import routing_classification
+
+    classified: Final = routing_classification(error)
+    status: Final = getattr(classified, "status_code", None)
     num_retries: Final = getattr(error, "num_retries", None)
     # `_deployment_ids_to_skip_on_retry` reads the id off the exception.
     named_deployment: Final = getattr(error, "retry_skip_deployment_id", None) or getattr(
@@ -594,15 +599,15 @@ def attempt_failure(error: BaseException) -> Mapping[str, object]:
     )
     return {
         "ok": False,
-        "kind": failure_kind(error),
+        "kind": failure_kind(classified),
         "status": status if isinstance(status, int) and 100 <= status <= 599 else None,
-        "status_absent": getattr(error, "status_code", "") == "",
-        "retry_after": retry_after_seconds(error),
+        "status_absent": getattr(classified, "status_code", "") == "",
+        "retry_after": retry_after_seconds(classified),
         "num_retries": num_retries if isinstance(num_retries, int) and num_retries >= 0 else None,
         "failed_deployment_id": named_deployment if isinstance(named_deployment, str) else None,
-        "detail": str(error),
-        "classes": [cls.__name__ for cls in type(error).__mro__],
-        "llm_provider": bool(getattr(error, "llm_provider", "")),
+        "detail": str(classified),
+        "classes": [cls.__name__ for cls in type(classified).__mro__],
+        "llm_provider": bool(getattr(classified, "llm_provider", "")),
         "agentic_followup": is_agentic_followup_failure(error),
     }
 

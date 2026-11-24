@@ -10,6 +10,7 @@ from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, 
 from pathlib import Path
 from typing import Final, cast  # noqa: TID251  # narrows the untyped Messages entries to their call shape
 
+import openai
 import pytest
 from botocore.exceptions import NoCredentialsError, PartialCredentialsError, ProfileNotFound
 from pydantic import TypeAdapter
@@ -19,8 +20,9 @@ from litellm.anthropic_beta_headers_manager import reload_beta_headers_config
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils import model_cost_table
 from litellm.llms.bedrock.base_aws_llm import AwsAuthError
+from litellm.types.router import AllowedFailsPolicy, RetryPolicy
 from tests.test_litellm_rust.messages.data import MESSAGES, MESSAGES_EVENTS, MESSAGES_RESPONSE, RATE_LIMITED
-from tests.test_litellm_rust.support.isolation import rebound
+from tests.test_litellm_rust.support.isolation import isolated_callback_registries, rebound
 from tests.test_litellm_rust.support.recording_server import RecordedRequest, RecordingServer, ResponseSpec, relaxed
 from tests.test_litellm_rust.support.routing import assert_served_natively
 
@@ -553,6 +555,96 @@ async def test_bedrock_invoke_stream_failure_raises_and_logs_what_python_does(
     [rust_logged] = recorder.logged
     kind, logged_response, _ = _billed(rust_logged)
     assert [kind, logged_response] == expected["billed"]
+
+
+_BACKUP_MODEL: Final = "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
+
+
+def _deployment(model_group: str, model: str, server: RecordingServer) -> dict[str, object]:
+    return {"model_name": model_group, "litellm_params": {"model": model, "api_base": server.base_url, **AWS}}
+
+
+def _requests_to(server: RecordingServer, model: str) -> int:
+    model_id: Final = model.removeprefix("bedrock/").split(":")[0]
+    return sum(model_id in request.path for request in server.requests)
+
+
+def _error_event(exception_type: str) -> ResponseSpec:
+    return ResponseSpec(body=_wire_frame("exception", exception_type, b'{"message": "boom"}'))
+
+
+async def _routed_failure(router: litellm.Router, model_group: str) -> Exception | None:
+    try:
+        async for _ in cast(  # cast-ok: a streamed Messages answer yields SSE bytes
+            AsyncIterator[bytes],
+            await router.aanthropic_messages(model=model_group, messages=list(MESSAGES), max_tokens=64, stream=True),
+        ):
+            pass
+    except Exception as error:  # noqa: BLE001  # the routed failure is what the test reads
+        return error
+    return None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("exception_type", "status", "retry_policy"),
+    (
+        pytest.param(
+            "internalServerException",
+            500,
+            RetryPolicy(ServiceUnavailableErrorRetries=1, DefaultRetries=0),
+            id="internal-server",
+        ),
+        pytest.param(
+            "serviceUnavailableException",
+            503,
+            RetryPolicy(ServiceUnavailableErrorRetries=1, DefaultRetries=0),
+            id="service-unavailable",
+        ),
+        pytest.param(
+            "throttlingException", 429, RetryPolicy(RateLimitErrorRetries=1, DefaultRetries=0), id="throttling"
+        ),
+        pytest.param("modelTimeoutException", 408, RetryPolicy(TimeoutErrorRetries=1, DefaultRetries=0), id="timeout"),
+    ),
+)
+async def test_a_routed_bedrock_stream_error_event_retries_by_the_policy_its_raw_error_falls_under(
+    server: RecordingServer, exception_type: str, status: int, retry_policy: RetryPolicy
+) -> None:
+    server.default_response = _error_event(exception_type)
+
+    with isolated_callback_registries():
+        router: Final = litellm.Router(
+            model_list=[_deployment("primary", BEDROCK_MODEL, server)], num_retries=0, retry_policy=retry_policy
+        )
+        raised: Final = await _routed_failure(router, "primary")
+
+    assert isinstance(raised, openai.APIError)
+    assert getattr(raised, "status_code", None) == status
+    assert_served_natively(server, count=1)
+
+
+@pytest.mark.asyncio
+async def test_a_routed_bedrock_rate_limit_event_cools_down_by_the_allowed_fails_its_raw_error_falls_under(
+    server: RecordingServer,
+) -> None:
+    server.default_response = ResponseSpec(body=b"".join(_aws_frame(event) for event in _EVENTS))
+
+    with isolated_callback_registries():
+        router: Final = litellm.Router(
+            model_list=[_deployment("primary", BEDROCK_MODEL, server), _deployment("backup", _BACKUP_MODEL, server)],
+            fallbacks=[{"primary": ["backup"]}],
+            num_retries=0,
+            allowed_fails=3,
+            allowed_fails_policy=AllowedFailsPolicy(RateLimitErrorAllowedFails=0),
+        )
+        server.enqueue(_error_event("throttlingException"))
+        first: Final = await _routed_failure(router, "primary")
+        server.enqueue(_error_event("throttlingException"))
+        second: Final = await _routed_failure(router, "primary")
+
+    assert (first, second) == (None, None)
+    assert (_requests_to(server, BEDROCK_MODEL), _requests_to(server, _BACKUP_MODEL)) == (2, 2)
+    assert_served_natively(server, count=4)
 
 
 @pytest.mark.asyncio
