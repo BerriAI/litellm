@@ -9,6 +9,26 @@ mod owner;
 mod project;
 mod team;
 
+/// An object permission row, every column of it, which a key, a team and an end user can each
+/// point at. `mcp_tool_permissions` keeps the order its row was written in.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ObjectPermissionRecord {
+    pub object_permission_id: String,
+    pub mcp_servers: Option<Vec<String>>,
+    pub mcp_access_groups: Option<Vec<String>>,
+    pub mcp_tool_permissions: Option<Vec<(String, Vec<String>)>>,
+    pub vector_stores: Option<Vec<String>>,
+    pub agents: Option<Vec<String>>,
+    pub agent_access_groups: Option<Vec<String>>,
+    pub models: Option<Vec<String>>,
+    pub mcp_toolsets: Option<Vec<String>>,
+    pub blocked_tools: Option<Vec<String>>,
+    pub search_tools: Option<Vec<String>>,
+    pub mcp_tool_search_enabled: Option<bool>,
+    pub skills: Option<Vec<String>>,
+    pub apps: Option<Vec<String>>,
+}
+
 /// A key's project, as far as any host reads it: the two values a key in it carries.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ProjectRecord {

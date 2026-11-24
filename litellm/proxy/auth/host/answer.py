@@ -94,7 +94,7 @@ async def _key_reads(call: RustAuth, step: RustAuthStep, host: PythonAuthHost) -
         case RustAuthStep.KeyTeam(team_id=team_id):
             call.found_row(await host.key_team(team_id))
         case RustAuthStep.ObjectPermission(id=object_permission_id):
-            call.found_row(await host.object_permission(object_permission_id))
+            call.object_permission(await host.object_permission(object_permission_id))
         case RustAuthStep.Project(project_id=project_id):
             call.project(await host.project(project_id))
         case _:

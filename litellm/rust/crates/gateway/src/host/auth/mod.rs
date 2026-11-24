@@ -28,7 +28,7 @@ use litellm_gateway_auth_core::{
             AliasRead, DelegatedTeam, FinishedJwt, IdentityRead, ManagedAgent, ModelAccess, Org,
             RegisteredAgent, TeamRead, UserLookup, UserRead,
         },
-        key::{Owner, ProjectRecord},
+        key::{ObjectPermissionRecord, Owner, ProjectRecord},
     },
 };
 use litellm_redis_store::auth_cache::CachedKey;
@@ -50,7 +50,6 @@ impl Rows for NativeRows {
     type User = Infallible;
     type Team = Infallible;
     type EndUser = ();
-    type ObjectPermission = Infallible;
     type Membership = Infallible;
 }
 
@@ -303,7 +302,7 @@ impl AuthHost for NativeAuthHost {
         declined("validated_end_user_id")
     }
 
-    async fn object_permission(&self, _: &str) -> Result<Option<Infallible>, Error> {
+    async fn object_permission(&self, _: &str) -> Result<Option<ObjectPermissionRecord>, Error> {
         declined("object_permission")
     }
 

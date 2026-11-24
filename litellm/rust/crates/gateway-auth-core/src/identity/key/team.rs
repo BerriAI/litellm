@@ -19,5 +19,5 @@ pub(super) async fn read<H: AuthHost>(
         None => None,
         Some(id) => host.object_permission(id).await?,
     };
-    Ok(TeamGrant::KeyCopy(permission))
+    Ok(TeamGrant::KeyCopy(permission.map(Box::new)))
 }

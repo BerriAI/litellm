@@ -9,7 +9,7 @@ from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.models.team import LiteLLM_TeamTableCachedObj
 from litellm.models.user import LiteLLM_UserTable
 from litellm.proxy.auth.host import identity as auth_identity
-from litellm.proxy.auth.host.facts import EndUserRow
+from litellm.proxy.auth.host.facts import EndUserRow, ObjectPermissionFields
 from litellm.proxy.auth.host.python import PythonAuthHost
 from litellm.rust_bridge._native import RustDenial, RustIdentity, RustKeyContext, RustProject, RustTeamGrant
 from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
@@ -105,9 +105,10 @@ async def test_unloadable_team_keeps_the_keys_metadata_with_the_permission_it_na
     permission: Final = LiteLLM_ObjectPermissionTable(object_permission_id="op-1")
     key: Final = UserAPIKeyAuth(token="hashed", team_id="t", team_metadata={"guardrails": ["g"]})
 
-    token: Final = await project_outcome(
-        RustIdentity.VirtualKey(context=_context(key, team=RustTeamGrant.KeyCopy(object_permission=permission))),
-    )
+    fields: Final = ObjectPermissionFields(**permission.model_dump())
+    grant: Final = RustTeamGrant.KeyCopy(object_permission=fields)
+
+    token: Final = await project_outcome(RustIdentity.VirtualKey(context=_context(key, team=grant)))
 
     assert (token.team_object_permission, token.team_metadata) == (permission, {"guardrails": ["g"]})
 
