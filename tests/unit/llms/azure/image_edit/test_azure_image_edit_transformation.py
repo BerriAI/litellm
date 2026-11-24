@@ -311,7 +311,7 @@ def test_azure_image_edit_drops_markup_when_drop_params_is_set():
 
 
 def test_azure_image_edit_rejects_markup_without_drop_params(monkeypatch):
-    """Without drop_params, markup on Azure fails locally as an unsupported param instead of reaching Azure."""
+    """Without drop_params, the image edit param check reports markup as unsupported for Azure."""
     monkeypatch.setattr(litellm, "drop_params", None)
 
     with pytest.raises(litellm.UnsupportedParamsError, match="markup"):
