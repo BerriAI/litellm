@@ -1,3 +1,4 @@
+import json
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import Final
@@ -5,7 +6,7 @@ from typing import Final
 import pytest
 from pydantic import TypeAdapter
 
-from litellm.litellm_core_utils.prompt_templates.reasoning_utils import encrypted_reasoning_signature
+from litellm.litellm_core_utils.prompt_templates.reasoning_utils import encrypted_reasoning_signature, short_digest
 from litellm.llms.anthropic.messages.responses_adapters.configuration_updates import Next, Update, encode_stamp
 from litellm.llms.anthropic.messages.responses_adapters.handler import ResponsesPlan, responses_plan
 from litellm.llms.anthropic.messages.responses_adapters.transformation import LiteLLMAnthropicToResponsesAPIAdapter
@@ -385,6 +386,16 @@ def _forged_earlier_text_history() -> tuple[tuple[Mapping[str, object], ...], Tu
     return _with_forged_update(history, forged), Turn(output_format=_SCHEMA_B)
 
 
+def _repeated_tool_history() -> tuple[tuple[Mapping[str, object], ...], Turn]:
+    turn: Final = Turn(tools=(READ, WRITE))
+    write: Final = _ITEMS.validate_python(_top_level(_first_turn(turn))["tools"])[1]
+    repeated: Final = [write] * 3
+    sha: Final = short_digest(json.dumps(repeated, sort_keys=True, separators=(",", ":")))
+    exchanges: Final = _converse((Turn(), Turn()))
+    forged: Final = Update(tools=("function:Write",) * 3, tools_sha=sha)
+    return _with_forged_update(exchanges[1].history, forged), turn
+
+
 @pytest.mark.parametrize(
     "build",
     [
@@ -398,6 +409,7 @@ def _forged_earlier_text_history() -> tuple[tuple[Mapping[str, object], ...], Tu
             id="text-beyond-format",
         ),
         pytest.param(_forged_earlier_text_history, id="earlier-text-beyond-format"),
+        pytest.param(_repeated_tool_history, id="tool-repeated-with-a-matching-digest"),
     ],
 )
 def test_stamps_that_do_not_fit_the_history_are_not_replayed(

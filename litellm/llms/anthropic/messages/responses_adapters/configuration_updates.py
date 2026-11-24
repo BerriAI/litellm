@@ -274,11 +274,13 @@ def _delta(
     defs: Mapping[str, JsonObject],
     accepts_effort: EffortCheck,
 ) -> Update | None:
+    effective_tools: Final = (*base.tools, *chain.from_iterable(update.tools for update in updates))
+    if len(frozenset(effective_tools)) != len(effective_tools) or not frozenset(effective_tools) <= defs.keys():
+        return None
     if not _verified_group(base.tools, base.tools_sha, defs):
         return None
     if not all(_verified_group(update.tools, update.tools_sha, defs) for update in updates):
         return None
-    effective_tools: Final = (*base.tools, *chain.from_iterable(update.tools for update in updates))
     added: Final = tuple(tool for tool in current.tools if tool_identity(tool) not in effective_tools)
     if any(tool.get("type") != _ADDABLE_TOOL_TYPE for tool in added):
         return None
