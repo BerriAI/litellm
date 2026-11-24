@@ -2,21 +2,29 @@
 Unit Tests for the max parallel request limiter v1 for the proxy
 """
 
+import asyncio
+import contextvars
 import itertools
-from collections.abc import Callable, Iterator, Mapping
+import types
+from collections.abc import Awaitable, Callable, Iterator, Mapping
 from datetime import datetime
 from typing import Final
+from unittest.mock import patch
 
 import pytest
 
+import litellm
 from litellm.caching.caching import DualCache
 from litellm.constants import USAGE_ONLY_SETTLEMENT_KEY
 from litellm.interactions.background_cost_polling import rebuild_logging_obj
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+from litellm.proxy.hooks import PROXY_HOOKS
 from litellm.proxy.hooks.parallel_request_limiter import (
     PROXY_MaxParallelRequestsHandler,
 )
+from litellm.proxy.hooks.parallel_request_limiter_v3 import ParallelRequestLimiterHook
 from litellm.proxy.utils import InternalUsageCache, ProxyLogging, hash_token
 from litellm.types.utils import CallTypes, EmbeddingResponse, ModelResponse, TextCompletionResponse, Usage
 
@@ -530,3 +538,93 @@ async def test_a_rejected_realtime_attempt_does_not_free_a_slot_it_never_took():
     await proxy_logging_obj.arelease_responses_websocket_slot(auth)
     after_socket_close = await handler.internal_usage_cache.async_get_cache(key=bucket, litellm_parent_otel_span=None)
     assert after_socket_close["current_requests"] == 0, after_socket_close
+
+
+def _legacy_limiter(internal_usage_cache: InternalUsageCache) -> PROXY_MaxParallelRequestsHandler:
+    return PROXY_MaxParallelRequestsHandler(internal_usage_cache, clock=_frozen_clock)
+
+
+def _proxy_logging_with(
+    monkeypatch: pytest.MonkeyPatch, limiter: Callable[[InternalUsageCache], object]
+) -> ProxyLogging:
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setitem(PROXY_HOOKS, "parallel_request_limiter", limiter)
+    proxy_logging_obj: Final = ProxyLogging(user_api_key_cache=DualCache())
+    with patch("litellm.proxy.proxy_server.prisma_client", None):
+        proxy_logging_obj._add_proxy_hooks(llm_router=None)
+    ProxyLogging._callback_capabilities_cache.clear()
+    return proxy_logging_obj
+
+
+async def _admitted(proxy_logging_obj: ProxyLogging, auth: UserAPIKeyAuth) -> bool:
+    try:
+        await proxy_logging_obj.pre_call_hook(
+            user_api_key_dict=auth, data={"model": "gpt-4o-mini"}, call_type="acompletion"
+        )
+    except ProxyRateLimitError:
+        return False
+    return True
+
+
+async def _hang_up_before_the_first_chunk(proxy_logging_obj: ProxyLogging, auth: UserAPIKeyAuth) -> None:
+    await ProxyBaseLLMRequestProcessing.finalize_streaming_generator_cleanup(
+        request=None,
+        request_data={},
+        response=types.SimpleNamespace(chunks=[], messages=None),
+        stream_completed=False,
+        client_disconnected=True,
+        user_api_key_dict=auth,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+
+async def _in_its_own_request(step: Callable[[], Awaitable[object]]) -> object:
+    return await asyncio.create_task(step(), context=contextvars.Context())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("limiter", [ParallelRequestLimiterHook, _legacy_limiter], ids=["default", "legacy"])
+async def test_a_stream_dropped_before_its_first_chunk_frees_the_slot_it_took_exactly_once(
+    monkeypatch: pytest.MonkeyPatch, limiter: Callable[[InternalUsageCache], object]
+) -> None:
+    """A client that hangs up before the first chunk leaves no callback to free its slot, so the stream cleanup frees
+    it (#50885). The cleanup can run again for the same stream and must not free a second slot."""
+    proxy_logging_obj: Final = _proxy_logging_with(monkeypatch, limiter)
+    auth: Final = UserAPIKeyAuth(api_key=hash_token("sk-two-slots"), max_parallel_requests=2)
+
+    async def a_request_still_in_flight() -> bool:
+        return await _admitted(proxy_logging_obj, auth)
+
+    async def a_stream_dropped_before_its_first_chunk() -> bool:
+        admitted: Final = await _admitted(proxy_logging_obj, auth)
+        await _hang_up_before_the_first_chunk(proxy_logging_obj, auth)
+        await _hang_up_before_the_first_chunk(proxy_logging_obj, auth)
+        return admitted
+
+    assert await _in_its_own_request(a_request_still_in_flight)
+    assert await _in_its_own_request(a_stream_dropped_before_its_first_chunk)
+
+    assert await _in_its_own_request(a_request_still_in_flight), "the dropped stream still holds its slot"
+    assert not await _in_its_own_request(a_request_still_in_flight), "the dropped stream freed more than its own slot"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("limiter", [ParallelRequestLimiterHook, _legacy_limiter], ids=["default", "legacy"])
+async def test_a_refused_streams_cleanup_leaves_the_slot_of_the_request_that_holds_it(
+    monkeypatch: pytest.MonkeyPatch, limiter: Callable[[InternalUsageCache], object]
+) -> None:
+    proxy_logging_obj: Final = _proxy_logging_with(monkeypatch, limiter)
+    auth: Final = UserAPIKeyAuth(api_key=hash_token("sk-one-slot"), max_parallel_requests=1)
+
+    async def a_request_still_in_flight() -> bool:
+        return await _admitted(proxy_logging_obj, auth)
+
+    async def a_refused_stream_cleaned_up() -> bool:
+        admitted: Final = await _admitted(proxy_logging_obj, auth)
+        await _hang_up_before_the_first_chunk(proxy_logging_obj, auth)
+        return admitted
+
+    assert await _in_its_own_request(a_request_still_in_flight)
+    assert not await _in_its_own_request(a_refused_stream_cleaned_up)
+
+    assert not await _in_its_own_request(a_request_still_in_flight), "the refused stream freed a slot it never took"
