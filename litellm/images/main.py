@@ -963,11 +963,11 @@ def image_edit(
             extra_headers = dict(merged_extra_headers)
 
         # get llm provider logic
-        litellm_params: Final = GenericLiteLLMParams(**kwargs)
         model, custom_llm_provider, _, _ = get_llm_provider(
             model=model or "",
             custom_llm_provider=custom_llm_provider,
         )
+        litellm_params: Final = GenericLiteLLMParams(**kwargs, custom_llm_provider=custom_llm_provider)
 
         # Check for custom provider
         if custom_llm_provider in litellm._custom_providers:

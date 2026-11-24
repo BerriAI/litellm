@@ -155,26 +155,36 @@ def test_image_edit_rejects_quality_unless_dropped():
     assert b'name="prompt"\r\n\r\nadd a hat' in captured[0].content
 
 
-def test_image_edit_rejects_markup_unless_dropped(monkeypatch: pytest.MonkeyPatch) -> None:
-    from typing import Final
+def test_image_edit_rejects_markup_unless_dropped():
+    captured: list[httpx.Request] = []
 
-    from litellm.images.utils import ImageEditRequestUtils
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(200, json={"created": 1712697600, "data": [{"b64_json": "aW1n"}]})
 
-    monkeypatch.setattr(litellm, "drop_params", None)
+    client = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(handler)))
 
     with pytest.raises(litellm.UnsupportedParamsError, match="markup"):
-        ImageEditRequestUtils.get_optional_params_image_edit(
-            model=MODEL,
-            image_edit_provider_config=HostedVLLMImageEditConfig(),
-            image_edit_optional_params={"markup": PNG_BYTES},
-            drop_params=False,
+        litellm.image_edit(
+            model=f"hosted_vllm/{MODEL}",
+            image=PNG_BYTES,
+            prompt="add a hat",
+            api_base="http://localhost:8091",
+            client=client,
+            markup=PNG_BYTES,
         )
+    assert captured == []
 
-    dropped: Final = ImageEditRequestUtils.get_optional_params_image_edit(
-        model=MODEL,
-        image_edit_provider_config=HostedVLLMImageEditConfig(),
-        image_edit_optional_params={"markup": PNG_BYTES, "n": 1},
+    litellm.image_edit(
+        model=f"hosted_vllm/{MODEL}",
+        image=PNG_BYTES,
+        prompt="add a hat",
+        api_base="http://localhost:8091",
+        client=client,
+        markup=PNG_BYTES,
         drop_params=True,
     )
 
-    assert dropped == {"n": 1}
+    assert len(captured) == 1
+    assert b'name="markup"' not in captured[0].content
+    assert PNG_BYTES in captured[0].content

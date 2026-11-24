@@ -484,8 +484,13 @@ def test_transform_image_edit_request_sends_first_file_of_a_markup_list(
 
 
 @pytest.mark.parametrize("field_name", ["mask", "markup"])
+@pytest.mark.parametrize(
+    "reference",
+    [{"image_url": "https://images.example/overlay.png"}, [{"image_url": "https://images.example/overlay.png"}]],
+    ids=["single", "list"],
+)
 def test_transform_image_edit_request_rejects_json_image_reference_as_bad_request(
-    image_edit_config: OpenAIImageEditConfig, field_name: str
+    image_edit_config: OpenAIImageEditConfig, field_name: str, reference: object
 ) -> None:
     """A JSON image reference cannot be a multipart file part, so the caller gets a 400 instead of a failed send."""
     with pytest.raises(litellm.BadRequestError, match=f"'{field_name}' must be an uploaded image file"):
@@ -493,7 +498,7 @@ def test_transform_image_edit_request_rejects_json_image_reference_as_bad_reques
             model="gpt-image-2.5-flare",
             prompt="Apply the marked changes",
             image=[b"\x89PNG\r\n\x1a\n"],
-            image_edit_optional_request_params={field_name: {"image_url": "https://images.example/overlay.png"}},
+            image_edit_optional_request_params={field_name: reference},
             litellm_params=GenericLiteLLMParams(),
             headers={},
         )
