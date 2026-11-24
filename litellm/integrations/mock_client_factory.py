@@ -8,14 +8,19 @@ making actual network calls.
 
 import asyncio
 import json
-from collections.abc import AsyncIterable, Iterable
+from collections.abc import AsyncIterable, Callable, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import Final, cast
+from typing import TYPE_CHECKING, Final, cast
 
 import httpx
+from httpx._types import RequestFiles
 
 from litellm._logging import verbose_logger
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
 
 @dataclass
@@ -26,13 +31,13 @@ class MockClientConfig:
     env_var: str  # e.g., "GCS_MOCK", "LANGFUSE_MOCK"
     default_latency_ms: int = 100  # Default mock latency in milliseconds
     default_status_code: int = 200  # Default HTTP status code
-    default_json_data: dict | None = None  # Default JSON response data
+    default_json_data: Mapping[str, object] | None = None  # Default JSON response data
     url_matchers: list[str] | None = None  # List of strings to match in URLs (e.g., ["storage.googleapis.com"])
     patch_async_handler: bool = True  # Whether to patch AsyncHTTPHandler.post
     patch_sync_client: bool = False  # Whether to patch httpx.Client.post
     patch_http_handler: bool = False  # Whether to patch HTTPHandler.post (for sync calls that use HTTPHandler)
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         """Ensure url_matchers is a list."""
         if self.url_matchers is None:
             self.url_matchers = []
@@ -44,10 +49,10 @@ class MockResponse:
     def __init__(
         self,
         status_code: int = 200,
-        json_data: dict | None = None,
-        url: str | None = None,
+        json_data: Mapping[str, object] | None = None,
+        url: str | httpx.URL | None = None,
         elapsed_seconds: float = 0.0,
-    ):
+    ) -> None:
         self.status_code = status_code
         self._json_data = json_data or {"status": "success"}
         self.headers = httpx.Headers({})
@@ -69,7 +74,7 @@ class MockResponse:
         """Return response content."""
         return self._content
 
-    def json(self) -> dict:
+    def json(self) -> Mapping[str, object]:
         """Return JSON response data."""
         return self._json_data
 
@@ -77,13 +82,13 @@ class MockResponse:
         """Read response content."""
         return self._content
 
-    def raise_for_status(self):
+    def raise_for_status(self) -> None:
         """Raise exception for error status codes."""
         if self.status_code >= 400:
             raise Exception(f"HTTP {self.status_code}")
 
 
-def _is_url_match(url, matchers: list[str]) -> bool:
+def _is_url_match(url: str | httpx.URL, matchers: list[str]) -> bool:
     """Check if URL matches any of the provided matchers."""
     try:
         parsed_url: Final = httpx.URL(url) if isinstance(url, str) else url
@@ -105,7 +110,7 @@ def _is_url_match(url, matchers: list[str]) -> bool:
         return False
 
 
-def create_mock_client_factory(config: MockClientConfig):
+def create_mock_client_factory(config: MockClientConfig) -> tuple[Callable[[], None], Callable[[], bool]]:
     """
     Factory function that creates mock client functions based on configuration.
 
@@ -125,22 +130,22 @@ def create_mock_client_factory(config: MockClientConfig):
     _MOCK_LATENCY_SECONDS: Final = float(os.getenv(latency_env, str(config.default_latency_ms))) / 1000.0
 
     # Create URL matcher function
-    def _is_mock_url(url) -> bool:
+    def _is_mock_url(url: str | httpx.URL) -> bool:
         # url_matchers is guaranteed to be a list after __post_init__
         return _is_url_match(url, cast(list[str], config.url_matchers))
 
     # Create async handler mock
     async def _mock_async_handler_post(
-        self,
+        self: "AsyncHTTPHandler",
         url,
-        data=None,
-        json=None,
-        params=None,
-        headers=None,
-        timeout=None,
-        stream=False,
-        logging_obj=None,
-        files=None,
+        data: dict[str, object] | str | bytes | None = None,
+        json: dict[str, object] | None = None,
+        params: dict[str, object] | None = None,
+        headers: dict[str, object] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        stream: bool = False,
+        logging_obj: "LiteLLMLoggingObject | None" = None,
+        files: RequestFiles | None = None,
         content: str | bytes | Iterable[bytes] | AsyncIterable[bytes] | None = None,
     ):
         """Monkey-patched AsyncHTTPHandler.post that intercepts API calls."""
@@ -170,7 +175,7 @@ def create_mock_client_factory(config: MockClientConfig):
         raise RuntimeError("Original AsyncHTTPHandler.post not available")
 
     # Create sync client mock
-    def _mock_sync_client_post(self, url, **kwargs):
+    def _mock_sync_client_post(self: httpx.Client, url: httpx.URL | str, **kwargs):
         """Monkey-patched httpx.Client.post that intercepts API calls."""
         if _is_mock_url(url):
             verbose_logger.info("[%s MOCK] POST to %s (sync)", config.name, url)
@@ -185,17 +190,17 @@ def create_mock_client_factory(config: MockClientConfig):
 
     # Create HTTPHandler mock (for sync calls that use HTTPHandler.post)
     def _mock_http_handler_post(
-        self,
+        self: "HTTPHandler",
         url,
-        data=None,
-        json=None,
-        params=None,
-        headers=None,
-        timeout=None,
-        stream=False,
-        files=None,
+        data: dict[str, object] | str | bytes | None = None,
+        json: dict[str, object] | str | list[object] | None = None,
+        params: dict[str, object] | None = None,
+        headers: dict[str, object] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        stream: bool = False,
+        files: dict[str, object] | RequestFiles | None = None,
         content: str | bytes | Iterable[bytes] | AsyncIterable[bytes] | None = None,
-        logging_obj=None,
+        logging_obj: "LiteLLMLoggingObject | None" = None,
     ):
         """Monkey-patched HTTPHandler.post that intercepts API calls."""
         if isinstance(url, str) and _is_mock_url(url):
@@ -226,7 +231,7 @@ def create_mock_client_factory(config: MockClientConfig):
         raise RuntimeError("Original HTTPHandler.post not available")
 
     # Create mock client initialization function
-    def create_mock_client():
+    def create_mock_client() -> None:
         """Initialize the mock client by patching HTTP handlers."""
         nonlocal \
             _original_async_handler_post, \

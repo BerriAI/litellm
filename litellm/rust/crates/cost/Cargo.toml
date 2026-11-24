@@ -6,16 +6,19 @@ license.workspace = true
 repository.workspace = true
 
 [features]
-serde = ["dep:serde"]
+serde = ["dep:serde", "dep:serde_with", "jiff/serde"]
 schema = ["serde", "dep:schemars"]
 
 [dependencies]
-jiff = { version = "0.2.37", default-features = false, features = ["std"] }
+jiff = { version = "0.2.37", default-features = false, features = ["std", "tzdb-bundle-always"] }
+litellm-fnmatch.workspace = true
 schemars = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }
+serde_with = { workspace = true, optional = true }
 thiserror.workspace = true
 strum.workspace = true
 
 [dev-dependencies]
 rstest.workspace = true
+serde.workspace = true
 serde_json.workspace = true

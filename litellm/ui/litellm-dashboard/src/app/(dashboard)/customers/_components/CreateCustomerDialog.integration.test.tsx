@@ -9,6 +9,7 @@ import {
   screen,
   testQueryClient,
   waitFor,
+  within,
 } from "../../../../../tests/test-utils";
 import CreateCustomerDialog from "./CreateCustomerDialog";
 
@@ -42,8 +43,10 @@ beforeEach(() => {
   testQueryClient.clear();
   vi.stubGlobal(
     "fetch",
-    vi.fn(async (request: Request) => {
+    vi.fn<typeof fetch>(async (input, init) => {
+      const request = new Request(input, init);
       const url = new URL(request.url);
+      if (url.pathname === "/models") return Response.json({ data: [] });
       if (url.pathname.endsWith("/.well-known/litellm-ui-config")) {
         return Response.json({ server_root_path: "", proxy_base_url: "", admin_ui_disabled: false });
       }
@@ -137,7 +140,8 @@ describe("CreateCustomerDialog", () => {
       screen.getByRole("combobox", { name: "Customer organization limits" }),
       "Enter custom limits instead",
     );
-    fireEvent.change(screen.getByLabelText("Spend limit (USD)"), { target: { value: "40" } });
+    const limits = within(screen.getByRole("region", { name: "Customer organization limits" }));
+    fireEvent.change(limits.getByRole("spinbutton", { name: "Max Budget (USD)" }), { target: { value: "40" } });
     await userEvent.click(screen.getByRole("button", { name: "Create customer" }));
     await waitFor(() => expect(onCreated).toHaveBeenCalledOnce());
     expect(creations[0]).toMatchObject({ budget: { max_budget: 40, budget_duration: "1mo" } });
@@ -157,13 +161,16 @@ describe("CreateCustomerDialog", () => {
 
   it("previews profile limits and preserves custom values when switching modes", async () => {
     const user = renderCustomerForm();
-    fireEvent.change(await screen.findByLabelText("Spend limit (USD)"), { target: { value: "15000" } });
-    fireEvent.change(screen.getByLabelText("Tokens per minute"), { target: { value: "25000" } });
-    fireEvent.change(screen.getByLabelText("Requests per minute"), { target: { value: "120" } });
-    fireEvent.change(screen.getByLabelText("Group 2 tokens per minute"), { target: { value: "5000" } });
-    fireEvent.change(screen.getByLabelText("Group 2 requests per minute"), { target: { value: "10" } });
-    await user.click(screen.getByRole("combobox", { name: "Reset period" }));
-    await user.click(await screen.findByRole("option", { name: "/ year" }));
+    const limits = within(screen.getByRole("region", { name: "Customer organization limits" }));
+    const group = within(screen.getByRole("row", { name: "default_user" }));
+    fireEvent.change(await limits.findByRole("spinbutton", { name: "Max Budget (USD)" }), {
+      target: { value: "15000" },
+    });
+    fireEvent.change(limits.getByRole("spinbutton", { name: "Tokens per minute" }), { target: { value: "25000" } });
+    fireEvent.change(limits.getByRole("spinbutton", { name: "Requests per minute" }), { target: { value: "120" } });
+    fireEvent.change(group.getByRole("spinbutton", { name: "Tokens per minute" }), { target: { value: "5000" } });
+    fireEvent.change(group.getByRole("spinbutton", { name: "Requests per minute" }), { target: { value: "10" } });
+    await chooseSelectOption(user, limits.getByRole("combobox", { name: "Reset period" }), "/ year");
     const profile = screen.getByRole("combobox", { name: "Customer organization limits" });
     await waitFor(() => expect(profile).toBeEnabled());
     await user.click(profile);
@@ -173,14 +180,13 @@ describe("CreateCustomerDialog", () => {
     expect(profile).toHaveTextContent("$12,000/yr");
     expect(profile).toHaveTextContent("50K TPM");
     expect(profile).toHaveTextContent("0 RPM");
-    expect(screen.queryByLabelText("Spend limit (USD)")).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("Tokens per minute")).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("Requests per minute")).not.toBeInTheDocument();
-    await user.click(profile);
-    await user.keyboard("e{Enter}");
-    expect(screen.getByLabelText("Spend limit (USD)")).toHaveValue(15000);
-    expect(screen.getByLabelText("Tokens per minute")).toHaveValue(25000);
-    expect(screen.getByLabelText("Requests per minute")).toHaveValue(120);
+    expect(limits.queryByRole("spinbutton", { name: "Max Budget (USD)" })).not.toBeInTheDocument();
+    expect(limits.queryByRole("spinbutton", { name: "Tokens per minute" })).not.toBeInTheDocument();
+    expect(limits.queryByRole("spinbutton", { name: "Requests per minute" })).not.toBeInTheDocument();
+    await chooseSelectOption(user, profile, "Enter custom limits instead");
+    expect(limits.getByRole("spinbutton", { name: "Max Budget (USD)" })).toHaveValue(15000);
+    expect(limits.getByRole("spinbutton", { name: "Tokens per minute" })).toHaveValue(25000);
+    expect(limits.getByRole("spinbutton", { name: "Requests per minute" })).toHaveValue(120);
     await user.click(screen.getByRole("button", { name: "Create customer" }));
     await waitFor(() => expect(onCreated).toHaveBeenCalledOnce());
     expect(creations[0]).toMatchObject({
@@ -219,7 +225,9 @@ describe("CreateCustomerDialog", () => {
     await user.click(screen.getByRole("option", { name: "Pause, allow increase requests" }));
     await user.click(screen.getByRole("button", { name: "Add budget group" }));
     fireEvent.change(screen.getByLabelText("Group name 4"), { target: { value: "custom_user" } });
-    fireEvent.change(screen.getByLabelText("Group 4 yearly budget (USD)"), { target: { value: "300" } });
+    const group = within(screen.getByRole("row", { name: "custom_user" }));
+    fireEvent.change(group.getByRole("spinbutton", { name: "Max Budget (USD)" }), { target: { value: "300" } });
+    await chooseSelectOption(user, group.getByRole("combobox", { name: "Reset period" }), "/ year");
     fireEvent.keyDown(screen.getByRole("combobox", { name: "New members join" }), {
       key: "ArrowDown",
     });
@@ -251,11 +259,14 @@ describe("CreateCustomerDialog", () => {
     rejectCreation = true;
     const user = renderCustomerForm();
     fireEvent.change(screen.getByLabelText("Organization ID (optional)"), { target: { value: "existing-id" } });
-    fireEvent.change(screen.getByLabelText("Group 2 yearly budget (USD)"), { target: { value: "450" } });
+    const group = within(screen.getByRole("row", { name: "default_user" }));
+    fireEvent.change(group.getByRole("spinbutton", { name: "Max Budget (USD)" }), { target: { value: "450" } });
+    await chooseSelectOption(user, group.getByRole("combobox", { name: "Reset period" }), "/ year");
     await user.click(screen.getByRole("button", { name: "Create customer" }));
     await waitFor(() => expect(creations).toHaveLength(1));
     expect(await screen.findByRole("button", { name: "Create customer" })).toBeEnabled();
-    expect(screen.getByLabelText("Group 2 yearly budget (USD)")).toHaveValue(450);
+    expect(group.getByRole("spinbutton", { name: "Max Budget (USD)" })).toHaveValue(450);
+    expect(group.getByRole("combobox", { name: "Reset period" })).toHaveTextContent("/ yr");
     expect(onCreated).not.toHaveBeenCalled();
     rejectCreation = false;
     fireEvent.change(screen.getByLabelText("Organization ID (optional)"), { target: { value: "new-id" } });
@@ -267,13 +278,16 @@ describe("CreateCustomerDialog", () => {
       default_budgets: expect.arrayContaining([
         expect.objectContaining({
           name: "default_user",
-          budget_limits: expect.arrayContaining([{ budget_duration: "12mo", max_budget: 450 }]),
+          max_budget: 450,
+          budget_duration: "12mo",
         }),
       ]),
     });
     await user.click(screen.getByRole("button", { name: "Open customer form" }));
     expect(screen.getByLabelText("Customer name")).toHaveValue("");
-    expect(screen.getByLabelText("Group 2 yearly budget (USD)")).toHaveValue(500);
+    const reopenedGroup = within(screen.getByRole("row", { name: "default_user" }));
+    expect(reopenedGroup.getByRole("spinbutton", { name: "Max Budget (USD)" })).toHaveValue(50);
+    expect(reopenedGroup.getByRole("combobox", { name: "Reset period" })).toHaveTextContent("/ mo");
     expect(screen.getByRole("combobox", { name: "New members join" })).toHaveTextContent("default_user");
   });
 });

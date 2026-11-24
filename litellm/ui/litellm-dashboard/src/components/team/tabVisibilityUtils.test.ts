@@ -26,6 +26,7 @@ describe("team_info_tabs", () => {
       expect(tabs).toEqual([
         TEAM_INFO_TAB_KEYS.OVERVIEW,
         TEAM_INFO_TAB_KEYS.ACTIVITY,
+        TEAM_INFO_TAB_KEYS.LENS,
         TEAM_INFO_TAB_KEYS.MY_USER,
         TEAM_INFO_TAB_KEYS.VIRTUAL_KEYS,
       ]);
@@ -36,9 +37,11 @@ describe("team_info_tabs", () => {
       expect(tabs).toEqual([
         TEAM_INFO_TAB_KEYS.OVERVIEW,
         TEAM_INFO_TAB_KEYS.ACTIVITY,
+        TEAM_INFO_TAB_KEYS.LENS,
         TEAM_INFO_TAB_KEYS.MY_USER,
         TEAM_INFO_TAB_KEYS.VIRTUAL_KEYS,
         TEAM_INFO_TAB_KEYS.MEMBERS,
+        TEAM_INFO_TAB_KEYS.MEMBER_DEFAULTS,
         TEAM_INFO_TAB_KEYS.MEMBER_PERMISSIONS,
         TEAM_INFO_TAB_KEYS.SETTINGS,
       ]);

@@ -29,7 +29,7 @@ from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module expo
     get_team_object_from_cache,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET
+from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET, UserApiKeyCache
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.management_helpers.access_group_team_sync import invalidate_access_group_cache
 from litellm.proxy.management_helpers.resource_display_names import (
@@ -39,7 +39,8 @@ from litellm.proxy.management_helpers.resource_display_names import (
     vector_store_display_names,
 )
 from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
-from litellm.proxy.utils import PrismaClient, get_prisma_client_or_throw
+from litellm.proxy.utils import PrismaClient, ProxyLogging, get_prisma_client_or_throw
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.repositories.access_group_repository import AccessGroupRepository
 from litellm.repositories.table_repositories import TeamRepository
 from litellm.types.access_group import (
@@ -452,13 +453,13 @@ def _detach_access_group_from_agent_registry(agent_ids: Sequence[str], access_gr
 async def _patch_team_caches_add_access_group(
     team_ids: list[str],
     access_group_id: str,
-    user_api_key_cache,
-    proxy_logging_obj,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging,
 ) -> None:
     """Patch cached team objects to include access_group_id."""
     for team_id in team_ids:
         cached_team = await get_team_object_from_cache(
-            key=f"team_id:{team_id}",
+            key=AuthObject.team(team_id),
             user_api_key_cache=user_api_key_cache,
             parent_otel_span=None,
         )
@@ -481,13 +482,13 @@ async def _patch_team_caches_add_access_group(
 async def _patch_team_caches_remove_access_group(
     team_ids: list[str],
     access_group_id: str,
-    user_api_key_cache,
-    proxy_logging_obj,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging,
 ) -> None:
     """Patch cached team objects to remove access_group_id."""
     for team_id in team_ids:
         cached_team = await get_team_object_from_cache(
-            key=f"team_id:{team_id}",
+            key=AuthObject.team(team_id),
             user_api_key_cache=user_api_key_cache,
             parent_otel_span=None,
         )
@@ -505,13 +506,13 @@ async def _patch_team_caches_remove_access_group(
 async def _patch_key_caches_add_access_group(
     key_tokens: list[str],
     access_group_id: str,
-    user_api_key_cache,
-    proxy_logging_obj,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging,
 ) -> None:
     """Patch cached key objects to include access_group_id."""
     for token in key_tokens:
         cached_key = await user_api_key_cache.async_get_cache(
-            key=token,
+            key=AuthObject.virtual_key(token),
             model_type=UserAPIKeyAuth,
         )
         if cached_key is None:
@@ -534,13 +535,13 @@ async def _patch_key_caches_add_access_group(
 async def _patch_key_caches_remove_access_group(
     key_tokens: list[str],
     access_group_id: str,
-    user_api_key_cache,
-    proxy_logging_obj,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging,
 ) -> None:
     """Patch cached key objects to remove access_group_id."""
     for token in key_tokens:
         cached_key = await user_api_key_cache.async_get_cache(
-            key=token,
+            key=AuthObject.virtual_key(token),
             model_type=UserAPIKeyAuth,
         )
         if cached_key is not None and cached_key.access_group_ids:
@@ -682,7 +683,7 @@ async def update_access_group(
     prisma_client: Final = get_prisma_client_or_throw(CommonProxyErrors.db_not_connected_error.value)
 
     update_fields: Final = _explicitly_set_fields(data)
-    update_data: Final[dict] = {"updated_by": user_api_key_dict.user_id}
+    update_data: Final[dict[str, object]] = {"updated_by": user_api_key_dict.user_id}
     for field, value in update_fields.items():
         if field in (
             "assigned_team_ids",

@@ -13,7 +13,7 @@ from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mappi
 from litellm.types.vector_stores import RETRIEVAL_QUERY_PARAMS, VectorStoreSearchQueryImage
 
 _QUERY_IMAGE: Final = TypeAdapter(VectorStoreSearchQueryImage)
-_Query: Final = TypeVar("_Query", bound=str | Sequence[str])
+_Query = TypeVar("_Query", bound=str | Sequence[str])
 _CALLER_QUERY_PARAMS: Final = ("query_image", *RETRIEVAL_QUERY_PARAMS)
 _BASE64_LINE_BREAKS: Final = str.maketrans("", "", "\r\n")
 

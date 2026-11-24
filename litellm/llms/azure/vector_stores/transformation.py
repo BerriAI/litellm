@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import Final
 
 from litellm.llms.azure.common_utils import BaseAzureLLM
@@ -9,7 +10,7 @@ class AzureOpenAIVectorStoreConfig(OpenAIVectorStoreConfig):
     def get_complete_url(
         self,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> str:
         return BaseAzureLLM.get_base_azure_url(
             api_base=api_base,
@@ -22,5 +23,5 @@ class AzureOpenAIVectorStoreConfig(OpenAIVectorStoreConfig):
         url: Final = f"{path}/{encoded_vector_store_id}"
         return f"{url}?{query}" if query else url
 
-    def validate_environment(self, headers: dict, litellm_params: GenericLiteLLMParams | None) -> dict:
+    def validate_environment(self, headers: dict, litellm_params: GenericLiteLLMParams | None) -> dict[str, str]:
         return BaseAzureLLM.base_validate_azure_environment(headers=headers, litellm_params=litellm_params)

@@ -90,9 +90,6 @@ class SensitiveDataMasker:
         if excluded_keys and key in excluded_keys:
             return False
 
-        # Split on underscores and hyphens (and, when opted in, camelCase boundaries too) and check whether any
-        # segment matches the pattern. This avoids false positives like "max_tokens" matching "token"
-        # but still catches "api_key", "access_token" and, with split_camel_case, "apiKey", "APIKey" and "AWSSecret".
         key_lower: Final = str(key).lower().replace("-", "_")
         camel_lower: Final = (
             _CAMEL_BOUNDARY.sub("_", str(key)).lower().replace("-", "_") if self.split_camel_case else key_lower

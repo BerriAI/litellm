@@ -16,7 +16,14 @@ from litellm.integrations.anthropic_cache_control_hook import (
     deployment_prompt_cache_breakpoint_support,
     targets_openai_api,
 )
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, normalize_drop_params, process_response_headers
+from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
+    length_of,
+    normalize_drop_params,
+    process_response_headers,
+    subscript,
+    sum_of,
+)
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     safe_convert_created_field,
@@ -346,6 +353,23 @@ def _json_object_body(response: _JsonObjectResponse) -> dict[str, object]:
     return response.json()
 
 
+def _reasoning_summary(reasoning_content: object) -> object:
+    if length_of(reasoning_content) > 100:
+        return sum_of(subscript(reasoning_content, slice(100)), "...")
+    return reasoning_content
+
+
+def list_input_items_query_params(
+    after: str | None, before: str | None, include: Sequence[str] | None, limit: int, order: Literal["asc", "desc"]
+) -> dict[str, object]:
+    optional: Final = (("after", after), ("before", before), ("include[]", list(include) if include else None))
+    return {
+        **{key: value for key, value in optional if value is not None},
+        "limit": limit,
+        "order": order,
+    }
+
+
 class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
     @property
     def custom_llm_provider(self) -> LlmProviders:
@@ -435,7 +459,8 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
 
     @staticmethod
     def _requested_effort(reasoning: object) -> object:
-        return reasoning.get("effort") if isinstance(reasoning, Mapping) else getattr(reasoning, "effort", None)
+        mapping: Final = _json_object_or_none(reasoning)
+        return mapping.get("effort") if mapping is not None else getattr(reasoning, "effort", None)
 
     @staticmethod
     def _enforce_min_max_output_tokens(max_output_tokens: "int | None") -> "int | None":
@@ -450,7 +475,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             return OPENAI_RESPONSES_API_MIN_MAX_OUTPUT_TOKENS
         return max_output_tokens
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         """
         All OpenAI Responses API params are supported
         """
@@ -474,7 +499,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         response_api_optional_params: ResponsesAPIOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         return dict(
             self.map_openai_params_for_deployment(
                 response_api_optional_params, model, drop_params, declared_reasoning_efforts=None
@@ -499,7 +524,18 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         'none' on models that support it).
         Apply the same validation used by the chat completions path.
         """
-        params: Final = dict(response_api_optional_params)
+        drops_o_series_temperature: Final = (
+            self.custom_llm_provider == LlmProviders.OPENAI
+            and (drop_params or litellm.drop_params)
+            and "temperature" in response_api_optional_params
+            and response_api_optional_params["temperature"] not in (None, 1)
+            and litellm.openaiOSeriesConfig.is_model_o_series_model(model=model)
+        )
+        params: Final = {
+            key: value
+            for key, value in response_api_optional_params.items()
+            if key != "temperature" or not drops_o_series_temperature
+        }
 
         if "max_output_tokens" in params:
             params["max_output_tokens"] = self._enforce_min_max_output_tokens(params.get("max_output_tokens"))
@@ -986,7 +1022,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         # Input is expected to be either str or List, no single BaseModel expected
         return input
 
-    def _handle_reasoning_item(self, item: dict[str, Any]) -> Mapping[str, object]:
+    def _handle_reasoning_item(self, item: dict[str, object]) -> Mapping[str, object]:
         """
         Handle reasoning items specifically to filter out status=None using OpenAI's model.
         Issue: https://github.com/BerriAI/litellm/issues/13484
@@ -1000,11 +1036,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                 # Ensure required fields are present for ResponseReasoningItem
                 item_data: Final = dict(item)
                 if "summary" not in item_data:
-                    item_data["summary"] = (
-                        item_data.get("reasoning_content", "")[:100] + "..."
-                        if len(item_data.get("reasoning_content", "")) > 100
-                        else item_data.get("reasoning_content", "")
-                    )
+                    item_data["summary"] = _reasoning_summary(item_data.get("reasoning_content", ""))
 
                 # Create ResponseReasoningItem object from the item data
                 reasoning_item: Final = ResponseReasoningItem.model_validate(item_data)
@@ -1234,7 +1266,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         """
         Transform the delete response API request into a URL and data
 
@@ -1243,7 +1275,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         """
         encoded_response_id: Final = encode_url_path_segment(response_id, field_name="response_id")
         url: Final = f"{api_base}/{encoded_response_id}"
-        data: Final[dict] = {}
+        data: Final[dict[str, object]] = {}
         return url, data
 
     def transform_delete_response_api_response(
@@ -1315,27 +1347,16 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         include: list[str] | None = None,
         limit: int = 20,
         order: Literal["asc", "desc"] = "desc",
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         encoded_response_id: Final = encode_url_path_segment(response_id, field_name="response_id")
         url: Final = join_api_base(api_base, f"{encoded_response_id}/input_items")
-        params: Final[dict[str, object]] = {}
-        if after is not None:
-            params["after"] = after
-        if before is not None:
-            params["before"] = before
-        if include:
-            params["include"] = ",".join(include)
-        if limit is not None:
-            params["limit"] = limit
-        if order is not None:
-            params["order"] = order
-        return url, params
+        return url, list_input_items_query_params(after=after, before=before, include=include, limit=limit, order=order)
 
     def transform_list_input_items_response(
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-    ) -> dict:
+    ) -> dict[str, object]:
         try:
             return _json_object_body(raw_response)
         except Exception:
@@ -1350,7 +1371,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         """
         Transform the cancel response API request into a URL and data
 
@@ -1359,7 +1380,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         """
         encoded_response_id: Final = encode_url_path_segment(response_id, field_name="response_id")
         url: Final = join_api_base(api_base, f"{encoded_response_id}/cancel")
-        data: Final[dict] = {}
+        data: Final[dict[str, object]] = {}
         return url, data
 
     def transform_cancel_response_api_response(
@@ -1405,7 +1426,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         """
         Transform the compact response API request into a URL and data
 

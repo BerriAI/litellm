@@ -212,7 +212,7 @@ def pre_call_request() -> "NativeRequestRedis | None":
 
 def post_call_request() -> "NativeRequestRedis | None":
     batches: Final = active_request_redis_batches()
-    return None if batches is None else batches.native_post_call()
+    return None if batches is None else batches.native()
 
 
 def _auth(data: Mapping[str, object]) -> UserAPIKeyAuth | None:
@@ -665,7 +665,7 @@ async def _lookups(
     groups: Final = {candidate: limiter.model_group_resolver(candidate) for candidate in named}
     resolved: Final = tuple(dict.fromkeys(group or candidate for candidate, group in groups.items()))
     settings: Final = litellm.priority_reservation_settings
-    borrowers: Final = frozenset() if settings is None else settings.model_limit_borrowing_entities
+    borrowers: Final[frozenset[str]] = frozenset() if settings is None else settings.model_limit_borrowing_entities
     dynamic: Final = "dynamic" in (_member(limits, "rpm_limit_type"), _member(limits, "tpm_limit_type"))
     requested_group: Final = (groups.get(model) or model) if model else None
     ceiling: Final = (

@@ -194,7 +194,7 @@ class AnthropicExceptionMapping:
         if start < 0:
             return None
         try:
-            embedded, _ = _JSON_DECODER.raw_decode(raw_message, start)
+            embedded: Final = _PARSED_ERROR_BODY.validate_python(_JSON_DECODER.raw_decode(raw_message, start)[0])
         except ValueError:
             return None
         try:

@@ -2,14 +2,25 @@ import threading
 import time
 import uuid
 from collections import OrderedDict
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final
 
 import httpx
+from pydantic import TypeAdapter
 from typing_extensions import NotRequired, TypedDict
 
 from litellm._logging import verbose_proxy_logger
-from litellm.litellm_core_utils.core_helpers import attribute_or_none, decoded_json_object, iter_items, json_contains
+from litellm.litellm_core_utils.core_helpers import (
+    as_object_list,
+    as_str_mapping,
+    attribute_or_none,
+    decoded_json_object,
+    int_of,
+    iter_items,
+    json_contains,
+    require_get,
+    subscript,
+)
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
 )
@@ -30,6 +41,8 @@ GRAPH_SCOPE: Final = "https://graph.microsoft.com/.default"
 
 # Protection scope cache TTL in seconds (1 hour, per Microsoft recommendation).
 SCOPE_CACHE_TTL_SECONDS: Final = 3600.0
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class GraphTokenResponse(TypedDict):
@@ -79,11 +92,11 @@ class PurviewGuardrailBase:
         self.user_id_field = user_id_field
 
         # Token cache: (access_token, expires_at_epoch)
-        self._token_cache: tuple[str, float] | None = None
+        self._token_cache: tuple[object, float] | None = None
 
         # Protection scope cache: user_id -> (etag, scope_response, fetched_at)
         # Capped at 1000 entries (LRU eviction) to avoid unbounded growth.
-        self._scope_cache: OrderedDict[str, tuple[str, Mapping[str, object], float]] = OrderedDict()
+        self._scope_cache: OrderedDict[str, tuple[str, object, float]] = OrderedDict()
         self._scope_cache_maxsize = 1000
         # Use a threading.Lock (not asyncio.Lock) because this lock is acquired
         # from both the proxy's main asyncio event loop and from short-lived
@@ -104,7 +117,7 @@ class PurviewGuardrailBase:
     # OAuth2 token management
     # ------------------------------------------------------------------
 
-    async def _get_access_token(self) -> str:
+    async def _get_access_token(self) -> object:
         """Acquire or return cached OAuth2 token via client_credentials grant."""
         now: Final = time.time()
         with self._cache_lock:
@@ -125,9 +138,9 @@ class PurviewGuardrailBase:
             timeout=self.timeout,
         )
         response.raise_for_status()
-        token_data: Final[GraphTokenResponse] = response.json()
-        access_token: Final = token_data["access_token"]
-        expires_in: Final = int(token_data.get("expires_in", 3599))
+        token_data: Final = _DECODED_JSON.validate_python(response.json())
+        access_token: Final = subscript(token_data, "access_token")
+        expires_in: Final = int_of(require_get(token_data).get("expires_in", 3599))
         # Recompute ``now`` after the await so the expiry reflects when the
         # token was actually received, not when the request started.
         with self._cache_lock:
@@ -144,7 +157,7 @@ class PurviewGuardrailBase:
         url: str,
         json_body: dict[str, object],
         extra_headers: Mapping[str, str] | None = None,
-    ) -> tuple[dict[str, object], dict[str, str]]:
+    ) -> tuple[object, dict[str, str]]:
         """POST to Graph API with bearer auth.
 
         Returns:
@@ -161,7 +174,7 @@ class PurviewGuardrailBase:
         verbose_proxy_logger.debug("Purview Graph POST %s", url)
         response: Final = await self.async_handler.post(url=url, headers=headers, json=json_body, timeout=self.timeout)
         response.raise_for_status()
-        response_json: Final[dict[str, object]] = response.json()
+        response_json: Final = _DECODED_JSON.validate_python(response.json())
         response_headers: Final = dict(response.headers)
         verbose_proxy_logger.debug("Purview Graph response: %s", response_json)
         return response_json, response_headers
@@ -170,7 +183,7 @@ class PurviewGuardrailBase:
     # Protection scopes
     # ------------------------------------------------------------------
 
-    async def _compute_protection_scopes(self, user_id: str) -> tuple[str, Mapping[str, object]]:
+    async def _compute_protection_scopes(self, user_id: str) -> tuple[str, object]:
         """Call protectionScopes/compute and cache with ETag.
 
         Returns:
@@ -223,8 +236,8 @@ class PurviewGuardrailBase:
         text: str,
         activity: str,
         etag: str,
-        correlation_id: str | None = None,
-    ) -> dict[str, object]:
+        correlation_id: object = None,
+    ) -> Mapping[str, object]:
         """Call processContent for DLP policy evaluation.
 
         Args:
@@ -276,11 +289,11 @@ class PurviewGuardrailBase:
         response_json, _ = await self._graph_post(url, body, extra_headers)
 
         # If policies changed, invalidate scope cache so next call re-fetches.
-        if response_json.get("protectionScopeState") == "modified":
+        if require_get(response_json).get("protectionScopeState") == "modified":
             with self._cache_lock:
                 self._scope_cache.pop(user_id, None)
 
-        return response_json
+        return response_json  # pyright: ignore[reportReturnType]  # main returned the raw Graph JSON
 
     # ------------------------------------------------------------------
     # User ID resolution
@@ -309,10 +322,9 @@ class PurviewGuardrailBase:
         if hasattr(user_api_key_dict, "end_user_id") and user_api_key_dict.end_user_id:
             return str(user_api_key_dict.end_user_id)
 
-        metadata_value: Final[object] = data.get("metadata") or data.get("litellm_metadata") or {}
-        if not isinstance(metadata_value, Mapping):
+        metadata: Final = as_str_mapping(data.get("metadata") or data.get("litellm_metadata") or {})
+        if metadata is None:
             return None
-        metadata: Final[Mapping[str, object]] = metadata_value
         uid = metadata.get("user_api_key_user_id")
         if uid:
             return str(uid)
@@ -388,7 +400,7 @@ class PurviewGuardrailBase:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def is_token_id_prompt(prompt: str | Sequence[object] | None) -> bool:
+    def is_token_id_prompt(prompt: object) -> bool:
         """Return True if ``prompt`` carries OpenAI completions token ids.
 
         Covers every list shape that ``completion_prompt_to_str`` cannot decode
@@ -396,17 +408,18 @@ class PurviewGuardrailBase:
         ``list[list[int]]`` (multi-prompt token-id batches), and mixed lists
         that include any token-id sub-array.
         """
-        if not isinstance(prompt, list) or not prompt:
+        prompt_items: Final = as_object_list(prompt)
+        if not prompt_items:
             return False
-        for x in prompt:
+        for x in prompt_items:
             if isinstance(x, int):
                 return True
-            if isinstance(x, list) and x and any(isinstance(y, int) for y in x):
+            if any(isinstance(y, int) for y in as_object_list(x) or ()):
                 return True
         return False
 
     @staticmethod
-    def completion_prompt_to_str(prompt: str | Sequence[object] | None) -> str | None:
+    def completion_prompt_to_str(prompt: object) -> str | None:
         """Normalize OpenAI ``/v1/completions`` ``prompt`` for text DLP.
 
         Supports string prompts and list-of-string prompts. List-of-token-id prompts
@@ -417,14 +430,15 @@ class PurviewGuardrailBase:
         if isinstance(prompt, str):
             stripped: Final = prompt.strip()
             return stripped or None
-        if isinstance(prompt, list) and prompt:
-            if all(isinstance(x, str) for x in prompt):
-                joined = "\n".join(s.strip() for s in prompt if isinstance(s, str))
+        prompt_items: Final = as_object_list(prompt)
+        if prompt_items:
+            if all(isinstance(x, str) for x in prompt_items):
+                joined = "\n".join(s.strip() for s in prompt_items if isinstance(s, str))
                 return joined.strip() or None
-            if all(isinstance(x, int) for x in prompt):
+            if all(isinstance(x, int) for x in prompt_items):
                 verbose_proxy_logger.debug("Purview DLP: completions prompt is token ids only; skipping text scan")
                 return None
-            str_parts: Final = [x for x in prompt if isinstance(x, str)]
+            str_parts: Final = [x for x in prompt_items if isinstance(x, str)]
             if str_parts:
                 joined = "\n".join(s.strip() for s in str_parts)
                 return joined.strip() or None

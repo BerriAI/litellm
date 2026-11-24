@@ -120,7 +120,7 @@ def initialize_guardrails(
                 litellm.guardrail_name_config_map[k] = guardrail_item
 
         # set appropriate callbacks if they are default on
-        default_on_callbacks: Final = set()
+        default_on_callbacks: Final = set[str]()
         callback_specific_params: Final = {}
         for guardrail in all_guardrails:
             verbose_proxy_logger.debug(guardrail.guardrail_name)

@@ -4,6 +4,7 @@ Test for response_api_endpoints/endpoints.py
 
 import asyncio
 import contextlib
+import contextvars
 import dataclasses
 import datetime
 import json
@@ -22,6 +23,7 @@ import respx
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from httpx import Response
+from starlette.datastructures import URL
 
 import litellm
 from litellm.caching.base_cache import BaseCache
@@ -31,8 +33,11 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+from litellm.proxy.hooks import PROXY_HOOKS
+from litellm.proxy.hooks.parallel_request_limiter import PROXY_MaxParallelRequestsHandler
+from litellm.proxy.hooks.parallel_request_limiter_v3 import ParallelRequestLimiterHook
 from litellm.proxy.proxy_server import app
-from litellm.proxy.utils import ProxyLogging
+from litellm.proxy.utils import InternalUsageCache, ProxyLogging
 from litellm.responses.streaming_iterator import ResponsesAPIStreamingIterator
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
@@ -1830,6 +1835,228 @@ async def test_a_malformed_resume_query_through_the_proxy_is_a_400(
     assert result.status_code == 400, result.text
     assert bad_param in result.json()["error"]["message"]
     assert upstream_requests == ()
+
+
+async def _list_items_through_proxy(
+    monkeypatch: pytest.MonkeyPatch,
+    query: tuple[tuple[str, str], ...],
+    drop_params: bool = False,
+    deployment_params: Mapping[str, object] = EMPTY_MAPPING,
+    body: Mapping[str, object] | None = None,
+    router_defaults: Mapping[str, object] = EMPTY_MAPPING,
+) -> tuple[httpx.Response, tuple[httpx.Request, ...]]:
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-5.6",
+                "litellm_params": {
+                    "model": "openai/gpt-5.6",
+                    "api_base": _RESUMED_UPSTREAM,
+                    "api_key": "fixture-key",
+                    "drop_params": drop_params,
+                    **deployment_params,
+                },
+                "model_info": {"id": "deployment-read"},
+            }
+        ],
+        num_retries=0,
+        default_litellm_params=dict(router_defaults),
+    )
+    monkeypatch.setattr(ps, "llm_router", router)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, _auth_override)
+    with respx.mock(assert_all_called=False) as transport:
+        route: Final = transport.get(_RESUMED_UPSTREAM + "/responses/resp_read/input_items").mock(
+            return_value=httpx.Response(200, json={"object": "list", "data": [], "has_more": False})
+        )
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://testserver") as client:
+            result: Final = await client.request(
+                "GET", f"/v1/responses/{_proxy_issued_id('resp_read')}/input_items", params=list(query), json=body
+            )
+        return result, tuple(call.request for call in route.calls)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "query, forwarded",
+    [
+        (
+            (
+                ("limit", "2"),
+                ("order", "asc"),
+                ("after", "item_a"),
+                ("before", "item_b"),
+                ("include[]", "message.input_image.image_url"),
+                ("include[]", "file_search_call.results"),
+            ),
+            [
+                ("after", "item_a"),
+                ("before", "item_b"),
+                ("include[]", "file_search_call.results"),
+                ("include[]", "message.input_image.image_url"),
+                ("limit", "2"),
+                ("order", "asc"),
+            ],
+        ),
+        (
+            (("include", "message.input_image.image_url"),),
+            [("include[]", "message.input_image.image_url"), ("limit", "20"), ("order", "desc")],
+        ),
+        (
+            (("include", "message.input_image.image_url,file_search_call.results"),),
+            [
+                ("include[]", "file_search_call.results"),
+                ("include[]", "message.input_image.image_url"),
+                ("limit", "20"),
+                ("order", "desc"),
+            ],
+        ),
+        (
+            (("include[]", "message.input_image.image_url,file_search_call.results"),),
+            [
+                ("include[]", "message.input_image.image_url,file_search_call.results"),
+                ("limit", "20"),
+                ("order", "desc"),
+            ],
+        ),
+        (
+            (("after", ""), ("before", ""), ("include", ""), ("include[]", ""), ("limit", ""), ("order", "")),
+            [("limit", "20"), ("order", "desc")],
+        ),
+        ((), [("limit", "20"), ("order", "desc")]),
+        ((("limit", "+1"),), [("limit", "1"), ("order", "desc")]),
+    ],
+)
+async def test_listing_input_items_through_the_proxy_forwards_the_client_list_params(
+    monkeypatch: pytest.MonkeyPatch, query: tuple[tuple[str, str], ...], forwarded: list[tuple[str, str]]
+):
+    result, upstream_requests = await _list_items_through_proxy(monkeypatch, query)
+
+    assert result.status_code == 200, result.text
+    assert [sorted(request.url.params.multi_items()) for request in upstream_requests] == [forwarded]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "query, forwarded",
+    [
+        ((), [("limit", "20"), ("order", "desc")]),
+        (
+            (("include", "file_search_call.results"), ("order", "asc")),
+            [("include[]", "file_search_call.results"), ("limit", "20"), ("order", "asc")],
+        ),
+    ],
+)
+@pytest.mark.parametrize("configured_extra_query", [{"limit": 1, "order": "asc"}, "limit=1"])
+@pytest.mark.parametrize("set_as_router_default", [False, True])
+async def test_configured_params_named_like_list_params_never_reach_the_input_items_listing(
+    monkeypatch: pytest.MonkeyPatch,
+    query: tuple[tuple[str, str], ...],
+    forwarded: list[tuple[str, str]],
+    configured_extra_query: object,
+    set_as_router_default: bool,
+):
+    configured: Final = {
+        "order": 1,
+        "include": ["reasoning.encrypted_content"],
+        "limit": 50,
+        "after": "item_from_config",
+        "before": "item_from_config",
+        "extra_query": configured_extra_query,
+    }
+    result, upstream_requests = await _list_items_through_proxy(
+        monkeypatch,
+        query,
+        deployment_params=EMPTY_MAPPING if set_as_router_default else configured,
+        router_defaults=configured if set_as_router_default else EMPTY_MAPPING,
+    )
+
+    assert result.status_code == 200, result.text
+    assert [sorted(request.url.params.multi_items()) for request in upstream_requests] == [forwarded]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "query, bad_param",
+    [
+        ((("limit", "abc"),), "limit"),
+        ((("limit", "-1"),), "limit"),
+        ((("limit", "\u00b2"),), "limit"),
+        ((("limit", "1" * 20),), "limit"),
+        ((("order", "sideways"),), "order"),
+        ((("after", "item_a"), ("after", "item_b")), "after"),
+        ((("before", "item_a"), ("before", "item_b")), "before"),
+    ],
+)
+async def test_a_malformed_input_items_query_through_the_proxy_is_a_400(
+    monkeypatch: pytest.MonkeyPatch, query: tuple[tuple[str, str], ...], bad_param: str
+):
+    result, upstream_requests = await _list_items_through_proxy(monkeypatch, query)
+
+    assert result.status_code == 400, result.text
+    assert bad_param in result.json()["error"]["message"]
+    assert upstream_requests == ()
+
+
+@pytest.mark.asyncio
+async def test_an_input_items_query_param_wins_over_the_same_key_in_a_body_extra_query(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    result, upstream_requests = await _list_items_through_proxy(
+        monkeypatch, (("limit", "2"),), body={"extra_query": {"limit": 5, "order": "asc"}}
+    )
+
+    assert result.status_code == 200, result.text
+    assert [sorted(request.url.params.multi_items()) for request in upstream_requests] == [
+        [("limit", "2"), ("order", "asc")]
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "drop_params, status_code, forwarded",
+    [(False, 400, []), (True, 200, [[("limit", "20"), ("order", "desc")]])],
+)
+async def test_a_body_extra_query_that_is_not_an_object_is_a_400_or_dropped_under_drop_params(
+    monkeypatch: pytest.MonkeyPatch, drop_params: bool, status_code: int, forwarded: list[list[tuple[str, str]]]
+):
+    result, upstream_requests = await _list_items_through_proxy(
+        monkeypatch, (), drop_params=drop_params, body={"extra_query": "limit=2"}
+    )
+
+    assert result.status_code == status_code, result.text
+    assert ("Invalid 'extra_query'" in result.text) is (status_code == 400)
+    assert [sorted(request.url.params.multi_items()) for request in upstream_requests] == forwarded
+
+
+@pytest.mark.asyncio
+async def test_a_body_extra_query_that_is_not_an_object_is_a_400_even_next_to_query_params(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    result, upstream_requests = await _list_items_through_proxy(
+        monkeypatch, (("limit", "2"),), body={"extra_query": "limit=1"}
+    )
+
+    assert result.status_code == 400, result.text
+    assert "Invalid 'extra_query'" in result.text
+    assert upstream_requests == ()
+
+
+@pytest.mark.asyncio
+async def test_a_malformed_input_items_query_under_drop_params_is_dropped_and_the_rest_forwarded(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    result, upstream_requests = await _list_items_through_proxy(
+        monkeypatch, (("limit", "abc"), ("order", "asc"), ("after", "item_a")), drop_params=True
+    )
+
+    assert result.status_code == 200, result.text
+    assert [sorted(request.url.params.multi_items()) for request in upstream_requests] == [
+        [("after", "item_a"), ("limit", "20"), ("order", "asc")]
+    ]
 
 
 @pytest.mark.asyncio
@@ -4431,12 +4658,12 @@ class TestResponsesWSFirstFrameModelAuth:
             endpoint = asyncio.ensure_future(
                 responses_websocket_endpoint(websocket=ws, model=None, user_api_key_dict=MagicMock())
             )
-            await asyncio.wait_for(row_started.wait(), timeout=1)
+            await row_started.wait()
             proxy_logging_obj.arelease_responses_websocket_slot.assert_awaited_once()
             finished_early, _ = await asyncio.wait({endpoint}, timeout=0.05)
             assert endpoint not in finished_early
             row_may_finish.set()
-            finished, _ = await asyncio.wait({endpoint}, timeout=1)
+            finished, _ = await asyncio.wait({endpoint})
             assert endpoint in finished
             assert row_written.is_set()
 
@@ -6904,3 +7131,77 @@ def test_input_token_count_keeps_the_joined_name_of_a_self_named_namespace_membe
 
     assert called_names(namespace_tools) == ["search__search"]
     assert called_names([{"type": "function", "name": "search", "defer_loading": True}]) == ["search"]
+
+
+async def _admits(proxy_logging: ProxyLogging, key: UserAPIKeyAuth, call_type: CallTypesLiteral) -> bool:
+    async def admit() -> bool:
+        try:
+            await proxy_logging.pre_call_hook(user_api_key_dict=key, data={"model": "gpt-4o-mini"}, call_type=call_type)
+        except ProxyRateLimitError:
+            return False
+        return True
+
+    return await asyncio.create_task(admit(), context=contextvars.Context())
+
+
+class _RefusesWebSocketOpens(CustomLogger):
+    def __init__(self, refusal: Exception) -> None:
+        super().__init__()
+        self.refusal: Final = refusal
+
+    async def async_pre_call_hook(
+        self, user_api_key_dict: UserAPIKeyAuth, cache: DualCache, data: dict, call_type: CallTypesLiteral
+    ) -> None:
+        if call_type == "_aresponses_websocket":
+            raise self.refusal
+
+
+def _legacy_limiter(internal_usage_cache: InternalUsageCache) -> PROXY_MaxParallelRequestsHandler:
+    return PROXY_MaxParallelRequestsHandler(internal_usage_cache, clock=lambda: datetime.datetime(2026, 1, 31, 12, 0, 30))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("limiter", [ParallelRequestLimiterHook, _legacy_limiter], ids=["default", "legacy"])
+@pytest.mark.parametrize(
+    "open_failure",
+    [
+        litellm.RateLimitError(message="session is over its limit", model="gpt-4o-mini", llm_provider="openai"),
+        RuntimeError("a pre-call step after the limiter failed"),
+    ],
+    ids=["rate_limit", "error"],
+)
+async def test_a_responses_websocket_refused_after_admission_gives_its_parallel_slot_back(
+    monkeypatch: pytest.MonkeyPatch, limiter: Callable[..., CustomLogger], open_failure: Exception
+) -> None:
+    from litellm.proxy.response_api_endpoints.endpoints import responses_websocket_endpoint
+
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setitem(PROXY_HOOKS, "parallel_request_limiter", limiter)
+    monkeypatch.setitem(PROXY_HOOKS, "refuses_after_the_limiter", lambda: _RefusesWebSocketOpens(open_failure))
+    proxy_logging: Final = ProxyLogging(user_api_key_cache=DualCache())
+    with patch("litellm.proxy.proxy_server.prisma_client", None):
+        proxy_logging._add_proxy_hooks(llm_router=None)
+    ProxyLogging._callback_capabilities_cache.clear()
+    key: Final = UserAPIKeyAuth(api_key="hashed-single-slot-key", max_parallel_requests=1)
+
+    ws: Final = MagicMock()
+    ws.headers = {}
+    ws.query_params = {}
+    ws.scope = {"headers": []}
+    ws.url = URL("ws://testserver/v1/responses")
+    ws.accept = AsyncMock()
+    ws.receive_text = AsyncMock(
+        return_value=json.dumps({"type": "response.create", "model": "gpt-4o-mini", "input": []})
+    )
+    ws.send_text = AsyncMock()
+    ws.close = AsyncMock()
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging):
+        await asyncio.create_task(
+            responses_websocket_endpoint(websocket=ws, model="gpt-4o-mini", user_api_key_dict=key),
+            context=contextvars.Context(),
+        )
+
+    ws.close.assert_awaited_once()
+    assert await _admits(proxy_logging, key, "acompletion"), "the refused socket still holds the key's only slot"
+    assert not await _admits(proxy_logging, key, "acompletion"), "the limiter under test must enforce the single slot"
