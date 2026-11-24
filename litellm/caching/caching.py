@@ -36,6 +36,7 @@ from litellm.litellm_core_utils.model_param_helper import (
     embeds_thought_signature_in_tool_call_id,
     peek_reasoning_summary_aliases,
 )
+from litellm.llms.base_llm.embedding.transformation import kwargs_for_input
 from litellm.types.caching import *
 from litellm.types.semantic_cache import response_cache_policy_ttl, semantic_cache_policy
 from litellm.types.utils import EmbeddingResponse, Usage, is_litellm_owned_kwarg
@@ -1190,7 +1191,7 @@ class Cache:
         kwargs: dict[str, object],
         idx_in_result_data: int = 0,
     ) -> tuple[str, dict[str, object], dict[str, object]]:
-        preset_cache_key: Final = self.get_cache_key(**{**kwargs, "input": input})
+        preset_cache_key: Final = self.get_cache_key(**kwargs_for_input(kwargs, input, idx_in_result_data))
         kwargs["cache_key"] = preset_cache_key
         embedding_response: Final = _embedding_item(result, idx_in_result_data)
 

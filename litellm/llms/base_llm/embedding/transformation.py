@@ -97,6 +97,22 @@ def extra_body_for_inputs(extra_body: object, kept_input_indexes: Sequence[int])
     }
 
 
+def kwargs_for_input(
+    kwargs: Mapping[str, object], input: object, input_index: int
+) -> dict[str, object]:  # mutable-ok: spread as the cache key kwargs
+    """The call kwargs narrowed to one input and the ``extra_body`` item written for it, so a cached embedding is only
+    reused for the same input under the same item."""
+    return {
+        **kwargs,
+        "input": input,
+        **(
+            {"extra_body": extra_body_for_inputs(kwargs["extra_body"], (input_index,))}
+            if "extra_body" in kwargs
+            else {}
+        ),
+    }
+
+
 def _inputs_kept(items: Sequence[object], kept_input_indexes: Sequence[int]) -> Sequence[object]:
     return [items[i] for i in kept_input_indexes if i < len(items)]
 

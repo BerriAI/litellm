@@ -2801,6 +2801,43 @@ async def test_partial_embedding_cache_hit_sends_only_misses_and_keeps_input_ord
 
 
 @pytest.mark.asyncio
+async def test_a_cached_embedding_is_not_served_to_the_same_input_under_another_extra_body_item(monkeypatch):
+    import litellm
+    from litellm import CustomLLM
+    from litellm.caching.caching import Cache
+    from litellm.types.utils import Embedding, EmbeddingResponse
+
+    class ItemEchoingEmbedder(CustomLLM):
+        async def aembedding(self, model, input, model_response, optional_params, **kwargs) -> EmbeddingResponse:
+            return EmbeddingResponse(
+                model=model,
+                data=[
+                    Embedding(embedding=[float(item["outputDimensionality"])], index=idx, object="embedding")
+                    for idx, item in enumerate(optional_params["extra_body"]["requests"])
+                ],
+            )
+
+    monkeypatch.setattr(
+        litellm, "custom_provider_map", [{"provider": "item-echoing", "custom_handler": ItemEchoingEmbedder()}]
+    )
+    monkeypatch.setattr(litellm, "provider_list", [*litellm.provider_list, "item-echoing"])
+    monkeypatch.setattr(litellm, "_custom_providers", [*litellm._custom_providers, "item-echoing"])
+    monkeypatch.setattr(litellm, "cache", Cache(type="local"))
+    extra_body = {"requests": [{"outputDimensionality": 256}, {"outputDimensionality": 128}]}
+
+    first = await litellm.aembedding(model="item-echoing/m", input=["a", "b"], extra_body=extra_body)
+    await asyncio.gather(*_PENDING_CACHE_WRITES)
+    swapped = await litellm.aembedding(model="item-echoing/m", input=["b", "a"], extra_body=extra_body)
+    await asyncio.gather(*_PENDING_CACHE_WRITES)
+    repeated = await litellm.aembedding(model="item-echoing/m", input=["a", "b"], extra_body=extra_body)
+
+    assert [item["embedding"] for item in first.data] == [[256.0], [128.0]]
+    assert [item["embedding"] for item in swapped.data] == [[256.0], [128.0]]
+    assert [item["embedding"] for item in repeated.data] == [[256.0], [128.0]]
+    assert repeated._hidden_params["cache_hit"] is True
+
+
+@pytest.mark.asyncio
 async def test_a_partial_embedding_cache_hit_sends_each_missed_input_with_its_own_extra_body_item(monkeypatch):
     import litellm
     from litellm import CustomLLM

@@ -2978,7 +2978,7 @@ def client(original_function):
             await _llm_caching_handler.async_set_cache(
                 result=result,
                 original_function=original_function,
-                kwargs={**call_kwargs, "extra_body": kwargs["extra_body"]} if "extra_body" in kwargs else call_kwargs,
+                kwargs=call_kwargs,
                 args=args,
             )
 

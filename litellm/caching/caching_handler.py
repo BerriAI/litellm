@@ -38,7 +38,7 @@ from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
 from litellm.litellm_core_utils.logging_utils import (
     assemble_complete_response_from_streaming_chunks,
 )
-from litellm.llms.base_llm.embedding.transformation import extra_body_for_inputs
+from litellm.llms.base_llm.embedding.transformation import extra_body_for_inputs, kwargs_for_input
 from litellm.llms.custom_httpx.sse_lines import split_sse_lines
 from litellm.types.caching import CACHED_STREAM_EVENTS_KEY, EMBEDDING_CACHE_FORMAT_VERSION, CachedEmbedding
 from litellm.types.integrations.custom_logger import converted_stream_requested
@@ -1095,7 +1095,7 @@ class LLMCachingHandler:
             new_kwargs["input"] = self.handle_kwargs_input_list_or_str(new_kwargs)
             tasks: Final[list[Awaitable[object]]] = []
             for idx, i in enumerate(new_kwargs["input"]):
-                preset_cache_key = litellm.cache.get_cache_key(**{**new_kwargs, "input": i})
+                preset_cache_key = litellm.cache.get_cache_key(**kwargs_for_input(new_kwargs, i, idx))
                 tasks.append(
                     litellm.cache.async_get_cache(
                         cache_key=preset_cache_key,
