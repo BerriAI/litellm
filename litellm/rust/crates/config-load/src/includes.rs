@@ -27,13 +27,15 @@ fn read(path: &Path) -> Result<Mapping, Error> {
         path: path.to_owned(),
         source,
     })?;
-    let mut config: Mapping =
+    let config: Mapping =
         serde_yaml_ng::from_value(document).map_err(|source| Error::ParseFile {
             path: path.to_owned(),
             source,
         })?;
-    config.retain(|key, value| !is_empty_settings_section(key, value));
-    Ok(config)
+    Ok(config
+        .into_iter()
+        .filter(|(key, value)| !is_empty_settings_section(key, value))
+        .collect())
 }
 
 fn is_empty_settings_section(key: &Value, value: &Value) -> bool {
