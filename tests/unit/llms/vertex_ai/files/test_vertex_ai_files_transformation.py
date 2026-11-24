@@ -1240,6 +1240,11 @@ def _embeddings_entry(**overrides):
     return entry
 
 
+def _clip_entry(custom_id: str, video_metadata: Mapping[str, object], **body: object) -> dict[str, object]:
+    clip: Final = {"type": "file", "file": {"file_id": "gs://my-bucket/clip.mp4", "video_metadata": dict(video_metadata)}}
+    return _embeddings_entry(custom_id=custom_id, body={"model": "gemini-embedding-2", "input": [clip], **body})
+
+
 class TestVertexEmbeddingsBatchInputTranslation:
     """
     /v1/embeddings batch lines must be translated to Vertex's Gemini Embedding batch
@@ -1328,6 +1333,19 @@ class TestVertexEmbeddingsBatchInputTranslation:
                 "video_metadata": {"startOffset": "3s", "endOffset": "6s"},
             }
         ]
+
+    def test_should_refuse_the_upload_naming_the_line_whose_window_samples_no_frames(
+        self, config: VertexAIFilesConfig
+    ) -> None:
+        from litellm.llms.vertex_ai.common_utils import VertexAIError
+
+        entries: Final = (
+            _clip_entry("request-1", {"start_offset": "0s", "end_offset": "10s"}),
+            _clip_entry("request-2", {"fps": 0.2, "start_offset": "0s", "end_offset": "1s"}),
+        )
+        with pytest.raises(VertexAIError, match=r"line 2 .*\(1s\) at 0\.2 fps rounds to 0 frames") as exc_info:
+            _uploaded_rows(config, {"gcs_bucket_name": "my-bucket", "model": "vertex_ai/gemini-embedding-2"}, entries)
+        assert exc_info.value.status_code == 400
 
     def test_should_translate_multimodal_gcs_input(self):
         (row,) = _wrap_entries(
