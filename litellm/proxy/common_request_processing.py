@@ -375,6 +375,7 @@ from litellm.proxy.litellm_pre_call_utils import (
 from litellm.proxy.policy_engine.response_retrieval import attach_post_call_pipelines_to_retrieval
 from litellm.types.litellm_params import STREAM_USAGE_INJECTED_FIELD
 from litellm.types.utils import (
+    CallTypes,
     Choices,
     LLMResponseTypes,
     ModelResponse,
@@ -2296,6 +2297,21 @@ def _totals_to_zero(response_cost: float | str | None) -> bool:
 def _is_cache_hit(litellm_logging_obj: LiteLLMLoggingObj) -> bool:
     caching_details: Final = litellm_logging_obj.caching_details
     return caching_details is not None and caching_details.get("cache_hit") is True
+
+
+_ANTHROPIC_MESSAGES_CALL_TYPES: Final = frozenset({CallTypes.anthropic_messages, CallTypes.aanthropic_messages})
+
+
+def _anthropic_messages_cache_key_header(response_cache_key: object, logging_obj: LiteLLMLoggingObj) -> object:
+    if (
+        response_cache_key
+        or logging_obj.call_type not in _ANTHROPIC_MESSAGES_CALL_TYPES
+        or not _is_cache_hit(logging_obj)
+    ):
+        return response_cache_key
+    litellm_params: Final[object] = logging_obj.litellm_params
+    preset_cache_key: Final = litellm_params.get("preset_cache_key") if is_str_keyed_dict(litellm_params) else None
+    return preset_cache_key if isinstance(preset_cache_key, str) else response_cache_key
 
 
 def _get_cost_breakdown_from_logging_obj(
@@ -4414,7 +4430,7 @@ class ProxyBaseLLMRequestProcessing:
                 user_api_key_dict=user_api_key_dict,
                 call_id=logging_obj.litellm_call_id,
                 model_id=model_id,
-                cache_key=cache_key,
+                cache_key=_anthropic_messages_cache_key_header(cache_key, logging_obj),
                 api_base=api_base,
                 version=version,
                 response_cost=logging_obj.finalized_cost.amount
