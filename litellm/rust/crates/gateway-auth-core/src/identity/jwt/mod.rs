@@ -169,30 +169,22 @@ pub struct JwtIdentity<R: Rows> {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum JwtOutcome<R: Rows> {
-    /// A proxy admin, which the host projects without finishing a token.
-    Admin(JwtIdentity<R>),
-    /// The token `finish_jwt` built for the JWT or the key auto-registered for it.
-    Finished(R::Key),
+    /// A JWT that acts as itself, which the host converts to its token.
+    Jwt(JwtIdentity<R>),
+    /// A key auto-registered for the JWT that stands in for it without the virtual-key checks.
+    AutoRegistered(AutoRegisteredJwt<R>),
     /// A key the JWT maps to, which still has to pass the virtual-key checks.
     MappedKey(Keyed<R::Key>, MappedJwt<R::User>),
 }
 
-/// What the host builds its token from in `finish_jwt`.
-#[derive(Debug)]
-pub enum FinishedJwt<'a, R: Rows> {
-    Identity(&'a JwtIdentity<R>),
-    /// A key auto-registered for the JWT that stands in for it without the virtual-key checks,
-    /// as the host's `key_by_hash` loaded it.
-    AutoRegisteredKey(&'a MappedJwt<R::User>, &'a R::Key),
+/// A key auto-registered for a JWT, as the host's `key_by_hash` loaded it, with what the JWT
+/// keeps and the key's project.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AutoRegisteredJwt<R: Rows> {
+    pub jwt: MappedJwt<R::User>,
+    pub key: R::Key,
+    pub project: Option<R::Project>,
 }
-
-impl<R: Rows> Clone for FinishedJwt<'_, R> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-impl<R: Rows> Copy for FinishedJwt<'_, R> {}
 
 /// What `_resolve_jwt_to_virtual_key` found for a token, for callers that never provision a key.
 #[derive(Clone, Debug, PartialEq)]

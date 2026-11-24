@@ -112,8 +112,16 @@ async def project(outcome: RustAuthOutcome, host: PythonAuthHost) -> UserAPIKeyA
             return await _virtual_key(
                 host, auto_registered_key(key_token, claims, end_user_id, user_email, org_id, user), context
             )
-        case RustIdentity.FinishedJwt(token=token):
-            return token
+        case RustIdentity.AutoRegisteredJwt(
+            claims=claims,
+            end_user_id=end_user_id,
+            user_email=user_email,
+            org_id=org_id,
+            user=policy_user,
+            key=key,
+            project=project,
+        ):
+            return with_project(auto_registered_key(key, claims, end_user_id, user_email, org_id, policy_user), project)
         case RustIdentity.Jwt() as jwt_identity:
             return auth_from_result(jwt_result(jwt_identity, host.api_key), host.parent_otel_span)
         case None:

@@ -1009,11 +1009,42 @@ class RustIdentity:
         def context(self) -> RustKeyContext: ...
 
     @final
-    class FinishedJwt(RustIdentity):
-        __match_args__: tuple[Literal["token"]] = ("token",)
-        def __new__(cls, token: UserAPIKeyAuth) -> RustIdentity.FinishedJwt: ...
+    class AutoRegisteredJwt(RustIdentity):
+        """`org_id` is the JWT's and is set only for a key created for it."""
+
+        __match_args__: tuple[
+            Literal["claims"],
+            Literal["end_user_id"],
+            Literal["user_email"],
+            Literal["org_id"],
+            Literal["user"],
+            Literal["key"],
+            Literal["project"],
+        ] = ("claims", "end_user_id", "user_email", "org_id", "user", "key", "project")
+        def __new__(
+            cls,
+            claims: dict[str, object],
+            end_user_id: str | None,
+            user_email: str | None,
+            org_id: str | None,
+            user: LiteLLM_UserTable | None,
+            key: UserAPIKeyAuth,
+            project: LiteLLM_ProjectTableCachedObj | None,
+        ) -> RustIdentity.AutoRegisteredJwt: ...
         @property
-        def token(self) -> UserAPIKeyAuth: ...
+        def claims(self) -> dict[str, object]: ...
+        @property
+        def end_user_id(self) -> str | None: ...
+        @property
+        def user_email(self) -> str | None: ...
+        @property
+        def org_id(self) -> str | None: ...
+        @property
+        def user(self) -> LiteLLM_UserTable | None: ...
+        @property
+        def key(self) -> UserAPIKeyAuth: ...
+        @property
+        def project(self) -> LiteLLM_ProjectTableCachedObj | None: ...
 
     @final
     class Jwt(RustIdentity):
@@ -1102,7 +1133,7 @@ _AuthenticatedIdentity = (
     | RustIdentity.VirtualKey
     | RustIdentity.MappedJwtKey
     | RustIdentity.AutoRegisteredJwtKey
-    | RustIdentity.FinishedJwt
+    | RustIdentity.AutoRegisteredJwt
     | RustIdentity.Jwt
 )
 
@@ -1423,6 +1454,19 @@ class RustAuthStep:
         def runs_inference_checks(self) -> bool: ...
 
     @final
+    class JwtUserModelBudget(RustAuthStep):
+        __match_args__: tuple[Literal["user"], Literal["user_id"], Literal["team_id"]] = ("user", "user_id", "team_id")
+        def __new__(
+            cls, user: LiteLLM_UserTable, user_id: str, team_id: str | None
+        ) -> RustAuthStep.JwtUserModelBudget: ...
+        @property
+        def user(self) -> LiteLLM_UserTable: ...
+        @property
+        def user_id(self) -> str: ...
+        @property
+        def team_id(self) -> str | None: ...
+
+    @final
     class KeyTeam(RustAuthStep):
         __match_args__: tuple[Literal["team_id"]] = ("team_id",)
         def __new__(cls, team_id: str) -> RustAuthStep.KeyTeam: ...
@@ -1703,45 +1747,6 @@ class RustAuthStep:
         def __new__(cls, end_user_id: str) -> RustAuthStep.JwtEndUser: ...
         @property
         def end_user_id(self) -> str: ...
-
-    @final
-    class FinishJwt(RustAuthStep):
-        __match_args__: tuple[Literal["identity"]] = ("identity",)
-        def __new__(cls, identity: RustIdentity.Jwt) -> RustAuthStep.FinishJwt: ...
-        @property
-        def identity(self) -> RustIdentity.Jwt: ...
-
-    @final
-    class FinishAutoRegisteredJwt(RustAuthStep):
-        __match_args__: tuple[
-            Literal["claims"],
-            Literal["end_user_id"],
-            Literal["user_email"],
-            Literal["org_id"],
-            Literal["user"],
-            Literal["key"],
-        ] = ("claims", "end_user_id", "user_email", "org_id", "user", "key")
-        def __new__(
-            cls,
-            claims: dict[str, object],
-            end_user_id: str | None,
-            user_email: str | None,
-            org_id: str | None,
-            user: LiteLLM_UserTable | None,
-            key: UserAPIKeyAuth,
-        ) -> RustAuthStep.FinishAutoRegisteredJwt: ...
-        @property
-        def claims(self) -> dict[str, object]: ...
-        @property
-        def end_user_id(self) -> str | None: ...
-        @property
-        def user_email(self) -> str | None: ...
-        @property
-        def org_id(self) -> str | None: ...
-        @property
-        def user(self) -> LiteLLM_UserTable | None: ...
-        @property
-        def key(self) -> UserAPIKeyAuth: ...
 
     @final
     class KeyMappingHash(RustAuthStep):

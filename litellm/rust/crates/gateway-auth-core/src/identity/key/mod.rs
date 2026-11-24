@@ -6,7 +6,7 @@ use crate::{
 };
 
 mod owner;
-mod project;
+pub(crate) mod project;
 mod team;
 
 #[derive(Clone, Debug, PartialEq)]

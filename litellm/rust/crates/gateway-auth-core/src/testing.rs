@@ -10,13 +10,13 @@ use serde_json::Value;
 use crate::{
     AgentIdentityFailure, AuthHost, BudgetExceeded, Error, KeyHash, OperatorHooks, Rows, Token,
     authn::{
-        jwt::{KeyMappingRow, KeyMappingWrite, MappedClaim, MappedJwt, MappedKey},
+        jwt::{KeyMappingRow, KeyMappingWrite, MappedClaim, MappedKey},
         key::{CachedTeam, KeyRecord, Keyed},
     },
     body::Params,
     identity::{
         jwt::{
-            AliasRead, DelegatedTeam, FinishedJwt, IdentityRead, ManagedAgent, ModelAccess, Org,
+            AliasRead, DelegatedTeam, IdentityRead, ManagedAgent, ModelAccess, Org,
             RegisteredAgent, Team, TeamRead, User, UserLookup, UserRead,
         },
         key::Owner,
@@ -83,8 +83,6 @@ pub(crate) struct ScriptedHost {
     pub(crate) agent_failure: Option<AgentIdentityFailure>,
     pub(crate) agents: HashMap<&'static str, RegisteredAgent>,
     pub(crate) delegated_team: Option<&'static str>,
-    /// The JWT `finish_jwt` last finished an auto-registered key for.
-    pub(crate) finished_mapping: Mutex<Option<MappedJwt<String>>>,
     /// Stored credentials by name.
     pub(crate) credentials: HashMap<&'static str, Params>,
     pub(crate) calls: Mutex<Vec<String>>,
@@ -282,6 +280,18 @@ impl AuthHost for ScriptedHost {
         self.step("project", format!("project {project_id}"))?;
         Ok(Some(format!("project {project_id}")))
     }
+    async fn jwt_user_model_budget(
+        &self,
+        user: &String,
+        user_id: &str,
+        team_id: Option<&str>,
+    ) -> Result<(), Error> {
+        self.record(format!(
+            "jwt_user_model_budget {user} {user_id} {}",
+            or_dash(team_id)
+        ));
+        verdict(self.jwt_user_over_budget.as_ref())
+    }
     async fn proxy_budget_alert(&self, key: &String) -> Result<(), Error> {
         self.step("proxy_budget_alert", format!("proxy_budget_alert {key}"))
     }
@@ -439,19 +449,6 @@ impl AuthHost for ScriptedHost {
     async fn jwt_end_user(&self, end_user_id: &str) -> Result<String, Error> {
         self.record(format!("end_user {end_user_id}"));
         Ok(format!("end-user {end_user_id}"))
-    }
-    async fn finish_jwt(&self, finished: FinishedJwt<'_, Labels>) -> Result<String, Error> {
-        let token = match finished {
-            FinishedJwt::Identity(_) => "finish identity".to_owned(),
-            FinishedJwt::AutoRegisteredKey(jwt, key) => {
-                *self.finished_mapping.lock().unwrap() = Some(jwt.clone());
-                format!("finish auto_registered {key}")
-            }
-        };
-        self.record(token.clone());
-        self.jwt_user_over_budget
-            .clone()
-            .map_or(Ok(token), |denial| Err(denial.into()))
     }
 
     async fn key_mapping_hash(

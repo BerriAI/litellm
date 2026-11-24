@@ -238,12 +238,32 @@ async def test_jwt_proxy_admin_is_projected_as_an_admin_with_its_claims(
 
 
 @pytest.mark.asyncio
-async def test_a_finished_jwt_is_projected_as_the_token_the_host_finished(
+async def test_a_key_auto_registered_without_the_key_checks_carries_the_jwt_and_the_keys_project(
     project_outcome: Callable[[RustIdentity], Awaitable[UserAPIKeyAuth]],
 ) -> None:
-    finished: Final = UserAPIKeyAuth(user_id="u", project_alias="p")
+    token: Final = await project_outcome(
+        RustIdentity.AutoRegisteredJwt(
+            claims={"sub": "u"},
+            end_user_id="eu",
+            user_email="u@example.com",
+            org_id="jwt-org",
+            user=LiteLLM_UserTable(user_id="u", model_max_budget={"gpt-a": 2.0}),
+            key=UserAPIKeyAuth(token="hashed", user_id="owner", project_id="p"),
+            project=LiteLLM_ProjectTableCachedObj(project_id="p", project_alias="alias", metadata={"tier": "gold"}),
+        )
+    )
 
-    assert await project_outcome(RustIdentity.FinishedJwt(token=finished)) is finished
+    assert (
+        token.api_key,
+        token.user_id,
+        token.jwt_claims,
+        token.end_user_id,
+        token.user_email,
+        token.org_id,
+        token.user_model_max_budget,
+        token.project_alias,
+        token.project_metadata,
+    ) == ("hashed", "owner", {"sub": "u"}, "eu", "u@example.com", "jwt-org", {"gpt-a": 2.0}, "alias", {"tier": "gold"})
 
 
 @pytest.mark.asyncio

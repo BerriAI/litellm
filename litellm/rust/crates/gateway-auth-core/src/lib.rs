@@ -111,10 +111,10 @@ pub async fn authenticate_jwt<H: AuthHost>(
             Err(error) => return denied(error, None),
         };
     match outcome {
-        JwtOutcome::Admin(identity) => Ok(Outcome::Authenticated(Identity::AdminJwt(Box::new(
-            identity,
-        )))),
-        JwtOutcome::Finished(token) => Ok(Outcome::Authenticated(Identity::FinishedJwt(token))),
+        JwtOutcome::Jwt(identity) => Ok(Outcome::Authenticated(Identity::Jwt(Box::new(identity)))),
+        JwtOutcome::AutoRegistered(registered) => Ok(Outcome::Authenticated(
+            Identity::AutoRegisteredJwt(Box::new(registered)),
+        )),
         JwtOutcome::MappedKey(key, jwt) => {
             let credential = KeySource::Resolved {
                 key,

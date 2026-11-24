@@ -34,13 +34,18 @@ from litellm.proxy.auth.host.facts import (
 )
 from litellm.proxy.auth.host.python import AgentLookup, HttpCall, NoRegisteredAgents, PythonAuthHost, SharedFetches
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
-from litellm.proxy.hooks.model_max_budget_limiter import PROXY_VirtualKeyModelMaxBudgetLimiter
+from litellm.proxy.auth.host import identity as auth_identity
+from litellm.proxy.hooks.model_max_budget_limiter import (
+    PROXY_VirtualKeyModelMaxBudgetLimiter,
+    model_budget_spend_cache_key,
+)
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.redis.stores.auth_cache import AuthObject
 from litellm.redis.stores.router_cooldowns import RouterCooldownStore
 from litellm.router_utils.cooldown_cache import CooldownCache
-from litellm.rust_bridge._native import RustAuth, RustAuthSettings, RustIdentity
+from litellm.rust_bridge._native import RustAuth, RustAuthSettings, RustDenial, RustIdentity
 from litellm.types.agents import AgentResponse
+from litellm.types.integrations.slack_alerting import Litellm_EntityType
 from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.types.proxy.auth.user_roles import LitellmUserRoles
 from tests.unit.caching.redis_batch_double import FakeNatives, fake_send
@@ -641,3 +646,58 @@ async def test_the_auth_prefetch_reads_from_the_proxy_router_current_when_it_rea
     await _run(prefetch, replace(_host(request_data={"model": "claude"}, cache=cache), llm_router=captured))
 
     assert (_declared(captured_handle), _declared(current_handle)) == ([], [frozenset({"dep-a"})])
+
+
+_MODEL_BUDGET: Final = {"gpt-a": {"budget_limit": 1.0, "time_period": "1mo"}}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("spend", "price", "refused"),
+    [(5.0, 1e-6, True), (0.25, 1e-6, False), (5.0, 0.0, False)],
+    ids=["over_budget", "within_budget", "over_budget_on_a_free_model"],
+)
+async def test_a_jwt_user_over_its_model_budget_is_refused_and_one_within_it_carries_the_budget(
+    spend: float, price: float, refused: bool
+) -> None:
+    cache: Final = UserApiKeyCache()
+    await cache.async_set_cache(
+        key=AuthObject.user("u1"),
+        value=LiteLLM_UserTable(user_id="u1", user_role="internal_user", model_max_budget=_MODEL_BUDGET),
+        model_type=LiteLLM_UserTable,
+    )
+    limiter: Final = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
+    await limiter.dual_cache.async_set_cache(
+        key=model_budget_spend_cache_key(Litellm_EntityType.USER, "u1", "gpt-a", "1mo"), value=spend, ttl=600
+    )
+    token: Final = _token({"sub": "u1"})
+    host: Final = replace(
+        _host(request_data={"model": "gpt-a"}, cache=cache, http_handler=_Jwks(), api_key=token),  # pyright: ignore[reportArgumentType]  # serves only the GET the host makes
+        model_max_budget_limiter=limiter,
+        llm_router=Router(
+            model_list=[
+                {
+                    "model_name": "gpt-a",
+                    "litellm_params": {
+                        "model": "openai/gpt-a",
+                        "input_cost_per_token": price,
+                        "output_cost_per_token": price,
+                    },
+                }
+            ]
+        ),
+    )
+    settings: Final = RustAuthSettings(
+        {"enable_jwt_auth": True}, JWT_AUTH, core.HostFacts(master_key=None, premium=True, has_db=True)
+    )
+
+    outcome: Final = await core.drive(
+        RustAuth.authenticate_jwt(core.request(token, "/chat/completions", "POST", model="gpt-a"), settings), host
+    )
+
+    if refused:
+        assert isinstance(outcome.denial, RustDenial.BudgetExceeded)
+        assert (outcome.denial.entity_type, outcome.denial.entity_id) == ("user", "u1")
+        return
+    projected: Final = await auth_identity.project(outcome, host)
+    assert (projected.user_id, projected.user_model_max_budget) == ("u1", _MODEL_BUDGET)

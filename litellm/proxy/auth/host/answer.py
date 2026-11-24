@@ -67,15 +67,6 @@ async def _budget(call: RustAuth, check: Awaitable[None]) -> None:
     call.done()
 
 
-async def _finish_jwt(call: RustAuth, finish: Awaitable[UserAPIKeyAuth]) -> None:
-    try:
-        token: Final = await finish
-    except litellm.BudgetExceededError as exceeded:
-        call.budget_exceeded(exceeded)
-        return
-    call.row(token)
-
-
 async def _key_reads(call: RustAuth, step: RustAuthStep, host: PythonAuthHost) -> bool:
     match step:
         case RustAuthStep.CachedKey(hash=key_hash):
@@ -271,12 +262,8 @@ async def _budgets(call: RustAuth, step: RustAuthStep, host: PythonAuthHost) -> 
         case RustAuthStep.ProxyBudgetAlert(key=budget_key):
             await host.proxy_budget_alert(budget_key)
             call.done()
-        case RustAuthStep.FinishJwt(identity=identity):
-            await _finish_jwt(call, host.finish_jwt(identity))
-        case RustAuthStep.FinishAutoRegisteredJwt(
-            claims=claims, end_user_id=end_user_id, user_email=user_email, org_id=org_id, user=user, key=key
-        ):
-            await _finish_jwt(call, host.finish_auto_registered_jwt(key, claims, end_user_id, user_email, org_id, user))
+        case RustAuthStep.JwtUserModelBudget(user=user, user_id=user_id, team_id=team_id):
+            await _budget(call, host.jwt_user_model_budget(user, user_id, team_id))
         case _:
             return False
     return True

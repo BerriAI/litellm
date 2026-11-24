@@ -69,12 +69,9 @@ from litellm.proxy.auth.host.facts import (
     end_user_params,
     team_facts,
     team_member_facts,
-    with_project,
 )
-from litellm.proxy.auth.host.identity import auto_registered_key
 from litellm.proxy.auth.host.steps import jwt_auto_register, team_member_add
 from litellm.proxy.auth.host.steps.budgets import BudgetChecks, proxy_budget_alert
-from litellm.proxy.auth.jwt import auth_from_result, jwt_result
 from litellm.proxy.auth.resolvers.exceptions import KeyNotFoundError
 from litellm.proxy.auth.resolvers.grants import (
     GrantResolver,
@@ -103,7 +100,6 @@ from litellm.redis.stores.auth_cache import AuthObject
 from litellm.redis.stores.auth_cache.handle import TeamRoster
 from litellm.repositories.user_repository import UserRepository
 from litellm.repositories.verification_token_repository import VerificationTokenRepository
-from litellm.rust_bridge._native import RustIdentity
 from litellm.types.agents import AgentResponse
 from litellm.types.proxy.agent_identity import AgentIdentityFailure, ManagedAgentContext
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
@@ -757,30 +753,9 @@ class PythonAuthHost:
         )
         return EndUserRow(end_user_id=end_user_id, end_user=end_user, params={})
 
-    async def finish_jwt(self, identity: RustIdentity.Jwt) -> UserAPIKeyAuth:
+    async def jwt_user_model_budget(self, user: LiteLLM_UserTable, user_id: str, team_id: str | None) -> None:
         """Raises `litellm.BudgetExceededError` for a user over its model budget."""
-        return await self._finish(auth_from_result(jwt_result(identity, self.api_key), self.parent_otel_span))
-
-    async def finish_auto_registered_jwt(
-        self,
-        key: UserAPIKeyAuth,
-        claims: Mapping[str, object],
-        end_user_id: str | None,
-        user_email: str | None,
-        org_id: str | None,
-        user: LiteLLM_UserTable | None,
-    ) -> UserAPIKeyAuth:
-        """Raises `litellm.BudgetExceededError` for a user over its model budget."""
-        return await self._finish(auto_registered_key(key, claims, end_user_id, user_email, org_id, user))
-
-    async def _finish(self, token: UserAPIKeyAuth) -> UserAPIKeyAuth:
-        """The JWT path's project lookup and per-model user budget check, which the key path runs as its
-        own steps."""
-        budgets: Final = self._budgets()
-        project_id: Final = token.project_id
-        finished: Final = with_project(token, None if project_id is None else await self.project(project_id))
-        await budgets.jwt_user_model(finished)
-        return finished
+        await self._budgets().jwt_user_model(user, user_id, team_id)
 
     async def key_mapping_hash(self, claim_field: str, claim_value: str, issuer: str | None) -> str | None:
         return await get_jwt_key_mapping_object(

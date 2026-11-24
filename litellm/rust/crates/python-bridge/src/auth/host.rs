@@ -5,14 +5,14 @@ use litellm_coroutine::{Co, Reply};
 use litellm_gateway_auth_core::{
     AgentIdentityFailure, AuthHost, BudgetExceeded, Error, KeyHash, OperatorHooks, Rows, Token,
     authn::{
-        jwt::{KeyMappingRow, KeyMappingWrite, MappedClaim, MappedJwt, MappedKey},
+        jwt::{KeyMappingRow, KeyMappingWrite, MappedClaim, MappedKey},
         key::{CachedTeam, Keyed},
     },
     body::Params,
     identity::{
         jwt::{
-            AliasRead, DelegatedTeam, FinishedJwt, IdentityRead, JwtIdentity, ManagedAgent,
-            ModelAccess, Org, RegisteredAgent, Team, TeamRead, UserLookup, UserRead,
+            AliasRead, DelegatedTeam, IdentityRead, ManagedAgent, ModelAccess, Org,
+            RegisteredAgent, Team, TeamRead, UserLookup, UserRead,
         },
         key::Owner,
     },
@@ -125,12 +125,6 @@ pub(crate) struct Delegation {
     pub(crate) allowed_team_ids: Option<Vec<String>>,
 }
 
-/// `FinishedJwt`, owned.
-pub(crate) enum Finished {
-    Identity(Box<JwtIdentity<PyRows>>),
-    AutoRegisteredKey(Box<MappedJwt<PyRow>>, PyRow),
-}
-
 fn owned(text: Option<&str>) -> Option<String> {
     text.map(str::to_owned)
 }
@@ -207,6 +201,12 @@ pub(crate) enum Ask {
         key: PyRow,
         owner: Option<PyRow>,
         runs_inference_checks: bool,
+        reply: Reply<Result<(), BudgetExceeded>>,
+    },
+    JwtUserModelBudget {
+        user: PyRow,
+        user_id: String,
+        team_id: Option<String>,
         reply: Reply<Result<(), BudgetExceeded>>,
     },
     KeyTeam {
@@ -326,10 +326,6 @@ pub(crate) enum Ask {
     JwtEndUser {
         end_user_id: String,
         reply: Reply<PyRow>,
-    },
-    FinishJwt {
-        finished: Finished,
-        reply: Reply<Result<PyRow, BudgetExceeded>>,
     },
 
     KeyMappingHash {
@@ -500,6 +496,22 @@ impl AuthHost for PythonAuthHost {
             key,
             owner,
             runs_inference_checks,
+            reply,
+        })
+        .await?
+        .map_err(Error::from)
+    }
+    async fn jwt_user_model_budget(
+        &self,
+        user: &PyRow,
+        user_id: &str,
+        team_id: Option<&str>,
+    ) -> Result<(), Error> {
+        let (user, user_id, team_id) = (user.clone(), user_id.to_owned(), owned(team_id));
+        self.ask(|reply| Ask::JwtUserModelBudget {
+            user,
+            user_id,
+            team_id,
             reply,
         })
         .await?
@@ -682,17 +694,6 @@ impl AuthHost for PythonAuthHost {
         let end_user_id = end_user_id.to_owned();
         self.ask(|reply| Ask::JwtEndUser { end_user_id, reply })
             .await
-    }
-    async fn finish_jwt(&self, finished: FinishedJwt<'_, PyRows>) -> Result<PyRow, Error> {
-        let finished = match finished {
-            FinishedJwt::Identity(identity) => Finished::Identity(Box::new(identity.clone())),
-            FinishedJwt::AutoRegisteredKey(jwt, key) => {
-                Finished::AutoRegisteredKey(Box::new(jwt.clone()), key.clone())
-            }
-        };
-        self.ask(|reply| Ask::FinishJwt { finished, reply })
-            .await?
-            .map_err(Error::from)
     }
 
     async fn key_mapping_hash(

@@ -635,15 +635,33 @@ async def check_user_model_budget(
     Separate from the key check: a user's per-model budget caps every key they
     own, so a caller cannot escape it by minting another key.
     """
-    user_model_max_budget: Final = valid_token.user_model_max_budget
-    if valid_token.user_id is None or not isinstance(user_model_max_budget, Mapping) or not user_model_max_budget:
+    if valid_token.user_id is None:
+        return
+    await enforce_user_model_budget(
+        user_id=valid_token.user_id,
+        user_model_max_budget=valid_token.user_model_max_budget,
+        team_id=valid_token.team_id,
+        model_max_budget_limiter=model_max_budget_limiter,
+        models=models,
+    )
+
+
+async def enforce_user_model_budget(
+    *,
+    user_id: str,
+    user_model_max_budget: Mapping[str, object] | None,
+    team_id: str | None,
+    model_max_budget_limiter: _UserModelBudgetLimiter,
+    models: Sequence[str],
+) -> None:
+    if not isinstance(user_model_max_budget, Mapping) or not user_model_max_budget:
         return
     for model_name in models:
         await model_max_budget_limiter.is_user_within_model_budget(
-            user_id=valid_token.user_id,
+            user_id=user_id,
             user_model_max_budget=user_model_max_budget,
             model=model_name,
-            team_id=valid_token.team_id,
+            team_id=team_id,
         )
 
 

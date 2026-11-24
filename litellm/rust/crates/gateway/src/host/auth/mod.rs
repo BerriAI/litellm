@@ -26,7 +26,7 @@ use litellm_gateway_auth_core::{
     body::Params,
     identity::{
         jwt::{
-            AliasRead, DelegatedTeam, FinishedJwt, IdentityRead, ManagedAgent, ModelAccess, Org,
+            AliasRead, DelegatedTeam, IdentityRead, ManagedAgent, ModelAccess, Org,
             RegisteredAgent, TeamRead, UserLookup, UserRead,
         },
         key::Owner,
@@ -386,6 +386,15 @@ impl AuthHost for NativeAuthHost {
         }
     }
 
+    async fn jwt_user_model_budget(
+        &self,
+        _: &UserRecord,
+        _: &str,
+        _: Option<&str>,
+    ) -> Result<(), Error> {
+        declined("jwt_user_model_budget")
+    }
+
     async fn proxy_budget_alert(&self, _: &Key) -> Result<(), Error> {
         Ok(())
     }
@@ -403,10 +412,6 @@ impl AuthHost for NativeAuthHost {
 
     async fn create_key_mapping(&self, _: &KeyMappingRow<'_>) -> Result<KeyMappingWrite, Error> {
         declined("create_key_mapping")
-    }
-
-    async fn finish_jwt(&self, _: FinishedJwt<'_, NativeRows>) -> Result<Key, Error> {
-        declined("finish_jwt")
     }
 
     async fn with_team(&self, _: &Key, _: &TeamRecord) -> Result<Key, Error> {

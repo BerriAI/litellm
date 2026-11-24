@@ -12,7 +12,7 @@ use crate::{
     body::Params,
     identity::{
         jwt::{
-            AliasRead, DelegatedTeam, FinishedJwt, IdentityRead, ManagedAgent, ModelAccess, Org,
+            AliasRead, DelegatedTeam, IdentityRead, ManagedAgent, ModelAccess, Org,
             RegisteredAgent, Team, TeamRead, UserLookup, UserRead,
         },
         key::Owner,
@@ -396,6 +396,15 @@ pub trait AuthHost: Send + Sync {
         runs_inference_checks: bool,
     ) -> impl Future<Output = Result<(), Error>> + Send;
 
+    // TODO: decided by the host until the user per-model budget and its spend counter move to Rust
+    /// The per-model budget of the user a JWT acts as, in `team_id`, unless the request is free.
+    fn jwt_user_model_budget(
+        &self,
+        user: &UserRow<Self>,
+        user_id: &str,
+        team_id: Option<&str>,
+    ) -> impl Future<Output = Result<(), Error>> + Send;
+
     // TODO: the host reads the global spend and skips the alert without one, until that is a read
     // of the spend and an alert the core asks for
     /// Sends the proxy budget alert with the proxy's global spend.
@@ -430,15 +439,6 @@ pub trait AuthHost: Send + Sync {
     ) -> impl Future<Output = Result<KeyMappingWrite, Error>> + Send;
 
     // Finish: rows the host rebuilds from what the core decided.
-
-    // TODO: decided by the host until the user per-model budget moves to Rust and the project read
-    // uses `project`
-    /// Builds the request's token from the identity and its rows, then runs the JWT path's project
-    /// lookup and per-model user budget check on it, and returns the token.
-    fn finish_jwt(
-        &self,
-        finished: FinishedJwt<'_, Self::Rows>,
-    ) -> impl Future<Output = Result<KeyRow<Self>, Error>> + Send;
 
     // TODO: rebuilt by the host until the core returns the fresher team beside the key
     /// The key with the `team_*` values of a fresher cached team.
