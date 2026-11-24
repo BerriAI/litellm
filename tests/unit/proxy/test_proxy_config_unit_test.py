@@ -163,7 +163,7 @@ async def test_multiple_includes():
     assert config["litellm_settings"]["callbacks"] == ["prometheus"]
 
 
-def test_add_callbacks_from_db_config():
+def test_add_callbacks_from_db_config(monkeypatch: pytest.MonkeyPatch):
     """Test that callbacks are added correctly and duplicates are prevented"""
     # Setup
     from litellm.integrations.langfuse.langfuse_prompt_management import (
@@ -172,9 +172,8 @@ def test_add_callbacks_from_db_config():
 
     proxy_config = ProxyConfig()
 
-    # Reset litellm callbacks before test
-    litellm.success_callback = []
-    litellm.failure_callback = []
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "failure_callback", [])
 
     # Test Case 1: Add new callbacks
     config_data = {
@@ -201,19 +200,13 @@ def test_add_callbacks_from_db_config():
     assert len(litellm.success_callback) == 2
     assert len(litellm.failure_callback) == 1
 
-    # Cleanup
-    litellm.success_callback = []
-    litellm.failure_callback = []
-    litellm._known_custom_logger_compatible_callbacks = []
 
-
-def test_add_callbacks_invalid_input():
+def test_add_callbacks_invalid_input(monkeypatch: pytest.MonkeyPatch):
     """Test handling of invalid input for callbacks"""
     proxy_config = ProxyConfig()
 
-    # Reset callbacks
-    litellm.success_callback = []
-    litellm.failure_callback = []
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "failure_callback", [])
 
     # Test Case 1: Invalid callback format
     config_data = {
@@ -236,10 +229,6 @@ def test_add_callbacks_invalid_input():
     # Verify no callbacks were added
     assert len(litellm.success_callback) == 0
     assert len(litellm.failure_callback) == 0
-
-    # Cleanup
-    litellm.success_callback = []
-    litellm.failure_callback = []
 
 
 @pytest.mark.asyncio
