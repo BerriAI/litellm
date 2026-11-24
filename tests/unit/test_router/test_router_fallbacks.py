@@ -2324,7 +2324,7 @@ def _anthropic_to_openai_router(
             },
             {"model_name": "gpt", "litellm_params": {"model": "openai/gpt-5.6", **openai_params}},
         ],
-        fallbacks=[{"claude": [fallback_target]}],
+        fallbacks=[{"claude": [fallback_target]}, {"claude-latest": [fallback_target]}],
         model_group_alias={"claude-latest": "claude"},
         num_retries=0,
         **settings,
