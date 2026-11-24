@@ -363,8 +363,9 @@ async def test_aimage_edit_sends_markup_and_output_fields_to_openai_as_json_valu
         client=client,
     )
 
-    body: Final = _sent_json_body(captured)
-    expected: Final[dict[str, object]] = {
+    assert _sent_json_body(captured) == {
+        "model": "gpt-image-1",
+        "prompt": "add a hat",
         "images": list(_DATA_URL_REFERENCE),
         "markup": _MARKUP_REFERENCE,
         "n": 2,
@@ -373,7 +374,6 @@ async def test_aimage_edit_sends_markup_and_output_fields_to_openai_as_json_valu
         "output_format": "webp",
         "background": "transparent",
     }
-    assert {key: body.get(key) for key in expected} == expected
 
 
 def test_image_edit_sends_image_references_to_openai_as_a_json_body() -> None:
@@ -392,9 +392,11 @@ def test_image_edit_sends_image_references_to_openai_as_a_json_body() -> None:
         client=client,
     )
 
-    body: Final = _sent_json_body(captured)
-    assert body["images"] == list(_DATA_URL_REFERENCE)
-    assert body["prompt"] == "add a hat"
+    assert _sent_json_body(captured) == {
+        "model": "gpt-image-1",
+        "prompt": "add a hat",
+        "images": list(_DATA_URL_REFERENCE),
+    }
     assert [image.b64_json for image in response.data] == ["aW1n"]
 
 
@@ -416,10 +418,11 @@ async def test_aimage_edit_sends_image_references_to_an_azure_deployment_as_a_js
         client=client,
     )
 
-    body: Final = _sent_json_body(captured)
-    assert body["images"] == list(_IMAGE_REFERENCES)
-    assert body["mask"] == _MASK_REFERENCE
-    assert body["prompt"] == "add a hat"
+    assert _sent_json_body(captured) == {
+        "prompt": "add a hat",
+        "images": list(_IMAGE_REFERENCES),
+        "mask": _MASK_REFERENCE,
+    }
     assert [image.b64_json for image in response.data] == ["aW1n"]
 
 
@@ -441,7 +444,10 @@ async def test_aimage_edit_with_an_uploaded_file_still_reaches_openai_as_multipa
     content_type: Final = cast(str, captured["content_type"])
     assert content_type.startswith("multipart/form-data"), content_type
     assert _multipart_file_parts(content_type, cast(bytes, captured["body"])) == (("image[]", PNG_BYTES),)
-    assert _multipart_text_fields(content_type, cast(bytes, captured["body"]))["prompt"] == "add a hat"
+    assert _multipart_text_fields(content_type, cast(bytes, captured["body"])) == {
+        "model": "gpt-image-1",
+        "prompt": "add a hat",
+    }
 
 
 @pytest.mark.asyncio

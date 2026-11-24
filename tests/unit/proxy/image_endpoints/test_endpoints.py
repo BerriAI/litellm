@@ -867,8 +867,12 @@ def test_image_edit_json_body_with_image_references_reaches_openai_as_json(monke
         response.text,
         [call.request.content for call in upstream.calls],
     )
-    sent: Final = orjson.loads(upstream.calls.last.request.content)
-    assert (sent["images"], sent["mask"], sent["prompt"]) == (images, mask, "add a hat")
+    assert orjson.loads(upstream.calls.last.request.content) == {
+        "model": "gpt-image-1",
+        "prompt": "add a hat",
+        "images": images,
+        "mask": mask,
+    }
     assert response.status_code == 200, response.text
     assert [image["b64_json"] for image in response.json()["data"]] == ["ZWRpdGVk"]
 

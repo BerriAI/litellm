@@ -133,9 +133,11 @@ def test_image_edit_with_image_references_posts_a_form_vllm_omni_can_read():
 
     assert len(captured) == 1
     assert captured[0].headers["content-type"].startswith("application/x-www-form-urlencoded")
-    form = parse_qs(captured[0].content.decode())
-    assert form["prompt"] == ["add a hat"]
-    assert form["model"] == [MODEL]
+    assert parse_qs(captured[0].content.decode()) == {
+        "model": [MODEL],
+        "images[][image_url]": ["https://images.example/tree.png"],
+        "prompt": ["add a hat"],
+    }
 
 
 @pytest.mark.parametrize("param", ["mask", "quality", "input_fidelity"])

@@ -123,7 +123,11 @@ class TestAzureMAIImageEdit:
 
         assert len(captured) == 1
         assert captured[0].headers["content-type"].startswith("application/x-www-form-urlencoded")
-        assert parse_qs(captured[0].content.decode())["prompt"] == ["Turn this into a studio product shot"]
+        assert parse_qs(captured[0].content.decode()) == {
+            "model": ["MAI-Image-2.5"],
+            "images[][image_url]": ["https://images.example/tree.png"],
+            "prompt": ["Turn this into a studio product shot"],
+        }
 
     def test_transform_image_edit_request_uses_image_field(self):
         config = AzureFoundryMAIImageEditConfig()

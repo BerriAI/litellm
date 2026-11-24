@@ -483,8 +483,7 @@ def test_image_edit_json_image_references_reach_openai_as_the_same_json_body(gat
         response.text,
     )
     assert received[0].headers["authorization"] == "Bearer synthetic-openai-key"
-    sent: Final = _json_body(received[0])
-    expected: Final[dict[str, JsonValue]] = {
+    assert _json_body(received[0]) == {
         "model": "gpt-image-1",
         "prompt": _PROMPT,
         "images": _IMAGE_REFERENCES,
@@ -493,7 +492,6 @@ def test_image_edit_json_image_references_reach_openai_as_the_same_json_body(gat
         "size": "1024x1024",
         "output_format": "png",
     }
-    assert {key: sent.get(key) for key in expected} == expected
     assert response.status_code == 200, response.text
     payload: Final = _ImageResponse.model_validate_json(response.content)
     assert [image.b64_json for image in payload.data] == [_EDITED_IMAGE_B64], response.text
