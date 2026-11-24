@@ -17,44 +17,55 @@ vi.mock("@/components/vector_store_providers", () => ({
   VectorStoreProviders: {
     BEDROCK: "Amazon Bedrock",
     S3Vectors: "AWS S3 Vectors",
+    VERTEX: "Vertex AI RAG Engine",
     PGVECTOR: "PG Vector",
   },
   vectorStoreProviderMap: {
     BEDROCK: "bedrock",
     S3Vectors: "s3_vectors",
+    VERTEX: "vertex_ai",
     PGVECTOR: "pg_vector",
   },
   vectorStoreProviderLogoMap: {
     "Amazon Bedrock": "https://example.com/bedrock.png",
     "AWS S3 Vectors": "https://example.com/aws.png",
+    "Vertex AI RAG Engine": "https://example.com/vertex.png",
     "PG Vector": "https://example.com/pg.png",
   },
   getProviderSpecificFields: vi.fn((provider: string) => {
-    if (provider === "pg_vector") {
+    if (provider === "vertex_ai") {
       return [
         {
           name: "api_base",
           label: "API Base",
-          tooltip: "Base URL of the pgvector server",
-          placeholder: "http://localhost:8000",
+          tooltip: "Base URL of the provider",
+          placeholder: "https://vertex.internal",
           required: true,
           type: "text",
         },
         {
           name: "api_key",
           label: "API Key",
-          tooltip: "Secret for the pgvector server",
+          tooltip: "Secret for the provider",
           placeholder: "sk-...",
           required: false,
           type: "password",
         },
         {
-          name: "embedding_model",
-          label: "Embedding Model",
-          tooltip: "Model used to embed documents",
-          placeholder: "text-embedding-3-small",
+          name: "vertex_project",
+          label: "Project",
+          tooltip: "GCP project",
+          placeholder: "my-project",
+          required: true,
+          type: "text",
+        },
+        {
+          name: "vertex_location",
+          label: "Location",
+          tooltip: "GCP region",
+          placeholder: "us-central1",
           required: false,
-          type: "select",
+          type: "text",
         },
       ];
     }
@@ -141,23 +152,21 @@ describe("CreateVectorStore submit payload characterization", () => {
   it("accumulates provider-specific fields into the providerParams argument", async () => {
     render(<CreateVectorStore accessToken="test-token" />);
     await uploadFile();
-    await pickProvider("PG Vector");
+    await pickProvider("Vertex AI RAG Engine");
 
-    fireEvent.change(screen.getByPlaceholderText("http://localhost:8000"), {
-      target: { value: "http://pg.internal:8000" },
-    });
-    fireEvent.change(screen.getByPlaceholderText("sk-..."), { target: { value: "sk-secret" } });
+    fireEvent.change(screen.getByPlaceholderText("my-project"), { target: { value: "acme-rag" } });
+    fireEvent.change(screen.getByPlaceholderText("us-central1"), { target: { value: "europe-west1" } });
     await clickCreate();
 
     await waitFor(() => expect(networking.ragIngestCall).toHaveBeenCalledTimes(1));
     expect(networking.ragIngestCall).toHaveBeenCalledWith(
       "test-token",
       expect.any(File),
-      "pg_vector",
+      "vertex_ai",
       undefined,
       undefined,
       undefined,
-      { api_base: "http://pg.internal:8000", api_key: "sk-secret" },
+      { vertex_project: "acme-rag", vertex_location: "europe-west1" },
     );
   });
 
@@ -190,17 +199,28 @@ describe("CreateVectorStore submit payload characterization", () => {
   it("blocks the submit when a required provider field is missing", async () => {
     render(<CreateVectorStore accessToken="test-token" />);
     await uploadFile();
-    await pickProvider("PG Vector");
+    await pickProvider("Vertex AI RAG Engine");
     await clickCreate();
 
     expect(networking.ragIngestCall).not.toHaveBeenCalled();
   });
 
-  it("renders the password provider field as a masked input", async () => {
+  it("does not ask for the api_key and api_base the proxy rejects on ingest", async () => {
     render(<CreateVectorStore accessToken="test-token" />);
-    await pickProvider("PG Vector");
+    await pickProvider("Vertex AI RAG Engine");
 
-    expect(screen.getByPlaceholderText("sk-...")).toHaveAttribute("type", "password");
+    expect(screen.getByPlaceholderText("my-project")).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText("https://vertex.internal")).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText("sk-...")).not.toBeInTheDocument();
+  });
+
+  it("offers only providers the proxy can ingest documents into", async () => {
+    const user = userEvent.setup();
+    render(<CreateVectorStore accessToken="test-token" />);
+    await user.click(screen.getAllByRole("combobox")[0]);
+
+    expect(await screen.findByRole("option", { name: /Vertex AI RAG Engine/ })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /PG Vector/ })).not.toBeInTheDocument();
   });
 
   it("reuses the vector store id returned by the first ingest for later documents", async () => {

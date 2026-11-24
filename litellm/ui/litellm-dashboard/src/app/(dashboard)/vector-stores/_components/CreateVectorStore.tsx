@@ -1,7 +1,7 @@
 import React, { useEffect, useId, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "@/lib/toast";
-import { CircleCheck, CircleHelp, Inbox, X } from "lucide-react";
+import { CircleCheck, CircleHelp, Inbox, Info, X } from "lucide-react";
 import { v4 as uuidv4 } from "uuid";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/shared/Alert";
 import { ragIngestCall } from "@/components/networking";
@@ -37,10 +37,15 @@ const ACCEPTED_DOCUMENT_TYPES = [
 
 const MAX_DOCUMENT_BYTES = 50 * 1024 * 1024;
 
-const RAG_INGEST_UNSUPPORTED_PROVIDERS = new Set(["valkey", "opensearch"]);
+const RAG_INGEST_PROVIDERS = new Set(["openai", "bedrock", "s3_vectors", "vertex_ai"]);
+
+const SERVER_SIDE_CREDENTIAL_FIELDS = new Set(["api_key", "api_base"]);
+
+const ingestFields = (provider: string): VectorStoreFieldConfig[] =>
+  getProviderSpecificFields(provider).filter((field) => !SERVER_SIDE_CREDENTIAL_FIELDS.has(field.name));
 
 const providerItems = Object.entries(VectorStoreProviders)
-  .filter(([providerEnum]) => !RAG_INGEST_UNSUPPORTED_PROVIDERS.has(vectorStoreProviderMap[providerEnum]))
+  .filter(([providerEnum]) => RAG_INGEST_PROVIDERS.has(vectorStoreProviderMap[providerEnum]))
   .map(([providerEnum, providerDisplayName]) => ({
     value: vectorStoreProviderMap[providerEnum],
     label: providerDisplayName,
@@ -155,8 +160,7 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
       return;
     }
 
-    // Validate provider-specific required fields
-    const requiredFields = getProviderSpecificFields(selectedProvider).filter((field) => field.required);
+    const requiredFields = ingestFields(selectedProvider).filter((field) => field.required);
     for (const field of requiredFields) {
       if (!providerParams[field.name]) {
         toast.warning(t("vectorStores.create.toasts.fieldRequired", { field: t(field.label) }));
@@ -273,6 +277,12 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
           <h3 className="text-lg font-medium">{t("vectorStores.create.title")}</h3>
           <p className="text-sm text-muted-foreground">{t("vectorStores.create.description")}</p>
         </div>
+
+        <Alert>
+          <Info />
+          <AlertTitle>{t("vectorStores.create.otherProviders.title")}</AlertTitle>
+          <AlertDescription>{t("vectorStores.create.otherProviders.description")}</AlertDescription>
+        </Alert>
 
         {/* Upload Area */}
         <Card>
@@ -396,7 +406,7 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
 
               {/* Other Provider-specific fields */}
               {selectedProvider !== "s3_vectors" &&
-                getProviderSpecificFields(selectedProvider).map((field: VectorStoreFieldConfig) => (
+                ingestFields(selectedProvider).map((field: VectorStoreFieldConfig) => (
                   <Field key={field.name}>
                     <FieldLabel htmlFor={`vector-store-${field.name}`}>
                       {labelWithHint(t(field.label), t(field.tooltip))}

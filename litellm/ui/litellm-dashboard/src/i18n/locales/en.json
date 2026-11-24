@@ -910,7 +910,7 @@
       "refresh": "Refresh",
       "description": "You can use vector stores to store and retrieve LLM embeddings.",
       "tabs": {
-        "create": "Create Vector Store",
+        "create": "Create from Documents",
         "manage": "Manage Vector Stores",
         "test": "Test Vector Store",
         "indexes": "Indexes"
@@ -1067,8 +1067,12 @@
       }
     },
     "create": {
-      "title": "Create Vector Store",
-      "description": "Upload documents and select a provider to create a new vector store with embedded content.",
+      "title": "Create from Documents",
+      "description": "Upload documents and LiteLLM embeds them into a new vector store, using the provider credentials configured on the proxy.",
+      "otherProviders": {
+        "title": "Using Milvus, pgvector, MongoDB, Azure, Vertex AI Search, OpenSearch or Valkey?",
+        "description": "Those stores can't be created from documents here. Open Manage Vector Stores and click Add Vector Store to register one with its connection details."
+      },
       "upload": {
         "title": "Step 1: Upload Documents",
         "description": "Upload one or more documents (PDF, TXT, DOCX, MD). Maximum file size: 50MB per file.",

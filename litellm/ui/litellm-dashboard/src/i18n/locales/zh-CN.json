@@ -846,7 +846,7 @@
       "refresh": "刷新",
       "description": "可以使用向量存储来保存和检索 LLM 嵌入向量。",
       "tabs": {
-        "create": "创建向量存储",
+        "create": "从文档创建",
         "manage": "管理向量存储",
         "test": "测试向量存储",
         "indexes": "索引"
@@ -1003,8 +1003,12 @@
       }
     },
     "create": {
-      "title": "创建向量存储",
-      "description": "上传文档并选择提供商，以创建包含向量化内容的向量存储。",
+      "title": "从文档创建",
+      "description": "上传文档后，LiteLLM 会使用代理上配置的提供商凭据，将其嵌入到新的向量存储中。",
+      "otherProviders": {
+        "title": "使用 Milvus、pgvector、MongoDB、Azure、Vertex AI Search、OpenSearch 或 Valkey？",
+        "description": "这些向量存储无法在此通过文档创建。请打开“管理向量存储”，点击“添加向量存储”，填写连接信息完成注册。"
+      },
       "upload": {
         "title": "第一步：上传文档",
         "description": "上传一份或多份文档（PDF、TXT、DOCX、MD），每份最大 50 MB。",
