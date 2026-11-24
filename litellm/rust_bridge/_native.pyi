@@ -2233,6 +2233,15 @@ class RustSpendLog:
         token_redactor: NativeTokenRedactor,
     ) -> RustSpendLog: ...
     def callback(self) -> RustHandle: ...
+    def start(
+        self,
+        hook: str,
+        fields: Mapping[str, object],
+        call: Mapping[str, object] | None,
+        host: object,
+        request: NativeRequestRedis | None,
+        /,
+    ) -> Execution: ...
 
 @final
 class NativeTokenRedactor:

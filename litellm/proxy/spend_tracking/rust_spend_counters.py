@@ -17,6 +17,8 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 from typing_extensions import assert_never
 
 from litellm._internal_context import with_service_target
+from litellm._logging import verbose_proxy_logger
+from litellm.caching.redis_batch import flush_post_call_redis_batches
 from litellm.constants import AUTH_OBJECTS_TARGET
 from litellm.proxy.auth.customer_spend import customer_spend_counter
 from litellm.proxy.db.spend_counter_reseed import SpendCounterReseed
@@ -291,3 +293,22 @@ async def charge_spend_counters(
         ),
         _streamless,
     )
+
+
+async def charge_counter_steps(steps: Sequence[Mapping[str, object]]) -> None:
+    """Runs counter steps the Rust spend log callback built, one after another, with this proxy answering their host
+    calls, on the request's post-call batch, then sends that batch. A failed step is logged and the rest still run,
+    as ``_raise_failure_spend_counters`` does per row."""
+    from litellm.proxy.proxy_server import spend_counter_store
+    from litellm.proxy.spend_tracking.native_budgets import native_budgets
+
+    budgets: Final = native_budgets()
+    if budgets is None:
+        raise RuntimeError("the ledger's spend counter step runs on the Rust spend counter store")
+    request: Final = post_call_request() if spend_counter_store.has_redis else None
+    for step in steps:
+        try:
+            _ = await drive(budgets.charge_counters(step, None, None, request, _HOST), _streamless)
+        except Exception:  # noqa: BLE001  # one row's counter failure must not keep the other rows' counters from landing
+            verbose_proxy_logger.exception("Failed to raise spend counters for a failure spend row")
+    await flush_post_call_redis_batches()
