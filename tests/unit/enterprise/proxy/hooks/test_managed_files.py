@@ -6187,6 +6187,7 @@ def _gemini_batch_output_row() -> LiteLLM_ManagedFileTable:
         ("user", "file"),
         ("user", "image_url"),
         ("user", "input_image"),
+        ("user", "video_url"),
         ("tool", "file"),
         ("tool", "image_url"),
         ("tool", "input_image"),
@@ -6207,6 +6208,8 @@ async def test_chat_file_references_use_managed_file_access(
     part: Final = (
         {"type": "file", "file": {"file_id": uri, "format": "application/pdf"}}
         if media == "file"
+        else {"type": media, "video_url": {"url": uri, "format": "video/mp4"}}
+        if media == "video_url"
         else {"type": media, "image_url": {"url": uri, "format": "image/png"}}
     )
     content_key: Final = "images" if role == "assistant" else "content"
