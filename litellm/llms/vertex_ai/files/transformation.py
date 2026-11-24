@@ -1356,14 +1356,14 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         messages: list[AllMessageValues],
         optional_params: Mapping[str, object],
         litellm_params: dict,
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         if not api_key:
             api_key, _ = self.get_access_token(
                 credentials=litellm_params.get("vertex_credentials"),
@@ -1506,10 +1506,10 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
     def map_openai_params(
         self,
         non_default_params: Mapping[str, object],
-        optional_params: dict,
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         return optional_params
 
     def _map_openai_to_vertex_params(
@@ -1649,7 +1649,9 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             object="file",
         )
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | Headers
+    ) -> BaseLLMException:
         return VertexAIError(status_code=status_code, message=error_message, headers=headers)
 
     def _parse_gcs_uri(self, file_id: str, litellm_params: Mapping[str, object] | None = None) -> tuple[str, str]:
@@ -1728,7 +1730,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         purpose: str | None,
         optional_params: Mapping[str, object],
         litellm_params: Mapping[str, object],
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         raise NotImplementedError("VertexAIFilesConfig does not support file listing")
 
     def transform_list_files_response(
