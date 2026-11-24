@@ -686,7 +686,7 @@ async def test_anthropic_messages_claude_platform_sends_exact_body_through_stric
 def _proxy_user_profile_header(user_profile_id: str) -> object:
     from litellm.proxy.litellm_pre_call_utils import add_provider_specific_headers_to_request
 
-    data: Final[dict] = {}
+    data: Final[dict[str, object]] = {}
     add_provider_specific_headers_to_request(data=data, headers={}, user_profile_id=user_profile_id)
     return data["provider_specific_header"]
 

@@ -151,7 +151,7 @@ class TestProviderSpecificHeaderUtils:
         assert result == {}
 
     def test_override_headers_replaces_any_casing_but_keeps_a_caller_beta(self):
-        merged = override_headers(
+        merged: Final = override_headers(
             {"Anthropic-Beta": "caller-beta", "Anthropic-User-Profile-Id": "uprof_other"},
             {"anthropic-beta": "client-header-beta", "anthropic-user-profile-id": "uprof_pinned"},
         )

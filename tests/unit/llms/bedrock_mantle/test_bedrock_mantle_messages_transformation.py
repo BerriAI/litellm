@@ -305,7 +305,7 @@ class TestWireRequest:
     async def test_a_proxy_user_profile_id_reaches_mantle_in_the_body(self, model: str) -> None:
         from litellm.proxy.litellm_pre_call_utils import add_provider_specific_headers_to_request
 
-        proxy_request_data: Final[dict] = {}  # mutable-ok: the function under test writes into it
+        proxy_request_data: Final[dict[str, object]] = {}  # mutable-ok: the function under test writes into it
         add_provider_specific_headers_to_request(data=proxy_request_data, headers={}, user_profile_id="uprof_01")
         route: Final = _mantle_messages_route("us-east-1").mock(return_value=_anthropic_response())
 
@@ -328,7 +328,7 @@ class TestWireRequest:
     async def test_the_proxy_user_profile_id_beats_a_caller_header_in_another_case(self, model: str) -> None:
         from litellm.proxy.litellm_pre_call_utils import add_provider_specific_headers_to_request
 
-        proxy_request_data: Final[dict] = {}  # mutable-ok: the function under test writes into it
+        proxy_request_data: Final[dict[str, object]] = {}  # mutable-ok: the function under test writes into it
         add_provider_specific_headers_to_request(data=proxy_request_data, headers={}, user_profile_id="uprof_pinned")
         route: Final = _mantle_messages_route("us-east-1").mock(return_value=_anthropic_response())
 
