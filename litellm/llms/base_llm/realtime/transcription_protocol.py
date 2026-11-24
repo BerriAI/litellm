@@ -11,6 +11,7 @@ from pydantic import JsonValue, TypeAdapter, ValidationError
 from litellm._uuid import uuid
 from litellm.types.llms.openai import (
     OpenAIRealtimeErrorEvent,
+    OpenAIRealtimeInputAudioBufferCleared,
     OpenAIRealtimeInputAudioBufferSpeechEvent,
     OpenAIRealtimeInputAudioTranscriptionCompleted,
     OpenAIRealtimeInputAudioTranscriptionDelta,
@@ -254,6 +255,14 @@ def speech_event(
         "type": event_type,
         "event_id": new_event_id(),
         "item_id": item_id,
+    }
+    return event
+
+
+def cleared_event() -> OpenAIRealtimeInputAudioBufferCleared:
+    event: Final[OpenAIRealtimeInputAudioBufferCleared] = {
+        "type": "input_audio_buffer.cleared",
+        "event_id": new_event_id(),
     }
     return event
 

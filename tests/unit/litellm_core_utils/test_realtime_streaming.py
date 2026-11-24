@@ -3918,7 +3918,6 @@ async def test_deferred_setup_caps_non_audio_buffered_messages(monkeypatch):
     client_ws.receive_text = AsyncMock(
         side_effect=[audio_msg] + [flood_msg] * (cap + 50) + [ConnectionClosed(None, None)]
     )
-    client_ws.send_text = AsyncMock()
     backend_ws = MagicMock()
     backend_ws.send = AsyncMock()
     logging_obj: Final = _mock_logging()
@@ -3937,36 +3936,6 @@ async def test_deferred_setup_caps_non_audio_buffered_messages(monkeypatch):
     backend_ws.send.assert_not_called()
     assert len(streaming._pending_messages_until_setup) == cap
     assert streaming._pending_messages_byte_total <= RealTimeStreaming._MAX_BUFFERED_BYTES
-    sent: Final = [json.loads(call.args[0]) for call in client_ws.send_text.await_args_list]
-    assert [(event["type"], event["error"]["code"]) for event in sent] == [("error", "session_not_configured")]
-
-
-@pytest.mark.asyncio
-async def test_a_full_buffer_after_setup_does_not_ask_the_client_for_session_update(monkeypatch):
-    monkeypatch.setattr(litellm, "gemini_live_defer_setup", True, raising=False)
-    from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
-
-    cap: Final = RealTimeStreaming._MAX_BUFFERED_MESSAGES
-    audio_msg: Final = json.dumps({"type": "input_audio_buffer.append", "audio": "AA=="})
-    client_ws: Final = MagicMock()
-    client_ws.receive_text = AsyncMock(side_effect=[*([audio_msg] * (cap + 5)), ConnectionClosed(None, None)])
-    client_ws.send_text = AsyncMock()
-    backend_ws: Final = MagicMock()
-    backend_ws.send = AsyncMock(side_effect=ConnectionError("upstream unavailable"))
-    streaming: Final = RealTimeStreaming(
-        client_ws,
-        backend_ws,
-        _mock_logging(),
-        provider_config=GeminiRealtimeConfig(),
-        model="gemini-live-2.5-flash-native-audio",
-    )
-    streaming._backend_setup_complete = True
-    streaming._pending_messages_until_setup.append(audio_msg)
-
-    await streaming.client_ack_messages()
-
-    sent: Final = [json.loads(call.args[0]) for call in client_ws.send_text.await_args_list]
-    assert [event["error"].get("code") for event in sent if event["type"] == "error"] == []
 
 
 @pytest.mark.asyncio
@@ -4712,9 +4681,9 @@ async def test_deferred_setup_clear_drops_appends_when_buffered():
     clear_msg = json.dumps({"type": "input_audio_buffer.clear"})
     new_audio = json.dumps({"type": "input_audio_buffer.append", "audio": "new"})
 
-    await streaming._buffer_pending_message_until_setup(old_audio)
-    await streaming._buffer_pending_message_until_setup(clear_msg)
-    await streaming._buffer_pending_message_until_setup(new_audio)
+    streaming._buffer_pending_message_until_setup(old_audio)
+    streaming._buffer_pending_message_until_setup(clear_msg)
+    streaming._buffer_pending_message_until_setup(new_audio)
 
     assert streaming._pending_messages_until_setup == [new_audio]
 

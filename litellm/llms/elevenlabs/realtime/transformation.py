@@ -21,6 +21,7 @@ from litellm.llms.base_llm.realtime.transcription_protocol import (
     RealtimeTranscriptionProtocolError,
     TranscriptionAudioFormat,
     build_realtime_wss_url,
+    cleared_event,
     completed_event,
     decode_pcm16_append,
     delta_event,
@@ -217,8 +218,13 @@ def parse_session_update(
     update: Final = parse_transcription_session_update(payload, ElevenLabsProtocolError)
     if update.session_type not in (None, "transcription", "realtime"):
         return SessionUpdateRejected(f"{_BACKEND_NAME} supports transcription sessions only")
-    if update.model is not None and normalize_model(update.model) != model:
-        return SessionUpdateRejected("realtime session model cannot be changed")
+    model_changed: Final = update.model is not None and normalize_model(update.model) != model
+    if model_changed and not drop_params:
+        return SessionUpdateRejected(
+            f"realtime session model cannot be changed: send {model} or leave transcription.model out"
+        )
+    if model_changed:
+        verbose_logger.warning("ElevenLabs realtime: dropping transcription.model %s", update.model)
     if update.unsupported_transcription_keys:
         verbose_logger.warning(
             "ElevenLabs realtime: dropping unsupported transcription settings %s",
@@ -325,6 +331,13 @@ class _Turn:
     previous: str | None
 
 
+def _cleared_events(turn: _Turn | None) -> tuple[OpenAIRealtimeEvents, ...]:
+    stopped: Final[tuple[OpenAIRealtimeEvents, ...]] = (
+        () if turn is None else (speech_event("input_audio_buffer.speech_stopped", turn.item_id),)
+    )
+    return (*stopped, cleared_event())
+
+
 class ElevenLabsEventTransformer:
     def __init__(self, *, new_item_id: Callable[[], str] = _new_item_id) -> None:
         self._new_item_id: Final = new_item_id
@@ -402,7 +415,7 @@ class ElevenLabsEventTransformer:
         answered_commit: Final = self._pending_commit_discards[:1]
         self._pending_commit_discards = self._pending_commit_discards[1:]
         if answered_commit == (True,):
-            return ()
+            return _cleared_events(turn)
         if turn is None and not text and answered_commit != (False,):
             return ()
         item_id: Final = self._new_item_id() if turn is None else turn.item_id

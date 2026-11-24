@@ -217,23 +217,6 @@ _HELD_SESSION_UPDATE_TOO_LARGE: Final = RealtimeSessionUpdateRejection(
 )
 
 
-def _pre_setup_buffer_full_error_event() -> Mapping[str, object]:
-    return {
-        "type": "error",
-        "event_id": f"event_{uuid.uuid4()}",
-        "error": {
-            "type": "invalid_request_error",
-            "code": "session_not_configured",
-            "message": (
-                "Send session.update to configure the session. Audio sent before it is buffered up to a limit, "
-                "and that limit was reached, so later audio is dropped until session.update arrives"
-            ),
-            "param": None,
-            "event_id": None,
-        },
-    }
-
-
 def _unscreened_audio_error_event(client_event_id: object) -> Mapping[str, object]:
     return {
         "type": "error",
@@ -634,7 +617,6 @@ class RealTimeStreaming:
         self._applied_session_fields: Mapping[str, object] | None = None
         self._held_session_update_bytes: int = 0
         self._unscreened_audio_refused: bool = False
-        self._pre_setup_buffer_full_reported: bool = False
         # Whether this is a transcription-only session (session.type == "transcription",
         # e.g. gpt-realtime-whisper). Such sessions must not be sent response.create and
         # their input_audio_transcription.completed usage drives duration-based cost.
@@ -1524,7 +1506,7 @@ class RealTimeStreaming:
             return False
         return msg_obj.get("type") in RealTimeStreaming._CLIENT_AUDIO_BUFFER_TYPES
 
-    async def _buffer_pending_message_until_setup(self, message: str) -> None:
+    def _buffer_pending_message_until_setup(self, message: str) -> None:
         try:
             msg_type = _decode_json_object(message).get("type")
         except (json.JSONDecodeError, TypeError):
@@ -1550,13 +1532,6 @@ class RealTimeStreaming:
                 len(self._pending_messages_until_setup),
                 self._pending_messages_byte_total,
             )
-            await self._report_pre_setup_buffer_full()
-
-    async def _report_pre_setup_buffer_full(self) -> None:
-        if self._pre_setup_buffer_full_reported or self._backend_setup_complete:
-            return
-        self._pre_setup_buffer_full_reported = True
-        await self.websocket.send_text(json.dumps(_pre_setup_buffer_full_error_event()))
 
     async def _flush_pending_messages_until_setup(self) -> bool:
         pending: Final = self._collapse_buffered_audio_messages(self._pending_messages_until_setup)
@@ -2699,7 +2674,7 @@ class RealTimeStreaming:
                     await self._send_setup_before_content(msg_type)
 
                 if self._should_buffer_client_message_until_setup(message):
-                    await self._buffer_pending_message_until_setup(message)
+                    self._buffer_pending_message_until_setup(message)
                     continue
 
                 if self._pending_messages_until_setup:
@@ -2709,13 +2684,13 @@ class RealTimeStreaming:
                         and msg_type in SESSION_UPDATE_EVENT_TYPES
                     )
                     if not should_send_setup_before_buffered_messages:
-                        await self._buffer_pending_message_until_setup(message)
+                        self._buffer_pending_message_until_setup(message)
                         if self._backend_setup_complete and not self._flushing_pending_messages_until_setup:
                             await self._flush_pending_messages_until_setup()
                         continue
 
                 if self._flushing_pending_messages_until_setup:
-                    await self._buffer_pending_message_until_setup(message)
+                    self._buffer_pending_message_until_setup(message)
                     continue
 
                 ## FORWARD TO BACKEND
