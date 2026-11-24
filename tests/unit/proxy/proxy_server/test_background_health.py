@@ -760,14 +760,16 @@ async def test_run_background_health_check_probes_only_listed_model_groups(monke
         (False, True, ["active", "paused"]),
         (True, True, ["active"]),
         (True, False, ["active", "paused"]),
+        ("true", True, ["active"]),
+        ("false", True, ["active", "paused"]),
     ],
-    ids=["unset", "off", "on", "unblocked"],
+    ids=["unset", "off", "on", "unblocked", "on_as_string", "off_as_string"],
 )
 async def test_background_health_check_can_skip_blocked_deployments(
     monkeypatch: pytest.MonkeyPatch,
     router_redis: tuple[RedisCache, object],
     shared: bool,
-    skip_blocked: bool | None,
+    skip_blocked: bool | str | None,
     blocked: bool,
     expected: list[str],
 ) -> None:

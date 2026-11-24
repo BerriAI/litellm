@@ -4815,7 +4815,7 @@ async def _run_background_health_check():
         wildcard_children, wildcard_child_ids = _public_wildcard_children(
             litellm.public_model_groups, llm_router, prisma_client is not None, scoped_model_groups
         )
-        skip_blocked = general_settings_view().get("health_check_skip_blocked_background_models") is True
+        skip_blocked = str(general_settings_view().get("health_check_skip_blocked_background_models")).lower() == "true"
         scoped_deployments = filter_deployments_to_model_groups(probe_candidates, scoped_model_groups)
         _llm_model_list = [
             deployment

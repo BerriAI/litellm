@@ -775,6 +775,24 @@ async def test_health_check_routing_falls_back_to_unhealthy_deployments_beside_a
     assert await core.health().fully_unhealthy_model_names() == {"g"}
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failed", "expected"),
+    [(("p1", "p2"), {"g"}), (("p1",), set())],
+    ids=["all_failed", "one_failed"],
+)
+async def test_a_group_of_only_paused_deployments_is_fully_unhealthy_when_every_one_failed(
+    make_core: MakeCore, failed: tuple[str, ...], expected: set[str]
+) -> None:
+    core: Final = make_core(
+        model_list=[deployment("g", deployment_id, model_info={"blocked": True}) for deployment_id in ("p1", "p2")],
+        enable_health_check_routing=True,
+    )
+    core.health().health_checks.set_deployment_health_states(unhealthy(*failed))  # pyright: ignore[reportArgumentType]  # health states
+
+    assert await core.health().fully_unhealthy_model_names() == expected
+
+
 @pytest.mark.parametrize(
     ("arguments", "age"),
     [
