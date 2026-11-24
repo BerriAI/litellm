@@ -8,7 +8,7 @@ from pydantic import fields as pyd_fields
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.core_helpers import process_response_headers
+from litellm.litellm_core_utils.core_helpers import process_response_headers, require_attributes
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     safe_convert_created_field,
 )
@@ -48,6 +48,11 @@ class _EventModelClass(Protocol):
     def model_validate(self, obj: Mapping[str, object]) -> ResponsesAPIStreamingResponse: ...
 
 
+class _ModelFieldsCarrier(Protocol):
+    @property
+    def model_fields(self) -> Mapping[str, pyd_fields.FieldInfo]: ...
+
+
 class _FieldDefaultCarrier(Protocol):
     @property
     def default(self) -> object: ...
@@ -85,7 +90,7 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def custom_llm_provider(self) -> LlmProviders:
         return LlmProviders.VOLCENGINE
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         """
         Volcengine Responses API: only documented parameters are supported.
         """
@@ -127,7 +132,7 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def get_complete_url(
         self,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: object,
     ) -> str:
         """
         Construct Volcengine Responses API endpoint.
@@ -153,7 +158,7 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
         response_api_optional_params: ResponsesAPIOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Volcengine Responses API aligns with OpenAI parameters.
         Remove parameters not supported by the public docs.
@@ -279,11 +284,11 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
         response_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[str, dict]:
+        headers: object,
+    ) -> tuple[str, dict[str, object]]:
         encoded_response_id: Final = encode_url_path_segment(response_id, field_name="response_id")
         url: Final = f"{api_base}/{encoded_response_id}"
-        data: Final[dict] = {}
+        data: Final[dict[str, object]] = {}
         return url, data
 
     def transform_delete_response_api_response(
@@ -312,7 +317,7 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
         response_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
+        headers: object,
     ) -> tuple[str, dict[str, str]]:
         encoded_response_id: Final = encode_url_path_segment(response_id, field_name="response_id")
         url: Final = f"{api_base}/{encoded_response_id}"
@@ -345,13 +350,13 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
         response_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
+        headers: object,
         after: str | None = None,
         before: str | None = None,
         include: list[str] | None = None,
         limit: int = 20,
         order: Literal["asc", "desc"] = "desc",
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         encoded_response_id: Final = encode_url_path_segment(response_id, field_name="response_id")
         url: Final = join_api_base(api_base, f"{encoded_response_id}/input_items")
         return url, list_input_items_query_params(after=after, before=before, include=include, limit=limit, order=order)
@@ -360,7 +365,7 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-    ) -> dict:
+    ) -> dict[str, object]:
         try:
             return self._parsed_response_body(raw_response)
         except Exception:
@@ -374,11 +379,11 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
         response_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[str, dict]:
+        headers: object,
+    ) -> tuple[str, dict[str, object]]:
         encoded_response_id: Final = encode_url_path_segment(response_id, field_name="response_id")
         url: Final = join_api_base(api_base, f"{encoded_response_id}/cancel")
-        data: Final[dict] = {}
+        data: Final[dict[str, object]] = {}
         return url, data
 
     def transform_cancel_response_api_response(
@@ -528,7 +533,7 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
             v_type: Final = value_items.get("type")
             for candidate in candidates:
                 try:
-                    candidate_fields: Mapping[str, pyd_fields.FieldInfo] = getattr(candidate, "model_fields")
+                    candidate_fields = require_attributes(candidate, _ModelFieldsCarrier, "model_fields").model_fields
                     type_field = candidate_fields.get("type")
                     if type_field is None:
                         continue

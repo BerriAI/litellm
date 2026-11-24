@@ -712,6 +712,101 @@ async def test_editing_a_custom_cap_retains_its_original_reset_anchor(elapsed: i
     assert after.reset_at == before.reset_at
 
 
+class ResetAdvancingBudgetTable(Table):
+    def __init__(self, database: Database) -> None:
+        super().__init__("budget_id", database)
+        self.locked = False
+
+    def advance_reset(self, budget_id: str) -> None:
+        row: Final = self.rows[budget_id]
+        windows: Final = TypeAdapter(tuple[Mapping[str, object], ...]).validate_python(
+            row.model_dump()["budget_limits"]
+        )
+        self.rows = {
+            **self.rows,
+            budget_id: row.model_copy(
+                update={"budget_limits": [{**window, "reset_at": (NOW + timedelta(days=2)).isoformat()}
+                                          for window in windows]}
+            ),
+        }
+
+    async def find_unique(
+        self, where: Mapping[str, object], include: Mapping[str, object] | None = None
+    ) -> Record | None:
+        snapshot: Final = await super().find_unique(where, include)
+        if snapshot is not None and not self.locked:
+            self.advance_reset(str(where["budget_id"]))
+        return snapshot
+
+
+class ResetAdvancingDatabase(Database):
+    def __init__(self) -> None:
+        super().__init__()
+        self.budget_rows: Final = ResetAdvancingBudgetTable(self)
+        self.litellm_budgettable = self.budget_rows
+        self.in_transaction = False
+
+    async def query_raw(self, query: str, *args: object) -> Sequence[Mapping[str, object]]:
+        if query.startswith('SELECT budget_limits FROM "LiteLLM_BudgetTable"') and "FOR UPDATE" in query:
+            assert self.in_transaction, "Budget row locks must cover the edit transaction"
+            budget_id: Final = str(args[0])
+            self.budget_rows.advance_reset(budget_id)
+            self.budget_rows.locked = True
+            return ({"budget_limits": self.budget_rows.rows[budget_id].model_dump()["budget_limits"]},)
+        return await super().query_raw(query, *args)
+
+    @asynccontextmanager
+    async def tx(self) -> AsyncIterator["ResetAdvancingDatabase"]:
+        async with super().tx():
+            self.in_transaction = True
+            try:
+                yield self
+            finally:
+                self.budget_rows.locked = False
+                self.in_transaction = False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ("edit", "clear-null", "clear-empty", "scalar"))
+async def test_customer_budget_edit_preserves_a_racing_reset(change: str) -> None:
+    database: Final = ResetAdvancingDatabase()
+    hierarchy: Final = CustomerHierarchy(
+        cast("Prisma", database), premium_user=True, clock=lambda: NOW
+    )  # cast-ok: deterministic Prisma protocol fixture
+    organization: Final = await hierarchy.create_organization(
+        OrganizationCreate(
+            customer_org_id="org",
+            budget=Budget(
+                max_budget=50,
+                budget_limits=(BudgetLimit(budget_duration="2d", max_budget=10, reset_at=NOW),),
+            ),
+        ),
+        "admin",
+    )
+    assert not isinstance(organization, Failure)
+    assert organization.budget_id is not None
+    edits: Final = {
+        "edit": Budget(budget_limits=(BudgetLimit(budget_duration="2d", max_budget=20),)),
+        "clear-null": Budget(budget_limits=None),
+        "clear-empty": Budget(budget_limits=()),
+        "scalar": Budget(max_budget=75),
+    }
+    result: Final = await hierarchy.update_organization(
+        "org", OrganizationPatch(budget=edits[change]), "admin"
+    )
+    assert not isinstance(result, Failure)
+    stored: Final = database.budget_rows.rows[organization.budget_id].model_dump()
+    expected_windows: Final = (
+        None if change == "clear-null" else [] if change == "clear-empty" else [
+            {"budget_duration": "2d", "max_budget": 20 if change == "edit" else 10,
+             "reset_at": (NOW + timedelta(days=2)).isoformat()}
+        ]
+    )
+    assert (stored["max_budget"], stored["budget_limits"]) == (
+        75 if change == "scalar" else 50, expected_windows
+    )
+
+
 def test_window_override_preserves_other_period_and_scalar_fields() -> None:
     template: Final = Budget(
         max_budget=500,

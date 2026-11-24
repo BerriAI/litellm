@@ -105,7 +105,7 @@ jobs:
           set -o pipefail
           mode=core
           lint_runtime=true
-          [ -n "${PR_NUMBER}" ] || { mode=full; lint_runtime=false; }
+          [ -n "${PR_NUMBER}" ] || mode=full
           case "${BASE_REF}" in
             rc/* | stable/* | lts/*) mode=full; lint_runtime=false ;;
           esac
@@ -304,7 +304,9 @@ jobs:
               tests/unit/llms/gigachat
               tests/unit/llms/google_pse
               tests/unit/llms/github_copilot
+              tests/unit/llms/gnani
               tests/unit/llms/gradient_ai
+              tests/unit/llms/gradium
               tests/unit/llms/groq
               tests/unit/llms/heroku
               tests/unit/llms/hosted_vllm
@@ -502,7 +504,6 @@ jobs:
               tests/unit/secret_managers
               tests/unit/skills/test_skills_main.py
               tests/unit/telemetry tests/unit/proxy/telemetry
-              tests/unit/tracing
             python-version: "3.12"
             workers: 4
             reruns: 0
@@ -786,6 +787,7 @@ jobs:
               tests/unit/responses/test_additional_tools.py
               tests/unit/responses/test_custom_tool_call.py
               tests/unit/responses/test_input_items_query.py
+              tests/unit/responses/test_instructions_length.py
               tests/unit/responses/test_metadata_codex_callback.py
               tests/unit/responses/test_no_duplicate_spend_logs.py
               tests/unit/responses/test_null_test_fix.py
@@ -992,7 +994,6 @@ jobs:
           - shard: endpoints-and-responses
             test-path: |-
               tests/unit/proxy/test_proxy_server_exception_mapping.py
-              tests/unit/proxy/lens
               tests/unit/proxy/auth/test_models_fallback_endpoint.py
               tests/unit/proxy/common_utils/test_check_batch_cost.py
               tests/unit/proxy/common_utils/test_check_responses_cost.py
@@ -1018,7 +1019,7 @@ jobs:
 
           - shard: lens-python-310
             test-path: >-
-              tests/unit/proxy/lens
+              tests/unit/integrations/lens/proxy
             python-version: "3.10"
             workers: 0
             reruns: 0
@@ -1370,6 +1371,14 @@ jobs:
         timeout-minutes: 5
         uses: ./.github/actions/cache-uv-downloads
 
+      - name: Checkout litellm-docs into docs/my-website (for documentation_tests)
+        if: steps.changes.outputs.decision != 'skip'
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          repository: BerriAI/litellm-docs
+          path: docs/my-website
+          persist-credentials: false
+
       - name: Download the Rust bridge
         if: steps.changes.outputs.decision != 'skip'
         timeout-minutes: 5
@@ -1405,6 +1414,19 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: uv run --no-sync python litellm/scripts/openapi_docs_gate.py --base "$(git rev-parse HEAD^1)"
+
+      - name: Run the code-quality checks that import litellm
+        if: steps.changes.outputs.decision != 'skip'
+        run: |
+          printf '%s\n' "$GITHUB_WORKSPACE" > "$(.venv/bin/python -c 'import sysconfig; print(sysconfig.get_path("purelib"))')/litellm-workspace.pth"
+          uv run --no-sync python .github/scripts/ci/run_parallel_checks.py --jobs 4 <<'EOF'
+          python ./tests/code_coverage_tests/enforce_llms_folder_style.py
+          python ./tests/code_coverage_tests/test_proxy_types_import.py
+          pytest -q --noconftest -p no:cacheprovider -c /dev/null tests/code_coverage_tests/test_generate_provider_endpoints_support.py
+          LITELLM_MASTER_KEY="sk-$(openssl rand -hex 16)" PYTHONPATH=tests/e2e pytest -q --noconftest -p no:cacheprovider -c /dev/null tests/code_coverage_tests/test_e2e_metadata.py tests/code_coverage_tests/test_e2e_junit_report.py
+          python ./tests/documentation_tests/test_router_settings.py
+          python ./tests/documentation_tests/test_api_docs.py
+          EOF
   ui-unit:
     name: ui-unit
     permissions:

@@ -31,6 +31,7 @@ from litellm.types.llms.openai import (
     ResponseAPIUsage,
     ResponseCompletedEvent,
     ResponseInputParam,
+    ResponsesAPIOptionalRequestParams,
     ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
 )
@@ -2674,6 +2675,85 @@ class TestResponsesSurfaceSharesTheEffortRule:
         assert mapped["top_p"] == 0.9
 
 
+class TestOSeriesTemperatureMatchesChat:
+    @pytest.mark.parametrize("model", ["o1", "o3", "o3-mini", "o4-mini", "openai/o3-mini"])
+    def test_drop_params_argument_drops_only_a_non_default_temperature(
+        self, local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch, model: str
+    ) -> None:
+        monkeypatch.setattr(litellm, "drop_params", False)
+        mapped: Final = OpenAIResponsesAPIConfig().map_openai_params(
+            response_api_optional_params={"temperature": 0.5, "top_p": 0.9, "max_output_tokens": 100},
+            model=model,
+            drop_params=True,
+        )
+        assert mapped == {"top_p": 0.9, "max_output_tokens": 100}
+
+    def test_global_drop_params_drops_a_non_default_temperature(
+        self, local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(litellm, "drop_params", True)
+        mapped: Final = OpenAIResponsesAPIConfig().map_openai_params(
+            response_api_optional_params={"temperature": 0.5, "max_output_tokens": 100},
+            model="o3-mini",
+            drop_params=False,
+        )
+        assert mapped == {"max_output_tokens": 100}
+
+    @pytest.mark.parametrize(
+        "params",
+        [
+            {"temperature": 1, "max_output_tokens": 100},
+            {"temperature": None, "max_output_tokens": 100},
+            {"max_output_tokens": 100},
+        ],
+    )
+    def test_default_or_omitted_temperature_is_forwarded_as_sent(
+        self, local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch, params: ResponsesAPIOptionalRequestParams
+    ) -> None:
+        monkeypatch.setattr(litellm, "drop_params", True)
+        mapped: Final = OpenAIResponsesAPIConfig().map_openai_params(
+            response_api_optional_params=params,
+            model="o3-mini",
+            drop_params=True,
+        )
+        assert mapped == params
+
+    def test_without_drop_params_a_non_default_temperature_is_still_forwarded(
+        self, local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(litellm, "drop_params", False)
+        mapped: Final = OpenAIResponsesAPIConfig().map_openai_params(
+            response_api_optional_params={"temperature": 0.5},
+            model="o3-mini",
+            drop_params=False,
+        )
+        assert mapped == {"temperature": 0.5}
+
+    @pytest.mark.parametrize(
+        "config, model",
+        [
+            (OpenAIResponsesAPIConfig(), "gpt-4o"),
+            (OpenAIResponsesAPIConfig(), "gpt-4.1"),
+            (AzureOpenAIResponsesAPIConfig(), "o3-mini"),
+            (HostedVLLMResponsesAPIConfig(), "o3-mini"),
+        ],
+    )
+    def test_temperature_is_kept_for_non_o_series_models_and_other_providers(
+        self,
+        local_model_cost_map: None,
+        monkeypatch: pytest.MonkeyPatch,
+        config: OpenAIResponsesAPIConfig,
+        model: str,
+    ) -> None:
+        monkeypatch.setattr(litellm, "drop_params", False)
+        mapped: Final = config.map_openai_params(
+            response_api_optional_params={"temperature": 0.5},
+            model=model,
+            drop_params=True,
+        )
+        assert mapped == {"temperature": 0.5}
+
+
 class TestFlattenToolSchemaCombinatorsWiring:
     """Regression tests for MCP tools with a top-level anyOf schema (Codex Desktop).
 
@@ -4993,6 +5073,7 @@ def test_compact_request_drops_params_compact_rejects_under_drop_params(
             "store": False,
             "truncation": "auto",
             "max_output_tokens": 100,
+            "background_options": {"completion_window": "2h"},
             "tool_choice": "auto",
             "reasoning": {"effort": "low"},
             "include": ["reasoning.encrypted_content"],

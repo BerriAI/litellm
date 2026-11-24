@@ -47,7 +47,7 @@ DAILY_SPEND_TABLES: Final[Mapping[DailySpendEntity, DailySpendTable]] = MappingP
         "customer_member": DailySpendTable(
             name="LiteLLM_DailyCustomerMemberSpend",
             entity_id_column="customer_member_id",
-            parent_id_columns=("customer_team_id", "customer_org_id", "app_id"),
+            parent_id_columns=("customer_team_id", "customer_org_id", "app_id", "app_group_id"),
             hashed_identity=True,
             records_cache_cost=True,
         ),
@@ -176,7 +176,7 @@ def hashed_row_id(table: DailySpendTable, key: tuple[str, ...]) -> str:
     pairs: Final = sorted(
         (column, value)
         for column, value in zip(_identity_columns(table), key, strict=True)
-        if column != "app_id" or value
+        if column not in ("app_id", "app_group_id") or value
     )
     return sha256(dumps(pairs, separators=(",", ":")).encode("utf-8")).hexdigest()
 

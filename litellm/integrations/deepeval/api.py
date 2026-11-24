@@ -1,5 +1,6 @@
 # duplicate -> https://github.com/confident-ai/deepeval/blob/main/deepeval/confident/api.py
 import logging
+from collections.abc import Mapping
 from enum import Enum
 from typing import Final
 
@@ -20,7 +21,7 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 
 
-def log_retry_error(details):
+def log_retry_error(details: Mapping[str, object]):
     exception: Final = details.get("exception")
     tries: Final = details.get("tries")
     if exception:
@@ -51,7 +52,7 @@ class Endpoints(Enum):
 
 
 class Api:
-    def __init__(self, api_key: str, base_url=None):
+    def __init__(self, api_key: str, base_url: str | None = None):
         self.api_key = api_key
         self._headers = {
             "Content-Type": "application/json",
@@ -63,7 +64,14 @@ class Api:
         self.sync_http_handler = HTTPHandler()
         self.async_http_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
 
-    def _http_request(self, method: str, url: str, headers=None, json=None, params=None):
+    def _http_request(
+        self,
+        method: str,
+        url: str,
+        headers: dict[str, str] | None = None,
+        json: dict[str, object] | None = None,
+        params: dict[str, object] | None = None,
+    ):
         if method != "POST":
             raise Exception("Only POST requests are supported")
         try:
@@ -78,7 +86,13 @@ class Api:
         except Exception as e:
             raise e
 
-    def send_request(self, method: HttpMethods, endpoint: Endpoints, body=None, params=None):
+    def send_request(
+        self,
+        method: HttpMethods,
+        endpoint: Endpoints,
+        body: dict[str, object] | None = None,
+        params: dict[str, object] | None = None,
+    ):
         url: Final = f"{self.base_api_url}{endpoint.value}"
         res: Final = self._http_request(
             method=method.value,
@@ -97,7 +111,13 @@ class Api:
             verbose_logger.debug(res.json())
             raise Exception(res.json().get("error", res.text))
 
-    async def a_send_request(self, method: HttpMethods, endpoint: Endpoints, body=None, params=None):
+    async def a_send_request(
+        self,
+        method: HttpMethods,
+        endpoint: Endpoints,
+        body: dict[str, object] | None = None,
+        params: dict[str, object] | None = None,
+    ):
         if method != HttpMethods.POST:
             raise Exception("Only POST requests are supported")
 

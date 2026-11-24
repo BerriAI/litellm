@@ -268,7 +268,7 @@ it.each(["private-chat", "member-1", null])(
       await user.click(chat.getByRole("button", { name: "Edit custom allowance" }));
     }
     const dialog = within(await screen.findByRole("dialog", { name: "Per-member default for Chat" }));
-    const spend = dialog.getByRole("spinbutton", { name: "Spend limit (USD)" });
+    const spend = dialog.getByRole("spinbutton", { name: "Max Budget (USD)" });
     expect(spend).toHaveValue(initial ? 30 : null);
     fireEvent.change(spend, { target: { value: "" } });
     fireEvent.change(dialog.getByRole("spinbutton", { name: "Tokens per minute" }), { target: { value: "-1" } });

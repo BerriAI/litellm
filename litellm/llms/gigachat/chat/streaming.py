@@ -95,10 +95,10 @@ class GigaChatModelResponseIterator:
         if usage_data and isinstance(usage_data, dict):
             validated_usage: Final = {k: int(v) for k, v in usage_data.items()}
             usage = convert_usage(validated_usage)
-            _prompt_details: dict | None = (
+            _prompt_details: dict[str, object] | None = (
                 usage.prompt_tokens_details.model_dump() if usage.prompt_tokens_details else None
             )
-            _completion_details: dict | None = (
+            _completion_details: dict[str, object] | None = (
                 usage.completion_tokens_details.model_dump() if usage.completion_tokens_details else None
             )
             usage_block = ChatCompletionUsageBlock(  # pyright: ignore[reportCallIssue]  # TypedDict kwarg constructor

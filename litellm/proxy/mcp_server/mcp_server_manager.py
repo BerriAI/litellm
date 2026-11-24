@@ -72,7 +72,7 @@ from litellm.constants import (
     MCP_UPSTREAM_SESSION_SHUTDOWN_TIMEOUT_SECONDS,
 )
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
-from litellm.litellm_core_utils.core_helpers import as_object_list, decoded_json_object
+from litellm.litellm_core_utils.core_helpers import as_object_list, decoded_json_object, require_get
 from litellm.litellm_core_utils.url_utils import SSRFError, async_safe_get
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.mcp_client.client import (
@@ -241,6 +241,7 @@ from litellm.types.mcp_server.mcp_server_manager import (
     MCPInfo,
     MCPOAuthMetadata,
     MCPServer,
+    MCPServerEventsConfig,
     parse_pinned_tools,
 )
 from litellm.types.utils import CallTypes
@@ -477,19 +478,6 @@ class MCPServerConfig(TypedDict, total=False):
     timeout: float
     max_concurrent_requests: int
     rpm: ReadOnly[int | None]
-
-
-class _AuthorizationServerMetadataPayload(TypedDict, total=False):
-    """The RFC 8414 / OpenID Discovery authorization-server metadata fields this gateway reads."""
-
-    issuer: str
-    authorization_endpoint: str
-    token_endpoint: str
-    registration_endpoint: str
-    client_id_metadata_document_supported: ReadOnly[object]
-    scopes_supported: Sequence[str]
-    grant_types_supported: Sequence[str]
-    token_endpoint_auth_methods_supported: Sequence[str]
 
 
 def _mapping_value(source: Mapping[str, object], key: str, default: object) -> object:
@@ -1842,6 +1830,22 @@ def _warn_config_id_jag_server_outruns_sso(server: MCPServer) -> None:
     )
 
 
+def _stored_events_config(value: object) -> MCPServerEventsConfig | None:
+    if isinstance(value, MCPServerEventsConfig):
+        return value
+    if not isinstance(value, (str, Mapping)) or not value:
+        return None
+    try:
+        return (
+            MCPServerEventsConfig.model_validate_json(value)
+            if isinstance(value, str)
+            else MCPServerEventsConfig.model_validate(value)
+        )
+    except ValidationError:
+        verbose_logger.warning("Ignoring an unreadable MCP server events configuration")
+        return None
+
+
 def _deserialize_json_dict(data: str | _StringMap | None) -> dict[str, str] | None:
     """
     Deserialize optional JSON mappings stored in the database.
@@ -1863,7 +1867,7 @@ def _deserialize_json_dict(data: str | _StringMap | None) -> dict[str, str] | No
         return data
 
 
-def _deserialize_json_list(data: object) -> list[dict[str, Any]] | None:
+def _deserialize_json_list(data: object) -> _EnvVarList | None:
     """Deserialize a JSON array stored in the DB (``env_vars`` and friends).
 
     Returns ``None`` for empty / null / unparseable input. Accepts strings
@@ -2019,7 +2023,7 @@ class _InternalNetworkSettings(Protocol):
     def get(self, key: Literal["mcp_internal_ip_ranges"], /) -> list[str] | None: ...
 
 
-_Gathered: Final = TypeVar("_Gathered")
+_Gathered = TypeVar("_Gathered")
 
 
 async def _gather_before_relaying_url_elicitation(tasks: Sequence[asyncio.Task[_Gathered]]) -> Sequence[_Gathered]:
@@ -2659,7 +2663,7 @@ class MCPServerManager:
                 stdio_env=None,
             )
 
-            async def _noop(_session):
+            async def _noop(_session: object) -> str:
                 return "ok"
 
             await asyncio.wait_for(client.run_with_session(_noop), timeout=MCP_HEALTH_CHECK_TIMEOUT)
@@ -2714,7 +2718,7 @@ class MCPServerManager:
         self._upstream_initialize_instructions_probed_at.clear()
 
         # Track which aliases have been used to ensure only first occurrence is used
-        used_aliases: Final = set()
+        used_aliases: Final = set[str]()
         # server_id -> the config server_name that claimed it, so a pinned id cannot silently
         # overwrite another server's entry in self.config_mcp_servers.
         assigned_server_ids: MutableMapping[str, str] = {}  # mutable-ok: per-load collision index
@@ -2996,6 +3000,7 @@ class MCPServerManager:
                 token_exchange_profile=server_config.get("token_exchange_profile", "rfc8693"),
                 allow_sampling=bool(server_config.get("allow_sampling", False)),
                 allow_elicitation=bool(server_config.get("allow_elicitation", False)),
+                events=_stored_events_config(server_config.get("events", None)),
                 timeout=server_config.get("timeout", None),
                 max_concurrent_requests=server_config.get("max_concurrent_requests", None),
                 rpm=server_config.get("rpm", None),
@@ -3603,6 +3608,7 @@ class MCPServerManager:
             timeout=getattr(mcp_server, "timeout", None),
             max_concurrent_requests=getattr(mcp_server, "max_concurrent_requests", None),
             rpm=mcp_server.rpm,
+            events=_stored_events_config(getattr(mcp_server, "events", None)),
         )
         _warn_legacy_delegate_auth_if_applicable(new_server, source="database")
         if register_oauth_discovery:
@@ -4113,7 +4119,7 @@ class MCPServerManager:
         """
         if client_ip is None:
             return server_ids, 0
-        allowed: Final = []
+        allowed: Final = list[str]()
         blocked = 0
         for sid in server_ids:
             s = self.get_mcp_server_by_id(sid)
@@ -5759,7 +5765,7 @@ class MCPServerManager:
             try:
                 response = await self._fetch_oauth_discovery_url(url, server_url)
                 response.raise_for_status()
-                data: _AuthorizationServerMetadataPayload = response.json()
+                decoded = _UNTYPED_VALUE.validate_python(response.json())
             except SSRFError as exc:
                 verbose_logger.warning(
                     "MCP OAuth discovery: refusing to fetch authorization-server "
@@ -5777,6 +5783,7 @@ class MCPServerManager:
                 )
                 continue
 
+            data = require_get(decoded)
             claimed_issuer = data.get("issuer")
             verbose_logger.debug(
                 "Authorization server metadata from %s: issuer=%s grant_types_supported=%s "
@@ -5802,22 +5809,24 @@ class MCPServerManager:
                 authorization_metadata = OAuthMetadata.model_validate(data)
             except ValidationError:
                 authorization_metadata = None
-            metadata = MCPOAuthMetadata(
-                authorization_server_metadata=(
-                    TypeAdapter(dict[str, object]).validate_python(authorization_metadata.model_dump(mode="json"))
-                    if authorization_metadata is not None
-                    else None
-                ),
-                scopes=scopes,
-                authorization_url=data.get("authorization_endpoint"),
-                token_url=data.get("token_endpoint"),
-                registration_url=data.get("registration_endpoint"),
-                client_id_metadata_document_supported=data.get("client_id_metadata_document_supported") is True,
-                discovered_issuer=claimed_issuer if isinstance(claimed_issuer, str) and claimed_issuer else None,
-                authorization_response_iss_parameter_supported=data.get(
-                    "authorization_response_iss_parameter_supported"
-                )
-                is True,
+            metadata = MCPOAuthMetadata.model_validate(
+                {
+                    "authorization_server_metadata": (
+                        TypeAdapter(dict[str, object]).validate_python(authorization_metadata.model_dump(mode="json"))
+                        if authorization_metadata is not None
+                        else None
+                    ),
+                    "scopes": scopes,
+                    "authorization_url": data.get("authorization_endpoint"),
+                    "token_url": data.get("token_endpoint"),
+                    "registration_url": data.get("registration_endpoint"),
+                    "client_id_metadata_document_supported": data.get("client_id_metadata_document_supported") is True,
+                    "discovered_issuer": claimed_issuer if isinstance(claimed_issuer, str) and claimed_issuer else None,
+                    "authorization_response_iss_parameter_supported": data.get(
+                        "authorization_response_iss_parameter_supported"
+                    )
+                    is True,
+                }
             )
 
             if any(
@@ -6118,7 +6127,7 @@ class MCPServerManager:
             listing_updates.callback(self._create_prefixed_tools, tools, server, add_prefix=add_prefix)
             register_bare_names = False
 
-        prefixed_tools: Final = []
+        prefixed_tools: Final = list[MCPTool]()
         prefix: Final = get_server_prefix(server)
 
         for tool in tools:
@@ -6161,7 +6170,7 @@ class MCPServerManager:
         Returns:
             List of prompts with prefixed names
         """
-        prefixed_prompts: Final = []
+        prefixed_prompts: Final = list[Prompt]()
         prefix: Final = get_server_prefix(server)
 
         for prompt in prompts:
@@ -6863,7 +6872,7 @@ class MCPServerManager:
         mcp_server: MCPServer,
         original_tool_name: str,
         arguments: _ToolArguments,
-        tasks: list,
+        tasks: list[asyncio.Task[object]],
         mcp_auth_header: str | None,
         mcp_server_auth_headers: dict[str, dict[str, str]] | None,
         oauth2_headers: dict[str, str] | None,
@@ -7043,7 +7052,7 @@ class MCPServerManager:
             managed_per_user: Final = mcp_server.is_gateway_managed_oauth2 and mcp_server.needs_user_oauth_token
             server_label: Final = mcp_server.name or mcp_server.server_name or mcp_server.alias or ""
 
-            async def _call_tool_via_client(client, params):
+            async def _call_tool_via_client(client: MCPClient, params: MCPCallToolRequestParams):
                 async with self._outbound_limit(mcp_server, persistent_session):
                     if not relays_upstream_auth and not managed_per_user:
                         return await client.call_tool(
@@ -7406,7 +7415,7 @@ class MCPServerManager:
         # Allow validation and modification of tool calls before execution
         # Using standard pre_call_hook
         #########################################################
-        hook_result: Final[dict[str, Any]] = await self.pre_call_tool_check(
+        hook_result: Final = await self.pre_call_tool_check(
             name=name,
             arguments=arguments,
             server_name=server_name,
@@ -7623,7 +7632,7 @@ class MCPServerManager:
         await self.catalog.reload()
 
     def get_mcp_servers_from_ids(self, server_ids: list[str]) -> list[MCPServer]:
-        servers: Final = []
+        servers: Final = list[MCPServer]()
         registry: Final = self.get_registry()
         for server in registry.values():
             if server.server_id in server_ids:
@@ -7941,7 +7950,7 @@ class MCPServerManager:
                     stdio_env=None,
                 )
 
-                async def _noop(session):
+                async def _noop(session: object) -> str:
                     return "ok"
 
                 # Add timeout wrapper to prevent hanging
@@ -8006,6 +8015,7 @@ class MCPServerManager:
             timeout=server.timeout,
             max_concurrent_requests=server.max_concurrent_requests,
             rpm=server.rpm,
+            events=server.events,
         )
 
     async def get_all_mcp_servers_with_health_and_teams(
@@ -8130,6 +8140,7 @@ class MCPServerManager:
             timeout=server.timeout,
             max_concurrent_requests=server.max_concurrent_requests,
             rpm=server.rpm,
+            events=server.events,
         )
 
     _build_mcp_server_table = build_mcp_server_table

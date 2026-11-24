@@ -486,6 +486,7 @@ class DailyActivityRepository:
         conditions: Final = {
             "date": {"gte": adjusted_start, "lte": adjusted_end},
             **({"app_id": scope.app_id} if scope.app_id is not None else {}),
+            **({"app_group_id": scope.app_group_id} if scope.app_group_id is not None else {}),
             **({scope.entity_id_field: {"in": list(scope.entity_ids)}} if scope.entity_ids is not None else {}),
             **exclusion_filter,
             **(

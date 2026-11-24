@@ -21,16 +21,16 @@ from litellm.types.utils import CallTypes
 
 def has_together_registry_pricing(model: str, cost_map: Mapping[str, object]) -> bool:
     stripped: Final = model.removeprefix("together_ai/")
-    return any(_prices_tokens(cost_map.get(key)) for key in (model, f"together_ai/{stripped}"))
+    return any(_has_input_rate(cost_map.get(key)) for key in (model, f"together_ai/{stripped}"))
 
 
-def _prices_tokens(entry: object) -> bool:
-    return isinstance(entry, Mapping) and "input_cost_per_token" in entry
+def _has_input_rate(entry: object) -> bool:
+    return isinstance(entry, Mapping) and ("input_cost_per_token" in entry or "input_cost_per_character" in entry)
 
 
 # Extract the number of billion parameters from the model name
 # only used for together_computer LLMs
-def get_model_params_and_category(model_name, call_type: CallTypes) -> str:
+def get_model_params_and_category(model_name: str, call_type: CallTypes) -> str:
     """
     Helper function for calculating together ai pricing.
 
@@ -68,7 +68,7 @@ def get_model_params_and_category(model_name, call_type: CallTypes) -> str:
     return model_name
 
 
-def get_model_params_and_category_embeddings(model_name) -> str:
+def get_model_params_and_category_embeddings(model_name: str) -> str:
     """
     Helper function for calculating together ai embedding pricing.
 

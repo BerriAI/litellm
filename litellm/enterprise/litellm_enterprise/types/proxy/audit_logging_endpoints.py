@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 
 from pydantic import Field
 
@@ -16,8 +16,8 @@ class AuditLogResponse(LiteLLMBaseModel):
     action: str
     table_name: str
     object_id: str
-    before_value: Optional[Dict[str, Any]] = None
-    updated_values: Optional[Dict[str, Any]] = None
+    before_value: Optional[Dict[str, object]] = None
+    updated_values: Optional[Dict[str, object]] = None
 
 
 class PaginatedAuditLogResponse(LiteLLMBaseModel):

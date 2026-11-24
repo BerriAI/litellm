@@ -104,7 +104,9 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
     delivers_ended_stream_rewrites = True
     assembles_streamed_response = True
 
-    def get_structured_messages(self, data: dict, *, keep_tool_errors: bool = False) -> list[AllMessageValues] | None:
+    def get_structured_messages(
+        self, data: Mapping[str, object], *, keep_tool_errors: bool = False
+    ) -> list[AllMessageValues] | None:
         """
         Convert chat completions request data to OpenAI-spec structured messages.
 
@@ -120,7 +122,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         data: dict,
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Process input messages by applying guardrails to text content.
         """
@@ -446,7 +448,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
         user_api_key_dict: "UserAPIKeyAuth | None" = None,
-        request_data: dict | None = None,
+        request_data: dict[str, object] | None = None,
     ) -> ModelResponse:
         """
         Process output response by applying guardrails to text content.
@@ -570,7 +572,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
         user_api_key_dict: "UserAPIKeyAuth | None" = None,
-        request_data: dict | None = None,
+        request_data: dict[str, object] | None = None,
         stream_transform_sink: StreamTransformSink | None = None,
         deliver_ended_stream_rewrites: bool = False,
     ) -> list["ModelResponseStream"]:
@@ -626,7 +628,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None",
         user_api_key_dict: "UserAPIKeyAuth | None",
-        request_data: dict | None,
+        request_data: dict[str, object] | None,
         deliver_ended_stream_rewrites: bool = False,
     ) -> list["ModelResponseStream"]:
         """Block-only streaming path: run the guardrail so an in-flight BLOCK can
@@ -838,7 +840,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None",
         user_api_key_dict: "UserAPIKeyAuth | None",
-        request_data: dict | None,
+        request_data: dict[str, object] | None,
         sink: StreamTransformSink,
     ) -> None:
         """Run the guardrail over the raw accumulated text and report the
@@ -1401,6 +1403,11 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                                     # Subsequent chunks - clear the text
                                     content_item["text"] = ""
 
+    def starts_client_tool_call(self, item: object) -> bool:
+        return any(
+            _delta_has_client_tool_call(stream_item_field(choice, "delta")) for choice in _stream_chunk_choices(item)
+        )
+
     def _check_streaming_has_ended(self, responses_so_far: Sequence[object]) -> bool:
         """
         True once any relayed chunk carries a non-null ``finish_reason``.
@@ -1503,6 +1510,10 @@ def _stream_chunk_choices(item: object) -> Sequence[object]:
     if isinstance(choices, Sequence) and not isinstance(choices, (str, bytes)):
         return choices
     return ()
+
+
+def _delta_has_client_tool_call(delta: object) -> bool:
+    return bool(stream_item_items(delta, "tool_calls")) or stream_item_field(delta, "function_call") is not None
 
 
 def _streamed_delta_tool_calls(delta: object) -> tuple[object, ...]:

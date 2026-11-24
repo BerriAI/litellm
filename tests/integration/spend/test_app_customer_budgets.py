@@ -11,6 +11,7 @@ import psycopg
 import pytest
 from pydantic import JsonValue, TypeAdapter
 
+from litellm.types.proxy.management_endpoints.app_groups import AppGroup
 from litellm.types.proxy.management_endpoints.apps import (
     AppDefinition,
     AppResource,
@@ -21,6 +22,7 @@ from tests.integration._support.client import (
     JSON_OBJECT,
     Gateway,
     Scenario,
+    delete_key_if_present,
     eventually,
     string_value,
 )
@@ -133,7 +135,13 @@ def _customer(scenario: Scenario) -> Customer:
     return Customer(organization, organization, member, other)
 
 
-def _app(scenario: Scenario, model: str, name: str) -> tuple[str, str]:
+def _rotatable_key(scenario: Scenario, **fields: JsonValue) -> str:
+    key: Final = string_value(scenario.gateway.post("/key/generate", fields)["key"])
+    scenario.cleanups.callback(delete_key_if_present, scenario.gateway, key)
+    return key
+
+
+def _app(scenario: Scenario, model: str, name: str, *, rotatable: bool = False) -> tuple[str, str]:
     alias: Final = f"{name}-{uuid.uuid4().hex}"
     definition: Final = scenario.gateway.request("GET", f"{_APPS}/definition")
     resource_type: Final = AppDefinition.model_validate_json(definition.content).resource_type
@@ -143,7 +151,13 @@ def _app(scenario: Scenario, model: str, name: str) -> tuple[str, str]:
         if resource_type is AppResourceType.PROJECT
         else None
     )
-    key: Final = scenario.key(team_id=team, project_id=project, models=[model], key_alias=alias)
+    key_fields: Final[dict[str, JsonValue]] = {
+        "team_id": team,
+        "project_id": project,
+        "models": [model],
+        "key_alias": alias,
+    }
+    key: Final = _rotatable_key(scenario, **key_fields) if rotatable else scenario.key(**key_fields)
     discovered: Final = scenario.gateway.request("GET", f"{_APPS}/resources")
     assert discovered.status_code == 200, discovered.text
     resources: Final = TypeAdapter(tuple[AppResource, ...]).validate_json(discovered.content)
@@ -416,7 +430,7 @@ def test_rotating_a_virtual_key_keeps_its_customer_app_budget_and_spend(
             output_cost_per_token=0.002,
         )
         customer: Final = _customer(scenario)
-        app_id, key = _app(scenario, model, "rotating")
+        app_id, key = _app(scenario, model, "rotating", rotatable=True)
         _budget(app_gateway, app_id, customer, 0.05)
         assert _chat(app_gateway, key, model, customer).status_code == 200
         eventually(
@@ -438,3 +452,120 @@ def test_rotating_a_virtual_key_keeps_its_customer_app_budget_and_spend(
             (app_id, customer.organization),
         )
         assert isclose(_spend(stored[0]), _COST)
+
+
+def _group(scenario: Scenario, budget: Mapping[str, JsonValue]) -> str:
+    from psycopg import sql
+
+    response: Final = scenario.gateway.request(
+        "POST", "/management/v1/app_groups", {"name": f"group-{uuid.uuid4().hex}", "budget": dict(budget)}
+    )
+    assert response.status_code == 201, response.text
+    identity: Final = string_value(JSON_OBJECT.validate_json(response.content)["app_group_id"])
+
+    def cleanup() -> None:
+        assert scenario.gateway.database_url is not None
+        with psycopg.connect(scenario.gateway.database_url) as connection:
+            connection.execute(
+                sql.SQL('UPDATE "LiteLLM_AppTable" SET app_group_id=NULL WHERE app_group_id=%s'), (identity,)
+            )
+            connection.execute(sql.SQL('DELETE FROM "LiteLLM_AppGroupTable" WHERE app_group_id=%s'), (identity,))
+
+    scenario.cleanups.callback(cleanup)
+    return identity
+
+
+def _group_spend(gateway: Gateway, group_id: str, expected: float) -> None:
+    rows: Final = eventually(
+        lambda: gateway.rows('SELECT spend FROM "LiteLLM_AppGroupTable" WHERE app_group_id=%s', (group_id,)),
+        lambda values: len(values) == 1 and _spend(values[0]) >= expected,
+        seconds=70,
+    )
+    assert _spend(rows[0]) == pytest.approx(expected)
+
+
+@pytest.mark.parametrize("duration", (None, "1mo"))
+def test_app_group_customer_and_app_caps_apply_independently_across_workers(
+    app_gateway: Gateway,
+    duration: str | None,
+) -> None:
+    with wire_server(_reply) as wire, app_gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            api_base=f"{wire.url}/v1", input_cost_per_token=0.001, output_cost_per_token=0.002
+        )
+        customer: Final = _customer(scenario)
+        other: Final = _customer(scenario)
+        group: Final = _group(scenario, {"max_budget": 10, "budget_duration": duration})
+        chat, chat_key = _app(scenario, model, "chat")
+        search, search_key = _app(scenario, model, "search")
+        for app_id in (chat, search):
+            bound: Final = app_gateway.request("PATCH", f"{_APPS}/{app_id}", {"app_group_id": group})
+            assert bound.status_code == 200, bound.text
+        child: Final = app_gateway.request(
+            "PATCH", f"{_APPS}/{chat}", {"budget": {"max_budget": 0.05, "budget_duration": duration}}
+        )
+        assert child.status_code == 200, child.text
+        pair: Final = app_gateway.request(
+            "PUT",
+            f"/management/v1/app_groups/{group}/customer_organizations/{customer.organization}",
+            {"budget": {"max_budget": 0.11, "budget_duration": duration}},
+        )
+        assert pair.status_code == 200, pair.text
+        assert app_gateway.request("GET", "/management/v1/app_groups", key=chat_key).status_code in (401, 403)
+        assert _chat(app_gateway, chat_key, model, customer).status_code == 200
+        _group_spend(app_gateway, group, _COST)
+        _blocked_on_every_worker(app_gateway, chat_key, model, customer)
+        assert _chat(app_gateway, search_key, model, customer).status_code == 200
+        _group_spend(app_gateway, group, 2 * _COST)
+        _blocked_on_every_worker(app_gateway, search_key, model, customer)
+        assert _chat(app_gateway, search_key, model, other).status_code == 200
+        _group_spend(app_gateway, group, 3 * _COST)
+        lowered: Final = app_gateway.request(
+            "PATCH", f"/management/v1/app_groups/{group}", {"budget": {"max_budget": 0.17, "budget_duration": duration}}
+        )
+        assert lowered.status_code == 200, lowered.text
+        updated: Final = AppGroup.model_validate_json(lowered.content)
+        assert updated.budget is not None and updated.budget.max_budget == 0.17
+        assert updated.budget_usage[0].spend == pytest.approx(3 * _COST)
+        wire.drain()
+        _blocked_on_every_worker(app_gateway, search_key, model, other)
+        assert not tuple(request for request in wire.drain() if request.method == "POST")
+        readback: Final = JSON_OBJECT.validate_json(
+            app_gateway.request("GET", f"/management/v1/app_groups/{group}").content
+        )
+        assert float(str(readback["spend"])) == pytest.approx(3 * _COST)
+
+
+def test_moving_an_app_preserves_historical_group_usage(app_gateway: Gateway) -> None:
+    from datetime import datetime, timezone
+
+    with wire_server(_reply) as wire, app_gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            api_base=f"{wire.url}/v1", input_cost_per_token=0.001, output_cost_per_token=0.002
+        )
+        customer: Final = _customer(scenario)
+        first: Final = _group(scenario, {"max_budget": 10})
+        second: Final = _group(scenario, {"max_budget": 10})
+        app_id, key = _app(scenario, model, "moving")
+        for group in (first, second):
+            bound: Final = app_gateway.request("PATCH", f"{_APPS}/{app_id}", {"app_group_id": group})
+            assert bound.status_code == 200, bound.text
+            assert _chat(app_gateway, key, model, customer).status_code == 200
+            _group_spend(app_gateway, group, _COST)
+        day: Final = datetime.now(timezone.utc).date().isoformat()
+        for group in (first, second):
+            response: Final = app_gateway.client.get(
+                "/management/v1/customer_organizations/daily/activity/aggregated",
+                headers={"Authorization": f"Bearer {app_gateway.key}"},
+                params={
+                    "customer_org_id": customer.organization,
+                    "app_group_id": group,
+                    "start_date": day,
+                    "end_date": day,
+                },
+            )
+            assert response.status_code == 200, response.text
+            metadata: Final = JSON_OBJECT.validate_python(JSON_OBJECT.validate_json(response.content)["metadata"])
+            assert float(str(metadata["total_spend"])) == pytest.approx(_COST)
+        totals: Final = app_gateway.rows('SELECT spend FROM "LiteLLM_AppTable" WHERE app_id=%s', (app_id,))
+        assert _spend(totals[0]) == pytest.approx(2 * _COST)

@@ -540,7 +540,7 @@ describe("TeamInfoView", () => {
       expect(screen.getByText(/of \$1,000\.00/)).toBeInTheDocument();
     });
 
-    it("renders a tpm/rpm/budget limit of 0 as 0 in the overview and settings tabs, never as Unlimited or No Limit", async () => {
+    it("renders zero limits in Overview, Settings, and Member Defaults, never as Unlimited or No Limit", async () => {
       vi.mocked(networking.teamInfoCall).mockResolvedValue(
         createMockTeamData({
           tpm_limit: 0,
@@ -555,17 +555,19 @@ describe("TeamInfoView", () => {
       expect(within(overview).getByText("TPM: 0")).toBeInTheDocument();
       expect(within(overview).getByText("RPM: 0")).toBeInTheDocument();
 
-      await userEvent.setup({ delay: null }).click(screen.getByRole("tab", { name: "Settings" }));
+      const user = userEvent.setup({ delay: null });
+      await user.click(screen.getByRole("tab", { name: "Settings" }));
       const settings = await screen.findByRole("tabpanel", { name: "Settings" });
       expect(within(settings).getByText("TPM: 0")).toBeInTheDocument();
       expect(within(settings).getByText("RPM: 0")).toBeInTheDocument();
-      expect(within(settings).getByText("TPM Limit: 0")).toBeInTheDocument();
-      expect(within(settings).getByText("RPM Limit: 0")).toBeInTheDocument();
-      expect(within(settings).getByText("Max Budget: 0")).toBeInTheDocument();
       expect(screen.queryByText("TPM: Unlimited")).not.toBeInTheDocument();
       expect(screen.queryByText("RPM: Unlimited")).not.toBeInTheDocument();
-      expect(screen.queryByText("TPM Limit: No Limit")).not.toBeInTheDocument();
-      expect(screen.queryByText("RPM Limit: No Limit")).not.toBeInTheDocument();
+
+      await user.click(screen.getByRole("tab", { name: "Member Defaults" }));
+      const memberDefaults = await screen.findByRole("tabpanel", { name: "Member Defaults" });
+      for (const label of ["Default TPM Limit", "Default RPM Limit", "Default Budget (USD)"]) {
+        expect(within(memberDefaults).getByText(label).nextElementSibling).toHaveTextContent(/^0$/);
+      }
     });
 
     it("should display guardrails in overview when present", async () => {
@@ -584,7 +586,7 @@ describe("TeamInfoView", () => {
       expect(screen.getByText("guardrail2")).toBeInTheDocument();
     });
 
-    it("should display policies in overview when present", async () => {
+    it("shows legacy top-level policies when metadata has no policy list", async () => {
       vi.mocked(networking.teamInfoCall).mockResolvedValue(
         createMockTeamData({
           policies: ["policy1"],
@@ -596,9 +598,7 @@ describe("TeamInfoView", () => {
 
       renderWithProviders(<TeamInfoView {...defaultProps} />);
 
-      await waitFor(() => {
-        expect(screen.getByText("Policies")).toBeInTheDocument();
-      });
+      expect(await screen.findByText("policy1")).toBeVisible();
     });
 
     it("should display team member budget information when present", async () => {
@@ -900,6 +900,52 @@ describe("TeamInfoView", () => {
 
   describe("settings and editing", () => {
     const policiesFormFieldLabel = () => screen.queryByText("Policies", { selector: "label" });
+
+    it("shows saved team policies and clears the last one", async () => {
+      const user = userEvent.setup({ delay: null });
+      const teamInfo = vi.mocked(networking.teamInfoCall);
+      teamInfo.mockResolvedValue(createMockTeamData({ metadata: { policies: ["review-policy"] } }));
+      vi.mocked(networking.getPolicyInfoWithGuardrails).mockResolvedValue({ resolved_guardrails: [] });
+      vi.mocked(networking.teamUpdateCall).mockImplementation(async () => {
+        teamInfo.mockResolvedValue(createMockTeamData({ metadata: { policies: [] } }));
+        return { data: {} as networking.Team, team_id: "test-team" };
+      });
+
+      renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+      expect(await screen.findByText("review-policy")).toBeVisible();
+      await user.click(screen.getByRole("tab", { name: "Settings" }));
+      await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+      const settings = within(screen.getByRole("tabpanel", { name: "Settings" }));
+      const policyChip = await settings.findByLabelText("review-policy");
+      expect(policyChip).toBeVisible();
+      await user.click(within(policyChip).getByRole("button"));
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+      await screen.findByRole("button", { name: /edit settings/i });
+
+      expect(networking.teamUpdateCall).toHaveBeenCalledWith("test-token", expect.objectContaining({ policies: [] }));
+      await user.click(screen.getByRole("tab", { name: "Overview" }));
+      expect(screen.queryByText("review-policy")).not.toBeInTheDocument();
+    });
+
+    it("shows team logging integrations without offering key-only callback controls", async () => {
+      const user = userEvent.setup({ delay: null });
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(
+        createMockTeamData({
+          metadata: { logging: [{ callback_name: "langfuse", callback_type: "success", callback_vars: {} }] },
+        }),
+      );
+
+      renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+      expect(await screen.findByText("Langfuse")).toBeVisible();
+      expect(screen.queryByText("Disabled Callbacks")).not.toBeInTheDocument();
+      await user.click(screen.getByRole("tab", { name: "Settings" }));
+      expect(screen.queryByText("Disabled Callbacks")).not.toBeInTheDocument();
+      await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+      expect(await screen.findByRole("button", { name: "Add Integration" })).toBeVisible();
+      expect(screen.queryByText("Disabled Callbacks")).not.toBeInTheDocument();
+    });
 
     it("should offer the policies field and load it for a caller with the viewPolicies capability", async () => {
       const user = userEvent.setup({ delay: null });
@@ -1765,8 +1811,8 @@ describe("TeamInfoView", () => {
 
       await openSettingsEditor(user);
 
-      expect(screen.getByPlaceholderText("Max spend ($)")).toHaveValue(5);
-      expect(screen.getByPlaceholderText("Max spend ($)")).toBeDisabled();
+      expect(screen.getByPlaceholderText("Max Budget")).toHaveValue(5);
+      expect(screen.getByPlaceholderText("Max Budget")).toBeDisabled();
       expect(screen.getByRole("button", { name: /Add Model Budget/i })).toBeDisabled();
     });
 
@@ -1791,7 +1837,7 @@ describe("TeamInfoView", () => {
       renderWithProviders(<TeamInfoView {...defaultProps} premiumUser={true} />);
 
       await openSettingsEditor(user);
-      fireEvent.change(screen.getByPlaceholderText("Max spend ($)"), { target: { value: "2.5" } });
+      fireEvent.change(screen.getByPlaceholderText("Max Budget"), { target: { value: "2.5" } });
       await user.click(screen.getByRole("button", { name: /save changes/i }));
 
       expect((await savedPayload()).model_max_budget).toEqual({ "gpt-4": { budget_limit: 2.5, time_period: "1d" } });
@@ -1825,15 +1871,8 @@ describe("TeamInfoView", () => {
         expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0);
       });
 
-      await user.click(screen.getByRole("tab", { name: "Settings" }));
-
-      await waitFor(() => {
-        expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
-      });
-
-      await user.click(screen.getByRole("button", { name: /edit settings/i }));
-
-      await user.click(await screen.findByRole("button", { name: /team member settings/i }));
+      await user.click(screen.getByRole("tab", { name: "Member Defaults" }));
+      await user.click(await screen.findByRole("button", { name: "Edit Defaults" }));
 
       await waitFor(() => {
         expect(screen.getByLabelText(/^Default Key Duration/)).toHaveValue("30d");
@@ -1948,7 +1987,7 @@ describe("TeamInfoView", () => {
       await user.click(screen.getByRole("tab", { name: "Settings" }));
       await user.click(await screen.findByRole("button", { name: /edit settings/i }));
 
-      await user.click(await screen.findByRole("combobox", { name: "Select pass through routes" }));
+      await user.click(await screen.findByRole("combobox", { name: "Select pass-through routes" }));
 
       const option = await screen.findByText("POST /bedrock-passthrough");
       await user.click(option);
@@ -2145,8 +2184,8 @@ describe("TeamInfoView", () => {
 
       renderWithProviders(<TeamInfoView {...teamAdminProps} />);
 
-      await user.click(await screen.findByRole("tab", { name: "Settings" }));
-      await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+      await user.click(await screen.findByRole("tab", { name: "Member Defaults" }));
+      await user.click(await screen.findByRole("button", { name: "Edit Defaults" }));
 
       expect(await screen.findByLabelText("Member Default Budget (USD)")).toHaveValue(10);
       expect(screen.getByLabelText("Member Default Budget Duration")).toHaveTextContent("monthly");
@@ -2188,7 +2227,7 @@ describe("TeamInfoView", () => {
   });
 });
 
-describe("TeamInfoView - which team member fields reach the update payload depends on the open sections", () => {
+describe("TeamInfoView - member defaults editor", () => {
   const props = {
     teamId: "123",
     onUpdate: vi.fn(),
@@ -2214,6 +2253,7 @@ describe("TeamInfoView - which team member fields reach the update payload depen
       tpm_limit: 11,
       rpm_limit: 22,
     },
+    editDefaults = true,
   ) => {
     vi.mocked(networking.teamInfoCall).mockResolvedValue(
       createMockTeamData({
@@ -2225,9 +2265,14 @@ describe("TeamInfoView - which team member fields reach the update payload depen
 
     renderWithProviders(<TeamInfoView {...props} />);
     await waitFor(() => expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0));
-    await user.click(screen.getByRole("tab", { name: "Settings" }));
-    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
-    await screen.findByLabelText("Team Name");
+    if (editDefaults) {
+      await user.click(await screen.findByRole("tab", { name: "Member Defaults" }));
+      await user.click(await screen.findByRole("button", { name: "Edit Defaults" }));
+    } else {
+      await user.click(screen.getByRole("tab", { name: "Settings" }));
+      await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+      await screen.findByLabelText("Team Name");
+    }
   };
 
   const save = async (user: ReturnType<typeof userEvent.setup>) => {
@@ -2236,9 +2281,9 @@ describe("TeamInfoView - which team member fields reach the update payload depen
     return vi.mocked(networking.teamUpdateCall).mock.calls[0][1] as Record<string, unknown>;
   };
 
-  it("omits every stored team member field when Team Member Settings is left closed", async () => {
+  it("omits every stored team member field when saving general settings", async () => {
     const user = userEvent.setup({ delay: null });
-    await openEditor(user);
+    await openEditor(user, undefined, false);
 
     const payload = await save(user);
 
@@ -2253,11 +2298,10 @@ describe("TeamInfoView - which team member fields reach the update payload depen
     expect(wireBody).not.toHaveProperty("default_team_member_models");
   });
 
-  it("resends every stored team member field once Team Member Settings is opened", async () => {
+  it("resends every stored team member field when saving Member Defaults", async () => {
     const user = userEvent.setup({ delay: null });
     await openEditor(user);
 
-    await user.click(screen.getByText("Team Member Settings"));
     await screen.findByLabelText("Default Budget (USD)");
     const payload = await save(user);
 
@@ -2266,13 +2310,13 @@ describe("TeamInfoView - which team member fields reach the update payload depen
     expect(payload.team_member_tpm_limit).toBe(11);
     expect(payload.team_member_rpm_limit).toBe(22);
     expect(payload.default_team_member_models).toEqual(["gpt-4"]);
+    expect(payload).not.toHaveProperty("team_member_rollover_max_budget");
   });
 
   it("sends a null team_member_budget_duration when Default Budget Duration is set to never reset", async () => {
     const user = userEvent.setup({ delay: null });
     await openEditor(user);
 
-    await user.click(screen.getByText("Team Member Settings"));
     await screen.findByLabelText("Default Budget (USD)");
     await chooseSelectOption(user, screen.getByLabelText("Default Budget Duration"), "Never resets");
 
@@ -2287,8 +2331,6 @@ describe("TeamInfoView - which team member fields reach the update payload depen
     const user = userEvent.setup({ delay: null });
     await openEditor(user, { max_budget: 42, budget_duration: null, tpm_limit: null, rpm_limit: null });
 
-    await user.click(screen.getByText("Team Member Settings"));
-
     expect(await screen.findByLabelText("Default Budget Duration")).toHaveTextContent("Never resets");
   });
 
@@ -2296,7 +2338,6 @@ describe("TeamInfoView - which team member fields reach the update payload depen
     const user = userEvent.setup({ delay: null });
     await openEditor(user, null);
 
-    await user.click(screen.getByText("Team Member Settings"));
     const durationSelect = await screen.findByLabelText("Default Budget Duration");
     expect(durationSelect).toHaveTextContent("Inherit team reset period");
     expect(durationSelect).not.toHaveTextContent("Never resets");
@@ -2312,7 +2353,6 @@ describe("TeamInfoView - which team member fields reach the update payload depen
     const user = userEvent.setup({ delay: null });
     await openEditor(user);
 
-    await user.click(screen.getByText("Team Member Settings"));
     fireEvent.change(await screen.findByLabelText("Default Budget (USD)"), { target: { value: "" } });
     const payload = await save(user);
 
@@ -2323,11 +2363,10 @@ describe("TeamInfoView - which team member fields reach the update payload depen
     });
   });
 
-  it("keeps a member default with no dollar cap uncapped when Team Member Settings is saved", async () => {
+  it("keeps a member default with no dollar cap uncapped when Member Defaults are saved", async () => {
     const user = userEvent.setup({ delay: null });
     await openEditor(user, { max_budget: null, budget_duration: "30d", tpm_limit: null, rpm_limit: 60 });
 
-    await user.click(screen.getByText("Team Member Settings"));
     await screen.findByLabelText("Default Budget (USD)");
     const payload = await save(user);
 
@@ -2338,16 +2377,38 @@ describe("TeamInfoView - which team member fields reach the update payload depen
     const user = userEvent.setup({ delay: null });
     await openEditor(user);
 
-    await user.click(screen.getByText("Team Member Settings"));
     fireEvent.change(await screen.findByLabelText("Default Budget (USD)"), { target: { value: "12.5" } });
     const payload = await save(user);
 
     expect(payload.team_member_budget).toBe(12.5);
   });
 
+  it.each([
+    ["90", 90],
+    ["", null],
+  ])("saves an edited rollover cap of %s from Member Defaults", async (input, expected) => {
+    const user = userEvent.setup({ delay: null });
+    const savedBudget = {
+      max_budget: 42,
+      rollover_max_budget: 84,
+      budget_duration: "30d",
+      tpm_limit: 11,
+      rpm_limit: 22,
+    };
+    await openEditor(user, savedBudget);
+
+    const cap = await screen.findByLabelText("Member Rollover Cap (USD)");
+    expect(cap).toHaveValue(84);
+    fireEvent.change(cap, { target: { value: input } });
+    const payload = await save(user);
+
+    expect(payload.team_member_rollover_max_budget).toBe(expected);
+    expect(payload.team_member_budget).toBe(42);
+  });
+
   it("omits object_permission.search_tools while Search Tool Settings is closed", async () => {
     const user = userEvent.setup({ delay: null });
-    await openEditor(user);
+    await openEditor(user, undefined, false);
 
     const payload = await save(user);
 
@@ -2356,7 +2417,7 @@ describe("TeamInfoView - which team member fields reach the update payload depen
 
   it("includes object_permission.search_tools once Search Tool Settings is opened", async () => {
     const user = userEvent.setup({ delay: null });
-    await openEditor(user);
+    await openEditor(user, undefined, false);
 
     await user.click(screen.getByText("Search Tool Settings"));
     await screen.findByPlaceholderText("Select search tools (optional, empty = all allowed)");
@@ -2462,7 +2523,6 @@ describe("TeamInfoView - the exact bytes the update call sends", () => {
     expect(payload.metadata).not.toHaveProperty("require_trace_id");
     expect(payload).toStrictEqual({
       ...alwaysSent,
-      team_member_budget_duration: undefined,
       object_permission: mcpPermissions,
     });
     expect(wireBody(payload)).toStrictEqual({
@@ -2589,12 +2649,16 @@ describe("TeamInfoView - the exact bytes the update call sends", () => {
     expect(objectPermission.vector_stores).toStrictEqual([]);
   });
 
-  it("resends every stored value once both sections are opened", async () => {
+  it("keeps member defaults and search tools in separate saves", async () => {
     const user = userEvent.setup({ delay: null });
     await openEditor(user);
 
-    await user.click(screen.getByText("Team Member Settings"));
+    await user.click(await screen.findByRole("tab", { name: "Member Defaults" }));
+    await user.click(await screen.findByRole("button", { name: "Edit Defaults" }));
     await screen.findByLabelText("Default Budget (USD)");
+    const defaultsPayload = await save(user);
+    vi.mocked(networking.teamUpdateCall).mockClear();
+    await user.click(await screen.findByRole("tab", { name: "Settings" }));
     await user.click(screen.getByText("Search Tool Settings"));
     await screen.findByPlaceholderText("Select search tools (optional, empty = all allowed)");
 
@@ -2602,13 +2666,17 @@ describe("TeamInfoView - the exact bytes the update call sends", () => {
 
     const expected = {
       ...alwaysSent,
+      object_permission: { ...mcpPermissions, search_tools: ["tool-a"] },
+    };
+    const expectedDefaults = {
+      team_id: "123",
       team_member_budget_duration: "30d",
       team_member_budget: 42,
       team_member_tpm_limit: 11,
       team_member_rpm_limit: 22,
       default_team_member_models: ["gpt-4"],
-      object_permission: { ...mcpPermissions, search_tools: ["tool-a"] },
     };
+    expect(wireBody(defaultsPayload)).toStrictEqual(expectedDefaults);
     expect(payload).toStrictEqual(expected);
     expect(wireBody(payload)).toStrictEqual(expected);
   });
@@ -2646,7 +2714,8 @@ describe("TeamInfoView - the exact bytes the update call sends", () => {
     const user = userEvent.setup({ delay: null });
     await openEditorWithMemberBudgetAlerts(user);
 
-    await user.click(screen.getByText("Team Member Settings"));
+    await user.click(await screen.findByRole("tab", { name: "Member Defaults" }));
+    await user.click(await screen.findByRole("button", { name: "Edit Defaults" }));
     await screen.findByLabelText("Default Budget (USD)");
     const thresholds = screen.getAllByPlaceholderText("% of budget");
     const recipients = screen.getAllByPlaceholderText(/Additional recipients/);
@@ -2671,7 +2740,8 @@ describe("TeamInfoView - the exact bytes the update call sends", () => {
     const user = userEvent.setup({ delay: null });
     await openEditorWithMemberBudgetAlerts(user);
 
-    await user.click(screen.getByText("Team Member Settings"));
+    await user.click(await screen.findByRole("tab", { name: "Member Defaults" }));
+    await user.click(await screen.findByRole("button", { name: "Edit Defaults" }));
     await screen.findByLabelText("Default Budget (USD)");
     const removeButtons = screen.getAllByRole("button", { name: "Remove budget alert threshold" });
     await user.click(removeButtons[1]);
@@ -2686,7 +2756,8 @@ describe("TeamInfoView - the exact bytes the update call sends", () => {
     const user = userEvent.setup({ delay: null });
     await openEditorWithMemberBudgetAlerts(user);
 
-    await user.click(screen.getByText("Team Member Settings"));
+    await user.click(await screen.findByRole("tab", { name: "Member Defaults" }));
+    await user.click(await screen.findByRole("button", { name: "Edit Defaults" }));
     await screen.findByLabelText("Default Budget (USD)");
     const threshold = screen.getAllByPlaceholderText("% of budget")[0] as HTMLInputElement;
     fireEvent.change(threshold, { target: { value: "150" } });
@@ -2701,7 +2772,8 @@ describe("TeamInfoView - the exact bytes the update call sends", () => {
     const user = userEvent.setup({ delay: null });
     await openEditorWithMemberBudgetAlerts(user);
 
-    await user.click(screen.getByText("Team Member Settings"));
+    await user.click(await screen.findByRole("tab", { name: "Member Defaults" }));
+    await user.click(await screen.findByRole("button", { name: "Edit Defaults" }));
     await screen.findByLabelText("Default Budget (USD)");
     await user.click(screen.getByRole("button", { name: "Add Budget Alert Threshold" }));
     await user.click(screen.getByRole("button", { name: /save changes/i }));
@@ -2934,36 +3006,39 @@ describe("TeamInfoView - the exact bytes the update call sends", () => {
     expect(payload.model_rpm_limit).toStrictEqual({ "gpt-4": 40 });
   });
 
-  it("keeps a team member budget edited before the section is collapsed and resends it on reopen", async () => {
+  it("keeps an unsaved member default while switching tabs", async () => {
     const user = userEvent.setup({ delay: null });
     await openEditor(user);
 
-    await user.click(screen.getByText("Team Member Settings"));
+    await user.click(await screen.findByRole("tab", { name: "Member Defaults" }));
+    await user.click(await screen.findByRole("button", { name: "Edit Defaults" }));
     const budgetInput = await screen.findByLabelText("Default Budget (USD)");
     await user.clear(budgetInput);
     await user.type(budgetInput, "77");
 
-    await user.click(screen.getByText("Team Member Settings"));
-    await waitFor(() => expect(screen.queryByLabelText("Default Budget (USD)")).not.toBeInTheDocument());
-
-    await user.click(screen.getByText("Team Member Settings"));
+    await user.click(screen.getByRole("tab", { name: "Settings" }));
+    await user.click(screen.getByRole("tab", { name: "Member Defaults" }));
     expect(await screen.findByLabelText("Default Budget (USD)")).toHaveValue(77);
 
     const payload = await save(user);
     expect(payload.team_member_budget).toBe(77);
   });
 
-  it("sends no team member key at all when the section is collapsed again after an edit", async () => {
+  it("does not save a member default draft after cancelling", async () => {
     const user = userEvent.setup({ delay: null });
     await openEditor(user);
 
-    await user.click(screen.getByText("Team Member Settings"));
+    await user.click(await screen.findByRole("tab", { name: "Member Defaults" }));
+    await user.click(await screen.findByRole("button", { name: "Edit Defaults" }));
     const budgetInput = await screen.findByLabelText("Default Budget (USD)");
     await user.clear(budgetInput);
     await user.type(budgetInput, "77");
 
-    await user.click(screen.getByText("Team Member Settings"));
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
     await waitFor(() => expect(screen.queryByLabelText("Default Budget (USD)")).not.toBeInTheDocument());
+    expect(networking.teamUpdateCall).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("tab", { name: "Settings" }));
 
     const payload = await save(user);
 
@@ -3034,10 +3109,12 @@ describe("TeamInfoView - the exact bytes the update call sends", () => {
     expect(payload.model_tpm_limit).toStrictEqual({ "gpt-4": 30 });
   });
 
-  it("leaves stored policies out of the update body for a caller without the viewPolicies capability", async () => {
+  it("preserves saved policies when the caller cannot edit them", async () => {
     const user = userEvent.setup({ delay: null });
     can.mockReturnValue(false);
-    vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData({ models: ["gpt-4"], policies: ["pci"] }));
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(
+      createMockTeamData({ models: ["gpt-4"], metadata: { policies: ["review-policy"] } }),
+    );
     vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
 
     renderWithProviders(<TeamInfoView {...props} />);
@@ -3050,6 +3127,7 @@ describe("TeamInfoView - the exact bytes the update call sends", () => {
 
     expect(payload).toHaveProperty("team_alias");
     expect(wireBody(payload)).not.toHaveProperty("policies");
+    expect(payload.metadata).toMatchObject({ policies: ["review-policy"] });
   });
 
   it("blocks the save on an empty team name and names the rule", async () => {

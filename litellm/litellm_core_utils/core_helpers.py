@@ -1,15 +1,25 @@
 # What is this?
 ## Helper utilities
 import copy
+import json
 import logging
 import math
 import re
-import sys
-from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass
 from http import HTTPStatus
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeVar, cast, runtime_checkable
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Final,
+    Literal,
+    Protocol,
+    TypeVar,
+    cast,
+    overload,
+    runtime_checkable,
+)
 
 import httpx
 from pydantic import BaseModel, TypeAdapter, ValidationError
@@ -22,13 +32,14 @@ from litellm.litellm_core_utils.hidden_params import set_extra_attribute
 from litellm.litellm_core_utils.llm_response_utils.get_headers import get_provider_request_id
 from litellm.types.litellm_params import MCP_HANDLER_KWARG_NAMES
 from litellm.types.llms.openai import AllMessageValues, OpenAIChatCompletionFinishReason
+from litellm.types.rerank import RerankResponse
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
     from litellm.types.utils import ClaudeSubscriptionUsage, ModelResponseStream, StandardLoggingKubernetesPodRouting
 
-    Span = _Span | Any
+    Span = _Span
 else:
     Span = Any
 
@@ -36,8 +47,24 @@ else:
 _CODEX_CLIENT_PREFIX_RE: Final = re.compile(r"^codex[-_ /]", re.IGNORECASE)
 
 
+def _camel_case(key: str) -> str:
+    head, *rest = key.split("_")
+    return head + "".join(part[:1].upper() + part[1:] for part in rest)
+
+
+def camel_case_keys(config: Mapping[str, object]) -> Mapping[str, object]:
+    return {
+        **{_camel_case(key): value for key, value in config.items() if "_" in key},
+        **{key: value for key, value in config.items() if "_" not in key},
+    }
+
+
 def is_codex_user_agent(user_agent: str) -> bool:
     return bool(_CODEX_CLIENT_PREFIX_RE.match(user_agent))
+
+
+def is_github_copilot_chat_user_agent(user_agent: str) -> bool:
+    return user_agent.startswith("GitHubCopilotChat/")
 
 
 def qualify_provider_stripped_model(model: str, custom_llm_provider: str) -> str:
@@ -106,6 +133,44 @@ _LAX_BOOL: Final = TypeAdapter(bool)
 
 def as_str_mapping(value: object) -> Mapping[str, object] | None:
     return value if isinstance(value, (dict, Mapping)) else None
+
+
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
+def loads_json_object(payload: str | bytes | bytearray) -> Mapping[str, object] | None:
+    opens_object: Final = (
+        payload.lstrip().startswith(b"{")
+        if isinstance(payload, (bytes, bytearray))
+        else payload.lstrip().startswith("{")
+    )
+    if not opens_object:
+        return None
+    try:
+        return as_str_mapping(_DECODED_JSON.validate_python(json.loads(payload)))
+    except (ValueError, RecursionError):
+        return None
+
+
+_JSON_NESTING_ALWAYS_DECODABLE: Final = 100
+_DIGIT_RUN_PYTHON_MAY_REFUSE: Final = re.compile(r"[0-9]{640}")
+
+
+def is_undecodable_json_object(payload: str) -> bool:
+    if not payload.lstrip().startswith("{"):
+        return False
+    if (
+        payload.count("{") + payload.count("[") < _JSON_NESTING_ALWAYS_DECODABLE
+        and _DIGIT_RUN_PYTHON_MAY_REFUSE.search(payload) is None
+    ):
+        return False
+    try:
+        json.loads(payload)
+    except json.JSONDecodeError:
+        return False
+    except (ValueError, RecursionError):
+        return True
+    return False
 
 
 def as_object_list(value: object) -> Sequence[object] | None:
@@ -182,11 +247,6 @@ class _SupportsIter(Protocol):
     def __iter__(self) -> Iterator[object]: ...
 
 
-@runtime_checkable
-class _SupportsGetItem(Protocol):
-    def __getitem__(self, key: str | int, /) -> object: ...
-
-
 def attribute_or_none(source: object, name: str) -> object:
     return getattr(source, name, None)
 
@@ -197,15 +257,15 @@ _HTTP_ERROR_STATUSES: Final = range(HTTPStatus.BAD_REQUEST, 600)
 def error_status_code(exc: object, default: int) -> int:
     """The 4xx or 5xx HTTP status an exception carries as ``status_code`` (an int or a decimal string) or,
     the way ``ProxyException`` stores it, as a stringified ``code``; ``default`` when it carries neither."""
-    carried: Final = _http_error_status(attribute_or_none(exc, "status_code"))
+    carried: Final = http_error_status(attribute_or_none(exc, "status_code"))
     if carried is not None:
         return carried
     stringified: Final = attribute_or_none(exc, "code")
-    from_code: Final = _http_error_status(stringified) if isinstance(stringified, str) else None
+    from_code: Final = http_error_status(stringified) if isinstance(stringified, str) else None
     return default if from_code is None else from_code
 
 
-def _http_error_status(value: object) -> int | None:
+def http_error_status(value: object) -> int | None:
     match value:
         case bool():
             return None
@@ -217,7 +277,8 @@ def _http_error_status(value: object) -> int | None:
             return None
 
 
-_Shape: Final = TypeVar("_Shape")
+_Shape = TypeVar("_Shape")
+_MetadataBucket = TypeVar("_MetadataBucket", bound=MutableMapping[str, object])
 
 
 @dataclass(frozen=True, slots=True)
@@ -248,8 +309,52 @@ def has_attributes(
 def require_attributes(value: object, shape: type[_Shape], *names: str) -> _Shape:
     if has_attributes(value, shape, *names):
         return value
-    missing: Final = next(name for name in names if not hasattr(value, name))
-    raise AttributeError(f"'{type(value).__name__}' object has no attribute '{missing}'", name=missing, obj=value)
+    for name in names:
+        getattr(value, name)
+    raise AttributeError(f"{type(value).__name__!r} object lacks {names!r}")
+
+
+def int_of(value: object) -> int:
+    return int(value)  # pyright: ignore[reportArgumentType]  # int() raises its own TypeError
+
+
+def float_of(value: object) -> float:
+    return float(value)  # pyright: ignore[reportArgumentType]  # float() raises its own TypeError
+
+
+def length_of(value: object) -> int:
+    return len(value)  # pyright: ignore[reportArgumentType]  # len() raises its own TypeError
+
+
+def joined(separator: str, parts: object) -> str:
+    return separator.join(parts)  # pyright: ignore[reportArgumentType]  # join raises its own TypeError
+
+
+def json_loaded(document: object) -> object:
+    return json.loads(document)  # pyright: ignore[reportArgumentType, reportAny]  # loads raises its own TypeError
+
+
+def set_item(container: object, key: object, value: object) -> None:
+    container[key] = value  # pyright: ignore[reportIndexIssue]  # raises its own TypeError
+
+
+def sum_of(left: object, right: object) -> object:
+    return left + right  # pyright: ignore[reportOperatorIssue, reportUnknownVariableType]  # + raises its TypeError
+
+
+def concatenated(prefix: str, suffix: object) -> str:
+    return prefix + suffix  # pyright: ignore[reportOperatorIssue, reportUnknownVariableType]  # + raises its TypeError
+
+
+def spread(value: object) -> tuple[object, ...]:
+    return (*value,)  # pyright: ignore[reportGeneralTypeIssues, reportUnknownVariableType]  # * raises its TypeError
+
+
+def callable_of(value: object) -> Callable[..., object]:
+    if callable(value):
+        return value
+    value()  # pyright: ignore[reportCallIssue]  # raises its own TypeError
+    raise TypeError(f"{type(value).__name__!r} object is not callable")
 
 
 class KeywordArguments(Protocol):
@@ -258,12 +363,29 @@ class KeywordArguments(Protocol):
     def __getitem__(self, key: str, /) -> object: ...
 
 
-def keyword_arguments(value: object, target: type[object]) -> KeywordArguments:
+def keyword_arguments(value: object, target: Callable[..., object]) -> KeywordArguments:
     if has_attributes(value, KeywordArguments, "keys"):
         return value
-    raise TypeError(
-        f"{target.__module__}.{target.__qualname__}() argument after ** must be a mapping, not {type(value).__name__}"
-    )
+    target(**value)  # pyright: ignore[reportCallIssue]  # ** fails before target runs
+    raise TypeError(f"argument after ** must be a mapping, not {type(value).__name__}")
+
+
+def unpackable_mapping(value: object) -> KeywordArguments:
+    if has_attributes(value, KeywordArguments, "keys"):
+        return value
+    return {**value}  # pyright: ignore[reportGeneralTypeIssues, reportUnknownVariableType]  # ** raises its TypeError
+
+
+class SupportsGet(Protocol):
+    @overload
+    def get(self, key: str, /) -> object: ...
+
+    @overload
+    def get(self, key: str, default: object, /) -> object: ...
+
+
+def require_get(value: object) -> SupportsGet:
+    return require_attributes(value, SupportsGet, "get")
 
 
 def iter_items(value: object) -> Iterable[object]:
@@ -272,31 +394,19 @@ def iter_items(value: object) -> Iterable[object]:
         return listed
     if isinstance(value, _SupportsIter):
         return value
-    if isinstance(value, _SupportsGetItem):
-        return iter(value)
-    raise TypeError(f"'{type(value).__name__}' object is not iterable")
+    return iter(value)  # pyright: ignore[reportCallIssue, reportArgumentType, reportUnknownVariableType]  # raises
 
 
-@runtime_checkable
-class _SupportsContains(Protocol):
-    def __contains__(self, key: object, /) -> bool: ...
-
-
-_NOT_A_CONTAINER: Final = "is not a container or iterable" if sys.version_info >= (3, 14) else "is not iterable"
+def dict_from_pairs(value: object) -> Mapping[object, object]:
+    return dict[object, object](value)  # pyright: ignore[reportCallIssue, reportArgumentType]  # dict() raises
 
 
 def json_contains(value: object, key: object) -> bool:
-    if isinstance(value, _SupportsContains):
-        return key in value
-    if isinstance(value, (_SupportsIter, _SupportsGetItem)):
-        return key in tuple(iter_items(value))
-    raise TypeError(f"argument of type '{type(value).__name__}' {_NOT_A_CONTAINER}")
+    return key in value  # pyright: ignore[reportOperatorIssue]  # in raises its own TypeError
 
 
-def subscript(value: object, key: str | int) -> object:
-    if isinstance(value, _SupportsGetItem):
-        return value[key]
-    raise TypeError(f"'{type(value).__name__}' object is not subscriptable")
+def subscript(value: object, key: object) -> object:
+    return value[key]  # pyright: ignore[reportIndexIssue, reportUnknownVariableType]  # [] raises its own TypeError
 
 
 def attribute_items(source: object, name: str) -> Iterable[object]:
@@ -319,13 +429,6 @@ def normalize_drop_params(value: object) -> bool | None:
 
 def drops_unsupported_params(drop_params: object) -> bool:
     return litellm.drop_params is True or normalize_drop_params(drop_params) is True
-
-
-def drop_params_flag(value: object, source: str, logger: logging.Logger) -> bool:
-    normalized: Final = normalize_drop_params(value)
-    if normalized is None and value is not None:
-        logger.warning("%s=%r is not a flag value, treating it as off", source, value)
-    return bool(normalized)
 
 
 DROP_PARAMS_ENV_VAR: Final = "LITELLM_DROP_PARAMS"
@@ -457,7 +560,7 @@ def coerce_token_limit(value: object) -> int | None:
     return None
 
 
-_FINISH_REASON_MAP: Final[dict[str, OpenAIChatCompletionFinishReason]] = {
+_FINISH_REASON_MAP: Final[Mapping[str, OpenAIChatCompletionFinishReason]] = {
     # Anthropic
     "stop_sequence": "stop",
     "end_turn": "stop",
@@ -527,7 +630,7 @@ def map_finish_reason(finish_reason: str) -> OpenAIChatCompletionFinishReason:
 
 
 def remove_index_from_tool_calls(
-    messages: list[AllMessageValues] | None,
+    messages: Sequence[AllMessageValues] | None,
 ):
     if messages is not None:
         for message in messages:
@@ -553,7 +656,9 @@ def remove_items_at_indices(items: _PoppableByIndex | None, indices: Iterable[in
             items.pop(index)
 
 
-def add_missing_spend_metadata_to_litellm_metadata(litellm_metadata: dict, metadata: Mapping[str, object]) -> dict:
+def add_missing_spend_metadata_to_litellm_metadata(
+    litellm_metadata: _MetadataBucket, metadata: Mapping[str, object]
+) -> _MetadataBucket:
     """
     Helper to get litellm metadata for spend tracking
 
@@ -598,7 +703,7 @@ def max_retries_per_request_hit(kwargs: Mapping[str, object], num_retries_per_re
 
 
 def get_or_create_metadata_bucket(
-    request_data: dict,
+    request_data: MutableMapping[str, object],
 ) -> tuple[Literal["metadata", "litellm_metadata"], dict]:
     """
     Return the proxy-internal metadata bucket for this request, creating it if absent.
@@ -771,7 +876,7 @@ def unbind_budget_reservation_from_callbacks(litellm_params: Mapping[str, object
 def reconstruct_model_name(
     model_name: str,
     custom_llm_provider: str | None,
-    metadata: dict,
+    metadata: Mapping,
 ) -> str:
     """Reconstruct full model name with provider prefix for logging."""
     # Check if deployment model name from router metadata is available (has original prefix)
@@ -826,9 +931,9 @@ _get_parent_otel_span_from_kwargs = get_parent_otel_span_from_kwargs
 
 
 def process_response_headers(
-    response_headers: httpx.Headers | dict,
+    response_headers: httpx.Headers | Mapping[str, _Value],
     preserve_litellm_internal_headers: bool = False,
-) -> dict:
+) -> dict[str, _Value | str]:
     """
     `preserve_litellm_internal_headers` must only be True when the input is a
     LiteLLM-owned dict (e.g. `_hidden_params["additional_headers"]` that has
@@ -847,9 +952,9 @@ def process_response_headers(
     # must never be treated as LiteLLM-owned, regardless of caller intent.
     _preserve: Final = preserve_litellm_internal_headers and isinstance(response_headers, dict)
 
-    openai_headers: Final = {}
-    processed_headers: Final = {}
-    additional_headers = {}
+    openai_headers: Final[dict[str, _Value | str]] = {}
+    processed_headers: Final[dict[str, _Value | str]] = {}
+    additional_headers: dict[str, _Value | str] = {}
 
     for k, v in response_headers.items():
         if k in OPENAI_RESPONSE_HEADERS:  # return openai-compatible headers
@@ -968,7 +1073,7 @@ def safe_deep_copy(data):
 
 
 def independent_snapshot(
-    data: dict,  # mutable-ok: caller-defined request-payload shape
+    data: dict[str, _Value],  # mutable-ok: caller-defined request-payload shape
 ) -> dict:  # mutable-ok: caller-defined request-payload shape
     """
     A copy of ``data`` whose top-level keys are deep-copied independently
@@ -1021,7 +1126,7 @@ def independent_snapshot(
     return {key: _copied_value(key, value) for key, value in sanitized.items()}
 
 
-def filter_exceptions_from_params(data: object, max_depth: int = 20) -> Any:
+def filter_exceptions_from_params(data: object, max_depth: int = 20) -> object:
     """
     Recursively filter out Exception objects and callable objects from dicts/lists.
 
@@ -1092,10 +1197,18 @@ def filter_internal_params(data: Mapping[str, _Value]) -> dict[str, _Value]:
     return {k: v for k, v in data.items() if k not in MCP_HANDLER_KWARG_NAMES}
 
 
+@overload
 def redact_nested_match_and_regex_keys(
-    payload: dict | list[Any] | str | None,
+    payload: dict | list[dict[str, object]] | str | None,
     keys: Collection[str] = ("match", "regex"),
-) -> dict | list[Any] | str | None:
+) -> dict | list[dict[str, object]] | str | None: ...
+
+
+@overload
+def redact_nested_match_and_regex_keys(payload: object, keys: Collection[str] = ("match", "regex")) -> object: ...
+
+
+def redact_nested_match_and_regex_keys(payload: object, keys: Collection[str] = ("match", "regex")) -> object:
     """
     Deep-copy `payload` and replace every configured string field with "[REDACTED]"
     anywhere in nested dict/list structures.
@@ -1105,13 +1218,13 @@ def redact_nested_match_and_regex_keys(
     if payload is None or isinstance(payload, str):
         return payload
     try:
-        redacted: Final[dict | list[object] | str | None] = copy.deepcopy(payload)
+        redacted: Final = copy.deepcopy(payload)
     except Exception:
         return payload
 
     # Iterative traversal; `seen` guards against cyclic refs preserved by deepcopy.
     try:
-        seen: Final[set] = set()
+        seen: Final[set[int]] = set()
         stack: Final[list[object]] = [redacted]
         while stack:
             node = stack.pop()
@@ -1236,9 +1349,13 @@ def billed_usage_cost(response: object, custom_llm_provider: str | None) -> floa
     cost: Final = (
         _numeric(hidden[UPSTREAM_USAGE_COST])
         if hidden is not None and UPSTREAM_USAGE_COST in hidden
-        else provider_reported_usage_cost(_usage_field(response, "usage"), custom_llm_provider)
+        else provider_reported_usage_cost(_billed_usage_block(response), custom_llm_provider)
     )
     return cost if cost is not None and math.isfinite(cost) and cost >= 0 else None
+
+
+def _billed_usage_block(response: object) -> object:
+    return response.provider_usage if isinstance(response, RerankResponse) else _usage_field(response, "usage")
 
 
 _MESSAGES_REPORTED_COST_PROVIDERS: Final = frozenset({"opencode_go"})

@@ -38,7 +38,7 @@ const usage = new Map([
   ["Alpha", { ...EMPTY_CUSTOMER_USAGE, spend: 2, tokens: 1000 }],
   ["Beta", { ...EMPTY_CUSTOMER_USAGE, spend: 100, tokens: 9 }],
 ]);
-const rows = applicationTableRows(source, groups, usage, "Custom");
+const rows = applicationTableRows(source, groups, usage, { customLabel: "Custom" });
 const names = (items: typeof rows) => items.map(({ resource }) => resource.alias);
 
 describe("application sorting", () => {
@@ -61,7 +61,7 @@ describe("application sorting", () => {
       app: app && { ...app, budget: null, budget_usage: [] },
     }));
     const totals = new Map([...usage, ["Beta", { ...EMPTY_CUSTOMER_USAGE, spend: 2, tokens: 0 }]]);
-    const prepared = applicationTableRows(uncapped, groups, totals, "Custom");
+    const prepared = applicationTableRows(uncapped, groups, totals, { customLabel: "Custom" });
     expect(names(sortApplications(prepared, "", [{ id: "spend", desc: true }]))).toEqual([
       "Alpha",
       "Beta",
@@ -72,6 +72,19 @@ describe("application sorting", () => {
     expect(names(sortApplications(rows, "  RESOURCE-BETA  ", []))).toEqual(["Beta"]);
   });
 
+  it("sorts scoped usage by selected spend while retaining the app's current budget", () => {
+    const scoped = applicationTableRows(source, groups, usage, { customLabel: "Custom", spendPeriod: "selected" });
+    expect(names(sortApplications(scoped, "", [{ id: "spend", desc: true }]))).toEqual([
+      "Beta",
+      "Alpha",
+      "Unknown",
+      "Unlimited",
+    ]);
+    expect(scoped.find(({ entity }) => entity.id === "resource-Alpha")?.entity.budgetUsage).toEqual(
+      source.find(({ resource }) => resource.alias === "Alpha")?.app?.budget_usage,
+    );
+  });
+
   it("keeps a missing monthly counter unknown and uses the displayed monthly window limit", () => {
     const base = application(
       "Window",
@@ -80,6 +93,9 @@ describe("application sorting", () => {
     );
     const row = { ...base, app: base.app && { ...base.app, budget_usage: null } };
     const totals = new Map([["Window", { ...EMPTY_CUSTOMER_USAGE, spend: 75 }]]);
-    expect(applicationTableRows([row], [], totals, "Custom")[0].values).toMatchObject({ spend: null, budget: 20 });
+    expect(applicationTableRows([row], [], totals, { customLabel: "Custom" })[0].values).toMatchObject({
+      spend: null,
+      budget: 20,
+    });
   });
 });

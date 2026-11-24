@@ -93,7 +93,7 @@ class PostHogLogger(CustomBatchLogger):
             verbose_logger.exception("PostHog: Got exception on init PostHog client %s", e)
             raise e
 
-    def log_success_event(self, kwargs, response_obj, start_time, end_time):
+    def log_success_event(self, kwargs: PostHogLogKwargs, response_obj: object, start_time: object, end_time: object):
         try:
             verbose_logger.debug("PostHog: Sync logging - Enters logging function for model %s", kwargs)
 
@@ -127,7 +127,9 @@ class PostHogLogger(CustomBatchLogger):
         except Exception as e:
             verbose_logger.exception("PostHog Sync Layer Error - %s", e)
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(
+        self, kwargs: PostHogLogKwargs, response_obj: object, start_time: object, end_time: object
+    ):
         try:
             verbose_logger.debug("PostHog: Async logging - Enters logging function for model %s", kwargs)
             self._ensure_async_setup()  # Lazy initialization
@@ -135,7 +137,9 @@ class PostHogLogger(CustomBatchLogger):
         except Exception as e:
             verbose_logger.exception("PostHog Layer Error - %s", e)
 
-    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_failure_event(
+        self, kwargs: PostHogLogKwargs, response_obj: object, start_time: object, end_time: object
+    ):
         try:
             verbose_logger.debug("PostHog: Async logging - Enters logging function for model %s", kwargs)
             self._ensure_async_setup()  # Lazy initialization
@@ -143,7 +147,9 @@ class PostHogLogger(CustomBatchLogger):
         except Exception as e:
             verbose_logger.exception("PostHog Layer Error - %s", e)
 
-    async def _log_async_event(self, kwargs, response_obj=None, start_time=0.0, end_time=0.0):
+    async def _log_async_event(
+        self, kwargs: PostHogLogKwargs, response_obj: object = None, start_time: object = 0.0, end_time: object = 0.0
+    ):
         # Note: response_obj, start_time, end_time not used - all data comes from kwargs
         api_key, api_url = self._get_credentials_for_request(kwargs)
         event_payload: Final = self.create_posthog_event_payload(kwargs)

@@ -50,7 +50,7 @@ const organizationWithBudgets = (...budgets: Budget[]) => ({
 
 async function openLimitEditor(user: UserEvent, group: string) {
   await user.click(limitsFor(group).getByRole("button", { name: "+ Add Budget Window" }));
-  return screen.findByRole("dialog", { name: "Additional spend limit (USD)" });
+  return screen.findByRole("dialog", { name: "Additional Max Budget (USD)" });
 }
 
 describe("CustomerBudgetGroups", () => {
@@ -100,6 +100,7 @@ describe("CustomerBudgetGroups", () => {
   });
 
   const catalogs = [
+    ["App group budget groups", "App Group Budget Groups", "/management/v1/app_group_budget_groups", "app-group"],
     ["Overall app budget groups", "Overall App Budget Groups", "/management/v1/app_budget_groups", "overall-app"],
     [
       "Organization budget groups",
@@ -125,6 +126,7 @@ describe("CustomerBudgetGroups", () => {
     const user = userEvent.setup();
     const { period, duration } = {
       "overall-app": { period: "No reset", duration: null },
+      "app-group": { period: "/ month", duration: "1mo" },
       organization: { period: "/ month", duration: "1mo" },
       app: { period: "Custom period", duration: "7d" },
       "app-member": { period: "/ year", duration: "12mo" },
@@ -156,7 +158,7 @@ describe("CustomerBudgetGroups", () => {
     await user.click(await editor.findByRole("button", { name: "Add budget group" }));
     fireEvent.change(editor.getByLabelText("Group name 1"), { target: { value: name } });
     if (!modelOnly) {
-      fireEvent.change(editor.getByRole("spinbutton", { name: "Spend limit (USD)" }), { target: { value: "0" } });
+      fireEvent.change(editor.getByRole("spinbutton", { name: "Max Budget (USD)" }), { target: { value: "0" } });
       await chooseSelectOption(user, editor.getByRole("combobox", { name: "Reset period" }), period);
       if (period === "Custom period")
         fireEvent.change(editor.getByLabelText("Custom period"), { target: { value: duration } });
@@ -220,7 +222,7 @@ describe("CustomerBudgetGroups", () => {
     );
     renderWithProviders(<CustomerBudgetGroups organization={source} onSaved={onSaved} />);
     expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
-    fireEvent.change(limitsFor("Standard").getByRole("spinbutton", { name: "Additional spend limit (USD)" }), {
+    fireEvent.change(limitsFor("Standard").getByRole("spinbutton", { name: "Additional Max Budget (USD)" }), {
       target: { value: "15" },
     });
     const primary = within(await openLimitEditor(user, "Standard"));
@@ -228,12 +230,12 @@ describe("CustomerBudgetGroups", () => {
     expect(primary.getByRole("button", { name: "Add limit" })).toBeDisabled();
     fireEvent.change(primary.getByRole("spinbutton"), { target: { value: "0" } });
     await user.click(primary.getByRole("button", { name: "Add limit" }));
-    expect(limitsFor("Standard").getByRole("spinbutton", { name: "Spend limit (USD)" })).toHaveValue(0);
+    expect(limitsFor("Standard").getByRole("spinbutton", { name: "Max Budget (USD)" })).toHaveValue(0);
     await user.click(screen.getByRole("combobox", { name: "Group 1 at the cap" }));
     await user.click(await screen.findByRole("option", { name: "Pause, allow increase requests" }));
     await user.click(screen.getByRole("button", { name: "Add budget group" }));
     fireEvent.change(screen.getByRole("textbox", { name: "Group name 3" }), { target: { value: "New" } });
-    fireEvent.change(limitsFor("New").getByRole("spinbutton", { name: "Spend limit (USD)" }), {
+    fireEvent.change(limitsFor("New").getByRole("spinbutton", { name: "Max Budget (USD)" }), {
       target: { value: "30" },
     });
     await chooseSelectOption(user, limitsFor("New").getByRole("combobox", { name: "Reset period" }), "/ year");
@@ -330,15 +332,19 @@ describe("CustomerBudgetGroups", () => {
     expect(fetchMock.mock.calls.every(([input]) => (input as Request).method === "GET")).toBe(true);
   });
 
-  it("saves a default for new organizations and lets No limit clear it", async () => {
+  it.each([
+    ["organization", "New organizations join", "/management/v1/customer_organization_budget_groups"],
+    ["overall-app", "New apps use", "/management/v1/app_budget_groups"],
+    ["app-group", "New app groups use", "/management/v1/app_group_budget_groups"],
+  ])("saves the %s default and lets No limit clear it", async (tab, label, endpoint) => {
     const user = userEvent.setup();
     fetchMock.mockImplementation(async (input) => {
       const request = input as Request;
       const body = request.method === "PATCH" ? await request.clone().json() : null;
       return json({ ...organization, default_budget_template_id: body?.default_budget_template ? "standard" : null });
     });
-    renderWithProviders(<CustomerSettings />);
-    const defaults = await screen.findByRole("combobox", { name: "New organizations join" });
+    renderWithProviders(<CustomerSettings />, { searchParams: `?tab=${tab}` });
+    const defaults = await screen.findByRole("combobox", { name: label });
     expect(defaults).toHaveTextContent("No limit");
     await user.click(defaults);
     await user.click(await screen.findByRole("option", { name: "Standard" }));
@@ -354,6 +360,7 @@ describe("CustomerBudgetGroups", () => {
       .map(([input]) => input as Request)
       .filter((request) => request.method === "PATCH");
     expect(requests).toHaveLength(2);
+    expect(requests.map((request) => new URL(request.url).pathname)).toEqual([endpoint, endpoint]);
     expect(await requests[0].clone().json()).toMatchObject({ default_budget_template: "Standard" });
     expect(await requests[1].clone().json()).toMatchObject({ default_budget_template: null });
   });
@@ -371,13 +378,13 @@ describe("CustomerBudgetGroups", () => {
       status === 204 ? new Response(null, { status }) : json({ detail: error }, status),
     );
     renderWithProviders(<CustomerBudgetGroups global={global} organization={source} onSaved={onSaved} />);
-    fireEvent.change(limitsFor("Standard").getByRole("spinbutton", { name: "Additional spend limit (USD)" }), {
+    fireEvent.change(limitsFor("Standard").getByRole("spinbutton", { name: "Additional Max Budget (USD)" }), {
       target: { value: "15" },
     });
     await user.click(screen.getByRole("button", { name: "Remove Old" }));
     await user.click(screen.getByRole("button", { name: "Save changes" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(error);
-    expect(limitsFor("Standard").getByRole("spinbutton", { name: "Additional spend limit (USD)" })).toHaveValue(15);
+    expect(limitsFor("Standard").getByRole("spinbutton", { name: "Additional Max Budget (USD)" })).toHaveValue(15);
     expect(screen.queryByDisplayValue("Old")).not.toBeInTheDocument();
     expect(onSaved).not.toHaveBeenCalled();
     expect(fetchMock).toHaveBeenCalledOnce();
@@ -397,7 +404,7 @@ describe("CustomerBudgetGroups", () => {
     );
     await user.click(screen.getByRole("button", { name: "Add budget group" }));
     fireEvent.change(screen.getByRole("textbox", { name: "Group name 1" }), { target: { value: "First" } });
-    fireEvent.change(limitsFor("First").getByRole("spinbutton", { name: "Spend limit (USD)" }), {
+    fireEvent.change(limitsFor("First").getByRole("spinbutton", { name: "Max Budget (USD)" }), {
       target: { value: "10" },
     });
     expect(screen.getByRole("combobox", { name: "New members join" })).toHaveTextContent("First");

@@ -11,7 +11,7 @@ dict at call time.
 Reference: https://docs.nvidia.com/deeplearning/riva/user-guide/docs/asr/asr-overview.html
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Final, TypedDict
 
 from httpx import Headers, Response
@@ -63,11 +63,11 @@ class NvidiaRivaAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: dict[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         for key, value in non_default_params.items():
             if value is None:
                 continue
@@ -97,8 +97,8 @@ class NvidiaRivaAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         self,
         model: str,
         audio_file: FileTypes,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
     ) -> AudioTranscriptionRequestData:
         """
         Build a structured dict that the gRPC handler consumes. We do *not*
@@ -137,18 +137,18 @@ class NvidiaRivaAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         # gRPC auth is constructed in the handler, not via HTTP headers.
         return headers
 
-    def _build_recognition_config_dict(self, model: str, optional_params: dict) -> dict[str, object]:
+    def _build_recognition_config_dict(self, model: str, optional_params: Mapping[str, object]) -> dict[str, object]:
         """
         Build the Riva ``RecognitionConfig`` shape as a plain dict.
 
@@ -172,7 +172,7 @@ class NvidiaRivaAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             "profanity_filter": optional_params.get("profanity_filter", False),
         }
 
-    def _build_endpointing_config_dict(self, optional_params: dict) -> dict[str, object] | None:
+    def _build_endpointing_config_dict(self, optional_params: Mapping[str, object]) -> dict[str, object] | None:
         """
         Translate an OpenAI-style ``chunking_strategy`` into Riva's
         ``EndpointingConfig`` shape, or pass through an explicit
@@ -204,7 +204,7 @@ class NvidiaRivaAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         return None
 
     @staticmethod
-    def _normalize_language_code(language: str) -> str:
+    def _normalize_language_code(language: object) -> str:
         """
         OpenAI accepts bare ISO-639 codes like ``en``; Riva requires BCP-47
         like ``en-US``. Normalize the most common bare codes; pass through

@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, ClassVar, Final, TypedDict
 
 import httpx
+from typing_extensions import ReadOnly
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -30,7 +31,7 @@ class TextToSpeechRequestData(TypedDict, total=False):
     Providers should set ONE of: dict_body, ssml_body, or text_body.
     """
 
-    dict_body: dict[str, Any]  # JSON request body (e.g., OpenAI TTS)
+    dict_body: ReadOnly[dict[str, object]]  # JSON request body (e.g., OpenAI TTS)
     ssml_body: str  # SSML/XML string body (e.g., Azure AVA TTS)
     headers: dict[str, str]  # Provider-specific headers to merge with base headers
 
@@ -61,7 +62,7 @@ class BaseTextToSpeechConfig(ABC):
         }
 
     @abstractmethod
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         """
         Get list of OpenAI TTS parameters supported by this provider
         """

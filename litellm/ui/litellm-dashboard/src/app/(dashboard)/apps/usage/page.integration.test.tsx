@@ -141,7 +141,7 @@ it("edits only the selected app and customer budget and refreshes its table row"
   renderWithProviders(<AppUsagePage />, { searchParams: initialUrl });
   await user.click(await screen.findByRole("button", { name: "Edit budget for Customer 1" }));
   const dialog = within(await screen.findByRole("dialog", { name: "Customer 1's app budget" }));
-  const amount = await dialog.findByRole("spinbutton", { name: "Spend limit (USD)" });
+  const amount = await dialog.findByRole("spinbutton", { name: "Max Budget (USD)" });
   fireEvent.change(amount, { target: { value: "120" } });
   await user.click(dialog.getByRole("button", { name: "Save app budget" }));
   await waitFor(() => expect(network.writes).toHaveLength(1));

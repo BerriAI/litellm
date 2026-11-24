@@ -3,7 +3,6 @@ import type { components } from "@/lib/http/schema";
 export type NewCustomerBody = components["schemas"]["NewCustomerRequest"];
 export type UpdateCustomerBody = components["schemas"]["UpdateCustomerRequest"];
 
-export const digitsOnly = (s: string) => s.replace(/[^0-9]/g, "");
 export const decimalOnly = (s: string) => s.replace(/[^0-9.]/g, "");
 
 const numberOrNull = (s: string): number | null => (s.trim() === "" ? null : Number(s));
