@@ -267,7 +267,9 @@ def _model_info_findings(
         get_model_info_helper(model=lookup, catalog_only=True)
     except Exception:  # noqa: BLE001  # get_model_info_helper raises a bare Exception for unmapped models
         missing: Final = [
-            key for key in _UNMAPPED_MODEL_KEYS if model_info.get(key) is None and params.get(key) is None
+            key
+            for key in _UNMAPPED_MODEL_KEYS
+            if model_info.get(key) is None and (params.get(key) is None or "cost" not in key)
         ]
         if missing:
             yield Finding(

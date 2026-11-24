@@ -312,6 +312,18 @@ def test_prices_under_litellm_params_count_for_a_model_missing_from_the_cost_map
     assert _lint(tmp_path, _model_entry(params, "{max_input_tokens: 1000, max_output_tokens: 100}")) == []
 
 
+def test_token_limits_under_litellm_params_do_not_count_for_a_model_missing_from_the_cost_map(tmp_path: Path) -> None:
+    params: Final = (
+        "{model: azure/my-deployment, api_key: k, api_base: https://example.com, api_version: v, "
+        "max_input_tokens: 1000, max_output_tokens: 100}"
+    )
+    assert _lint(tmp_path, _model_entry(params, "{input_cost_per_token: 0.1, output_cost_per_token: 0.2}")) == [
+        "config.yaml:4: warning: model_list[0].model_info: azure/my-deployment is not in LiteLLM's model cost map, "
+        "so cost tracking and token limits need model_info.base_model or "
+        "model_info.max_input_tokens, model_info.max_output_tokens"
+    ]
+
+
 def test_wildcard_model_is_not_checked_against_the_cost_map(tmp_path: Path) -> None:
     assert _lint(tmp_path, _model_entry('{model: "openai/*"}')) == []
 
