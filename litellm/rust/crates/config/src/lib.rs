@@ -22,7 +22,8 @@ pub use environment::{Environment, Flag};
 pub use error::Error;
 pub use layer::Origins;
 pub use litellm_router_types::{
-    LitellmParams, RouterRedis, RouterSettings, RoutingGroupSpec, RoutingStrategy, Spelled,
+    CallSettings, LitellmParams, RouterRedis, RouterSettings, RoutingGroupSpec, RoutingStrategy,
+    Spelled,
 };
 pub use mcp::{McpAuth, McpServer, McpTransport};
 pub use model::Model;

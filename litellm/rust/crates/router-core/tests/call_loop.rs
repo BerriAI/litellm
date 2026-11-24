@@ -2,7 +2,7 @@
 //! scripted host.
 
 use std::{
-    collections::{BTreeSet, HashMap, VecDeque},
+    collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
     sync::Arc,
     time::Duration,
 };
@@ -19,7 +19,7 @@ use litellm_router_core::{
     health::current_minute,
     host::UncountedRetries,
     mock::MockFailure,
-    precall::PreCallFacts,
+    precall::{PreCallFacts, Sent, Unsupported},
     select,
     select::PassThrough,
 };
@@ -876,6 +876,8 @@ struct SteppedHost {
     scripted: ScriptedHost,
     attempted: Mutex<BTreeSet<String>>,
     steps: Mutex<BTreeSet<String>>,
+    facts: PreCallFacts,
+    support_asked: Mutex<Vec<Vec<&'static str>>>,
 }
 
 fn step_name(step: &HostStep) -> String {
@@ -928,7 +930,17 @@ impl RouterHost for SteppedHost {
         _candidates: &[Arc<Deployment>],
     ) -> Result<PreCallFacts, Error> {
         self.made(&HostStep::PreCallFacts);
-        Ok(PreCallFacts::default())
+        Ok(self.facts.clone())
+    }
+
+    async fn unsupported_params(
+        &self,
+        _ctx: &RoutingContext<'_>,
+        _candidates: &[Arc<Deployment>],
+        params: &[&'static str],
+    ) -> Result<Unsupported, Error> {
+        self.support_asked.lock().push(params.to_vec());
+        Ok(Unsupported::default())
     }
 
     async fn allow_fallback(&self, _target: &str) -> Result<bool, AttemptError> {
@@ -1047,6 +1059,38 @@ async fn a_call_stays_inside_what_reach_reports_for_its_name(
     );
     assert!(attempted.is_subset(&served), "{attempted:?} of {served:?}");
     assert_eq!(made, reported);
+}
+
+#[rstest]
+#[case::structured(Sent::Structured, Some(false), vec![vec!["response_format"]])]
+#[case::not_set(Sent::Null, Some(false), vec![])]
+#[case::text(Sent::Text, Some(false), vec![])]
+#[case::dropped_for_every_call(Sent::Structured, Some(true), vec![])]
+#[tokio::test]
+async fn deployments_are_asked_what_they_support_only_for_a_requested_param(
+    #[case] response_format: Sent,
+    #[case] drop_params: Option<bool>,
+    #[case] asked: Vec<Vec<&'static str>>,
+) {
+    let config = RouterConfig {
+        model_list: tiers(false).model_list,
+        ..serde_json::from_value(json!({"enable_pre_call_checks": true})).unwrap()
+    };
+    let dynamic = serde_json::from_value(json!({"num_retries": 0})).unwrap();
+    let router = Router::new(config, dynamic).unwrap();
+    let host = SteppedHost {
+        facts: PreCallFacts {
+            has_input: true,
+            drop_params,
+            sent_params: BTreeMap::from([("response_format".to_owned(), response_format)]),
+            ..PreCallFacts::default()
+        },
+        ..SteppedHost::default()
+    };
+
+    let _ = router.call(&host, Op::from("acompletion"), request()).await;
+
+    assert_eq!(*host.support_asked.lock(), asked);
 }
 
 #[rstest]

@@ -4,11 +4,10 @@
 use std::collections::HashMap;
 
 use crate::host::NativeBootHost;
-use litellm_config::{Config, Spelled};
+use litellm_config::Config;
 use litellm_inference_messages::{MessagesSettings, MessagesShaping};
 use litellm_llms::anthropic::model_capabilities::messages_route_capabilities;
 use litellm_model_catalog::Catalog;
-use litellm_python_compat::flags::lax_bool;
 use litellm_router_core::{
     BuildPath, Deployment, Router, RouterConfig, build::Install, registry::DeploymentFilter,
 };
@@ -47,30 +46,6 @@ fn entries(config: &Config) -> Vec<Map<String, Value>> {
         .collect()
 }
 
-fn is_on(flag: Option<&Spelled<bool>>) -> bool {
-    match flag {
-        Some(Spelled::Value(on)) => *on,
-        Some(Spelled::Text(text)) => lax_bool(&text.as_str().into()) == Some(true),
-        None => false,
-    }
-}
-
-fn additional_drop_params(deployment: &Deployment) -> Vec<String> {
-    deployment
-        .params
-        .extra
-        .get("additional_drop_params")
-        .and_then(Value::as_array)
-        .map(|names| {
-            names
-                .iter()
-                .filter_map(Value::as_str)
-                .map(str::to_owned)
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
 /// How the messages route shapes a call to `deployment`: its `drop_params`, and the
 /// capabilities the catalog and its `model_info` declare.
 fn shaping(
@@ -79,13 +54,18 @@ fn shaping(
     drops_params_globally: bool,
 ) -> MessagesShaping {
     let params = &deployment.params;
-    let drop_params = drops_params_globally || is_on(params.drop_params.as_ref());
+    let drop_params = drops_params_globally || params.call_settings.drop_params == Some(true);
     let base_model = params.extra.get("base_model").and_then(Value::as_str);
     MessagesShaping {
         settings: MessagesSettings {
             drop_params,
             drops_unsupported_params: drop_params,
-            additional_drop_params: additional_drop_params(deployment),
+            additional_drop_params: params
+                .call_settings
+                .additional_drop_params
+                .clone()
+                .map(Vec::from)
+                .unwrap_or_default(),
             base_model: base_model.map(str::to_owned),
             ..MessagesSettings::default()
         },

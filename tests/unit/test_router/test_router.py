@@ -20475,7 +20475,10 @@ def test_pre_call_checks_answers_400_when_the_group_name_lists_no_deployments(mo
         )
 
 
-def test_pre_call_checks_lets_a_request_setting_replace_the_deployment_setting(monkeypatch: pytest.MonkeyPatch):
+@pytest.mark.parametrize("sent_drop_params", [False, None], ids=["off", "none"])
+def test_pre_call_checks_lets_a_request_setting_replace_the_deployment_setting(
+    monkeypatch: pytest.MonkeyPatch, sent_drop_params: bool | None
+):
     monkeypatch.setattr(litellm, "drop_params", False)
     model_list: Final = [
         {
@@ -20499,7 +20502,7 @@ def test_pre_call_checks_lets_a_request_setting_replace_the_deployment_setting(m
         model="no-json-mode",
         healthy_deployments=model_list,
         messages=[{"role": "user", "content": "hi"}],
-        request_kwargs={"response_format": {"type": "json_object"}, "drop_params": False},
+        request_kwargs={"response_format": {"type": "json_object"}, "drop_params": sent_drop_params},
     )
 
     assert [d["model_info"]["id"] for d in filtered] == ["allows-it"]

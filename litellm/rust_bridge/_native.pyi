@@ -2959,6 +2959,7 @@ class _SelectStep(_Step):
         "strategy",
         "tags",
         "pre_call",
+        "param_support",
         "text_only",
         "callback_filters",
         "routing_plugins",
@@ -2976,6 +2977,9 @@ class _SelectStep(_Step):
     candidates: list[str]
     # `routing_plugins` only: whether the plugins run.
     run: NotRequired[bool]
+    # `pre_call`: the params to report how the request sends. `param_support`: the params to
+    # report which deployments do not support.
+    params: NotRequired[list[str]]
     # `callback_filters` only: the ids the request already failed on.
     excluded_ids: NotRequired[list[str]]
     skipped_ids: NotRequired[list[str]]
@@ -3278,6 +3282,18 @@ class RouterCoreHandle:
     # Each model_info's `service_tiers`, unvalidated.
     @staticmethod
     def configured_service_tiers(model_infos: list[object]) -> list[object]: ...
+    # `Router._pre_call_checks` over deployment records, each paired with the id the facts name
+    # it by. `facts` answers a `pre_call` step's question for the params it is called with and
+    # `unsupported` a `param_support` step's. Returns `{"kept": [id, ...]}`, or the `error_kind`
+    # of the error and the fields that name it.
+    @staticmethod
+    def pre_call_filter(
+        model: str,
+        candidates: list[tuple[str, Mapping[str, object]]],
+        pool: list[tuple[str, Mapping[str, object]]],
+        facts: Callable[[list[str]], Mapping[str, object]],
+        unsupported: Callable[[list[str]], Mapping[str, Sequence[str]]],
+    ) -> dict[str, object]: ...
     # The routing-cache key a deployment counts `metric` (tpm, rpm, itpm, otpm) under in `minute`.
     def registry_version(self) -> int: ...
     # The version the deployments before the newest appends last changed at.

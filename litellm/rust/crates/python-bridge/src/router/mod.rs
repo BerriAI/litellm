@@ -21,15 +21,17 @@ use litellm_router_core::{
     FailureReport, Op, OutcomeCallbacks, PreRouted, Provided, RetryCause, Router, RouterEvent,
     SecretAt, SuccessReport, UsageWindow,
     build::Install,
-    registry::{DeploymentFilter, ResolveKind, ResolveScope},
+    precall::{self, CHECKED_PARAMS, PreCallFacts, Unsupported},
+    registry::{DeploymentFilter, ModelInfo, ResolveKind, ResolveScope},
     strategy::routing_context,
 };
+use litellm_router_types::{CallSettings, LitellmParams};
 use pyo3::{
     exceptions::{PyRuntimeError, PyValueError},
     prelude::*,
-    types::{PyBool, PyDict, PyList, PyString, PyTuple},
+    types::{PyBool, PyDict, PyList, PyMapping, PyString, PyTuple},
 };
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use litellm_redis_store::router_usage::{Counter, Kind, Scope};
 
@@ -398,6 +400,45 @@ impl RouterCoreHandle {
             .iter()
             .map(|tiers| to_py(py, tiers))
             .collect()
+    }
+
+    /// `Router._pre_call_checks` over deployment records, each paired with the id the host's
+    /// facts name it by. `facts` reports the pre-call facts for the checked params it is called
+    /// with, and `unsupported` which of the params it is called with each record does not
+    /// support, called only when the request asks for one. Returns `{"kept": [id, ...]}`, or
+    /// the `error_kind` of the error and the fields that name it.
+    #[staticmethod]
+    fn pre_call_filter<'py>(
+        py: Python<'py>,
+        model: &str,
+        candidates: Vec<(String, Bound<'py, PyAny>)>,
+        pool: Vec<(String, Bound<'py, PyAny>)>,
+        facts: &Bound<'py, PyAny>,
+        unsupported: &Bound<'py, PyAny>,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let facts = pre_call_facts(&facts.call1((CHECKED_PARAMS.to_vec(),))?)?;
+        let requested = precall::requested(&facts);
+        let unsupported = if requested.is_empty() {
+            Unsupported::default()
+        } else {
+            from_py_argument(&unsupported.call1((requested,))?)?
+        };
+        let checked = |records: Vec<(String, Bound<'py, PyAny>)>| {
+            records
+                .into_iter()
+                .map(|(id, record)| checked_deployment(id, &record).map(Arc::new))
+                .collect::<PyResult<Vec<_>>>()
+        };
+        let (candidates, pool) = (checked(candidates)?, checked(pool)?);
+        let outcome = PyDict::new(py);
+        match precall::filter(model, candidates, &pool, &facts, &unsupported) {
+            Ok(kept) => {
+                let kept: Vec<&str> = kept.iter().map(|kept| kept.id.as_str()).collect();
+                outcome.set_item("kept", kept)?;
+            }
+            Err(error) => error_items(&outcome, &error)?,
+        }
+        Ok(outcome)
     }
 
     /// Keep the providers `other`'s build resolved for the deployments this router serves too.
@@ -1153,12 +1194,11 @@ fn host_call_response(
         HostCall::Select {
             stage: Stage::PreCall,
             ..
-        } => {
-            let facts = from_py_argument(&outcome.ok_or_else(missing)?)?;
-            serde_json::from_value(facts)
-                .map(HostCallResponse::PreCall)
-                .map_err(|error| PyValueError::new_err(format!("bad pre-call facts: {error}")))
-        }
+        } => pre_call_facts(&outcome.ok_or_else(missing)?).map(HostCallResponse::PreCall),
+        HostCall::Select {
+            stage: Stage::ParamSupport { .. },
+            ..
+        } => from_py_argument(&outcome.ok_or_else(missing)?).map(HostCallResponse::ParamSupport),
         HostCall::Select {
             stage: Stage::RoutingPlugins { .. } | Stage::ProviderRequest,
             ..
@@ -1282,6 +1322,69 @@ fn host_call_response(
 }
 
 /// A pre-route response: `None`, a model group name, or a custom strategy's deployment document.
+/// The facts a `pre_call` select step or a `_pre_call_checks` call reports.
+fn pre_call_facts(answer: &Bound<'_, PyAny>) -> PyResult<PreCallFacts> {
+    serde_json::from_value(from_py_argument(answer)?)
+        .map_err(|error| PyValueError::new_err(format!("bad pre-call facts: {error}")))
+}
+
+/// The `litellm_params` keys the pre-call checks read.
+const CHECKED_PARAM_KEYS: &[&str] = &[
+    "model",
+    "base_model",
+    "region_name",
+    "drop_params",
+    "allowed_openai_params",
+    "additional_drop_params",
+];
+
+/// The `keys` of `record[section]` that are there. A value JSON cannot spell reads as `None`.
+fn picked(record: &Bound<'_, PyAny>, section: &str, keys: &[&str]) -> PyResult<Map<String, Value>> {
+    let Ok(record) = record.cast::<PyMapping>() else {
+        return Ok(Map::new());
+    };
+    if !record.contains(section)? {
+        return Ok(Map::new());
+    }
+    let section = record.get_item(section)?;
+    let Ok(section) = section.cast::<PyMapping>() else {
+        return Ok(Map::new());
+    };
+    let mut picked = Map::new();
+    for key in keys {
+        if section.contains(key)? {
+            let value = from_py_argument(&section.get_item(key)?).unwrap_or(Value::Null);
+            picked.insert((*key).to_owned(), value);
+        }
+    }
+    Ok(picked)
+}
+
+/// A deployment record `Router._pre_call_checks` is handed. It need not be in the registry, or
+/// be one the registry could build, so only what the checks read of it is typed.
+fn checked_deployment(id: String, record: &Bound<'_, PyAny>) -> PyResult<Deployment> {
+    let raw_params = picked(record, "litellm_params", CHECKED_PARAM_KEYS)?;
+    let call_settings: CallSettings = serde_json::from_value(Value::Object(raw_params.clone()))
+        .map_err(|error| PyValueError::new_err(error.to_string()))?;
+    let model = raw_params.get("model").and_then(Value::as_str);
+    Ok(Deployment {
+        id,
+        model_name: String::new(),
+        params: LitellmParams {
+            model: model.unwrap_or_default().to_owned(),
+            call_settings,
+            ..LitellmParams::default()
+        },
+        raw_params,
+        model_info: ModelInfo {
+            raw: picked(record, "model_info", &["base_model"])?,
+            ..ModelInfo::default()
+        },
+        extra: Map::new(),
+        resolved_provider: None,
+    })
+}
+
 fn pre_route_outcome(outcome: Option<Bound<'_, PyAny>>) -> PyResult<Option<PreRouted>> {
     let Some(outcome) = outcome.filter(|outcome| !outcome.is_none()) else {
         return Ok(None);
@@ -1801,7 +1904,14 @@ fn host_call_items(py: Python<'_>, dict: &Bound<'_, PyDict>, call: HostCall) -> 
                     ("strategy", Some(strategy))
                 }
                 Stage::Tags => ("tags", None),
-                Stage::PreCall => ("pre_call", None),
+                Stage::PreCall => {
+                    dict.set_item("params", CHECKED_PARAMS)?;
+                    ("pre_call", None)
+                }
+                Stage::ParamSupport { params } => {
+                    dict.set_item("params", params)?;
+                    ("param_support", None)
+                }
                 Stage::TextOnly => ("text_only", None),
                 Stage::RouteIncapable { handler } => {
                     dict.set_item("handler", handler)?;
