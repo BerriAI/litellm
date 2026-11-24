@@ -15,6 +15,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
 from pydantic import TypeAdapter, ValidationError
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_router_logger
@@ -219,6 +220,11 @@ def _first_present(*sources: Mapping[str, object] | None, key: str) -> int | flo
     return None
 
 
+class _CooldownPolicyModelInfo(TypedDict, total=False):
+    allowed_fails_policy: ReadOnly[object]
+    allowed_fails: ReadOnly[int | None]
+
+
 def _get_deployment_cooldown_policy(
     ctx: "RoutingContext",
     deployment: str,
@@ -235,7 +241,7 @@ def _get_deployment_cooldown_policy(
     dep: Final = ctx.registry().deployment_dict(deployment)
     if dep is None:
         return None, None
-    mi: Final[Mapping[str, Any]] = dep.get("model_info") or MappingProxyType({})
+    mi: Final[_CooldownPolicyModelInfo] = dep.get("model_info") or _CooldownPolicyModelInfo()
     raw: Final = mi.get("allowed_fails_policy")
     policy: Final[Mapping[str, int] | None] = raw if isinstance(raw, dict) else None
     allowed: Final[int | None] = mi.get("allowed_fails")

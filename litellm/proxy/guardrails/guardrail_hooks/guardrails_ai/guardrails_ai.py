@@ -25,6 +25,7 @@ from litellm.types.guardrails import GuardrailEventHooks
 
 if TYPE_CHECKING:
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
+    from litellm.types.utils import LLMResponseTypes
 
 
 class GuardrailsAIResponse(TypedDict):
@@ -196,7 +197,7 @@ class GuardrailsAI(CustomGuardrail):
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        response,
+        response: "LLMResponseTypes",
     ):
         """
         Runs on response from LLM API call

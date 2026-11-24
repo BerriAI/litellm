@@ -25,6 +25,7 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.files.transformation import BaseFilesConfig, LiteLLMLoggingObj
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import (
+    BatchInputFormat,
     CreateFileRequest,
     FileContentRequest,
     HttpxBinaryResponseContent,
@@ -265,4 +266,4 @@ class MistralFilesConfig(BaseFilesConfig):
         logging_obj: LiteLLMLoggingObj,
         litellm_params: Mapping[str, object],
     ) -> HttpxBinaryResponseContent:
-        return HttpxBinaryResponseContent(response=raw_response)
+        return HttpxBinaryResponseContent(response=raw_response, batch_input_format=BatchInputFormat.OPENAI)

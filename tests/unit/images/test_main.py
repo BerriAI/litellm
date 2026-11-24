@@ -230,6 +230,43 @@ async def test_image_generation_returns_success_without_forwarding_retry_control
     assert requests.qsize() == 1
 
 
+@pytest.mark.asyncio
+async def test_routed_image_generation_on_a_caller_made_logging_object_bills_the_deployment_price() -> None:
+    price_per_image: Final = 0.25
+    logging_obj, request = litellm.utils.function_setup(
+        original_function="aimage_generation",
+        rules_obj=litellm.utils.Rules(),
+        start_time=datetime(2026, 1, 1),
+        is_async_call=True,
+        model="scripted-image-group",
+        prompt="a red circle",
+        litellm_call_id="caller-made-call",
+    )
+    async with AsyncOpenAI(
+        api_key="synthetic-image-key",
+        base_url="https://image.test/v1",
+        http_client=httpx.AsyncClient(
+            transport=httpx.MockTransport(
+                lambda _: httpx.Response(200, json={"created": 1700000000, "data": [{"b64_json": "aW1n"}]})
+            )
+        ),
+    ) as client:
+        response: Final = await litellm.Router(
+            model_list=[
+                {
+                    "model_name": "scripted-image-group",
+                    "litellm_params": {
+                        "model": "openai/dall-e-3",
+                        "api_key": "synthetic-image-key",
+                        "api_base": "https://image.test/v1",
+                        "output_cost_per_image": price_per_image,
+                    },
+                }
+            ]
+        ).aimage_generation(**request, client=client, litellm_logging_obj=logging_obj)
+    assert response._hidden_params["response_cost"] == pytest.approx(price_per_image)
+
+
 def test_image_generation_keeps_an_internal_prefixed_kwarg_out_of_the_provider_request(
     respx_mock: respx.MockRouter,
 ) -> None:

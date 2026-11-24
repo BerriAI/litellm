@@ -389,6 +389,7 @@ class RustHealthCallbacks:
         """The Rust call recording a failed hop, or None past the exits of
         ``_trigger_cooldown_for_failed_deployment``: another list than ``failure_exits``, checked per
         failed hop. The selection tag is not on it; a stream stall and a generic call's 404 are."""
+        from litellm.litellm_core_utils.batch_utils import is_batch_api_call_type
         from litellm.router_rust.core import attempt_failure
         from litellm.router_utils.cooldown_handlers import (
             _is_per_user_provider_request,  # pyright: ignore[reportPrivateUsage]  # the cooldown check's own rule
@@ -429,6 +430,7 @@ class RustHealthCallbacks:
             deployment_cooldown=True,
             count_only=exception_status == "",
             cooldown_time=None if deployment is None else _deployment_cooldown(deployment.model_dump()),
+            batch_api=is_batch_api_call_type(model_call_details.get("call_type")),
         )
 
     def deployment_callback_on_failure(
@@ -483,6 +485,7 @@ class RustHealthCallbacks:
         router does not hold against the deployment is still a request of the minute
         (``async_deployment_callback_on_failure`` makes none of the failure callback's exits)."""
         from litellm.litellm_core_utils import core_helpers
+        from litellm.litellm_core_utils.batch_utils import is_batch_api_call_type
         from litellm.router_rust.core import attempt_failure
 
         self._sync_allowed_fails()
@@ -514,6 +517,7 @@ class RustHealthCallbacks:
             counts_request=counts_request,
             usage_model=usage_model if isinstance(usage_model, str) else None,
             callbacks=callbacks,
+            batch_api=is_batch_api_call_type(kwargs.get("call_type")),
         )
 
     def sync_deployment_callback_on_success(

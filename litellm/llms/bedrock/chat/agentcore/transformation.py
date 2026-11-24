@@ -5,7 +5,7 @@ https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agentcore_InvokeAgen
 """
 
 import json
-from collections.abc import AsyncGenerator, Mapping
+from collections.abc import AsyncGenerator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Optional, Union
 from urllib.parse import quote
 
@@ -68,7 +68,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
+        non_default_params: Mapping[str, object],
         optional_params: dict,
         model: str,
         drop_params: bool,
@@ -83,8 +83,8 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         """
@@ -225,7 +225,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Transform the request to AgentCore format.
 
@@ -256,7 +256,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         prompt: Final = convert_content_list_to_str(messages[-1])
 
         # Create the payload - this is what goes in the body (raw JSON)
-        payload: Final[dict] = {"prompt": prompt}
+        payload: Final[dict[str, object]] = {"prompt": prompt}
 
         # Opt-in: when forward_multimodal_content is set, forward the OpenAI content
         # list verbatim under "content" so an attachment-aware agent can read the raw
@@ -287,7 +287,9 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         return payload
 
     @staticmethod
-    def _should_forward_multimodal_content(optional_params: dict, litellm_params: dict) -> bool:
+    def _should_forward_multimodal_content(
+        optional_params: Mapping[str, object], litellm_params: Mapping[str, object]
+    ) -> bool:
         """Whether to forward raw OpenAI content blocks under ``payload["content"]``.
 
         Opt-in via the ``forward_multimodal_content`` litellm param (default ``False``)
@@ -673,8 +675,8 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         logging_obj: LiteLLMLoggingObj,
         api_base: str,
         headers: dict,
-        data: dict,
-        messages: list,
+        data: Mapping[str, object],
+        messages: Sequence[object],
         client: Union[HTTPHandler, "AsyncHTTPHandler"] | None = None,
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
@@ -903,8 +905,8 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         logging_obj: LiteLLMLoggingObj,
         api_base: str,
         headers: dict,
-        data: dict,
-        messages: list,
+        data: Mapping[str, object],
+        messages: Sequence[object],
         client: Optional["AsyncHTTPHandler"] = None,
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
@@ -1034,10 +1036,10 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
+        request_data: Mapping[str, object],
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
@@ -1100,8 +1102,8 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         headers: dict,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
