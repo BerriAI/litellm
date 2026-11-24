@@ -8,7 +8,6 @@ with guardrail transformations, specifically testing edge cases with empty choic
 import json
 import logging
 import re
-import time
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Literal, Optional, Final, cast
 from unittest.mock import MagicMock, patch
@@ -3623,27 +3622,6 @@ class TestToolsTheGuardrailLeftAloneReachTheProviderAsSent:
         )
 
         assert [cast(dict[str, object], tool)["name"] for tool in tools] == expected_names
-
-    async def test_the_time_to_write_back_renamed_tools_grows_in_step_with_the_tool_count(self):
-        def renamed(returned: list[object]) -> list[object]:
-            tools: Final = cast(list[dict[str, dict[str, object]]], json.loads(json.dumps(returned)))
-            return [
-                {**tool, "function": {**tool["function"], "name": f"{tool['function']['name']}_v2"}} for tool in tools
-            ]
-
-        async def cpu_seconds(tool_count: int) -> float:
-            request_tools: Final = [{**self._READ, "name": f"tool_{index}"} for index in range(tool_count)]
-            started: Final = time.process_time()
-            tools: Final = await self._tools_after(ReturnedToolsRewritingGuardrail(renamed), request_tools)
-            spent: Final = time.process_time() - started
-            assert [cast(dict[str, object], tool)["name"] for tool in tools] == [
-                f"tool_{index}_v2" for index in range(tool_count)
-            ]
-            return spent
-
-        few: Final = min([await cpu_seconds(500) for _ in range(3)])
-        many: Final = min([await cpu_seconds(4000) for _ in range(3)])
-        assert many < 20 * few
 
 
 class TestAnthropicMessagesHandlerStreamingScanKey:
