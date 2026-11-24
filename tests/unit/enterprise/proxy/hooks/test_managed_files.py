@@ -27,7 +27,7 @@ from litellm_enterprise.proxy.hooks.managed_files import (
 from litellm import Router
 from litellm.caching import DualCache
 from litellm.litellm_core_utils.prompt_templates.file_id_utils import get_format_from_file_id
-from litellm.proxy._types import CallTypes, LiteLLM_ManagedFileTable, UserAPIKeyAuth
+from litellm.proxy._types import CallTypes, LiteLLM_ManagedFileTable, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.openai_files_endpoints.common_utils import (
     BATCH_CREATE_HIDDEN_PARAM,
     TeamProviderDeployment,
@@ -6804,6 +6804,31 @@ async def test_enforce_provider_file_access_still_passes_a_file_nobody_registere
     stranger: Final = UserAPIKeyAuth(user_id="stranger")
 
     assert await managed_files.enforce_provider_file_access("files/batch-other", stranger) is None
+
+
+@pytest.mark.asyncio
+async def test_provider_file_ids_denied_to_names_only_the_spellings_of_another_keys_file():
+    managed_files, _ = _managed_files_with_fake_prisma(_gemini_batch_output_row())
+    stranger: Final = UserAPIKeyAuth(user_id="stranger", team_id="team-stranger")
+    asked: Final = (*_GEMINI_OUTPUT_SPELLINGS, "files/batch-other", "files/nobody-registered")
+
+    assert await managed_files.provider_file_ids_denied_to(asked, stranger) == _GEMINI_OUTPUT_SPELLINGS
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "caller",
+    [
+        UserAPIKeyAuth(user_id="owner", team_id="team-owner"),
+        UserAPIKeyAuth(user_id="teammate", team_id="team-owner"),
+        UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+    ],
+    ids=["owner", "teammate", "admin"],
+)
+async def test_provider_file_ids_denied_to_denies_nothing_to_a_caller_who_may_read_the_file(caller: UserAPIKeyAuth):
+    managed_files, _ = _managed_files_with_fake_prisma(_gemini_batch_output_row())
+
+    assert await managed_files.provider_file_ids_denied_to(_GEMINI_OUTPUT_SPELLINGS, caller) == ()
 
 
 _GEMINI_UPLOAD_URI: Final = "https://generativelanguage.googleapis.com/v1beta/files/upload-1"

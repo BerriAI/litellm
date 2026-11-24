@@ -1,6 +1,6 @@
 import base64
 import json
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from typing import Final
 
 import httpx
@@ -246,7 +246,9 @@ class _DenyingFileAccessGuard:
         raise HTTPException(status_code=403, detail="not the owner")
 
 
-async def _call_gemini_pass_through(method: str, endpoint: str, override_header: str | None = None) -> object:
+async def _call_gemini_pass_through(
+    method: str, endpoint: str, override_header: str | None = None, body: bytes | None = None
+) -> object:
     from fastapi import Request, Response
 
     from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import gemini_proxy_route
@@ -270,9 +272,139 @@ async def _call_gemini_pass_through(method: str, endpoint: str, override_header:
     }
 
     async def receive() -> dict:
-        return {"type": "http.request", "body": b"{}" if method == "POST" else b"", "more_body": False}
+        default_body: Final = b"{}" if method == "POST" else b""
+        return {"type": "http.request", "body": default_body if body is None else body, "more_body": False}
 
     return await gemini_proxy_route(endpoint=endpoint, request=Request(scope, receive), fastapi_response=Response())
+
+
+class _AnotherCallersFilesGuard:
+    """Stands in for the managed files hook: the files in ``owned_by_another_caller`` are denied, the rest are not"""
+
+    def __init__(self, *owned_by_another_caller: str) -> None:
+        self._owned_by_another_caller: Final = frozenset(owned_by_another_caller)
+
+    async def provider_file_ids_denied_to(self, file_ids: Sequence[str], user_api_key_dict: object) -> Sequence[str]:
+        from litellm.llms.gemini.files.utils import gemini_file_id
+
+        return tuple(file_id for file_id in file_ids if gemini_file_id(file_id) in self._owned_by_another_caller)
+
+
+_ANOTHER_CALLERS_FILE_URI: Final = "https://generativelanguage.googleapis.com/v1beta/files/abc123"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("endpoint", "body"),
+    [
+        (
+            "v1beta/models/gemini-2.5-flash:generateContent",
+            {"contents": [{"parts": [{"fileData": {"mimeType": "text/plain", "fileUri": _ANOTHER_CALLERS_FILE_URI}}]}]},
+        ),
+        (
+            "v1beta/models/gemini-2.5-flash:streamGenerateContent",
+            {"contents": [{"parts": [{"file_data": {"file_uri": "files/abc123"}}]}]},
+        ),
+        (
+            "v1beta/models/gemini-2.5-flash:countTokens",
+            {"contents": [{"parts": [{"fileData": {"fileUri": "/v1beta/files/abc123"}}]}]},
+        ),
+        (
+            "v1beta/cachedContents",
+            {"model": "models/gemini-2.5-flash", "contents": [{"parts": [{"fileData": {"fileUri": "files/abc123"}}]}]},
+        ),
+        (
+            "v1beta/models/gemini-2.5-flash:batchGenerateContent",
+            {"batch": {"input_config": {"file_name": "files/abc123"}}},
+        ),
+    ],
+)
+async def test_gemini_pass_through_refuses_a_request_body_that_reads_a_file_the_caller_does_not_own(
+    endpoint: str,
+    body: dict[str, object],
+    respx_mock: "respx.MockRouter",
+    httpx_transport: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import httpx
+    from fastapi import HTTPException
+
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-test-key")
+    guard: Final = _AnotherCallersFilesGuard("abc123")
+    monkeypatch.setattr(proxy_server.proxy_logging_obj, "get_proxy_hook", lambda name: guard)
+    upstream: Final = respx_mock.route(host="generativelanguage.googleapis.com").mock(
+        return_value=httpx.Response(200, json={})
+    )
+
+    with pytest.raises(HTTPException) as refused:
+        await _call_gemini_pass_through("POST", endpoint, body=json.dumps(body).encode())
+
+    assert refused.value.status_code == 403
+    assert upstream.call_count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"contents": [{"parts": [{"fileData": {"fileUri": "files/mine456"}}, {"text": "summarize it"}]}]},
+        {"contents": [{"parts": [{"text": "what does files/abc123 mean in a prompt?"}]}]},
+    ],
+    ids=["own-file", "prompt-text-naming-the-file"],
+)
+async def test_gemini_pass_through_forwards_a_request_body_that_reads_no_file_of_another_caller(
+    body: dict[str, object],
+    respx_mock: "respx.MockRouter",
+    httpx_transport: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import httpx
+
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-test-key")
+    guard: Final = _AnotherCallersFilesGuard("abc123")
+    monkeypatch.setattr(proxy_server.proxy_logging_obj, "get_proxy_hook", lambda name: guard)
+    upstream: Final = respx_mock.route(host="generativelanguage.googleapis.com").mock(
+        return_value=httpx.Response(200, json={"candidates": []})
+    )
+
+    response: Final = await _call_gemini_pass_through(
+        "POST", "v1beta/models/gemini-2.5-flash:generateContent", body=json.dumps(body).encode()
+    )
+
+    assert json.loads(response.body) == {"candidates": []}
+    assert json.loads(upstream.calls[0].request.content) == body
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("endpoint", ["v1beta/files", "v1beta/files/", "v1beta/files%2F", "v1beta\\files"])
+async def test_gemini_pass_through_file_list_leaves_out_files_the_caller_does_not_own(
+    endpoint: str,
+    respx_mock: "respx.MockRouter",
+    httpx_transport: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import httpx
+
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-test-key")
+    guard: Final = _AnotherCallersFilesGuard("abc123")
+    monkeypatch.setattr(proxy_server.proxy_logging_obj, "get_proxy_hook", lambda name: guard)
+    mine: Final = {"name": "files/mine456", "uri": "https://generativelanguage.googleapis.com/v1beta/files/mine456"}
+    theirs: Final = {"name": "files/abc123", "uri": _ANOTHER_CALLERS_FILE_URI, "displayName": "secret.txt"}
+    respx_mock.route(host="generativelanguage.googleapis.com").mock(
+        return_value=httpx.Response(200, json={"files": [theirs, mine], "nextPageToken": "page-2"})
+    )
+
+    response: Final = await _call_gemini_pass_through("GET", endpoint)
+
+    assert response.status_code == 200
+    assert json.loads(response.body) == {"files": [mine], "nextPageToken": "page-2"}
+    assert int(response.headers["content-length"]) == len(response.body)
 
 
 @pytest.mark.asyncio

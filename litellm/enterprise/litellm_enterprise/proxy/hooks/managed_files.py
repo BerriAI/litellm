@@ -1223,6 +1223,41 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     detail=f"User {user_api_key_dict.user_id} does not have access to the file {file_id}",
                 )
 
+    async def provider_file_ids_denied_to(
+        self, file_ids: Sequence[str], user_api_key_dict: UserAPIKeyAuth
+    ) -> Sequence[str]:
+        """The provider-format file ids, out of ``file_ids``, that another caller owns. Ids with no ownership row
+        are not denied, the same as ``enforce_provider_file_access``."""
+        if self.prisma_client is None or not file_ids:
+            return ()
+        spellings_by_id: Final = MappingProxyType(
+            {file_id: frozenset(provider_file_id_spellings(file_id)) for file_id in dict.fromkeys(file_ids)}
+        )
+        spellings: Final = sorted(frozenset().union(*spellings_by_id.values()))
+        managed_files: Final = await _managed_file_table(self.prisma_client).find_many(
+            where={
+                "OR": [
+                    {"unified_file_id": {"in": spellings}},  # bounded-ok: the ids of one request body or one list page
+                    {"flat_model_file_ids": {"hasSome": spellings}},
+                ]
+            }
+        )
+        denied_spellings: Final = frozenset(
+            stored_id
+            for managed_file in managed_files
+            if not can_access_resource(
+                user_api_key_dict=user_api_key_dict,
+                created_by=managed_file.created_by,
+                resource_team_id=managed_file.team_id,
+            )
+            for stored_id in (managed_file.unified_file_id, *managed_file.flat_model_file_ids)
+        )
+        return tuple(
+            file_id
+            for file_id, own_spellings in spellings_by_id.items()
+            if not own_spellings.isdisjoint(denied_spellings)
+        )
+
     async def store_batch_output_file_ownership(
         self, response: LiteLLMBatch, litellm_parent_otel_span: Optional[Span]
     ) -> None:
