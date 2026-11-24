@@ -204,11 +204,9 @@ future_section:
     assert!(model.litellm_params.extra.contains_key("future_param"));
     assert!(model.additional_fields.contains_key("access_groups"));
     assert_eq!(config.router_settings.allowed_fails, Some(2));
-    assert!(
-        config
-            .router_settings
-            .additional_fields
-            .contains_key("redis_host")
+    assert_eq!(
+        config.router_settings.redis.redis_host.as_deref(),
+        Some("cache.internal")
     );
     assert!(
         config

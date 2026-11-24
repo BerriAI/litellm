@@ -19,6 +19,10 @@ from litellm.repositories.spend_log_insert import spend_log_insert_statement
 from tests.integration._support.database import scratch_database
 
 _MIGRATIONS: Final = Path(__file__).resolve().parents[3] / "litellm/proxy-extras/litellm_proxy_extras/migrations"
+_RUST_DELIVERY_INSERT: Final = (
+    Path(__file__).resolve().parents[3]
+    / "litellm/rust/crates/repositories/src/spend_log/queries/insert_spend_log_deliveries.sql"
+)
 
 
 @pytest.fixture
@@ -81,7 +85,7 @@ async def test_delivery_first_acceptance_deduplicates_all_storage_modes(
 ):
     from types import SimpleNamespace
 
-    from litellm.repositories.table_repositories import SpendLogsRepository
+    from litellm.repositories.spend_logs_repository import SpendLogsRepository
 
     if partitioned:
         delivery_database.execute('ALTER TABLE "LiteLLM_SpendLogs" RENAME TO spend_template')
@@ -122,7 +126,7 @@ async def test_delivery_first_acceptance_deduplicates_all_storage_modes(
 async def test_duplicate_rows_in_one_flush_keep_first_accounting_payload(delivery_database, delivery_client, mode):
     from types import SimpleNamespace
 
-    from litellm.repositories.table_repositories import SpendLogsRepository
+    from litellm.repositories.spend_logs_repository import SpendLogsRepository
 
     repository = SpendLogsRepository(SimpleNamespace(db=delivery_client, writer_db=delivery_client))
     first = {**_with_payload(_row("repeated")), "accounting_log_disabled": mode == "disabled"}
@@ -146,7 +150,7 @@ async def test_batch_charged_before_the_ledger_is_not_charged_again(
 ):
     from types import SimpleNamespace
 
-    from litellm.repositories.table_repositories import SpendLogsRepository
+    from litellm.repositories.spend_logs_repository import SpendLogsRepository
 
     batch: Final = {**_row("batch_legacy"), "call_type": "aretrieve_batch", "status": "success"}
     _insert(delivery_database, ({**batch, "spend": legacy_spend},), ledger=False)
@@ -164,7 +168,7 @@ async def test_transaction_a_rolls_back_payload_and_log_on_failure(delivery_data
     from prisma.errors import PrismaError
     from psycopg import sql
 
-    from litellm.repositories.table_repositories import SpendLogsRepository
+    from litellm.repositories.spend_logs_repository import SpendLogsRepository
 
     delivery_database.execute(
         sql.SQL("ALTER TABLE {} ADD CONSTRAINT reject_poison CHECK (request_id <> 'poison')").format(
@@ -308,6 +312,49 @@ async def test_two_workers_claim_disjoint_rows_and_apply_once(
     assert delivery_database.execute(
         "SELECT COUNT(*) FROM \"LiteLLM_SpendLogDelivery\" WHERE state = 'applied'"
     ).fetchone() == (2,)
+
+
+@pytest.mark.asyncio
+async def test_a_delivery_the_rust_writer_stores_is_due_on_a_database_behind_utc(
+    delivery_database: psycopg.Connection[tuple[object, ...]],
+) -> None:
+    from psycopg.types.json import Jsonb
+
+    name: Final = delivery_database.info.dbname
+    delivery_database.execute(f"ALTER DATABASE \"{name}\" SET timezone = 'America/Los_Angeles'")
+    delivery_database.execute("CREATE TABLE totals (spend float8 NOT NULL)")
+    delivery_database.execute("INSERT INTO totals VALUES (0)")
+    delivery_database.execute("SET TimeZone = 'UTC'")
+    _insert(delivery_database, (_row("utc"),), ledger=False)
+    delivery_database.execute(
+        _RUST_DELIVERY_INSERT.read_text().replace("$1", "%s"),
+        (
+            Jsonb(
+                [
+                    {
+                        "delivery_id": "utc",
+                        "request_id": "utc",
+                        "accounting_payload": dict(_row("utc")),
+                        "is_batch": False,
+                    }
+                ]
+            ),
+        ),
+    )
+
+    async def apply(transaction: LedgerTransaction, rows: tuple[DeliveryProjection, ...]) -> None:
+        await transaction.execute_raw("UPDATE totals SET spend = spend + $1::float8", float(str(rows[0].row["spend"])))
+
+    url: Final = urlunsplit(urlsplit(os.environ["DATABASE_URL"])._replace(path=f"/{name}"))
+    client: Final = Prisma(datasource={"url": url})
+    await client.connect()
+    try:
+        assert (await client.query_raw("SHOW TimeZone"))[0]["TimeZone"] == "America/Los_Angeles"
+        result: Final = await AccountingDeliveryRepository(client).apply_pending(apply)
+    finally:
+        await client.disconnect()
+    assert result.applied == 1
+    assert delivery_database.execute("SELECT spend FROM totals").fetchone() == (0.5,)
 
 
 @pytest.mark.asyncio

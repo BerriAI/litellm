@@ -30,7 +30,9 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
 from litellm.proxy.hooks.priority_class_share import pool_member
 from litellm.proxy.utils import InternalUsageCache
 from litellm.redis.stores.rate_limits import RateLimitScope
+from litellm.rust_bridge._native import NativeRedisStoreError
 from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
+from litellm.types.utils import CallTypes
 from tests.unit.proxy.hooks.native_capacity_handler import NativeDynamicRateLimitHandler as DynamicRateLimitHandler
 from tests.unit.proxy.hooks.native_capacity_handler import (
     NativeDynamicRateLimitHandler as PROXY_DynamicRateLimitHandlerV3,
@@ -2043,6 +2045,80 @@ async def test_a_websocket_admitted_while_idle_has_its_turns_counted_once_the_mo
     assert await _team_tokens_remaining(handler) == 10
 
 
+async def _charge_realtime_turn(handler: _PROXY_DynamicRateLimitHandlerV3, tokens: int) -> None:
+    await handler.charge_realtime_capacity_turn(
+        user_api_key_dict=_team_key(),
+        requested_model="shared-model",
+        usage=litellm.Usage(prompt_tokens=tokens, completion_tokens=0, total_tokens=tokens),
+    )
+
+
+async def _close_realtime_session(handler: _PROXY_DynamicRateLimitHandlerV3, total_tokens: int) -> None:
+    await _settle_tokens(
+        handler,
+        total_tokens,
+        response=[],
+        call_type=CallTypes.arealtime.value,
+        litellm_params={"metadata": {}, "litellm_metadata": {"model_group": "shared-model"}},
+        combined_usage_object=litellm.Usage(
+            prompt_tokens=total_tokens, completion_tokens=0, total_tokens=total_tokens
+        ),
+    )
+
+
+def _model_tokens_counted(handler: _PROXY_DynamicRateLimitHandlerV3) -> int:
+    counter: Final = RateLimitScope("model_saturation_check", "shared-model").counter("tokens")
+    return int(handler.rate_limits.local((counter,))[0] or 0)
+
+
+@pytest.mark.asyncio
+async def test_a_realtime_turn_counts_against_capacity_before_its_session_closes(monkeypatch: pytest.MonkeyPatch):
+    handler: Final = _borrowing_handler(monkeypatch, borrows=True)
+    await _check(handler, _team_key(), saturation=0.5)
+
+    await _charge_realtime_turn(handler, 150)
+
+    assert _model_tokens_counted(handler) == 150
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _check(handler, _team_key(), saturation=0.5)
+    _held_to_team_limit(exc.value, "tokens", "model_tpm_limit")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("turn_tokens", "close_total", "expected_counted"),
+    [((60,), 90, 90), ((60, 30), 90, 90), ((60,), 0, 60), ((90,), 60, 90)],
+    ids=["close_adds_the_rest", "turns_covered_the_total", "close_reported_nothing", "close_reported_less"],
+)
+async def test_a_realtime_session_close_counts_only_the_tokens_its_turns_did_not(
+    monkeypatch: pytest.MonkeyPatch, turn_tokens: tuple[int, ...], close_total: int, expected_counted: int
+):
+    handler: Final = _borrowing_handler(monkeypatch, borrows=True)
+    await _check(handler, _team_key(), saturation=0.5)
+    for tokens in turn_tokens:
+        await _charge_realtime_turn(handler, tokens)
+
+    await _close_realtime_session(handler, close_total)
+
+    assert _model_tokens_counted(handler) == expected_counted
+    assert await _team_tokens_remaining(handler) == 100 - expected_counted
+
+
+@pytest.mark.asyncio
+async def test_a_realtime_turn_charged_after_its_session_settled_is_not_counted_twice(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handler: Final = _borrowing_handler(monkeypatch, borrows=True)
+    await _check(handler, _team_key(), saturation=0.5)
+    await _charge_realtime_turn(handler, 60)
+    await _close_realtime_session(handler, 90)
+
+    await _charge_realtime_turn(handler, 30)
+
+    assert _model_tokens_counted(handler) == 90
+    assert await _team_tokens_remaining(handler) == 10
+
+
 @pytest.mark.asyncio
 async def test_a_websocket_turn_gets_a_503_when_the_team_counter_cannot_be_read(monkeypatch: pytest.MonkeyPatch):
     from litellm.exceptions import ServiceUnavailableError
@@ -2650,12 +2726,20 @@ class _UnavailableRegistry:
         raise RedisConnectionError("redis is down")
 
 
+class _UnavailableNativeRegistry:
+    async def touch(self, model: str, team_id: str, priority: str, window: int) -> Mapping[str, str]:
+        raise NativeRedisStoreError("transport", "redis is down")
+
+
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "registry", [_UnavailableRegistry, _UnavailableNativeRegistry], ids=["redis_py", "native_store"]
+)
 async def test_a_registry_failure_falls_back_to_the_class_pool_instead_of_skipping_the_limits(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, registry: Callable[[], object]
 ):
     handler = _borrowing_handler(monkeypatch, borrows=False, splits=True)
-    handler.active_teams = _UnavailableRegistry()  # pyright: ignore[reportAttributeAccessIssue]  # injected failing registry
+    handler.active_teams = registry()  # pyright: ignore[reportAttributeAccessIssue]  # injected failing registry
     await _burn(handler, _class_team("team-a"), "interactive", 650)
     with pytest.raises(ProxyRateLimitError) as exc:
         await _check(handler, _class_team("team-a"), saturation=0.65, priority="interactive")

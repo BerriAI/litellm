@@ -36,7 +36,7 @@ class CohereRerankConfig(BaseRerankConfig):
             return ensure_api_route(api_base, "v1/rerank")
         return "https://api.cohere.ai/v1/rerank"
 
-    def get_supported_cohere_rerank_params(self, model: str) -> list:
+    def get_supported_cohere_rerank_params(self, model: str) -> list[str]:
         return [
             "query",
             "documents",
@@ -60,7 +60,7 @@ class CohereRerankConfig(BaseRerankConfig):
         max_chunks_per_doc: int | None = None,
         max_tokens_per_doc: int | None = None,
         instruction: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Map Cohere rerank params
 
@@ -84,7 +84,7 @@ class CohereRerankConfig(BaseRerankConfig):
         api_key: str | None = None,
         optional_params: dict | None = None,
         litellm_params: Mapping[str, object] | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         if api_key is None:
             api_key = get_secret_str("COHERE_API_KEY") or get_secret_str("CO_API_KEY") or litellm.cohere_key
 
@@ -110,9 +110,9 @@ class CohereRerankConfig(BaseRerankConfig):
         self,
         model: str,
         optional_rerank_params: dict,
-        headers: dict,
+        headers: dict[str, object],
         litellm_params: dict | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         if "query" not in optional_rerank_params:
             raise ValueError("query is required for Cohere rerank")
         if "documents" not in optional_rerank_params:
@@ -151,5 +151,7 @@ class CohereRerankConfig(BaseRerankConfig):
 
         return RerankResponse.model_validate(_JSON_OBJECT.validate_python(raw_response_json))
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: Mapping[str, object] | httpx.Headers
+    ) -> BaseLLMException:
         return CohereError(message=error_message, status_code=status_code)

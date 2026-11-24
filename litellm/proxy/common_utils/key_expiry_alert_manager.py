@@ -15,7 +15,7 @@ from litellm.constants import (
 )
 from litellm.proxy.common_utils.key_expiry_alerts import key_expiry_alert_days
 from litellm.proxy.db.db_transaction_queue.pod_lock_manager import POD_LOCK_TARGET, PodLockManager
-from litellm.proxy.utils import PrismaClient
+from litellm.proxy.utils import PrismaClient, query_raw_rows
 from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.user_repository import UserRepository
 from litellm.types.integrations.key_expiring_email import VIRTUAL_KEY_EXPIRING_EMAIL_EVENT
@@ -163,7 +163,8 @@ class KeyExpiryAlertManager:
         default_days: Final = self.default_days()
         now: Final = self.clock().astimezone(timezone.utc)
         rows: Final = _ROWS.validate_python(
-            await self.prisma_client.db.query_raw(
+            await query_raw_rows(
+                self.prisma_client.db,
                 _EXPIRING_KEYS_SQL,
                 now,
                 now + timedelta(days=KEY_EXPIRY_ALERT_MAX_DAYS),

@@ -125,6 +125,14 @@ def _member(source: object, name: str) -> object:
     return value
 
 
+def _socket_turn_owner(request: object) -> Mapping[str, str]:
+    owners: Final = (
+        ("agent_id", _member(request, "resolved_agent_id")),
+        ("session_id", _member(request, "session_id")),
+    )
+    return MappingProxyType({name: str(value) for name, value in owners if value})
+
+
 def _rate_limited(wire: WireAbort) -> Exception:
     fields: Final[Mapping[str, object]] = wire.error.fields if wire.error is not None else MappingProxyType({})
     requested_model: Final = fields.get("requested_model")
@@ -212,7 +220,7 @@ def pre_call_request() -> "NativeRequestRedis | None":
 
 def post_call_request() -> "NativeRequestRedis | None":
     batches: Final = active_request_redis_batches()
-    return None if batches is None else batches.native_post_call()
+    return None if batches is None else batches.native()
 
 
 def _auth(data: Mapping[str, object]) -> UserAPIKeyAuth | None:
@@ -452,6 +460,7 @@ class ParallelRequestLimiterNativeLogger(RustLogger):
             )
         finally:
             self._stash_descriptors(stash, state, ceiling)
+            stash.socket_turn_owner = _socket_turn_owner(_member(view, Field.limiter_request.value))
             mirror_rate_limit_response(self.bridge, state)
 
     async def _hosted(
@@ -665,7 +674,7 @@ async def _lookups(
     groups: Final = {candidate: limiter.model_group_resolver(candidate) for candidate in named}
     resolved: Final = tuple(dict.fromkeys(group or candidate for candidate, group in groups.items()))
     settings: Final = litellm.priority_reservation_settings
-    borrowers: Final = frozenset() if settings is None else settings.model_limit_borrowing_entities
+    borrowers: Final[frozenset[str]] = frozenset() if settings is None else settings.model_limit_borrowing_entities
     dynamic: Final = "dynamic" in (_member(limits, "rpm_limit_type"), _member(limits, "tpm_limit_type"))
     requested_group: Final = (groups.get(model) or model) if model else None
     ceiling: Final = (

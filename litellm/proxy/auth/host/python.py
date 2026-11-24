@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Final, Protocol
 
 import httpx
 from fastapi import HTTPException, Request
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._internal_context import with_service_target
@@ -33,11 +34,7 @@ from litellm.proxy._types import (
     LiteLLM_OrganizationTable,
     LiteLLM_ProjectTableCachedObj,
     LiteLLM_TeamTable,
-    LitellmUserRoles,
-    Member,
-    ProxyErrorTypes,
     ProxyException,
-    TeamMemberAddRequest,
 )
 from litellm.proxy.agent_endpoints.identity import has_legacy_identity
 from litellm.proxy.agent_endpoints.identity_store import AgentIdentityStore, resolve_managed_agent
@@ -71,10 +68,11 @@ from litellm.proxy.auth.host.facts import (
     TeamMissing,
     end_user_params,
     team_facts,
+    team_member_facts,
     with_project,
 )
 from litellm.proxy.auth.host.identity import auto_registered_key
-from litellm.proxy.auth.host.steps import jwt_auto_register
+from litellm.proxy.auth.host.steps import jwt_auto_register, team_member_add
 from litellm.proxy.auth.host.steps.budgets import BudgetChecks, proxy_budget_alert
 from litellm.proxy.auth.jwt import auth_from_result, jwt_result
 from litellm.proxy.auth.resolvers.exceptions import KeyNotFoundError
@@ -101,6 +99,8 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     get_management_object_ttl,
 )
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
+from litellm.redis.stores.auth_cache import AuthObject
+from litellm.redis.stores.auth_cache.handle import TeamRoster
 from litellm.repositories.user_repository import UserRepository
 from litellm.repositories.verification_token_repository import VerificationTokenRepository
 from litellm.rust_bridge._native import RustIdentity
@@ -112,6 +112,7 @@ from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 if TYPE_CHECKING:
     from opentelemetry.trace import Span
 
+    from litellm.proxy.common_utils.state_cache import StateCache
     from litellm.proxy.hooks.model_max_budget_limiter import PROXY_VirtualKeyModelMaxBudgetLimiter
     from litellm.proxy.utils import PrismaClient, ProxyLogging
     from litellm.router import Router
@@ -119,6 +120,7 @@ if TYPE_CHECKING:
 JWKS_FETCH_ATTEMPTS: Final = 3
 JWKS_FETCH_RETRY_BACKOFF_SECONDS: Final = 0.25
 OIDC_DISCOVERY_PATH: Final = ".well-known/openid-configuration"
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class AgentLookup(Protocol):
@@ -198,6 +200,7 @@ class PythonAuthHost:
     http: HttpCall | None
     prisma_client: PrismaClient | None
     user_api_key_cache: UserApiKeyCache
+    jwks_cache: StateCache
     proxy_logging_obj: ProxyLogging
     llm_router: Router | None
     llm_model_list: Sequence[object] | None
@@ -267,7 +270,7 @@ class PythonAuthHost:
         await prefetch_identity_keys(
             identity_cache_keys(token or "", end_user_id=end_user_id, key_is_resolved=token is None),
             user_api_key_cache=self.user_api_key_cache,
-            before_read=arm_routing_cooldowns,
+            before_read=self._arm_routing_cooldowns,
         )
 
     async def end_user(self, end_user_id: str | None) -> EndUserRow:
@@ -341,6 +344,7 @@ class PythonAuthHost:
                             **key.model_dump(exclude_none=True),
                             **team_grants(team, membership, user.user_id),
                             "user_role": get_user_role(user),
+                            "user_email": user.user_email,
                             "models": () if team is not None else user_models(user),
                         }
                     )
@@ -367,6 +371,7 @@ class PythonAuthHost:
             parent_otel_span=self.parent_otel_span,
             proxy_logging_obj=self.proxy_logging_obj,
             check_cache_only=True,
+            for_auth=True,
         )
 
     async def with_team(self, token: UserAPIKeyAuth, team: LiteLLM_TeamTableCachedObj) -> UserAPIKeyAuth:
@@ -406,7 +411,15 @@ class PythonAuthHost:
             end_user_id=end_user.end_user_id,
             user_api_key_cache=self.user_api_key_cache,
             prisma_client=self.prisma_client,
+            requested_model=self._requested_model(),
         )
+
+    def _requested_model(self) -> str | None:
+        model: Final = None if self.http is None else self.http.request_data.get("model")
+        return model if isinstance(model, str) else None
+
+    def _arm_routing_cooldowns(self) -> None:
+        arm_routing_cooldowns(self._requested_model())
 
     async def key_owner(self, user_id: str) -> LiteLLM_UserTable | None:
         """Raises when the owner cannot be read; the core treats that as no owner."""
@@ -440,6 +453,7 @@ class PythonAuthHost:
                     user_api_key_cache=self.user_api_key_cache,
                     parent_otel_span=self.parent_otel_span,
                     proxy_logging_obj=self.proxy_logging_obj,
+                    for_auth=True,
                 )
         except HTTPException:
             return None
@@ -509,7 +523,7 @@ class PythonAuthHost:
             what: Final = "OIDC discovery endpoint" if discovery else "JWKS endpoint"
             raise Exception(f"JWT Auth: {what} {url} returned status {response.status_code}: {response.text}")
         try:
-            return response.json()
+            return _DECODED_JSON.validate_python(response.json())
         except Exception as e:
             if discovery:
                 raise Exception(f"JWT Auth: Failed to parse OIDC discovery document at {url}: {e}")
@@ -525,21 +539,37 @@ class PythonAuthHost:
             )
             if response.status_code != 200:
                 raise Exception(f"OIDC UserInfo endpoint returned status {response.status_code}: {response.text}")
-            return response.json()
+            return _DECODED_JSON.validate_python(response.json())
         except Exception as e:
             verbose_proxy_logger.error("Error fetching OIDC UserInfo: %s", e)
             raise Exception(f"Failed to fetch OIDC UserInfo: {e}")
 
     @with_service_target(AUTH_OBJECTS_TARGET)
-    async def cached_json(self, key: str) -> object:
-        return await self.user_api_key_cache.async_get_cache(key)
+    async def cached_document(self, key: str) -> object:
+        return _DECODED_JSON.validate_python(await self.jwks_cache.async_get_cache(key))
 
     @with_service_target(AUTH_OBJECTS_TARGET)
-    async def cache_json(self, key: str, value: object, ttl_seconds: float) -> None:
-        await self.user_api_key_cache.async_set_cache(key=key, value=value, ttl=ttl_seconds)
+    async def cache_document(self, key: str, value: object, ttl_seconds: float) -> None:
+        await self.jwks_cache.async_set_cache(key=key, value=value, ttl=ttl_seconds)
 
-    async def forget_json(self, key: str) -> None:
-        await self.user_api_key_cache.async_delete_cache(key)
+    @with_service_target(AUTH_OBJECTS_TARGET)
+    async def cached_key_mapping(self, claim_field: str, claim_value: str, issuer: str | None) -> object:
+        return _DECODED_JSON.validate_python(
+            await self.user_api_key_cache.async_get_cache(AuthObject.jwt_key_mapping(claim_field, claim_value, issuer))
+        )
+
+    @with_service_target(AUTH_OBJECTS_TARGET)
+    async def cache_key_mapping(
+        self, claim_field: str, claim_value: str, issuer: str | None, value: object, ttl_seconds: float
+    ) -> None:
+        await self.user_api_key_cache.async_set_cache(
+            AuthObject.jwt_key_mapping(claim_field, claim_value, issuer), value, ttl=ttl_seconds
+        )
+
+    async def forget_key_mapping(self, claim_field: str, claim_value: str, issuer: str | None) -> None:
+        await self.user_api_key_cache.async_delete_cache(
+            AuthObject.jwt_key_mapping(claim_field, claim_value, issuer).key
+        )
 
     async def _team(
         self, team_id: str, *, upsert: bool = False, check_db_only: bool = False
@@ -563,14 +593,24 @@ class PythonAuthHost:
         return TeamMissing.UNREADABLE
 
     async def team(self, team_id: str, upsert: bool) -> FoundTeam | TeamMissing:
+        if self.prisma_client is not None:
+            cached: Final = await self.user_api_key_cache.get_team_snapshot(AuthObject.team(team_id))
+            if cached is not None:
+                return team_facts(*cached)
         return await self._team(team_id, upsert=upsert)
 
     async def granting_team(self, team_id: str) -> FoundTeam | TeamMissing:
         return await self._team(team_id, check_db_only=True)
 
+    async def bind_team_member(self, team: LiteLLM_TeamTable, roster: TeamRoster, user_id: str) -> FoundTeam:
+        return team_member_facts(team, roster, user_id)
+
     async def team_by_alias(self, alias: str) -> FoundTeam | AliasMissing:
         if self.prisma_client is None:
             return AliasMissing.NO_DB
+        cached: Final = await self.user_api_key_cache.get_team_snapshot(AuthObject.team_alias(alias))
+        if cached is not None:
+            return team_facts(*cached)
         try:
             team: Final = await get_team_object_by_alias(
                 team_alias=alias,
@@ -653,7 +693,7 @@ class PythonAuthHost:
 
     async def _recache_user(self, user: LiteLLM_UserTable) -> LiteLLM_UserTable:
         await self.user_api_key_cache.async_set_cache(
-            key=user.user_id,
+            key=AuthObject.user(user.user_id),
             value=user,
             model_type=LiteLLM_UserTable,
             ttl=get_management_object_ttl(self.user_api_key_cache),
@@ -662,8 +702,8 @@ class PythonAuthHost:
 
     @with_service_target(AUTH_OBJECTS_TARGET)
     async def set_user_role(self, user: LiteLLM_UserTable, role: str) -> LiteLLM_UserTable:
-        await UserRepository(self._db()).table.update(where={"user_id": user.user_id}, data={"user_role": role})
-        return await self._recache_user(user.model_copy(update={"user_role": role}))
+        stored: Final = await UserRepository(self._db()).set_role(user.user_id, role)
+        return await self._recache_user(stored or user.model_copy(update={"user_role": role}))
 
     @with_service_target(AUTH_OBJECTS_TARGET)
     async def patch_team_membership(
@@ -680,20 +720,9 @@ class PythonAuthHost:
         return await self._recache_user(user.model_copy(update={"teams": [*kept, *add]}))
 
     async def add_team_member(self, user_id: str, team_id: str) -> None:
-        from litellm.proxy.management_endpoints.team_endpoints import (  # noqa: PLC0415  # team endpoints import auth
-            team_member_add,
+        await team_member_add.add_team_member(
+            self._db(), self.user_api_key_cache, self.proxy_logging_obj, self.litellm_proxy_admin_name, user_id, team_id
         )
-
-        try:
-            await team_member_add(
-                data=TeamMemberAddRequest(member=Member(user_id=user_id, role="user"), team_id=team_id),
-                user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
-            )
-            verbose_proxy_logger.debug("Successfully added user %s to team %s", user_id, team_id)
-        except ProxyException as e:
-            if e.type != ProxyErrorTypes.team_member_already_in_team:
-                raise
-            verbose_proxy_logger.debug("User %s is already a member of team %s", user_id, team_id)
 
     async def org(self, org_id: str) -> LiteLLM_OrganizationTable | None:
         return await get_org_object(
@@ -837,6 +866,7 @@ def proxy_host(
         global_agent_registry,
     )
     from litellm.proxy.proxy_server import (  # noqa: PLC0415  # runtime globals, rebound on every config load
+        jwks_cache,
         jwt_http_handler,
         litellm_jwtauth,
         litellm_proxy_admin_name,
@@ -854,6 +884,7 @@ def proxy_host(
         http=http,
         prisma_client=prisma_client,
         user_api_key_cache=user_api_key_cache,
+        jwks_cache=jwks_cache,
         proxy_logging_obj=proxy_logging_obj,
         llm_router=llm_router,
         llm_model_list=llm_model_list,

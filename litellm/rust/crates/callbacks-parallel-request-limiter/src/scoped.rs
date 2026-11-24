@@ -51,6 +51,10 @@ pub enum Action {
         input_tokens: i64,
         output_tokens: i64,
     },
+    SettleIo {
+        input_tokens: i64,
+        output_tokens: i64,
+    },
     /// Reserve a router fallback target's per-model limits, recording the model on the request.
     FallbackTarget { model: String },
 }
@@ -237,6 +241,15 @@ impl ParallelRequestLimiter {
                     .await
                     .map(|(response, _, _)| response),
             ),
+            Action::SettleIo {
+                input_tokens,
+                output_tokens,
+            } => {
+                self.engine()
+                    .settle_io_tokens(&descriptors, input_tokens, output_tokens, ctx)
+                    .await;
+                Outcome::Checked(Ok(Response::ok(Vec::new())))
+            }
         };
         Ok(Ok(Scoped {
             descriptors,
@@ -275,11 +288,29 @@ mod tests {
             descriptor("agent_session", "a:s", json!(null), json!(8)),
         ];
         assert_eq!(
-            socket_turn_tpm_windows(built, &agent_windows),
+            socket_turn_tpm_windows(built, &agent_windows, false),
             vec![
                 json!({"key": "api_key", "value": "k", "rate_limit": {"tokens_per_unit": 100, "window_size": 60}}),
                 json!({"key": "agent", "value": "a", "rate_limit": {"tokens_per_unit": 7, "window_size": 60}}),
                 json!({"key": "agent_session", "value": "a:s", "rate_limit": {"tokens_per_unit": 8, "window_size": 60}}),
+            ]
+        );
+    }
+
+    #[rstest]
+    fn a_socket_turn_that_charges_project_io_keeps_its_project_windows_but_not_ptu() {
+        let built = vec![
+            descriptor("model_per_project_itpm", "p:m", json!(null), json!(9)),
+            descriptor("model_per_project_otpm", "p:m", json!(null), json!(4)),
+            descriptor("model_per_team_ptu", "t:m", json!(null), json!(6)),
+        ];
+        assert_eq!(
+            socket_turn_tpm_windows(built, &[], true),
+            vec![
+                json!({"key": "model_per_project_itpm", "value": "p:m",
+                    "rate_limit": {"tokens_per_unit": 9, "window_size": 60}}),
+                json!({"key": "model_per_project_otpm", "value": "p:m",
+                    "rate_limit": {"tokens_per_unit": 4, "window_size": 60}}),
             ]
         );
     }

@@ -5,7 +5,8 @@ Gaps in the routing-strategy pre-call checks and the Responses-websocket turn ad
 takes part in those checks through ``pre_call_check`` / ``async_pre_call_check``.
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from datetime import datetime, timezone
 from typing import Final
 
 import pytest
@@ -13,6 +14,9 @@ import pytest
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.router_core import RouterCore
+from litellm.redis.stores.connection import connect
+from litellm.redis.stores.router_usage import CounterIncrement, RouterUsageStore, UsageCounter
+from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import async_admit_io_token_turn
 from tests.unit.test_router.core.endpoints_helpers import EndpointHost
 from tests.unit.test_router.core.retries_health_helpers import attempt, attempt_sync, cooled_down
 from tests.unit.test_router.core.scripted_host import ScriptedHost, deployment, rate_limit
@@ -72,6 +76,51 @@ async def test_a_rate_limit_from_a_pre_call_check_cools_the_deployment_down_and_
     assert cooled[checked]["cooldown_time"] == 33
 
 
+class RefusesOneDeployment(PreCallGate):
+    def __init__(self, refused_id: str, error: Exception) -> None:
+        super().__init__(error)
+        self.refused_id: Final = refused_id
+
+    async def async_pre_call_check(self, deployment: dict, parent_otel_span: object) -> dict | None:  # pyright: ignore[reportIncompatibleMethodOverride]
+        self.seen.append(("async", deployment["model_info"]["id"]))
+        if deployment["model_info"]["id"] == self.refused_id and self.error is not None:
+            raise self.error
+        return None
+
+
+async def _itpm_turn_refusal(used: int) -> litellm.RateLimitError:
+    usage: Final = RouterUsageStore(connect(None).router_usage())
+    usage.increment_local(
+        CounterIncrement(UsageCounter("global_router", "t", "openai/gpt-5-mini", "12-34", "itpm"), used, 60)
+    )
+    limited: Final = {"litellm_params": {"model": "openai/gpt-5-mini", "itpm": 100}, "model_info": {"id": "t"}}
+    with pytest.raises(litellm.RateLimitError) as refusal:
+        await async_admit_io_token_turn(
+            usage, limited, datetime(2026, 1, 1, 12, 34, tzinfo=timezone.utc), {"input": "ocean tides " * 100}
+        )
+    return refusal.value
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("used", "cooled"), [(99, []), (100, ["a"])])
+async def test_only_a_deployment_at_its_itpm_limit_cools_down_when_it_refuses_a_turn(
+    make_core: MakeCore, host: ScriptedHost, used: int, cooled: list[str]
+) -> None:
+    core: Final = make_core(
+        model_list=[deployment("g", "a", order=1), deployment("g", "b", order=2)],
+        num_retries=2,
+        cooldown_time=33,
+    )
+    gate: Final = RefusesOneDeployment("a", await _itpm_turn_refusal(used))
+    host.lists["callbacks"].append(gate)
+
+    await attempt(core)
+
+    assert gate.seen == [("async", "a"), ("async", "b")]
+    assert host.deployments_called("acompletion") == ["b"]
+    assert list(cooled_down(core, ["a", "b"])) == cooled
+
+
 @pytest.mark.asyncio
 async def test_any_other_error_from_a_pre_call_check_is_raised_without_a_cooldown(
     make_core: MakeCore, host: ScriptedHost
@@ -127,7 +176,7 @@ class TestResponsesWebsocketTurnAdmission:
         return EndpointHost()
 
     @staticmethod
-    async def open_socket(core: RouterCore, host: EndpointHost) -> Callable[[], object]:
+    async def open_socket(core: RouterCore, host: EndpointHost) -> Callable[[Mapping[str, object]], object]:
         await core.call("_aresponses_websocket", {"model": "g"})
         (call,) = host.calls_to("_aresponses_websocket")
         admission: Final = call.kwargs["turn_admission"]
@@ -142,7 +191,7 @@ class TestResponsesWebsocketTurnAdmission:
         gate: Final = gated(host)
         admit: Final = await self.open_socket(core, host)
 
-        admitted: Final = [dict(await admit()) for _ in range(3)]  # pyright: ignore[reportGeneralTypeIssues]
+        admitted: Final = [dict(await admit({})) for _ in range(3)]  # pyright: ignore[reportGeneralTypeIssues]
 
         assert admitted == [{}, {}, {}]
         assert gate.seen == [("async", "a")] * 4  # the socket opening, then each turn
@@ -157,7 +206,7 @@ class TestResponsesWebsocketTurnAdmission:
         gate.error = rate_limit(message="turn refused")
 
         with pytest.raises(litellm.RateLimitError, match="turn refused"):
-            await admit()  # pyright: ignore[reportGeneralTypeIssues]
+            await admit({})  # pyright: ignore[reportGeneralTypeIssues]
 
     @pytest.mark.asyncio
     async def test_usage_based_routing_admits_turns_until_the_deployment_rpm_is_used_up(
@@ -168,9 +217,9 @@ class TestResponsesWebsocketTurnAdmission:
         core: Final = make_core(model_list=[deployment("g", "a", rpm=5)], routing_strategy="usage-based-routing-v2")
         admit: Final = await self.open_socket(core, host)
 
-        admitted: Final = [dict(await admit()) for _ in range(3)]  # pyright: ignore[reportGeneralTypeIssues]
+        admitted: Final = [dict(await admit({})) for _ in range(3)]  # pyright: ignore[reportGeneralTypeIssues]
         with pytest.raises(litellm.RateLimitError) as refused:
-            await admit()  # pyright: ignore[reportGeneralTypeIssues]
+            await admit({})  # pyright: ignore[reportGeneralTypeIssues]
 
         assert admitted == [{}, {}, {}]
         assert str(refused.value).startswith(

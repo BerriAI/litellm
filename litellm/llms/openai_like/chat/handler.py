@@ -5,7 +5,7 @@ For handling OpenAI-like chat completions, like IBM WatsonX, etc.
 """
 
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from typing import Final
 
 import httpx
@@ -22,6 +22,7 @@ from litellm.llms.custom_httpx.sse_lines import aiter_sse_lines, iter_sse_lines
 from litellm.llms.databricks.streaming_utils import ModelResponseIterator
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.llms.openai.openai import OpenAIConfig
+from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import CustomStreamingDecoder, ModelResponse
 from litellm.utils import CustomStreamWrapper, ProviderConfigManager
 
@@ -43,18 +44,19 @@ def _fake_streamed_model_response(payload: object) -> ModelResponse:
 async def make_call(
     client: AsyncHTTPHandler | None,
     api_base: str,
-    headers: dict,
+    headers: dict[str, str],
     data: str,
     model: str,
-    messages: list,
-    logging_obj,
+    messages: Sequence[object],
+    logging_obj: LiteLLMLoggingObj,
     streaming_decoder: CustomStreamingDecoder | None = None,
     fake_stream: bool = False,
+    timeout: float | httpx.Timeout | None = None,
 ):
     if client is None:
         client = litellm.module_level_aclient
 
-    response: Final = await client.post(api_base, headers=headers, data=data, stream=not fake_stream)
+    response: Final = await client.post(api_base, headers=headers, data=data, stream=not fake_stream, timeout=timeout)
 
     if streaming_decoder is not None:
         completion_stream = streaming_decoder.aiter_bytes(response.aiter_bytes(chunk_size=1024))
@@ -79,11 +81,11 @@ async def make_call(
 def make_sync_call(
     client: HTTPHandler | None,
     api_base: str,
-    headers: dict,
+    headers: dict[str, str],
     data: str,
     model: str,
-    messages: list,
-    logging_obj,
+    messages: Sequence[object],
+    logging_obj: LiteLLMLoggingObj,
     streaming_decoder: CustomStreamingDecoder | None = None,
     fake_stream: bool = False,
     timeout: float | httpx.Timeout | None = None,
@@ -118,30 +120,31 @@ def make_sync_call(
 
 
 class OpenAILikeChatHandler(OpenAILikeBase):
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs: object) -> None:
         super().__init__(**kwargs)
 
     async def acompletion_stream_function(
         self,
         model: str,
-        messages: list,
+        messages: Sequence[object],
         custom_llm_provider: str,
         api_base: str,
-        custom_prompt_dict: dict,
+        custom_prompt_dict: Mapping[str, object],
         model_response: ModelResponse,
-        print_verbose: Callable,
-        encoding,
-        api_key,
+        print_verbose: Callable[..., object],
+        encoding: object,
+        api_key: object,
         logging_obj: LiteLLMLoggingObj,
-        stream,
+        stream: object,
         data: dict,
-        optional_params=None,
-        litellm_params=None,
-        logger_fn=None,
+        optional_params: object = None,
+        litellm_params: object = None,
+        logger_fn: object = None,
         headers={},
         client: AsyncHTTPHandler | None = None,
         streaming_decoder: CustomStreamingDecoder | None = None,
         fake_stream: bool = False,
+        timeout: float | httpx.Timeout | None = None,
     ) -> CustomStreamWrapper:
         data["stream"] = True
         completion_stream: Final = await make_call(
@@ -153,6 +156,7 @@ class OpenAILikeChatHandler(OpenAILikeBase):
             messages=messages,
             logging_obj=logging_obj,
             streaming_decoder=streaming_decoder,
+            timeout=timeout,
         )
         streamwrapper: Final = CustomStreamWrapper(
             completion_stream=completion_stream,
@@ -166,22 +170,22 @@ class OpenAILikeChatHandler(OpenAILikeBase):
     async def acompletion_function(
         self,
         model: str,
-        messages: list,
+        messages: list[AllMessageValues],
         api_base: str,
-        custom_prompt_dict: dict,
+        custom_prompt_dict: Mapping[str, object],
         model_response: ModelResponse,
         custom_llm_provider: str,
-        print_verbose: Callable,
+        print_verbose: Callable[..., object],
         client: AsyncHTTPHandler | None,
-        encoding,
-        api_key,
-        logging_obj,
-        stream,
+        encoding: object,
+        api_key: str | None,
+        logging_obj: LiteLLMLoggingObj,
+        stream: bool,
         data: dict,
         base_model: str | None,
-        optional_params: dict,
-        litellm_params=None,
-        logger_fn=None,
+        optional_params: dict[str, object],
+        litellm_params: object = None,
+        logger_fn: object = None,
         headers={},
         timeout: float | httpx.Timeout | None = None,
         json_mode: bool = False,
@@ -200,8 +204,8 @@ class OpenAILikeChatHandler(OpenAILikeBase):
                 status_code=e.response.status_code,
                 message=e.response.text,
             )
-        except httpx.TimeoutException:
-            raise OpenAILikeError(status_code=408, message="Timeout error occurred.")
+        except (litellm.Timeout, httpx.TimeoutException) as e:
+            raise OpenAILikeError(status_code=408, message=str(e))
         except Exception as e:
             raise OpenAILikeError(status_code=500, message=str(e))
 
@@ -231,14 +235,14 @@ class OpenAILikeChatHandler(OpenAILikeBase):
         custom_llm_provider: str,
         custom_prompt_dict: dict,
         model_response: ModelResponse,
-        print_verbose: Callable,
-        encoding,
+        print_verbose: Callable[..., object],
+        encoding: object,
         api_key: str | None,
         logging_obj: LiteLLMLoggingObj,
         optional_params: dict,
-        acompletion=None,
+        acompletion: object = None,
         litellm_params: dict = {},
-        logger_fn=None,
+        logger_fn: object = None,
         headers: dict | None = None,
         timeout: float | httpx.Timeout | None = None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
@@ -315,6 +319,7 @@ class OpenAILikeChatHandler(OpenAILikeBase):
                     custom_llm_provider=custom_llm_provider,
                     streaming_decoder=streaming_decoder,
                     fake_stream=fake_stream,
+                    timeout=timeout,
                 )
             else:
                 return self.acompletion_function(
@@ -365,7 +370,7 @@ class OpenAILikeChatHandler(OpenAILikeBase):
                 if client is None or not isinstance(client, HTTPHandler):
                     client = HTTPHandler(timeout=timeout)
                 try:
-                    response: Final = client.post(url=api_base, headers=headers, data=json.dumps(data))
+                    response: Final = client.post(url=api_base, headers=headers, data=json.dumps(data), timeout=timeout)
                     response.raise_for_status()
 
                 except httpx.HTTPStatusError as e:
@@ -373,8 +378,8 @@ class OpenAILikeChatHandler(OpenAILikeBase):
                         status_code=e.response.status_code,
                         message=e.response.text,
                     )
-                except httpx.TimeoutException:
-                    raise OpenAILikeError(status_code=408, message="Timeout error occurred.")
+                except litellm.Timeout as e:
+                    raise OpenAILikeError(status_code=408, message=str(e))
                 except Exception as e:
                     raise OpenAILikeError(status_code=500, message=str(e))
         return OpenAILikeChatConfig._transform_response(

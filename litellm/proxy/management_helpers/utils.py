@@ -1,12 +1,12 @@
 # What is this?
 ## Helper utils for the management endpoints (keys/users/teams)
 import json
-from collections.abc import Awaitable, Callable, Mapping, MutableMapping, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Mapping, MutableMapping, Sequence
 from collections.abc import Set as AbstractSet
 from datetime import datetime
 from functools import wraps
 from types import MappingProxyType
-from typing import Any, Final, NoReturn, ParamSpec, Protocol, TypeVar
+from typing import Final, NoReturn, ParamSpec, Protocol, TypeVar
 
 from fastapi import HTTPException, Request
 from pydantic import BaseModel, TypeAdapter
@@ -18,7 +18,13 @@ from litellm._internal_context import with_service_target
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.integrations.otel.model.config import is_otel_v2_enabled
-from litellm.litellm_core_utils.core_helpers import attribute_or_none, require_attributes
+from litellm.litellm_core_utils.core_helpers import (
+    KeywordArguments,
+    attribute_or_none,
+    dict_from_pairs,
+    has_attributes,
+    require_attributes,
+)
 from litellm.models.team import BudgetLimitEntry
 from litellm.proxy._types import (  # key request types; user request types; team request types; customer request types
     BudgetNewRequest,
@@ -44,7 +50,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
     _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     read_request_body,
 )
-from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time, get_budget_window_reset_fields
 from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET
 from litellm.proxy.utils import PrismaClient, jsonify_object
 from litellm.repositories.budget_repository import BudgetRepository
@@ -104,7 +110,14 @@ class _PrismaTeamMembershipTable(Protocol):
     ) -> _PrismaRecord: ...
 
 
-class MemberWriteTx(Protocol):
+class BudgetWriteTx(Protocol):
+    """Where `resolve_member_budget_id` reads and writes budgets when the caller owns the transaction."""
+
+    @property
+    def litellm_budgettable(self) -> _PrismaBudgetTable: ...
+
+
+class MemberWriteTx(BudgetWriteTx, Protocol):
     """Transaction surface `add_new_member` writes through when the caller owns one.
 
     A caller already holding a transaction, and with it a pooled connection plus that
@@ -116,9 +129,6 @@ class MemberWriteTx(Protocol):
     def litellm_usertable(self) -> _PrismaUserTable: ...
 
     @property
-    def litellm_budgettable(self) -> _PrismaBudgetTable: ...
-
-    @property
     def litellm_teammembership(self) -> _PrismaTeamMembershipTable: ...
 
 
@@ -126,7 +136,7 @@ def _user_table(prisma_client: PrismaClient, tx: MemberWriteTx | None) -> _Prism
     return tx.litellm_usertable if tx is not None else UserRepository(prisma_client).table
 
 
-def _budget_table(prisma_client: PrismaClient, tx: MemberWriteTx | None) -> _PrismaBudgetTable:
+def _budget_table(prisma_client: PrismaClient, tx: BudgetWriteTx | None) -> _PrismaBudgetTable:
     return tx.litellm_budgettable if tx is not None else BudgetRepository(prisma_client).table
 
 
@@ -238,20 +248,28 @@ BUDGET_WINDOWS_ADAPTER: Final = TypeAdapter(tuple[BudgetLimitEntry, ...])
 def budget_windows_json(requested: Sequence[BudgetLimitEntry] | None, stored: Sequence[BudgetLimitEntry] | None) -> str:
     if not requested:
         return json.dumps(None)
-    stored_reset_at: Final = MappingProxyType(
-        {window.budget_duration: window.reset_at for window in stored or () if window.reset_at is not None}
+    stored_windows: Final = MappingProxyType(
+        {window.budget_duration: window for window in stored or () if window.reset_at is not None}
     )
     return json.dumps(
         [
             {
-                **window.model_dump(),
-                "reset_at": (
-                    stored_reset_at.get(window.budget_duration)
-                    or get_budget_reset_time(budget_duration=window.budget_duration)
-                ).isoformat(),
+                **window.model_dump(exclude={"window_start", "reset_at"}),
+                **_stored_or_new_window_fields(window.budget_duration, stored_windows.get(window.budget_duration)),
             }
             for window in requested
         ]
+    )
+
+
+def _stored_or_new_window_fields(duration: str, stored: BudgetLimitEntry | None) -> Mapping[str, str]:
+    if stored is None or stored.reset_at is None:
+        return get_budget_window_reset_fields(duration)
+    return MappingProxyType(
+        {
+            "reset_at": stored.reset_at.isoformat(),
+            **({"window_start": stored.window_start.isoformat()} if stored.window_start is not None else {}),
+        }
     )
 
 
@@ -381,6 +399,7 @@ async def handle_budget_for_entity(
 # default member-budget into an individual member-budget so that the new
 # row starts with the same limits as the default.
 _CLONABLE_BUDGET_FIELDS: Final[tuple[str, ...]] = (
+    "rollover_max_budget",
     "max_budget",
     "soft_budget",
     "max_parallel_requests",
@@ -398,7 +417,7 @@ async def _clone_team_default_budget_for_member(
     user_api_key_dict: UserAPIKeyAuth,
     litellm_proxy_admin_name: str,
     budget_duration_override: str | None = None,
-    tx: MemberWriteTx | None = None,
+    tx: BudgetWriteTx | None = None,
 ) -> str | None:
     """
     Create a new budget row that copies the values from the team's default
@@ -446,7 +465,7 @@ async def _clone_team_default_budget_for_member(
     return new_budget.budget_id
 
 
-async def _resolve_member_budget_id(
+async def resolve_member_budget_id(
     prisma_client: PrismaClient,
     user_api_key_dict: UserAPIKeyAuth,
     litellm_proxy_admin_name: str,
@@ -454,7 +473,7 @@ async def _resolve_member_budget_id(
     allowed_models: list[str] | None,
     budget_duration: str | None,
     default_team_budget_id: str | None,
-    tx: MemberWriteTx | None = None,
+    tx: BudgetWriteTx | None = None,
 ) -> str | None:
     """
     Resolve the budget a new team member should be linked to.
@@ -512,8 +531,11 @@ async def _resolve_member_budget_id(
     return response.budget_id
 
 
+_resolve_member_budget_id: Final = resolve_member_budget_id
+
+
 async def _team_default_budget_duration(
-    prisma_client: PrismaClient, default_team_budget_id: str, tx: MemberWriteTx | None
+    prisma_client: PrismaClient, default_team_budget_id: str, tx: BudgetWriteTx | None
 ) -> str | None:
     """The reset period a member with models of their own and no cap of their own must carry.
 
@@ -638,7 +660,7 @@ async def add_new_member(
 
 
 @with_service_target(AUTH_OBJECTS_TARGET)
-def _delete_user_id_from_cache(kwargs):
+def _delete_user_id_from_cache(kwargs: Mapping[str, object]):
     from litellm.proxy.proxy_server import user_api_key_cache
 
     if kwargs.get("data") is not None:
@@ -653,7 +675,7 @@ def _delete_user_id_from_cache(kwargs):
 
 
 @with_service_target(AUTH_OBJECTS_TARGET)
-def _delete_api_key_from_cache(kwargs):
+def _delete_api_key_from_cache(kwargs: Mapping[str, object]):
     from litellm.proxy.proxy_server import user_api_key_cache
 
     if kwargs.get("data") is not None:
@@ -668,7 +690,7 @@ def _delete_api_key_from_cache(kwargs):
 
 
 @with_service_target(AUTH_OBJECTS_TARGET)
-def _delete_team_id_from_cache(kwargs):
+def _delete_team_id_from_cache(kwargs: Mapping[str, object]):
     from litellm.proxy.proxy_server import user_api_key_cache
 
     if kwargs.get("data") is not None:
@@ -683,7 +705,7 @@ def _delete_team_id_from_cache(kwargs):
 
 
 @with_service_target(AUTH_OBJECTS_TARGET)
-def _delete_customer_id_from_cache(kwargs):
+def _delete_customer_id_from_cache(kwargs: Mapping[str, object]):
     from litellm.proxy.proxy_server import user_api_key_cache
 
     if kwargs.get("data") is not None:
@@ -698,7 +720,7 @@ def _delete_customer_id_from_cache(kwargs):
 
 
 async def send_management_endpoint_alert(
-    request_kwargs: dict,
+    request_kwargs: dict[str, object],
     user_api_key_dict: UserAPIKeyAuth,
     function_name: str,
 ):
@@ -807,13 +829,26 @@ def _redact_env_var_values(response: MutableMapping[str, object]) -> None:
         response["items"] = [_redact_record_env_vars(item) for item in items]
 
 
+class _KeyValuePairs(Protocol):
+    def __iter__(self) -> Iterator[tuple[str, object]]: ...
+
+
+def _response_fields(result: object) -> Mapping[str, object]:
+    if has_attributes(result, KeywordArguments, "keys"):
+        return dict(result)
+    if has_attributes(result, _KeyValuePairs, "__iter__") or has_attributes(result, _KeyValuePairs, "__getitem__"):
+        return dict(result)
+    dict_from_pairs(result)
+    raise TypeError(f"{type(result).__name__!r} object is not iterable")
+
+
 async def _emit_management_endpoint_otel_span(
-    func: Callable,
+    func: Callable[..., object],
     kwargs: dict,
     parent_otel_span: Span | None,
     start_time: datetime,
     end_time: datetime,
-    result: Any = None,
+    result: object = None,
     exception: Exception | None = None,
     log_payload: bool = True,
 ) -> None:
@@ -869,7 +904,7 @@ async def _emit_management_endpoint_otel_span(
     _response: dict[str, object] | None = None
     if log_payload and exception is None and result is not None:
         try:
-            raw: Final[Mapping[str, object]] = dict(result)
+            raw: Final = _response_fields(result)
             _response = {k: v for k, v in raw.items() if k not in _CREDENTIAL_FIELDS}
             _redact_env_var_values(_response)
         except Exception:
@@ -896,8 +931,8 @@ async def _emit_management_endpoint_otel_span(
         )
 
 
-_P: Final = ParamSpec("_P")
-_R: Final = TypeVar("_R")
+_P = ParamSpec("_P")
+_R = TypeVar("_R")
 
 
 def management_endpoint_wrapper(func: Callable[_P, Awaitable[_R]]) -> Callable[_P, Awaitable[_R]]:

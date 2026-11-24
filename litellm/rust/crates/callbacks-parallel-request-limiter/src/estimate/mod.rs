@@ -23,6 +23,7 @@ const RESPONSES: [&str; 2] = ["aresponses", "responses"];
 const EMBEDDING: [&str; 2] = ["aembedding", "embedding"];
 const TEXT_COMPLETION: [&str; 2] = ["atext_completion", "text_completion"];
 const EXTRACTION: [&str; 2] = ["extraction", "aextraction"];
+const REALTIME: [&str; 1] = ["_arealtime"];
 const MEDIA_TYPES: [&str; 10] = [
     "file",
     "input_file",
@@ -340,8 +341,9 @@ pub fn input_and_output_tokens(
         0
     };
     let explicit = explicit_output_cap(request, call_type, cap)?;
-    let generates_no_output =
-        is_embedding_request(request, call_type) || EXTRACTION.contains(&call_type);
+    let generates_no_output = is_embedding_request(request, call_type)
+        || EXTRACTION.contains(&call_type)
+        || REALTIME.contains(&call_type);
     let floor = i128::from(no_max_tokens_output_floor(
         estimate.min_configured_tpm_limit,
         cap.default_max_tokens_estimate,

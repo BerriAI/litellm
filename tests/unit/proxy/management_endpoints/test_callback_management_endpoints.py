@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 
 from typing import cast
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 
 import litellm
 from litellm.integrations.datadog.datadog import DataDogLogger
@@ -470,7 +470,9 @@ class TestNewRelicKeyLoggingValidation:
         is_otel_v2_enabled.cache_clear()
         try:
             assert raise_on_invalid_key_logging_config(None) is None
-            assert raise_on_invalid_key_logging_config({"logging": "not-a-list"}) is None
+            with pytest.raises(HTTPException) as error:
+                raise_on_invalid_key_logging_config({"logging": "not-a-list"})
+            assert error.value.status_code == 400
             assert raise_on_invalid_key_logging_config({"tags": ["a"]}) is None
             assert raise_on_invalid_key_logging_config(self._metadata({})) is None
             assert (

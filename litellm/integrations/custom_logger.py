@@ -2,7 +2,7 @@
 #    On success, logs events to Promptlayer
 import re
 import traceback
-from collections.abc import AsyncGenerator, Mapping, Sequence
+from collections.abc import AsyncGenerator, Callable, Mapping, MutableMapping, Sequence
 from datetime import datetime
 from functools import cache
 from itertools import takewhile
@@ -23,7 +23,6 @@ from litellm.types.utils import (
     CallTypesLiteral,
     LLMResponseTypes,
     ModelResponse,
-    ModelResponseStream,
     StandardAuditLogPayload,
     StandardBatchLineItemsPayload,
     StandardCallbackDynamicParams,
@@ -31,7 +30,7 @@ from litellm.types.utils import (
 )
 
 if TYPE_CHECKING:
-    from fastapi import HTTPException
+    from fastapi import APIRouter, HTTPException
     from opentelemetry.trace import Span as _Span
 
     from litellm.caching.caching import DualCache
@@ -101,7 +100,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         turn_off_message_logging: bool = False,
         # deprecated param, use `turn_off_message_logging` instead
         message_logging: bool = True,
-        **kwargs,
+        **kwargs: object,
     ) -> None:
         """
         Args:
@@ -110,6 +109,18 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         """
         self.message_logging = message_logging
         self.turn_off_message_logging = turn_off_message_logging
+
+    async def async_setup_proxy(self) -> "APIRouter | None":
+        """
+        Runs once when the proxy starts, before it serves traffic. Raising aborts startup.
+
+        HTTP API routes on a returned router are added to the proxy behind LiteLLM key auth.
+        Websocket routes, mounts and plain Starlette routes are refused.
+        """
+        return None
+
+    async def async_close_proxy(self) -> None:
+        """Runs when the proxy shuts down, after in-flight requests and queued logs have drained."""
 
     @staticmethod
     def get_callback_env_vars(callback_name: str | None = None) -> list[str]:
@@ -150,30 +161,30 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
 
         return list(params)
 
-    def log_pre_api_call(self, model, messages, kwargs):
+    def log_pre_api_call(self, model: str, messages: object, kwargs: Mapping[str, object]):
         pass
 
-    def log_post_api_call(self, kwargs, response_obj, start_time, end_time):
+    def log_post_api_call(self, kwargs: object, response_obj: object, start_time: object, end_time: object):
         pass
 
-    def log_stream_event(self, kwargs, response_obj, start_time, end_time):
+    def log_stream_event(self, kwargs, response_obj: object, start_time: object, end_time: object):
         pass
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
         pass
 
-    def log_failure_event(self, kwargs, response_obj, start_time, end_time):
+    def log_failure_event(self, kwargs, response_obj: object, start_time, end_time):
         pass
 
     #### ASYNC ####
 
-    async def async_log_stream_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_stream_event(self, kwargs, response_obj: object, start_time: object, end_time: object):
         pass
 
-    async def async_log_pre_api_call(self, model, messages, kwargs):
+    async def async_log_pre_api_call(self, model: str, messages: object, kwargs: Mapping[str, object]):
         pass
 
-    async def async_pre_request_hook(self, model: str, messages: list, kwargs: dict) -> dict | None:
+    async def async_pre_request_hook(self, model: str, messages: list, kwargs: dict) -> dict[str, object] | None:
         """
         Hook called before making the API request to allow modifying request parameters.
 
@@ -201,7 +212,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         pass
 
-    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_failure_event(self, kwargs, response_obj: object, start_time, end_time):
         pass
 
     async def async_log_failed_attempt(
@@ -238,7 +249,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         prompt_version: int | None = None,
         ignore_prompt_manager_model: bool | None = False,
         ignore_prompt_manager_optional_params: bool | None = False,
-    ) -> tuple[str, list[AllMessageValues], dict]:
+    ) -> tuple[str, list[AllMessageValues], dict[str, object]]:
         """
         Returns:
         - model: str - the model to use (can be pulled from prompt management tool)
@@ -260,7 +271,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         prompt_version: int | None = None,
         ignore_prompt_manager_model: bool | None = False,
         ignore_prompt_manager_optional_params: bool | None = False,
-    ) -> tuple[str, list[AllMessageValues], dict]:
+    ) -> tuple[str, list[AllMessageValues], dict[str, object]]:
         """
         Returns:
         - model: str - the model to use (can be pulled from prompt management tool)
@@ -296,12 +307,15 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         messages: list[AllMessageValues] | None,
         request_kwargs: dict | None = None,
         parent_otel_span: Span | None = None,
-    ) -> list[dict]:
+    ) -> list[dict[str, object]]:
         return healthy_deployments
+
+    def filters_deployments_for(self, request_kwargs: Mapping[str, object]) -> bool:
+        return True
 
     async def async_pre_call_deployment_hook(
         self, kwargs: dict[str, object], call_type: CallTypes | None
-    ) -> dict | None:
+    ) -> dict[str, object] | None:
         """
         Allow modifying the request just before it's sent to the deployment.
 
@@ -310,10 +324,10 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         Used in managed_files.py
         """
 
-    async def async_pre_call_check(self, deployment: dict, parent_otel_span: Span | None) -> dict | None:
+    async def async_pre_call_check(self, deployment: dict, parent_otel_span: Span | None) -> dict[str, object] | None:
         pass
 
-    def pre_call_check(self, deployment: dict) -> dict | None:
+    def pre_call_check(self, deployment: dict) -> dict[str, object] | None:
         pass
 
     async def async_post_call_success_deployment_hook(
@@ -321,7 +335,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         request_data: dict,
         response: LLMResponseTypes,
         call_type: CallTypes | None,
-    ) -> LLMResponseTypes | None:
+    ) -> object:
         """
         Allow modifying / reviewing the response just after it's received from the deployment.
         """
@@ -527,11 +541,13 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     ) -> Any:
         pass
 
-    async def async_logging_hook(self, kwargs: dict, result: object, call_type: str) -> tuple[dict, object]:
+    async def async_logging_hook(
+        self, kwargs: dict, result: object, call_type: str
+    ) -> tuple[dict[str, object], object]:
         """For masking logged request/response. Return a modified version of the request/result."""
         return kwargs, result
 
-    def logging_hook(self, kwargs: dict, result: object, call_type: str) -> tuple[dict, object]:
+    def logging_hook(self, kwargs: dict, result: object, call_type: str) -> tuple[dict[str, object], object]:
         """For masking logged request/response. Return a modified version of the request/result."""
         return kwargs, result
 
@@ -547,7 +563,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         self,
         user_api_key_dict: UserAPIKeyAuth,
         response: str,
-    ) -> Any:
+    ) -> object:
         pass
 
     async def async_post_call_streaming_iterator_hook(
@@ -555,13 +571,20 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         user_api_key_dict: UserAPIKeyAuth,
         response: Any,
         request_data: dict,
-    ) -> AsyncGenerator[ModelResponseStream, None]:
+    ) -> AsyncGenerator[object, None]:
         async for item in response:
             yield item
 
     #### SINGLE-USE #### - https://docs.litellm.ai/docs/observability/custom_callback#using-your-custom-callback-function
 
-    def log_input_event(self, model, messages, kwargs, print_verbose, callback_func):
+    def log_input_event(
+        self,
+        model: object,
+        messages: object,
+        kwargs: MutableMapping[str, object],
+        print_verbose: Callable[[str], object],
+        callback_func: Callable[..., object],
+    ):
         try:
             kwargs["model"] = model
             kwargs["messages"] = messages
@@ -573,7 +596,14 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         except Exception:
             print_verbose(f"Custom Logger Error - {traceback.format_exc()}")
 
-    async def async_log_input_event(self, model, messages, kwargs, print_verbose, callback_func):
+    async def async_log_input_event(
+        self,
+        model: object,
+        messages: object,
+        kwargs: MutableMapping[str, object],
+        print_verbose: Callable[[str], object],
+        callback_func,
+    ):
         try:
             kwargs["model"] = model
             kwargs["messages"] = messages
@@ -585,7 +615,15 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         except Exception:
             print_verbose(f"Custom Logger Error - {traceback.format_exc()}")
 
-    def log_event(self, kwargs, response_obj, start_time, end_time, print_verbose, callback_func):
+    def log_event(
+        self,
+        kwargs: MutableMapping[str, object],
+        response_obj: object,
+        start_time: object,
+        end_time: object,
+        print_verbose: Callable[[str], object],
+        callback_func,
+    ):
         # Method definition
         try:
             kwargs["log_event_type"] = "post_api_call"
@@ -598,7 +636,15 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         except Exception:
             print_verbose(f"Custom Logger Error - {traceback.format_exc()}")
 
-    async def async_log_event(self, kwargs, response_obj, start_time, end_time, print_verbose, callback_func):
+    async def async_log_event(
+        self,
+        kwargs: MutableMapping[str, object],
+        response_obj: object,
+        start_time: object,
+        end_time: object,
+        print_verbose: Callable[[str], object],
+        callback_func,
+    ):
         # Method definition
         try:
             kwargs["log_event_type"] = "post_api_call"
@@ -616,7 +662,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     #########################################################
 
     async def async_post_mcp_tool_call_hook(
-        self, kwargs, response_obj: MCPPostCallResponseObject, start_time, end_time
+        self, kwargs, response_obj: MCPPostCallResponseObject, start_time: datetime, end_time: datetime
     ) -> MCPPostCallResponseObject | None:
         """
         This log gets called after the MCP tool call is made.
@@ -634,6 +680,9 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     # AGENTIC LOOP HOOKS (for litellm.messages + future completion support)
     #########################################################
 
+    def answers_tool_calls_at_agentic_loop_cap(self, custom_llm_provider: str) -> bool:
+        return False
+
     async def async_should_run_agentic_loop(
         self,
         response: object,
@@ -643,7 +692,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         stream: bool,
         custom_llm_provider: str,
         kwargs: dict,
-    ) -> tuple[bool, dict]:
+    ) -> tuple[bool, dict[str, object]]:
         """
         Hook to determine if agentic loop should be executed.
 
@@ -829,7 +878,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         stream: bool,
         custom_llm_provider: str,
         kwargs: dict,
-    ) -> tuple[bool, dict]:
+    ) -> tuple[bool, dict[str, object]]:
         """
         Hook to determine if chat completion agentic loop should be executed.
         """
@@ -907,7 +956,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
             else text
         )
 
-    def _select_metadata_field(self, request_kwargs: dict | None = None) -> str | None:
+    def _select_metadata_field(self, request_kwargs: Mapping[str, object] | None = None) -> str | None:
         """
         Select the metadata field to use for logging
 
@@ -930,7 +979,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         `turn_off_message_logging` leaves the success event they receive unredacted."""
         return False
 
-    def redact_standard_logging_payload_from_model_call_details(self, model_call_details: dict) -> dict:
+    def redact_standard_logging_payload_from_model_call_details(self, model_call_details: dict) -> dict[str, object]:
         """
         Redacts or excludes fields from StandardLoggingPayload before callbacks receive it.
 
@@ -987,7 +1036,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     async def get_proxy_server_request_from_cold_storage_with_object_key(
         self,
         object_key: str,
-    ) -> dict | None:
+    ) -> dict[str, object] | None:
         """
         Get the proxy server request from cold storage using the object key directly.
         """
