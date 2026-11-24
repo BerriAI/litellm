@@ -20,6 +20,7 @@ func resourceKey() *schema.Resource {
 		ReadContext:   resourceKeyRead,
 		UpdateContext: resourceKeyUpdate,
 		DeleteContext: resourceKeyDelete,
+		CustomizeDiff: validateLoggingCallbackDiff,
 		Importer: &schema.ResourceImporter{
 			StateContext: schema.ImportStatePassthroughContext,
 		},
@@ -71,11 +72,12 @@ func resourceKey() *schema.Resource {
 				Optional: true,
 				Elem:     &schema.Schema{Type: schema.TypeString},
 			},
+			loggingCallbackAttr: loggingCallbackSchema(),
 			"server_metadata": {
 				Type:        schema.TypeMap,
 				Computed:    true,
 				Elem:        &schema.Schema{Type: schema.TypeString},
-				Description: "Every metadata entry the proxy stores for this key, including ones not declared in metadata. Read-only, so drift on undeclared entries shows up on refresh without Terraform taking ownership of them. Entries the provider already exposes as their own attributes (model_rpm_limit, model_tpm_limit, tags, guardrails, enforced_params, allowed_passthrough_routes, rpm_limit_type, tpm_limit_type, prompts) are omitted, and non-string values are JSON encoded",
+				Description: "Read-only metadata stored by the proxy, including entries not declared in metadata. Non-string values are JSON encoded. Entries exposed as separate attributes and callback credential values are omitted.",
 			},
 			"tpm_limit": {
 				Type:     schema.TypeInt,
@@ -286,6 +288,12 @@ func resourceKeyCreate(ctx context.Context, d *schema.ResourceData, m interface{
 
 	key := &Key{}
 	mapResourceDataToKey(d, key)
+	if len(d.Get(loggingCallbackAttr).([]interface{})) != 0 {
+		key.Metadata = mergeKeyMetadata(key.Metadata, nil, nil)
+		if err := writeLoggingCallbackMetadata(d, key.Metadata); err != nil {
+			return diag.FromErr(err)
+		}
+	}
 	// A config-supplied key value becomes the key itself; when absent the
 	// proxy generates one. Write-only attributes are invisible to d.Get in
 	// real Terraform runs, so read the raw config first.
@@ -359,6 +367,9 @@ func resourceKeyRead(ctx context.Context, d *schema.ResourceData, m interface{})
 	}
 
 	d.Set("server_metadata", serverKeyMetadata(key.Metadata))
+	if err := readLoggingCallbacks(d, key.Metadata); err != nil {
+		return diag.FromErr(err)
+	}
 	key.Metadata = declaredKeyMetadata(key.Metadata, d.Get("metadata").(map[string]interface{}))
 	mapKeyToResourceData(d, key)
 	return nil
@@ -467,7 +478,9 @@ func suppressUnconfiguredAllowedRoutes(k, old, new string, d *schema.ResourceDat
 var errKeyGone = errors.New("no longer exists")
 
 func plannedKeyMetadata(c *Client, d *schema.ResourceData) (map[string]interface{}, error) {
-	if !d.HasChange("metadata") {
+	metadataChanged := d.HasChange("metadata")
+	callbacksChanged := d.HasChange(loggingCallbackAttr)
+	if !metadataChanged && !callbacksChanged {
 		return nil, nil
 	}
 	current, err := c.GetKey(d.Id())
@@ -477,8 +490,23 @@ func plannedKeyMetadata(c *Client, d *schema.ResourceData) (map[string]interface
 	if current == nil {
 		return nil, fmt.Errorf("key %s %w", d.Id(), errKeyGone)
 	}
-	oldDeclared, newDeclared := d.GetChange("metadata")
-	return mergeKeyMetadata(current.Metadata, oldDeclared.(map[string]interface{}), newDeclared.(map[string]interface{})), nil
+	var oldDeclared, newDeclared map[string]interface{}
+	if metadataChanged {
+		oldValue, newValue := d.GetChange("metadata")
+		oldDeclared, newDeclared = oldValue.(map[string]interface{}), newValue.(map[string]interface{})
+	}
+	metadata := mergeKeyMetadata(current.Metadata, oldDeclared, newDeclared)
+	if callbacksChanged {
+		for _, field := range keyFieldsStoredInMetadata {
+			if d.HasChange(field) {
+				delete(metadata, field)
+			}
+		}
+		if err := writeLoggingCallbackMetadata(d, metadata); err != nil {
+			return nil, err
+		}
+	}
+	return metadata, nil
 }
 
 func declaredKeyMetadata(server, declared map[string]interface{}) map[string]interface{} {
@@ -498,6 +526,10 @@ func serverKeyMetadata(server map[string]interface{}) map[string]string {
 	result := make(map[string]string, len(server))
 	for k, v := range server {
 		if slices.Contains(keyFieldsStoredInMetadata, k) {
+			continue
+		}
+		v, ok := callbackMetadataForState(k, v)
+		if !ok {
 			continue
 		}
 		if s, ok := v.(string); ok {

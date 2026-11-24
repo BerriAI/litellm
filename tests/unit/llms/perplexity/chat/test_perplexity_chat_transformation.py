@@ -6,13 +6,16 @@ from Perplexity API responses.
 """
 
 import datetime
-from unittest.mock import Mock
+import json
+from typing import Final
 
 import httpx
 import pytest
+import respx
+
+import litellm
 
 # Add the project root to Python path
-
 from litellm import ModelResponse
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.perplexity.chat.transformation import PerplexityChatConfig
@@ -917,3 +920,131 @@ def test_transform_response_keeps_body_values_of_every_json_type_as_the_provider
     assert response.search_results == search_results
     assert [type(result) for result in response.search_results] == [dict, str, int]
     assert repr(response.usage.citation_tokens) == "18"
+
+
+_GET_TIME_TOOL: Final = {
+    "type": "function",
+    "function": {
+        "name": "get_time",
+        "description": "Get the current time in a city",
+        "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+    },
+}
+_AGENT_FUNCTION_CALL_RESPONSE: Final[dict[str, object]] = {
+    "id": "resp_tool_call",
+    "object": "response",
+    "created_at": 1700000000,
+    "status": "completed",
+    "model": "anthropic/claude-sonnet-5-5",
+    "output": [
+        {
+            "type": "function_call",
+            "id": "fc_1",
+            "call_id": "toolu_1",
+            "name": "get_time",
+            "arguments": '{"city": "Vienna"}',
+            "status": "completed",
+        }
+    ],
+    "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+}
+
+
+@pytest.mark.asyncio
+async def test_chat_tools_reach_a_function_calling_agent_model_and_its_tool_call_comes_back(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "drop_params", False)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    upstream: Final = respx_mock.post("https://api.perplexity.ai/v1/responses").mock(
+        return_value=httpx.Response(200, json=_AGENT_FUNCTION_CALL_RESPONSE)
+    )
+
+    response: Final = await litellm.acompletion(
+        model="perplexity/anthropic/claude-sonnet-5-5",
+        api_key="fake-api-key",
+        messages=[{"role": "user", "content": "What time is it in Vienna?"}],
+        tools=[_GET_TIME_TOOL],
+        tool_choice={"type": "function", "function": {"name": "get_time"}},
+        parallel_tool_calls=False,
+    )
+
+    sent: Final = json.loads(upstream.calls.last.request.content)
+    assert [tool["name"] for tool in sent["tools"]] == ["get_time"]
+    assert sent["tools"][0]["parameters"] == _GET_TIME_TOOL["function"]["parameters"]
+    assert sent["tool_choice"] == {"type": "function", "name": "get_time"}
+    assert sent["parallel_tool_calls"] is False
+    tool_calls: Final = response.choices[0].message.tool_calls
+    assert [(call.id, call.function.name, call.function.arguments) for call in tool_calls] == [
+        ("toolu_1", "get_time", '{"city": "Vienna"}')
+    ]
+    assert response.choices[0].finish_reason == "tool_calls"
+
+
+@pytest.mark.parametrize("model", ["perplexity/sonar", "perplexity/sonar-pro"])
+def test_chat_tools_stay_unsupported_for_models_the_cost_map_does_not_mark_as_function_calling(
+    model: str, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    upstream: Final = respx_mock.post("https://api.perplexity.ai/chat/completions")
+    assert litellm.supports_function_calling(model) is False
+
+    with pytest.raises(litellm.UnsupportedParamsError):
+        litellm.completion(
+            model=model,
+            api_key="fake-api-key",
+            messages=[{"role": "user", "content": "What time is it in Vienna?"}],
+            tools=[_GET_TIME_TOOL],
+        )
+
+    assert upstream.call_count == 0
+
+
+def _register_agent_model(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, model: str, flags: dict[str, bool]
+) -> respx.Route:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {"litellm_provider": "perplexity", "mode": "responses", "input_cost_per_token": 0.0, **flags},
+    )
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    return respx_mock.post("https://api.perplexity.ai/v1/responses").mock(
+        return_value=httpx.Response(200, json=_AGENT_FUNCTION_CALL_RESPONSE)
+    )
+
+
+def test_chat_tools_reach_an_agent_model_whose_cost_map_row_leaves_function_calling_unset(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    model: Final = "perplexity/example/agent-model-unflagged"
+    upstream: Final = _register_agent_model(monkeypatch, respx_mock, model, {})
+
+    litellm.completion(
+        model=model,
+        api_key="fake-api-key",
+        messages=[{"role": "user", "content": "What time is it in Vienna?"}],
+        tools=[_GET_TIME_TOOL],
+    )
+
+    assert [tool["name"] for tool in json.loads(upstream.calls.last.request.content)["tools"]] == ["get_time"]
+
+
+def test_chat_tools_stay_rejected_for_an_agent_model_the_cost_map_marks_as_not_function_calling(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    model: Final = "perplexity/example/agent-model-disabled"
+    upstream: Final = _register_agent_model(monkeypatch, respx_mock, model, {"supports_function_calling": False})
+
+    with pytest.raises(litellm.UnsupportedParamsError):
+        litellm.completion(
+            model=model,
+            api_key="fake-api-key",
+            messages=[{"role": "user", "content": "What time is it in Vienna?"}],
+            tools=[_GET_TIME_TOOL],
+        )
+
+    assert upstream.call_count == 0

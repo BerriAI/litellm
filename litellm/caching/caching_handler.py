@@ -44,6 +44,7 @@ from litellm.types.integrations.custom_logger import converted_stream_requested
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import ChatCompletionFileObject, ResponsesAPIResponse
 from litellm.types.rerank import RerankResponse
+from litellm.types.semantic_cache import semantic_cache_policy
 from litellm.types.utils import (
     CachingDetails,
     CallTypes,
@@ -62,7 +63,7 @@ if TYPE_CHECKING:
     from litellm.llms.anthropic.messages.native.response_cache import (
         AnthropicMessagesStreamCacheWriter,
     )
-    from litellm.types.utils import PromptTokensDetailsWrapper
+    from litellm.types.utils import ModelResponseStream, PromptTokensDetailsWrapper
 else:
     LiteLLMLoggingObj = Any
 
@@ -142,7 +143,7 @@ def _is_response_cache_excluded(model: str | None, kwargs: Mapping[str, object])
     )
 
 
-def _is_chat_completion_cached_dict(cached_result: dict) -> bool:
+def _is_chat_completion_cached_dict(cached_result: Mapping[str, object]) -> bool:
     obj: Final = cached_result.get("object")
     if obj == "response":
         return False
@@ -767,7 +768,7 @@ class LLMCachingHandler:
 
         """
         embedding_all_elements_cache_hit: bool = False
-        remaining_list: Final = []
+        remaining_list: Final[list[EmbeddingCacheInputElement]] = []
         non_null_list: Final = []
         kwargs_input_as_list: Final = self.handle_kwargs_input_list_or_str(kwargs)
         for idx, cr in enumerate(cached_result):
@@ -896,7 +897,7 @@ class LLMCachingHandler:
         dict1: Final = _prompt_tokens_details_as_mapping(details1)
         dict2: Final = _prompt_tokens_details_as_mapping(details2)
 
-        merged: Final[dict] = {}
+        merged: Final[dict[str, object]] = {}
         for key in set(dict1.keys()) | set(dict2.keys()):
             v1 = dict1.get(key, 0)
             v2 = dict2.get(key, 0)
@@ -904,7 +905,7 @@ class LLMCachingHandler:
                 merged[key] = v1 + v2
             elif isinstance(v1, dict) and isinstance(v2, dict):
                 # Recursively merge nested dicts (e.g. cache_creation_token_details)
-                nested: dict = {}
+                nested: dict[object, object] = {}
                 for nk in set(v1.keys()) | set(v2.keys()):
                     nv1 = v1.get(nk, 0)
                     nv2 = v2.get(nk, 0)
@@ -1076,6 +1077,11 @@ class LLMCachingHandler:
             new_kwargs["cache_key"] = litellm.cache.get_cache_key(**new_kwargs)
         cached_result: object | None = None
         if call_type == CallTypes.aembedding.value:
+            scoped_controls: Final = (
+                {"cache": new_kwargs["cache"]}
+                if not litellm.cache.is_semantic_cache() and semantic_cache_policy(new_kwargs) is not None
+                else {}
+            )
             new_kwargs["input"] = self.handle_kwargs_input_list_or_str(new_kwargs)
             tasks: Final[list[Awaitable[object]]] = []
             for idx, i in enumerate(new_kwargs["input"]):
@@ -1084,6 +1090,7 @@ class LLMCachingHandler:
                     litellm.cache.async_get_cache(
                         cache_key=preset_cache_key,
                         dynamic_cache_object=self.dual_cache,
+                        **scoped_controls,
                     )
                 )
             with response_cache_phase("get"):
@@ -1295,7 +1302,7 @@ class LLMCachingHandler:
             convert_to_streaming_response_async,
         )
 
-        _stream_cached_result: AsyncGenerator | Generator
+        _stream_cached_result: AsyncGenerator[ModelResponseStream, None] | Generator[ModelResponseStream, None, None]
         if call_type == CallTypes.acompletion.value or call_type == CallTypes.atext_completion.value:
             _stream_cached_result = convert_to_streaming_response_async(
                 response_object=cached_result,
@@ -1315,7 +1322,7 @@ class LLMCachingHandler:
     async def async_set_cache(
         self,
         result: object,
-        original_function: Callable,
+        original_function: Callable[..., object],
         kwargs: Mapping[str, object],
         args: tuple[object, ...] | None = None,
     ):
@@ -1604,6 +1611,9 @@ class LLMCachingHandler:
             stream=request_kwargs.get("stream", False),
             custom_llm_provider=custom_llm_provider,
         )
+        from litellm.utils import call_headers
+
+        logging_obj.record_call_credential(request_kwargs.get("api_key"), call_headers(request_kwargs))
 
         logging_obj.caching_details = CachingDetails(
             cache_hit=True,
@@ -1612,7 +1622,7 @@ class LLMCachingHandler:
 
 
 def convert_args_to_kwargs(
-    original_function: Callable,
+    original_function: Callable[..., object],
     args: tuple[object, ...] | None = None,
 ) -> dict[str, object]:
     # Get the signature of the original function
@@ -1622,7 +1632,7 @@ def convert_args_to_kwargs(
     param_names: Final = list(signature.parameters.keys())
 
     # Create a mapping of positional arguments to parameter names
-    args_to_kwargs: Final = {}
+    args_to_kwargs: Final[dict[str, object]] = {}
     if args:
         for index, arg in enumerate(args):
             if index < len(param_names):

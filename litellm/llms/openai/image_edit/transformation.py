@@ -82,7 +82,7 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
         image_edit_optional_params: ImageEditOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         """No mapping applied since inputs are in OpenAI spec already"""
         return dict(image_edit_optional_params)
 
@@ -114,8 +114,8 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
         image: FileTypes | Sequence[FileTypes | None] | None,
         image_edit_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[dict, RequestFiles]:
+        headers: dict[str, str],
+    ) -> tuple[dict[str, object], RequestFiles]:
         """
         Transform image edit request to OpenAI API format.
 
@@ -189,7 +189,7 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
         headers: dict,
         model: str,
         api_key: str | None = None,
-        litellm_params: dict | None = None,
+        litellm_params: dict[str, object] | None = None,
         api_base: str | None = None,
     ) -> dict:
         bearer_token: Final = resolve_openai_bearer_token(
@@ -202,7 +202,7 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
         self,
         model: str,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
     ) -> str:
         """
         Get the endpoint for OpenAI responses API

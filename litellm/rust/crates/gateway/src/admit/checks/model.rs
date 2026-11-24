@@ -25,8 +25,9 @@ const MESSAGES_PROVIDERS: [LlmProviders; 2] = [LlmProviders::Anthropic, LlmProvi
 const HONORED_EXTRA_PARAMS: [&str; 1] = ["weight"];
 
 /// The `model_info` keys the router reads as Python's does. `access_groups` only decides which
-/// models a caller other than the master key may call.
-const HONORED_MODEL_INFO: [&str; 2] = ["id", "access_groups"];
+/// models a caller other than the master key may call, and `max_input_tokens` is the context
+/// window the pre-call checks hold a prompt to.
+const HONORED_MODEL_INFO: [&str; 3] = ["id", "access_groups", "max_input_tokens"];
 
 pub(super) fn model(admit: &Admit, fields: &Map<String, Value>) -> Option<Reason> {
     let model = fields.get("model").and_then(Value::as_str)?;
@@ -53,13 +54,7 @@ pub(super) fn model(admit: &Admit, fields: &Map<String, Value>) -> Option<Reason
 fn unserved(admit: &Admit, reached: &Reached) -> Option<Box<str>> {
     let group = reached.group.as_str();
     super::router::group(&admit.config.router_settings, group)
-        .or_else(|| {
-            reached
-                .steps
-                .iter()
-                .find(|step| !crate::host::answers(step))
-                .map(|step| format!("router_settings.{}", step.setting()).into())
-        })
+        .or_else(|| admit.host.unanswered(reached))
         .or_else(|| {
             admit
                 .config
@@ -136,6 +131,9 @@ fn params(params: &LitellmParams) -> Vec<Box<str>> {
         custom_llm_provider: _,
         tpm: _,
         rpm: _,
+        tpd: _,
+        rpd: _,
+        daily_reset_time: _,
         drop_params: _,
         aws_bedrock_project_id: _,
         claude_platform: _,
@@ -336,11 +334,6 @@ mod tests {
         "  routing_strategy: least-busy\n",
         "other",
         "router_settings.routing_strategy"
-    )]
-    #[case::pre_call_checks(
-        "  enable_pre_call_checks: true\n",
-        "other",
-        "router_settings.enable_pre_call_checks"
     )]
     #[case::health_check_routing(
         "  enable_health_check_routing: true\n",

@@ -269,6 +269,72 @@ async def test_shutdown_commits_spend_a_logging_task_queued_while_the_first_comm
 
 
 @pytest.mark.asyncio
+async def test_shutdown_commits_spend_an_agents_row_logs_while_waiting_rows_drain():
+    queued: Final[list[str]] = []
+    committed: Final[list[str]] = []
+
+    async def commit_spend() -> None:
+        committed.extend(queued)
+        queued.clear()
+
+    waiting: Final = ["agents turn spend"]
+
+    async def drain_deferred_rows(timeout: float) -> None:
+        await asyncio.sleep(0.01)
+        queued.extend(waiting)
+        waiting.clear()
+
+    await litellm.proxy.proxy_server._flush_spend_around_logging_drain_on_shutdown(
+        flush_spend=commit_spend, drain_deferred_rows=drain_deferred_rows
+    )
+
+    assert committed == ["agents turn spend"]
+
+
+@pytest.mark.asyncio
+async def test_shutdown_commits_an_agents_row_still_logging_when_the_callback_budget_runs_out(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.litellm_core_utils.logging_worker import LoggingWorker
+    from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
+
+    monkeypatch.setenv("GRACEFUL_SHUTDOWN_TIMEOUT", "10.05")
+    worker: Final = LoggingWorker()
+    queued: Final[list[str]] = []
+    committed: Final[list[str]] = []
+    GracefulShutdownManager.start_shutdown(clock=lambda: 100.0)
+
+    async def commit_spend() -> None:
+        committed.extend(queued)
+        queued.clear()
+
+    async def log_row() -> None:
+        await asyncio.sleep(0.2)
+        queued.append("agents turn spend")
+
+    row: Final = asyncio.create_task(log_row())
+
+    async def drain_deferred_rows(timeout: float) -> None:
+        _ = await asyncio.wait((row,), timeout=timeout)
+
+    async def drain_tasks(timeout: float) -> None:
+        return None
+
+    try:
+        await litellm.proxy.proxy_server._flush_spend_around_logging_drain_on_shutdown(  # pyright: ignore[reportPrivateUsage]  # the shutdown sequence under test
+            commit_spend,
+            worker=worker,
+            clock=lambda: 100.0,
+            drain_tasks=drain_tasks,
+            drain_deferred_rows=drain_deferred_rows,
+        )
+        assert committed == ["agents turn spend"]
+    finally:
+        GracefulShutdownManager.reset()
+        await worker.stop()
+
+
+@pytest.mark.asyncio
 async def test_shutdown_flushes_rust_callbacks_after_the_logging_drain_next_to_the_last_spend_flush() -> None:
     from litellm.responses.streaming_iterator import spawn_logging_task
 
