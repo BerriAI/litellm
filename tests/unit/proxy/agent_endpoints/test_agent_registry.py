@@ -1710,6 +1710,35 @@ async def test_editing_a_token_exchange_block_keeps_the_stored_secret_unless_a_n
     assert stored_params["token_exchange"] == {**edited, "client_secret": stored_secret}
 
 
+_NEW_IDP: Final = "https://other-idp.example.com/token"
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "sent_secret", "expected_secret"),
+    [
+        (_NEW_IDP, {}, None),
+        (_NEW_IDP, {"client_secret": REDACTED_BY_LITELM_STRING}, None),
+        (_OBO_BLOCK["token_exchange_endpoint"], {}, _OBO_SECRET),
+        (_NEW_IDP, {"client_secret": "new-idp-secret"}, "new-idp-secret"),
+    ],
+)
+def test_the_stored_token_exchange_secret_is_only_carried_to_the_same_endpoint(
+    endpoint: str, sent_secret: Mapping[str, str], expected_secret: str | None
+) -> None:
+    edited: Final = {
+        **{key: value for key, value in _OBO_BLOCK.items() if key != "client_secret"},
+        "token_exchange_endpoint": endpoint,
+        **sent_secret,
+    }
+
+    restored: Final = _LITELLM_PARAMS.validate_python(
+        _restore_redacted_litellm_params({"token_exchange": edited}, {"token_exchange": _OBO_BLOCK})["token_exchange"]
+    )
+
+    assert restored.get("client_secret") == expected_secret
+    assert restored["token_exchange_endpoint"] == endpoint
+
+
 @pytest.mark.parametrize(
     "stored",
     [

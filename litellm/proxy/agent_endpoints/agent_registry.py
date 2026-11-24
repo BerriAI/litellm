@@ -212,6 +212,10 @@ _EMPTY_LITELLM_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
 _NO_PLAIN_FIELDS: Final[frozenset[str]] = frozenset()
 
 
+_TOKEN_EXCHANGE_ENDPOINT: Final = "token_exchange_endpoint"
+_TOKEN_EXCHANGE_SECRET: Final = "client_secret"
+
+
 def _is_token_exchange_block(key: str, value: object) -> bool:
     return key == TOKEN_EXCHANGE_PARAM and isinstance(value, Mapping)
 
@@ -220,6 +224,16 @@ def _is_secret_agent_param(key: str, value: object, plain_fields: frozenset[str]
     if _is_token_exchange_block(key, value) or key in plain_fields:
         return False
     return _AGENT_PARAMS_MASKER.is_sensitive_key(key)
+
+
+def _restorable_existing_value(key: str, incoming_value: object, existing_value: object) -> object:
+    if not (_is_token_exchange_block(key, incoming_value) and _is_token_exchange_block(key, existing_value)):
+        return existing_value
+    incoming_block: Final = _AGENT_PARAMS_ADAPTER.validate_python(incoming_value)
+    existing_block: Final = _AGENT_PARAMS_ADAPTER.validate_python(existing_value)
+    if incoming_block.get(_TOKEN_EXCHANGE_ENDPOINT) == existing_block.get(_TOKEN_EXCHANGE_ENDPOINT):
+        return existing_value
+    return {name: value for name, value in existing_block.items() if name != _TOKEN_EXCHANGE_SECRET}
 
 
 def _child_plain_fields(key: str, value: object) -> frozenset[str]:
@@ -393,7 +407,9 @@ def _resolved_agent_param_value(
         value: Final = incoming[key]
         if _is_secret_agent_param(key, value, plain_fields):
             return existing.get(key, _MISSING_AGENT_PARAM) if value == REDACTED_BY_LITELM_STRING else value
-        return _restore_redacted_nested_value(value, existing.get(key), _depth, _child_plain_fields(key, value))
+        return _restore_redacted_nested_value(
+            value, _restorable_existing_value(key, value, existing.get(key)), _depth, _child_plain_fields(key, value)
+        )
     if _is_secret_agent_param(key, existing.get(key), plain_fields) or _is_token_exchange_block(key, existing.get(key)):
         return existing.get(key, _MISSING_AGENT_PARAM)
     return _MISSING_AGENT_PARAM
