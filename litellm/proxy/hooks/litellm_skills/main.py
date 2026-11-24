@@ -36,7 +36,15 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.core_helpers import has_attributes, iter_items, length_of, require_attributes
+from litellm.litellm_core_utils.core_helpers import (
+    as_object_list,
+    has_attributes,
+    iter_items,
+    length_of,
+    require_attributes,
+    set_item,
+    sum_of,
+)
 from litellm.llms.litellm_proxy.skills.constants import LITELLM_SKILL_ID_PREFIX
 from litellm.llms.litellm_proxy.skills.prompt_injection import (
     SkillPromptInjectionHandler,
@@ -88,6 +96,14 @@ class _ChatCompletion(Protocol):
 class _HasContent(Protocol):
     @property
     def content(self) -> object: ...
+
+
+class _Appendable(Protocol):
+    def append(self, item: object, /) -> object: ...
+
+
+class _HasModelDump(Protocol):
+    def model_dump(self) -> object: ...
 
 
 class _HasStartsWith(Protocol):
@@ -187,9 +203,9 @@ class SkillsInjectionHook(CustomLogger):
         self,
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
-        data: dict,
+        data: dict[str, object],
         call_type: CallTypesLiteral,
-    ) -> Exception | str | dict | None:
+    ) -> Exception | str | dict[str, object] | None:
         """
         Process skills from container.skills before the LLM call.
 
@@ -203,12 +219,12 @@ class SkillsInjectionHook(CustomLogger):
         if call_type not in ["completion", "acompletion", "anthropic_messages"]:
             return data
 
-        container: Final = data.get("container")
-        if not container or not isinstance(container, dict):
+        container: Final = _dict_or_none(data.get("container"))
+        if not container:
             return data
 
-        skills: Final = container.get("skills")
-        if not skills or not isinstance(skills, list):
+        skills: Final = as_object_list(container.get("skills"))
+        if not skills:
             return data
 
         verbose_proxy_logger.debug("SkillsInjectionHook: Processing %s skills", len(skills))
@@ -251,10 +267,10 @@ class SkillsInjectionHook(CustomLogger):
 
     def _process_for_messages_api(
         self,
-        data: dict,
+        data: dict[str, object],
         litellm_skills: list[LiteLLM_SkillsTable],
         use_anthropic_format: bool = True,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Process skills for messages API (Anthropic format tools).
 
@@ -274,7 +290,9 @@ class SkillsInjectionHook(CustomLogger):
 
         for skill in litellm_skills:
             # Convert skill to Anthropic-style tool
-            tools.append(self.prompt_handler.convert_skill_to_anthropic_tool(skill))
+            require_attributes(tools, _Appendable, "append").append(
+                self.prompt_handler.convert_skill_to_anthropic_tool(skill)
+            )
 
             # Extract skill content from file if available
             content = self.prompt_handler.extract_skill_content(skill)
@@ -302,12 +320,12 @@ class SkillsInjectionHook(CustomLogger):
         # Add litellm_code_execution tool if we have skill files
         if all_skill_files:
             code_exec_tool: Final = get_litellm_code_execution_tool_anthropic()
-            data["tools"] = data.get("tools", []) + [code_exec_tool]
+            data["tools"] = sum_of(data.get("tools", []), [code_exec_tool])
 
             # Store skill files in litellm_metadata for automatic code execution
             data["litellm_metadata"] = data.get("litellm_metadata", {})
-            data["litellm_metadata"]["_skill_files"] = all_skill_files
-            data["litellm_metadata"]["_litellm_code_execution_enabled"] = True
+            set_item(data["litellm_metadata"], "_skill_files", all_skill_files)
+            set_item(data["litellm_metadata"], "_litellm_code_execution_enabled", True)
 
         # Remove container (not supported by underlying providers)
         data.pop("container", None)
@@ -323,9 +341,9 @@ class SkillsInjectionHook(CustomLogger):
 
     def _process_non_anthropic_model(
         self,
-        data: dict,
+        data: dict[str, object],
         litellm_skills: list[LiteLLM_SkillsTable],
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Process skills for non-Anthropic models (OpenAI format tools).
 
@@ -341,7 +359,7 @@ class SkillsInjectionHook(CustomLogger):
 
         for skill in litellm_skills:
             # Convert skill to OpenAI-style tool
-            tools.append(self.prompt_handler.convert_skill_to_tool(skill))
+            require_attributes(tools, _Appendable, "append").append(self.prompt_handler.convert_skill_to_tool(skill))
 
             # Extract skill content from file if available
             content = self.prompt_handler.extract_skill_content(skill)
@@ -370,13 +388,13 @@ class SkillsInjectionHook(CustomLogger):
                 get_litellm_code_execution_tool,
             )
 
-            data["tools"] = data.get("tools", []) + [get_litellm_code_execution_tool()]
+            data["tools"] = sum_of(data.get("tools", []), [get_litellm_code_execution_tool()])
 
             # Store skill files in litellm_metadata for automatic code execution
             # Using litellm_metadata instead of metadata to avoid conflicts with user metadata
             data["litellm_metadata"] = data.get("litellm_metadata", {})
-            data["litellm_metadata"]["_skill_files"] = all_skill_files
-            data["litellm_metadata"]["_litellm_code_execution_enabled"] = True
+            set_item(data["litellm_metadata"], "_skill_files", all_skill_files)
+            set_item(data["litellm_metadata"], "_litellm_code_execution_enabled", True)
 
         # Remove container for non-Anthropic (they don't support it)
         data.pop("container", None)
@@ -509,7 +527,7 @@ class SkillsInjectionHook(CustomLogger):
 
     def _extract_tool_calls(self, response: object) -> Sequence[Mapping[str, object]]:
         """Extract tool calls from response, handling both formats."""
-        tool_calls: Final = []
+        tool_calls: Final[list[Mapping[str, object]]] = []
 
         # Get content - handle both dict and object responses
         response_mapping: Final = _dict_or_none(response)
@@ -590,23 +608,25 @@ class SkillsInjectionHook(CustomLogger):
         for iteration in range(self.max_iterations):
             # Extract tool calls from current response
             tool_calls = self._extract_tool_calls(current_response)
+            response_mapping = _dict_or_none(current_response)
             stop_reason = (
-                current_response.get("stop_reason")
-                if isinstance(current_response, dict)
+                response_mapping.get("stop_reason")
+                if response_mapping is not None
                 else getattr(current_response, "stop_reason", None)
             )
 
             # Get content for assistant message - convert to plain dicts
             raw_content = (
-                current_response.get("content", [])
-                if isinstance(current_response, dict)
+                response_mapping.get("content", [])
+                if response_mapping is not None
                 else getattr(current_response, "content", [])
             )
-            content_blocks = []
-            for block in raw_content or []:
-                if isinstance(block, dict):
-                    content_blocks.append(block)
-                elif hasattr(block, "model_dump"):
+            content_blocks: list[object] = []
+            for block in iter_items(raw_content or []):
+                block_mapping = _dict_or_none(block)
+                if block_mapping is not None:
+                    content_blocks.append(block_mapping)
+                elif has_attributes(block, _HasModelDump, "model_dump"):
                     content_blocks.append(block.model_dump())
                 elif hasattr(block, "__dict__"):
                     content_blocks.append(dict(block.__dict__))
@@ -627,7 +647,7 @@ class SkillsInjectionHook(CustomLogger):
                 return self._attach_files_to_response(current_response, generated_files)
 
             # Process tool calls
-            tool_results = []
+            tool_results: list[dict[str, object]] = []
             for tc in tool_calls:
                 tool_name = tc.get("name", "")
                 tool_id = tc.get("id", "")

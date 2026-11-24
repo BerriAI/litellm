@@ -1,10 +1,11 @@
 import types
-from collections.abc import Mapping
-from typing import Final
+from collections.abc import Iterable, Mapping
+from typing import Final, Protocol
 
 from openai.types.image import Image
 from typing_extensions import TypedDict
 
+from litellm.litellm_core_utils.core_helpers import int_of, require_attributes
 from litellm.llms.bedrock.common_utils import get_cached_model_info
 from litellm.types.llms.bedrock import (
     AmazonNovaCanvasColorGuidedGenerationParams,
@@ -18,6 +19,10 @@ from litellm.types.llms.bedrock import (
     AmazonNovaCanvasTextToImageResponse,
 )
 from litellm.types.utils import ImageResponse
+
+
+class _HasSplit(Protocol):
+    def split(self, sep: str, /) -> Iterable[object]: ...
 
 
 class _NovaCanvasTaskFields(TypedDict, total=False, extra_items=object):
@@ -166,16 +171,18 @@ class AmazonNovaCanvasConfig:
         raise NotImplementedError(f"Task type {task_type} is not supported")
 
     @classmethod
-    def map_openai_params(cls, non_default_params: dict, optional_params: dict[str, object]) -> dict[str, object]:
+    def map_openai_params(
+        cls, non_default_params: Mapping[str, object], optional_params: dict[str, object]
+    ) -> dict[str, object]:
         """
         Map the OpenAI params to the Bedrock params
         """
         _size: Final = non_default_params.get("size")
         if _size is not None:
-            width, height = _size.split("x")
+            width, height = require_attributes(_size, _HasSplit, "split").split("x")
             optional_params["width"], optional_params["height"] = (
-                int(width),
-                int(height),
+                int_of(width),
+                int_of(height),
             )
         if non_default_params.get("n") is not None:
             optional_params["numberOfImages"] = non_default_params.get("n")

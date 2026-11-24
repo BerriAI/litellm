@@ -22,7 +22,7 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm._internal_context import is_internal_call
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.core_helpers import require_attributes
+from litellm.litellm_core_utils.core_helpers import iter_items, joined, require_attributes, sum_of
 from litellm.types.llms.openai import ResponseOutputItem, ResponsesAPIResponse
 from litellm.types.vector_stores import VectorStoreSearchResult
 
@@ -35,6 +35,17 @@ ToolParam: TypeAlias = object
 FILE_SEARCH_FUNCTION_NAME: Final = "litellm_file_search"
 
 _DECODED_JSON: Final = TypeAdapter(object)
+
+
+def _as_dict(value: object) -> Mapping[str, object] | None:
+    """The value itself when it is a dict, otherwise None."""
+    return value if isinstance(value, dict) else None
+
+
+def _is_file_search_tool(tool: object) -> bool:
+    """Whether a tool is a dict declaring the file_search type."""
+    tool_dict: Final = _as_dict(tool)
+    return tool_dict is not None and tool_dict.get("type") == "file_search"
 
 
 class FileSearchToolCallArgs(TypedDict):
@@ -55,7 +66,7 @@ def should_use_emulated_file_search(
     """Return True when there is a file_search tool and the provider can't handle it natively."""
     if not tools:
         return False
-    has_fs: Final = any(isinstance(t, dict) and t.get("type") == "file_search" for t in tools)
+    has_fs: Final = any(_is_file_search_tool(t) for t in tools)
     if not has_fs:
         return False
     return provider_config is None or not provider_config.supports_native_file_search()
@@ -189,16 +200,17 @@ async def _run_vector_searches(
 
 def _get_field(result: object, key: str, default: object = None) -> object:
     """Read a field from either a dict/TypedDict or an attribute-based object."""
-    if isinstance(result, dict):
-        return result.get(key, default)
+    result_dict: Final = _as_dict(result)
+    if result_dict is not None:
+        return result_dict.get(key, default)
     return getattr(result, key, default)
 
 
 def _joined_content_text(result: object) -> str:
     """Concatenate the text of every content chunk on a search result."""
     content_items: Final = cast(Iterable[object], _get_field(result, "content") or [])  # cast-ok: iterated as today
-    text_chunks: Final = [c.get("text", "") if isinstance(c, dict) else getattr(c, "text", "") for c in content_items]
-    return " ".join(t for t in text_chunks if t)
+    text_chunks: Final = [_get_field(c, "text", "") for c in content_items]
+    return joined(" ", (t for t in text_chunks if t))
 
 
 def _format_search_results_as_tool_output(
@@ -335,13 +347,15 @@ def _build_message_output(
 def _extract_text_from_responses_output(response: ResponsesAPIResponse) -> str:
     """Pull the assistant's text from the provider's response."""
     for item in response.output:
-        item_type = item.get("type") if isinstance(item, dict) else getattr(item, "type", None)
+        item_dict = _as_dict(item)
+        item_type = item_dict.get("type") if item_dict is not None else getattr(item, "type", None)
         if item_type == "message":
-            content = item.get("content") if isinstance(item, dict) else getattr(item, "content", [])
-            for block in content or []:
-                block_type = block.get("type") if isinstance(block, dict) else getattr(block, "type", None)
+            content = item_dict.get("content") if item_dict is not None else getattr(item, "content", [])
+            for block in iter_items(content or []):
+                block_dict = _as_dict(block)
+                block_type = block_dict.get("type") if block_dict is not None else getattr(block, "type", None)
                 if block_type == "output_text":
-                    raw = block.get("text") if isinstance(block, dict) else getattr(block, "text", "")
+                    raw = block_dict.get("text") if block_dict is not None else getattr(block, "text", "")
                     return str(raw) if raw is not None else ""
     return ""
 
@@ -376,14 +390,10 @@ def _synthesize_responses_api_response(
         hidden: Final = dict(getattr(original_response, "_hidden_params") or {})
         if first_response is not None and hasattr(first_response, "_hidden_params"):
             first_hidden: Final[object] = getattr(first_response, "_hidden_params") or {}
-            first_cost: Final = (
-                first_hidden.get("response_cost")
-                if isinstance(first_hidden, dict)
-                else getattr(first_hidden, "response_cost", None)
-            )
+            first_cost: Final = _get_field(first_hidden, "response_cost")
             if first_cost is not None:
                 current_cost: Final = hidden.get("response_cost") if isinstance(hidden, dict) else 0
-                hidden["response_cost"] = (current_cost or 0) + first_cost
+                hidden["response_cost"] = sum_of(current_cost or 0, first_cost)
         synthesized.hidden_params = hidden
     return synthesized
 
