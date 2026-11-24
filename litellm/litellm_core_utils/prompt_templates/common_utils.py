@@ -402,6 +402,14 @@ def _content_of(message: Mapping[str, object]) -> object:
     return message.get("content")
 
 
+def _field_of(message: Mapping[str, object], key: str) -> object:
+    return message.get(key)
+
+
+def _object_dict(value: object) -> Mapping[object, object] | None:
+    return value if isinstance(value, dict) else None
+
+
 def _message_with_text_only_content_as_str(message: AllMessageValues) -> AllMessageValues:
     text: Final = _text_only_content(_content_of(message))
     if text is None:
@@ -422,7 +430,7 @@ def strip_name_from_message(message: AllMessageValues, allowed_name_roles: list[
     Removes 'name' from message
     """
     msg_copy: Final = message.copy()
-    if msg_copy.get("role") not in allowed_name_roles:
+    if _field_of(msg_copy, "role") not in allowed_name_roles:
         msg_copy.pop("name", None)
     return msg_copy
 
@@ -435,7 +443,7 @@ def strip_name_from_messages(
     """
     new_messages: Final[list[AllMessageValues]] = []
     for message in messages:
-        msg_role = message.get("role")
+        msg_role = _field_of(message, "role")
         msg_copy = message.copy()
         if msg_role not in allowed_name_roles:
             msg_copy.pop("name", None)
@@ -460,20 +468,21 @@ def extract_search_results_text(search_results: object) -> str:
     Counts every string field forwarded on Bedrock ``SearchResultBlock``:
     ``source``, ``title``, ``content[].text``, and ``citations``.
     """
-    if not isinstance(search_results, list):
+    results: Final = as_object_list(search_results)
+    if results is None:
         return ""
     texts = ""
-    for result in search_results:
-        if not isinstance(result, dict):
+    for result in map(_object_dict, results):
+        if result is None:
             continue
         for key in ("source", "title"):
             value = result.get(key)
             if isinstance(value, str):
                 texts += value
-        content = result.get("content")
-        if isinstance(content, list):
-            for block in content:
-                if isinstance(block, dict):
+        content = as_object_list(result.get("content"))
+        if content is not None:
+            for block in map(_object_dict, content):
+                if block is not None:
                     text = block.get("text")
                     if isinstance(text, str):
                         texts += text
@@ -532,9 +541,10 @@ def get_semantic_cache_prompt_from_messages(messages: Sequence[Mapping[str, obje
 def _semantic_cache_content_text(content: object) -> str:
     if isinstance(content, str):
         return content
-    if not isinstance(content, list):
+    blocks: Final = as_object_list(content)
+    if blocks is None:
         return ""
-    return "".join(_semantic_cache_block_text(block) for block in content if isinstance(block, Mapping))
+    return "".join(_semantic_cache_block_text(block) for block in map(as_str_mapping, blocks) if block is not None)
 
 
 def _semantic_cache_block_text(block: Mapping[str, object]) -> str:
@@ -546,7 +556,7 @@ def _semantic_cache_block_text(block: Mapping[str, object]) -> str:
 
 def is_non_content_values_set(message: AllMessageValues) -> bool:
     ignore_keys: Final = ["content", "role", "name"]
-    return any(message.get(key, None) is not None for key in message if key not in ignore_keys)
+    return any(_field_of(message, key) is not None for key in message if key not in ignore_keys)
 
 
 _IMAGE_CONTENT_PART_TYPES: Final = ("image_url", "input_image", "image", "computer_screenshot")
@@ -558,14 +568,14 @@ def _content_parts_contain_image(parts: Sequence[object]) -> bool:
     recursion; an Anthropic tool_result nests its image parts exactly one level down."""
     frontier = parts  # rebind-ok: depth-bounded frontier walk
     for _ in range(_IMAGE_SCAN_MAX_DEPTH):
-        if any(isinstance(part, Mapping) and part.get("type") in _IMAGE_CONTENT_PART_TYPES for part in frontier):
+        mappings = tuple(part for part in map(as_str_mapping, frontier) if part is not None)
+        if any(part.get("type") in _IMAGE_CONTENT_PART_TYPES for part in mappings):
             return True
         frontier = tuple(
             nested
-            for part in frontier
-            if isinstance(part, Mapping)
-            for content in (part.get("content"),)
-            if isinstance(content, list)
+            for part in mappings
+            for content in (as_object_list(part.get("content")),)
+            if content is not None
             for nested in content
         )
         if not frontier:
@@ -989,15 +999,15 @@ def _estimate_json_bytes(obj: object) -> int:
     stack: Final[list[object]] = [obj]
     while stack:
         x = stack.pop()
-        if isinstance(x, dict):
+        if (x_dict := _object_dict(x)) is not None:
             total += 2  # `{}`
-            for k, v in x.items():
+            for k, v in x_dict.items():
                 total += len(str(k)) + 4  # `"k":,`
                 stack.append(v)
-        elif isinstance(x, list):
+        elif (x_list := as_object_list(x)) is not None:
             total += 2  # `[]`
-            total += max(0, len(x) - 1)  # commas between items
-            stack.extend(x)
+            total += max(0, len(x_list) - 1)  # commas between items
+            stack.extend(x_list)
         elif isinstance(x, str):
             total += len(x) + 2
         elif isinstance(x, bool):  # bool subclasses int -- check first
@@ -1674,21 +1684,22 @@ _ToolMediaPart: TypeAlias = ChatCompletionImageObject | ChatCompletionFileObject
 
 
 def _is_tool_media_part(part: object) -> bool:
-    return isinstance(part, dict) and part.get("type") in ("image_url", "file", "input_audio")
+    part_dict: Final = _object_dict(part)
+    return part_dict is not None and part_dict.get("type") in ("image_url", "file", "input_audio")
 
 
 def _tool_message_carries_media(message: AllMessageValues) -> bool:
     if message.get("role") != "tool":
         return False
-    content: Final = message.get("content")
-    return isinstance(content, list) and any(_is_tool_media_part(part) for part in content)
+    content: Final = as_object_list(_content_of(message))
+    return content is not None and any(_is_tool_media_part(part) for part in content)
 
 
 def _split_media_from_tool_message(
     message: AllMessageValues,
 ) -> tuple[AllMessageValues, tuple[_ToolMediaPart, ...]]:
-    content: Final = message.get("content")
-    if not isinstance(content, list):
+    content: Final = as_object_list(_content_of(message))
+    if content is None:
         return message, ()
     media_parts: Final = tuple(
         cast(_ToolMediaPart, part)  # cast-ok: canonical media discriminator checked by _is_tool_media_part
@@ -1751,14 +1762,15 @@ def hoist_images_from_tool_messages(
 
 
 def _is_tool_reference_part(part: object) -> bool:
-    return isinstance(part, dict) and part.get("type") == "tool_reference"
+    part_dict: Final = _object_dict(part)
+    return part_dict is not None and part_dict.get("type") == "tool_reference"
 
 
 def _tool_message_carries_tool_reference(message: AllMessageValues) -> bool:
     if message.get("role") != "tool":
         return False
-    content = message.get("content")
-    return isinstance(content, list) and any(_is_tool_reference_part(part) for part in content)
+    content = as_object_list(_content_of(message))
+    return content is not None and any(_is_tool_reference_part(part) for part in content)
 
 
 def _drop_tool_reference_parts(message: AllMessageValues) -> AllMessageValues:
@@ -1813,7 +1825,7 @@ def _system_content_as_text_parts(content: object) -> tuple[object, ...]:
 def _merge_system_message_run(run: Sequence[AllMessageValues]) -> AllMessageValues:
     if len(run) == 1:
         return run[0]
-    contents: Final = tuple(content for content in (message.get("content") for message in run) if content is not None)
+    contents: Final = tuple(content for content in (_content_of(message) for message in run) if content is not None)
     if not contents:
         return run[0]
     if all(isinstance(content, str) for content in contents):

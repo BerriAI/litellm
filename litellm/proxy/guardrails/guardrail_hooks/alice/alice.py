@@ -346,6 +346,10 @@ def _request_keys_to_omit(inputs: GenericGuardrailAPIInputs) -> frozenset[str]:
     return _UNREAD_REQUEST_KEYS | (_CONVERSATION_REQUEST_KEYS if carries_conversation else frozenset[str]())
 
 
+def _dict_or_none(value: object) -> Mapping[object, object] | None:
+    return value if isinstance(value, dict) else None
+
+
 def _json_safe(
     value: object,
     depth: int = 0,
@@ -375,10 +379,11 @@ def _json_safe(
 
     nested: Final = seen | frozenset((id(value),))
 
-    if isinstance(value, dict):
+    value_dict: Final = _dict_or_none(value)
+    if value_dict is not None:
         return {
             key: _json_safe(item, depth + 1, nested, strip_keys)
-            for key, item in islice(value.items(), _MAX_ITEMS)
+            for key, item in islice(value_dict.items(), _MAX_ITEMS)
             if isinstance(key, str) and key not in strip_keys and key not in omit_keys
         }
 

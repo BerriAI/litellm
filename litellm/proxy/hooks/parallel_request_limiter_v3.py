@@ -55,7 +55,7 @@ from litellm.litellm_core_utils.add_retry_fallback_headers import (
     ensure_response_additional_headers,
     response_has_hidden_params,
 )
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
 from litellm.litellm_core_utils.model_latest_aliases import expand_model_latest_alias
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_str_from_messages,
@@ -1023,13 +1023,17 @@ def _extraction_input_text(data: Mapping[str, object]) -> str:
     return f"{state if isinstance(state, str) else ''}\n{json.dumps(data.get('fields'), default=str)}"
 
 
+def _dict_or_none(value: object) -> Mapping[object, object] | None:
+    return value if isinstance(value, dict) else None
+
+
 def _get_explicit_output_cap(data: object, call_type: str | None) -> int | None:
     if call_type in GOOGLE_GENAI_NATIVE_CALL_TYPES:
-        config: Final = google_genai_request_config(data)
+        config: Final = _dict_or_none(google_genai_request_config(data))
         google_cap_values: Final = tuple(
             parsed
             for field in ("maxOutputTokens", "max_output_tokens")
-            if isinstance(config, dict)
+            if config is not None
             for parsed in (_parse_output_cap_value(config.get(field)),)
             if parsed is not None
         )
@@ -1920,16 +1924,17 @@ def _estimate_audio_content_tokens(messages: object) -> int:
     Returns 0 when there are no ``input_audio`` blocks, which the caller
     uses to skip the (relatively expensive) strip pass.
     """
-    if not isinstance(messages, list):
+    message_list: Final = as_object_list(messages)
+    if message_list is None:
         return 0
     return sum(
         _estimate_audio_block_tokens(block)
-        for message in messages
-        if isinstance(message, dict)
-        for content in (message.get("content"),)
-        if isinstance(content, list)
-        for block in content
-        if isinstance(block, dict) and block.get("type") == "input_audio"
+        for message in map(_dict_or_none, message_list)
+        if message is not None
+        for content in (as_object_list(message.get("content")),)
+        if content is not None
+        for block in map(_dict_or_none, content)
+        if block is not None and block.get("type") == "input_audio"
     )
 
 
@@ -1942,21 +1947,25 @@ def _strip_audio_content_blocks(messages: object) -> object:
     message (text/images/tools) still gets counted accurately instead of
     the whole call falling back to the cheap char-count estimate.
     """
-    if not isinstance(messages, list):
+    message_list: Final = as_object_list(messages)
+    if message_list is None:
         return messages
     sanitized: Final[list[object]] = []  # mutable-ok: token_counter requires a list of message dicts
-    for message in messages:
-        if not isinstance(message, dict):
+    for message in message_list:
+        message_dict = _dict_or_none(message)
+        if message_dict is None:
             sanitized.append(message)
             continue
-        content = message.get("content")
-        if not isinstance(content, list):
+        content = as_object_list(message_dict.get("content"))
+        if content is None:
             sanitized.append(message)
             continue
         filtered_content = [
-            block for block in content if not (isinstance(block, dict) and block.get("type") == "input_audio")
+            block
+            for block, block_dict in zip(content, map(_dict_or_none, content))
+            if not (block_dict is not None and block_dict.get("type") == "input_audio")
         ]
-        sanitized.append({**message, "content": filtered_content})
+        sanitized.append({**message_dict, "content": filtered_content})
     return sanitized
 
 
@@ -1983,12 +1992,14 @@ def _responses_input_to_chat_messages(data: object) -> Sequence[object]:
 
 
 def _count_pretokenized_embedding_input(value: object) -> int | None:
-    if not isinstance(value, list):
+    tokens: Final = as_object_list(value)
+    if tokens is None:
         return None
-    if all(isinstance(token, int) for token in value):
-        return len(value)
-    if all(isinstance(token_ids, list) and all(isinstance(token, int) for token in token_ids) for token_ids in value):
-        return sum(len(token_ids) for token_ids in value)
+    if all(isinstance(token, int) for token in tokens):
+        return len(tokens)
+    nested: Final = tuple(map(as_object_list, tokens))
+    if all(token_ids is not None and all(isinstance(token, int) for token in token_ids) for token_ids in nested):
+        return sum(len(token_ids) for token_ids in nested if token_ids is not None)
     return None
 
 

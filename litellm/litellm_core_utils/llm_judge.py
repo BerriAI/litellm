@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import TYPE_CHECKING, Final, Literal
@@ -48,18 +48,30 @@ def parse_json_verdict(raw: str) -> dict[str, object]:  # mutable-ok: plain pars
         if start == -1 or end <= start:
             raise
         parsed = _DECODED_JSON.validate_python(json.loads(text[start : end + 1]))
-    if not isinstance(parsed, dict):
+    parsed_dict: Final = _dict_or_none(parsed)
+    if parsed_dict is None:
         raise ValueError("judge response is not a JSON object")
-    return {str(k): v for k, v in parsed.items()}
+    return {str(k): v for k, v in parsed_dict.items()}
+
+
+def _dict_or_none(value: object) -> Mapping[object, object] | None:
+    return value if isinstance(value, dict) else None
+
+
+def _list_or_none(value: object) -> Sequence[object] | None:
+    return value if isinstance(value, list) else None
 
 
 def extract_text_from_content(content: object) -> str:
     """Return plain text from a message content field (str or multimodal list)."""
     if isinstance(content, str):
         return content
-    if isinstance(content, list):
+    parts: Final = _list_or_none(content)
+    if parts is not None:
         return " ".join(
-            str(part.get("text", "")) for part in content if isinstance(part, dict) and part.get("type") == "text"
+            str(part.get("text", ""))
+            for part in map(_dict_or_none, parts)
+            if part is not None and part.get("type") == "text"
         )
     return ""
 

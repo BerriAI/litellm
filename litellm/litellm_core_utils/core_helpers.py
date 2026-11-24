@@ -694,8 +694,8 @@ def get_metadata_variable_name_from_kwargs(
 def max_retries_per_request_hit(kwargs: Mapping[str, object], num_retries_per_request: int | None) -> bool:
     if num_retries_per_request is None:
         return False
-    metadata: Final = kwargs.get(get_metadata_variable_name_from_kwargs(kwargs))
-    if not isinstance(metadata, Mapping):
+    metadata: Final = as_str_mapping(kwargs.get(get_metadata_variable_name_from_kwargs(kwargs)))
+    if metadata is None:
         return False
     retry_count: Final = metadata.get("request_retry_count")
     return type(retry_count) is int and 0 < retry_count and num_retries_per_request <= retry_count
@@ -721,10 +721,13 @@ def get_or_create_metadata_bucket(
 
 
 def proxy_stamped_used_client_oauth_token(metadata: object, litellm_params: Mapping[str, object] | None) -> object:
-    litellm_metadata: Final = litellm_params.get("litellm_metadata") if litellm_params is not None else None
-    if isinstance(litellm_metadata, Mapping) and "used_client_oauth_token" in litellm_metadata:
+    litellm_metadata: Final = (
+        as_str_mapping(litellm_params.get("litellm_metadata")) if litellm_params is not None else None
+    )
+    if litellm_metadata is not None and "used_client_oauth_token" in litellm_metadata:
         return litellm_metadata["used_client_oauth_token"]
-    return metadata.get("used_client_oauth_token") if isinstance(metadata, Mapping) else None
+    metadata_mapping: Final = as_str_mapping(metadata)
+    return metadata_mapping.get("used_client_oauth_token") if metadata_mapping is not None else None
 
 
 def _claude_subscription_headers(headers: Mapping[str, object] | None) -> Mapping[str, str]:
@@ -833,8 +836,9 @@ def get_litellm_metadata_from_kwargs(kwargs: dict):
 
 
 def _budget_reservation_on_auth_object(user_api_key_auth: object) -> object:
-    if isinstance(user_api_key_auth, Mapping):
-        return user_api_key_auth.get("budget_reservation")
+    auth_mapping: Final = as_str_mapping(user_api_key_auth)
+    if auth_mapping is not None:
+        return auth_mapping.get("budget_reservation")
     return getattr(user_api_key_auth, "budget_reservation", None)
 
 
@@ -848,8 +852,8 @@ def budget_reservation_from_metadata(metadata: Mapping[str, object]) -> dict[str
 
 def _stamp_budget_reservation_callback_bound(litellm_params: Mapping[str, object], callback_bound: bool) -> None:
     for metadata_variable_name in ("metadata", "litellm_metadata"):
-        metadata = litellm_params.get(metadata_variable_name)
-        if not isinstance(metadata, Mapping):
+        metadata = as_str_mapping(litellm_params.get(metadata_variable_name))
+        if metadata is None:
             continue
         budget_reservation = budget_reservation_from_metadata(metadata)
         if budget_reservation is not None:
@@ -1174,9 +1178,9 @@ def _filter_exceptions_from_params(data: object, max_depth: int) -> object:
                 # Skip values that cause errors during filtering
                 continue
         return result
-    elif isinstance(data, list):
+    elif (data_list := as_object_list(data)) is not None:
         result_list: Final[list[object]] = []
-        for item in data:
+        for item in data_list:
             # Skip exception and callable items
             if isinstance(item, Exception) or (callable(item) and not isinstance(item, type)):
                 continue
@@ -1236,8 +1240,8 @@ def redact_nested_match_and_regex_keys(payload: object, keys: Collection[str] = 
                     if key in node:
                         node[key] = "[REDACTED]"
                 stack.extend(node.values())
-            elif isinstance(node, list):
-                stack.extend(node)
+            elif (node_list := as_object_list(node)) is not None:
+                stack.extend(node_list)
     except Exception:
         return payload
     return redacted
