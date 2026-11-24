@@ -8024,6 +8024,8 @@ class Router:
         }
         try:
             return await run_async_fallback(*args, **failover_kwargs)
+        except UnresolvablePreviousResponseError:
+            raise
         except (openai.APIError, RouterRateLimitError, RouterRateLimitErrorBasic):
             # Expected model-level failure on the retried deployment. All
             # litellm provider errors derive from openai.APIError; if every
@@ -8286,6 +8288,8 @@ class Router:
                 )
 
                 return response
+        except UnresolvablePreviousResponseError:
+            raise
         except Exception as new_exception:
             parent_otel_span: Final = get_parent_otel_span_from_kwargs(kwargs)
             fallback_failure_exception_str = truncate_fallback_error_detail(redact_string(str(new_exception)))

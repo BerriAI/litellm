@@ -557,6 +557,92 @@ async def test_a_refused_follow_up_is_neither_retried_nor_sent_to_a_fallback(fal
     assert not getattr(refused.value, "num_retries", None)
 
 
+@pytest.mark.asyncio
+async def test_a_follow_up_refused_on_a_fallback_reaches_the_caller_as_the_400():
+    native_params: Final = {
+        "model": "openai/gpt-5.4-mini",
+        "api_key": "fake-api-key",
+        "mock_response": "answered by the next fallback without the history",
+    }
+    router: Final = litellm.Router(
+        model_list=[
+            {"model_name": "native", "litellm_params": native_params, "model_info": {"id": "n1"}},
+            {
+                "model_name": "bridged",
+                "litellm_params": {
+                    "model": "azure_ai/claude-sonnet-4-6",
+                    "api_base": "https://fake-foundry-resource.services.ai.azure.com",
+                    "api_key": "fake-api-key",
+                },
+                "model_info": {"id": "d1"},
+            },
+            {"model_name": "native-fallback", "litellm_params": native_params, "model_info": {"id": "n2"}},
+        ],
+        fallbacks=[{"native": ["bridged", "native-fallback"]}],
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client", None):
+        with pytest.raises(litellm.BadRequestError) as refused:
+            await router.aresponses(
+                model="native", input="Double it", previous_response_id=_TURN_ONE_ID, mock_testing_fallbacks=True
+            )
+
+    assert (refused.value.status_code, refused.value.param, refused.value.code) == (
+        400,
+        "previous_response_id",
+        "previous_response_not_found",
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_follow_up_refused_by_the_failover_deployment_skips_the_next_fallback(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    respx_mock.post("https://api.openai.com/v1/responses").mock(
+        return_value=httpx.Response(500, json={"error": {"message": "down", "type": "server_error"}})
+    )
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "mixed",
+                "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "fake-api-key", "weight": 1_000_000},
+                "model_info": {"id": "native"},
+            },
+            {
+                "model_name": "mixed",
+                "litellm_params": {
+                    "model": "azure_ai/claude-sonnet-4-6",
+                    "api_base": "https://fake-foundry-resource.services.ai.azure.com",
+                    "api_key": "fake-api-key",
+                    "weight": 1,
+                },
+                "model_info": {"id": "bridged"},
+            },
+            {
+                "model_name": "native-fallback",
+                "litellm_params": {
+                    "model": "openai/gpt-5.4-mini",
+                    "api_key": "fake-api-key",
+                    "mock_response": "answered by the next fallback without the history",
+                },
+                "model_info": {"id": "fallback"},
+            },
+        ],
+        routing_strategy="simple-shuffle",
+        num_retries=0,
+        enable_weighted_failover=True,
+        fallbacks=[{"mixed": ["native-fallback"]}],
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client", None):
+        with pytest.raises(litellm.BadRequestError) as refused:
+            await router.aresponses(model="mixed", input="Double it", previous_response_id=_TURN_ONE_ID)
+
+    assert refused.value.code == "previous_response_not_found"
+
+
 class _CountedLookups:
     def __init__(self) -> None:
         self.lookups = 0
