@@ -14,7 +14,7 @@ import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.anthropic.messages.stream_assembly import extract_sse_data
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import PassThroughEndpointLoggingTypedDict, UserAPIKeyAuth
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import _upstream_headers_for_anthropic_route
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
     AnthropicPassthroughLoggingHandler,
@@ -3430,13 +3430,17 @@ def _log_generic_route_call(
     all_chunks: list[str],
     httpx_response: httpx.Response,
     configured_provider: str | None = None,
-) -> tuple[LiteLLMLoggingObj, dict]:
+    request_model: str = _BEDROCK_STYLE_REQUEST_MODEL,
+) -> tuple[LiteLLMLoggingObj, PassThroughEndpointLoggingTypedDict]:
     returned_model: Final = httpx_response.json()["model"]
     monkeypatch.setattr(
         litellm,
         "model_cost",
         {
-            f"bedrock_mantle/{_BEDROCK_STYLE_REQUEST_MODEL}": {"litellm_provider": "bedrock_mantle", **_MANTLE_ROW_PRICING},
+            f"bedrock_mantle/{_BEDROCK_STYLE_REQUEST_MODEL}": {
+                "litellm_provider": "bedrock_mantle",
+                **_MANTLE_ROW_PRICING,
+            },
             returned_model: {"litellm_provider": "anthropic", **_DEPLOYMENT_PRICING},
         },
     )
@@ -3452,7 +3456,7 @@ def _log_generic_route_call(
     logging_obj.model_call_details["stream"] = stream
     if configured_provider is not None:
         logging_obj.model_call_details["custom_llm_provider"] = configured_provider
-    request_body: Final = {"model": _BEDROCK_STYLE_REQUEST_MODEL, "stream": stream, "messages": []}
+    request_body: Final = {"model": request_model, "stream": stream, "messages": []}
     if stream:
         return logging_obj, AnthropicPassthroughLoggingHandler.handle_logging_anthropic_collected_chunks(  # pyright: ignore[reportUnknownMemberType]  # the handler leaves its passthrough logging object untyped
             litellm_logging_obj=logging_obj,
@@ -3521,3 +3525,22 @@ def test_a_provider_the_route_configured_is_kept_on_a_mantle_host(
     )
 
     assert logging_obj.model_call_details["custom_llm_provider"] == "anthropic"
+
+
+@pytest.mark.parametrize("stream", (False, True))
+def test_a_mantle_host_model_with_no_mantle_row_is_still_billed_at_the_model_the_upstream_returned(
+    monkeypatch: pytest.MonkeyPatch, stream: bool, all_chunks: list[str], mock_httpx_response: httpx.Response
+) -> None:
+    logging_obj, result = _log_generic_route_call(
+        monkeypatch,
+        _MANTLE_MESSAGES_URL,
+        stream,
+        all_chunks,
+        mock_httpx_response,
+        request_model="anthropic.claude-opus-4-5",
+    )
+
+    assert result["result"].usage.prompt_tokens > 0
+    assert result["kwargs"]["response_cost"] == pytest.approx(_price_of(result["result"].usage, _DEPLOYMENT_PRICING))
+    assert logging_obj.model_call_details["custom_llm_provider"] == "anthropic"
+    assert result["kwargs"]["model"] == mock_httpx_response.json()["model"]

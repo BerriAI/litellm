@@ -108,8 +108,19 @@ def _stamp_reported_stream_cost(
         override_stamped_response_cost(response, reported)
 
 
-def _stamp_upstream_provider(logging_obj: LiteLLMLoggingObj, url_route: str | None) -> None:
-    if url_route and not logging_obj.model_call_details.get("custom_llm_provider") and MANTLE_HOST_RE.match(url_route):
+def _is_priced_mantle_call(url_route: str | None, request_body: Mapping[str, object] | None) -> bool:
+    if not url_route or not MANTLE_HOST_RE.match(url_route):
+        return False
+    priced_models: Final[Mapping[str, object]] = litellm.model_cost  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # litellm.model_cost is an untyped module global
+    return f"{litellm.LlmProviders.BEDROCK_MANTLE.value}/{(request_body or {}).get('model')}" in priced_models
+
+
+def _stamp_upstream_provider(
+    logging_obj: LiteLLMLoggingObj, url_route: str | None, request_body: Mapping[str, object] | None
+) -> None:
+    if not logging_obj.model_call_details.get("custom_llm_provider") and _is_priced_mantle_call(
+        url_route, request_body
+    ):
         logging_obj.model_call_details["custom_llm_provider"] = litellm.LlmProviders.BEDROCK_MANTLE.value
 
 
@@ -146,9 +157,9 @@ class AnthropicPassthroughLoggingHandler:
                 **kwargs,
             )
 
-        _stamp_upstream_provider(logging_obj, url_route)
         model: Final = response_body.get("model", "")
         resolved_request_body: Final[Mapping[str, object] | None] = request_body or kwargs.get("request_body")  # pyright: ignore[reportUnknownVariableType]  # request_body is an untyped dict param
+        _stamp_upstream_provider(logging_obj, url_route, resolved_request_body)  # pyright: ignore[reportUnknownArgumentType]  # request_body is an untyped dict param
         speed: Final = AnthropicPassthroughLoggingHandler._cost_relevant_speed(resolved_request_body)
         anthropic_config: Final = get_anthropic_config(url_route)
         litellm_model_response: Final[ModelResponse] = anthropic_config().transform_response(
@@ -310,7 +321,7 @@ class AnthropicPassthroughLoggingHandler:
     ) -> None:
         if not all_chunks:
             return
-        _stamp_upstream_provider(litellm_logging_obj, url_route)
+        _stamp_upstream_provider(litellm_logging_obj, url_route, request_body)
         model: Final = AnthropicPassthroughLoggingHandler._resolve_logged_model(
             litellm_logging_obj, request_body, all_chunks
         )
@@ -617,7 +628,7 @@ class AnthropicPassthroughLoggingHandler:
         - Logs in litellm callbacks
         """
 
-        _stamp_upstream_provider(litellm_logging_obj, url_route)
+        _stamp_upstream_provider(litellm_logging_obj, url_route, request_body)
         model: Final = AnthropicPassthroughLoggingHandler._resolve_logged_model(
             litellm_logging_obj, request_body, all_chunks
         )
