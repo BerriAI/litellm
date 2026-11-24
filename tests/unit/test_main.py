@@ -716,7 +716,9 @@ def test_fallbacks_and_model_list_send_the_provider_the_body_a_direct_call_sends
     openai_api_response: dict[str, object],
     routing: Mapping[str, object],
     tool_choice: object,
+    monkeypatch: pytest.MonkeyPatch,
 ):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     respx_mock.post("http://localhost:12346/v1/chat/completions").mock(
         return_value=httpx.Response(status_code=200, json=openai_api_response)
     )
