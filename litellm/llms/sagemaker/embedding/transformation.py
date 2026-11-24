@@ -79,7 +79,9 @@ class SagemakerEmbeddingConfig(BaseEmbeddingConfig):
     ) -> dict[str, object]:
         return optional_params
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | Headers
+    ) -> BaseLLMException:
         return SagemakerError(message=error_message, status_code=status_code, headers=headers)
 
     def transform_embedding_request(
@@ -136,7 +138,7 @@ class SagemakerEmbeddingConfig(BaseEmbeddingConfig):
                 message=f"HF response not in expected format - {embeddings}",
             )
 
-        output_data: Final = []
+        output_data: Final[list[dict[str, object]]] = []
         for idx, embedding in enumerate(embeddings):
             output_data.append({"object": "embedding", "index": idx, "embedding": embedding})
 
