@@ -10500,6 +10500,8 @@ class ProviderConfigManager:
     def get_provider_realtime_config(
         model: str,
         provider: LlmProviders,
+        drop_params: bool = False,
+        litellm_params: Mapping[str, object] = MappingProxyType({}),
     ) -> BaseRealtimeConfig | None:
         if LlmProviders.GEMINI == provider:
             from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig

@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, cast
 
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict, assert_never
 
 import litellm
@@ -66,6 +67,7 @@ vertex_llm_base: Final = VertexBase()
 base_llm_http_handler = BaseLLMHTTPHandler()
 _EMPTY_MODEL_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
 _EMPTY_AUTH_HEADERS: Final[Mapping[str, str]] = MappingProxyType({})
+_DEPLOYMENT_PARAMS: Final = TypeAdapter(Mapping[str, object])
 
 
 def _model_params_with_stored_credentials(model_params: Mapping[str, object]) -> Mapping[str, object]:
@@ -539,11 +541,14 @@ async def _arealtime(
         )
         return
 
+    drop_params: Final = litellm.drop_params is True or normalize_drop_params(kwargs.get("drop_params")) is True
     provider_config: BaseRealtimeConfig | None = None
     if _custom_llm_provider in LlmProviders._member_map_.values():
         provider_config = ProviderConfigManager.get_provider_realtime_config(
             model=model,
             provider=LlmProviders(_custom_llm_provider),
+            drop_params=drop_params,
+            litellm_params=_DEPLOYMENT_PARAMS.validate_python(kwargs),
         )
     if provider_config is not None:
         await base_llm_http_handler.async_realtime(
@@ -625,7 +630,6 @@ async def _arealtime(
         aws_bedrock_runtime_endpoint: Final = kwargs.get("aws_bedrock_runtime_endpoint")
         aws_external_id: Final = kwargs.get("aws_external_id")
         aws_session_tags: Final = kwargs.get("aws_session_tags")
-        drop_params: Final = litellm.drop_params is True or normalize_drop_params(kwargs.get("drop_params")) is True
 
         await bedrock_realtime.async_realtime(
             model=model,

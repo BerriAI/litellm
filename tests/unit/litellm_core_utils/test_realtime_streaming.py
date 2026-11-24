@@ -30,6 +30,7 @@ from litellm.llms.xai.realtime.usage_meter import XAIRealtimeUsageMeter
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.xai import RealtimeMeteredUsage
 from litellm.types.realtime import RealtimeResponseTransformInput, RealtimeResponseTypedDict
+from litellm.llms.base_llm.realtime.transcription_protocol import RealtimeTranscriptionProtocolError
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 
@@ -3189,6 +3190,7 @@ async def test_session_close_flushes_unbilled_transcription_usage():
     provider_config: Final = MagicMock()
     provider_config.transform_realtime_response = MagicMock(return_value=transcript_frame)
     provider_config.unbilled_usage_on_session_close = MagicMock(return_value=usage)
+    provider_config.session_refusal = MagicMock(return_value=None)
 
     streaming: Final = RealTimeStreaming(
         client_ws,
@@ -3322,10 +3324,14 @@ def _backend_ws_closing_with(*frames: bytes | Exception) -> MagicMock:
     return backend_ws
 
 
-def _relay_session(client_ws: MagicMock, backend_ws: MagicMock) -> _RelaySession:
+def _relay_session(
+    client_ws: MagicMock, backend_ws: MagicMock, provider_config: BaseRealtimeConfig | None = None
+) -> _RelaySession:
     logging: Final = _RecordingLogging()
     worker: Final = _InlineLoggingWorker()
-    streaming: Final = RealTimeStreaming(client_ws, backend_ws, logging, model="gpt-realtime", logging_worker=worker)
+    streaming: Final = RealTimeStreaming(
+        client_ws, backend_ws, logging, provider_config=provider_config, model="gpt-realtime", logging_worker=worker
+    )
     return _RelaySession(streaming=streaming, logging=logging, worker=worker)
 
 
@@ -3385,6 +3391,57 @@ async def test_bidirectional_forward_maps_abnormal_upstream_close_to_internal_er
     assert "1006" in error_event["error"]["message"]
     client_ws.close.assert_awaited_once()
     assert client_ws.close.await_args.kwargs["code"] == 1011
+
+
+class _TranscriptionConfigRejectingSessionUpdates(_PassthroughRealtimeConfig):
+    def __init__(self, *, defers_setup: bool) -> None:
+        self._defers_setup: Final = defers_setup
+
+    def requires_session_configuration(self) -> bool:
+        return not self._defers_setup
+
+    def transform_realtime_request(
+        self, message: str, model: str, session_configuration_request: str | None = None
+    ) -> Sequence[str | bytes]:
+        if json.loads(message).get("type") == "session.update":
+            raise RealtimeTranscriptionProtocolError("requires pcm16 input audio")
+        return (message,)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "defers_setup,client_frames_read,audio_reaches_backend",
+    ((True, 1, False), (False, 3, True)),
+    ids=["deferred_setup_session_ends", "eager_setup_session_continues"],
+)
+async def test_a_rejected_transcription_session_update_sends_an_error_and_ends_only_a_deferred_setup_session(
+    defers_setup: bool, client_frames_read: int, audio_reaches_backend: bool
+):
+    append: Final = json.dumps({"type": "input_audio_buffer.append", "audio": "AAE="})
+    client_ws: Final = MagicMock()
+    client_ws.headers = {}
+    client_ws.receive_text = AsyncMock(
+        side_effect=[json.dumps({"type": "session.update", "session": {"type": "transcription"}}), append, RuntimeError]
+    )
+    client_ws.send_text = AsyncMock()
+    backend_ws: Final = MagicMock()
+    backend_ws.send = AsyncMock()
+    streaming: Final = RealTimeStreaming(
+        client_ws,
+        backend_ws,
+        _RecordingLogging(),
+        provider_config=_TranscriptionConfigRejectingSessionUpdates(defers_setup=defers_setup),
+        model="chirp_3",
+        logging_worker=_InlineLoggingWorker(),
+    )
+
+    await asyncio.wait_for(streaming.client_ack_messages(), timeout=2)
+
+    assert _error_events_sent_to(client_ws) == [
+        {"type": "error", "error": {"type": "invalid_request_error", "message": "requires pcm16 input audio"}}
+    ]
+    assert client_ws.receive_text.await_count == client_frames_read
+    assert (append in [call.args[0] for call in backend_ws.send.await_args_list]) is audio_reaches_backend
 
 
 @pytest.mark.asyncio
