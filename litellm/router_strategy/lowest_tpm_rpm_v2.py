@@ -448,7 +448,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
         rpm_counters: Sequence[UsageCounter],
         rpm_values: Sequence[float | None] | None,
         messages: list[dict[str, str]] | None = None,
-        input: str | list | None = None,
+        input: str | list[str] | None = None,
         routable_group: RoutableGroup = no_routable_group,
         refusal: type[RequestOverDeploymentTpmError] = RequestOverDeploymentTpmError,
     ) -> dict | None:
@@ -547,7 +547,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
         model_group: str,
         healthy_deployments: list,
         messages: list[dict[str, str]] | None = None,
-        input: str | list | None = None,
+        input: str | list[str] | None = None,
         routable_group: RoutableGroup = no_routable_group,
     ):
         """
@@ -656,7 +656,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
         model_group: str,
         healthy_deployments: list,
         messages: list[dict[str, str]] | None = None,
-        input: str | list | None = None,
+        input: str | list[str] | None = None,
         parent_otel_span: Span | None = None,
         routable_group: RoutableGroup = no_routable_group,
     ):
