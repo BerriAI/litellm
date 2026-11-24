@@ -23,7 +23,7 @@ class BaseTextCompletionConfig(BaseConfig, ABC):
         model: str,
         messages: list[AllMessageValues] | list[OpenAITextCompletionUserMessage],
         optional_params: dict,
-        headers: dict,
+        headers: dict[str, object],
     ) -> dict:
         return {}
 

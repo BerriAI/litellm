@@ -390,7 +390,7 @@ fn ensure_thinking_for_clear_thinking_context_management(
         })
         .filter(|max_tokens| *max_tokens <= i128::from(minimum));
     if let Some(max_tokens) = too_small_max_tokens {
-        litellm_tracing::warn!(
+        tracing::warn!(
             "Bedrock clear_thinking_20251015: max_tokens={max_tokens} is not greater than minimum thinking budget ({minimum}); cannot inject thinking safely"
         );
         return Ok(false);
@@ -491,7 +491,7 @@ fn drop_compaction_without_beta(body: &mut Body, betas: &[String]) {
         && !(body.get("compaction").is_some_and(Value::is_object)
             && betas.iter().any(|beta| beta == "compact-2026-09-04"))
     {
-        litellm_tracing::debug!(
+        tracing::debug!(
             "Bedrock Invoke: dropping `compaction`; compact-2026-09-04 is not served on this route"
         );
         body.shift_remove("compaction");
@@ -508,9 +508,7 @@ fn pop_output_config_under_global_drop(
         Some(Value::Object(output_config)) if output_config.keys().any(|key| key != "format")
     );
     if global_drop_params && has_non_format_keys && !supports_effort {
-        litellm_tracing::warn!(
-            "Bedrock Invoke: dropping `output_config` the model does not accept"
-        );
+        tracing::warn!("Bedrock Invoke: dropping `output_config` the model does not accept");
         body.shift_remove("output_config");
     }
 }
@@ -522,7 +520,7 @@ fn strip_unsupported_bedrock_invoke_fields(body: Body, settings: &InvokeRequestS
         .filter(|key| !settings.allows_top_level_field(key))
         .collect();
     if !stripped.is_empty() {
-        litellm_tracing::debug!(
+        tracing::debug!(
             "Bedrock Invoke: stripping unsupported top-level request fields: {stripped:?}"
         );
     }
@@ -588,7 +586,7 @@ pub(crate) fn transform_anthropic_messages_request(
         &shared_params,
         headers,
         &model,
-        capabilities,
+        context,
         injected_thinking,
         settings,
     )?;
@@ -806,6 +804,31 @@ mod tests {
         assert_eq!(
             wire["tools"],
             json!([{"name": "t", "input_schema": {"type": "object"}}])
+        );
+    }
+
+    #[rstest]
+    fn only_custom_tools_without_a_name_get_one() {
+        let tools = json!([
+            {"type": "computer_toolset_20260801"},
+            {"type": "browser_toolset_20260801"},
+            {"type": "bash_20250124", "name": "bash"},
+            {"type": "custom", "input_schema": {"type": "object"}},
+            {"input_schema": {"type": "object"}},
+        ]);
+        let wire = transformed(
+            hello("us.anthropic.claude-sonnet-5-5", json!({"tools": tools})),
+            MessagesModelCapabilities::default(),
+        );
+        assert_eq!(
+            wire["tools"],
+            json!([
+                {"type": "computer_toolset_20260801"},
+                {"type": "browser_toolset_20260801"},
+                {"type": "bash_20250124", "name": "bash"},
+                {"type": "custom", "input_schema": {"type": "object"}, "name": "litellm_unnamed_tool_3"},
+                {"input_schema": {"type": "object"}, "name": "litellm_unnamed_tool_4"},
+            ])
         );
     }
 

@@ -128,7 +128,7 @@ class OpenAITextCompletionConfig(BaseTextCompletionConfig, OpenAIGPTConfig):
         except Exception as e:
             raise e
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         return [
             "functions",
             "function_call",
@@ -158,8 +158,8 @@ class OpenAITextCompletionConfig(BaseTextCompletionConfig, OpenAIGPTConfig):
         model: str,
         messages: list[AllMessageValues] | list[OpenAITextCompletionUserMessage],
         optional_params: dict,
-        headers: dict,
-    ) -> dict:
+        headers: dict[str, object],
+    ) -> dict[str, object]:
         prompt: Final = transform_prompt(messages)
         return {
             "model": model,

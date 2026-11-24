@@ -31,11 +31,11 @@ class AzureOpenAITextConfig(OpenAITextCompletionConfig):
     def __init__(
         self,
         frequency_penalty: int | None = None,
-        logit_bias: dict | None = None,
+        logit_bias: dict[str, object] | None = None,
         max_tokens: int | None = None,
         n: int | None = None,
         presence_penalty: int | None = None,
-        stop: str | list | None = None,
+        stop: str | list[str] | None = None,
         temperature: int | None = None,
         top_p: int | None = None,
     ) -> None:

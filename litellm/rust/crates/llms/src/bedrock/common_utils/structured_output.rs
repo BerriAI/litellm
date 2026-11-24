@@ -572,7 +572,7 @@ pub(crate) fn apply_bedrock_invoke_structured_output(
         }
         return Ok(());
     }
-    litellm_tracing::warn!(
+    tracing::warn!(
         "Bedrock Invoke: model={model} does not take native structured output for this schema per model_prices_and_context_window.json, so the JSON schema was inlined into the last user message and is NOT enforced by the model."
     );
     convert_bedrock_invoke_output_format_to_inline_schema(&schema_format, body)

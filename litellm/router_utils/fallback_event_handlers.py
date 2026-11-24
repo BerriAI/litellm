@@ -226,10 +226,11 @@ def fallback_lookup_groups(kwargs: Mapping[str, object], model_group: str | None
     chain of its own, so it resumes the original group's chain, and `attempted_targets` keeps
     the entries already tried from being repeated.
     """
-    metadata: Final = kwargs.get(get_metadata_variable_name_from_kwargs(kwargs))
-    routed_group_value: Final = metadata.get("model_group") if isinstance(metadata, Mapping) else None
+    raw_metadata: Final = kwargs.get(get_metadata_variable_name_from_kwargs(kwargs))
+    metadata: Final[Mapping[object, object] | None] = raw_metadata if isinstance(raw_metadata, Mapping) else None
+    routed_group_value: Final = metadata.get("model_group") if metadata is not None else None
     routed_group: Final = routed_group_value if isinstance(routed_group_value, str) else None
-    original_group_value: Final = metadata.get("original_model_group") if isinstance(metadata, Mapping) else None
+    original_group_value: Final = metadata.get("original_model_group") if metadata is not None else None
     original_group: Final = original_group_value if isinstance(original_group_value, str) else None
     ordered: Final = (get_pre_routing_selection(kwargs), routed_group, model_group, original_group)
     return tuple(dict.fromkeys(group for group in ordered if group))

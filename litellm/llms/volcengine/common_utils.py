@@ -2,6 +2,7 @@
 Common utilities for Volcengine LLM provider
 """
 
+from collections.abc import Mapping
 from typing import Final
 
 import httpx
@@ -36,7 +37,7 @@ def get_volcengine_base_url(api_base: str | None = None) -> str:
     return "https://ark.cn-beijing.volces.com"
 
 
-def get_volcengine_headers(api_key: str, extra_headers: dict | None = None) -> dict:
+def get_volcengine_headers(api_key: str, extra_headers: Mapping[str, object] | None = None) -> dict[str, object]:
     """
     Get headers for Volcengine API calls.
 
@@ -47,7 +48,7 @@ def get_volcengine_headers(api_key: str, extra_headers: dict | None = None) -> d
     Returns:
         Dictionary of headers
     """
-    headers: Final = {
+    headers: Final[dict[str, object]] = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {api_key}",
     }

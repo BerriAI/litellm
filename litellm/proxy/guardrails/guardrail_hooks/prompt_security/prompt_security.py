@@ -28,7 +28,7 @@ from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-    from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
+    from litellm.types.proxy.guardrails.guardrail_hooks.prompt_security import PromptSecurityGuardrailConfigModel
 
 
 _SANITIZE_FILE_FAIL_OPEN_TIMEOUT_SECONDS: Final = 30.0
@@ -247,8 +247,8 @@ class PromptSecurityGuardrail(CustomGuardrail):
         inputs: GenericGuardrailAPIInputs,
         texts: list[str],
         images: list[str],
-        structured_messages: list,
-        request_data: dict,
+        structured_messages: Sequence[AllMessageValues],
+        request_data: object,
         user_api_key_alias: str | None,
     ) -> GenericGuardrailAPIInputs:
         """Handle request-side guardrail checks."""
@@ -739,7 +739,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
 
         return processed_messages
 
-    def filter_messages_by_role(self, messages: list) -> list:
+    def filter_messages_by_role(self, messages: Sequence[Mapping[str, object]]) -> Sequence[Mapping[str, object]]:
         """Filter messages to only include standard OpenAI/Anthropic roles.
 
         Behavior depends on check_tool_results flag:
@@ -748,7 +748,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
 
         This allows checking tool results for indirect prompt injection when enabled.
         """
-        filtered_messages: Final = []
+        filtered_messages: Final[list[Mapping[str, object]]] = []
         transformed_count = 0
         filtered_count = 0
 
@@ -791,21 +791,21 @@ class PromptSecurityGuardrail(CustomGuardrail):
 
         return filtered_messages
 
-    def _build_headers(self, user_api_key_alias: str | None = None) -> dict:
+    def _build_headers(self, user_api_key_alias: str | None = None) -> dict[str, str | None]:
         headers: Final = {"APP-ID": self.api_key, "Content-Type": "application/json"}
         if user_api_key_alias:
             headers["X-LiteLLM-Key-Alias"] = user_api_key_alias
         return headers
 
     @staticmethod
-    def _redact_headers(headers: dict) -> dict:
+    def _redact_headers(headers: Mapping[str, str | None]) -> dict[str, str | None]:
         return {name: ("REDACTED" if name.lower() == "app-id" else value) for name, value in headers.items()}
 
     def _log_api_request(
         self,
         method: str,
         url: str,
-        headers: dict,
+        headers: Mapping[str, str | None],
         payload: object,
     ) -> None:
         verbose_proxy_logger.debug(
@@ -830,7 +830,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
         )
 
     @staticmethod
-    def get_config_model() -> type["GuardrailConfigModel"] | None:
+    def get_config_model() -> type["PromptSecurityGuardrailConfigModel"] | None:
         from litellm.types.proxy.guardrails.guardrail_hooks.prompt_security import (
             PromptSecurityGuardrailConfigModel,
         )
