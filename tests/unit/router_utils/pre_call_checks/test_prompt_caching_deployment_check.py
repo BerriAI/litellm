@@ -2520,3 +2520,62 @@ async def test_responses_request_with_a_malformed_tool_is_left_to_the_provider(b
     pinned = await _read_responses_pin(PromptCachingDeploymentCheck(cache=DualCache()), request)
 
     assert pinned == ("dep-1", "dep-2")
+
+
+def _base64_document_messages(data: str) -> list[AllMessageValues]:
+    return cast(
+        list[AllMessageValues],
+        [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": data}},
+                    {"type": "text", "text": "word " * 5000, "cache_control": {"type": "ephemeral"}},
+                ],
+            }
+        ],
+    )
+
+
+async def _pinned_and_later_deployments(router: litellm.Router, messages: list[AllMessageValues]) -> tuple[object, ...]:
+    first: Final = await router.acompletion(model=MODEL_GROUP_ALIAS, messages=messages, mock_response="ok")
+    affinity_key: Final = PromptCachingCache.get_prompt_caching_cache_key(messages, None)
+    pin: Final = await _eventually(lambda: router.registry().plugins("prompt_caching_pins").get_cache(key=affinity_key))
+    later: Final = tuple(
+        [
+            (await router.acompletion(model=MODEL_GROUP_ALIAS, messages=messages, mock_response="ok"))._hidden_params[
+                "model_id"
+            ]
+            for _ in range(4)
+        ]
+    )
+    return (first._hidden_params["model_id"], pin, later)
+
+
+@pytest.mark.asyncio
+async def test_same_size_base64_documents_pin_their_own_deployment_while_loggers_see_a_placeholder(monkeypatch):
+    monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", False)
+    probe: Final = _LoggedMessagesProbe()
+    monkeypatch.setattr(litellm, "callbacks", [probe])
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": MODEL_GROUP_ALIAS,
+                "litellm_params": {"model": "anthropic/claude-opus-4-6", "api_key": "sk-fake"},
+                "model_info": {"id": model_id},
+            }
+            for model_id in ("dep-1", "dep-2")
+        ],
+        optional_pre_call_checks=["prompt_caching"],
+    )
+    documents: Final = ("QUJD" * 4096, "WFla" * 4096)
+
+    for document in documents:
+        served_by, pin, later = await _pinned_and_later_deployments(router, _base64_document_messages(document))
+        assert pin == {"model_id": served_by}
+        assert later == (served_by,) * 4
+
+    await _eventually(lambda: len(probe.logged_messages) == 10)
+    logged_sources: Final = [logged[0][0]["content"][0]["source"]["data"] for logged in probe.logged_messages]
+    assert len(logged_sources) == 10
+    assert all(source.startswith("[base64_data truncated: ") for source in logged_sources), logged_sources
