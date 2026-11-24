@@ -1558,7 +1558,7 @@ class RealTimeStreaming:
             return self._event_normalizer.normalize(event)
         return event
 
-    def _event_to_client_json(self, event: dict) -> str:
+    def _event_to_client_json(self, event: dict[str, object]) -> str:
         return json.dumps(self._session_event_for_client(self._normalize_event_for_ga_client(event)))
 
     def _session_event_for_client(self, event: Mapping[str, object]) -> Mapping[str, object]:

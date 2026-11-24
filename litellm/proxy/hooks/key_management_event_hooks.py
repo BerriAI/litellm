@@ -619,7 +619,7 @@ class KeyManagementEventHooks:
             )
 
     @staticmethod
-    async def _send_key_rotated_email(response: dict, existing_key_alias: str | None):
+    async def _send_key_rotated_email(response: dict[str, object], existing_key_alias: str | None):
         """
         Send key rotated email if email sending is enabled.
 

@@ -958,6 +958,7 @@ from litellm.redis.stores.connection import connect
 from litellm.redis.stores.spend_counters import (
     SPEND_COUNTERS_TARGET,
     SpendCounterStore,
+    is_rejected,
     is_unavailable,
 )
 from litellm.router import router_arguments
@@ -4117,7 +4118,7 @@ async def ensure_spend_counter_initialized(
             # DB unavailable - fall back to in-process cache (may be stale).
             base_spend: Final = await _get_source_cache_base_spend(source_cache_key=source_cache_key)
             if base_spend > 0:
-                await increment_spend_counter_cache(counter_key=counter_key, increment=base_spend)
+                await _seed_spend_counter_cache(counter_key=counter_key, spend=base_spend)
 
 
 _ensure_spend_counter_initialized: Final = ensure_spend_counter_initialized
@@ -4220,6 +4221,24 @@ async def increment_spend_counter_cache(counter_key: str, increment: float) -> f
 
 
 _increment_spend_counter_cache: Final = increment_spend_counter_cache
+
+
+@with_service_target(SPEND_COUNTERS_TARGET)
+async def _seed_spend_counter_cache(counter_key: str, spend: float) -> None:
+    try:
+        _ = await spend_counter_store.set_max(counter_key, spend)
+    except Exception as error:
+        if is_rejected(error):
+            # set_max is a Lua script; a Redis that refuses scripts still takes the plain increment.
+            await increment_spend_counter_cache(counter_key=counter_key, increment=spend)
+            return
+        # The script may have applied, so the counter is dropped everywhere, as a failed increment drops it.
+        await invalidate_spend_counter(counter_key)
+        raise
+    # The charge that follows is an INCRBYFLOAT, so the seed still ends with one: a counter that command cannot
+    # reach (a Redis Cluster slot mid-migration) fails here and is dropped on its own, as it was when the seed was
+    # that increment.
+    _ = await increment_spend_counter_cache(counter_key=counter_key, increment=0.0)
 
 
 @with_service_target(SPEND_COUNTERS_TARGET)
@@ -4627,7 +4646,7 @@ def _schedule_background_health_check_db_save(
     asyncio.create_task(_window_gated_health_check_db_save(save, pod_lock_manager, lock_ttl))
 
 
-def _get_endpoint_exception_status(endpoint: dict, exceptions: dict) -> int:
+def _get_endpoint_exception_status(endpoint: dict, exceptions: dict[str, object]) -> int:
     """Return the HTTP status code for an unhealthy endpoint.
 
     Prefers the live exception object in `exceptions` (direct health check path).
@@ -6270,7 +6289,7 @@ class ProxyConfig:
             config_file_path=config_file_path,
         )
 
-    def _get_team_config(self, team_id: str, all_teams_config: list[dict]) -> dict:
+    def _get_team_config(self, team_id: str, all_teams_config: list[dict[str, object]]) -> dict:
         team_config: dict = {}
         for team in all_teams_config:
             if "team_id" not in team:
@@ -8524,7 +8543,7 @@ class ProxyConfig:
     async def _update_config_from_db(
         self,
         prisma_client: PrismaClient,
-        config: dict,
+        config: dict[str, object],
         store_model_in_db: bool | None,
     ):
         if store_model_in_db is not True:
@@ -10953,7 +10972,7 @@ async def async_data_generator(
 
 
 def select_data_generator(
-    response,
+    response: object,
     user_api_key_dict: UserAPIKeyAuth,
     request_data: dict[str, object],
     request: Request | None = None,
@@ -11472,7 +11491,7 @@ class ProxyStartupEvent:
     @classmethod
     async def initialize_scheduled_background_jobs(
         cls,
-        general_settings: dict,
+        general_settings: dict[str, object],
         prisma_client: PrismaClient,
         proxy_budget_rescheduler_min_time: int,
         proxy_budget_rescheduler_max_time: int,
@@ -17003,7 +17022,7 @@ def _check_if_model_is_team_model(models: list[DeploymentTypedDict], user_row: _
 
 
 async def non_admin_all_models(
-    all_models: list[dict],
+    all_models: list[dict[str, object]],
     llm_router: Router,
     user_api_key_dict: UserAPIKeyAuth,
     prisma_client: PrismaClient | None,
@@ -19036,7 +19055,7 @@ async def _get_v1_model_info_allowed_model_names_with_access_groups(
 
 
 def _filter_v1_model_info_deployments(
-    all_models: list[dict],
+    all_models: list[dict[str, object]],
     allowed_model_names: Collection[str] | None,
 ) -> list[dict]:
     if allowed_model_names is None:
@@ -19071,7 +19090,7 @@ def _translate_model_name_for_response(model: dict) -> dict[str, object]:
     return {**model, "model_name": team_public}
 
 
-def _get_proxy_model_info(model: dict, caller_aliases: CallerAliases = GLOBAL_ALIASES_ONLY) -> dict:
+def _get_proxy_model_info(model: dict[str, object], caller_aliases: CallerAliases = GLOBAL_ALIASES_ONLY) -> dict:
     return _translate_model_name_for_response(
         _enrich_model_info_with_litellm_data(model=model, llm_router=llm_router, caller_aliases=caller_aliases)
     )
