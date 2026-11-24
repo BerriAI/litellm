@@ -3198,8 +3198,9 @@ class PrometheusLogger(CustomLogger):
             """
             refused_prompt: Final = isinstance(exception, IMAGE_ANSWER_ERRORS)
             # Only mark a deployment outage when one was actually picked.
-            if deployment_selected and not refused_prompt:
-                self.set_deployment_partial_outage(
+            if deployment_selected:
+                self._set_deployment_state_after_failure(
+                    refused_prompt=refused_prompt,
                     litellm_model_name=litellm_model_name or "",
                     model_id=model_id,
                     api_base=api_base,
@@ -3833,11 +3834,25 @@ class PrometheusLogger(CustomLogger):
     def set_deployment_healthy(
         self,
         litellm_model_name: str,
-        model_id: str,
-        api_base: str,
+        model_id: str | None,
+        api_base: str | None,
         api_provider: str,
     ):
         self.set_litellm_deployment_state(0, litellm_model_name, model_id, api_base, api_provider)
+
+    def _set_deployment_state_after_failure(
+        self,
+        *,
+        refused_prompt: bool,
+        litellm_model_name: str,
+        model_id: str | None,
+        api_base: str | None,
+        api_provider: str,
+    ) -> None:
+        set_state: Final = self.set_deployment_healthy if refused_prompt else self.set_deployment_partial_outage
+        set_state(
+            litellm_model_name=litellm_model_name, model_id=model_id, api_base=api_base, api_provider=api_provider
+        )
 
     def set_deployment_partial_outage(
         self,
