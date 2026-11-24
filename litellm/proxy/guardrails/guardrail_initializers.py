@@ -271,7 +271,7 @@ def initialize_lasso(
     return _lasso_callback
 
 
-def initialize_panw_prisma_airs(litellm_params, guardrail):
+def initialize_panw_prisma_airs(litellm_params, guardrail: Guardrail):
     from litellm.proxy.guardrails.guardrail_hooks.panw_prisma_airs import (
         PanwPrismaAirsHandler,
     )

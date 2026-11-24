@@ -35,7 +35,7 @@ from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object, iter_items
 from litellm.litellm_core_utils.reasoning_effort_utils import warn_dropped_reasoning_params
 from litellm.litellm_core_utils.token_counter import token_counter, usage_tokenizer_model
-from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.base_llm.chat.transformation import BaseLLMException, RelayOnlyBodyLLMException
 from litellm.llms.custom_httpx.accept_encoding import ACCEPT_ENCODING_HEADER
 from litellm.llms.custom_httpx.http2_graceful_goaway import drain_http2_connections_on_graceful_goaway
 from litellm.llms.custom_httpx.http_handler import (
@@ -173,7 +173,7 @@ class OpenAIError(BaseLLMException):
         request: httpx.Request | None = None,
         response: httpx.Response | None = None,
         headers: dict | httpx.Headers | None = None,
-        body: Mapping[str, object] | None = None,
+        body: object = None,
     ):
         self.status_code = status_code
         self.message = message
@@ -192,8 +192,12 @@ class OpenAIError(BaseLLMException):
             headers=self.headers,
             request=self.request,
             response=self.response,
-            body=None if body is None else dict(body),
+            body=None if (body_object := as_str_mapping(body)) is None else dict(body_object),
         )
+
+
+class RelayOnlyBodyOpenAIError(OpenAIError, RelayOnlyBodyLLMException):
+    pass
 
 
 def upstream_error_response(error: Exception) -> httpx.Response | None:
@@ -347,7 +351,7 @@ class BaseOpenAILLM:
 
     @staticmethod
     def get_cached_openai_client(
-        client_initialization_params: dict, client_type: Literal["openai", "azure"]
+        client_initialization_params: dict[str, object], client_type: Literal["openai", "azure"]
     ) -> OpenAI | AsyncOpenAI | AzureOpenAI | AsyncAzureOpenAI | None:
         """Retrieves the OpenAI client from the in-memory cache based on the client initialization parameters"""
         _cache_key: Final = BaseOpenAILLM.get_openai_client_cache_key(
@@ -380,7 +384,7 @@ class BaseOpenAILLM:
     def set_cached_openai_client(
         openai_client: OpenAI | AsyncOpenAI | AzureOpenAI | AsyncAzureOpenAI,
         client_type: Literal["openai", "azure"],
-        client_initialization_params: dict,
+        client_initialization_params: dict[str, object],
         litellm_owned_client: bool = False,
     ):
         """Stores the OpenAI client in the in-memory cache for _DEFAULT_TTL_FOR_HTTPX_CLIENTS SECONDS

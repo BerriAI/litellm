@@ -1514,7 +1514,7 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
         user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
-        request_data: dict | None = None,
+        request_data: dict[str, object] | None = None,
     ) -> object:
         endpoint: Final[object] = (request_data or {}).get("endpoint", "")
         if (

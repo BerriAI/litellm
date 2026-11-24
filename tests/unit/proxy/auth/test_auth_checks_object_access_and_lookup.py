@@ -4893,11 +4893,10 @@ async def test_get_team_object_loads_model_aliases_relation(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_get_team_object_distinguishes_absent_team_from_unreadable_row(monkeypatch):
-    """A deleted team and a database that would not answer both surface as a 404,
-    which leaves callers unable to tell a definitive answer from a degraded read.
-    Only the row being positively absent raises the subclass; anything else keeps
-    the plain 404 so every existing caller is unaffected."""
+@pytest.mark.parametrize("error", [ConnectionError("db unreachable"), rust_database.NoDatabaseConnected()])
+async def test_get_team_object_distinguishes_absent_team_from_unreadable_row(
+    monkeypatch: pytest.MonkeyPatch, error: Exception
+) -> None:
     from unittest.mock import AsyncMock, MagicMock
 
     from fastapi import HTTPException
@@ -4907,7 +4906,6 @@ async def test_get_team_object_distinguishes_absent_team_from_unreadable_row(mon
     mock_cache = MagicMock()
     mock_cache.async_get_cache = AsyncMock(return_value=None)
 
-    # The database answered, and the row is not there.
     _install_store(monkeypatch, RustTeamRepository, AsyncMock(return_value=None))
     with pytest.raises(TeamNotFoundError) as absent_info:
         await get_team_object(
@@ -4919,9 +4917,7 @@ async def test_get_team_object_distinguishes_absent_team_from_unreadable_row(mon
     assert absent_info.value.status_code == 404
     assert "Team doesn't exist in db" in str(absent_info.value.detail)
 
-    # The database did not answer. Same status and detail, but not the subclass,
-    # so a caller keying on it does not read this as proof the team is gone.
-    _install_store(monkeypatch, RustTeamRepository, AsyncMock(side_effect=ConnectionError("db unreachable")))
+    _install_store(monkeypatch, RustTeamRepository, AsyncMock(side_effect=error))
     with pytest.raises(HTTPException) as unreadable_info:
         await get_team_object(
             team_id="unreadable-team-lit5522",
@@ -4929,7 +4925,9 @@ async def test_get_team_object_distinguishes_absent_team_from_unreadable_row(mon
             user_api_key_cache=mock_cache,
             check_db_only=True,
         )
-    assert unreadable_info.value.status_code == 404
+    assert unreadable_info.value.status_code == 503
+    assert unreadable_info.value.detail == "Team policy is unavailable"
+    assert unreadable_info.value.__cause__ is error
     assert not isinstance(unreadable_info.value, TeamNotFoundError)
 
 
@@ -12505,7 +12503,7 @@ async def test_authoritative_team_permission_outage_cannot_drop_the_teams_restri
     cache.async_set_cache = AsyncMock()
     with pytest.raises(HTTPException) as failure:
         await get_team_object(row.team_id, client, cache, check_db_only=True)
-    assert failure.value.status_code == 404
+    assert failure.value.status_code == 503
     assert rust_auth_stores.object_permission.lookups == [("team-permission", True)]
     cache.async_set_cache.assert_not_awaited()
 

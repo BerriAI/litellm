@@ -3,7 +3,7 @@ per-object getters still enforce on their own when the prefetch cannot help."""
 
 from collections.abc import Sequence
 from typing import Final
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi import HTTPException
@@ -26,7 +26,7 @@ from litellm.proxy.auth.auth_object_prefetch import AuthObjectRefs, prefetch_aut
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.redis.stores.auth_cache import AuthObject
 from litellm.rust_bridge._native import NativeRedisStoreError
-from tests.unit.proxy.rust_auth_stores import install_rust_auth_stores
+from tests.unit.proxy.rust_auth_stores import FakeKeyOwnersStore, RustAuthStores, install_rust_auth_stores
 from tests.unit.redis.stores.auth_cache_double import DeclaredOp, FakeAuthCache, shared_cache
 
 USER_ID = "prefetch-user"
@@ -75,15 +75,19 @@ ALL_ROWS = {
 }
 
 
-def _prisma(rows: dict[str, object] | None = ALL_ROWS) -> MagicMock:
-    prisma = MagicMock(name="prisma_client")
-    prisma.db.query_first = AsyncMock(return_value=rows)
-    prisma.writer_db = prisma.db
-    return prisma
+@pytest.fixture(autouse=True)
+def stores(monkeypatch: pytest.MonkeyPatch) -> RustAuthStores:
+    """The Rust repositories, with the key owners read the prefetch fills from answering ``ALL_ROWS``."""
+    return install_rust_auth_stores(monkeypatch, RustAuthStores(key_owners=FakeKeyOwnersStore(rows=ALL_ROWS)))
 
 
-def _non_prefetch_db_calls(prisma: MagicMock) -> list[str]:
-    return [str(call) for call in prisma.db.mock_calls if not str(call).startswith("call.query_first(")]
+@pytest.fixture
+def owners(stores: RustAuthStores) -> FakeKeyOwnersStore:
+    return stores.key_owners
+
+
+def _prisma() -> MagicMock:
+    return MagicMock(name="prisma_client")
 
 
 def _cache(redis: FakeAuthCache | None) -> UserApiKeyCache:
@@ -132,15 +136,15 @@ def test_refs_from_token_only_names_membership_when_both_ids_present():
 
 
 @pytest.mark.asyncio
-async def test_cold_regime_uses_one_database_query_and_the_getters_never_touch_io_again():
+async def test_cold_regime_uses_one_database_query_and_the_getters_never_touch_io_again(owners: FakeKeyOwnersStore):
     redis = FakeAuthCache()
     prisma = _prisma()
     cache = _cache(redis)
 
     await prefetch_auth_objects(refs=_refs(), user_api_key_cache=cache, prisma_client=prisma)
 
-    assert prisma.db.query_first.await_count == 1
-    assert prisma.db.query_first.await_args.args[1:] == (USER_ID, TEAM_ID, USER_ID, ORG_ID, None)
+    assert len(owners.lookups) == 1
+    assert owners.lookups[-1] == (USER_ID, TEAM_ID, USER_ID, ORG_ID, None)
     mgets = [c for c in redis.commands if c[0] == "MGET"]
     assert len(mgets) == 1
     assert set(mgets[0][1]) == {
@@ -163,10 +167,10 @@ async def test_cold_regime_uses_one_database_query_and_the_getters_never_touch_i
     assert _round_trips(redis) == 4, "one MGET, one pipeline, and a leased user write"
     assert ("SET_LEASED", USER_ID, 60) in redis.commands
 
-    before = (_round_trips(redis), prisma.db.query_first.await_count)
+    before = (_round_trips(redis), len(owners.lookups))
     user, team, membership, org = await _read_all_through_getters(cache, prisma)
-    assert (_round_trips(redis), prisma.db.query_first.await_count) == before
-    assert _non_prefetch_db_calls(prisma) == []
+    assert (_round_trips(redis), len(owners.lookups)) == before
+    assert prisma.db.mock_calls == []
 
     assert isinstance(user, LiteLLM_UserTable) and user.max_budget == 50.0
     assert isinstance(team, LiteLLM_TeamTableCachedObj) and team.organization_id == ORG_ID
@@ -178,20 +182,10 @@ async def test_cold_regime_uses_one_database_query_and_the_getters_never_touch_i
 
 
 @pytest.mark.asyncio
-async def test_cold_user_auth_prefetch_uses_the_writer_budget() -> None:
-    stale_row: Final = {**USER_ROW, "temp_budget_increase": 50, "temp_budget_expiry": "2030-01-01T12:00:00Z"}
-    prisma: Final = _prisma({**ALL_ROWS, "user_row": stale_row})
-    prisma.writer_db = _prisma().db
-    cache: Final = _cache(FakeAuthCache())
-    await prefetch_auth_objects(refs=_refs(), user_api_key_cache=cache, prisma_client=prisma)
-    cached: Final = await cache.async_get_cache(key=AuthObject.user(USER_ID), model_type=LiteLLM_UserTable)
-    assert cached is not None and cached.temp_budget_increase is None
-
-
-@pytest.mark.asyncio
-async def test_redis_warm_regime_is_exactly_one_mget_and_zero_queries():
+async def test_redis_warm_regime_is_exactly_one_mget_and_zero_queries(owners: FakeKeyOwnersStore):
     seeded = FakeAuthCache()
     await prefetch_auth_objects(refs=_refs(), user_api_key_cache=_cache(seeded), prisma_client=_prisma())
+    owners.lookups.clear()
 
     redis = FakeAuthCache(redis=seeded.redis)
     prisma = _prisma()
@@ -200,7 +194,7 @@ async def test_redis_warm_regime_is_exactly_one_mget_and_zero_queries():
 
     assert _round_trips(redis) == 1
     assert redis.commands[0][0] == "MGET"
-    assert prisma.db.query_first.await_count == 0
+    assert len(owners.lookups) == 0
 
     user, team, membership, org = await _read_all_through_getters(cache, prisma)
     assert _round_trips(redis) == 1
@@ -209,62 +203,65 @@ async def test_redis_warm_regime_is_exactly_one_mget_and_zero_queries():
 
 
 @pytest.mark.asyncio
-async def test_hot_regime_costs_nothing():
+async def test_hot_regime_costs_nothing(owners: FakeKeyOwnersStore):
     redis = FakeAuthCache()
     prisma = _prisma()
     cache = _cache(redis)
     await prefetch_auth_objects(refs=_refs(), user_api_key_cache=cache, prisma_client=prisma)
     redis.commands.clear()
     prisma.db.reset_mock()
+    owners.lookups.clear()
 
     await prefetch_auth_objects(refs=_refs(), user_api_key_cache=cache, prisma_client=prisma)
     await _read_all_through_getters(cache, prisma)
 
     assert _round_trips(redis) == 0
     assert prisma.db.mock_calls == []
+    assert owners.lookups == []
 
 
 @pytest.mark.asyncio
-async def test_partial_redis_hit_queries_only_the_missing_objects():
+async def test_partial_redis_hit_queries_only_the_missing_objects(owners: FakeKeyOwnersStore):
     seeded = FakeAuthCache()
     await prefetch_auth_objects(refs=_refs(), user_api_key_cache=_cache(seeded), prisma_client=_prisma())
+    owners.lookups.clear()
     for key in (f"team_id:{TEAM_ID}", f"{TEAM_ID}_{USER_ID}", f"team_membership:{USER_ID}:{TEAM_ID}"):
         del seeded.redis[key]
 
     prisma = _prisma()
     await prefetch_auth_objects(refs=_refs(), user_api_key_cache=_cache(seeded), prisma_client=prisma)
 
-    assert prisma.db.query_first.await_count == 1
-    assert prisma.db.query_first.await_args.args[1:] == (None, TEAM_ID, USER_ID, None, None)
+    assert len(owners.lookups) == 1
+    assert owners.lookups[-1] == (None, TEAM_ID, USER_ID, None, None)
 
     del seeded.redis[f"org_id:{ORG_ID}:with_budget"]
     await prefetch_auth_objects(refs=_refs(), user_api_key_cache=_cache(seeded), prisma_client=prisma)
-    assert prisma.db.query_first.await_args.args[1:] == (None, None, None, ORG_ID, None)
+    assert owners.lookups[-1] == (None, None, None, ORG_ID, None)
 
 
 @pytest.mark.asyncio
-async def test_deleted_team_cache_entry_is_refetched_and_the_update_is_visible():
+async def test_deleted_team_cache_entry_is_refetched_and_the_update_is_visible(owners: FakeKeyOwnersStore):
     redis = FakeAuthCache()
     prisma = _prisma()
     cache = _cache(redis)
     await prefetch_auth_objects(refs=_refs(), user_api_key_cache=cache, prisma_client=prisma)
 
     await cache.async_delete_cache(f"team_id:{TEAM_ID}")
-    prisma.db.query_first.return_value = {**ALL_ROWS, "team_row": {**TEAM_ROW, "blocked": True}}
+    owners.rows = {**ALL_ROWS, "team_row": {**TEAM_ROW, "blocked": True}}
     await prefetch_auth_objects(refs=_refs(), user_api_key_cache=cache, prisma_client=prisma)
 
     team = await get_team_object(team_id=TEAM_ID, prisma_client=prisma, user_api_key_cache=cache)
     assert team.blocked is True
-    assert prisma.db.query_first.await_count == 2
-    assert prisma.db.query_first.await_args.args[1:] == (None, TEAM_ID, None, None, None)
+    assert len(owners.lookups) == 2
+    assert owners.lookups[-1] == (None, TEAM_ID, None, None, None)
 
 
 @pytest.mark.asyncio
 async def test_row_missing_a_required_column_is_not_cached_so_the_getter_still_fails_closed(
-    monkeypatch: pytest.MonkeyPatch,
+    stores: RustAuthStores,
 ):
-    stores = install_rust_auth_stores(monkeypatch)
-    prisma = _prisma({**ALL_ROWS, "team_row": {"max_budget": 1.0}})
+    stores.key_owners.rows = {**ALL_ROWS, "team_row": {"max_budget": 1.0}}
+    prisma = _prisma()
     cache = _cache(FakeAuthCache())
 
     await prefetch_auth_objects(refs=_refs(), user_api_key_cache=cache, prisma_client=prisma)
@@ -277,9 +274,10 @@ async def test_row_missing_a_required_column_is_not_cached_so_the_getter_still_f
 
 
 @pytest.mark.asyncio
-async def test_absent_rows_are_not_cached_as_present():
+async def test_absent_rows_are_not_cached_as_present(owners: FakeKeyOwnersStore):
     redis = FakeAuthCache()
-    prisma = _prisma({key: None for key in ALL_ROWS})
+    owners.rows = {}
+    prisma = _prisma()
     cache = _cache(redis)
 
     await prefetch_auth_objects(refs=_refs(), user_api_key_cache=cache, prisma_client=prisma)
@@ -311,29 +309,34 @@ async def test_user_eviction_during_redis_prefetch_leaves_the_user_uncached():
 
 
 @pytest.mark.asyncio
-async def test_user_eviction_during_database_fill_leaves_the_user_uncached():
-    cache = UserApiKeyCache()
-    prisma = _prisma()
-    key = AuthObject.user(USER_ID)
+async def test_user_eviction_during_database_fill_leaves_the_user_uncached(
+    owners: FakeKeyOwnersStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cache: Final = UserApiKeyCache()
+    key: Final = AuthObject.user(USER_ID)
+    find: Final = owners.find
 
-    async def load_rows(*_args: object) -> dict[str, object]:
+    async def load_rows(**ids: str | None) -> str:
+        rows: Final = await find(**ids)
         await cache.async_delete_cache(key.key)
-        return ALL_ROWS
+        return rows
 
-    prisma.db.query_first.side_effect = load_rows
-    await prefetch_auth_objects(refs=_refs(), user_api_key_cache=cache, prisma_client=prisma)
+    monkeypatch.setattr(owners, "find", load_rows)
+    await prefetch_auth_objects(refs=_refs(), user_api_key_cache=cache, prisma_client=_prisma())
 
+    assert owners.lookups == [(USER_ID, TEAM_ID, USER_ID, ORG_ID, None)]
     assert await cache.async_get_cache(key=key, model_type=LiteLLM_UserTable) is None
 
 
 @pytest.mark.asyncio
-async def test_a_failed_redis_read_reads_as_a_miss_and_the_database_fill_takes_over():
+async def test_a_failed_redis_read_reads_as_a_miss_and_the_database_fill_takes_over(owners: FakeKeyOwnersStore):
     prisma = _prisma()
     cache = _cache(FakeAuthCache(fail=NativeRedisStoreError("transport", "redis down")))
 
     await prefetch_auth_objects(refs=_refs(), user_api_key_cache=cache, prisma_client=prisma)
 
-    assert prisma.db.query_first.await_count == 1
+    assert len(owners.lookups) == 1
     assert cache.get_local(AuthObject.user(USER_ID))["user_id"] == USER_ID
 
 
@@ -351,13 +354,13 @@ async def test_no_prisma_still_uses_redis_but_never_queries():
 
 
 @pytest.mark.asyncio
-async def test_no_redis_goes_straight_to_one_query():
+async def test_no_redis_goes_straight_to_one_query(owners: FakeKeyOwnersStore):
     prisma = _prisma()
     cache = _cache(None)
 
     await prefetch_auth_objects(refs=_refs(), user_api_key_cache=cache, prisma_client=prisma)
 
-    assert prisma.db.query_first.await_count == 1
+    assert len(owners.lookups) == 1
     assert cache.get_local(AuthObject.team_membership_reservation(user_id=USER_ID, team_id=TEAM_ID)) is not None
 
 

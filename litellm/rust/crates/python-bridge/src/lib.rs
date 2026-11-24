@@ -1,4 +1,5 @@
 mod auth;
+mod billable_route;
 mod budget_counters;
 mod budgets;
 mod cache;
@@ -50,6 +51,8 @@ mod _native {
         auth_route_matches_prefix, auth_route_matches_wildcard,
     };
     #[pymodule_export]
+    use crate::billable_route::{billable_route_passthrough_prefixes, classify_billable_route};
+    #[pymodule_export]
     use crate::budgets::NativeBudgets;
     #[pymodule_export]
     use crate::budgets::budget_check_decision;
@@ -68,9 +71,10 @@ mod _native {
     use crate::db_repository::{
         RustAccessGroupRepository, RustAgentIdentityRepository, RustAuditLogRepository,
         RustBudgetRepository, RustEndUserRepository, RustJwtKeyMappingRepository,
-        RustKeyRepository, RustModelAccessGroupRepository, RustObjectPermissionRepository,
-        RustOrganizationRepository, RustProjectRepository, RustSpendLogRepository,
-        RustTagRepository, RustTeamMembershipRepository, RustTeamRepository, RustUserRepository,
+        RustKeyOwnersRepository, RustKeyRepository, RustModelAccessGroupRepository,
+        RustObjectPermissionRepository, RustOrganizationRepository, RustProjectRepository,
+        RustSpendLogRepository, RustTagRepository, RustTeamMembershipRepository,
+        RustTeamRepository, RustUserRepository,
     };
     #[cfg(feature = "panic-test")]
     #[pymodule_export]
@@ -267,6 +271,7 @@ mod tests {
                 "NativeDatabase",
                 "NativeDatabaseFailure",
                 "RustKeyRepository",
+                "RustKeyOwnersRepository",
                 "RustJwtKeyMappingRepository",
                 "RustModelAccessGroupRepository",
                 "RustBudgetRepository",
@@ -313,7 +318,9 @@ mod tests {
                 "reserve_process_for_forking",
                 "unsupported_tls_settings",
                 "NativeBudgets",
+                "billable_route_passthrough_prefixes",
                 "billable_service_tier",
+                "classify_billable_route",
                 "budget_check_decision",
                 "NativeModelCapacity",
                 "NativeModelCapacityState",

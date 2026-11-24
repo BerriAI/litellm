@@ -55,7 +55,7 @@ class PromptManagementBase(ABC):
         self,
         prompt_id: str | None,
         prompt_spec: PromptSpec | None,
-        prompt_variables: dict | None,
+        prompt_variables: dict[str, object] | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
         prompt_label: str | None = None,
         prompt_version: int | None = None,
@@ -66,7 +66,7 @@ class PromptManagementBase(ABC):
     async def async_compile_prompt_helper(
         self,
         prompt_id: str | None,
-        prompt_variables: dict | None,
+        prompt_variables: dict[str, object] | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
         prompt_spec: PromptSpec | None = None,
         prompt_label: str | None = None,
@@ -84,7 +84,7 @@ class PromptManagementBase(ABC):
     def compile_prompt(
         self,
         prompt_id: str,
-        prompt_variables: dict | None,
+        prompt_variables: dict[str, object] | None,
         client_messages: list[AllMessageValues],
         dynamic_callback_params: StandardCallbackDynamicParams,
         prompt_label: str | None = None,
@@ -111,7 +111,7 @@ class PromptManagementBase(ABC):
     async def async_compile_prompt(
         self,
         prompt_id: str | None,
-        prompt_variables: dict | None,
+        prompt_variables: dict[str, object] | None,
         client_messages: list[AllMessageValues],
         dynamic_callback_params: StandardCallbackDynamicParams,
         prompt_spec: PromptSpec | None = None,
@@ -145,11 +145,11 @@ class PromptManagementBase(ABC):
         self,
         prompt_template: PromptManagementClient,
         messages: list[AllMessageValues],
-        non_default_params: dict,
+        non_default_params: Mapping[str, object],
         model: str,
         ignore_prompt_manager_model: bool | None = False,
         ignore_prompt_manager_optional_params: bool | None = False,
-    ):
+    ) -> tuple[str, list[AllMessageValues], dict[str, object]]:
         completed_messages: Final = prompt_template["completed_messages"] or messages
 
         prompt_template_optional_params: Final = prompt_template["prompt_template_optional_params"] or {}
@@ -170,9 +170,9 @@ class PromptManagementBase(ABC):
         self,
         model: str,
         messages: list[AllMessageValues],
-        non_default_params: dict,
+        non_default_params: dict[str, object],
         prompt_id: str | None,
-        prompt_variables: dict | None,
+        prompt_variables: dict[str, object] | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
         prompt_spec: PromptSpec | None = None,
         prompt_label: str | None = None,
@@ -217,9 +217,9 @@ class PromptManagementBase(ABC):
         self,
         model: str,
         messages: list[AllMessageValues],
-        non_default_params: dict,
+        non_default_params: dict[str, object],
         prompt_id: str | None,
-        prompt_variables: dict | None,
+        prompt_variables: dict[str, object] | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
         litellm_logging_obj: "LiteLLMLoggingObj",
         prompt_spec: PromptSpec | None = None,

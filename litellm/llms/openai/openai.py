@@ -1,7 +1,8 @@
 import inspect
+import json
 import time
 import types
-from collections.abc import AsyncIterator, Callable, Coroutine, Iterable, Iterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Collection, Coroutine, Iterable, Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Final, Literal, Optional, cast
 
 import httpx
@@ -32,6 +33,13 @@ from litellm._logging import WarningLogger, verbose_logger
 from litellm.constants import DEFAULT_MAX_RETRIES
 from litellm.exceptions import UnsupportedParamsError
 from litellm.files.types import FileContentStreamingResult
+from litellm.images.streaming import (
+    ImageStream,
+    image_generation_stream_requested,
+    openai_image_generation_async_stream,
+    openai_image_generation_stream,
+)
+from litellm.litellm_core_utils.audio_utils.transcription_streaming import litellm_exception_mapper
 from litellm.litellm_core_utils.chat_completion_agentic_loop import (
     bill_first_round_on_failure,
     run_chat_completion_agentic_hooks,
@@ -62,7 +70,7 @@ from litellm.utils import (
 
 from ...types.llms.openai import *
 from ..base import BaseLLM
-from .chat.gpt_reasoning_transformation import OpenAIGPT5Config
+from .chat.gpt_reasoning_transformation import OpenAIGPT5Config, is_chat_latest_name
 from .chat.gpt_transformation import (
     OpenAIGPTConfig,
     OpenAIUnknownModelConfig,
@@ -128,7 +136,7 @@ class MistralEmbeddingConfig:
             "encoding_format",
         ]
 
-    def map_openai_params(self, non_default_params: dict, optional_params: dict):
+    def map_openai_params(self, non_default_params: Mapping[str, object], optional_params: dict[str, object]):
         for param, value in non_default_params.items():
             if param == "encoding_format":
                 optional_params["encoding_format"] = value
@@ -180,17 +188,17 @@ class OpenAIConfig(BaseConfig):
     def __init__(
         self,
         frequency_penalty: int | None = None,
-        function_call: str | dict | None = None,
-        functions: list | None = None,
-        logit_bias: dict | None = None,
+        function_call: str | Mapping[str, object] | None = None,
+        functions: Sequence[object] | None = None,
+        logit_bias: Mapping[str, object] | None = None,
         max_completion_tokens: int | None = None,
         max_tokens: int | None = None,
         n: int | None = None,
         presence_penalty: int | None = None,
-        stop: str | list | None = None,
+        stop: str | Sequence[object] | None = None,
         temperature: int | None = None,
         top_p: int | None = None,
-        response_format: dict | None = None,
+        response_format: Mapping[str, object] | None = None,
     ) -> None:
         locals_: Final[Mapping[str, object]] = types.MappingProxyType(locals().copy())
         for key, value in locals_.items():
@@ -201,7 +209,7 @@ class OpenAIConfig(BaseConfig):
     def get_config(cls):
         return super().get_config()
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         """
         This function returns the list
         of supported openai parameters for a given OpenAI Model
@@ -218,7 +226,7 @@ class OpenAIConfig(BaseConfig):
         """
         if openaiOSeriesConfig.is_model_o_series_model(model=model):
             return openaiOSeriesConfig.get_supported_openai_params(model=model)
-        elif openAIGPT5Config.is_model_gpt_5_model(model=model):
+        elif self._routes_to_gpt_5_config(model):
             return openAIGPT5Config.get_supported_openai_params(model=model)
         elif litellm.openAIGPTAudioConfig.is_model_gpt_audio_model(model=model):
             return litellm.openAIGPTAudioConfig.get_supported_openai_params(model=model)
@@ -238,12 +246,24 @@ class OpenAIConfig(BaseConfig):
             messages, model=model, custom_llm_provider=custom_llm_provider, api_base=api_base, model_info=model_info
         )
 
+    def config_for_openai_compatible_provider(self, model: str) -> "OpenAIConfig | OpenAIGPTConfig":
+        if is_chat_latest_name(model):
+            return self._gpt_config_for_model(model)
+        return self
+
+    def _routes_to_gpt_5_config(self, model: str) -> bool:
+        if type(self) is OpenAIConfig:
+            return openAIGPT5Config.is_openai_gpt_5_model(model)
+        return not is_chat_latest_name(model) and openAIGPT5Config.is_model_gpt_5_model(model=model)
+
     def _gpt_config_for_model(self, model: str) -> OpenAIGPTConfig:
         if type(self) is OpenAIConfig and not OpenAIGPTConfig.is_openai_catalog_model(model):
             return OpenAIUnknownModelConfig()
         return litellm.openAIGPTConfig
 
-    def _map_openai_params(self, non_default_params: dict, optional_params: dict, model: str) -> dict:
+    def _map_openai_params(
+        self, non_default_params: Mapping[str, object], optional_params: dict[str, object], model: str
+    ) -> dict[str, object]:
         supported_openai_params: Final = self.get_supported_openai_params(model)
         for param, value in non_default_params.items():
             if param in supported_openai_params:
@@ -262,12 +282,14 @@ class OpenAIConfig(BaseConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: dict[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
         *,
         reasoning_drop_logger: WarningLogger = verbose_logger,
+        declared_reasoning_efforts: Collection[str] | None = None,
+        allowed_openai_params: Collection[str] = (),
     ) -> dict:
         """ """
         if openaiOSeriesConfig.is_model_o_series_model(model=model):
@@ -276,8 +298,11 @@ class OpenAIConfig(BaseConfig):
                 optional_params=optional_params,
                 model=model,
                 drop_params=drop_params,
+                declared_reasoning_efforts=declared_reasoning_efforts,
+                allowed_openai_params=allowed_openai_params,
+                reasoning_drop_logger=reasoning_drop_logger,
             )
-        elif openAIGPT5Config.is_model_gpt_5_model(model=model):
+        elif self._routes_to_gpt_5_config(model):
             return openAIGPT5Config.map_openai_params(
                 non_default_params=non_default_params,
                 optional_params=optional_params,
@@ -311,9 +336,9 @@ class OpenAIConfig(BaseConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
+        headers: dict[str, object],
     ) -> dict:
         messages = self._transform_messages(messages=messages, model=model)
         return {"model": model, "messages": messages, **optional_params}
@@ -324,10 +349,10 @@ class OpenAIConfig(BaseConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
+        request_data: dict[str, object],
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
@@ -351,8 +376,8 @@ class OpenAIConfig(BaseConfig):
         headers: dict,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
@@ -486,7 +511,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         workload_identity_config: Final = resolve_openai_workload_identity_config(
             api_key=api_key, api_base=api_base, litellm_params=litellm_params
         )
-        client_initialization_params: Final[dict] = locals()
+        client_initialization_params: Final[dict[str, object]] = locals()
         if client is None:
             if not isinstance(max_retries, int):
                 raise OpenAIError(
@@ -706,7 +731,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         self,
         response: object,
         model: str,
-        messages: list[dict],
+        messages: list[dict[str, object]],
         optional_params: dict[str, object],
         logging_obj: LiteLLMLoggingObj,
         stream: bool,
@@ -761,7 +786,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         model_response: ModelResponse,
         timeout: float | httpx.Timeout,
         optional_params: dict,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
         logging_obj: LiteLLMLoggingObj,
         model: str | None = None,
         messages: list[AllMessageValues] | None = None,
@@ -1010,8 +1035,8 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
     async def acompletion(
         self,
         messages: list,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         provider_config: BaseConfig,
         model: str,
         model_response: ModelResponse,
@@ -1195,8 +1220,8 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         self,
         timeout: float | httpx.Timeout,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         provider_config: BaseConfig,
         model: str,
         logging_obj: LiteLLMLoggingObj,
@@ -1444,7 +1469,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         timeout: float,
         logging_obj: LiteLLMLoggingObj,
         model_response: EmbeddingResponse,
-        optional_params: dict,
+        optional_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
         client=None,
@@ -1535,7 +1560,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
     async def aimage_generation(
         self,
         prompt: str,
-        data: dict,
+        data: Mapping[str, Any],
         model_response: ModelResponse,
         timeout: float,
         logging_obj: LiteLLMLoggingObj,
@@ -1544,7 +1569,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         client: OpenAI | AsyncOpenAI | None = None,
         max_retries: int | None = None,
         organization: str | None = None,
-        headers: dict | None = None,
+        headers: Mapping[str, object] | None = None,
         litellm_params: Mapping[str, object] | None = None,
     ):
         try:
@@ -1571,10 +1596,19 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             )
 
             request_data: Final = {**data, "extra_headers": headers} if headers else data
+            streams: Final = image_generation_stream_requested(data.get("stream"), data.get("extra_body"))
             raw_response: Final = await openai_aclient.images.with_raw_response.generate(
-                **request_data, timeout=timeout
+                **({**request_data, "stream": True} if streams else request_data), timeout=timeout
             )
-            stringified_response: Final = raw_response.parse().model_dump()
+            if streams:
+                async_stream: Final = openai_image_generation_async_stream(
+                    raw_response, logging_obj, litellm_exception_mapper(logging_obj.model_call_details)
+                )
+                if async_stream is not None:
+                    return async_stream
+            stringified_response: Final = (
+                json.loads(await raw_response.http_response.aread()) if streams else raw_response.parse().model_dump()
+            )
             ## LOGGING
             logging_obj.post_call(
                 input=prompt,
@@ -1603,7 +1637,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         model: str | None,
         prompt: str,
         timeout: float,
-        optional_params: dict,
+        optional_params: Mapping[str, Any],
         logging_obj: LiteLLMLoggingObj,
         api_key: str | None = None,
         api_base: str | None = None,
@@ -1611,9 +1645,9 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         client: OpenAI | AsyncOpenAI | None = None,
         aimg_generation: bool | None = None,
         organization: str | None = None,
-        headers: dict | None = None,
+        headers: Mapping[str, object] | None = None,
         litellm_params: Mapping[str, object] | None = None,
-    ) -> ImageResponse:
+    ) -> ImageResponse | ImageStream:
         data = {}
         try:
             data = {"model": model, "prompt": prompt, **optional_params}
@@ -1662,9 +1696,19 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
 
             ## COMPLETION CALL
             request_data: Final = {**data, "extra_headers": headers} if headers else data
-            raw_response: Final = openai_client.images.with_raw_response.generate(**request_data, timeout=timeout)
-
-            response: Final = raw_response.parse().model_dump()
+            streams: Final = image_generation_stream_requested(data.get("stream"), data.get("extra_body"))
+            raw_response: Final = openai_client.images.with_raw_response.generate(
+                **({**request_data, "stream": True} if streams else request_data), timeout=timeout
+            )
+            if streams:
+                sync_stream: Final = openai_image_generation_stream(
+                    raw_response, logging_obj, litellm_exception_mapper(logging_obj.model_call_details)
+                )
+                if sync_stream is not None:
+                    return sync_stream
+            response: Final = (
+                json.loads(raw_response.http_response.read()) if streams else raw_response.parse().model_dump()
+            )
             ## LOGGING
             logging_obj.post_call(
                 input=prompt,
@@ -2786,7 +2830,7 @@ class OpenAIAssistantsAPI(BaseLLM):
     def add_message(
         self, 
         thread_id: str,
-        message_data: dict,
+        message_data: dict[str, object],
         api_key: str | None,
         api_base: str | None,
         timeout: float | httpx.Timeout,
@@ -2803,7 +2847,7 @@ class OpenAIAssistantsAPI(BaseLLM):
     def add_message(
         self, 
         thread_id: str,
-        message_data: dict,
+        message_data: dict[str, object],
         api_key: str | None,
         api_base: str | None,
         timeout: float | httpx.Timeout,
@@ -3348,7 +3392,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         timeout: float | httpx.Timeout,
         max_retries: int | None,
         organization: str | None,
-        client,
+        client: object,
         arun_thread: Literal[True], 
         event_handler: AssistantEventHandler | None,
         *,
@@ -3372,7 +3416,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         timeout: float | httpx.Timeout,
         max_retries: int | None,
         organization: str | None,
-        client,
+        client: object,
         arun_thread: Literal[False] | None, 
         event_handler: AssistantEventHandler | None,
         *,

@@ -28,6 +28,7 @@ from litellm.types.utils import (
     Choices,
     Message,
     ModelResponse,
+    ModelResponseStream,
     TextCompletionResponse,
 )
 
@@ -249,7 +250,7 @@ def build_complete_streaming_response_legacy(
         sync_stream=False,
         speed=speed,
     )
-    all_openai_chunks: Final = []
+    all_openai_chunks: Final[list[ModelResponseStream]] = []
 
     # Process each chunk - a chunk may contain multiple SSE events
     for _chunk_str in all_chunks:
@@ -384,7 +385,7 @@ def build_usage_only_response_from_chunks(
     # build usage via the same AnthropicConfig.calculate_usage path the success
     # cases use, so prompt_tokens are cache-inclusive and cache / server_tool_use /
     # inference_geo tokens are priced instead of left at $0
-    usage_object: Final[dict] = {
+    usage_object: Final[dict[str, object]] = {
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
     }
@@ -398,7 +399,7 @@ def build_usage_only_response_from_chunks(
             "ephemeral_1h_input_tokens": cache_creation_1h or 0,
         }
     if web_search_requests is not None or tool_search_requests is not None:
-        _server_tool_use: Final[dict] = {}
+        _server_tool_use: Final[dict[str, object]] = {}
         if web_search_requests is not None:
             _server_tool_use["web_search_requests"] = web_search_requests
         if tool_search_requests is not None:

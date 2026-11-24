@@ -1967,6 +1967,8 @@ def auth_route_matches_wildcard(route: str, pattern: str) -> bool: ...
 def auth_managed_route(route: str) -> Literal["discovery", "realtime", "live", "model", "tool", "other"]: ...
 def auth_managed_agent_route_allowed(route: str, method: str | None = None) -> bool: ...
 def auth_route_matches_prefix(route: str, allowed_route: str) -> bool: ...
+def classify_billable_route(path: str, method: str) -> tuple[Literal["llm", "mcp", "a2a"], str] | None: ...
+def billable_route_passthrough_prefixes() -> list[str]: ...
 def auth_route_matches_denied(route: str, denied_route: str) -> bool: ...
 def auth_first_denied_route(forwarded_routes: Sequence[str], denied_sources: Sequence[object]) -> str | None: ...
 def auth_jwt_team_routes_grant(route: str, team_allowed_routes: object) -> bool: ...
@@ -2255,6 +2257,19 @@ class RustKeyRepository:
     def find(self, token: str, *, use_writer: bool = False) -> Future[object]: ...
 
 @final
+class RustKeyOwnersRepository:
+    def __new__(cls, database: NativeDatabase) -> RustKeyOwnersRepository: ...
+    def find(
+        self,
+        *,
+        user_id: str | None,
+        team_id: str | None,
+        membership_user_id: str | None,
+        organization_id: str | None,
+        project_id: str | None,
+    ) -> Future[str]: ...
+
+@final
 class RustJwtKeyMappingRepository:
     def __new__(cls, database: NativeDatabase) -> RustJwtKeyMappingRepository: ...
     def mapped_token(
@@ -2407,6 +2422,15 @@ class RustSpendLog:
         token_redactor: NativeTokenRedactor,
     ) -> RustSpendLog: ...
     def callback(self) -> RustHandle: ...
+    def start(
+        self,
+        hook: str,
+        fields: Mapping[str, object],
+        call: Mapping[str, object] | None,
+        host: object,
+        request: NativeRequestRedis | None,
+        /,
+    ) -> Execution: ...
 
 @final
 class NativeTokenRedactor:
@@ -2541,6 +2565,15 @@ class NativeModelCapacity:
         connection: NativeModelCapacityState | None,
         key: Mapping[str, object],
         model: str,
+        facts: Mapping[str, object],
+        request: NativeRequestRedis | None = None,
+    ) -> Future[dict[str, object]]: ...
+    def charge_turn(
+        self,
+        connection: NativeModelCapacityState | None,
+        key: Mapping[str, object],
+        model: str,
+        usage: tuple[int, int, int, int],
         facts: Mapping[str, object],
         request: NativeRequestRedis | None = None,
     ) -> Future[dict[str, object]]: ...
@@ -2753,6 +2786,7 @@ __all__ = [
     "RustJwtKeyMappingRepository",
     "RustJwtMapping",
     "RustKeyContext",
+    "RustKeyOwnersRepository",
     "RustKeyRepository",
     "RustMappedClaims",
     "RustModelAccessGroupRepository",
@@ -2788,9 +2822,11 @@ __all__ = [
     "auth_route_matches_denied",
     "auth_route_matches_prefix",
     "auth_route_matches_wildcard",
+    "billable_route_passthrough_prefixes",
     "billable_service_tier",
     "budget_check_decision",
     "bundled_model_cost_map",
+    "classify_billable_route",
     "completion",
     "drain_post_call_redis_batches",
     "embedding",
@@ -3526,6 +3562,12 @@ class NativeParallelRequestLimiter:
         operations: Sequence[tuple[str, str, str, int | float, int | None, str | None, str | None]],
     ) -> Future[None]: ...
     def release_on_disconnect(self, state: NativeParallelRequestLimiterState) -> Future[None]: ...
+    def leave_reservation_to_socket_close(self, state: NativeParallelRequestLimiterState) -> None: ...
+    def close_socket(
+        self,
+        state: NativeParallelRequestLimiterState,
+        close: Literal["refused_at_open", "relay_failed", "turns_finished", "turn_unfinished", "settled_by_its_log"],
+    ) -> Future[None]: ...
     def scoped(
         self,
         inputs: Mapping[str, object],
