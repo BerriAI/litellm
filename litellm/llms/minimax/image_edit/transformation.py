@@ -1,5 +1,5 @@
 import io
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Final
 
 import httpx
@@ -36,10 +36,11 @@ def _whole_file(image: FileTypes) -> bytes:  # pyright: ignore[reportUnknownPara
     return extract_file_data(image)["content"]  # pyright: ignore[reportUnknownArgumentType]  # FileTypes holds a bare PathLike
 
 
-def _image_contents(image: FileTypes | list[FileTypes] | None) -> list[bytes] | None:  # pyright: ignore[reportUnknownParameterType]  # mutable-ok: the parent uploads each image of a list, FileTypes holds a bare PathLike
+def _image_contents(image: FileTypes | Sequence[FileTypes | None] | None) -> list[bytes] | None:  # pyright: ignore[reportUnknownParameterType]  # mutable-ok: the parent uploads each image of a list, FileTypes holds a bare PathLike
     if image is None:
         return None
-    return list(map(_whole_file, image if isinstance(image, list) else (image,)))  # pyright: ignore[reportUnknownArgumentType]  # FileTypes holds a bare PathLike
+    images: Final = image if isinstance(image, list) else (image,)
+    return [_whole_file(item) for item in images if item is not None]  # pyright: ignore[reportArgumentType]  # like the parent, only a list holds several images
 
 
 class MinimaxImageEditConfig(OpenAIImageEditConfig):
@@ -71,7 +72,7 @@ class MinimaxImageEditConfig(OpenAIImageEditConfig):
         self,
         error_message: str,
         status_code: int,
-        headers: dict[str, str] | httpx.Headers,  # mutable-ok: mirrors override contract
+        headers: dict[str, object] | httpx.Headers,  # mutable-ok: mirrors override contract
     ) -> BaseLLMException:
         return MinimaxImageError(status_code=status_code, message=error_message, headers=headers)
 
@@ -87,7 +88,7 @@ class MinimaxImageEditConfig(OpenAIImageEditConfig):
         self,
         model: str,
         prompt: str | None,
-        image: FileTypes | list[FileTypes] | None,  # pyright: ignore[reportUnknownParameterType]  # mutable-ok: mirrors image_edit's image param, FileTypes holds a bare PathLike
+        image: FileTypes | Sequence[FileTypes | None] | None,  # pyright: ignore[reportUnknownParameterType]  # FileTypes holds a bare PathLike
         image_edit_optional_request_params: Mapping[str, object],
         litellm_params: GenericLiteLLMParams,
         headers: Mapping[str, str],
