@@ -17,8 +17,9 @@
 //! ciphertexts.
 //!
 //! Boot never fails over the database. When `store_model_in_db` is on and the stored config
-//! cannot be read, the native app runs the file alone and [`StoredConfig::Unread`] has `admit`
-//! refuse every request until a later read loads it.
+//! cannot be read, or the settings rows that may turn it on cannot be read, the native app runs
+//! the file alone and [`StoredConfig::Unread`] has `admit` refuse every request until a later read
+//! loads it.
 
 use std::{collections::BTreeMap, path::Path, sync::Arc};
 
@@ -56,8 +57,8 @@ pub enum StoredConfig {
     Unused,
     /// It is on and the database was read, so the config holds what it stores.
     Loaded,
-    /// It is on and the database could not be read, so the native app runs the file alone and
-    /// serves nothing.
+    /// It is on, or the settings rows that may turn it on could not be read, and the database could
+    /// not be read, so the native app runs the file alone and serves nothing.
     Unread,
     /// It is off and the UI settings could not be read, so the native app runs the file alone and
     /// serves nothing. No stored model is ever loaded for it.
@@ -137,6 +138,11 @@ pub(crate) async fn load(path: &Path, secrets: Arc<Secrets>) -> Result<Loaded, E
         return Ok(without_stored(file, on));
     };
     let key = salt_key(&*environment, &file);
+    let switched_on = store_model_in_db(
+        file.general_settings.store_model_in_db,
+        &*environment,
+        &SettingsRows::default(),
+    );
     let (loaded, fetched) = layered(
         document.clone(),
         file,
@@ -150,7 +156,15 @@ pub(crate) async fn load(path: &Path, secrets: Arc<Secrets>) -> Result<Loaded, E
         pools.close().await;
         return Ok(loaded);
     };
-    let source = Source::new(document, key, secrets, database, pools, fetched);
+    let source = Source::new(
+        document,
+        key,
+        switched_on,
+        secrets,
+        database,
+        pools,
+        fetched,
+    );
     Ok(Loaded {
         source: Some(source),
         ..loaded
@@ -195,22 +209,11 @@ pub(crate) async fn layered(
     let settings = match rows.settings().await {
         Ok(found) => settings_rows(&found, readable_key),
         Err(error) => {
-            let on = store_model_in_db(switched_on, environment, &SettingsRows::default());
             tracing::warn!(
                 error = %Report::new(&error),
-                store_model_in_db = on,
-                "could not read the settings the proxy stores in its database"
+                "could not read the settings the proxy stores in its database, so whether store_model_in_db is on is unknown and python answers every request"
             );
-            return (
-                match (on, ui_settings) {
-                    (true, _) => without_stored(file, true),
-                    (false, None) => ui_settings_unread(file),
-                    (false, Some(ui_settings)) => {
-                        with_ui_settings(document, file, ui_settings, secrets).await
-                    }
-                },
-                None,
-            );
+            return (without_stored(file, true), None);
         }
     };
     let on = store_model_in_db(switched_on, environment, &settings);
@@ -279,12 +282,7 @@ async fn with_ui_settings(
     let Some(ui_settings) = ui_settings else {
         return without_stored(file, false);
     };
-    let rows = SettingsRows {
-        ui_settings,
-        ..SettingsRows::default()
-    };
-    let (document, _) = document.overlay(&rows);
-    match document.resolve(secrets()).await {
+    match ui_settings_only(document, ui_settings, secrets).await {
         Ok(config) => Loaded {
             config,
             stored: StoredConfig::Unused,
@@ -298,6 +296,20 @@ async fn with_ui_settings(
             without_stored(file, true)
         }
     }
+}
+
+/// The config `document` describes with only `ui_settings` layered in, what a proxy with
+/// `store_model_in_db` off serves.
+pub(crate) async fn ui_settings_only(
+    document: Document,
+    ui_settings: UiSettings,
+    secrets: &Secrets,
+) -> Result<Config, litellm_config_load::Error> {
+    let rows = SettingsRows {
+        ui_settings,
+        ..SettingsRows::default()
+    };
+    document.overlay(&rows).0.resolve(secrets()).await
 }
 
 /// `file` alone, for a proxy that reads no stored config but whose UI settings could not be read.
@@ -662,10 +674,10 @@ mod tests {
         rows_with(Some(r#"{"store_model_in_db": true}"#), true, true),
         (StoredConfig::Loaded, vec!["file", "stored"])
     )]
-    #[case::settings_unreadable_while_off(
+    #[case::settings_unreadable_while_the_file_says_nothing(
         FILE,
         Rows::default(),
-        (StoredConfig::Unused, vec!["file"])
+        (StoredConfig::Unread, vec!["file"])
     )]
     #[case::settings_unreadable_while_on(
         &format!("{FILE}{ON}"),
