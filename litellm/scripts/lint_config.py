@@ -17,7 +17,7 @@ import re
 import sys
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from functools import cache
+from functools import cache, reduce
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final, Literal, TypeAlias, get_args
@@ -283,14 +283,14 @@ def _model_info_findings(
 _AZURE_CLIENT_LOGIN: Final = ("tenant_id", "client_id", "client_secret")
 
 
-def _effective_environ(declared: Mapping[str, object], environ: Mapping[str, str]) -> dict[str, str]:
-    effective: Final = dict(environ)
-    for name, value in declared.items():
-        text: Final = "" if value is None else str(value)
-        effective[str(name)] = (
-            effective.get(text.removeprefix(_ENV_PREFIX), "") if text.startswith(_ENV_PREFIX) else text
-        )
-    return effective
+def _with_declared(environ: Mapping[str, str], item: tuple[object, object]) -> Mapping[str, str]:
+    text: Final = "" if item[1] is None else str(item[1])
+    value: Final = environ.get(text.removeprefix(_ENV_PREFIX), "") if text.startswith(_ENV_PREFIX) else text
+    return {**environ, str(item[0]): value}
+
+
+def _effective_environ(declared: Mapping[str, object], environ: Mapping[str, str]) -> Mapping[str, str]:
+    return reduce(_with_declared, declared.items(), environ)
 
 
 def _provider_model(params: Mapping[str, object], model: str) -> str:
