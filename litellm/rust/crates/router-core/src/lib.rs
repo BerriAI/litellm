@@ -301,6 +301,82 @@ pub struct SuccessReport {
     pub callbacks: OutcomeCallbacks,
 }
 
+impl Core {
+    /// A failure reported against `id`: counted, then cooled down by the rules. Returns the
+    /// cooldown applied, if any.
+    pub(crate) async fn reported_failure<C: RouterCache>(
+        &self,
+        snapshot: &RouterStateSnapshot,
+        cache: &C,
+        id: &str,
+        failure: &AttemptError,
+        report: &FailureReport,
+    ) -> Result<Option<std::time::Duration>, Error> {
+        let health = Health::new(cache, self.clock.clone());
+        if !report.uncounted && !failure.outside_deployment {
+            health.count_failure(id).await?;
+        }
+        let Some(deployment) = snapshot.registry.deployment(id) else {
+            return Ok(None);
+        };
+        if report.counts_request {
+            health
+                .count_failed_request(&deployment, report.usage_model.as_deref())
+                .await?;
+        }
+        if failure.outside_deployment {
+            return Ok(None);
+        }
+        // An empty status is no cooldown (`_is_cooldown_required`), unless the deployment's
+        // own policy names the error.
+        if report.count_only
+            && crate::health::deployment_allowed_fails(
+                deployment.model_info.allowed_fails_policy.as_ref(),
+                failure,
+            )
+            .is_none()
+        {
+            return Ok(None);
+        }
+        let cooldown = if report.deployment_cooldown {
+            report
+                .cooldown_time
+                .filter(|seconds| *seconds >= 0.0)
+                .and_then(|seconds| std::time::Duration::try_from_secs_f64(seconds).ok())
+                .or(failure.retry_after)
+                .unwrap_or(snapshot.settings.cooldown_time)
+        } else {
+            snapshot.settings.cooldown_time
+        };
+        let has_fallback_group = snapshot
+            .settings
+            .dynamic
+            .fallback_targets(&[report
+                .requested_group
+                .as_deref()
+                .unwrap_or(&deployment.model_name)])
+            .is_some();
+        let shape = GroupShape::of_failure(report.batch_api, has_fallback_group, |batch_call| {
+            snapshot
+                .registry
+                .group(&deployment.model_name)
+                .is_some_and(|group| deployment.peers_in(&group, batch_call) == 1)
+                && !report.requested_group.as_deref().is_some_and(|group| {
+                    routing_group_has_alternatives(
+                        &snapshot.registry,
+                        group,
+                        &deployment,
+                        batch_call,
+                    )
+                })
+                && !team_model_has_alternatives(&snapshot.registry, &deployment, batch_call)
+        });
+        health
+            .cool_down_after(&snapshot.settings, &deployment, shape, failure, cooldown)
+            .await
+    }
+}
+
 /// Builds a [`Router`], with test seams.
 pub struct RouterBuilder {
     config: RouterConfig,
@@ -574,80 +650,14 @@ impl Router {
             .callbacks
             .record(
                 OutcomeWrite::Failure,
-                self.reported_failure(cache, id, failure, &report),
+                self.core.reported_failure(
+                    &self.core.snapshot.load_full(),
+                    cache,
+                    id,
+                    failure,
+                    &report,
+                ),
             )
-            .await
-    }
-
-    async fn reported_failure<C: RouterCache>(
-        &self,
-        cache: &C,
-        id: &str,
-        failure: &AttemptError,
-        report: &FailureReport,
-    ) -> Result<Option<std::time::Duration>, Error> {
-        let health = self.health(cache);
-        if !report.uncounted && !failure.outside_deployment {
-            health.count_failure(id).await?;
-        }
-        let snapshot = self.core.snapshot.load_full();
-        let Some(deployment) = snapshot.registry.deployment(id) else {
-            return Ok(None);
-        };
-        if report.counts_request {
-            health
-                .count_failed_request(&deployment, report.usage_model.as_deref())
-                .await?;
-        }
-        if failure.outside_deployment {
-            return Ok(None);
-        }
-        // An empty status is no cooldown (`_is_cooldown_required`), unless the deployment's
-        // own policy names the error.
-        if report.count_only
-            && crate::health::deployment_allowed_fails(
-                deployment.model_info.allowed_fails_policy.as_ref(),
-                failure,
-            )
-            .is_none()
-        {
-            return Ok(None);
-        }
-        let cooldown = if report.deployment_cooldown {
-            report
-                .cooldown_time
-                .filter(|seconds| *seconds >= 0.0)
-                .and_then(|seconds| std::time::Duration::try_from_secs_f64(seconds).ok())
-                .or(failure.retry_after)
-                .unwrap_or(snapshot.settings.cooldown_time)
-        } else {
-            snapshot.settings.cooldown_time
-        };
-        let has_fallback_group = snapshot
-            .settings
-            .dynamic
-            .fallback_targets(&[report
-                .requested_group
-                .as_deref()
-                .unwrap_or(&deployment.model_name)])
-            .is_some();
-        let shape = GroupShape::of_failure(report.batch_api, has_fallback_group, |batch_call| {
-            snapshot
-                .registry
-                .group(&deployment.model_name)
-                .is_some_and(|group| deployment.peers_in(&group, batch_call) == 1)
-                && !report.requested_group.as_deref().is_some_and(|group| {
-                    routing_group_has_alternatives(
-                        &snapshot.registry,
-                        group,
-                        &deployment,
-                        batch_call,
-                    )
-                })
-                && !team_model_has_alternatives(&snapshot.registry, &deployment, batch_call)
-        });
-        health
-            .cool_down_after(&snapshot.settings, &deployment, shape, failure, cooldown)
             .await
     }
 
