@@ -101,24 +101,26 @@ class OpenAIOSeriesConfig(OpenAIGPTConfig):
         drop_params: bool,
         *,
         declared_reasoning_efforts: Collection[str] | None = None,
+        allowed_openai_params: Collection[str] = (),
     ):
         requested_effort: Final = get_effort_level(
             non_default_params.get("reasoning_effort") or optional_params.get("reasoning_effort")  # pyright: ignore[reportUnknownMemberType]  # the request params arrive as a bare dict
         )
-        if (
-            requested_effort is not None
+        refused_effort: Final = (
+            requested_effort
+            if requested_effort is not None
             and requested_effort not in (declared_reasoning_efforts or ())
+            and "reasoning_effort" not in allowed_openai_params
             and is_explicitly_disabled_factory(
                 model=model, custom_llm_provider=None, key=f"supports_{requested_effort}_reasoning_effort"
             )
-        ):
-            if not (litellm.drop_params or drop_params):
-                raise litellm.utils.UnsupportedParamsError(
-                    message=unsupported_reasoning_effort_message("reasoning_effort", requested_effort, model),
-                    status_code=400,
-                )
-            non_default_params.pop("reasoning_effort", None)  # pyright: ignore[reportUnknownMemberType]  # the request params arrive as a bare dict
-            optional_params.pop("reasoning_effort", None)  # pyright: ignore[reportUnknownMemberType]  # the request params arrive as a bare dict
+            else None
+        )
+        if refused_effort is not None and not (litellm.drop_params or drop_params):
+            raise litellm.utils.UnsupportedParamsError(
+                message=unsupported_reasoning_effort_message("reasoning_effort", refused_effort, model),
+                status_code=400,
+            )
         if "max_tokens" in non_default_params:
             optional_params["max_completion_tokens"] = non_default_params.pop("max_tokens")
         if "temperature" in non_default_params:
@@ -136,7 +138,12 @@ class OpenAIOSeriesConfig(OpenAIGPTConfig):
                             status_code=400,
                         )
 
-        return super()._map_openai_params(non_default_params, optional_params, model, drop_params)
+        mapped_params: Final[dict[str, object]] = super()._map_openai_params(  # mutable-ok: OpenAIConfig returns a dict
+            non_default_params, optional_params, model, drop_params
+        )
+        if refused_effort is None:
+            return mapped_params
+        return {param: value for param, value in mapped_params.items() if param != "reasoning_effort"}
 
     def _with_provider_roles(self, messages: Sequence[AllMessageValues], model: str) -> Sequence[AllMessageValues]:
         keeps_system_messages: Final = supports_system_messages(model, "openai")

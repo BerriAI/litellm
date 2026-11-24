@@ -307,7 +307,10 @@ def test_o3_judges_every_form_of_a_requested_level(
     )
 
 
-@pytest.mark.parametrize("custom_llm_provider", ["openai", "azure"])
+O3_CHAT_ROUTES: Final = ("openai", "azure", "azure_ai", "github_copilot", "chatgpt", "ragflow")
+
+
+@pytest.mark.parametrize("custom_llm_provider", O3_CHAT_ROUTES)
 @pytest.mark.parametrize(
     ("model_info", "drop_params", "sent"),
     [
@@ -332,7 +335,22 @@ def test_o3_chat_request_forwards_minimal_only_when_the_deployment_declares_it(
     assert optional_params.get("reasoning_effort") == sent
 
 
-@pytest.mark.parametrize("custom_llm_provider", ["openai", "azure"])
+@pytest.mark.parametrize("custom_llm_provider", O3_CHAT_ROUTES)
 def test_o3_chat_request_refuses_minimal_without_drop_params(local_model_cost_map: None, custom_llm_provider: str):
     with pytest.raises(litellm.utils.UnsupportedParamsError, match="reasoning_effort=minimal is not supported"):
         get_optional_params(model="o3", custom_llm_provider=custom_llm_provider, reasoning_effort="minimal")
+
+
+@pytest.mark.parametrize("custom_llm_provider", O3_CHAT_ROUTES)
+@pytest.mark.parametrize("drop_params", [True, False])
+def test_o3_chat_request_forwards_a_level_the_caller_allows(
+    local_model_cost_map: None, custom_llm_provider: str, drop_params: bool
+):
+    optional_params: Final = get_optional_params(
+        model="o3",
+        custom_llm_provider=custom_llm_provider,
+        reasoning_effort="minimal",
+        drop_params=drop_params,
+        allowed_openai_params=["reasoning_effort"],
+    )
+    assert optional_params.get("reasoning_effort") == "minimal"
