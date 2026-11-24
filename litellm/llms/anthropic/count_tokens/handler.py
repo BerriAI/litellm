@@ -69,6 +69,7 @@ class AnthropicCountTokensHandler(AnthropicCountTokensConfig):
                 tools=tools,
                 system=system,
                 optional_params=optional_params,
+                api_base=api_base,
             )
 
             verbose_logger.debug("Transformed request: %s", request_body)

@@ -84,6 +84,9 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
     def _resolved_provider(self) -> str:
         return self.custom_llm_provider or "anthropic"
 
+    def thinking_signature_rule_provider(self) -> str:
+        return self._resolved_provider
+
     def get_supported_anthropic_messages_params(self, model: str) -> list:
         return [
             "messages",
@@ -683,6 +686,8 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                 strip_encrypted_reasoning_blocks_from_anthropic_messages(messages),
                 model=model,
                 base_model=base_model if isinstance(base_model, str) else None,
+                custom_llm_provider=self.thinking_signature_rule_provider(),
+                api_base=getattr(litellm_params, "api_base", None),
             ),
             max_tokens=max_tokens,
             model=model,
