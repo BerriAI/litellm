@@ -89,6 +89,7 @@ IGNORE_FUNCTIONS = [
     "_without_requester_ip_address",  # walks only the fresh tree _sanitize_request_body_for_spend_logs_payload returns (mapping cycles already cut), so it never goes deeper than that sanitizer did.
     "_gemini_wire_value",  # max depth set (DEFAULT_MAX_RECURSE_DEPTH); returns the subtree as plain JSON at the cap.
     "_schema_rejection",  # cohere v2 response_format schema check: max depth set (_SCHEMA_DEPTH_CHECKED); returns a rejection at the cap.
+    "_redacted_client_field",  # max depth set (DEFAULT_MAX_RECURSE_DEPTH); fails closed by returning REDACTED for anything nested past the cap.
 ]
 
 

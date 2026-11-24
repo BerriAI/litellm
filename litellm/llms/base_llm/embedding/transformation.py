@@ -1,11 +1,14 @@
+import base64
+import struct
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.types.llms.openai import AllEmbeddingInputValues, AllMessageValues
-from litellm.types.utils import EmbeddingResponse, ModelResponse
+from litellm.types.utils import Embedding, EmbeddingResponse, ModelResponse
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -14,6 +17,40 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+class _EmbeddingItems(BaseModel):
+    model_config = ConfigDict(frozen=True, from_attributes=True)
+
+    data: tuple[Embedding, ...]
+
+
+class _EmbeddingVector(BaseModel):
+    model_config = ConfigDict(frozen=True, from_attributes=True)
+
+    embedding: tuple[float, ...] | str
+
+
+_EMBEDDING_VECTORS: Final = TypeAdapter(tuple[_EmbeddingVector, ...])
+
+
+def _float32_base64(vector: tuple[float, ...] | str) -> str:
+    if isinstance(vector, str):
+        return vector
+    return base64.b64encode(struct.pack(f"<{len(vector)}f", *vector)).decode("ascii")
+
+
+def with_base64_embeddings(response: EmbeddingResponse) -> EmbeddingResponse:
+    items: Final = _EmbeddingItems.model_validate(response, from_attributes=True).data
+    vectors: Final = _EMBEDDING_VECTORS.validate_python(items, from_attributes=True)
+    return response.model_copy(
+        update={
+            "data": [
+                item.model_copy(update={"embedding": _float32_base64(vector.embedding)})
+                for item, vector in zip(items, vectors, strict=True)
+            ]
+        }
+    )
 
 
 class BaseEmbeddingConfig(BaseConfig, ABC):

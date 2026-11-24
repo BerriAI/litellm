@@ -3,9 +3,9 @@ import datetime
 import json
 import os
 import sys
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import nullcontext
-from typing import Final, cast
+from typing import Final, Literal, cast
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -26,9 +26,13 @@ from litellm.llms.anthropic.pass_through.responses_adapters.handler import (
     LiteLLMMessagesToResponsesAPIHandler,
     _build_responses_kwargs,
 )
+from litellm.llms.anthropic.pass_through.utils import model_reasoning_efforts
 from litellm.router import Router
+from litellm.utils import is_generalized_model_info
+from litellm.router_utils.reasoning_effort_capability import resolve_supported_reasoning_efforts
 from litellm.types.integrations.custom_logger import CONVERTED_STREAM_KEYS, converted_stream_requested
 from litellm.types.utils import StandardLoggingPayload
+from litellm.types.llms.anthropic import AnthropicOutputConfig
 
 MESSAGES = [{"role": "user", "content": "hello"}]
 CLAUDE_CODE_USER_ID = json.dumps({"device_id": "d" * 64, "account_uuid": "", "session_id": "session-abc"})
@@ -316,6 +320,307 @@ def test_build_responses_kwargs_skips_include_for_a_responses_provider_that_reje
     )
     assert "include" not in responses_kwargs
     assert "reasoning" in responses_kwargs
+
+
+OFF_SWITCH_MODELS: Final = [
+    "gpt-5",
+    "gpt-5-mini",
+    "gpt-5-nano",
+    "gpt-6.1-sol",
+    "gpt-6-luna",
+    "gpt-5.1",
+    "chat-latest",
+    "o3",
+    "gpt-4.1",
+    "gpt-bridge-unmapped",
+]
+OFF_THINKING: Final = [{"type": "disabled"}, {"type": "between_tools"}]
+OFF_THINKING_IDS: Final = ["disabled", "between_tools-first-turn"]
+
+
+def _leaves_reasoning_to_the_model(model: str, thinking: dict[str, object]) -> bool:
+    return thinking["type"] == "between_tools" and model_reasoning_efforts(model, "openai") is None
+
+
+def _lowest_listed_off_switch(model: str) -> str:
+    levels: Final = model_reasoning_efforts(model, "openai") or ()
+    return next((level for level in ("none", "minimal", "low") if level in levels), "none")
+
+
+@pytest.mark.parametrize("thinking", OFF_THINKING, ids=OFF_THINKING_IDS)
+@pytest.mark.parametrize("model", OFF_SWITCH_MODELS)
+def test_build_responses_kwargs_turns_reasoning_off_at_the_lowest_level_the_model_lists_unless_it_never_reasons(
+    model: str, thinking: dict[str, object]
+) -> None:
+    responses_kwargs: Final = _build_responses_kwargs(
+        max_tokens=1024,
+        messages=MESSAGES,
+        model=f"openai/{model}",
+        thinking=thinking,
+        extra_kwargs={"custom_llm_provider": "openai"},
+    )
+
+    map_row: Final = litellm.model_cost.get(model)
+    never_reasons: Final = map_row is not None and not map_row.get("supports_reasoning")
+    sends_no_reasoning: Final = never_reasons or _leaves_reasoning_to_the_model(model, thinking)
+    assert responses_kwargs.get("reasoning") == (
+        None if sends_no_reasoning else {"effort": _lowest_listed_off_switch(model)}
+    )
+
+
+@pytest.mark.parametrize("thinking", OFF_THINKING, ids=OFF_THINKING_IDS)
+@pytest.mark.parametrize("model", OFF_SWITCH_MODELS)
+def test_build_responses_kwargs_under_drop_params_keeps_a_listed_lower_tier_and_drops_an_unconfirmed_none(
+    model: str, thinking: dict[str, object]
+) -> None:
+    responses_kwargs: Final = _build_responses_kwargs(
+        max_tokens=1024,
+        messages=MESSAGES,
+        model=f"openai/{model}",
+        thinking=thinking,
+        extra_kwargs={"custom_llm_provider": "openai", "drop_params": True},
+    )
+
+    off_switch: Final = _lowest_listed_off_switch(model)
+    map_row: Final = litellm.model_cost.get(model)
+    confirms_none: Final = map_row is not None and map_row.get("supports_none_reasoning_effort") is True
+    keeps_none: Final = map_row is None or (bool(map_row.get("supports_reasoning")) and confirms_none)
+    sends_off_switch: Final = (off_switch != "none" or keeps_none) and not _leaves_reasoning_to_the_model(
+        model, thinking
+    )
+    assert responses_kwargs.get("reasoning") == ({"effort": off_switch} if sends_off_switch else None)
+
+
+@pytest.mark.parametrize("model", ["gpt-5.4-mini", "gpt-5.1", "gpt-6-luna", "gpt-bridge-unmapped"])
+@pytest.mark.parametrize("thinking", [None, {"type": "adaptive"}], ids=["thinking-left-out", "adaptive"])
+def test_build_responses_kwargs_never_turns_on_reasoning_the_client_left_off(
+    model: str, thinking: dict[str, object] | None
+) -> None:
+    responses_kwargs: Final = _build_responses_kwargs(
+        max_tokens=1024,
+        messages=MESSAGES,
+        model=f"openai/{model}",
+        output_config={"effort": "high"},
+        thinking=thinking,
+        extra_kwargs={"custom_llm_provider": "openai"},
+    )
+
+    map_row: Final = litellm.model_cost.get(model)
+    reasons_unasked: Final = map_row is not None and map_row.get("default_reasoning_effort") != "none"
+    reasoning: Final = responses_kwargs.get("reasoning")
+    assert (reasoning is None) == (thinking is None and not reasons_unasked)
+    assert reasoning is None or cast(Mapping[str, object], reasoning)["effort"] != "none"
+
+
+@pytest.mark.parametrize("model_info", [None, {"id": "router-deployment"}], ids=["sdk", "router"])
+@pytest.mark.parametrize(
+    "thinking, output_config, reasoning",
+    [
+        pytest.param({"type": "disabled"}, None, {"effort": "none"}, id="disabled"),
+        pytest.param(None, {"effort": "high"}, None, id="bare-effort"),
+    ],
+)
+def test_build_responses_kwargs_treats_a_name_only_the_family_rule_matches_as_unlisted_on_every_path(
+    model_info: dict[str, object] | None,
+    thinking: dict[str, object] | None,
+    output_config: AnthropicOutputConfig | None,
+    reasoning: dict[str, object] | None,
+) -> None:
+    model: Final = "openai/gpt-9.97-unlisted"
+    assert is_generalized_model_info(litellm.get_model_info(model))
+
+    responses_kwargs: Final = _build_responses_kwargs(
+        max_tokens=1024,
+        messages=MESSAGES,
+        model=model,
+        thinking=thinking,
+        output_config=output_config,
+        extra_kwargs={"custom_llm_provider": "openai", "drop_params": True, "model_info": model_info},
+    )
+
+    assert responses_kwargs.get("reasoning") == reasoning
+
+
+@pytest.mark.parametrize("thinking", [None, {"type": "adaptive"}], ids=["thinking-left-out", "adaptive"])
+def test_build_responses_kwargs_leaves_a_bare_output_effort_to_an_explicit_reasoning_effort(
+    thinking: dict[str, object] | None,
+) -> None:
+    responses_kwargs: Final = _build_responses_kwargs(
+        max_tokens=1024,
+        messages=MESSAGES,
+        model="openai/gpt-5-mini",
+        output_config={"effort": "high"},
+        thinking=thinking,
+        extra_kwargs={"custom_llm_provider": "openai", "reasoning_effort": "minimal"},
+    )
+
+    assert responses_kwargs["reasoning_effort"] == "minimal"
+    assert ("reasoning" in responses_kwargs) == (thinking is not None)
+
+
+@pytest.mark.parametrize("drop_params", [True, False], ids=["drop_params", "no-drop_params"])
+@pytest.mark.parametrize("thinking", [None, {"type": "adaptive"}], ids=["thinking-left-out", "adaptive"])
+def test_build_responses_kwargs_drops_an_effort_no_reasoning_api_defines_only_under_drop_params(
+    drop_params: bool, thinking: dict[str, object] | None
+) -> None:
+    responses_kwargs: Final = _build_responses_kwargs(
+        max_tokens=1024,
+        messages=MESSAGES,
+        model="openai/gpt-6-luna",
+        output_config=cast(AnthropicOutputConfig, {"effort": "turbo"}),
+        thinking=thinking,
+        extra_kwargs={"custom_llm_provider": "openai", "drop_params": drop_params},
+    )
+
+    assert responses_kwargs.get("reasoning") == (None if drop_params else {"effort": "turbo"})
+
+
+@pytest.mark.parametrize("drop_params", [True, False], ids=["drop_params", "no-drop_params"])
+@pytest.mark.parametrize("thinking", [None, {"type": "adaptive"}], ids=["thinking-left-out", "adaptive"])
+@pytest.mark.parametrize("effort", ["low", "medium", "high"])
+def test_build_responses_kwargs_drops_an_effort_the_model_does_not_list_only_under_drop_params(
+    effort: Literal["low", "medium", "high"], thinking: dict[str, object] | None, drop_params: bool
+) -> None:
+    responses_kwargs: Final = _build_responses_kwargs(
+        max_tokens=1024,
+        messages=MESSAGES,
+        model="openai/chat-latest",
+        output_config={"effort": effort},
+        thinking=thinking,
+        extra_kwargs={"custom_llm_provider": "openai", "drop_params": drop_params},
+    )
+
+    listed: Final = effort in (model_reasoning_efforts("chat-latest", "openai") or ())
+    assert responses_kwargs.get("reasoning") == ({"effort": effort} if listed or not drop_params else None)
+
+
+REASONS_WITHOUT_CONFIRMING_NONE: Final = {"supports_reasoning": True}
+TOOL_RESULT_TURN: Final = [
+    {"role": "user", "content": "multiply 6 by 7"},
+    {
+        "role": "assistant",
+        "content": [{"type": "tool_use", "id": "toolu_1", "name": "multiply", "input": {"a": 6, "b": 7}}],
+    },
+    {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "42"}]},
+]
+
+
+@pytest.mark.parametrize("drop_params", [True, False], ids=["drop_params", "no-drop_params"])
+@pytest.mark.parametrize(
+    "thinking, messages",
+    [({"type": "adaptive"}, MESSAGES), ({"type": "between_tools"}, TOOL_RESULT_TURN)],
+    ids=["adaptive", "between_tools-after-a-tool-result"],
+)
+def test_build_responses_kwargs_drops_a_client_none_a_reasoning_deployment_never_confirmed_only_under_drop_params(
+    drop_params: bool, thinking: dict[str, object], messages: list[dict[str, object]]
+) -> None:
+    responses_kwargs: Final = _build_responses_kwargs(
+        max_tokens=1024,
+        messages=messages,
+        model="openai/reasoner-without-levels",
+        output_config=cast(AnthropicOutputConfig, {"effort": "none"}),
+        thinking=thinking,
+        extra_kwargs={
+            "custom_llm_provider": "openai",
+            "drop_params": drop_params,
+            "model_info": REASONS_WITHOUT_CONFIRMING_NONE,
+        },
+    )
+
+    assert responses_kwargs.get("reasoning") == (None if drop_params else {"effort": "none"})
+
+
+@pytest.mark.parametrize("drop_params", [True, False], ids=["drop_params", "no-drop_params"])
+def test_build_responses_kwargs_drops_a_bare_client_none_on_o3_only_under_drop_params(drop_params: bool) -> None:
+    responses_kwargs: Final = _build_responses_kwargs(
+        max_tokens=1024,
+        messages=MESSAGES,
+        model="openai/o3",
+        output_config=cast(AnthropicOutputConfig, {"effort": "none"}),
+        extra_kwargs={"custom_llm_provider": "openai", "drop_params": drop_params},
+    )
+
+    o3_row: Final = litellm.model_cost["o3"]
+    unconfirmed_none: Final = (
+        model_reasoning_efforts("o3", "openai") is None
+        and o3_row.get("supports_reasoning") is True
+        and o3_row.get("supports_none_reasoning_effort") is not True
+    )
+    assert responses_kwargs.get("reasoning") == (None if drop_params and unconfirmed_none else {"effort": "none"})
+
+
+def test_build_responses_kwargs_keeps_a_pinned_effort_out_when_drop_params_drops_the_client_effort() -> None:
+    responses_kwargs: Final = _build_responses_kwargs(
+        max_tokens=1024,
+        messages=MESSAGES,
+        model="openai/gpt-5-mini",
+        output_config=cast(AnthropicOutputConfig, {"effort": "none"}),
+        thinking={"type": "adaptive"},
+        extra_kwargs={"custom_llm_provider": "openai", "drop_params": True, "reasoning_effort": "low"},
+    )
+
+    listed_levels: Final = model_reasoning_efforts("gpt-5-mini", "openai") or ()
+    assert listed_levels and "none" not in listed_levels
+    assert "reasoning" not in responses_kwargs
+    assert "reasoning_effort" not in responses_kwargs
+
+
+@pytest.mark.parametrize("drop_params", [True, False], ids=["drop_params", "no-drop_params"])
+def test_build_responses_kwargs_keeps_a_pinned_effort_out_when_drop_params_drops_disabled(drop_params: bool) -> None:
+    responses_kwargs: Final = _build_responses_kwargs(
+        max_tokens=1024,
+        messages=MESSAGES,
+        model="openai/reasoner-without-levels",
+        thinking={"type": "disabled"},
+        extra_kwargs={
+            "custom_llm_provider": "openai",
+            "drop_params": drop_params,
+            "reasoning_effort": "high",
+            "model_info": REASONS_WITHOUT_CONFIRMING_NONE,
+        },
+    )
+
+    sent: Final = {key: responses_kwargs.get(key) for key in ("reasoning", "reasoning_effort")}
+    assert sent == (
+        {"reasoning": None, "reasoning_effort": None}
+        if drop_params
+        else {"reasoning": {"effort": "none"}, "reasoning_effort": "high"}
+    )
+
+
+def test_build_responses_kwargs_under_drop_params_leaves_an_unlisted_effort_to_a_deployment_that_rounds_it() -> None:
+    responses_kwargs: Final = _build_responses_kwargs(
+        max_tokens=1024,
+        messages=MESSAGES,
+        model="openai/chat-latest",
+        output_config={"effort": "high"},
+        thinking={"type": "adaptive"},
+        extra_kwargs={
+            "custom_llm_provider": "openai",
+            "drop_params": True,
+            "model_info": {"reasoning_effort_levels": ["low", "high"]},
+        },
+    )
+
+    assert responses_kwargs.get("reasoning") == {"effort": "high"}
+
+
+@pytest.mark.parametrize("effort", ["max", "xhigh"])
+def test_build_responses_kwargs_forwards_an_output_effort_the_model_accepts(effort: Literal["max", "xhigh"]) -> None:
+    responses_kwargs: Final = _build_responses_kwargs(
+        max_tokens=1024,
+        messages=MESSAGES,
+        model="openai/gpt-5.6-luna",
+        output_config={"effort": effort},
+        extra_kwargs={"custom_llm_provider": "openai"},
+    )
+
+    forwarded: Final = cast(Mapping[str, object], responses_kwargs["reasoning"])["effort"]
+    accepted: Final = resolve_supported_reasoning_efforts(
+        litellm.get_model_info(model="gpt-5.6-luna", custom_llm_provider="openai"), deployment_is_mapped=True
+    )
+    assert accepted is not None and forwarded in accepted
+    assert (forwarded == effort) == (effort in accepted)
 
 
 def test_build_responses_kwargs_keeps_the_deployment_include_next_to_encrypted_reasoning():
@@ -976,6 +1281,27 @@ TEXT_RESPONSE: Final = {
     "tools": [],
     "usage": {"input_tokens": 3, "output_tokens": 4, "total_tokens": 7},
 }
+SUMMARY_REFUSAL: Final = {
+    "error": {
+        "message": (
+            "Your organization must be verified to generate reasoning summaries. Please go to: "
+            "https://platform.openai.com/settings/organization/general and click on Verify Organization. "
+            "If you just verified, it can take up to 15 minutes for access to propagate."
+        ),
+        "type": "invalid_request_error",
+        "param": "reasoning.summary",
+        "code": "unsupported_value",
+    }
+}
+OTHER_SUMMARY_400: Final = {
+    "error": {
+        "message": "Unsupported value: 'reasoning.summary' does not support 'auto' with this model.",
+        "type": "invalid_request_error",
+        "param": "reasoning.summary",
+        "code": "unsupported_value",
+    }
+}
+
 
 REJECTED_REPLAYED_REASONING: Final = {
     "error": {
@@ -1051,6 +1377,39 @@ async def test_openai_turn_is_sent_again_once_without_replayed_reasoning_the_bac
 
     assert _replayed_reasoning_counts(upstream) == [1, 0]
     assert events[-1]["type"] in ("message", "message_stop")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "message",
+    [
+        "The encrypted content for item rs_1 could not be verified.",
+        "Encrypted content could not be decrypted or parsed.",
+    ],
+)
+async def test_openai_turn_is_sent_again_when_only_the_error_code_names_the_rejected_reasoning(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, message: str
+) -> None:
+    rejection: Final = {
+        "error": {
+            "message": message,
+            "type": "invalid_request_error",
+            "param": None,
+            "code": "invalid_encrypted_content",
+        }
+    }
+    upstream: Final = _upstream(respx_mock, monkeypatch, httpx.Response(400, json=rejection), False)
+
+    await LiteLLMMessagesToResponsesAPIHandler.async_anthropic_messages_handler(
+        max_tokens=64,
+        messages=_history(replayed_reasoning=True),
+        model="openai/gpt-5.6-luna",
+        tools=[dict(BASH_TOOL)],
+        stream=False,
+        custom_llm_provider="openai",
+    )
+
+    assert _replayed_reasoning_counts(upstream) == [1, 0]
 
 
 def test_sync_openai_turn_is_sent_again_once_without_replayed_reasoning_the_backend_cannot_decrypt(
@@ -1323,3 +1682,216 @@ async def test_openai_turn_logs_every_reasoning_item_the_messages_client_was_ser
 
     assert [block["type"] for block in reply["content"]].count("redacted_thinking") == 2
     assert success_log.logged_reasoning_item_ids == (("rs_1", "rs_2"),)
+
+
+def _upstream_answering_400_then_200(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, *, refusal: Mapping[str, object], stream: bool
+) -> respx.Route:
+    return _upstream_after(respx_mock, monkeypatch, (httpx.Response(400, json=refusal),), stream)
+
+
+async def _summarized_turn(*, sync: bool, stream: bool, drop_params: bool) -> object:
+    if sync:
+        return LiteLLMMessagesToResponsesAPIHandler.anthropic_messages_handler(
+            max_tokens=1024,
+            messages=MESSAGES,
+            model="openai/gpt-5.6-luna",
+            stream=stream,
+            custom_llm_provider="openai",
+            thinking={"type": "adaptive", "display": "summarized"},
+            output_config={"effort": "high"},
+            drop_params=drop_params,
+        )
+    return await LiteLLMMessagesToResponsesAPIHandler.async_anthropic_messages_handler(
+        max_tokens=1024,
+        messages=MESSAGES,
+        model="openai/gpt-5.6-luna",
+        stream=stream,
+        custom_llm_provider="openai",
+        thinking={"type": "adaptive", "display": "summarized"},
+        output_config={"effort": "high"},
+        drop_params=drop_params,
+    )
+
+
+async def _reply_types(served: object, *, stream: bool) -> list[object]:
+    if not stream:
+        return [cast(Mapping[str, object], served)["type"]]
+    return [
+        json.loads(chunk.decode().split("data: ", 1)[1])["type"]
+        async for chunk in cast(AsyncIterator[bytes], served)
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True], ids=["non_stream", "stream"])
+@pytest.mark.parametrize("sync", [False, True], ids=["async", "sync"])
+async def test_under_drop_params_an_unverified_organization_gets_the_turn_again_without_the_summary(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, sync: bool, stream: bool
+) -> None:
+    upstream: Final = _upstream_answering_400_then_200(respx_mock, monkeypatch, refusal=SUMMARY_REFUSAL, stream=stream)
+
+    reply_types: Final = await _reply_types(
+        await _summarized_turn(sync=sync, stream=stream, drop_params=True), stream=stream
+    )
+
+    first, second = (json.loads(call.request.content) for call in upstream.calls)
+    assert first["reasoning"]["summary"]
+    assert second["reasoning"] == {"effort": first["reasoning"]["effort"]}
+    assert {key: value for key, value in second.items() if key != "reasoning"} == {
+        key: value for key, value in first.items() if key != "reasoning"
+    }
+    assert (reply_types[0], reply_types[-1]) == (("message_start", "message_stop") if stream else ("message",) * 2)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True], ids=["non_stream", "stream"])
+@pytest.mark.parametrize("sync", [False, True], ids=["async", "sync"])
+async def test_without_drop_params_an_unverified_organization_gets_the_400_after_one_request(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, sync: bool, stream: bool
+) -> None:
+    upstream: Final = _upstream_answering_400_then_200(respx_mock, monkeypatch, refusal=SUMMARY_REFUSAL, stream=stream)
+
+    with pytest.raises(litellm.BadRequestError, match="must be verified to generate reasoning summaries"):
+        await _reply_types(await _summarized_turn(sync=sync, stream=stream, drop_params=False), stream=stream)
+
+    assert upstream.call_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync", [False, True], ids=["async", "sync"])
+async def test_under_drop_params_another_400_about_the_summary_is_not_retried(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, sync: bool
+) -> None:
+    upstream: Final = _upstream_answering_400_then_200(respx_mock, monkeypatch, refusal=OTHER_SUMMARY_400, stream=False)
+
+    with pytest.raises(litellm.BadRequestError, match="does not support 'auto' with this model"):
+        await _summarized_turn(sync=sync, stream=False, drop_params=True)
+
+    assert upstream.call_count == 1
+
+
+def _refuse_a_summary(request: httpx.Request) -> httpx.Response:
+    if "summary" in json.loads(request.content).get("reasoning", {}):
+        return httpx.Response(400, json=SUMMARY_REFUSAL)
+    return httpx.Response(200, json=TEXT_RESPONSE)
+
+
+def _refuse_a_summary_then_replayed_reasoning(request: httpx.Request) -> httpx.Response:
+    body: Final = json.loads(request.content)
+    replays_reasoning: Final = any(item.get("type") == "reasoning" for item in body["input"])
+    if replays_reasoning and "summary" not in body.get("reasoning", {}):
+        return httpx.Response(400, json=REJECTED_REPLAYED_REASONING)
+    return _refuse_a_summary(request)
+
+
+def _upstream_refusing_every_summary(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    answer: Callable[[httpx.Request], httpx.Response] = _refuse_a_summary,
+) -> respx.Route:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-replay-test")
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    return respx_mock.post("https://api.openai.com/v1/responses").mock(side_effect=answer)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync", [False, True], ids=["async", "sync"])
+async def test_under_drop_params_a_refused_summary_is_sent_again_once_and_not_logged_as_the_turn_failing(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, sync: bool
+) -> None:
+    failure_log: Final = _FailureLog()
+    monkeypatch.setattr(litellm, "callbacks", [failure_log])
+    upstream: Final = _upstream_refusing_every_summary(respx_mock, monkeypatch)
+
+    if sync:
+        litellm.anthropic.messages.create(
+            max_tokens=1024,
+            messages=MESSAGES,
+            model="openai/gpt-5.6-luna",
+            thinking={"type": "adaptive", "display": "summarized"},
+            output_config={"effort": "high"},
+            drop_params=True,
+            num_retries=2,
+        )
+    else:
+        await litellm.anthropic.messages.acreate(
+            max_tokens=1024,
+            messages=MESSAGES,
+            model="openai/gpt-5.6-luna",
+            thinking={"type": "adaptive", "display": "summarized"},
+            output_config={"effort": "high"},
+            drop_params=True,
+            num_retries=2,
+        )
+
+    assert ["summary" in json.loads(call.request.content)["reasoning"] for call in upstream.calls] == [True, False]
+    assert failure_log.rejections == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync", [False, True], ids=["async", "sync"])
+async def test_a_summarized_turn_sent_again_without_replayed_reasoning_logs_only_its_outcome(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, sync: bool
+) -> None:
+    failure_log: Final = _FailureLog()
+    monkeypatch.setattr(litellm, "callbacks", [failure_log])
+    _rejected_then(respx_mock, monkeypatch, httpx.Response(200, json=TEXT_RESPONSE))
+
+    if sync:
+        litellm.anthropic.messages.create(
+            max_tokens=1024,
+            messages=_history(replayed_reasoning=True),
+            model="openai/gpt-5.6-luna",
+            tools=[dict(BASH_TOOL)],
+            thinking={"type": "adaptive", "display": "summarized"},
+            drop_params=True,
+        )
+    else:
+        await litellm.anthropic.messages.acreate(
+            max_tokens=1024,
+            messages=_history(replayed_reasoning=True),
+            model="openai/gpt-5.6-luna",
+            tools=[dict(BASH_TOOL)],
+            thinking={"type": "adaptive", "display": "summarized"},
+            drop_params=True,
+        )
+
+    assert failure_log.rejections == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync", [False, True], ids=["async", "sync"])
+async def test_a_summary_refused_while_replayed_reasoning_is_resent_is_not_logged_as_the_turn_failing(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, sync: bool
+) -> None:
+    failure_log: Final = _FailureLog()
+    monkeypatch.setattr(litellm, "callbacks", [failure_log])
+    upstream: Final = _upstream_refusing_every_summary(
+        respx_mock, monkeypatch, answer=_refuse_a_summary_then_replayed_reasoning
+    )
+
+    if sync:
+        litellm.anthropic.messages.create(
+            max_tokens=1024,
+            messages=_history(replayed_reasoning=True),
+            model="openai/gpt-5.6-luna",
+            tools=[dict(BASH_TOOL)],
+            thinking={"type": "adaptive", "display": "summarized"},
+            drop_params=True,
+        )
+    else:
+        await litellm.anthropic.messages.acreate(
+            max_tokens=1024,
+            messages=_history(replayed_reasoning=True),
+            model="openai/gpt-5.6-luna",
+            tools=[dict(BASH_TOOL)],
+            thinking={"type": "adaptive", "display": "summarized"},
+            drop_params=True,
+        )
+
+    answered: Final = json.loads(upstream.calls[-1].request.content)
+    assert "summary" not in answered.get("reasoning", {})
+    assert _replayed_reasoning_counts(upstream)[-1] == 0
+    assert failure_log.rejections == ()

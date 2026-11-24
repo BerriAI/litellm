@@ -1132,48 +1132,67 @@ def anthropic_messages_pt_xml(messages: list):
 
 def _azure_tool_call_invoke_helper(
     function_call_params: ChatCompletionToolCallFunctionChunk,
-) -> ChatCompletionToolCallFunctionChunk | None:
+) -> ChatCompletionToolCallFunctionChunk:
     """
     Azure requires 'arguments' to be a string.
     """
-    if function_call_params.get("arguments") is None:
-        function_call_params["arguments"] = ""
-    return function_call_params
+    if function_call_params.get("arguments") is not None:
+        return function_call_params
+    return {**function_call_params, "arguments": ""}
 
 
-def _azure_image_url_helper(content: ChatCompletionImageObject):
-    if isinstance(content["image_url"], str):
-        content["image_url"] = {"url": content["image_url"]}
-    else:
-        content["image_url"] = cast(
-            ChatCompletionImageUrlObject,
-            {k: v for k, v in content["image_url"].items() if k != "format"},
-        )
+def _azure_image_url_helper(content: ChatCompletionImageObject) -> ChatCompletionImageObject:
+    image_url: Final = content["image_url"]
+    if isinstance(image_url, str):
+        return {**content, "image_url": {"url": image_url}}
+    return {
+        **content,
+        "image_url": cast(  # cast-ok: dropping format keeps the required url
+            ChatCompletionImageUrlObject, {k: v for k, v in image_url.items() if k != "format"}
+        ),
+    }
 
 
-def _azure_file_helper(content: ChatCompletionFileObject) -> None:
-    content["file"] = cast(
-        ChatCompletionFileObjectFile,
-        {k: v for k, v in content.get("file", {}).items() if k != "format"},
+def _azure_file_helper(content: ChatCompletionFileObject) -> ChatCompletionFileObject:
+    return {
+        **content,
+        "file": cast(  # cast-ok: dropping format leaves only ChatCompletionFileObjectFile keys
+            ChatCompletionFileObjectFile, {k: v for k, v in content.get("file", {}).items() if k != "format"}
+        ),
+    }
+
+
+def _azure_content_part(part: object) -> object:
+    mapping: Final = as_str_mapping(part)
+    part_type: Final = None if mapping is None else mapping.get("type")
+    if part_type == "image_url":
+        return _azure_image_url_helper(cast(ChatCompletionImageObject, part))  # cast-ok: the type tag says image_url
+    if part_type == "file":
+        return _azure_file_helper(cast(ChatCompletionFileObject, part))  # cast-ok: the type tag says file
+    return part
+
+
+def _azure_message(message: AllMessageValues) -> AllMessageValues:
+    if message["role"] == "assistant":
+        function_call: Final = message.get("function_call")
+        if function_call is None:
+            return message
+        return {**message, "function_call": _azure_tool_call_invoke_helper(function_call)}
+    if message["role"] != "user":
+        return message
+    content: Final = message.get("content")
+    if not isinstance(content, list):
+        return message
+    parts: Final[tuple[object, ...]] = tuple(content)
+    return cast(  # cast-ok: only image_url and file parts change, each to the shape Azure takes
+        AllMessageValues, {**message, "content": [_azure_content_part(part) for part in parts]}
     )
 
 
 def convert_to_azure_openai_messages(
     messages: list[AllMessageValues],
 ) -> list[AllMessageValues]:
-    for m in messages:
-        if m["role"] == "assistant":
-            function_call = m.get("function_call", None)
-            if function_call is not None:
-                m["function_call"] = _azure_tool_call_invoke_helper(function_call)
-
-        if m["role"] == "user" and isinstance(m.get("content"), list):
-            for content in m.get("content", []):
-                if isinstance(content, dict) and content.get("type") == "image_url":
-                    _azure_image_url_helper(cast(ChatCompletionImageObject, content))
-                elif isinstance(content, dict) and content.get("type") == "file":
-                    _azure_file_helper(cast(ChatCompletionFileObject, content))
-    return messages
+    return [_azure_message(message) for message in messages]
 
 
 # ------------------------------------------------------------------------------
@@ -2356,7 +2375,7 @@ _S3_MIME_SUBTYPE_FORMATS: Final = MappingProxyType(
     {"jpg": "jpeg", "quicktime": "mov", "x-matroska": "mkv", "x-flv": "flv", "x-ms-wmv": "wmv", "3gpp": "3gp"}
 )
 _CONVERSE_VIDEO_FORMAT_NAMES: Final = MappingProxyType({"3gp": "three_gp"})
-_EMPTY_TEXT_PLACEHOLDER: Final = "[System: Empty message content sanitised to satisfy protocol]"
+EMPTY_TEXT_PLACEHOLDER: Final = "[System: Empty message content sanitised to satisfy protocol]"
 
 
 def _sanitize_empty_text_content(
@@ -2380,7 +2399,7 @@ def _sanitize_empty_text_content(
     if isinstance(content, str):
         if not content or not content.strip():
             message = cast(AllMessageValues, dict(message))  # Make a copy
-            message["content"] = _EMPTY_TEXT_PLACEHOLDER
+            message["content"] = EMPTY_TEXT_PLACEHOLDER
             verbose_logger.debug(
                 "_sanitize_empty_text_content: Replaced empty text content in %s message", message.get("role")
             )
@@ -2397,7 +2416,7 @@ def _sanitize_empty_text_content(
                 text = block.get("text")
                 if not isinstance(text, str) or not text or not text.strip():
                     new_block = dict(block)
-                    new_block["text"] = _EMPTY_TEXT_PLACEHOLDER
+                    new_block["text"] = EMPTY_TEXT_PLACEHOLDER
                     new_blocks.append(new_block)
                     rewrote_any = True
                     continue
@@ -2762,7 +2781,7 @@ def _tool_result_later_in_turn(
 
 
 def _empty_text_placeholder(message: AllMessageValues) -> AnthropicMessagesTextParam:
-    placeholder: Final = AnthropicMessagesTextParam(type="text", text=_EMPTY_TEXT_PLACEHOLDER)
+    placeholder: Final = AnthropicMessagesTextParam(type="text", text=EMPTY_TEXT_PLACEHOLDER)
     add_cache_control_to_content(anthropic_content_element=placeholder, original_content_element=message)
     return placeholder
 
