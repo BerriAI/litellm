@@ -3584,6 +3584,34 @@
     "default_model_placeholder": "gpt-3.5-turbo"
   },
   {
+    "provider": "INFEROCK",
+    "provider_display_name": "Inferock",
+    "litellm_provider": "inferock",
+    "credential_fields": [
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": "Inferock API key from Settings -> Inferock keys.",
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_base",
+        "label": "Gateway Base URL",
+        "placeholder": "https://<your-gateway-host>",
+        "tooltip": "Your Inferock Gateway base URL (from Settings -> Inferock keys), with or without /v1.",
+        "required": true,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "inferock/dane"
+  },
+  {
     "provider": "REFUSELESS",
     "provider_display_name": "Refuseless",
     "litellm_provider": "refuseless",

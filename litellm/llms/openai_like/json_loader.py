@@ -32,6 +32,7 @@ _MODEL_UNRESTRICTED_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, frozenset[s
 _API_KEY_ENV_ADAPTER: Final[TypeAdapter[str | tuple[str, ...]]] = TypeAdapter(
     str | Annotated[tuple[str, ...], Field(min_length=1)]
 )
+_HEADERS_ADAPTER: Final = TypeAdapter(Mapping[str, str])
 
 _VERSION_PLACEHOLDER: Final = "{version}"
 _PYTHON_PLACEHOLDER: Final = "{python}"
@@ -56,7 +57,18 @@ class SimpleProviderConfig:
         api_key_env: Final = _API_KEY_ENV_ADAPTER.validate_python(data["api_key_env"])
         self.api_key_envs: Final[tuple[str, ...]] = (api_key_env,) if isinstance(api_key_env, str) else api_key_env
         self.api_key_env: str = self.api_key_envs[0]
-        self.api_base_env: str | None = data.get("api_base_env")
+        raw_api_base_env: Final = data.get("api_base_env")
+        if raw_api_base_env is None:
+            self.api_base_envs: Final[tuple[str, ...]] = ()
+        else:
+            parsed_base_env: Final = _API_KEY_ENV_ADAPTER.validate_python(raw_api_base_env)
+            self.api_base_envs = (parsed_base_env,) if isinstance(parsed_base_env, str) else parsed_base_env
+        self.api_base_env: str | None = self.api_base_envs[0] if self.api_base_envs else None
+        self.default_headers: Final[Mapping[str, str]] = (
+            MappingProxyType(dict(_HEADERS_ADAPTER.validate_python(data["default_headers"])))
+            if "default_headers" in data
+            else MappingProxyType({})
+        )
         self.base_class = data.get("base_class", "openai_gpt")
         self.user_agent: str | None = _STR_ADAPTER.validate_python(data["user_agent"]) if "user_agent" in data else None
         self.param_mappings = data.get("param_mappings", {})
@@ -108,6 +120,9 @@ class SimpleProviderConfig:
     def api_key_from(self, lookup: Callable[[str], str | None]) -> str | None:
         return next(filter(None, map(lookup, self.api_key_envs)), None)
 
+    def api_base_from(self, lookup: Callable[[str], str | None]) -> str | None:
+        return next(filter(None, map(lookup, self.api_base_envs)), None)
+
     def default_base_url(self, model: str | None) -> str:
         if model is None:
             return self.base_url
@@ -129,16 +144,17 @@ class SimpleProviderConfig:
         )
 
     def get_attribution_headers(self) -> Mapping[str, str]:
+        headers: dict[str, str] = dict(self.default_headers)
         if not self.user_agent:
-            return {}
+            return MappingProxyType(headers)
         user_agent_override: Final = os.environ.get("LITELLM_USER_AGENT")
         if user_agent_override is not None:
-            return {"User-Agent": user_agent_override}
-        return {
-            "User-Agent": self.user_agent.replace(_VERSION_PLACEHOLDER, _LITELLM_VERSION).replace(
-                _PYTHON_PLACEHOLDER, platform.python_version()
-            )
-        }
+            headers["User-Agent"] = user_agent_override
+            return MappingProxyType(headers)
+        headers["User-Agent"] = self.user_agent.replace(_VERSION_PLACEHOLDER, _LITELLM_VERSION).replace(
+            _PYTHON_PLACEHOLDER, platform.python_version()
+        )
+        return MappingProxyType(headers)
 
 
 def _provider_config(slug: str, config: object) -> SimpleProviderConfig:

@@ -536,7 +536,7 @@ API_BASE_CHAT_PROVIDERS: Final = (
     "databricks", "databricks_agent", "datarobot", "deepinfra", "deepseek", "docker_model_runner", "edenai",
     "empiriolabs", "empower", "featherless_ai", "fireworks_ai", "friendliai", "galadriel", "gemini", "github",
     "groq", "helicone", "heroku", "hosted_vllm", "hostinger_router", "huggingface", "hyperbolic", "inception",
-    "inferenceapis", "kyma", "lambda_ai", "langflow", "langgraph", "lemonade", "libertai", "litellm_proxy",
+    "inferenceapis", "inferock", "kyma", "lambda_ai", "langflow", "langgraph", "lemonade", "libertai", "litellm_proxy",
     "llamafile", "lm_studio", "maritalk", "meta", "meta_llama", "minimax", "mistral", "modelscope", "moonshot",
     "morph", "nadir", "nano-gpt", "nebius", "neosantara", "novita", "nscale", "nvidia_nim", "ollama", "ollama_chat",
     "oobabooga", "openai", "opencode_go", "openinfer", "openrouter", "ovhcloud", "parasail", "perplexity",

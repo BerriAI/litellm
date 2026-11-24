@@ -93,3 +93,17 @@ def missing_json_provider_key_error(
         llm_provider=json_provider.slug,
         model=model,
     )
+
+
+def missing_json_provider_base_error(
+    custom_llm_provider: str | None,
+    api_base: str | None,
+    uses_openai_client: bool,
+) -> ValueError | None:
+    json_provider: Final = JSONProviderRegistry.get(custom_llm_provider) if custom_llm_provider else None
+    if json_provider is None or uses_openai_client:
+        return None
+    if api_base or json_provider.base_url:
+        return None
+    env_hint: Final = " or ".join(json_provider.api_base_envs) if json_provider.api_base_envs else "api_base"
+    return ValueError(f"{json_provider.slug} requires an explicit api_base (or set {env_hint}).")

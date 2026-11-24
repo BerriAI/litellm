@@ -392,5 +392,56 @@
       "/v1/chat/completions",
       "/v1/completions"
     ]
+  },
+  "inferock": {
+    "base_url": "",
+    "api_key_env": "INFEROCK_API_KEY",
+    "api_base_env": [
+      "INFEROCK_API_BASE",
+      "GATEWAY_BASE_URL"
+    ],
+    "default_headers": {
+      "x-governance-provider": "inferock-serve"
+    },
+    "base_class": "openai_gpt",
+    "unsupported_params": [
+      "temperature",
+      "top_p",
+      "frequency_penalty",
+      "presence_penalty",
+      "stop",
+      "n",
+      "seed",
+      "logprobs",
+      "top_logprobs",
+      "logit_bias",
+      "response_format",
+      "parallel_tool_calls",
+      "functions",
+      "function_call",
+      "safety_identifier",
+      "user",
+      "store",
+      "verbosity",
+      "prediction",
+      "audio",
+      "modalities",
+      "web_search_options",
+      "service_tier",
+      "prompt_cache_key",
+      "prompt_cache_retention"
+    ],
+    "special_handling": {
+      "ensure_v1_path": true,
+      "strip_tool_strict": true,
+      "round_reasoning_effort_to_declared_levels": true
+    },
+    "provider_info": {
+      "supports_function_calling": true,
+      "supports_reasoning": true
+    },
+    "supported_endpoints": [
+      "/v1/chat/completions"
+    ]
   }
 }

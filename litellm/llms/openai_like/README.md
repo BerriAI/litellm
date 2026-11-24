@@ -36,11 +36,19 @@ That's it! The provider will be automatically loaded and available.
 ```json
 {
   "your_provider": {
+    // Base URL for the provider. Set to "" when every account has a
+    // tenant-specific gateway URL and must supply api_base or api_base_env.
     "base_url": "https://api.yourprovider.com/v1",
     "api_key_env": "YOUR_PROVIDER_API_KEY",
     
-    // Optional: Override base_url via environment variable
+    // Optional: Override base_url via one or more environment variables
+    // (string or ordered list of env var names)
     "api_base_env": "YOUR_PROVIDER_API_BASE",
+
+    // Optional: Static headers sent on every request unless overridden by caller
+    "default_headers": {
+      "x-example-header": "value"
+    },
     
     // Optional: User-Agent sent on chat requests. {version} and {python}
     // expand to the running litellm and Python versions. LITELLM_USER_AGENT
@@ -72,6 +80,8 @@ That's it! The provider will be automatically loaded and available.
     // round_reasoning_effort_to_declared_levels sends reasoning_effort as the
     // nearest level in the model's reasoning_effort_levels cost map row, and
     // drops a level the row does not declare under drop_params
+    // ensure_v1_path appends /v1 to api_base when not already present
+    // strip_tool_strict removes tools[*].function.strict for providers that reject it
     "special_handling": {
       "convert_content_list_to_string": true
     },

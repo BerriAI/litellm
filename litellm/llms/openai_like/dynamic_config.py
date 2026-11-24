@@ -53,6 +53,28 @@ def web_search_requests_from_tool_usage(payload: object) -> int | None:
     return calls if calls > 0 else None
 
 
+def _normalized_api_base(api_base: str, handling: Mapping[str, bool]) -> str:
+    stripped: Final = api_base.strip().rstrip("/")
+    if not handling.get("ensure_v1_path"):
+        return stripped
+    if stripped.endswith("/v1") or stripped.endswith("/v1/chat/completions"):
+        return stripped
+    return f"{stripped}/v1"
+
+
+def _strip_tool_strict(tools: object) -> object:
+    if not isinstance(tools, list):
+        return tools
+    cleaned: list[object] = []
+    for tool in tools:
+        if isinstance(tool, Mapping) and isinstance(tool.get("function"), Mapping) and "strict" in tool["function"]:
+            fn = {k: v for k, v in tool["function"].items() if k != "strict"}
+            cleaned.append({**tool, "function": fn})
+        else:
+            cleaned.append(tool)
+    return cleaned
+
+
 def _flattened_messages(
     messages: Sequence[AllMessageValues], handling: Mapping[str, bool]
 ) -> Sequence[AllMessageValues]:
@@ -289,12 +311,11 @@ def create_config_class(provider: SimpleProviderConfig):
         def get_model_provider_info(
             self, model: str | None, api_base: str | None, api_key: str | None
         ) -> tuple[str | None, str | None]:
-            resolved_base: Final = (
-                api_base
-                or (get_secret_str(provider.api_base_env) if provider.api_base_env else None)
-                or provider.default_base_url(model)
-            )
+            raw_base: Final = api_base or provider.api_base_from(get_secret_str) or provider.default_base_url(model)
             resolved_key: Final = api_key or provider.api_key_from(get_secret_str)
+            if not raw_base:
+                return None, resolved_key
+            resolved_base: Final = _normalized_api_base(raw_base, provider.special_handling)
             return resolved_base, resolved_key
 
         def get_complete_url(
@@ -307,7 +328,12 @@ def create_config_class(provider: SimpleProviderConfig):
             stream: bool | None = None,
         ) -> str:
             """Build complete URL for the API endpoint"""
-            return ensure_api_route(api_base or provider.default_base_url(model), "chat/completions")
+            raw_base: Final = api_base or provider.api_base_from(get_secret_str) or provider.default_base_url(model)
+            if not raw_base:
+                env_hint = " or ".join(provider.api_base_envs) if provider.api_base_envs else "api_base"
+                raise ValueError(f"{provider.slug} requires an explicit api_base (or set {env_hint}).")
+            normalized: Final = _normalized_api_base(raw_base, provider.special_handling)
+            return ensure_api_route(normalized, "chat/completions")
 
         def get_supported_openai_params(self, model: str) -> list[str]:
             """Get supported OpenAI params, excluding tool-related params for models
@@ -397,6 +423,9 @@ def create_config_class(provider: SimpleProviderConfig):
                 elif param in supported_params:
                     optional_params[param] = value
 
+            if provider.special_handling_for(model).get("strip_tool_strict") and "tools" in optional_params:
+                optional_params["tools"] = _strip_tool_strict(optional_params["tools"])
+
             # Apply temperature constraints if present
             if "temperature" in optional_params:
                 temp = optional_params["temperature"]
@@ -419,6 +448,42 @@ def create_config_class(provider: SimpleProviderConfig):
                 optional_params["temperature"] = temp
 
             return optional_params
+
+        def transform_extra_body(
+            self,
+            extra_body: Mapping[str, object],
+            request: Mapping[str, object],
+            model: str,
+            litellm_params: Mapping[str, object],
+        ) -> Mapping[str, object]:
+            drop_params: Final = bool(litellm_params.get("drop_params")) or litellm.drop_params is True
+            raw_allowed: Final = litellm_params.get("allowed_openai_params")
+            allowed: Final[Collection[str]] = (
+                tuple(param for param in raw_allowed if isinstance(param, str))
+                if isinstance(raw_allowed, (list, tuple, set, frozenset))
+                else ()
+            )
+            requested: Final = (
+                _with_declared_reasoning_effort(
+                    extra_body,
+                    model=model,
+                    provider_slug=provider.slug,
+                    drop_params=drop_params,
+                )
+                if provider.special_handling_for(model).get("round_reasoning_effort_to_declared_levels")
+                else extra_body
+            )
+            accepted: Final = _params_the_provider_accepts(
+                requested,
+                provider,
+                model,
+                drop_params,
+                unsupported_params=provider.unsupported_params,
+                allowed_openai_params=allowed,
+            )
+            if provider.special_handling_for(model).get("strip_tool_strict") and "tools" in accepted:
+                return MappingProxyType({**accepted, "tools": _strip_tool_strict(accepted["tools"])})
+            return accepted
 
         def transform_parsed_response_dict(
             self,

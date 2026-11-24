@@ -170,7 +170,11 @@ from litellm.llms.openai.chat.gpt_reasoning_transformation import (
     OpenAIGPT5Config,
 )
 from litellm.llms.openai.common_utils import get_openai_credentials
-from litellm.llms.openai_like.common_utils import missing_json_provider_key_error, with_canonical_authorization
+from litellm.llms.openai_like.common_utils import (
+    missing_json_provider_base_error,
+    missing_json_provider_key_error,
+    with_canonical_authorization,
+)
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.llms.vertex_ai.common_utils import (
     VertexAIModelRoute,
@@ -2996,6 +3000,14 @@ def _complete_custom_openai(
     timeout: Final = ctx.timeout
 
     # for deepinfra/perplexity/anyscale/groq/friendliai we check in get_llm_provider and pass in the api base from there
+    if (
+        missing_base_error := missing_json_provider_base_error(
+            custom_llm_provider,
+            api_base,
+            isinstance(_dispatch_client_openai(ctx), openai.OpenAI | openai.AsyncOpenAI),
+        )
+    ) is not None:
+        raise missing_base_error
     api_base = _resolve_openai_api_base(api_base)
     if (missing_key_error := _missing_provider_key_error(ctx)) is not None:
         raise missing_key_error
@@ -3104,6 +3116,18 @@ def _complete_custom_openai(
                 provider_config=provider_config,
             )
         else:
+            raw_extra_body: Final = optional_params.get("extra_body")
+            if provider_config is not None and isinstance(raw_extra_body, Mapping):
+                transformed_extra_body: Final = provider_config.transform_extra_body(
+                    extra_body=raw_extra_body,
+                    request=optional_params,
+                    model=model,
+                    litellm_params=litellm_params,
+                )
+                if transformed_extra_body:
+                    optional_params["extra_body"] = dict(transformed_extra_body)
+                else:
+                    optional_params.pop("extra_body", None)
             response = openai_chat_completions.completion(
                 model=model,
                 messages=messages,
