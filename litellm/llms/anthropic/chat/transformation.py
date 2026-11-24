@@ -56,6 +56,7 @@ from litellm.litellm_core_utils.prompt_templates.image_handling import (
     format_pdf_links,
     inline_remote_image_urls,
     is_unformatted_pdf_link_image,
+    with_remote_media_placeholders,
 )
 from litellm.litellm_core_utils.prompt_templates.json_schema_utils import (
     is_object_schema,
@@ -332,10 +333,6 @@ def non_string_message_field_error(messages: Sequence[object], error: Exception)
     return AnthropicError(status_code=400, message=invalid_type_message(*malformed_field))
 
 
-def _is_json_object(value: object) -> bool:
-    return isinstance(value, Mapping)
-
-
 def _is_non_list_collection(value: object) -> bool:
     return isinstance(value, (str, bytes, bytearray, Set, Mapping))
 
@@ -344,14 +341,23 @@ def _is_non_list_thinking_blocks(value: object) -> bool:
     return isinstance(value, (int, float)) or (_is_non_list_collection(value) and bool(value))
 
 
+def _thinking_block_fault(field: str, block: object) -> tuple[str, object, str] | None:
+    if not isinstance(block, Mapping):
+        return (field, block, "an object")
+    fields: Final = cast(Mapping[str, object], block)  # cast-ok: isinstance proved a mapping
+    if "type" not in fields or isinstance(fields["type"], str):
+        return None
+    return (f"{field}.type", fields["type"], "a string")
+
+
 def _thinking_blocks_faults(index: int, thinking_blocks: object) -> tuple[tuple[str, object, str], ...]:
     if _is_non_list_thinking_blocks(thinking_blocks):
         return ((f"messages[{index}].thinking_blocks", thinking_blocks, "a list"),)
-    return tuple(
-        (f"messages[{index}].thinking_blocks[{position}]", block, "an object")
+    faults: Final = (
+        _thinking_block_fault(f"messages[{index}].thinking_blocks[{position}]", block)
         for position, block in enumerate(parts_of(thinking_blocks))
-        if not _is_json_object(block)
     )
+    return tuple(fault for fault in faults if fault is not None)
 
 
 def malformed_thinking_blocks_error(messages: Sequence[object]) -> AnthropicError | None:
@@ -386,30 +392,54 @@ def without_malformed_thinking_blocks(message: AllMessageValues) -> AllMessageVa
         return message
     if _is_non_list_thinking_blocks(thinking_blocks):
         return _with_thinking_blocks(message, None)
-    return _with_thinking_blocks(message, tuple(block for block in parts_of(thinking_blocks) if _is_json_object(block)))
+    return _with_thinking_blocks(
+        message, tuple(block for block in parts_of(thinking_blocks) if _thinking_block_fault("", block) is None)
+    )
 
 
-def _with_repeatable_thinking_blocks(message: AllMessageValues) -> AllMessageValues:
-    thinking_blocks: Final = message_field(message, "thinking_blocks")
-    if not isinstance(thinking_blocks, Iterable) or isinstance(thinking_blocks, (Sequence, Mapping, Set)):
-        return message
-    blocks: Final = cast(Iterable[object], thinking_blocks)  # cast-ok: isinstance above proved it is iterable
-    return _with_thinking_blocks(message, tuple(blocks))
+def _is_non_sequence_iterable(value: object) -> bool:
+    return isinstance(value, Iterable) and not isinstance(value, (Sequence, Mapping, Set))
+
+
+def _repeatable_blocks_by_identity(turns: Iterable[object]) -> Mapping[int, tuple[object, ...]]:
+    values: Final = (
+        message_field(turn, "thinking_blocks") for turn in turns if message_field(turn, "role") == "assistant"
+    )
+    iterables: Final = {
+        id(value): cast(Iterable[object], value)  # cast-ok: _is_non_sequence_iterable proved it is iterable
+        for value in values
+        if _is_non_sequence_iterable(value)
+    }
+    return MappingProxyType({key: tuple(value) for key, value in iterables.items()})
+
+
+def _with_repeatable_thinking_blocks(
+    message: AllMessageValues, repeatable: Mapping[int, tuple[object, ...]]
+) -> AllMessageValues:
+    blocks: Final = repeatable.get(id(message_field(message, "thinking_blocks")))
+    return message if blocks is None else _with_thinking_blocks(message, blocks)
+
+
+def _is_unreadable_content_block(block: object) -> bool:
+    if not isinstance(block, Mapping):
+        return not callable(getattr(block, "get", None))
+    fields: Final = cast(Mapping[str, object], block)  # cast-ok: isinstance proved a mapping
+    return "type" in fields and not isinstance(fields["type"], str)
 
 
 def _has_unreadable_content_block(messages: Sequence[object]) -> bool:
     blocks: Final = chain.from_iterable(parts_of(message_field(message, "content")) for message in messages)
-    return not all(callable(getattr(block, "get", None)) for block in blocks)
+    return any(_is_unreadable_content_block(block) for block in blocks)
 
 
-def _translation_or_error(
+def _translates_cleanly(
     translate: Callable[[Sequence[AllMessageValues]], Sequence[AllAnthropicPassThroughMessageValues]],
     conversation: Sequence[AllMessageValues],
-) -> Sequence[AllAnthropicPassThroughMessageValues] | TypeError | AttributeError:
+) -> bool:
     try:
-        return translate(conversation)
-    except (TypeError, AttributeError) as error:
-        return error
+        return not _has_unreadable_content_block(translate(with_remote_media_placeholders(conversation)))
+    except Exception:  # noqa: BLE001  # the translator raises many types and any failure means this probe failed
+        return False
 
 
 @dataclass(frozen=True, slots=True)
@@ -432,40 +462,29 @@ def _thinking_param_lacks_replayed_blocks(thinking: object, messages: Sequence[A
     ) and not any_assistant_message_has_thinking_blocks(turns)
 
 
-def _original_outcome(
-    translation: Sequence[AllAnthropicPassThroughMessageValues] | TypeError | AttributeError,
-) -> _ThinkingBlocksTranslation:
-    if isinstance(translation, Exception):
-        raise translation
-    return _ThinkingBlocksTranslation(translation)
-
-
 def translated_without_malformed_thinking_blocks(
     translate: Callable[[Sequence[AllMessageValues]], Sequence[AllAnthropicPassThroughMessageValues]],
     conversation: Sequence[AllMessageValues],
-    messages: Sequence[object],
+    messages: Sequence[AllMessageValues],
     drop_params: bool,
 ) -> _ThinkingBlocksTranslation | AnthropicError:
-    repeatable_conversation: Final = (
-        tuple(_with_repeatable_thinking_blocks(message) for message in conversation)
-        if drop_params and malformed_thinking_blocks_error(messages) is not None
-        else conversation
+    repeatable: Final = _repeatable_blocks_by_identity(chain(messages, conversation))
+    repeatable_conversation: Final = tuple(
+        _with_repeatable_thinking_blocks(message, repeatable) for message in conversation
     )
-    translation: Final = _translation_or_error(translate, repeatable_conversation)
-    if not isinstance(translation, Exception) and not _has_unreadable_content_block(translation):
-        return _ThinkingBlocksTranslation(translation)
-    thinking_blocks_error: Final = malformed_thinking_blocks_error(messages)
-    if thinking_blocks_error is None:
-        return _original_outcome(translation)
+    thinking_blocks_error: Final = malformed_thinking_blocks_error(
+        tuple(_with_repeatable_thinking_blocks(message, repeatable) for message in messages)
+    )
+    if thinking_blocks_error is None or _translates_cleanly(translate, repeatable_conversation):
+        return _ThinkingBlocksTranslation(translate(repeatable_conversation))
     cleaned_conversation: Final = tuple(
         without_malformed_thinking_blocks(message) for message in repeatable_conversation
     )
-    cleaned_translation: Final = _translation_or_error(translate, cleaned_conversation)
-    if isinstance(cleaned_translation, Exception):
-        return _original_outcome(translation)
+    if not _translates_cleanly(translate, cleaned_conversation):
+        return _ThinkingBlocksTranslation(translate(repeatable_conversation))
     if not drop_params:
         return thinking_blocks_error
-    return _ThinkingBlocksTranslation(cleaned_translation, cleaned_conversation)
+    return _ThinkingBlocksTranslation(translate(cleaned_conversation), cleaned_conversation)
 
 
 def _tool_type(tool: object) -> str | None:

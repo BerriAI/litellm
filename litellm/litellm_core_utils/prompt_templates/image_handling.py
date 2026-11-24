@@ -194,6 +194,7 @@ def convert_url_to_base64(
 
 
 _REMOTE_URL_PREFIXES: Final = ("http://", "https://")
+_REMOTE_MEDIA_PLACEHOLDER: Final = "data:image/png;base64,AA=="
 
 
 @dataclass(frozen=True, slots=True)
@@ -663,6 +664,13 @@ def inline_remote_media(
         return messages
     data_urls: Final = MappingProxyType({url: convert_url_to_base64(url) for url in remote_urls})
     return [_inline_message(message, data_urls, should_inline) for message in messages]
+
+
+def with_remote_media_placeholders(messages: Sequence[AllMessageValues]) -> tuple[AllMessageValues, ...]:
+    placeholders: Final = MappingProxyType(
+        dict.fromkeys(_remote_urls_to_inline(messages, inline_every_remote_url), _REMOTE_MEDIA_PLACEHOLDER)
+    )
+    return tuple(_inline_message(message, placeholders, inline_every_remote_url) for message in messages)
 
 
 async def async_inline_remote_media(
