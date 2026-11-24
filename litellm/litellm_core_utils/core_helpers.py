@@ -76,6 +76,11 @@ def as_object_list(value: object) -> Sequence[object] | None:
     return value if isinstance(value, list) else None
 
 
+def proxy_request_headers(container: Mapping[str, object] | None) -> Mapping[str, object] | None:
+    proxy_server_request: Final = as_str_mapping(container.get("proxy_server_request")) if container else None
+    return as_str_mapping(proxy_server_request.get("headers")) if proxy_server_request else None
+
+
 _OBJECT_ENTRIES: Final = TypeAdapter(list[object])
 _OBJECT_KEYS: Final = TypeAdapter(dict[object, object])
 _PARAM_NAME: Final = re.compile(r"\w+")

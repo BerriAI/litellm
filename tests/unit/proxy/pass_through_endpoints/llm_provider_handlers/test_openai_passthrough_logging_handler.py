@@ -1,6 +1,6 @@
 import json
 from datetime import datetime
-from typing import Any, Dict, List
+from typing import Any, Dict, Final, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -19,6 +19,7 @@ from litellm.proxy.pass_through_endpoints.success_handler import (
 )
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+    EndpointType,
     PassthroughStandardLoggingPayload,
 )
 
@@ -2098,3 +2099,49 @@ def test_count_relayed_prompt_tokens_charges_an_uppercase_scheme_remote_high_det
     assert count_relayed_prompt_tokens("gpt-4.1-mini", messages) == (
         litellm.token_counter(model="gpt-4.1-mini", messages=TEXT_ONLY_MESSAGES) + high_detail_image_token_upper_bound()
     )
+
+
+AGENT_SESSION_EVENTS_URL: Final = "https://api.openai.com/v1/agents/sessions/sess_6a0b0f8e2c1d4e5f/events"
+
+
+@pytest.mark.parametrize(
+    ("request_body", "session_agent", "logged_model"),
+    [
+        pytest.param({}, {"agent": {"model": "gpt-5.4-mini"}}, "gpt-5.4-mini", id="session_event_names_the_model"),
+        pytest.param({"agent": {"model": "gpt-5.4"}}, {}, "gpt-5.4", id="request_agent_fallback"),
+    ],
+)
+def test_streamed_agents_session_logs_the_agent_model_without_chat_usage(
+    request_body: dict[str, object], session_agent: dict[str, object], logged_model: str
+):
+    session_event: Final = {"type": "agent.session.in_progress", "session": {"id": "sess_6a0b0f8e", **session_agent}}
+    logging_obj: Final = LiteLLMLoggingObj(
+        model="unknown",
+        messages=[],
+        stream=True,
+        call_type="pass_through_endpoint",
+        start_time=datetime(2026, 10, 17, 13, 47, 3),
+        litellm_call_id="5b7d9f1a-3c5e-4a7b-8d9f-0e2a4c6b8d35",
+        function_id="1234",
+    )
+    chunks: Final = [
+        "event: agent.session.in_progress",
+        f"data: {json.dumps(session_event)}",
+        "event: agent.turn.completed",
+        'data: {"type": "agent.turn.completed", "usage": null}',
+    ]
+
+    logged: Final = OpenAIPassthroughLoggingHandler.handle_logging_openai_collected_chunks(
+        litellm_logging_obj=logging_obj,
+        passthrough_success_handler_obj=PassThroughEndpointLogging(),
+        url_route=AGENT_SESSION_EVENTS_URL,
+        request_body=request_body,
+        endpoint_type=EndpointType.OPENAI,
+        start_time=datetime(2026, 10, 17, 13, 47, 3),
+        all_chunks=chunks,
+        end_time=datetime(2026, 10, 17, 13, 47, 3),
+    )
+
+    assert logging_obj.model_call_details["model"] == logged_model
+    assert logged["result"] == {"response": "\n".join(chunks)}
+    assert logged["kwargs"] == {}
