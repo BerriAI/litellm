@@ -6192,6 +6192,10 @@ def _gemini_batch_output_row() -> LiteLLM_ManagedFileTable:
         ("tool", "image_url"),
         ("tool", "input_image"),
         ("assistant", "image_url"),
+        ("assistant", "image_string"),
+        ("assistant-content", "video_url"),
+        ("system", "file"),
+        ("system", "image_url"),
     ],
 )
 @pytest.mark.parametrize("has_access", [True, False], ids=["owner", "different-key"])
@@ -6210,10 +6214,13 @@ async def test_chat_file_references_use_managed_file_access(
         if media == "file"
         else {"type": media, "video_url": {"url": uri, "format": "video/mp4"}}
         if media == "video_url"
+        else {"image_url": uri}
+        if media == "image_string"
         else {"type": media, "image_url": {"url": uri, "format": "image/png"}}
     )
     content_key: Final = "images" if role == "assistant" else "content"
-    request: Final = {"model": "gemini/gemini-4-argon", "messages": [{"role": role, content_key: [part]}]}
+    message: Final = {"role": role.removesuffix("-content"), content_key: [part]}
+    request: Final = {"model": "gemini/gemini-4-argon", "messages": [message]}
     if has_access:
         result: Final = await managed_files.async_pre_call_hook(caller, DualCache(), request, "acompletion")
         assert result == request

@@ -236,9 +236,9 @@ def _gemini_assistant_image_file_ids(value: object) -> Iterator[str]:
     for image in images:
         if (fields := as_str_mapping(image)) is None:
             continue
-        if (image_url := as_str_mapping(fields.get("image_url"))) is None:
-            continue
-        if isinstance((url := image_url.get("url")), str) and url.startswith(GEMINI_FILES_API_URI_PREFIXES):
+        raw_image_url = fields.get("image_url")
+        url = raw_image_url if isinstance(raw_image_url, str) else (as_str_mapping(raw_image_url) or {}).get("url")
+        if isinstance(url, str) and url.startswith(GEMINI_FILES_API_URI_PREFIXES):
             yield url
 
 
@@ -1744,13 +1744,13 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 continue
             if role == "assistant":
                 yield from _gemini_assistant_image_file_ids(fields.get("images"))
-                continue
-            if role not in ("user", "tool", "function"):
+            if role not in ("user", "system", "developer", "assistant", "tool", "function"):
                 continue
             if not _is_object_iterable(content := fields.get("content")) or isinstance(content, (str, Mapping)):
                 continue
+            part_role = "user" if role in ("system", "developer") else role
             for part in content:
-                if (file_id := _chat_message_file_id(part, role)) is not None:
+                if (file_id := _chat_message_file_id(part, part_role)) is not None:
                     yield file_id
 
     @staticmethod
