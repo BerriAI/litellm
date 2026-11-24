@@ -3,13 +3,16 @@ Host-side facts for the Rust core's ``enable_pre_call_checks`` filter.
 
 The Rust core decides which deployments the pre-call checks drop and which error a group with
 nothing left raises (``router-core/src/precall/mod.rs``). What needs live Python objects is answered
-here, on a ``pre_call`` select step: the prompt's token count (messages, Responses input and
-instructions, tools and an Anthropic ``system`` block), each deployment's context window from
-its router model info, and which requested params each deployment takes. Ported from the Python
-router core's ``_pre_call_checks`` helpers; it never reaches a Python router core.
+here, as read and with no rule applied. A ``pre_call`` select step asks for the prompt's token count
+(messages, Responses input and instructions, tools and an Anthropic ``system`` block), each
+deployment's context window from its router model info, the live ``litellm.drop_params`` and how the
+request sends the params the step names. A ``param_support`` step asks which of its params each
+deployment does not support. Ported from the Python router core's ``_pre_call_checks`` helpers; it
+never reaches a Python router core.
 
-``pre_call_checks`` is the one decision made here: ``RoutingContext.pre_call_checks`` hands over
-deployment records rather than a step, and those need not be in the Rust registry.
+``pre_call_checks`` serves ``RoutingContext.pre_call_checks``, which hands over deployment records
+rather than a step. Those need not be in the Rust registry, so it runs the same Rust filter over the
+records and answers its two questions with the same facts.
 """
 
 from collections.abc import Callable, Mapping, Sequence
@@ -20,7 +23,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Protocol
 
 from litellm._logging import verbose_router_logger
-from litellm.litellm_core_utils.core_helpers import allowed_openai_param_names, as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.deployment_pricing import deployment_backend_models
 from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import parts_of
@@ -46,8 +49,7 @@ if TYPE_CHECKING:
     from litellm.router_python_host import PythonHost
     from litellm.types.utils import LlmProviders
 
-# The chat params a deployment must take when the request sends them (`_PRE_CALL_CHECK_FILTERED_PARAMS`).
-_FILTERED_PARAMS: Final = frozenset({"response_format"})
+_CALL_SETTINGS: Final = ("drop_params", "allowed_openai_params", "additional_drop_params")
 _CHARS_PER_OFFLOADED_COUNT: Final = 1 << 16
 
 
@@ -210,10 +212,6 @@ def _is_list(value: object) -> bool:
     return isinstance(value, list)
 
 
-def _declared_param_allowlist(params: Mapping[str, object]) -> frozenset[str]:
-    return frozenset(allowed_openai_param_names(params.get("allowed_openai_params")))
-
-
 def _capability_model_and_provider(deployment_params: Mapping[str, object], group: str) -> tuple[str, str]:
     model_label: Final = str(deployment_params.get("model") or group)
     custom_llm_provider: Final = deployment_params.get("custom_llm_provider")
@@ -255,42 +253,21 @@ def _supports_param(deployment: Mapping[str, object], group: str, param: str) ->
     return supported is None or param in supported
 
 
-def _lacks_params(deployment: Mapping[str, object], group: str, params: frozenset[str]) -> bool:
-    return any(not _supports_param(deployment, group, param) for param in params)
+def _sent_as(value: object) -> str:
+    """How a request sends a param, as ``router-core/src/precall/params.rs`` names it."""
+    if value is None:
+        return "null"
+    return "text" if isinstance(value, str) else "structured"
 
 
-def _rejects_params(
-    deployment: Mapping[str, object], group: str, params: frozenset[str], request_kwargs: Mapping[str, object]
-) -> bool:
-    """``_deployment_rejects_params``: lacks a param neither the deployment nor the request drops or allows."""
-    call_settings: Final[Mapping[str, object]] = {
-        **(as_str_mapping(deployment.get("litellm_params")) or {}),
-        **request_kwargs,
-    }
-    if call_settings.get("drop_params") is True:
-        return False
-    dropped: Final = call_settings.get("additional_drop_params")
-    dropped_names: Final = frozenset(
-        entry for entry in (_items(dropped) if _is_list(dropped) else ()) if isinstance(entry, str)
-    )
-    return _lacks_params(deployment, group, params - _declared_param_allowlist(call_settings) - dropped_names)
-
-
-def _requested_params(request_kwargs: Mapping[str, object]) -> frozenset[str]:
-    """``_pre_call_check_requested_chat_params``."""
-    from litellm import utils as litellm_utils
-
-    return _filtered_params(
-        litellm_utils.get_non_default_params(passed_params=dict(request_kwargs))  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # an untyped helper
-    )
-
-
-def _filtered_params(requested: Mapping[object, object]) -> frozenset[str]:
-    return frozenset(
-        param
-        for param, value in requested.items()
-        if isinstance(param, str) and param in _FILTERED_PARAMS and not isinstance(value, str)
-    )
+def unsupported_params(
+    step: Mapping[str, object], records: Callable[[str], Mapping[str, object]]
+) -> Mapping[str, Sequence[str]]:
+    """The answer of a ``param_support`` step: which of its params each candidate and pool deployment does not support."""
+    group: Final = str(step.get("model_group"))
+    params: Final = tuple(str(param) for param in _items(step.get("params")))
+    ids: Final = dict.fromkeys(str(id) for id in (*_items(step.get("candidates")), *_items(step.get("pool"))))
+    return {id: [param for param in params if not _supports_param(records(id), group, param)] for id in ids}
 
 
 class PreCallFacts:
@@ -312,6 +289,7 @@ class PreCallFacts:
         self._name: Final = str(step.get("model"))
         self._candidates: Final = [str(id) for id in _items(step.get("candidates"))]
         self._pool: Final = [str(id) for id in _items(step.get("pool"))]
+        self._params: Final = tuple(str(param) for param in _items(step.get("params")))
         self._records: Final = records
         self._request: Final = request
         self._messages: Final = messages
@@ -418,27 +396,18 @@ class PreCallFacts:
         if not self._has_input:
             return {"has_input": False}
         request: Final[Mapping[str, object]] = self._request if self._request is not None else {}
-        params: Final = (
-            _requested_params(request)
-            if self._request is not None and self._host.dynamic().drop_params is False
-            else frozenset[str]()
-        )
-        deployments: Final[dict[str, dict[str, object]]] = {}  # mutable-ok: built here, then returned
-        for id in dict.fromkeys([*self._candidates, *self._pool]):
-            record = self._record(id)
-            deployments[id] = {
-                "max_input_tokens": self._windows.get(id),
-                "lacks_params": bool(params) and id in self._candidates and _lacks_params(record, self._model, params),
-                "rejects_params": bool(params) and _rejects_params(record, self._model, params, request),
-            }
-        allowed_region: Final = request.get("allowed_model_region")
         return {
             "has_input": True,
             "countable": not compaction_pending(self._request),
             "input_tokens": input_tokens,
-            "allowed_model_region": allowed_region,
-            "requested_params": sorted(params),
-            "deployments": deployments,
+            "allowed_model_region": request.get("allowed_model_region"),
+            "drop_params": self._host.dynamic().drop_params,
+            "sent_params": {param: _sent_as(request[param]) for param in self._params if param in request},
+            "call_settings": {key: request[key] for key in _CALL_SETTINGS if key in request},
+            "deployments": {
+                id: {"max_input_tokens": self._windows.get(id)}
+                for id in dict.fromkeys([*self._candidates, *self._pool])
+            },
         }
 
     def answer(self) -> Mapping[str, object]:
@@ -462,8 +431,8 @@ def pre_call_checks(
     skip_inline_token_count: bool = False,
     request_deployments: Sequence[Mapping[str, object]] | None = None,
 ) -> Sequence[Mapping[str, object]]:
-    """``_pre_call_checks`` over the given deployments, as ``router-core/src/precall/mod.rs`` decides it."""
-    import litellm.exceptions as litellm_exceptions
+    """``_pre_call_checks`` over the given deployments, decided by ``router-core/src/precall/mod.rs``."""
+    from litellm.rust_bridge._native import RouterCoreHandle
 
     pool: Final = (
         tuple(request_deployments)
@@ -474,64 +443,55 @@ def pre_call_checks(
     group: Final = {f"pool-{index}": record for index, record in enumerate(pool)}
     records: Final = {**candidates, **group}
     step: Final = {"model_group": model, "model": model, "candidates": list(candidates), "pool": list(group)}
-    facts: Final = PreCallFacts(host, registry, step, records.__getitem__, request_kwargs, messages, input)
-    counted: Final = (
-        input_token_count
-        if input_token_count is not None or skip_inline_token_count or not facts._needs_count()  # pyright: ignore[reportPrivateUsage]  # this module's own class
-        else facts._count()  # pyright: ignore[reportPrivateUsage]  # see above
+
+    def facts(params: Sequence[str]) -> Mapping[str, object]:
+        found: Final = PreCallFacts(
+            host, registry, {**step, "params": list(params)}, records.__getitem__, request_kwargs, messages, input
+        )
+        counted: Final = (
+            input_token_count
+            if input_token_count is not None or skip_inline_token_count or not found._needs_count()  # pyright: ignore[reportPrivateUsage]  # this module's own class
+            else found._count()  # pyright: ignore[reportPrivateUsage]  # see above
+        )
+        return found._answer(counted)  # pyright: ignore[reportPrivateUsage]  # see above
+
+    def unsupported(params: Sequence[str]) -> Mapping[str, Sequence[str]]:
+        return unsupported_params({**step, "params": list(params)}, records.__getitem__)
+
+    outcome: Final = RouterCoreHandle.pre_call_filter(
+        model, list(candidates.items()), list(group.items()), facts, unsupported
     )
-    answer: Final = facts._answer(counted)  # pyright: ignore[reportPrivateUsage]  # see above
-    rows: Final = as_str_mapping(answer.get("deployments")) or {}
-    allowed_region: Final = answer.get("allowed_model_region")
-
-    def row(id: str) -> Mapping[str, object]:  # a candidate or pool key
-        return as_str_mapping(rows.get(id)) or {}
-
-    def over_window(id: str) -> bool:
-        limit: Final = row(id).get("max_input_tokens")
-        return isinstance(limit, int) and answer.get("countable") is True and counted is not None and counted > limit
-
-    def out_of_region(id: str) -> bool:
-        params: Final = as_str_mapping(records[id].get("litellm_params")) or {}
-        return allowed_region is not None and params.get("region_name") != allowed_region
-
-    too_small: Final = tuple(id for id in candidates if over_window(id))
-    invalid: Final = frozenset(too_small) | frozenset(id for id in candidates if out_of_region(id))
-    param_candidates: Final = tuple(id for id in candidates if id not in invalid)
-    lacking: Final = tuple(row(id).get("lacks_params") is True for id in param_candidates)
-    rejecting: Final = tuple(row(id).get("rejects_params") is True for id in param_candidates)
-    failing: Final = rejecting if lacking and all(lacking) else lacking
-    excluded: Final = invalid | frozenset(id for id, fails in zip(param_candidates, failing, strict=True) if fails)
-    if len(excluded) == len(candidates):
-        requested: Final = [str(param) for param in _items(answer.get("requested_params"))]
-        if not too_small and group and all(row(id).get("rejects_params") is True for id in group):
-            raise litellm_exceptions.UnsupportedParamsError(
-                message=(
-                    f"no deployment of model={model} supports {requested}. "
-                    "To drop these, set `litellm.drop_params=True` or for proxy `litellm_settings: drop_params: true`, "
-                    f"or send allowed_openai_params={requested} to pass them through"
-                ),
-                model=model,
-            )
-        if too_small:
-            detail: Final = "".join(
-                f"Model={_error_model(records[id])}, Max Input Tokens={row(id).get('max_input_tokens')}, Got={counted}"
-                for id in too_small
-            )
-            raise litellm_exceptions.ContextWindowExceededError(
-                message="litellm._pre_call_checks: Context Window exceeded for given call. No models have context "
-                f"window large enough for this call.\n{detail}",
-                model=model,
-                llm_provider="",
-            )
-    return tuple(record for id, record in candidates.items() if id not in excluded)
+    error: Final = pre_call_error(outcome, model)
+    if error is not None:
+        raise error
+    kept: Final = frozenset(_items(outcome.get("kept")))
+    return tuple(record for id, record in candidates.items() if id in kept)
 
 
-def _error_model(deployment: Mapping[str, object]) -> object:
-    """The name a context-window error gives a deployment: its base model, else its model."""
-    params: Final = as_str_mapping(deployment.get("litellm_params")) or {}
-    model_info: Final = as_str_mapping(deployment.get("model_info")) or {}
-    return model_info.get("base_model") or params.get("base_model") or params.get("model")
+def pre_call_error(failed: Mapping[str, object], model: str) -> BaseException | None:
+    """The error the pre-call checks raise for a group with nothing left, when ``failed`` names one."""
+    import litellm.exceptions as litellm_exceptions
+
+    kind: Final = failed.get("error_kind")
+    error_model: Final = str(failed.get("error_model") or model)
+    if kind == "context_window_exceeded":
+        return litellm_exceptions.ContextWindowExceededError(
+            message="litellm._pre_call_checks: Context Window exceeded for given call. No models have context "
+            f"window large enough for this call.\n{failed.get('error_detail')}",
+            model=error_model,
+            llm_provider="",
+        )
+    if kind == "unsupported_params":
+        params: Final = sorted(str(param) for param in _items(failed.get("error_params")))
+        return litellm_exceptions.UnsupportedParamsError(
+            message=(
+                f"no deployment of model={error_model} supports {params}. "
+                "To drop these, set `litellm.drop_params=True` or for proxy `litellm_settings: drop_params: true`, "
+                f"or send allowed_openai_params={params} to pass them through"
+            ),
+            model=error_model,
+        )
+    return None
 
 
 def request_carries_image(messages: object, request: Mapping[str, object]) -> bool:

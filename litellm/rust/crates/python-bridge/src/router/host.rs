@@ -25,8 +25,12 @@ use litellm_router_core::{
     Deployment, Error, HealthState, LimitCounter, Outcomes, PreRoute, PreRouted, Provided,
     Randomness, RegistryHost, RouterCache, RouterEvent, RouterHost, RouterResponse, RoutingContext,
     SecretRef, SelectStage, Served, ThreadRandomness, UsageCounts, UsageWindow,
-    build::BuiltDeployment, health::CooldownValue, host::ModelInfoLookup,
-    model_info::MergedModelInfo, precall::PreCallFacts, shape::AttemptShape,
+    build::BuiltDeployment,
+    health::CooldownValue,
+    host::ModelInfoLookup,
+    model_info::MergedModelInfo,
+    precall::{PreCallFacts, Unsupported},
+    shape::AttemptShape,
 };
 use pyo3::{PyResult, Python, types::PyAnyMethods};
 use serde_json::{Map, Value};
@@ -80,6 +84,9 @@ pub(crate) enum Stage {
     Tags,
     /// `enable_pre_call_checks`: return the facts the filter decides by.
     PreCall,
+    /// `enable_pre_call_checks`: return which of `params` each candidate and pool deployment
+    /// does not support.
+    ParamSupport { params: Vec<&'static str> },
     /// `_deployment_declares_no_vision`: return the candidates that declare no vision support.
     TextOnly,
     /// `_deployment_serves_route`: return the candidates that cannot serve `handler`'s call.
@@ -356,6 +363,8 @@ pub(crate) enum HostCallResponse {
     PreRoute(Option<PreRouted>),
     /// The facts a `pre_call` select step asked for.
     PreCall(PreCallFacts),
+    /// The params a `param_support` select step found unsupported, by deployment id.
+    ParamSupport(Unsupported),
     /// The candidate models a `routing_plugins` select step reported.
     Models(Option<Vec<String>>),
     /// The ids a `callback_filters` select step left with the one a filter prefers, or the error
@@ -386,6 +395,7 @@ impl HostCallResponse {
             Self::Select(_)
             | Self::Positions(_)
             | Self::PreCall(_)
+            | Self::ParamSupport(_)
             | Self::Models(_)
             | Self::Filtered(_) => StepKind::Select,
             Self::PreRoute(_) => StepKind::PreRoute,
@@ -1017,6 +1027,30 @@ impl RouterHost for PythonRouterHost {
             unreachable!("{CHECKED}");
         };
         Ok(facts)
+    }
+
+    async fn unsupported_params(
+        &self,
+        ctx: &RoutingContext<'_>,
+        candidates: &[Arc<Deployment>],
+        params: &[&'static str],
+    ) -> Result<Unsupported, Error> {
+        let (scope, group) = ctx.scope.wire();
+        let call = HostCall::Select {
+            stage: Stage::ParamSupport {
+                params: params.to_vec(),
+            },
+            pool: ctx.pool.iter().map(|d| d.id.clone()).collect(),
+            model_group: ctx.model_group.to_owned(),
+            name: ctx.name.to_owned(),
+            scope,
+            group: group.map(str::to_owned),
+            candidates: candidates.iter().map(|d| d.id.clone()).collect(),
+        };
+        let HostCallResponse::ParamSupport(unsupported) = answered(call_host(call).await)? else {
+            unreachable!("{CHECKED}");
+        };
+        Ok(unsupported)
     }
 
     async fn callback_filters(

@@ -16,6 +16,7 @@ use crate::{
     error::Error,
     health_routing::WhenAllUnhealthy,
     host::{RouterHost, RouterRequest, RoutingContext, SelectStage},
+    precall::{self, Unsupported},
     registry::{Deployment, Registry, ResolveKind},
     resolve::{Caller, resolve_request},
     strategy::{StrategyScope, request_override, routing_context},
@@ -807,7 +808,15 @@ impl<H: RouterHost> Call<'_, H> {
         );
         ctx.pool = pool;
         let facts = self.host.pre_call_facts(&ctx, &healthy).await?;
-        crate::precall::filter(model_group, healthy, pool, &facts)
+        let requested = precall::requested(&facts);
+        let unsupported = if requested.is_empty() {
+            Unsupported::default()
+        } else {
+            self.host
+                .unsupported_params(&ctx, &healthy, &requested)
+                .await?
+        };
+        precall::filter(model_group, healthy, pool, &facts, &unsupported)
     }
 
     /// Pick one of `candidates.healthy` with the group's strategy.

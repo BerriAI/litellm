@@ -640,6 +640,28 @@ async def test_a_request_drop_params_false_overrides_the_deployment_drop_params(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "setting",
+    [
+        {"drop_params": True},
+        {"allowed_openai_params": ["response_format"]},
+        {"additional_drop_params": ["response_format"]},
+    ],
+    ids=["drop", "allowlist", "additional-drop"],
+)
+async def test_a_request_setting_sent_as_none_replaces_the_deployments(
+    make_core: MakeCore, host: ScriptedHost, setting: dict[str, object]
+) -> None:
+    """The call merges ``{**litellm_params, **kwargs}``, so a ``None`` the request sends is what the call reads."""
+    host.set_dynamic(drop_params=False)
+    core: Final = make_core(
+        model_list=[deployment("g", "old", model=NO_JSON_MODE_MODEL, **setting)], enable_pre_call_checks=True
+    )
+    with pytest.raises(litellm.UnsupportedParamsError):
+        await core.select("g", {**JSON_MODE, **dict.fromkeys(setting)}, messages=SHORT)
+
+
+@pytest.mark.asyncio
 async def test_a_context_window_error_wins_over_an_unsupported_param(make_core: MakeCore, host: ScriptedHost) -> None:
     host.set_dynamic(drop_params=False)
     core: Final = make_core(

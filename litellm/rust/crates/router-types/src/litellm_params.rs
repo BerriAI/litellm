@@ -7,7 +7,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use serde_with::{OneOrMany, formats::PreferMany, serde_as};
 
-use crate::Spelled;
+use crate::{CallSettings, Spelled};
 
 /// Python's `LiteLLM_Params`: a deployment's `litellm_params`, as a config spells them and as
 /// a caller passes them. Each credential family is one flattened group owned by its auth
@@ -15,9 +15,10 @@ use crate::Spelled;
 /// map. Every key no field names lands in [`Self::extra`], as Python's `extra="allow"` keeps it.
 ///
 /// A key a field names but cannot hold is an error, as it is for Python's pydantic model;
-/// the coercions Python's validators apply (`max_retries` from text, `drop_params` from a flag
-/// word) are left to the readers, so the shapes here are the ones the YAML carries. An
-/// `organization` list is what Python's router expands into one deployment per entry.
+/// the coercion Python's validator applies to `max_retries` from text is left to the readers, so
+/// the shapes here are the ones the YAML carries. [`CallSettings`] is the exception: its three
+/// keys are read here, by the rules a call reads them with. An `organization` list is what
+/// Python's router expands into one deployment per entry.
 #[serde_as]
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 pub struct LitellmParams {
@@ -40,7 +41,8 @@ pub struct LitellmParams {
     pub max_parallel_requests: Option<u64>,
     #[serde_as(as = "Option<OneOrMany<_, PreferMany>>")]
     pub organization: Option<Vec<String>>,
-    pub drop_params: Option<Spelled<bool>>,
+    #[serde(flatten)]
+    pub call_settings: CallSettings,
     pub tags: Option<Box<[String]>>,
     pub tag_regex: Option<Box<[String]>>,
     pub max_budget: Option<f64>,
@@ -132,5 +134,31 @@ mod tests {
         assert!(params.extra.is_empty(), "{:?}", params.extra);
         assert_eq!(params.claude_platform.workspace().as_deref(), Some("x"));
         assert_eq!(params.claude_platform.ignored_override_type(), Some("str"));
+    }
+
+    #[rstest]
+    fn the_call_settings_land_in_their_group_not_the_extra_params() {
+        let params: LitellmParams = serde_json::from_value(json!({
+            "model": "m",
+            "drop_params": "true",
+            "allowed_openai_params": ["tools"],
+            "additional_drop_params": ["response_format"],
+            "base_model": "b",
+        }))
+        .unwrap();
+        assert_eq!(
+            params.extra.keys().collect::<Vec<_>>(),
+            ["base_model"],
+            "{:?}",
+            params.extra
+        );
+        assert_eq!(
+            params.call_settings,
+            CallSettings {
+                drop_params: Some(true),
+                allowed_openai_params: Some(["tools".to_owned()].into()),
+                additional_drop_params: Some(["response_format".to_owned()].into()),
+            }
+        );
     }
 }

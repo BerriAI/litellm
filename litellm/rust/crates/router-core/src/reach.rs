@@ -34,7 +34,8 @@ pub struct Reached {
 pub enum HostStep {
     /// `RouterHost::select` with `SelectStage::Strategy`, for the selector the scope names.
     Pick(RoutingStrategy, StrategyScope),
-    /// `RouterHost::pre_call_facts`.
+    /// `RouterHost::pre_call_facts`, then `RouterHost::unsupported_params` for a request that asks
+    /// for a checked param.
     PreCallFacts,
     /// `RouterCache::health_states`.
     HealthStates,

@@ -1,3 +1,4 @@
+mod call_settings;
 mod litellm_params;
 mod router_redis;
 mod router_settings;
@@ -5,6 +6,7 @@ mod routing;
 mod secret_pointer;
 mod value;
 
+pub use call_settings::CallSettings;
 pub use litellm_params::{ExtraParams, LitellmParams};
 pub use router_redis::RouterRedis;
 pub use router_settings::RouterSettings;

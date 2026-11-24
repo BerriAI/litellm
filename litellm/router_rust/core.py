@@ -150,10 +150,12 @@ from litellm.router_rust.steps.precall import (
     PreCallFacts,
     cannot_serve_route,
     declares_no_vision,
+    pre_call_error,
     refuses_decisions_media,
     request_carries_image,
     request_carries_json_input,
     serves_route_capability,
+    unsupported_params,
 )
 from litellm.router_rust.steps.prerouting import PreRouter, PreRoutingStrategies, picks_async
 from litellm.router_rust.steps.selection import (
@@ -3517,15 +3519,13 @@ class RustCore(
         )
         return [found for record in kept if (found := picked_id(record)) is not None]
 
+    def _pre_call_record(self, id: str) -> Mapping[str, object]:  # a deployment id
+        return self._hosted._core_get_model_info(id) or as_str_mapping(self._handle.deployment(id)) or {}  # pyright: ignore[reportPrivateUsage]  # see __init__
+
     def _pre_call_facts(
         self, step: Mapping[str, object], request: Mapping[str, object], messages: object, input: object
     ) -> PreCallFacts:
-        hosted: Final = self._hosted
-
-        def record(id: str) -> Mapping[str, object]:
-            return hosted._core_get_model_info(id) or as_str_mapping(self._handle.deployment(id)) or {}  # pyright: ignore[reportPrivateUsage]  # see __init__
-
-        return PreCallFacts(self._host, hosted, step, record, request, messages, input)  # pyright: ignore[reportArgumentType]  # the host registry serves the reads
+        return PreCallFacts(self._host, self._hosted, step, self._pre_call_record, request, messages, input)  # pyright: ignore[reportArgumentType]  # the host registry serves the reads
 
     def _text_only(self, step: Mapping[str, object]) -> list[str]:  # mutable-ok: the step's answer
         """The candidates that declare no vision support (bridged: needs the cost map)."""
@@ -3624,6 +3624,20 @@ class RustCore(
         tag_routable: Final = self._tag_routable_ids(str(step.get("model")), pool, routable, pool_ids, request)
         return tuple(record for record in routable if picked_id(record) in tag_routable)
 
+    def _answer_from_step(self, step: Mapping[str, object]) -> object:
+        """The answer of a select stage that reads the step alone, or None for any other stage."""
+        match step.get("stage"):
+            case "text_only":
+                return self._text_only(step)
+            case "route_incapable":
+                return self._route_incapable(step)
+            case "provider_request":
+                return _provider_request(step)
+            case "param_support":
+                return unsupported_params(step, self._pre_call_record)
+            case _:
+                return None
+
     async def _answer_select(
         self,
         step: Mapping[str, object],
@@ -3636,16 +3650,15 @@ class RustCore(
     ) -> object:
         if step.get("stage") == "pre_call":
             return await self._pre_call_facts(step, request, messages, input).answer_async()
+        from_step: Final = self._answer_from_step(step)
+        if from_step is not None:
+            return from_step
         if step.get("stage") == "routing_plugins":
             # The plugins already ran in this pick's pre_route step (see `_pre_route`), on the
             # session-resolved name and before a strategy was selected, as Python's hook runs them.
             return candidate_models(request)
         if step.get("stage") == "tags":
             return await self._answer_tags(step, request)
-        if step.get("stage") == "text_only":
-            return self._text_only(step)
-        if step.get("stage") == "route_incapable":
-            return self._route_incapable(step)
         if step.get("stage") == "media_refusing":
             return self._media_refusing(step, request)
         if step.get("stage") == "embedding_batch":
@@ -3656,8 +3669,6 @@ class RustCore(
                 for record in self._records_of(step.get("candidates")):
                     await selector.async_pre_call_check(dict(record), None)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # every selector is a CustomLogger
             return step["candidates"]
-        if step.get("stage") == "provider_request":
-            return _provider_request(step)
         inputs: Final = self._strategy_inputs(step, request)
         if inputs is None:
             return step["candidates"]
@@ -3710,15 +3721,14 @@ class RustCore(
     ) -> object:
         if step.get("stage") == "pre_call":
             return self._pre_call_facts(step, request, messages, input).answer()
+        from_step: Final = self._answer_from_step(step)
+        if from_step is not None:
+            return from_step
         if step.get("stage") == "routing_plugins":
             return candidate_models(request)
         if step.get("stage") == "callback_filters":
             # Only the async candidate lists run the callback filters.
             return step["candidates"]
-        if step.get("stage") == "text_only":
-            return self._text_only(step)
-        if step.get("stage") == "route_incapable":
-            return self._route_incapable(step)
         if step.get("stage") == "media_refusing":
             return self._media_refusing(step, request)
         if step.get("stage") == "embedding_batch":
@@ -3729,8 +3739,6 @@ class RustCore(
                 for record in self._records_of(step.get("candidates")):
                     selector.pre_call_check(dict(record))  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # every selector is a CustomLogger
             return step["candidates"]
-        if step.get("stage") == "provider_request":
-            return _provider_request(step)
         inputs: Final = self._strategy_inputs(step, request)
         if inputs is None:
             return step["candidates"]
@@ -3913,7 +3921,7 @@ class RustCore(
             remaining = rest
         return found
 
-    def _failure_error(  # noqa: C901  # one branch per failure Python tells apart
+    def _failure_error(
         self,
         step: Mapping[str, object],
         model: str,
@@ -3994,24 +4002,9 @@ class RustCore(
                 "Please add use_in_pass_through: true in the deployment configuration"
             )
             return litellm_exceptions.BadRequestError(message=message, model=listed_model, llm_provider="")
-        if kind == "context_window_exceeded":
-            return litellm_exceptions.ContextWindowExceededError(
-                message="litellm._pre_call_checks: Context Window exceeded for given call. No models have context "
-                f"window large enough for this call.\n{step.get('error_detail')}",
-                model=str(step.get("error_model") or model),
-                llm_provider="",
-            )
-        if kind == "unsupported_params":
-            params: Final = sorted(str(param) for param in _as_list(step.get("error_params")))
-            unsupported_model: Final = str(step.get("error_model") or model)
-            return litellm_exceptions.UnsupportedParamsError(
-                message=(
-                    f"no deployment of model={unsupported_model} supports {params}. "
-                    "To drop these, set `litellm.drop_params=True` or for proxy `litellm_settings: drop_params: true`, "
-                    f"or send allowed_openai_params={params} to pass them through"
-                ),
-                model=unsupported_model,
-            )
+        pre_call: Final = pre_call_error(step, model)
+        if pre_call is not None:
+            return pre_call
         if kind == "routing_plugins_left_nothing":
             left: Final = [str(name) for name in _as_list(step.get("error_params"))]
             return ValueError(f"No deployments left after routing-plugin filtering. candidate_models={left}")

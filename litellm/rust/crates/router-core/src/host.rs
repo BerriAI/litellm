@@ -19,7 +19,7 @@ use crate::{
     fallback::Fallbacks,
     mock::MockFailure,
     outcome::OutcomeCallbacks,
-    precall::PreCallFacts,
+    precall::{PreCallFacts, Unsupported},
     prerouting::{PreRoute, PreRouted},
     registry::{Deployment, Registry},
     settings::Settings,
@@ -747,8 +747,9 @@ pub trait RouterHost: Send + Sync {
     }
 
     /// The facts the `enable_pre_call_checks` filter decides by (token count, context windows,
-    /// param support), for `candidates` and the deployments in `ctx.pool`. A host without them
-    /// reports no input, so nothing is checked.
+    /// the live `litellm.drop_params`, how the request sends the checked params), for
+    /// `candidates` and the deployments in `ctx.pool`. A host without them reports no input, so
+    /// nothing is checked.
     fn pre_call_facts(
         &self,
         ctx: &RoutingContext<'_>,
@@ -756,6 +757,19 @@ pub trait RouterHost: Send + Sync {
     ) -> impl Future<Output = Result<PreCallFacts, Error>> + Send {
         let _ = (ctx, candidates);
         async { Ok(PreCallFacts::default()) }
+    }
+
+    /// Which of `params` each of `candidates` and of the deployments in `ctx.pool` does not
+    /// support (`_deployment_supports_param`). Asked only when [`crate::precall::requested`]
+    /// names a param. A host that cannot tell reports none, so every deployment takes them.
+    fn unsupported_params(
+        &self,
+        ctx: &RoutingContext<'_>,
+        candidates: &[Arc<Deployment>],
+        params: &[&'static str],
+    ) -> impl Future<Output = Result<Unsupported, Error>> + Send {
+        let _ = (ctx, candidates, params);
+        async { Ok(Unsupported::default()) }
     }
 
     /// `f"{provider}/{model}"` for `ctx.name`, which `PatternMatchRouter.get_pattern` tries when

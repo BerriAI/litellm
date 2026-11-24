@@ -1,7 +1,7 @@
 use litellm_auth_types::{AwsParams, VertexParams};
 use litellm_secret_value::SecretValue;
 
-use litellm_router_types::{LitellmParams, Spelled};
+use litellm_router_types::{CallSettings, LitellmParams, Spelled};
 use rstest::rstest;
 use serde_json::{Map, Value, json};
 
@@ -58,7 +58,10 @@ fn params(value: Value) -> LitellmParams {
         model: "m".into(),
         timeout: Some(Spelled::Text("os.environ/T".into())),
         rpm: Some(Spelled::Value(5.0)),
-        drop_params: Some(Spelled::Text("true".into())),
+        call_settings: CallSettings {
+            drop_params: Some(true),
+            ..CallSettings::default()
+        },
         tags: Some(Box::from(["a".to_string()])),
         max_budget: Some(1.5),
         ..LitellmParams::default()

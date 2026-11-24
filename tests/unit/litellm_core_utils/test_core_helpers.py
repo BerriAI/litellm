@@ -17,6 +17,7 @@ from litellm.litellm_core_utils.core_helpers import (
     _FINISH_REASON_MAP,
     RESPONSE_COST_HEADER,
     KeywordArguments,
+    allowed_openai_param_names,
     bind_budget_reservation_to_callbacks,
     budget_reservation_from_metadata,
     callable_of,
@@ -1215,3 +1216,21 @@ def test_only_keeps_the_named_keys_in_order_and_leaves_the_source_unchanged() ->
     assert list(result.items()) == [("b", 2), ("d", 4), ("e", 5)]
     assert only(source) == {}
     assert source == {"a": 1, "b": 2, "c": 3, "d": 4}
+
+
+@pytest.mark.parametrize(
+    ("value", "names"),
+    [
+        ("response_format, tools;x-y", ("response_format", "tools", "x", "y")),
+        ({"response_format": None, "tools": 1}, ("response_format", "tools")),
+        (["response_format", 5, None, "tools"], ("response_format", "tools")),
+        (None, ()),
+        (5, ()),
+    ],
+    ids=["text", "mapping", "list", "none", "number"],
+)
+def test_allowed_openai_param_names_reads_text_mapping_keys_and_list_entries(
+    value: object, names: tuple[str, ...]
+) -> None:
+    """The same cases pin ``ParamNames`` in ``litellm/rust/crates/python-compat/src/lenient.rs``."""
+    assert allowed_openai_param_names(value) == names

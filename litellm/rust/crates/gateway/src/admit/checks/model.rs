@@ -5,7 +5,7 @@
 //! serve as Python does sends its whole group to Python, and so does a fallback to such a group.
 
 use axum::http::Uri;
-use litellm_config::{LitellmParams, Model, Spelled};
+use litellm_config::{CallSettings, LitellmParams, Model, Spelled};
 use litellm_core_utils::get_llm_provider_logic::LlmProviders;
 use litellm_model_catalog::Catalog;
 use litellm_router_core::Reached;
@@ -136,7 +136,12 @@ fn params(params: &LitellmParams) -> Vec<Box<str>> {
         custom_llm_provider: _,
         tpm: _,
         rpm: _,
-        drop_params: _,
+        call_settings:
+            CallSettings {
+                drop_params: _,
+                allowed_openai_params,
+                additional_drop_params,
+            },
         aws_bedrock_project_id: _,
         claude_platform: _,
         api_key,
@@ -188,6 +193,8 @@ fn params(params: &LitellmParams) -> Vec<Box<str>> {
             default_api_key_rpm_limit,
             litellm_credential_name,
             provider_affinity_header,
+            allowed_openai_params,
+            additional_drop_params,
         ],
         on: [use_in_pass_through, use_chat_completions_api]
     )
