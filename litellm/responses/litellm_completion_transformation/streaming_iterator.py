@@ -461,10 +461,9 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
 
     def _responses_namespace_tool_call_fields(self, fn_name: str) -> tuple[str, str | None]:
         mapped: Final = self._namespace_tool_names.get(fn_name)
-        if mapped:
-            namespace, tool_name = mapped
-            return tool_name, namespace
-        return fn_name, None
+        if mapped is None:
+            return fn_name, None
+        return mapped.name, mapped.returned_namespace
 
     def _tool_call_item_kwargs(self, call_id: str, fn_name: str, arguments: str, status: str) -> dict[str, str]:
         item_kwargs: Final = build_tool_call_item_kwargs(call_id, fn_name, arguments, status, self._custom_tool_names)

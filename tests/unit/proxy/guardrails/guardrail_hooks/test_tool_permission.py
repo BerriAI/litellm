@@ -5161,7 +5161,7 @@ _DENY_VAULT_ALLOW_MCP: Final = [
 
 def _bridged_vault_request(event_hook: GuardrailEventHooks) -> dict[str, object]:
     from litellm.litellm_core_utils.litellm_logging import Logging
-    from litellm.litellm_core_utils.tool_fields import BridgedTool
+    from litellm.litellm_core_utils.tool_fields import NamespaceMember
 
     logging_obj: Final = Logging(
         model="anthropic/claude-sonnet-5-5",
@@ -5172,7 +5172,7 @@ def _bridged_vault_request(event_hook: GuardrailEventHooks) -> dict[str, object]
         litellm_call_id="bridged-vault",
         function_id="test",
     )
-    logging_obj.record_bridged_tool_names({_VAULT_SENT_NAME: BridgedTool(_VAULT_NAMESPACE, _VAULT_TOOL)})
+    logging_obj.record_bridged_tool_names({_VAULT_SENT_NAME: NamespaceMember(_VAULT_NAMESPACE, _VAULT_TOOL)})
     return {
         "guardrails": [f"vault-{event_hook.value}"],
         "tools": [{"type": "function", "function": {"name": _VAULT_SENT_NAME, "parameters": {"type": "object"}}}],
@@ -5379,3 +5379,37 @@ async def test_a_bridged_call_is_judged_as_the_tool_the_caller_gets_back(
     message: Final = response.choices[0].message
     assert message.tool_calls in (None, [])
     assert "deny_what_the_caller_gets" in (message.content or "")
+
+
+@pytest.mark.asyncio
+async def test_a_deferred_top_level_tool_is_judged_by_its_own_name_not_as_a_namespace_member() -> None:
+    from litellm.responses.litellm_completion_transformation.transformation import LiteLLMCompletionResponsesConfig
+
+    tools: Final = [
+        {"type": "function", "name": "read", "defer_loading": True, "parameters": {"type": "object"}},
+    ]
+    request_input: Final = [{"type": "message", "role": "user", "content": "read it"}]
+    completion_kwargs: Final = _bridged_completion_kwargs(request_input, tools)
+    returned_items: Final = LiteLLMCompletionResponsesConfig.transform_chat_completion_tools_to_responses_tools(
+        _returns_a_call_to("read"), {"tools": tools}, request_input
+    )
+    assert [(item.name, getattr(item, "namespace", None)) for item in returned_items] == [("read", "read")]
+
+    guardrail: Final = ToolPermissionGuardrail(
+        guardrail_name="bridged-identity",
+        rules=[{"id": "allow_read_namespace", "tool_name": "^read__.*$", "decision": "allow"}],
+        default_action="deny",
+        on_disallowed_action="rewrite",
+        event_hook=GuardrailEventHooks.post_call,
+    )
+    response: Final = _returns_a_call_to("read")
+
+    await guardrail.async_post_call_success_hook(
+        data={**completion_kwargs, "guardrails": ["bridged-identity"]},
+        user_api_key_dict=UserAPIKeyAuth(),
+        response=response,
+    )
+
+    message: Final = response.choices[0].message
+    assert message.tool_calls in (None, [])
+    assert "Tool 'read'" in (message.content or "")

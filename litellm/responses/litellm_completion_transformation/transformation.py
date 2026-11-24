@@ -85,7 +85,14 @@ from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import 
     message_field,
     parts_of,
 )
-from litellm.litellm_core_utils.tool_fields import SentToolNames, chat_member_name, qualified_member_name
+from litellm.litellm_core_utils.tool_fields import (
+    BridgedTool,
+    DeferredTopLevelTool,
+    NamespaceMember,
+    SentToolNames,
+    chat_member_name,
+    qualified_member_name,
+)
 from litellm.llms.anthropic.common_utils import (
     anthropic_server_tool_call_params,
     anthropic_server_tool_calls,
@@ -221,7 +228,7 @@ from .tool_search_results import (
     with_tool_search_outputs,
 )
 
-NamespaceNameMap: TypeAlias = Mapping[str, tuple[str, str]]
+NamespaceNameMap: TypeAlias = Mapping[str, BridgedTool]
 NamespaceTool: TypeAlias = Mapping[str, object]
 ResponseTools: TypeAlias = Sequence[Mapping[str, object]] | None
 ChatToolParam: TypeAlias = ChatCompletionToolParam | OpenAIMcpServerTool | AnthropicToolSearchToolRegex
@@ -3505,7 +3512,7 @@ class LiteLLMCompletionResponsesConfig:
     def namespace_tool_name_map(
         tools: ResponseTools, request_input: str | ResponseInputParam | None = None
     ) -> NamespaceNameMap:
-        """The namespace tool the caller gets back for each name the provider may call.
+        """The tool the caller gets back for each name the provider may call.
 
         This is the one answer the response conversion and the tool permission guardrail both read. Namespaced
         calls in the history count too, since a resumed turn can replay a call to a tool the client has not
@@ -3523,20 +3530,21 @@ class LiteLLMCompletionResponsesConfig:
             }
         )
         unambiguous_entries: Final = tuple(
-            (tool_name, (namespace, tool_name))
+            (tool_name, NamespaceMember(namespace, tool_name))
             for namespace, tool_name in namespace_entries
             if tool_name not in top_level_function_names and unqualified_counts[tool_name] == 1
         )
         qualified_entries: Final = tuple(
-            (chat_member_name(namespace, tool_name), (namespace, tool_name))
+            (chat_member_name(namespace, tool_name), NamespaceMember(namespace, tool_name))
             for namespace, tool_name in namespace_entries
         )
         # The OpenAI Agents SDK reserves namespace == name for a deferred top-level tool (agents/_tool_identity.py)
         deferred_top_level_entries: Final = tuple(
-            (name, (name, name)) for name in LiteLLMCompletionResponsesConfig.deferred_top_level_names(tools)
+            (name, DeferredTopLevelTool(name))
+            for name in LiteLLMCompletionResponsesConfig.deferred_top_level_names(tools)
         )
         history_entries: Final = tuple(
-            (chat_name, (namespace, tool_name))
+            (chat_name, NamespaceMember(namespace, tool_name))
             for namespace, tool_name in LiteLLMCompletionResponsesConfig._history_namespace_calls(request_input)
             if (chat_name := chat_member_name(namespace, tool_name)) not in top_level_function_names
         )
@@ -3559,11 +3567,10 @@ class LiteLLMCompletionResponsesConfig:
 
     @staticmethod
     def _restore_namespace_tool_name(tool_name: str, names: NamespaceNameMap) -> tuple[str, str | None]:
-        mapped = names.get(tool_name)
+        mapped: Final = names.get(tool_name)
         if mapped is None:
             return tool_name, None
-        namespace, restored_tool_name = mapped
-        return restored_tool_name, namespace
+        return mapped.name, mapped.returned_namespace
 
     @staticmethod
     def transform_chat_completion_tools_to_responses_tools(

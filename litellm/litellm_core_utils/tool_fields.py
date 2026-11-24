@@ -96,7 +96,7 @@ def qualified_member_name(namespace: str, name: str) -> str:
 
 
 @dataclass(frozen=True, slots=True)
-class BridgedTool:
+class NamespaceMember:
     namespace: str
     name: str
 
@@ -104,15 +104,34 @@ class BridgedTool:
     def full_name(self) -> str:
         return qualified_member_name(self.namespace, self.name)
 
+    @property
+    def returned_namespace(self) -> str:
+        return self.namespace
+
+
+@dataclass(frozen=True, slots=True)
+class DeferredTopLevelTool:
+    """A top-level function sent with defer_loading, which the Responses API returns as namespace == name."""
+
+    name: str
+
+    @property
+    def full_name(self) -> str:
+        return self.name
+
+    @property
+    def returned_namespace(self) -> str:
+        return self.name
+
+
+BridgedTool: TypeAlias = NamespaceMember | DeferredTopLevelTool
+
 
 @dataclass(frozen=True, slots=True)
 class BridgedToolNames:
-    """The namespace tool the caller gets back for each name a bridged request let the provider call."""
+    """The tool the caller gets back for each name a bridged request let the provider call."""
 
     tool_by_sent_name: tuple[tuple[str, BridgedTool], ...]
-
-    def as_mapping(self) -> Mapping[str, str]:
-        return {sent_name: tool.full_name for sent_name, tool in self.tool_by_sent_name}
 
     def tools(self) -> Mapping[str, BridgedTool]:
         return MappingProxyType(dict(self.tool_by_sent_name))
@@ -121,15 +140,8 @@ class BridgedToolNames:
 _NO_BRIDGED_TOOLS: Final = MappingProxyType[str, BridgedTool]({})
 
 
-def shortened_full_names(tools: Mapping[str, BridgedTool]) -> Mapping[str, str]:
-    """The full name behind each name the bridge had to shorten, which is all logs and spend tracking rename."""
-    return MappingProxyType(
-        {
-            sent_name: tool.full_name
-            for sent_name, tool in tools.items()
-            if sent_name == chat_member_name(tool.namespace, tool.name) != tool.full_name
-        }
-    )
+def full_names_by_sent_name(tools: Mapping[str, BridgedTool]) -> Mapping[str, str]:
+    return MappingProxyType({sent_name: tool.full_name for sent_name, tool in tools.items()})
 
 
 def recorded_bridged_tools(call_details: object) -> Mapping[str, BridgedTool]:

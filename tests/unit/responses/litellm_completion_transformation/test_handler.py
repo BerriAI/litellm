@@ -31,10 +31,10 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.tool_fields import (
     BRIDGED_TOOL_NAMES_KWARG,
-    BridgedTool,
     BridgedToolNames,
+    NamespaceMember,
+    full_names_by_sent_name,
     qualified_member_name,
-    shortened_full_names,
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.responses.litellm_completion_transformation.compaction_trigger import SUMMARY_PROMPT
@@ -625,7 +625,9 @@ async def test_bridged_turn_logs_the_full_name_of_a_namespace_member_sent_under_
     logged: Final = logging_obj.model_call_details.get(BRIDGED_TOOL_NAMES_KWARG)
     assert full_name not in sent_names
     assert isinstance(logged, BridgedToolNames)
-    assert shortened_full_names(logged.tools()) == {sent_name: full_name for sent_name in sent_names}
+    assert full_names_by_sent_name(logged.tools()) == {
+        sent_name: full_name for sent_name in (*sent_names, _LONG_MEMBER)
+    }
 
 
 @pytest.mark.asyncio
@@ -671,8 +673,63 @@ async def test_bridged_turn_logs_a_shortened_name_known_only_from_an_earlier_cal
 
     logged: Final = logging_obj.model_call_details.get(BRIDGED_TOOL_NAMES_KWARG)
     assert isinstance(logged, BridgedToolNames)
-    assert list(logged.tools().values()) == [BridgedTool(_LONG_NAMESPACE, _LONG_MEMBER)]
+    assert list(logged.tools().values()) == [NamespaceMember(_LONG_NAMESPACE, _LONG_MEMBER)]
     assert all(len(sent_name) <= 64 for sent_name in logged.tools())
+
+
+@pytest.mark.parametrize(
+    ("returned_name", "logged_name"),
+    [("run", "exec__run"), ("exec__run", "exec__run"), ("read", "read"), ("shell", "shell")],
+    ids=["bare namespace member", "joined namespace member", "deferred top-level tool", "plain function"],
+)
+def test_spend_logs_name_a_bridged_call_by_the_tool_the_caller_gets_back(returned_name: str, logged_name: str):
+    from litellm.proxy.db.spend_log_tool_index import logged_full_tool_names, response_tool_call_names
+
+    logging_obj: Final = LiteLLMLoggingObj(
+        model="anthropic/claude-sonnet-5-5",
+        messages=[],
+        stream=False,
+        call_type="responses",
+        start_time=1.0,
+        litellm_call_id="spend-log-tool-names",
+        function_id="test",
+    )
+
+    def fake_completion(**kwargs: object) -> None:
+        raise _StopForwarding()
+
+    tools: Final = [
+        {"type": "namespace", "name": "exec", "description": "", "tools": [{"type": "function", "name": "run"}]},
+        {"type": "function", "name": "read", "defer_loading": True, "parameters": {"type": "object"}},
+        {"type": "function", "name": "shell", "parameters": {"type": "object"}},
+    ]
+    with (
+        patch("litellm.completion", fake_completion),  # test-quality-ok: no DI seam; the file stubs this same boundary
+        pytest.raises(_StopForwarding),
+    ):
+        LiteLLMCompletionTransformationHandler().response_api_handler(
+            model="anthropic/claude-sonnet-5-5",
+            input="go",
+            responses_api_request={"tools": tools},
+            custom_llm_provider="anthropic",
+            _is_async=False,
+            litellm_logging_obj=logging_obj,
+        )
+
+    response: Final = litellm.ModelResponse(
+        choices=[
+            {
+                "message": {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {"id": "call_1", "type": "function", "function": {"name": returned_name, "arguments": "{}"}}
+                    ],
+                }
+            }
+        ]
+    )
+    logged_names: Final = response_tool_call_names(response, logged_full_tool_names(logging_obj.model_call_details))
+    assert logged_names == (logged_name,)
 
 
 def _anthropic_streams_a_call_to_the_first_tool(request: httpx.Request) -> httpx.Response:

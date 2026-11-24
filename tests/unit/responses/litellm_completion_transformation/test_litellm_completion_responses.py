@@ -22,7 +22,7 @@ import litellm
 from litellm.constants import CALLER_SESSION_ID_METADATA_KEY, PREVIOUS_RESPONSE_IDS_METADATA_KEY
 from litellm.integrations.anthropic_cache_control_hook import MAX_CACHE_CONTROL_BLOCKS, AnthropicCacheControlHook
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR
-from litellm.litellm_core_utils.tool_fields import chat_member_name
+from litellm.litellm_core_utils.tool_fields import DeferredTopLevelTool, NamespaceMember, chat_member_name
 from litellm.litellm_core_utils.prompt_templates.factory import (
     _bedrock_converse_messages_pt,
     anthropic_messages_pt,
@@ -3644,8 +3644,8 @@ class TestToolTransformation:
 
         assert LiteLLMCompletionResponsesConfig.deferred_top_level_names(tools) == frozenset({"lookup"})
         assert dict(LiteLLMCompletionResponsesConfig.namespace_tool_name_map(tools)) == {
-            "search__search": ("search", "search"),
-            "lookup": ("lookup", "lookup"),
+            "search__search": NamespaceMember("search", "search"),
+            "lookup": DeferredTopLevelTool("lookup"),
         }
         messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
             input=[
@@ -3766,8 +3766,8 @@ class TestToolTransformation:
 
         result = LiteLLMCompletionResponsesConfig.namespace_tool_name_map([namespace_tool])
 
-        assert result["collaboration__wait_agent"] == ("collaboration", "wait_agent")
-        assert result["wait_agent"] == ("collaboration", "wait_agent")
+        assert result["collaboration__wait_agent"] == NamespaceMember("collaboration", "wait_agent")
+        assert result["wait_agent"] == NamespaceMember("collaboration", "wait_agent")
 
     def test_namespace_tool_name_map_drops_ambiguous_unqualified_names(self):
         tools = [
@@ -3810,9 +3810,9 @@ class TestToolTransformation:
 
         result = LiteLLMCompletionResponsesConfig.namespace_tool_name_map(tools)
 
-        assert result["alpha__run"] == ("alpha", "run")
-        assert result["beta__run"] == ("beta", "run")
-        assert result["gamma__run"] == ("gamma", "run")
+        assert result["alpha__run"] == NamespaceMember("alpha", "run")
+        assert result["beta__run"] == NamespaceMember("beta", "run")
+        assert result["gamma__run"] == NamespaceMember("gamma", "run")
         assert "run" not in result
 
     def test_namespace_tool_name_map_keeps_the_object_tools_beside_a_malformed_entry(self):
@@ -3831,9 +3831,9 @@ class TestToolTransformation:
         )
 
         assert LiteLLMCompletionResponsesConfig.namespace_tool_name_map(tools) == {
-            "ns__a": ("ns", "a"),
-            "a": ("ns", "a"),
-            "top": ("top", "top"),
+            "ns__a": NamespaceMember("ns", "a"),
+            "a": NamespaceMember("ns", "a"),
+            "top": DeferredTopLevelTool("top"),
         }
 
     def test_namespace_tool_name_map_drops_top_level_function_collision(self):
@@ -3854,7 +3854,7 @@ class TestToolTransformation:
 
         result = LiteLLMCompletionResponsesConfig.namespace_tool_name_map(tools)
 
-        assert result["admin__run"] == ("admin", "run")
+        assert result["admin__run"] == NamespaceMember("admin", "run")
         assert "run" not in result
 
     def test_namespace_tool_name_map_prefers_a_sent_name_over_another_members_bare_name(self):
@@ -3873,8 +3873,8 @@ class TestToolTransformation:
 
         result = LiteLLMCompletionResponsesConfig.namespace_tool_name_map(tools)
 
-        assert result["x__foo"] == ("x", "foo")
-        assert result["y__x__foo"] == ("y", "x__foo")
+        assert result["x__foo"] == NamespaceMember("x", "foo")
+        assert result["y__x__foo"] == NamespaceMember("y", "x__foo")
 
     def test_transform_tools_rejects_flattened_name_collision(self):
         tools = [

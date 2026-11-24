@@ -27,7 +27,7 @@ from typing_extensions import LiteralString
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import SPEND_LOG_WRITE_BATCH_MAX_BYTES, SPEND_LOG_WRITE_BATCH_MAX_ROWS, TOOL_NAME_MAX_UTF8_BYTES
-from litellm.litellm_core_utils.tool_fields import recorded_bridged_tools, shortened_full_names
+from litellm.litellm_core_utils.tool_fields import full_names_by_sent_name, recorded_bridged_tools
 from litellm.proxy._types import DB_RETRY_SAFE_ERROR_TYPES
 from litellm.proxy.db.db_span import db_span
 from litellm.proxy.db.rollup_lock_timeout import ROLLUP_LOCK_TIMEOUT_SQL, rollup_lock_timeout_setting
@@ -52,7 +52,7 @@ _NO_FULL_TOOL_NAMES: Final[Mapping[str, str]] = MappingProxyType({})
 
 
 def logged_full_tool_names(call_kwargs: object) -> Mapping[str, str]:
-    full_names: Final = shortened_full_names(recorded_bridged_tools(call_kwargs))
+    full_names: Final = full_names_by_sent_name(recorded_bridged_tools(call_kwargs))
     return full_names if full_names else _NO_FULL_TOOL_NAMES
 
 
