@@ -9,14 +9,20 @@ Covers:
   - M3-I12: Regression tests for error scenarios
 """
 
-from typing import Any, Dict, List
-from unittest.mock import MagicMock, patch
+import json
+from typing import Any, Dict, Final, List
+from unittest.mock import MagicMock, Mock, patch
 
+import httpx
 import pytest
 
+import litellm
+from litellm.anthropic_interface import messages as anthropic_messages
+from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.integrations.websearch_interception.handler import (
     WebSearchInterceptionLogger,
 )
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
 
 # ---------------------------------------------------------------------------
@@ -492,37 +498,58 @@ class TestFollowUpErrorScenarios:
         assert captured_kwargs.get("metadata") == proxy_metadata
         assert captured_kwargs.get("litellm_call_id") == "call-abc-123"
 
-    @pytest.mark.asyncio
-    async def test_max_tokens_resolved_from_logging_obj_when_popped_from_optional_params(self):
-        """When max_tokens was popped from optional_params (Messages transformation), it is resolved from logging_obj."""
-        logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
-        captured_kwargs: Dict[str, Any] = {}
 
-        async def _fake_acreate(**kw):
-            captured_kwargs.update(kw)
-            return MagicMock()
+@pytest.mark.asyncio
+async def test_messages_web_search_follow_up_preserves_client_max_tokens(monkeypatch: pytest.MonkeyPatch) -> None:
+    model: Final = "claude-haiku-4-5-20251001"
+    client_limit: Final = 4000
+    search_tool: Final = {"name": "litellm_web_search", "input_schema": {"type": "object"}}
 
-        logging_obj = _make_logging_obj()
-        logging_obj.model_call_details["max_tokens"] = 4000
+    def respond(request: httpx.Request) -> httpx.Response:
+        body: Final = json.loads(request.content)
+        is_follow_up: Final = len(body["messages"]) > 1
+        content: Final = (
+            [{"type": "text", "text": "Answer after search"}]
+            if is_follow_up
+            else [{"type": "tool_use", "id": "toolu_1", "name": search_tool["name"], "input": {"query": "LiteLLM"}}]
+        )
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_follow_up" if is_follow_up else "msg_initial",
+                "type": "message",
+                "role": "assistant",
+                "model": model,
+                "content": content,
+                "stop_reason": "end_turn" if is_follow_up else "tool_use",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 10, "output_tokens": 4},
+            },
+        )
 
-        with (
-            patch(
-                "litellm.integrations.websearch_interception.handler.anthropic_messages.acreate",
-                side_effect=_fake_acreate,
-            ),
-            patch.object(
-                logger, "_execute_search", return_value=("search result", None)
-            ),
-        ):
-            await logger._execute_agentic_loop(
-                model="us.anthropic.claude-opus-4-6-v1",
-                messages=[{"role": "user", "content": "hi"}],
-                tool_calls=_make_tool_calls(),
-                thinking_blocks=[],
-                anthropic_messages_optional_request_params={},  # max_tokens already popped by transformation
-                logging_obj=logging_obj,
-                stream=False,
-                kwargs={},
+    logger: Final = WebSearchInterceptionLogger(enabled_providers=["anthropic"])
+    monkeypatch.setenv("SSL_ECDH_CURVE", "secp521r1")
+    monkeypatch.setattr(litellm, "callbacks", [logger])
+    upstream: Final = Mock(side_effect=respond)
+    client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(upstream))
+    clients: Final = LLMClientCache()
+    clients.set_cache(key="async_httpx_clientanthropic", value=client)
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", clients)
+    try:
+        with patch.object(logger, "_execute_search", return_value=("search result", None)):
+            response: Final = await anthropic_messages.acreate(
+                model=f"anthropic/{model}",
+                max_tokens=client_limit,
+                messages=[{"role": "user", "content": "Search and summarize"}],
+                tools=[search_tool],
+                api_key="test-key",
             )
+    finally:
+        await client.close()
 
-        assert captured_kwargs.get("max_tokens") == 4000
+    assert [json.loads(call.args[0].content)["max_tokens"] for call in upstream.call_args_list] == [
+        client_limit,
+        client_limit,
+    ]
+    assert isinstance(response, dict)
+    assert response["id"] == "msg_follow_up"
