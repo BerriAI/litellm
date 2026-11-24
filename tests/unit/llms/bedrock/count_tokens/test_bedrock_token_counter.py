@@ -19,6 +19,7 @@ from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude_transformation import (
     AmazonAnthropicClaudeConfig,
 )
+from litellm.llms.bedrock.common_utils import bedrock_converse_supports_parallel_tool_use_config
 from litellm.llms.bedrock.count_tokens.bedrock_token_counter import BedrockTokenCounter
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.utils import (
@@ -835,6 +836,41 @@ async def test_claude_runtime_count_carries_the_forced_tool_choice_inference_sen
     invoke_body: Final = _invoke_body(bedrock.requests[0])
     assert invoke_body["tool_choice"] == counted_tool_choice
     assert invoke_body["messages"] == [{"role": "user", "content": [{"type": "text", "text": "Weather in Paris?"}]}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "deployment_model",
+    [
+        "bedrock/converse/us.anthropic.claude-unlisted-v1:0",
+        "bedrock/converse/global.anthropic.claude-opus-4-8",
+        "bedrock/invoke/us.anthropic.claude-unlisted-v1:0",
+    ],
+    ids=["converse_without_parallel_config", "converse_with_parallel_config", "invoke"],
+)
+async def test_claude_runtime_count_disables_parallel_tool_use_only_where_inference_does(deployment_model: str) -> None:
+    bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 382}), mantle=(200, {"input_tokens": 1}))
+    model: Final = deployment_model.rsplit("/", 1)[-1]
+
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use=model,
+        messages=[{"role": "user", "content": "Weather in Paris?"}],
+        contents=None,
+        deployment=_deployment(deployment_model),
+        request_model=model,
+        tools=[{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}],
+        messages_format="openai",
+        chat_params={"parallel_tool_calls": False},
+    )
+
+    assert result is not None
+    assert (result.error, result.total_tokens) == (False, 382)
+    inference_sends_it: Final = deployment_model.startswith(
+        "bedrock/invoke/"
+    ) or bedrock_converse_supports_parallel_tool_use_config(model)
+    assert _invoke_body(bedrock.requests[0]).get("tool_choice") == (
+        {"type": "auto", "disable_parallel_tool_use": True} if inference_sends_it else None
+    )
 
 
 @pytest.mark.asyncio

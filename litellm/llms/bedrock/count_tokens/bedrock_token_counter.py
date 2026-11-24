@@ -32,6 +32,7 @@ from litellm.llms.bedrock.common_utils import (
     BEDROCK_INVOKE_CONTEXT_MANAGEMENT_EDIT_BETAS,
     BedrockError,
     bedrock_capability_model,
+    bedrock_converse_supports_parallel_tool_use_config,
     get_bedrock_base_model,
     strip_bedrock_routing_prefix,
 )
@@ -125,6 +126,16 @@ def _inference_capability_model(litellm_params: Mapping[str, object], counted_mo
         strip_bedrock_routing_prefix(deployment_model) if isinstance(deployment_model, str) else counted_model,
         litellm_params.get("base_model"),
     )
+
+
+def _chat_params_inference_honors(
+    deployment_config: BaseConfig | None, chat_params: Mapping[str, JsonValue], capability_model: str
+) -> Mapping[str, JsonValue]:
+    if not isinstance(deployment_config, litellm.AmazonConverseConfig):
+        return chat_params
+    if bedrock_converse_supports_parallel_tool_use_config(capability_model):
+        return chat_params
+    return MappingProxyType({key: value for key, value in chat_params.items() if key != "parallel_tool_calls"})
 
 
 def _has_role(message: Mapping[str, object]) -> bool:
@@ -303,6 +314,7 @@ class BedrockTokenCounter(BaseTokenCounter):
         claude: Final = is_mantle_claude_model(resolved_model)
         deployment_config: Final = _deployment_chat_config(litellm_params) if claude else None
         chat_config: Final = deployment_config if isinstance(deployment_config, AnthropicConfig) else None
+        capability_model: Final = _inference_capability_model(litellm_params, counted_model)
         converse_config: Final = (
             deployment_config
             if messages_format == "openai"
@@ -318,7 +330,7 @@ class BedrockTokenCounter(BaseTokenCounter):
                 rendered_messages,
                 tools,
                 chat_params,
-                _inference_capability_model(litellm_params, counted_model),
+                capability_model,
                 _deployment_model_info(deployment),
                 litellm_params,
             )
@@ -333,7 +345,7 @@ class BedrockTokenCounter(BaseTokenCounter):
                 tools,
                 messages_format,
                 chat_config or AnthropicConfig(),
-                chat_params,
+                _chat_params_inference_honors(deployment_config, chat_params, capability_model),
                 messages_are_converse_turns=converse_config is not None,
                 translate_contentless_turns=chat_config is not None,
             )
