@@ -807,7 +807,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[rstest]
     fn only_custom_tools_without_a_name_get_one() {
         let tools = json!([
             {"type": "computer_toolset_20260801"},
