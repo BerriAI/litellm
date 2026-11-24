@@ -2917,7 +2917,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             log_when_nothing_new=True,
         )
         if session_scan is True:
-            data["messages"] = self._merge_filtered_messages(
+            data["messages"] = self._merge_filtered_messages(  # rebind-ok: post_call reads the request messages back
                 original_messages=filter_result.original_messages or new_messages,
                 updated_target_messages=filtered_messages,
                 target_indices=filter_result.target_indices,
