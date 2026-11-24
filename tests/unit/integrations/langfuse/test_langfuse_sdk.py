@@ -1881,6 +1881,45 @@ def test_base64_images_leave_the_span_as_media_references_and_are_queued_for_upl
     assert {upload.media.content for upload in uploader.uploads} == {b"hello"}
 
 
+def test_request_messages_logged_as_model_parameters_have_their_images_replaced_too():
+    """A call rejected before the provider is logged with its whole request body as the model parameters."""
+    uploader = _RecordingUploader()
+    tracing, exporter = _media_channel(uploader)
+
+    generation = start_generation(
+        tracing=tracing,
+        trace_id=TRACE_A,
+        parent_observation_id=None,
+        existing_trace=False,
+        observation_id=None,
+        name="generation",
+        start_time=CALL_START,
+        public=None,
+        attributes=observation_attributes(
+            observation_type="generation",
+            input="rejected",
+            model_parameters={"max_tokens": 16, "messages": _image_messages()},
+        ),
+    )
+    generation.end(CALL_END)
+    assert tracing.flush() is True
+
+    parameters = json.loads(_only_span(exporter, "generation").attributes[A.OBSERVATION_MODEL_PARAMETERS])
+    assert parameters == {
+        "max_tokens": 16,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "what is this"},
+                    {"type": "image_url", "image_url": {"url": IMAGE_REFERENCE}},
+                ],
+            }
+        ],
+    }
+    assert [(upload.field, upload.observation_id) for upload in uploader.uploads] == [("metadata", generation.id)]
+
+
 def test_a_span_without_media_reaches_the_exporter_as_the_same_object():
     received: list = []
 
