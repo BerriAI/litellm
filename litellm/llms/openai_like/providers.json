@@ -392,5 +392,11 @@
       "/v1/chat/completions",
       "/v1/completions"
     ]
+  },
+  "openimpact": {
+    "base_url": "https://api.oimpact.ai/v1",
+    "api_key_env": "OPENIMPACT_API_KEY",
+    "api_base_env": "OPENIMPACT_API_BASE",
+    "supported_endpoints": ["/v1/chat/completions"]
   }
 }
