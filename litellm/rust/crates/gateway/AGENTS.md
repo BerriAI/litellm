@@ -102,6 +102,7 @@
 - `db::connect` (`src/db.rs`) builds `litellm_db::Pools`, and the `litellm_repositories::Database` the repositories run their queries on, from `resolve` in `db-resolve`, which takes `general_settings` and `resources.secrets` the way `redis-resolve`'s `resolve` does. No database configured, or a token auth toggle Rust cannot mint for yet, is `None`
 - The pools are lazy, so boot never waits for Postgres. A handler takes `State<Option<Pools>>` and picks `writer()`, `read()` or `read_after_write()` per query. Don't add an extractor that checks out a connection, because it would hide that choice
 - `/health/readiness` pings the writer for up to 2s and reports `connected`, `disconnected`, or `Not connected` when no database is configured, and always answers 200. The proxy's 503 on `disconnected` without `allow_requests_on_db_unavailable` and its 15s cache of a good answer are not ported
+- A gateway `fips` cargo feature, when it is added, must enable `litellm-at-rest/fips`, so a FIPS build cannot read or write a stored value with the NaCl cipher. With `general_settings.fips_mode` on, `stored.rs` derives the at-rest key with `KeyDerivation::FipsKbkdf` from `LITELLM_SALT_KEY` alone, and when that fails it leaves every request to Python, never falling back to the SHA-256 key
 
 ## License
 - `AppState::build` verifies the license once at boot with `build_license` (`src/license.rs`) and keeps the result as `entitlements`, which never changes while serving. `middleware::global` hands it to every middleware and route as `Extension<Arc<Entitlements>>`
