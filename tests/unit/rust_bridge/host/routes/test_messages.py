@@ -657,9 +657,20 @@ def test_a_bedrock_stream_error_event_maps_to_the_pre_stream_class_keeping_the_s
     )
 
     routed_as: Final = routing_classification(mapped)
+    response: Final = getattr(mapped, "response", None)
+    response_before_the_stream: Final = getattr(before_the_stream, "response", None)
     assert isinstance(mapped, openai.APIError)
     assert type(mapped) is type(before_the_stream)
     assert getattr(mapped, "status_code", None) == status
+    assert isinstance(response, httpx.Response)
+    assert isinstance(response_before_the_stream, httpx.Response)
+    assert response.status_code == status
+    assert (response.headers, response.content, response.request.method, response.request.url) == (
+        response_before_the_stream.headers,
+        response_before_the_stream.content,
+        response_before_the_stream.request.method,
+        response_before_the_stream.request.url,
+    )
     assert provider_origin_status(mapped) == status
     assert body in str(mapped)
     assert mapped.__context__ is event

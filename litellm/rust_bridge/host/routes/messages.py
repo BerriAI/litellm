@@ -26,6 +26,7 @@ from typing import (
 from urllib.parse import SplitResult, urlsplit
 
 import httpx
+import openai
 from aiohttp import ClientPayloadError
 from aiohttp.http_exceptions import ContentLengthError, TransferEncodingError
 from pydantic import JsonValue, TypeAdapter, ValidationError
@@ -39,6 +40,7 @@ from litellm.constants import (
     ANTHROPIC_MESSAGES_DETACHED_STREAM_DRAIN_TIMEOUT_SECONDS,
     ANTHROPIC_MESSAGES_MAX_DETACHED_STREAM_DRAINS,
 )
+from litellm.exceptions import error_response_without_credentials
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils import exception_mapping_utils
 from litellm.litellm_core_utils.core_helpers import (
@@ -1310,15 +1312,19 @@ def _bedrock_stream_error(error: Exception, request: Mapping[str, object]) -> Ex
     return _config_error(status, text, headers, request, "bedrock")
 
 
+_UNKNOWN_REQUEST_URL: Final = "https://docs.litellm.ai/docs"
+
+
 def _bedrock_stream_event_error(
     stream_error: Exception, error: Exception, request: Mapping[str, object], request_provider: str
 ) -> Exception:
-    """An error event Bedrock sent mid-stream raises its mapped public class with the status Bedrock sent,
-    while the router keeps classifying it as the raw `BedrockError` it raised before."""
+    """Keeps the status Bedrock sent, and the router's classification of the raw `BedrockError`, which the
+    stream raised unmapped before, so retries, cooldowns and the proxy's answer stay as they were."""
     mapped: Final = _public_provider_error(stream_error, error, request, request_provider)
     status: Final = getattr(stream_error, "status_code", None)
-    if isinstance(status, int):
-        mapped.status_code = status  # pyright: ignore[reportAttributeAccessIssue]  # every mapped litellm error has one
+    if isinstance(status, int) and isinstance(mapped, openai.APIStatusError):
+        mapped.status_code = status
+        mapped.response = error_response_without_credentials(status, mapped.response, _UNKNOWN_REQUEST_URL)
     keep_routing_classification(mapped, stream_error)
     return mapped
 

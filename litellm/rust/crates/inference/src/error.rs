@@ -176,7 +176,6 @@ impl Error {
         }
     }
 
-    /// The provider sent this failure as an error event inside a stream it had opened.
     pub fn is_upstream_stream_event(&self) -> bool {
         matches!(
             self,

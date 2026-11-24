@@ -2932,12 +2932,10 @@ _ErrorT = TypeVar("_ErrorT", bound=BaseException)
 
 
 def keep_routing_classification(mapped: BaseException, classified_as: Exception) -> None:
-    """The router keeps classifying ``mapped`` as ``classified_as``, the error it raised before it was mapped."""
     setattr(mapped, ROUTING_CLASSIFICATION_ATTRIBUTE, classified_as)
 
 
 def routing_classification(error: _ErrorT) -> _ErrorT | Exception:
-    """The error the router classifies ``error`` as: the one kept by ``keep_routing_classification``, else itself."""
     kept: Final = getattr(error, ROUTING_CLASSIFICATION_ATTRIBUTE, None)
     return kept if isinstance(kept, Exception) else error
 

@@ -586,8 +586,8 @@ def retry_after_seconds(error: BaseException) -> float | None:
 
 
 def attempt_failure(error: BaseException) -> Mapping[str, object]:
-    """The failure the router decides on. It classifies the error a mapped one keeps for routing, and reads
-    what the router stamps on the raised error (retry count, deployment id, agentic follow-up) off that error."""
+    """The router stamps its retry count, deployment id and agentic mark on the raised error, so they are read
+    off it even when it keeps another error for routing."""
     from litellm.litellm_core_utils.exception_mapping_utils import routing_classification
 
     classified: Final = routing_classification(error)
