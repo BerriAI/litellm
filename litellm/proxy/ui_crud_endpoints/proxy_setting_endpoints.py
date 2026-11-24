@@ -2019,7 +2019,6 @@ async def update_background_chat_settings(
 async def get_ui_settings():
     """
     Get UI-specific configuration flags.
-    All authenticated users can fetch these settings for client-side behavior.
     """
     from litellm.proxy.proxy_server import prisma_client, proxy_config
 
