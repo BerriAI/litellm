@@ -1,7 +1,7 @@
 import asyncio
 import json
 import time
-from collections.abc import Callable, Coroutine, Mapping, Sequence
+from collections.abc import Callable, Coroutine
 from typing import Final, Protocol
 
 import httpx
@@ -88,7 +88,7 @@ class AzureOpenAIAssistantsAPIConfig:
             "metadata",
         ]
 
-    def map_openai_params_create_message_params(self, non_default_params: Mapping[str, object], optional_params: dict):
+    def map_openai_params_create_message_params(self, non_default_params: dict, optional_params: dict):
         for param, value in non_default_params.items():
             if param == "role":
                 optional_params["role"] = value
@@ -125,7 +125,7 @@ class AzureOpenAIAssistantsAPIConfig:
 
 
 def check_dynamic_azure_params(
-    azure_client_params: Mapping[str, object],
+    azure_client_params: dict,
     azure_client: AzureOpenAI | AsyncAzureOpenAI | None,
 ) -> bool:
     """
@@ -229,9 +229,9 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         api_version: str,
         api_type: str,
         azure_ad_token: str | None,
-        azure_ad_token_provider: object,
+        azure_ad_token_provider: Callable | None,
         dynamic_params: bool,
-        print_verbose: object,
+        print_verbose: Callable,
         timeout: float | httpx.Timeout,
         logging_obj: LiteLLMLoggingObj,
         optional_params,
@@ -428,7 +428,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         logging_obj: LiteLLMLoggingObj,
         max_retries: int,
         azure_ad_token: str | None = None,
-        azure_ad_token_provider: object = None,
+        azure_ad_token_provider: Callable | None = None,
         convert_tool_call_to_json_mode: bool | None = None,
         client: AzureOpenAI | AsyncAzureOpenAI | OpenAI | AsyncOpenAI | None = None,  # this is the AsyncAzureOpenAI
         litellm_params: dict | None = {},
@@ -536,7 +536,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         timeout: float | httpx.Timeout,
         max_retries: int,
         azure_ad_token: str | None = None,
-        azure_ad_token_provider: object = None,
+        azure_ad_token_provider: Callable | None = None,
         client: AzureOpenAI | AsyncAzureOpenAI | OpenAI | AsyncOpenAI | None = None,
         litellm_params: dict | None = {},
     ):
@@ -613,7 +613,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         timeout: float | httpx.Timeout,
         max_retries: int,
         azure_ad_token: str | None = None,
-        azure_ad_token_provider: object = None,
+        azure_ad_token_provider: Callable | None = None,
         client: AzureOpenAI | AsyncAzureOpenAI | OpenAI | AsyncOpenAI | None = None,
         litellm_params: dict | None = {},
     ):
@@ -684,7 +684,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         model: str,
         data: dict,
         model_response: EmbeddingResponse,
-        input: object,
+        input: list,
         logging_obj: LiteLLMLoggingObj,
         api_base: str,
         api_key: str | None = None,
@@ -998,11 +998,11 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         model_response: ImageResponse | None,
         azure_client_params: dict,
         api_key: str,
-        input: object,
+        input: list,
         logging_obj: LiteLLMLoggingObj,
         headers: dict[str, str],
-        client: object = None,
-        timeout: float | httpx.Timeout | None = None,
+        client=None,
+        timeout=None,
         model: str | None = None,
     ) -> ImageResponse:
         response: dict | None = None
@@ -1091,8 +1091,8 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         api_version: str | None = None,
         model_response: ImageResponse | None = None,
         azure_ad_token: str | None = None,
-        azure_ad_token_provider: object = None,
-        client: object = None,
+        azure_ad_token_provider: Callable | None = None,
+        client=None,
         aimg_generation: object = None,
         litellm_params: dict | None = None,
     ) -> ImageResponse:
@@ -1334,9 +1334,9 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         timeout: float,
         mode: str,
         messages: list | None = None,
-        input: Sequence[object] | None = None,
+        input: list | None = None,
         prompt: str | None = None,
-    ) -> dict[str, str]:
+    ) -> dict:
         client_session: Final = litellm.client_session or httpx.Client()
         if api_base is not None and "gateway.ai.cloudflare.com" in api_base:
             ## build base url - assume api base includes resource name
