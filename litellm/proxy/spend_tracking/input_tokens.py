@@ -95,7 +95,7 @@ def _approximate_input_size(request_body: Mapping[str, object]) -> int:
 
 
 async def count_input_tokens(
-    request_body: dict[str, object],
+    request_body: dict,
     raw_body: bytes | None,
     models: Sequence[str],
     served_models: Sequence[str] = (),
