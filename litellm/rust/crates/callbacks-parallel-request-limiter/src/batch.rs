@@ -7,7 +7,7 @@ use litellm_redis_store::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    descriptor::{Descriptor, PROJECT_ITPM, PROJECT_OTPM},
+    descriptor::Descriptor,
     engine::{GuardedOp, Op},
     enqueued::EnqueuedScope,
     status::{LimitKind, Status, WindowIdentity},
@@ -140,7 +140,7 @@ impl BatchFacts {
     }
 
     fn token_count(&self, descriptor: &Descriptor) -> i64 {
-        let model = descriptor.is_project_io().then(|| {
+        let model = descriptor.is_io().then(|| {
             descriptor
                 .value
                 .split_once(':')
@@ -165,10 +165,12 @@ impl BatchFacts {
                     .sum()
             }
         };
-        match descriptor.key.as_str() {
-            PROJECT_OTPM => figure("output_tokens", self.output_tokens),
-            PROJECT_ITPM => figure("total_tokens", self.total_tokens),
-            _ => self.total_tokens,
+        if descriptor.is_otpm() {
+            figure("output_tokens", self.output_tokens)
+        } else if descriptor.is_itpm() {
+            figure("total_tokens", self.total_tokens)
+        } else {
+            self.total_tokens
         }
     }
 }
@@ -272,6 +274,18 @@ mod tests {
         json!([{"key": "model_per_project_otpm", "value": "p:other", "rate_limit": {"tokens_per_unit": 100}}]),
         status("model_per_project_otpm", Some("p:other"), LimitKind::Tokens), None,
         "Batch rate limit exceeded for model_per_project_otpm: p:other. Batch contains 300 tokens but only 0 tokens remaining out of 100 TPM limit. Limit resets at: 2023-11-14 22:14:20 UTC",
+        60
+    )]
+    #[case::key_output_tokens_for_the_rows_model(
+        json!([{"key": "model_per_key_otpm", "value": "k:alias", "rate_limit": {"tokens_per_unit": 100}}]),
+        status("model_per_key_otpm", Some("k:alias"), LimitKind::Tokens), None,
+        "Batch rate limit exceeded for model_per_key_otpm: k:alias. Batch contains 1 tokens but only 0 tokens remaining out of 100 TPM limit. Limit resets at: 2023-11-14 22:14:20 UTC",
+        60
+    )]
+    #[case::team_input_tokens_for_the_rows_model(
+        json!([{"key": "model_per_team_itpm", "value": "t:gpt", "rate_limit": {"tokens_per_unit": 100}}]),
+        status("model_per_team_itpm", Some("t:gpt"), LimitKind::Tokens), None,
+        "Batch rate limit exceeded for model_per_team_itpm: t:gpt. Batch contains 75 tokens but only 0 tokens remaining out of 100 TPM limit. Limit resets at: 2023-11-14 22:14:20 UTC",
         60
     )]
     fn the_refusal_reads_like_the_python_batch_limiter(

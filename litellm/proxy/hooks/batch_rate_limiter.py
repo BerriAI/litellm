@@ -63,8 +63,8 @@ from litellm.proxy.hooks.batch_enqueued_tokens import (
     resolve_project_model_batch_enqueued_token_scopes,
 )
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
-    PROJECT_ITPM_DESCRIPTOR_KEY,
-    PROJECT_OTPM_DESCRIPTOR_KEY,
+    ITPM_DESCRIPTOR_KEYS,
+    OTPM_DESCRIPTOR_KEYS,
     ReservationWindowIdentity,
     WindowGuardedIncrement,
     atomic_check_and_increment_by_n,
@@ -114,6 +114,7 @@ else:
 
 _BATCH_BODY_ADAPTER: Final = TypeAdapter(dict[str, object])
 _DECODED_JSON: Final = TypeAdapter(object)
+_MODEL_LIMITS: Final = TypeAdapter(dict[str, int])
 _WINDOW_START_ADAPTER: Final[TypeAdapter[int | float | str | None]] = TypeAdapter(int | float | str | None)
 
 
@@ -167,6 +168,33 @@ def _rows_were_rewritten_on_upload(input_file_id: str) -> bool:
     from litellm.proxy.openai_files_endpoints.common_utils import is_base64_encoded_unified_file_id
 
     return bool(is_base64_encoded_unified_file_id(input_file_id))
+
+
+def _key_io_token_limits(
+    user_api_key_dict: UserAPIKeyAuth, limit: Literal["model_itpm_limit", "model_otpm_limit"]
+) -> Mapping[str, int]:
+    try:
+        metadata: Final = _BATCH_BODY_ADAPTER.validate_python(
+            user_api_key_dict.metadata  # pyright: ignore[reportUnknownMemberType]  # UserAPIKeyAuth.metadata is a bare dict
+        )
+        return _MODEL_LIMITS.validate_python(metadata.get(limit))
+    except ValidationError:
+        return {}
+
+
+def _io_token_limits(
+    user_api_key_dict: UserAPIKeyAuth, limit: Literal["model_itpm_limit", "model_otpm_limit"]
+) -> tuple[int, ...]:
+    scopes: Final = (
+        get_model_rate_limit_from_metadata(user_api_key_dict, "project_metadata", limit)
+        if user_api_key_dict.project_id is not None
+        else None,
+        get_model_rate_limit_from_metadata(user_api_key_dict, "team_metadata", limit)
+        if user_api_key_dict.team_id is not None
+        else None,
+        _key_io_token_limits(user_api_key_dict, limit),
+    )
+    return tuple(int(v) for v in itertools.chain.from_iterable((limits or {}).values() for limits in scopes))
 
 
 def _deployment_model_name_via_proxy_router(model: str) -> str | None:
@@ -350,11 +378,10 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         is parsed, so the file must be read whenever *any* model could be
         quota-limited, not only when the routing model itself is.
         """
-        if user_api_key_dict.project_id is None:
-            return False
         return bool(
-            get_model_rate_limit_from_metadata(user_api_key_dict, "project_metadata", "model_itpm_limit")
-        ) or bool(get_model_rate_limit_from_metadata(user_api_key_dict, "project_metadata", "model_otpm_limit"))
+            _io_token_limits(user_api_key_dict, "model_itpm_limit")
+            or _io_token_limits(user_api_key_dict, "model_otpm_limit")
+        )
 
     async def _create_project_io_descriptors_for_models(
         self,
@@ -415,7 +442,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             (
                 descriptor,
                 usage.get("output_tokens", 0)
-                if descriptor["key"] == PROJECT_OTPM_DESCRIPTOR_KEY
+                if descriptor["key"] in OTPM_DESCRIPTOR_KEYS
                 else usage.get("total_tokens", 0),
             )
             for descriptor in model_descriptors
@@ -804,7 +831,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             # is available so the error reflects what was actually charged.
             descriptor_model: Final = (
                 descriptor.get("value", "").split(":", 1)[-1]
-                if descriptor.get("key") in (PROJECT_ITPM_DESCRIPTOR_KEY, PROJECT_OTPM_DESCRIPTOR_KEY)
+                if descriptor.get("key") in ITPM_DESCRIPTOR_KEYS | OTPM_DESCRIPTOR_KEYS
                 else None
             )
             charged_usage: Final = tuple(
@@ -816,13 +843,13 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                     if charged_usage
                     else batch_usage.output_tokens
                 )
-                if descriptor.get("key") == PROJECT_OTPM_DESCRIPTOR_KEY
+                if descriptor.get("key") in OTPM_DESCRIPTOR_KEYS
                 else (
                     sum(usage.get("total_tokens", 0) for usage in charged_usage)
                     if charged_usage
                     else batch_usage.total_tokens
                 )
-                if descriptor.get("key") == PROJECT_ITPM_DESCRIPTOR_KEY
+                if descriptor.get("key") in ITPM_DESCRIPTOR_KEYS
                 else batch_usage.total_tokens
             )
             token_limit_label: Final = (
@@ -997,7 +1024,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         descriptor_otpm_limits: Final = tuple(
             int(v)
             for d in (descriptors or ())
-            if d.get("key") == PROJECT_OTPM_DESCRIPTOR_KEY
+            if d.get("key") in OTPM_DESCRIPTOR_KEYS
             for rate_limit in (d.get("rate_limit"),)
             for v in (rate_limit.get("tokens_per_unit") if rate_limit is not None else None,)
             if v is not None
@@ -1008,14 +1035,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         # OTPM limit keeps the no-`max_tokens` floor from drifting wide just
         # because a row's specific model isn't known until parsed below.
         project_otpm_limits: Final = (
-            tuple(int(v) for v in project_otpm_limit_map.values())
-            if user_api_key_dict is not None
-            and (
-                project_otpm_limit_map := get_model_rate_limit_from_metadata(
-                    user_api_key_dict, "project_metadata", "model_otpm_limit"
-                )
-            )
-            else ()
+            _io_token_limits(user_api_key_dict, "model_otpm_limit") if user_api_key_dict is not None else ()
         )
         min_configured_otpm_limit: Final = min((*descriptor_otpm_limits, *project_otpm_limits), default=None)
         try:

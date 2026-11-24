@@ -47,12 +47,13 @@ from litellm.proxy.hooks.batch_enqueued_tokens import (
     resolve_batch_enqueued_token_scopes,
     resolve_project_model_batch_enqueued_token_scopes,
 )
+from litellm.proxy.hooks.parallel_request_limiter_v3 import ITPM_DESCRIPTOR_KEYS, OTPM_DESCRIPTOR_KEYS
 from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit
 from litellm.rust_bridge.execution import drive
 from litellm.types.integrations.custom_logger_v2 import Record
 from litellm.types.utils import MCP_GUARDRAIL_CALL_TYPES, CallTypes, Usage
 
-_IO_KEYS: Final = frozenset({"model_per_project_itpm", "model_per_project_otpm"})
+_IO_KEYS: Final = ITPM_DESCRIPTOR_KEYS | OTPM_DESCRIPTOR_KEYS
 _AGENT_DESCRIPTOR_KEYS: Final = frozenset({"agent", "agent_session"})
 PROJECT_OTPM_DESCRIPTOR_KEY: Final = "model_per_project_otpm"
 PTU_TEAM_DESCRIPTOR_KEY: Final = "model_per_team_ptu"
@@ -631,12 +632,16 @@ def _auth_metadata(auth: UserAPIKeyAuth | None) -> Mapping[str, object]:
     return {
         "key_model_rpm_limit": _metadata_member(_member(auth, "metadata"), "model_rpm_limit"),
         "key_model_tpm_limit": _metadata_member(_member(auth, "metadata"), "model_tpm_limit"),
+        "key_model_itpm_limit": _metadata_member(_member(auth, "metadata"), "model_itpm_limit"),
+        "key_model_otpm_limit": _metadata_member(_member(auth, "metadata"), "model_otpm_limit"),
         "key_tag_rpm_limit": _metadata_member(_member(auth, "metadata"), "tag_rpm_limit"),
         "model_max_budget": {model: budget for model, budget in budgets.items() if _entries(budget) is not None}
         if budgets
         else None,
         "team_model_rpm_limit": _metadata_member(_member(auth, "team_metadata"), "model_rpm_limit"),
         "team_model_tpm_limit": _metadata_member(_member(auth, "team_metadata"), "model_tpm_limit"),
+        "team_model_itpm_limit": _metadata_member(_member(auth, "team_metadata"), "model_itpm_limit"),
+        "team_model_otpm_limit": _metadata_member(_member(auth, "team_metadata"), "model_otpm_limit"),
         "organization_model_rpm_limit": _metadata_member(_member(auth, "organization_metadata"), "model_rpm_limit"),
         "organization_model_tpm_limit": _metadata_member(_member(auth, "organization_metadata"), "model_tpm_limit"),
         "project_model_rpm_limit": _metadata_member(_member(auth, "project_metadata"), "model_rpm_limit"),

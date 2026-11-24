@@ -11,7 +11,7 @@ use litellm_redis_store::{
 };
 
 use crate::{
-    descriptor::{Declared, Descriptor, Limits, PROJECT_ITPM, PROJECT_OTPM},
+    descriptor::{Declared, Descriptor, ITPM_KEYS, Limits, OTPM_KEYS},
     failure::{Failure, python_counter},
     status::{Backend, Code, LimitKind, Response, Status, WindowIdentity, identities},
 };
@@ -1354,7 +1354,7 @@ impl Engine {
         descriptors
             .iter()
             .filter(|descriptor| {
-                !descriptor.is_project_io() && descriptor.limits().tokens_per_unit.is_some()
+                !descriptor.is_io() && descriptor.limits().tokens_per_unit.is_some()
             })
             .map(|descriptor| Descriptor {
                 key: descriptor.key.clone(),
@@ -1407,12 +1407,12 @@ impl Engine {
     ) -> Result<(Response, i64, i64), Unverifiable> {
         let itpm: Vec<Descriptor> = descriptors
             .iter()
-            .filter(|descriptor| descriptor.key == PROJECT_ITPM)
+            .filter(|descriptor| descriptor.is_itpm())
             .cloned()
             .collect();
         let otpm: Vec<Descriptor> = descriptors
             .iter()
-            .filter(|descriptor| descriptor.key == PROJECT_OTPM)
+            .filter(|descriptor| descriptor.is_otpm())
             .cloned()
             .collect();
         if itpm.is_empty() && otpm.is_empty() {
@@ -1487,18 +1487,17 @@ impl Engine {
         ctx: Ctx<'_>,
     ) {
         let unreserved = BTreeSet::new();
-        let operations: Vec<Increment> =
-            [(PROJECT_ITPM, input_tokens), (PROJECT_OTPM, output_tokens)]
-                .into_iter()
-                .flat_map(|(key, amount)| {
-                    let targets: Vec<(String, String)> = descriptors
-                        .iter()
-                        .filter(|descriptor| descriptor.key == key)
-                        .map(|descriptor| (descriptor.key.clone(), descriptor.value.clone()))
-                        .collect();
-                    self.reservation_ops(&targets, &unreserved, amount, 0)
-                })
-                .collect();
+        let operations: Vec<Increment> = [(ITPM_KEYS, input_tokens), (OTPM_KEYS, output_tokens)]
+            .into_iter()
+            .flat_map(|(keys, amount)| {
+                let targets: Vec<(String, String)> = descriptors
+                    .iter()
+                    .filter(|descriptor| keys.contains(&descriptor.key.as_str()))
+                    .map(|descriptor| (descriptor.key.clone(), descriptor.value.clone()))
+                    .collect();
+                self.reservation_ops(&targets, &unreserved, amount, 0)
+            })
+            .collect();
         self.increment_with_ttl_preservation(&operations, ctx).await;
     }
 

@@ -487,6 +487,8 @@ _AUDIO_BYTES_PER_TOKEN: Final = 1600
 # on the same project+model simultaneously without colliding on cache keys.
 PROJECT_ITPM_DESCRIPTOR_KEY: Final = "model_per_project_itpm"
 PROJECT_OTPM_DESCRIPTOR_KEY: Final = "model_per_project_otpm"
+ITPM_DESCRIPTOR_KEYS: Final = frozenset({PROJECT_ITPM_DESCRIPTOR_KEY, "model_per_key_itpm", "model_per_team_itpm"})
+OTPM_DESCRIPTOR_KEYS: Final = frozenset({PROJECT_OTPM_DESCRIPTOR_KEY, "model_per_key_otpm", "model_per_team_otpm"})
 PTU_TEAM_DESCRIPTOR_KEY: Final = "model_per_team_ptu"
 # How long an acquired slot counts toward the in-flight total before it is
 # considered leaked (worker crashed without any release callback firing) and
@@ -961,7 +963,7 @@ def request_stash_for_callback(kwargs: Mapping[str, object]) -> RequestRateLimit
 
 
 _SOCKET_TURN_UNCOUNTED_DESCRIPTOR_KEYS: Final = frozenset(
-    {PROJECT_ITPM_DESCRIPTOR_KEY, PROJECT_OTPM_DESCRIPTOR_KEY, PTU_TEAM_DESCRIPTOR_KEY}
+    {*ITPM_DESCRIPTOR_KEYS, *OTPM_DESCRIPTOR_KEYS, PTU_TEAM_DESCRIPTOR_KEY}
 )
 
 
@@ -2509,10 +2511,10 @@ def _project_io_refund_operations(
     reserved: Final = MappingProxyType(
         {
             RateLimitScope(descriptor["key"], descriptor["value"]).counter("tokens"): (
-                input_tokens if descriptor["key"] == PROJECT_ITPM_DESCRIPTOR_KEY else output_tokens
+                input_tokens if descriptor["key"] in ITPM_DESCRIPTOR_KEYS else output_tokens
             )
             for descriptor in descriptors
-            if descriptor["key"] in (PROJECT_ITPM_DESCRIPTOR_KEY, PROJECT_OTPM_DESCRIPTOR_KEY)
+            if descriptor["key"] in ITPM_DESCRIPTOR_KEYS | OTPM_DESCRIPTOR_KEYS
         }
     )
     return tuple(

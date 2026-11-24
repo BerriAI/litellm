@@ -6,7 +6,10 @@ use serde_json::{Map, Value, json};
 
 use crate::{
     arithmetic::{ArithmeticError, AuthFacts, auth_descriptors},
-    descriptor::{PROJECT_ITPM, PROJECT_OTPM, PTU_TEAM, python_text},
+    descriptor::{
+        ITPM_KEYS, KEY_ITPM, KEY_OTPM, OTPM_KEYS, PROJECT_ITPM, PROJECT_OTPM, PTU_TEAM, TEAM_ITPM,
+        TEAM_OTPM, python_text,
+    },
     ptu::Ceiling,
     python::{hash_error, stringified, type_name},
     state::RateLimitedModel,
@@ -29,10 +32,14 @@ pub enum BuildError {
 pub struct AuthMetadata {
     pub key_model_rpm_limit: Value,
     pub key_model_tpm_limit: Value,
+    pub key_model_itpm_limit: Value,
+    pub key_model_otpm_limit: Value,
     pub key_tag_rpm_limit: Value,
     pub model_max_budget: Value,
     pub team_model_rpm_limit: Value,
     pub team_model_tpm_limit: Value,
+    pub team_model_itpm_limit: Value,
+    pub team_model_otpm_limit: Value,
     pub organization_model_rpm_limit: Value,
     pub organization_model_tpm_limit: Value,
     pub project_model_rpm_limit: Value,
@@ -688,25 +695,52 @@ impl Request<'_> {
         )
     }
 
-    fn project_io(&self) -> Result<Vec<Value>, BuildError> {
-        let project = self.attribute("project_id");
-        if project.is_null() {
-            return Ok(Vec::new());
-        }
+    /// Separate input and output token quotas per model, each read only from its own scope's metadata.
+    fn io(&self) -> Result<Vec<Value>, BuildError> {
+        let metadata = self.metadata;
+        let scopes = [
+            (
+                "project_id",
+                [
+                    (PROJECT_ITPM, &metadata.project_model_itpm_limit),
+                    (PROJECT_OTPM, &metadata.project_model_otpm_limit),
+                ],
+            ),
+            (
+                "api_key",
+                [
+                    (KEY_ITPM, &metadata.key_model_itpm_limit),
+                    (KEY_OTPM, &metadata.key_model_otpm_limit),
+                ],
+            ),
+            (
+                "team_id",
+                [
+                    (TEAM_ITPM, &metadata.team_model_itpm_limit),
+                    (TEAM_OTPM, &metadata.team_model_otpm_limit),
+                ],
+            ),
+        ];
+        let models = self.scoped_models();
         let mut found = Vec::new();
-        for model in self.scoped_models() {
-            let value = format!("{}:{}", text(project), model.group);
-            let itpm = limit_in(&self.metadata.project_model_itpm_limit, &model)?;
-            let otpm = limit_in(&self.metadata.project_model_otpm_limit, &model)?;
-            for (key, limit) in [(PROJECT_ITPM, itpm), (PROJECT_OTPM, otpm)] {
-                if !limit.is_null() {
-                    found.push(descriptor(
-                        key,
-                        Value::String(value.clone()),
-                        Value::Null,
-                        limit,
-                        self.window_size,
-                    ));
+        for (attribute, limits) in scopes {
+            let entity = self.attribute(attribute);
+            if entity.is_null() {
+                continue;
+            }
+            for model in &models {
+                let value = format!("{}:{}", text(entity), model.group);
+                for (key, configured) in limits {
+                    let limit = limit_in(configured, model)?;
+                    if !limit.is_null() {
+                        found.push(descriptor(
+                            key,
+                            Value::String(value.clone()),
+                            Value::Null,
+                            limit,
+                            self.window_size,
+                        ));
+                    }
                 }
             }
         }
@@ -789,7 +823,7 @@ impl Request<'_> {
             coalesce(descriptors)?
         };
         descriptors.extend(self.project_models()?);
-        descriptors.extend(self.project_io()?);
+        descriptors.extend(self.io()?);
         descriptors.extend(auth.organization);
         descriptors.extend(self.organization_models()?);
         descriptors.extend(self.tags_from_database());
@@ -801,7 +835,7 @@ impl Request<'_> {
 }
 
 /// The descriptor keys a router fallback target reserves: every limit scoped to one model.
-pub const FALLBACK_TARGET_KEYS: [&str; 15] = [
+pub const FALLBACK_TARGET_KEYS: [&str; 19] = [
     "model_per_key",
     "model_per_team",
     "model_per_end_user",
@@ -809,6 +843,10 @@ pub const FALLBACK_TARGET_KEYS: [&str; 15] = [
     "model_per_project",
     PROJECT_ITPM,
     PROJECT_OTPM,
+    KEY_ITPM,
+    KEY_OTPM,
+    TEAM_ITPM,
+    TEAM_OTPM,
     "model_per_customer_org",
     "model_per_customer_team",
     "model_per_customer_member",
@@ -907,10 +945,10 @@ pub fn socket_turn_tpm_windows(
     agent_windows: &[Value],
     project_io: bool,
 ) -> Vec<Value> {
-    let uncounted: &[&str] = if project_io {
-        &[PTU_TEAM]
+    let uncounted: Vec<&str> = if project_io {
+        vec![PTU_TEAM]
     } else {
-        &[PROJECT_ITPM, PROJECT_OTPM, PTU_TEAM]
+        [&ITPM_KEYS[..], &OTPM_KEYS[..], &[PTU_TEAM]].concat()
     };
     let built_scopes: Vec<(Value, Value)> = built.iter().map(identity).collect();
     built
@@ -920,7 +958,7 @@ pub fn socket_turn_tpm_windows(
                 .iter()
                 .filter(|window| !built_scopes.contains(&identity(window))),
         )
-        .filter(|descriptor| !keyed(descriptor, uncounted))
+        .filter(|descriptor| !keyed(descriptor, &uncounted))
         .filter_map(|descriptor| {
             let tokens = rate_limit_member(descriptor, "tokens_per_unit");
             (!tokens.is_null()).then(|| {
@@ -1121,7 +1159,7 @@ impl Request<'_> {
                 agent_windows,
                 *project_io,
             )),
-            Selection::ProjectIo => self.project_io(),
+            Selection::ProjectIo => self.io(),
             Selection::SubCall => {
                 let (mut descriptors, organization) = self.base()?;
                 descriptors.extend(self.project_models()?);
@@ -1240,6 +1278,41 @@ mod tests {
                     60
                 ),
             ]
+        );
+    }
+
+    fn io_metadata() -> AuthMetadata {
+        AuthMetadata {
+            key_model_itpm_limit: json!({"gpt-4o": 7}),
+            key_model_otpm_limit: json!({"gpt-4o": 5}),
+            team_model_otpm_limit: json!({"gpt-4o": 20}),
+            ..AuthMetadata::default()
+        }
+    }
+
+    #[rstest]
+    #[case::a_key_and_its_team_each_count_their_own_limit(
+        json!({"api_key": "k", "team_id": "t"}),
+        vec![
+            descriptor("model_per_key_itpm", json!("k:gpt-4o"), json!(null), json!(7), 60),
+            descriptor("model_per_key_otpm", json!("k:gpt-4o"), json!(null), json!(5), 60),
+            descriptor("model_per_team_otpm", json!("t:gpt-4o"), json!(null), json!(20), 60),
+        ],
+    )]
+    #[case::a_key_without_a_team_has_no_team_counter(
+        json!({"api_key": "k"}),
+        vec![
+            descriptor("model_per_key_itpm", json!("k:gpt-4o"), json!(null), json!(7), 60),
+            descriptor("model_per_key_otpm", json!("k:gpt-4o"), json!(null), json!(5), 60),
+        ],
+    )]
+    fn key_and_team_input_and_output_limits_build_their_own_descriptors(
+        #[case] auth: Value,
+        #[case] expected: Vec<Value>,
+    ) {
+        assert_eq!(
+            built(auth, io_metadata(), &lookups(&["gpt-4o"]), "gpt-4o"),
+            expected
         );
     }
 

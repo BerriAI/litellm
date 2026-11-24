@@ -30,6 +30,7 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     PROJECT_ITPM_DESCRIPTOR_KEY,
     PROXY_MaxParallelRequestsHandler_v3,
     get_batch_rate_limiter,
+    no_max_tokens_output_floor,
     run_scoped,
 )
 from litellm.proxy.utils import InternalUsageCache, hash_token
@@ -972,6 +973,43 @@ async def test_alias_routed_rows_naming_the_deployment_model_are_held_to_both_pr
 
     assert refused.value.status_code == 429
     assert f"project-1:{limited_model}" in str(refused.value.detail)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("limited", "descriptor_key", "entity"),
+    [
+        ("metadata", "model_per_key_otpm", hash_token("sk-batch")),
+        ("team_metadata", "model_per_team_otpm", "team-1"),
+    ],
+    ids=["key", "team"],
+)
+async def test_key_and_team_output_limits_size_and_charge_the_output_a_batch_row_may_produce(
+    alias_routed_batch: respx.MockRouter, limited: str, descriptor_key: str, entity: str
+):
+    alias_routed_batch.get(_ROUTED_FILE_URL).mock(
+        side_effect=_serve_file_to_the_deployment_key((_row_naming(_BATCH_ALIAS),))
+    )
+    internal_usage_cache, rate_limiter, batch_limiter = _make_limiters()
+    otpm_limit: Final = 200
+
+    await batch_limiter.async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key=hash_token("sk-batch"),
+            models=[_BATCH_ALIAS],
+            team_id="team-1",
+            **{limited: {"model_otpm_limit": {_BATCH_ALIAS: otpm_limit}}},
+        ),
+        cache=DualCache(),
+        data=dict(_alias_routing("body")),
+        call_type="acreate_batch",
+    )
+
+    charged: Final = await _counter(
+        internal_usage_cache, rate_limiter, descriptor_key, f"{entity}:{_BATCH_ALIAS}", "tokens"
+    )
+    assert charged == no_max_tokens_output_floor(otpm_limit)
+    assert charged < no_max_tokens_output_floor(None)
 
 
 @pytest.mark.asyncio

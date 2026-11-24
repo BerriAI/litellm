@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Final
 
 import pytest
 import redis
+from fastapi import HTTPException
 from pydantic import TypeAdapter
 
 import litellm
@@ -58,6 +59,7 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     increment_reservation_aware_tokens,
     raise_if_over_limit_before_body,
     request_capacity,
+    run_scoped,
 )
 from litellm.proxy.hooks.parallel_request_limiter_v3_native import (
     ParallelRequestLimiterNativeLogger,
@@ -952,6 +954,105 @@ async def test_project_io_without_reservation_still_reserves_like_python(
         _PROJECT_SCOPES,
         backend,
     )
+
+
+_KEY_AND_TEAM_IO_SCOPES: Final = (
+    ("model_per_key_itpm", f"{_KEY}:gpt-4o"),
+    ("model_per_key_otpm", f"{_KEY}:gpt-4o"),
+    ("model_per_team_itpm", "t1:gpt-4o"),
+    ("model_per_team_otpm", "t1:gpt-4o"),
+)
+
+
+def _io_tokens(side: Side) -> list[int | None]:
+    counters: Final = (RateLimitScope(key, value).counter("tokens") for key, value in _KEY_AND_TEAM_IO_SCOPES)
+    stored: Final = (
+        side.limiter.rate_limits.local(tuple(counters))
+        if side.remote is None
+        else [side.remote.get(f"{{{key}:{value}}}:tokens") for key, value in _KEY_AND_TEAM_IO_SCOPES]
+    )
+    return [None if tokens is None else int(tokens) for tokens in stored]
+
+
+@pytest.mark.asyncio
+async def test_key_and_team_io_limits_reserve_the_requested_output_then_settle_to_the_usage_billed(
+    backend: int | None,
+) -> None:
+    side: Final = _side(_clock(backend), port=backend)
+    request: Final = Request(
+        _auth(
+            team_id="t1",
+            metadata={"model_itpm_limit": {"gpt-4o": 400}, "model_otpm_limit": {"gpt-4o": 100}},
+            team_metadata={"model_itpm_limit": {"gpt-4o": 700}, "model_otpm_limit": {"gpt-4o": 300}},
+        ),
+        {**_CHAT, "max_tokens": 20},
+    )
+
+    assert await _run(side, 0, _admit, request) is None
+    reserved: Final = _io_tokens(side)
+    await _run(side, 0, _end, request)
+
+    assert (reserved[1], reserved[3]) == (20, 20)
+    assert _io_tokens(side) == [
+        request.usage.prompt_tokens,
+        request.usage.completion_tokens,
+        request.usage.prompt_tokens,
+        request.usage.completion_tokens,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_key_without_a_team_gets_no_team_io_counter_from_its_own_metadata(backend: int | None) -> None:
+    side: Final = _side(_clock(backend), port=backend)
+    request: Final = Request(_auth(metadata={"model_otpm_limit": {"gpt-4o": 100}}), {**_CHAT, "max_tokens": 20})
+
+    assert await _run(side, 0, _admit, request) is None
+
+    assert _io_tokens(side) == [None, 20, None, None]
+
+
+@pytest.mark.asyncio
+async def test_a_responses_websocket_frame_is_held_to_key_and_team_io_limits_and_refunded_when_refused(
+    backend: int | None,
+) -> None:
+    side: Final = _side(_clock(backend), port=backend)
+    auth: Final = _auth(
+        team_id="t1",
+        metadata={"model_itpm_limit": {"gpt-4o": 400}, "model_otpm_limit": {"gpt-4o": 100}},
+        team_metadata={"model_itpm_limit": {"gpt-4o": 700}, "model_otpm_limit": {"gpt-4o": 300}},
+    )
+
+    refund: Final = await side.limiter.enforce_project_io_token_quota_for_frame(auth, "gpt-4o", 30, 60)
+    with pytest.raises(HTTPException) as refused:
+        await side.limiter.enforce_project_io_token_quota_for_frame(auth, "gpt-4o", 30, 60)
+    after_refusal: Final = _io_tokens(side)
+    assert refund is not None
+    await refund()
+
+    assert "model_per_key_otpm" in str(refused.value.detail)
+    assert after_refusal == [30, 60, 30, 60]
+    assert _io_tokens(side) == [0, 0, 0, 0]
+
+
+@pytest.mark.asyncio
+async def test_a_realtime_turn_charges_its_usage_to_key_and_team_io_counters(backend: int | None) -> None:
+    side: Final = _side(_clock(backend), port=backend)
+    auth: Final = _auth(
+        team_id="t1",
+        metadata={"model_itpm_limit": {"gpt-4o": 400}, "model_otpm_limit": {"gpt-4o": 100}},
+        team_metadata={"model_itpm_limit": {"gpt-4o": 700}, "model_otpm_limit": {"gpt-4o": 300}},
+    )
+
+    await run_scoped(
+        side.limiter,
+        auth,
+        {"model": "gpt-4o"},
+        {"kind": "project_io"},
+        {"kind": "settle_io", "input_tokens": 18, "output_tokens": 9},
+        batched=False,
+    )
+
+    assert _io_tokens(side) == [18, 9, 18, 9]
 
 
 async def _guarded(call: Coroutine[object, object, object]) -> object:
