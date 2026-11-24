@@ -8143,6 +8143,11 @@ class TestPassthroughRouterModelBudgetReservation:
             "is_passthrough_request_using_router_model",
             lambda request_body, llm_router=None: request_body.get("model") in ("gpt-5", "router-model"),
         )
+        monkeypatch.setattr(
+            ep,
+            "is_azure_router_model_group",
+            lambda llm_router, model_group: model_group in ("gpt-5", "router-model"),
+        )
         return captured
 
     def _assert_metadata_carries_attribution(self, captured: list[dict], user_api_key_dict: UserAPIKeyAuth) -> None:
@@ -8246,6 +8251,11 @@ class TestAzureRouterModelStreamingDispatch:
             "is_passthrough_request_using_router_model",
             lambda request_body, llm_router=None: request_body.get("model") in ("gpt-5", "router-model"),
         )
+        monkeypatch.setattr(
+            ep,
+            "is_azure_router_model_group",
+            lambda llm_router, model_group: model_group in ("gpt-5", "router-model"),
+        )
 
         request = MagicMock(spec=Request)
         request.method = "POST"
@@ -8309,6 +8319,11 @@ class TestAzureRouterModelStreamingKeepalive:
             ep,
             "is_passthrough_request_using_router_model",
             lambda request_body, llm_router=None: request_body.get("model") in ("gpt-5", "router-model"),
+        )
+        monkeypatch.setattr(
+            ep,
+            "is_azure_router_model_group",
+            lambda llm_router, model_group: model_group in ("gpt-5", "router-model"),
         )
 
         request = MagicMock(spec=Request)
@@ -8380,6 +8395,11 @@ class TestRouterModelRelayUpstreamContract:
             ep,
             "is_passthrough_request_using_router_model",
             lambda request_body, llm_router=None: request_body.get("model") in ("gpt-5", "router-model"),
+        )
+        monkeypatch.setattr(
+            ep,
+            "is_azure_router_model_group",
+            lambda llm_router, model_group: model_group in ("gpt-5", "router-model"),
         )
 
     def _recording_router(self, captured: list[dict]):
@@ -9641,21 +9661,28 @@ async def _azure_relay_json_upstream() -> httpx.Response:
     return httpx.Response(200, json={"id": "resp_1", "model": "gpt-5.4-fallback"}, headers={"x-request-id": "r-1"})
 
 
+_AZURE_RELAY_GROUP_MODELS: Final = (("gpt-5.4", "azure/gpt-5.4-primary"), ("azure-gpt-5.4", "azure/gpt-5.4-fallback"))
+
+
 class _AzureBodyModelGroupRouter:
-    def __init__(self, captured: list[dict], upstream: _AzureRelayUpstream = _azure_relay_json_upstream) -> None:
+    def __init__(
+        self,
+        captured: list[dict],
+        upstream: _AzureRelayUpstream = _azure_relay_json_upstream,
+        group_models: tuple[tuple[str, str], ...] = _AZURE_RELAY_GROUP_MODELS,
+    ) -> None:
         self.captured = captured
         self.upstream = upstream
+        self.rows = [
+            {"model_name": group, "litellm_params": {"model": model, "api_key": "k"}} for group, model in group_models
+        ]
         route_entry_points_to_stubs(self)
 
     def get_model_names(self, team_id=None):
-        return ["gpt-5.4", "azure-gpt-5.4"]
+        return [row["model_name"] for row in self.rows]
 
     def get_model_list(self, model_name=None, team_id=None):
-        rows = [
-            {"model_name": "gpt-5.4", "litellm_params": {"model": "azure/gpt-5.4-primary", "api_key": "k"}},
-            {"model_name": "azure-gpt-5.4", "litellm_params": {"model": "azure/gpt-5.4-fallback", "api_key": "k"}},
-        ]
-        return [row for row in rows if model_name is None or row["model_name"] == model_name]
+        return [row for row in self.rows if model_name is None or row["model_name"] == model_name]
 
     async def allm_passthrough_route(self, **kwargs):
         self.captured.append(kwargs)
@@ -9668,6 +9695,7 @@ class TestAzureBodyModelGroupRelay:
         monkeypatch: pytest.MonkeyPatch,
         body: dict,
         upstream: _AzureRelayUpstream = _azure_relay_json_upstream,
+        group_models: tuple[tuple[str, str], ...] = _AZURE_RELAY_GROUP_MODELS,
     ) -> list[dict]:
         import litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints as ep
         from litellm.proxy import proxy_server
@@ -9677,7 +9705,7 @@ class TestAzureBodyModelGroupRelay:
         async def fake_get_request_body(_request: Request) -> dict:
             return body
 
-        monkeypatch.setattr(proxy_server, "llm_router", _AzureBodyModelGroupRouter(captured, upstream))
+        monkeypatch.setattr(proxy_server, "llm_router", _AzureBodyModelGroupRouter(captured, upstream, group_models))
         monkeypatch.setattr(ep, "get_request_body", fake_get_request_body)
         monkeypatch.delenv("AZURE_API_BASE", raising=False)
         return captured
@@ -9845,6 +9873,67 @@ class TestAzureBodyModelGroupRelay:
         assert captured == []
         (route,) = routes
         assert route["target"] == "https://operator.openai.azure.com/openai/v1/fine_tuning/jobs"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "group_models",
+        [
+            pytest.param((("gpt-5.4", "openai/gpt-4o"),), id="openai_group"),
+            pytest.param((("gpt-5.4", "bedrock/anthropic.claude-sonnet-4-5"),), id="bedrock_group"),
+        ],
+    )
+    @pytest.mark.parametrize(
+        "endpoint",
+        ["openai/v1/responses", "openai/v1/chat/completions", "openai/deployments/gpt-5.4/chat/completions"],
+    )
+    async def test_model_group_not_served_by_azure_goes_to_the_operator_azure_endpoint(
+        self, monkeypatch, group_models, endpoint
+    ):
+        import litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints as ep
+
+        captured = self._install(monkeypatch, {"model": "gpt-5.4", "input": "ping"}, group_models=group_models)
+        monkeypatch.setenv("AZURE_API_BASE", "https://operator.openai.azure.com")
+        monkeypatch.setenv("AZURE_API_KEY", "operator-key")
+        routes: list[dict] = []
+
+        def fake_create_pass_through_route(**kwargs):
+            routes.append(kwargs)
+            return AsyncMock(return_value=Response(content=b"{}", status_code=200))
+
+        monkeypatch.setattr(ep, "create_pass_through_route", fake_create_pass_through_route)
+
+        result = await azure_proxy_route(
+            endpoint=endpoint,
+            request=self._request(),
+            fastapi_response=MagicMock(spec=Response),
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-token"),
+        )
+
+        assert result.status_code == 200
+        assert captured == []
+        (route,) = routes
+        assert route["target"] == f"https://operator.openai.azure.com/{endpoint}"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "group_models",
+        [
+            pytest.param((("gpt-5.4", "azure_ai/gpt-5.4"),), id="azure_ai_group"),
+            pytest.param((("gpt-5.4", "openai/gpt-4o"), ("gpt-5.4", "azure/gpt-5.4-primary")), id="mixed_group"),
+        ],
+    )
+    async def test_model_group_with_an_azure_deployment_is_relayed_through_the_router(self, monkeypatch, group_models):
+        captured = self._install(monkeypatch, {"model": "gpt-5.4", "input": "ping"}, group_models=group_models)
+
+        result = await azure_proxy_route(
+            endpoint="openai/v1/responses",
+            request=self._request(),
+            fastapi_response=MagicMock(spec=Response),
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-token"),
+        )
+
+        assert result.status_code == 200
+        assert [relay["model"] for relay in captured] == ["gpt-5.4"]
 
 
 AZURE_SPEECH_SHORT_AUDIO_ENDPOINT: Final = "/speech/recognition/conversation/cognitiveservices/v1"

@@ -223,6 +223,11 @@ class _SettingsWithSchema(LiteLLMBaseModel):
     field_schema: dict[str, object]
 
 
+class _SettingsWithSchemaPayload(TypedDict):
+    values: ReadOnly[dict[str, object]]
+    field_schema: ReadOnly[dict[str, object]]
+
+
 class BackgroundChatSettings(LiteLLMBaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -880,7 +885,7 @@ async def _get_settings_with_schema(
     settings_key: str,
     settings_class: type[BaseModel],
     config: dict,
-) -> dict:
+) -> _SettingsWithSchemaPayload:
     """
     Common utility function to get settings with schema information.
 

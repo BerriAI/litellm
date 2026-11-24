@@ -14,7 +14,7 @@ import secrets
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import datetime, timezone
 from functools import partial, reduce
-from typing import TYPE_CHECKING, Final, Protocol, cast
+from typing import TYPE_CHECKING, Final, Protocol, TypeVar, cast
 
 import anyio
 import fastapi
@@ -40,6 +40,7 @@ from litellm.integrations.otel.runtime import (
     phase_span,
     seed_request_identity,
 )
+from litellm.litellm_core_utils.core_helpers import attribute_or_none
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias
 from litellm.models.end_user import LiteLLM_EndUserTable
@@ -220,6 +221,7 @@ from litellm.router_api import (
 )
 from litellm.rust_bridge._native import RustAuth, RustDenial, RustIdentity, RustPlan
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
+from litellm.types.semantic_cache import semantic_cache_params
 from litellm.types.services import ServiceTypes
 
 if TYPE_CHECKING:
@@ -296,6 +298,7 @@ def get_model_from_request_context(
 _CLAUDE_MODEL_ROUTES: Final = frozenset(
     f"/{prefix}{endpoint}" for prefix in ("", "v1/") for endpoint in ("messages", "chat/completions", "responses")
 )
+_FetchedT = TypeVar("_FetchedT")
 _CLAUDE_MODEL_NORMALIZED: Final = "litellm.claude_model_normalized"
 _GENERAL_SETTINGS_ADAPTER: Final = TypeAdapter(dict[str, object])
 _KEY_METADATA_ADAPTER: Final = TypeAdapter(dict[str, object])
@@ -303,7 +306,7 @@ _REQUEST_HEADERS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 
 async def _normalize_claude_model(
-    request_data: dict, valid_token: UserAPIKeyAuth, request: Request | None, route: str
+    request_data: dict[str, object], valid_token: UserAPIKeyAuth, request: Request | None, route: str
 ) -> None:
     from litellm.proxy.proxy_server import llm_router, prisma_client, proxy_config, proxy_logging_obj
 
@@ -2312,7 +2315,7 @@ async def _impersonate_or_raise(
             )
 
 
-async def _safe_fetch(label: str, awaitable):
+async def _safe_fetch(label: str, awaitable: Awaitable[_FetchedT]) -> _FetchedT | None:
     """Run an awaitable and return its result. Re-raises authentication /
     authorization failures (HTTPException, ProxyException,
     BudgetExceededError) so they propagate to the caller.
@@ -2766,6 +2769,10 @@ async def run_centralized_common_checks(
         )
 
     user_object: LiteLLM_UserTable | None = user_result if isinstance(user_result, LiteLLM_UserTable) else None
+    if user_object is not None:
+        user_api_key_auth_obj.apply_user_semantic_cache_params(
+            semantic_cache_params(attribute_or_none(user_object, "metadata"))
+        )
     project_object: Final[LiteLLM_ProjectTableCachedObj | None] = (
         None if isinstance(project_result, BaseException) else project_result
     )
@@ -3637,6 +3644,7 @@ async def return_user_api_key_auth_obj(
             user_spend=getattr(user_obj, "spend", None),
             user_max_budget=user_obj.effective_max_budget(),
             user_model_max_budget=getattr(user_obj, "model_max_budget", None),
+            user_semantic_cache_params=semantic_cache_params(attribute_or_none(user_obj, "metadata")),
         )
     if user_obj is not None and is_user_proxy_admin(user_obj=user_obj):
         user_api_key_kwargs.update(

@@ -5,7 +5,7 @@ For handling OpenAI-like chat completions, like IBM WatsonX, etc.
 """
 
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from typing import Final
 
 import httpx
@@ -46,7 +46,7 @@ async def make_call(
     headers: dict,
     data: str,
     model: str,
-    messages: list,
+    messages: Sequence[object],
     logging_obj: LiteLLMLoggingObj,
     streaming_decoder: CustomStreamingDecoder | None = None,
     fake_stream: bool = False,
@@ -83,7 +83,7 @@ def make_sync_call(
     headers: dict,
     data: str,
     model: str,
-    messages: list,
+    messages: Sequence[object],
     logging_obj: LiteLLMLoggingObj,
     streaming_decoder: CustomStreamingDecoder | None = None,
     fake_stream: bool = False,
@@ -125,12 +125,12 @@ class OpenAILikeChatHandler(OpenAILikeBase):
     async def acompletion_stream_function(
         self,
         model: str,
-        messages: list,
+        messages: Sequence[object],
         custom_llm_provider: str,
         api_base: str,
-        custom_prompt_dict: dict,
+        custom_prompt_dict: Mapping[str, object],
         model_response: ModelResponse,
-        print_verbose: Callable,
+        print_verbose: Callable[..., object],
         encoding: object,
         api_key: object,
         logging_obj: LiteLLMLoggingObj,
@@ -171,10 +171,10 @@ class OpenAILikeChatHandler(OpenAILikeBase):
         model: str,
         messages: list,
         api_base: str,
-        custom_prompt_dict: dict,
+        custom_prompt_dict: Mapping[str, object],
         model_response: ModelResponse,
         custom_llm_provider: str,
-        print_verbose: Callable,
+        print_verbose: Callable[..., object],
         client: AsyncHTTPHandler | None,
         encoding: object,
         api_key: str | None,
@@ -234,7 +234,7 @@ class OpenAILikeChatHandler(OpenAILikeBase):
         custom_llm_provider: str,
         custom_prompt_dict: dict,
         model_response: ModelResponse,
-        print_verbose: Callable,
+        print_verbose: Callable[..., object],
         encoding: object,
         api_key: str | None,
         logging_obj: LiteLLMLoggingObj,

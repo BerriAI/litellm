@@ -25,6 +25,7 @@ from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_semantic_cache_prompt_from_messages,
 )
+from litellm.types.semantic_cache import semantic_similarity_override
 from litellm.types.utils import EmbeddingResponse
 
 from ._embedding_router import (
@@ -452,12 +453,13 @@ class RedisSemanticCache(BaseCache):
         except Exception as e:
             print_verbose(f"Error setting {value_str or value} in the Redis semantic cache: {e}")
 
-    def get_cache(self, key: str, **kwargs) -> object:
+    def get_cache(self, key: str, *, cache: object = None, **kwargs) -> object:
         """
         Retrieve a semantically similar cached response.
 
         Args:
             key: The cache key used to isolate semantic cache entries
+            cache: Request cache controls
             **kwargs: Additional arguments including 'messages' for the prompt
 
         Returns:
@@ -475,10 +477,12 @@ class RedisSemanticCache(BaseCache):
             # Check the cache for semantically similar prompts in this exact
             # LiteLLM cache-key scope.
             prompt_embedding: Final = self._get_embedding(prompt, metadata=kwargs.get("metadata"))
+            threshold: Final = semantic_similarity_override(cache)
             check_kwargs: Final[Mapping[str, object]] = {
                 "prompt": prompt,
                 "vector": prompt_embedding,
                 "filter_expression": self._get_cache_key_filter_expression(key),
+                **({} if threshold is None else {"distance_threshold": 1 - threshold}),
             }
             results: Final = self.llmcache.check(**check_kwargs)
 
@@ -505,6 +509,8 @@ class RedisSemanticCache(BaseCache):
 
             # update kwargs["metadata"] with similarity, don't rewrite the original metadata
             kwargs.setdefault("metadata", {})["semantic-similarity"] = similarity
+            if threshold is not None and similarity < threshold:
+                return None
 
             print_verbose(
                 f"Cache hit: similarity threshold: {self.similarity_threshold}, "
@@ -602,12 +608,13 @@ class RedisSemanticCache(BaseCache):
         except Exception as e:
             print_verbose(f"Error in async_set_cache: {e}")
 
-    async def async_get_cache(self, key: str, **kwargs) -> object:
+    async def async_get_cache(self, key: str, *, cache: object = None, **kwargs) -> object:
         """
         Asynchronously retrieve a semantically similar cached response.
 
         Args:
             key: The cache key used to isolate semantic cache entries
+            cache: Request cache controls
             **kwargs: Additional arguments including 'messages' for the prompt
 
         Returns:
@@ -627,10 +634,12 @@ class RedisSemanticCache(BaseCache):
 
             # Check the cache for semantically similar prompts in this exact
             # LiteLLM cache-key scope.
+            threshold: Final = semantic_similarity_override(cache)
             check_kwargs: Final[Mapping[str, object]] = {
                 "prompt": prompt,
                 "vector": prompt_embedding,
                 "filter_expression": self._get_cache_key_filter_expression(key),
+                **({} if threshold is None else {"distance_threshold": 1 - threshold}),
             }
             results: Final = await self.llmcache.acheck(**check_kwargs)
 
@@ -656,6 +665,8 @@ class RedisSemanticCache(BaseCache):
 
             # update kwargs["metadata"] with similarity, don't rewrite the original metadata
             kwargs.setdefault("metadata", {})["semantic-similarity"] = similarity
+            if threshold is not None and similarity < threshold:
+                return None
 
             print_verbose(
                 f"Cache hit: similarity threshold: {self.similarity_threshold}, "
@@ -688,9 +699,7 @@ class RedisSemanticCache(BaseCache):
             **kwargs: Additional arguments
         """
         try:
-            tasks: Final = []
-            for val in cache_list:
-                tasks.append(self.async_set_cache(val[0], val[1], **kwargs))
+            tasks: Final = [self.async_set_cache(val[0], val[1], **kwargs) for val in cache_list]
             await asyncio.gather(*tasks)
         except Exception as e:
             print_verbose(f"Error in async_set_cache_pipeline: {e}")

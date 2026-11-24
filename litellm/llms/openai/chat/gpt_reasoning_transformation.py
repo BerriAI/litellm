@@ -95,7 +95,7 @@ def _catalogue_declares_default_effort() -> bool:
 
 
 def _normalize_reasoning_effort_for_chat_completion(
-    value: str | dict | None,
+    value: object,
 ) -> str | None:
     """Convert reasoning_effort to the string format expected by OpenAI chat completion API.
 
@@ -111,7 +111,7 @@ def _normalize_reasoning_effort_for_chat_completion(
     return None
 
 
-def get_effort_level(value: str | dict | None) -> str | None:
+def get_effort_level(value: object) -> str | None:
     """Extract the effective effort level from reasoning_effort (string or dict).
 
     Use this for guards that compare effort level (e.g. xhigh validation, "none" checks).
@@ -318,7 +318,7 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
             return False
         return cls.is_reasoning_effort_level_explicitly_disabled(model, level)
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         if self.is_model_gpt_5_search_model(model):
             return [
                 "max_tokens",
@@ -364,13 +364,13 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
     def map_openai_params(
         self,
         non_default_params: dict,
-        optional_params: dict,
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
         *,
         declared_reasoning_efforts: Collection[str] | None = None,
         reasoning_drop_logger: WarningLogger = verbose_logger,
-    ) -> dict:
+    ) -> dict[str, object]:
         if self.is_model_gpt_5_search_model(model):
             if "max_tokens" in non_default_params:
                 optional_params["max_completion_tokens"] = non_default_params.pop("max_tokens")

@@ -16,7 +16,7 @@ Requires:
 
 import json
 import os
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, ClassVar, Final
 
@@ -139,7 +139,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
     async def async_read_secret(
         self,
         secret_name: str,
-        optional_params: dict | None = None,
+        optional_params: dict[str, object] | None = None,
         timeout: float | httpx.Timeout | None = None,
         primary_secret_name: str | None = None,
     ) -> str | None:
@@ -184,7 +184,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
     def sync_read_secret(
         self,
         secret_name: str,
-        optional_params: dict | None = None,
+        optional_params: dict[str, object] | None = None,
         timeout: float | httpx.Timeout | None = None,
         primary_secret_name: str | None = None,
     ) -> str | None:
@@ -272,9 +272,9 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         secret_name: str,
         secret_value: str,
         description: str | None = None,
-        optional_params: dict | None = None,
+        optional_params: dict[str, object] | None = None,
         timeout: float | httpx.Timeout | None = None,
-        tags: dict | list | None = None,
+        tags: Mapping[str, object] | Sequence[object] | None = None,
     ) -> dict[str, object]:
         """
         Async function to write a secret to AWS Secrets Manager
@@ -508,7 +508,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         self,
         secret_name: str,
         secret_value: str,
-        optional_params: dict | None = None,
+        optional_params: dict[str, object] | None = None,
         timeout: float | httpx.Timeout | None = None,
     ) -> dict[str, object]:
         """
@@ -561,7 +561,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         current_secret_name: str,
         new_secret_name: str,
         new_secret_value: str,
-        optional_params: dict | None = None,
+        optional_params: dict[str, object] | None = None,
         timeout: float | httpx.Timeout | None = None,
     ) -> dict[str, object]:
         """
@@ -594,7 +594,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         self,
         secret_name: str,
         recovery_window_in_days: int | None = 7,
-        optional_params: dict | None = None,
+        optional_params: dict[str, object] | None = None,
         timeout: float | httpx.Timeout | None = None,
     ) -> dict[str, object]:
         """

@@ -135,8 +135,8 @@ def mock_vector_store_create_response(
 async def acreate(
     name: str | None = None,
     file_ids: builtins.list[str] | None = None,
-    expires_after: dict | None = None,
-    chunking_strategy: dict | None = None,
+    expires_after: Mapping[str, object] | None = None,
+    chunking_strategy: Mapping[str, object] | None = None,
     metadata: dict[str, str] | None = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
@@ -146,7 +146,7 @@ async def acreate(
     timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> VectorStoreCreateResponse:
     """
     Async: Create a vector store.
@@ -199,8 +199,8 @@ async def acreate(
 def create(
     name: str | None = None,
     file_ids: builtins.list[str] | None = None,
-    expires_after: dict | None = None,
-    chunking_strategy: dict | None = None,
+    expires_after: Mapping[str, object] | None = None,
+    chunking_strategy: Mapping[str, object] | None = None,
     metadata: dict[str, str] | None = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
@@ -470,7 +470,7 @@ async def asearch(
     router: "Router | None" = None,
     *,
     query_image: VectorStoreSearchQueryImage | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> VectorStoreSearchResponse:
     """
     Async: Search a vector store for relevant chunks based on a query and file attributes filter.
@@ -720,7 +720,7 @@ async def aretrieve(
     extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> VectorStoreCreateResponse:
     """
     Async: Retrieve a vector store.
@@ -855,7 +855,7 @@ async def alist(
     extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> object:
     """
     Async: List vector stores.
@@ -1000,14 +1000,14 @@ def list(
 async def aupdate(
     vector_store_id: str,
     name: str | None = None,
-    expires_after: dict | None = None,
+    expires_after: Mapping[str, object] | None = None,
     metadata: dict[str, str] | None = None,
     extra_headers: dict[str, object] | None = None,
     extra_query: dict[str, object] | None = None,
     extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> VectorStoreCreateResponse:
     """
     Async: Update a vector store.
@@ -1058,7 +1058,7 @@ async def aupdate(
 def update(
     vector_store_id: str,
     name: str | None = None,
-    expires_after: dict | None = None,
+    expires_after: Mapping[str, object] | None = None,
     metadata: dict[str, str] | None = None,
     extra_headers: dict[str, object] | None = None,
     extra_query: dict[str, object] | None = None,
@@ -1159,7 +1159,7 @@ async def adelete(
     extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> object:
     """
     Async: Delete a vector store.

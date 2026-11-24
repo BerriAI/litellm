@@ -4082,11 +4082,12 @@ async def test_ProxyConfig_load_config_warns_that_a_non_flag_litellm_settings_dr
     assert litellm.drop_params is False
     assert caplog.text.count("is not a flag value") == 1
     assert (
-        f"litellm_settings.drop_params={logged} is not a flag value, treating it as off, except for Claude Code and "
-        "Codex requests, which keep their drop_params default on" in caplog.text
+        f"litellm_settings.drop_params={logged} is not a flag value, treating it as off, except for Claude Code, "
+        "Codex, and VS Code Copilot Chat requests, which keep their drop_params default on" in caplog.text
     )
     assert should_auto_drop_params_for_agentic_cli("claude-cli/2.1.299 (external, cli)", False, proxy_config)
     assert should_auto_drop_params_for_agentic_cli("codex_cli_rs/0.165.0", False, proxy_config)
+    assert should_auto_drop_params_for_agentic_cli("GitHubCopilotChat/0.74.0", False, proxy_config)
     assert not should_auto_drop_params_for_agentic_cli("curl/8.5.0", False, proxy_config)
 
 

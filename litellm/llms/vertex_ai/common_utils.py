@@ -18,6 +18,8 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+from litellm.litellm_core_utils import model_cost_table
+from litellm.litellm_core_utils.fallback_generalizations import match_fill_missing_generalizations
 from litellm.litellm_core_utils.prompt_templates.common_utils import unpack_defs
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -57,6 +59,47 @@ GEMINI_VIDEO_METADATA_KEYS: Final = MappingProxyType(
 
 
 GEMINI_FILES_API_URI_PREFIX: Final = "https://generativelanguage.googleapis.com/v1beta/files/"
+GEMINI_FILES_API_V1_URI_PREFIX: Final = "https://generativelanguage.googleapis.com/v1/files/"
+GEMINI_FILES_API_URI_PREFIXES: Final = (
+    GEMINI_FILES_API_URI_PREFIX,
+    GEMINI_FILES_API_V1_URI_PREFIX,
+)
+
+
+def gemini_media_capability(
+    model: str,
+    key: Literal["supports_part_media_resolution", "supports_media_in_tool_response"],
+    *,
+    custom_llm_provider: str | None = None,
+) -> bool:
+    name: Final = model.rsplit("/", 1)[-1]
+    qualified_name: Final = f"gemini/{name}"
+    catalog: Final = cast(  # cast-ok: the published catalog contains model rows
+        Mapping[str, Mapping[str, object]], model_cost_table.published()
+    )
+    candidates: Final = (
+        (model, qualified_name, f"vertex_ai/{name}", name)
+        if custom_llm_provider is None
+        else (f"{custom_llm_provider}/{name}", name)
+    )
+    for candidate in candidates:
+        row = catalog.get(candidate)
+        if row is None:
+            continue
+        flag = row.get(key)
+        if isinstance(flag, bool):
+            return flag
+    defaults: Final = match_fill_missing_generalizations(qualified_name, custom_llm_provider or "gemini")
+    default_flag: Final = defaults.get(key) if defaults is not None else None
+    if isinstance(default_flag, bool):
+        return default_flag
+
+    from .gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+
+    # Older cost maps lack these flags, including for models no longer listed in the catalog.
+    return VertexGeminiConfig.is_gemini_3_or_newer(model)
+
+
 _YOUTUBE_VIDEO_URL: Final = re.compile(
     r"(?i:https?://(?:(?:www|m)\.)?youtube\.com(?::443)?/)(?:watch\?(?:[^#]*&)?v=|shorts/|embed/)[\w-]"
     r"|(?i:https?://youtu\.be(?::443)?/)[\w-]"
@@ -64,7 +107,7 @@ _YOUTUBE_VIDEO_URL: Final = re.compile(
 
 
 def gemini_fetches_url_itself(url: str) -> bool:
-    return url.startswith(GEMINI_FILES_API_URI_PREFIX) or _YOUTUBE_VIDEO_URL.match(url) is not None
+    return url.startswith(GEMINI_FILES_API_URI_PREFIXES) or _YOUTUBE_VIDEO_URL.match(url) is not None
 
 
 def youtube_video_mime_type(url: str) -> str | None:
@@ -213,7 +256,7 @@ def redact_vertex_ai_metadata_from_logged_object(obj: object) -> None:
             hidden_params.pop(field, None)
 
 
-def redact_vertex_ai_metadata_from_litellm_params(model_call_details: dict) -> None:
+def redact_vertex_ai_metadata_from_litellm_params(model_call_details: Mapping[str, object]) -> None:
     """
     success_handler() merges response._hidden_params into
     litellm_params.metadata['hidden_params'] before redaction runs, so the Vertex
@@ -253,7 +296,7 @@ def vertex_request_labels_from_litellm_params(
 
 
 def pop_vertex_caller_labels(
-    optional_params: dict | None,
+    optional_params: dict[str, object] | None,
     litellm_params: Mapping[str, object] | None,
 ) -> dict[str, str] | None:
     """
@@ -267,8 +310,8 @@ def pop_vertex_caller_labels(
 
 
 def pop_vertex_request_labels(
-    optional_params: dict | None,
-    litellm_params: dict | None,
+    optional_params: dict[str, object] | None,
+    litellm_params: Mapping[str, object] | None,
 ) -> dict[str, str] | None:
     """
     The caller's labels from ``pop_vertex_caller_labels``, plus the proxy identity
@@ -1374,7 +1417,7 @@ def filter_schema_fields(
     if not isinstance(schema_dict, dict):
         return schema_dict
 
-    result: Final = {}
+    result: Final[dict[str, object]] = {}
     schema_dict = _filter_anyof_fields(schema_dict)
     for key, value in schema_dict.items():
         if key not in valid_fields:

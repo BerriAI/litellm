@@ -687,7 +687,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         litellm_params: MutableMapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         result: Final[dict[str, object]] = {}
         result.update(headers)
         signed_headers: Final = litellm_params.pop(S3_SIGNED_REQUEST_HEADERS_PARAM, None)
@@ -803,7 +803,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
+        non_default_params: Mapping[str, object],
         optional_params: dict,
         model: str,
         drop_params: bool,
@@ -1894,7 +1894,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> HttpxBinaryResponseContent:
         if raw_response.status_code >= 400:
             raise BedrockError(
