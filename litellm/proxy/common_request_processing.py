@@ -62,6 +62,7 @@ from litellm.constants import (
     MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG,
     NON_INFERENCE_CALL_TYPES,
     RETURN_RAW_MODEL_NAME_METADATA_KEY,
+    SEMANTIC_CACHE_SCOPE_HEADER,
     STREAM_SSE_DATA_PREFIX,
     STREAM_SSE_KEEPALIVE_PING_BYTES,
     UNSAFE_PROXY_RESPONSE_HEADERS,
@@ -219,6 +220,7 @@ from litellm.types.extraction import ExtractionResponse
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.router import RouterRateLimitError
 from litellm.types.router_weights import RouterWeights, validate_router_weights
+from litellm.types.semantic_cache import semantic_cache_policy
 
 _LateResponseT = TypeVar("_LateResponseT")
 _LlmCallT = TypeVar("_LlmCallT")
@@ -832,6 +834,10 @@ def _as_success_dispatcher(logging_obj: _DispatchesSuccessHandlers) -> _Dispatch
 
 class _ClosesAsync(Protocol):
     def aclose(self) -> Awaitable[object]: ...
+
+
+class _DumpsStreamChunk(Protocol):
+    def model_dump(self, *, mode: str, exclude_none: bool) -> object: ...
 
 
 class _DeferredLoggingSlot(Protocol):
@@ -3035,6 +3041,9 @@ class ProxyBaseLLMRequestProcessing:
             **{k: str(v) for k, v in kwargs.items()},
         }
         if request_data:
+            cache_policy: Final = semantic_cache_policy(request_data)
+            if cache_policy is not None:
+                headers[SEMANTIC_CACHE_SCOPE_HEADER] = cache_policy.scope
             remaining_tokens_header: Final = get_remaining_tokens_and_requests_from_request_data(dict(request_data))
             headers.update(remaining_tokens_header)
 
@@ -5681,14 +5690,14 @@ class ProxyBaseLLMRequestProcessing:
                     if isinstance(chunk, (ModelResponse, ModelResponseStream)):
                         response_str = litellm.get_response_string(response_obj=chunk)
                         str_so_far += response_str
-                    elif hasattr(chunk, "model_dump"):
+                    elif has_attributes(chunk, _DumpsStreamChunk, "model_dump"):
                         try:
                             d = chunk.model_dump(mode="json", exclude_none=True)
-                            if isinstance(d, dict):
+                            if is_str_keyed_dict(d):
                                 str_so_far += _content_text(d)
                         except Exception:
                             pass
-                    elif isinstance(chunk, dict):
+                    elif is_str_keyed_dict(chunk):
                         str_so_far += str(chunk.get("content", ""))
 
                     model_name = request_data.get("model", "")
@@ -6044,6 +6053,8 @@ class ProxyBaseLLMRequestProcessing:
         """
         usage: Final = obj.get("usage")
         if not isinstance(usage, dict):
+            return None
+        if "cost" in usage and getattr(litellm_logging_obj, "route_prices_call", False) is True:
             return None
         stream_usage: Final = ProxyBaseLLMRequestProcessing._stream_usage_for_event(obj, usage)
         if stream_usage is None:

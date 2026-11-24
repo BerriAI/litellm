@@ -5,7 +5,7 @@ import traceback
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Final, Protocol, cast
+from typing import Final, Literal, Protocol, cast
 
 import httpx
 from pydantic import TypeAdapter, ValidationError
@@ -1142,6 +1142,65 @@ def _get_bedrock_mantle_context_window_message(error_str: str) -> str | None:
     return None
 
 
+def _aws_credential_error_status(error: BaseException) -> Literal[401, 403] | None:
+    from litellm.llms.bedrock_mantle.common_utils import BedrockMantleAuthError
+
+    if isinstance(error, BedrockMantleAuthError):
+        return 401
+    if not type(error).__module__.startswith("botocore"):
+        return None
+    from botocore.exceptions import (
+        LoginError,
+        LoginInsufficientPermissions,
+        NoCredentialsError,
+        PartialCredentialsError,
+        ProfileNotFound,
+        SSOError,
+        TokenRetrievalError,
+    )
+
+    match error:
+        case LoginInsufficientPermissions():
+            return 403
+        case (
+            LoginError()
+            | NoCredentialsError()
+            | PartialCredentialsError()
+            | ProfileNotFound()
+            | SSOError()
+            | TokenRetrievalError()
+        ):
+            return 401
+        case _:
+            return None
+
+
+def is_aws_credential_error(error: BaseException) -> bool:
+    return _aws_credential_error_status(error) is not None
+
+
+def _map_aws_credential_error(*, model: str, original_exception: _ProviderHTTPException, error_str: str) -> None:
+    if not isinstance(original_exception, BaseException):
+        return
+    match _aws_credential_error_status(original_exception):
+        case 403:
+            raise PermissionDeniedError(
+                message=f"BedrockException PermissionDeniedError - {error_str}",
+                model=model,
+                llm_provider="bedrock",
+                response=_bedrock_response_with_status(original_exception, 403),
+            )
+        case 401:
+            raise AuthenticationError(
+                message=f"BedrockException Invalid Authentication - {error_str}",
+                model=model,
+                llm_provider="bedrock",
+                response=_bedrock_response_with_status(original_exception, 401),
+            )
+        case None:
+            return
+
+
 def _map_bedrock_exception(
     *,
     model: str,
@@ -1152,6 +1211,7 @@ def _map_bedrock_exception(
     exception_provider: str,
     extra_information: str,
 ) -> None:
+    _map_aws_credential_error(model=model, original_exception=original_exception, error_str=error_str)
     if custom_llm_provider == "bedrock_mantle":
         mantle_context_window_message = _get_bedrock_mantle_context_window_message(error_str)
         if mantle_context_window_message is not None:

@@ -1,9 +1,11 @@
 import asyncio
 import os
 import time
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Final
+
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
@@ -29,7 +31,7 @@ from litellm.types.utils import StandardLoggingPayload
 # request_tags / metadata cannot overwrite these, even when the key is
 # allowlisted via cost_tag_keys, because that would let an authenticated caller
 # spoof cost attribution (e.g. request_tags=["team:victim-team"]).
-_RESERVED_TAG_KEYS: Final[frozenset] = frozenset(
+_RESERVED_TAG_KEYS: Final[frozenset[str]] = frozenset(
     {
         "env",
         "service",
@@ -43,6 +45,12 @@ _RESERVED_TAG_KEYS: Final[frozenset] = frozenset(
         "model_group",
     }
 )
+
+
+class _DatadogCostLoggingKwargs(TypedDict, total=False, extra_items=object):
+    """The logging kwargs this logger reads its standard logging payload from."""
+
+    standard_logging_object: ReadOnly[StandardLoggingPayload | None]
 
 
 def _as_mapping(metadata: Mapping[str, object]) -> Mapping[str, object]:
@@ -75,7 +83,9 @@ class DatadogCostManagementLogger(CustomBatchLogger):
 
         super().__init__(**kwargs)
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(
+        self, kwargs: _DatadogCostLoggingKwargs, response_obj: object, start_time: object, end_time: object
+    ) -> None:
         try:
             standard_logging_object: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object", None)
 
@@ -241,7 +251,7 @@ class DatadogCostManagementLogger(CustomBatchLogger):
         if value:
             tags[key] = str(value)
 
-    async def _upload_to_datadog(self, payload: list[dict]):
+    async def _upload_to_datadog(self, payload: Sequence[DatadogFOCUSCostEntry]) -> None:
         if not self.dd_api_key or not self.dd_app_key:
             return
 

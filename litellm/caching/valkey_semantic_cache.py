@@ -32,6 +32,7 @@ from litellm._logging import print_verbose
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.core_helpers import float_of, set_item
 from litellm.llms.valkey.common_utils import build_valkey_url, pack_vector
+from litellm.types.semantic_cache import semantic_similarity_override
 
 from ._embedding_router import resolve_embedding_timeout
 from .redis_semantic_cache import RedisSemanticCache
@@ -64,7 +65,7 @@ class ValkeySemanticCache(RedisSemanticCache):
         embedding_model: str = "text-embedding-ada-002",
         index_name: str | None = None,
         ssl: bool = False,
-        startup_nodes: list | None = None,
+        startup_nodes: Sequence[object] | None = None,
         sync_client: Redis | None = None,
         async_client: AsyncRedis | None = None,
         embedding_max_input_tokens: int | None = None,
@@ -255,7 +256,8 @@ class ValkeySemanticCache(RedisSemanticCache):
         similarity: Final = 1 - hit.distance
         self._record_similarity(kwargs, similarity)
 
-        if similarity < self.similarity_threshold:
+        threshold: Final = semantic_similarity_override(kwargs.get("cache"))
+        if similarity < (self.similarity_threshold if threshold is None else threshold):
             return None
         return self._get_cache_logic(cached_response=hit.response)
 

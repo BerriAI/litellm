@@ -30,7 +30,7 @@ from litellm.llms.vertex_ai.common_utils import (
 from litellm.llms.vertex_ai.request_labels import caller_labels_header_names, vertex_request_label_fields
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.videos.main import VideoCreateOptionalRequestParams, VideoObject
+from litellm.types.videos.main import CharacterObject, VideoCreateOptionalRequestParams, VideoObject
 from litellm.types.videos.utils import (
     encode_video_id_with_provider,
     extract_original_video_id,
@@ -176,7 +176,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
             return parts[7]
         return None
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         """
         Get the list of supported OpenAI parameters for Veo video generation.
         Veo supports minimal parameters compared to OpenAI.
@@ -275,11 +275,11 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: Mapping[str, object],
         model: str,
         api_key: str | None = None,
-        litellm_params: GenericLiteLLMParams | dict | None = None,
-    ) -> dict:
+        litellm_params: GenericLiteLLMParams | Mapping[str, object] | None = None,
+    ) -> dict[str, object]:
         """
         Validate environment and return headers for Vertex AI OCR.
 
@@ -313,7 +313,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         self,
         model: str,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
     ) -> str:
         """
         Get the complete URL for Veo video generation.
@@ -350,10 +350,10 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         model: str,
         prompt: str,
         api_base: str,
-        video_create_optional_request_params: dict,
+        video_create_optional_request_params: dict[str, object],
         litellm_params: GenericLiteLLMParams,
         headers: dict[str, str],
-    ) -> tuple[dict, RequestFiles, str]:
+    ) -> tuple[dict[str, object], RequestFiles, str]:
         """
         Transform the video creation request for Veo API.
 
@@ -441,7 +441,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
         custom_llm_provider: str | None = None,
-        request_data: dict | None = None,
+        request_data: Mapping[str, object] | None = None,
     ) -> VideoObject:
         """
         Transform the Veo video creation response.
@@ -477,8 +477,8 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         video_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[str, dict]:
+        headers: Mapping[str, object],
+    ) -> tuple[str, dict[str, str]]:
         """
         Transform the video status retrieve request for Veo API.
 
@@ -581,9 +581,9 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         video_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
+        headers: Mapping[str, object],
         variant: str | None = None,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, str]]:
         """
         Transform the video content request for Veo API.
 
@@ -642,9 +642,9 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         prompt: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
+        headers: Mapping[str, object],
         extra_body: dict[str, object] | None = None,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         """
         Video remix is not supported by Veo API.
         """
@@ -665,12 +665,12 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         self,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
+        headers: Mapping[str, object],
         after: str | None = None,
         limit: int | None = None,
         order: str | None = None,
         extra_query: dict[str, object] | None = None,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         """
         Video list is not supported by Veo API.
         """
@@ -693,8 +693,8 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         video_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[str, dict]:
+        headers: Mapping[str, object],
+    ) -> tuple[str, dict[str, object]]:
         """
         Video delete is not supported by Veo API.
         """
@@ -710,16 +710,37 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         """Video delete is not supported."""
         raise NotImplementedError("Video delete is not supported by Vertex AI Veo.")
 
-    def transform_video_create_character_request(self, name, video: object, api_base, litellm_params, headers):
+    def transform_video_create_character_request(
+        self,
+        name: str,
+        video: object,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: Mapping[str, object],
+    ) -> tuple[str, list[object]]:
         raise NotImplementedError("video create character is not supported for Vertex AI")
 
-    def transform_video_create_character_response(self, raw_response, logging_obj):
+    def transform_video_create_character_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> CharacterObject:
         raise NotImplementedError("video create character is not supported for Vertex AI")
 
-    def transform_video_get_character_request(self, character_id, api_base, litellm_params, headers):
+    def transform_video_get_character_request(
+        self,
+        character_id: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: Mapping[str, object],
+    ) -> tuple[str, dict[str, object]]:
         raise NotImplementedError("video get character is not supported for Vertex AI")
 
-    def transform_video_get_character_response(self, raw_response, logging_obj):
+    def transform_video_get_character_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> CharacterObject:
         raise NotImplementedError("video get character is not supported for Vertex AI")
 
     def get_video_edit_prefetch_params(
@@ -727,8 +748,8 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         video_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[str, dict]:
+        headers: Mapping[str, object],
+    ) -> tuple[str, dict[str, str]]:
         """Return the fetchPredictOperation URL and body needed to retrieve the source video."""
         return self.transform_video_status_retrieve_request(
             video_id=video_id,
@@ -743,7 +764,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         video_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
+        headers: Mapping[str, object],
         video_file: FileContent | None = None,
         extra_body: dict[str, object] | None = None,
         prefetched_source_data: dict[str, object] | None = None,
@@ -802,7 +823,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
         custom_llm_provider: str | None = None,
-        request_data: dict | None = None,
+        request_data: Mapping[str, object] | None = None,
     ) -> VideoObject:
         """
         Transform the Veo video edit response.
@@ -837,20 +858,27 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
 
     def transform_video_extension_request(
         self,
-        prompt,
-        video_id,
-        seconds,
-        api_base,
-        litellm_params,
-        headers,
-        extra_body=None,
-    ):
+        prompt: str,
+        video_id: str,
+        seconds: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: Mapping[str, object],
+        extra_body: dict[str, object] | None = None,
+    ) -> tuple[str, dict[str, object]]:
         raise NotImplementedError("video extension is not supported for Vertex AI")
 
-    def transform_video_extension_response(self, raw_response, logging_obj, custom_llm_provider=None):
+    def transform_video_extension_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+        custom_llm_provider: str | None = None,
+    ) -> VideoObject:
         raise NotImplementedError("video extension is not supported for Vertex AI")
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers
+    ) -> BaseLLMException:
         from litellm.llms.vertex_ai.common_utils import VertexAIError
 
         return VertexAIError(

@@ -4426,3 +4426,88 @@ def test_a_deeply_nested_provider_error_keeps_its_status() -> None:
             original_exception=BaseLLMException(status_code=400, message=nested),
             custom_llm_provider="hosted_vllm",
         )
+
+
+def _botocore_credential_errors() -> tuple[Exception, ...]:
+    from botocore.exceptions import (
+        LoginRefreshRequired,
+        NoCredentialsError,
+        PartialCredentialsError,
+        ProfileNotFound,
+        SSOTokenLoadError,
+        TokenRetrievalError,
+        UnauthorizedSSOTokenError,
+    )
+
+    return (
+        TokenRetrievalError(provider="sso", error_msg="Token has expired and refresh failed"),
+        UnauthorizedSSOTokenError(),
+        SSOTokenLoadError(error_msg="Token for example.awsapps.com does not exist"),
+        LoginRefreshRequired(),
+        NoCredentialsError(),
+        PartialCredentialsError(provider="env", cred_var="AWS_SECRET_ACCESS_KEY"),
+        ProfileNotFound(profile="missing-profile"),
+    )
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["bedrock", "bedrock_mantle"])
+@pytest.mark.parametrize("credential_error", _botocore_credential_errors(), ids=lambda error: type(error).__name__)
+def test_bedrock_unusable_aws_credentials_answer_401_without_a_bug_report(
+    credential_error: Exception, custom_llm_provider: str
+) -> None:
+    with pytest.raises(litellm.AuthenticationError) as excinfo:
+        exception_type(
+            model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            original_exception=credential_error,
+            custom_llm_provider=custom_llm_provider,
+        )
+
+    assert excinfo.value.status_code == 401
+    assert excinfo.value.response.status_code == 401
+    assert str(credential_error) in excinfo.value.message
+    assert "github.com/BerriAI/litellm/issues/new" not in excinfo.value.message
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["bedrock", "bedrock_mantle"])
+def test_bedrock_aws_login_without_permission_answers_403(custom_llm_provider: str) -> None:
+    from botocore.exceptions import LoginInsufficientPermissions
+
+    with pytest.raises(litellm.PermissionDeniedError) as excinfo:
+        exception_type(
+            model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            original_exception=LoginInsufficientPermissions(),
+            custom_llm_provider=custom_llm_provider,
+        )
+
+    assert excinfo.value.status_code == 403
+    assert excinfo.value.response.status_code == 403
+
+
+def test_bedrock_credential_source_outage_stays_a_retryable_connection_error() -> None:
+    from botocore.exceptions import CredentialRetrievalError
+
+    with pytest.raises(litellm.APIConnectionError) as excinfo:
+        exception_type(
+            model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            original_exception=CredentialRetrievalError(provider="container-role", error_msg="connection refused"),
+            custom_llm_provider="bedrock",
+        )
+
+    assert excinfo.value.status_code == 500
+
+
+def test_bedrock_mantle_without_usable_aws_credentials_answers_401() -> None:
+    from botocore.exceptions import ProfileNotFound
+
+    from litellm.llms.bedrock_mantle.common_utils import BedrockMantleAuthError
+
+    signing_failure: Final = BedrockMantleAuthError()
+    signing_failure.__cause__ = ProfileNotFound(profile="missing-profile")
+
+    with pytest.raises(litellm.AuthenticationError) as excinfo:
+        exception_type(
+            model="openai.gpt-6-sol", original_exception=signing_failure, custom_llm_provider="bedrock_mantle"
+        )
+
+    assert excinfo.value.status_code == 401
+    assert "github.com/BerriAI/litellm/issues/new" not in excinfo.value.message

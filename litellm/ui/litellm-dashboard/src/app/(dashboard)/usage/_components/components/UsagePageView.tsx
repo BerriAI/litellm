@@ -15,7 +15,7 @@ import { Trans, useTranslation } from "react-i18next";
 import { StackedUsageChart } from "@/components/shared/charts";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/shared/Alert";
 import { ErrorState } from "@/components/shared/ErrorState";
-import { Page, PageContent } from "@/components/shared/Page";
+import { PageContent } from "@/components/shared/Page";
 import { PageHeader, PageHeaderTitle, PageHeaderDescription, PageHeaderControls } from "@/components/shared/PageHeader";
 import { Button } from "@/components/ui/button";
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
@@ -459,8 +459,8 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
   );
 
   return (
-    <Page ref={pageRef} className="relative">
-      <PageHeader>
+    <>
+      <PageHeader ref={pageRef}>
         <PageHeaderTitle>
           <BarChart3 />
           {t("usage.viewSelect.title")}
@@ -882,7 +882,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
           canIncludeMetadata={isAdmin}
         />
       </PageContent>
-    </Page>
+    </>
   );
 };
 

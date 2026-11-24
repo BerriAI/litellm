@@ -241,16 +241,16 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
     def __init__(
         self,
         frequency_penalty: int | None = None,
-        function_call: str | dict | None = None,
-        functions: list | None = None,
-        logit_bias: dict | None = None,
+        function_call: str | Mapping[str, object] | None = None,
+        functions: Sequence[object] | None = None,
+        logit_bias: Mapping[str, object] | None = None,
         max_tokens: int | None = None,
         n: int | None = None,
         presence_penalty: int | None = None,
-        stop: str | list | None = None,
+        stop: str | Sequence[object] | None = None,
         temperature: int | None = None,
         top_p: int | None = None,
-        response_format: dict | None = None,
+        response_format: Mapping[str, object] | None = None,
     ) -> None:
         locals_: Final[Mapping[str, object]] = dict(locals())
         for key, value in locals_.items():
@@ -315,11 +315,11 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
 
     def _map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: dict[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         If any supported_openai_params are in non_default_params, add them to optional_params, so they are use in API call
 
@@ -1086,7 +1086,7 @@ class OpenAIChatCompletionStreamingHandler(BaseModelResponseIterator):
         return choices
 
     @staticmethod
-    def _extract_error_from_chunk(chunk: dict) -> tuple[str, int] | None:
+    def _extract_error_from_chunk(chunk: Mapping[str, object]) -> tuple[str, int] | None:
         """OpenAI-compatible backends (vLLM, sglang) can return an HTTP 200
         stream whose body carries an error payload, e.g.
         ``data: {"error": {"message": "...", "code": 400}}``."""
