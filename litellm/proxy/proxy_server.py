@@ -16327,18 +16327,47 @@ async def count_request_tokens(
         count_options=count_options,
     )
     return await logged_token_count(
-        _with_anthropic_content_errors(count) if messages_format == "anthropic" else count,
+        _with_content_errors(count, request, responses_request),
         litellm_call_id=call_id,
         request_model=request.model,
         model_id=deployment_model_id(count_route.deployment),
     )
 
 
-async def _with_anthropic_content_errors(count: Awaitable[TokenCountResponse]) -> TokenCountResponse:
+def _content_error_param(request: TokenCountRequest, responses_request: Mapping[str, object] | None) -> str | None:
+    block_fields: Final = (
+        (
+            ("input", not isinstance(responses_request.get("input"), str)),
+            ("instructions", not isinstance(responses_request.get("instructions"), (str, type(None)))),
+        )
+        if responses_request is not None
+        else (
+            (
+                "messages",
+                any(
+                    isinstance((as_str_mapping(message) or _EMPTY_MAPPING).get("content"), list)
+                    for message in request.messages or ()
+                ),
+            ),
+            ("system", not isinstance(request.system, (str, type(None)))),
+        )
+    )
+    sent: Final = tuple(field for field, holds_blocks in block_fields if holds_blocks)
+    return sent[0] if len(sent) == 1 else None
+
+
+async def _with_content_errors(
+    count: Awaitable[TokenCountResponse], request: TokenCountRequest, responses_request: Mapping[str, object] | None
+) -> TokenCountResponse:
     try:
         return await count
     except UnsupportedContentTypeError as e:
-        raise ProxyException(message=str(e), type="invalid_request_error", param="messages", code=400) from e
+        raise ProxyException(
+            message=str(e),
+            type="invalid_request_error",
+            param=_content_error_param(request, responses_request),
+            code=400,
+        ) from e
 
 
 def _routable_count_deployments(served: str, select_request: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:

@@ -968,7 +968,7 @@ class RouteChecks:
     def _check_proxy_admin_viewer_access(
         route: str,
         _user_role: str,
-        request_data: dict,
+        request_data: Mapping[str, object],
         request: Request | None = None,
     ) -> None:
         """

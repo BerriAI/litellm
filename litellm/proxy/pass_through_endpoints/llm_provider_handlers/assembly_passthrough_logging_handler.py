@@ -162,7 +162,7 @@ class AssemblyAIPassthroughLoggingHandler:
             )
         )
 
-    def _get_response_to_log(self, transcript_response: AssemblyAITranscriptResponse | None) -> dict:
+    def _get_response_to_log(self, transcript_response: AssemblyAITranscriptResponse | None) -> dict[str, object]:
         if transcript_response is None:
             return {}
         return dict(transcript_response)
