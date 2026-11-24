@@ -24,6 +24,7 @@ import pytest
 import respx
 
 import litellm
+from litellm.constants import RESPONSES_SESSION_LOOKUP_MAX_ATTEMPTS
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.responses.litellm_completion_transformation.handler import (
     LiteLLMCompletionTransformationHandler,
@@ -554,6 +555,45 @@ async def test_a_refused_follow_up_is_neither_retried_nor_sent_to_a_fallback(fal
             await router.aresponses(model="bridged", input="Double it", previous_response_id=_TURN_ONE_ID)
 
     assert not getattr(refused.value, "num_retries", None)
+
+
+class _CountedLookups:
+    def __init__(self) -> None:
+        self.lookups = 0
+
+    async def query_raw(self, query: str, request_ids: list[str]) -> list[dict[str, object]]:
+        self.lookups += 1
+        return []
+
+
+@pytest.mark.asyncio
+async def test_a_follow_up_refused_on_a_retry_is_not_retried_again():
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "bridged",
+                "litellm_params": {
+                    "model": "azure_ai/claude-sonnet-4-6",
+                    "api_base": "https://fake-foundry-resource.services.ai.azure.com",
+                    "api_key": "fake-api-key",
+                },
+                "model_info": {"id": "d1"},
+            },
+        ],
+        retry_policy=RetryPolicy(RateLimitErrorRetries=3),
+    )
+    spend_logs: Final = _CountedLookups()
+
+    with patch("litellm.proxy.proxy_server.prisma_client", SimpleNamespace(db=spend_logs)):
+        with pytest.raises(litellm.BadRequestError, match="not found"):
+            await router.aresponses(
+                model="bridged",
+                input="Double it",
+                previous_response_id=_TURN_ONE_ID,
+                mock_testing_rate_limit_error=True,
+            )
+
+    assert spend_logs.lookups == RESPONSES_SESSION_LOOKUP_MAX_ATTEMPTS
 
 
 @pytest.mark.asyncio

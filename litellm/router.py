@@ -8592,6 +8592,8 @@ class Router:
                     return response
 
                 except Exception as e:
+                    if isinstance(e, UnresolvablePreviousResponseError):
+                        raise
                     # Always track the latest error so we raise the most
                     # recent exception instead of the first one.
                     original_exception = e
