@@ -46,10 +46,9 @@ def native_health_check_mode(
 
         return soniox_health_check_mode(model)
     if custom_llm_provider == "elevenlabs":
-        import litellm
-        from litellm.llms.elevenlabs.common_utils import elevenlabs_health_check_mode
+        from litellm.llms.elevenlabs.common_utils import elevenlabs_catalog_key, elevenlabs_health_check_mode
 
-        return elevenlabs_health_check_mode(model, litellm.model_cost)
+        return elevenlabs_health_check_mode(_cost_map_entry(elevenlabs_catalog_key(model)))
     if custom_llm_provider != "bedrock_mantle":
         return None
     from litellm.llms.bedrock_mantle.common_utils import mantle_health_check_mode
@@ -57,11 +56,19 @@ def native_health_check_mode(
     return mantle_health_check_mode(model)
 
 
-def _cost_map_mode(model: str) -> str | None:
+_COST_MAP_ENTRY: Final = TypeAdapter(dict[str, object])
+
+
+def _cost_map_entry(model: str) -> Mapping[str, object]:
     import litellm
+
+    return _COST_MAP_ENTRY.validate_python(litellm.model_cost.get(model) or {})
+
+
+def _cost_map_mode(model: str) -> str | None:
     from litellm.litellm_core_utils.health_check_utils import OPTIONAL_STR
 
-    return OPTIONAL_STR.validate_python(litellm.model_cost.get(model, {}).get("mode"))
+    return OPTIONAL_STR.validate_python(_cost_map_entry(model).get("mode"))
 
 
 def default_health_check_mode(requested_model: str, model: str, custom_llm_provider: str) -> str:

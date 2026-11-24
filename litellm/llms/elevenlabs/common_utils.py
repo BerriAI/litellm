@@ -18,13 +18,14 @@ def normalize_model(model: str) -> str:
     return model.strip().removeprefix("elevenlabs/")
 
 
-def elevenlabs_health_check_mode(
-    model: str, model_cost: Mapping[str, Mapping[str, object]]
-) -> Literal["realtime"] | None:
+def elevenlabs_catalog_key(model: str) -> str:
+    return f"elevenlabs/{normalize_model(model)}"
+
+
+def elevenlabs_health_check_mode(catalog_entry: Mapping[str, object]) -> Literal["realtime"] | None:
     """Realtime when the model's price-map row lists /v1/realtime, so a new realtime model is a JSON change."""
-    entry: Final = model_cost.get(f"elevenlabs/{normalize_model(model)}", {})
     try:
-        endpoints: Final = _ENDPOINTS.validate_python(entry.get("supported_endpoints") or ())
+        endpoints: Final = _ENDPOINTS.validate_python(catalog_entry.get("supported_endpoints") or ())
     except ValidationError:
         return None
     return "realtime" if _REALTIME_ENDPOINT in endpoints else None

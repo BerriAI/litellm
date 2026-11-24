@@ -2036,12 +2036,11 @@ class RealTimeStreaming:
         self.current_delta_type = returned_object["current_delta_type"]
         self.session_configuration_request = returned_object["session_configuration_request"]
         events: Final = transformed_response if isinstance(transformed_response, list) else [transformed_response]
-        billed_before_sends: Final = self._bill_completed_transcriptions_before_sends(events)
+        billed_ids: Final = frozenset(id(event) for event in self._bill_completed_transcriptions_before_sends(events))
         for event in events:
-            billed: Final = any(event is billed_event for billed_event in billed_before_sends)
-            if await self._dropped_after_token_limit_end(event, logged=billed) or self._should_drop_event_from_client(
-                event
-            ):
+            if await self._dropped_after_token_limit_end(
+                event, logged=id(event) in billed_ids
+            ) or self._should_drop_event_from_client(event):
                 continue
             if isinstance(event, dict):
                 self._detect_transcription_session_from_backend(event)
@@ -2085,7 +2084,7 @@ class RealTimeStreaming:
             if isinstance(event, dict) and event.get("type") == "conversation.item.input_audio_transcription.completed":
                 transcript = event.get("transcript", "")
                 self._collect_user_input_from_backend_event(cast(dict, event))
-                if not billed:
+                if id(event) not in billed_ids:
                     self.store_message(event_str)
                     self._capture_transcription_usage(event)
                 await self._send_event_to_client(event, event_str)
@@ -2111,16 +2110,16 @@ class RealTimeStreaming:
         if self._ended_over_token_limit:
             return ()
         completed: Final = tuple(
-            event
+            (event, mapping)
             for event in events
-            if isinstance(event, dict)
-            and event.get("type") == "conversation.item.input_audio_transcription.completed"
+            if (mapping := as_str_mapping(event)) is not None
+            and mapping.get("type") == "conversation.item.input_audio_transcription.completed"
             and not self._should_drop_event_from_client(event)
         )
-        for event in completed:
-            self.store_message(json.dumps(event))
-            self._capture_transcription_usage(event)
-        return completed
+        for _, mapping in completed:
+            self.store_message(dict(mapping))
+            self._capture_transcription_usage(mapping)
+        return tuple(event for event, _ in completed)
 
     async def _complete_deferred_backend_setup(self) -> None:
         if not self._uses_deferred_backend_setup() or self._backend_setup_complete:
