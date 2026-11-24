@@ -542,6 +542,17 @@ async def _memberships_on_team_member_budget(
     )
 
 
+async def _raise_if_over_seat_limit(prisma_client: "PrismaClient", added_users: int) -> None:
+    from litellm.proxy.proxy_server import _license_check
+
+    billable_users: Final = await UserRepository(prisma_client).count_billable_users()
+    if _license_check.is_over_limit(total_users=billable_users + added_users):
+        raise HTTPException(
+            status_code=403,
+            detail="License is over limit. Please contact support@berri.ai to upgrade your license.",
+        )
+
+
 def _default_team_membership(team: str | NewUserRequestTeam) -> NewUserRequestTeam:
     if isinstance(team, str):
         return NewUserRequestTeam(team_id=team)
@@ -635,7 +646,7 @@ async def new_user(
     if data.auto_create_key and actor is not None:
         validated_customer_key_metadata(data.metadata, None, actor)
     try:
-        from litellm.proxy.proxy_server import _license_check, prisma_client
+        from litellm.proxy.proxy_server import prisma_client
 
         if prisma_client is None:
             raise HTTPException(status_code=400, detail=CommonProxyErrors.db_not_connected_error.value)
@@ -646,13 +657,7 @@ async def new_user(
         await _check_duplicate_user_id(data.user_id, prisma_client)
         await _check_duplicate_user_email(data.user_email, prisma_client)
 
-        # Check if license is over limit
-        billable_users: Final = await UserRepository(prisma_client).count_billable_users()
-        if billable_users and _license_check.is_over_limit(total_users=billable_users):
-            raise HTTPException(
-                status_code=403,
-                detail="License is over limit. Please contact support@berri.ai to upgrade your license.",
-            )
+        await _raise_if_over_seat_limit(prisma_client, added_users=0)
 
         # Only proxy admins can create administrative users
         # Check if user_api_key_dict is actually a UserAPIKeyAuth instance (not a Depends object)
@@ -1846,6 +1851,8 @@ async def _update_single_user_helper(
         existing_metadata=existing_metadata or {},
     )
     was_deactivated: Final = isinstance(existing_user_row, LiteLLM_UserTable) and deactivated(existing_user_row)
+    if user_request.blocked is False and was_deactivated:
+        await _raise_if_over_seat_limit(prisma_client, added_users=1)
     non_default_values["metadata"] = _with_scim_active(
         _ADMIN_USER_ROW_ADAPTER.validate_python(non_default_values["metadata"]),
         _ADMIN_USER_ROW_ADAPTER.validate_python(existing_metadata),
@@ -1948,7 +1955,7 @@ async def _update_single_user_helper(
                 entity_id=TypeAdapter(str).validate_python(non_default_values["user_id"]),
             )
 
-        if user_request.blocked is not None and user_request.blocked != was_deactivated:
+        if user_request.blocked is not None:
             await set_user_keys_blocked(
                 user_id=TypeAdapter(str).validate_python(non_default_values["user_id"]),
                 blocked=user_request.blocked,
