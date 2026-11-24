@@ -22,6 +22,8 @@ from litellm.integrations.ternary.export_engine import (
     _keep_window_days,
     _merge_token_tags,
     _partition_by_day,
+    focus_rows_for,
+    usage_days,
 )
 from litellm.integrations.ternary.ternary_logger import (
     TERNARY_USAGE_DATA_JOB_NAME,
@@ -369,6 +371,18 @@ async def test_transform_enrich_deliver_enriches_tags_then_delivers():
 
 
 @pytest.mark.asyncio
+async def test_deliver_returns_only_the_days_that_had_something_to_upload():
+    data = pl.DataFrame({"date": ["2026-09-03", "2026-09-04"], "Tags": ["{}", "{}"], "prompt_tokens": [7, 8]})
+    engine = _fake_engine(transformed=pl.DataFrame({"Tags": ["{}"]}), payload=b"")
+    engine._serializer.serialize = MagicMock(side_effect=[b"csv-bytes", b""])
+
+    uploaded = await TernaryExportEngine._deliver_enriched(engine, data, _window())
+
+    assert uploaded == ("2026-09-03",)
+    engine._destination.deliver.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_transform_enrich_deliver_skips_empty_data():
     engine = _fake_engine(transformed=pl.DataFrame(), payload=b"")
     await TernaryExportEngine._deliver_enriched(engine, pl.DataFrame(), _window())
@@ -666,3 +680,44 @@ async def test_a_bounded_export_window_uploads_only_the_days_it_covers():
     await TernaryExportEngine.export_window(engine, window=window, limit=None)
 
     assert captured["data"]["date"].to_list() == ["2026-09-01"]
+
+
+def test_usage_days_lists_each_utc_day_once_in_order():
+    data = pl.DataFrame({"date": ["2026-10-14", "2026-10-02", "2026-10-14", None, "not-a-date"]})
+
+    assert usage_days(data) == ("2026-10-02", "2026-10-14")
+
+
+def test_usage_days_is_empty_without_a_date_column():
+    assert usage_days(pl.DataFrame({"spend": [1.0]})) == ()
+
+
+def test_focus_rows_for_no_usage_is_an_empty_preview():
+    rows = focus_rows_for(pl.DataFrame({"date": [], "spend": []}, schema={"date": pl.Utf8, "spend": pl.Float64}))
+
+    assert rows.is_empty()
+
+
+class _RecordingEngine:
+    def __init__(self) -> None:
+        self.windows: list[tuple[FocusTimeWindow, int | None]] = []
+
+    async def export_days(self, *, window: FocusTimeWindow, limit: int | None) -> tuple[str, ...]:
+        self.windows.append((window, limit))
+        return ("2026-10-18", "2026-10-19")
+
+
+@pytest.mark.asyncio
+async def test_export_days_exports_the_requested_window_and_returns_the_days_sent():
+    logger = TernaryLogger(
+        api_key="k", connection_id="c", base_url="http://localhost:8080", frequency="interval", interval_seconds=60
+    )
+    engine = _RecordingEngine()
+    logger._ternary_engine = engine  # pyright: ignore[reportAttributeAccessIssue]  # inject the engine the logger builds lazily
+    start, end = datetime(2026, 10, 18, tzinfo=timezone.utc), datetime(2026, 10, 19, 12, tzinfo=timezone.utc)
+
+    days = await logger.export_days(start_time_utc=start, end_time_utc=end, limit=10)
+
+    assert days == ("2026-10-18", "2026-10-19")
+    [(window, limit)] = engine.windows
+    assert (window.start_time, window.end_time, window.frequency, limit) == (start, end, "interval", 10)
