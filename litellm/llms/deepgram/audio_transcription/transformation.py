@@ -62,7 +62,7 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
     def map_openai_params(
         self,
         non_default_params: Mapping[str, object],
-        optional_params: dict,
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
     ) -> dict:
@@ -205,7 +205,7 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
+        optional_params: dict[str, object],
         litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:

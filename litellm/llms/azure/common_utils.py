@@ -753,7 +753,7 @@ class BaseAzureLLM(BaseOpenAILLM):
         api_base: str | None,
         api_version: str | None = None,
         client: AzureOpenAI | AsyncAzureOpenAI | OpenAI | AsyncOpenAI | None = None,
-        litellm_params: dict | None = None,
+        litellm_params: dict[str, object] | None = None,
         _is_async: bool = False,
         model: str | None = None,
     ) -> AzureOpenAI | AsyncAzureOpenAI | OpenAI | AsyncOpenAI | None:

@@ -22,7 +22,7 @@ class BaseTextCompletionConfig(BaseConfig, ABC):
         self,
         model: str,
         messages: list[AllMessageValues] | list[OpenAITextCompletionUserMessage],
-        optional_params: dict,
+        optional_params: dict[str, object],
         headers: dict[str, object],
     ) -> dict:
         return {}
@@ -32,8 +32,8 @@ class BaseTextCompletionConfig(BaseConfig, ABC):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         stream: bool | None = None,
     ) -> str:
         """
@@ -49,8 +49,8 @@ class BaseTextCompletionConfig(BaseConfig, ABC):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         headers: dict,
     ) -> dict:
         raise NotImplementedError(
@@ -65,8 +65,8 @@ class BaseTextCompletionConfig(BaseConfig, ABC):
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,

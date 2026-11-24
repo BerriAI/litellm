@@ -4422,7 +4422,7 @@ class VertexLLM(VertexBase):
         vertex_location: str | None,
         vertex_credentials: VERTEX_CREDENTIALS_TYPES | None,
         gemini_api_key: str | None,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
         logger_fn: object = None,
         extra_headers: dict | None = None,
         client: AsyncHTTPHandler | HTTPHandler | None = None,
