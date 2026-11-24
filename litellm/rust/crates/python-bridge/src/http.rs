@@ -154,6 +154,7 @@ pub(crate) fn settings_config(
     Ok(resolved(py, settings))
 }
 
+/// The TLS settings the bridge's clients cannot apply, for which its calls go through Python instead.
 #[pyfunction]
 #[pyo3(signature = (ssl_security_level=None, ssl_ecdh_curve=None))]
 pub(crate) fn unsupported_tls_settings(
@@ -165,11 +166,22 @@ pub(crate) fn unsupported_tls_settings(
         ssl_ecdh_curve,
         ..HttpSettingsLayer::default()
     }]);
-    Resolution::from(&settings)
-        .unsupported
+    sent_to_python(&Resolution::from(&settings).unsupported)
+}
+
+/// A curve the FIPS build's OpenSSL provider does not offer is left out: Python's OpenSSL on that image lacks it too,
+/// so the bridge keeps the call on the default groups and logs the warning `resolved` does.
+fn sent_to_python(unsupported: &[Unsupported]) -> Vec<String> {
+    unsupported
         .iter()
+        .filter(|unsupported| !kept_on_bridge(unsupported))
         .map(ToString::to_string)
         .collect()
+}
+
+/// A setting the bridge drops while it keeps the call, which `sent_to_python` leaves out.
+fn kept_on_bridge(unsupported: &Unsupported) -> bool {
+    matches!(unsupported, Unsupported::EcdhCurveNotOffered(_))
 }
 
 fn resolution(settings: HttpSettings) -> Resolution {
@@ -179,10 +191,15 @@ fn resolution(settings: HttpSettings) -> Resolution {
 /// The client config `settings` resolve to, warning once per process about each setting the client cannot apply
 fn resolved(py: Python<'_>, settings: HttpSettings) -> HttpClientConfig {
     let resolution = resolution(settings);
-    for unsupported in unreported(&REPORTED_UNSUPPORTED, resolution.unsupported) {
+    warn_once(py, resolution.unsupported);
+    resolution.config
+}
+
+/// Logs each setting in `unsupported` this process has not warned about yet.
+fn warn_once(py: Python<'_>, unsupported: impl IntoIterator<Item = Unsupported>) {
+    for unsupported in unreported(&REPORTED_UNSUPPORTED, unsupported) {
         crate::logger::capture(py).scope(|| tracing::warn!("{unsupported}"));
     }
-    resolution.config
 }
 
 pub(crate) fn provider_client(
@@ -194,13 +211,19 @@ pub(crate) fn provider_client(
     Ok(pool().client(&config, ClientVariant::Provider))
 }
 
+/// The `/v1/messages` client. Python's transport applies the settings `sent_to_python` names, so only a setting the
+/// bridge drops while it keeps the call is warned about.
 pub(crate) fn messages_client(
     py: Python<'_>,
     kwargs: &Bound<'_, PyDict>,
     asynchronous: bool,
 ) -> PyResult<Result<Client, litellm_http::Error>> {
-    let config = resolution(call_settings(py, kwargs, asynchronous)?).config;
-    Ok(pool().client(&config, ClientVariant::Undecoded))
+    let resolution = resolution(call_settings(py, kwargs, asynchronous)?);
+    warn_once(
+        py,
+        resolution.unsupported.into_iter().filter(kept_on_bridge),
+    );
+    Ok(pool().client(&resolution.config, ClientVariant::Undecoded))
 }
 
 pub(crate) fn host_client(py: Python<'_>, variant: ClientVariant) -> PyResult<Client> {
@@ -222,7 +245,7 @@ pub(crate) fn client_error(error: litellm_http::Error) -> PyErr {
 
 fn unreported(
     reported: &Mutex<HashSet<Unsupported>>,
-    unsupported: Vec<Unsupported>,
+    unsupported: impl IntoIterator<Item = Unsupported>,
 ) -> Vec<Unsupported> {
     let mut reported = reported.lock().unwrap_or_else(PoisonError::into_inner);
     unsupported
@@ -482,6 +505,28 @@ user_agent='litellm/9.9.9',
             assert!(error.is_instance_of::<PyValueError>(py));
             assert!(error.to_string().contains("http_settings.ssl_"));
         });
+    }
+
+    #[rstest]
+    fn a_curve_the_provider_does_not_offer_keeps_calls_on_the_bridge() {
+        let unknown = Unsupported::EcdhCurve("secp521r1".into());
+        let not_offered = Unsupported::EcdhCurveNotOffered("X25519".into());
+
+        assert_eq!(
+            sent_to_python(&[not_offered, unknown.clone()]),
+            [unknown.to_string()]
+        );
+    }
+
+    #[rstest]
+    #[case::a_curve_the_provider_does_not_offer(Unsupported::EcdhCurveNotOffered("X25519".into()), true)]
+    #[case::a_curve_sent_to_python(Unsupported::EcdhCurve("secp521r1".into()), false)]
+    #[case::a_security_level_sent_to_python(Unsupported::SecurityLevel("1".into()), false)]
+    fn only_a_setting_dropped_on_the_bridge_is_kept_on_it(
+        #[case] unsupported: Unsupported,
+        #[case] kept: bool,
+    ) {
+        assert_eq!(kept_on_bridge(&unsupported), kept);
     }
 
     #[test]

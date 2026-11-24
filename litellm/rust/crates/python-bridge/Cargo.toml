@@ -13,7 +13,7 @@ crate-type = ["cdylib"]
 default = ["abi3", "fast", "huggingface", "tiktoken"]
 abi3 = ["pyo3/abi3-py310"]
 extension-module = ["pyo3/extension-module"]
-fips = ["dep:openssl", "litellm-db/native-tls", "litellm-gateway-auth-core/fips"]
+fips = ["dep:openssl", "dep:rustls-openssl", "litellm-db/native-tls", "litellm-gateway-auth-core/fips"]
 panic-test = []
 fast = ["litellm-token-counter/fast"]
 huggingface = ["litellm-token-counter/huggingface"]
@@ -22,6 +22,7 @@ tiktoken = ["litellm-token-counter/tiktoken"]
 [dependencies]
 litellm-env.workspace = true
 rustls.workspace = true
+rustls-openssl = { workspace = true, optional = true }
 openssl = { workspace = true, optional = true }
 litellm-secret-value.workspace = true
 litellm-db.workspace = true

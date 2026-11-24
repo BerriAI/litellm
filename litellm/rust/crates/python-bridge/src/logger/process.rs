@@ -347,6 +347,11 @@ mod tests {
         crate::http::call_config(py, &PyDict::new(py), false).map(|_| ())
     }
 
+    #[pyfunction]
+    fn messages_warning(py: Python<'_>) -> PyResult<()> {
+        crate::http::messages_client(py, &PyDict::new(py), false).map(|_| ())
+    }
+
     /// Whether the calling thread may wait on the runtime. A blocking-pool thread may, and an async worker panics.
     #[pyfunction]
     fn may_wait_on_the_runtime() -> bool {
@@ -510,6 +515,12 @@ mod tests {
                 .unwrap();
             locals
                 .set_item("http_warning", wrap_pyfunction!(http_warning, py).unwrap())
+                .unwrap();
+            locals
+                .set_item(
+                    "messages_warning",
+                    wrap_pyfunction!(messages_warning, py).unwrap(),
+                )
                 .unwrap();
             locals.set_item("native", crate::native_module(py)).unwrap();
             let importable = py
@@ -708,6 +719,11 @@ try:
     assert len(capture.records) == before + 1
     assert 'logger-test-unsupported-curve' in capture.records[-1].getMessage()
     assert capture.records[-1].pathname.endswith('http.rs')
+
+    before = len(capture.records)
+    litellm.ssl_ecdh_curve = 'logger-test-messages-curve'
+    messages_warning()
+    assert len(capture.records) == before
 
     verbose_logger.handlers = [Broken()]
     sys.unraisablehook = failures.append
