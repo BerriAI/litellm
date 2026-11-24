@@ -122,16 +122,16 @@ async def _counter_spend(counter_key: str, fallback_spend: float, max_budget: fl
     )
 
 
-async def _current_personal_budget(
+async def _personal_budget_exhausted(
     valid_token: UserAPIKeyAuth, user_id: str, checked_budget: float, spend: float
-) -> float | None:
+) -> bool:
     from litellm.proxy.proxy_server import prisma_client
 
     legacy_budget: Final = valid_token.user_max_budget
-    if legacy_budget is not None and spend < legacy_budget:
-        return valid_token.effective_user_max_budget()
-    if not valid_token.has_active_temporary_user_budget() or prisma_client is None:
-        return valid_token.effective_user_max_budget()
+    effective_budget: Final = valid_token.effective_user_max_budget()
+    base_budget: Final = valid_token.user_budget_without_temporary_increase()
+    if effective_budget == legacy_budget or prisma_client is None or (base_budget is not None and spend < base_budget):
+        return effective_budget is not None and spend >= effective_budget
     user: Final = await bounded_db_lookup(
         UserRepository(prisma_client, use_writer=True).find_by_id(user_id), name="user", tracker=None
     )
@@ -142,8 +142,8 @@ async def _current_personal_budget(
     ):
         current_budget: Final = user.effective_max_budget(now)
         if current_budget is not None:
-            return min(checked_budget, current_budget)
-    return legacy_budget
+            return max(spend, user.spend) >= min(checked_budget, current_budget)
+    return legacy_budget is not None and max(spend, user.spend if user is not None else spend) >= legacy_budget
 
 
 async def is_token_within_budget_for_model(
@@ -183,12 +183,9 @@ async def is_token_within_budget_for_model(
         user_spend: Final = await _counter_spend(
             counter_key=user_counter(valid_token.user_id),
             fallback_spend=valid_token.user_spend or 0.0,
-            max_budget=user_budget,
+            max_budget=max(user_budget, valid_token.user_max_budget or user_budget),
         )
-        admission_budget: Final = await _current_personal_budget(
-            valid_token, valid_token.user_id, user_budget, user_spend
-        )
-        if admission_budget is not None and user_spend >= admission_budget:
+        if await _personal_budget_exhausted(valid_token, valid_token.user_id, user_budget, user_spend):
             return False
 
     team_member_model_max_budget: Final = valid_token.team_member_model_max_budget

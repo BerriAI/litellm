@@ -233,11 +233,11 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
         remaining: Final = calculate_active_temp_budget_increase(increase, expiry, datetime.now(timezone.utc))
         return budget + remaining if remaining > 0 else self.user_max_budget
 
-    def has_active_temporary_user_budget(self) -> bool:
-        if self._temporary_user_budget is None:
-            return False
-        _, increase, expiry = self._temporary_user_budget
-        return calculate_active_temp_budget_increase(increase, expiry, datetime.now(timezone.utc)) > 0
+    def user_budget_without_temporary_increase(self) -> float | None:
+        if self.user_max_budget is not None or self._temporary_user_budget is None:
+            return self.user_max_budget
+        budget, _, _ = self._temporary_user_budget
+        return budget
 
     # Values stay `object` rather than BudgetConfig: this is the raw JSON column,
     # and validating it here would make one malformed row fail auth outright.

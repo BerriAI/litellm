@@ -1,5 +1,6 @@
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
@@ -145,6 +146,31 @@ async def test_paid_target_restores_legacy_user_budget_at_expiry(
         assert (
             await is_token_within_budget_for_model(model="paid-model", valid_token=token, llm_router=router)
             is allowed_after_expiry
+        )
+
+
+@pytest.mark.asyncio
+async def test_paid_target_stays_available_below_base_budget_for_jwt_during_writer_outage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    now: Final = datetime(2030, 1, 1, tzinfo=timezone.utc)
+    writer: Final = SimpleNamespace(litellm_usertable=SimpleNamespace(find_unique=AsyncMock(side_effect=TimeoutError)))
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(writer_db=writer))
+    token: Final = UserAPIKeyAuth(user_id="u1")
+    with time_machine.travel(now, tick=False):
+        token.carry_temporary_user_budget(
+            LiteLLM_UserTable(
+                user_id="u1",
+                spend=2,
+                max_budget=10,
+                temp_budget_increase=5,
+                temp_budget_expiry=now + timedelta(hours=1),
+            )
+        )
+        assert (
+            await is_token_within_budget_for_model(model="paid-model", valid_token=token, llm_router=_router()) is True
         )
 
 
