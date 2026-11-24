@@ -327,7 +327,8 @@ class StandardBuiltInToolCostTracking:
             + (output_details.image_tokens if output_details else 0) * rate("output_cost_per_image_token")
             + (output_details.text_tokens if output_details else 0) * rate("output_cost_per_token")
         )
-        return token_cost if token_cost > 0 or deployment_rates else None
+        priced_at_zero: Final = bool(deployment_rates) and (input_details is not None or output_details is not None)
+        return token_cost if token_cost > 0 or priced_at_zero else None
 
     @staticmethod
     def _image_tool_deployment_rates(tool_model: str) -> Mapping[str, float]:
