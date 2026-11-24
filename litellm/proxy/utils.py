@@ -1887,6 +1887,16 @@ _PROMPT_FIELD_BY_SETUP_CALL_TYPE: Final[Mapping[str | None, str]] = {
 _LOG_DB_METRICS_CALL_TYPES: Final = frozenset(("get_data", "insert_data", "update_data", "delete_data"))
 
 
+def _is_text_or_message_prompt(prompt: object) -> bool:
+    """True for a non-empty string, a list of strings, or a list of message objects: the shapes
+    a logging callback can read as messages. Token ID lists and other shapes are not."""
+    if isinstance(prompt, str):
+        return bool(prompt)
+    if not isinstance(prompt, list) or not prompt:
+        return False
+    return all(isinstance(item, str) for item in prompt) or all(isinstance(item, Mapping) for item in prompt)
+
+
 _EXCEPTION_CHAIN_MAX_DEPTH: Final = 16
 
 
@@ -4674,7 +4684,7 @@ class ProxyLogging:
             route_call_type: Final = _call_type_for_route(route)
             route_prompt: Final = request_fields.get(_PROMPT_FIELD_BY_SETUP_CALL_TYPE.get(route_call_type, ""))
             litellm_logging_obj, data = litellm.utils.function_setup(
-                original_function=(route_call_type if route_prompt and isinstance(route_prompt, (str, list)) else route)
+                original_function=(route_call_type if _is_text_or_message_prompt(route_prompt) else route)
                 or "IGNORE_THIS",
                 rules_obj=litellm.utils.Rules(),
                 start_time=datetime.now(),
