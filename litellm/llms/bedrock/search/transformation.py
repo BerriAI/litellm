@@ -172,7 +172,7 @@ class AgentCoreSearchConfig(BaseSearchConfig, BaseAWSLLM):
 
     def validate_environment(
         self,
-        headers: dict[str, object],  # mutable-ok: BaseSearchConfig hands providers the mutable request header dict
+        headers: dict,  # mutable-ok: BaseSearchConfig hands providers the mutable request header dict
         api_key: str | None = None,
         api_base: str | None = None,
         **kwargs: object,  # kwargs-ok: BaseSearchConfig.validate_environment forwards provider-specific extras
@@ -196,7 +196,7 @@ class AgentCoreSearchConfig(BaseSearchConfig, BaseAWSLLM):
     def get_complete_url(
         self,
         api_base: str | None,
-        optional_params: dict[str, object],  # mutable-ok: BaseSearchConfig passes optional params as a dict
+        optional_params: dict,  # mutable-ok: BaseSearchConfig passes optional params as a dict
         data: dict | list[dict] | None = None,  # mutable-ok: BaseSearchConfig request bodies are JSON dicts
         **kwargs: object,  # kwargs-ok: BaseSearchConfig.get_complete_url forwards provider-specific extras
     ) -> str:
