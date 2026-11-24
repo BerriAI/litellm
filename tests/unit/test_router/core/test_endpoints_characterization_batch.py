@@ -19,7 +19,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.router_core import RouterCore
 from litellm.types.utils import LiteLLMBatch, ModelResponse
 from tests.unit.test_router.core.endpoints_helpers import EndpointHost
-from tests.unit.test_router.core.scripted_host import ScriptedHost, bad_request, deployment
+from tests.unit.test_router.core.scripted_host import ScriptedHost, bad_request, deployment, server_error
 
 MESSAGES: Final = [{"role": "user", "content": "hi"}]
 MakeCore = Callable[..., RouterCore]
@@ -132,9 +132,7 @@ async def _sent_target_model_names(core: RouterCore, host: EndpointHost, targets
     return [_bucket(call.kwargs, "extra_body")["target_model_names"] for call in host.calls]
 
 
-async def test_acreate_file_sends_every_target_a_litellm_proxy_wildcard_serves(
-    make_core: MakeCore, host: EndpointHost
-):
+async def test_acreate_file_sends_every_target_a_litellm_proxy_wildcard_serves(make_core: MakeCore, host: EndpointHost):
     core: Final = make_core(model_list=[deployment("litellm_proxy/*", "wild", model="litellm_proxy/*")])
     targets: Final = ("litellm_proxy/gpt-a", "litellm_proxy/claude-b")
     assert await _sent_target_model_names(core, host, targets) == ["gpt-a,claude-b", "gpt-a,claude-b"]
@@ -174,9 +172,7 @@ async def test_acreate_file_names_a_repeated_target_once(make_core: MakeCore, ho
 
 async def test_acreate_file_sends_other_providers_no_target_model_names(make_core: MakeCore, host: EndpointHost):
     core: Final = make_core(model_list=[*TWO_DEPLOYMENTS, deployment("h", "d3")])
-    response: Final = await core.acreate_file(
-        model="g", target_model_names=("g", "h"), file=_jsonl(), purpose="batch"
-    )
+    response: Final = await core.acreate_file(model="g", target_model_names=("g", "h"), file=_jsonl(), purpose="batch")
     assert sorted(host.deployments_called("acreate_file")) == ["d1", "d2"]
     assert all("target_model_names" not in call.kwargs and "extra_body" not in call.kwargs for call in host.calls)
     assert response._hidden_params["covered_target_model_names"] == ()
@@ -218,6 +214,28 @@ async def test_acreate_file_sends_each_batch_upload_to_a_litellm_proxy_wildcard_
     assert _bucket(host.calls[0].kwargs, "extra_body")["target_model_names"] == "gpt-a"
     assert response._hidden_params["covered_target_model_names"] == ()
     assert response._hidden_params["target_model_names_by_deployment"] == {"wild": ("litellm_proxy/gpt-a",)}
+
+
+async def test_acreate_file_after_an_order_fallback_still_uploads_another_target_its_own_routing_picks(
+    make_core: MakeCore, host: EndpointHost
+):
+    host.answer("*", lambda **kwargs: server_error() if kwargs.get("api_base") == "http://low" else None)
+    core: Final = make_core(
+        model_list=[
+            deployment("litellm_proxy/*", "wild-low", model="litellm_proxy/*", api_base="http://low", order=1),
+            deployment("litellm_proxy/*", "wild-high", model="litellm_proxy/*", api_base="http://high", order=2),
+        ],
+        num_retries=0,
+    )
+    response: Final = await core.acreate_file(
+        model="litellm_proxy/gpt-a",
+        target_model_names=("litellm_proxy/gpt-a", "litellm_proxy/claude-b"),
+        file=_jsonl(),
+        purpose="user_data",
+    )
+    assert host.deployments_called("acreate_file") == ["wild-low", "wild-high"]
+    assert response._hidden_params["covered_target_model_names"] == ()
+    assert _bucket(host.calls[1].kwargs, "extra_body")["target_model_names"] == "gpt-a"
 
 
 @pytest.mark.parametrize(

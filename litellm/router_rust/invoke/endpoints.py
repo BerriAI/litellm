@@ -2554,7 +2554,8 @@ class RustEndpoints:
     ) -> Mapping[str, Mapping[str, str]]:
         if not targets or is_batch_upload(request) or not any(self._is_litellm_proxy(d) for d in deployments):
             return MappingProxyType({})
-        served: Final = await asyncio.gather(*(self._stripped_names_by_deployment(t, request) for t in targets))
+        own_routing: Final = without(request, "_target_order")
+        served: Final = await asyncio.gather(*(self._stripped_names_by_deployment(t, own_routing) for t in targets))
         return MappingProxyType(dict(zip(targets, served, strict=True)))
 
     async def _stripped_names_by_deployment(self, target: str, request: Mapping[str, object]) -> Mapping[str, str]:
