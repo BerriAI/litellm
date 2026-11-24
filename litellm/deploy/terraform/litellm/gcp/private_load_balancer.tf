@@ -36,7 +36,9 @@ resource "google_compute_region_backend_service" "private_lb" {
   load_balancing_scheme = "INTERNAL_MANAGED"
 
   backend {
-    group = each.value
+    group           = each.value
+    balancing_mode  = "UTILIZATION"
+    capacity_scaler = 1.0
   }
 }
 

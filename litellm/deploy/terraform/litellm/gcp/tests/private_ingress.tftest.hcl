@@ -32,6 +32,14 @@ run "private_http_creates_only_a_regional_internal_frontend" {
   }
 
   assert {
+    condition = length(google_compute_region_backend_service.private_lb) == 3 && alltrue([
+      for service in google_compute_region_backend_service.private_lb :
+      one(service.backend).balancing_mode == "UTILIZATION" && one(service.backend).capacity_scaler == 1
+    ])
+    error_message = "The gateway, backend, and UI serverless NEGs must use UTILIZATION with full capacity."
+  }
+
+  assert {
     condition = alltrue([
       for service in [google_cloud_run_v2_service.gateway[0], google_cloud_run_v2_service.backend[0], google_cloud_run_v2_service.ui[0]] :
       service.ingress == "INGRESS_TRAFFIC_INTERNAL_ONLY" && service.invoker_iam_disabled
