@@ -475,6 +475,18 @@ def _looks_like_model_name(model: str) -> bool:
     return len(candidate) <= MAX_SPEND_LOG_MODEL_NAME_LENGTH and not any(char.isspace() for char in candidate)
 
 
+class AgentNameLookup(Protocol):
+    def get_agent_by_name(self, agent_name: str) -> object | None: ...
+
+
+_A2A_AGENT_MODEL_PREFIX: Final = "a2a_agent/"
+
+
+def _names_registered_agent(model: str, agent_names: AgentNameLookup | None) -> bool:
+    agent_name: Final = model.removeprefix(_A2A_AGENT_MODEL_PREFIX)
+    return agent_names is not None and agent_name != model and agent_names.get_agent_by_name(agent_name) is not None
+
+
 _TRUNCATION_MARKER: Final = re.compile(
     rf"\.\.\. \({re.escape(LITELLM_TRUNCATED_PAYLOAD_FIELD)} skipped \d+ chars\. "
     rf"{re.escape(LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE)}\) \.\.\."
@@ -545,6 +557,7 @@ def get_logging_payload(
     start_time: datetime,
     end_time: datetime,
     llm_router: "Router | None" = None,
+    agent_names: AgentNameLookup | None = None,
 ) -> SpendLogsPayload:
     if kwargs is None:
         kwargs = {}
@@ -665,6 +678,7 @@ def get_logging_payload(
         and not _model_id
         and not _looks_like_model_name(resolved_model)
         and not _is_configured_model_group(_model_group, llm_router)
+        and not _names_registered_agent(resolved_model, agent_names)
     )
     model_name: Final = (
         UNKNOWN_MODEL_SPEND_LOG_MODEL
