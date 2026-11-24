@@ -4672,12 +4672,9 @@ class ProxyLogging:
             request_data.setdefault("litellm_call_id", str(uuid.uuid4()))
 
             route_call_type: Final = _call_type_for_route(route)
+            route_prompt: Final = request_fields.get(_PROMPT_FIELD_BY_SETUP_CALL_TYPE.get(route_call_type, ""))
             litellm_logging_obj, data = litellm.utils.function_setup(
-                original_function=(
-                    route_call_type
-                    if request_fields.get(_PROMPT_FIELD_BY_SETUP_CALL_TYPE.get(route_call_type, ""))
-                    else route
-                )
+                original_function=(route_call_type if route_prompt and isinstance(route_prompt, (str, list)) else route)
                 or "IGNORE_THIS",
                 rules_obj=litellm.utils.Rules(),
                 start_time=datetime.now(),

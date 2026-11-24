@@ -283,6 +283,8 @@ async def test_proxy_only_error_log_builds_payload_when_logging_object_has_malfo
         ("/v1/completions", {}, [{"role": "user", "content": "default-message-value"}]),
         ("/v1/embeddings", {"input": ""}, [{"role": "user", "content": "default-message-value"}]),
         ("/v1/images/generations", {"prompt": "PROMPT-CANARY"}, [{"role": "user", "content": "default-message-value"}]),
+        ("/v1/responses", {"input": 7}, [{"role": "user", "content": "default-message-value"}]),
+        ("/v1/embeddings", {"input": {"text": "PROMPT-CANARY"}}, [{"role": "user", "content": "default-message-value"}]),
     ],
     ids=[
         "responses_text",
@@ -295,6 +297,8 @@ async def test_proxy_only_error_log_builds_payload_when_logging_object_has_malfo
         "completions_without_prompt",
         "embeddings_with_empty_input",
         "image_generation_unchanged",
+        "responses_with_number_input",
+        "embeddings_with_object_input",
     ],
 )
 async def test_proxy_only_error_log_keeps_the_prompt_as_the_logged_messages(
