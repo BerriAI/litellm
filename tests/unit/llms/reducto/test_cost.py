@@ -1,3 +1,5 @@
+from typing import Final
+
 import litellm
 import pytest
 
@@ -5,118 +7,49 @@ from litellm.cost_calculator import completion_cost
 from litellm.llms.base_llm.ocr.transformation import OCRPage, OCRResponse, OCRUsageInfo
 
 
-def test_ocr_cost_prefers_credit_pricing_when_pages_processed_is_none(monkeypatch):
-    monkeypatch.setattr(
-        litellm.cost_calculator,
-        "get_model_info_for_call",
-        lambda model, custom_llm_provider=None, api_base=None, api_key=None: {"ocr_cost_per_credit": 0.003},
-    )
-
-    response = OCRResponse(
-        pages=[OCRPage(index=0, markdown="credit priced")],
-        model="parse-v3",
-        usage_info=OCRUsageInfo(pages_processed=None, credits=10),
-    )
-
-    cost = completion_cost(
-        completion_response=response,
-        model="reducto/parse-v3",
-        custom_llm_provider="reducto",
+def _ocr_cost(provider: str, prices: dict[str, float], usage: OCRUsageInfo) -> float:
+    model: Final = f"{provider}/ocr-cost-test-model"
+    litellm.register_model({model: {"litellm_provider": provider, "mode": "ocr", **prices}}, persist_across_reloads=False)
+    return completion_cost(
+        completion_response=OCRResponse(
+            pages=[OCRPage(index=0, markdown="page")], model="ocr-cost-test-model", usage_info=usage
+        ),
+        model=model,
+        custom_llm_provider=provider,
         call_type="ocr",
+    )
+
+
+def test_ocr_cost_prefers_credit_pricing_when_pages_processed_is_none():
+    cost: Final = _ocr_cost(
+        "reducto", {"ocr_cost_per_credit": 0.003}, OCRUsageInfo(pages_processed=None, credits=10)
     )
 
     assert cost == 0.03
 
 
-def test_ocr_cost_prefers_zero_credit_pricing_over_page_pricing(monkeypatch):
-    monkeypatch.setattr(
-        litellm.cost_calculator,
-        "get_model_info_for_call",
-        lambda model, custom_llm_provider=None, api_base=None, api_key=None: {
-            "ocr_cost_per_credit": 0.0,
-            "ocr_cost_per_page": 0.5,
-        },
-    )
-
-    response = OCRResponse(
-        pages=[OCRPage(index=0, markdown="free credit priced")],
-        model="parse-v3",
-        usage_info=OCRUsageInfo(pages_processed=2, credits=10),
-    )
-
-    cost = completion_cost(
-        completion_response=response,
-        model="reducto/parse-v3",
-        custom_llm_provider="reducto",
-        call_type="ocr",
+def test_ocr_cost_prefers_zero_credit_pricing_over_page_pricing():
+    cost: Final = _ocr_cost(
+        "reducto",
+        {"ocr_cost_per_credit": 0.0, "ocr_cost_per_page": 0.5},
+        OCRUsageInfo(pages_processed=2, credits=10),
     )
 
     assert cost == 0.0
 
 
-def test_ocr_cost_falls_back_to_page_pricing(monkeypatch):
-    monkeypatch.setattr(
-        litellm.cost_calculator,
-        "get_model_info_for_call",
-        lambda model, custom_llm_provider=None, api_base=None, api_key=None: {"ocr_cost_per_page": 0.5},
-    )
-
-    response = OCRResponse(
-        pages=[OCRPage(index=0, markdown="page priced")],
-        model="mistral-ocr-latest",
-        usage_info=OCRUsageInfo(pages_processed=2),
-    )
-
-    cost = completion_cost(
-        completion_response=response,
-        model="mistral/mistral-ocr-latest",
-        custom_llm_provider="mistral",
-        call_type="ocr",
-    )
+def test_ocr_cost_falls_back_to_page_pricing():
+    cost: Final = _ocr_cost("mistral", {"ocr_cost_per_page": 0.5}, OCRUsageInfo(pages_processed=2))
 
     assert cost == 1.0
 
 
-def test_ocr_cost_returns_zero_when_no_pricing_and_no_pages(monkeypatch):
-    monkeypatch.setattr(
-        litellm.cost_calculator,
-        "get_model_info_for_call",
-        lambda model, custom_llm_provider=None, api_base=None, api_key=None: {},
-    )
-
-    response = OCRResponse(
-        pages=[OCRPage(index=0, markdown="unpriced")],
-        model="parse-v3",
-        usage_info=OCRUsageInfo(pages_processed=None, credits=5),
-    )
-
-    cost = completion_cost(
-        completion_response=response,
-        model="reducto/parse-v3",
-        custom_llm_provider="reducto",
-        call_type="ocr",
-    )
+def test_ocr_cost_returns_zero_when_no_pricing_and_no_pages():
+    cost: Final = _ocr_cost("reducto", {}, OCRUsageInfo(pages_processed=None, credits=5))
 
     assert cost == 0.0
 
 
-def test_ocr_cost_raises_when_pages_processed_missing_for_page_pricing(monkeypatch):
-    monkeypatch.setattr(
-        litellm.cost_calculator,
-        "get_model_info_for_call",
-        lambda model, custom_llm_provider=None, api_base=None, api_key=None: {"ocr_cost_per_page": 0.5},
-    )
-
-    response = OCRResponse(
-        pages=[OCRPage(index=0, markdown="missing pages")],
-        model="mistral-ocr-latest",
-        usage_info=OCRUsageInfo(pages_processed=None),
-    )
-
+def test_ocr_cost_raises_when_pages_processed_missing_for_page_pricing():
     with pytest.raises(ValueError, match="OCR response pages_processed is None"):
-        completion_cost(
-            completion_response=response,
-            model="mistral/mistral-ocr-latest",
-            custom_llm_provider="mistral",
-            call_type="ocr",
-        )
+        _ocr_cost("mistral", {"ocr_cost_per_page": 0.5}, OCRUsageInfo(pages_processed=None))
