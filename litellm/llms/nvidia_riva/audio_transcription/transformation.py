@@ -90,7 +90,9 @@ class NvidiaRivaAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
 
         return optional_params
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | Headers
+    ) -> BaseLLMException:
         return NvidiaRivaException(message=error_message, status_code=status_code, headers=headers)
 
     def transform_audio_transcription_request(
@@ -137,14 +139,14 @@ class NvidiaRivaAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         # gRPC auth is constructed in the handler, not via HTTP headers.
         return headers
 

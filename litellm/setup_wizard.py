@@ -410,7 +410,7 @@ class SetupWizard:
     # ── key collection ───────────────────────────────────────────────────────
 
     @staticmethod
-    def _collect_keys(providers: list[dict]) -> dict[str, str]:
+    def _collect_keys(providers: Sequence[_Provider]) -> dict[str, str]:
         env_vars: Final[dict[str, str]] = {}
         print()
         print(_divider())
@@ -448,7 +448,7 @@ class SetupWizard:
         return env_vars
 
     @staticmethod
-    def _prompt_key(provider: dict) -> str:
+    def _prompt_key(provider: _Provider) -> str:
         """Prompt for a provider's API key, with skip option. Returns the key or ''."""
         hint: Final = grey(provider.get("key_hint", ""))
         while True:
@@ -460,7 +460,7 @@ class SetupWizard:
                 return ""
 
     @staticmethod
-    def _validate_and_report(provider: dict, api_key: str) -> str:
+    def _validate_and_report(provider: _Provider, api_key: str) -> str:
         """
         Validate credentials using litellm.utils.check_valid_key and print result.
         Offers a re-entry loop on failure. Returns the final (possibly re-entered) key.
