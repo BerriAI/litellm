@@ -371,14 +371,7 @@ pub(crate) fn cooldown_rule(
 /// cooldown and the TTL of the deployment's `allowed_fails:generic` counter.
 fn configured_cooldown(deployment: &Deployment) -> Option<Duration> {
     deployment
-        .model_info
-        .cooldown_time
-        .or_else(|| {
-            deployment
-                .raw_params
-                .get("cooldown_time")
-                .and_then(|v| v.as_f64())
-        })
+        .cooldown_time()
         .filter(|seconds| *seconds >= 0.0)
         .and_then(|seconds| Duration::try_from_secs_f64(seconds).ok())
 }
@@ -514,12 +507,7 @@ impl<C: RouterCache> Health<C> {
             .model_info
             .cooldown_time
             .or(call_cooldown)
-            .or_else(|| {
-                deployment
-                    .raw_params
-                    .get("cooldown_time")
-                    .and_then(|v| v.as_f64())
-            })
+            .or_else(|| deployment.params_cooldown_time())
             .filter(|seconds| *seconds >= 0.0)
             .and_then(|seconds| Duration::try_from_secs_f64(seconds).ok());
         configured

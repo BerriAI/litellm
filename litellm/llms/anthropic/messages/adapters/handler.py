@@ -111,12 +111,16 @@ def _provider_error_code(body: object) -> str | None:
     return code if isinstance(code, str) else None
 
 
+def _names_invalid_encrypted_content(error: litellm.BadRequestError) -> bool:
+    return (
+        error.code == "invalid_encrypted_content"
+        or _provider_error_code(error.body) == "invalid_encrypted_content"
+        or "invalid_encrypted_content" in str(error)
+    )
+
+
 def _logged_rejection_code(error: litellm.BadRequestError) -> str:
-    if error.code == "invalid_encrypted_content" or _provider_error_code(error.body) == "invalid_encrypted_content":
-        return "invalid_encrypted_content"
-    if "invalid_encrypted_content" in str(error):
-        return "invalid_encrypted_content"
-    return "could_not_be_verified"
+    return "invalid_encrypted_content" if _names_invalid_encrypted_content(error) else "could_not_be_verified"
 
 
 def _completion_text(completion_kwargs: _CompletionKwargs, key: str) -> str:
@@ -140,10 +144,7 @@ def _sends_encrypted_reasoning(completion_kwargs: _CompletionKwargs) -> bool:
 
 
 def _rejects_encrypted_reasoning(error: litellm.BadRequestError) -> bool:
-    error_message: Final = str(error)
-    return (
-        "invalid_encrypted_content" in error_message or _UNVERIFIED_ENCRYPTED_CONTENT.search(error_message) is not None
-    )
+    return _names_invalid_encrypted_content(error) or _UNVERIFIED_ENCRYPTED_CONTENT.search(str(error)) is not None
 
 
 def _is_rejected_reasoning(error: Exception) -> bool:
@@ -239,7 +240,9 @@ def _is_compaction_block(block: object) -> bool:
 def _messages_have_compaction_block(messages: _AnthropicMessages) -> bool:
     """Return True when any message carries a ``compaction`` content block."""
     return any(
-        any(map(_is_compaction_block, content)) for msg in messages if isinstance(content := msg.get("content"), list)
+        any(map(_is_compaction_block, content))
+        for msg in messages
+        if (content := as_object_list(msg.get("content"))) is not None
     )
 
 
@@ -309,7 +312,7 @@ async def prepare_context_managed_request(
     system: _AnthropicSystem,
     context_management_spec: _ContextManagementSpec,
     litellm_metadata: dict[str, object] | None,
-    additional_drop_params: list[str] | None,
+    additional_drop_params: object,
     llm_router: "Router | None",
     user_api_key_auth: "UserAPIKeyAuth | None" = None,
     sub_call_logging_kwargs: ProxySubCallLoggingKwargs | None = None,
@@ -383,7 +386,7 @@ async def prepare_context_managed_request(
 def _polyfill_will_run(
     *,
     context_management_spec: _ContextManagementSpec,
-    additional_drop_params: list[str] | None,
+    additional_drop_params: object,
 ) -> bool:
     """Return True when ``compact_20260112`` will run via the polyfill dispatcher.
 
@@ -410,7 +413,7 @@ def _polyfill_will_run(
 def _spec_has_non_compact_edits(
     *,
     context_management_spec: _ContextManagementSpec,
-    additional_drop_params: list[str] | None,
+    additional_drop_params: object,
 ) -> bool:
     """Return True when the spec includes edits other than ``compact_20260112``.
 
@@ -446,7 +449,7 @@ def context_management_explicitly_dropped(additional_drop_params: object) -> boo
 def _normalize_spec_edits(
     *,
     context_management_spec: _ContextManagementSpec,
-    additional_drop_params: list[str] | None,
+    additional_drop_params: object,
 ) -> list[dict[str, object]] | None:
     """Return the normalized ``edits`` list, or ``None`` if the polyfill won't run.
 
@@ -477,7 +480,7 @@ async def _run_polyfill_if_enabled(
     system: _AnthropicSystem,
     context_management_spec: _ContextManagementSpec,
     litellm_metadata: dict[str, object] | None,
-    additional_drop_params: list[str] | None,
+    additional_drop_params: object,
     llm_router: "Router | None",
     user_api_key_auth: "UserAPIKeyAuth | None" = None,
     sub_call_logging_kwargs: ProxySubCallLoggingKwargs | None = None,
@@ -818,6 +821,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         base_model: Final = provider_kwargs.get("base_model")
         custom_llm_provider: Final = provider_kwargs.get("custom_llm_provider")
         target_provider: Final = custom_llm_provider if isinstance(custom_llm_provider, str) else None
+        api_base: Final = provider_kwargs.get("api_base")
         drop_params: Final = drops_unsupported_params(provider_kwargs.get("drop_params"))
         strips_mcp_servers: Final = target_provider in ROUTES_WITHOUT_MCP_SERVERS
         request_tools: Final = (
@@ -835,7 +839,11 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         request_data: Final[dict[str, object]] = {
             "model": model,
             "messages": strip_unsignable_thinking_blocks_for_claude(
-                messages, model, base_model if isinstance(base_model, str) else None
+                messages,
+                model,
+                base_model if isinstance(base_model, str) else None,
+                custom_llm_provider=target_provider,
+                api_base=api_base if isinstance(api_base, str) else None,
             ),
             "max_tokens": max_tokens,
         }
@@ -871,7 +879,6 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         if "output_config" in extra_kwargs:
             request_data["output_config"] = extra_kwargs["output_config"]
 
-        api_base: Final = extra_kwargs.get("api_base")
         (
             openai_request,
             tool_name_mapping,
@@ -1001,7 +1008,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
     ) -> AnthropicMessagesResponse | AsyncIterator[bytes] | Iterator[bytes]:
         """Handle non-Anthropic models asynchronously using the adapter"""
         context_management: Final = kwargs.pop("context_management", None)
-        additional_drop_params: Final[list[str] | None] = kwargs.get("additional_drop_params", None)
+        additional_drop_params: Final = kwargs.get("additional_drop_params", None)
         litellm_router: Final[Router | None] = _router_or_proxy_fallback(kwargs.pop("litellm_router", None))
 
         proxy_litellm_metadata, user_api_key_auth = _extract_proxy_litellm_metadata(kwargs)
@@ -1103,7 +1110,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         top_p: float | None = None,
         output_format: dict[str, object] | None = None,
         _is_async: bool = False,
-        **kwargs,
+        **kwargs: object,
     ) -> (
         AnthropicMessagesResponse
         | Iterator[bytes]
@@ -1139,7 +1146,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         # ``compact_20260112`` editor can ``await`` the summarization model);
         # bridge to it via ``run_async_function``.
         context_management: Final = kwargs.pop("context_management", None)
-        additional_drop_params: Final[list[str] | None] = kwargs.get("additional_drop_params", None)
+        additional_drop_params: Final = kwargs.get("additional_drop_params", None)
         drop_invalid_edits: Final = drops_unsupported_params(sync_request_kwargs.get("drop_params"))
         # Deliberately do NOT auto-attach the proxy ``llm_router`` here:
         # ``run_async_function`` spawns a new event loop in a worker thread
@@ -1152,7 +1159,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         # ``llm_router`` is ``None``, which is safe to call from the bridged
         # loop. The async ``async_anthropic_messages_handler`` path is
         # unaffected because it ``await``s within the original event loop.
-        litellm_router: Final[Router | None] = kwargs.pop("litellm_router", None)
+        litellm_router: Final = kwargs.pop("litellm_router", None)
 
         # Skip the async bridge entirely when there is nothing for either the
         # polyfill or the client-history slice-only fallback to do. The vast

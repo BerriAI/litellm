@@ -44,7 +44,7 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
     return _pillar_callback
 
 
-def _get_config_value(litellm_params, optional_params, attribute_name):
+def _get_config_value(litellm_params: object, optional_params: object, attribute_name: str):
     """Return guardrail configuration value prioritising optional params when present."""
 
     if optional_params is not None:

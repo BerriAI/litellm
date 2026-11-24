@@ -339,7 +339,7 @@ class ArizePhoenixPromptManager(CustomPromptManagement):
         litellm_params: dict[str, object] | None = None,
         prompt_id: str | None = None,
         prompt_variables: dict[str, object] | None = None,
-        **kwargs,
+        **kwargs: object,
     ) -> tuple[list[AllMessageValues], dict[str, object] | None]:
         """
         Pre-call hook that processes the prompt template before making the LLM call.
@@ -414,7 +414,7 @@ class ArizePhoenixPromptManager(CustomPromptManagement):
         self,
         prompt_id: str | None,
         prompt_spec: PromptSpec | None,
-        prompt_variables: dict | None,
+        prompt_variables: dict[str, object] | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
         prompt_label: str | None = None,
         prompt_version: int | None = None,
@@ -443,7 +443,7 @@ class ArizePhoenixPromptManager(CustomPromptManagement):
             template_model: Final = raw_template_model if isinstance(raw_template_model, str) else None
 
             # Extract optional parameters from metadata
-            optional_params: Final = {}
+            optional_params: Final[dict[str, object]] = {}
             for param in [
                 "temperature",
                 "max_tokens",
@@ -468,7 +468,7 @@ class ArizePhoenixPromptManager(CustomPromptManagement):
     async def async_compile_prompt_helper(
         self,
         prompt_id: str | None,
-        prompt_variables: dict | None,
+        prompt_variables: dict[str, object] | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
         prompt_spec: PromptSpec | None = None,
         prompt_label: str | None = None,
@@ -493,16 +493,16 @@ class ArizePhoenixPromptManager(CustomPromptManagement):
         self,
         model: str,
         messages: list[AllMessageValues],
-        non_default_params: dict,
+        non_default_params: dict[str, object],
         prompt_id: str | None,
-        prompt_variables: dict | None,
+        prompt_variables: dict[str, object] | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
         prompt_spec: PromptSpec | None = None,
         prompt_label: str | None = None,
         prompt_version: int | None = None,
         ignore_prompt_manager_model: bool | None = False,
         ignore_prompt_manager_optional_params: bool | None = False,
-    ) -> tuple[str, list[AllMessageValues], dict]:
+    ) -> tuple[str, list[AllMessageValues], dict[str, object]]:
         """
         Get chat completion prompt from Arize Phoenix and return processed model, messages, and parameters.
         """

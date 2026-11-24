@@ -22,7 +22,7 @@ from litellm.exceptions import BadRequestError
 from litellm.google_genai.adapters.transformation import GOOGLE_GENAI_CONFIG_FIELDS
 from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
 from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, float_of
 from litellm.litellm_core_utils.duration_parser import (
     duration_in_seconds,
     is_annual_budget_duration,
@@ -276,7 +276,7 @@ async def _renew_reservation_lease(
 
 
 async def reserve_budget_for_request(
-    request_body: dict,
+    request_body: Mapping[str, object],
     route: str,
     llm_router: Router | None,
     valid_token: UserAPIKeyAuth | None,
@@ -686,7 +686,7 @@ async def release_unbound_budget_reservation(budget_reservation: Mapping[str, ob
 
 
 async def _get_budget_counters(
-    request_body: dict,
+    request_body: Mapping[str, object],
     valid_token: UserAPIKeyAuth,
     team_object: LiteLLM_TeamTable | None,
     user_object: LiteLLM_UserTable | None,
@@ -862,7 +862,7 @@ async def _get_end_user_budget_counter(
 
 
 async def _get_tag_budget_counters(
-    request_body: dict,
+    request_body: Mapping[str, object],
     prisma_client: PrismaClient | None,
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
@@ -1229,9 +1229,9 @@ async def reseed_reserved_counter(counter_key: str, actual_cost: float) -> None:
         await increment_spend_counter_cache(counter_key=counter_key, increment=actual_cost)
 
 
-def _get_entry_reserved_cost(entry: dict, default_reserved_cost: float) -> float:
+def _get_entry_reserved_cost(entry: Mapping[str, object], default_reserved_cost: float) -> float:
     try:
-        return float(entry.get("reserved_cost", default_reserved_cost) or 0.0)
+        return float_of(entry.get("reserved_cost", default_reserved_cost) or 0.0)
     except (TypeError, ValueError):
         return default_reserved_cost
 
@@ -1332,7 +1332,7 @@ def estimate_request_input_cost(
             input_tokens=_model_input_tokens(request_body, model_name, input_token_counts),
         )
         for model_name in _get_request_models(
-            request_body=request_body, route=route, llm_router=llm_router, path_params=path_params
+            request_body=body, route=route, llm_router=llm_router, path_params=path_params
         )
     )
 
@@ -1793,7 +1793,7 @@ def _deployment_pricing(serving: _ServingDeployment) -> _DeploymentPricing:
 
 
 def _get_request_models(
-    request_body: dict,
+    request_body: Mapping[str, object],
     route: str,
     llm_router: Router | None,
     path_params: Mapping[str, object] | None = None,

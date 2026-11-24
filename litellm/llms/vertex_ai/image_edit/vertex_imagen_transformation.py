@@ -170,7 +170,7 @@ class VertexAIImagenImageEditConfig(BaseImageEditConfig, VertexLLM):
         image: FileTypes | Sequence[FileTypes | None] | None,
         image_edit_optional_request_params: Mapping[str, object],
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
+        headers: Mapping[str, object],
     ) -> tuple[dict[str, object], RequestFiles | None]:
         # Prepare reference images in the correct Imagen format
         if image is None:
