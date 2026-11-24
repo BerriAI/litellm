@@ -1040,6 +1040,11 @@ def _bedrock_price_map_flag(model: str, flag: str) -> bool:
     return any(entry is not None and entry.get(flag) is True for entry in _bedrock_price_map_entries(model))
 
 
+def _bedrock_price_map_value(model: str, flag: str) -> bool | None:
+    values: Final = (entry.get(flag) for entry in _bedrock_price_map_entries(model) if entry is not None)
+    return next((value for value in values if isinstance(value, bool)), None)
+
+
 def _price_map_entry_lists_endpoint(entry: Mapping[str, object] | None, endpoint: str) -> bool:
     endpoints: Final = None if entry is None else entry.get("supported_endpoints")
     return isinstance(endpoints, (list, tuple)) and endpoint in endpoints
@@ -1373,7 +1378,13 @@ def _is_claude(model: str) -> bool:
 
 
 def bedrock_converse_resolves_tool_schema_defs(model: str | None) -> bool:
-    return model is not None and _is_claude_behind_any_region_prefix(model)
+    if model is None:
+        return False
+    listed: Final = (
+        _bedrock_price_map_value(model, "supports_tool_schema_defs"),
+        _bedrock_price_map_value(get_bedrock_base_model(model), "supports_tool_schema_defs"),
+    )
+    return next((flag for flag in listed if flag is not None), _is_claude_behind_any_region_prefix(model))
 
 
 def _is_claude_behind_any_region_prefix(model: str) -> bool:
