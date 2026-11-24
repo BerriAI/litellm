@@ -397,7 +397,7 @@ def _translation_audio_bytes_per_second(audio_format: "str | RealtimeAudioFormat
 
 class RealtimeEventNormalizer(Protocol):
     def should_drop(self, event: object) -> bool: ...
-    def normalize(self, event: dict) -> dict: ...
+    def normalize(self, event: dict[str, object]) -> dict[str, object]: ...
     def patch_outgoing_session(self, session: dict[str, object]) -> dict[str, object]: ...
     def gate_turn_detection(self, turn_detection: object, /) -> Mapping[str, object]: ...
     @property
@@ -518,10 +518,10 @@ class RealTimeStreaming:
         self.messages: list[OpenAIRealtimeEvents] = []
         self._backend_sent_frames: bool = False
         self._backend_sent_non_error_frames: bool = False
-        self.input_message: dict = {}
+        self.input_message: dict[str, object] = {}
         self.input_messages: list[dict[str, str]] = []
-        self.session_tools: list[dict] = []
-        self.tool_calls: list[dict] = []
+        self.session_tools: list[dict[str, object]] = []
+        self.tool_calls: list[dict[str, object]] = []
         self._is_translation_session = translation_session
         self._bridges_beta_client_to_ga: Final = bridges_beta_client_to_ga
         self._remaps_all_beta_fields_to_ga: Final = bridges_beta_client_to_ga or translation_session
@@ -661,7 +661,7 @@ class RealTimeStreaming:
             return True
         return False
 
-    def store_message(self, message: str | bytes | dict | OpenAIRealtimeEvents):
+    def store_message(self, message: str | bytes | dict[str, object] | OpenAIRealtimeEvents):
         """Store message in list"""
         if isinstance(message, bytes):
             message = message.decode("utf-8")
@@ -1517,13 +1517,13 @@ class RealTimeStreaming:
             return self._event_normalizer.should_drop(event)
         return False
 
-    def _normalize_event_for_ga_client(self, event: dict) -> dict:
+    def _normalize_event_for_ga_client(self, event: dict[str, object]) -> dict[str, object]:
         """Apply per-provider GA normalization before forwarding to clients."""
         if self._event_normalizer is not None:
             return self._event_normalizer.normalize(event)
         return event
 
-    def _event_to_client_json(self, event: dict) -> str:
+    def _event_to_client_json(self, event: dict[str, object]) -> str:
         return json.dumps(self._session_event_for_client(self._normalize_event_for_ga_client(event)))
 
     def _session_event_for_client(self, event: Mapping[str, object]) -> Mapping[str, object]:
