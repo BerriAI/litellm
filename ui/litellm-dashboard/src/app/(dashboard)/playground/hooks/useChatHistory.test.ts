@@ -664,6 +664,7 @@ describe("useChatHistory", () => {
         "switching session management back on",
         (hook: ReturnType<typeof useChatHistory>) => hook.handleToggleSessionManagement(true),
       ],
+      ["changing the model", (hook: ReturnType<typeof useChatHistory>) => hook.handleModelChange()],
     ])("continues from response ids again after %s, once a resend stopped it", (_, reset) => {
       const { result } = renderHook(() => useChatHistory({ simplified: false }));
 

@@ -15,6 +15,7 @@ import litellm
 from litellm import Router
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils import get_llm_provider_logic
+from litellm.responses.litellm_completion_transformation.transformation import previous_response_not_found
 from litellm.router_utils.cooldown_handlers import mark_advisor_orchestration_failure
 from litellm.router_utils.fallback_event_handlers import (
     MID_STREAM_FALLBACK_CONTROLS_KEY,
@@ -39,6 +40,7 @@ from litellm.router_utils.fallback_event_handlers import (
     routed_deployment_id,
     run_async_fallback,
 )
+from litellm.router_utils.router_callbacks.track_deployment_metrics import get_deployment_failures_for_current_minute
 from litellm.types.router import FallbackSkipReason, SkippedFallbackTarget
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 from tests.fake_openai_endpoint import FAKE_OPENAI_API_BASE
@@ -893,6 +895,23 @@ class TestTriggerCooldownForFailedDeployment:
             _trigger_cooldown_for_failed_deployment(litellm_router=mock_router, kwargs={}, exception=exc)
 
             mock_set_cooldown.assert_not_called()
+
+    def test_a_refused_follow_up_does_not_count_toward_the_fallback_deployments_failures(self):
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": "bridged-fallback",
+                    "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "fake-api-key"},
+                    "model_info": {"id": "fallback-deployment"},
+                }
+            ]
+        )
+        refusal: Final = previous_response_not_found("resp_unknown", "gpt-5.4-mini", "openai")
+        refusal.failed_deployment_id = "fallback-deployment"
+
+        _trigger_cooldown_for_failed_deployment(litellm_router=router, kwargs={}, exception=refusal)
+
+        assert get_deployment_failures_for_current_minute(router, "fallback-deployment") == 0
 
     def test_uses_deployment_litellm_params_cooldown_time_override(self):
         mock_router = MagicMock()

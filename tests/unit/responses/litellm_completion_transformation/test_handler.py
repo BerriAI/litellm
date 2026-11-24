@@ -12,6 +12,7 @@ capture the forwarded kwargs; if the flag-setting line is removed the captured
 kwargs lack the flag and these tests fail.
 """
 
+import asyncio
 import json
 import sys
 from collections.abc import Mapping
@@ -28,6 +29,7 @@ from litellm.responses.litellm_completion_transformation.handler import (
     LiteLLMCompletionTransformationHandler,
 )
 from litellm.responses.utils import ResponsesAPIRequestUtils
+from litellm.router_utils.router_callbacks.track_deployment_metrics import get_deployment_failures_for_current_minute
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.utils import ADDRESSED_RESPONSE_ID_FIELD
 
@@ -321,6 +323,32 @@ async def test_bridged_follow_up_without_a_replayable_previous_turn_is_refused_b
         "previous_response_not_found",
     )
     assert f"Previous response with id '{_TURN_ONE_ID}' not found." in refused.value.message
+    assert "`store_prompts_in_spend_logs: true`" in refused.value.message
+
+
+@pytest.mark.asyncio
+async def test_refused_follow_ups_do_not_count_toward_the_deployments_failure_rate():
+    litellm_params: Final = {
+        "model": "azure_ai/claude-sonnet-4-6",
+        "api_base": "https://fake-foundry-resource.services.ai.azure.com",
+        "api_key": "fake-api-key",
+    }
+    router: Final = litellm.Router(
+        model_list=[
+            {"model_name": "bridged", "litellm_params": litellm_params, "model_info": {"id": "d1"}},
+            {"model_name": "bridged-fallback", "litellm_params": litellm_params, "model_info": {"id": "d2"}},
+        ],
+        fallbacks=[{"bridged": ["bridged-fallback"]}],
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client", None):
+        for _ in range(6):
+            with pytest.raises(litellm.BadRequestError, match="not found"):
+                await router.aresponses(model="bridged", input="Double it", previous_response_id=_TURN_ONE_ID)
+    await asyncio.sleep(1)
+
+    assert get_deployment_failures_for_current_minute(router, "d1") == 0
+    assert get_deployment_failures_for_current_minute(router, "d2") == 0
 
 
 @pytest.mark.asyncio
@@ -337,7 +365,8 @@ async def test_an_sdk_install_without_the_proxy_extras_gets_the_400_for_a_follow
 
     assert provider.request_body is None, "the follow-up reached the provider with no conversation history"
     assert (refused.value.status_code, refused.value.param) == (400, "previous_response_id")
-    assert "LiteLLM proxy" in refused.value.message
+    assert "send the earlier turns in `input`" in refused.value.message
+    assert "spend logs" not in refused.value.message
 
 
 @pytest.mark.asyncio

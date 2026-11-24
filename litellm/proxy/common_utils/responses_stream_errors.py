@@ -102,6 +102,15 @@ def _response_error_code(details: _FailureDetails) -> str:
     return _status_error_code(details.status_code)
 
 
+def responses_failure_error(exception: Exception) -> Mapping[str, object]:
+    original: Final = _original_failure(exception)
+    details: Final = _failure_details(original)
+    return {
+        "code": _response_error_code(details),
+        "message": redact_internal_details_from_client_message(details.message or str(original)),
+    }
+
+
 class ResponsesStreamErrorState:
     def __init__(self) -> None:
         self.response_id: str | None = None
@@ -132,8 +141,6 @@ class ResponsesStreamErrorState:
     def format_failure(self, exception: Exception) -> str | None:
         if self.terminal_emitted:
             return None
-        original: Final = _original_failure(exception)
-        details: Final = _failure_details(original)
         response: Final = ResponsesAPIResponse.model_validate(
             MappingProxyType(
                 {
@@ -143,12 +150,7 @@ class ResponsesStreamErrorState:
                     "model": self.model,
                     "status": "failed",
                     "output": (),
-                    "error": MappingProxyType(
-                        {
-                            "code": _response_error_code(details),
-                            "message": redact_internal_details_from_client_message(details.message or str(original)),
-                        }
-                    ),
+                    "error": responses_failure_error(exception),
                 }
             )
         )

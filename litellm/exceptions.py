@@ -397,6 +397,10 @@ class MalformedRequestFieldError(BadRequestError):
     pass
 
 
+class UnresolvablePreviousResponseError(MalformedRequestFieldError):
+    pass
+
+
 class UnprocessableEntityError(openai.UnprocessableEntityError):
     def __init__(
         self,

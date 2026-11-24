@@ -128,6 +128,8 @@ export default function ChatConversationPage() {
 
   const selectModel = useCallback((model: string) => {
     setSelectedModel(model);
+    setResponsesSessionId(null);
+    setResendsHistory(false);
     localStorage.setItem(LOCALSTORAGE_MODEL_KEY, model);
     setModelSelectorOpen(false);
     setModelSearchText("");

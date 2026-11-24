@@ -176,6 +176,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
     updateSearchResults,
     handleResponseId,
     handleToggleSessionManagement,
+    handleModelChange,
     handleHistoryResent,
     handleMCPEvent,
     updateImageUI,
@@ -1180,6 +1181,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
   };
 
   const onModelChange = (value: string | null) => {
+    if (value !== selectedModel) handleModelChange();
     setSelectedModel(value);
     setShowCustomModelInput(value === "custom");
 

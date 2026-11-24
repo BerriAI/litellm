@@ -224,10 +224,10 @@ from litellm.router_utils.cooldown_handlers import (
     async_get_cooldown_deployments,
     async_get_cooldown_deployments_with_debug_info,
     get_cooldown_deployments,
-    is_advisor_orchestration_failure,
     is_background_response_poll_not_found,
     is_caller_scoped_auth_failure,
     is_caller_timeout_408,
+    is_failure_outside_selected_deployment,
     is_video_lookup_not_found,
     set_cooldown_deployments,
 )
@@ -9043,10 +9043,10 @@ class Router:
         try:
             exception: Final = kwargs.get("exception", None)
 
-            if is_advisor_orchestration_failure(exception):
+            if is_failure_outside_selected_deployment(exception):
                 verbose_router_logger.debug(
                     "Router: Exiting 'deployment_callback_on_failure' without cooldown. "
-                    "Failure originated from advisor orchestration, not the selected deployment."
+                    "Failure did not come from the selected deployment."
                 )
                 return False
 

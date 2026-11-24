@@ -1,6 +1,7 @@
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useChatHistory } from "@/components/chat/useChatHistory";
+import { fetchAvailableModels } from "@/components/llm_calls/fetch_models";
 import ChatConversationPage from "./page";
 import { renderWithProviders } from "@/../tests/test-utils";
 import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
@@ -171,6 +172,48 @@ describe("/ui/chat request metrics", () => {
       { role: "assistant", content: "Two cents." },
       { role: "user", content: "Thanks" },
     ]);
+  });
+
+  it("starts a fresh session on the model picked mid-conversation and continues it by response id", async () => {
+    const answer =
+      (reply: string, responseId: string) =>
+      async (...args: unknown[]) => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        (args[1] as (role: string, delta: string) => void)("assistant", reply);
+        (args[ON_RESPONSE_ID_INDEX] as (id: string) => void)(responseId);
+      };
+    vi.mocked(fetchAvailableModels).mockResolvedValueOnce([
+      { model_group: "gpt-5.4-mini" },
+      { model_group: "claude-sonnet-4-6" },
+    ] as Awaited<ReturnType<typeof fetchAvailableModels>>);
+    mockMakeOpenAIResponsesRequest
+      .mockImplementationOnce(answer("About a cent.", "resp_first"))
+      .mockImplementationOnce(answer("Two cents.", "resp_switched"))
+      .mockResolvedValueOnce(undefined);
+    const sendFollowUp = async (text: string) => {
+      fireEvent.change(screen.getByPlaceholderText("Send a message..."), { target: { value: text } });
+      await waitFor(() => expect(screen.getByRole("button", { name: "Send" })).toBeEnabled());
+      fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    };
+
+    await sendOneMessage();
+    expect(await screen.findByText("About a cent.")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /gpt-5\.4-mini/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /claude-sonnet-4-6/ }));
+    await sendFollowUp("And yesterday?");
+    expect(await screen.findByText("Two cents.")).toBeInTheDocument();
+    await sendFollowUp("Thanks");
+    await waitFor(() => expect(mockMakeOpenAIResponsesRequest).toHaveBeenCalledTimes(3));
+
+    const [, switched, continued] = mockMakeOpenAIResponsesRequest.mock.calls;
+    expect(switched[PREVIOUS_RESPONSE_ID_INDEX]).toBeNull();
+    expect(switched[0]).toEqual([
+      { role: "user", content: "How much did this cost?" },
+      { role: "assistant", content: "About a cent." },
+      { role: "user", content: "And yesterday?" },
+    ]);
+    expect(continued[PREVIOUS_RESPONSE_ID_INDEX]).toBe("resp_switched");
+    expect(continued[0]).toEqual([{ role: "user", content: "Thanks" }]);
   });
 
   it("puts the new conversation ID in the URL after the first message is sent", async () => {

@@ -17,7 +17,7 @@ following the OpenAI Response API format.
 import asyncio
 import json
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Final, Optional
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
@@ -1759,6 +1759,30 @@ class TestBackgroundStreamingTerminalEvents:
         final_call = handler.update_state.call_args_list[-1]
         assert final_call.kwargs["status"] == "completed"
         assert final_call.kwargs["usage"] == {"input_tokens": 13, "output_tokens": 10}
+
+    @pytest.mark.asyncio
+    async def test_a_request_refused_before_streaming_polls_failed_with_its_reason(self):
+        from litellm.proxy.response_polling.background_streaming import (
+            background_streaming_task,
+        )
+        from litellm.responses.litellm_completion_transformation.transformation import (
+            previous_response_not_found,
+        )
+
+        refusal: Final = previous_response_not_found("resp_unknown", "claude-sonnet-4-6", "anthropic")
+        handler: Final = AsyncMock(spec=ResponsePollingHandler)
+        kwargs: Final = _make_background_streaming_kwargs("poll_refused", handler)
+
+        with patch(  # test-quality-ok: the processor is built inside the task, same idiom as the sibling tests
+            "litellm.proxy.response_polling.background_streaming.ProxyBaseLLMRequestProcessing"
+        ) as MockProcessor:
+            MockProcessor.return_value.base_process_llm_request = AsyncMock(side_effect=refusal)
+            await background_streaming_task(**kwargs)
+
+        final_call: Final = handler.update_state.call_args_list[-1]
+        assert final_call.kwargs["status"] == "failed"
+        assert final_call.kwargs["error"]["code"] == "previous_response_not_found"
+        assert final_call.kwargs["error"]["message"].startswith("Previous response with id 'resp_unknown' not found.")
 
 
 class TestEdgeCases:
