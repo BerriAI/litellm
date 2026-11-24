@@ -106,7 +106,7 @@ class _EmailValidator(Protocol):
     def SPECIAL_USE_DOMAIN_NAMES(self) -> Sequence[str]: ...
 
 
-_EMAIL_VALIDATOR: Final = cast(_EmailValidator, email_validator)  # cast-ok: the proxy extra is absent from the typecheck venv
+_EMAIL_VALIDATOR: Final = cast(_EmailValidator, email_validator)  # cast-ok: typecheck venv omits email-validator
 
 
 class GenericOpenID(CustomOpenID):
