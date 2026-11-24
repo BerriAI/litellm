@@ -405,6 +405,78 @@ async def test_mantle_retry_leaves_out_the_tool_choice_drop_params_left_out_of_t
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    ("model_to_use", "runtime", "posted_hosts"),
+    (
+        ("bedrock_mantle/anthropic.claude-opus-5-5", (200, {"inputTokens": 1}), (MANTLE_HOST,)),
+        ("us.anthropic.claude-opus-5-5", (400, UNSUPPORTED), (RUNTIME_HOST, MANTLE_HOST)),
+    ),
+)
+async def test_messages_count_options_reach_the_mantle_count(
+    model_to_use: str, runtime: tuple[int, Mapping[str, object]], posted_hosts: tuple[str, ...]
+) -> None:
+    bedrock: Final = _Bedrock(runtime=runtime, mantle=(200, {"input_tokens": 433}))
+
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use=model_to_use,
+        messages=MESSAGES,
+        contents=None,
+        deployment=DEPLOYMENT,
+        request_model="claude-opus-5-5",
+        tools=[{"name": "get_weather", "input_schema": {"type": "object"}}],
+        count_options={"tool_choice": {"type": "any"}},
+    )
+
+    assert result is not None
+    assert (result.error, result.total_tokens) == (False, 433)
+    assert bedrock.posted_hosts() == posted_hosts
+    assert _JSON_BODY.validate_json(bedrock.requests[-1].content)["tool_choice"] == {"type": "any"}
+
+
+@pytest.mark.asyncio
+async def test_runtime_400_without_a_tool_choice_still_reports_the_mantle_failure() -> None:
+    bedrock: Final = _Bedrock(
+        runtime=(400, {"message": "The provided model identifier is invalid."}),
+        mantle=(404, {"type": "error", "error": {"type": "not_found_error", "message": "does not exist"}}),
+    )
+
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        messages=MESSAGES,
+        contents=None,
+        deployment=DEPLOYMENT,
+        request_model="claude-haiku-4-5",
+    )
+
+    assert result is not None
+    assert result.status_code == 404
+    assert result.tokenizer_type == "bedrock_mantle_api"
+    assert "does not exist" in (result.error_message or "")
+    assert bedrock.posted_hosts() == (RUNTIME_HOST, MANTLE_HOST)
+
+
+@pytest.mark.asyncio
+async def test_non_claude_runtime_count_leaves_out_the_tool_choice() -> None:
+    with_choice: Final = _Bedrock(runtime=(200, {"inputTokens": 12}), mantle=(200, {"input_tokens": 1}))
+    without_choice: Final = _Bedrock(runtime=(200, {"inputTokens": 12}), mantle=(200, {"input_tokens": 1}))
+    request: Final = {
+        "model_to_use": "amazon.nova-pro-v1:0",
+        "messages": MESSAGES,
+        "contents": None,
+        "deployment": DEPLOYMENT,
+        "request_model": "amazon.nova-pro-v1:0",
+    }
+
+    result: Final = await _counter(with_choice).count_tokens(**request, count_options={"tool_choice": {"type": "any"}})
+    await _counter(without_choice).count_tokens(**request)
+
+    assert result is not None
+    assert (result.error, result.total_tokens) == (False, 12)
+    assert with_choice.posted_hosts() == (RUNTIME_HOST,)
+    assert with_choice.requests[0].content == without_choice.requests[0].content
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     ("model", "host", "tokenizer", "expected_tokens"),
     (
         ("bedrock_mantle/anthropic.claude-opus-5-5", MANTLE_HOST, "bedrock_mantle_api", 271),

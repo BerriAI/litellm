@@ -48,6 +48,7 @@ from litellm.llms.anthropic.pass_through.responses_adapters.transformation impor
 )
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
 from litellm.llms.bedrock.common_utils import BedrockError
+from litellm.llms.bedrock.count_tokens import handler as bedrock_count_tokens_handler
 from litellm.llms.bedrock.count_tokens.bedrock_token_counter import BedrockTokenCounter
 from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensHandler
 from litellm.llms.bedrock.count_tokens.kimi_k3 import (
@@ -3475,3 +3476,195 @@ async def _count_the_paris_weather_turn(monkeypatch: pytest.MonkeyPatch, model: 
             model="billed", messages=[{"role": "user", "content": "What is the weather in Paris?"}]
         )
     )
+
+
+class _OpenAICountTokensPeer:
+    def __init__(self) -> None:
+        self.request_bodies: tuple[bytes, ...] = ()
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.request_bodies = (*self.request_bodies, request.content)
+        return httpx.Response(200, json={"object": "response.input_tokens", "input_tokens": 52}, request=request)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("deployment_params", "request_options", "counted_tool_choice"),
+    [
+        ({}, {}, "required"),
+        ({"additional_drop_params": ["tool_choice"]}, {}, None),
+        ({}, {"additional_drop_params": ["tool_choice"]}, None),
+    ],
+    ids=["forwarded", "deployment-drops-tool-choice", "request-drops-tool-choice"],
+)
+async def test_messages_count_tokens_counts_the_forced_tool_choice_on_the_openai_count_api(
+    deployment_params: dict[str, JsonValue],
+    request_options: dict[str, JsonValue],
+    counted_tool_choice: JsonValue,
+) -> None:
+    import litellm.proxy.anthropic_endpoints.endpoints as anthropic_endpoints
+    import litellm.proxy.proxy_server as proxy_server
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "counted",
+                "litellm_params": {"model": "openai/gpt-6.2-sol", "api_key": "test-key", **deployment_params},
+            }
+        ]
+    )
+    peer: Final = _OpenAICountTokensPeer()
+    mock_request: Final = MagicMock(spec=Request)
+    mock_request.headers = {}
+    request_body: Final[dict[str, JsonValue]] = {
+        "model": "counted",
+        "messages": [{"role": "user", "content": "What is the weather in Paris?"}],
+        "tools": [
+            {"name": "get_weather", "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}}}
+        ],
+        "tool_choice": {"type": "any"},
+        **request_options,
+    }
+
+    with (
+        patch.object(proxy_server, "llm_router", router),
+        patch.object(anthropic_endpoints, "read_request_body", AsyncMock(return_value=request_body)),
+        patch.object(
+            openai_count_tokens_handler,
+            "get_async_httpx_client",
+            return_value=AsyncHTTPHandler(transport=httpx.MockTransport(peer)),
+        ),
+    ):
+        response: Final = await anthropic_count_tokens(mock_request, MagicMock())
+
+    assert response == {"input_tokens": 52, "litellm_count_source": "provider"}
+    assert [json.loads(body).get("tool_choice") for body in peer.request_bodies] == [counted_tool_choice]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("router_defaults", "request_options", "headers"),
+    [
+        ({}, {"drop_params": True}, {}),
+        ({}, {}, {"user-agent": "claude-cli/2.1.0 (external, cli)"}),
+        ({"drop_params": True}, {}, {}),
+        ({"additional_drop_params": ["tool_choice"]}, {}, {}),
+    ],
+    ids=[
+        "request-drop-params",
+        "claude-code-auto-drop",
+        "router-default-drop-params",
+        "router-default-drops-tool-choice",
+    ],
+)
+async def test_messages_count_tokens_leaves_out_a_forced_tool_choice_without_tools_the_caller_drops(
+    router_defaults: dict[str, JsonValue],
+    request_options: dict[str, JsonValue],
+    headers: dict[str, str],
+) -> None:
+    import litellm.proxy.anthropic_endpoints.endpoints as anthropic_endpoints
+    import litellm.proxy.proxy_server as proxy_server
+
+    router: Final = Router(
+        model_list=[
+            {"model_name": "counted", "litellm_params": {"model": "openai/gpt-6.2-sol", "api_key": "test-key"}}
+        ],
+        default_litellm_params=router_defaults,
+    )
+    peer: Final = _OpenAICountTokensPeer()
+    mock_request: Final = MagicMock(spec=Request)
+    mock_request.headers = headers
+    request_body: Final[dict[str, JsonValue]] = {
+        "model": "counted",
+        "messages": [{"role": "user", "content": "What is the weather in Paris?"}],
+        "tool_choice": {"type": "any"},
+        **request_options,
+    }
+
+    with (
+        patch.object(proxy_server, "llm_router", router),
+        patch.object(anthropic_endpoints, "read_request_body", AsyncMock(return_value=request_body)),
+        patch.object(
+            openai_count_tokens_handler,
+            "get_async_httpx_client",
+            return_value=AsyncHTTPHandler(transport=httpx.MockTransport(peer)),
+        ),
+    ):
+        response: Final = await anthropic_count_tokens(mock_request, MagicMock())
+
+    assert response == {"input_tokens": 52, "litellm_count_source": "provider"}
+    assert [json.loads(body).get("tool_choice") for body in peer.request_bodies] == [None]
+
+
+class _BedrockRuntimeCountPeer:
+    def __init__(self) -> None:
+        self.tool_choices: tuple[JsonValue, ...] = ()
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        count_input: Final = json.loads(request.content)["input"]
+        counted_tool_choice: Final = (
+            json.loads(base64.b64decode(count_input["invokeModel"]["body"])).get("tool_choice")
+            if "invokeModel" in count_input
+            else count_input["converse"].get("toolConfig", {}).get("toolChoice")
+        )
+        self.tool_choices = (*self.tool_choices, counted_tool_choice)
+        return httpx.Response(200, json={"inputTokens": 31}, request=request)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("router_defaults", "request_options", "counted_tool_choice"),
+    [
+        ({}, {"drop_params": True}, None),
+        ({"drop_params": True}, {}, None),
+        ({"drop_params": True}, {"drop_params": False}, {"type": "any"}),
+    ],
+    ids=["request-drop-params", "router-default-drop-params", "request-overrides-router-default"],
+)
+async def test_bedrock_messages_count_follows_the_request_drop_params_over_the_router_default(
+    router_defaults: dict[str, JsonValue],
+    request_options: dict[str, JsonValue],
+    counted_tool_choice: JsonValue,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm.proxy.anthropic_endpoints.endpoints as anthropic_endpoints
+    import litellm.proxy.proxy_server as proxy_server
+
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "counted",
+                "litellm_params": {
+                    "model": "bedrock/anthropic.claude-sonnet-4-6",
+                    "aws_access_key_id": "AKIATESTACCESSKEY",
+                    "aws_secret_access_key": "test-secret",
+                    "aws_region_name": "us-east-1",
+                },
+            }
+        ],
+        default_litellm_params=router_defaults,
+    )
+    peer: Final = _BedrockRuntimeCountPeer()
+    mock_request: Final = MagicMock(spec=Request)
+    mock_request.headers = {}
+    request_body: Final[dict[str, JsonValue]] = {
+        "model": "counted",
+        "messages": [{"role": "user", "content": "What is the weather in Paris?"}],
+        "tool_choice": {"type": "any"},
+        **request_options,
+    }
+
+    with (
+        patch.object(proxy_server, "llm_router", router),
+        patch.object(anthropic_endpoints, "read_request_body", AsyncMock(return_value=request_body)),
+        patch.object(
+            bedrock_count_tokens_handler,
+            "get_async_httpx_client",
+            return_value=AsyncHTTPHandler(transport=httpx.MockTransport(peer)),
+        ),
+    ):
+        response: Final = await anthropic_count_tokens(mock_request, MagicMock())
+
+    assert isinstance(response, dict) and response["input_tokens"] == 31
+    assert peer.tool_choices == (counted_tool_choice,)
