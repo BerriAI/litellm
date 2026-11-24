@@ -34,31 +34,23 @@ const TransformRequestPanel: React.FC<TransformRequestPanelProps> = ({ accessTok
   const [transformedResponse, setTransformedResponse] = useState("");
   const [isLoading, setIsLoading] = useState(false);
 
-  // Function to format curl command from API response parts
   const formatCurlCommand = (
     apiBase: string,
-    requestBody: Record<string, any>,
+    requestBody: Record<string, unknown>,
     requestHeaders: Record<string, string>,
   ) => {
-    // Format the request body as nicely indented JSON with 2 spaces
-    const formattedBody = JSON.stringify(requestBody, null, 2)
-      // Add additional indentation for the entire body
-      .split("\n")
-      .map((line) => `  ${line}`)
-      .join("\n");
+    const formattedBody = JSON.stringify(requestBody, null, 2);
 
-    // Build headers string with consistent indentation
-    const headerString = Object.entries(requestHeaders)
-      .map(([key, value]) => `-H '${key}: ${value}'`)
-      .join(" \\\n  ");
+    const hasContentType = Object.keys(requestHeaders).some((key) => key.toLowerCase() === "content-type");
+    const headerEntries = hasContentType
+      ? Object.entries(requestHeaders)
+      : [...Object.entries(requestHeaders), ["Content-Type", "application/json"]];
 
-    // Build the curl command with consistent indentation
+    const headerString = headerEntries.map(([key, value]) => `-H '${key}: ${value}'`).join(" \\\n  ");
+
     return `curl -X POST \\
   ${apiBase} \\
-  ${headerString ? `${headerString} \\\n  ` : ""}-H 'Content-Type: application/json' \\
-  -d '{
-${formattedBody}
-  }'`;
+  ${headerString ? `${headerString} \\\n  ` : ""}-d '${formattedBody}'`;
   };
 
   // Function to handle the transform request
