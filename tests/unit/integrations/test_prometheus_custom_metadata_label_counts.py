@@ -1,6 +1,7 @@
 import logging
 import sys
-from typing import Final
+from collections.abc import Awaitable, Callable, Iterator, Mapping
+from typing import Final, TypeAlias
 
 import pytest
 from prometheus_client import REGISTRY
@@ -155,6 +156,7 @@ def test_virtual_key_rate_limit_metrics_preserve_zero_remaining_values(
     assert not any(sample.value == sys.maxsize for sample in token_samples)
 
 
+_FallbackEvent: TypeAlias = Callable[[PrometheusLogger, str, dict[str, object], Exception], Awaitable[None]]
 _FALLBACK_METADATA_LABELS: Final = (
     "metadata.caller_agent",
     "metadata.owner",
@@ -163,13 +165,17 @@ _FALLBACK_METADATA_LABELS: Final = (
     "metadata.is_silent_experiment",
 )
 _FALLBACK_EVENTS: Final = (
-    pytest.param("log_success_fallback_event", "litellm_deployment_successful_fallbacks_total", id="success"),
-    pytest.param("log_failure_fallback_event", "litellm_deployment_failed_fallbacks_total", id="failure"),
+    pytest.param(
+        PrometheusLogger.log_success_fallback_event, "litellm_deployment_successful_fallbacks_total", id="success"
+    ),
+    pytest.param(
+        PrometheusLogger.log_failure_fallback_event, "litellm_deployment_failed_fallbacks_total", id="failure"
+    ),
 )
 
 
 @pytest.fixture
-def fallback_logger(monkeypatch: pytest.MonkeyPatch):
+def fallback_logger(monkeypatch: pytest.MonkeyPatch) -> Iterator[PrometheusLogger]:
     monkeypatch.setattr(litellm, "custom_prometheus_metadata_labels", list(_FALLBACK_METADATA_LABELS))
     monkeypatch.setattr(litellm, "custom_prometheus_tags", ["prod"])
     _clear_prometheus_registry()
@@ -177,28 +183,15 @@ def fallback_logger(monkeypatch: pytest.MonkeyPatch):
     _clear_prometheus_registry()
 
 
-async def _log_fallback(logger: PrometheusLogger, event: str, kwargs: dict[str, object]) -> None:
+async def _log_fallback(logger: PrometheusLogger, event: _FallbackEvent, kwargs: Mapping[str, object]) -> None:
     exception: Final = litellm.RateLimitError("boom", llm_provider="openai", model="model-a")
-    await getattr(logger, event)(original_model_group="model-a", kwargs=kwargs, original_exception=exception)
+    await event(logger, "model-a", dict(kwargs), exception)
 
 
-def _only_sample_labels(metric_name: str) -> dict[str, str]:
+def _only_sample_labels(metric_name: str) -> Mapping[str, str]:
     samples: Final = _metric_samples(metric_name)
     assert [sample.value for sample in samples] == [1.0]
     return samples[0].labels
-
-
-def _custom_label_values(labels: dict[str, str]) -> dict[str, str]:
-    return {
-        name: labels[name]
-        for name in (
-            "metadata_caller_agent",
-            "metadata_owner",
-            "metadata_org_unit",
-            "metadata_user_api_key_team_alias",
-            "metadata_is_silent_experiment",
-        )
-    }
 
 
 _UNSET: Final = {
@@ -208,6 +201,10 @@ _UNSET: Final = {
     "metadata_user_api_key_team_alias": "None",
     "metadata_is_silent_experiment": "None",
 }
+
+
+def _custom_label_values(labels: Mapping[str, str]) -> Mapping[str, str]:
+    return {name: labels[name] for name in _UNSET}
 
 
 @pytest.mark.parametrize(("event", "metric_name"), _FALLBACK_EVENTS)
@@ -266,10 +263,10 @@ _UNSET: Final = {
 @pytest.mark.asyncio
 async def test_fallback_metrics_label_custom_metadata_like_request_metrics(
     fallback_logger: PrometheusLogger,
-    event: str,
+    event: _FallbackEvent,
     metric_name: str,
-    metadata: dict[str, object],
-    expected: dict[str, str],
+    metadata: Mapping[str, object],
+    expected: Mapping[str, str],
 ):
     await _log_fallback(fallback_logger, event, {"model": "model-b", "metadata": metadata})
 
@@ -279,7 +276,7 @@ async def test_fallback_metrics_label_custom_metadata_like_request_metrics(
 @pytest.mark.parametrize(("event", "metric_name"), _FALLBACK_EVENTS)
 @pytest.mark.asyncio
 async def test_fallback_metrics_keep_builtin_labels_and_tags_next_to_custom_metadata(
-    fallback_logger: PrometheusLogger, event: str, metric_name: str
+    fallback_logger: PrometheusLogger, event: _FallbackEvent, metric_name: str
 ):
     kwargs: Final = {
         "model": "model-b",
@@ -306,7 +303,7 @@ async def test_fallback_metrics_keep_builtin_labels_and_tags_next_to_custom_meta
 @pytest.mark.parametrize(("event", "metric_name"), _FALLBACK_EVENTS)
 @pytest.mark.asyncio
 async def test_fallback_metrics_read_litellm_metadata_when_present(
-    fallback_logger: PrometheusLogger, event: str, metric_name: str
+    fallback_logger: PrometheusLogger, event: _FallbackEvent, metric_name: str
 ):
     kwargs: Final = {
         "model": "model-b",
@@ -322,7 +319,7 @@ async def test_fallback_metrics_read_litellm_metadata_when_present(
 @pytest.mark.parametrize(("event", "metric_name"), _FALLBACK_EVENTS)
 @pytest.mark.asyncio
 async def test_fallback_metrics_do_not_mutate_the_request_metadata(
-    fallback_logger: PrometheusLogger, event: str, metric_name: str
+    fallback_logger: PrometheusLogger, event: _FallbackEvent, metric_name: str
 ):
     spend_logs_metadata: Final = {"caller_agent": "triage", "org": {"unit": "search"}}
     metadata: Final = {"requester_metadata": {"owner": "requester"}, "spend_logs_metadata": spend_logs_metadata}
@@ -339,7 +336,7 @@ async def test_fallback_metrics_do_not_mutate_the_request_metadata(
 @pytest.mark.parametrize(("event", "metric_name"), _FALLBACK_EVENTS)
 @pytest.mark.asyncio
 async def test_fallback_metrics_without_custom_metadata_labels_emit_no_metadata_labels(
-    monkeypatch: pytest.MonkeyPatch, event: str, metric_name: str
+    monkeypatch: pytest.MonkeyPatch, event: _FallbackEvent, metric_name: str
 ):
     monkeypatch.setattr(litellm, "custom_prometheus_metadata_labels", [])
     monkeypatch.setattr(litellm, "custom_prometheus_tags", [])
