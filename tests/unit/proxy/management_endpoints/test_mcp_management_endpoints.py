@@ -5053,13 +5053,16 @@ class TestMCPRegistryEndpoint:
         data = response.json()
         assert len(data["servers"]) == 2  # built-in + custom server
 
-        builtin_entry = data["servers"][0]["server"]
-        assert builtin_entry["name"] == "litellm-mcp-server"
-        assert builtin_entry["remotes"][0]["url"].endswith("/mcp")
+        builtin_item = data["servers"][0]
+        assert set(builtin_item) == {"server"}, builtin_item
+        assert builtin_item["server"]["name"] == "litellm-mcp-server"
+        assert builtin_item["server"]["remotes"][0]["url"].endswith("/mcp")
 
-        custom_entry = data["servers"][1]["server"]
-        assert custom_entry["name"] == "zapier"
-        assert custom_entry["remotes"][0]["url"].endswith("/zapier/mcp")
+        custom_item = data["servers"][1]
+        assert custom_item["_meta"] == {"ai.litellm/server": {"server_id": "server-123"}}, custom_item
+        assert custom_item["server"]["name"] == "zapier"
+        assert custom_item["server"]["remotes"][0]["url"].endswith("/zapier/mcp")
+        assert "server_id" not in custom_item["server"], custom_item
 
     @pytest.mark.parametrize(
         ("server_name", "mcp_info", "expected_title", "expected_description"),

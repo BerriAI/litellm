@@ -47,7 +47,7 @@ from fastapi import (
 )
 from fastapi.responses import JSONResponse
 from pydantic import TypeAdapter
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.proxy.mcp_server.catalog import catalog_operation, public_catalog_operation
 
@@ -492,6 +492,19 @@ if MCP_AVAILABLE:
                     "url": remote_url,
                 }
             ],
+        }
+
+    class _McpRegistryLiteLLMServerMeta(TypedDict):
+        server_id: ReadOnly[str]
+
+    class _McpRegistryItem(TypedDict):
+        server: ReadOnly[_McpRegistryEntry]
+        _meta: NotRequired[ReadOnly[Mapping[str, _McpRegistryLiteLLMServerMeta]]]
+
+    def _build_mcp_registry_item_for_server(server: MCPServer, base_url: str) -> _McpRegistryItem:
+        return {
+            "server": _build_mcp_registry_entry_for_server(server, base_url),
+            "_meta": {"ai.litellm/server": {"server_id": server.server_id}},
         }
 
     def _build_builtin_registry_entry(base_url: str) -> _McpRegistryEntry:
@@ -1185,7 +1198,7 @@ if MCP_AVAILABLE:
         verbose_proxy_logger.debug("MCP registry request from IP=%s", client_ip)
 
         base_url: Final = get_request_base_url(request)
-        registry_servers: Final[list[dict[str, _McpRegistryEntry]]] = []
+        registry_servers: Final[list[_McpRegistryItem]] = []
         registry_servers.append({"server": _build_builtin_registry_entry(base_url)})
 
         # Centralized IP-based filtering: external callers only see public servers
@@ -1196,13 +1209,13 @@ if MCP_AVAILABLE:
 
         for server in registered_servers:
             try:
-                entry = _build_mcp_registry_entry_for_server(server, base_url)
+                item = _build_mcp_registry_item_for_server(server, base_url)
             except Exception as e:
                 verbose_proxy_logger.debug(
                     "Skipping MCP server %s in registry: %s", getattr(server, "server_id", "unknown"), e
                 )
                 continue
-            registry_servers.append({"server": entry})
+            registry_servers.append(item)
 
         return {"servers": registry_servers}
 

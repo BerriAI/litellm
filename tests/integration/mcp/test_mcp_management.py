@@ -341,10 +341,14 @@ def test_registry_json_publishes_saved_description_and_server_name(gateway: Gate
         registry_proxy.scenario() as scenario,
     ):
         alias: Final = "reg" + uuid.uuid4().hex[:8]
-        register_mcp(scenario, peer, alias, server_name=alias + "_server", description="Docs MCP server")
+        server_id: Final = register_mcp(
+            scenario, peer, alias, server_name=alias + "_server", description="Docs MCP server"
+        )
         response: Final = registry_proxy.client.get("/v1/mcp/registry.json")
         assert response.status_code == 200, response.text
-        entry: Final = next(item["server"] for item in response.json()["servers"] if item["server"]["name"] == alias)
+        item: Final = next(item for item in response.json()["servers"] if item["server"]["name"] == alias)
+        assert item["_meta"] == {"ai.litellm/server": {"server_id": server_id}}, item
+        entry: Final = item["server"]
         assert entry["title"] == alias + "_server", entry
         assert entry["description"] == "Docs MCP server", entry
         assert entry["remotes"][0]["url"].endswith(f"/{alias}/mcp"), entry
