@@ -3669,11 +3669,6 @@ def catalog_row_with_runtime_registrations(key: str) -> Mapping[str, object] | N
     return loaded if registered is None else {**(loaded or {}), **registered}
 
 
-def has_catalog_entry(model: str, custom_llm_provider: str | None) -> bool:
-    info: Final = lookup_model_info_for_registration(model, custom_llm_provider)
-    return not isinstance(info, ModelInfoLookupMiss) and info["key"] in GetModelCostMap.loaded_model_cost_map()
-
-
 def runtime_model_cost_registrations(
     model: str, custom_llm_provider: str
 ) -> tuple[tuple[str, Mapping[str, object]], ...]:
