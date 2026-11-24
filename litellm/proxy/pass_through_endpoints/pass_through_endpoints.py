@@ -2904,7 +2904,7 @@ def create_pass_through_route(
 def create_websocket_passthrough_route(
     endpoint: str,
     target: str,
-    custom_headers: dict | None = None,
+    custom_headers: Mapping[str, str] | None = None,
     _forward_headers: bool | None = False,
     dependencies: Sequence[params.Depends] | None = None,
     cost_per_request: float | None = None,
@@ -3460,7 +3460,7 @@ def _log_session_usage(logging_obj: LiteLLMLoggingObj, usage: WebSocketSessionUs
 async def websocket_passthrough_request(
     websocket: WebSocket,
     target: str,
-    custom_headers: dict,
+    custom_headers: Mapping[str, str],
     user_api_key_dict: UserAPIKeyAuth,
     forward_headers: bool | None = False,
     endpoint: str | None = None,
