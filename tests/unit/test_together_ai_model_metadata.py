@@ -149,11 +149,8 @@ def test_together_prompt_caching_flag_implies_cache_read_rate(cost_map: CostMap)
 
 
 def _together_rows(cost_map: CostMap, mode: str) -> tuple[tuple[str, dict[str, object]], ...]:
-    return tuple(
-        (model, info)
-        for model, info in cost_map.items()
-        if model in ABSORBED_MODELS and info.get("mode") == mode
-    )
+    absorbed: Final = tuple((model, cost_map[model]) for model in sorted(ABSORBED_MODELS))
+    return tuple((model, info) for model, info in absorbed if info.get("mode") == mode)
 
 
 # Published serverless removals or redirects by July 29, 2026:
