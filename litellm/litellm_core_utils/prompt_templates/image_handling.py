@@ -490,11 +490,28 @@ def inline_remote_media(
     return [_inline_message(message, data_urls, should_inline) for message in messages]
 
 
+def _with_file_data_placeholder(part: object) -> object:
+    fields: Final = _as_mapping(part)
+    file: Final = _file_of_file_part(part)
+    if fields is None or file is None or _remote_url(file.get("file_data")) is None:
+        return part
+    return {**fields, "file": {**file, "file_data": _REMOTE_MEDIA_PLACEHOLDER}}
+
+
+def _with_file_data_placeholders(message: AllMessageValues) -> AllMessageValues:
+    parts: Final = _content_parts(message)
+    if not parts:
+        return message
+    swapped: Final = {**message, "content": [_with_file_data_placeholder(part) for part in parts]}
+    return swapped  # pyright: ignore[reportReturnType]  # the same message with its remote file_data swapped
+
+
 def with_remote_media_placeholders(messages: Sequence[AllMessageValues]) -> tuple[AllMessageValues, ...]:
     placeholders: Final = MappingProxyType(
         dict.fromkeys(_remote_urls_to_inline(messages, inline_every_remote_url), _REMOTE_MEDIA_PLACEHOLDER)
     )
-    return tuple(_inline_message(message, placeholders, inline_every_remote_url) for message in messages)
+    inlined: Final = (_inline_message(message, placeholders, inline_every_remote_url) for message in messages)
+    return tuple(_with_file_data_placeholders(message) for message in inlined)
 
 
 async def async_inline_remote_media(
