@@ -351,3 +351,75 @@ async def test_a_body_sent_in_many_tiny_pieces_is_counted_once_per_piece():
     assert named is None
     assert len(body_reads) == 2 * len(sent), "each piece is read once to count it and once to join the body"
     assert [await replay() for _ in sent] == sent
+
+
+def test_a_plain_body_labelled_gzip_names_its_trace(proxy):
+    client, exporter = proxy
+    payload: Final = json.dumps({"model": "m", "litellm_metadata": {"trace_id": UUID}}).encode()
+
+    for _ in range(2):
+        response = client.post(
+            PATHS[1], content=payload, headers={"content-type": "application/json", "content-encoding": "gzip"}
+        )
+        assert response.content == payload
+
+    assert set(_trace_ids(exporter)) == {UUID_HEX}
+
+
+def test_a_compressed_body_expanding_past_the_proxy_ratio_names_no_trace(proxy, monkeypatch):
+    import gzip
+
+    from litellm import constants
+
+    monkeypatch.setattr(constants, "MAX_REQUEST_BODY_DECOMPRESSION_RATIO", 2)
+    client, exporter = proxy
+    payload: Final = gzip.compress(b'{"metadata": {"trace_id": "%s"}, "input": "%s"}' % (UUID.encode(), b"x" * 50_000))
+
+    response = client.post(
+        PATHS[1], content=payload, headers={"content-type": "application/json", "content-encoding": "gzip"}
+    )
+
+    assert response.content == payload
+    assert UUID_HEX not in _trace_ids(exporter)
+
+
+@pytest.mark.asyncio
+async def test_compressed_bodies_are_decoded_one_at_a_time():
+    import asyncio
+    import gzip
+    import threading
+
+    from litellm.integrations.otel.plumbing import named_trace
+
+    decoding: Final = []
+    most_at_once: Final = []
+    lock: Final = threading.Lock()
+    read_json: Final = named_trace._json_object
+
+    def counted(body):
+        with lock:
+            decoding.append(body)
+            most_at_once.append(len(decoding))
+        threading.Event().wait(0.02)
+        with lock:
+            decoding.pop()
+        return read_json(body)
+
+    named_trace._json_object = counted
+    try:
+        body: Final = gzip.compress(b'{"metadata": {"trace_id": "%s"}}' % UUID.encode())
+        scope: Final = {
+            "type": "http",
+            "method": "POST",
+            "headers": [(b"content-type", b"application/json"), (b"content-encoding", b"gzip")],
+        }
+
+        async def receive():
+            return {"type": "http.request", "body": body, "more_body": False}
+
+        named: Final = await asyncio.gather(*(named_trace.read_named_trace(scope, receive) for _ in range(8)))
+    finally:
+        named_trace._json_object = read_json
+
+    assert {trace_id for trace_id, _ in named} == {int(UUID_HEX, 16)}
+    assert max(most_at_once) == 1

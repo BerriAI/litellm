@@ -37,6 +37,7 @@ _HEADER_PREFIX: Final = "langfuse_"
 # The body is read ahead of the proxy's request size limit, admission control and auth, so what is held here is
 # capped: a larger body is handed to the app unread past the cap and the request gets a trace of its own.
 _MAX_LOOKAHEAD_BYTES: Final = 16 * 1024 * 1024
+_DECODING: Final = anyio.CapacityLimiter(1)
 _NO_BODY: Final[Mapping[str, object]] = MappingProxyType({})
 
 
@@ -148,24 +149,43 @@ async def read_named_trace(scope: Scope, receive: Receive) -> tuple[int | None, 
         return named_trace_id(headers, _NO_BODY), _as_receive(replay)
     sent: Final = b"".join(message.get("body", b"") for message in read if message["type"] == "http.request")
     coding: Final = headers.get("content-encoding", "").strip().lower()
-    body: Final = await anyio.to_thread.run_sync(_decoded, coding, sent) if coding else sent
-    return named_trace_id(headers, _json_object(body)), _as_receive(replay)
+    if not coding:
+        return named_trace_id(headers, _json_object(sent)), _as_receive(replay)
+    named: Final = await anyio.to_thread.run_sync(_named_in_encoded, headers, coding, sent, limiter=_DECODING)
+    return named, _as_receive(replay)
 
 
-def _decoded(coding: str, sent: bytes) -> bytes:
-    """The JSON a compressed body carries, which the proxy only decodes further in. Decoding stops at
-    ``_MAX_LOOKAHEAD_BYTES``, and a body that is larger, damaged or in an unknown coding names no trace."""
-    from litellm.proxy.middleware.request_body_decompression_middleware import AVAILABLE_CODECS, CODING_ALIASES
+def _named_in_encoded(headers: Mapping[str, str], coding: str, sent: bytes) -> int | None:
+    """The trace id named by a body sent with a ``Content-Encoding``, which the proxy only decodes further in.
 
-    codec: Final = AVAILABLE_CODECS.get(CODING_ALIASES.get(coding, coding))
+    This runs ahead of the proxy's own decoding and the memory it budgets for it, so one body is decoded at a
+    time and its decoded bytes are dropped before the next: a body is decoded to at most ``_MAX_LOOKAHEAD_BYTES``
+    and the proxy's expansion ratio. One that is larger, damaged or in a coding the proxy does not decode names
+    no trace, and one that is not actually encoded is read as it was sent, as the proxy reads it.
+    """
+    from litellm.constants import MAX_REQUEST_BODY_DECOMPRESSION_RATIO
+    from litellm.proxy.middleware.request_body_decompression_middleware import (
+        AVAILABLE_CODECS,
+        CODING_ALIASES,
+        CODING_SIGNATURES,
+    )
+
+    name: Final = CODING_ALIASES.get(coding, coding)
+    starts_encoded: Final = CODING_SIGNATURES.get(name)
+    if starts_encoded is not None and not starts_encoded(sent):
+        return named_trace_id(headers, _json_object(sent))
+    codec: Final = AVAILABLE_CODECS.get(name)
     if codec is None:
-        return b""
+        return named_trace_id(headers, _NO_BODY)
+    limit: Final = min(_MAX_LOOKAHEAD_BYTES, len(sent) * MAX_REQUEST_BODY_DECOMPRESSION_RATIO)
     decompressor: Final = codec.new_decompressor()
     try:
-        decoded: Final = decompressor.decompress(sent, max_length=_MAX_LOOKAHEAD_BYTES + 1)
+        decoded: Final = decompressor.decompress(sent, max_length=limit + 1)
     except codec.error:
-        return b""
-    return decoded if decompressor.eof and len(decoded) <= _MAX_LOOKAHEAD_BYTES else b""
+        return named_trace_id(headers, _NO_BODY)
+    if not decompressor.eof or len(decoded) > limit:
+        return named_trace_id(headers, _NO_BODY)
+    return named_trace_id(headers, _json_object(decoded))
 
 
 def _declared_length(headers: Mapping[str, str]) -> int:
