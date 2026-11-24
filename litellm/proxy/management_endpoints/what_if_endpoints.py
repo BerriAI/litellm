@@ -8,13 +8,14 @@ from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from itertools import chain, groupby
 from typing import Annotated, Final, Literal, TypeAlias
+from urllib.parse import urlsplit
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
-from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth, user_api_key_has_admin_view
+from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth, user_api_key_has_admin_view
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.utils import query_raw_within_statement_timeout
 from litellm.types.llms.custom_http import httpxSpecialProvider
@@ -453,11 +454,34 @@ async def _play_all(
     return str(_as_dict(_as_dict(spec.text).get("info")).get("version", "unknown")), tuple(played)
 
 
+_TAPE_ROUTES: Final = frozenset({("GET", "/mcp-rest/tools/list"), ("POST", "/mcp-rest/tools/call")})
+
+
+def gateway_base(gateway_url: str) -> str:
+    """Only a plain http(s) gateway address, with no embedded credentials, may be recorded from or replayed against."""
+    parsed: Final = urlsplit(gateway_url)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.username or parsed.password:
+        raise HTTPException(status_code=400, detail="gateway_url must be an http(s) URL without credentials")
+    return gateway_url.rstrip("/")
+
+
+def replayable_exchanges(tape: Tape) -> tuple[Exchange, ...]:
+    """A tape may only replay the MCP routes that recording produces."""
+    if any((exchange.method, exchange.path) not in _TAPE_ROUTES for exchange in tape.exchanges):
+        raise HTTPException(status_code=400, detail="tape contains a request that tape check does not record")
+    return tape.exchanges
+
+
+def _require_full_admin(user: UserAPIKeyAuth) -> None:
+    if user.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(status_code=403, detail="Only the proxy admin can record or replay a tape")
+
+
 @router.post("/tape_check/record")
 async def record_tape(request: RecordRequest, user: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)]) -> Tape:
     """Record what MCP clients get from a running gateway: tool lists with and without the upstream credential, and read-only calls."""
-    _require_admin(user)
-    base: Final = request.gateway_url.rstrip("/")
+    _require_full_admin(user)
+    base: Final = gateway_base(request.gateway_url)
     version, exchanges = await _play_all(
         base, request.api_key, request.upstream_headers, _planned(request.read_only_calls)
     )
@@ -467,7 +491,9 @@ async def record_tape(request: RecordRequest, user: Annotated[UserAPIKeyAuth, De
 @router.post("/tape_check/replay")
 async def replay_tape(request: ReplayRequest, user: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)]) -> TapeCheck:
     """Replay a recorded tape against a candidate gateway and report every answer an MCP client would see change."""
-    _require_admin(user)
-    base: Final = request.gateway_url.rstrip("/")
-    version, replayed = await _play_all(base, request.api_key, request.upstream_headers, request.tape.exchanges)
+    _require_full_admin(user)
+    base: Final = gateway_base(request.gateway_url)
+    version, replayed = await _play_all(
+        base, request.api_key, request.upstream_headers, replayable_exchanges(request.tape)
+    )
     return compare_tape(request.tape, base, version, replayed)

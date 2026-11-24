@@ -1,6 +1,9 @@
 from collections.abc import Mapping
 from typing import Final
 
+import pytest
+from fastapi import HTTPException
+
 from litellm.proxy.management_endpoints.what_if_endpoints import (
     Exchange,
     Tape,
@@ -9,8 +12,10 @@ from litellm.proxy.management_endpoints.what_if_endpoints import (
     compare_tape,
     field_fates,
     fingerprint,
+    gateway_base,
     key_split,
     lost_fields,
+    replayable_exchanges,
     summarize_answer,
 )
 
@@ -160,3 +165,27 @@ def test_replaying_a_tape_marks_only_the_exchanges_whose_answer_changed():
     assert check.changed == 1
     assert [(e.name, e.verdict) for e in check.exchanges] == [("no credential", "changed"), ("with credential", "same")]
     assert check.exchanges[0].changes == ("tool missing: search",)
+
+
+@pytest.mark.parametrize("url", ["file:///etc/passwd", "http://user:pw@gateway.internal", "gateway.internal:4000"])
+def test_tape_check_refuses_a_gateway_url_that_is_not_plain_http(url: str) -> None:
+    with pytest.raises(HTTPException) as refused:
+        gateway_base(url)
+    assert refused.value.status_code == 400
+
+
+def test_tape_check_accepts_a_plain_gateway_url() -> None:
+    assert gateway_base("http://localhost:4000/") == "http://localhost:4000"
+
+
+def test_tape_check_refuses_to_replay_a_route_it_does_not_record() -> None:
+    forged: Final = Tape(
+        recorded_from="http://old",
+        version="1",
+        exchanges=(
+            Exchange(name="x", method="GET", path="/key/list", upstream_credential=False, status=200, answer={}),
+        ),
+    )
+    with pytest.raises(HTTPException) as refused:
+        replayable_exchanges(forged)
+    assert refused.value.status_code == 400
