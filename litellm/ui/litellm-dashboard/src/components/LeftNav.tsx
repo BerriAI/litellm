@@ -81,6 +81,7 @@ import type { ParseKeys } from "i18next";
 import i18n from "@/i18n/i18n";
 import { cn } from "@/lib/cva.config";
 import { rolesWithCapability } from "../utils/capabilities";
+import { whatIfNavItems } from "./WhatIfNavItems";
 import {
   all_admin_roles,
   formatUserRole,
@@ -381,6 +382,7 @@ const menuGroups: MenuGroup[] = [
         roles: [...all_admin_roles, ...internalUserRoles],
         label: "shell.nav.items.costOptimization",
       },
+      ...whatIfNavItems,
       { key: "logs", page: "logs", label: "shell.nav.items.logs", icon: <Activity {...ICON} /> },
       {
         key: "lens",

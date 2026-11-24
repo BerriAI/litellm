@@ -8783,7 +8783,10 @@
         "costTracking": "Cost Tracking",
         "uiTheme": "UI Theme",
         "telemetry": "Telemetry",
-        "customers": "$t(customerPortal.entities.organizations)"
+        "customers": "$t(customerPortal.entities.organizations)",
+        "tapeCheck": "Tape Check",
+        "lostFields": "Lost Fields",
+        "keySplit": "Key Split"
       },
       "homeLink": "LiteLLM home"
     },
@@ -8825,7 +8828,10 @@
       "routerSettings": "Configure routing and load balancing settings",
       "telemetry": "Choose which anonymous usage telemetry this proxy collects and see the last report",
       "loggingAndAlerts": "Set up logging and alert configurations",
-      "adminPanel": "Access admin panel and settings"
+      "adminPanel": "Access admin panel and settings",
+      "tapeCheck": "Record what your MCP clients get from the gateway you run today, replay it against the version you want to upgrade to, and see every answer that changes before any client does.",
+      "lostFields": "Every field your clients sent in the last 24 hours that the provider never received, or received under another name, found by translating each logged request with and without the field.",
+      "keySplit": "Service-account keys whose logged traffic comes from more than one agent, told apart by system prompt and tool set, with one click to give each agent its own key."
     },
     "sidebarAccountMenu": {
       "toggles": {
@@ -21837,6 +21843,56 @@
       "infrastructure": "One place, your infrastructure",
       "findProblems": "Find what needs fixing",
       "nextRun": "Insights for the next run"
+    }
+  },
+  "whatIf": {
+    "tapeCheck": {
+      "title": "Tape Check",
+      "description": "Record what your MCP clients get from the gateway you run today, replay it against the version you want to upgrade to, and see every answer that changes before any client does.",
+      "record": "Record tape",
+      "replay": "Replay on candidate",
+      "tape": "Tape from v{{version}}: {{count}} exchanges",
+      "result": "v{{version}}: {{count}} changed",
+      "exchange": "Exchange",
+      "recorded": "Recorded answer",
+      "replayed": "On the candidate",
+      "same": "same",
+      "form": {
+        "current": "Gateway you run today",
+        "candidate": "Candidate gateway",
+        "key": "Gateway key",
+        "header": "Upstream credential header",
+        "credential": "Upstream credential",
+        "calls": "Read-only tool calls to record (JSON)"
+      }
+    },
+    "lostFields": {
+      "title": "Lost Fields",
+      "description": "Every field your clients sent in the last 24 hours that the provider never received, or received under another name, found by translating each logged request with and without the field.",
+      "scanned": "Requests scanned",
+      "affected": "Requests that lost a field",
+      "dropped": "Fields never sent",
+      "model": "Model",
+      "clientSent": "Client sent",
+      "providerGot": "Provider received",
+      "requests": "Requests",
+      "example": "Example request",
+      "neverSent": "never sent",
+      "sentAs": "sent as {{fields}}"
+    },
+    "keySplit": {
+      "title": "Key Split",
+      "description": "Service-account keys whose logged traffic comes from more than one agent, told apart by system prompt and tool set, with one click to give each agent its own key.",
+      "agentsBehind": "{{count}} agents behind this key",
+      "totals": "{{requests}} requests, ${{spend}}",
+      "agent": "Inferred agent",
+      "tools": "Tools",
+      "model": "Model",
+      "requests": "Requests",
+      "failed": "Failed",
+      "spend": "Spend",
+      "mint": "Give it its own key",
+      "none": "{{count}} keys scanned, none carries more than one agent"
     }
   }
 }

@@ -909,6 +909,7 @@ from litellm.proxy.management_endpoints.ui_sso import router as ui_sso_router
 from litellm.proxy.management_endpoints.user_agent_analytics_endpoints import (
     router as user_agent_analytics_router,
 )
+from litellm.proxy.management_endpoints.what_if_endpoints import router as what_if_router
 from litellm.proxy.management_endpoints.workflow_management_endpoints import (
     router as workflow_management_router,
 )
@@ -23305,6 +23306,7 @@ app.include_router(model_management_router)
 app.include_router(model_access_group_management_router)
 app.include_router(auto_router_management_router)
 app.include_router(tag_management_router)
+app.include_router(what_if_router)
 app.include_router(workflow_management_router)
 app.include_router(memory_router)
 app.include_router(lens_router)

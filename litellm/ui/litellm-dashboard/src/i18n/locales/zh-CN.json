@@ -8513,7 +8513,10 @@
         "costTracking": "成本追踪",
         "uiTheme": "UI 主题",
         "telemetry": "遥测",
-        "customers": "$t(customerPortal.entities.organizations)"
+        "customers": "$t(customerPortal.entities.organizations)",
+        "tapeCheck": "录带检查",
+        "lostFields": "丢失字段",
+        "keySplit": "密钥拆分"
       },
       "homeLink": "LiteLLM 首页"
     },
@@ -8555,7 +8558,10 @@
       "routerSettings": "配置路由和负载均衡",
       "telemetry": "选择此代理收集哪些匿名用量遥测数据，并查看最近一次报告",
       "loggingAndAlerts": "配置日志和告警",
-      "adminPanel": "访问管理面板与设置"
+      "adminPanel": "访问管理面板与设置",
+      "tapeCheck": "录制 MCP 客户端从当前网关获得的响应，在要升级到的版本上重放，并在客户端受影响之前看到每一处变化。",
+      "lostFields": "过去 24 小时内客户端发送但提供商从未收到或以其他名称收到的每个字段，通过对比包含和不包含该字段的请求转换结果得出。",
+      "keySplit": "日志流量来自多个智能体的服务账号密钥，按系统提示词和工具集区分，一键为每个智能体生成独立密钥。"
     },
     "sidebarAccountMenu": {
       "toggles": {
@@ -21500,6 +21506,56 @@
       "infrastructure": "集中管理，运行于您的基础设施",
       "findProblems": "找到需要修复的问题",
       "nextRun": "为下次运行提供洞察"
+    }
+  },
+  "whatIf": {
+    "tapeCheck": {
+      "title": "录带检查",
+      "description": "录制 MCP 客户端从当前网关获得的响应，在要升级到的版本上重放，并在客户端受影响之前看到每一处变化。",
+      "record": "录制",
+      "replay": "在候选版本上重放",
+      "tape": "来自 v{{version}} 的录带：{{count}} 次交互",
+      "result": "v{{version}}：{{count}} 处变化",
+      "exchange": "交互",
+      "recorded": "录制的响应",
+      "replayed": "候选版本",
+      "same": "相同",
+      "form": {
+        "current": "当前运行的网关",
+        "candidate": "候选网关",
+        "key": "网关密钥",
+        "header": "上游凭据请求头",
+        "credential": "上游凭据",
+        "calls": "要录制的只读工具调用 (JSON)"
+      }
+    },
+    "lostFields": {
+      "title": "丢失字段",
+      "description": "过去 24 小时内客户端发送但提供商从未收到或以其他名称收到的每个字段，通过对比包含和不包含该字段的请求转换结果得出。",
+      "scanned": "已扫描请求",
+      "affected": "丢失字段的请求",
+      "dropped": "从未发送的字段",
+      "model": "模型",
+      "clientSent": "客户端发送",
+      "providerGot": "提供商收到",
+      "requests": "请求数",
+      "example": "示例请求",
+      "neverSent": "未发送",
+      "sentAs": "以 {{fields}} 发送"
+    },
+    "keySplit": {
+      "title": "密钥拆分",
+      "description": "日志流量来自多个智能体的服务账号密钥，按系统提示词和工具集区分，一键为每个智能体生成独立密钥。",
+      "agentsBehind": "此密钥背后有 {{count}} 个智能体",
+      "totals": "{{requests}} 次请求，${{spend}}",
+      "agent": "推断的智能体",
+      "tools": "工具",
+      "model": "模型",
+      "requests": "请求数",
+      "failed": "失败",
+      "spend": "花费",
+      "mint": "为其生成独立密钥",
+      "none": "已扫描 {{count}} 个密钥，没有密钥承载多个智能体"
     }
   }
 }

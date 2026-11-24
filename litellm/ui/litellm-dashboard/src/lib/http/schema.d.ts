@@ -26953,6 +26953,86 @@ export interface paths {
         patch: operations["watsonx_proxy_route_watsonx__endpoint__patch"];
         trace?: never;
     };
+    "/what_if/key_split": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Key Split
+         * @description Find keys whose logged traffic comes from more than one agent, told apart by system prompt and tool set.
+         */
+        get: operations["get_key_split_what_if_key_split_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/what_if/lost_fields": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Lost Fields
+         * @description Replay the provider translation of logged requests and report client fields that never reached the provider.
+         */
+        get: operations["get_lost_fields_what_if_lost_fields_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/what_if/tape_check/record": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Record Tape
+         * @description Record what MCP clients get from a running gateway: tool lists with and without the upstream credential, and read-only calls.
+         */
+        post: operations["record_tape_what_if_tape_check_record_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/what_if/tape_check/replay": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Replay Tape
+         * @description Replay a recorded tape against a candidate gateway and report every answer an MCP client would see change.
+         */
+        post: operations["replay_tape_what_if_tape_check_replay_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/{mcp_server_name}/authorize": {
         parameters: {
             query?: never;
@@ -35890,6 +35970,30 @@ export interface components {
             /** Updated At */
             updated_at?: number | null;
         };
+        /** Exchange */
+        Exchange: {
+            /** Answer */
+            answer: {
+                [key: string]: unknown;
+            };
+            /** Body */
+            body?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Method
+             * @enum {string}
+             */
+            method: "GET" | "POST";
+            /** Name */
+            name: string;
+            /** Path */
+            path: string;
+            /** Status */
+            status: number;
+            /** Upstream Credential */
+            upstream_credential: boolean;
+        };
         /**
          * ExportType
          * @enum {string}
@@ -37268,6 +37372,27 @@ export interface components {
              */
             object: "list";
         };
+        /** InferredAgent */
+        InferredAgent: {
+            /** Failures */
+            failures: number;
+            /** Fingerprint */
+            fingerprint: string;
+            /** Models */
+            models: string[];
+            /** Requests */
+            requests: number;
+            /** Spend */
+            spend: number;
+            /** Suggested Name */
+            suggested_name: string;
+            /** System Prompt */
+            system_prompt: string;
+            /** Tools */
+            tools: string[];
+            /** User Agents */
+            user_agents: string[];
+        };
         /** InlineSkill */
         InlineSkill: {
             /** Description */
@@ -37589,6 +37714,15 @@ export interface components {
              * @default 0
              */
             total_tokens: number;
+        };
+        /** KeySplit */
+        KeySplit: {
+            /** Keys Scanned */
+            keys_scanned: number;
+            /** Shared Keys */
+            shared_keys: components["schemas"]["SharedKey"][];
+            /** Window Hours */
+            window_hours: number;
         };
         /**
          * KeyUpdateFields
@@ -41384,6 +41518,37 @@ export interface components {
             token: string;
         } & {
             [key: string]: unknown;
+        };
+        /** LostField */
+        LostField: {
+            /** Became */
+            became: string[];
+            /** Example Request Id */
+            example_request_id: string;
+            /**
+             * Fate
+             * @enum {string}
+             */
+            fate: "dropped" | "rewritten";
+            /** Field */
+            field: string;
+            /** Model */
+            model: string;
+            /** Requests */
+            requests: number;
+            /** Sent Value */
+            sent_value: string;
+        };
+        /** LostFields */
+        LostFields: {
+            /** Fields */
+            fields: components["schemas"]["LostField"][];
+            /** Requests Scanned */
+            requests_scanned: number;
+            /** Requests With Dropped Fields */
+            requests_with_dropped_fields: number;
+            /** Window Hours */
+            window_hours: number;
         };
         /**
          * MCPAllowedClient
@@ -46634,6 +46799,25 @@ export interface components {
             /** Summary */
             summary?: ("auto" | "concise" | "detailed") | null;
         };
+        /** RecordRequest */
+        RecordRequest: {
+            /** Api Key */
+            api_key: string;
+            /** Gateway Url */
+            gateway_url: string;
+            /**
+             * Read Only Calls
+             * @default []
+             */
+            read_only_calls: components["schemas"]["ToolCall"][];
+            /**
+             * Upstream Headers
+             * @default {}
+             */
+            upstream_headers: {
+                [key: string]: string;
+            };
+        };
         /** ReferenceExchangeRates */
         ReferenceExchangeRates: {
             /**
@@ -46960,6 +47144,33 @@ export interface components {
              * @description Opening delimiter, e.g. '<system-reminder>'
              */
             open: string;
+        };
+        /** ReplayRequest */
+        ReplayRequest: {
+            /** Api Key */
+            api_key: string;
+            /** Gateway Url */
+            gateway_url: string;
+            tape: components["schemas"]["Tape"];
+            /**
+             * Upstream Headers
+             * @default {}
+             */
+            upstream_headers: {
+                [key: string]: string;
+            };
+        };
+        /** ReplayedExchange */
+        ReplayedExchange: {
+            /** Changes */
+            changes: string[];
+            /** Name */
+            name: string;
+            /**
+             * Verdict
+             * @enum {string}
+             */
+            verdict: "same" | "changed";
         };
         /**
          * RequestComplexityRouterConfig
@@ -50304,6 +50515,19 @@ export interface components {
             /** Turn Count */
             turn_count: number;
         };
+        /** SharedKey */
+        SharedKey: {
+            /** Agents */
+            agents: components["schemas"]["InferredAgent"][];
+            /** Key Alias */
+            key_alias: string | null;
+            /** Key Hash */
+            key_hash: string;
+            /** Requests */
+            requests: number;
+            /** Spend */
+            spend: number;
+        };
         /**
          * ShellCall
          * @description A tool representing a request to execute one or more shell commands.
@@ -51763,6 +51987,30 @@ export interface components {
             /** Tpm Limit */
             tpm_limit?: number | null;
         };
+        /** Tape */
+        Tape: {
+            /** Exchanges */
+            exchanges: components["schemas"]["Exchange"][];
+            /** Recorded From */
+            recorded_from: string;
+            /** Version */
+            version: string;
+        };
+        /** TapeCheck */
+        TapeCheck: {
+            /** Candidate */
+            candidate: string;
+            /** Candidate Version */
+            candidate_version: string;
+            /** Changed */
+            changed: number;
+            /** Exchanges */
+            exchanges: components["schemas"]["ReplayedExchange"][];
+            /** Recorded From */
+            recorded_from: string;
+            /** Recorded Version */
+            recorded_version: string;
+        };
         /** Team */
         Team: {
             /** Alias */
@@ -52894,6 +53142,20 @@ export interface components {
             tokenizer_type: string;
             /** Total Tokens */
             total_tokens: number;
+        };
+        /** ToolCall */
+        ToolCall: {
+            /**
+             * Arguments
+             * @default {}
+             */
+            arguments: {
+                [key: string]: unknown;
+            };
+            /** Name */
+            name: string;
+            /** Server Id */
+            server_id: string;
         };
         /**
          * ToolChoiceAllowedParam
@@ -96707,6 +96969,134 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_key_split_what_if_key_split_get: {
+        parameters: {
+            query?: {
+                hours?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KeySplit"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_lost_fields_what_if_lost_fields_get: {
+        parameters: {
+            query?: {
+                hours?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LostFields"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    record_tape_what_if_tape_check_record_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecordRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Tape"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    replay_tape_what_if_tape_check_replay_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReplayRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TapeCheck"];
                 };
             };
             /** @description Validation Error */
