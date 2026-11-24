@@ -295,6 +295,47 @@ async def test_router_cooldown_event_callback():
 
 
 @pytest.mark.asyncio
+async def test_router_cooldown_event_callback_uses_upstream_model_label():
+    """
+    The litellm_model_name label must match what the request-success/failure
+    metric paths emit (request_kwargs["model"], i.e. the provider-resolved
+    upstream model), not the model group name. Otherwise the
+    litellm_deployment_state gauge stays at complete outage after the
+    deployment recovers, because the success handler writes a differently
+    labelled series.
+    """
+    from prometheus_client import REGISTRY
+
+    collectors = list(REGISTRY._collector_to_names.keys())
+    for collector in collectors:
+        REGISTRY.unregister(collector)
+
+    mock_ctx = MagicMock()
+    mock_deployment = Deployment(
+        model_name="glm-5.3-flash-uncensored",
+        litellm_params=LiteLLM_Params(
+            model="openai/GLM-5.3-Flash",
+            api_base="http://self-hosted.example.com:8080/v1",
+        ),
+        model_info=ModelInfo(id="test-model-id"),
+    )
+    mock_ctx.registry.return_value.deployment.return_value = mock_deployment
+
+    prometheus_logger = CustomPrometheusLogger()
+    litellm.callbacks = [prometheus_logger]
+
+    await router_cooldown_event_callback(
+        ctx=mock_ctx,
+        deployment_id="test-deployment",
+        exception_status="404",
+        cooldown_time=60.0,
+    )
+
+    assert prometheus_logger.deployment_complete_outages[0][0] == "GLM-5.3-Flash"
+    assert prometheus_logger.deployment_cooled_downs[0][0] == "GLM-5.3-Flash"
+
+
+@pytest.mark.asyncio
 async def test_router_cooldown_event_callback_no_prometheus():
     """
     Test the router_cooldown_event_callback function
