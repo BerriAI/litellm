@@ -12,6 +12,7 @@ from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
@@ -29,7 +30,8 @@ from ..common_utils import ElevenLabsException
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 _JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
 _FORM_ITEMS: Final = TypeAdapter(tuple[object, ...])
-_CLIENT_BLOCKED_FIELDS: Final = frozenset({"model_id", "extra_body"})
+_EXTRA_BODY: Final = TypeAdapter(Mapping[object, object])
+_FIELD_NAME: Final = TypeAdapter(str, config=ConfigDict(hide_input_in_errors=True, strict=True))
 
 
 def _json_compatible(value: object) -> object:
@@ -42,10 +44,18 @@ def _json_text(value: object) -> str:
     return json.dumps(value, default=_json_compatible)
 
 
-def _extra_body_fields(extra_body: object) -> Mapping[str, object]:
+def _field_name(key: object) -> str | None:
     with suppress(ValidationError):
-        return _JSON_OBJECT.validate_python(extra_body if isinstance(extra_body, Mapping) else {})
-    raise ElevenLabsException(status_code=400, message="ElevenLabs extra_body keys must be strings")
+        return _FIELD_NAME.validate_python(key)
+    return None
+
+
+def _extra_body_fields(extra_body: object, drop_params: bool) -> Mapping[str, object]:
+    entries: Final = _EXTRA_BODY.validate_python(extra_body if isinstance(extra_body, Mapping) else {}).items()
+    named: Final = tuple((_field_name(key), value) for key, value in entries)
+    if not drop_params and any(name is None for name, _ in named):
+        raise ElevenLabsException(status_code=400, message="ElevenLabs extra_body keys must be strings")
+    return {name: value for name, value in named if name is not None}
 
 
 def _form_scalar(value: object) -> str:
@@ -65,10 +75,10 @@ def _encoded_form_value(value: object) -> str | tuple[str, ...]:
     return tuple(_form_scalar(item) for item in items)
 
 
-def _form_value(value: object) -> str | tuple[str, ...]:
+def _form_value_if_encodable(value: object) -> str | tuple[str, ...] | None:
     with suppress(TypeError, ValueError, RecursionError):
         return _encoded_form_value(value)
-    raise ElevenLabsException(status_code=400, message="ElevenLabs form value cannot be encoded as JSON or text")
+    return None
 
 
 class ElevenLabsAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
@@ -127,21 +137,23 @@ class ElevenLabsAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
                 openai_params=openai_params,
             )
         )
-        extra_fields: Final = _extra_body_fields(provider_specific_params.get("extra_body"))
-        form_data: Final = {
-            "model_id": model,
-            **{
-                key: _form_value(value)
-                for key, value in extra_fields.items()
-                if key not in _CLIENT_BLOCKED_FIELDS and value is not None
-            },
-            **{key: _form_value(value) for key, value in params.items() if key in openai_params and value is not None},
-            **{
-                key: _form_value(value)
-                for key, value in provider_specific_params.items()
-                if key not in _CLIENT_BLOCKED_FIELDS
-            },
+        drop_params: Final = drops_unsupported_params(_JSON_OBJECT.validate_python(litellm_params).get("drop_params"))
+        extra_fields: Final = _extra_body_fields(provider_specific_params.get("extra_body"), drop_params)
+        requested: Final = {
+            **{key: value for key, value in extra_fields.items() if key != "extra_body" and value is not None},
+            **{key: value for key, value in params.items() if key in openai_params and value is not None},
+            **{key: value for key, value in provider_specific_params.items() if key != "extra_body"},
         }
+        if not drop_params and requested.get("model_id", model) != model:
+            raise ElevenLabsException(
+                status_code=400, message="ElevenLabs model_id must match the model this request uses"
+            )
+        encoded: Final = {key: _form_value_if_encodable(value) for key, value in requested.items() if key != "model_id"}
+        if not drop_params and any(value is None for value in encoded.values()):
+            raise ElevenLabsException(
+                status_code=400, message="ElevenLabs form value cannot be encoded as JSON or text"
+            )
+        form_data: Final = {"model_id": model, **{key: value for key, value in encoded.items() if value is not None}}
 
         # Prepare files
         files: Final = {
