@@ -41,6 +41,7 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
 SESSIONS_URL: Final = "https://api.openai.com/v1/agents/sessions"
 SESSION_ID: Final = "sess_6a0b0f8e2c1d4e5f"
 EVENTS_URL: Final = f"{SESSIONS_URL}/{SESSION_ID}/events"
+ENCODED_DOT_SEGMENT_SESSIONS_URL: Final = "https://api.openai.com/v1/agents/x/%2E%2E/sessions"
 TURNS_URL: Final = f"{SESSIONS_URL}/{SESSION_ID}/turns?order=desc&limit=100"
 SUBAGENTS_URL: Final = f"{SESSIONS_URL}/{SESSION_ID}/subagents?order=desc&limit=100"
 SUBAGENT_TURNS_URL: Final = f"{SESSIONS_URL}/{SESSION_ID}/subagents/subagent_1/turns?order=desc&limit=100"
@@ -364,6 +365,7 @@ async def test_an_input_message_bills_its_turn_once_usage_arrives(local_model_co
         pytest.param(f"{SESSIONS_URL}/{SESSION_ID}/%65vents", id="encoded_events"),
         pytest.param(f"https://api.openai.com/v1/agent%73/sessions/{SESSION_ID}/events", id="encoded_agents"),
         pytest.param(f"{SESSIONS_URL}/{SESSION_ID}/x/../events", id="dot_segment"),
+        pytest.param(f"{SESSIONS_URL}/{SESSION_ID}/x/%2E%2E/events", id="encoded_dot_segment"),
     ],
 )
 async def test_an_events_call_spelled_another_way_upstream_still_bills_its_turn(
@@ -381,6 +383,34 @@ async def test_an_events_call_spelled_another_way_upstream_still_bills_its_turn(
         {"events": [INPUT_MESSAGE]},
         None,
         "6f8b0d2f-4b6d-4f8b-0d2f-4b6d8f0b2d46",
+    )
+    row: Final = await rows.only_row()
+
+    assert row["total_tokens"] == TURN_USAGE["total_tokens"]
+    assert row["spend"] == pytest.approx(_expected_cost(TURN_USAGE))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "url_route",
+    [
+        pytest.param("https://api.openai.com/v1/agents/session%73", id="encoded_sessions"),
+        pytest.param(ENCODED_DOT_SEGMENT_SESSIONS_URL, id="encoded_dot_segment"),
+    ],
+)
+async def test_a_session_create_spelled_another_way_upstream_still_bills_its_first_turn(
+    local_model_cost_map: None, url_route: str
+):
+    api: Final = _AgentsApi(turn_pages=((_turn("turn_1", CALL_STARTED_AT, "completed", TURN_USAGE),),))
+    rows: Final = _SpendRows()
+
+    await _relay_call(
+        _biller(api, _Clock()),
+        rows,
+        url_route,
+        {"agent": {"model": AGENT_MODEL}, "input": USER_TEXT},
+        _session(),
+        "0d2f4b6d-8f0a-4c2e-9a4c-6e8a0c2e4a71",
     )
     row: Final = await rows.only_row()
 
@@ -684,7 +714,16 @@ async def test_a_call_that_starts_no_turn_logs_at_once_without_polling(
 
 
 @pytest.mark.asyncio
-async def test_a_streamed_session_create_defers_its_row_until_the_turn_is_billed(local_model_cost_map: None):
+@pytest.mark.parametrize(
+    "url_route",
+    [
+        pytest.param(SESSIONS_URL, id="canonical"),
+        pytest.param(ENCODED_DOT_SEGMENT_SESSIONS_URL, id="encoded_dot_segment"),
+    ],
+)
+async def test_a_streamed_session_create_defers_its_row_until_the_turn_is_billed(
+    local_model_cost_map: None, url_route: str
+):
     api: Final = _AgentsApi(turn_pages=((_turn("turn_1", CALL_STARTED_AT, "completed", TURN_USAGE),),))
     rows: Final = _SpendRows()
     created_event: Final = {"type": "agent.session.created", "session": _session()}
@@ -694,11 +733,11 @@ async def test_a_streamed_session_create_defers_its_row_until_the_turn_is_billed
             rows,
             "6a8c0e2a-4c6e-4f8a-9b2c-5a7c9e1a3c46",
             stream=True,
-            api_base=SESSIONS_URL,
+            api_base=url_route,
             litellm_params=_litellm_params(),
         ),
         passthrough_success_handler_obj=PassThroughEndpointLogging(agents_turn_biller=_biller(api, _Clock())),
-        url_route=SESSIONS_URL,
+        url_route=url_route,
         request_body={"agent": {"model": AGENT_MODEL}, "input": USER_TEXT, "stream": True},
         endpoint_type=EndpointType.OPENAI,
         start_time=CALL_TIME,

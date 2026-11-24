@@ -1,6 +1,7 @@
 import asyncio
 import itertools
 import math
+import posixpath
 import re
 import time
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
@@ -500,7 +501,7 @@ def openai_agents_sessions_call(url_route: str, custom_llm_provider: object) -> 
     if custom_llm_provider != "openai" or not is_openai_compatible_url(url_route):
         return None
     parsed_url: Final = urlparse(url_route)
-    route: Final = _sessions_route(httpx.URL(url_route).path)
+    route: Final = _sessions_route(posixpath.normpath(httpx.URL(url_route).path))
     return (
         None if route is None else AgentsSessionsCall(origin=f"{parsed_url.scheme}://{parsed_url.netloc}", route=route)
     )
