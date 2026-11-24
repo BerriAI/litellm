@@ -25,6 +25,26 @@ else:
     LiteLLMLoggingObj = Any
 
 
+def _upload_file_name(upload: object, default_name: str) -> object:
+    return upload.name if isinstance(upload, BufferedReader) else default_name
+
+
+def _build_upload_part(upload: object, default_name: str) -> tuple[object, ...]:
+    if isinstance(upload, tuple) and 2 <= len(upload) <= 4:
+        raw_name: Final = upload[0]
+        content: Final = upload[1]
+        resolved_name: Final = raw_name if raw_name is not None else _upload_file_name(content, default_name)
+        raw_type: Final = upload[2] if len(upload) >= 3 else None
+        resolved_type: Final = (
+            raw_type if raw_type is not None else ImageEditRequestUtils.get_image_content_type(content)
+        )
+        if len(upload) == 4:
+            return (resolved_name, content, resolved_type, upload[3])
+        return (resolved_name, content, resolved_type)
+    image_content_type: Final = ImageEditRequestUtils.get_image_content_type(upload)
+    return (_upload_file_name(upload, default_name), upload, image_content_type)
+
+
 class OpenAIImageEditConfig(BaseImageEditConfig):
     """
     Base configuration for OpenAI image edit API.
@@ -71,12 +91,7 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
         default_name: str = "image.png",
     ) -> None:
         """Add an image to the files list with appropriate content type"""
-        image_content_type: Final = ImageEditRequestUtils.get_image_content_type(image)
-
-        if isinstance(image, BufferedReader):
-            files_list.append((field_name, (image.name, image, image_content_type)))
-        else:
-            files_list.append((field_name, (default_name, image, image_content_type)))
+        files_list.append((field_name, _build_upload_part(image, default_name)))
 
     def transform_image_edit_request(
         self,
