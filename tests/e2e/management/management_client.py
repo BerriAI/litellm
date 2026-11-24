@@ -28,6 +28,7 @@ from e2e_metadata import STEP_FRAMES, step
 from models import (
     AuditLogPage,
     AuditLogParams,
+    BulkKeyInfoResponse,
     ChatBody,
     ChatMessage,
     ConnectionTestBody,
@@ -41,6 +42,7 @@ from models import (
     KeyDeleteByAliasBody,
     KeyGenerateBody,
     KeyGenerateResponse,
+    KeyInfoBulkBody,
     KeyInfoParams,
     KeyInfoResponse,
     KeyListParams,
@@ -205,6 +207,17 @@ class ManagementClient:
             headers=self.proxy.management_headers(caller_key),
             params=KeyInfoParams(key=key),
             response_type=KeyInfoResponse,
+        )
+
+    @step("Read the permitted key metadata from /v2/key/info")
+    def key_info_bulk_as(self, keys: list[str], *, caller_key: str | None = None) -> BulkKeyInfoResponse:
+        return unwrap(
+            self.proxy.transport.post(
+                "/v2/key/info",
+                headers=self.proxy.management_headers(caller_key),
+                json=KeyInfoBulkBody(keys=keys),
+                response_type=BulkKeyInfoResponse,
+            )
         )
 
     @step("Delete the virtual key")
