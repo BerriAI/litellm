@@ -579,6 +579,20 @@ def test_require_explicit_prices_lists_every_missing_price_when_model_info_is_ab
     ]
 
 
+@pytest.mark.usefixtures("price_map")
+def test_require_explicit_prices_ignores_a_price_litellm_params_does_not_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(_GPT_MAP_ENTRY, "input_cost_per_request", 0.01)
+    params: Final = "{model: openai/lint-gpt, input_cost_per_request: 1}"
+    assert _lint_prices(tmp_path, _model_entry(params, _GPT_PRICES)) == [
+        "config.yaml:3: warning: model_list[0].litellm_params.input_cost_per_request: unknown key, did you mean "
+        '"input_cost_per_query"?',
+        "config.yaml:4: error: model_list[0].model_info: openai/lint-gpt would take these prices from LiteLLM's "
+        "model cost map, set them in model_info: input_cost_per_request",
+    ]
+
+
 def test_require_explicit_prices_skips_wildcard_and_unmapped_models(tmp_path: Path) -> None:
     assert _lint_prices(tmp_path, _model_entry("{model: openai/*}")) == []
     unmapped: Final = _lint_prices(tmp_path, _model_entry("{model: openai/my-own-model}"))

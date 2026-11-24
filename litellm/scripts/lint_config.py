@@ -251,6 +251,7 @@ def _model_info_findings(
 ) -> Iterator[Finding]:
     import litellm
     from litellm.types.router import ModelInfo as RouterModelInfo
+    from litellm.types.utils import CustomPricingLiteLLMParams
     from litellm.utils import get_model_info_helper
 
     info_path: Final = (*path, "model_info")
@@ -294,7 +295,10 @@ def _model_info_findings(
     unset: Final = sorted(
         key
         for key, value in mapped.items()
-        if _is_price_key(key) and value is not None and model_info.get(key) is None and params.get(key) is None
+        if _is_price_key(key)
+        and value is not None
+        and model_info.get(key) is None
+        and (params.get(key) is None or key not in CustomPricingLiteLLMParams.model_fields)
     )
     if unset:
         yield Finding(
