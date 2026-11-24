@@ -205,7 +205,7 @@ class AutoRouter(CustomLogger):
     async def async_pre_routing_hook(
         self,
         model: str,
-        request_kwargs: dict[str, object],
+        request_kwargs: dict,
         messages: list[dict[str, object]] | None = None,
         input: str | Sequence[object] | None = None,
         specific_deployment: bool | None = False,
