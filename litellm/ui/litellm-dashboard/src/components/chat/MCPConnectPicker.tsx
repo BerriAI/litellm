@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import { Switch } from "@/components/ui/switch";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "@/lib/toast";
-import { Logo } from "@/components/molecules/logo/Logo";
+import { MCPServerLogo } from "@/components/mcp_tools/MCPServerLogo";
 import { fetchMCPServers, listMCPTools } from "../networking";
 import { MCPServer } from "../mcp_tools/types";
 
@@ -102,13 +102,11 @@ const MCPConnectPicker: React.FC<Props> = ({ accessToken, selectedServers, onCha
 
           return (
             <div key={server.server_id} className="flex items-start justify-between px-3 py-2 gap-3">
-              {server.mcp_info?.logo_url && (
-                <Logo
-                  src={server.mcp_info.logo_url}
-                  label={name}
-                  className="w-6 h-6 rounded-md object-contain shrink-0 mt-0.5"
-                />
-              )}
+              <MCPServerLogo
+                server={server}
+                name={name}
+                className="w-6 h-6 rounded-md object-contain shrink-0 mt-0.5"
+              />
               <div className="flex-1 min-w-0">
                 <div className="font-medium text-[13px] text-foreground truncate">{name}</div>
                 {server.description && (

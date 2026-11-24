@@ -76,8 +76,20 @@ describe("MCPServerCard logo", () => {
   });
 
   it("renders a letter avatar when no logo_url is set", () => {
-    renderCard({ mcp_info: { server_name: "demo_server" } });
+    renderCard({ mcp_info: { server_name: "demo_server" }, url: "http://demo.namespace.svc.cluster.local/mcp" });
     expect(screen.queryByAltText("demo_server logo")).not.toBeInTheDocument();
+    expect(screen.getByText("DE")).toBeInTheDocument();
+  });
+
+  it("uses the server's favicon when no logo is set and falls back to initials on image error", () => {
+    renderCard({});
+
+    const logo = screen.getByRole("img", { name: "demo_server logo" });
+    expect(logo).toHaveAttribute("src", "https://example.com/favicon.ico");
+    expect(logo).toHaveAttribute("referrerpolicy", "no-referrer");
+
+    fireEvent.error(logo);
+    expect(screen.queryByRole("img", { name: "demo_server logo" })).not.toBeInTheDocument();
     expect(screen.getByText("DE")).toBeInTheDocument();
   });
 });

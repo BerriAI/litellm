@@ -22,7 +22,7 @@ import {
   handleTransport,
   isUnsupportedOnGatewayConnect,
 } from "../mcp_tools/types";
-import { Logo } from "@/components/molecules/logo/Logo";
+import { MCPServerLogo } from "@/components/mcp_tools/MCPServerLogo";
 import i18n from "@/i18n/i18n";
 import { toast } from "@/lib/toast";
 import { pendingUserMcpOAuthServerId, useUserMcpOAuthFlow, type UserMcpOAuthStatus } from "@/hooks/useUserMcpOAuthFlow";
@@ -566,20 +566,19 @@ const MCPAppsPanel: React.FC<Props> = ({
         </Button>
 
         <div className="flex items-start gap-5 mb-7">
-          {detailServer.mcp_info?.logo_url ? (
-            <Logo
-              src={detailServer.mcp_info.logo_url}
-              label={name}
-              className="w-16 h-16 rounded-2xl object-contain shrink-0 bg-muted/50"
-            />
-          ) : (
-            <div
-              className="w-16 h-16 rounded-2xl flex items-center justify-center text-white font-bold text-[28px] shrink-0"
-              style={{ background: color }}
-            >
-              {name.charAt(0).toUpperCase()}
-            </div>
-          )}
+          <MCPServerLogo
+            server={detailServer}
+            name={name}
+            className="w-16 h-16 rounded-2xl object-contain shrink-0 bg-muted/50"
+            fallback={
+              <div
+                className="w-16 h-16 rounded-2xl flex items-center justify-center text-white font-bold text-[28px] shrink-0"
+                style={{ background: color }}
+              >
+                {name.charAt(0).toUpperCase()}
+              </div>
+            }
+          />
           <div className="flex-1">
             <h2 className="m-0 mb-1 text-[22px] font-bold text-foreground">{name}</h2>
             <p className="m-0 text-sm text-muted-foreground">
@@ -731,20 +730,19 @@ const MCPAppsPanel: React.FC<Props> = ({
                   unavailable ? "opacity-50" : ""
                 }`}
               >
-                {server.mcp_info?.logo_url ? (
-                  <Logo
-                    src={server.mcp_info.logo_url}
-                    label={name}
-                    className="w-[38px] h-[38px] rounded-xl object-contain shrink-0 bg-muted/50"
-                  />
-                ) : (
-                  <div
-                    className="w-[38px] h-[38px] rounded-xl flex items-center justify-center text-white font-bold text-base shrink-0"
-                    style={{ background: color }}
-                  >
-                    {name.charAt(0).toUpperCase()}
-                  </div>
-                )}
+                <MCPServerLogo
+                  server={server}
+                  name={name}
+                  className="w-[38px] h-[38px] rounded-xl object-contain shrink-0 bg-muted/50"
+                  fallback={
+                    <div
+                      className="w-[38px] h-[38px] rounded-xl flex items-center justify-center text-white font-bold text-base shrink-0"
+                      style={{ background: color }}
+                    >
+                      {name.charAt(0).toUpperCase()}
+                    </div>
+                  }
+                />
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-medium text-foreground truncate">{name}</div>
                   <div className="text-xs text-muted-foreground mt-0.5 flex items-center gap-1.5">

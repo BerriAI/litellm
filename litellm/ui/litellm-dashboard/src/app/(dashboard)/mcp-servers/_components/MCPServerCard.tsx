@@ -13,7 +13,7 @@ import {
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/cva.config";
 import { AUTH_TYPE, MCP_REACHABLE_DESCRIPTION, type MCPServer } from "@/components/mcp_tools/types";
-import { Logo } from "@/components/molecules/logo/Logo";
+import { MCPServerLogo } from "@/components/mcp_tools/MCPServerLogo";
 import { getMaskedAndFullUrl, getMCPNetworkAccess } from "./utils";
 import { STDIO_DISABLED_MESSAGE_KEY } from "./StdioAvailability";
 
@@ -60,8 +60,6 @@ const MCPServerCard: FC<MCPServerCardProps> = ({
   const { t } = useTranslation();
   const alias = server.alias || server.server_name || "";
   const name = server.server_name || alias || server.server_id;
-  // Logo is sourced exclusively from the admin-set `mcp_info.logo_url`.
-  const candidateLogo = server.mcp_info?.logo_url ?? undefined;
   const transport = server.transport || "http";
   const displayTransport = server.spec_path && transport !== "stdio" ? "openapi" : transport;
   const authType = server.auth_type || "none";
@@ -134,13 +132,16 @@ const MCPServerCard: FC<MCPServerCardProps> = ({
         )}
       >
         <div className="flex items-start gap-3">
-          {candidateLogo ? (
-            <Logo src={candidateLogo} label={name} className="h-10 w-10 shrink-0 rounded-sm object-contain" />
-          ) : (
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-sm bg-muted font-semibold text-muted-foreground">
-              {(name || "?").slice(0, 2).toUpperCase()}
-            </div>
-          )}
+          <MCPServerLogo
+            server={server}
+            name={name}
+            className="h-10 w-10 shrink-0 rounded-sm object-contain"
+            fallback={
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-sm bg-muted font-semibold text-muted-foreground">
+                {(name || "?").slice(0, 2).toUpperCase()}
+              </div>
+            }
+          />
           <div className="min-w-0 flex-1">
             <div className="block w-full truncate text-left font-semibold" title={name}>
               {name}
