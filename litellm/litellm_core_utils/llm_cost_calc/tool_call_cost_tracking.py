@@ -335,11 +335,11 @@ class StandardBuiltInToolCostTracking:
         """The provider runs the tool model itself, so no deployment is picked for it: the rates of the
         deployments named after the tool model apply only when every one of them configures the same ones."""
         from litellm.cost_calculator import _raw_cost_map_entry  # pyright: ignore[reportPrivateUsage]  # cost map row
-        from litellm.router_rust.surface.replay import live_registries
+        from litellm.router_rust.surface.replay import operator_registries
 
         deployments: Final = itertools.chain.from_iterable(
             registry._core_model_list  # pyright: ignore[reportPrivateUsage]  # the live list
-            for registry in live_registries()
+            for registry in operator_registries()
         )
         deployment_ids: Final = tuple(
             _output_item_field(deployment.get("model_info"), "id")
