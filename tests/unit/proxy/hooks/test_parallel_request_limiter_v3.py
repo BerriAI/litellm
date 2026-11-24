@@ -1572,6 +1572,7 @@ async def test_embedding_served_after_a_failed_attempt_still_charges_its_tpm_est
     [
         {"input": [_MP4_DATA_URI]},
         {"input": [{"image": {"bytesBase64Encoded": _JPEG_DATA_URI.split(",", 1)[1]}}]},
+        {"input": [{"audio": {"bytesBase64Encoded": "A" * 4096}}]},
         {"input": _JPEG_DATA_URI.split(",", 1)[1], "input_type": "image"},
         {"input": ["s3://bucket/clip.mp4"], "inputType": "video"},
     ],
