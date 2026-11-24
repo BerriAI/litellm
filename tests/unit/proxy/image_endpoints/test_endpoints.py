@@ -964,3 +964,56 @@ def test_streamed_image_blocked_by_a_post_call_guardrail_never_reaches_the_clien
     assert "image blocked by guardrail" in response.text
     assert _STREAMED_IMAGE not in response.text
     assert "UA==" not in response.text
+
+
+class _ImageReplacingLogger(CustomLogger):
+    async def async_post_call_success_hook(
+        self, data: dict[str, object], user_api_key_dict: UserAPIKeyAuth, response: object
+    ) -> object:
+        assert isinstance(response, ImageResponse)
+        return ImageResponse(
+            created=response.created, data=[ImageObject(b64_json="UkVQTEFDRUQ=")], usage=response.usage
+        )
+
+
+@pytest.mark.parametrize("kind", ["generation", "edit"])
+def test_streamed_image_replaced_by_a_post_call_hook_is_the_one_the_client_gets(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, kind: str
+) -> None:
+    prefix: Final = _STREAM_ROUTES[kind][1]
+    monkeypatch.setattr(litellm, "callbacks", [_ImageReplacingLogger()])
+    with _streaming_image_client(monkeypatch, respx_mock, kind) as client:
+        response: Final = _streamed_image_request(client, kind)
+
+    assert response.status_code == 200, response.text
+    events: Final = _sse_events(response.text)
+    assert [name for name, _ in events] == [f"{prefix}.partial_image", f"{prefix}.completed"]
+    assert events[-1][1]["b64_json"] == "UkVQTEFDRUQ="
+    assert events[-1][1]["usage"]["total_tokens"] == _STREAMED_USAGE["total_tokens"]
+    assert _STREAMED_IMAGE not in response.text
+
+
+@pytest.mark.parametrize("kind", ["generation", "edit"])
+def test_streamed_image_request_answered_with_json_gets_every_image_as_a_completed_event(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, kind: str
+) -> None:
+    path, prefix = _STREAM_ROUTES[kind]
+    with _streaming_image_client(monkeypatch, respx_mock, kind) as client:
+        respx_mock.post(f"https://openai.test/v1/images/{path}").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "created": 1700000000,
+                    "data": [{"b64_json": "Rklyc3Q="}, {"b64_json": _STREAMED_IMAGE}],
+                    "usage": _STREAMED_USAGE,
+                },
+            )
+        )
+        response: Final = _streamed_image_request(client, kind)
+
+    assert response.status_code == 200, response.text
+    events: Final = _sse_events(response.text)
+    assert [name for name, _ in events] == [f"{prefix}.completed", f"{prefix}.completed"]
+    assert [payload["b64_json"] for _, payload in events] == ["Rklyc3Q=", _STREAMED_IMAGE]
+    assert ["usage" in payload for _, payload in events] == [False, True]
+    assert events[-1][1]["usage"]["total_tokens"] == _STREAMED_USAGE["total_tokens"]

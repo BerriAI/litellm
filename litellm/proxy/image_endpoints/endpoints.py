@@ -17,7 +17,7 @@ import litellm
 from litellm.constants import MODEL_GROUP_ALIAS_RESOLVED_SCOPE_KEY
 from litellm.images.streaming import (
     AsyncImageStream,
-    completed_image_event,
+    completed_image_events,
     image_event_sse_frame,
     image_response_from_completed_event,
     image_stream_requested,
@@ -74,37 +74,43 @@ def _post_call_success_hook_of(proxy_logging: _PostCallSuccessHook) -> Callable[
 async def image_event_sse_stream(
     response: ImageResponse | AsyncImageStream,
     user_api_key_dict: UserAPIKeyAuth,
-    request_data: dict,
+    request_data: dict[str, object],
     request: Request | None = None,
     *,
     event_prefix: str,
 ) -> AsyncGenerator[str, None]:
     """Answer a streamed image request with the provider's events as server-sent events.
 
-    When a post-call guardrail applies, or the provider answered unstreamed, the client gets one completed
-    event once `post_call_success_hook` has passed the finished image."""
+    The finished image always goes through `post_call_success_hook` before it is sent. Partial images are
+    held back when a post-call guardrail applies, since only the finished image can be checked."""
     from litellm.proxy.proxy_server import openai_sse_error_frame, proxy_logging_obj
 
-    async def checked_completed_frame(image_response: ImageResponse) -> str:
+    async def checked_completed_frames(image_response: ImageResponse, provider_frame: str | None) -> tuple[str, ...]:
+        unchecked: Final = image_response.model_dump()
         checked: Final = await _post_call_success_hook_of(proxy_logging_obj)(
             data=request_data, user_api_key_dict=user_api_key_dict, response=image_response
         )
-        return image_event_sse_frame(
-            completed_image_event(
-                checked if isinstance(checked, ImageResponse) else image_response, event_prefix=event_prefix
-            )
+        served: Final = checked if isinstance(checked, ImageResponse) else image_response
+        if provider_frame is not None and served.model_dump() == unchecked:
+            return (provider_frame,)
+        return tuple(
+            image_event_sse_frame(event) for event in completed_image_events(served, event_prefix=event_prefix)
         )
 
     try:
         if isinstance(response, ImageResponse):
-            yield await checked_completed_frame(response)
+            for frame in await checked_completed_frames(response, None):
+                yield frame
             return
         guarded: Final = ProxyBaseLLMRequestProcessing(data=request_data)._has_post_call_guardrails_for_passthrough()  # pyright: ignore[reportPrivateUsage]  # the gate post_call_success_hook itself applies
         async for event in response:
-            if not guarded:
+            if is_completed_image_event(event):
+                for frame in await checked_completed_frames(
+                    image_response_from_completed_event(event), image_event_sse_frame(event)
+                ):
+                    yield frame
+            elif not guarded:
                 yield image_event_sse_frame(event)
-            elif is_completed_image_event(event):
-                yield await checked_completed_frame(image_response_from_completed_event(event))
     except Exception as stream_error:  # noqa: BLE001  # stream boundary: a failure ends the SSE body as an error event
         replacement: Final = await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,

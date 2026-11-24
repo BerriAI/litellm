@@ -198,19 +198,61 @@ async def test_a_stream_closed_after_its_first_event_is_still_billed_for_the_ima
     assert await outcomes.has_no_more()
 
 
+class _HeldEventStream(httpx.AsyncByteStream):
+    """An event stream whose bytes arrive only once `release` is set, so a read can be cancelled mid-flight."""
+
+    def __init__(self, body: bytes) -> None:
+        self.body: Final = body
+        self.read_started: Final = asyncio.Event()
+        self.release: Final = asyncio.Event()
+
+    async def __aiter__(self):
+        self.read_started.set()
+        await self.release.wait()
+        yield self.body
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["generation", "edit"])
+async def test_a_stream_whose_first_read_is_cancelled_is_still_billed_for_the_image(
+    respx_mock: respx.MockRouter, outcomes: _Outcomes, kind: str
+) -> None:
+    path, prefix = ROUTES[kind]
+    _provider(respx_mock, kind, None)
+    await _settled(_call(kind, True))
+    unstreamed_outcome: Final = await outcomes.next_outcome()
+    held: Final = _HeldEventStream(_partial(prefix) + _completed(prefix))
+    respx_mock.post(f"{API_BASE}/images/{path}").mock(
+        return_value=httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=held)
+    )
+
+    stream: Final = await _settled(_call(kind, True, stream=True, partial_images=1))
+    assert isinstance(stream, AsyncImageStream)
+    first_read: Final = asyncio.ensure_future(stream.__anext__())
+    await held.read_started.wait()
+    first_read.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await first_read
+    held.release.set()
+    await stream.aclose()
+
+    assert await outcomes.next_outcome() == unstreamed_outcome
+    assert await outcomes.has_no_more()
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
 @pytest.mark.parametrize("kind", ["generation", "edit"])
-async def test_a_stream_that_ends_without_a_completed_event_is_logged_as_a_failure(
+async def test_a_stream_that_ends_without_a_completed_event_raises_and_is_logged_as_a_failure(
     respx_mock: respx.MockRouter, outcomes: _Outcomes, kind: str, is_async: bool
 ) -> None:
     prefix: Final = ROUTES[kind][1]
     _provider(respx_mock, kind, _partial(prefix))
 
-    events: Final = await _events(await _settled(_call(kind, is_async, stream=True)))
+    with pytest.raises(litellm.BadGatewayError, match="ended before its completed event"):
+        await _events(await _settled(_call(kind, is_async, stream=True)))
     status, exception = await outcomes.next_outcome()
 
-    assert [event.type for event in events] == [f"{prefix}.partial_image"]
     assert status == "failure"
     assert "ended before its completed event" in str(exception)
     assert await outcomes.has_no_more()

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import datetime
 import json
 import traceback
@@ -71,19 +72,25 @@ def image_event_sse_frame(event: BaseModel) -> str:
     return f"event: {getattr(event, 'type', 'message')}\ndata: {event.model_dump_json(exclude_unset=True)}\n\n"
 
 
-def completed_image_event(response: ImageResponse, *, event_prefix: str) -> BaseModel:
-    """The one event a streamed request is answered with when its image was produced unstreamed."""
-    image: Final = response.data[0] if response.data else None
-    return openai.BaseModel.model_validate(
-        {
-            "type": f"{event_prefix}{_COMPLETED_SUFFIX}",
-            "created_at": response.created,
-            **response.model_dump(
-                include={"usage", "size", "quality", "output_format", "background"}, exclude_none=True
-            ),
-            **({} if image is None else image.model_dump(include={"b64_json", "url"}, exclude_none=True)),
-        }
-    )
+def completed_image_events(response: ImageResponse, *, event_prefix: str) -> tuple[BaseModel, ...]:
+    """One completed event per image of a response that was produced unstreamed. The last one carries the usage."""
+    images: Final = tuple(response.data or ())
+    shared: Final = {
+        "type": f"{event_prefix}{_COMPLETED_SUFFIX}",
+        "created_at": response.created,
+        **response.model_dump(include={"size", "quality", "output_format", "background"}, exclude_none=True),
+    }
+    usage: Final = response.model_dump(include={"usage"}, exclude_none=True)
+    return tuple(
+        openai.BaseModel.model_validate(
+            {
+                **shared,
+                **(usage if position == len(images) - 1 else {}),
+                **image.model_dump(include={"b64_json", "url"}, exclude_none=True),
+            }
+        )
+        for position, image in enumerate(images)
+    ) or (openai.BaseModel.model_validate({**shared, **usage}),)
 
 
 def _event_from_sse_data(line: str) -> BaseModel | None:
@@ -195,8 +202,11 @@ class ImageStream:
         try:
             event: Final = next(self._events)
         except StopIteration:
-            self._fail(_ended_before_completion())
-            raise
+            if self._settled:
+                raise
+            cut: Final = self._map_exception(_ended_before_completion())
+            self._fail(cut)
+            raise cut from None
         except Exception as exception:  # noqa: BLE001  # stream boundary: every provider failure is mapped and logged
             mapped: Final = self._map_exception(exception)
             self._fail(mapped)
@@ -248,6 +258,7 @@ class AsyncImageStream:
         self._logging_obj: Final = logging_obj
         self._map_exception: Final = map_exception
         self._settled = False
+        self._pending: asyncio.Future[BaseModel] | None = None
 
     @property
     def logging_obj(self) -> ImageStreamLogging:
@@ -258,10 +269,13 @@ class AsyncImageStream:
 
     async def __anext__(self) -> BaseModel:
         try:
-            event: Final = await self._events.__anext__()
+            event: Final = await self._read()
         except StopAsyncIteration:
-            await self._fail(_ended_before_completion())
-            raise
+            if self._settled:
+                raise
+            cut: Final = self._map_exception(_ended_before_completion())
+            await self._fail(cut)
+            raise cut from None
         except Exception as exception:  # noqa: BLE001  # stream boundary: every provider failure is mapped and logged
             mapped: Final = self._map_exception(exception)
             await self._fail(mapped)
@@ -269,6 +283,16 @@ class AsyncImageStream:
         if is_completed_image_event(event):
             await self._succeed(event)
         return event
+
+    async def _read(self) -> BaseModel:
+        """A caller cancelled mid-read leaves the read running, so `aclose` can still collect the billed image."""
+        pending: Final = self._pending or asyncio.ensure_future(self._events.__anext__())
+        self._pending = pending
+        try:
+            return await asyncio.shield(pending)
+        finally:
+            if pending.done():
+                self._pending = None
 
     async def _succeed(self, event: BaseModel) -> None:
         if self._settled:
