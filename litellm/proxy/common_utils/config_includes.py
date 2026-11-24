@@ -6,6 +6,7 @@ from typing import Final, Protocol
 from litellm._logging import verbose_proxy_logger
 
 INCLUDE_KEY: Final = "include"
+_SETTINGS_SECTIONS: Final = frozenset(("general_settings", "router_settings", "litellm_settings"))
 
 
 def resolve_include_file_path(include_file: str, declared_in: str, root_config_path: str) -> str:
@@ -70,6 +71,14 @@ def _without_include(config: Mapping[str, object]) -> Mapping[str, object]:
     return MappingProxyType({key: value for key, value in config.items() if key != INCLUDE_KEY})
 
 
+def is_empty_settings_section(key: str, value: object) -> bool:
+    return key in _SETTINGS_SECTIONS and not isinstance(value, Mapping) and not value
+
+
+def _without_empty_settings_sections(config: Mapping[str, object]) -> Mapping[str, object]:
+    return MappingProxyType({key: value for key, value in config.items() if not is_empty_settings_section(key, value)})
+
+
 def include_entries(config: Mapping[str, object]) -> tuple[str, ...]:
     if INCLUDE_KEY not in config:
         return ()
@@ -106,7 +115,7 @@ async def _resolve(
 
     included: Final = await read(location)
     return await _resolve(
-        _merged(config, _without_include(included)),
+        _merged(config, _without_empty_settings_sections(_without_include(included))),
         (*pending[1:], *_pending_from(included, location)),
         loaded | frozenset((location,)),
         resolve,
@@ -123,10 +132,13 @@ async def resolve_includes(
     """
     Merge every config named by the `include` directive into the config that declares it.
 
-    List values are extended and every other value is overridden, `resolve` turns each entry into the
+    List values are extended and every other value is overridden, an empty settings section in any config
+    reads as no section so it never replaces one another config sets, `resolve` turns each entry into the
     location it names relative to the config that declares it, a config already pulled in is neither
     read nor merged a second time, and `read` decides where a location is read from, so the same merge
     applies to configs on disk and to configs hosted in a bucket.
     """
-    merged: Final = await _resolve(config, _pending_from(config, location), frozenset((location,)), resolve, read)
+    merged: Final = await _resolve(
+        _without_empty_settings_sections(config), _pending_from(config, location), frozenset((location,)), resolve, read
+    )
     return dict(merged)

@@ -22,6 +22,7 @@ import yaml
 
 import litellm
 from litellm.proxy.proxy_server import ProxyConfig
+from tests._master_key import MASTER_KEY
 
 INVALID_FILES = ["config_with_missing_include.yaml"]
 
@@ -381,17 +382,20 @@ async def test_proxy_config_model_fallbacks_never_becomes_the_sdk_global_fallbac
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("section", ["litellm_settings", "general_settings", "router_settings"])
-@pytest.mark.parametrize("empty", [[], "", 0, False, None])
-async def test_get_config_reads_an_empty_settings_section_as_no_section(
-    tmp_path: Path, section: str, empty: object
+@pytest.mark.parametrize("empty", [[], None])
+async def test_get_config_keeps_the_general_settings_a_config_sets_over_an_empty_included_section(
+    tmp_path: Path, empty: object
 ) -> None:
+    general_settings: Final = {"master_key": MASTER_KEY, "allowed_ips": ["10.9.9.9"]}
+    (tmp_path / "shared.yaml").write_text(yaml.safe_dump({"general_settings": empty}))
     config_path: Final = tmp_path / "config.yaml"
-    config_path.write_text(yaml.safe_dump({"model_list": [], section: empty}))
+    config_path.write_text(
+        yaml.safe_dump({"model_list": [], "include": ["shared.yaml"], "general_settings": general_settings})
+    )
 
     config: Final = await ProxyConfig().get_config(config_file_path=str(config_path))
 
-    assert section not in config
+    assert config["general_settings"] == general_settings
 
 
 @pytest.mark.asyncio

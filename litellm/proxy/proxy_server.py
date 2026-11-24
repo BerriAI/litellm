@@ -5478,14 +5478,6 @@ _CONFIG_UNMANAGED_EXCLUSIONS: Final = frozenset(("environment_variables", "model
 _CONFIG_SECTION_VALUES: Final = TypeAdapter(Mapping[str, JsonValue])
 
 
-def _is_empty_settings_section(key: str, value: object) -> bool:
-    return key in _CONFIG_PERSISTED_SECTIONS and not isinstance(value, Mapping) and not value
-
-
-def _without_empty_settings_sections(config: Mapping[str, object]) -> Mapping[str, object]:
-    return MappingProxyType({key: value for key, value in config.items() if not _is_empty_settings_section(key, value)})
-
-
 class _ConfigParamWhere(TypedDict):
     param_name: ReadOnly[str]
 
@@ -6459,21 +6451,18 @@ class ProxyConfig:
             if object_key is None:
                 raise Exception("LITELLM_CONFIG_BUCKET_OBJECT_KEY must be set to load the config from a bucket.")
 
-            bucket_config: Final = await get_config_from_bucket(
+            config = await get_config_from_bucket(
                 bucket_type=bucket_type,
                 bucket_name=bucket_name,
                 object_key=object_key,
             )
 
-            if bucket_config is None:
+            if config is None:
                 raise Exception("Unable to load config from given source.")
-            config = dict(_without_empty_settings_sections(bucket_config))
         else:
             # default to file
 
-            config = dict(
-                _without_empty_settings_sections(await self._get_config_from_file(config_file_path=config_file_path))
-            )
+            config = await self._get_config_from_file(config_file_path=config_file_path)
 
         self._load_yaml_settings_stores(config)
 

@@ -99,6 +99,19 @@ def test_one_mistake_is_reported_at_its_line(tmp_path: Path, old: str, new: str,
     assert _lint(tmp_path, VALID.replace(old, new)) == expected
 
 
+@pytest.mark.parametrize("section", ["litellm_settings", "general_settings", "router_settings"])
+def test_an_empty_settings_section_has_no_findings(tmp_path: Path, section: str) -> None:
+    assert _lint(tmp_path, f"model_list: []\n{section}: []\n") == []
+
+
+def test_an_empty_section_in_an_included_file_leaves_findings_at_their_own_line(tmp_path: Path) -> None:
+    (tmp_path / "shared.yaml").write_text("general_settings: []\n", encoding="utf-8")
+    text: Final = "model_list: []\ninclude:\n  - shared.yaml\ngeneral_settings:\n  master_kee: x\n"
+    assert _lint(tmp_path, text) == [
+        'config.yaml:5: warning: general_settings.master_kee: unknown key, did you mean "master_key"?'
+    ]
+
+
 def test_malformed_yaml_is_one_error_with_a_line(tmp_path: Path) -> None:
     findings: Final = _lint(tmp_path, VALID.replace("litellm_settings:", "model_list: [\nlitellm_settings:"))
     assert len(findings) == 1
