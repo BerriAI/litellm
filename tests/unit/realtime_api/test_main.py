@@ -1098,6 +1098,30 @@ async def test_xai_health_check_trusts_the_handshake_without_reading_a_first_eve
     assert connect.url == "wss://api.x.ai/v1/realtime?model=grok-voice-latest"
 
 
+@pytest.mark.asyncio
+async def test_hosted_vllm_health_check_trusts_the_handshake_without_reading_a_first_event():
+    connect: Final = _CapturingConnect(_ScriptedConnection())
+    with patch("websockets.connect", connect):
+        assert await realtime_main.realtime_health_check(
+            model="Voxtral-Mini-4B-Realtime-2602",
+            custom_llm_provider="hosted_vllm",
+            api_key="sk-test",
+            api_base="http://10.13.1.150:8030/v1",
+        )
+    assert connect.url == "ws://10.13.1.150:8030/v1/realtime?model=Voxtral-Mini-4B-Realtime-2602"
+    assert connect.kwargs["ssl"] is None
+
+
+@pytest.mark.asyncio
+async def test_hosted_vllm_health_check_without_an_api_base_raises():
+    with pytest.raises(ValueError, match="api_base is required"):
+        await realtime_main.realtime_health_check(
+            model="Voxtral-Mini-4B-Realtime-2602",
+            custom_llm_provider="hosted_vllm",
+            api_key="sk-test",
+        )
+
+
 class _ConnectThatStopsAfterCapturingTheUrl:
     url: str | None = None
 
@@ -1785,6 +1809,33 @@ async def test_arealtime_openai_connects_to_api_base_rather_than_the_callers_cli
 
     expected_query: Final = "model=gateway-realtime&intent=transcription" if intent else "model=gateway-realtime"
     assert connect.url == f"wss://configured-gateway.example/v1/realtime?{expected_query}"
+
+
+@pytest.mark.asyncio
+async def test_arealtime_hosted_vllm_connects_to_the_deployment_api_base() -> None:
+    connect: Final = _ConnectThatStopsAfterCapturingTheUrl()
+    with patch("websockets.connect", connect), patch("websockets.asyncio.client.connect", connect):
+        await realtime_main._arealtime.__wrapped__(
+            model="hosted_vllm/Voxtral-Mini-4B-Realtime-2602",
+            websocket=_ClosableGaClientWebSocket(),
+            api_key="fake-key",
+            api_base="http://10.13.1.150:8030/v1",
+            query_params={"model": "hosted_vllm/Voxtral-Mini-4B-Realtime-2602"},
+            litellm_logging_obj=FakeLogging(),
+        )
+    assert connect.url == "ws://10.13.1.150:8030/v1/realtime?model=Voxtral-Mini-4B-Realtime-2602"
+
+
+@pytest.mark.asyncio
+async def test_arealtime_hosted_vllm_without_an_api_base_raises() -> None:
+    with pytest.raises(ValueError, match="api_base is required"):
+        await realtime_main._arealtime.__wrapped__(
+            model="hosted_vllm/Voxtral-Mini-4B-Realtime-2602",
+            websocket=_ClosableGaClientWebSocket(),
+            api_key="fake-key",
+            query_params={"model": "hosted_vllm/Voxtral-Mini-4B-Realtime-2602"},
+            litellm_logging_obj=FakeLogging(),
+        )
 
 
 @pytest.mark.parametrize(

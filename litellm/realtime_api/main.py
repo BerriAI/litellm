@@ -180,6 +180,12 @@ def _session_litellm_metadata(kwargs: Mapping[str, object]) -> Mapping[str, obje
 
 _HTTP_TRANSLATION_PROVIDERS: Final = frozenset({LlmProviders.OPENAI.value, LlmProviders.AZURE.value})
 _WEBSOCKET_TRANSLATION_PROVIDERS: Final = frozenset({LlmProviders.OPENAI.value, *AZURE_OPENAI_AUDIO_PROVIDERS})
+# Self-hosted providers that speak the OpenAI-compatible realtime protocol
+# (GET /v1/realtime websocket). They are served through the OpenAI realtime
+# handler with the deployment's own api_base instead of api.openai.com.
+_OPENAI_COMPATIBLE_REALTIME_PROVIDERS: Final = frozenset(
+    {LlmProviders.HOSTED_VLLM.value, LlmProviders.VLLM.value}
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1102,8 +1108,16 @@ async def _arealtime(
             bridges_beta_client_to_ga=realtime_protocol.bridges_beta_client_to_ga,
             drop_params=drop_params,
         )
-    elif _custom_llm_provider == "openai":
-        api_base = dynamic_api_base or litellm_params.api_base or litellm.api_base or "https://api.openai.com/"
+    elif (
+        _custom_llm_provider == "openai"
+        or _custom_llm_provider in _OPENAI_COMPATIBLE_REALTIME_PROVIDERS
+    ):
+        api_base = dynamic_api_base or litellm_params.api_base or litellm.api_base
+        if api_base is None:
+            if _custom_llm_provider == "openai":
+                api_base = "https://api.openai.com/"
+            else:
+                raise ValueError(f"api_base is required for {_custom_llm_provider} realtime calls")
         api_key = await resolve_openai_bearer_token_async(
             static_api_key=openai_static_api_key(dynamic_api_key), api_base=api_base, litellm_params=kwargs
         )
@@ -1385,6 +1399,10 @@ async def realtime_health_check(
             query_params=azure_query_params,
         )
     elif custom_llm_provider == "openai":
+        url = openai_realtime.construct_url(api_base=openai_api_base, query_params={"model": model})
+    elif custom_llm_provider in _OPENAI_COMPATIBLE_REALTIME_PROVIDERS:
+        if resolved_api_base is None and litellm.api_base is None:
+            raise ValueError(f"api_base is required for {custom_llm_provider} realtime health checks")
         url = openai_realtime.construct_url(api_base=openai_api_base, query_params={"model": model})
     elif custom_llm_provider == "soniox":
         return await soniox_realtime_health_check(
