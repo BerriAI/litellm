@@ -1,6 +1,7 @@
 mod admit;
 mod boot;
 mod callbacks;
+mod config_sync;
 mod db;
 mod error;
 mod health;
