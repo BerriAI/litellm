@@ -12615,6 +12615,7 @@ async def _key_model_listing(
     include_wildcard_routes: bool = False,
     include_metadata: bool = False,
     fallback_type: str | None = None,
+    offered_model_names: Sequence[str] = (),
 ) -> _KeyModelListing:
     from litellm.proxy.utils import get_available_models_for_user
 
@@ -12631,11 +12632,12 @@ async def _key_model_listing(
         return_wildcard_routes=include_wildcard_routes,
         user_api_key_cache=user_api_key_cache,
     )
+    names: Final = (*available, *(name for name in offered_model_names if name not in available))
     excluded: Final = hidden_names | undiscoverable_model_names(
-        available, llm_router, user_api_key_dict, team_id or user_api_key_dict.team_id
+        names, llm_router, user_api_key_dict, team_id or user_api_key_dict.team_id
     )
     translated_entries: Final = TeamModelNameTranslator.listing_entries(
-        [name for name in available if name not in excluded], llm_router, general_settings_view()
+        [name for name in names if name not in excluded], llm_router, general_settings_view()
     )
     verdict: Final = await _listing_callback_verdict(
         user_api_key_dict,

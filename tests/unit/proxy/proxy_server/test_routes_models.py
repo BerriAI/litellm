@@ -647,3 +647,23 @@ async def test_pickers_offer_typesafe_names_once_and_no_bare_name_for_registered
     assert "ticket-router" in listed
     assert listed.count("typesafe/*") == 1
     assert set(listed).isdisjoint({"*", "my-classifier"})
+
+
+@pytest.mark.asyncio
+async def test_accessible_model_names_lists_the_registered_models_a_key_can_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    router: Final = Router(
+        model_list=[
+            {"model_name": "ticket-router", "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-fake"}},
+            {"model_name": "off-limits", "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-fake"}},
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "llm_model_list", router.model_list)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(proxy_server, "user_model", None)
+    key: Final = UserAPIKeyAuth(api_key="sk-test", user_id="u", models=["ticket-router"])
+
+    assert await proxy_server.accessible_model_names(key) == ("ticket-router",)
