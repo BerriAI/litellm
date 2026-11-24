@@ -1,7 +1,9 @@
+import asyncio
 import copy
 import dataclasses
+import time
 import uuid
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from types import SimpleNamespace
 from typing import Final
 
@@ -47,6 +49,13 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointT
 from litellm.types.utils import CallTypes
 
 _DESCRIPTORS: Final = TypeAdapter(list[RateLimitDescriptor])
+NATIVE_LOG_DELIVERY_SECONDS: Final = 30
+
+
+async def native_logs_delivered(ready: Callable[[], bool]) -> None:
+    deadline: Final = time.monotonic() + NATIVE_LOG_DELIVERY_SECONDS
+    while not ready() and time.monotonic() < deadline:
+        await asyncio.sleep(0.01)
 
 
 def _view(

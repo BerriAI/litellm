@@ -72,7 +72,7 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointT
 from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth, CustomerScopeAuth
 from litellm.types.utils import CallTypes, ModelResponse, Usage
 from tests._support.parallel_request_limiter_golden import Golden, Ttl
-from tests._support.rust_parallel_request_limiter import declared_reads
+from tests._support.rust_parallel_request_limiter import declared_reads, native_logs_delivered
 from tests.unit.proxy.hooks.native_capacity_handler import NativeDynamicRateLimitHandler
 
 pytest.importorskip("litellm.rust_bridge._native")
@@ -1843,7 +1843,6 @@ async def test_fail_closed_refuses_in_a_request_batch_with_the_breaker_open_like
 
 
 _OS_ERROR: Final = re.compile(r"\(os error \d+\)")
-_DELIVERY_SECONDS: Final = 30
 
 
 class _Lines(logging.Handler):
@@ -1855,9 +1854,7 @@ class _Lines(logging.Handler):
         self.lines.append((record.levelname, _OS_ERROR.sub("(os error <errno>)", record.getMessage())))
 
     async def delivered(self) -> list[tuple[str, str]]:
-        deadline: Final = time.monotonic() + _DELIVERY_SECONDS
-        while not _GOLDEN.agrees(sorted(self.lines)) and time.monotonic() < deadline:
-            await asyncio.sleep(0.01)
+        await native_logs_delivered(lambda: _GOLDEN.agrees(sorted(self.lines)))
         return sorted(self.lines)
 
 

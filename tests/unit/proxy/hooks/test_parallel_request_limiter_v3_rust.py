@@ -96,6 +96,7 @@ from tests._support.rust_parallel_request_limiter import (
     PROXY_MaxParallelRequestsHandler_v3,
     estimate_tokens_for_request,
     get_request_stash,
+    native_logs_delivered,
     rate_limit_descriptors,
 )
 from tests._support.rust_parallel_request_limiter import (
@@ -5281,9 +5282,22 @@ async def test_one_malformed_estimate_field_does_not_discard_the_other(monkeypat
     assert broken_global == ONE_TOKEN_PROMPT_INPUT_ESTIMATE + 3001
 
 
+_CANNOT_BE_ADMITTED: Final = "cannot be admitted even against an empty window"
+_FAIL_CLOSED_REJECTION: Final = (
+    "fail_closed_rate_limit_enforcement: rejecting request, batch_rate_limiter_script could not verify the "
+    "counters against Redis"
+)
+
+
+def _logged(caplog: pytest.LogCaptureFixture, text: str) -> tuple[str, ...]:
+    return tuple(record.getMessage() for record in caplog.records if text in record.getMessage())
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("declared", [100_000, 5000])
-async def test_declared_estimate_over_the_tpm_budget_is_honored_and_explained(monkeypatch, caplog, declared):
+async def test_declared_estimate_over_the_tpm_budget_is_honored_and_explained(
+    monkeypatch, caplog: pytest.LogCaptureFixture, declared
+):
     """A declaration bigger than the budget must not be silently shrunk.
 
     Capping it against the TPM limit would re-admit exactly the traffic this
@@ -5312,13 +5326,10 @@ async def test_declared_estimate_over_the_tpm_budget_is_honored_and_explained(mo
                 data={"model": "gpt-4o-mini", "messages": ONE_TOKEN_PROMPT},
                 call_type="completion",
             )
+        await native_logs_delivered(lambda: bool(_logged(caplog, _CANNOT_BE_ADMITTED)))
 
     assert exc_info.value.status_code == 429
-    explained = [
-        record.getMessage()
-        for record in caplog.records
-        if "cannot be admitted even against an empty window" in record.getMessage()
-    ]
+    explained = _logged(caplog, _CANNOT_BE_ADMITTED)
     assert len(explained) == 1, f"expected exactly one explanation, got {explained}"
     assert str(declared) in explained[0]
     assert str(ONE_TOKEN_PROMPT_INPUT_ESTIMATE + declared) in explained[0]
@@ -5326,7 +5337,9 @@ async def test_declared_estimate_over_the_tpm_budget_is_honored_and_explained(mo
 
 
 @pytest.mark.asyncio
-async def test_a_key_that_declared_nothing_is_never_blamed_for_a_declaration(monkeypatch, caplog):
+async def test_a_key_that_declared_nothing_is_never_blamed_for_a_declaration(
+    monkeypatch, caplog: pytest.LogCaptureFixture
+):
     """A request can outgrow its budget on prompt size alone, with no declaration.
 
     The heuristic path reserves input plus the injected clamp, so a long
@@ -5351,13 +5364,13 @@ async def test_a_key_that_declared_nothing_is_never_blamed_for_a_declaration(mon
             )
 
     assert exc_info.value.status_code == 429
-    assert not [
-        record for record in caplog.records if "cannot be admitted even against an empty window" in record.getMessage()
-    ]
+    assert not _logged(caplog, _CANNOT_BE_ADMITTED)
 
 
 @pytest.mark.asyncio
-async def test_declared_estimate_inside_the_tpm_budget_is_not_explained(monkeypatch, caplog):
+async def test_declared_estimate_inside_the_tpm_budget_is_not_explained(
+    monkeypatch, caplog: pytest.LogCaptureFixture
+):
     """The explanation is for requests that cannot fit, not for every request.
 
     Without this, a correctly configured key would emit one line per call.
@@ -5378,9 +5391,7 @@ async def test_declared_estimate_inside_the_tpm_budget_is_not_explained(monkeypa
             call_type="completion",
         )
 
-    assert not [
-        record for record in caplog.records if "cannot be admitted even against an empty window" in record.getMessage()
-    ]
+    assert not _logged(caplog, _CANNOT_BE_ADMITTED)
 
 
 @pytest.mark.asyncio
@@ -5976,7 +5987,7 @@ def _redis_that_breaks_the_pipe() -> Iterator[int]:
 
 @pytest.mark.asyncio
 async def test_fail_closed_read_from_the_bound_settings_store_rejects_a_limited_key_when_redis_breaks_mid_request(
-    monkeypatch, caplog
+    monkeypatch, caplog: pytest.LogCaptureFixture
 ):
     from litellm.proxy import proxy_server
     from litellm.proxy.config_resolvers.settings_store import SettingsStore
@@ -5996,14 +6007,11 @@ async def test_fail_closed_read_from_the_bound_settings_store_rejects_a_limited_
             with pytest.raises(HTTPException) as exc:
                 await _admit(handler, limited)
             await _admit(handler, unlimited)
+            await native_logs_delivered(lambda: bool(_logged(caplog, _FAIL_CLOSED_REJECTION)))
 
     assert exc.value.status_code == 503
     assert exc.value.detail == {"error": RATE_LIMIT_UNVERIFIABLE_MESSAGE}
-    assert any(
-        "fail_closed_rate_limit_enforcement: rejecting request, batch_rate_limiter_script could not verify the "
-        "counters against Redis" in record.getMessage()
-        for record in caplog.records
-    )
+    assert _logged(caplog, _FAIL_CLOSED_REJECTION)
 
 
 def test_default_hash_tag_grouping_resolver_uses_litellm_setting(monkeypatch: pytest.MonkeyPatch):
