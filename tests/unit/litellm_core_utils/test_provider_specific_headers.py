@@ -162,7 +162,7 @@ class TestProviderSpecificHeaderUtils:
             "anthropic-user-profile-id": "uprof_pinned",
         }
 
-_PROFILE_ON_AZURE_AI: ProviderSpecificHeader = {
+_PROFILE_ON_AZURE_AI: Final[ProviderSpecificHeader] = {
     "custom_llm_provider": "azure_ai",
     "extra_headers": {"anthropic-user-profile-id": "uprof_client"},
     "user_profile_id_models_only": True,
@@ -247,7 +247,7 @@ def test_an_unlisted_deployment_takes_the_profile_id_when_its_base_model_is_flag
 def test_a_yielding_entry_never_replaces_a_configured_header(
     yields_to_configured: bool, configured_headers: dict[str, str] | None, expected: dict[str, str]
 ) -> None:
-    scoped_header: ProviderSpecificHeader = {**_PROFILE_ON_AZURE_AI, "yields_to_configured": yields_to_configured}
+    scoped_header: Final[ProviderSpecificHeader] = {**_PROFILE_ON_AZURE_AI, "yields_to_configured": yields_to_configured}
 
     assert (
         ProviderSpecificHeaderUtils.get_provider_specific_headers(
