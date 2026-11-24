@@ -1,14 +1,14 @@
 //! Salt-key encryption of the values the Python proxy stores in the DB, such as model params and credentials,
-//! byte-compatible with `litellm/proxy/common_utils/encrypt_decrypt_utils.py` outside FIPS mode
+//! byte-compatible with `litellm/proxy/common_utils/encrypt_decrypt_utils.py` with `general_settings.fips_mode` off or on
 #![forbid(unsafe_code)]
 
+mod approved;
 mod error;
-mod gcm;
 mod key;
 mod secretbox;
 
-pub use error::{DecryptError, EncryptError};
-pub use key::{Algorithm, AtRestKey, Plaintext};
+pub use error::{DecryptError, EncryptError, SaltKeyTooShort};
+pub use key::{Algorithm, AtRestKey, KeyDerivation, Plaintext};
 
 fn random_nonce<const N: usize>() -> Result<[u8; N], EncryptError> {
     let mut nonce = [0u8; N];
