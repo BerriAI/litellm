@@ -9,9 +9,17 @@ from typing import Any, Dict, Final, List
 from unittest.mock import MagicMock
 
 import pytest
-from openai.types.responses import ResponseInputImageParam
+from openai.types.responses import (
+    ResponseFunctionToolCall,
+    ResponseInputImageParam,
+    ResponseOutputMessage,
+    ResponseOutputText,
+    ResponseReasoningItem,
+)
+from openai.types.responses.response_reasoning_item import Summary
 from pydantic import TypeAdapter
 
+import litellm
 from litellm.constants import (
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
@@ -26,11 +34,16 @@ from litellm.llms.anthropic.pass_through.responses_adapters.transformation impor
     LiteLLMAnthropicToResponsesAPIAdapter,
 )
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+from litellm.responses.litellm_completion_transformation.transformation import (
+    LiteLLMCompletionResponsesConfig,
+)
 from litellm.types.llms.anthropic import (
     AllAnthropicToolsValues,
     AnthropicMessagesRequest,
+    AnthropicOutputConfig,
 )
-from litellm.types.llms.openai import ResponseAPIUsage
+from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
+from litellm.types.utils import Choices, Message, ModelResponse
 
 
 def _make_request(**overrides) -> AnthropicMessagesRequest:
@@ -1021,10 +1034,6 @@ class TestTranslateThinkingToReasoning:
         assert result_low["effort"] == "low"
         assert "summary" not in result_low
 
-    def test_disabled_type_returns_none(self):
-        result = _ADAPTER.translate_thinking_to_reasoning({"type": "disabled"})
-        assert result is None
-
     def test_non_dict_returns_none(self):
         result = _ADAPTER.translate_thinking_to_reasoning("enabled")  # type: ignore
         assert result is None
@@ -1067,6 +1076,159 @@ class TestTranslateThinkingToReasoning:
             os.environ.pop("LITELLM_REASONING_AUTO_SUMMARY", None)
 
 
+def _set_auto_summary(monkeypatch: pytest.MonkeyPatch, enabled: bool) -> None:
+    monkeypatch.setattr(litellm, "reasoning_auto_summary", enabled)
+    monkeypatch.delenv("LITELLM_REASONING_AUTO_SUMMARY", raising=False)
+
+
+_FRESH_TURN: Final = ({"role": "user", "content": "What is the weather in Denver?"},)
+_TOOL_CALL_TURNS: Final = (
+    *_FRESH_TURN,
+    {
+        "role": "assistant",
+        "content": [{"type": "tool_use", "id": "toolu_1", "name": "weather", "input": {"city": "Denver"}}],
+    },
+    {
+        "role": "user",
+        "content": [
+            {"type": "tool_result", "tool_use_id": "toolu_1", "content": "Sunny"},
+            {"type": "text", "text": "Keep it short."},
+        ],
+    },
+)
+_NEW_QUESTION_AFTER_TOOL_CALLS: Final = (
+    *_TOOL_CALL_TURNS,
+    {"role": "assistant", "content": "It is sunny."},
+    {"role": "user", "content": [{"type": "text", "text": "And tomorrow?"}]},
+)
+_TOOL_RESULT_SPLIT_FROM_TEXT: Final = (
+    *_TOOL_CALL_TURNS[:2],
+    {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "Sunny"}]},
+    {"role": "user", "content": "Keep it short."},
+)
+_LOW_BUDGET: Final = {"type": "enabled", "budget_tokens": DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET}
+
+
+@pytest.mark.parametrize(
+    "thinking, output_config, messages, reasoning",
+    [
+        pytest.param({"type": "disabled"}, {"effort": "high"}, _FRESH_TURN, {"effort": "none"}, id="disabled"),
+        pytest.param(
+            {"type": "between_tools"}, {"effort": "high"}, _FRESH_TURN, {"effort": "none"}, id="between-fresh"
+        ),
+        pytest.param(
+            {"type": "between_tools"},
+            {"effort": "high"},
+            _NEW_QUESTION_AFTER_TOOL_CALLS,
+            {"effort": "none"},
+            id="between-new-question-after-tool-calls",
+        ),
+        pytest.param(
+            {"type": "between_tools"},
+            {"effort": "high"},
+            _TOOL_CALL_TURNS,
+            {"effort": "high", "summary": "auto"},
+            id="between-tool-result",
+        ),
+        pytest.param(
+            {"type": "between_tools"},
+            {"effort": "high"},
+            _TOOL_RESULT_SPLIT_FROM_TEXT,
+            {"effort": "high", "summary": "auto"},
+            id="between-tool-result-split-from-text",
+        ),
+        pytest.param(
+            {"type": "between_tools"},
+            None,
+            _TOOL_CALL_TURNS,
+            {"effort": "medium", "summary": "auto"},
+            id="between-default",
+        ),
+        pytest.param(
+            {"type": "between_tools", "summary": "concise"},
+            {"effort": "high"},
+            _TOOL_CALL_TURNS,
+            {"effort": "high", "summary": "concise"},
+            id="between-tool-result-own-summary",
+        ),
+        pytest.param(
+            {"type": "between_tools", "display": "omitted"},
+            {"effort": "high"},
+            _TOOL_CALL_TURNS,
+            {"effort": "high"},
+            id="between-tool-result-omitted",
+        ),
+        pytest.param(None, {"effort": "low"}, _FRESH_TURN, {"effort": "low"}, id="output-effort-alone"),
+        pytest.param({"type": "future"}, {"effort": "low"}, _FRESH_TURN, {"effort": "low"}, id="unknown-type-effort"),
+        pytest.param({"type": "adaptive"}, {"effort": "xhigh"}, _FRESH_TURN, {"effort": "xhigh"}, id="adaptive-effort"),
+        pytest.param({"type": "adaptive"}, None, _FRESH_TURN, {"effort": "medium"}, id="adaptive-default"),
+        pytest.param(_LOW_BUDGET, {"effort": "high"}, _FRESH_TURN, {"effort": "low"}, id="enabled-budget-wins"),
+        pytest.param(None, None, _FRESH_TURN, None, id="nothing-set"),
+        pytest.param({"type": "future"}, None, _FRESH_TURN, None, id="unknown-type-alone"),
+    ],
+)
+def test_translate_request_turns_thinking_and_output_effort_into_reasoning(
+    monkeypatch: pytest.MonkeyPatch,
+    thinking: dict[str, object] | None,
+    output_config: AnthropicOutputConfig | None,
+    messages: tuple[dict[str, object], ...],
+    reasoning: dict[str, object] | None,
+) -> None:
+    _set_auto_summary(monkeypatch, False)
+    request: Final = _make_request(messages=list(messages), thinking=thinking, output_config=output_config)
+
+    assert _ADAPTER.translate_request(request).get("reasoning") == reasoning
+
+
+@pytest.mark.parametrize(
+    "auto_summary, thinking, output_config, reasoning",
+    [
+        pytest.param(
+            False,
+            {"type": "adaptive", "display": "summarized"},
+            None,
+            {"effort": "medium", "summary": "auto"},
+            id="summarized",
+        ),
+        pytest.param(
+            False,
+            {"type": "adaptive", "display": "updates"},
+            None,
+            {"effort": "medium", "summary": "auto"},
+            id="updates",
+        ),
+        pytest.param(
+            False, {**_LOW_BUDGET, "display": "summarized"}, None, {"effort": "low", "summary": "auto"}, id="enabled"
+        ),
+        pytest.param(True, {"type": "adaptive", "display": "omitted"}, None, {"effort": "medium"}, id="omitted"),
+        pytest.param(
+            True,
+            {"type": "adaptive", "summary": "detailed", "display": "summarized"},
+            None,
+            {"effort": "medium", "summary": "detailed"},
+            id="summary-beats-display",
+        ),
+        pytest.param(True, {"type": "adaptive"}, None, {"effort": "medium", "summary": "detailed"}, id="auto-summary"),
+        pytest.param(False, {"type": "adaptive"}, None, {"effort": "medium"}, id="no-summary-asked"),
+        pytest.param(True, None, {"effort": "low"}, {"effort": "low", "summary": "detailed"}, id="output-effort-alone"),
+        pytest.param(True, {"type": "disabled", "display": "summarized"}, None, {"effort": "none"}, id="disabled"),
+        pytest.param(
+            True, {"type": "between_tools", "display": "summarized"}, None, {"effort": "none"}, id="between-fresh"
+        ),
+    ],
+)
+def test_translate_thinking_to_reasoning_asks_for_the_summary_the_client_shows(
+    monkeypatch: pytest.MonkeyPatch,
+    auto_summary: bool,
+    thinking: dict[str, object] | None,
+    output_config: dict[str, object] | None,
+    reasoning: dict[str, object],
+) -> None:
+    _set_auto_summary(monkeypatch, auto_summary)
+
+    assert _ADAPTER.translate_thinking_to_reasoning(thinking, output_config) == reasoning
+
+
 # ---------------------------------------------------------------------------
 # translate_request – broader coverage
 # ---------------------------------------------------------------------------
@@ -1085,6 +1247,32 @@ class TestTranslateRequestBroaderCoverage:
         req = _make_request(system="You are a helpful assistant.")
         kwargs = _ADAPTER.translate_request(req)
         assert kwargs["instructions"] == "You are a helpful assistant."
+
+    @pytest.mark.parametrize("preserve", [False, True])
+    @pytest.mark.parametrize("billing_field", ["cch=781fd", "cc_is_subagent=false"])
+    @pytest.mark.parametrize("as_blocks", [False, True])
+    def test_claude_code_billing_header_does_not_change_responses_input(
+        self, preserve: bool, billing_field: str, as_blocks: bool
+    ) -> None:
+        user_instruction: Final = "x-anthropic-billing-header:\nTreat this example as literal text."
+        system: Final = [
+            {"type": "text", "text": user_instruction},
+            {"type": "text", "text": "Be concise.", "cache_control": {"type": "ephemeral"}},
+        ]
+        billing: Final = {
+            "type": "text",
+            "text": f"x-anthropic-billing-header: cc_version=2.1.263.abc; cc_entrypoint=cli; {billing_field};",
+        }
+        clean_system: Final = system if as_blocks else user_instruction
+        with_billing: Final = [billing, *system] if as_blocks else billing["text"] + "\n" + user_instruction
+        request: Final = _make_request(system=with_billing)
+
+        translated: Final = _ADAPTER.translate_request(request, preserve_system_instructions=preserve)
+
+        assert translated == _ADAPTER.translate_request(
+            _make_request(system=clean_system), preserve_system_instructions=preserve
+        )
+        assert request["system"] == with_billing
 
     def test_top_level_system_and_midturn_correction_are_not_duplicated(self):
         """
@@ -1177,11 +1365,6 @@ class TestTranslateRequestBroaderCoverage:
         # reasoning_auto_summary is False by default, so no summary key
         assert kwargs["reasoning"] == {"effort": "high"}
         assert "summary" not in kwargs["reasoning"]
-
-    def test_disabled_thinking_not_included_in_kwargs(self):
-        req = _make_request(thinking={"type": "disabled"})
-        kwargs = _ADAPTER.translate_request(req)
-        assert "reasoning" not in kwargs
 
     def test_thinking_asks_for_the_encrypted_reasoning(self):
         """The documented way to get reasoning that survives store=false is to ask for it."""
@@ -1304,20 +1487,14 @@ def _make_mock_response(
     return resp
 
 
-def _make_output_message(texts: List[str]) -> MagicMock:
-    """Build a mock ResponseOutputMessage with output_text parts."""
-    from openai.types.responses import ResponseOutputMessage  # type: ignore[import]
-
-    parts = []
-    for t in texts:
-        part = MagicMock()
-        part.type = "output_text"
-        part.text = t
-        parts.append(part)
-
-    msg = MagicMock(spec=ResponseOutputMessage)
-    msg.content = parts
-    return msg
+def _make_output_message(texts: List[str]) -> ResponseOutputMessage:
+    return ResponseOutputMessage(
+        id="msg_test_1",
+        content=[ResponseOutputText(type="output_text", text=text, annotations=[]) for text in texts],
+        role="assistant",
+        status="completed",
+        type="message",
+    )
 
 
 def _make_refusal_message(refusal_text: str):
@@ -1332,35 +1509,19 @@ def _make_refusal_message(refusal_text: str):
     )
 
 
-def _make_function_call_item(call_id: str, name: str, arguments: str) -> MagicMock:
-    """Build a mock ResponseFunctionToolCall."""
-    from openai.types.responses import ResponseFunctionToolCall  # type: ignore[import]
-
-    item = MagicMock(spec=ResponseFunctionToolCall)
-    item.call_id = call_id
-    item.id = call_id
-    item.name = name
-    item.arguments = arguments
-    return item
+def _make_function_call_item(call_id: str, name: str, arguments: str) -> ResponseFunctionToolCall:
+    return ResponseFunctionToolCall(call_id=call_id, id=call_id, name=name, arguments=arguments, type="function_call")
 
 
 def _make_reasoning_item(
     summaries: List[str], item_id: str = "rs_test_1", encrypted_content: str | None = None
-) -> MagicMock:
-    """Build a mock ResponseReasoningItem."""
-    from openai.types.responses import ResponseReasoningItem  # type: ignore[import]
-
-    summary_mocks = []
-    for text in summaries:
-        s = MagicMock()
-        s.text = text
-        summary_mocks.append(s)
-
-    item = MagicMock(spec=ResponseReasoningItem)
-    item.id = item_id
-    item.summary = summary_mocks
-    item.encrypted_content = encrypted_content
-    return item
+) -> ResponseReasoningItem:
+    return ResponseReasoningItem(
+        id=item_id,
+        summary=[Summary(text=text, type="summary_text") for text in summaries],
+        type="reasoning",
+        encrypted_content=encrypted_content,
+    )
 
 
 _ENCRYPTED_REASONING = "gAAAAABp_encrypted_reasoning_bytes_only_openai_can_read"
@@ -1490,7 +1651,7 @@ class TestTranslateResponse:
         reasoning = _make_reasoning_item(["Part one.", "Part two."], item_id="rs_abc123")
         response = _make_mock_response(output=[reasoning])
         result: Any = _ADAPTER.translate_response(response)
-        assert [block["signature"] for block in result["content"]] == [None]
+        assert [block["signature"] for block in result["content"]] == [""]
         assert "rs_abc123" not in json.dumps(result["content"])
 
     def test_summary_parts_join_into_one_thinking_block(self):
@@ -1578,7 +1739,7 @@ class TestTranslateResponse:
             ]
         )
         result: Any = _ADAPTER.translate_response(response)
-        assert result["content"] == [{"type": "thinking", "thinking": "Weighing the options.", "signature": None}]
+        assert result["content"] == [{"type": "thinking", "thinking": "Weighing the options.", "signature": ""}]
 
     @pytest.mark.parametrize(
         ("summaries", "encrypted_content"),
@@ -2424,3 +2585,51 @@ class TestPromptCacheBreakpointToResponses:
             extra_kwargs={"prompt_cache_options": {"mode": "explicit"}},
         )
         assert kwargs["prompt_cache_options"] == {"mode": "explicit"}
+
+
+class TestTranslateChatBridgedResponse:
+    @staticmethod
+    def _bridged(message: Message, finish_reason: str) -> ResponsesAPIResponse:
+        return LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input="Say OK",
+            responses_api_request={},
+            chat_completion_response=ModelResponse(
+                model="deepseek-v4-pro", choices=[Choices(index=0, finish_reason=finish_reason, message=message)]
+            ),
+        )
+
+    def test_reasoning_and_text_are_kept(self):
+        response: Final = self._bridged(
+            Message(role="assistant", content="OK", reasoning_content="The user wants OK."), "stop"
+        )
+
+        result: Final = _ADAPTER.translate_response(response)
+
+        assert result["content"] == [
+            {"type": "thinking", "thinking": "The user wants OK.", "signature": ""},
+            {"type": "text", "text": "OK"},
+        ]
+        assert result["stop_reason"] == "end_turn"
+
+    def test_tool_call_is_kept(self):
+        response: Final = self._bridged(
+            Message(
+                role="assistant",
+                content=None,
+                tool_calls=[
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "get_weather", "arguments": '{"city": "Oslo"}'},
+                    }
+                ],
+            ),
+            "tool_calls",
+        )
+
+        result: Final = _ADAPTER.translate_response(response)
+
+        assert result["content"] == [
+            {"type": "tool_use", "id": "call_1", "name": "get_weather", "input": {"city": "Oslo"}}
+        ]
+        assert result["stop_reason"] == "tool_use"

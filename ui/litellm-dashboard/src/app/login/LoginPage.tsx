@@ -140,7 +140,7 @@ function LoginPageContent() {
       if (returnUrl && isValidReturnUrl(returnUrl)) {
         ssoUrl += `?redirect_to=${encodeURIComponent(returnUrl)}`;
       }
-      router.push(ssoUrl);
+      window.location.assign(ssoUrl);
       return;
     }
 
@@ -345,7 +345,7 @@ function LoginPageContent() {
                         // include return_to so the callback redirects back here
                         const ssoBase = selectedWorker?.url ?? getProxyBaseUrl();
                         const returnTo = encodeURIComponent(getLoginUrl(window.location.origin));
-                        router.push(`${ssoBase}/sso/key/generate?return_to=${returnTo}`);
+                        window.location.assign(`${ssoBase}/sso/key/generate?return_to=${returnTo}`);
                       }}
                       className="w-full"
                     >

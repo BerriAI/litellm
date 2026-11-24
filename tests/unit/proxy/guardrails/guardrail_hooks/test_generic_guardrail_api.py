@@ -5,6 +5,7 @@ This test file tests the Generic Guardrail API implementation,
 specifically focusing on metadata extraction and passing.
 """
 
+import json
 import os
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -16,6 +17,7 @@ import litellm
 from litellm import ModelResponse
 from litellm._version import version as litellm_version
 from litellm.exceptions import GuardrailRaisedException, Timeout
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
     GenericGuardrailAPI,
@@ -24,6 +26,26 @@ from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api.generic_guar
     _HEADER_PRESENT_PLACEHOLDER,
 )
 from litellm.types.utils import Choices, Message
+
+
+async def _structured_messages_sent(guardrail: GenericGuardrailAPI, rows: list[dict]) -> list:
+    sent_bodies: Final[list[bytes]] = []  # mutable-ok: records every body the guardrail endpoint received
+
+    async def answer(request: httpx.Request) -> httpx.Response:
+        sent_bodies.append(request.content)
+        return httpx.Response(200, json={"action": "NONE"}, request=request)
+
+    endpoint: Final = AsyncHTTPHandler(transport=httpx.MockTransport(answer))
+    try:
+        with patch.object(guardrail, "async_handler", endpoint):
+            await guardrail.apply_guardrail(
+                inputs={"texts": ["What is written here?"], "structured_messages": rows},
+                request_data={},
+                input_type="request",
+            )
+    finally:
+        await endpoint.close()
+    return [json.loads(body)["structured_messages"] for body in sent_bodies]
 
 
 @pytest.fixture
@@ -671,6 +693,30 @@ class TestStructuredMessagesInResponse:
 
         assert "structured_messages" not in guardrailed_inputs
         assert guardrailed_inputs["texts"] == ["Never repeat an SSN.", "Look up [REDACTED] for me."]
+
+    @pytest.mark.asyncio
+    async def test_an_image_with_a_bucket_owner_that_is_not_a_string_keeps_its_turn_for_the_guardrail(
+        self, generic_guardrail
+    ):
+        row: Final = {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What is written here?"},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,AA", "bucket_owner": 111122223333}},
+            ],
+        }
+
+        assert await _structured_messages_sent(generic_guardrail, [row]) == [
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "What is written here?"},
+                        {"type": "image_url", "image_url": {"url": "data:image/png;base64,AA"}},
+                    ],
+                }
+            ]
+        ]
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(

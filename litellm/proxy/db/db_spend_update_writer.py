@@ -110,18 +110,28 @@ def _turn_chains_through_the_db(payload: Mapping[str, object], llm_router: "Rout
 
     Native Responses providers hold the conversation themselves, so their rows can wait for the batch write.
     A row with no router deployment behind it is treated as bridged, which keeps today's immediate flush.
+    A native Foundry model router row is written at once too, as when every router turn was bridged,
+    because its follow-up can land on a router entry in the same group that still bridges.
     """
     if payload.get("call_type") not in RESPONSES_SESSION_CALL_TYPES:
         return False
+    from litellm.llms.azure_ai.common_utils import is_foundry_v1_model_router
+    from litellm.responses.main import answered_by_the_chat_bridge, provider_stores_the_conversation
+
+    if answered_by_the_chat_bridge(payload.get("request_id")):
+        return True
     model_id: Final = payload.get("model_id")
     deployment: Final = (
         llm_router.get_deployment(model_id=model_id) if llm_router is not None and isinstance(model_id, str) else None
     )
     if deployment is None:
         return True
-    from litellm.responses.main import provider_stores_the_conversation
-
     litellm_params: Final = deployment.litellm_params
+    if is_foundry_v1_model_router(litellm_params.model, litellm_params.api_base) and (
+        litellm.get_llm_provider(model=litellm_params.model, custom_llm_provider=litellm_params.custom_llm_provider)[1]
+        == "azure_ai"
+    ):
+        return True
     return not provider_stores_the_conversation(
         litellm_params.model,
         litellm_params.custom_llm_provider,

@@ -61,6 +61,10 @@ from litellm.types.utils import (
 )
 
 
+
+
+
+
 class TimeController:
     def __init__(self):
         self._current = datetime.utcnow()
@@ -8566,3 +8570,31 @@ async def test_a2a_url_target_owns_invocation_fee_and_request_limit(
         await _rpm_request(limiter, cache, auth, "a2a/cheap")
     assert denied.value.status_code == 429
     assert "expensive" in str(denied.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_raise_if_over_limit_before_body_refuses_an_exhausted_key_without_charging_it() -> None:
+    cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
+    auth: Final = UserAPIKeyAuth(api_key=hash_token("sk-exhausted"), rpm_limit=1)
+
+    assert await handler.raise_if_over_limit_before_body(auth) is None
+    await handler.async_pre_call_hook(auth, cache, {"model": "gpt-5.6", "messages": []}, "acompletion")
+    charged: Final = dict(cache.in_memory_cache.cache_dict)
+
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await handler.raise_if_over_limit_before_body(auth)
+    assert exc.value.status_code == 429
+    assert exc.value.headers["rate_limit_type"] == "requests"
+    assert dict(cache.in_memory_cache.cache_dict) == charged, "the headers-only refusal must not count as a request"
+
+
+@pytest.mark.asyncio
+async def test_raise_if_over_limit_before_body_skips_limits_that_need_the_model() -> None:
+    cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
+    auth: Final = UserAPIKeyAuth(api_key=hash_token("sk-per-model"), metadata={"model_rpm_limit": {"gpt-5.6": 1}})
+
+    await handler.async_pre_call_hook(auth, cache, {"model": "gpt-5.6", "messages": []}, "acompletion")
+
+    assert await handler.raise_if_over_limit_before_body(auth) is None

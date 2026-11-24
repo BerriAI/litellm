@@ -46,7 +46,7 @@ _AI_DECIDE_BODY: Final[dict[str, JsonValue]] = {"response": {"answers": _ANSWERS
 _SYSTEM_ONE_BODY: Final[dict[str, JsonValue]] = {
     "model": None,
     "answers": _ANSWERS,
-    "usage": {"input_tokens": 0, "output_tokens": 0},
+    "usage": None,
     "metadata": _METADATA,
 }
 _MODEL_RULE: Final = (

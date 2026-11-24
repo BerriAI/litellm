@@ -21,6 +21,7 @@ from pydantic import TypeAdapter
 
 from litellm.batches.batch_utils import batch_cost_is_final
 from litellm.constants import MAX_FILE_LIST_LIMIT
+from litellm.llms.vertex_ai.common_utils import GEMINI_FILES_API_V1_URI_PREFIX
 from litellm.proxy._types import ProxyException
 from litellm.repositories.managed_file_repository import ManagedFileRepository
 from litellm.repositories.table_repositories import (
@@ -376,6 +377,7 @@ def _iter_stored_forms(bare_ids: Sequence[str]) -> Iterator[str]:
         yield bare_id
         yield f"files/{bare_id}"
         yield f"{_GEMINI_FILES_URL}{bare_id}"
+        yield f"{GEMINI_FILES_API_V1_URI_PREFIX}{bare_id}"
 
 
 def provider_file_id_spellings(file_id: str) -> tuple[str, ...]:
@@ -703,6 +705,35 @@ def add_deployment_model_info(
         **(data.get("litellm_metadata") or {}),
         "model_info": deployment.model_info.model_dump(),
     }
+
+
+def _deployment_drop_params(llm_router: "Router", model_id: str) -> bool | str | None:
+    deployment: Final = llm_router.get_credential_deployment(model_id=model_id)
+    return deployment.litellm_params.drop_params if deployment is not None else None
+
+
+def _as_drop_params(drop_params: object) -> Mapping[str, bool | str]:
+    return MappingProxyType({"drop_params": drop_params} if isinstance(drop_params, (bool, str)) else {})
+
+
+def router_default_drop_params(
+    llm_router: Optional["Router"], request: Mapping[str, object]
+) -> Mapping[str, bool | str]:
+    if llm_router is None or request.get("drop_params") is not None:
+        return MappingProxyType({})
+    router_defaults: Final = cast(  # cast-ok: the Router stores default_litellm_params as an untyped dict
+        Mapping[str, object], llm_router.default_litellm_params
+    )
+    return _as_drop_params(router_defaults.get("drop_params"))
+
+
+def configured_drop_params(
+    llm_router: Optional["Router"], model_id: str, request: Mapping[str, object]
+) -> Mapping[str, bool | str]:
+    router_default: Final = router_default_drop_params(llm_router, request)
+    if llm_router is None or request.get("drop_params") is not None or router_default:
+        return router_default
+    return _as_drop_params(_deployment_drop_params(llm_router, model_id))
 
 
 def prepare_data_with_credentials(

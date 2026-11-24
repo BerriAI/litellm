@@ -19,6 +19,7 @@ import click
 import fastapi.routing
 import httpx
 import pytest
+import respx
 import yaml
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
@@ -610,6 +611,48 @@ def test_text_completion_without_a_prompt_returns_400_naming_prompt(client_no_au
 
     assert response.status_code == 400, response.text
     assert response.json()["error"]["param"] == "prompt", response.text
+
+
+@pytest.mark.usefixtures("httpx_transport")
+def test_text_completion_backend_400_answers_with_an_openai_error_type_and_the_backend_param(
+    client_no_auth, monkeypatch
+):
+    from litellm import Router
+
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "vllm-qwen",
+                    "litellm_params": {
+                        "model": "hosted_vllm/Qwen/Qwen2.5-7B-Instruct",
+                        "api_base": "https://vllm-backend.example.com/v1",
+                        "api_key": "sk-vllm-key",
+                    },
+                }
+            ]
+        ),
+    )
+    backend_error: Final = {
+        "error": {
+            "object": "error",
+            "message": "max_tokens must be at least 1, got -5.",
+            "type": "BadRequestError",
+            "param": "max_tokens",
+            "code": 400,
+        }
+    }
+    with respx.mock(assert_all_called=True) as backend:
+        _ = backend.post("https://vllm-backend.example.com/v1/completions").mock(
+            return_value=httpx.Response(400, json=backend_error)
+        )
+        response: Final = client_no_auth.post("/v1/completions", json={"model": "vllm-qwen", "prompt": "hi"})
+
+    error: Final = response.json()["error"]
+    assert (response.status_code, error["type"], error["param"]) == (400, "invalid_request_error", "max_tokens"), (
+        response.text
+    )
 
 
 @pytest.mark.parametrize(
@@ -12520,6 +12563,30 @@ async def test_update_config_general_settings_emits_audit_log(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_update_config_general_settings_stores_a_client_side_s3_bucket_the_gate_admits(monkeypatch):
+    import litellm.proxy.proxy_server as proxy_server_module
+    from litellm.proxy._types import ConfigFieldUpdate
+    from litellm.proxy.auth.auth_utils import ClientSideStorageAllowlist
+    from litellm.proxy.proxy_server import update_config_general_settings
+
+    fake: Final = _fake_prisma_with_config({})
+    monkeypatch.setattr(proxy_server_module, "prisma_client", fake)
+    monkeypatch.setattr(litellm, "store_audit_logs", False)
+
+    await update_config_general_settings(
+        data=ConfigFieldUpdate(
+            field_name="allowed_client_side_s3_buckets",
+            field_value=["media-bucket"],
+            config_type="general_settings",
+        ),
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-admin", user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    stored: Final = json.loads(fake.db.litellm_config.upsert.call_args.kwargs["data"]["update"]["param_value"])
+    assert ClientSideStorageAllowlist.model_validate(stored).admits_s3_bucket("media-bucket")
+
+
+@pytest.mark.asyncio
 async def test_delete_config_general_settings_is_visible_to_the_next_read(monkeypatch):
     import litellm.proxy.proxy_server as proxy_server_module
     from litellm.proxy._types import ConfigFieldDelete
@@ -14157,6 +14224,66 @@ async def test_moderations_reraises_proxy_exception_unwrapped():
     assert exc_info.value.code == "400"
     assert exc_info.value.param == "metadata"
     mock_logging.post_call_failure_hook.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("carried_param", "relayed_param"),
+    [("sk-test-fake-0123456789abcdefghijklmn", "REDACTED"), ("input", "input"), (None, None)],
+)
+async def test_moderations_error_never_relays_a_credential_in_its_param(
+    carried_param: str | None, relayed_param: str | None
+) -> None:
+    import httpx
+    import openai
+
+    from litellm.proxy._types import ProxyException
+
+    upstream = openai.BadRequestError(
+        message="rejected",
+        response=httpx.Response(400, request=httpx.Request("POST", "https://upstream.test/v1/moderations")),
+        body={"message": "rejected", "param": carried_param},
+    )
+    request = MagicMock()
+    request.body = AsyncMock(return_value=b'{"input": "hi"}')
+
+    with (
+        patch.object(proxy_server_module, "add_litellm_data_to_request", new=AsyncMock(side_effect=upstream)),
+        patch.object(proxy_server_module, "proxy_logging_obj") as mock_logging,
+    ):
+        mock_logging.post_call_failure_hook = AsyncMock()
+        with pytest.raises(ProxyException) as caught:
+            await proxy_server_module.moderations(
+                request=request,
+                fastapi_response=MagicMock(),
+                user_api_key_dict=MagicMock(),
+            )
+
+    assert caught.value.param == relayed_param
+
+
+@pytest.mark.asyncio
+async def test_moderations_error_without_a_param_keeps_its_wire_value() -> None:
+    from litellm.proxy._types import ProxyException
+
+    request = MagicMock()
+    request.body = AsyncMock(return_value=b'{"input": "hi"}')
+
+    with (
+        patch.object(
+            proxy_server_module, "add_litellm_data_to_request", new=AsyncMock(side_effect=ValueError("rejected"))
+        ),
+        patch.object(proxy_server_module, "proxy_logging_obj") as mock_logging,
+    ):
+        mock_logging.post_call_failure_hook = AsyncMock()
+        with pytest.raises(ProxyException) as caught:
+            await proxy_server_module.moderations(
+                request=request,
+                fastapi_response=MagicMock(),
+                user_api_key_dict=MagicMock(),
+            )
+
+    assert caught.value.param == "None"
 
 
 @pytest.mark.asyncio
