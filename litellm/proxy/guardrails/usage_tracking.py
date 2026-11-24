@@ -29,6 +29,7 @@ from litellm.repositories.table_repositories import (
     DailyGuardrailUsageUnitsRepository,
     SpendLogGuardrailIndexRepository,
 )
+from litellm.types.utils import GUARDRAIL_ACTION_MASK
 
 if TYPE_CHECKING:
     from prisma import types as prisma_types
@@ -217,10 +218,18 @@ def guardrail_status_to_action(status: object) -> str:
     return "passed"
 
 
+# The `guardrail_action` values of a run that changed the content and let the request through: the
+# shared guardrail logging's own, and a provider's action for a request it anonymized.
+_ACTED_WITHOUT_BLOCKING: Final = frozenset({GUARDRAIL_ACTION_MASK, "guardrail_intervened"})
+
+
 def guardrail_ran_without_acting(entry: Mapping[str, object]) -> bool:
     """True for a run `general_settings.guardrail_log_skip_passed` drops from the request log: the guardrail
-    passed or did not run, and reported no masked entity."""
+    passed or did not run, reported no masked entity and logged no masking action."""
     if guardrail_status_to_action(entry.get("guardrail_status")) not in ("passed", "not_run"):
+        return False
+    action: Final = entry.get("guardrail_action")
+    if isinstance(action, str) and action.lower() in _ACTED_WITHOUT_BLOCKING:
         return False
     counts: Final = as_str_mapping(entry.get("masked_entity_count"))
     if counts is None:

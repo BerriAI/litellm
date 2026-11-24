@@ -39,6 +39,7 @@ from litellm.types.guardrails import (
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 from litellm.types.utils import (
+    GUARDRAIL_ACTION_MASK,
     CallTypes,
     GenericGuardrailAPIInputs,
     GuardrailStatus,
@@ -1749,6 +1750,11 @@ class CustomGuardrail(CustomLogger):
             start_time=start_time,
             end_time=end_time,
             event_type=event_type,
+            tracing_detail=(
+                {"guardrail_action": GUARDRAIL_ACTION_MASK}
+                if guardrail_response == "mask" and not isinstance(response, str)
+                else None
+            ),
         )
         return response
 

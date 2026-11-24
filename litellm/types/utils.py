@@ -3886,6 +3886,11 @@ class StandardLoggingEvalInformation(TypedDict, total=False):
     threshold: float | None
 
 
+# The `guardrail_action` a run logs when it changed the content and let the request through. Spend-log
+# redaction keeps `guardrail_action`, so a masked run stays recognizable when prompts are not stored.
+GUARDRAIL_ACTION_MASK: Final = "mask"
+
+
 class GuardrailTracingDetail(TypedDict, total=False):
     """
     Typed fields for guardrail tracing metadata.

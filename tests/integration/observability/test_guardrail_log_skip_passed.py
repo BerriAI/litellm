@@ -28,6 +28,7 @@ PASSES: Final = "skip-passed-passes"
 MASKS: Final = "skip-passed-masks"
 BLOCKS: Final = "skip-passed-blocks"
 FLAGS: Final = "skip-passed-flags"
+REWRITES: Final = "skip-passed-rewrites"
 UNSET: Final = "unset"
 CHAT: Final = "chat"
 CHAT_STREAM: Final = "chat-stream"
@@ -100,6 +101,29 @@ def _content_filter(name: str, mode: str, action: str) -> dict[str, object]:
     }
 
 
+_REWRITING_CODE: Final = (
+    "def apply_guardrail(inputs, request_data, input_type):\n"
+    '    texts = list(inputs.get("texts") or [])\n'
+    f'    masked = [text.replace("{AWS_KEY}", "[MASKED]") for text in texts]\n'
+    "    if masked != texts:\n"
+    "        return modify(texts=masked)\n"
+    "    return allow()\n"
+)
+
+
+def _rewriting_guardrail(name: str) -> dict[str, object]:
+    """A guardrail that masks through the shared guardrail logging, which reports no entity counts."""
+    return {
+        "guardrail_name": name,
+        "litellm_params": {
+            "guardrail": "custom_code",
+            "mode": "pre_call",
+            "default_on": False,
+            "custom_code": _REWRITING_CODE,
+        },
+    }
+
+
 def _config(root: Path, name: str, skip_passed: bool | None, spend_log_writer: str) -> Path:
     config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
     config["litellm_settings"]["cache"] = False
@@ -111,6 +135,7 @@ def _config(root: Path, name: str, skip_passed: bool | None, spend_log_writer: s
         _content_filter(MASKS, "pre_call", "MASK"),
         _content_filter(BLOCKS, "pre_call", "BLOCK"),
         _content_filter(FLAGS, "logging_only", "BLOCK"),
+        _rewriting_guardrail(REWRITES),
     ]
     path: Final = root / name
     path.write_text(yaml.safe_dump(config))
@@ -168,12 +193,19 @@ class Rig:
         )
 
     def index_rows_added(
-        self, guardrail: str, texts: tuple[str, ...], statuses: tuple[int, ...], added: Counters, endpoint: str = CHAT
+        self,
+        guardrail: str,
+        texts: tuple[str, ...],
+        statuses: tuple[int, ...],
+        added: Counters,
+        endpoint: str = CHAT,
+        logged_as: str | None = None,
     ) -> int:
         """Send one request per text through `guardrail`, wait until the daily counters grew by `added`, and
         return how many index rows the guardrail gained. The worker database outlives each proxy, so every
-        check is a difference from what was there before."""
-        guardrail_id: Final = self.guardrail_id(guardrail)
+        check is a difference from what was there before. `logged_as` is the id the rows carry when it is
+        not the guardrail's listed id."""
+        guardrail_id: Final = logged_as or self.guardrail_id(guardrail)
         before: Final = self.counters(guardrail_id)
         indexed: Final = self.indexed_requests(guardrail_id)
         assert tuple(self.send(endpoint, text, guardrail).status_code for text in texts) == statuses
@@ -240,6 +272,17 @@ def test_a_masked_run_keeps_its_index_row(rig: Rig) -> None:
     assert rig.index_rows_added(MASKS, texts, (200, 200), Counters(2, 2, 0, 0)) == 1
     forwarded: Final = tuple(request.body.decode() for request in rig.provider.drain())
     assert any("the key is" in body for body in forwarded), forwarded
+    assert not any(AWS_KEY in body for body in forwarded), forwarded
+
+
+@skips_passed
+def test_a_masked_run_that_reports_no_entity_count_keeps_its_index_row(rig: Rig) -> None:
+    """The shared guardrail logging records no guardrail id, so these rows are keyed by the guardrail's name."""
+    rig.provider.drain()
+    texts: Final = ("clean prompt", f"the key is {AWS_KEY}")
+    assert rig.index_rows_added(REWRITES, texts, (200, 200), Counters(2, 2, 0, 0), logged_as=REWRITES) == 1
+    forwarded: Final = tuple(request.body.decode() for request in rig.provider.drain())
+    assert any("the key is [MASKED]" in body for body in forwarded), forwarded
     assert not any(AWS_KEY in body for body in forwarded), forwarded
 
 

@@ -3421,6 +3421,13 @@ class TestPreCallHookResponseIsNotLoggedVerbatim:
         return entries[0]["guardrail_response"]
 
     @staticmethod
+    def _logged_action(request_data: dict[str, object]) -> object:
+        metadata = request_data["litellm_metadata"]
+        assert isinstance(metadata, dict)
+        (entry,) = metadata["standard_logging_guardrail_information"]
+        return entry.get("guardrail_action")
+
+    @staticmethod
     def _request() -> dict[str, object]:
         return {
             "model": "gpt-4.1-mini",
@@ -3448,6 +3455,7 @@ class TestPreCallHookResponseIsNotLoggedVerbatim:
         )
 
         assert self._logged_response(data) == "allow"
+        assert self._logged_action(data) is None
 
     @pytest.mark.asyncio
     async def test_pre_call_hook_returning_modified_copy_logs_mask(self):
@@ -3468,6 +3476,7 @@ class TestPreCallHookResponseIsNotLoggedVerbatim:
         )
 
         assert self._logged_response(data) == "mask"
+        assert self._logged_action(data) == "mask"
 
     @pytest.mark.asyncio
     async def test_pre_call_hook_mutating_request_in_place_logs_mask(self):
@@ -3512,6 +3521,28 @@ class TestPreCallHookResponseIsNotLoggedVerbatim:
 
         assert result == "Blocked by policy"
         assert self._logged_response(data) == "Blocked by policy"
+        assert self._logged_action(data) is None
+
+    @pytest.mark.asyncio
+    async def test_pre_call_hook_rejecting_with_the_word_mask_logs_no_masking_action(self):
+        class RejectingGuardrail(CustomGuardrail):
+            @log_guardrail_information
+            async def async_pre_call_hook(
+                self,
+                user_api_key_dict: UserAPIKeyAuth,
+                cache: object,
+                data: dict[str, object],
+                call_type: str,
+            ) -> str:
+                return "mask"
+
+        data = self._request()
+        await RejectingGuardrail(guardrail_name="g").async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(), cache=None, data=data, call_type="acompletion"
+        )
+
+        assert self._logged_response(data) == "mask"
+        assert self._logged_action(data) is None
 
     @pytest.mark.asyncio
     async def test_pre_call_hook_removing_legacy_functions_in_place_logs_mask(self):

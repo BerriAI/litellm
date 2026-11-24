@@ -755,6 +755,36 @@ async def test_guardrail_log_skip_passed_keeps_index_rows_only_for_runs_that_act
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("skip_passed", "kept"),
+    [
+        (True, ["anonymized", "masked-no-counts", "masked-prompts-not-stored"]),
+        (None, ["allowed", "anonymized", "masked-no-counts", "masked-prompts-not-stored", "no-action", "not-text"]),
+    ],
+)
+async def test_guardrail_log_skip_passed_keeps_a_masked_run_that_reports_no_entity_count(
+    monkeypatch, skip_passed, kept
+):
+    _skip_passed(monkeypatch, skip_passed)
+    prisma: Final = _prisma()
+    passed: Final = {"guardrail_id": "g", "guardrail_status": "success"}
+    logs: Final = [
+        _entries_payload("masked-no-counts", [{**passed, "guardrail_response": "mask", "guardrail_action": "mask"}]),
+        _entries_payload(
+            "masked-prompts-not-stored", [{**passed, "guardrail_response": None, "guardrail_action": "mask"}]
+        ),
+        _entries_payload("anonymized", [{**passed, "guardrail_action": "GUARDRAIL_INTERVENED"}]),
+        _entries_payload("no-action", [{**passed, "guardrail_action": "NONE"}]),
+        _entries_payload("allowed", [{**passed, "guardrail_response": "allow", "guardrail_action": "allow"}]),
+        _entries_payload("not-text", [{**passed, "guardrail_action": ["mask"]}]),
+    ]
+
+    await process_spend_logs_guardrail_usage(prisma, logs)
+
+    assert [request_id for request_id, _, _ in _indexed(prisma)] == kept
+
+
+@pytest.mark.asyncio
 async def test_guardrail_log_skip_passed_keeps_the_row_when_any_run_of_the_guardrail_acted(monkeypatch):
     _skip_passed(monkeypatch, True)
     prisma: Final = _prisma()
