@@ -1939,7 +1939,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     data["file_id"] = provider_file_id
                     data.update(stored_s3_bucket_kwargs(provider_file_id))
         elif call_type == CallTypes.aimage_edit.value or call_type == CallTypes.image_edit.value:
-            await self.check_file_ids_access(_nested_file_ids(data), user_api_key_dict)
+            await self.check_file_ids_access(_nested_file_ids(_REQUEST_FIELDS.validate_python(data)), user_api_key_dict)
         elif call_type == CallTypes.acreate_batch.value:
             input_file_id = cast(Optional[str], data.get("input_file_id"))
             if input_file_id:
