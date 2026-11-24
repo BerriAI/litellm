@@ -155,8 +155,7 @@ def test_transform_image_edit_request_with_buffered_reader(
             # Check that files contains the image with the original filename
             assert len(files) == 1
             assert files[0][0] == "image[]"
-            # Should use the buffer's name (full path from the BufferedReader.name)
-            assert files[0][1][0] == temp_file_path  # Uses full path from buffer.name
+            assert files[0][1][0] == os.path.basename(temp_file_path)
             assert files[0][1][1] == image_buffer  # Should be the buffer object
             # Content type detection defaults to PNG for fake data without image headers
             assert files[0][1][2].startswith("image/")  # Should detect some image type
@@ -427,8 +426,9 @@ def test_transform_image_edit_request_detects_content_type_of_a_two_part_tuple(
     assert markup_parts == [("overlay.jpg", jpeg_bytes, "image/jpeg")]
 
 
-def test_transform_image_edit_request_names_an_unnamed_tuple_after_its_open_file(
-    image_edit_config: OpenAIImageEditConfig, tmp_path: Path
+@pytest.mark.parametrize("wrap_in_tuple", [False, True], ids=["open_file", "unnamed_tuple"])
+def test_transform_image_edit_request_names_an_open_file_markup_by_its_base_name(
+    image_edit_config: OpenAIImageEditConfig, tmp_path: Path, wrap_in_tuple: bool
 ) -> None:
     overlay_path: Final = tmp_path / "overlay.png"
     overlay_path.write_bytes(b"\x89PNG\r\n\x1a\n")
@@ -437,13 +437,13 @@ def test_transform_image_edit_request_names_an_unnamed_tuple_after_its_open_file
             model="gpt-image-2.5-flare",
             prompt="Apply the marked changes",
             image=[b"\x89PNG\r\n\x1a\n"],
-            image_edit_optional_request_params={"markup": (None, overlay)},
+            image_edit_optional_request_params={"markup": (None, overlay) if wrap_in_tuple else overlay},
             litellm_params=GenericLiteLLMParams(),
             headers={},
         )
 
         markup_parts: Final = [part for field_name, part in files if field_name == "markup"]
-        assert markup_parts == [(str(overlay_path), overlay, "image/png")]
+        assert markup_parts == [("overlay.png", overlay, "image/png")]
 
 
 def test_transform_image_edit_request_unpacks_mask_tuple(
@@ -486,13 +486,17 @@ def test_transform_image_edit_request_sends_first_file_of_a_markup_list(
 @pytest.mark.parametrize("field_name", ["mask", "markup"])
 @pytest.mark.parametrize(
     "reference",
-    [{"image_url": "https://images.example/overlay.png"}, [{"image_url": "https://images.example/overlay.png"}]],
-    ids=["single", "list"],
+    [
+        {"image_url": "https://images.example/overlay.png"},
+        [{"image_url": "https://images.example/overlay.png"}],
+        "/tmp/overlay.png",
+    ],
+    ids=["single", "list", "string"],
 )
-def test_transform_image_edit_request_rejects_json_image_reference_as_bad_request(
+def test_transform_image_edit_request_rejects_a_non_file_upload_as_bad_request(
     image_edit_config: OpenAIImageEditConfig, field_name: str, reference: object
 ) -> None:
-    """A JSON image reference cannot be a multipart file part, so the caller gets a 400 instead of a failed send."""
+    """A JSON image reference or a string cannot be a multipart file part, so the caller gets a 400 before any send."""
     with pytest.raises(litellm.BadRequestError, match=f"'{field_name}' must be an uploaded image file"):
         image_edit_config.transform_image_edit_request(
             model="gpt-image-2.5-flare",
@@ -605,3 +609,59 @@ async def test_aimage_edit_sends_markup_tuple_upload() -> None:
     assert b'name="markup"; filename="overlay.png"' in req.content
     assert b'name="image[]"; filename="square.png"' in req.content
     assert png in req.content
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wrap_in_tuple", [False, True], ids=["path", "named_tuple_with_path"])
+async def test_aimage_edit_reads_path_uploads_into_multipart_files(tmp_path: Path, wrap_in_tuple: bool) -> None:
+    """pathlib.Path image, mask and markup uploads are read from disk and sent under their base names."""
+    import base64
+    from queue import SimpleQueue
+
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+    png: Final = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGD4DwABBAEAX+XDSwAAAABJRU5ErkJggg==",
+    )
+    reply: Final = {
+        "created": 1,
+        "data": [{"b64_json": base64.b64encode(png).decode()}],
+        "usage": {
+            "input_tokens": 1,
+            "output_tokens": 1,
+            "total_tokens": 2,
+            "input_tokens_details": {"image_tokens": 1, "text_tokens": 0},
+        },
+    }
+    sent: Final[SimpleQueue[httpx.Request]] = SimpleQueue()
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        request.read()
+        sent.put(request)
+        return httpx.Response(200, json=reply)
+
+    image_path: Final = tmp_path / "square.png"
+    mask_path: Final = tmp_path / "cutout.png"
+    markup_path: Final = tmp_path / "overlay.png"
+    for path in (image_path, mask_path, markup_path):
+        path.write_bytes(png)
+
+    await litellm.aimage_edit(
+        model="openai/gpt-image-2.5-flare",
+        prompt="Apply the marked changes",
+        image=[image_path],
+        mask=mask_path,
+        markup=("sketch.png", markup_path) if wrap_in_tuple else markup_path,
+        api_key="sk-test",
+        api_base="https://openai.test/v1",
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(respond)),
+    )
+
+    assert sent.qsize() == 1
+    body: Final = sent.get_nowait().content
+    expected_markup_name: Final = b"sketch.png" if wrap_in_tuple else b"overlay.png"
+    assert b'name="image[]"; filename="square.png"' in body
+    assert b'name="mask"; filename="cutout.png"' in body
+    assert b'name="markup"; filename="' + expected_markup_name + b'"' in body
+    assert body.count(png) == 3
+    assert str(tmp_path).encode() not in body
