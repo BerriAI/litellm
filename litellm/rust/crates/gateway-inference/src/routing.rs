@@ -28,7 +28,7 @@ use crate::{
     error::{Ended, NoDeployments},
     headers::Routing,
     hooks::{CallHooks, CallType},
-    stream_event::Read,
+    stream_event::{Counts, Read},
     stream_hold::{self, Cause, Chunks, Held},
     stream_outcome,
 };
@@ -77,8 +77,12 @@ pub trait RouteAttempt: Send + Sync {
 
     fn run(&self, attempt: &Attempt) -> impl Future<Output = Result<Self::Outcome, Error>> + Send;
 
-    /// The tokens a complete outcome used. A stream's are counted as it is read.
-    fn total_tokens(outcome: &Self::Outcome) -> u64;
+    /// What a complete outcome counted, which the router counts against the deployment. A
+    /// stream's counts are read from its events.
+    fn counts(outcome: &Self::Outcome) -> Option<Counts> {
+        let _ = outcome;
+        None
+    }
 
     /// The stream of an outcome and the reader of its format: its outcome is reported to the
     /// router as it is read, and another attempt may answer in its place while it has sent no
@@ -113,7 +117,7 @@ pub async fn attempt<H: Host, A: RouteAttempt>(
         .await
         .map_err(|error| attempt_failure(attempt, error))?;
     let Some((chunks, read)) = A::held(&mut outcome) else {
-        let total_tokens = A::total_tokens(&outcome);
+        let total_tokens = A::counts(&outcome).map_or(0, Counts::total);
         return Ok(Served::new(outcome, total_tokens));
     };
     let unreported = std::mem::replace(chunks, stream::empty().boxed());
@@ -467,23 +471,6 @@ pub(crate) fn api_key(deployment: &Deployment) -> Option<String> {
         .map(|key| key.expose().to_owned())
 }
 
-/// The tokens a response's `usage` counts: its `total_tokens`, else its input plus output.
-pub(crate) fn total_tokens(usage: Option<&Value>) -> u64 {
-    let count = |name: &str| {
-        usage
-            .and_then(|usage| usage.get(name))
-            .and_then(Value::as_u64)
-    };
-    count("total_tokens").unwrap_or_else(|| {
-        count("input_tokens")
-            .or(count("prompt_tokens"))
-            .unwrap_or(0)
-            + count("output_tokens")
-                .or(count("completion_tokens"))
-                .unwrap_or(0)
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -602,10 +589,6 @@ mod tests {
                 event.map(|event| bytes::Bytes::from_static(event.as_bytes()))
             });
             Ok(litellm_framer::sse::blocks(sent).boxed())
-        }
-
-        fn total_tokens(_outcome: &RouteChunks) -> u64 {
-            0
         }
 
         fn held(outcome: &mut RouteChunks) -> Option<(&mut RouteChunks, Read)> {

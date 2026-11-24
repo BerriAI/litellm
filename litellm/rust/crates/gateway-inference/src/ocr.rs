@@ -126,8 +126,4 @@ impl RouteAttempt for OcrAttempt<'_> {
             None => response.into_json(),
         })
     }
-
-    fn total_tokens(outcome: &Value) -> u64 {
-        routing::total_tokens(outcome.get("usage"))
-    }
 }

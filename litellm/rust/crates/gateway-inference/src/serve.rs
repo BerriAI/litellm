@@ -65,12 +65,6 @@ pub(crate) trait Endpoint: RouteAttempt {
     /// route's calls to no context window, so each route says so itself.
     fn prompt(&self) -> Option<Prompt<'_>>;
 
-    /// What a complete outcome counted. A stream's counts are read from its events.
-    fn counts(outcome: &Self::Outcome) -> Option<Counts> {
-        let _ = outcome;
-        None
-    }
-
     /// Those counts as Python's litellm `Usage`, `None` for a route that counts no tokens.
     fn usage(counts: Counts) -> Option<ChatCompletionsUsage> {
         let _ = counts;
