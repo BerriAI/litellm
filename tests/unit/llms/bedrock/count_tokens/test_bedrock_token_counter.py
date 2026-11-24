@@ -916,6 +916,65 @@ async def test_claude_runtime_count_forces_the_json_tool_only_where_converse_inf
     )
 
 
+_CALLER_JSON_TOOL_SCHEMA: Final = {"type": "object", "properties": {"city": {"type": "string"}}}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("messages_format", "tools", "count_options", "chat_params"),
+    [
+        (
+            "openai",
+            [{"type": "function", "function": {"name": RESPONSE_FORMAT_TOOL_NAME, "parameters": _CALLER_JSON_TOOL_SCHEMA}}],
+            {},
+            {"tool_choice": {"type": "function", "function": {"name": RESPONSE_FORMAT_TOOL_NAME}}},
+        ),
+        (
+            "openai",
+            [{"type": "function", "function": {"name": RESPONSE_FORMAT_TOOL_NAME, "parameters": _CALLER_JSON_TOOL_SCHEMA}}],
+            {},
+            {
+                "tool_choice": {"type": "function", "function": {"name": RESPONSE_FORMAT_TOOL_NAME}},
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {"name": "city", "schema": _CALLER_JSON_TOOL_SCHEMA},
+                },
+            },
+        ),
+        (
+            "anthropic",
+            [{"name": RESPONSE_FORMAT_TOOL_NAME, "input_schema": _CALLER_JSON_TOOL_SCHEMA}],
+            {"tool_choice": {"type": "tool", "name": RESPONSE_FORMAT_TOOL_NAME}},
+            {},
+        ),
+    ],
+    ids=["openai_own_tool", "openai_own_tool_with_native_response_format", "anthropic_own_tool"],
+)
+async def test_claude_runtime_count_keeps_a_caller_forcing_its_own_tool_named_like_the_json_tool(
+    messages_format: TokenCountMessagesFormat,
+    tools: list[dict[str, JsonValue]],
+    count_options: dict[str, JsonValue],
+    chat_params: dict[str, JsonValue],
+) -> None:
+    bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 612}), mantle=(200, {"input_tokens": 1}))
+
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use="global.anthropic.claude-opus-4-8",
+        messages=[{"role": "user", "content": "Weather in Paris?"}],
+        contents=None,
+        deployment=_deployment("bedrock/converse/global.anthropic.claude-opus-4-8"),
+        request_model="global.anthropic.claude-opus-4-8",
+        tools=tools,
+        messages_format=messages_format,
+        count_options=count_options,
+        chat_params=chat_params,
+    )
+
+    assert result is not None
+    assert (result.error, result.total_tokens) == (False, 612)
+    assert _invoke_body(bedrock.requests[0]).get("tool_choice") == {"type": "tool", "name": RESPONSE_FORMAT_TOOL_NAME}
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("tool_choice", [{"type": "auto"}, {"type": "none"}], ids=["auto", "none"])
 async def test_claude_runtime_count_sends_a_choice_that_adds_no_tokens_like_no_choice(

@@ -139,6 +139,14 @@ def _chat_params_inference_honors(
     return MappingProxyType({key: value for key, value in chat_params.items() if key != "parallel_tool_calls"})
 
 
+def _caller_forces_json_tool(chat_params: Mapping[str, JsonValue]) -> bool:
+    match chat_params.get("tool_choice"):
+        case {"function": {"name": caller_name}}:
+            return caller_name == RESPONSE_FORMAT_TOOL_NAME
+        case _:
+            return False
+
+
 def _options_inference_sends(
     options: Mapping[str, JsonValue],
     deployment_config: BaseConfig | None,
@@ -149,6 +157,8 @@ def _options_inference_sends(
     match options.get("tool_choice"), deployment_config:
         case {"type": "tool", "name": name}, litellm.AmazonConverseConfig() as converse_config if (
             name == RESPONSE_FORMAT_TOOL_NAME
+            and isinstance(chat_params.get("response_format"), dict)
+            and not _caller_forces_json_tool(chat_params)
             and not converse_config.response_format_adds_tools(chat_params, capability_model, model_info)
         ):
             return MappingProxyType({key: value for key, value in options.items() if key != "tool_choice"})
