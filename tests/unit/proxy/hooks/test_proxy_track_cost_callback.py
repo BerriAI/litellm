@@ -4,7 +4,7 @@ import logging
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from typing import Final
+from typing import Final, cast
 from unittest.mock import AsyncMock, MagicMock, create_autospec, patch
 
 import httpx
@@ -2610,11 +2610,120 @@ async def test_failure_spend_rows_raise_the_live_spend_counters_by_their_cost(
     )
 
 
+_ATTEMPT_USAGE: Final = Usage(prompt_tokens=24, completion_tokens=0, total_tokens=24)
+
+
+def _recovered_stream_failure() -> Mapping[str, object]:
+    return {
+        "combined_usage_object": Usage(prompt_tokens=30, completion_tokens=40, total_tokens=70),
+        "response_cost": 0.125,
+    }
+
+
+def _guardrail_only_failure(cost_in_spend: bool = True) -> Mapping[str, object]:
+    entry: Final = {"guardrail_name": "priced", "guardrail_cost": 0.3, "guardrail_cost_in_spend": cost_in_spend}
+    return {"litellm_metadata": {"standard_logging_guardrail_information": [entry]}}
+
+
+def _retry_only_failure(attempt_cost: float = 0.25) -> Mapping[str, object]:
+    return {
+        "combined_usage_object": _ATTEMPT_USAGE,
+        "response_cost": 0.0,
+        "billed_failed_attempts": (
+            BilledFailedAttempt(
+                attempted_retries=0, deployment_id="dep-a", usage=_ATTEMPT_USAGE, response_cost=attempt_cost
+            ),
+        ),
+    }
+
+
 @pytest.mark.asyncio
-async def test_failure_spend_rows_leave_the_live_spend_counters_alone_while_spend_updates_are_disabled(
-    live_spend_counters: DualCache, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    ("failure", "charged"),
+    [
+        (_recovered_stream_failure(), 0.125),
+        (_guardrail_only_failure(), 0.3),
+        (_retry_only_failure(), 0.25),
+        (_failure_with_billed_attempts(), 1.25),
+    ],
+    ids=["recovered-stream", "guardrail-only", "retry-only", "final-and-retries"],
+)
+async def test_a_billed_failure_raises_the_live_spend_counters_while_error_logs_are_off(
+    live_spend_counters: DualCache,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: Mapping[str, object],
+    charged: float,
 ):
-    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"disable_spend_updates": True})
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"disable_error_logs": True})
+    for key, spend in _LIVE_COUNTERS.items():
+        await live_spend_counters.async_set_cache(key, spend)
+
+    await _fail_request(ProxyDBLogger(), failure)
+
+    assert await _counter_values(live_spend_counters) == pytest.approx(
+        {key: spend + charged for key, spend in _LIVE_COUNTERS.items()}
+    )
+
+
+class _RecordingSpendWriter:
+    def __init__(self) -> None:
+        self.rows: list[Mapping[str, object]] = []  # mutable-ok: test double records the spend rows written
+
+    async def update_database(self, **kwargs: object) -> None:
+        self.rows.append(kwargs)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("disable_error_logs", [False, True])
+@pytest.mark.parametrize(
+    ("failure", "row_costs"),
+    [
+        (_recovered_stream_failure(), (0.125,)),
+        (_guardrail_only_failure(), (0.3,)),
+        (_retry_only_failure(), (0.0, 0.25)),
+        ({}, (0.0,)),
+        ({"combined_usage_object": _ATTEMPT_USAGE, "response_cost": 0.0}, (0.0,)),
+        ({"combined_usage_object": _ATTEMPT_USAGE, "response_cost": -0.5}, (0.0,)),
+        ({"response_cost": 0.5}, (0.0,)),
+        (_guardrail_only_failure(cost_in_spend=False), (0.0,)),
+        (_retry_only_failure(attempt_cost=0.0), (0.0, 0.0)),
+    ],
+    ids=[
+        "recovered-stream",
+        "guardrail-only",
+        "retry-only",
+        "no-cost",
+        "zero-recovered-cost",
+        "negative-recovered-cost",
+        "cost-without-usage",
+        "guardrail-cost-outside-spend",
+        "zero-cost-retry",
+    ],
+)
+async def test_disabling_error_logs_drops_only_failures_that_billed_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+    disable_error_logs: bool,
+    failure: Mapping[str, object],
+    row_costs: tuple[float, ...],
+):
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"disable_error_logs": disable_error_logs})
+    writer: Final = _RecordingSpendWriter()
+
+    await _fail_request(ProxyDBLogger(spend_writer=lambda: cast(DBSpendUpdateWriter, writer)), failure)
+
+    suppressed: Final = disable_error_logs and not any(cost > 0 for cost in row_costs)
+    assert tuple(row["response_cost"] for row in writer.rows) == (() if suppressed else row_costs)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("disable_error_logs", [False, True])
+async def test_failure_spend_rows_leave_the_live_spend_counters_alone_while_spend_updates_are_disabled(
+    live_spend_counters: DualCache, monkeypatch: pytest.MonkeyPatch, disable_error_logs: bool
+):
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.general_settings",
+        {"disable_spend_updates": True, "disable_error_logs": disable_error_logs},
+    )
     for key, spend in _LIVE_COUNTERS.items():
         await live_spend_counters.async_set_cache(key, spend)
 

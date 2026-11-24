@@ -231,6 +231,12 @@ def _billed_failed_attempts(request_data: Mapping[str, object]) -> tuple[BilledF
     return tuple(attempt for attempt in lifted if isinstance(attempt, BilledFailedAttempt))
 
 
+def _failure_billed_the_provider(request_data: Mapping[str, object]) -> bool:
+    return failure_row_response_cost(request_data) > 0 or any(
+        attempt.response_cost > 0 for attempt in _billed_failed_attempts(request_data)
+    )
+
+
 def _failure_spend_rows(
     request_data: Mapping[str, object],
     final_cost: float,
@@ -402,6 +408,9 @@ class _ProxyDBLogger(CustomLogger):
         request_route: Final = user_api_key_dict.request_route
         if (
             ProxyDBLogger._should_track_errors_in_db() is False
+            and not _failure_billed_the_provider(
+                cast("Mapping[str, object]", request_data)  # cast-ok: request dict, read only
+            )
             or request_route is not None
             and not (
                 RouteChecks.is_llm_api_route(route=request_route) or RouteChecks.is_info_route(route=request_route)
