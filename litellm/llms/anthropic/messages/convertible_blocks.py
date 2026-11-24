@@ -554,7 +554,7 @@ def drop_non_string_texts(
 
 
 def emptied_messages_error(sent: Sequence[object], kept: Sequence[object]) -> str | None:
-    if kept or not sent:
+    if kept or malformed_text_error(sent) is None:
         return None
     return "messages: no message has content left after dropping empty or non-string text blocks"
 

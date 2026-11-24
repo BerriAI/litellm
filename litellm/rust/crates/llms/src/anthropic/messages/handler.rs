@@ -11,9 +11,8 @@ use crate::{
     Error, ErrorDetail,
     anthropic::common_utils::{
         flatten_unencrypted_raw_web_search_results, flatten_unencrypted_web_search_results,
-        map_messages, map_messages_rejecting_emptied, non_string_user_text_path,
-        sanitize_raw_tool_use_ids, sanitize_tool_use_ids, strip_empty_content_blocks,
-        strip_empty_raw_content_blocks, strip_provider_specific_fields,
+        map_messages, non_string_user_text_path, sanitize_raw_tool_use_ids, sanitize_tool_use_ids,
+        strip_empty_content_blocks, strip_empty_raw_content_blocks, strip_provider_specific_fields,
         strip_raw_provider_specific_fields,
     },
     base_llm::messages::context::MessagesShapeOptions,
@@ -35,11 +34,11 @@ pub fn shape_anthropic_messages_request(
             strip_raw_provider_specific_fields,
         )
     } else {
-        map_messages_rejecting_emptied(
+        map_messages(
             request.messages,
             sanitize_anthropic_messages,
             sanitize_raw_anthropic_message,
-        )?
+        )
     };
     Ok(MessagesRequest {
         messages,
@@ -401,7 +400,10 @@ mod tests {
     #[rstest]
     #[case::blank_text(json!([{"type": "text", "text": "  "}]))]
     #[case::missing_text(json!([{"type": "text"}]))]
-    fn shaping_that_leaves_no_message_is_a_request_error(#[case] blocks: Value) {
+    fn shaping_that_strips_every_message_leaves_the_empty_request_for_the_provider(
+        #[case] blocks: Value,
+        #[values(false, true)] drops_unsupported_params: bool,
+    ) {
         let shaped = shape_anthropic_messages_request(
             request(json!({"model": "m", "messages": [
                 {"role": "user", "content": blocks},
@@ -410,13 +412,11 @@ mod tests {
             MessagesShapeOptions {
                 reasoning_auto_summary: false,
                 presanitized: false,
-                drops_unsupported_params: false,
+                drops_unsupported_params,
             },
-        );
-        assert!(matches!(
-            shaped,
-            Err(Error::InvalidRequest(crate::ErrorDetail::EmptiedMessages))
-        ));
+        )
+        .unwrap();
+        assert_eq!(serde_json::to_value(shaped).unwrap()["messages"], json!([]));
     }
 
     #[rstest]

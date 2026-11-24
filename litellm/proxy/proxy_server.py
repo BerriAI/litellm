@@ -15451,7 +15451,7 @@ def _counted_request_messages(
     emptied_error: Final = emptied_messages_error(messages, kept)
     if emptied_error is not None:
         raise ProxyException(message=emptied_error, type="invalid_request_error", param="messages", code=400)
-    return kept
+    return kept or list(messages)
 
 
 async def _try_provider_token_count(

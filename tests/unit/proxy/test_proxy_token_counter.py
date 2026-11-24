@@ -2217,6 +2217,16 @@ async def test_count_tokens_without_a_count_api_counts_a_non_string_user_text_as
 
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text", ("", " \n"), ids=("empty", "blank"))
+async def test_anthropic_count_tokens_counts_a_request_with_only_blank_user_text_as_sent(
+    monkeypatch: pytest.MonkeyPatch, text: str
+) -> None:
+    messages: Final[list[dict[str, JsonValue]]] = [{"role": "user", "content": [{"type": "text", "text": text}]}]
+
+    assert await _messages_sent_to_anthropic_count(monkeypatch, {"messages": messages}, {}) == messages
+
+
 _EMPTIED_MESSAGES_ERROR: Final = "messages: no message has content left after dropping empty or non-string text blocks"
 
 
@@ -2233,7 +2243,6 @@ def _non_string_text_error(field: str) -> str:
             {"drop_params": True},
             _EMPTIED_MESSAGES_ERROR,
         ),
-        ([{"role": "user", "content": [{"type": "text", "text": ""}]}], {}, _EMPTIED_MESSAGES_ERROR),
         (
             _prompt_beside({"type": "text", "text": None}),
             {},
@@ -2241,7 +2250,7 @@ def _non_string_text_error(field: str) -> str:
         ),
         (_BLANK_BEFORE_NULL_PROMPT, {}, _non_string_text_error("messages.0.content.1.text")),
     ),
-    ids=("only-null-dropped", "only-empty-string", "null-beside-text", "blank-before-null"),
+    ids=("only-null-dropped", "null-beside-text", "blank-before-null"),
 )
 @pytest.mark.parametrize(
     "model",
@@ -5734,19 +5743,15 @@ async def test_messages_count_tokens_sends_the_edited_messages_to_a_bridged_prov
 
 
 @pytest.mark.asyncio
-async def test_messages_count_tokens_answers_the_inference_400_for_only_empty_text_on_a_bridged_provider(
+async def test_messages_count_tokens_counts_only_empty_text_on_a_bridged_provider_count_api(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     empty_turn: Final[dict[str, JsonValue]] = {"role": "user", "content": [{"type": "text", "text": ""}]}
 
     response, sent_bodies = await _count_on_a_bridged_provider_count_api({"messages": [empty_turn]}, monkeypatch)
 
-    assert isinstance(response, JSONResponse)
-    assert response.status_code == 400
-    assert json.loads(bytes(response.body))["error"]["message"] == (
-        "messages: no message has content left after dropping empty or non-string text blocks"
-    )
-    assert sent_bodies == ()
+    assert response == {"input_tokens": 57, "litellm_count_source": "provider"}
+    assert len(sent_bodies) == 1
 
 
 _BEDROCK_CLAUDE_MODEL: Final = "bedrock/us.anthropic.claude-sonnet-5-5"

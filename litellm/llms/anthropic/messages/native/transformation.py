@@ -257,7 +257,11 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                     text = content_block.get("text", "")
                     content_type = content_block.get("type", "")
                     # Skip text blocks that start with billing header
-                    if content_type == "text" and text.startswith(ANTHROPIC_BILLING_METADATA_PREFIX):
+                    if (
+                        content_type == "text"
+                        and isinstance(text, str)
+                        and text.startswith(ANTHROPIC_BILLING_METADATA_PREFIX)
+                    ):
                         continue
                     filtered_list.append(content_block)
                 else:
