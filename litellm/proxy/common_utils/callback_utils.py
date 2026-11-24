@@ -489,7 +489,7 @@ def get_remaining_tokens_and_requests_from_request_data(data: dict) -> dict[str,
     Returns {} when api_key + model rpm/tpm limit is not set
 
     """
-    headers: Final = {}
+    headers: Final[dict[str, str]] = {}
     _metadata: Final = data.get("metadata", None) or {}
     model_group: Final = get_model_group_from_request_data(data)
 

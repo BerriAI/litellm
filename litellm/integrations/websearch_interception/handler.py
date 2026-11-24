@@ -9,7 +9,7 @@ server-side using litellm router's search tools.
 import asyncio
 import math
 import uuid
-from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Coroutine, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, TypedDict, TypeVar, cast
@@ -822,7 +822,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         # When extended thinking is enabled, the model response includes
         # thinking/redacted_thinking blocks that must be preserved and
         # prepended to the follow-up assistant message.
-        thinking_blocks: Final[list[dict]] = []
+        thinking_blocks: Final[list[dict[str, object]]] = []
         if isinstance(response, dict):
             content = response.get("content", [])
         else:
@@ -840,7 +840,7 @@ class WebSearchInterceptionLogger(CustomLogger):
                 else:
                     # Convert object to dict using getattr, matching the
                     # pattern in _detect_from_non_streaming_response
-                    thinking_block_dict: dict = {"type": block_type}
+                    thinking_block_dict: dict[str, object] = {"type": block_type}
                     if block_type == "thinking":
                         thinking_block_dict["thinking"] = getattr(block, "thinking", "")
                         thinking_block_dict["signature"] = getattr(block, "signature", "")
@@ -1017,7 +1017,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         anthropic_messages_optional_request_params: dict,
         logging_obj: "LiteLLMLoggingObj | None",
         stream: bool,
-        kwargs: dict,
+        kwargs: Mapping[str, object],
     ) -> AgenticLoopPlan:
         if kwargs.get("_agentic_loop_api_surface") == CHAT_COMPLETION_AGENTIC_SURFACE:
             return await self.async_build_chat_completion_agentic_loop_plan(
@@ -1106,7 +1106,7 @@ class WebSearchInterceptionLogger(CustomLogger):
 
     @staticmethod
     def _build_native_result_blocks(
-        tool_calls: list[dict],
+        tool_calls: list[dict[str, object]],
         search_outcomes: Sequence[SearchOutcome],
     ) -> tuple[Mapping[str, object], ...]:
         """
@@ -1258,7 +1258,7 @@ class WebSearchInterceptionLogger(CustomLogger):
     async def _build_responses_request_patch(
         self,
         model: str,
-        messages: str | list[dict],
+        messages: str | list[dict[str, object]],
         tool_calls: list[dict],
         optional_params: Mapping[str, object],
         kwargs: Mapping[str, object],
@@ -1344,7 +1344,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         )
 
     @staticmethod
-    def _normalize_responses_input(messages: str | list[dict]) -> list[dict]:
+    def _normalize_responses_input(messages: str | list[dict[str, object]]) -> list[dict[str, object]]:
         if isinstance(messages, str):
             return [{"role": "user", "content": messages}]
         if isinstance(messages, list):
@@ -1365,7 +1365,7 @@ class WebSearchInterceptionLogger(CustomLogger):
     @staticmethod
     def _resolve_max_tokens(
         optional_params: dict,
-        kwargs: dict,
+        kwargs: Mapping[str, object],
     ) -> int:
         """Extract max_tokens and validate against thinking.budget_tokens.
 
@@ -1417,8 +1417,8 @@ class WebSearchInterceptionLogger(CustomLogger):
         self,
         model: str,
         messages: list[dict[str, object]],
-        tool_calls: list[dict],
-        thinking_blocks: list[dict],
+        tool_calls: list[dict[str, object]],
+        thinking_blocks: Sequence[Mapping[str, object]],
         anthropic_messages_optional_request_params: Mapping[str, object],
         logging_obj: "LiteLLMLoggingObj | None",
         stream: bool,
@@ -1474,17 +1474,17 @@ class WebSearchInterceptionLogger(CustomLogger):
         model: str,
         messages: list[dict[str, object]],
         tool_calls: list[dict],
-        thinking_blocks: list[dict],
+        thinking_blocks: Sequence[Mapping[str, object]],
         anthropic_messages_optional_request_params: dict,
         logging_obj: "LiteLLMLoggingObj | None",
-        kwargs: dict,
+        kwargs: Mapping[str, object],
     ) -> tuple[AgenticLoopRequestPatch, tuple[SearchOutcome, ...]]:
         """
         Execute litellm.search() and build follow-up request patch.
         """
 
         # Extract search queries from tool_use blocks
-        search_tasks: Final = []
+        search_tasks: Final[list[Coroutine[object, object, tuple[str, SearchResponse | None]]]] = []
         for tool_call in tool_calls:
             query = tool_call["input"].get("query")
             if query:
@@ -1875,7 +1875,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         self,
         model: str,
         messages: list[dict[str, object]],
-        tool_calls: list[dict],
+        tool_calls: list[dict[str, object]],
         optional_params: Mapping[str, object],
         logging_obj: "LiteLLMLoggingObj | None",
         stream: bool,
@@ -1912,7 +1912,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         self,
         model: str,
         messages: list[dict[str, object]],
-        tool_calls: list[dict],
+        tool_calls: list[dict[str, object]],
         optional_params: Mapping[str, object],
         kwargs: Mapping[str, object],
         logging_obj: "LiteLLMLoggingObj | None",
