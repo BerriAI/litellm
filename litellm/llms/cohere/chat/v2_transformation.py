@@ -373,10 +373,10 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
+        optional_params: dict[str, object],
         litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
@@ -416,7 +416,7 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
     def map_openai_params(
         self,
         non_default_params: Mapping[str, object],
-        optional_params: dict,
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
     ) -> dict:
@@ -451,7 +451,7 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
         messages: list[AllMessageValues],
         optional_params: dict[str, object],
         litellm_params: dict[str, object],
-        headers: dict,
+        headers: dict[str, object],
     ) -> dict:
         """
         Cohere v2 chat api is in openai format, so we can use the openai transform request function to transform the request.

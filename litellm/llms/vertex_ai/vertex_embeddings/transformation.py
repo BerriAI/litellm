@@ -99,7 +99,9 @@ class VertexAITextEmbeddingConfig(LiteLLMBaseModel):
     def get_supported_openai_params(self):
         return ["dimensions"]
 
-    def map_openai_params(self, non_default_params: Mapping[str, object], optional_params: dict, kwargs: dict):
+    def map_openai_params(
+        self, non_default_params: Mapping[str, object], optional_params: dict[str, object], kwargs: dict
+    ):
         for param, value in non_default_params.items():
             if param == "dimensions":
                 optional_params["outputDimensionality"] = value
@@ -114,7 +116,7 @@ class VertexAITextEmbeddingConfig(LiteLLMBaseModel):
         """
         return {"project": "vertex_project", "region_name": "vertex_location"}
 
-    def map_special_auth_params(self, non_default_params: Mapping[str, object], optional_params: dict):
+    def map_special_auth_params(self, non_default_params: Mapping[str, object], optional_params: dict[str, object]):
         mapped_params: Final = self.get_mapped_special_auth_params()
 
         for param, value in non_default_params.items():
@@ -127,7 +129,7 @@ class VertexAITextEmbeddingConfig(LiteLLMBaseModel):
         input: list | str,
         optional_params: dict,
         model: str,
-        litellm_params: dict | None = None,
+        litellm_params: dict[str, object] | None = None,
     ) -> VertexEmbeddingRequest:
         """
         Transforms an openai request to a vertex embedding request.

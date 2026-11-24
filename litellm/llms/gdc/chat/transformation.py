@@ -84,7 +84,9 @@ class GDCGeminiConfig(OpenAILikeChatConfig):
             or optional_params.get("vertex_ai_location")
         )
 
-    def _effective_project(self, api_base: str, optional_params: dict, litellm_params: dict) -> str | None:
+    def _effective_project(
+        self, api_base: str, optional_params: dict[str, object], litellm_params: dict[str, object]
+    ) -> str | None:
         match: Final = re.search(r"/v1/projects/([^/]+)", api_base)
         if match:
             return match.group(1)

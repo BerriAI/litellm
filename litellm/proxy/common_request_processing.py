@@ -3068,7 +3068,7 @@ class ProxyBaseLLMRequestProcessing:
     async def build_litellm_proxy_success_headers_from_llm_response(
         *,
         response: object,
-        request_data: dict,
+        request_data: dict[str, object],
         request: Request,
         user_api_key_dict: UserAPIKeyAuth,
         logging_obj: LiteLLMLoggingObj,
@@ -5539,7 +5539,7 @@ class ProxyBaseLLMRequestProcessing:
     @staticmethod
     async def finalize_streaming_generator_cleanup(
         request: Request | None,
-        request_data: dict,
+        request_data: dict[str, object],
         response: object,
         stream_completed: bool = False,
         client_disconnected: bool = False,
@@ -5803,7 +5803,7 @@ class ProxyBaseLLMRequestProcessing:
     def async_sse_data_generator(
         response: object,
         user_api_key_dict: UserAPIKeyAuth,
-        request_data: dict,
+        request_data: dict[str, object],
         proxy_logging_obj: ProxyLogging,
         request: Request | None = None,
         restamp_model: str | None = None,

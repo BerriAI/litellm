@@ -50,7 +50,16 @@ from .redis_semantic_cache import RedisSemanticCache
 from .s3_cache import S3Cache
 
 RESPONSE_CACHE_TARGET: Final = "llm_response"
-_ALWAYS_KEYED_PROVIDER_PARAMS: Final = frozenset({"continuation_token", "previous_interaction_id", "return_token_ids"})
+_ALWAYS_KEYED_PROVIDER_PARAMS: Final = frozenset(
+    {
+        "continuation_token",
+        "previous_interaction_id",
+        "return_token_ids",
+        "responseFormat",
+        "generationConfig",
+        "generation_config",
+    }
+)
 _DECODED_LITERAL: Final = TypeAdapter(object)
 _REDIS_STARTUP_NODES_ADAPTER: Final = TypeAdapter(
     list[dict[str, object]], config=ConfigDict(strict=True, hide_input_in_errors=True)
