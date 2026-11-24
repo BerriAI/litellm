@@ -32,6 +32,7 @@ export interface UseChatHistoryReturn {
   handleResponseId: (responseId: string) => void;
   handleToggleSessionManagement: (useApi: boolean) => void;
   handleHistoryResent: () => void;
+  handleModelChange: () => void;
   handleMCPEvent: (event: MCPEvent) => void;
   updateImageUI: (imageUrl: string, model: string) => void;
   updateEmbeddingsUI: (embeddings: string, model?: string) => void;
