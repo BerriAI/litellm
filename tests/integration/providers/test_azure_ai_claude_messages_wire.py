@@ -281,6 +281,7 @@ def test_azure_ai_claude_messages_forwards_the_auto_injected_betas_azure_accepts
 
 
 def test_azure_ai_claude_messages_forwards_supported_beta(gateway: Gateway) -> None:
+
     identity: Final = "msg_azure_claude_supported_beta"
     reply_body: Final = cc.message_reply(identity, _BACKEND, _CONTENT, _USAGE)
     request_body: Final = {
