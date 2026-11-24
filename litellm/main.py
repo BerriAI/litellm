@@ -1432,18 +1432,14 @@ def mock_completion(
         raise Exception(f"Mock completion response failed - {e}")
 
 
+from litellm.responses import bridge_check as interactions_bridge
 from litellm.responses.bridge_check import (  # noqa: E402  # re-export at the old definition site
     _resolve_openai_api_base as _resolve_openai_api_base,  # pyright: ignore[reportPrivateUsage]  # noqa: PLC0414  # re-export of moved helper
 )
 from litellm.responses.bridge_check import (
     bridge_reasoning_effort,
-    dispatch_interactions_bridge,
-    resolve_bridge_allowed_openai_params,
-    resolve_bridge_tool_choice,
     serves_only_responses,
-    should_route_to_interactions_api,
     str_keyed_mapping,
-    strip_interactions_routing_params,
 )
 from litellm.responses.bridge_check import (  # noqa: E402  # re-export at the old definition site
     responses_api_bridge_check as responses_api_bridge_check,  # pyright: ignore[reportUnknownVariableType]  # noqa: PLC0414  # re-export of moved function
@@ -6209,7 +6205,7 @@ def completion(
         if not is_claude_tool_target(custom_llm_provider=custom_llm_provider, model=model):
             tools = _drop_anthropic_only_tool_keys(tools=tools)
 
-        bridges_to_interactions_api: Final = should_route_to_interactions_api(
+        bridges_to_interactions_api: Final = interactions_bridge.should_route_to_interactions_api(
             model=model,
             custom_llm_provider=custom_llm_provider,
             optional_params=provider_params,  # pyright: ignore[reportUnknownArgumentType]  # untyped provider_params
@@ -6218,6 +6214,8 @@ def completion(
             skip_bridge=skip_interactions_api_bridge,  # pyright: ignore[reportUnknownArgumentType]  # untyped skip flag
             candidate_count=n,
             asks_for_logprobs=logprobs is True or top_logprobs is not None,
+            tools=tools,  # pyright: ignore[reportUnknownArgumentType]  # untyped tools local
+            service_tier=service_tier,
         )
         drops_tool_choice: Final = drops_unsupported_allowed_tools_tool_choice(
             tool_choice=cast(  # cast-ok: widening an untyped dict to object is always sound, the helper validates it with pydantic
@@ -6322,17 +6320,17 @@ def completion(
         bridges_to_responses_api: Final = (
             responses_api_model_info.get("mode") == "responses" and may_bridge_to_responses_api
         )
-        cleaned_provider_params: Final = strip_interactions_routing_params(
+        cleaned_provider_params: Final = interactions_bridge.strip_interactions_routing_params(
             provider_params  # pyright: ignore[reportUnknownArgumentType]  # untyped provider_params
         )
-        effective_tool_choice: Final = resolve_bridge_tool_choice(
+        effective_tool_choice: Final = interactions_bridge.resolve_bridge_tool_choice(
             tool_choice,  # pyright: ignore[reportUnknownArgumentType]  # untyped tool_choice local
             bridges_to_interactions_api=bridges_to_interactions_api,
             model=model,
             custom_llm_provider=custom_llm_provider,
             drop_params=drop_unsupported_reasoning,
         )
-        allowed_openai_params: Final = resolve_bridge_allowed_openai_params(
+        allowed_openai_params: Final = interactions_bridge.resolve_bridge_allowed_openai_params(
             raw_allowed=kwargs.get("allowed_openai_params"),  # pyright: ignore[reportUnknownMemberType,reportUnknownArgumentType]  # untyped kwargs
             bridges_to_responses_api=bool(bridges_to_responses_api),  # pyright: ignore[reportUnknownArgumentType]  # untyped responses_api_model_info
             bridges_to_interactions_api=bridges_to_interactions_api,
@@ -6647,23 +6645,28 @@ def completion(
             )
 
         if bridges_to_interactions_api:
-            return dispatch_interactions_bridge(  # pyright: ignore[reportReturnType]  # bridge returns a coroutine on the acompletion path; awaited by the async caller
-                model=model,
-                messages=messages,  # pyright: ignore[reportUnknownArgumentType]  # untyped messages local
-                headers=headers,  # pyright: ignore[reportUnknownArgumentType]  # untyped headers local
-                model_response=model_response,
-                api_key=api_key,  # pyright: ignore[reportUnknownArgumentType]  # untyped api_key local
-                api_base=api_base,  # pyright: ignore[reportUnknownArgumentType]  # untyped api_base local
-                acompletion=acompletion,  # pyright: ignore[reportUnknownArgumentType]  # untyped acompletion local
-                logging_obj=logging,  # pyright: ignore[reportUnknownArgumentType]  # untyped logging local
-                processed_params=processed_non_default_params,  # pyright: ignore[reportUnknownArgumentType]  # untyped params local
-                stream_options=stream_options,  # pyright: ignore[reportUnknownArgumentType]  # untyped stream_options local
-                litellm_params=litellm_params,  # pyright: ignore[reportUnknownArgumentType]  # untyped litellm_params local
-                raw_kwargs=kwargs,  # pyright: ignore[reportUnknownArgumentType]  # untyped kwargs local
-                timeout=timeout,
-                client=client,  # pyright: ignore[reportUnknownArgumentType]  # untyped client local
-                custom_llm_provider=custom_llm_provider,
-                stream=stream,  # pyright: ignore[reportUnknownArgumentType]  # untyped stream local
+            return _replayed_as_stream(  # pyright: ignore[reportReturnType]  # bridge returns a coroutine on the acompletion path; awaited by the async caller
+                interactions_bridge.dispatch_interactions_bridge(
+                    model=model,
+                    messages=messages,  # pyright: ignore[reportUnknownArgumentType]  # untyped messages local
+                    headers=headers,  # pyright: ignore[reportUnknownArgumentType]  # untyped headers local
+                    model_response=model_response,
+                    api_key=api_key,  # pyright: ignore[reportUnknownArgumentType]  # untyped api_key local
+                    api_base=api_base,  # pyright: ignore[reportUnknownArgumentType]  # untyped api_base local
+                    acompletion=acompletion,  # pyright: ignore[reportUnknownArgumentType]  # untyped acompletion local
+                    logging_obj=logging,  # pyright: ignore[reportUnknownArgumentType]  # untyped logging local
+                    processed_params=processed_non_default_params,  # pyright: ignore[reportUnknownArgumentType]  # untyped params local
+                    stream_options=None if replays_stream else stream_options,  # pyright: ignore[reportUnknownArgumentType]  # untyped stream_options local
+                    litellm_params=litellm_params,  # pyright: ignore[reportUnknownArgumentType]  # untyped litellm_params local
+                    raw_kwargs=kwargs,  # pyright: ignore[reportUnknownArgumentType]  # untyped kwargs local
+                    timeout=timeout,
+                    client=client,  # pyright: ignore[reportUnknownArgumentType]  # untyped client local
+                    custom_llm_provider=custom_llm_provider,
+                    stream=dispatch_stream,  # pyright: ignore[reportUnknownArgumentType]  # untyped stream local
+                ),
+                partial(_replayed_stream, logging_obj=logging, stream_options=stream_options)
+                if replays_stream
+                else None,
             )
 
         ## RESPONSES API BRIDGE LOGIC ## - check if model has 'mode: responses' in litellm.model_cost map

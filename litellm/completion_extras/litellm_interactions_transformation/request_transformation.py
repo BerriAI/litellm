@@ -4,7 +4,7 @@ import base64
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial
-from itertools import accumulate, chain
+from itertools import accumulate, chain, takewhile
 from types import MappingProxyType
 from typing import Final, TypeAlias
 
@@ -16,6 +16,7 @@ from litellm.litellm_core_utils.allowed_tools_tool_choice import (
     parse_allowed_tools_tool_choice,
     responses_allowed_tools_tool_choice,
 )
+from litellm.litellm_core_utils.prompt_templates.common_utils import is_blank_content
 from litellm.litellm_core_utils.prompt_templates.factory import (
     THOUGHT_SIGNATURE_SEPARATOR,
     convert_to_anthropic_image_obj,
@@ -202,6 +203,13 @@ def _validate_request_params(
         raise litellm.BadRequestError(
             message="'file_search' tools are not supported for chat completions on the Gemini Interactions API. "
             "Use the Interactions API directly to search a file search store.",
+            model=model,
+            llm_provider=custom_llm_provider,
+        )
+    if params.get("environment") is not None:
+        raise litellm.BadRequestError(
+            message="'environment' is not supported for chat completions on the Gemini Interactions API. "
+            "Use the Interactions API directly to run in an environment.",
             model=model,
             llm_provider=custom_llm_provider,
         )
@@ -666,6 +674,8 @@ def _steps_for_non_system_message(
 ) -> tuple[JsonValue, ...]:
     match msg.get("role"):
         case "user":
+            if is_blank_content(msg.get("content")):
+                return ()
             user_blocks: Final = _convert_content_blocks(msg.get("content"), model, custom_llm_provider, media_fetcher)
             return ({"type": "user_input", "content": user_blocks},) if user_blocks else ()
         case "assistant" | "model":
@@ -674,6 +684,18 @@ def _steps_for_non_system_message(
             return (_build_tool_result_step(msg, tool_names_by_id, model, custom_llm_provider, media_fetcher),)
         case _:
             return ()
+
+
+def _blank_last_user_turn(messages: Sequence[JsonMapping], steps: Sequence[JsonValue]) -> tuple[JsonValue, ...]:
+    last_user_span: Final = tuple(takewhile(lambda msg: msg.get("role") == "user", reversed(messages)))
+    ends_on_user_input: Final = bool(steps) and isinstance(steps[-1], dict) and steps[-1].get("type") == "user_input"
+    if (
+        not last_user_span
+        or ends_on_user_input
+        or not all(is_blank_content(msg.get("content")) for msg in last_user_span)
+    ):
+        return ()
+    return ({"type": "user_input", "content": [{"type": "text", "text": " "}]},)
 
 
 def _convert_messages(
@@ -692,7 +714,8 @@ def _convert_messages(
         _steps_for_non_system_message(msg, tool_names_by_id, model, custom_llm_provider, media_fetcher)
         for msg in dict_messages
     )
-    steps: Final = list(chain.from_iterable(step_groups))
+    spoken_steps: Final = tuple(chain.from_iterable(step_groups))
+    steps: Final = [*spoken_steps, *_blank_last_user_turn(dict_messages, spoken_steps)]
 
     combined_system: Final = "\n\n".join(system_chunks) if system_chunks else None
     if not steps and combined_system is not None:
@@ -1047,7 +1070,6 @@ def transform_chat_to_interactions_request(
             key: normalized_params[key]
             for key in (
                 "previous_interaction_id",
-                "environment",
                 "response_modalities",
             )
             if normalized_params.get(key) is not None

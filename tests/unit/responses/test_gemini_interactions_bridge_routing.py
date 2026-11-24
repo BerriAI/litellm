@@ -12,6 +12,7 @@ from litellm.completion_extras.litellm_interactions_transformation import (
     InteractionsToCompletionBridgeHandler,
 )
 from litellm.exceptions import BadRequestError, UnsupportedParamsError
+from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.vertex_ai.interactions.transformation import VertexAIInteractionsConfig
 from litellm.responses.bridge_check import keep_registered_mode, should_route_to_interactions_api
@@ -267,7 +268,6 @@ def test_top_level_interactions_kwargs_pass_preprocessing_with_drop_params_false
             model="gemini/gemini-3-flash-preview",
             messages=[{"role": "user", "content": "continue"}],
             use_interactions=True,
-            environment="browser",
             audio={"voice": "alloy", "format": "pcm16"},
             response_json_schema=schema,
             api_key="unit-gemini-key",
@@ -293,7 +293,6 @@ def test_top_level_interactions_kwargs_pass_preprocessing_with_drop_params_false
         "model": "gemini-3-flash-preview",
         "input": [{"type": "user_input", "content": [{"type": "text", "text": "continue"}]}],
         "store": False,
-        "environment": "browser",
         "response_format": {"type": "text", "mime_type": "application/json", "schema": schema},
         "generation_config": {"speech_config": [{"voice": "Kore"}]},
     }
@@ -552,6 +551,13 @@ def test_bridged_gemini_translates_openai_allowed_tools_tool_choice_while_unbrid
         ("gemini-4-neon", "gemini", {"candidate_count": 2}, False),
         ("gemini-4-neon", "gemini", {"optional_params": {"cached_content": "cachedContents/abc"}}, False),
         ("gemini-4-neon", "gemini", {"optional_params": {"previous_interaction_id": "v1_other_keys_turn"}}, False),
+        ("gemini-4-neon", "gemini", {"optional_params": {"environment": "env_other_keys_sandbox"}}, False),
+        (
+            "gemini-4-neon",
+            "gemini",
+            {"optional_params": {"extra_body": {"environment": {"environment_id": "e1"}}}},
+            False,
+        ),
         (
             "gemini-4-neon",
             "gemini",
@@ -671,3 +677,80 @@ def test_callers_continuation_token_reaches_interactions_from_the_top_level_or_e
     assert isinstance(resumed, ModelResponse)
     assert [req.url.path for req in captured] == ["/v1beta/interactions"]
     assert json.loads(captured[0].content)["continuation_token"] == "tok_resume"
+
+
+def _answering_either_gemini_route(captured: list[httpx.Request]) -> httpx.MockTransport:
+    def responder(req: httpx.Request) -> httpx.Response:
+        captured.append(req)
+        if req.url.path.endswith("/interactions"):
+            return httpx.Response(
+                200,
+                json={
+                    "id": "v1_route_choice",
+                    "status": "completed",
+                    "steps": [{"type": "model_output", "content": [{"type": "text", "text": "ANSWER"}]}],
+                    "usage": {"total_input_tokens": 8, "total_output_tokens": 3, "total_tokens": 11},
+                },
+            )
+        return httpx.Response(
+            200,
+            json={
+                "candidates": [{"content": {"role": "model", "parts": [{"text": "ANSWER"}]}, "finishReason": "STOP"}],
+                "usageMetadata": {"promptTokenCount": 8, "candidatesTokenCount": 3, "totalTokenCount": 11},
+            },
+        )
+
+    return httpx.MockTransport(responder)
+
+
+@pytest.mark.parametrize(
+    "request_fields",
+    (
+        {"tools": [{"type": "file_search", "file_search_store_names": ["fileSearchStores/team"]}]},
+        {"service_tier": "flex"},
+        {"top_k": 40},
+    ),
+    ids=("file_search_tool", "service_tier", "top_k"),
+)
+def test_gemini_4_completion_with_a_field_interactions_cannot_carry_is_sent_to_generate_content(
+    monkeypatch: pytest.MonkeyPatch, request_fields: Mapping[str, object]
+) -> None:
+    monkeypatch.setattr(litellm, "route_all_chat_gemini_to_interactions", False)
+    captured: Final[list[httpx.Request]] = []  # mutable-ok: transport spy
+
+    with httpx.Client(transport=_answering_either_gemini_route(captured)) as raw_client:
+        litellm.completion(  # pyright: ignore[reportUnknownMemberType]  # completion is untyped upstream
+            model="gemini/gemini-4-neon",
+            messages=[{"role": "user", "content": "answer"}],
+            api_key="unit-gemini-key",
+            api_base="https://generativelanguage.googleapis.com",
+            client=HTTPHandler(client=raw_client),
+            **request_fields,
+        )
+
+    assert [req.url.path.rsplit(":", 1)[-1] for req in captured] == ["generateContent"]
+
+
+def test_gemini_4_stream_asked_to_be_replayed_makes_one_complete_interactions_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "route_all_chat_gemini_to_interactions", False)
+    captured: Final[list[httpx.Request]] = []  # mutable-ok: transport spy
+
+    with httpx.Client(transport=_answering_either_gemini_route(captured)) as raw_client:
+        stream: Final = litellm.completion(  # pyright: ignore[reportUnknownMemberType]  # completion is untyped upstream
+            model="gemini/gemini-4-neon",
+            messages=[{"role": "user", "content": "answer"}],
+            api_key="unit-gemini-key",
+            api_base="https://generativelanguage.googleapis.com",
+            client=HTTPHandler(client=raw_client),
+            stream=True,
+            fake_stream=True,
+        )
+        assert isinstance(stream, CustomStreamWrapper)
+        chunks: Final = tuple(stream)
+        text: Final = "".join(chunk.choices[0].delta.content or "" for chunk in chunks)
+
+    assert text == "ANSWER"
+    assert [(req.url.path, req.url.query) for req in captured] == [("/v1beta/interactions", b"")]
+    assert "stream" not in json.loads(captured[0].content)

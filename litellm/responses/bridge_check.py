@@ -391,6 +391,10 @@ _GENERATE_CONTENT_ONLY_KEYS: Final = frozenset(
         "cached_content",
         "cachedContent",
         "previous_interaction_id",
+        "environment",
+        "service_tier",
+        "top_k",
+        "topK",
     }
 )
 _VERTEX_LOCATION_KEYS: Final = ("vertex_location", "vertex_ai_location")
@@ -447,7 +451,7 @@ def _catalog_row(model: str, custom_llm_provider: str) -> Mapping[str, object] |
 
 
 def has_global_safety_settings() -> bool:
-    return litellm.vertex_ai_safety_settings is not None
+    return litellm.vertex_ai_safety_settings is not None  # pyright: ignore[reportUnknownMemberType]  # module global is an untyped dict
 
 
 def should_route_to_interactions_api(
@@ -460,6 +464,8 @@ def should_route_to_interactions_api(
     skip_bridge: object = False,
     candidate_count: object = None,
     asks_for_logprobs: bool = False,
+    tools: object = None,
+    service_tier: str | None = None,
 ) -> bool:
     if bool(skip_bridge):
         return False
@@ -493,6 +499,8 @@ def should_route_to_interactions_api(
         and not has_global_safety_settings()
         and candidate_count in _ONE_CANDIDATE
         and not asks_for_logprobs
+        and service_tier is None
+        and not _names_a_file_search_store(tools)
         and not _needs_generate_content(str_keyed_mapping(optional_params), llm_map)
         and not _relies_on_ambient_vertex_location(custom_llm_provider, str_keyed_mapping(optional_params), llm_map)
     )

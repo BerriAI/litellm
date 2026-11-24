@@ -76,6 +76,17 @@ def test_callers_previous_interaction_id_is_rejected_so_chat_cannot_read_a_store
         )
 
 
+@pytest.mark.parametrize("environment", ("env_other_keys_sandbox", {"environment_id": "env_other_keys_sandbox"}))
+def test_callers_environment_is_rejected_so_chat_cannot_reuse_a_sandbox_it_does_not_own(environment: object) -> None:
+    with pytest.raises(litellm.BadRequestError, match="environment"):
+        transform_chat_to_interactions_request(
+            messages=[{"role": "user", "content": "List the files"}],
+            model="gemini-4-neon",
+            optional_params={"environment": environment},
+            litellm_params={"drop_params": True},
+        )
+
+
 def test_stateless_tool_loop_replays_signature_and_resolves_tool_name() -> None:
     encoded_id: Final = encode_tool_call_id_with_signature("call_weather_1", "c2lnX2Jhc2U2NF94eXo=")
     assistant_msg: Final = Message(
@@ -795,3 +806,24 @@ def test_forced_bridge_is_rejected_while_global_safety_settings_are_configured_s
             optional_params={},
             litellm_params={"drop_params": True},
         )
+
+
+@pytest.mark.parametrize("blank", ("", None, [{"type": "text", "text": ""}]))
+def test_blank_final_user_turn_after_an_assistant_reply_still_ends_the_request_on_a_user_turn(blank: object) -> None:
+    prepared = transform_chat_to_interactions_request(
+        model="gemini-4-neon",
+        messages=[
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": "hi there"},
+            {"role": "user", "content": blank},
+        ],
+        optional_params={},
+        litellm_params={},
+        custom_llm_provider="gemini",
+    )
+
+    assert prepared.input_steps == [
+        {"type": "user_input", "content": [{"type": "text", "text": "hello"}]},
+        {"type": "model_output", "content": [{"type": "text", "text": "hi there"}]},
+        {"type": "user_input", "content": [{"type": "text", "text": " "}]},
+    ]
