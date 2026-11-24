@@ -20,7 +20,7 @@ from litellm.types.mcp import MCPAuth
 from tests.unit.proxy.rust_auth_stores import FakeKeyStore, RustAuthStores, install_rust_auth_stores
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator, Mapping
+    from collections.abc import Iterator, Mapping, Sequence
 
     import httpx
     from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
@@ -9981,7 +9981,7 @@ class _ConfigOAuthClientStore:
         self.unavailable = unavailable
         self.reads: tuple[tuple[str, ...], ...] = ()
 
-    async def find_many(self, *, where: "Mapping[str, Mapping[str, tuple[str, ...]]]") -> tuple[SimpleNamespace, ...]:
+    async def find_many(self, *, where: "Mapping[str, Mapping[str, Sequence[str]]]") -> tuple[SimpleNamespace, ...]:
         ids: Final = tuple(where["server_id"]["in"])
         self.reads = (*self.reads, ids)
         if self.unavailable:
@@ -10068,6 +10068,34 @@ async def test_hydrate_config_server_applies_stored_dcr_client(monkeypatch, lega
     assert malformed.client_id is None
     assert configured.client_id == "admin-client"
     assert store.reads == ((server.server_id, "malformed", "second"),)
+
+
+@pytest.mark.asyncio
+async def test_hydrate_config_servers_reads_across_chunk_boundaries(monkeypatch):
+    import litellm.proxy.common_utils.encrypt_decrypt_utils as enc
+    from litellm.proxy._types import MCPTransport
+    from litellm.proxy.mcp_server.db import encrypt_credentials
+    from litellm.proxy.mcp_server.mcp_server_manager import MCPServerManager
+    from litellm.repositories.chunked_in import IN_LIST_CHUNK_SIZE
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    salt: Final = "salt-hydrate-key"
+    monkeypatch.setattr(enc, "get_salt_key", lambda: salt)
+    ids: Final = tuple(f"yaml_{i}" for i in range(IN_LIST_CHUNK_SIZE + 1))
+    servers: Final = tuple(MCPServer(server_id=name, name=name, transport=MCPTransport.http) for name in ids)
+    store: Final = _ConfigOAuthClientStore(
+        {
+            ids[0]: encrypt_credentials({"client_id": "first-client"}, encryption_key=salt),
+            ids[-1]: encrypt_credentials({"client_id": "last-client"}, encryption_key=salt),
+        }
+    )
+    prisma: Final = SimpleNamespace(db=SimpleNamespace(litellm_mcpserveroauthclient=store))
+
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+        await MCPServerManager().hydrate_config_servers_dcr_clients(servers)
+
+    assert store.reads == (ids[:-1], ids[-1:])
+    assert (servers[0].client_id, servers[-1].client_id) == ("first-client", "last-client")
 
 
 @pytest.mark.asyncio
