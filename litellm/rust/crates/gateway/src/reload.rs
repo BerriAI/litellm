@@ -9,6 +9,10 @@
 //! swaps to it. What changed is logged by model id, credential name and settings key, never by
 //! value.
 //!
+//! A stored setting one of the parts the process keeps across swaps is built from, such as a
+//! Redis, the database or the license, is read at boot only. Every read that finds one set
+//! differently from boot warns, by name, that it takes a restart.
+//!
 //! Python's guards against a database blip emptying the router hold here too
 //! (`_update_llm_router` and `_delete_deployment` in `proxy_server.py`). A poll whose model or
 //! credential read fails changes nothing. A poll whose settings read fails keeps the settings it
@@ -25,7 +29,13 @@ use std::{
 
 use futures_util::stream::BoxStream;
 use litellm_at_rest::AtRestKey;
-use litellm_config::{Config, Value, db::models::DbModel};
+use litellm_config::{
+    Config, Value,
+    db::{
+        models::DbModel,
+        settings::{Section, SettingsRows},
+    },
+};
 use litellm_config_load::Document;
 use litellm_db::Pools;
 use litellm_error::Report;
@@ -39,16 +49,71 @@ use crate::{
     stored::{self, Fetched, Secrets, StoredRows},
 };
 
-/// Python falls back to this when `proxy_config_reload_interval_seconds` is not positive.
+/// Python falls back to this when `proxy_config_reload_interval_seconds` is unset or not
+/// positive.
 const DEFAULT_EVERY: Duration = Duration::from_secs(30);
 
+/// The stored `general_settings` the coordination Redis and the database pools are built from.
+const RESTART_GENERAL_SETTINGS: [&str; 8] = [
+    "coordination_redis",
+    "database_connect_timeout",
+    "database_connection_pool_limit",
+    "database_connection_timeout",
+    "database_disable_prepared_statements",
+    "database_max_idle_connection_lifetime",
+    "database_socket_timeout",
+    "database_url",
+];
+
 /// How often the stored config is read again, `general_settings.proxy_config_reload_interval_seconds`
-/// as boot loaded it.
+/// as boot loaded it, which `PROXY_CONFIG_RELOAD_INTERVAL_SECONDS` fills when the config leaves it
+/// unset.
 pub fn reload_every(config: &Config) -> Duration {
     match config.general_settings.proxy_config_reload_interval_seconds {
-        0 => DEFAULT_EVERY,
-        seconds => Duration::from_secs(seconds),
+        Some(seconds @ 1..) => Duration::from_secs(seconds.unsigned_abs()),
+        _ => DEFAULT_EVERY,
     }
+}
+
+/// Whether a part the process keeps across swaps (`AppState::next`) is built from the stored
+/// `key` of `section`: a Redis client, the database pools or the license. No stored
+/// `litellm_settings` key the proxy applies reaches one.
+fn restarts(section: Section, key: &str) -> bool {
+    match section {
+        Section::GeneralSettings => RESTART_GENERAL_SETTINGS.contains(&key),
+        Section::RouterSettings => key.starts_with("redis_") || key == "cache_kwargs",
+        Section::LitellmSettings => false,
+        Section::EnvironmentVariables => {
+            key.starts_with("REDIS_")
+                || key.starts_with("DATABASE_")
+                || matches!(
+                    key,
+                    "LITELLM_LICENSE" | "IAM_TOKEN_DB_AUTH" | "AZURE_POSTGRESQL_AUTH"
+                )
+        }
+    }
+}
+
+/// The settings a kept part is built from that `now` holds differently from `booted`, as
+/// `section.key`. Both are the file document with stored settings layered in, so a key the file
+/// sets never counts.
+fn restart_only(booted: &Document, now: &Document) -> Vec<String> {
+    <Section as strum::VariantArray>::VARIANTS
+        .iter()
+        .flat_map(|&section| {
+            let name = <&str>::from(section);
+            let kept = |document: &Document| -> BTreeMap<String, Value> {
+                document
+                    .section(name)
+                    .filter(|(key, _)| restarts(section, key))
+                    .map(|(key, value)| (key.to_owned(), value.clone()))
+                    .collect()
+            };
+            changed(&kept(booted), &kept(now))
+                .into_iter()
+                .map(move |key| format!("{name}.{key}"))
+        })
+        .collect()
 }
 
 /// Where the stored config is read again: the database boot read it from, over the pool boot
@@ -68,9 +133,11 @@ impl Source {
         pools: Pools,
         served: Option<Fetched>,
     ) -> Self {
+        let booted = booted_document(&document, served.as_ref());
         Self {
             reading: Reading {
                 document,
+                booted,
                 key,
                 secrets,
                 served,
@@ -203,10 +270,20 @@ where
     }
 }
 
+/// The file document with the stored settings boot read layered in, the file alone when boot
+/// could not read them.
+fn booted_document(document: &Document, served: Option<&Fetched>) -> Document {
+    let none = SettingsRows::default();
+    let settings = served.map_or(&none, |served| &served.settings);
+    document.clone().overlay(settings).0
+}
+
 /// What the stored config is layered from on each read, and what the last read the native app
 /// serves found.
 pub(crate) struct Reading {
     document: Document,
+    /// What the parts the process keeps were built from, see [`restart_only`].
+    booted: Document,
     key: Option<AtRestKey>,
     secrets: Arc<Secrets>,
     /// `None` until a read loads, so while boot could not read the stored config.
@@ -240,6 +317,7 @@ impl Reading {
         let Some(fetched) = self.read(rows).await else {
             return Reloaded::Unread;
         };
+        self.warn_restart_only(&fetched.settings);
         let changes = Changes::between(self.served.as_ref(), &fetched);
         if self.served.is_some() && changes.is_empty() {
             return Reloaded::Unchanged;
@@ -271,6 +349,20 @@ impl Reading {
                 Reloaded::Unbuilt
             }
         }
+    }
+
+    /// Warns about each stored setting a kept part is built from that `settings` holds differently
+    /// from boot, by name, never by value.
+    fn warn_restart_only(&self, settings: &SettingsRows) -> Vec<String> {
+        let (now, _) = self.document.clone().overlay(settings);
+        let differ = restart_only(&self.booted, &now);
+        if !differ.is_empty() {
+            tracing::warn!(
+                settings = differ.join(", "),
+                "a stored setting the gateway reads only at boot differs from the value it started with, so it takes a restart to apply"
+            );
+        }
+        differ
     }
 
     /// The stored config `rows` hold now, `None` when it cannot be read. When only the settings
@@ -541,6 +633,7 @@ mod tests {
         );
         let live = Live::new(Served::new(state, Some(Arc::new(admit)), native()));
         let reading = Reading {
+            booted: booted_document(&document, served.as_ref()),
             document,
             key: None,
             secrets: Arc::new(secrets(&[])),
@@ -745,15 +838,153 @@ mod tests {
         );
     }
 
+    /// Stored settings rows holding `router_settings` and `environment_variables` as JSON.
+    fn settings(router: &str, variables: &str) -> SettingsRows {
+        stored::settings_rows(
+            &[
+                setting("router_settings", router),
+                setting("environment_variables", variables),
+            ],
+            None,
+        )
+    }
+
+    fn boot_settings() -> SettingsRows {
+        settings(
+            r#"{"redis_host": "boot-redis", "num_retries": 1}"#,
+            r#"{"DATABASE_URL": "postgresql://boot", "OTHER": "boot"}"#,
+        )
+    }
+
+    async fn booted_with(settings: SettingsRows) -> Reading {
+        let mut reading = booted(&serving(&[])).await.1;
+        reading.booted = booted_document(
+            &reading.document,
+            Some(&Fetched {
+                settings,
+                ..Fetched::default()
+            }),
+        );
+        reading
+    }
+
     #[rstest]
-    #[case::unset("model_list: []\n", 30)]
-    #[case::not_positive("general_settings:\n  proxy_config_reload_interval_seconds: 0\n", 30)]
-    #[case::set("general_settings:\n  proxy_config_reload_interval_seconds: 5\n", 5)]
-    fn the_stored_config_is_read_again_on_the_interval_the_config_sets(
+    #[case::nothing_changed(boot_settings(), &[])]
+    #[case::a_setting_no_kept_part_reads(
+        settings(
+            r#"{"redis_host": "boot-redis", "num_retries": 3}"#,
+            r#"{"DATABASE_URL": "postgresql://boot", "OTHER": "changed"}"#,
+        ),
+        &[]
+    )]
+    #[case::the_router_redis(
+        settings(
+            r#"{"redis_host": "other-redis", "num_retries": 1}"#,
+            r#"{"DATABASE_URL": "postgresql://boot", "OTHER": "boot"}"#,
+        ),
+        &["router_settings.redis_host"]
+    )]
+    #[case::the_database_url_and_a_redis_variable_added(
+        settings(
+            r#"{"redis_host": "boot-redis", "num_retries": 1}"#,
+            r#"{"DATABASE_URL": "postgresql://other", "OTHER": "boot", "REDIS_PASSWORD": "new"}"#,
+        ),
+        &["environment_variables.DATABASE_URL", "environment_variables.REDIS_PASSWORD"]
+    )]
+    #[case::the_router_redis_removed(
+        settings(
+            r#"{"num_retries": 1}"#,
+            r#"{"DATABASE_URL": "postgresql://boot", "OTHER": "boot"}"#,
+        ),
+        &["router_settings.redis_host"]
+    )]
+    #[tokio::test]
+    async fn a_read_warns_about_each_stored_setting_a_kept_part_reads_that_differs_from_boot(
+        #[case] now: SettingsRows,
+        #[case] warned: &[&str],
+    ) {
+        let reading = booted_with(boot_settings()).await;
+
+        assert_eq!(reading.warn_restart_only(&now), warned);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn a_setting_that_goes_back_to_its_boot_value_stops_the_warning() {
+        let reading = booted_with(boot_settings()).await;
+        let changed = settings(
+            r#"{"redis_host": "other-redis", "num_retries": 1}"#,
+            r#"{"DATABASE_URL": "postgresql://boot", "OTHER": "boot"}"#,
+        );
+
+        let warned = [
+            reading.warn_restart_only(&changed),
+            reading.warn_restart_only(&changed),
+            reading.warn_restart_only(&boot_settings()),
+        ];
+
+        assert_eq!(
+            warned,
+            [
+                vec!["router_settings.redis_host".to_owned()],
+                vec!["router_settings.redis_host".to_owned()],
+                vec![],
+            ]
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn a_stored_setting_the_file_sets_never_warns() {
+        let mut reading = booted_with(SettingsRows::default()).await;
+        let file = "general_settings:\n  database_url: postgresql://file\n";
+        let mut path = tempfile::Builder::new().suffix(".yaml").tempfile().unwrap();
+        path.write_all(file.as_bytes()).unwrap();
+        reading.document = Document::read(path.path()).unwrap();
+        reading.booted = booted_document(&reading.document, None);
+        let now = stored::settings_rows(
+            &[setting(
+                "general_settings",
+                r#"{"database_url": "postgresql://stored"}"#,
+            )],
+            None,
+        );
+
+        assert_eq!(reading.warn_restart_only(&now), Vec::<String>::new());
+    }
+
+    #[rstest]
+    #[case::neither("model_list: []\n", None, 30)]
+    #[case::the_config(
+        "general_settings:\n  proxy_config_reload_interval_seconds: 5\n",
+        None,
+        5
+    )]
+    #[case::the_variable("model_list: []\n", Some("7"), 7)]
+    #[case::the_config_over_the_variable(
+        "general_settings:\n  proxy_config_reload_interval_seconds: 5\n",
+        Some("7"),
+        5
+    )]
+    #[case::a_config_value_that_is_not_positive(
+        "general_settings:\n  proxy_config_reload_interval_seconds: 0\n",
+        Some("7"),
+        30
+    )]
+    #[case::a_variable_that_is_not_positive("model_list: []\n", Some("-5"), 30)]
+    #[case::a_variable_that_is_no_integer("model_list: []\n", Some("soon"), 30)]
+    fn the_stored_config_is_read_again_on_the_interval_the_config_or_its_variable_sets(
         #[case] yaml: &str,
+        #[case] variable: Option<&str>,
         #[case] every: u64,
     ) {
-        let config = Config::from_yaml(yaml).unwrap();
+        let lookup = |name: &str| {
+            (name == "PROXY_CONFIG_RELOAD_INTERVAL_SECONDS")
+                .then_some(variable)
+                .flatten()
+                .map(str::to_owned)
+        };
+        let config = Config::from_yaml(yaml).unwrap().with_environment(&lookup);
 
         assert_eq!(reload_every(&config), Duration::from_secs(every));
     }
