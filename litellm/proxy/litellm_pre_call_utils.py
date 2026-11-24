@@ -5131,13 +5131,15 @@ def _caller_provider_specific_header(entry: object) -> ProviderSpecificHeader | 
 def _caller_entries_beside_a_pin(
     header: ProviderSpecificHeader, pinned_providers: frozenset[str]
 ) -> tuple[ProviderSpecificHeader, ...]:
-    headers: Final = {
+    profile: Final = {
         name: value
         for name, value in header["extra_headers"].items()
-        if name.lower() != ANTHROPIC_USER_PROFILE_ID_HEADER
+        if name.lower() == ANTHROPIC_USER_PROFILE_ID_HEADER
     }
+    headers: Final = {name: value for name, value in header["extra_headers"].items() if name not in profile}
     credentials: Final = {name: value for name, value in headers.items() if _is_credential_header(name)}
     providers: Final = tuple(provider.strip() for provider in header["custom_llm_provider"].split(","))
+    unpinned_profile_providers: Final = ANTHROPIC_USER_PROFILE_ID_PROVIDERS - pinned_providers
     variants: Final = (
         (
             header["custom_llm_provider"],
@@ -5150,6 +5152,7 @@ def _caller_entries_beside_a_pin(
             credentials,
             {"non_user_profile_id_models_only": True},
         ),
+        (",".join(provider for provider in providers if provider in unpinned_profile_providers), profile, {}),
     )
     return tuple(
         _PROVIDER_SPECIFIC_HEADER.validate_python(
