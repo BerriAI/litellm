@@ -264,6 +264,20 @@ def _model_entry(litellm_params: str, model_info: str = "") -> str:
                 "unexpected value: must not be negative, got '-1'"
             ],
         ),
+        (
+            "{input_cost_per_token: .nan}",
+            [
+                "config.yaml:4: warning: model_list[0].model_info.input_cost_per_token: "
+                "unexpected value: must be a finite number, got nan"
+            ],
+        ),
+        (
+            "{output_cost_per_token: .inf}",
+            [
+                "config.yaml:4: warning: model_list[0].model_info.output_cost_per_token: "
+                "unexpected value: must be a finite number, got inf"
+            ],
+        ),
         ("[max_output_tokens]", ["config.yaml:4: error: model_list[0].model_info: must be a mapping"]),
         ("{my_team_label: blue, max_output_tokens: 100, input_cost_per_token: os.environ/OPENAI_API_KEY}", []),
     ],
@@ -609,3 +623,34 @@ def test_require_explicit_prices_flag_alone_makes_the_exit_code_nonzero(
     config_path.write_text(_model_entry("{model: anthropic/lint-opus}", _OPUS_PRICES), encoding="utf-8")
     assert main([str(config_path)]) == 0
     assert main([str(config_path), "--require-explicit-prices"]) == 1
+
+
+def test_a_model_that_only_matches_a_family_default_is_reported_as_unmapped(tmp_path: Path) -> None:
+    assert _lint(tmp_path, _model_entry("{model: anthropic/claude-opus-9}")) == [
+        "config.yaml:2: warning: model_list[0]: anthropic/claude-opus-9 is not in LiteLLM's model cost map, "
+        "so cost tracking and token limits need model_info.base_model or model_info.input_cost_per_token, "
+        "model_info.output_cost_per_token, model_info.max_input_tokens, model_info.max_output_tokens"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("model", "alternate", "documented"),
+    [
+        ("cohere/command-r", "CO_API_KEY", "COHERE_API_KEY"),
+        ("featherless_ai/lint-model", "FEATHERLESS_API_KEY", "FEATHERLESS_AI_API_KEY"),
+        ("perplexity/sonar", "PERPLEXITY_API_KEY", "PERPLEXITYAI_API_KEY"),
+        ("replicate/meta/lint-model", "REPLICATE_API_TOKEN", "REPLICATE_API_KEY"),
+        ("volcengine/lint-model", "ARK_API_KEY", "VOLCENGINE_API_KEY"),
+    ],
+)
+def test_a_provider_key_under_its_alternate_environment_name_is_not_reported_missing(
+    tmp_path: Path, model: str, alternate: str, documented: str
+) -> None:
+    text: Final = _model_entry(f"{{model: {model}}}", "{base_model: gpt-4o}")
+    needs_key: Final = (
+        f"config.yaml:3: warning: model_list[0].litellm_params: {model} needs {documented} in the environment"
+    )
+    assert [
+        [line.partition(" or ")[0] for line in _lint(tmp_path, text, environ)]
+        for environ in ({}, {alternate: "sk-test"})
+    ] == [[needs_key], []]

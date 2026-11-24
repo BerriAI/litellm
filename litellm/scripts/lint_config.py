@@ -12,6 +12,7 @@ import difflib
 import fnmatch
 import inspect
 import itertools
+import math
 import os
 import re
 import sys
@@ -268,15 +269,20 @@ def _model_info_findings(
         if number is None:
             if key not in RouterModelInfo.model_fields:
                 yield Finding("warning", (*info_path, key), f"unexpected value: expected a number, got {value!r}")
+        elif not math.isfinite(number):
+            yield Finding("warning", (*info_path, key), f"unexpected value: must be a finite number, got {value!r}")
         elif number < 0:
             yield Finding("warning", (*info_path, key), f"unexpected value: must not be negative, got {value!r}")
     base_model: Final = model_info.get("base_model")
     lookup: Final = base_model if isinstance(base_model, str) and base_model else model
     if "*" in lookup:
         return
+    mapped: Mapping[str, object] | None
     try:
-        mapped: Final = litellm.model_cost.get(get_model_info_helper(model=lookup, catalog_only=True)["key"], {})
+        mapped = litellm.model_cost.get(get_model_info_helper(model=lookup, catalog_only=True)["key"])
     except Exception:  # noqa: BLE001  # get_model_info_helper raises a bare Exception for unmapped models
+        mapped = None
+    if mapped is None:
         missing: Final = [
             key
             for key in _UNMAPPED_MODEL_KEYS
