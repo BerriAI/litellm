@@ -2,6 +2,7 @@
 Helper utilities for tracking the cost of built-in tools.
 """
 
+import itertools
 from collections.abc import Mapping, Sequence
 from typing import Final, Literal, cast
 
@@ -335,12 +336,18 @@ class StandardBuiltInToolCostTracking:
         from litellm.cost_calculator import _raw_cost_map_entry  # pyright: ignore[reportPrivateUsage]  # cost map row
         from litellm.router_rust.surface.replay import live_registries
 
+        deployments: Final = itertools.chain.from_iterable(
+            registry._core_model_list  # pyright: ignore[reportPrivateUsage]  # the live list
+            for registry in live_registries()
+        )
+        deployment_ids: Final = tuple(
+            _output_item_field(deployment.get("model_info"), "id")
+            for deployment in deployments
+            if deployment.get("model_name") == tool_model
+        )
         configured: Final = frozenset(
             tuple((_raw_cost_map_entry(str(deployment_id)) or {}).get(field) for field in _IMAGE_TOOL_RATE_FIELDS)
-            for registry in live_registries()
-            for deployment in registry._core_model_list  # pyright: ignore[reportPrivateUsage]  # the live list
-            if deployment.get("model_name") == tool_model
-            and (deployment_id := _output_item_field(deployment.get("model_info"), "id")) is not None
+            for deployment_id in deployment_ids
         )
         if len(configured) != 1:
             return {}
