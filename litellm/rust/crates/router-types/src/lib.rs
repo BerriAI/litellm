@@ -7,7 +7,7 @@ mod value;
 
 pub use litellm_params::{ExtraParams, LitellmParams};
 pub use router_redis::RouterRedis;
-pub use router_settings::RouterSettings;
+pub use router_settings::{OptionalPreCallCheck, RouterSettings};
 pub use routing::{RoutingGroupSpec, RoutingStrategy};
 pub use secret_pointer::holds_secret_pointer;
 pub use value::Spelled;

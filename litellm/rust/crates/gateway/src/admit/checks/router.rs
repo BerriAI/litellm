@@ -5,9 +5,9 @@
 
 use std::collections::BTreeMap;
 
-use litellm_config::RouterSettings;
+use litellm_config::{OptionalPreCallCheck, RouterSettings};
 
-fn pins(affinity: &Option<BTreeMap<String, Vec<String>>>, group: &str) -> bool {
+fn pins(affinity: &Option<BTreeMap<String, Vec<OptionalPreCallCheck>>>, group: &str) -> bool {
     affinity
         .as_ref()
         .is_some_and(|groups| groups.contains_key(group))
