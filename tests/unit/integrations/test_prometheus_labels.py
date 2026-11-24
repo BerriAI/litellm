@@ -764,16 +764,27 @@ async def test_failure_counters_keep_logged_deployment_attribution(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("call_type", "usage", "expected_spend", "expected_tokens"),
+    ("call_type", "usage", "response_cost", "expected_spend", "expected_tokens"),
     (
-        pytest.param("aimage_generation", litellm.Usage(prompt_tokens=8, total_tokens=8), 0.25, 8.0, id="billed_image"),
-        pytest.param("aimage_edit", litellm.Usage(prompt_tokens=8, total_tokens=8), 0.25, 8.0, id="billed_edit"),
-        pytest.param("aimage_generation", None, None, None, id="unbilled_image"),
-        pytest.param("acompletion", litellm.Usage(prompt_tokens=8, total_tokens=8), None, None, id="cut_chat_stream"),
+        pytest.param(
+            "aimage_generation", litellm.Usage(prompt_tokens=8, total_tokens=8), 0.25, 0.25, 8.0, id="billed_image"
+        ),
+        pytest.param("aimage_edit", litellm.Usage(prompt_tokens=8, total_tokens=8), 0.25, 0.25, 8.0, id="billed_edit"),
+        pytest.param("aimage_generation", None, 0.25, None, None, id="unbilled_image"),
+        pytest.param(
+            "aimage_generation", litellm.Usage(prompt_tokens=15, total_tokens=15), 0.0, None, None, id="estimated_prompt"
+        ),
+        pytest.param(
+            "acompletion", litellm.Usage(prompt_tokens=8, total_tokens=8), 0.25, None, None, id="cut_chat_stream"
+        ),
     ),
 )
 async def test_failure_hook_counts_the_spend_of_a_billed_image_failure_once(
-    call_type: str, usage: litellm.Usage | None, expected_spend: float | None, expected_tokens: float | None
+    call_type: str,
+    usage: litellm.Usage | None,
+    response_cost: float,
+    expected_spend: float | None,
+    expected_tokens: float | None,
 ) -> None:
     from litellm.integrations.prometheus import PrometheusLogger
     from litellm.proxy._types import UserAPIKeyAuth
@@ -785,8 +796,8 @@ async def test_failure_hook_counts_the_spend_of_a_billed_image_failure_once(
                 "model": "image-group",
                 "metadata": {},
                 "call_type": call_type,
-                "response_cost": 0.25,
-                "standard_logging_object": {"model": "gemini/image-model"},
+                "response_cost": response_cost,
+                "standard_logging_object": {"model": "gemini/image-model", "custom_llm_provider": "gemini"},
                 **({} if usage is None else {"combined_usage_object": usage}),
             },
             original_exception=Exception("refused"),
@@ -796,7 +807,7 @@ async def test_failure_hook_counts_the_spend_of_a_billed_image_failure_once(
         tokens: Final = _collected_samples("litellm_total_tokens_metric_total")
         assert [sample.value for sample in spend] == ([] if expected_spend is None else [expected_spend])
         assert [sample.value for sample in tokens] == ([] if expected_tokens is None else [expected_tokens])
-        assert all(sample.labels["model"] == "gemini/image-model" for sample in spend)
+        assert all(sample.labels["model"] == "image-model" for sample in (*spend, *tokens))
     finally:
         _clear_prometheus_registry()
 

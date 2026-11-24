@@ -69,6 +69,14 @@ def _failure_logged_in_background(logging_obj: Logging) -> bool:
     return logging_obj.model_call_details.get("stream") is True
 
 
+def _router_counted_the_failed_attempt(litellm_router: LitellmRouter, logging_obj: Logging) -> bool:
+    return logging_obj.logs_each_attempt and logging_obj.should_run_callback(
+        callback=litellm_router.deployment_callback_on_failure,
+        litellm_params=logging_obj.model_call_details.get("litellm_params", {}),
+        event_hook="failure_handler",
+    )
+
+
 def _set_aside_failed_attempt_spend(logging_obj: Logging | None) -> _FailedAttemptSpend | None:
     if logging_obj is None or _failure_logged_in_background(logging_obj):
         return None
@@ -950,15 +958,15 @@ async def run_async_fallback(
                 original_exception=original_exception,
             )
             if (
-                logging_obj is not None
-                and logging_obj.model_call_details.get("has_logged_async_failure", False)
-                and not (billing_logging_obj is not None and billing_logging_obj.logs_each_attempt)
+                billing_logging_obj is not None
+                and billing_logging_obj.model_call_details.get("has_logged_async_failure", False)
+                and not _router_counted_the_failed_attempt(litellm_router, billing_logging_obj)
             ):
                 _trigger_cooldown_for_failed_deployment(
                     litellm_router=litellm_router,
                     kwargs=kwargs,
                     exception=e,
-                    model_call_details=logging_obj.model_call_details,
+                    model_call_details=billing_logging_obj.model_call_details,
                 )
     raise error_from_fallbacks
 

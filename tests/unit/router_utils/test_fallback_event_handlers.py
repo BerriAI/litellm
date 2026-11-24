@@ -17,6 +17,7 @@ import litellm
 from litellm import Router
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils import get_llm_provider_logic
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.gemini.empty_image_response import ImageRefusalError
 from litellm.proxy.utils import _failure_fields_to_lift
 from litellm.router_utils.cooldown_handlers import async_get_cooldown_deployments, mark_advisor_orchestration_failure
@@ -1108,7 +1109,8 @@ class TestRunAsyncFallbackTriggersCooldown:
             raise RuntimeError("fallback model also failed")
 
     def _logging_obj(self, has_logged_async_failure: bool) -> MagicMock:
-        logging_obj = MagicMock()
+        logging_obj = MagicMock(spec=Logging)
+        logging_obj.logs_each_attempt = False
         logging_obj.model_call_details = {"has_logged_async_failure": has_logged_async_failure}
         return logging_obj
 
@@ -2966,7 +2968,7 @@ async def test_a_fallback_attempt_that_fails_before_sending_logs_its_own_api_bas
     assert capture.api_base_by_error.get("UnsupportedParamsError") == logged_api_base
 
 
-async def _backup_cooled_down_after_a_failed_edit(router: Router, attempt: int) -> bool:
+async def _backup_cooled_down_after_a_failed_edit(router: Router, attempt: int, no_log: bool) -> bool:
     call_id: Final = f"failed-edit-{attempt}"
     logging_obj, _ = litellm.utils.function_setup(
         original_function="aimage_edit",
@@ -2983,13 +2985,15 @@ async def _backup_cooled_down_after_a_failed_edit(router: Router, attempt: int) 
             image=BytesIO(b"\x89PNG\r\n\x1a\nimage"),
             litellm_logging_obj=logging_obj,
             litellm_call_id=call_id,
+            no_log=no_log,
         )
     return "backup-id" in await async_get_cooldown_deployments(litellm_router_instance=router, parent_otel_span=None)
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("no_log", (False, True))
 async def test_a_failed_image_edit_fallback_counts_once_toward_the_backups_allowed_fails(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, no_log: bool
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     respx_mock.post(url__startswith="https://fails.example/").mock(
@@ -3015,7 +3019,7 @@ async def test_a_failed_image_edit_fallback_counts_once_toward_the_backups_allow
     )
 
     cooled_after_each_request: Final = [
-        await _backup_cooled_down_after_a_failed_edit(router, attempt) for attempt in (1, 2)
+        await _backup_cooled_down_after_a_failed_edit(router, attempt, no_log) for attempt in (1, 2)
     ]
 
     assert cooled_after_each_request == [False, True]

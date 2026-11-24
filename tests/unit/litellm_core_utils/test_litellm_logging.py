@@ -12627,8 +12627,20 @@ def test_record_native_bedrock_guardrail_bills_each_call_its_own_trace_when_call
 
 
 @pytest.mark.asyncio
-async def test_an_image_served_after_a_billed_failure_sums_the_tokens_of_both_attempts() -> None:
-    from litellm.types.utils import ImageResponse, ImageUsage, ImageUsageInputTokensDetails
+@pytest.mark.parametrize(
+    "before_logging",
+    [
+        pytest.param(lambda logging_obj, served: None, id="edit"),
+        pytest.param(
+            lambda logging_obj, served: logging_obj.response_cost_calculator(result=served),
+            id="edit_already_priced_for_its_response_headers",
+        ),
+    ],
+)
+async def test_an_image_served_after_a_billed_failure_sums_the_tokens_of_both_attempts(
+    before_logging: Callable[[LitellmLogging, ImageResponse], object],
+) -> None:
+    from litellm.types.utils import ImageUsage, ImageUsageInputTokensDetails
 
     logging_obj: Final = LitellmLogging(
         model="gpt-image-2",
@@ -12645,21 +12657,21 @@ async def test_an_image_served_after_a_billed_failure_sums_the_tokens_of_both_at
     logging_obj.owe_failed_attempt_on_success(
         litellm.Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500), 0.02
     )
-    now: Final = datetime.datetime.now()
-    await logging_obj.async_success_handler(
-        ImageResponse(
-            created=1,
-            data=[],
-            usage=ImageUsage(
-                input_tokens=9,
-                input_tokens_details=ImageUsageInputTokensDetails(image_tokens=0, text_tokens=9),
-                output_tokens=14,
-                total_tokens=23,
-            ),
+    served: Final = ImageResponse(
+        created=1,
+        data=[],
+        usage=ImageUsage(
+            input_tokens=9,
+            input_tokens_details=ImageUsageInputTokensDetails(image_tokens=0, text_tokens=9),
+            output_tokens=14,
+            total_tokens=23,
         ),
-        now,
-        now,
     )
+    before_logging(logging_obj, served)
+    now: Final = datetime.datetime.now()
+    await logging_obj.async_success_handler(served, now, now)
 
     combined: Final = logging_obj.model_call_details["combined_usage_object"]
+    logged: Final = logging_obj.model_call_details["standard_logging_object"]
     assert (combined.prompt_tokens, combined.completion_tokens, combined.total_tokens) == (1009, 514, 1523)
+    assert (logged["prompt_tokens"], logged["completion_tokens"], logged["total_tokens"]) == (1009, 514, 1523)

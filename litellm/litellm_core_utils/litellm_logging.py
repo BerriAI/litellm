@@ -162,7 +162,6 @@ from litellm.types.utils import (
     EmbeddingResponse,
     GuardrailStatus,
     ImageResponse,
-    ImageUsage,
     LiteLLMBatch,
     LiteLLMLoggingBaseClass,
     LiteLLMRealtimeStreamLoggingObject,
@@ -7480,9 +7479,12 @@ def get_standard_logging_metadata(
 
 
 def _image_usage(usage: object) -> Usage | None:
-    if not isinstance(usage, ImageUsage):
+    if not isinstance(usage, BaseModel):
         return None
-    return ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(usage.model_dump())
+    fields: Final = usage.model_dump()
+    if not ResponseAPILoggingUtils.is_response_api_usage(fields):
+        return None
+    return ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(fields)
 
 
 def scrub_sensitive_keys_in_metadata(litellm_params: dict | None):
