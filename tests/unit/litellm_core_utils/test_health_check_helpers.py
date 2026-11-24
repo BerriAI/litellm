@@ -830,7 +830,7 @@ def test_elevenlabs_health_checks_use_the_websocket_for_models_the_cost_map_list
         {
             "elevenlabs/scribe_v2_realtime": {"mode": "audio_transcription", "supported_endpoints": ["/v1/realtime"]},
             "elevenlabs/scribe_v9_realtime": {"mode": "audio_transcription", "supported_endpoints": ["/v1/realtime"]},
-            "elevenlabs/scribe_v2": {"mode": "audio_transcription"},
+            "elevenlabs/scribe_v2": {"mode": "audio_transcription", "supported_endpoints": ["/v1/audio/transcriptions"]},
             "elevenlabs/eleven_v3": {"mode": "audio_speech"},
         },
     )
