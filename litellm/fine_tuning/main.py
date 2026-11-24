@@ -25,8 +25,8 @@ from litellm.llms.vertex_ai.fine_tuning.handler import VertexFineTuningAPI
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import FineTuningJobCreate, Hyperparameters
 from litellm.types.router import *
-from litellm.types.utils import LiteLLMFineTuningJob
-from litellm.utils import client, supports_httpx_timeout
+from litellm.types.utils import CallTypes, LiteLLMFineTuningJob
+from litellm.utils import client, load_credentials_from_list, supports_httpx_timeout
 
 ####### ENVIRONMENT VARIABLES ###################
 openai_fine_tuning_apis_instance: Final = OpenAIFineTuningAPI()
@@ -77,7 +77,7 @@ async def acreate_fine_tuning_job(
     custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
     extra_headers: dict[str, str] | None = None,
     extra_body: dict[str, str] | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> LiteLLMFineTuningJob:
     """
     Async: Creates and executes a batch from an uploaded file of request
@@ -117,7 +117,15 @@ async def acreate_fine_tuning_job(
         raise e
 
 
-def _build_fine_tuning_job_data(model, training_file, hyperparameters, suffix, validation_file, integrations, seed):
+def _build_fine_tuning_job_data(
+    model: str,
+    training_file: str,
+    hyperparameters: Hyperparameters,
+    suffix: str | None,
+    validation_file: str | None,
+    integrations: list[str] | None,
+    seed: int | None,
+) -> FineTuningJobCreate:
     return FineTuningJobCreate(
         model=model,
         training_file=training_file,
@@ -330,7 +338,7 @@ async def acancel_fine_tuning_job(
     custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
     extra_headers: dict[str, str] | None = None,
     extra_body: dict[str, str] | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> LiteLLMFineTuningJob:
     """
     Async: Immediately cancel a fine-tune job.
@@ -482,7 +490,7 @@ async def alist_fine_tuning_jobs(
     custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
     extra_headers: dict[str, str] | None = None,
     extra_body: dict[str, str] | None = None,
-    **kwargs,
+    **kwargs: object,
 ):
     """
     Async: List your organization's fine-tuning jobs
@@ -532,6 +540,7 @@ def list_fine_tuning_jobs(
     - limit: Optional[int] = None, Number of fine-tuning jobs to retrieve. Defaults to 20
     """
     try:
+        load_credentials_from_list(kwargs, CallTypes.list_fine_tuning_jobs.value)  # pyright: ignore[reportUnknownArgumentType]  # **kwargs is untyped
         optional_params: Final = GenericLiteLLMParams(**kwargs)
         ### TIMEOUT LOGIC ###
         timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
@@ -639,7 +648,7 @@ async def aretrieve_fine_tuning_job(
     custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
     extra_headers: dict[str, str] | None = None,
     extra_body: dict[str, str] | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> LiteLLMFineTuningJob:
     """
     Async: Get info about a fine-tuning job.

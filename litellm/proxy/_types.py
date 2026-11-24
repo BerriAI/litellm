@@ -43,7 +43,7 @@ from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     validate_langfuse_span_scope_value,
     validate_no_callback_env_reference,
 )
-from litellm.models.budget import BudgetLimitList, BudgetLimits
+from litellm.models.budget import BudgetLimitList, BudgetLimits, BudgetRolloverCap
 from litellm.proxy.auth.access_group_rules import AccessGroupRule, _validate_rules
 from litellm.proxy.mcp_server.stdio_gate import MCP_STDIO_DISABLED_MESSAGE, is_mcp_stdio_enabled
 from litellm.types.agents import (
@@ -338,6 +338,9 @@ class LiteLLMRoutes(enum.Enum):
         "/live/sessions",
         "/v1/live/sessions",
         "/openai/v1/live/sessions",
+        "/live/sessions/{session_id}/attach",
+        "/v1/live/sessions/{session_id}/attach",
+        "/openai/v1/live/sessions/{session_id}/attach",
         "/realtime?{model}",
         "/v1/realtime?{model}",
         "/openai/v1/realtime?{model}",
@@ -457,6 +460,7 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/traces/query",
         "/v1/traces/query/help",
         "/v1/traces/{trace_id}",
+        "/v1/traces/{trace_id}/conversation",
         "/v1/traces/{trace_id}/spans/{span_id}",
         "/v1/traces/{trace_id}/spans/{span_id}/error",
     )
@@ -1570,6 +1574,14 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
 
 class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     server_id: str
+    preserve_explicit_oauth_settings: bool = Field(
+        default=False,
+        exclude=True,
+        description=(
+            "Keep explicitly supplied OAuth settings on upstream or auth changes, "
+            "even when their values match the saved settings."
+        ),
+    )
     server_name: str | None = None
     alias: str | None = None
     description: str | None = None
@@ -1802,6 +1814,7 @@ from litellm.types.proxy.management_endpoints.user_requests import (  # noqa: E4
 
 class NewUserResponse(GenerateKeyResponse):
     max_budget: float | None = None
+    rollover_max_budget: float | None = Field(default=None, exclude_if=lambda value: value is None)
     user_email: str | None = None
     user_role: (
         Literal[
@@ -1885,6 +1898,14 @@ class BudgetNewRequest(LiteLLMPydanticObjectBase):
         default=None,
         description="Datetime when the budget is reset",
     )
+
+
+class TeamMemberBudgetWrite(BudgetNewRequest):
+    model_config = ConfigDict(frozen=True)
+
+    tpm_limit: int | None = None
+    rpm_limit: int | None = None
+    rollover_max_budget: BudgetRolloverCap | None = None
 
 
 class BudgetWriteRequest(BudgetNewRequest):
@@ -2053,6 +2074,7 @@ class NewTeamRequest(TeamBase):
     team_member_tpm_limit: int | None = None  # allow user to set TPM limit for all team members
     team_member_key_duration: str | None = None  # e.g. "1d", "1w", "1m"
     team_member_budget_duration: str | None = None  # e.g. "30d", "1mo"
+    team_member_rollover_max_budget: BudgetRolloverCap | None = None
     team_member_model_max_budget: GenericBudgetConfigType | None = None
     allowed_vector_store_indexes: list[AllowedVectorStoreIndexItem] | None = None
     enforced_batch_output_expires_after: dict | None = None
@@ -2113,6 +2135,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     require_trace_id: bool | None = None
     team_member_budget: float | None = None
     team_member_budget_duration: str | None = None
+    team_member_rollover_max_budget: BudgetRolloverCap | None = None
     team_member_model_max_budget: GenericBudgetConfigType | None = None
     team_member_rpm_limit: int | None = None
     team_member_tpm_limit: int | None = None
@@ -2559,7 +2582,9 @@ class ScheduledJobStaggerSettings(LiteLLMPydanticObjectBase):
     )
 
 
-SPEND_LOGS_METADATA_ALWAYS_KEPT_FIELDS: Final = frozenset({"status", "cold_storage_object_key"})
+SPEND_LOGS_METADATA_ALWAYS_KEPT_FIELDS: Final = frozenset(
+    {"status", "cold_storage_object_key", "litellm_previous_response_ids"}
+)
 
 
 def _known_spend_logs_metadata_field(name: str) -> str:
@@ -2616,6 +2641,11 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     use_spend_logs_ledger: bool = Field(
         True,
         description="Apply request accounting from stored SpendLogs deliveries. Set to false to roll back to the previous in-memory and Redis spend queues.",
+    )
+
+    meter_webrtc_calls: bool = Field(
+        True,
+        description="Bill Realtime and GPT-Live WebRTC calls by joining each call from the proxy over a WebSocket to the provider, and answer 503 when the proxy cannot join. Set to false when the proxy cannot open that WebSocket. Calls then start without it and are not billed or counted against budgets.",
     )
 
     reject_unregistered_guardrails: bool = Field(
@@ -3417,6 +3447,9 @@ class UserInfoV2Response(LiteLLMPydanticObjectBase):
     user_role: str | None = None
     spend: float = 0.0
     max_budget: float | None = None
+    rollover_max_budget: float | None = Field(default=None, exclude_if=lambda value: value is None)
+    rollover_credit: float | None = Field(default=None, exclude_if=lambda value: value is None)
+    effective_max_budget: float | None = Field(default=None, exclude_if=lambda value: value is None)
     tpm_limit: int | None = None
     rpm_limit: int | None = None
     models: list[str] = []
@@ -3638,6 +3671,7 @@ class LiteLLM_ProjectTableCachedObj(LiteLLM_ProjectTable):
 class LiteLLM_UserTableFiltered(LiteLLMBaseModel):  # done to avoid exposing sensitive data
     user_id: str
     user_email: str | None = None
+    user_alias: str | None = None
 
 
 from litellm.models.access_group import (  # noqa: E402
@@ -4008,6 +4042,8 @@ class SpendLogsMetadata(TypedDict):
     requester_ip_address: str | None
     user_agent: ReadOnly[str | None]
     litellm_call_id: str | None
+    litellm_previous_response_ids: ReadOnly[NotRequired[Sequence[str] | None]]
+    """Spend log request ids of the bridged /v1/responses turns this turn continues, root first."""
     applied_guardrails: list[str] | None
     mcp_tool_call_metadata: StandardLoggingMCPToolCall | None
     vector_store_request_metadata: list[StandardLoggingVectorStoreRequest] | None
@@ -4684,6 +4720,7 @@ TeamMemberBudgetSource: TypeAlias = Literal["team_default", "custom", "none"]
 
 class TeamInfoMembership(LiteLLM_TeamMembership):
     budget_source: TeamMemberBudgetSource
+    effective_max_budget: float | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 class TeamInfoResponseObject(TypedDict):

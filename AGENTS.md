@@ -88,6 +88,8 @@ Do not add `Co-Authored-By: Claude` or any Claude attribution to commit messages
 
 When working on a PR, keep the PR description in sync with new commits being made
 
+Before editing an existing PR's description, fetch its live body and edit that. Never push a copy saved earlier in the session or rebuilt from the template, since the author may have written their handwritten description after you last read it
+
 All GitHub comments must be human-readable and 15-25 words max
 
 Monkeypatching attributes of a class to do testing is an anti-pattern. Prefer dependency-injecting things into classes. That way, at unit test time, you can pass a mocked dependency in
@@ -104,7 +106,7 @@ Follow these coding conventions for new/updated code (a three-line fix in a lega
 - Never-nester: early returns over deep nesting
 - Don't throw. Model failures as values (One function (e.g., raise_public) maps error union to existing public exception contracts via exhaustive match + assert_never)
 - No mutation. Don't reassign variables, global or local. Instead of mutable lists and dicts, prefer tuples, frozen dataclasses (with slots=True), `MappingProxyType`, etc.
-  - Annotate every variable with `: Final` (LIT010). Unpacking and walrus targets cannot carry the annotation, so they are implicitly final. Don't rebind them. Never rebind or mutate function parameters (LIT011). `self`/`cls` attribute stores are the exception. If rebinding or in-place mutation is truly unavoidable, suppress with `# rebind-ok: <reason>`
+  - Annotate every variable with `: Final` (LIT010). A `TypeVar`, `ParamSpec`, `TypeVarTuple`, or `TypeAliasType` is the exception and stays bare, since mypy reads a Final one as a plain variable instead of a type. Unpacking and walrus targets cannot carry the annotation, so they are implicitly final. Don't rebind them. Never rebind or mutate function parameters (LIT011). `self`/`cls` attribute stores are the exception. If rebinding or in-place mutation is truly unavoidable, suppress with `# rebind-ok: <reason>`
   - Qualify every TypedDict field with `ReadOnly[...]` (LIT012), which nests freely with `Required` / `NotRequired` / `Annotated` in any order. If making the key writable is truly unavoidable, suppress with `# writable-ok: <reason>`
   - Comprehensions take at most one `for` clause and one `if` clause (LIT014). Split stacked clauses into a helper generator, a named intermediate, or a plain loop. Suppress with `# comprehension-ok: <reason>` only when unavoidable
   - Every pydantic model must be frozen (LIT015), set via `model_config = ConfigDict(frozen=True)`, a dict-literal `model_config`, an inner `class Config`, or the class keywords. Subclasses inherit it unless they override it. Replace in-place field writes with `model_copy(update=...)`. If making the model mutable is truly unavoidable, suppress with `# frozen-ok: <reason>` on the `class` line

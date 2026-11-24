@@ -127,6 +127,21 @@ SPAN_ERROR_RESPONSE: Final = {
     "total_chars": 10,
     "next_cursor": None,
 }
+CONVERSATION_RESPONSE: Final = {
+    "turns": [
+        {
+            "trace_id": "earlier-trace",
+            "trace_ref": "earlier-run",
+            "span_id": "earlier-span",
+            "start_time": "2026-01-01T00:00:00Z",
+            "input": "earlier input",
+            "output": "earlier output",
+            "input_ui": {"kind": "text", "text": "earlier input"},
+            "output_ui": {"kind": "text", "text": "earlier output"},
+        }
+    ],
+    "next_cursor": "more-turns",
+}
 NOW_MS: Final = 1_800_000_000_000
 
 
@@ -196,6 +211,7 @@ def receiver(client) -> MagicMock:
     fake.list_traces = AsyncMock(return_value={"data": [], "next_cursor": None})
     fake.get_trace = AsyncMock(return_value=None)
     fake.get_span = AsyncMock(return_value=None)
+    fake.get_conversation = AsyncMock(return_value=None)
     fake.list_agents = AsyncMock(return_value=TraceAgentList(agents=()))
     client.app.dependency_overrides[tracing_endpoints.provide_receiver] = lambda: fake
     return fake
@@ -214,34 +230,23 @@ def client() -> TestClient:
     return TestClient(app)
 
 
-@pytest.mark.parametrize("media_type", ("application/json", "application/x-protobuf"))
-def test_log_uploads_return_setup_guidance_without_reading_the_body(
-    client: TestClient, receiver: MagicMock, media_type: str
-) -> None:
-    from google.rpc.status_pb2 import Status
-
-    response: Final = client.post("/v1/logs", content=b"invalid payload", headers={"content-type": media_type})
-    assert response.status_code == 410
-    assert response.headers["content-type"] == media_type
-    message: Final = (
-        response.json()["message"] if media_type == "application/json" else Status.FromString(response.content).message
-    )
-    assert message == "Send logs directly to the Lens endpoint shown in Lens setup."
-    receiver.ingest.assert_not_called()
-
-
 AGENT_SPANS: Final = b"\x0a\x02agent spans exactly as the agent sent them"
 
 
-def _forward_agent_spans(client: TestClient, lens: httpx.MockTransport, headers: Mapping[str, str]) -> Response:
+def _forward_agent_spans(
+    client: TestClient, lens: httpx.MockTransport, headers: Mapping[str, str], path: str = "/v1/traces"
+) -> Response:
     tracing: Final = TraceReceiver(
         storage=LensTraceStorage(RemoteTraceStore(httpx.AsyncClient(base_url="http://lens", transport=lens)))
     )
     client.app.dependency_overrides[tracing_endpoints.provide_receiver] = lambda: tracing
-    return client.post("/v1/traces", content=AGENT_SPANS, headers=headers)
+    return client.post(path, content=AGENT_SPANS, headers=headers)
 
 
-def test_agent_spans_reach_lens_unchanged_under_the_owner_of_the_key_that_sent_them(client: TestClient) -> None:
+@pytest.mark.parametrize("path", ("/v1/traces", "/v1/logs"))
+def test_agent_telemetry_reaches_lens_unchanged_under_the_owner_of_the_key_that_sent_it(
+    client: TestClient, path: str
+) -> None:
     received: Final = Queue[httpx.Request]()
 
     def accept(request: httpx.Request) -> httpx.Response:
@@ -260,6 +265,7 @@ def test_agent_spans_reach_lens_unchanged_under_the_owner_of_the_key_that_sent_t
             "x-litellm-api-key-hash": "another-key",
             "x-litellm-team-id": "another-team",
         },
+        path,
     )
 
     forwarded: Final = received.get_nowait()
@@ -270,7 +276,7 @@ def test_agent_spans_reach_lens_unchanged_under_the_owner_of_the_key_that_sent_t
         "application/x-protobuf",
     )
     assert (forwarded.url.path, forwarded.content, forwarded.headers["content-encoding"]) == (
-        "/v1/traces",
+        path,
         AGENT_SPANS,
         "gzip",
     )
@@ -324,10 +330,11 @@ def test_agent_spans_larger_than_the_forwarding_limit_are_refused_before_lens_se
     FORWARD_BUFFER_BUDGET.release(FORWARD_BUFFER_BUDGET.capacity)
 
 
-def test_agent_spans_are_refused_on_a_gateway_without_tracing(client: TestClient) -> None:
+@pytest.mark.parametrize("path", ("/v1/traces", "/v1/logs"))
+def test_agent_telemetry_is_refused_on_a_gateway_without_tracing(client: TestClient, path: str) -> None:
     client.app.dependency_overrides[tracing_endpoints.provide_receiver] = lambda: None
 
-    response: Final = client.post("/v1/traces", content=AGENT_SPANS, headers={"content-type": "application/json"})
+    response: Final = client.post(path, content=AGENT_SPANS, headers={"content-type": "application/json"})
 
     assert (response.status_code, response.json()["message"]) == (501, "Agent tracing is not enabled on this gateway.")
 
@@ -342,6 +349,108 @@ def test_list_traces_passes_scope_window_and_cursor(client, receiver):
         end_ms=2,
         cursor="abc",
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("role", (LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.PROXY_ADMIN))
+@pytest.mark.parametrize(
+    ("endpoint", "operation", "result"),
+    (
+        ("/v1/traces", "list", {"data": [], "next_cursor": None}),
+        ("/v1/traces/agents", "query", {"data": []}),
+        ("/v1/traces/t1", "trace", TRACE_RESPONSE),
+        ("/v1/traces/t1/conversation", "conversation", CONVERSATION_RESPONSE),
+        ("/v1/traces/t1/spans/s1", "span", SPAN_DETAIL_RESPONSE),
+        ("/v1/traces/t1/spans/s1/error", "span_error", SPAN_ERROR_RESPONSE),
+    ),
+)
+async def test_key_and_team_filters_reach_lens_without_replacing_authenticated_scope(
+    client: TestClient, role: LitellmUserRoles, endpoint: str, operation: str, result: Mapping[str, JsonValue]
+) -> None:
+    requests: Final = asyncio.Queue[httpx.Request]()
+
+    def accept(request: httpx.Request) -> httpx.Response:
+        requests.put_nowait(request)
+        return httpx.Response(200, json=result)
+
+    async def lookup(auth: UserAPIKeyAuth) -> tuple[str, ...]:
+        return ("permitted-team",)
+
+    client.app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_id="reader", user_role=role)
+    client.app.dependency_overrides[get_log_team_lookup] = lambda: lookup
+    client.app.dependency_overrides[tracing_endpoints.current_time_ms] = lambda: NOW_MS
+    async with httpx.AsyncClient(base_url="http://lens", transport=httpx.MockTransport(accept)) as worker:
+        tracing: Final = TraceReceiver(LensTraceStorage(RemoteTraceStore(worker)))
+        client.app.dependency_overrides[tracing_endpoints.provide_receiver] = lambda: tracing
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=client.app), base_url="http://gateway"
+        ) as gateway:
+            response: Final = await gateway.get(
+                endpoint,
+                params={"team_id": "requested-team", "api_key_hash": "requested-key", "start_ms": 123, "end_ms": 456},
+            )
+    assert response.status_code == 200, response.text
+    forwarded: Final = json.loads(requests.get_nowait().content)
+    assert requests.empty()
+    assert forwarded["operation"] == operation
+    assert forwarded["parameters" if operation == "query" else "scope"] == {
+        "all_teams": 1 if role == LitellmUserRoles.PROXY_ADMIN else 0,
+        "user_id": "" if role == LitellmUserRoles.PROXY_ADMIN else "reader",
+        "team_ids": [] if role == LitellmUserRoles.PROXY_ADMIN else ["permitted-team"],
+        "filter_team_id": "requested-team",
+        "filter_api_key_hash": "requested-key",
+        **({"start_ms": 123, "end_ms": 456, "limit": AGENT_TRACING_AGENT_LIST_LIMIT} if operation == "query" else {}),
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("exists", (True, False))
+async def test_conversation_transport_preserves_scoped_reference_and_continuation(
+    client: TestClient, exists: bool
+) -> None:
+    def accept(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/internal/read"
+        assert json.loads(request.content) == {
+            "operation": "conversation",
+            "scope": {
+                "all_teams": 0,
+                "user_id": "user",
+                "team_ids": [],
+                "filter_team_id": "selected-team",
+                "filter_api_key_hash": "selected-key",
+            },
+            "trace_id": "t1",
+            "trace_ref": "selected-run",
+            "cursor": "previous-page",
+            "page_size": 7,
+        }
+        return httpx.Response(200, content=json.dumps(CONVERSATION_RESPONSE if exists else None))
+
+    async with httpx.AsyncClient(base_url="http://lens", transport=httpx.MockTransport(accept)) as worker:
+        tracing: Final = TraceReceiver(LensTraceStorage(RemoteTraceStore(worker)))
+        client.app.dependency_overrides[tracing_endpoints.provide_receiver] = lambda: tracing
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=client.app), base_url="http://gateway"
+        ) as gateway:
+            response: Final = await gateway.get(
+                "/v1/traces/t1/conversation",
+                params={
+                    "team_id": "selected-team",
+                    "api_key_hash": "selected-key",
+                    "trace_ref": "selected-run",
+                    "cursor": "previous-page",
+                    "page_size": 7,
+                },
+            )
+    assert response.status_code == (200 if exists else 404), response.text
+    assert response.json() == (CONVERSATION_RESPONSE if exists else {"detail": "Trace t1 not found"})
+
+
+@pytest.mark.parametrize("query", ("page_size=0", "page_size=51", "cursor=" + "x" * 513))
+def test_conversation_rejects_unbounded_parameters(client: TestClient, receiver: MagicMock, query: str) -> None:
+    response: Final = client.get(f"/v1/traces/t1/conversation?{query}")
+    assert response.status_code == 422, response.text
+    receiver.get_conversation.assert_not_awaited()
 
 
 def test_list_traces_defaults_to_last_24h(client, receiver):
@@ -520,6 +629,8 @@ async def test_agent_picker_reads_through_worker_with_authenticated_scope(
         "parameters": {
             **expected_scope,
             "team_ids": list(expected_scope["team_ids"]),
+            "filter_team_id": "",
+            "filter_api_key_hash": "",
             "start_ms": 123,
             "end_ms": 456,
             "limit": AGENT_TRACING_AGENT_LIST_LIMIT,
@@ -703,6 +814,7 @@ def test_trace_read_routes_ignore_unknown_query_parameters(client: TestClient, r
     (
         ("/v1/traces", "list_traces"),
         ("/v1/traces/t1", "get_trace"),
+        ("/v1/traces/t1/conversation", "get_conversation"),
         ("/v1/traces/t1/spans/s1", "get_span"),
         ("/v1/traces/t1/spans/s1/error", "get_span_error"),
     ),
@@ -782,6 +894,7 @@ def test_key_without_user_cannot_read_traces(client: TestClient, auth: UserAPIKe
     for path in (
         "/v1/traces",
         "/v1/traces/t1",
+        "/v1/traces/t1/conversation",
         "/v1/traces/t1/spans/s1",
         "/v1/traces/t1/spans/s1/error",
         "/v1/traces/query/help",
@@ -790,7 +903,13 @@ def test_key_without_user_cannot_read_traces(client: TestClient, auth: UserAPIKe
         assert response.status_code == 403, response.text
     query: Final = client.post("/v1/traces/query", json={"sql": "SELECT * FROM otel_traces"})
     assert query.status_code == 403, query.text
-    for read in (storage.list_traces, storage.get_trace, storage.get_span, storage.get_span_error):
+    for read in (
+        storage.list_traces,
+        storage.get_trace,
+        storage.get_conversation,
+        storage.get_span,
+        storage.get_span_error,
+    ):
         read.assert_not_called()
     storage.query_sql.assert_not_called()
     storage.query_help.assert_not_called()
@@ -1205,7 +1324,7 @@ def _in_process_lens(connection: LensConnection) -> httpx.AsyncClient:
 
 
 @pytest.mark.asyncio
-async def test_connected_gateway_delivers_each_model_call_to_lens_as_one_trace_with_the_caller_ip(
+async def test_connected_gateway_sends_lens_no_spans_of_its_own_for_a_model_call(
     monkeypatch: pytest.MonkeyPatch, lens_uploads: list[_Upload]
 ) -> None:
     import litellm
@@ -1213,9 +1332,6 @@ async def test_connected_gateway_delivers_each_model_call_to_lens_as_one_trace_w
     from litellm.proxy import proxy_server
 
     monkeypatch.setattr(proxy_server, "open_telemetry_logger", None)
-    monkeypatch.setenv("OTEL_EXPORTER", "otlp_http")
-    monkeypatch.setenv("OTEL_ENDPOINT", f"{_LENS_URL}/operator")
-    monkeypatch.setenv("OTEL_SERVICE_NAME", "operator-service")
 
     async with manage_tracing(
         True, lambda: TraceReceiver(MagicMock(spec=LensTraceStorage)), client_factory=_in_process_lens
@@ -1224,122 +1340,9 @@ async def test_connected_gateway_delivers_each_model_call_to_lens_as_one_trace_w
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": "what is the capital of France"}],
             mock_response="Paris",
-            metadata={"user_api_key_user_id": "user-1", "requester_ip_address": "203.0.113.7"},
+            metadata={"user_api_key_user_id": "user-1"},
         )
         await asyncio.sleep(0.2)
-        assert proxy_server.open_telemetry_logger is None
+        assert not any(isinstance(callback, OpenTelemetryV2) for callback in litellm.callbacks)
 
-    traces: Final = tuple(
-        ExportTraceServiceRequest.FromString(body)
-        for path, auth, body in lens_uploads
-        if path == "/v1/traces" and auth == "Bearer test-service-token-with-32-characters" and body
-    )
-    spans: Final = _spans(chain.from_iterable(trace.resource_spans for trace in traces))
-    assert tuple(span.name for span in spans) == ("chat gpt-4o-mini",)
-    assert tuple(path for path, _, _ in lens_uploads if path.startswith("/operator")) == ()
-    assert "operator-service" not in str(traces[0].resource_spans[0].resource)
-    attributes: Final = {attribute.key: attribute.value.string_value for attribute in spans[0].attributes}
-    assert attributes["litellm.metadata.user_api_key_user_id"] == "user-1"
-    assert "what is the capital of France" in attributes["gen_ai.input.messages"]
-    assert "Paris" in attributes["gen_ai.output.messages"]
-    assert attributes["litellm.metadata.requester_ip_address"] == "203.0.113.7"
-    assert not any(isinstance(callback, OpenTelemetryV2) for callback in litellm.callbacks)
-
-
-@pytest.mark.asyncio
-async def test_the_trace_lens_receives_holds_the_message_without_claude_code_reminders(
-    monkeypatch: pytest.MonkeyPatch, lens_uploads: list[_Upload]
-) -> None:
-    import litellm
-    from litellm.proxy import proxy_server
-
-    monkeypatch.setattr(proxy_server, "open_telemetry_logger", None)
-
-    async with manage_tracing(
-        True, lambda: TraceReceiver(MagicMock(spec=LensTraceStorage)), client_factory=_in_process_lens
-    ):
-        await litellm.acompletion(
-            model="gpt-4o-mini",
-            messages=[
-                {
-                    "role": "user",
-                    "content": "<system-reminder>\nContents of AGENTS.md\n</system-reminder>\nwhat is the capital of France",
-                }
-            ],
-            mock_response="Paris",
-        )
-        await asyncio.sleep(0.2)
-
-    traces: Final = tuple(
-        ExportTraceServiceRequest.FromString(body) for path, _, body in lens_uploads if path == "/v1/traces" and body
-    )
-    spans: Final = _spans(chain.from_iterable(trace.resource_spans for trace in traces))
-    attributes: Final = {attribute.key: attribute.value.string_value for attribute in spans[0].attributes}
-    assert "what is the capital of France" in attributes["gen_ai.input.messages"]
-    assert "AGENTS.md" not in attributes["gen_ai.input.messages"]
-
-
-@pytest.mark.asyncio
-async def test_an_agent_session_reaches_lens_as_one_named_run_with_its_tool_call_as_a_step(
-    monkeypatch: pytest.MonkeyPatch, lens_uploads: list[_Upload]
-) -> None:
-    import litellm
-    from litellm.proxy import proxy_server
-
-    monkeypatch.setattr(proxy_server, "open_telemetry_logger", None)
-
-    async with manage_tracing(
-        True, lambda: TraceReceiver(MagicMock(spec=LensTraceStorage)), client_factory=_in_process_lens
-    ):
-        await litellm.acompletion(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "user", "content": "list the files"},
-                {
-                    "role": "assistant",
-                    "content": "",
-                    "tool_calls": [
-                        {
-                            "id": "call-ls",
-                            "type": "function",
-                            "function": {"name": "Bash", "arguments": '{"command": "ls"}'},
-                        }
-                    ],
-                },
-                {"role": "tool", "tool_call_id": "call-ls", "content": "a.txt"},
-            ],
-            mock_response="one file",
-            litellm_session_id="session-1",
-            metadata={"user_agent": "claude-cli/2.1.329 (external, sdk-cli)"},
-        )
-        await asyncio.sleep(0.2)
-
-    resources: Final = tuple(
-        chain.from_iterable(
-            ExportTraceServiceRequest.FromString(body).resource_spans
-            for path, _, body in lens_uploads
-            if path == "/v1/traces" and body
-        )
-    )
-    spans: Final = {span.name: span for span in _spans(resources)}
-    assert sorted(spans) == ["chat gpt-4o-mini", "execute_tool Bash"]
-    assert {
-        attribute.key: attribute.value.string_value
-        for attribute in chain.from_iterable(resource.resource.attributes for resource in resources)
-        if attribute.key.startswith("lens.")
-    } == {"lens.session.capture": "true", "lens.session.attribute": "gen_ai.conversation.id"}
-    model_call: Final = {item.key: item.value.string_value for item in spans["chat gpt-4o-mini"].attributes}
-    assert (model_call["gen_ai.conversation.id"], model_call["gen_ai.agent.name"]) == ("session-1", "claude-code")
-    tool_step: Final = spans["execute_tool Bash"]
-    assert {item.key: item.value.string_value for item in tool_step.attributes} == {
-        "gen_ai.operation.name": "execute_tool",
-        "gen_ai.tool.name": "Bash",
-        "gen_ai.tool.call.id": "call-ls",
-        "gen_ai.tool.call.arguments": '{"command": "ls"}',
-        "gen_ai.tool.call.result": "a.txt",
-        "gen_ai.conversation.id": "session-1",
-        "gen_ai.agent.name": "claude-code",
-        "langsmith.metadata.ls_integration": "claude-code",
-        "lens.task": "list the files",
-    }
-    assert tool_step.start_time_unix_nano == tool_step.end_time_unix_nano
+    assert tuple(path for path, _, _ in lens_uploads if path in ("/v1/traces", "/v1/logs")) == ()

@@ -522,6 +522,60 @@ async def test_an_allowed_messages_stream_arrives_byte_for_byte_however_the_tran
     assert b"".join(chunk for chunk in received if isinstance(chunk, bytes)) == whole
 
 
+class _TextRecordingGuardrail(CustomGuardrail):
+    def __init__(self) -> None:
+        super().__init__(guardrail_name="text-recording-test", event_hook="post_call")
+        self.texts_scanned: Final[list[str]] = []
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: object | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        self.texts_scanned.extend(inputs.get("texts") or ())
+        return inputs
+
+
+@pytest.mark.parametrize("read_size", READ_SIZES)
+@pytest.mark.parametrize("mode", ["end_only", "sampled"])
+@pytest.mark.parametrize("text", ["Let me clean that up.", "Café ☕ is déjà vu"], ids=["ascii", "multibyte"])
+@pytest.mark.asyncio
+async def test_a_guardrail_without_the_flag_reads_messages_text_however_the_transport_cuts_it(
+    read_size: int, mode: str, text: str
+) -> None:
+    guardrail: Final = _TextRecordingGuardrail()
+    for setting, value in STREAM_MODES[mode].items():
+        setattr(guardrail, setting, value)
+    guardrail.streaming_buffer_until_moderated = False
+    guardrail.streaming_hold_tool_calls = False
+    events: Final = tuple(
+        {**event, "delta": {"type": "text_delta", "text": text}} if event["type"] == "content_block_delta" else event
+        for event in _messages_events(False)
+    )
+    raw_stream: Final = b"".join(
+        f"event: {event['type']}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n".encode() for event in events
+    )
+    wire: Final = _cut(raw_stream, read_size)
+
+    received: Final = [
+        chunk
+        async for chunk in UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test", request_route="/v1/messages"),
+            response=_as_stream(wire),
+            request_data={
+                "messages": [{"role": "user", "content": "clean up"}],
+                "guardrail_to_apply": guardrail,
+                "metadata": {"guardrails": [guardrail.guardrail_name]},
+            },
+        )
+    ]
+
+    assert text in guardrail.texts_scanned
+    assert b"".join(chunk for chunk in received if isinstance(chunk, bytes)) == raw_stream
+
+
 @pytest.mark.asyncio
 async def test_text_split_across_transport_reads_still_streams_before_the_verdict() -> None:
     whole: Final = _messages_items(with_tool_call=True)
@@ -536,6 +590,61 @@ async def test_text_split_across_transport_reads_still_streams_before_the_verdic
     )
 
     assert b"".join(chunk for chunk in at_scan if isinstance(chunk, bytes)) == text
+
+
+class _ScanTimingGuardrail(CustomGuardrail):
+    def __init__(self, upstream_reads: Sequence[object]) -> None:
+        super().__init__(guardrail_name="scan-timing-test", event_hook="post_call")
+        self._upstream_reads: Final = upstream_reads
+        self.reads_at_scan: Final[list[int]] = []
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: object | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        self.reads_at_scan.append(len(self._upstream_reads))
+        return inputs
+
+
+@pytest.mark.asyncio
+async def test_a_sampled_guardrail_still_scans_mid_stream_when_every_other_read_ends_inside_a_frame() -> None:
+    frames: Final = tuple(
+        f"event: {event['type']}\ndata: {json.dumps(event)}\n\n".encode()
+        for event in (
+            *_messages_events(False)[:2],
+            *(
+                {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": f"part {n} "}}
+                for n in range(8)
+            ),
+            *_messages_events(False)[-3:],
+        )
+    )
+    wire: Final = (frames[0], *(piece for frame in frames[1:] for piece in (frame[:5], frame[5:])))
+    upstream_reads: Final[list[object]] = []
+    guardrail: Final = _ScanTimingGuardrail(upstream_reads)
+    guardrail.streaming_end_of_stream_only = False
+    guardrail.streaming_sampling_rate = 2
+    guardrail.streaming_buffer_until_moderated = False
+    guardrail.streaming_hold_tool_calls = False
+
+    received: Final = [
+        chunk
+        async for chunk in UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test", request_route="/v1/messages"),
+            response=_recorded(_as_stream(wire), upstream_reads),
+            request_data={
+                "messages": [{"role": "user", "content": "clean up"}],
+                "guardrail_to_apply": guardrail,
+                "metadata": {"guardrails": [guardrail.guardrail_name]},
+            },
+        )
+    ]
+
+    assert b"".join(chunk for chunk in received if isinstance(chunk, bytes)) == b"".join(frames)
+    assert guardrail.reads_at_scan and guardrail.reads_at_scan[0] < len(wire) // 2
 
 
 def _responses_items_with_client_run_item(item_type: str) -> tuple[object, ...]:

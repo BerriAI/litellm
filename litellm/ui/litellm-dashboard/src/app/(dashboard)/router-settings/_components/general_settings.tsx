@@ -1,4 +1,4 @@
-import { Page, PageContent } from "@/components/shared/Page";
+import { PageContent } from "@/components/shared/Page";
 import { PageHeader, PageHeaderTitle, PageHeaderDescription } from "@/components/shared/PageHeader";
 import React, { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
@@ -318,108 +318,104 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
   }
 
   return (
-    <Page>
-      <PageContent>
-        <PageHeader>
-          <PageHeaderTitle>
-            <Route />
-            {t("shell.nav.items.routerSettings")}
-          </PageHeaderTitle>
-          <PageHeaderDescription>{t("shell.pageDescriptions.routerSettings")}</PageHeaderDescription>
-        </PageHeader>
-        <Tabs defaultValue="loadbalancing" className="w-full gap-6">
-          <TabsList variant="line" className="max-w-full justify-start overflow-x-auto">
-            <TabsTrigger value="loadbalancing">{t("routerSettings.generalSettings.tabs.loadbalancing")}</TabsTrigger>
-            <TabsTrigger value="routing-groups">{t("routerSettings.generalSettings.tabs.routingGroups")}</TabsTrigger>
-            <TabsTrigger value="fallbacks">{t("routerSettings.generalSettings.tabs.fallbacks")}</TabsTrigger>
-            <TabsTrigger value="prompt-caching">{t("routerSettings.generalSettings.tabs.promptCaching")}</TabsTrigger>
-            <TabsTrigger value="general">{t("routerSettings.generalSettings.tabs.general")}</TabsTrigger>
-          </TabsList>
-          <TabsContent value="loadbalancing" keepMounted>
-            <RouterSettings accessToken={accessToken} userRole={userRole} userID={userID} />
-          </TabsContent>
-          <TabsContent value="routing-groups" keepMounted>
-            <RoutingGroups />
-          </TabsContent>
-          <TabsContent value="fallbacks" keepMounted>
-            <Fallbacks accessToken={accessToken} userRole={userRole} userID={userID} />
-          </TabsContent>
-          <TabsContent value="prompt-caching" keepMounted>
-            <PromptCachingPanel accessToken={accessToken} settings={generalSettings} onChange={handleInputChange} />
-          </TabsContent>
-          <TabsContent value="general" keepMounted>
-            <Card>
-              <CardContent>
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>{t("routerSettings.generalSettings.columns.setting")}</TableHead>
-                      <TableHead>{t("routerSettings.generalSettings.columns.value")}</TableHead>
-                      <TableHead>{t("routerSettings.generalSettings.columns.status")}</TableHead>
-                      <TableHead>{t("routerSettings.generalSettings.columns.action")}</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {generalSettings
-                      .filter(
-                        (value) => value.field_type !== "TypedDictionary" && value.field_tab !== PROMPT_CACHING_TAB,
-                      )
-                      .map((value, index) => (
-                        <TableRow key={index}>
-                          <TableCell className="whitespace-normal">
-                            <p className="break-words">{value.field_name}</p>
-                            <p
-                              style={{
-                                fontSize: "0.65rem",
-                                color: "#808080",
-                                fontStyle: "italic",
-                              }}
-                              className="mt-1 break-words"
+    <PageContent>
+      <PageHeader>
+        <PageHeaderTitle>
+          <Route />
+          {t("shell.nav.items.routerSettings")}
+        </PageHeaderTitle>
+        <PageHeaderDescription>{t("shell.pageDescriptions.routerSettings")}</PageHeaderDescription>
+      </PageHeader>
+      <Tabs defaultValue="loadbalancing" className="w-full gap-6">
+        <TabsList variant="line" className="max-w-full justify-start overflow-x-auto">
+          <TabsTrigger value="loadbalancing">{t("routerSettings.generalSettings.tabs.loadbalancing")}</TabsTrigger>
+          <TabsTrigger value="routing-groups">{t("routerSettings.generalSettings.tabs.routingGroups")}</TabsTrigger>
+          <TabsTrigger value="fallbacks">{t("routerSettings.generalSettings.tabs.fallbacks")}</TabsTrigger>
+          <TabsTrigger value="prompt-caching">{t("routerSettings.generalSettings.tabs.promptCaching")}</TabsTrigger>
+          <TabsTrigger value="general">{t("routerSettings.generalSettings.tabs.general")}</TabsTrigger>
+        </TabsList>
+        <TabsContent value="loadbalancing" keepMounted>
+          <RouterSettings accessToken={accessToken} userRole={userRole} userID={userID} />
+        </TabsContent>
+        <TabsContent value="routing-groups" keepMounted>
+          <RoutingGroups />
+        </TabsContent>
+        <TabsContent value="fallbacks" keepMounted>
+          <Fallbacks accessToken={accessToken} userRole={userRole} userID={userID} />
+        </TabsContent>
+        <TabsContent value="prompt-caching" keepMounted>
+          <PromptCachingPanel accessToken={accessToken} settings={generalSettings} onChange={handleInputChange} />
+        </TabsContent>
+        <TabsContent value="general" keepMounted>
+          <Card>
+            <CardContent>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>{t("routerSettings.generalSettings.columns.setting")}</TableHead>
+                    <TableHead>{t("routerSettings.generalSettings.columns.value")}</TableHead>
+                    <TableHead>{t("routerSettings.generalSettings.columns.status")}</TableHead>
+                    <TableHead>{t("routerSettings.generalSettings.columns.action")}</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {generalSettings
+                    .filter((value) => value.field_type !== "TypedDictionary" && value.field_tab !== PROMPT_CACHING_TAB)
+                    .map((value, index) => (
+                      <TableRow key={index}>
+                        <TableCell className="whitespace-normal">
+                          <p className="break-words">{value.field_name}</p>
+                          <p
+                            style={{
+                              fontSize: "0.65rem",
+                              color: "#808080",
+                              fontStyle: "italic",
+                            }}
+                            className="mt-1 break-words"
+                          >
+                            {value.field_description}
+                          </p>
+                        </TableCell>
+                        <TableCell>
+                          <SettingValueEditor setting={value} onChange={handleInputChange} />
+                        </TableCell>
+                        <TableCell>
+                          {value.stored_in_db == true ? (
+                            <StatusBadge tone="success" label={t("routerSettings.generalSettings.status.inDb")} />
+                          ) : value.stored_in_db == false ? (
+                            <StatusBadge tone="neutral" label={t("routerSettings.generalSettings.status.inConfig")} />
+                          ) : (
+                            <StatusBadge tone="neutral" label={t("routerSettings.generalSettings.status.notSet")} />
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          <Button
+                            disabled={
+                              value.field_name === "request_tag_mappings" &&
+                              (value.editable === false || !requestTagMappingsAreValid(value.field_value))
+                            }
+                            onClick={() => handleUpdateField(value.field_name)}
+                          >
+                            {t("routerSettings.generalSettings.update")}
+                          </Button>
+                          {value.field_name === "request_tag_mappings" && value.editable === false ? null : (
+                            <span
+                              onClick={() => handleResetField(value.field_name)}
+                              className="inline-flex shrink-0 cursor-pointer items-center justify-center px-1.5 py-1.5 text-destructive"
                             >
-                              {value.field_description}
-                            </p>
-                          </TableCell>
-                          <TableCell>
-                            <SettingValueEditor setting={value} onChange={handleInputChange} />
-                          </TableCell>
-                          <TableCell>
-                            {value.stored_in_db == true ? (
-                              <StatusBadge tone="success" label={t("routerSettings.generalSettings.status.inDb")} />
-                            ) : value.stored_in_db == false ? (
-                              <StatusBadge tone="neutral" label={t("routerSettings.generalSettings.status.inConfig")} />
-                            ) : (
-                              <StatusBadge tone="neutral" label={t("routerSettings.generalSettings.status.notSet")} />
-                            )}
-                          </TableCell>
-                          <TableCell>
-                            <Button
-                              disabled={
-                                value.field_name === "request_tag_mappings" &&
-                                (value.editable === false || !requestTagMappingsAreValid(value.field_value))
-                              }
-                              onClick={() => handleUpdateField(value.field_name)}
-                            >
-                              {t("routerSettings.generalSettings.update")}
-                            </Button>
-                            {value.field_name === "request_tag_mappings" && value.editable === false ? null : (
-                              <span
-                                onClick={() => handleResetField(value.field_name)}
-                                className="inline-flex shrink-0 cursor-pointer items-center justify-center px-1.5 py-1.5 text-destructive"
-                              >
-                                <Trash2 className="h-5 w-5 shrink-0" />
-                              </span>
-                            )}
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                  </TableBody>
-                </Table>
-              </CardContent>
-            </Card>
-          </TabsContent>
-        </Tabs>
-      </PageContent>
-    </Page>
+                              <Trash2 className="h-5 w-5 shrink-0" />
+                            </span>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
+        </TabsContent>
+      </Tabs>
+    </PageContent>
   );
 };
 

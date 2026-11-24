@@ -8,6 +8,7 @@ from pydantic import JsonValue, TypeAdapter
 
 import litellm
 from litellm.litellm_core_utils.core_helpers import (
+    as_object_list,
     as_str_mapping,
     attribute_items,
     normalize_drop_params,
@@ -96,6 +97,13 @@ def is_provider_native_tool_dict(tool: Mapping[str, object]) -> bool:
         return False
     key, value = next(iter(tool.items()))
     return key not in _ANTHROPIC_TOOL_SCHEMA_KEYS and isinstance(value, dict)
+
+
+def is_anthropic_web_search_tool(tool: Mapping[str, object]) -> bool:
+    tool_type: Final = tool.get("type", "")
+    return (isinstance(tool_type, str) and tool_type.startswith("web_search")) or (
+        tool.get("name", "") == "web_search" and "input_schema" not in tool
+    )
 
 
 def create_tool_name_mapping(
@@ -337,11 +345,30 @@ class AnthropicAdapter:
         Note: Use translate_completion_input_params_with_tool_mapping() if you need
         the tool name mapping for restoring original names in responses.
         """
+        from litellm.responses.bridge_check import empty_user_turn_for_model_turn_end
+
+        route_params: Final = MappingProxyType({**kwargs})
+        caller_messages: Final = as_object_list(route_params.get("messages"))
+        custom_llm_provider: Final = route_params.get("custom_llm_provider")
         result, _ = self.translate_completion_input_params_with_tool_mapping(
             kwargs,
             drop_params=litellm.drop_params is True or normalize_drop_params(kwargs.get("drop_params")) is True,
         )
-        return result
+        if result is None:
+            return None
+        return {
+            **result,
+            "messages": [
+                *result["messages"],
+                *empty_user_turn_for_model_turn_end(
+                    as_str_mapping(caller_messages[-1]) if caller_messages else None,
+                    result["messages"],
+                    result["model"],
+                    custom_llm_provider if isinstance(custom_llm_provider, str) else None,
+                    route_params,
+                ),
+            ],
+        }
 
     def translate_completion_input_params_with_tool_mapping(
         self,
@@ -462,7 +489,7 @@ class AnthropicAdapter:
         return anthropic_wrapper.anthropic_sse_wrapper()
 
 
-_BlockT: Final = TypeVar("_BlockT", bound=Mapping[str, object])
+_BlockT = TypeVar("_BlockT", bound=Mapping[str, object])
 
 
 _CLAUDE_OVER_REASONING_EFFORT_PROVIDERS: Final = frozenset({LlmProviders.KYMA.value})
@@ -559,24 +586,7 @@ class LiteLLMAnthropicMessagesAdapter:
         ]
 
     def _is_web_search_tool(self, tool: Mapping[str, object]) -> bool:
-        """
-        Check if a tool is an Anthropic web search tool.
-
-        Anthropic web search tools have:
-        - type starting with "web_search" (e.g., "web_search_20260209")
-        - legacy name = "web_search" without a client input_schema
-
-        Args:
-            tool: Tool definition dict
-
-        Returns:
-            True if this is a web search tool
-        """
-        tool_type: Final = tool.get("type", "")
-        tool_name: Final = tool.get("name", "")
-        return (isinstance(tool_type, str) and tool_type.startswith("web_search")) or (
-            tool_name == "web_search" and "input_schema" not in tool
-        )
+        return is_anthropic_web_search_tool(tool)
 
     def translate_anthropic_messages_to_openai(
         self,

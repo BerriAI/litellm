@@ -132,7 +132,7 @@ class HuggingFaceChatConfig(OpenAIGPTConfig):
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
-    ) -> dict:
+    ) -> dict[str, object]:
         lacks_explicit_api_base: Final = not litellm_params.get("api_base")
         if not lacks_explicit_api_base or _api_base_from_env():
             endpoint_messages: Final = (

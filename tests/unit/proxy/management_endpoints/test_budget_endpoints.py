@@ -4,14 +4,11 @@ import json
 import types
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone, tzinfo
-from typing import Final
+from typing import TYPE_CHECKING, Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
-from prisma import Json
-from prisma import models as prisma_models
-from prisma.builder import QueryBuilder
 
 import litellm.proxy.proxy_server as ps
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
@@ -21,6 +18,26 @@ from litellm.proxy.proxy_server import app
 from litellm.redis.stores.auth_cache import AuthObject
 from litellm.rust_bridge._native import NativeRedisStoreError
 from tests.unit.redis.stores.auth_cache_double import FakeAuthCache, shared_cache
+
+if TYPE_CHECKING:
+    from prisma import models as prisma_models
+
+
+def _budget_record(data: Mapping[str, object]) -> "prisma_models.LiteLLM_BudgetTable":
+    from prisma import Json, models
+
+    now: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    return models.LiteLLM_BudgetTable.model_validate(
+        {
+            "budget_reset_count": 0,
+            "allowed_models": (),
+            "created_at": now,
+            "updated_at": now,
+            "created_by": "test_user",
+            "updated_by": "test_user",
+            **{key: json.dumps(value.data) if isinstance(value, Json) else value for key, value in data.items()},
+        }
+    )
 
 
 @pytest.mark.asyncio
@@ -45,6 +62,15 @@ async def test_budget_update_replaces_cached_app_budget(
     monkeypatch.setattr(ps, "prisma_client", types.SimpleNamespace(db=database, writer_db=database))
     reader: Final = AppStore(database, NOW, cache)
     assert await reader.by_resource(AppResourceType.TEAM, "chat") == configured
+    update: Final = database.litellm_budgettable.update
+
+    async def update_budget_row(
+        *, where: Mapping[str, object], data: Mapping[str, object]
+    ) -> "prisma_models.LiteLLM_BudgetTable | None":
+        row: Final = await update(where=where, data=data)
+        return _budget_record(row.model_dump()) if row is not None else None
+
+    monkeypatch.setattr(database.litellm_budgettable, "update", update_budget_row)
     response: Final = client.post("/budget/update", json={"budget_id": configured.budget_id, "max_budget": 0})
     assert response.status_code == 200, response.text
     with pytest.raises(ConnectionError, match="database unavailable"):
@@ -59,10 +85,10 @@ def client_and_mocks(monkeypatch):
     mock_prisma = MagicMock()
     mock_table = MagicMock()
 
-    def created(*, data: Mapping[str, object]) -> dict[str, object]:
-        return {key: value.data if isinstance(value, Json) else value for key, value in data.items()}
+    def created(*, data: Mapping[str, object]) -> "prisma_models.LiteLLM_BudgetTable":
+        return _budget_record(data)
 
-    def updated(*, where: Mapping[str, object], data: Mapping[str, object]) -> dict[str, object]:
+    def updated(*, where: Mapping[str, object], data: Mapping[str, object]) -> "prisma_models.LiteLLM_BudgetTable":
         return created(data={**where, **data})
 
     mock_table.create = AsyncMock(side_effect=created)
@@ -138,6 +164,9 @@ def test_budget_windows_round_trip_with_existing_scalar_cap(
 def test_budget_update_can_remove_malformed_windows(
     client_and_mocks: tuple[TestClient, MagicMock, MagicMock], clear: object
 ) -> None:
+    from prisma import models
+    from prisma.builder import QueryBuilder
+
     client, database, table = client_and_mocks
     stored: Final = [
         {"budget_duration": "1d", "max_budget": 10.0, "reset_at": "2030-01-02T00:00:00+00:00"},
@@ -150,7 +179,7 @@ def test_budget_update_can_remove_malformed_windows(
     assert response.status_code == 200, response.text
     assert response.json()["budget_limits"] == clear
     query: Final = QueryBuilder(
-        method="update", model=prisma_models.LiteLLM_BudgetTable,
+        method="update", model=models.LiteLLM_BudgetTable,
         arguments=table.update.call_args.kwargs, root_selection=["budget_id"],
     ).build_query()
     assert f"budget_limits: {json.dumps(json.dumps(clear))}" in query
@@ -494,7 +523,7 @@ async def test_update_budget_allows_null_max_budget(client_and_mocks):
 
     async def capture_update(*, where, data):
         captured_data.update(data)
-        return {**where, **data}
+        return _budget_record({**where, **data})
 
     mock_table.update = AsyncMock(side_effect=capture_update)
 
@@ -618,7 +647,7 @@ def _capture_update_data(mock_table):
 
     async def capture(*, where, data):
         captured.update(data)
-        return {**where, **data}
+        return _budget_record({**where, **data})
 
     mock_table.update = AsyncMock(side_effect=capture)
     return captured
@@ -630,9 +659,15 @@ def test_shared_budget_cap_edit_keeps_the_saved_schedule(
     client_and_mocks: tuple[TestClient, MagicMock, MagicMock], duration: str, year: int
 ) -> None:
     client, _, table = client_and_mocks
-    table.find_unique = AsyncMock(return_value=types.SimpleNamespace(
-        budget_duration=duration, budget_reset_at=datetime(year, 7, 16, 4, tzinfo=timezone.utc),
-    ))
+    table.find_unique = AsyncMock(
+        return_value=_budget_record(
+            {
+                "budget_id": "saved-schedule",
+                "budget_duration": duration,
+                "budget_reset_at": datetime(year, 7, 16, 4, tzinfo=timezone.utc),
+            }
+        )
+    )
     written: Final = _capture_update_data(table)
 
     response: Final = client.post(
@@ -667,14 +702,17 @@ def test_daily_budget_edit_does_not_keep_a_monthly_reset_from_a_lagging_replica(
     )
     writer_table: Final = MagicMock()
     writer_table.find_unique = AsyncMock(
-        return_value=types.SimpleNamespace(
-            budget_duration="30d",
-            budget_reset_at=monthly_reset,
+        return_value=_budget_record(
+            {
+                "budget_id": "lagging-schedule",
+                "budget_duration": "30d",
+                "budget_reset_at": monthly_reset,
+            }
         )
     )
 
-    async def write(*, where: Mapping[str, object], data: Mapping[str, object]) -> Mapping[str, object]:
-        return {"budget_reset_at": monthly_reset, **where, **data}
+    async def write(*, where: Mapping[str, object], data: Mapping[str, object]) -> "prisma_models.LiteLLM_BudgetTable":
+        return _budget_record({"budget_reset_at": monthly_reset, **where, **data})
 
     reader_table.update = AsyncMock(side_effect=write)
     writer_table.update = AsyncMock(side_effect=write)
@@ -805,8 +843,9 @@ async def test_update_budget_serializes_model_max_budget_for_prisma(
 @pytest.fixture
 def admin_client(client_and_mocks):
     client, mock_prisma, mock_table = client_and_mocks
-    mock_table.delete = AsyncMock(return_value={"budget_id": "tpl-1"})
-    mock_table.find_unique = AsyncMock(return_value={"budget_id": "tpl-1"})
+    row: Final = _budget_record({"budget_id": "tpl-1"})
+    mock_table.delete = AsyncMock(return_value=row)
+    mock_table.find_unique = AsyncMock(return_value=row)
     mock_table.delete_many = AsyncMock(return_value=1)
     mock_prisma.db.litellm_customerorganizationtable = MagicMock(
         find_many=AsyncMock(return_value=[]), count=AsyncMock(return_value=0)
@@ -869,7 +908,7 @@ async def test_delete_budget_deletes_budget_no_customer_organization_uses(admin_
     assert resp.json() == (
         {"detail": {"error": "Budget is attached to a customer or app. Remove it through the owning entity."}}
         if attached
-        else {"budget_id": "tpl-1"}
+        else _budget_record({"budget_id": "tpl-1"}).model_dump(mode="json", exclude={"rollover_max_budget"})
     )
     mock_table.delete_many.assert_awaited_once()
 

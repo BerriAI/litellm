@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Callable, Sequence
+from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Final, TypeVar
 
@@ -13,6 +14,18 @@ from litellm.redis.stores.auth_cache import AuthCacheSettings, AuthCacheStore, A
 from litellm.rust_bridge._native import LocalSizes, NativeRedisClient
 
 T = TypeVar("T")
+
+
+@dataclass(frozen=True)
+class _Roster:
+    row: object
+
+    def member(self, user_id: str) -> object:
+        if not isinstance(self.row, dict):
+            return None
+        return deepcopy(
+            next((item for item in self.row.get("members_with_roles", ()) if item.get("user_id") == user_id), None)
+        )
 
 
 @dataclass
@@ -191,6 +204,42 @@ class FakeAuthCache:
     def get_local_by_key(self, key: str) -> object:
         entry: Final = self.memory.get(key)
         return None if entry is None else entry[0]
+
+    @staticmethod
+    def _team_fields(value: object, fields: Sequence[str] | None, user_id: str | None) -> object:
+        if not isinstance(value, dict):
+            return value
+        if fields is not None:
+            return deepcopy({name: item for name, item in value.items() if name in fields})
+        members: Final = value.get("members_with_roles", ())
+        if not isinstance(members, (list, tuple)) or any(not isinstance(member, dict) for member in members):
+            return deepcopy(value)
+        member: Final = next((member for member in members if member.get("user_id") == user_id), None)
+        projected: Final = {
+            name: item for name, item in value.items() if name not in ("members_with_roles", "members", "admins")
+        }
+        return deepcopy(
+            {**projected, "members_with_roles": [member] if user_id is not None and member is not None else []}
+        )
+
+    async def team_fields(
+        self, key: AuthObject, fields: Sequence[str] | None, user_id: str | None, request: object
+    ) -> object:
+        return self._team_fields(await self.get(key, request), fields, user_id)
+
+    async def team_snapshot(self, key: AuthObject, request: object) -> tuple[object, _Roster | None] | None:
+        row: Final = await self.get(key, request)
+        return None if row is None else (self._team_fields(row, None, None), _Roster(row))
+
+    def local_team_fields(self, key: AuthObject, fields: Sequence[str] | None, user_id: str | None) -> object:
+        return self._team_fields(self.get_local(key), fields, user_id)
+
+    def add_local_team_spend(self, key: AuthObject, delta: float) -> bool:
+        row: Final = self.get_local(key)
+        if not isinstance(row, dict):
+            return False
+        self.memory[key.key] = ({**row, "spend": (row.get("spend") or 0.0) + delta}, self.memory[key.key][1])
+        return True
 
     def set_local(self, key: AuthObject, value: object, ttl_seconds: float | None = None) -> None:
         self.memory[key.key] = (value, ttl_seconds)

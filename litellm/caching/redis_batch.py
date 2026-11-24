@@ -13,7 +13,7 @@ if TYPE_CHECKING:
     from litellm.rust_bridge._native import NativeRequestRedis, NativeSend
 
 _T = TypeVar("_T")
-_T_co: Final = TypeVar("_T_co", covariant=True)
+_T_co = TypeVar("_T_co", covariant=True)
 POST_CALL_FLUSH_DEADLINE_SECONDS: Final = 1.0
 
 

@@ -53,9 +53,8 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import Choices, ModelResponse, ModelResponseStream
 
 if TYPE_CHECKING:
-    import tiktoken
-
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
 REASONING_OPEN_TAG: Final = "<reasoning>"
 REASONING_CLOSE_TAG: Final = "</reasoning>"
@@ -82,7 +81,7 @@ def chat_completions_params_refused_for(model: str) -> frozenset[str]:
     them out of its supported params and litellm refuses them, or drops them under ``drop_params``, before sending.
     """
     model_id: Final = split_bedrock_region_path(model)[1]
-    return frozenset().union(
+    return frozenset[str]().union(
         *(refused for family, refused in CHAT_COMPLETIONS_REFUSED_PARAMS_BY_FAMILY.items() if family in model_id)
     )
 
@@ -112,7 +111,7 @@ def chat_completions_reasoning_efforts_refused_for(model: str) -> frozenset[str]
     ``reasoning_effort`` for it, so the native config drops the value and AWS applies its default effort as before.
     """
     model_id: Final = split_bedrock_region_path(model)[1]
-    return frozenset().union(
+    return frozenset[str]().union(
         *(
             refused
             for family, refused in CHAT_COMPLETIONS_REFUSED_REASONING_EFFORTS_BY_FAMILY.items()
@@ -283,7 +282,10 @@ class BedrockRuntimeChatCompletionsStreamingHandler(OpenAIChatCompletionStreamin
                 if is_positional_tool_call_id(tool_call.id):
                     tool_call.id = self._minted_tool_call_id(choice.index, tool_call.index)
 
-    def chunk_parser(self, chunk: dict) -> ModelResponseStream:  # mutable-ok: BaseModelResponseIterator signature
+    def chunk_parser(
+        self,
+        chunk: dict[str, object],  # mutable-ok: BaseModelResponseIterator signature
+    ) -> ModelResponseStream:
         parsed: Final = super().chunk_parser(chunk)
         self._mint_streamed_tool_call_ids(parsed)
         if not bedrock_runtime_chat_completions_serves_reasoning_inline(parsed.model or ""):
@@ -343,11 +345,11 @@ class AmazonBedrockRuntimeChatCompletionsConfig(OpenAILikeChatConfig):
 
     def validate_environment(
         self,
-        headers: dict,  # mutable-ok: BaseConfig signature
+        headers: dict[str, object],  # mutable-ok: BaseConfig signature
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,  # mutable-ok: BaseConfig signature
-        litellm_params: dict,  # mutable-ok: BaseConfig signature
+        optional_params: dict[str, object],  # mutable-ok: BaseConfig signature
+        litellm_params: dict[str, object],  # mutable-ok: BaseConfig signature
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:  # mutable-ok: BaseConfig signature
@@ -366,8 +368,8 @@ class AmazonBedrockRuntimeChatCompletionsConfig(OpenAILikeChatConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,  # mutable-ok: BaseConfig signature
-        litellm_params: dict,  # mutable-ok: BaseConfig signature
+        optional_params: dict[str, object],  # mutable-ok: BaseConfig signature
+        litellm_params: dict[str, object],  # mutable-ok: BaseConfig signature
         stream: bool | None = None,
     ) -> str:
         configured_runtime_endpoint: Final = optional_params.get("aws_bedrock_runtime_endpoint")
@@ -400,8 +402,8 @@ class AmazonBedrockRuntimeChatCompletionsConfig(OpenAILikeChatConfig):
         return ensure_api_route(openai_base, "openai/v1/chat/completions")
 
     def _params_with_region_from_path(
-        self, optional_params: dict, model: str | None
-    ) -> dict:  # mutable-ok: BaseAWSLLM's region resolver and signer take a plain dict
+        self, optional_params: dict[str, object], model: str | None
+    ) -> dict[str, object]:  # mutable-ok: BaseAWSLLM's region resolver and signer take a plain dict
         region_from_path, _ = split_bedrock_region_path(model or "")
         if region_from_path is None or optional_params.get("aws_region_name") is not None:
             return optional_params
@@ -409,9 +411,9 @@ class AmazonBedrockRuntimeChatCompletionsConfig(OpenAILikeChatConfig):
 
     def sign_request(
         self,
-        headers: dict,  # mutable-ok: BaseConfig signature
-        optional_params: dict,  # mutable-ok: BaseConfig signature
-        request_data: dict,  # mutable-ok: BaseConfig signature
+        headers: dict[str, object],  # mutable-ok: BaseConfig signature
+        optional_params: dict[str, object],  # mutable-ok: BaseConfig signature
+        request_data: dict[str, object],  # mutable-ok: BaseConfig signature
         api_base: str,
         api_key: str | None = None,
         model: str | None = None,
@@ -437,7 +439,7 @@ class AmazonBedrockRuntimeChatCompletionsConfig(OpenAILikeChatConfig):
         model: str,
         drop_params: bool,
         replace_max_completion_tokens_with_max_tokens: bool = False,
-    ) -> dict:  # mutable-ok: BaseConfig signature
+    ) -> dict[str, object]:  # mutable-ok: BaseConfig signature
         mapped: Final = _PARAMS_DICT_ADAPTER.validate_python(
             super().map_openai_params(
                 non_default_params=non_default_params,
@@ -505,9 +507,9 @@ class AmazonBedrockRuntimeChatCompletionsConfig(OpenAILikeChatConfig):
         self,
         model: str,
         messages: list[AllMessageValues],  # mutable-ok: BaseConfig signature
-        optional_params: dict,  # mutable-ok: BaseConfig signature
-        litellm_params: dict,  # mutable-ok: BaseConfig signature
-        headers: dict,  # mutable-ok: BaseConfig signature
+        optional_params: dict[str, object],  # mutable-ok: BaseConfig signature
+        litellm_params: dict[str, object],  # mutable-ok: BaseConfig signature
+        headers: dict[str, object],  # mutable-ok: BaseConfig signature
     ) -> dict:  # mutable-ok: BaseConfig signature
         optional_params_view: Final = _PARAMS_DICT_ADAPTER.validate_python(optional_params)
         return super().transform_request(
@@ -522,9 +524,9 @@ class AmazonBedrockRuntimeChatCompletionsConfig(OpenAILikeChatConfig):
         self,
         model: str,
         messages: list[AllMessageValues],  # mutable-ok: BaseConfig signature
-        optional_params: dict,  # mutable-ok: BaseConfig signature
-        litellm_params: dict,  # mutable-ok: BaseConfig signature
-        headers: dict,  # mutable-ok: BaseConfig signature
+        optional_params: dict[str, object],  # mutable-ok: BaseConfig signature
+        litellm_params: dict[str, object],  # mutable-ok: BaseConfig signature
+        headers: dict[str, object],  # mutable-ok: BaseConfig signature
     ) -> dict:  # mutable-ok: BaseConfig signature
         optional_params_view: Final = _PARAMS_DICT_ADAPTER.validate_python(optional_params)
         return await super().async_transform_request(
@@ -541,11 +543,11 @@ class AmazonBedrockRuntimeChatCompletionsConfig(OpenAILikeChatConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: "LiteLLMLoggingObj",
-        request_data: dict,  # mutable-ok: BaseConfig signature
+        request_data: dict[str, object],  # mutable-ok: BaseConfig signature
         messages: list[AllMessageValues],  # mutable-ok: BaseConfig signature
-        optional_params: dict,  # mutable-ok: BaseConfig signature
-        litellm_params: dict,  # mutable-ok: BaseConfig signature
-        encoding: "tiktoken.Encoding | None",
+        optional_params: dict[str, object],  # mutable-ok: BaseConfig signature
+        litellm_params: dict[str, object],  # mutable-ok: BaseConfig signature
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -577,7 +579,7 @@ class AmazonBedrockRuntimeChatCompletionsConfig(OpenAILikeChatConfig):
             choice.message.content = content
         return response
 
-    def get_supported_openai_params(self, model: str) -> list:  # mutable-ok: BaseConfig signature
+    def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: BaseConfig signature
         refused: Final = frozenset(("n", *chat_completions_params_refused_for(model)))
         base_params: Final = tuple(
             param

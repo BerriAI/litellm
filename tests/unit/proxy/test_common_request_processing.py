@@ -6,6 +6,7 @@ import datetime
 import gc
 import gzip
 import json
+import threading
 import time
 import traceback
 import weakref
@@ -46,12 +47,14 @@ from litellm.litellm_core_utils.bug_report import (
     bug_report_notice,
     build_bug_report,
 )
-from litellm.litellm_core_utils.core_helpers import FinishEvidence
+from litellm.litellm_core_utils.core_helpers import FinishEvidence, get_litellm_metadata_from_kwargs
+from litellm.litellm_core_utils.exception_mapping_utils import _get_response_headers
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.litellm_core_utils.total_deadline import current_total_deadline
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.vertex_ai.gemini.long_decode import AsyncStreamResume
 from litellm.proxy._types import Litellm_EntityType, LitellmUserRoles, ProxyErrorTypes, ProxyException
 from litellm.proxy._types import UserAPIKeyAuth as ProxyUserAPIKeyAuth
@@ -73,7 +76,6 @@ from litellm.proxy.common_request_processing import (
     _has_attribute_error_in_chain,
     _override_openai_response_model,
     _parse_event_data_for_error,
-    _resolve_per_request_model_group_alias,
     _sse_error_frames,
     _UpstreamClosingStreamingResponse,
     attach_guardrail_information,
@@ -83,6 +85,7 @@ from litellm.proxy.common_request_processing import (
     is_azure_model_router_request,
     open_sse_before_first_byte,
     resolve_litellm_call_id,
+    resolve_per_request_model_group_alias,
     should_return_raw_model_name,
     sse_error_payload,
     ttft_keepalive_interval,
@@ -6818,6 +6821,41 @@ class TestStreamingClientDisconnectLogging:
         assert request_data["metadata"]["client_disconnected"] is True
         assert request_data["litellm_params"]["metadata"]["client_disconnected"] is True
 
+    @pytest.mark.parametrize(
+        "logged_litellm_params",
+        [
+            {"metadata": {"tags": ["chat"]}},
+            {"metadata": {"user_api_key": "hashed"}, "litellm_metadata": {"tags": ["responses"]}},
+            {"metadata": {"tags": ["chat"]}, "litellm_metadata": {}},
+        ],
+        ids=["chat_route_metadata", "responses_route_litellm_metadata", "empty_litellm_metadata"],
+    )
+    @pytest.mark.asyncio
+    async def test_record_streaming_client_disconnect_reaches_the_metadata_the_spend_log_reads(
+        self, logged_litellm_params: dict[str, dict[str, object]]
+    ):
+        from litellm.proxy.common_request_processing import (
+            _record_streaming_client_disconnect_if_needed,
+        )
+
+        logging_obj: Final = MagicMock()
+        logging_obj.model_call_details = {"litellm_params": copy.deepcopy(logged_litellm_params)}
+        tags_before: Final = get_litellm_metadata_from_kwargs(logging_obj.model_call_details).get("tags")
+        request_data: Final = {
+            "litellm_logging_obj": logging_obj,
+            **copy.deepcopy(logged_litellm_params),
+            "litellm_params": copy.deepcopy(logged_litellm_params),
+        }
+
+        recorded: Final = await _record_streaming_client_disconnect_if_needed(None, request_data, client_disconnected=True)
+
+        logged: Final = get_litellm_metadata_from_kwargs(logging_obj.model_call_details)
+        assert recorded is True
+        assert logged["client_disconnected"] is True
+        assert logged["error_information"]["error_class"] == "ClientDisconnected"
+        assert logged.get("tags") == tags_before
+        assert get_litellm_metadata_from_kwargs(request_data)["error_information"]["error_code"] == "499"
+
     @pytest.mark.asyncio
     async def test_apply_client_disconnect_metadata_none_returns_early(self):
         from litellm.proxy.common_request_processing import (
@@ -12250,6 +12288,31 @@ class TestStreamingClientDisconnectBilling:
         assert usage.prompt_tokens_details.cached_tokens == 7
 
 
+    @pytest.mark.asyncio
+    async def test_building_the_responses_disconnect_partial_leaves_the_event_loop_serving(self):
+        other_request_served: Final = threading.Event()
+
+        class _SlowPartialStream:
+            built_while_loop_served = False
+
+            def partial_response_on_disconnect(self) -> None:
+                self.built_while_loop_served = other_request_served.wait(timeout=2)
+
+        async def _serve_other_request() -> None:
+            other_request_served.set()
+
+        logging_obj: Final = MagicMock(spec=LiteLLMLoggingObj)
+        logging_obj.model_call_details = {}
+        stream: Final = _SlowPartialStream()
+        other_request: Final = asyncio.create_task(_serve_other_request())
+
+        billed: Final = await _bill_partial_streamed_spend_on_disconnect({"litellm_logging_obj": logging_obj}, stream)
+        await other_request
+
+        assert stream.built_while_loop_served is True
+        assert billed is False
+
+
 def _apply_stream_usage_tracking(
     data: dict,
     general_settings: dict,
@@ -12799,7 +12862,7 @@ class TestPerRequestModelGroupAlias:
         ],
     )
     async def test_resolves_alias_for_the_requested_model_group(self, alias_map, expected):
-        resolved = await _resolve_per_request_model_group_alias(
+        resolved = await resolve_per_request_model_group_alias(
             requested_model="group-a",
             router_settings={"model_group_alias": alias_map},
             user_api_key_dict=ProxyUserAPIKeyAuth(api_key="hash", models=[]),
@@ -12813,7 +12876,7 @@ class TestPerRequestModelGroupAlias:
         """Access was authorized against the requested group, so a rewrite that
         the key could not have requested directly must not be served."""
         with pytest.raises(ProxyException) as exc_info:
-            await _resolve_per_request_model_group_alias(
+            await resolve_per_request_model_group_alias(
                 requested_model="group-a",
                 router_settings={"model_group_alias": {"group-a": "group-b"}},
                 user_api_key_dict=ProxyUserAPIKeyAuth(api_key="hash", models=["group-a"]),
@@ -12825,7 +12888,7 @@ class TestPerRequestModelGroupAlias:
 
     @pytest.mark.asyncio
     async def test_alias_target_inside_the_key_allowlist_resolves(self):
-        resolved = await _resolve_per_request_model_group_alias(
+        resolved = await resolve_per_request_model_group_alias(
             requested_model="group-a",
             router_settings={"model_group_alias": {"group-a": "group-b"}},
             user_api_key_dict=ProxyUserAPIKeyAuth(api_key="hash", models=["group-a", "group-b"]),
@@ -12839,7 +12902,7 @@ class TestPerRequestModelGroupAlias:
     async def test_non_string_requested_model_is_left_alone(self, requested_model):
         """The routed model is not always a string (a batch request carries a
         list), and an unhashable one must not blow up the alias lookup."""
-        resolved = await _resolve_per_request_model_group_alias(
+        resolved = await resolve_per_request_model_group_alias(
             requested_model=requested_model,
             router_settings={"model_group_alias": {"group-a": "group-b"}},
             user_api_key_dict=ProxyUserAPIKeyAuth(api_key="hash", models=[]),
@@ -13520,6 +13583,82 @@ class TestProcessChunkWithCostInjection:
 
         payload: Final = json.loads(injected.decode("utf-8").split("data:", 1)[1].strip())
         assert payload["usage"]["cost"] > 0
+
+    def test_a_stream_the_rust_route_prices_keeps_the_cost_the_route_injected(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", True)
+        logging_obj: Final = LiteLLMLoggingObj(
+            model="claude-opus-5-5",
+            messages=[],
+            stream=True,
+            call_type="anthropic_messages",
+            start_time=datetime.datetime(2025, 1, 1),
+            litellm_call_id="route-priced",
+            function_id="route-priced",
+        )
+        routed: Final = (
+            b'event: message_delta\ndata: {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, '
+            b'"usage": {"output_tokens": 120, "cost": 0.0024}}\n\n'
+        )
+        unrouted: Final = ProxyBaseLLMRequestProcessing.process_chunk_with_cost_injection(
+            routed, "claude-opus-5-5", logging_obj
+        )
+
+        logging_obj.record_route_metering()
+        kept: Final = ProxyBaseLLMRequestProcessing.process_chunk_with_cost_injection(
+            routed, "claude-opus-5-5", logging_obj
+        )
+
+        assert kept is routed
+        assert unrouted != routed, "without the route the proxy prices the event itself"
+
+    @pytest.mark.parametrize(
+        ("model", "provider", "wire_usage"),
+        [
+            (
+                "claude-opus-5-5",
+                "anthropic",
+                {"input_tokens": 1840, "output_tokens": 412, "server_tool_use": {"web_search_requests": 2}},
+            ),
+            (
+                "bedrock/us.anthropic.claude-opus-5-5",
+                "bedrock",
+                {"output_tokens": 77, "input_tokens": 812, "cache_read_input_tokens": 1024},
+            ),
+        ],
+    )
+    def test_a_usage_event_the_rust_route_left_unpriced_gets_the_price_the_logged_response_bills(
+        self, local_model_cost_map: None, model: str, provider: str, wire_usage: dict[str, object]
+    ) -> None:
+        logging_obj: Final = LiteLLMLoggingObj(
+            model=model,
+            messages=[{"role": "user", "content": "test"}],
+            stream=True,
+            call_type="anthropic_messages",
+            start_time=datetime.datetime(2025, 1, 1),
+            litellm_call_id="route-left-unpriced",
+            function_id="route-left-unpriced",
+        )
+        logging_obj.update_environment_variables(litellm_params={}, optional_params={})
+        logging_obj.model_call_details["custom_llm_provider"] = provider
+        logging_obj.record_route_metering()
+        event: Final = {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": wire_usage}
+        chunk: Final = f"event: message_delta\ndata: {json.dumps(event)}\n\n".encode()
+
+        result: Final = ProxyBaseLLMRequestProcessing.process_chunk_with_cost_injection(
+            chunk, model, logging_obj, request_headers={"X-LiteLLM-Include-Cost-In-Streaming-Usage": "True"}
+        )
+
+        assert isinstance(result, bytes)
+        payload: Final = json.loads(result.decode().split("data:", 1)[1].strip())
+        logged_cost: Final = logging_obj.response_cost_calculator(
+            result=litellm.ModelResponse(
+                model=model, usage=AnthropicConfig().calculate_usage(usage_object=wire_usage, reasoning_content=None)
+            )
+        )
+        assert logged_cost is not None and logged_cost > 0
+        assert payload["usage"]["cost"] == pytest.approx(logged_cost)
 
     def test_chunk_ending_in_partial_frame_passes_through_byte_identical(self, monkeypatch):
         monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", True)
@@ -15159,6 +15298,73 @@ async def test_handle_llm_api_exception_forwards_exactly_the_upstream_headers_of
     assert {name: value for name, value in forwarded.value.headers.items() if name.startswith("llm_provider-")} == {
         f"llm_provider-{name}": value for name, value in upstream_headers.items()
     }
+
+
+async def _call_the_shared_handler(route: Literal["responses", "chat", "anthropic"], client: AsyncHTTPHandler) -> None:
+    match route:
+        case "responses":
+            await litellm.aresponses(
+                model="openai/gpt-5.6",
+                input="hi",
+                api_key="transport-only",
+                api_base="https://upstream.example/v1",
+                client=client,
+            )
+        case "chat":
+            await litellm.acompletion(
+                model="groq/llama-3.3-70b-versatile",
+                messages=[{"role": "user", "content": "hi"}],
+                api_key="transport-only",
+                max_retries=0,
+                client=client,
+            )
+        case "anthropic":
+            await litellm.acompletion(
+                model="anthropic/claude-sonnet-4-5",
+                messages=[{"role": "user", "content": "hi"}],
+                api_key="transport-only",
+                client=client,
+            )
+
+
+async def _rejected_through_the_shared_handler(
+    route: Literal["responses", "chat", "anthropic"], transport: httpx.MockTransport
+) -> Exception:
+    client: Final = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=transport)
+    with pytest.raises(litellm.RateLimitError) as mapped:
+        await _call_the_shared_handler(route, client)
+    return mapped.value
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ("responses", "chat", "anthropic"))
+@pytest.mark.parametrize("content_encoding", (None, "gzip"))
+async def test_proxy_forwards_the_same_headers_and_retry_after_when_the_error_exposes_the_provider_reply(
+    route: Literal["responses", "chat", "anthropic"], content_encoding: Literal["gzip"] | None
+) -> None:
+    wire_body, wire_headers = _upstream_rejection_wire(content_encoding)
+    upstream_headers: Final = {**wire_headers, "retry-after": "7"}
+    mapped: Final = await _rejected_through_the_shared_handler(
+        route, httpx.MockTransport(lambda _request: httpx.Response(429, content=wire_body, headers=upstream_headers))
+    )
+    with pytest.raises(ProxyException) as forwarded:
+        await ProxyBaseLLMRequestProcessing(data={}).handle_llm_api_exception(
+            e=mapped,
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=UserApiKeyCache()),
+        )
+
+    decoded_reply_headers: Final = {
+        **{name: value for name, value in upstream_headers.items() if name != "content-encoding"},
+        "content-length": str(len(_UPSTREAM_REJECTION_BODY)),
+    }
+    assert forwarded.value.code == "429"
+    assert {name: value for name, value in forwarded.value.headers.items() if name.startswith("llm_provider-")} == {
+        f"llm_provider-{name}": value for name, value in decoded_reply_headers.items()
+    }
+    assert _get_response_headers(mapped)["retry-after"] == "7"
+    assert mapped.response.content == _UPSTREAM_REJECTION_BODY
 
 
 @pytest.mark.asyncio

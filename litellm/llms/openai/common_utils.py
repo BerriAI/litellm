@@ -36,6 +36,7 @@ from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json
 from litellm.litellm_core_utils.reasoning_effort_utils import warn_dropped_reasoning_params
 from litellm.litellm_core_utils.token_counter import token_counter, usage_tokenizer_model
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.custom_httpx.accept_encoding import ACCEPT_ENCODING_HEADER
 from litellm.llms.custom_httpx.http_handler import (
     _DEFAULT_TTL_FOR_HTTPX_CLIENTS,
     AsyncHTTPHandler,
@@ -121,6 +122,7 @@ class OpenAIHTTPClient(httpx.Client):
             timeout=_OPENAI_HTTPX_DEFAULT_TIMEOUT,
             limits=_OPENAI_HTTPX_CONNECTION_LIMITS,
             follow_redirects=True,
+            headers=ACCEPT_ENCODING_HEADER,
         )
 
     def __del__(self) -> None:
@@ -135,6 +137,7 @@ class OpenAIAsyncHTTPClient(httpx.AsyncClient):
             timeout=_OPENAI_HTTPX_DEFAULT_TIMEOUT,
             limits=_OPENAI_HTTPX_CONNECTION_LIMITS,
             follow_redirects=True,
+            headers=ACCEPT_ENCODING_HEADER,
         )
 
     def __del__(self) -> None:
@@ -465,6 +468,7 @@ class BaseOpenAILLM:
             mounts=AsyncHTTPHandler.create_httpx_proxy_mounts(transport, verify=ssl_config, cert=None),
             follow_redirects=True,
             http2=http2_enabled(),
+            headers=ACCEPT_ENCODING_HEADER,
         )
 
     @classmethod
@@ -491,6 +495,7 @@ class BaseOpenAILLM:
             verify=ssl_config,
             follow_redirects=True,
             http2=http2_enabled(),
+            headers=ACCEPT_ENCODING_HEADER,
         )
 
     @classmethod

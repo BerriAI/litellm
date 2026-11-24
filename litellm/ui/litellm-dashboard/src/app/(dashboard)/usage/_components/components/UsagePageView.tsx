@@ -15,7 +15,7 @@ import { Trans, useTranslation } from "react-i18next";
 import { StackedUsageChart } from "@/components/shared/charts";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/shared/Alert";
 import { ErrorState } from "@/components/shared/ErrorState";
-import { Page, PageContent } from "@/components/shared/Page";
+import { PageContent } from "@/components/shared/Page";
 import { PageHeader, PageHeaderTitle, PageHeaderDescription, PageHeaderControls } from "@/components/shared/PageHeader";
 import { Button } from "@/components/ui/button";
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
@@ -459,14 +459,14 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
   );
 
   return (
-    <Page ref={pageRef} className="relative">
-      <PageHeader>
+    <>
+      <PageHeader ref={pageRef}>
         <PageHeaderTitle>
           <BarChart3 />
           {t("usage.viewSelect.title")}
         </PageHeaderTitle>
         <PageHeaderDescription>{t("usage.viewSelect.description")}</PageHeaderDescription>
-        <PageHeaderControls className="flex-wrap justify-between">
+        <PageHeaderControls>
           <UsageViewSelect
             title={null}
             value={usageView}
@@ -475,35 +475,32 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
             canViewTagUsage={canViewTagUsage}
             isOrgAdmin={isOrgAdmin}
           />
-          <div className="flex flex-wrap items-center gap-2">
-            {isAdmin && usageView === "global" && (
-              <div className="flex items-center gap-2">
-                <div className="w-64">
-                  <UserDropdown value={urlParams.user} onChange={(user) => void setUrlParams({ user })} />
-                </div>
-                {urlParams.user && <UserRecordLink userId={urlParams.user} />}
-              </div>
-            )}
-            {CLIENT_USAGE_VIEWS.includes(usageView) && (
-              <div className="w-44">
-                <ClientUsageSelect value={selectedClient} onChange={openClientPanel} />
-              </div>
-            )}
+          {isAdmin && usageView === "global" && (
             <div className="flex items-center gap-2">
-              <AdvancedDatePicker
-                value={dateValue}
-                onValueChange={handleDateChange}
-                presetShortLabel={presetShortLabel}
-              />
-              <Button
-                variant="outline"
-                onClick={() => void copyToClipboard(window.location.href, t("usage.pageView.linkCopied"))}
-              >
-                <Link2 />
-                {t("usage.pageView.copyShareLink")}
-              </Button>
+              <div className="w-64">
+                <UserDropdown value={urlParams.user} onChange={(user) => void setUrlParams({ user })} />
+              </div>
+              {urlParams.user && <UserRecordLink userId={urlParams.user} />}
             </div>
-          </div>
+          )}
+          {CLIENT_USAGE_VIEWS.includes(usageView) && (
+            <div className="w-44">
+              <ClientUsageSelect value={selectedClient} onChange={openClientPanel} />
+            </div>
+          )}
+          <AdvancedDatePicker
+            value={dateValue}
+            onValueChange={handleDateChange}
+            presetShortLabel={presetShortLabel}
+            className="max-w-full flex-wrap"
+          />
+          <Button
+            variant="outline"
+            onClick={() => void copyToClipboard(window.location.href, t("usage.pageView.linkCopied"))}
+          >
+            <Link2 />
+            {t("usage.pageView.copyShareLink")}
+          </Button>
         </PageHeaderControls>
       </PageHeader>
       <PageContent>
@@ -885,7 +882,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
           canIncludeMetadata={isAdmin}
         />
       </PageContent>
-    </Page>
+    </>
   );
 };
 
