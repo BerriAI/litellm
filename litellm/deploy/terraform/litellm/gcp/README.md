@@ -212,6 +212,16 @@ literal header string, e.g. `Authorization=Bearer <token>`.
 only after auditing what lands in the backend, since prompts and
 completions are typically sensitive.
 
+```hcl
+otel_capture_message_content = "no_content"
+turn_off_message_logging     = true
+```
+
+Use these settings together to keep prompts and responses out of LiteLLM
+message logging and OpenTelemetry message content. The logging setting
+preserves other proxy configuration. It does not remove customer metadata
+from all telemetry.
+
 Behavior matches the AWS stack 1:1; the only naming differences are
 `otel_headers_secret` (a Secret Manager resource ID) vs AWS's
 `otel_headers_secret_arn` (a Secrets Manager ARN).

@@ -180,7 +180,10 @@ locals {
   # downloads it to /tmp/litellm-config.yaml via boto3 before exec'ing
   # uvicorn. The S3 object's etag is embedded in the task definition so a
   # config edit forces a new task-def revision and a rolling redeploy.
-  proxy_config_enabled = length(keys(var.proxy_config)) > 0
+  proxy_config = merge(var.proxy_config, var.turn_off_message_logging ? {
+    litellm_settings = merge(try(var.proxy_config.litellm_settings, null), { turn_off_message_logging = true })
+  } : {})
+  proxy_config_enabled = length(keys(local.proxy_config)) > 0
   proxy_config_path    = "/tmp/litellm-config.yaml"
 
   proxy_config_env = local.proxy_config_enabled ? [

@@ -728,6 +728,12 @@ variable "otel_environment_name" {
   default     = ""
 }
 
+variable "turn_off_message_logging" {
+  description = "Set litellm_settings.turn_off_message_logging in the proxy configuration to redact prompts and responses from LiteLLM message logging."
+  type        = bool
+  default     = false
+}
+
 variable "otel_capture_message_content" {
   description = <<-EOT
     Value for OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT. Default

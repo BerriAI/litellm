@@ -205,6 +205,16 @@ otel_headers_secret_arn = "arn:aws:secretsmanager:us-west-2:111122223333:secret:
 only after auditing what lands in the backend, since prompts and
 completions are typically sensitive.
 
+```hcl
+otel_capture_message_content = "no_content"
+turn_off_message_logging     = true
+```
+
+Use these settings together to keep prompts and responses out of LiteLLM
+message logging and OpenTelemetry message content. The logging setting
+preserves other proxy configuration. It does not remove customer metadata
+from all telemetry.
+
 Vendor presets (Arize, Phoenix, Langfuse OTel, Weave, Langtrace, Levo,
 AgentOps) live under `proxy_config.litellm_settings.callbacks` and are
 orthogonal to the OTLP variables above; their credentials still go in
