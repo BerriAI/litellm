@@ -500,7 +500,7 @@ def openai_agents_sessions_call(url_route: str, custom_llm_provider: object) -> 
     if custom_llm_provider != "openai" or not is_openai_compatible_url(url_route):
         return None
     parsed_url: Final = urlparse(url_route)
-    route: Final = _sessions_route(parsed_url.path)
+    route: Final = _sessions_route(httpx.URL(url_route).path)
     return (
         None if route is None else AgentsSessionsCall(origin=f"{parsed_url.scheme}://{parsed_url.netloc}", route=route)
     )
@@ -667,6 +667,15 @@ def _turn_cost(agent: AgentSpec, billed_turn: _BilledTurn, web_searches: int) ->
         return 0.0
 
 
+def _priced_at_shutdown(turn_start: AgentsTurnStart, turns: tuple[_BilledTurn, ...]) -> tuple[AgentSpec | None, float]:
+    verbose_proxy_logger.warning(
+        "OpenAI Agents passthrough: shutdown cut short pricing session %s, logging its turns without web search cost",
+        turn_start.session_id,
+    )
+    agent: Final = turn_start.agent
+    return agent, 0.0 if agent is None else sum(_turn_cost(agent, billed_turn, 0) for billed_turn in turns)
+
+
 class OpenAIAgentsTurnBiller:
     def __init__(
         self,
@@ -706,14 +715,12 @@ class OpenAIAgentsTurnBiller:
 
     async def _bill(self, turn_start: AgentsTurnStart, row: DeferredAgentsRow) -> None:
         await self._release_slot(turn_start, row)
-        costed: Final = await _unless_set(self._costed_kwargs(turn_start, row), self._abandoning)
-        await self._log(
-            row, costed if costed is not None else await self._row_kwargs(turn_start, row, _UNREAD_AT_SHUTDOWN)
+        outcome: Final = await _unless_set(
+            self._turn_outcome(turn_start, row.logging_obj.litellm_call_id), self._abandoning
         )
-
-    async def _costed_kwargs(self, turn_start: AgentsTurnStart, row: DeferredAgentsRow) -> Mapping[str, object]:
-        outcome: Final = await self._turn_outcome(turn_start, row.logging_obj.litellm_call_id)
-        return await self._row_kwargs(turn_start, row, outcome)
+        await self._log(
+            row, await self._row_kwargs(turn_start, row, _UNREAD_AT_SHUTDOWN if outcome is None else outcome)
+        )
 
     async def _release_slot(self, turn_start: AgentsTurnStart, row: DeferredAgentsRow) -> None:
         try:
@@ -1019,19 +1026,27 @@ class OpenAIAgentsTurnBiller:
             ]
         )
 
-    async def _billed_kwargs(
-        self, turn_start: AgentsTurnStart, row: DeferredAgentsRow, turns: tuple[_BilledTurn, ...]
-    ) -> Mapping[str, object]:
+    async def _priced(
+        self, turn_start: AgentsTurnStart, turns: tuple[_BilledTurn, ...]
+    ) -> tuple[AgentSpec | None, float]:
         agent: Final = await self._agent(turn_start)
         if agent is None:
             verbose_proxy_logger.warning(
                 "OpenAI Agents passthrough: no agent model for session %s, logging its turns without cost",
                 turn_start.session_id,
             )
+            return None, 0.0
+        return agent, await self._response_cost(turn_start, agent, turns)
+
+    async def _billed_kwargs(
+        self, turn_start: AgentsTurnStart, row: DeferredAgentsRow, turns: tuple[_BilledTurn, ...]
+    ) -> Mapping[str, object]:
+        priced: Final = await _unless_set(self._priced(turn_start, turns), self._abandoning)
+        agent, response_cost = priced if priced is not None else _priced_at_shutdown(turn_start, turns)
         billed: Final[Mapping[str, object]] = {
             **({} if agent is None else {"model": agent.model}),
             "custom_llm_provider": "openai",
-            "response_cost": 0.0 if agent is None else await self._response_cost(turn_start, agent, turns),
+            "response_cost": response_cost,
             "combined_usage_object": ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(
                 _combined_usage(tuple(billed_turn.usage for billed_turn in turns))
             ),

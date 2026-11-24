@@ -358,6 +358,37 @@ async def test_an_input_message_bills_its_turn_once_usage_arrives(local_model_co
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "url_route",
+    [
+        pytest.param(f"{SESSIONS_URL}/{SESSION_ID}/%65vents", id="encoded_events"),
+        pytest.param(f"https://api.openai.com/v1/agent%73/sessions/{SESSION_ID}/events", id="encoded_agents"),
+        pytest.param(f"{SESSIONS_URL}/{SESSION_ID}/x/../events", id="dot_segment"),
+    ],
+)
+async def test_an_events_call_spelled_another_way_upstream_still_bills_its_turn(
+    local_model_cost_map: None, url_route: str
+):
+    api: Final = _AgentsApi(
+        turn_pages=((_turn("turn_1", CALL_STARTED_AT + 1, "completed", TURN_USAGE),),), session=_session()
+    )
+    rows: Final = _SpendRows()
+
+    await _relay_call(
+        _biller(api, _Clock()),
+        rows,
+        url_route,
+        {"events": [INPUT_MESSAGE]},
+        None,
+        "6f8b0d2f-4b6d-4f8b-0d2f-4b6d8f0b2d46",
+    )
+    row: Final = await rows.only_row()
+
+    assert row["total_tokens"] == TURN_USAGE["total_tokens"]
+    assert row["spend"] == pytest.approx(_expected_cost(TURN_USAGE))
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("service_tier", ["auto", "priority", "flex"])
 async def test_a_session_create_with_input_bills_its_first_turn_at_the_agent_service_tier(
     local_model_cost_map: None, service_tier: str
@@ -544,7 +575,13 @@ async def test_a_turn_created_before_the_call_is_never_billed_to_it(local_model_
             ((_turn("turn_1", CALL_STARTED_AT + 1, "completed", None),),), 200, False, id="usage_never_arrives"
         ),
         pytest.param(
-            ((_turn("turn_old", CALL_STARTED_AT - OPENAI_AGENTS_TURN_CLOCK_SKEW_SECONDS - 1, "completed", TURN_USAGE),),),
+            (
+                (
+                    _turn(
+                        "turn_old", CALL_STARTED_AT - OPENAI_AGENTS_TURN_CLOCK_SKEW_SECONDS - 1, "completed", TURN_USAGE
+                    ),
+                ),
+            ),
             200,
             False,
             id="no_turn_to_claim",
@@ -865,9 +902,7 @@ async def test_a_billing_task_that_is_cancelled_reports_the_lost_row(
 async def test_a_poll_that_breaks_unexpectedly_still_logs_the_call_at_zero(
     local_model_cost_map: None, sleep_fails: bool, replies: Mapping[str, Sequence[_Reply]]
 ):
-    api: Final = _AgentsApi(
-        turn_pages=((_turn("turn_1", CALL_STARTED_AT, "completed", TURN_USAGE),),), replies=replies
-    )
+    api: Final = _AgentsApi(turn_pages=((_turn("turn_1", CALL_STARTED_AT, "completed", TURN_USAGE),),), replies=replies)
     clock: Final = _Clock()
     rows: Final = _SpendRows()
 
@@ -986,6 +1021,58 @@ async def test_a_shutdown_drain_cut_short_still_logs_the_waiting_row_at_zero(loc
 
     assert row["total_tokens"] == 0
     assert not row["spend"]
+
+
+def _get_that_never_answers(
+    api: _AgentsApi, blocked_url: str
+) -> Callable[[str, str, Mapping[str, str]], Awaitable[httpx.Response]]:
+    async def get(base_url: str, path: str, scope_headers: Mapping[str, str]) -> httpx.Response:
+        if f"{base_url}/{path}" == blocked_url:
+            return await _unanswered_get(base_url, path, scope_headers)
+        return await api.get(base_url, path, scope_headers)
+
+    return get
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("url_route", "request_body", "response_body", "blocked_url", "billed_spend"),
+    [
+        pytest.param(
+            EVENTS_URL, {"events": [INPUT_MESSAGE]}, None, f"{SESSIONS_URL}/{SESSION_ID}", 0.0, id="agent_unknown"
+        ),
+        pytest.param(
+            SESSIONS_URL,
+            {"agent": {"model": AGENT_MODEL}, "input": USER_TEXT},
+            _session(),
+            ROOT_ITEMS_URL,
+            _expected_cost(TURN_USAGE),
+            id="agent_known",
+        ),
+    ],
+)
+async def test_a_shutdown_while_pricing_settled_turns_still_logs_their_tokens(
+    local_model_cost_map: None,
+    url_route: str,
+    request_body: dict[str, object],
+    response_body: dict[str, object] | None,
+    blocked_url: str,
+    billed_spend: float,
+):
+    api: Final = _AgentsApi(
+        turn_pages=((_turn("turn_1", CALL_STARTED_AT + 1, "completed", TURN_USAGE),),), session=_session()
+    )
+    rows: Final = _SpendRows()
+    biller: Final = OpenAIAgentsTurnBiller(
+        get=_get_that_never_answers(api, blocked_url), sleep=_blocked_sleep, clock=_Clock()
+    )
+
+    await _relay_call(biller, rows, url_route, request_body, response_body, "5e7a9c1e-3a5c-4e7a-9c1e-3a5c7e9a1c35")
+    await biller.drain(timeout=0.2)
+    row: Final = await rows.only_row()
+
+    assert row["total_tokens"] == TURN_USAGE["total_tokens"]
+    assert (row["spend"] or 0.0) == pytest.approx(billed_spend)
 
 
 @pytest.mark.asyncio
@@ -1151,7 +1238,9 @@ async def test_a_subagent_turn_from_before_the_call_is_never_billed_to_it(local_
 
 
 @pytest.mark.asyncio
-async def test_a_subagent_turn_a_later_root_turn_started_is_never_billed_to_the_earlier_call(local_model_cost_map: None):
+async def test_a_subagent_turn_a_later_root_turn_started_is_never_billed_to_the_earlier_call(
+    local_model_cost_map: None,
+):
     api: Final = _AgentsApi(
         turn_pages=(
             (
@@ -1277,7 +1366,9 @@ async def test_a_settled_turns_agent_read_stops_retrying_when_refused_or_out_of_
 @pytest.mark.asyncio
 async def test_a_turn_stamped_before_the_call_by_a_skewed_clock_is_still_billed(local_model_cost_map: None):
     api: Final = _AgentsApi(
-        turn_pages=((_turn("turn_1", CALL_STARTED_AT - OPENAI_AGENTS_TURN_CLOCK_SKEW_SECONDS, "completed", TURN_USAGE),),),
+        turn_pages=(
+            (_turn("turn_1", CALL_STARTED_AT - OPENAI_AGENTS_TURN_CLOCK_SKEW_SECONDS, "completed", TURN_USAGE),),
+        ),
         session=_session(),
     )
     rows: Final = _SpendRows()
