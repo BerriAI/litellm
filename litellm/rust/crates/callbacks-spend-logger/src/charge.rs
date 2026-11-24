@@ -818,7 +818,9 @@ impl<S: LedgerStore + 'static> SpendLogCallback<S> {
     }
 
     /// `async_post_call_failure_hook`: release the reservation unless a completed cost settles
-    /// it, then one row for the final attempt and one per billed retry attempt.
+    /// it, then one row for the final attempt and one per billed retry attempt. The failure
+    /// logging already sent the request's post-call batch, so a charge declared here sends it
+    /// again instead of waiting out its deadline with the client already holding the error.
     pub(crate) async fn on_failure(
         &self,
         failure: Failure,
@@ -894,6 +896,9 @@ impl<S: LedgerStore + 'static> SpendLogCallback<S> {
                 {
                     tracing::error!(%error, "Failed to write the spend log for a failure with a completed cost");
                 }
+            }
+            if let Some(redis) = redis {
+                redis.flush_post().await;
             }
             return;
         }

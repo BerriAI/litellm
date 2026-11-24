@@ -1296,9 +1296,12 @@ async fn a_success_charge_waits_on_the_requests_post_call_batch_which_tracks_it(
 }
 
 #[rstest]
+#[case::a_billed_failure_row(json!({"failure_row_response_cost": 0.25}))]
+#[case::a_completed_cost(json!({"cost_finalized": true, "failure_row_response_cost": 0.25}))]
 #[tokio::test]
-async fn a_failure_row_charge_is_sent_on_the_requests_post_call_batch_by_the_hook_itself(
+async fn a_failure_charge_is_sent_on_the_requests_post_call_batch_by_the_hook_itself(
     golden: (Json, Json),
+    #[case] cost: Json,
 ) {
     let (config, row) = golden;
     let server = RedisServer::start().await.unwrap();
@@ -1308,12 +1311,7 @@ async fn a_failure_row_charge_is_sent_on_the_requests_post_call_batch_by_the_hoo
 
     run_on(
         &harness,
-        failure_input(
-            charged,
-            json!({"failure_row_response_cost": 0.25}),
-            Json::Null,
-            None,
-        ),
+        failure_input(charged, cost, Json::Null, None),
         false,
         Some(request.clone()),
     )
