@@ -869,7 +869,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
     def log_success_event(
         self,
-        kwargs,
+        kwargs: dict[str, object],
         response_obj: object,
         start_time: datetime | float | None,
         end_time: datetime | float | None,
@@ -878,7 +878,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
     def log_failure_event(
         self,
-        kwargs,
+        kwargs: dict[str, object],
         response_obj: object,
         start_time: datetime | float | None,
         end_time: datetime | float | None,
@@ -887,7 +887,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
     async def async_log_success_event(
         self,
-        kwargs,
+        kwargs: dict[str, object],
         response_obj: object,
         start_time: datetime | float | None,
         end_time: datetime | float | None,
@@ -896,7 +896,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
     async def async_log_failure_event(
         self,
-        kwargs,
+        kwargs: dict[str, object],
         response_obj: object,
         start_time: datetime | float | None,
         end_time: datetime | float | None,
@@ -933,7 +933,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         parent_otel_span: Span | None = None,
         start_time: datetime | float | None = None,
         end_time: datetime | float | None = None,
-        event_metadata: dict | None = None,
+        event_metadata: Mapping[str, object] | None = None,
     ):
         from opentelemetry.trace import Status, StatusCode
 
@@ -987,7 +987,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         parent_otel_span: Span | None = None,
         start_time: datetime | float | None = None,
         end_time: float | datetime | None = None,
-        event_metadata: dict | None = None,
+        event_metadata: Mapping[str, object] | None = None,
     ):
         from opentelemetry.trace import Status, StatusCode
 
@@ -1044,7 +1044,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
     async def async_post_call_failure_hook(
         self,
-        request_data: dict,
+        request_data: dict[str, object],
         original_exception: Exception,
         user_api_key_dict: UserAPIKeyAuth,
         traceback_str: str | None = None,
@@ -1170,7 +1170,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
     async def async_post_call_success_hook(
         self,
-        data: dict,
+        data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth,
         response: LLMResponseTypes,
     ):
@@ -1195,7 +1195,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
     #########################################################
     # Team/Key Based Logging Control Flow
     #########################################################
-    def get_tracer_to_use_for_request(self, kwargs: dict) -> Tracer:
+    def get_tracer_to_use_for_request(self, kwargs: dict[str, object]) -> Tracer:
         """
         Get the tracer to use for this request
 
@@ -1241,7 +1241,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
         return tracer_to_use
 
-    def _get_dynamic_otel_headers_from_kwargs(self, kwargs) -> dict | None:
+    def _get_dynamic_otel_headers_from_kwargs(self, kwargs) -> dict[str, str] | None:
         """Extract dynamic headers from kwargs if available."""
         standard_callback_dynamic_params: Final[StandardCallbackDynamicParams | None] = kwargs.get(
             "standard_callback_dynamic_params"
@@ -2972,7 +2972,9 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         primitive_value: Final = self._cast_as_primitive_value_type(value)
         span.set_attribute(key, primitive_value)
 
-    def _transform_messages_to_otel_semantic_conventions(self, messages: Iterable[object] | str) -> list[dict]:
+    def _transform_messages_to_otel_semantic_conventions(
+        self, messages: Iterable[object] | str
+    ) -> list[dict[str, object]]:
         """
         Transforms LiteLLM/OpenAI style messages into OTEL GenAI 1.38 compliant format.
         OTEL expects a 'parts' array instead of a single 'content' string.
@@ -3016,7 +3018,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
         return transformed
 
-    def _transform_choices_to_otel_semantic_conventions(self, choices: Iterable[object]) -> list[dict]:
+    def _transform_choices_to_otel_semantic_conventions(self, choices: Iterable[object]) -> list[dict[str, object]]:
         """
         Transforms choices into OTEL GenAI 1.38 compliant format for output.messages.
         """
@@ -3058,7 +3060,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             return obj.model_dump()
         return None
 
-    def _transform_responses_api_output_to_otel(self, output: Iterable[object]) -> list[dict]:
+    def _transform_responses_api_output_to_otel(self, output: Iterable[object]) -> list[dict[str, object]]:
         """
         Transform Responses API output items into OTEL GenAI 1.38 format.
 
@@ -3095,7 +3097,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                     transformed.append({"role": role, "parts": parts})
             elif item.get("type") == "function_call":
                 # Surface tool calls from Responses API output
-                part: dict = {
+                part: dict[str, object] = {
                     "type": "tool_call",
                     "name": item.get("name", ""),
                     "arguments": item.get("arguments", ""),
@@ -3187,7 +3189,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
         return LITELLM_REQUEST_SPAN_NAME
 
-    def get_traceparent_from_header(self, headers):
+    def get_traceparent_from_header(self, headers: Mapping[str, str] | None):
         if headers is None:
             return None
         _traceparent: Final = headers.get("traceparent", None)
@@ -3729,7 +3731,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
     def create_litellm_proxy_request_started_span(
         self,
         start_time: datetime,
-        headers: dict,
+        headers: Mapping[str, str],
     ) -> Span | None:
         """
         Create a span for the received proxy server request.
