@@ -189,13 +189,14 @@ async def test_schedule_background_health_check_db_save_creates_task(monkeypatch
     _schedule_background_health_check_db_save(
         prisma_client=prisma_client,
         shared_health_manager=shared_manager,
-        model_list=[{"model_name": "gpt-4"}],
-        healthy_endpoints=[{"model_id": "h1"}],
+        model_list=[{"model_name": "gpt-4"}, {"model_name": "gpt-4", "model_info": {"id": "recent"}}],
+        healthy_endpoints=[{"model_id": "h1"}, {"model_id": "recent", "health_check_source": "recent_traffic"}],
         unhealthy_endpoints=[{"model_id": "u1"}],
     )
 
     await asyncio.sleep(0)
 
+    assert captured["model_list"] == [{"model_name": "gpt-4"}]
     assert normalize(
         {
             "prisma_present": captured.get("prisma_client") is prisma_client,
@@ -851,3 +852,81 @@ async def test_run_background_health_check_keeps_checking_when_building_wildcard
         await _run_background_health_check()
 
     assert proxy_server.health_check_results["healthy_endpoints"] == [{"model": "m", "model_id": "explicit"}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("window, expected", [(0, ["active", "idle"]), (60, ["idle"])])
+async def test_recent_traffic_skips_only_the_serving_deployments_background_probe(
+    window: int, expected: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import httpx
+    import respx
+
+    import litellm
+    from contextlib import AsyncExitStack
+    from litellm.integrations.custom_logger import CustomLogger
+
+    logged: Final = asyncio.Event()
+
+    class SuccessEvent(CustomLogger):
+        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+            logged.set()
+
+    deployments: Final = [
+        {
+            "model_name": name,
+            "model_info": {"id": name, "mode": "chat"},
+            "litellm_params": {
+                "model": "openai/gpt-4o-mini",
+                "api_base": f"https://{name}.example/v1",
+                "api_key": "local-test",
+            },
+        }
+        for name in ("active", "idle")
+    ]
+    response: Final = {
+        "id": "chatcmpl-traffic",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "gpt-4o-mini",
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    }
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(proxy_server, "llm_model_list", deployments)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(proxy_server, "health_check_interval", 60)
+    monkeypatch.setattr(proxy_server, "use_shared_health_check", False)
+    monkeypatch.setattr(proxy_server, "redis_usage_cache", None)
+    monkeypatch.setattr(proxy_server, "health_check_results", {})
+    monkeypatch.setattr(proxy_server, "background_health_check_loop_active", False)
+    monkeypatch.setattr(proxy_server, "background_health_check_cycle_seq", 0)
+    router: Final = litellm.Router(model_list=deployments, num_retries=0)
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    try:
+        with respx.mock as upstream:
+            calls: Final = upstream.post(path="/v1/chat/completions").mock(
+                return_value=httpx.Response(200, json=response)
+            )
+            async with AsyncExitStack() as lifespan:
+                observer: Final = proxy_server.register_health_traffic(
+                    {"health_check_recent_success_window_seconds": window}, lifespan
+                )
+                capture: Final = SuccessEvent()
+                litellm.logging_callback_manager.add_litellm_callback(capture)
+                lifespan.callback(litellm.logging_callback_manager.remove_callback_from_all_lists, capture)
+                reply: Final = await router.acompletion(model="active", messages=[{"role": "user", "content": "hello"}])
+                assert reply.choices[0].message.content == "ok"
+                await asyncio.wait_for(logged.wait(), timeout=10)
+                assert [call.request.url.host for call in calls.calls] == ["active.example"]
+                monkeypatch.setattr(proxy_server, "asyncio", SimpleNamespace(sleep=_stop_after_one_cycle))
+                with pytest.raises(asyncio.CancelledError):
+                    await _run_background_health_check(observer)
+                assert sorted(call.request.url.host.split(".")[0] for call in calls.calls[1:]) == expected
+                assert proxy_server.health_check_results["healthy_count"] == 2
+                endpoints: Final = proxy_server.health_check_results["healthy_endpoints"]
+                by_id: Final = {ep["model_id"]: ep for ep in endpoints}
+                assert (by_id["active"].get("health_check_source") == "recent_traffic") is bool(window)
+                assert "health_check_source" not in by_id["idle"]
+    finally:
+        router.retire()

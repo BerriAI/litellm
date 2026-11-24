@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Final, Literal, TypeAlias, TypedDict
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, ConfigDict, TypeAdapter
-from typing_extensions import ReadOnly
+from typing_extensions import ReadOnly, Unpack
 
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
@@ -81,6 +81,7 @@ from litellm.proxy.db.health_check_latest import (
 from litellm.proxy.db.proxy_worker_heartbeat import count_live_proxy_workers
 from litellm.proxy.health_check import (  # noqa: F401  # legacy module exports
     ADMIN_ONLY_HEALTH_DISPLAY_PARAMS,
+    HealthCheckOptions,
     _clean_endpoint_data,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _update_litellm_params_for_health_check,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     clean_endpoint_data,
@@ -1519,7 +1520,7 @@ async def _perform_health_check_and_save(
     user_id: str | None,
     model_id: str | None = None,
     max_concurrency: int | None = None,
-    **perform_health_check_extra,
+    **perform_health_check_extra: Unpack[HealthCheckOptions],
 ):
     """Helper function to perform health check and save results to database"""
     healthy_endpoints, unhealthy_endpoints, _ = await perform_health_check(
@@ -1615,6 +1616,10 @@ async def health_endpoint(
     To skip deployments that set ``model_info.disable_background_health_check: true``
     on ``GET /health`` as well as in the background loop, set
     ``general_settings.health_check_skip_disabled_background_models: true``.
+
+    With ``health_check_recent_success_window_seconds`` enabled, a cached healthy endpoint
+    may carry ``health_check_source: recent_traffic`` and ``last_success_at`` (Unix seconds).
+    Such entries describe successful upstream traffic. Probe history contains actual checks.
     """
     import time
 
@@ -1672,7 +1677,9 @@ async def health_endpoint(
                     user_id=user_api_key_dict.user_id,
                     model_id=None,  # CLI model doesn't have model_id
                     max_concurrency=health_check_concurrency,
-                    **_hc_filter,
+                    health_check_skip_disabled_background_models=_hc_filter[
+                        "health_check_skip_disabled_background_models"
+                    ],
                 )
                 return _post_process(cli_result)
             raise HTTPException(
@@ -1780,7 +1787,7 @@ async def health_endpoint(
                 max_concurrency=health_check_concurrency,
                 router=llm_router,
                 team_id=user_api_key_dict.team_id,
-                **_hc_filter,
+                health_check_skip_disabled_background_models=_hc_filter["health_check_skip_disabled_background_models"],
             )
             return _post_process(router_result)
     except Exception as e:
@@ -1870,7 +1877,7 @@ async def shared_health_check_status_endpoint(
 
     Returns information about Redis connectivity, lock status, and cache status.
     """
-    from litellm.proxy.proxy_server import redis_usage_cache, use_shared_health_check
+    from litellm.proxy.proxy_server import general_settings_view, redis_usage_cache, use_shared_health_check
 
     if not use_shared_health_check:
         return {
@@ -1890,8 +1897,10 @@ async def shared_health_check_status_endpoint(
             SharedHealthCheckManager,
         )
 
+        window: Final = general_settings_view().get("health_check_recent_success_window_seconds")
         shared_health_manager: Final = SharedHealthCheckManager(
             redis_cache=redis_usage_cache,
+            traffic_aware=type(window) is int and window > 0,
         )
 
         health_status: Final = await shared_health_manager.get_health_check_status()

@@ -752,6 +752,7 @@ from litellm.proxy.guardrails.init_guardrails import (
     initialize_guardrails,
 )
 from litellm.proxy.health_check import (
+    HealthCheckResult,
     deployment_ids,
     filter_deployments_to_model_groups,
     health_check_filter_kwargs_from_general_settings,
@@ -760,6 +761,7 @@ from litellm.proxy.health_check import (
     public_wildcard_children,
     split_by_model_ids,
 )
+from litellm.proxy.health_check_utils.recent_traffic import RecentTrafficHealth, is_traffic_observation
 from litellm.proxy.health_endpoints._health_endpoints import router as health_router
 from litellm.proxy.health_endpoints.deployment_warning_endpoints import router as deployment_warning_router
 from litellm.proxy.hooks.model_max_budget_limiter import (  # noqa: F401, RUF100  # legacy module exports
@@ -1740,6 +1742,18 @@ def register_prompt_cache_alerts(
     resources.callback(litellm.logging_callback_manager.remove_callback_from_all_lists, logger)
 
 
+def register_health_traffic(settings: Mapping[str, object], resources: AsyncExitStack) -> RecentTrafficHealth | None:
+    window: Final = settings.get("health_check_recent_success_window_seconds", 0)
+    if type(window) is not int or window < 0:
+        raise ValueError("health_check_recent_success_window_seconds must be a nonnegative integer")
+    if window == 0:
+        return None
+    observer: Final = RecentTrafficHealth(window, lambda: redis_usage_cache)
+    litellm.logging_callback_manager.add_litellm_callback(observer)
+    resources.callback(litellm.logging_callback_manager.remove_callback_from_all_lists, observer)
+    return observer
+
+
 @asynccontextmanager
 async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGenerator[ProxyLifespanState, None]:
     global \
@@ -2096,7 +2110,8 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
 
     # Start background health checks AFTER models are loaded and index is built
     if use_background_health_checks:
-        asyncio.create_task(_run_background_health_check())  # start the background health check coroutine.
+        traffic_observer: Final = register_health_traffic(general_settings_view(), resources)
+        asyncio.create_task(_run_background_health_check(traffic_observer))
 
     # Start adaptive-router queue flusher unconditionally — adaptive routers
     # may be added later via `/config/reload`, and the flusher is a no-op when
@@ -4516,32 +4531,41 @@ _UNEXPECTED_KWARG: Final = re.compile(r"unexpected keyword argument '(?P<name>[^
 
 
 async def _run_direct_health_check_with_instrumentation(
-    model_list: list,
+    model_list: Sequence[Mapping[str, object]],
     details: bool | None,
     max_concurrency: int | None,
-    instrumentation_context: dict,
-):
+    instrumentation_context: Mapping[str, object],
+    recent_traffic: RecentTrafficHealth | None = None,
+) -> HealthCheckResult:
     """Call ``perform_health_check``, dropping exactly the optional kwarg each TypeError names.
 
     A callee that predates an argument rejects it by name, so only that one is dropped. A
     hand-written ladder of combinations would drop working options alongside it, and would
     need a new rung every time an argument is added.
     """
-    optional: Mapping[str, object] = MappingProxyType(  # rebind-ok: loses the kwarg the callee rejected
+    recent_successes: Final = (
+        (await recent_traffic.snapshot(model_list)).successes if recent_traffic is not None else None
+    )
+    optional: Final = MappingProxyType(
         {
             "router": llm_router,
             "instrumentation_context": instrumentation_context,
+            **({"recent_successes": recent_successes} if recent_successes is not None else {}),
             **health_check_filter_kwargs_from_general_settings(general_settings),
         }
     )
+    return await _health_check_with_supported_options(
+        partial(perform_health_check, model_list=model_list, details=details, max_concurrency=max_concurrency), optional
+    )
+
+
+async def _health_check_with_supported_options(
+    probe: Callable[..., Awaitable[HealthCheckResult]], options: Mapping[str, object]
+) -> HealthCheckResult:
+    optional: Mapping[str, object] = options  # rebind-ok: remove only the unsupported keyword named by the callee
     for _ in range(len(optional) + 1):
         try:
-            return await perform_health_check(
-                model_list=model_list,
-                details=details,
-                max_concurrency=max_concurrency,
-                **optional,
-            )
+            return await probe(**optional)
         except TypeError as e:
             rejected = _UNEXPECTED_KWARG.search(str(e))
             if rejected is None or rejected["name"] not in optional:
@@ -4588,9 +4612,9 @@ async def _window_gated_health_check_db_save(
 def _schedule_background_health_check_db_save(
     prisma_client: PrismaClient | None,
     shared_health_manager: "SharedHealthCheckManager | None",
-    model_list: list,
-    healthy_endpoints: list,
-    unhealthy_endpoints: list,
+    model_list: Sequence[Mapping[str, object]],
+    healthy_endpoints: Sequence[Mapping[str, object]],
+    unhealthy_endpoints: Sequence[Mapping[str, object]],
     pod_lock_manager: PodLockManager | None = None,
     lock_ttl: int | None = None,
 ) -> None:
@@ -4605,19 +4629,40 @@ def _schedule_background_health_check_db_save(
 
     checked_by: Final = shared_health_manager.pod_id if shared_health_manager is not None else "background_health_check"
     start_time: Final = time_module.time()
+    observed_ids: Final = frozenset(
+        ident
+        for endpoint in healthy_endpoints
+        if is_traffic_observation(endpoint) and isinstance(ident := endpoint.get("model_id"), str)
+    )
+    probed_models: Final = (
+        [
+            deployment
+            for deployment in model_list
+            if (as_str_mapping(deployment.get("model_info")) or {}).get("id") not in observed_ids
+        ]
+        if observed_ids
+        else model_list
+    )
+    probed_healthy: Final = (
+        [endpoint for endpoint in healthy_endpoints if not is_traffic_observation(endpoint)]
+        if observed_ids
+        else healthy_endpoints
+    )
+    if observed_ids and not probed_healthy and not unhealthy_endpoints:
+        return
     save: Final = partial(
         save_background_health_checks_to_db,
         prisma_client,
-        model_list,
-        healthy_endpoints,
-        unhealthy_endpoints,
+        list(probed_models),
+        list(probed_healthy),
+        list(unhealthy_endpoints),
         start_time,
         checked_by=checked_by,
     )
     asyncio.create_task(_window_gated_health_check_db_save(save, pod_lock_manager, lock_ttl))
 
 
-def _get_endpoint_exception_status(endpoint: dict, exceptions: dict) -> int:
+def _get_endpoint_exception_status(endpoint: dict, exceptions: Mapping[str, object]) -> int:
     """Return the HTTP status code for an unhealthy endpoint.
 
     Prefers the live exception object in `exceptions` (direct health check path).
@@ -4634,7 +4679,7 @@ def _get_endpoint_exception_status(endpoint: dict, exceptions: dict) -> int:
 def _write_health_state_to_router_cache(
     healthy_endpoints: list,
     unhealthy_endpoints: list,
-    exceptions_by_model_id: dict | None = None,
+    exceptions_by_model_id: Mapping[str, object] | None = None,
 ) -> None:
     """
     Write deployment health states to the router's health state cache
@@ -4649,7 +4694,7 @@ def _write_health_state_to_router_cache(
     """
     from litellm.proxy.health_check import build_deployment_health_states
 
-    _exceptions: Final[dict] = exceptions_by_model_id or {}
+    _exceptions: Final[Mapping[str, object]] = exceptions_by_model_id or {}
 
     try:
         if llm_router is None:
@@ -4752,7 +4797,7 @@ def _public_wildcard_children(
     return children, deployment_ids(children)
 
 
-async def _run_background_health_check():
+async def _run_background_health_check(recent_traffic: RecentTrafficHealth | None = None):
     """
     Periodically run health checks in the background on the endpoints.
 
@@ -4796,6 +4841,7 @@ async def _run_background_health_check():
             redis_cache=redis_usage_cache,
             health_check_ttl=DEFAULT_SHARED_HEALTH_CHECK_TTL,
             lock_ttl=DEFAULT_SHARED_HEALTH_CHECK_LOCK_TTL,
+            **({"traffic_aware": True} if recent_traffic is not None else {}),
         )
         verbose_proxy_logger.info("Initialized shared health check manager")
 
@@ -4867,7 +4913,10 @@ async def _run_background_health_check():
                     details=details_bool,
                     max_concurrency=health_check_concurrency,
                     router=llm_router,
-                    **_hc_filter,
+                    health_check_skip_disabled_background_models=_hc_filter[
+                        "health_check_skip_disabled_background_models"
+                    ],
+                    **({"recent_traffic": recent_traffic} if recent_traffic is not None else {}),
                 )
             except Exception as e:
                 verbose_proxy_logger.error(
@@ -4883,6 +4932,7 @@ async def _run_background_health_check():
                     details_bool,
                     health_check_concurrency,
                     instrumentation_context,
+                    **({"recent_traffic": recent_traffic} if recent_traffic is not None else {}),
                 )
         else:
             (
@@ -4894,6 +4944,7 @@ async def _run_background_health_check():
                 details_bool,
                 health_check_concurrency,
                 instrumentation_context,
+                **({"recent_traffic": recent_traffic} if recent_traffic is not None else {}),
             )
 
         routing_healthy, child_healthy = split_by_model_ids(healthy_endpoints, wildcard_child_ids)
@@ -4937,7 +4988,13 @@ async def _run_background_health_check():
         )
 
         # Write health state to router cache for health-check-driven routing
-        _write_health_state_to_router_cache(list(routing_healthy), list(routing_unhealthy), _exceptions_by_model_id)
+        _write_health_state_to_router_cache(
+            [ep for ep in routing_healthy if not is_traffic_observation(ep)]
+            if recent_traffic is not None
+            else list(routing_healthy),
+            list(routing_unhealthy),
+            _exceptions_by_model_id,
+        )
 
         await asyncio.sleep(health_check_interval)
 

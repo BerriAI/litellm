@@ -16,9 +16,10 @@ from litellm.constants import (
     HEALTH_CHECKS_TARGET,
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-from litellm.proxy.health_check import perform_health_check
+from litellm.proxy.health_check import HealthCheckOptions, HealthCheckResult, perform_health_check
 
 if TYPE_CHECKING:
+    from litellm.proxy.health_check_utils.recent_traffic import RecentTrafficHealth
     from litellm.router import Router
 
 
@@ -49,7 +50,9 @@ class SharedHealthCheckManager:
         redis_cache: RedisCache | None = None,
         health_check_ttl: int = DEFAULT_SHARED_HEALTH_CHECK_TTL,
         lock_ttl: int = DEFAULT_SHARED_HEALTH_CHECK_LOCK_TTL,
+        traffic_aware: bool = False,
     ):
+        self.results_key = self.get_health_check_cache_key() + (":recent_traffic" if traffic_aware else "")
         self.redis_cache = redis_cache
         self.health_check_ttl = health_check_ttl
         self.lock_ttl = lock_ttl
@@ -134,7 +137,7 @@ class SharedHealthCheckManager:
             return None
 
         try:
-            cache_key: Final = self.get_health_check_cache_key()
+            cache_key: Final = self.results_key
             cached_data: Final = await self.redis_cache.async_get_cache(cache_key)
 
             if cached_data is None:
@@ -186,7 +189,7 @@ class SharedHealthCheckManager:
                 "checked_by": self.pod_id,
             }
 
-            cache_key: Final = self.get_health_check_cache_key()
+            cache_key: Final = self.results_key
             await self.redis_cache.async_set_cache(
                 cache_key,
                 safe_dumps(cache_data),
@@ -210,7 +213,8 @@ class SharedHealthCheckManager:
         max_concurrency: int | None = None,
         health_check_skip_disabled_background_models: bool = False,
         router: "Router | None" = None,
-    ) -> tuple[list[Mapping[str, object]], list[Mapping[str, object]], dict[str, object]]:
+        recent_traffic: "RecentTrafficHealth | None" = None,
+    ) -> HealthCheckResult:
         """
         Perform health check with shared state coordination.
 
@@ -230,8 +234,33 @@ class SharedHealthCheckManager:
         Returns:
             Tuple of (healthy_endpoints, unhealthy_endpoints)
         """
+
+        async def cached_for_this_cycle() -> _CachedHealthCheckResults | None:
+            cached: Final = await self.get_cached_health_check_results()
+            if cached is None or recent_traffic is None:
+                return cached
+            observations: Final = await recent_traffic.snapshot(model_list)
+            return (
+                cached
+                if observations.accepts(cached.get("healthy_endpoints", []), cached.get("timestamp", 0))
+                else None
+            )
+
+        async def probe() -> HealthCheckResult:
+            successes: Final = (
+                (await recent_traffic.snapshot(model_list)).successes if recent_traffic is not None else None
+            )
+            filters: Final[HealthCheckOptions] = {
+                "router": router,
+                "health_check_skip_disabled_background_models": health_check_skip_disabled_background_models,
+            }
+            options: Final[HealthCheckOptions] = {**filters, "recent_successes": successes} if successes else filters
+            return await perform_health_check(
+                model_list=model_list, details=details, max_concurrency=max_concurrency, **options
+            )
+
         # First, try to get cached results
-        cached_results = await self.get_cached_health_check_results()
+        cached_results = await cached_for_this_cycle()
         if cached_results is not None:
             return (
                 cached_results.get("healthy_endpoints", []),
@@ -255,13 +284,7 @@ class SharedHealthCheckManager:
                     healthy_endpoints,
                     unhealthy_endpoints,
                     exceptions_by_model_id,
-                ) = await perform_health_check(
-                    model_list=model_list,
-                    details=details,
-                    max_concurrency=max_concurrency,
-                    health_check_skip_disabled_background_models=health_check_skip_disabled_background_models,
-                    router=router,
-                )
+                ) = await probe()
 
                 # Cache the results
                 await self.cache_health_check_results(healthy_endpoints, unhealthy_endpoints)
@@ -275,13 +298,7 @@ class SharedHealthCheckManager:
             # If Redis is not configured, skip polling — there is no cache
             # to wait for.
             if self.redis_cache is None:
-                return await perform_health_check(
-                    model_list=model_list,
-                    details=details,
-                    max_concurrency=max_concurrency,
-                    health_check_skip_disabled_background_models=health_check_skip_disabled_background_models,
-                    router=router,
-                )
+                return await probe()
 
             # Lock not acquired — poll for cached results until the lock
             # holder finishes or the lock expires, rather than falling back
@@ -296,7 +313,7 @@ class SharedHealthCheckManager:
                 await asyncio.sleep(poll_interval)
                 elapsed += poll_interval
 
-                cached_results = await self.get_cached_health_check_results()
+                cached_results = await cached_for_this_cycle()
                 if cached_results is not None:
                     verbose_proxy_logger.info(
                         "Pod %s using cached health check results after waiting %ds",
@@ -331,13 +348,7 @@ class SharedHealthCheckManager:
                 elapsed,
             )
 
-            return await perform_health_check(
-                model_list=model_list,
-                details=details,
-                max_concurrency=max_concurrency,
-                health_check_skip_disabled_background_models=health_check_skip_disabled_background_models,
-                router=router,
-            )
+            return await probe()
 
     @with_service_target(HEALTH_CHECKS_TARGET)
     async def is_health_check_in_progress(self) -> bool:

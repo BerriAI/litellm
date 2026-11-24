@@ -2901,6 +2901,16 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "model_info.disable_background_health_check)."
         ),
     )
+    health_check_recent_success_window_seconds: int = Field(
+        default=0,
+        ge=0,
+        strict=True,
+        description=(
+            "Let a completed upstream request stand in for a background probe of the same deployment and API "
+            "for this many seconds. Zero disables traffic observations. A later failure resumes active probing. "
+            "GET /health labels these results with health_check_source=recent_traffic and last_success_at."
+        ),
+    )
     model_list_healthy_only: bool | None = Field(
         None,
         description=(

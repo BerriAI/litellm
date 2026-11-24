@@ -11,9 +11,10 @@ from collections.abc import Awaitable, Iterable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from itertools import chain
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, TypeVar
+from typing import TYPE_CHECKING, Final, TypeAlias, TypeVar
 
 from pydantic import TypeAdapter, ValidationError
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 
@@ -756,12 +757,17 @@ async def _run_health_checks_with_bounded_concurrency(models: list, concurrency_
     return results, peak_in_flight
 
 
+HealthCheckResult: TypeAlias = tuple[
+    Sequence[Mapping[str, object]], Sequence[Mapping[str, object]], Mapping[str, object]
+]
+
+
 async def _perform_health_check(
     model_list: list,
     details: bool | None = True,
     max_concurrency: int | None = None,
     instrumentation_context: Mapping[str, object] | None = None,
-):
+) -> HealthCheckResult:
     """
     Perform a health check for each model in the list.
 
@@ -796,12 +802,12 @@ async def _perform_health_check(
             _rss_mb_for_log(),
         )
 
-    healthy_endpoints: Final = []
-    unhealthy_endpoints: Final = []
+    healthy_endpoints: Final = list[Mapping[str, object]]()
+    unhealthy_endpoints: Final = list[Mapping[str, object]]()
     # Exceptions keyed by model_id; returned separately so callers can use
     # them for cooldown integration without risking JSON-serialization errors
     # in the /health response.
-    exceptions_by_model_id: Final[dict] = {}
+    exceptions_by_model_id: Final = dict[str, object]()
 
     for is_healthy, model in zip(results, model_list):
         litellm_params = model["litellm_params"]
@@ -1085,8 +1091,16 @@ def update_litellm_params_for_health_check(
 _update_litellm_params_for_health_check: Final = update_litellm_params_for_health_check
 
 
+class HealthCheckOptions(TypedDict, total=False):
+    router: ReadOnly["Router | None"]
+    team_id: ReadOnly[str | None]
+    instrumentation_context: ReadOnly[Mapping[str, object]]
+    health_check_skip_disabled_background_models: ReadOnly[bool]
+    recent_successes: ReadOnly[Mapping[str, float]]
+
+
 async def perform_health_check(
-    model_list: list,
+    model_list: Sequence[Mapping[str, object]],
     model: str | None = None,
     cli_model: str | None = None,
     details: bool | None = True,
@@ -1096,7 +1110,8 @@ async def perform_health_check(
     health_check_skip_disabled_background_models: bool = False,
     router: "Router | None" = None,
     team_id: str | None = None,
-):
+    recent_successes: Mapping[str, float] | None = None,
+) -> HealthCheckResult:
     """
     Perform a health check on the system.
 
@@ -1157,6 +1172,8 @@ async def perform_health_check(
         else ()
     )
     checked: Final = requested + list(dependency_probes)
+    observed: Final = recent_successes or {}
+    active_checks: Final = [d for d in checked if _deployment_id(d) not in observed] if observed else checked
 
     if instrumentation_enabled:
         logger.debug(
@@ -1177,13 +1194,23 @@ async def perform_health_check(
             probed_unhealthy,
             exceptions_by_model_id,
         ) = await _perform_health_check(
-            checked,
+            active_checks,
             details,
             max_concurrency=max_concurrency,
             instrumentation_context=instrumentation_context,
         )
+        traffic_healthy: Final = [
+            {
+                **clean_endpoint_data(_MODEL_INFO_ADAPTER.validate_python(deployment["litellm_params"]), details),
+                "model_id": ident,
+                "health_check_source": "recent_traffic",
+                "last_success_at": observed[ident],
+            }
+            for deployment in checked
+            if (ident := _deployment_id(deployment)) is not None and ident in observed
+        ]
         graded_healthy, graded_unhealthy = _finalize_strategy_router_endpoints(
-            probed_healthy, probed_unhealthy, checked, router, dependency_probes
+            [*probed_healthy, *traffic_healthy], probed_unhealthy, checked, router, dependency_probes
         )
         healthy_endpoints: Final = list(graded_healthy)
         unhealthy_endpoints: Final = list(graded_unhealthy)
