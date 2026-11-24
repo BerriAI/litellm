@@ -2,7 +2,7 @@ import json
 import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from functools import reduce
+from functools import cache, reduce
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, get_args
 
@@ -288,9 +288,9 @@ def contract_violation(payload: Mapping[str, object]) -> ContractViolation | Non
     return None
 
 
+@cache
 def _violation_counter() -> "Counter | None":
     try:
-        # prometheus-client ships only in the proxy-runtime extra
         from prometheus_client import Counter
     except ImportError:
         return None
@@ -301,7 +301,6 @@ def _violation_counter() -> "Counter | None":
     )
 
 
-_VIOLATIONS: Final = _violation_counter()
 _METRIC_LABEL_VALUE: Final = re.compile(r"[a-z0-9_.]{1,80}")
 
 
@@ -310,8 +309,9 @@ def _label(value: str) -> str:
 
 
 def report_contract_violation(provider: str, violation: ContractViolation, *, log: bool) -> None:
-    if _VIOLATIONS is not None:
-        _VIOLATIONS.labels(
+    counter: Final = _violation_counter()
+    if counter is not None:
+        counter.labels(
             provider=_label(provider), event_type=_label(violation.event_type), reason=violation.reason
         ).inc()
     if log:
