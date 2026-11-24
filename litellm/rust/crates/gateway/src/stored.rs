@@ -54,6 +54,9 @@ pub enum StoredConfig {
     /// It is on and the database could not be read, so the native app runs the file alone and
     /// serves nothing.
     Unread,
+    /// It is off and the UI settings could not be read, so the native app runs the file alone and
+    /// serves nothing. No stored model is ever loaded for it.
+    UiSettingsUnread,
 }
 
 /// A config the native app is built from, and whether it holds the config the proxy stores in its
@@ -148,20 +151,17 @@ pub(crate) async fn layered(
     let key = salt_key(environment, &file);
     let readable_key = key.as_ref().ok().and_then(Option::as_ref);
     let ui_settings = match rows.ui_settings().await {
-        Ok(column) => column.map(|column| UiSettings::from_json(column.get())),
+        Ok(column) => Some(column.map(|column| UiSettings::from_json(column.get()))),
         Err(error) => {
             tracing::warn!(
                 error = %Report::new(&error),
                 "could not read the UI settings the proxy stores in its database"
             );
-            return without_stored(file, true);
+            None
         }
     };
     let settings = match rows.settings().await {
-        Ok(found) => SettingsRows {
-            ui_settings: ui_settings.clone().unwrap_or_default(),
-            ..settings_rows(&found, readable_key)
-        },
+        Ok(found) => settings_rows(&found, readable_key),
         Err(error) => {
             let on = store_model_in_db(switched_on, environment, &SettingsRows::default());
             tracing::warn!(
@@ -169,15 +169,28 @@ pub(crate) async fn layered(
                 store_model_in_db = on,
                 "could not read the settings the proxy stores in its database"
             );
-            if on {
-                return without_stored(file, true);
-            }
-            return with_ui_settings(document, file, ui_settings, secrets).await;
+            return match (on, ui_settings) {
+                (true, _) => without_stored(file, true),
+                (false, None) => ui_settings_unread(file),
+                (false, Some(ui_settings)) => {
+                    with_ui_settings(document, file, ui_settings, secrets).await
+                }
+            };
         }
     };
-    if !store_model_in_db(switched_on, environment, &settings) {
+    let on = store_model_in_db(switched_on, environment, &settings);
+    let ui_settings = match (on, ui_settings) {
+        (_, Some(ui_settings)) => ui_settings,
+        (true, None) => return without_stored(file, true),
+        (false, None) => return ui_settings_unread(file),
+    };
+    if !on {
         return with_ui_settings(document, file, ui_settings, secrets).await;
     }
+    let settings = SettingsRows {
+        ui_settings: ui_settings.unwrap_or_default(),
+        ..settings
+    };
     let key = match key {
         Ok(key) => key,
         Err(error) => {
@@ -231,6 +244,16 @@ async fn with_ui_settings(
             );
             without_stored(file, true)
         }
+    }
+}
+
+/// `file` alone, for a proxy that reads no stored config but whose UI settings could not be read.
+/// One of their flags may change how the proxy answers, so Python answers every request. Nothing
+/// reads the stored config again for it, as the proxy reloads only with `store_model_in_db` on.
+fn ui_settings_unread(file: Config) -> Loaded {
+    Loaded {
+        config: file,
+        stored: StoredConfig::UiSettingsUnread,
     }
 }
 
@@ -816,7 +839,13 @@ mod tests {
         Some(false)
     )]
     #[case::no_row(FILE, Ok(None), StoredConfig::Unused, None)]
-    #[case::unreadable(FILE, Err(()), StoredConfig::Unread, None)]
+    #[case::unreadable_with_store_model_in_db_off(FILE, Err(()), StoredConfig::UiSettingsUnread, None)]
+    #[case::unreadable_with_store_model_in_db_on(
+        &format!("{FILE}{ON}"),
+        Err(()),
+        StoredConfig::Unread,
+        None
+    )]
     #[tokio::test]
     async fn the_ui_settings_flags_are_layered_under_the_file(
         #[case] yaml: &str,
