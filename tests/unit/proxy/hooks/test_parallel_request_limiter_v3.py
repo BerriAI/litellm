@@ -1473,6 +1473,201 @@ async def test_split_usage_still_respects_the_configured_limit_type(monkeypatch)
     assert all(op["increment_value"] == 7 for op in token_operations)
 
 
+_JPEG_DATA_URI: Final = (
+    "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIs"
+    "IxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAI"
+    "AQEAAD8AKp//2Q=="
+)
+
+
+_MP4_DATA_URI: Final = "data:video/mp4;base64,AAAAIGZ0eXBpc29t" + "A" * 4096
+
+_SETTLE_PROJECT_ITPM: Final = ("model_per_project_itpm", "p-settle:titan-embed-image")
+
+
+async def _settle_tpm_for_call(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    call_type: str,
+    data: dict[str, object],
+    usage: Usage,
+    rate_limit_type: str = "total",
+    failed_attempts: int = 0,
+    counted: tuple[str, str] | None = None,
+    media_models: tuple[str, ...] = ("bedrock/amazon.titan-embed-image-v1",),
+) -> tuple[int, float]:
+    _set_token_rate_limit_type(monkeypatch, rate_limit_type)
+    api_key: Final = hash_token(f"sk-settle-{call_type}")
+    cache: Final = DualCache()
+    handler: Final = NativeLimiter(
+        internal_usage_cache=InternalUsageCache(cache),
+        media_model_resolver=lambda _model, _team_id: media_models,
+    )
+    await handler.async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key=api_key,
+            tpm_limit=10_000,
+            project_id="p-settle",
+            project_metadata={"model_itpm_limit": {"titan-embed-image": 10_000}},
+        ),
+        cache=cache,
+        data={**data, "litellm_call_id": "settle-call"},
+        call_type=call_type,
+    )
+    stash: Final = get_request_stash()
+    assert stash is not None and stash.reserved_tokens > 0
+    response: Final = (
+        EmbeddingResponse(model="titan-embed-image", usage=usage)
+        if call_type == "aembedding"
+        else ModelResponse(usage=usage)
+    )
+    callback_kwargs: Final = {
+        "litellm_call_id": "settle-call",
+        "call_type": call_type,
+        "standard_logging_object": {"metadata": {"user_api_key_hash": api_key}},
+    }
+    for _ in range(failed_attempts):
+        await handler.async_log_failure_event(
+            kwargs=dict(callback_kwargs), response_obj=None, start_time=datetime.now(), end_time=datetime.now()
+        )
+    await _log_success(handler, dict(callback_kwargs), response)
+    return stash.reserved_tokens, _tokens(handler, *(counted or ("api_key", api_key)))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rate_limit_type", ["total", "input"])
+@pytest.mark.parametrize("embedding_input", [[_JPEG_DATA_URI], "a photo of scones"])
+async def test_embedding_the_provider_reports_as_zero_tokens_keeps_its_tpm_reservation(
+    monkeypatch: pytest.MonkeyPatch, embedding_input: list[str] | str, rate_limit_type: str
+) -> None:
+    reserved, counted = await _settle_tpm_for_call(
+        monkeypatch,
+        call_type="aembedding",
+        data={"model": "titan-embed-image", "input": embedding_input},
+        usage=Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0),
+        rate_limit_type=rate_limit_type,
+    )
+
+    assert counted == reserved
+
+
+@pytest.mark.asyncio
+async def test_embedding_served_after_a_failed_attempt_still_charges_its_tpm_estimate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reserved, counted = await _settle_tpm_for_call(
+        monkeypatch,
+        call_type="aembedding",
+        data={"model": "titan-embed-image", "input": [_JPEG_DATA_URI]},
+        usage=Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0),
+        failed_attempts=1,
+    )
+
+    assert counted == reserved
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_fields",
+    [
+        {"input": [_MP4_DATA_URI]},
+        {"input": [{"image": {"bytesBase64Encoded": _JPEG_DATA_URI.split(",", 1)[1]}}]},
+        {"input": [{"audio": {"bytesBase64Encoded": "A" * 4096}}]},
+        {"input": _JPEG_DATA_URI.split(",", 1)[1], "input_type": "image"},
+        {"input": ["s3://bucket/clip.mp4"], "inputType": "video"},
+    ],
+)
+async def test_embedding_media_no_deployment_prices_refunds_its_tpm_reservation_when_reported_as_zero_tokens(
+    monkeypatch: pytest.MonkeyPatch, request_fields: dict[str, object]
+) -> None:
+    _, counted = await _settle_tpm_for_call(
+        monkeypatch,
+        call_type="aembedding",
+        data={"model": "titan-embed-image", **request_fields},
+        usage=Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0),
+        media_models=("bedrock/async_invoke/us.twelvelabs.marengo-embed-3-0-v1:0",),
+    )
+
+    assert counted == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_fields",
+    [
+        {"input": ["s3://notes " + "word " * 40]},
+        {"input": "gs://bucket/clip.mp4"},
+        {"input": [{"text": "word " * 40}]},
+        {"input": "s3://notes " + "word " * 40, "input_type": "text"},
+    ],
+)
+async def test_embedding_text_the_provider_reads_as_text_keeps_its_tpm_charge_when_reported_as_zero_tokens(
+    monkeypatch: pytest.MonkeyPatch, request_fields: dict[str, object]
+) -> None:
+    reserved, counted = await _settle_tpm_for_call(
+        monkeypatch,
+        call_type="aembedding",
+        data={"model": "titan-embed-image", **request_fields},
+        usage=Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0),
+        media_models=("bedrock/async_invoke/us.twelvelabs.marengo-embed-3-0-v1:0",),
+    )
+
+    assert counted == reserved
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("total_tokens", [7, 0])
+async def test_embedding_with_reported_tokens_settles_tpm_to_the_reported_count(
+    monkeypatch: pytest.MonkeyPatch, total_tokens: int
+) -> None:
+    reserved, counted = await _settle_tpm_for_call(
+        monkeypatch,
+        call_type="aembedding",
+        data={"model": "titan-embed-image", "input": [_JPEG_DATA_URI]},
+        usage=Usage(prompt_tokens=7, completion_tokens=0, total_tokens=total_tokens),
+    )
+
+    assert counted == 7 != reserved
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("call_type", "data", "rate_limit_type"),
+    [
+        ("acompletion", {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}]}, "total"),
+        ("aembedding", {"model": "titan-embed-image", "input": [_JPEG_DATA_URI]}, "output"),
+    ],
+)
+async def test_zero_usage_still_refunds_the_tpm_reservation_outside_input_counted_embeddings(
+    monkeypatch: pytest.MonkeyPatch, call_type: str, data: dict[str, object], rate_limit_type: str
+) -> None:
+    _, counted = await _settle_tpm_for_call(
+        monkeypatch,
+        call_type=call_type,
+        data=data,
+        usage=Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0),
+        rate_limit_type=rate_limit_type,
+    )
+
+    assert counted == 0
+
+
+@pytest.mark.asyncio
+async def test_embedding_the_provider_reports_as_zero_tokens_keeps_its_project_itpm_reservation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reserved, counted = await _settle_tpm_for_call(
+        monkeypatch,
+        call_type="aembedding",
+        data={"model": "titan-embed-image", "input": [_JPEG_DATA_URI]},
+        usage=Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0),
+        rate_limit_type="output",
+        counted=_SETTLE_PROJECT_ITPM,
+    )
+
+    assert counted == reserved
+
+
 @pytest.mark.parametrize("origin", ["shadow_eval_judge", "autorouter_compaction"])
 @pytest.mark.parametrize("rate_limit_type", ["input", "output", "total"])
 @pytest.mark.asyncio
@@ -2012,6 +2207,33 @@ async def test_a_reservation_is_settled_even_after_the_teams_share_is_gone(monke
     )
 
     assert settled == 300 - stash.ptu_reserved_tokens
+
+
+@pytest.mark.asyncio
+async def test_embedding_the_provider_reports_as_zero_tokens_keeps_its_ptu_reservation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    resolve, _ = _ptu_ceiling_for("t", "test-model", tpm_limit=2000, ratio=4.0)
+    cache: Final = DualCache()
+    handler: Final = NativeLimiter(internal_usage_cache=InternalUsageCache(cache), ptu_team_ceiling_resolver=resolve)
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key=hash_token("sk-ptu"), team_id="t"),
+        cache=cache,
+        data={"model": "test-model", "input": ["a photo of scones"]},
+        call_type="aembedding",
+    )
+    stash: Final = get_request_stash()
+    assert stash is not None and stash.ptu_reserved_tokens > 0
+    await _ptu_settled(
+        handler,
+        monkeypatch,
+        EmbeddingResponse(model="test-model", usage=Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0)),
+        {**_ptu_success_kwargs(), "call_type": "aembedding"},
+        rate_limit_type="total",
+    )
+
+    assert _ptu_tokens(handler) == stash.ptu_reserved_tokens
 
 
 @pytest.mark.asyncio
