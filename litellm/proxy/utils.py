@@ -2354,7 +2354,7 @@ class ProxyLogging:
         self.alerting: list[str] | None = None
         self.alerting_threshold: float = 300  # default to 5 min. threshold
         self.alert_types: list[AlertType] = DEFAULT_ALERT_TYPES
-        self.alert_to_webhook_url: dict[AlertType, list[str] | str] | None = None
+        self.alert_to_webhook_url: dict | None = None
         self.slack_alerting_instance: SlackAlerting = SlackAlerting(
             alerting_threshold=self.alerting_threshold,
             alerting=self.alerting,
