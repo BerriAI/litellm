@@ -19518,9 +19518,8 @@ async def test_catalog_reload_preserves_concurrent_config_discovery_and_routes(a
         }
     )
 
-    async def hydrate(target: MCPServer) -> bool:
-        target.client_id = "persisted-client"
-        return True
+    async def hydrate(targets: tuple[MCPServer, ...]) -> None:
+        targets[0].client_id = "persisted-client"
 
     async def read_rows(**_kwargs):
         assert manager._publish_resolved_oauth_server(resolved, generation) is resolved
@@ -19534,7 +19533,7 @@ async def test_catalog_reload_preserves_concurrent_config_discovery_and_routes(a
     with (
         patch("litellm.proxy.proxy_server.prisma_client", prisma),
         patch(
-            "litellm.proxy.mcp_server.discoverable_endpoints.hydrate_config_server_dcr_client",
+            "litellm.proxy.mcp_server.discoverable_endpoints.hydrate_config_dcr_clients",
             side_effect=hydrate,
         ),
     ):
@@ -20278,12 +20277,12 @@ async def test_catalog_cancelled_config_hydration_preserves_published_credential
     )
     manager.config_mcp_servers = {server.server_id: server}
 
-    async def cancelled_hydration(target: MCPServer) -> bool:
-        target.client_id = "unpublished-client"
+    async def cancelled_hydration(targets: tuple[MCPServer, ...]) -> None:
+        targets[0].client_id = "unpublished-client"
         raise asyncio.CancelledError()
 
     with patch(
-        "litellm.proxy.mcp_server.discoverable_endpoints.hydrate_config_server_dcr_client",
+        "litellm.proxy.mcp_server.discoverable_endpoints.hydrate_config_dcr_clients",
         side_effect=cancelled_hydration,
     ):
         with pytest.raises(asyncio.CancelledError):

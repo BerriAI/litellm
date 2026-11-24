@@ -1528,6 +1528,13 @@ async def get_mcp_server_oauth_client_credentials(prisma_client: PrismaClient, s
     return row.credentials
 
 
+async def get_mcp_server_oauth_client_credentials_by_id(
+    prisma_client: PrismaClient, server_ids: Sequence[str]
+) -> Mapping[str, object]:
+    rows: Final = await _oauth_client_table_actions(prisma_client).find_many(where={"server_id": {"in": server_ids}})
+    return {row.server_id: row.credentials for row in rows}
+
+
 async def upsert_mcp_server_oauth_client_credentials(
     prisma_client: PrismaClient, server_id: str, credentials: MCPCredentials
 ) -> None:

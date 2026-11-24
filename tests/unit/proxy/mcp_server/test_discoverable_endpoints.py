@@ -8532,7 +8532,9 @@ async def test_resolve_active_litellm_key_rejects_blocked_key(proxy_globals, rus
 
 
 @pytest.mark.asyncio
-async def test_resolve_active_litellm_key_fails_closed_on_malformed_expiry(proxy_globals, rust_auth_stores: RustAuthStores):
+async def test_resolve_active_litellm_key_fails_closed_on_malformed_expiry(
+    proxy_globals, rust_auth_stores: RustAuthStores
+):
     """A key whose stored expires string does not parse must fail closed to no-hash (the mint then
     returns invalid_request), not surface an unhandled 500. The active-state check runs outside the
     resolver's try, so it must be total over a bad expires rather than letting datetime.fromisoformat
@@ -8589,7 +8591,9 @@ async def test_resolve_active_litellm_key_db_outage_is_unavailable(proxy_globals
 
 
 @pytest.mark.asyncio
-async def test_resolve_active_litellm_key_permanent_engine_fault_is_faulted(proxy_globals, rust_auth_stores: RustAuthStores):
+async def test_resolve_active_litellm_key_permanent_engine_fault_is_faulted(
+    proxy_globals, rust_auth_stores: RustAuthStores
+):
     """A query engine that is missing or version-skewed cannot resolve any key until the deployment is
     repaired, so the resolver reports "faulted" (still statused 503 by the mint) rather than "unavailable",
     whose wording promises the outage is transient and asks the client to retry."""
@@ -8601,7 +8605,9 @@ async def test_resolve_active_litellm_key_permanent_engine_fault_is_faulted(prox
         _resolve_active_litellm_key,
     )
 
-    rust_auth_stores.key.rows[hash_token("sk-during-engine-fault")] = BinaryNotFoundError("query engine binary not found")
+    rust_auth_stores.key.rows[hash_token("sk-during-engine-fault")] = BinaryNotFoundError(
+        "query engine binary not found"
+    )
 
     proxy_globals.user_api_key_cache = UserApiKeyCache()
     proxy_globals.prisma_client = object()
@@ -9975,6 +9981,33 @@ async def test_persist_dcr_client_for_config_server_uses_side_store():
     mock_update_server.assert_not_called()
 
 
+class _ConfigOAuthClientStore:
+    def __init__(self, stored: "Mapping[str, object]", *, unavailable: bool = False) -> None:
+        self.stored = stored
+        self.unavailable = unavailable
+        self.reads: tuple[tuple[str, ...], ...] = ()
+
+    async def find_many(self, *, where: "Mapping[str, Mapping[str, tuple[str, ...]]]") -> tuple[SimpleNamespace, ...]:
+        ids: Final = tuple(where["server_id"]["in"])
+        self.reads = (*self.reads, ids)
+        if self.unavailable:
+            raise RuntimeError("OAuth client store unavailable")
+        return tuple(
+            SimpleNamespace(server_id=server_id, credentials=blob)
+            for server_id, blob in self.stored.items()
+            if server_id in ids
+        )
+
+    async def find_unique(self, *, where: "Mapping[str, str]") -> SimpleNamespace | None:
+        server_id: Final = where["server_id"]
+        self.reads = (*self.reads, (server_id,))
+        if self.unavailable:
+            raise RuntimeError("OAuth client store unavailable")
+        if server_id not in self.stored:
+            return None
+        return SimpleNamespace(server_id=server_id, credentials=self.stored[server_id])
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("legacy", [False, True])
 async def test_hydrate_config_server_applies_stored_dcr_client(monkeypatch, legacy):
@@ -9986,9 +10019,7 @@ async def test_hydrate_config_server_applies_stored_dcr_client(monkeypatch, lega
     from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
     from litellm.proxy._types import MCPTransport
     from litellm.proxy.mcp_server.db import encrypt_credentials
-    from litellm.proxy.mcp_server.discoverable_endpoints import (
-        hydrate_config_server_dcr_client,
-    )
+    from litellm.proxy.mcp_server.mcp_server_manager import MCPServerManager
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
     server = MCPServer(
@@ -10021,19 +10052,40 @@ async def test_hydrate_config_server_applies_stored_dcr_client(monkeypatch, lega
     )
     assert "stored-client" not in stored_blob and "stored-secret" not in stored_blob
 
-    with (
-        patch("litellm.proxy.utils.get_prisma_client_or_throw", return_value=MagicMock()),
-        patch(
-            "litellm.proxy.mcp_server.db.get_mcp_server_oauth_client_credentials",
-            new=AsyncMock(return_value=stored_blob),
-        ),
-    ):
-        applied = await hydrate_config_server_dcr_client(server)
+    second: Final = server.model_copy(update={"server_id": "second"})
+    malformed: Final = server.model_copy(update={"server_id": "malformed"})
+    configured: Final = server.model_copy(update={"server_id": "configured", "client_id": "admin-client"})
+    store: Final = _ConfigOAuthClientStore(
+        {"second": stored_blob, "malformed": "{invalid-json", server.server_id: stored_blob, "configured": stored_blob}
+    )
+    prisma: Final = SimpleNamespace(db=SimpleNamespace(litellm_mcpserveroauthclient=store))
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+        await MCPServerManager().hydrate_config_servers_dcr_clients((server, malformed, second, configured))
 
-    assert applied is True
     assert server.client_id == "stored-client"
     assert server.client_secret == "stored-secret"
     assert server.token_endpoint_auth_method == "client_secret_basic"
+    assert second.client_id == "stored-client"
+    assert malformed.client_id is None
+    assert configured.client_id == "admin-client"
+    assert store.reads == ((server.server_id, "malformed", "second"),)
+
+
+@pytest.mark.asyncio
+async def test_hydrate_config_servers_continues_when_oauth_client_batch_read_fails():
+    from litellm.proxy._types import MCPTransport
+    from litellm.proxy.mcp_server.mcp_server_manager import MCPServerManager
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    servers: Final = tuple(MCPServer(server_id=name, name=name, transport=MCPTransport.http) for name in ("one", "two"))
+    store: Final = _ConfigOAuthClientStore({}, unavailable=True)
+    prisma: Final = SimpleNamespace(db=SimpleNamespace(litellm_mcpserveroauthclient=store))
+
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+        await MCPServerManager().hydrate_config_servers_dcr_clients(servers)
+
+    assert tuple(server.client_id for server in servers) == (None, None)
+    assert store.reads == (("one", "two"),)
 
 
 @pytest.mark.asyncio
@@ -10164,9 +10216,7 @@ async def test_hydrate_does_not_overwrite_explicit_config_client_id():
     """An explicit client_id set in config.yaml wins: hydration must not overwrite it with a stale
     persisted store client, and must not even read the store when config already supplied a client."""
     from litellm.proxy._types import MCPTransport
-    from litellm.proxy.mcp_server.discoverable_endpoints import (
-        hydrate_config_server_dcr_client,
-    )
+    from litellm.proxy.mcp_server.mcp_server_manager import MCPServerManager
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
     server = MCPServer(
@@ -10177,19 +10227,13 @@ async def test_hydrate_does_not_overwrite_explicit_config_client_id():
         auth_type=MCPAuth.oauth2,
         client_id="explicit-from-config",
     )
-    store_read = AsyncMock(return_value={"client_id": "stale-store-client", "client_secret": "x", "redirect_uris": []})
-    with (
-        patch("litellm.proxy.utils.get_prisma_client_or_throw", return_value=MagicMock()),
-        patch(
-            "litellm.proxy.mcp_server.db.get_mcp_server_oauth_client_credentials",
-            new=store_read,
-        ),
-    ):
-        applied = await hydrate_config_server_dcr_client(server)
+    store: Final = _ConfigOAuthClientStore({server.server_id: {"client_id": "stale-store-client"}})
+    prisma: Final = SimpleNamespace(db=SimpleNamespace(litellm_mcpserveroauthclient=store))
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+        await MCPServerManager().hydrate_config_servers_dcr_clients((server,))
 
-    assert applied is False
     assert server.client_id == "explicit-from-config"
-    store_read.assert_not_called()
+    assert store.reads == ()
 
 
 @pytest.mark.asyncio

@@ -3,7 +3,7 @@ import html as _html
 import json
 import secrets
 import time
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import (
@@ -1752,18 +1752,43 @@ async def _load_store_dcr_credentials(
     return credentials
 
 
-async def hydrate_config_server_dcr_client(mcp_server: MCPServer) -> bool:
-    """Overlay a config-declared server's persisted DCR client onto its in-memory object so token
-    refresh can authenticate. Config.yaml servers have no LiteLLM_MCPServerTable row, so their
-    minted client lives in the server-scoped store; without this overlay the in-memory server
-    carries no client_id after a restart. An explicit client_id set in config.yaml wins and is never
-    overwritten by a persisted store client."""
-    if mcp_server.client_id:
-        return False
-    credentials: Final = await _load_store_dcr_credentials(mcp_server)
-    if credentials is None:
-        return False
-    return _apply_persisted_dcr_credentials(mcp_server, credentials)
+async def hydrate_config_dcr_clients(servers: Sequence[MCPServer]) -> None:
+    from litellm.proxy.mcp_server.db import (  # noqa: PLC0415  # avoids circular import
+        get_mcp_server_oauth_client_credentials_by_id,
+    )
+    from litellm.proxy.utils import get_prisma_client_or_throw  # noqa: PLC0415  # avoids circular import
+
+    candidates: Final = tuple(server for server in servers if not server.client_id)
+    if not candidates:
+        return
+    try:
+        prisma_client: Final = get_prisma_client_or_throw(
+            "Database not connected. Cannot read MCP OAuth client registration."
+        )
+        stored: Final = await get_mcp_server_oauth_client_credentials_by_id(
+            prisma_client, tuple(server.server_id for server in candidates)
+        )
+    except Exception as exc:  # noqa: BLE001  # configuration hydration is best effort
+        verbose_logger.debug("Failed to read stored MCP OAuth clients: %s", exc)
+        return
+
+    for server in candidates:
+        if server.client_id:
+            continue
+        try:
+            credentials: Final = _get_persisted_dcr_credentials(stored.get(server.server_id))
+            if (
+                credentials is not None
+                and credentials.client_id
+                and _apply_persisted_dcr_credentials(server, credentials)
+            ):
+                verbose_logger.debug(
+                    "hydrated persisted DCR client onto config MCP server server_id=%s", server.server_id
+                )
+        except Exception as exc:  # noqa: BLE001  # one bad client must not block other servers
+            verbose_logger.debug(
+                "load_servers_from_config: failed to hydrate DCR client for server_id=%s: %s", server.server_id, exc
+            )
 
 
 async def _resolve_persisted_dcr_client(
