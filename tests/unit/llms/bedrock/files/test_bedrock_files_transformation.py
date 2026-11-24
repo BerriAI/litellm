@@ -11,7 +11,7 @@ from io import BytesIO
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 from urllib.parse import unquote, urlparse
 
 import pytest
@@ -233,6 +233,24 @@ class TestBedrockFilesTransformation:
         assert model_input["messages"]
         assert "service_tier" not in json.dumps(model_input)
         assert "serviceTier" not in model_input
+
+    def test_claude_row_drop_params_decides_whether_a_malformed_thinking_blocks_fails_the_file(self):
+        messages: Final = [
+            {"role": "user", "content": "Hi"},
+            {"role": "assistant", "content": "Hello", "thinking_blocks": "abc"},
+            {"role": "user", "content": "Go on"},
+        ]
+        model: Final = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+
+        with pytest.raises(Exception, match=r"messages\[1\]\.thinking_blocks"):
+            BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(
+                [self._nova_row(model=model, body_params={"messages": messages, "max_tokens": 10})]
+            )
+
+        dropped: Final = BedrockFilesConfig().transform_openai_jsonl_content_to_bedrock_jsonl_content(
+            [self._nova_row(model=model, body_params={"messages": messages, "max_tokens": 10, "drop_params": True})]
+        )
+        assert dropped[0]["modelInput"]["messages"][1]["content"] == [{"type": "text", "text": "Hello"}]
 
     @pytest.mark.parametrize("tier", [None, "auto", "AUTO"])
     def test_claude_row_with_null_or_auto_service_tier_sends_no_tier(self, tier: str | None):
@@ -1676,6 +1694,7 @@ class TestBedrockFilesEmbeddingTransformation:
             BedrockFilesConfig._transform_batch_body_to_chat_body(
                 {"model": "bedrock/amazon.titan-embed-text-v2:0", "input": "hi"},
                 BedrockBatchRecordKind.EMBEDDING,
+                drop_params=False,
             )
 
     def test_explicit_chat_url_with_input_body_short_circuits_to_chat(self):
@@ -4701,6 +4720,41 @@ def test_sign_s3_request_without_body_uses_the_s3_pair_when_it_differs_from_the_
     )
 
 
+def test_file_download_identity_survives_the_typed_s3_params(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.llms.bedrock.files.transformation import S3_SIGNED_REQUEST_HEADERS_PARAM
+
+    monkeypatch.setattr(litellm, "bedrock_session_tag_fields", ["user_api_key_alias"])
+    monkeypatch.setattr(litellm, "bedrock_session_name_fields", ["user_api_key_alias"])
+    sts: Final = MagicMock()
+    sts.assume_role.return_value = {
+        "Credentials": {
+            "AccessKeyId": "ASIAFILEIDENTITY",
+            "SecretAccessKey": "secret",
+            "SessionToken": "token",
+            "Expiration": datetime(2099, 1, 1, tzinfo=timezone.utc),
+        }
+    }
+    params: Final[dict[str, object]] = {
+        "aws_access_key_id": "AKIACALLER",
+        "aws_secret_access_key": "caller-secret",
+        "aws_region_name": "us-east-1",
+        "aws_role_name": "arn:aws:iam::123456789012:role/file-identity",
+        "s3_bucket_name": "safe-bucket",
+        "litellm_metadata": {"user_api_key_alias": "file-caller"},
+    }
+    with patch.dict(os.environ, {}, clear=True), patch("boto3.client", return_value=sts):
+        BedrockFilesConfig().transform_file_content_request(
+            file_content_request={"file_id": "s3://safe-bucket/litellm-bedrock-files-model-id-abc.jsonl"},
+            optional_params={},
+            litellm_params=params,
+        )
+    assert sts.assume_role.call_args.kwargs["Tags"] == ({"Key": "user_api_key_alias", "Value": "file-caller"},)
+    assert sts.assume_role.call_args.kwargs["RoleSessionName"] == "file-caller"
+    assert _authorization(params[S3_SIGNED_REQUEST_HEADERS_PARAM]).startswith(
+        "AWS4-HMAC-SHA256 Credential=ASIAFILEIDENTITY/"
+    )
+
+
 def test_transform_file_content_request_signs_with_the_s3_pair_from_litellm_params():
     from litellm.llms.bedrock.files.transformation import S3_SIGNED_REQUEST_HEADERS_PARAM, BedrockFilesConfig
 
@@ -5061,3 +5115,258 @@ async def test_create_file_uploads_a_bedrock_format_batch_file_unchanged_when_it
     )
 
     assert put_route.calls.last.request.content == f"{bedrock_line}\n".encode()
+
+
+_HOSTED_MCP_TOOL: Final = {
+    "type": "mcp",
+    "server_label": "deepwiki",
+    "server_url": "https://mcp.deepwiki.com/mcp",
+    "require_approval": "never",
+}
+_WEATHER_TOOL: Final = {
+    "type": "function",
+    "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}},
+}
+_BATCH_MODELS: Final = (
+    "bedrock/us.amazon.nova-pro-v1:0",
+    "bedrock/us.anthropic.claude-sonnet-4-6",
+    "bedrock/openai.gpt-oss-120b-1:0",
+)
+
+
+def _uploaded_row(
+    model: str, url: str, body: Mapping[str, object], deployment_drop_params: bool | None
+) -> Mapping[str, object]:
+    upload: Final = BedrockFilesConfig().transform_create_file_request(
+        model="",
+        create_file_data={
+            "file": (
+                "batch.jsonl",
+                json.dumps({"custom_id": "row-1", "method": "POST", "url": url, "body": body}).encode(),
+                "application/jsonl",
+            ),
+            "purpose": "batch",
+        },
+        optional_params={
+            "aws_access_key_id": "test-key-id",
+            "aws_secret_access_key": "test-secret",
+            "aws_region_name": "us-west-2",
+        },
+        litellm_params={
+            "s3_bucket_name": "litellm-batch-bucket",
+            "model": model,
+            **({} if deployment_drop_params is None else {"drop_params": deployment_drop_params}),
+        },
+    )
+    return json.loads(upload["data"])["modelInput"]
+
+
+def _uploaded_hosted_mcp_row(
+    model: str, row_drop_params: object, deployment_drop_params: bool | None
+) -> Mapping[str, object]:
+    body: Final = {
+        "model": model,
+        "max_tokens": 10,
+        "messages": [{"role": "user", "content": "hi"}],
+        "tools": [_HOSTED_MCP_TOOL, _WEATHER_TOOL],
+        "tool_choice": {"type": "function", "function": {"name": "deepwiki"}},
+        **({} if row_drop_params is None else {"drop_params": row_drop_params}),
+    }
+    return _uploaded_row(model, "/v1/chat/completions", body, deployment_drop_params)
+
+
+@pytest.mark.parametrize("model", _BATCH_MODELS)
+@pytest.mark.parametrize(
+    ("row_drop_params", "deployment_drop_params"), [(None, True), (True, None)], ids=["deployment", "row"]
+)
+def test_batch_row_drops_a_hosted_mcp_tool_and_its_tool_choice_under_drop_params(
+    monkeypatch: pytest.MonkeyPatch, model: str, row_drop_params: bool | None, deployment_drop_params: bool | None
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    model_input: Final = _uploaded_hosted_mcp_row(model, row_drop_params, deployment_drop_params)
+
+    assert "get_weather" in json.dumps(model_input)
+    assert "deepwiki" not in json.dumps(model_input)
+    assert "drop_params" not in model_input
+
+
+_ROW_VALUE_KEEPS_DROPPING_OFF: Final = "this row sets `drop_params` to a value that does not turn dropping on"
+_SET_DROP_PARAMS_ANYWHERE: Final = (
+    "on the row, in `router_settings.default_litellm_params`, or on the deployment the upload names, to drop it."
+)
+
+
+@pytest.mark.parametrize("model", _BATCH_MODELS)
+@pytest.mark.parametrize(
+    ("row_drop_params", "deployment_drop_params", "advice", "misleading_advice"),
+    [
+        (None, None, _SET_DROP_PARAMS_ANYWHERE, "this row sets"),
+        (False, True, _ROW_VALUE_KEEPS_DROPPING_OFF, "router_settings"),
+        ("no", True, _ROW_VALUE_KEEPS_DROPPING_OFF, "drop_params: false"),
+        (0, True, _ROW_VALUE_KEEPS_DROPPING_OFF, "drop_params: false"),
+    ],
+    ids=["unset", "row_false_wins", "row_no_wins", "row_zero_wins"],
+)
+def test_batch_row_with_a_hosted_mcp_tool_is_refused_with_advice_that_matches_why_it_was_refused(
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    row_drop_params: object,
+    deployment_drop_params: bool | None,
+    advice: str,
+    misleading_advice: str,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    with pytest.raises(BedrockError) as exc_info:
+        _uploaded_hosted_mcp_row(model, row_drop_params, deployment_drop_params)
+
+    assert exc_info.value.status_code == 400
+    assert "`deepwiki`" in exc_info.value.message
+    assert advice in exc_info.value.message
+    assert misleading_advice not in exc_info.value.message
+    assert "litellm_proxy/mcp" not in exc_info.value.message
+
+
+_RESPONSES_WEATHER_TOOL: Final = {
+    "type": "function",
+    "name": "get_weather",
+    "parameters": {"type": "object", "properties": {}},
+}
+
+
+@pytest.mark.parametrize("model", _BATCH_MODELS)
+@pytest.mark.parametrize(
+    ("row_drop_params", "deployment_drop_params"), [(None, True), (True, None)], ids=["deployment", "row"]
+)
+def test_batch_responses_row_drops_a_tool_choice_that_forces_the_dropped_hosted_mcp_server(
+    monkeypatch: pytest.MonkeyPatch, model: str, row_drop_params: bool | None, deployment_drop_params: bool | None
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    body: Final = {
+        "model": model,
+        "input": "hi",
+        "max_output_tokens": 10,
+        "tools": [_HOSTED_MCP_TOOL, _RESPONSES_WEATHER_TOOL],
+        "tool_choice": {"type": "mcp", "server_label": "deepwiki"},
+        **({} if row_drop_params is None else {"drop_params": row_drop_params}),
+    }
+
+    model_input: Final = json.dumps(_uploaded_row(model, "/v1/responses", body, deployment_drop_params))
+
+    assert "get_weather" in model_input
+    assert "deepwiki" not in model_input
+    assert "toolChoice" not in model_input
+    assert "tool_choice" not in model_input
+    assert "drop_params" not in model_input
+
+
+_CHAT_ROW: Final = {"messages": [{"role": "user", "content": "hi"}], "max_tokens": 10}
+_FORCE_DEEPWIKI: Final = {"type": "mcp", "server_label": "deepwiki"}
+_FORCE_DOCS: Final = {"type": "mcp", "server_label": "docs"}
+_RESPONSES_ROW: Final = {"input": "hi", "max_output_tokens": 10}
+_REAL_TIME_MCP_CHOICE_REFUSAL: Final = (
+    "tool_choice type 'mcp' forces an OpenAI hosted tool and is only supported for azure, litellm_proxy, openai"
+)
+_REAL_TIME_CALLS: Final = MappingProxyType(
+    {"/v1/chat/completions": litellm.completion, "/v1/responses": litellm.responses}
+)
+
+
+@pytest.mark.parametrize("model", _BATCH_MODELS)
+@pytest.mark.parametrize(
+    ("url", "body", "drop_params", "cause"),
+    [
+        pytest.param(
+            "/v1/chat/completions",
+            {**_CHAT_ROW, "tools": [_HOSTED_MCP_TOOL, _WEATHER_TOOL], "tool_choice": _FORCE_DOCS},
+            True,
+            "This request sends no hosted MCP tool with server_label `docs`. Send that tool or remove the tool_choice.",
+            id="chat-another-server",
+        ),
+        pytest.param(
+            "/v1/chat/completions",
+            {**_CHAT_ROW, "tools": [_WEATHER_TOOL], "tool_choice": _FORCE_DEEPWIKI},
+            True,
+            "This request sends no hosted MCP tool with server_label `deepwiki`. "
+            "Send that tool or remove the tool_choice.",
+            id="chat-no-mcp-tool",
+        ),
+        pytest.param(
+            "/v1/chat/completions",
+            {**_CHAT_ROW, "tools": [_HOSTED_MCP_TOOL, _WEATHER_TOOL], "tool_choice": _FORCE_DEEPWIKI},
+            False,
+            "Set drop_params to true to drop this tool_choice together with the hosted MCP tool `deepwiki`, "
+            "or remove both.",
+            id="chat-drop-params-off",
+        ),
+        pytest.param(
+            "/v1/responses",
+            {**_RESPONSES_ROW, "tools": [_HOSTED_MCP_TOOL, _RESPONSES_WEATHER_TOOL], "tool_choice": _FORCE_DOCS},
+            True,
+            "This request sends no hosted MCP tool with server_label `docs`. Send that tool or remove the tool_choice.",
+            id="responses-another-server",
+        ),
+        pytest.param(
+            "/v1/responses",
+            {**_RESPONSES_ROW, "tools": [_RESPONSES_WEATHER_TOOL], "tool_choice": _FORCE_DEEPWIKI},
+            True,
+            "This request sends no hosted MCP tool with server_label `deepwiki`. "
+            "Send that tool or remove the tool_choice.",
+            id="responses-no-mcp-tool",
+        ),
+    ],
+)
+def test_batch_row_is_refused_like_a_real_time_call_when_drop_params_cannot_drop_its_mcp_tool_choice(
+    monkeypatch: pytest.MonkeyPatch, model: str, url: str, body: Mapping[str, object], drop_params: bool, cause: str
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    with pytest.raises(BedrockError) as batch:
+        _uploaded_row(model, url, {"model": model, **body}, drop_params)
+    with pytest.raises(litellm.BadRequestError) as real_time:
+        _REAL_TIME_CALLS[url](
+            model=model, **body, drop_params=drop_params, api_key="test-bedrock-token", aws_region_name="us-west-2"
+        )
+
+    assert batch.value.status_code == 400
+    assert _REAL_TIME_MCP_CHOICE_REFUSAL in batch.value.message
+    assert batch.value.message.endswith(f"custom_llm_provider=bedrock. {cause}")
+    assert real_time.value.message.endswith(f"custom_llm_provider=bedrock. {cause}")
+
+
+@pytest.mark.parametrize("model", _BATCH_MODELS)
+@pytest.mark.parametrize(
+    ("url", "body"),
+    [
+        (
+            "/v1/chat/completions",
+            {
+                "messages": [{"role": "user", "content": "hi"}],
+                "max_tokens": 10,
+                "tools": [_HOSTED_MCP_TOOL, _WEATHER_TOOL],
+                "tool_choice": {"type": "function", "function": {"name": "deepwiki"}},
+            },
+        ),
+        (
+            "/v1/responses",
+            {
+                "input": "hi",
+                "max_output_tokens": 10,
+                "tools": [_HOSTED_MCP_TOOL, _RESPONSES_WEATHER_TOOL],
+                "tool_choice": {"type": "mcp", "server_label": "deepwiki"},
+            },
+        ),
+    ],
+    ids=["chat", "responses"],
+)
+def test_batch_row_with_a_null_drop_params_takes_its_deployments_drop_params(
+    monkeypatch: pytest.MonkeyPatch, model: str, url: str, body: Mapping[str, object]
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    model_input: Final = json.dumps(_uploaded_row(model, url, {"model": model, **body, "drop_params": None}, True))
+
+    assert "get_weather" in model_input
+    assert "deepwiki" not in model_input
+    assert "drop_params" not in model_input

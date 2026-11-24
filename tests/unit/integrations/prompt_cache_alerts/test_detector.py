@@ -354,9 +354,13 @@ async def _call(
     return response
 
 
-async def _settle(script: _Script, count: int) -> None:
+async def _drain_logging() -> None:
     await drain_logging_tasks()
     await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=_GUARD_SECONDS)
+
+
+async def _settle(script: _Script, count: int) -> None:
+    await _drain_logging()
     await script.until(count)
 
 
@@ -375,7 +379,6 @@ _ZEROS: Final = _usage(0, 0)
     ("usage", "expected"), [(_ZEROS, "miss"), ({}, "reset")], ids=["reported-zeros", "counters-absent"]
 )
 async def test_a_real_completion_reads_the_raw_counters_and_leaves_the_response_unchanged(
-    monkeypatch: pytest.MonkeyPatch,
     respx_mock: respx.MockRouter,
     watched: _Script,
     usage: Mapping[str, int],
@@ -384,8 +387,8 @@ async def test_a_real_completion_reads_the_raw_counters_and_leaves_the_response_
     """Normalized usage reports 0 cache tokens either way, so only the raw body can tell them apart."""
     observed: Final = await _call(respx_mock, _anthropic_reply(usage))
     await _settle(watched, 1)
-    monkeypatch.setattr(litellm, "callbacks", [])
-    unobserved: Final = await _call(respx_mock, _anthropic_reply(usage))
+    unobserved: Final = await _call(respx_mock, _anthropic_reply(usage), no_log=True)
+    await _drain_logging()
     assert watched.events() == [expected]
     assert observed is not None and unobserved is not None
     assert observed.choices[0].model_dump() == unobserved.choices[0].model_dump()
@@ -398,8 +401,11 @@ async def test_a_streamed_request_between_misses_resets_the_deployment_those_mis
     """Streamed attempts log an empty API key, so they cannot share the assessed configuration. The reset lands on
     the deployment key every assessed streak on it reads."""
     await _call(respx_mock, _anthropic_reply(_usage(0, 2048)))
+    await _settle(watched, 1)
     await _call(respx_mock, _anthropic_reply(_ZEROS))
+    await _settle(watched, 2)
     await _call(respx_mock, _anthropic_stream(_usage(512, 0)), stream=True)
+    await _settle(watched, 3)
     await _call(respx_mock, _anthropic_reply(_ZEROS))
     await _settle(watched, 4)
     assert watched.events() == ["proof", "miss", "reset", "miss"]
@@ -411,8 +417,11 @@ async def test_the_logged_account_and_endpoint_split_configurations_and_redactio
     monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, watched: _Script
 ) -> None:
     await _call(respx_mock, _anthropic_reply(_ZEROS))
+    await _settle(watched, 1)
     await _call(respx_mock, _anthropic_reply(_ZEROS), api_key="sk-ant-other")
+    await _settle(watched, 2)
     await _call(respx_mock, _anthropic_reply(_ZEROS), api_base="https://gateway.example/v1/messages")
+    await _settle(watched, 3)
     monkeypatch.setattr(litellm, "turn_off_message_logging", True)
     await _call(respx_mock, _anthropic_reply(_ZEROS))
     await _settle(watched, 4)
@@ -428,8 +437,11 @@ async def test_a_no_log_request_is_never_observed_even_when_it_read_the_cache(
 ) -> None:
     """no-log requests stay out of the detector, so a hit among them is not seen and the alert stays advisory."""
     await _call(respx_mock, _anthropic_reply(_usage(0, 2048)))
+    await _settle(watched, 1)
     await _call(respx_mock, _anthropic_reply(_ZEROS))
+    await _settle(watched, 2)
     await _call(respx_mock, _anthropic_reply(_usage(2048, 0)), no_log=True)
+    await _drain_logging()
     await _call(respx_mock, _anthropic_reply(_ZEROS))
     await _settle(watched, 3)
     assert watched.events() == ["proof", "miss", "miss"]

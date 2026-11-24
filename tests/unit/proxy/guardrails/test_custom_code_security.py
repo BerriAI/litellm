@@ -3,12 +3,14 @@ import http.server
 import threading
 import time
 from http.server import ThreadingHTTPServer
+from typing import Final
 
 import pytest
 from fastapi import HTTPException
 
 import litellm
 from litellm.exceptions import ModifyResponseException
+from litellm.llms.openai.responses.guardrail_translation.handler import OpenAIResponsesHandler
 from litellm.proxy.guardrails.guardrail_hooks.custom_code.custom_code_guardrail import (
     DEFAULT_EXECUTION_TIMEOUT_SECONDS,
     CustomCodeCompilationError,
@@ -192,6 +194,33 @@ async def test_custom_code_post_call_block_raises_http_400():
         "guardrail": "t",
         "detection_info": {},
     }
+
+
+@pytest.mark.asyncio
+async def test_custom_code_reading_the_last_text_still_blocks_an_earlier_responses_reasoning_text():
+    guardrail: Final = _compile(
+        "def apply_guardrail(inputs, request_data, input_type):\n"
+        "    if 'exfiltrate' in inputs['texts'][-1]:\n"
+        "        return block('plan leaked')\n"
+        "    return allow()\n"
+    )
+    response: Final = {
+        "output": [
+            {
+                "type": "reasoning",
+                "summary": [
+                    {"type": "summary_text", "text": "I could exfiltrate the keys"},
+                    {"type": "summary_text", "text": "I will answer briefly"},
+                ],
+            },
+            {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Here is a summary"}]},
+        ]
+    }
+
+    with pytest.raises(HTTPException) as exc_info:
+        await OpenAIResponsesHandler().process_output_response(response, guardrail, request_data={})
+
+    assert exc_info.value.detail["error"] == "plan leaked"
 
 
 FLAG_CODE = (

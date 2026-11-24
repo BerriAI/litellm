@@ -30,6 +30,7 @@ import { Trans, useTranslation } from "react-i18next";
 import { z } from "zod";
 import { useWorker } from "@/hooks/useWorker";
 import i18n from "@/i18n/i18n";
+import { uiHref } from "@/utils/uiHref";
 import { productNames } from "@/i18n/untranslated/productNames";
 
 const loginSchema = z.object({
@@ -38,6 +39,23 @@ const loginSchema = z.object({
 });
 
 type LoginFormValues = z.infer<typeof loginSchema>;
+
+function LoginLogo() {
+  return (
+    <div className="flex justify-center">
+      <img
+        src={uiHref("assets/logos/litellm_logo.png")}
+        alt={productNames.liteLLM}
+        className="h-10 w-auto dark:hidden"
+      />
+      <img
+        src={uiHref("assets/logos/litellm_logo_dark.png")}
+        alt={productNames.liteLLM}
+        className="hidden h-10 w-auto dark:block"
+      />
+    </div>
+  );
+}
 
 function SsoEnabledNotice() {
   const { t } = useTranslation();
@@ -199,9 +217,7 @@ function LoginPageContent() {
         <Card className="w-full max-w-lg shadow-md">
           <CardContent>
             <div className="flex w-full flex-col gap-4">
-              <div className="text-center">
-                <h2 className="text-3xl font-semibold text-foreground">{productNames.liteLLMWithLogo}</h2>
-              </div>
+              <LoginLogo />
 
               <Alert variant="warning">
                 <TriangleAlert />
@@ -226,9 +242,7 @@ function LoginPageContent() {
         <CardContent>
           <TooltipProvider>
             <div className="flex w-full flex-col gap-4">
-              <div className="text-center">
-                <h2 className="text-3xl font-semibold text-foreground">{productNames.liteLLMWithLogo}</h2>
-              </div>
+              <LoginLogo />
 
               <div className="text-center">
                 <h3 className="text-2xl font-semibold text-foreground">{t("login.form.title")}</h3>

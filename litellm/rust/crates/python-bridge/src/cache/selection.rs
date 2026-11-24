@@ -1,39 +1,11 @@
 use super::{CACHE_HOST_MODULE, HandleError, python};
-use litellm_cache_response::{CacheOptions, CachePolicy, CacheScope, ScopedCache};
-use litellm_host::{
-    machine::{HostServices, MachineFault},
-    protocol::Protocol,
-};
+use litellm_cache_response::CachePolicy;
 use pyo3::{prelude::*, types::PyDict};
 
-enum Backend {
-    Disabled,
-    Python { namespace: String },
-}
-
+/// The configured Python cache a call uses, by its namespace, and the caller's cache controls.
 pub(crate) struct Selection {
-    backend: Backend,
-    options: CacheOptions,
-}
-
-impl Selection {
-    pub(crate) fn attach<P: Protocol>(
-        self,
-        services: HostServices<P>,
-    ) -> (Option<ScopedCache>, CacheOptions)
-    where
-        P::HostCall: From<python::CacheCall>,
-        P::Error: From<MachineFault> + std::error::Error,
-    {
-        let service = match self.backend {
-            Backend::Disabled => None,
-            Backend::Python { namespace } => Some(python::service(services, namespace)),
-        };
-        (
-            service.map(|service| ScopedCache::new(service, CacheScope::Shared)),
-            self.options,
-        )
-    }
+    pub(crate) namespace: Option<String>,
+    pub(crate) policy: CachePolicy,
 }
 
 fn selected_cache<'py>(
@@ -96,8 +68,8 @@ pub(crate) fn configure(
     };
     let Some(cache) = selected else {
         return Ok(Selection {
-            backend: Backend::Disabled,
-            options: CacheOptions::new(CacheScope::Shared),
+            namespace: None,
+            policy: CachePolicy::default(),
         });
     };
     let enabled = cache
@@ -119,13 +91,10 @@ pub(crate) fn configure(
             .transpose()
             .map(|value| value.unwrap_or(false))
     };
-    let options = CacheOptions {
-        policy: CachePolicy {
-            no_cache: boolean("no-cache")? || skips_read,
-            no_store: boolean("no-store")?,
-            ..CachePolicy::default()
-        },
-        ..CacheOptions::new(CacheScope::Shared)
+    let policy = CachePolicy {
+        no_cache: boolean("no-cache")? || skips_read,
+        no_store: boolean("no-store")?,
+        ..CachePolicy::default()
     };
     let namespace = cache
         .getattr_opt("namespace")?
@@ -135,11 +104,7 @@ pub(crate) fn configure(
         .unwrap_or_default();
     python.bind(cache, function, arguments);
     Ok(Selection {
-        backend: if enabled {
-            Backend::Python { namespace }
-        } else {
-            Backend::Disabled
-        },
-        options,
+        namespace: enabled.then_some(namespace),
+        policy,
     })
 }

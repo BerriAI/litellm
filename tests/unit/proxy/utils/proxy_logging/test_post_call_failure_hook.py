@@ -16,7 +16,7 @@ from fastapi import HTTPException
 
 import litellm
 from litellm.constants import PROXY_REJECTED_BEFORE_ROUTING_KEY
-from litellm.exceptions import GuardrailRaisedException
+from litellm.exceptions import GuardrailRaisedException, ModifyResponseException
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import ProxyErrorTypes, UserAPIKeyAuth
 from litellm.proxy.utils import REJECTED_BEFORE_REQUEST_SETUP, REJECTED_BEFORE_REQUEST_SETUP_KEY, ProxyLogging
@@ -28,6 +28,17 @@ def _clear_caps_cache():
     ProxyLogging._callback_capabilities_cache.clear()
     yield
     ProxyLogging._callback_capabilities_cache.clear()
+
+
+def _reply_block(*, log_as_failure: bool) -> ModifyResponseException:
+    """A guardrail's block of the prompt, answered as a 200 reply: the LLM was never called."""
+    return ModifyResponseException(
+        message="blocked by guardrail",
+        model="internal-model",
+        request_data={},
+        guardrail_name="deny-list",
+        log_as_failure=log_as_failure,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -63,6 +74,18 @@ def test_is_proxy_only_llm_api_truth_table(proxy_logging):
             original_exception=GuardrailRaisedException(guardrail_name="g", message="blocked"),
             route="/chat/completions",
         ),
+        "reply_block_on_llm_route": proxy_logging._is_proxy_only_llm_api_error(
+            original_exception=_reply_block(log_as_failure=False),
+            route="/chat/completions",
+        ),
+        "reply_block_asking_to_be_logged_on_llm_route": proxy_logging._is_proxy_only_llm_api_error(
+            original_exception=_reply_block(log_as_failure=True),
+            route="/chat/completions",
+        ),
+        "reply_block_asking_to_be_logged_on_non_llm_route": proxy_logging._is_proxy_only_llm_api_error(
+            original_exception=_reply_block(log_as_failure=True),
+            route="/random/path",
+        ),
     }
     assert snapshot == {
         "no_route": False,
@@ -71,6 +94,9 @@ def test_is_proxy_only_llm_api_truth_table(proxy_logging):
         "auth_short_circuit": True,
         "auth_short_circuit_on_queued_route": True,
         "guardrail_raised_on_llm_route": True,
+        "reply_block_on_llm_route": False,
+        "reply_block_asking_to_be_logged_on_llm_route": True,
+        "reply_block_asking_to_be_logged_on_non_llm_route": False,
     }
 
 
@@ -125,6 +151,43 @@ def test_is_proxy_only_llm_api_missing_exception_raises(proxy_logging):
 # ---------------------------------------------------------------------------
 # post_call_failure_hook
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("log_as_failure", "reply_logs_success", "failure_events"),
+    [(True, False, 1), (False, False, 0), (True, True, 0)],
+    ids=["asks-to-be-logged", "does-not-ask", "its-reply-stream-logs-a-success"],
+)
+async def test_a_reply_style_block_of_the_prompt_reaches_the_failure_callbacks_once_and_only_when_it_asks(
+    proxy_logging: ProxyLogging,
+    make_user_api_key_auth: Callable[..., UserAPIKeyAuth],
+    monkeypatch: pytest.MonkeyPatch,
+    log_as_failure: bool,
+    reply_logs_success: bool,
+    failure_events: int,
+) -> None:
+    recorded: Final[list[dict[str, object]]] = []
+
+    class _RecordingLogger(CustomLogger):
+        async def async_log_failure_event(
+            self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+        ) -> None:
+            recorded.append(kwargs)
+
+    monkeypatch.setattr(litellm, "callbacks", [_RecordingLogger()])
+    proxy_logging.alert_types = []
+
+    await proxy_logging.post_call_failure_hook(
+        request_data={"model": "internal-model", "messages": [{"role": "user", "content": "hi"}]},
+        original_exception=_reply_block(log_as_failure=log_as_failure),
+        user_api_key_dict=make_user_api_key_auth(request_route="/chat/completions"),
+        route="/chat/completions",
+        reply_logs_success=reply_logs_success,
+    )
+
+    assert len(recorded) == failure_events
+    assert all(isinstance(kwargs["exception"], ModifyResponseException) for kwargs in recorded)
 
 
 @pytest.mark.asyncio

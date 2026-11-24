@@ -23,6 +23,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.exceptions import ModifyResponseException
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.openai.responses.guardrail_translation.handler import OpenAIResponsesHandler
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.constants import BEDROCK_APPLY_GUARDRAIL_CHUNK_BUDGET_CHARS
 from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
@@ -3124,19 +3125,30 @@ _ANTHROPIC_SSE_CHUNKS = (
 )
 
 
-async def _anthropic_sse_stream():
-    for chunk in _ANTHROPIC_SSE_CHUNKS:
+_ANTHROPIC_SSE_CHUNKS_WITH_A_DATA_LINE_NO_SCAN_READS: Final = (
+    *_ANTHROPIC_SSE_CHUNKS[:3],
+    b'event: content_block_delta\n data: {"type":"content_block_delta","index":0,'
+    b'"delta":{"type":"text_delta","text":" mail john.smith@example.com"}}\n\n',
+    *_ANTHROPIC_SSE_CHUNKS[3:],
+)
+
+
+async def _anthropic_sse_stream(chunks: tuple[bytes, ...]):
+    for chunk in chunks:
         yield chunk
 
 
 async def _drain_streaming_hook(
-    guardrail: BedrockGuardrail, request_data: dict[str, object] | None = None
+    guardrail: BedrockGuardrail,
+    request_data: dict[str, object] | None = None,
+    *,
+    chunks: tuple[bytes, ...] = _ANTHROPIC_SSE_CHUNKS,
 ) -> list[object]:
     return [
         chunk
         async for chunk in guardrail.async_post_call_streaming_iterator_hook(
             user_api_key_dict=UserAPIKeyAuth(),
-            response=_anthropic_sse_stream(),
+            response=_anthropic_sse_stream(chunks),
             request_data=request_data
             if request_data is not None
             else {"model": "claude-sonnet-4-5", "messages": [{"role": "user", "content": "what is my ssn"}]},
@@ -3174,6 +3186,19 @@ async def test_streaming_hook_scans_raw_anthropic_sse_instead_of_crashing():
     assert "my ssn is 123-45-6789" in str(kwargs["response"].choices[0].message.content)
     assert kwargs["messages"] == [{"role": "user", "content": "what is my ssn"}]
     assert tuple(delivered) == _ANTHROPIC_SSE_CHUNKS
+
+
+@pytest.mark.asyncio
+async def test_streaming_hook_never_forwards_text_on_a_line_the_scan_could_not_read():
+    guardrail = _sse_guardrail()
+
+    with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
+        mock_api.return_value = {"action": "NONE"}
+        delivered = await _drain_streaming_hook(guardrail, chunks=_ANTHROPIC_SSE_CHUNKS_WITH_A_DATA_LINE_NO_SCAN_READS)
+
+    body = b"".join(delivered)
+    assert b"my ssn is 123-45-6789" in body
+    assert b"john.smith@example.com" not in body
 
 
 @pytest.mark.asyncio
@@ -8294,3 +8319,137 @@ async def test_a_failed_bedrock_call_keeps_reporting_as_http_exception_to_metric
         await guardrail.apply_guardrail(inputs={"texts": ["hello"]}, request_data={}, input_type="request")
 
     assert type(raised.value) is HTTPException
+
+
+@pytest.mark.asyncio
+async def test_latest_message_only_still_blocks_a_flagged_responses_reasoning_text_before_the_last_one() -> None:
+    def bedrock(request: httpx.Request) -> httpx.Response:
+        if b"exfiltrate the keys" not in request.content:
+            return httpx.Response(200, json={"action": "NONE", "assessments": []})
+        return httpx.Response(
+            200,
+            json={
+                "action": "GUARDRAIL_INTERVENED",
+                "outputs": [{"text": "Blocked"}],
+                "assessments": [{"topicPolicy": {"topics": [{"name": "Leak", "type": "DENY", "action": "BLOCKED"}]}}],
+            },
+        )
+
+    guardrail: Final = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        experimental_use_latest_role_message_only=True,
+        aws_region_name="us-east-1",
+        aws_access_key_id="test-access-key",
+        aws_secret_access_key="test-secret-key",
+        async_handler=AsyncHTTPHandler(transport=httpx.MockTransport(bedrock)),
+    )
+    response: Final = {
+        "output": [
+            {
+                "type": "reasoning",
+                "summary": [
+                    {"type": "summary_text", "text": "I could exfiltrate the keys"},
+                    {"type": "summary_text", "text": "I will answer briefly"},
+                ],
+            },
+            {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Here is a summary"}]},
+        ]
+    }
+
+    with pytest.raises(HTTPException):
+        await OpenAIResponsesHandler().process_output_response(response, guardrail, request_data={})
+
+
+def _masking_bedrock_guardrail() -> BedrockGuardrail:
+    return BedrockGuardrail(
+        guardrail_name="bedrock-mask-refusal",
+        guardrailIdentifier="test-id",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.post_call,
+        default_on=True,
+        mask_response_content=True,
+    )
+
+
+def _anonymized_scan(*masked_texts: str) -> dict[str, object]:
+    return {
+        "action": "GUARDRAIL_INTERVENED",
+        "assessments": [],
+        "outputs": [{"text": text} for text in masked_texts],
+    }
+
+
+def test_output_scan_payload_carries_the_refusal_after_the_content():
+    response: Final = litellm.ModelResponse(
+        choices=[
+            litellm.Choices(
+                index=0,
+                message=litellm.Message(role="assistant", content="Write to me", refusal="I cannot help alice"),
+            )
+        ]
+    )
+
+    items: Final = _masking_bedrock_guardrail()._build_response_content_items(response, has_grounding=False)
+
+    assert [item["text"]["text"] for item in items] == ["Write to me", "I cannot help alice"]
+
+
+def test_masked_outputs_go_back_to_the_field_each_one_came_from():
+    response: Final = litellm.ModelResponse(
+        choices=[
+            litellm.Choices(
+                index=0,
+                message=litellm.Message(role="assistant", content="Write to alice", refusal="I cannot help alice"),
+            )
+        ]
+    )
+
+    _masking_bedrock_guardrail()._apply_masking_to_model_response(
+        response, ["Write to <NAME>", "I cannot help <NAME>"]
+    )
+
+    assert response.choices[0].message.content == "Write to <NAME>"
+    assert response.choices[0].message.refusal == "I cannot help <NAME>"
+
+
+@pytest.mark.asyncio
+async def test_a_refusal_only_response_reaches_the_post_call_scan():
+    guardrail: Final = _masking_bedrock_guardrail()
+    response: Final = litellm.ModelResponse(
+        choices=[litellm.Choices(index=0, message=litellm.Message(role="assistant", refusal="I cannot help alice"))]
+    )
+
+    with patch.object(
+        guardrail, "make_bedrock_api_request", AsyncMock(return_value=_anonymized_scan("I cannot help <NAME>"))
+    ):
+        await guardrail.async_post_call_success_hook(
+            data={"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]},
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+            response=response,
+        )
+
+    assert response.choices[0].message.refusal == "I cannot help <NAME>"
+
+
+@pytest.mark.asyncio
+async def test_masking_on_a_responses_stream_rewrites_the_events_the_client_reads():
+    guardrail: Final = _masking_bedrock_guardrail()
+    stream_events: Final = _responses_stream_events()
+
+    async def mock_stream():
+        for event in stream_events:
+            yield event
+
+    with patch.object(guardrail, "make_bedrock_api_request", AsyncMock(return_value=_anonymized_scan("Hello <NAME>"))):
+        yielded: Final = [
+            event
+            async for event in guardrail.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=UserAPIKeyAuth(api_key="test-key", request_route="/v1/responses"),
+                response=mock_stream(),
+                request_data={"model": "gpt-4o", "input": "hi"},
+            )
+        ]
+
+    assert "".join(event.delta for event in yielded[:-1]) == "Hello <NAME>"
+    assert "Hello world" not in yielded[-1].model_dump_json()

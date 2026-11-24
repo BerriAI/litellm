@@ -557,6 +557,17 @@ class TestAnthropicBetaHeadersFiltering:
 
         assert frozenset(headers["anthropic-beta"].split(",")) == claude_code_betas
 
+    @pytest.mark.parametrize("provider", ["bedrock", "bedrock_mantle", "databricks"])
+    def test_platforms_forward_the_server_side_fallback_beta_they_take(self, provider: str) -> None:
+        """A `fallback` content block in the history needs server-side-fallback-2026-06-01, or the platform answers
+        400 "Input tag 'fallback' found using 'type' does not match any of the expected tags". Live probes on
+        2026-11-19 in us-east-1 found Bedrock Invoke and Bedrock Mantle answer 200 to a fallback-block history with
+        server-side-fallback-2026-06-01 and reject server-side-fallback-2026-07-01 with "Unexpected value(s)", and
+        Databricks answered the same way on databricks-claude-haiku-4-5 on 2026-11-23."""
+        assert update_headers_with_filtered_beta(
+            {"anthropic-beta": "server-side-fallback-2026-06-01,server-side-fallback-2026-07-01"}, provider
+        ) == {"anthropic-beta": "server-side-fallback-2026-06-01"}
+
     @pytest.mark.parametrize("provider", ["anthropic", "azure_ai", "vertex_ai"])
     def test_every_anthropic_sdk_beta_has_a_decision_for_the_probed_platforms(self, provider: str) -> None:
         sdk_betas: Final = _literal_strings(AnthropicBetaParam)

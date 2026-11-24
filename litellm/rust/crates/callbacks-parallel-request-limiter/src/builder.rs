@@ -801,7 +801,7 @@ impl Request<'_> {
 }
 
 /// The descriptor keys a router fallback target reserves: every limit scoped to one model.
-pub const FALLBACK_TARGET_KEYS: [&str; 10] = [
+pub const FALLBACK_TARGET_KEYS: [&str; 15] = [
     "model_per_key",
     "model_per_team",
     "model_per_end_user",
@@ -812,6 +812,11 @@ pub const FALLBACK_TARGET_KEYS: [&str; 10] = [
     "model_per_customer_org",
     "model_per_customer_team",
     "model_per_customer_member",
+    "model_per_app",
+    "model_per_app_customer_org",
+    "model_per_app_customer_member",
+    "model_per_app_group",
+    "model_per_app_group_customer_org",
 ];
 const MODEL_SCOPED_PREFIX: &str = "model_per_";
 const SKILL_HUB_PUBLISH: &str = "skill_hub_publish";
@@ -848,10 +853,12 @@ pub enum Selection {
     Request,
     /// The per-model limits a router fallback target reserves.
     FallbackTarget,
-    /// The token windows one Responses WebSocket turn is checked against.
+    /// The token windows one WebSocket turn is checked against.
     SocketTurn {
         #[serde(default)]
         agent_windows: Vec<Value>,
+        #[serde(default)]
+        project_io: bool,
     },
     /// The project ITPM and OTPM quotas of the requested model.
     ProjectIo,
@@ -893,8 +900,18 @@ fn keyed(descriptor: &Value, keys: &[&str]) -> bool {
 }
 
 /// Each descriptor's token window alone, for the turns of a socket that took its slot and RPM at
-/// admission. Project IO and PTU budgets are charged by their own paths, so they are left out.
-pub fn socket_turn_tpm_windows(built: Vec<Value>, agent_windows: &[Value]) -> Vec<Value> {
+/// admission. PTU budgets are charged by their own path, and so is project IO unless the turns
+/// charge it themselves, so those are left out.
+pub fn socket_turn_tpm_windows(
+    built: Vec<Value>,
+    agent_windows: &[Value],
+    project_io: bool,
+) -> Vec<Value> {
+    let uncounted: &[&str] = if project_io {
+        &[PTU_TEAM]
+    } else {
+        &[PROJECT_ITPM, PROJECT_OTPM, PTU_TEAM]
+    };
     let built_scopes: Vec<(Value, Value)> = built.iter().map(identity).collect();
     built
         .iter()
@@ -903,7 +920,7 @@ pub fn socket_turn_tpm_windows(built: Vec<Value>, agent_windows: &[Value]) -> Ve
                 .iter()
                 .filter(|window| !built_scopes.contains(&identity(window))),
         )
-        .filter(|descriptor| !keyed(descriptor, &[PROJECT_ITPM, PROJECT_OTPM, PTU_TEAM]))
+        .filter(|descriptor| !keyed(descriptor, uncounted))
         .filter_map(|descriptor| {
             let tokens = rate_limit_member(descriptor, "tokens_per_unit");
             (!tokens.is_null()).then(|| {
@@ -1096,9 +1113,13 @@ impl Request<'_> {
                 .into_iter()
                 .filter(|descriptor| keyed(descriptor, &FALLBACK_TARGET_KEYS))
                 .collect()),
-            Selection::SocketTurn { agent_windows } => Ok(socket_turn_tpm_windows(
+            Selection::SocketTurn {
+                agent_windows,
+                project_io,
+            } => Ok(socket_turn_tpm_windows(
                 self.build()?.descriptors,
                 agent_windows,
+                *project_io,
             )),
             Selection::ProjectIo => self.project_io(),
             Selection::SubCall => {
@@ -1120,6 +1141,41 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+
+    #[rstest]
+    #[case::app("app")]
+    #[case::organization("app_customer_org")]
+    #[case::member("app_customer_member")]
+    fn app_limits_emit_scope_and_model_descriptors(#[case] owner: &str) {
+        let metadata = AuthMetadata {
+            customer_scopes: Some(vec![CustomerScope {
+                key: owner.into(),
+                entity_id: "identity".into(),
+                rpm_limit: json!(2),
+                tpm_limit: json!(20),
+                model_rpm_limit: json!({"model": 1}),
+                model_tpm_limit: json!({"model": 10}),
+                ..Default::default()
+            }]),
+            ..Default::default()
+        };
+        let lookups = lookups(&["model"]);
+        let descriptors = built(json!({}), metadata, &lookups, "model");
+        assert!(descriptors.contains(&descriptor(
+            owner,
+            json!("identity"),
+            json!(2),
+            json!(20),
+            60
+        )));
+        assert!(descriptors.contains(&descriptor(
+            &format!("model_per_{owner}"),
+            json!("identity:model"),
+            json!(1),
+            json!(10),
+            60,
+        )));
+    }
 
     fn lookups(candidates: &[&str]) -> Lookups {
         Lookups {

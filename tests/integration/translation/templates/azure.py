@@ -1,6 +1,7 @@
 from collections.abc import Mapping
 from typing import Final
 
+from integration._support.responses_prompt import with_leading_system_message
 from pydantic import JsonValue
 
 AZURE_RESPONSES_REQUEST: Final[Mapping[str, JsonValue]] = {
@@ -85,7 +86,7 @@ AZURE_RESPONSES_REQUEST: Final[Mapping[str, JsonValue]] = {
     ],
 }
 
-AZURE_RESPONSES_BRIDGE_REQUEST: Final[Mapping[str, JsonValue]] = {
+AZURE_RESPONSES_BRIDGE_REQUEST_CAPTURED: Final[Mapping[str, JsonValue]] = {
     "input": [
         {
             "type": "message",
@@ -176,6 +177,10 @@ AZURE_RESPONSES_BRIDGE_REQUEST: Final[Mapping[str, JsonValue]] = {
         },
     ],
 }
+
+AZURE_RESPONSES_BRIDGE_REQUEST: Final[Mapping[str, JsonValue]] = with_leading_system_message(
+    AZURE_RESPONSES_BRIDGE_REQUEST_CAPTURED
+)
 
 AZURE_RESPONSES_RESPONSE: Final[Mapping[str, JsonValue]] = {
     "id": "resp_03952e888f4f1827006ad023aa00108190b24e51d376e9a373",

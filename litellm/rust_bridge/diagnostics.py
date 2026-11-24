@@ -6,7 +6,7 @@ from typing import Final, Protocol, TypeVar, cast
 
 from litellm.rust_bridge.bindings import NativeBinding
 
-ResultT: Final = TypeVar("ResultT")
+ResultT = TypeVar("ResultT")
 
 
 class NativeDiagnosticProcessor(Protocol):

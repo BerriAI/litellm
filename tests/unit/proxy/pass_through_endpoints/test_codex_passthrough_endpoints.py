@@ -24,17 +24,20 @@ from litellm.proxy import proxy_server
 from litellm.proxy._types import LiteLLM_JWTAuth, LiteLLM_TeamTableCachedObj, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.codex_model_catalog import bundled_codex_models
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.pass_through_endpoints.codex_passthrough_endpoints import (
     _ACCOUNT_SLUGS_FETCHES_PER_CALLER,
     codex_shared_cache,
 )
 from litellm.proxy.utils import hash_token
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.responses.litellm_completion_transformation.reasoning_items import (
     encode_thinking_blocks,
     mint_reasoning_item_id,
 )
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from tests._master_key import MASTER_KEY
+from tests.unit.proxy._prisma import prisma_with_empty_config
 
 _BASE: Final = "https://chatgpt.com/backend-api/codex"
 _TOKEN: Final = "test-subscription-token"
@@ -632,7 +635,7 @@ def test_chatgpt_model_keeps_passthrough_without_other_providers_reasoning(
 
 @pytest.fixture
 def restricted_key(monkeypatch: pytest.MonkeyPatch) -> Callable[..., str]:
-    monkeypatch.setattr(proxy_server, "prisma_client", "test-database")
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma_with_empty_config())
 
     def mint(
         models: list[str],
@@ -642,8 +645,8 @@ def restricted_key(monkeypatch: pytest.MonkeyPatch) -> Callable[..., str]:
     ) -> str:
         key: Final = f"sk-test-{'-'.join((*models, *allowed_routes, str(user_role), *allowed_tools))}"
         proxy_server.user_api_key_cache.set_cache(
-            key=hash_token(key),
-            value=UserAPIKeyAuth(
+            AuthObject.virtual_key(hash_token(key)),
+            UserAPIKeyAuth(
                 token=hash_token(key),
                 models=models,
                 allowed_routes=list(allowed_routes),
@@ -717,14 +720,14 @@ def test_native_route_serves_only_the_models_the_key_allows(
 
 
 def _key_with_alias_to_budgeted_target(monkeypatch: pytest.MonkeyPatch, target_budget: float) -> str:
-    monkeypatch.setattr(proxy_server, "prisma_client", "test-database")
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma_with_empty_config())
     monkeypatch.setattr(
         proxy_server, "llm_router", Router(model_list=[_open_weights("group-a"), _open_weights("group-b")])
     )
     key: Final = f"sk-test-alias-budget-{target_budget}"
     proxy_server.user_api_key_cache.set_cache(
-        key=hash_token(key),
-        value=UserAPIKeyAuth(
+        AuthObject.virtual_key(hash_token(key)),
+        UserAPIKeyAuth(
             token=hash_token(key),
             models=["group-a", "group-b"],
             router_settings={"model_group_alias": {"group-a": "group-b"}},
@@ -744,7 +747,9 @@ def test_native_route_refuses_a_saved_alias_when_its_target_is_over_budget(
     key: Final = _key_with_alias_to_budgeted_target(monkeypatch, target_budget=0.0)
     if custom_auth:
         monkeypatch.setattr(litellm, "enable_post_custom_auth_checks", True, raising=False)
-        identity: Final = proxy_server.user_api_key_cache.get_cache(key=hash_token(key), model_type=UserAPIKeyAuth)
+        identity: Final = proxy_server.user_api_key_cache.get_cache(
+            AuthObject.virtual_key(hash_token(key)), model_type=UserAPIKeyAuth
+        )
         assert identity is not None
 
         async def authenticate(request: Request, api_key: str) -> UserAPIKeyAuth:
@@ -790,11 +795,11 @@ def test_native_route_keeps_a_chatgpt_turn_on_the_subscription_despite_a_saved_a
     mixed_router: Router,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(proxy_server, "prisma_client", "test-database")
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma_with_empty_config())
     key: Final = "sk-test-alias-on-a-chatgpt-name"
     proxy_server.user_api_key_cache.set_cache(
-        key=hash_token(key),
-        value=UserAPIKeyAuth(
+        AuthObject.virtual_key(hash_token(key)),
+        UserAPIKeyAuth(
             token=hash_token(key),
             models=[_BUNDLED_SLUG, "open-weights"],
             router_settings={"model_group_alias": {_BUNDLED_SLUG: "open-weights"}},
@@ -817,14 +822,14 @@ def test_native_route_keeps_a_name_the_account_lists_on_the_subscription_despite
     respx_mock: respx.MockRouter,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(proxy_server, "prisma_client", "test-database")
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma_with_empty_config())
     monkeypatch.setattr(
         proxy_server, "llm_router", Router(model_list=[_open_weights("gpt-reserve"), _open_weights("group-b")])
     )
     key: Final = "sk-test-alias-on-a-name-the-account-lists"
     proxy_server.user_api_key_cache.set_cache(
-        key=hash_token(key),
-        value=UserAPIKeyAuth(
+        AuthObject.virtual_key(hash_token(key)),
+        UserAPIKeyAuth(
             token=hash_token(key),
             models=["gpt-reserve", "group-b"],
             router_settings={"model_group_alias": {"gpt-reserve": "group-b"}},
@@ -859,13 +864,13 @@ def test_native_route_never_sends_a_litellm_key_sent_as_the_bearer_to_chatgpt(
     monkeypatch: pytest.MonkeyPatch,
     gateway_header: dict[str, str],
 ) -> None:
-    monkeypatch.setattr(proxy_server, "prisma_client", "test-database")
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma_with_empty_config())
     monkeypatch.setattr(
         proxy_server, "llm_router", Router(model_list=[_open_weights("gpt-reserve"), _open_weights("group-b")])
     )
     proxy_server.user_api_key_cache.set_cache(
-        key=hash_token(_BEARER_KEY),
-        value=UserAPIKeyAuth(
+        AuthObject.virtual_key(hash_token(_BEARER_KEY)),
+        UserAPIKeyAuth(
             token=hash_token(_BEARER_KEY),
             models=["gpt-reserve", "group-b"],
             router_settings={"model_group_alias": {"gpt-reserve": "group-b"}},
@@ -1059,7 +1064,7 @@ def _team_jwt(monkeypatch: pytest.MonkeyPatch, team_allowed_routes: list[str]) -
         "alg": "RS256",
         "use": "sig",
     }
-    proxy_server.user_api_key_cache.set_cache(key=f"litellm_jwt_auth_keys_{_JWT_JWKS_URL}", value=[public_jwk])
+    proxy_server.jwks_cache.set_cache(key=f"litellm_jwt_auth_keys_{_JWT_JWKS_URL}", value=[public_jwk])
     monkeypatch.setattr(
         proxy_server,
         "litellm_jwtauth",
@@ -1071,10 +1076,10 @@ def _team_jwt(monkeypatch: pytest.MonkeyPatch, team_allowed_routes: list[str]) -
     )
     monkeypatch.setattr(proxy_server, "general_settings", {"enable_jwt_auth": True})
     monkeypatch.setattr(proxy_server, "premium_user", True)
-    monkeypatch.setattr(proxy_server, "prisma_client", "test-database")
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma_with_empty_config())
     proxy_server.user_api_key_cache.set_cache(
-        key=f"team_id:{_JWT_TEAM}",
-        value=LiteLLM_TeamTableCachedObj(team_id=_JWT_TEAM, models=["chatgpt-native", "open-weights"]),
+        AuthObject.team(_JWT_TEAM),
+        LiteLLM_TeamTableCachedObj(team_id=_JWT_TEAM, models=["chatgpt-native", "open-weights"]),
     )
     issued_at: Final = int(time.time())
     return jwt.encode(

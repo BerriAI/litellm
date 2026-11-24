@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use litellm_config::{RedisSettings, Value};
+use litellm_config::{RedisSettings, RouterRedis, Value};
 use litellm_env::Lookup;
 use litellm_redis_types::{ProviderHandle, Resolution};
 use litellm_secrets::SecretResolver;
@@ -29,6 +29,8 @@ pub enum Surface<'a> {
     Coordination(&'a RedisSettings),
     /// `litellm_settings.cache_params` with `type: redis`, as `litellm.Cache` hands it to `RedisCache`.
     CacheParams(&'a RedisSettings),
+    /// `router_settings`' `redis_*` and `cache_kwargs`, as the router hands them to `RedisCache`.
+    Router(&'a RouterRedis),
     /// No configured settings, so only `REDIS_*` and the other names the merge reads apply.
     Environment,
 }
@@ -36,7 +38,7 @@ pub enum Surface<'a> {
 /// The Redis one surface configures, merged the way `_get_redis_client_logic` merges it. Every name
 /// Python reads with `get_secret` is read through `secrets`, and the one it reads straight from
 /// `os.environ`, Azure's `REDIS_USERNAME`, from the environment under `secrets`. `None` is
-/// `Surface::Environment` with no name that says where Redis is.
+/// `Surface::Environment` with no name that says where Redis is, or `Surface::Router` naming none.
 pub async fn resolve(
     surface: Surface<'_>,
     secrets: &SecretResolver,
@@ -44,6 +46,10 @@ pub async fn resolve(
     let configured = match surface {
         Surface::Coordination(settings) => ConfiguredRedis::coordination(settings)?,
         Surface::CacheParams(settings) => ConfiguredRedis::cache_params(settings),
+        Surface::Router(settings) => match ConfiguredRedis::router(settings) {
+            Some(configured) => configured,
+            None => return Ok(None),
+        },
         Surface::Environment => ConfiguredRedis::environment_only(),
     };
     let snapshot = SecretSnapshot::read(configured.secret_names(), secrets).await?;
@@ -116,6 +122,49 @@ impl ConfiguredRedis {
             nulls: Nulls::KeptUnlessNamedByCache,
             credential_provider: None,
         }
+    }
+
+    /// `redis_cache_for` in `litellm/router_python_host.py`: a `redis_url`, or a `redis_host` with a
+    /// `redis_port`, names the router's Redis, and `cache_kwargs` are further `RedisCache` keywords
+    /// that replace the named ones. `RedisCache` drops a null only for a parameter it names, each of
+    /// which `Cache` names too, and passes any other null on.
+    pub(crate) fn router(settings: &RouterRedis) -> Option<Self> {
+        let RouterRedis {
+            redis_url,
+            redis_host,
+            redis_port,
+            redis_password,
+            redis_db,
+            cache_kwargs,
+        } = settings;
+        if redis_url.is_none() && (redis_host.is_none() || redis_port.is_none()) {
+            return None;
+        }
+        let named = [
+            (
+                Kwarg::Url,
+                redis_url.as_ref().map(|url| url.expose().to_owned()),
+            ),
+            (Kwarg::Host, redis_host.clone()),
+            (Kwarg::Port, redis_port.as_ref().map(ToString::to_string)),
+            (
+                Kwarg::Password,
+                redis_password
+                    .as_ref()
+                    .map(|password| password.expose().to_owned()),
+            ),
+            (Kwarg::Db, redis_db.as_ref().map(ToString::to_string)),
+        ]
+        .into_iter()
+        .filter_map(|(kwarg, value)| Some((kwarg.name().to_owned(), Value::String(value?))));
+        let keywords = cache_kwargs.iter().flatten().filter_map(|(kwarg, value)| {
+            Some((kwarg.clone(), serde_json::from_value(value.clone()).ok()?))
+        });
+        Some(Self {
+            fields: named.chain(keywords).collect(),
+            nulls: Nulls::KeptUnlessNamedByCache,
+            credential_provider: None,
+        })
     }
 
     /// `RedisCache.redis_kwargs`, the dict every Python surface ends in.

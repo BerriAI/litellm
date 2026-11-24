@@ -108,7 +108,7 @@ _PROVIDERS_LISTED_ONLY_THROUGH_A_DEPLOYMENT: Final = frozenset(
     {LlmProviders.OPENROUTER.value, LlmProviders.HOSTED_VLLM.value, LlmProviders.LITELLM_PROXY.value}
 )
 
-_Listed: Final = TypeVar("_Listed")
+_Listed = TypeVar("_Listed")
 
 
 async def run_model_listing(listing: Callable[[], _Listed]) -> _Listed:
@@ -300,9 +300,9 @@ def get_complete_model_list(
     If list contains wildcard -> return known provider models
     """
 
-    unique_models: Final = []
+    unique_models: Final[list[str]] = []
 
-    def append_unique(models):
+    def append_unique(models: Iterable[str]) -> None:
         for model in models:
             if model not in unique_models and model != SpecialModelNames.no_default_models.value:
                 unique_models.append(model)
@@ -1074,10 +1074,10 @@ def _get_wildcard_models(
     team_id: str | None = None,
     expand_wildcard_routes: bool = True,
 ) -> list[str]:
-    models_to_remove: Final = set()
+    models_to_remove: Final[set[str]] = set()
     routes_to_model: Final = _routes_to_model(_cached_wildcard_routing(llm_router), team_id)
     rival_patterns: Final = _rival_patterns(llm_router, team_id)
-    all_wildcard_models: Final = []
+    all_wildcard_models: Final[list[str]] = []
     for model in unique_models:
         if _check_wildcard_routing(model=model):
             if return_wildcard_routes:

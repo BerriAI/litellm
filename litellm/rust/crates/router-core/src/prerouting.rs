@@ -12,7 +12,13 @@
 
 use std::sync::Arc;
 
-use crate::{Core, config::Op, error::Error, host::RouterRequest, registry::Deployment};
+use crate::{
+    Call,
+    config::Op,
+    error::Error,
+    host::{RouterHost, RouterRequest},
+    registry::Deployment,
+};
 
 /// What the host's pre-routing step sees.
 #[derive(Clone, Copy, Debug)]
@@ -40,7 +46,7 @@ pub enum PreRouted {
     Deployment(Arc<Deployment>),
 }
 
-impl Core {
+impl<H: RouterHost> Call<'_, H> {
     /// What a pick of `ask.name` serves: the host's pre-routed group or custom pick, else the
     /// name itself. Only picks that ask for it pre-route (`request.pre_routes`).
     pub(crate) async fn pre_routed(&self, ask: PreRoute<'_>) -> Result<PreRouted, Error> {

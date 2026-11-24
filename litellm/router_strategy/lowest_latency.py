@@ -81,7 +81,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
         self.routing_args = RoutingArgs(**routing_args)
 
     @with_service_target(ROUTER_USAGE_TARGET)
-    def log_success_event(self, kwargs, response_obj, start_time, end_time):
+    def log_success_event(self, kwargs, response_obj: object, start_time, end_time):
         if is_batch_retrieve_call_type(kwargs.get("call_type")):
             return
         try:
@@ -216,7 +216,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
             )
 
     @with_service_target(ROUTER_USAGE_TARGET)
-    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_failure_event(self, kwargs, response_obj: object, start_time: object, end_time: object):
         """
         Check if Timeout Error, if timeout set deployment latency -> 100
         """
@@ -281,7 +281,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
             )
 
     @with_service_target(ROUTER_USAGE_TARGET)
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(self, kwargs, response_obj: object, start_time, end_time):
         if is_batch_retrieve_call_type(kwargs.get("call_type")):
             return
         try:
