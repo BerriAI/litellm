@@ -54,9 +54,9 @@ class TestProvenanceSeparatesUnknownFromNonReasoning:
 
 class TestResolveSupportedReasoningEfforts:
     def test_a_reasoning_model_with_no_flags_at_all_resolves_to_unknown(self):
-        # 689 of the map's 854 reasoning entries carry no effort flag, and the o-series, xai and
-        # bedrock nova entries among them accept neither none nor minimal, so composing a set out of
-        # the opt-out defaults alone would advertise levels those providers reject.
+        # Most of the map's reasoning entries carry no effort flag, and the o1, o3-mini, o4-mini, xai
+        # and bedrock nova entries among them accept neither none nor minimal, so composing a set out
+        # of the opt-out defaults alone would advertise levels those providers reject.
         assert resolve_supported_reasoning_efforts({"supports_reasoning": True}, deployment_is_mapped=True) is None
 
     def test_explicit_false_removes_an_opt_out_level(self):

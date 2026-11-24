@@ -14,8 +14,8 @@ Claude-family, where anthropic/chat/transformation.py gates max on the output_co
 explicit flag is the only signal that the tier is real.
 
 A deployment the map describes with no effort flags at all resolves to None rather than to the
-opt-out defaults. 689 of the map's 854 reasoning entries carry no flag, and the o-series, xai and
-bedrock nova entries among them take neither none nor minimal, so composing a set out of the
+opt-out defaults. Most of the map's reasoning entries carry no flag, and the o1, o3-mini, o4-mini,
+xai and bedrock nova entries among them take neither none nor minimal, so composing a set out of the
 defaults alone would advertise levels those providers reject.
 
 The advertisement order is the REASONING_EFFORT declaration order, which is presentation only. It

@@ -132,6 +132,7 @@ class OpenAIOSeriesConfig(OpenAIGPTConfig):
                 raise litellm.utils.UnsupportedParamsError(
                     message=unsupported_reasoning_effort_message("reasoning_effort", refused_effort, model),
                     status_code=400,
+                    body={"param": "reasoning_effort", "code": "unsupported_value"},
                 )
             reasoning_drop_logger.warning(
                 refused_reasoning_effort_warning(
