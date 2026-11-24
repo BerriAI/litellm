@@ -30,6 +30,18 @@ _CODEX_CLIENT_PREFIX_RE: Final = re.compile(r"^codex[-_ /]", re.IGNORECASE)
 _Value = TypeVar("_Value")  # rebind-ok: a TypeVar cannot be Final
 
 
+def _camel_case(key: str) -> str:
+    head, *rest = key.split("_")
+    return head + "".join(part[:1].upper() + part[1:] for part in rest)
+
+
+def camel_case_keys(config: Mapping[str, object]) -> Mapping[str, object]:
+    return {
+        **{_camel_case(key): value for key, value in config.items() if "_" in key},
+        **{key: value for key, value in config.items() if "_" not in key},
+    }
+
+
 def is_codex_user_agent(user_agent: str) -> bool:
     return bool(_CODEX_CLIENT_PREFIX_RE.match(user_agent))
 
@@ -266,6 +278,8 @@ _FINISH_REASON_MAP: Final[dict[str, OpenAIChatCompletionFinishReason]] = {
     "compaction": "length",
     # Cohere
     "COMPLETE": "stop",
+    "STOP_SEQUENCE": "stop",
+    "TOOL_CALL": "tool_calls",
     "ERROR_TOXIC": "content_filter",
     "ERROR": "stop",
     # HuggingFace / Together AI

@@ -64,7 +64,7 @@ def _blocked_key_error() -> dict[str, JsonValue]:
         "error": {
             "message": "Authentication Error, Key is blocked. Update via `/key/unblock` if you're an admin.",
             "type": "auth_error",
-            "param": "None",
+            "param": None,
             "code": "401",
         }
     }

@@ -21,6 +21,7 @@ from litellm.constants import (
     RESPONSE_FORMAT_TOOL_NAME,
 )
 from litellm.exceptions import BadRequestError
+from litellm.litellm_core_utils.allowed_tools_tool_choice import HostedMcpToolHandling
 from litellm.litellm_core_utils.core_helpers import (
     drops_unsupported_params,
     filter_exceptions_from_params,
@@ -59,6 +60,7 @@ from litellm.llms.anthropic.chat.transformation import (
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.base_llm.chat.transformation import REQUEST_PARAMS, BaseConfig, BaseLLMException
 from litellm.llms.bedrock.chat.tool_result_images import place_tool_result_images
+from litellm.llms.bedrock.chat.tool_use_ids import with_mistral_tool_use_ids
 from litellm.llms.bedrock.common_utils import (
     SAFEGUARDS,
     anthropic_body_betas,
@@ -1234,6 +1236,9 @@ class AmazonConverseConfig(BaseConfig):
         if "meta.llama3-3-70b-instruct-v1:0" in model and non_default_params.get("stream", False) is True:
             optional_params["fake_stream"] = True
 
+    def hosted_mcp_tool_handling(self, model: str) -> HostedMcpToolHandling:
+        return "drops"
+
     def map_openai_params(
         self,
         non_default_params: dict,
@@ -1243,7 +1248,11 @@ class AmazonConverseConfig(BaseConfig):
         model_info: Mapping[str, object] | None = None,
     ) -> dict:
         request_params: Final = tool_params_without_hosted_mcp(
-            non_default_params, model=model, route="bedrock", drop_params=drop_params
+            non_default_params,
+            model=model,
+            route="bedrock",
+            drop_params=drop_params,
+            handling=self.hosted_mcp_tool_handling(model),
         )
         is_thinking_enabled: Final = self.is_thinking_enabled(request_params)
         base_model: Final = BedrockModelInfo.get_base_model(model)
@@ -2433,15 +2442,19 @@ class AmazonConverseConfig(BaseConfig):
         )
 
         built_messages: Final = list(
-            place_tool_result_images(
-                await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
-                    messages=messages,
-                    model=capability_model,
-                    deployment_model=model,
-                    llm_provider="bedrock_converse",
-                    user_continue_message=litellm_params.pop("user_continue_message", None),
-                    base_model=self._deployment_base_model(_DEPLOYMENT_PARAMS.validate_python(litellm_params)),
-                    sends_guarded_assistant_parts=sends_guarded_text,
+            with_mistral_tool_use_ids(
+                place_tool_result_images(
+                    await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+                        messages=messages,
+                        model=capability_model,
+                        deployment_model=model,
+                        llm_provider="bedrock_converse",
+                        user_continue_message=litellm_params.pop("user_continue_message", None),
+                        base_model=self._deployment_base_model(_DEPLOYMENT_PARAMS.validate_python(litellm_params)),
+                        sends_guarded_assistant_parts=sends_guarded_text,
+                        drop_params=litellm.drop_params is True or litellm_params.get("drop_params") is True,
+                    ),
+                    capability_model,
                 ),
                 capability_model,
             )
@@ -2529,15 +2542,19 @@ class AmazonConverseConfig(BaseConfig):
 
         ## TRANSFORMATION ##
         built_messages: Final[list[MessageBlock]] = list(
-            place_tool_result_images(
-                _bedrock_converse_messages_pt(
-                    messages=messages,
-                    model=capability_model,
-                    deployment_model=model,
-                    llm_provider="bedrock_converse",
-                    user_continue_message=litellm_params.pop("user_continue_message", None),
-                    base_model=self._deployment_base_model(_DEPLOYMENT_PARAMS.validate_python(litellm_params)),
-                    sends_guarded_assistant_parts=sends_guarded_text,
+            with_mistral_tool_use_ids(
+                place_tool_result_images(
+                    _bedrock_converse_messages_pt(
+                        messages=messages,
+                        model=capability_model,
+                        deployment_model=model,
+                        llm_provider="bedrock_converse",
+                        user_continue_message=litellm_params.pop("user_continue_message", None),
+                        base_model=self._deployment_base_model(_DEPLOYMENT_PARAMS.validate_python(litellm_params)),
+                        sends_guarded_assistant_parts=sends_guarded_text,
+                        drop_params=litellm.drop_params is True or litellm_params.get("drop_params") is True,
+                    ),
+                    capability_model,
                 ),
                 capability_model,
             )

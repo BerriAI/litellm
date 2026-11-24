@@ -1,16 +1,150 @@
 import copy
 import json
 import os
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import responses
 
+import litellm
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation import (
     VertexAIPartnerModelsAnthropicMessagesConfig,
 )
 from litellm.llms.vertex_ai.vertex_ai_partner_models.main import VertexAIPartnerModels
 from litellm.types.router import GenericLiteLLMParams
+
+
+def _vertex_client() -> MagicMock:
+    vertex_response: Final = MagicMock()
+    vertex_response.json.return_value = {
+        "id": "msg_1",
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "text", "text": "hi"}],
+        "model": "claude-sonnet-5",
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 1, "output_tokens": 1},
+    }
+    client: Final = MagicMock(spec=AsyncHTTPHandler)
+    client.post = AsyncMock(return_value=vertex_response)
+    return client
+
+
+async def _send_to_vertex(
+    client: MagicMock,
+    caller_headers: Mapping[str, str],
+    drop_params: bool,
+    sampling: Mapping[str, float] = MappingProxyType({}),
+    model: str = "vertex_ai/claude-sonnet-5",
+) -> None:
+    with responses.RequestsMock(assert_all_requests_are_fired=False) as oauth:
+        oauth.add(responses.POST, "https://oauth2.googleapis.com/token", json={"access_token": "vertex-token", "expires_in": 3600})
+        await litellm.anthropic.messages.acreate(
+            model=model,
+            messages=[{"role": "user", "content": "hi"}],
+            max_tokens=16,
+            vertex_ai_project="version-project",
+            vertex_ai_location="global",
+            vertex_credentials=json.dumps(
+                {
+                    "type": "authorized_user",
+                    "client_id": "version-header-client",
+                    "client_secret": "synthetic-secret",
+                    "refresh_token": "synthetic-refresh",
+                }
+            ),
+            client=client,
+            drop_params=drop_params,
+            **sampling,
+            provider_specific_header={
+                "custom_llm_provider": "vertex_ai",
+                "extra_headers": {**caller_headers, "x-request-id": "req-1"},
+            },
+        )
+
+
+@pytest.mark.parametrize(
+    ("caller_headers", "drop_params", "body_version"),
+    (
+        ({"anthropic-version": "2026-10-21"}, False, "2026-10-21"),
+        ({"Anthropic-Version": "2026-10-21"}, False, "2026-10-21"),
+        ({"anthropic-version": "vertex-2023-10-16"}, False, "vertex-2023-10-16"),
+        ({"anthropic-version": "2023-06-01"}, False, "vertex-2023-10-16"),
+        ({"anthropic-version": "2023-01-01"}, False, "vertex-2023-10-16"),
+        ({"anthropic-version": " "}, False, "vertex-2023-10-16"),
+        ({}, False, "vertex-2023-10-16"),
+        ({"anthropic-version": "latest"}, True, "vertex-2023-10-16"),
+    ),
+)
+@pytest.mark.asyncio
+async def test_caller_anthropic_version_reaches_vertex_only_in_the_body(
+    caller_headers: dict[str, str], drop_params: bool, body_version: str
+) -> None:
+    client: Final = _vertex_client()
+    await _send_to_vertex(client, caller_headers, drop_params)
+
+    sent: Final = client.post.call_args.kwargs
+    sent_header_names: Final = {name.lower() for name in sent["headers"]}
+    assert "anthropic-version" not in sent_header_names
+    assert sent["headers"]["x-request-id"] == "req-1"
+    assert json.loads(sent["data"])["anthropic_version"] == body_version
+
+
+@pytest.mark.parametrize("requested", ("2025-01-01", "latest"))
+@pytest.mark.asyncio
+async def test_unsupported_anthropic_version_is_refused_without_drop_params(requested: str) -> None:
+    client: Final = _vertex_client()
+    with pytest.raises(litellm.BadRequestError, match=f"anthropic-version={requested}. To drop unsupported params"):
+        await _send_to_vertex(client, {"anthropic-version": requested}, drop_params=False)
+    client.post.assert_not_awaited()
+
+
+_SAMPLING: Final = MappingProxyType({"temperature": 1.0, "top_p": 0.9, "top_k": 40})
+_SAMPLING_MODEL: Final = "vertex_ai/claude-haiku-4-5"
+
+
+@pytest.mark.parametrize(
+    ("requested", "drop_params", "sent_sampling"),
+    (
+        ("2026-10-21", True, MappingProxyType({})),
+        ("2023-06-01", False, _SAMPLING),
+        ("2023-06-01", True, _SAMPLING),
+        ("2027-01-01", True, _SAMPLING),
+    ),
+)
+@pytest.mark.asyncio
+async def test_sampling_params_follow_the_version_vertex_applies(
+    requested: str, drop_params: bool, sent_sampling: Mapping[str, float]
+) -> None:
+    client: Final = _vertex_client()
+    await _send_to_vertex(
+        client, {"anthropic-version": requested}, drop_params, sampling=_SAMPLING, model=_SAMPLING_MODEL
+    )
+
+    body: Final = json.loads(client.post.call_args.kwargs["data"])
+    assert {name: body[name] for name in _SAMPLING if name in body} == dict(sent_sampling)
+
+
+@pytest.mark.asyncio
+async def test_sampling_params_are_refused_under_2026_10_21_without_drop_params() -> None:
+    client: Final = _vertex_client()
+    with pytest.raises(
+        litellm.BadRequestError,
+        match=r"temperature=1.0. anthropic-version 2026-10-21 removed temperature, top_p and top_k",
+    ):
+        await _send_to_vertex(
+            client,
+            {"anthropic-version": "2026-10-21"},
+            drop_params=False,
+            sampling=_SAMPLING,
+            model=_SAMPLING_MODEL,
+        )
+    client.post.assert_not_awaited()
 
 
 def test_validate_environment_uses_vertex_ai_location():

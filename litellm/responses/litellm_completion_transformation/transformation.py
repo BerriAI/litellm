@@ -57,7 +57,10 @@ from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import bedrock_declared_cache_point_support
 from litellm.llms.openrouter.chat.transformation import openrouter_model_supports_cache_control
 from litellm.llms.snowflake.chat.transformation import is_snowflake_claude_model
-from litellm.responses.bridge_check import chat_target_accepts_reasoning_summary
+from litellm.responses.bridge_check import (
+    chat_target_accepts_reasoning_summary,
+    empty_user_turn_for_model_turn_end,
+)
 from litellm.responses.litellm_completion_transformation.session_handler import (
     ResponsesSessionHandler,
 )
@@ -884,7 +887,7 @@ class LiteLLMCompletionResponsesConfig:
         keeps_item_marks: Final = _target_keeps_item_marks(
             model, custom_llm_provider, drops_unsupported_params(request_kwargs.get("drop_params"))
         )
-        bridged_messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+        converted_messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
             input=input,
             responses_api_request=responses_api_request,
             replay_reasoning=True,
@@ -892,6 +895,16 @@ class LiteLLMCompletionResponsesConfig:
             replay_tool_search=holds_tool_search_items(input)
             and request_runs_tool_search(request_tools or (), model, custom_llm_provider),
         )
+        bridged_messages: Final = [
+            *converted_messages,
+            *empty_user_turn_for_model_turn_end(
+                input[-1] if isinstance(input, list) and input else None,
+                converted_messages,
+                model,
+                custom_llm_provider,
+                request_kwargs,
+            ),
+        ]
 
         litellm_completion_request: dict = {
             "messages": (
@@ -1025,6 +1038,7 @@ class LiteLLMCompletionResponsesConfig:
         instructions: str | None,
         session_lookup: Callable[[str], Awaitable[ChatCompletionSession]] | None = None,
         request_kwargs: Mapping[str, object] = MappingProxyType({}),
+        previous_response_client_ids: tuple[str, ...] = (),
     ) -> dict:
         """
         Async hook to get the chain of previous input and output pairs and return a list of Chat Completion messages
@@ -1039,6 +1053,7 @@ class LiteLLMCompletionResponsesConfig:
         lookup: Final = session_lookup or partial(
             ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id,
             item_cache_control=keeps_item_marks,
+            client_response_ids=previous_response_client_ids,
         )
         chat_completion_session: Final = (
             await lookup(previous_response_id)
@@ -3097,6 +3112,9 @@ class LiteLLMCompletionResponsesConfig:
             LiteLLMCompletionResponsesConfig._extract_reasoning_output_items(chat_completion_response, choices)
         )
         responses_output.extend(
+            LiteLLMCompletionResponsesConfig._unclaimed_web_search_calls(chat_completion_response, choices)
+        )
+        responses_output.extend(
             LiteLLMCompletionResponsesConfig._extract_message_output_items(chat_completion_response, choices)
         )
         responses_output.extend(
@@ -3126,6 +3144,18 @@ class LiteLLMCompletionResponsesConfig:
             ]
 
         return responses_output
+
+    @staticmethod
+    def _unclaimed_web_search_calls(
+        chat_completion_response: ModelResponse, choices: Sequence[Choices]
+    ) -> tuple[ResponseFunctionWebSearch, ...]:
+        claimed_call_ids: Final = frozenset(
+            tool_call.id for tool_call in chain.from_iterable(choice.message.tool_calls or () for choice in choices)
+        )
+        web_search_calls: Final = LiteLLMCompletionResponsesConfig._web_search_calls_by_call_id(
+            chat_completion_response
+        )
+        return tuple(call for call_id, call in web_search_calls.items() if call_id not in claimed_call_ids)
 
     @staticmethod
     def _extract_tool_result_output_items(
