@@ -1,17 +1,25 @@
 """Shared handling of Claude Code's ~/.claude/settings.json.
 
-`lite up` and `lite autoroute up` patch this file temporarily and restore it on
-exit; `lite login --config-claude` and `lite configure claude` patch it
-persistently and record how to undo it. All of them need the same merge and the
-same apiKeyHelper command, and `up` already imports from `auth`, so the shared
-parts live here rather than in any one command module.
+`lite up` and `lite autoroute start` patch this file temporarily and restore it on
+exit; `lite configure claude` patches it persistently and records how to undo it.
+All of them need the same merge, and `up` already imports from `auth`, so the
+shared parts live here rather than in any one command module. The credential is a
+static token in `env.ANTHROPIC_AUTH_TOKEN`, except for a login `lite` renews on its own,
+which gets an `apiKeyHelper` running `lite auth print-token`: Claude Code reruns it
+every few minutes, so the key it sends follows each renewal. A helper is owned like
+any other key, so writing one credential strips the other, and it blanks
+`env.ANTHROPIC_AUTH_TOKEN`, since a token exported in the shell would win over it.
 """
 
 import hashlib
 import json
+import ntpath
+import os
+import posixpath
 import shlex
 import shutil
 import sys
+import sysconfig
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import reduce
@@ -20,20 +28,30 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Final, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
+import click
+from filelock import FileLock
+from packaging.version import InvalidVersion, Version
+from pydantic import ConfigDict, JsonValue, TypeAdapter, ValidationError
 
+from litellm._version import version as litellm_version
 from litellm.litellm_core_utils.private_json import (
     commit_staged_json,
     discard_staged_json,
     ensure_private_dir,
     stage_private_json,
+    write_private_bytes,
 )
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
+from . import statusline_script
 from .cmd_quoting import quote_for_cmd
 
 ENV_KEY: Final = "env"
 API_KEY_HELPER_KEY: Final = "apiKeyHelper"
+OTEL_HEADERS_HELPER_KEY: Final = "otelHeadersHelper"
+OTEL_HEADERS_HELPER_FLAG: Final = "--otel-headers"
 MODEL_KEY: Final = "model"
+STATUS_LINE_KEY: Final = "statusLine"
 ANTHROPIC_BASE_URL_KEY: Final = "ANTHROPIC_BASE_URL"
 ANTHROPIC_AUTH_TOKEN_KEY: Final = "ANTHROPIC_AUTH_TOKEN"
 ANTHROPIC_API_KEY_KEY: Final = "ANTHROPIC_API_KEY"
@@ -41,6 +59,32 @@ ENABLE_TOOL_SEARCH_KEY: Final = "ENABLE_TOOL_SEARCH"
 ENABLE_TOOL_SEARCH_VALUE: Final = "true"
 ENABLE_GATEWAY_MODEL_DISCOVERY_KEY: Final = "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"
 ENABLE_GATEWAY_MODEL_DISCOVERY_VALUE: Final = "1"
+ANTHROPIC_MODEL_KEY: Final = "ANTHROPIC_MODEL"
+OTLP_ENDPOINT_KEY: Final = "OTEL_EXPORTER_OTLP_ENDPOINT"
+OTLP_HEADERS_KEY: Final = "OTEL_EXPORTER_OTLP_HEADERS"
+# Per-signal settings win over the two above, so one left in place would send the gateway key to its collector
+OTLP_SIGNAL_KEYS: Final = (
+    "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+    "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
+    "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+    "OTEL_EXPORTER_OTLP_LOGS_HEADERS",
+    "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+    "OTEL_EXPORTER_OTLP_METRICS_HEADERS",
+)
+TELEMETRY_ENV: Final = MappingProxyType(
+    {
+        "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
+        "CLAUDE_CODE_ENHANCED_TELEMETRY_BETA": "1",
+        "CLAUDE_CODE_PROPAGATE_TRACEPARENT": "1",
+        "OTEL_TRACES_EXPORTER": "otlp",
+        "OTEL_LOGS_EXPORTER": "otlp",
+        "OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf",
+        "OTEL_LOG_USER_PROMPTS": "1",
+        "OTEL_LOG_ASSISTANT_RESPONSES": "1",
+        "OTEL_LOG_TOOL_DETAILS": "1",
+        "OTEL_LOG_TOOL_CONTENT": "1",
+    }
+)
 ANTHROPIC_DEFAULT_MODEL_ENV_KEYS: Final = (
     "ANTHROPIC_DEFAULT_SONNET_MODEL",
     "ANTHROPIC_DEFAULT_HAIKU_MODEL",
@@ -53,19 +97,30 @@ OWNED_ENV_KEYS: Final = (
     ANTHROPIC_BASE_URL_KEY,
     ANTHROPIC_AUTH_TOKEN_KEY,
     ANTHROPIC_API_KEY_KEY,
+    ANTHROPIC_MODEL_KEY,
+    *TELEMETRY_ENV,
+    OTLP_ENDPOINT_KEY,
+    OTLP_HEADERS_KEY,
+    *OTLP_SIGNAL_KEYS,
 )
-OWNED_TOP_LEVEL_KEYS: Final = (API_KEY_HELPER_KEY, MODEL_KEY)
+OWNED_TOP_LEVEL_KEYS: Final = (API_KEY_HELPER_KEY, OTEL_HEADERS_HELPER_KEY, MODEL_KEY, STATUS_LINE_KEY)
 OWNED_PATHS: Final = (*(f"{ENV_KEY}.{key}" for key in OWNED_ENV_KEYS), *OWNED_TOP_LEVEL_KEYS)
 _CREDENTIAL_ENV_KEYS: Final = frozenset((ANTHROPIC_API_KEY_KEY, ANTHROPIC_AUTH_TOKEN_KEY))
 _CREDENTIAL_PATHS: Final = (*(f"{ENV_KEY}.{key}" for key in sorted(_CREDENTIAL_ENV_KEYS)), API_KEY_HELPER_KEY)
 _BASE_URL_PATH: Final = f"{ENV_KEY}.{ANTHROPIC_BASE_URL_KEY}"
-STARTING_MODEL_ROLE: Final = "the /model picker's default row, the model Claude Code starts on"
+_MODEL_PATHS: Final = (MODEL_KEY, f"{ENV_KEY}.{ANTHROPIC_MODEL_KEY}")
+STARTING_MODEL_ROLE: Final = "the /model picker's default row, the model Claude Code starts and resumes on"
 
 CLAUDE_SETTINGS_PATH: Final = Path.home() / ".claude" / "settings.json"
 CLAUDE_CONFIG_DIR_ENV: Final = "CLAUDE_CONFIG_DIR"
+OVERLAY_FILE_NAME: Final = "litellm-subscription-overlay.json"
+LAUNCH_KEY_OVERLAY_PREFIX: Final = "litellm-launch-key-overlay-"
+_LAUNCH_SETTINGS_FILE_PATTERNS: Final = (OVERLAY_FILE_NAME, f"{LAUNCH_KEY_OVERLAY_PREFIX}*.json")
 BACKUP_PATH: Final = Path.home() / ".litellm" / "claude_settings_backup.json"
 AUTOROUTE_BACKUP_PATH: Final = Path.home() / ".litellm" / "autorouter" / "claude_settings_backup.json"
 CONFIGURE_STATE_PATH: Final = Path.home() / ".litellm" / "claude_configure_state.json"
+STATUSLINE_SCRIPT_PATH: Final = Path.home() / ".litellm" / "statusline.py"
+STATUSLINE_VERSION_PREFIX: Final = b"# litellm-statusline-version: "
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,7 +134,7 @@ class SettingsFileOwner:
 
 SETTINGS_FILE_OWNERS: Final = (
     SettingsFileOwner(BACKUP_PATH, "lite up", "lite down"),
-    SettingsFileOwner(AUTOROUTE_BACKUP_PATH, "lite autoroute up", "lite autoroute down"),
+    SettingsFileOwner(AUTOROUTE_BACKUP_PATH, "lite autoroute start", "lite autoroute stop"),
 )
 
 _SETTINGS_ADAPTER: Final = TypeAdapter(dict[str, JsonValue])
@@ -97,12 +152,31 @@ def claude_settings_path(environ: Mapping[str, str]) -> Path:
     return Path(config_dir).expanduser() / "settings.json"
 
 
+def _unlink(path: Path) -> OSError | None:
+    try:
+        path.unlink(missing_ok=True)
+    except OSError as error:
+        return error
+    return None
+
+
+def remove_launch_settings_files(config_dir: Path) -> None:
+    """Delete the `--settings` files `lite claude` launched Claude Code with, since each holds a LiteLLM key.
+    Claude Code reads that file only as it starts, so a session already running keeps working."""
+    found: Final = tuple(chain.from_iterable(config_dir.glob(pattern) for pattern in _LAUNCH_SETTINGS_FILE_PATTERNS))
+    failures: Final = tuple((path, error) for path in found if (error := _unlink(path)) is not None)
+    if len(found) > len(failures):
+        click.echo(f"Removed the settings files holding a LiteLLM key that `lite claude` left in {config_dir}.")
+    for path, error in failures:
+        click.echo(f"Could not remove {path}, which holds a LiteLLM key: {error}. Delete it yourself.", err=True)
+
+
 def _is_default_settings_file(settings_path: Path) -> bool:
     return settings_path.resolve() == CLAUDE_SETTINGS_PATH.resolve()
 
 
 def settings_file_owners(settings_path: Path) -> tuple[SettingsFileOwner, ...]:
-    """The commands whose backups guard settings_path: `lite up` and `lite autoroute up` only ever manage the default file."""
+    """The commands whose backups guard settings_path: `lite up` and `lite autoroute start` only ever manage the default file."""
     return SETTINGS_FILE_OWNERS if _is_default_settings_file(settings_path) else ()
 
 
@@ -125,7 +199,7 @@ class StaticToken:
 
 @dataclass(frozen=True, slots=True)
 class ApiKeyHelper:
-    """A `lite auth print-token` command Claude Code runs per request, so a login renews in place."""
+    """A `lite auth print-token` command Claude Code reruns for a fresh key, written into the top-level apiKeyHelper."""
 
     command: str
 
@@ -145,7 +219,9 @@ class UnpinModel:
 
 @dataclass(frozen=True, slots=True)
 class StartOn:
-    """Pin the top-level `model`, the row Claude Code starts on."""
+    """Pin `model` and `env.ANTHROPIC_MODEL`: the row Claude Code starts on, and the one a resumed session stays
+    on, since resume otherwise re-sends the transcript's served model, which a raw-model router made a tier
+    model the key may not reach."""
 
     model: str
 
@@ -153,7 +229,7 @@ class StartOn:
 ModelChoice: TypeAlias = KeepModel | UnpinModel | StartOn
 
 
-class OwnedValue(BaseModel):
+class OwnedValue(LiteLLMBaseModel):
     """What one key held at a moment in time; `present=False` is an absent key, not a null one."""
 
     model_config = ConfigDict(frozen=True)
@@ -162,7 +238,7 @@ class OwnedValue(BaseModel):
     value: JsonValue = None
 
 
-class ConfigureReceipt(BaseModel):
+class ConfigureReceipt(LiteLLMBaseModel):
     """What `lite configure claude` found and what it owns, keyed by dotted path (`env.X` or a top-level key).
 
     Ownership moves only by a write: `written` fingerprints the keys some configure changed, at the
@@ -239,7 +315,7 @@ def _env_object(settings: Mapping[str, JsonValue], path: Path) -> Mapping[str, J
 
 
 def refuse_while_owned(settings_path: Path, owners: Sequence[SettingsFileOwner]) -> None:
-    """Refuse while `lite up` or `lite autoroute up` holds a backup it will restore over any write; a
+    """Refuse while `lite up` or `lite autoroute start` holds a backup it will restore over any write; a
     purely local check, so commands run it before any login prompt or request."""
     for owner in owners:
         if owner.backup_path.exists():
@@ -257,6 +333,17 @@ def _write_target(settings_path: Path) -> Path:
         return settings_path.resolve() if settings_path.is_symlink() else settings_path
     except OSError as e:
         raise ClaudeSettingsError(f"Could not resolve {settings_path}: {e}") from e
+
+
+def write_claude_settings(settings_path: Path, settings: Mapping[str, JsonValue]) -> None:
+    """The one way a settings document lands on disk: staged owner-only beside the target and renamed into
+    place, through a symlink rather than over it. Every writer (`configure`, `up`, `autoroute start` and the
+    restores) may be carrying the credential, so none creates the file under the umask or truncates it."""
+    target: Final = _write_target(settings_path)
+    try:
+        commit_staged_json(stage_private_json(str(target), settings), str(target))
+    except OSError as e:
+        raise ClaudeSettingsError(f"Could not write {settings_path}: {e}") from e
 
 
 def _stage(path: Path, document: Mapping[str, object]) -> str:
@@ -287,83 +374,209 @@ def _land(
         raise ClaudeSettingsError(f"Could not {'remove' if staged is None else 'write'} {path}: {e}") from e
 
 
+def installed_executable(
+    name: str,
+    scripts_dir: str = sysconfig.get_path("scripts"),
+    environ: Mapping[str, str] = os.environ,
+    platform: str = sys.platform,
+) -> str | None:
+    """This interpreter's own `name` first, since a version manager's shim earlier on PATH may run a Python
+    that lacks it. Each directory is checked by full path, since `shutil.which` on Windows searches the
+    current directory before the ones it is given, and a repo could plant its own `lite.exe` there."""
+    file_name: Final = f"{name}.exe" if platform.startswith("win") else name
+    directories: Final = (scripts_dir, *environ.get("PATH", os.defpath).split(os.pathsep))
+    candidates: Final = (shutil.which(os.path.join(directory, file_name)) for directory in directories if directory)
+    return next((found for found in candidates if found is not None), None)
+
+
+_HELPER_SUBCOMMAND: Final = ("auth", "print-token")
+
+
+def _helper_args(base_url: str) -> tuple[str, ...]:
+    return ("--base-url", base_url.rstrip("/"), *_HELPER_SUBCOMMAND)
+
+
+def lite_api_key_helper(
+    base_url: str, platform: str = sys.platform, which: Callable[[str], str | None] = installed_executable
+) -> ApiKeyHelper | None:
+    """Quoted for the shell Claude Code runs it in, `sh` on POSIX and cmd.exe on Windows, with an absolute path
+    so the directory Claude Code starts in cannot pick another `lite`."""
+    lite_path: Final = which("lite")
+    if lite_path is None:
+        return None
+    windows: Final = platform.startswith("win")
+    quote: Final = quote_for_cmd if windows else shlex.quote
+    absolute_path: Final = (ntpath if windows else posixpath).abspath(lite_path)
+    return ApiKeyHelper(" ".join(quote(token) for token in (absolute_path, *_helper_args(base_url))))
+
+
+def _runs_lite_with(command: JsonValue, args: tuple[str, ...]) -> bool:
+    return isinstance(command, str) and any(
+        command.endswith(" " + " ".join(quote(token) for token in args)) for quote in (shlex.quote, quote_for_cmd)
+    )
+
+
+def is_lite_api_key_helper(command: JsonValue) -> bool:
+    return _runs_lite_with(command, _HELPER_SUBCOMMAND)
+
+
+def is_lite_api_key_helper_for(command: JsonValue, base_url: str) -> bool:
+    return _runs_lite_with(command, _helper_args(base_url))
+
+
+def statusline_command(script_path: Path, platform: str = sys.platform) -> str:
+    """This interpreter, not a bare `python3`: it is the one the apiKeyHelper already depends on."""
+    quote: Final = quote_for_cmd if platform.startswith("win") else shlex.quote
+    return " ".join(quote(token) for token in (sys.executable, str(script_path)))
+
+
+def _statusline_version(value: str) -> Version | None:
+    try:
+        return Version(value)
+    except InvalidVersion:
+        return None
+
+
+def _installed_statusline_version(target: Path) -> Version | None:
+    try:
+        with target.open("rb") as script:
+            header: Final = script.readline(256)
+    except FileNotFoundError:
+        return None
+    if not header.startswith(STATUSLINE_VERSION_PREFIX):
+        return None
+    try:
+        return _statusline_version(header.removeprefix(STATUSLINE_VERSION_PREFIX).decode("ascii").strip())
+    except UnicodeDecodeError:
+        return None
+
+
+def install_statusline_script(
+    script_path: Path | None = None,
+    *,
+    package_version: str = litellm_version,
+    write: Callable[[str, bytes], None] = write_private_bytes,
+) -> str:
+    target: Final = script_path or STATUSLINE_SCRIPT_PATH
+    try:
+        ensure_private_dir(target.parent)
+        bundled_version: Final = _statusline_version(package_version)
+        with FileLock(str(target) + ".lock", timeout=10, mode=0o600):
+            installed_version: Final = _installed_statusline_version(target)
+            if installed_version is not None and (bundled_version is None or installed_version > bundled_version):
+                cli_version: Final = str(bundled_version) if bundled_version is not None else "unknown"
+                click.echo(
+                    f"Keeping the status line from LiteLLM {installed_version}; this CLI is {cli_version}. "
+                    "Upgrade the CLI to refresh it.",
+                    err=True,
+                )
+                return statusline_command(target)
+            source: Final = Path(statusline_script.__file__).read_bytes()
+            header: Final = (
+                STATUSLINE_VERSION_PREFIX + str(bundled_version).encode("ascii") + b"\n"
+                if bundled_version is not None
+                else b""
+            )
+            write(str(target), header + source)
+    except OSError as e:
+        raise ClaudeSettingsError(f"Could not install the status line script at {target}: {e}") from e
+    return statusline_command(target)
+
+
+def with_status_line(settings: Mapping[str, JsonValue], command: str) -> Mapping[str, JsonValue]:
+    """Ours is recognised by the script it runs, so a re-install under another interpreter is still ours."""
+    existing: Final = settings.get(STATUS_LINE_KEY)
+    existing_command: Final = existing.get("command") if isinstance(existing, dict) else None
+    ours: Final = existing is None or (isinstance(existing_command, str) and command.split()[-1] in existing_command)
+    if not ours:
+        return settings
+    entry: Final = dict((("type", "command"), ("command", command)))
+    return dict(chain(settings.items(), ((STATUS_LINE_KEY, entry),)))
+
+
+# What a session said and did. Like the two switches above, a value the user already set is kept, so an opt out
+# such as OTEL_LOG_USER_PROMPTS=0 survives configure
+TELEMETRY_CONTENT_KEYS: Final = (
+    "OTEL_LOG_USER_PROMPTS",
+    "OTEL_LOG_ASSISTANT_RESPONSES",
+    "OTEL_LOG_TOOL_DETAILS",
+    "OTEL_LOG_TOOL_CONTENT",
+)
+
+
+def _telemetry_env(base_url: str, credential: ClaudeCredential) -> tuple[tuple[str, str], ...]:
+    """Claude Code's own traces and logs, sent to the gateway that takes its model calls and under the same
+    key: Lens shows a session from these alone. A StaticToken goes in the headers variable. An ApiKeyHelper
+    key changes on renewal, so its headers come from `otelHeadersHelper`, which Claude Code reruns."""
+    return (
+        *((key, value) for key, value in TELEMETRY_ENV.items() if key not in TELEMETRY_CONTENT_KEYS),
+        (OTLP_ENDPOINT_KEY, base_url.rstrip("/")),
+        *(
+            ((OTLP_HEADERS_KEY, f"Authorization=Bearer {credential.token}"),)
+            if isinstance(credential, StaticToken)
+            else ()
+        ),
+    )
+
+
 def merge_claude_settings(
     settings: Mapping[str, JsonValue],
     base_url: str,
     credential: ClaudeCredential,
     default_model: str | None = None,
     tier_model: str | None = None,
+    *,
+    status_line: str | None = None,
 ) -> Mapping[str, JsonValue]:
     """Return a new settings mapping wired to route Claude Code through the proxy.
 
-    A StaticToken lands in env.ANTHROPIC_AUTH_TOKEN, an ApiKeyHelper in the top-level apiKeyHelper;
-    the other credential slots are removed either way, since Claude Code given two credentials may
-    send the wrong one. ENABLE_TOOL_SEARCH and CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY get their
-    defaults only when missing. `default_model` is the top-level `model`, the row Claude Code starts
-    on; `tier_model` is `lite autoroute up`'s knob that points every ANTHROPIC_DEFAULT_*_MODEL at one
+    A StaticToken lands in env.ANTHROPIC_AUTH_TOKEN, an ApiKeyHelper in the top-level apiKeyHelper with
+    env.ANTHROPIC_AUTH_TOKEN blank, since Claude Code reads a blank one as unset and an ANTHROPIC_AUTH_TOKEN
+    exported in the shell would otherwise win over the helper. The other credential slots are removed either
+    way, since Claude Code given two credentials may send the wrong one.
+    ENABLE_TOOL_SEARCH and CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY get their defaults only when
+    missing. Claude Code's trace and log telemetry is turned on, pointed at the proxy (see _telemetry_env). `default_model` is the top-level `model` and env.ANTHROPIC_MODEL (see StartOn);
+    `tier_model` is `lite autoroute start`'s knob that points every ANTHROPIC_DEFAULT_*_MODEL at one
     group. Apart from those tier keys, exactly OWNED_PATHS are touched.
     """
     raw_env: Final = settings.get(ENV_KEY, {})
     current_env: Final = raw_env if isinstance(raw_env, dict) else {}
-    env: Final = dict(  # mutable-ok: JSON document handed to json.dump, which rejects a read-only mapping
+    env: Final = dict(
         chain(
             (
                 (ENABLE_TOOL_SEARCH_KEY, ENABLE_TOOL_SEARCH_VALUE),
                 (ENABLE_GATEWAY_MODEL_DISCOVERY_KEY, ENABLE_GATEWAY_MODEL_DISCOVERY_VALUE),
+                *((key, TELEMETRY_ENV[key]) for key in TELEMETRY_CONTENT_KEYS),
             ),
-            ((key, value) for key, value in current_env.items() if key not in _CREDENTIAL_ENV_KEYS),
+            (
+                (key, value)
+                for key, value in current_env.items()
+                if key not in _CREDENTIAL_ENV_KEYS and key not in (OTLP_HEADERS_KEY, *OTLP_SIGNAL_KEYS)
+            ),
             ((ANTHROPIC_BASE_URL_KEY, base_url.rstrip("/")),),
-            ((ANTHROPIC_AUTH_TOKEN_KEY, credential.token),) if isinstance(credential, StaticToken) else (),
+            ((ANTHROPIC_AUTH_TOKEN_KEY, credential.token if isinstance(credential, StaticToken) else ""),),
+            _telemetry_env(base_url, credential),
+            ((ANTHROPIC_MODEL_KEY, default_model),) if default_model is not None else (),
             ((key, tier_model) for key in ANTHROPIC_DEFAULT_MODEL_ENV_KEYS if tier_model is not None),
         )
     )
-    return dict(  # mutable-ok: JSON document handed to json.dump, which rejects a read-only mapping
+    return dict(
         chain(
-            ((key, value) for key, value in settings.items() if key not in (API_KEY_HELPER_KEY, ENV_KEY)),
+            (
+                (key, value)
+                for key, value in (with_status_line(settings, status_line) if status_line else settings).items()
+                if key not in (API_KEY_HELPER_KEY, OTEL_HEADERS_HELPER_KEY, ENV_KEY)
+            ),
             ((ENV_KEY, env),),
-            ((API_KEY_HELPER_KEY, credential.command),) if isinstance(credential, ApiKeyHelper) else (),
+            (
+                (API_KEY_HELPER_KEY, credential.command),
+                (OTEL_HEADERS_HELPER_KEY, f"{credential.command} {OTEL_HEADERS_HELPER_FLAG}"),
+            )
+            if isinstance(credential, ApiKeyHelper)
+            else (),
             ((MODEL_KEY, default_model),) if default_model is not None else (),
         )
     )
-
-
-def resolve_api_key_helper(base_url: str, platform: str = sys.platform) -> str:
-    """Build the shell command Claude Code should run for its apiKeyHelper.
-
-    Claude Code hands the string to the system shell, `sh` on POSIX and cmd.exe
-    on Windows, so every token is quoted for the shell that will read it.
-
-    Resolves `lite` to an absolute path so the helper works regardless of the
-    PATH visible to whatever subprocess Claude Code spawns it from. Passing
-    --base-url explicitly (rather than relying on the bare invocation Claude
-    Code would otherwise use) makes `print-token` enforce that the cached
-    token was actually issued for this proxy -- without it, a token minted
-    for a different, previously-logged-into proxy would be handed to
-    whichever server the settings currently point at.
-
-    --base-url belongs to the top-level `lite` group, so it has to precede the
-    subcommand; click rejects it outright after `print-token`.
-    """
-    lite_path: Final = shutil.which("lite")
-    if lite_path is None:
-        raise ClaudeSettingsError(
-            "Could not find `lite` on your PATH. Claude Code's apiKeyHelper needs an absolute path to it."
-        )
-    quote: Final = quote_for_cmd if platform.startswith("win") else shlex.quote
-    return " ".join(quote(token) for token in (lite_path, "--base-url", base_url, "auth", "print-token"))
-
-
-def lite_api_key_helper_configured(base_url: str, settings_path: Path) -> bool:
-    """Whether settings_path already carries the apiKeyHelper `lite login --config-claude` writes for base_url.
-
-    Only an exact match counts: a helper for another proxy, a hand-written one, or
-    settings that cannot be read leave the caller on the env-token path.
-    """
-    try:
-        configured_helper: Final = load_json_or_empty(settings_path).get(API_KEY_HELPER_KEY)
-        return configured_helper == resolve_api_key_helper(base_url.rstrip("/"))
-    except ClaudeSettingsError:
-        return False
 
 
 def _owned(container: Mapping[str, JsonValue], key: str) -> OwnedValue:
@@ -385,7 +598,7 @@ def _lookup(settings: Mapping[str, JsonValue], path: str) -> OwnedValue:
 
 
 def _with_key(container: Mapping[str, JsonValue], key: str, owned: OwnedValue) -> Mapping[str, JsonValue]:
-    return dict(  # mutable-ok: JSON document handed to json.dump, which rejects a read-only mapping
+    return dict(
         chain(((k, v) for k, v in container.items() if k != key), ((key, owned.value),) if owned.present else ())
     )
 
@@ -453,9 +666,15 @@ def read_configure_receipt(state_path: Path) -> ConfigureReceipt | None:
         return ConfigureReceipt.model_validate_json(state_path.read_bytes())
     except (OSError, ValidationError) as e:
         raise ClaudeSettingsError(
-            f"{state_path} is not a readable `lite configure claude` receipt ({e}). "
+            f"{state_path} is not a readable `lite configure claude` receipt. "
             "Remove it and edit Claude Code's settings by hand if they still point at the proxy."
         ) from e
+
+
+def preflight_claude_settings(settings_path: Path) -> None:
+    refuse_while_owned(settings_path, settings_file_owners(settings_path))
+    _env_object(load_json_or_empty(settings_path), settings_path)
+    read_configure_receipt(configure_state_path(settings_path))
 
 
 def configure_claude_settings(
@@ -466,6 +685,7 @@ def configure_claude_settings(
     state_path: Path,
     owners: Sequence[SettingsFileOwner],
     commit: Callable[[str, str], None] = commit_staged_json,
+    script_path: Path | None = None,
 ) -> None:
     """Persistently route Claude Code through base_url, recording how to undo it.
 
@@ -474,19 +694,28 @@ def configure_claude_settings(
     discards the staged settings, and a settings rename that fails after the receipt landed puts the
     earlier receipt back (or removes the new one), so the receipt on disk never describes settings
     that were not written. `model`: StartOn pins the starting model, UnpinModel lets go of a pin an
-    earlier configure made (never of the user's own), KeepModel leaves it alone (a re-login).
+    earlier configure made (never of the user's own), KeepModel leaves it alone (a re-login). The
+    status line script is installed and registered under `statusLine` unless the user runs their own;
+    the receipt owns that key like any other, so unconfigure removes only ours.
     """
     refuse_while_owned(settings_path, owners)
     current: Final = load_json_or_empty(settings_path)
     _env_object(current, settings_path)
     earlier: Final = read_configure_receipt(state_path)
-    existing: Final = (
-        _with(current, MODEL_KEY, earlier.previous[MODEL_KEY])
-        if isinstance(model, UnpinModel) and earlier is not None and _ours(current, MODEL_KEY, earlier)
-        else current
+    unpinned: Final = MappingProxyType(
+        {
+            path: earlier.previous[path]
+            for path in _MODEL_PATHS
+            if isinstance(model, UnpinModel) and earlier is not None and _ours(current, path, earlier)
+        }
     )
+    existing: Final = _with_all(current, unpinned)
     merged: Final = merge_claude_settings(
-        existing, base_url, credential, model.model if isinstance(model, StartOn) else None
+        existing,
+        base_url,
+        credential,
+        model.model if isinstance(model, StartOn) else None,
+        status_line=install_statusline_script(script_path),
     )
     receipt: Final = _receipt(current, merged, earlier, settings_path.exists())
     target: Final = _write_target(settings_path)
@@ -552,7 +781,7 @@ def unconfigure_claude_settings(
     )
     target: Final = _write_target(settings_path)
     file_removed: Final = not settings and not (receipt.file_existed and target.exists())
-    kept_receipt: Final = (  # mutable-ok: pydantic serializes the update as given and rejects a mappingproxy
+    kept_receipt: Final = (
         receipt.model_copy(update={"written": {item.key: _fingerprint(absent) for item in withheld}})
         if withheld
         else None
@@ -581,6 +810,7 @@ __all__ = (
     "ANTHROPIC_AUTH_TOKEN_KEY",
     "ANTHROPIC_BASE_URL_KEY",
     "ANTHROPIC_DEFAULT_MODEL_ENV_KEYS",
+    "ANTHROPIC_MODEL_KEY",
     "API_KEY_HELPER_KEY",
     "AUTOROUTE_BACKUP_PATH",
     "BACKUP_PATH",
@@ -592,12 +822,18 @@ __all__ = (
     "ENABLE_TOOL_SEARCH_KEY",
     "ENABLE_TOOL_SEARCH_VALUE",
     "ENV_KEY",
+    "LAUNCH_KEY_OVERLAY_PREFIX",
     "MODEL_KEY",
+    "OTEL_HEADERS_HELPER_FLAG",
+    "OTEL_HEADERS_HELPER_KEY",
+    "OVERLAY_FILE_NAME",
     "OWNED_ENV_KEYS",
     "OWNED_PATHS",
     "OWNED_TOP_LEVEL_KEYS",
     "SETTINGS_FILE_OWNERS",
     "STARTING_MODEL_ROLE",
+    "STATUSLINE_SCRIPT_PATH",
+    "STATUS_LINE_KEY",
     "ApiKeyHelper",
     "ClaudeCredential",
     "ClaudeSettingsError",
@@ -614,12 +850,16 @@ __all__ = (
     "claude_settings_path",
     "configure_claude_settings",
     "configure_state_path",
-    "lite_api_key_helper_configured",
+    "installed_executable",
+    "is_lite_api_key_helper",
+    "is_lite_api_key_helper_for",
+    "lite_api_key_helper",
     "load_json_or_empty",
     "merge_claude_settings",
     "read_configure_receipt",
     "refuse_while_owned",
-    "resolve_api_key_helper",
+    "remove_launch_settings_files",
     "settings_file_owners",
     "unconfigure_claude_settings",
+    "write_claude_settings",
 )

@@ -1,6 +1,10 @@
+import types
+from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm.constants import REPLICATE_MODEL_NAME_WITH_ID_LENGTH
@@ -19,13 +23,19 @@ from litellm.utils import token_counter
 from ..common_utils import ReplicateError
 
 if TYPE_CHECKING:
-    import tiktoken
-
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
     LoggingClass = LiteLLMLoggingObj
 else:
     LoggingClass = Any
+
+_TEXTS: Final = TypeAdapter(Iterable[str], config=ConfigDict(strict=True, hide_input_in_errors=True))
+_JSON_DICT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
+
+
+class _ReplicatePrediction(TypedDict):
+    urls: ReadOnly[NotRequired[Mapping[str, str]]]
 
 
 class ReplicateConfig(BaseConfig):
@@ -76,7 +86,7 @@ class ReplicateConfig(BaseConfig):
         seed: int | None = None,
         debug: bool | None = None,
     ) -> None:
-        locals_: Final = locals().copy()
+        locals_: Final[Mapping[str, object]] = dict(locals())
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -85,7 +95,7 @@ class ReplicateConfig(BaseConfig):
     def get_config(cls):
         return super().get_config()
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         return [
             "stream",
             "temperature",
@@ -101,11 +111,11 @@ class ReplicateConfig(BaseConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: dict[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         for param, value in non_default_params.items():
             if param == "stream":
                 optional_params["stream"] = value
@@ -140,8 +150,8 @@ class ReplicateConfig(BaseConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         stream: bool | None = None,
     ) -> str:
         version_id = self.model_to_version_id(model)
@@ -159,12 +169,12 @@ class ReplicateConfig(BaseConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
+        headers: dict[str, object],
+    ) -> dict[str, object]:
         ## Load Config
-        config: Final = litellm.ReplicateConfig.get_config()
+        config: Final[Mapping[str, object]] = types.MappingProxyType(litellm.ReplicateConfig.get_config())
         for k, v in config.items():
             if (
                 k not in optional_params
@@ -217,7 +227,7 @@ class ReplicateConfig(BaseConfig):
             input_data = {"prompt": prompt, **optional_params}
 
         version_id: Final = self.model_to_version_id(model)
-        request_data: Final[dict] = {"input": input_data}
+        request_data: Final[dict[str, object]] = {"input": input_data}
         if ":" in version_id and len(version_id) > REPLICATE_MODEL_NAME_WITH_ID_LENGTH:
             model_parts: Final = version_id.split(":")
             if (
@@ -233,11 +243,11 @@ class ReplicateConfig(BaseConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LoggingClass,
-        request_data: dict,
+        request_data: dict[str, object],
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -247,14 +257,14 @@ class ReplicateConfig(BaseConfig):
             original_response=raw_response.text,
             additional_args={"complete_input_dict": request_data},
         )
-        raw_response_json: Final = raw_response.json()
+        raw_response_json: Final = _JSON_DICT.validate_python(raw_response.json())
         if raw_response_json.get("status") != "succeeded":
             raise ReplicateError(
                 status_code=422,
                 message=f"LiteLLM Error - prediction not succeeded - {raw_response_json}",
                 headers=raw_response.headers,
             )
-        outputs: Final = raw_response_json.get("output", [])
+        outputs: Final = _TEXTS.validate_python(raw_response_json.get("output", []))
         response_str = "".join(outputs)
         if len(response_str) == 0:  # edge case, where result from replicate is empty
             response_str = " "
@@ -287,7 +297,7 @@ class ReplicateConfig(BaseConfig):
         "urls":{"cancel":"https://api.replicate.com/v1/predictions/gqsmqmp1pdrj00cknr08dgmvb4/cancel","get":"https://api.replicate.com/v1/predictions/gqsmqmp1pdrj00cknr08dgmvb4","stream":"https://stream-b.svc.rno2.c.replicate.net/v1/streams/eot4gbydowuin4snhncydwxt57dfwgsc3w3snycx5nid7oef7jga"}
         }
         """
-        response_json: Final = response.json()
+        response_json: Final[_ReplicatePrediction] = response.json()
         prediction_url: Final = response_json.get("urls", {}).get("get")
         if prediction_url is None:
             raise ReplicateError(
@@ -299,14 +309,14 @@ class ReplicateConfig(BaseConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         headers = {
             "Authorization": f"Token {api_key}",
             "Content-Type": "application/json",

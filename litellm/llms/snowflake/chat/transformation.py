@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any, Final, Protocol, TypedDict
 import httpx
 from typing_extensions import ReadOnly
 
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, iter_items
 from litellm.litellm_core_utils.prompt_templates.factory import (
     anthropic_process_openai_file_message,
     convert_to_anthropic_tool_result,
@@ -24,6 +25,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     select_anthropic_content_block_type_for_file,
 )
 from litellm.litellm_core_utils.prompt_templates.image_handling import async_inline_remote_media
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.anthropic.chat.handler import ModelResponseIterator as AnthropicStreamParser
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.common_utils import normalize_cache_control_in_anthropic_payload
@@ -96,7 +98,7 @@ def _decoded_messages(response: _MessagesResponse) -> _AnthropicMessagesResponse
     return response.json()
 
 
-def _is_claude_model(model: str) -> bool:
+def is_snowflake_claude_model(model: str) -> bool:
     """Return True if model name (after stripping snowflake/ prefix) is a Claude model."""
     name: Final = model.lower().removeprefix("snowflake/")
     return any(name.startswith(p) for p in _CLAUDE_MODEL_PREFIXES)
@@ -110,7 +112,7 @@ def _convert_image_url_to_anthropic(block: Mapping[str, object]) -> object:
     pdf/text data URIs become document blocks rather than malformed image blocks.
     """
     image_url: Final = block.get("image_url")
-    url: Final = image_url if isinstance(image_url, str) else _image_url_field(image_url, "url")
+    url: Final = image_url if isinstance(image_url, str) else _str_field(image_url, "url")
     if not url:
         return block
 
@@ -118,19 +120,32 @@ def _convert_image_url_to_anthropic(block: Mapping[str, object]) -> object:
         anthropic_process_openai_file_message({"type": "file", "file": {"file_data": url}})
         if select_anthropic_content_block_type_for_file(_data_uri_media_type(url)) == "document"
         else create_anthropic_image_param(
-            image_url if isinstance(image_url, dict) else url,  # mutable-ok: caller's JSON block
-            format=_image_url_field(image_url, "format"),
+            image_url if isinstance(image_url, dict) else url,
+            format=_str_field(image_url, "format"),
             is_bedrock_invoke=True,
         )
     )
+    return _with_cache_control(converted, block)
+
+
+def _convert_file_to_anthropic(block: Mapping[str, object]) -> object:
+    file_data: Final = _str_field(block.get("file"), "file_data")
+    if not file_data:
+        return block
+    return _with_cache_control(
+        anthropic_process_openai_file_message({"type": "file", "file": {"file_data": file_data}}), block
+    )
+
+
+def _with_cache_control(converted: Mapping[str, object], block: Mapping[str, object]) -> Mapping[str, object]:
     cache_control: Final = block.get("cache_control")
     if cache_control is None:
         return converted
-    return {**converted, "cache_control": cache_control}  # mutable-ok: JSON wire block
+    return {**converted, "cache_control": cache_control}
 
 
-def _image_url_field(image_url: object, key: str) -> str | None:
-    value: Final = image_url.get(key) if isinstance(image_url, dict) else None
+def _str_field(container: object, key: str) -> str | None:
+    value: Final = container.get(key) if isinstance(container, dict) else None
     return value if isinstance(value, str) else None
 
 
@@ -139,15 +154,23 @@ def _data_uri_media_type(url: str) -> str:
     return match.group(1) if match else ""
 
 
-def _convert_image_url_blocks_to_anthropic(content: object) -> object:
+def _convert_media_block_to_anthropic(block: object) -> object:
+    mapping: Final = as_str_mapping(block)
+    if mapping is None:
+        return block
+    match mapping.get("type"):
+        case "image_url":
+            return _convert_image_url_to_anthropic(mapping)
+        case "file":
+            return _convert_file_to_anthropic(mapping)
+        case _:
+            return block
+
+
+def _convert_media_blocks_to_anthropic(content: object) -> object:
     if not isinstance(content, list):
         return content
-    return [  # mutable-ok: JSON wire blocks
-        _convert_image_url_to_anthropic(block)
-        if isinstance(block, Mapping) and block.get("type") == "image_url"
-        else block
-        for block in content
-    ]
+    return [_convert_media_block_to_anthropic(block) for block in content]
 
 
 def _convert_tool_result_to_anthropic(
@@ -172,7 +195,7 @@ def _convert_tool_result_to_anthropic(
     )
     if cache_control is None:
         return converted
-    return {**converted, "cache_control": cache_control}  # mutable-ok: JSON wire block
+    return {**converted, "cache_control": cache_control}
 
 
 def _signed_thinking_blocks(msg: object) -> list[dict[str, object]]:  # mutable-ok: JSON wire blocks
@@ -183,20 +206,17 @@ def _signed_thinking_blocks(msg: object) -> list[dict[str, object]]:  # mutable-
     """
     blocks: Final = msg.get("thinking_blocks") if isinstance(msg, dict) else getattr(msg, "thinking_blocks", None)
     if not isinstance(blocks, list):
-        return []  # mutable-ok: JSON wire blocks
-    return [  # mutable-ok: JSON wire blocks
-        dict(block)
-        for block in blocks
-        if isinstance(block, Mapping) and (block.get("signature") or block.get("type") == "redacted_thinking")
+        return []
+    mappings: Final = tuple(filter(None, map(as_str_mapping, blocks)))
+    return [
+        {key: value for key, value in block.items() if key != "index"}
+        for block in mappings
+        if block.get("signature") or block.get("type") == "redacted_thinking"
     ]
 
 
-def _clean_input_schema(schema: object) -> object:  # mutable-ok: JSON schema copy
-    return (
-        {key: value for key, value in schema.items() if key != "$schema"}
-        if isinstance(schema, Mapping)
-        else schema  # mutable-ok: JSON schema copy
-    )  # mutable-ok: JSON schema copy
+def _clean_input_schema(schema: object) -> object:
+    return {key: value for key, value in schema.items() if key != "$schema"} if isinstance(schema, Mapping) else schema
 
 
 class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
@@ -226,7 +246,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
             "tools",
             "tool_choice",
         ]
-        if _is_claude_model(model):
+        if is_snowflake_claude_model(model):
             params.append("thinking")
         return params
 
@@ -235,22 +255,22 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         api_base = self._get_api_base(api_base, optional_params)
-        if _is_claude_model(model):
-            return f"{api_base}/cortex/v1/messages"
-        return f"{api_base}/cortex/v1/chat/completions"
+        if is_snowflake_claude_model(model):
+            return join_api_base(api_base, "cortex/v1/messages")
+        return join_api_base(api_base, "cortex/v1/chat/completions")
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
@@ -263,7 +283,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
             api_key=api_key,
             api_base=api_base,
         )
-        if _is_claude_model(model):
+        if is_snowflake_claude_model(model):
             headers["anthropic-version"] = ANTHROPIC_VERSION
         return headers
 
@@ -293,15 +313,15 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
                 anthropic_tools.append(anthropic_tool)
             else:
                 anthropic_tools.append(
-                    {**tool, "input_schema": _clean_input_schema(tool["input_schema"])}  # mutable-ok: JSON wire tool
+                    {**tool, "input_schema": _clean_input_schema(tool["input_schema"])}
                     if "input_schema" in tool
                     else tool
                 )
         return anthropic_tools
 
-    def _extract_system_and_messages(  # mutable-ok: JSON wire messages
+    def _extract_system_and_messages(
         self, messages: list[AllMessageValues]
-    ) -> tuple[list[dict] | None, list[dict]]:
+    ) -> tuple[list[dict[str, object]] | None, list[dict[str, object]]]:
         """
         Split messages into system prompt and conversation turns for Anthropic format.
 
@@ -309,13 +329,13 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         - assistant messages with tool_calls → tool_use content blocks
         - tool role messages → user role with tool_result content blocks
         """
-        system_parts: Final[list[dict]] = []  # mutable-ok: JSON wire messages
-        conversation: Final[list[dict]] = []  # mutable-ok: JSON wire messages
+        system_parts: Final[list[dict[str, object]]] = []  # mutable-ok: JSON wire messages
+        conversation: Final[list[dict[str, object]]] = []  # mutable-ok: JSON wire messages
 
         for msg in messages:
             if isinstance(msg, dict):
                 role = msg.get("role", "")
-                content: Any = msg.get("content", "")
+                content: object = msg.get("content", "")
                 msg_cache_control: object = msg.get("cache_control")
             else:
                 role = getattr(msg, "role", "")
@@ -324,27 +344,27 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
 
             if role == "system":
                 if isinstance(content, str) and content:
-                    system_parts.append({"type": "text", "text": content})  # mutable-ok: JSON wire system block
+                    system_parts.append({"type": "text", "text": content})
                 elif isinstance(content, list):
                     system_parts.extend(
-                        {  # mutable-ok: JSON wire system block
+                        {
                             "type": "text",
                             "text": block.get("text", ""),
-                            **(
-                                {"cache_control": block["cache_control"]} if "cache_control" in block else {}
-                            ),  # mutable-ok: JSON wire block
+                            **({"cache_control": block["cache_control"]} if "cache_control" in block else {}),
                         }
                         for block in content
                         if isinstance(block, Mapping) and block.get("type") == "text"
                     )
             elif role == "assistant":
-                tool_calls = msg.get("tool_calls") if isinstance(msg, dict) else getattr(msg, "tool_calls", None)
+                tool_calls: object = (
+                    msg.get("tool_calls") if isinstance(msg, dict) else getattr(msg, "tool_calls", None)
+                )
                 thinking_blocks = _signed_thinking_blocks(msg)
                 if tool_calls:
                     content_blocks: list[dict[str, object]] = list(thinking_blocks)  # mutable-ok: JSON wire blocks
                     if content:
                         content_blocks.append({"type": "text", "text": content})
-                    for tc in tool_calls:
+                    for tc in iter_items(tool_calls):
                         func = tc.get("function", {}) if isinstance(tc, dict) else getattr(tc, "function", {})
                         tc_id = tc.get("id", "") if isinstance(tc, dict) else getattr(tc, "id", "")
                         func_name = func.get("name", "") if isinstance(func, dict) else getattr(func, "name", "")
@@ -372,7 +392,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
                         ]
                         if isinstance(content, list)
                         else [*thinking_blocks, *([{"type": "text", "text": content}] if content else [])]
-                    )  # rebind-ok: loop-local normalized content
+                    )
                     conversation.append({"role": "assistant", "content": thinking_content})
                 else:
                     conversation.append({"role": "assistant", "content": content})
@@ -380,9 +400,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
                 tool_call_id_value = (
                     msg.get("tool_call_id", "") if isinstance(msg, dict) else getattr(msg, "tool_call_id", "")
                 )
-                tool_call_id = (
-                    tool_call_id_value if isinstance(tool_call_id_value, str) else ""
-                )  # rebind-ok: normalized loop value
+                tool_call_id = tool_call_id_value if isinstance(tool_call_id_value, str) else ""
                 tool_result_block = _convert_tool_result_to_anthropic(content, tool_call_id, msg_cache_control)
                 if (
                     conversation
@@ -393,15 +411,13 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
                 ):
                     conversation[-1]["content"].append(tool_result_block)
                 else:
-                    conversation.append(
-                        {"role": "user", "content": [tool_result_block]}  # mutable-ok: JSON wire message
-                    )  # mutable-ok: JSON wire message
+                    conversation.append({"role": "user", "content": [tool_result_block]})
             else:
-                conversation.append(  # mutable-ok: JSON wire message
-                    {  # mutable-ok: JSON wire message
+                conversation.append(
+                    {
                         "role": role,
-                        "content": _convert_image_url_blocks_to_anthropic(content),
-                    }  # mutable-ok: JSON wire message
+                        "content": _convert_media_blocks_to_anthropic(content),
+                    }
                 )
 
         system: Final[list[dict] | None] = system_parts if system_parts else None  # mutable-ok: JSON wire messages
@@ -412,13 +428,13 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         model: str,
         messages: list[AllMessageValues],
         optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        litellm_params: Mapping[str, object],
+        headers: Mapping[str, object],
+    ) -> dict[str, object]:
         stream: Final[bool] = optional_params.pop("stream", False) or False
         extra_body: Final = optional_params.pop("extra_body", {})
 
-        if _is_claude_model(model):
+        if is_snowflake_claude_model(model):
             return self._transform_request_anthropic(model, messages, optional_params, stream, extra_body)
         return self._transform_request_openai(model, messages, optional_params, stream, extra_body)
 
@@ -434,23 +450,25 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         litellm_params: dict[str, object],  # mutable-ok: BaseConfig signature
         headers: dict[str, object],  # mutable-ok: BaseConfig signature
     ) -> dict[str, object]:  # mutable-ok: BaseConfig signature
-        inlined_messages: Final = await async_inline_remote_media(messages) if _is_claude_model(model) else messages
+        inlined_messages: Final = (
+            await async_inline_remote_media(messages) if is_snowflake_claude_model(model) else messages
+        )
         return self.transform_request(model, inlined_messages, optional_params, litellm_params, headers)
 
     def _transform_request_openai(
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
+        optional_params: dict[str, object],
         stream: bool,
-        extra_body: dict,
-    ) -> dict:
+        extra_body: Mapping[str, object],
+    ) -> dict[str, object]:
         """OpenAI format for /chat/completions endpoint."""
         max_tokens: Final = optional_params.pop("max_tokens", None)
         max_completion_tokens: Final = optional_params.pop("max_completion_tokens", None)
         resolved_max: Final = max_completion_tokens or max_tokens
 
-        body: Final[dict] = {
+        body: Final[dict[str, object]] = {
             "model": model.removeprefix("snowflake/"),
             "messages": messages,
             "stream": stream,
@@ -463,7 +481,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
 
         return body
 
-    def _transform_tool_choice_to_anthropic(self, tool_choice: Any) -> dict[str, Any]:
+    def _transform_tool_choice_to_anthropic(self, tool_choice: object) -> Mapping[str, object]:
         """
         Convert tool_choice from OpenAI format to Anthropic format.
 
@@ -491,8 +509,8 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         stream: bool,
-        extra_body: dict,
-    ) -> dict:
+        extra_body: Mapping[str, object],
+    ) -> dict[str, object]:
         """Anthropic Messages format for /messages endpoint."""
         passthrough_system: Final = optional_params.pop("system", None)
         extracted_system, conversation = self._extract_system_and_messages(messages)
@@ -511,18 +529,16 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         model_name: Final = model.removeprefix("snowflake/")
 
         body: Final[dict[str, object]] = normalize_cache_control_in_anthropic_payload(  # mutable-ok: JSON wire body
-            {  # mutable-ok: JSON wire body
+            {
                 "model": model_name,
                 "messages": conversation,
                 "stream": stream,
                 **optional_params,
-                **extra_body,  # mutable-ok: JSON wire body
+                **extra_body,
             }
         )
         if system is not None:
-            body["system"] = normalize_cache_control_in_anthropic_payload(  # mutable-ok: JSON wire payload
-                {"system": system}  # mutable-ok: JSON wire payload
-            )["system"]
+            body["system"] = normalize_cache_control_in_anthropic_payload({"system": system})["system"]
 
         if "max_tokens" not in body:
             body["max_tokens"] = 4096  # reasonable default; Anthropic API max varies by model
@@ -535,15 +551,15 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
+        request_data: Mapping[str, object],
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         encoding: object,
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
-        if _is_claude_model(model):
+        if is_snowflake_claude_model(model):
             return self._transform_response_anthropic(
                 model, raw_response, model_response, logging_obj, request_data, messages
             )
@@ -555,7 +571,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
+        request_data: Mapping[str, object],
         messages: list[AllMessageValues],
     ) -> ModelResponse:
         """Parse standard OpenAI chat completions response."""
@@ -572,7 +588,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         returned_response.model = "snowflake/" + (returned_response.model or "")
 
         if model is not None:
-            returned_response._hidden_params["model"] = model
+            returned_response.hidden_params["model"] = model
 
         return returned_response
 
@@ -582,7 +598,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
+        request_data: Mapping[str, object],
         messages: list[AllMessageValues],
     ) -> ModelResponse:
         """Parse Anthropic Messages response into OpenAI format."""
@@ -637,7 +653,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         model_response.id = response_json.get("id", "")
 
         if model is not None:
-            model_response._hidden_params["model"] = model
+            model_response.hidden_params["model"] = model
 
         return model_response
 
@@ -678,7 +694,7 @@ class SnowflakeStreamingHandler(BaseModelResponseIterator):
             json_mode=json_mode,
         )
 
-    def chunk_parser(self, chunk: dict) -> GenericStreamingChunk | ModelResponseStream:
+    def chunk_parser(self, chunk: dict[str, object]) -> GenericStreamingChunk | ModelResponseStream:
         if "choices" in chunk:
             return self._parse_openai_chunk(chunk)
         return self._anthropic_parser.chunk_parser(chunk)

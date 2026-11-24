@@ -70,7 +70,7 @@ class BaseRerankConfig(ABC):
         return api_base or ""
 
     @abstractmethod
-    def get_supported_cohere_rerank_params(self, model: str) -> list:
+    def get_supported_cohere_rerank_params(self, model: str) -> list[str]:
         pass
 
     @abstractmethod
@@ -80,7 +80,7 @@ class BaseRerankConfig(ABC):
         model: str,
         drop_params: bool,
         query: str,
-        documents: list[str | dict[str, Any]],
+        documents: list[str | dict[str, object]],
         custom_llm_provider: str | None = None,
         top_n: int | None = None,
         rank_fields: list[str] | None = None,

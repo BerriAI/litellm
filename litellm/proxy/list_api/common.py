@@ -1,13 +1,17 @@
 """Contract machinery shared by every LiteLLM-defined list route, on any surface."""
 
-from typing import Final
+from collections.abc import Sequence
+from typing import Final, Protocol
 from urllib.parse import urlencode
 
 from fastapi import Request
+from fastapi.dependencies.models import Dependant
 from fastapi.dependencies.utils import get_flat_params
 from fastapi.params import ParamTypes
 from fastapi.responses import JSONResponse
 
+from litellm.litellm_core_utils.core_helpers import has_attributes
+from litellm.proxy.common_utils.validation_error_body import ValidationErrorDetail
 from litellm.types.proxy.management_endpoints.management_v1 import (
     ListLinks,
     PageLinks,
@@ -37,9 +41,14 @@ def problem_response(problem: ProblemDetail) -> JSONResponse:
     )
 
 
+class _DependantRoute(Protocol):
+    @property
+    def dependant(self) -> Dependant: ...
+
+
 def _declared_query_params(request: Request) -> frozenset[str]:
     route: Final = request.scope.get("route")
-    dependant: Final = getattr(route, "dependant", None)
+    dependant: Final = route.dependant if has_attributes(route, _DependantRoute, "dependant") else None
     if dependant is None:
         return frozenset()
     # fastapi>=0.140.7 removed get_flat_dependant(); get_flat_params() returns the
@@ -54,6 +63,32 @@ def _declared_query_params(request: Request) -> frozenset[str]:
 def escape_like(value: str) -> str:
     """Escape LIKE/ILIKE metacharacters. Ids routinely contain `_`, which is a wildcard unescaped."""
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _is_length_error_of_rejected_items(error: ValidationErrorDetail, errors: Sequence[ValidationErrorDetail]) -> bool:
+    """pydantic counts only items that validated, so a bad item also trips the parent's min_length."""
+    return error["type"] == "too_short" and any(
+        len(other["loc"]) > len(error["loc"]) and other["loc"][: len(error["loc"])] == error["loc"] for other in errors
+    )
+
+
+def request_validation_problem(raw_errors: Sequence[ValidationErrorDetail]) -> ProblemDetail:
+    """A body that fails validation (an unknown field included) is 422; a bad query parameter is 400."""
+    errors: Final = tuple(error for error in raw_errors if not _is_length_error_of_rejected_items(error, raw_errors))
+    detail: Final = "; ".join(f"{'.'.join(str(part) for part in error['loc'][1:])}: {error['msg']}" for error in errors)
+    if any(error["loc"] and error["loc"][0] == "body" for error in errors):
+        return ProblemDetail(
+            type=f"{PROBLEM_TYPE_BASE}invalid-request-body",
+            title="Invalid request body",
+            status=422,
+            detail=detail or "The request body is invalid.",
+        )
+    return ProblemDetail(
+        type=f"{PROBLEM_TYPE_BASE}invalid-query-parameter",
+        title="Invalid query parameter",
+        status=400,
+        detail=detail or "The request query parameters are invalid.",
+    )
 
 
 def unknown_query_param_problem(unknown: tuple[str, ...], allowed: tuple[str, ...]) -> ProblemDetail:

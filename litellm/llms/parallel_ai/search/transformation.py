@@ -9,7 +9,7 @@ from types import MappingProxyType
 from typing import Final, TypedDict
 
 import httpx
-from pydantic import BaseModel, ConfigDict
+from pydantic import ConfigDict
 from typing_extensions import ReadOnly
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -20,9 +20,10 @@ from litellm.llms.base_llm.search.transformation import (
 )
 from litellm.llms.parallel_ai.search.cost_calculator import PARALLEL_AI_USAGE_PARAM
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
-class _ParallelAIV1SearchResult(BaseModel):
+class _ParallelAIV1SearchResult(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore")
 
     url: str | None = None
@@ -31,7 +32,7 @@ class _ParallelAIV1SearchResult(BaseModel):
     excerpts: Sequence[str] | None = None
 
 
-class _ParallelAIV1SearchResponse(BaseModel):
+class _ParallelAIV1SearchResponse(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore")
 
     search_id: str | None = None
@@ -90,13 +91,18 @@ class ParallelAISearchConfig(BaseSearchConfig):
     def ui_friendly_name() -> str:
         return "Parallel AI"
 
+    def supports_rich_search_input(self) -> bool:
+        # The v1 search API takes `objective` + multiple `search_queries`
+        # natively; sending both is the documented best practice.
+        return True
+
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-        **kwargs,
-    ) -> dict:
+        **kwargs: object,
+    ) -> dict[str, object]:
         resolved_api_key: Final = self.resolve_server_api_key(
             caller_api_key=api_key,
             caller_api_base=api_base,
@@ -113,9 +119,9 @@ class ParallelAISearchConfig(BaseSearchConfig):
     def get_complete_url(
         self,
         api_base: str | None,
-        optional_params: dict,
-        data: dict | list[dict] | None = None,
-        **kwargs,
+        optional_params: Mapping[str, object],
+        data: Mapping[str, object] | Sequence[Mapping[str, object]] | None = None,
+        **kwargs: object,
     ) -> str:
         resolved_api_base: Final = api_base or get_secret_str("PARALLEL_AI_API_BASE") or self.PARALLEL_AI_API_BASE
 
@@ -128,8 +134,8 @@ class ParallelAISearchConfig(BaseSearchConfig):
         self,
         query: str | list[str],
         optional_params: dict,
-        **kwargs,
-    ) -> dict:
+        **kwargs: object,
+    ) -> dict[str, object]:
         """
         Transform Search request to Parallel AI v1 API format.
 
@@ -224,7 +230,7 @@ class ParallelAISearchConfig(BaseSearchConfig):
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        **kwargs,
+        **kwargs: object,
     ) -> SearchResponse:
         """
         Transform Parallel AI v1 API response to LiteLLM unified SearchResponse format.

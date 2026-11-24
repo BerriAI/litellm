@@ -43,12 +43,12 @@ _PROXY_RUNTIME_MODULES: tuple[str, ...] = ("fastapi", "uvicorn", "backoff", "orj
 
 
 def missing_proxy_runtime_modules() -> tuple[str, ...]:
-    """Proxy-server modules that ``lite autoroute up`` needs but the thin CLI install lacks.
+    """Proxy-server modules that ``lite autoroute start`` needs but the thin CLI install lacks.
 
     ``launch_proxy`` runs the full ``litellm.proxy.proxy_cli`` server, whose dependencies live in
     the ``proxy`` extra, not the ``cli`` extra that installs the ``lite`` command. On a thin
     ``litellm[cli]`` install the subprocess dies with a bare ``ModuleNotFoundError``; detecting the
-    gap here lets ``up`` fail with an actionable message instead.
+    gap here lets ``start`` fail with an actionable message instead.
     """
     return tuple(name for name in _PROXY_RUNTIME_MODULES if importlib.util.find_spec(name) is None)
 

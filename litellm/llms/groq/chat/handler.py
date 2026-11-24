@@ -7,6 +7,7 @@ from typing import cast
 
 from httpx._config import Timeout
 
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import CustomStreamingDecoder
@@ -17,7 +18,7 @@ from ...openai_like.chat.handler import OpenAILikeChatHandler
 
 
 class GroqChatCompletion(OpenAILikeChatHandler):
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs: object):
         super().__init__(**kwargs)
 
     def completion(
@@ -30,13 +31,13 @@ class GroqChatCompletion(OpenAILikeChatHandler):
         custom_prompt_dict: dict,
         model_response: ModelResponse,
         print_verbose: Callable,
-        encoding,
+        encoding: object,
         api_key: str | None,
-        logging_obj,
+        logging_obj: LiteLLMLoggingObj,
         optional_params: dict,
-        acompletion=None,
+        acompletion: object = None,
         litellm_params=None,
-        logger_fn=None,
+        logger_fn: object = None,
         headers: dict | None = None,
         timeout: float | Timeout | None = None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
@@ -44,7 +45,7 @@ class GroqChatCompletion(OpenAILikeChatHandler):
         streaming_decoder: CustomStreamingDecoder | None = None,
         fake_stream: bool = False,
     ):
-        messages = GroqChatConfig()._transform_messages(messages=cast(list[AllMessageValues], messages), model=model)
+        messages = GroqChatConfig().transform_messages(messages=cast(list[AllMessageValues], messages), model=model)
 
         if optional_params.get("stream") is True:
             fake_stream = GroqChatConfig()._should_fake_stream(optional_params)

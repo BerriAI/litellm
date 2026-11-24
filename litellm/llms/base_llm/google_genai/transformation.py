@@ -1,6 +1,7 @@
 import types
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -21,6 +22,14 @@ else:
 
 from litellm.types.router import GenericLiteLLMParams
 
+GENERATE_CONTENT_REQUEST_TOP_LEVEL_FIELDS: Final = (
+    "safetySettings",
+    "toolConfig",
+    "cachedContent",
+    "labels",
+    "continuationToken",
+)
+
 
 class BaseGoogleGenAIGenerateContentConfig(ABC):
     """Base configuration class for Google GenAI generate_content functionality"""
@@ -30,9 +39,10 @@ class BaseGoogleGenAIGenerateContentConfig(ABC):
 
     @classmethod
     def get_config(cls):
+        class_attributes: Final[Mapping[str, object]] = types.MappingProxyType(cls.__dict__)
         return {
             k: v
-            for k, v in cls.__dict__.items()
+            for k, v in class_attributes.items()
             if not k.startswith("__")
             and not k.startswith("_abc")
             and not isinstance(
@@ -71,14 +81,24 @@ class BaseGoogleGenAIGenerateContentConfig(ABC):
         ``systemInstruction`` (dedicated extraction) and ``generationConfig`` (mapped
         to ``config``).
         """
-        return ("safetySettings", "toolConfig", "cachedContent", "labels")
+        return GENERATE_CONTENT_REQUEST_TOP_LEVEL_FIELDS
+
+    def transform_top_level_request_fields(
+        self,
+        request_fields: Mapping[str, object] | None,
+        litellm_params: GenericLiteLLMParams,
+    ) -> Mapping[str, object] | None:
+        return request_fields
+
+    def transform_caller_headers(self, headers: Mapping[str, object]) -> Mapping[str, object]:
+        return headers
 
     @abstractmethod
     def map_generate_content_optional_params(
         self,
         generate_content_config_dict: GenerateContentConfigDict,
         model: str,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """
         Map Google GenAI parameters to provider-specific format.
 
@@ -95,10 +115,10 @@ class BaseGoogleGenAIGenerateContentConfig(ABC):
     def validate_environment(
         self,
         api_key: str | None,
-        headers: dict | None,
+        headers: dict[str, object] | None,
         model: str,
-        litellm_params: GenericLiteLLMParams | dict | None,
-    ) -> dict:
+        litellm_params: GenericLiteLLMParams | dict[str, object] | None,
+    ) -> dict[str, object]:
         """
         Validate the environment and return headers for the request.
 
@@ -117,9 +137,9 @@ class BaseGoogleGenAIGenerateContentConfig(ABC):
         self,
         api_base: str | None,
         model: str,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
         stream: bool,
-    ) -> tuple[dict, str]:
+    ) -> tuple[dict[str, object], str]:
         """
         Sync version of get_auth_token_and_url.
 
@@ -138,9 +158,9 @@ class BaseGoogleGenAIGenerateContentConfig(ABC):
         self,
         api_base: str | None,
         model: str,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
         stream: bool,
-    ) -> tuple[dict, str]:
+    ) -> tuple[dict[str, object], str]:
         """
         Get the complete URL for the request.
 
@@ -160,9 +180,9 @@ class BaseGoogleGenAIGenerateContentConfig(ABC):
         model: str,
         contents: GenerateContentContentListUnionDict,
         tools: ToolConfigDict | None,
-        generate_content_config_dict: dict,
-        system_instruction: Any | None = None,
-    ) -> dict:
+        generate_content_config_dict: dict[str, object],
+        system_instruction: object | None = None,
+    ) -> dict[str, object]:
         """
         Transform the request parameters for the generate content API.
 
@@ -195,7 +215,9 @@ class BaseGoogleGenAIGenerateContentConfig(ABC):
             Transformed response data
         """
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> Exception:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers
+    ) -> Exception:
         """
         Get the appropriate exception class for the error.
 

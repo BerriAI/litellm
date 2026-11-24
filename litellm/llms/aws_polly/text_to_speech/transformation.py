@@ -6,17 +6,19 @@ Reference: https://docs.aws.amazon.com/polly/latest/dg/API_SynthesizeSpeech.html
 """
 
 import json
-from collections.abc import Coroutine
-from typing import TYPE_CHECKING, Any, Final, Union
+from collections.abc import Coroutine, Mapping
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Union
 
 import httpx
 
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
+from litellm.litellm_core_utils.optional_imports import ensure_optional_import
 from litellm.llms.base_llm.text_to_speech.transformation import (
     BaseTextToSpeechConfig,
     TextToSpeechRequestData,
 )
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+from litellm.llms.bedrock.web_identity_session_policy import POLLY_SESSION_POLICY, WebIdentitySessionPolicy
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -33,6 +35,9 @@ class AWSPollyTextToSpeechConfig(BaseTextToSpeechConfig, BaseAWSLLM):
 
     Reference: https://docs.aws.amazon.com/polly/latest/dg/API_SynthesizeSpeech.html
     """
+
+    supports_streaming = True
+    _web_identity_session_policy: ClassVar[WebIdentitySessionPolicy] = POLLY_SESSION_POLICY
 
     def __init__(self):
         BaseTextToSpeechConfig.__init__(self)
@@ -81,6 +86,7 @@ class AWSPollyTextToSpeechConfig(BaseTextToSpeechConfig, BaseAWSLLM):
         aspeech: bool,
         api_base: str | None,
         api_key: str | None,
+        stream: bool = False,
         **kwargs: object,
     ) -> Union[
         "HttpxBinaryResponseContent",
@@ -127,6 +133,7 @@ class AWSPollyTextToSpeechConfig(BaseTextToSpeechConfig, BaseAWSLLM):
             extra_headers=extra_headers,
             client=None,
             _is_async=aspeech,
+            stream=stream,
         )
 
         return response
@@ -138,7 +145,7 @@ class AWSPollyTextToSpeechConfig(BaseTextToSpeechConfig, BaseAWSLLM):
             aws_region_name = self.get_aws_region_name_for_non_llm_api_calls()
         return aws_region_name
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         """
         AWS Polly TTS supports these OpenAI parameters
         """
@@ -148,14 +155,14 @@ class AWSPollyTextToSpeechConfig(BaseTextToSpeechConfig, BaseAWSLLM):
         self,
         model: str,
         optional_params: dict,
-        voice: str | dict | None = None,
+        voice: str | Mapping[str, object] | None = None,
         drop_params: bool = False,
-        kwargs: dict = {},
-    ) -> tuple[str | None, dict]:
+        kwargs: Mapping[str, object] = {},
+    ) -> tuple[str | None, dict[str, object]]:
         """
         Map OpenAI parameters to AWS Polly parameters
         """
-        mapped_params: Final = {}
+        mapped_params: Final[dict[str, object]] = {}
 
         # Map voice - support both native Polly voices and OpenAI voice mappings
         mapped_voice: str | None = None
@@ -177,7 +184,6 @@ class AWSPollyTextToSpeechConfig(BaseTextToSpeechConfig, BaseAWSLLM):
         else:
             mapped_params["output_format"] = self.DEFAULT_OUTPUT_FORMAT
 
-        # Extract engine from model name (e.g., "aws_polly/neural" -> "neural")
         engine: Final = self._extract_engine_from_model(model)
         mapped_params["engine"] = engine
 
@@ -195,18 +201,17 @@ class AWSPollyTextToSpeechConfig(BaseTextToSpeechConfig, BaseAWSLLM):
         """
         Extract engine from model name.
 
+        speech() strips the "aws_polly/" prefix before the config is called,
+        so the bare engine name is what normally arrives here.
+
         Examples:
-            - aws_polly/neural -> neural
-            - aws_polly/standard -> standard
+            - standard -> standard
             - aws_polly/long-form -> long-form
             - aws_polly -> neural (default)
         """
-        if "/" in model:
-            parts: Final = model.split("/")
-            if len(parts) >= 2:
-                engine: Final = parts[1].lower()
-                if engine in self.VALID_ENGINES:
-                    return engine
+        engine: Final = model.rsplit("/", 1)[-1].lower()
+        if engine in self.VALID_ENGINES:
+            return engine
         return self.DEFAULT_ENGINE
 
     def validate_environment(
@@ -262,11 +267,9 @@ class AWSPollyTextToSpeechConfig(BaseTextToSpeechConfig, BaseAWSLLM):
         Returns:
             Tuple of (signed_headers, json_body_string)
         """
-        try:
-            from botocore.auth import SigV4Auth
-            from botocore.awsrequest import AWSRequest
-        except ImportError:
-            raise ImportError("Missing boto3 to call AWS Polly. Run 'pip install boto3'.")
+        ensure_optional_import("botocore")
+        from botocore.auth import SigV4Auth
+        from botocore.awsrequest import AWSRequest
 
         # Get AWS region
         aws_region_name: Final = litellm_params.get("aws_region_name", self.DEFAULT_REGION)
@@ -312,9 +315,9 @@ class AWSPollyTextToSpeechConfig(BaseTextToSpeechConfig, BaseAWSLLM):
         model: str,
         input: str,
         voice: str | None,
-        optional_params: dict,
+        optional_params: Mapping[str, object],
         litellm_params: dict,
-        headers: dict,
+        headers: Mapping[str, object],
     ) -> TextToSpeechRequestData:
         """
         Transform OpenAI TTS request to AWS Polly SynthesizeSpeech format.

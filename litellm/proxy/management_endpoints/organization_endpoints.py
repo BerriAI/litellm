@@ -14,10 +14,12 @@ Endpoints for /organization operations
 #### ORGANIZATION MANAGEMENT ####
 
 from collections.abc import Mapping, Sequence
+from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
     Annotated,
     Final,
+    NamedTuple,
     Protocol,
     cast,  # noqa: TID251  # prisma types Json columns as fields.Json but reads back plain python values
     overload,
@@ -25,35 +27,54 @@ from typing import (
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from pydantic import TypeAdapter
+from pydantic import ConfigDict, TypeAdapter
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
+from litellm.litellm_core_utils.core_helpers import attribute_or_none
+from litellm.models.budget import CUSTOMER_ONLY_BUDGET_FIELDS
 from litellm.proxy._types import *
-from litellm.proxy.auth.auth_checks import can_user_call_model, get_user_object
+from litellm.proxy.auth.auth_checks import (
+    can_user_call_model,
+    delete_cache_key_objects,
+    get_jwt_key_mapping_cache_keys_for_tokens,
+    get_user_object,
+)
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.cache_invalidation_pubsub import evict_and_broadcast
+from litellm.proxy.common_utils.openai_error_payload import proxy_exception_for
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.management_endpoints.budget_management_endpoints import (
     new_budget,
     update_budget,
 )
-from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
-from litellm.proxy.management_endpoints.common_utils import (
-    _set_object_metadata_field,
-    _user_has_admin_view,
+from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity, unless_database_fails
+from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # legacy module exports
+    _set_object_metadata_field,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _user_has_admin_view,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    set_object_metadata_field,
+    user_api_key_has_admin_view,
     validate_budget_duration,
 )
 from litellm.proxy.management_helpers.object_permission_utils import (
     handle_update_object_permission_common,
     prepare_object_permission_upsert,
     reject_ambiguous_mcp_tool_permission_keys,
+    reject_app_grant_change,
+    reject_clearing_app_grants,
 )
+from litellm.proxy.management_helpers.ptu_share_guard import raise_if_teams_hold_ptu_shares
 from litellm.proxy.management_helpers.utils import (
     get_new_internal_user_defaults,
     management_endpoint_wrapper,
 )
-from litellm.proxy.utils import PrismaClient
+from litellm.proxy.spend_tracking.committed_spend import drop_committed_spend
+from litellm.proxy.utils import PrismaClient, ProxyLogging
+from litellm.redis.stores.spend_counters import org_counter, team_counter
 from litellm.repositories.budget_repository import BudgetRepository
+from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.table_repositories import OrganizationMembershipRepository
@@ -65,7 +86,7 @@ from litellm.repositories.verification_token_repository import (
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
 )
-from litellm.utils import _update_dictionary
+from litellm.utils import update_dictionary
 
 if TYPE_CHECKING:
     from types import TracebackType
@@ -78,7 +99,9 @@ if TYPE_CHECKING:
         LiteLLM_OrganizationMembership as PrismaOrganizationMembership,
     )
     from prisma.models import LiteLLM_OrganizationTable as PrismaOrganizationTable
+    from prisma.models import LiteLLM_TeamTable as PrismaTeamTable
     from prisma.models import LiteLLM_UserTable as PrismaUserTable
+    from prisma.models import LiteLLM_VerificationToken as PrismaVerificationToken
 
 
 async def _enterprise_license_required(
@@ -164,11 +187,19 @@ class _OrganizationMembershipTableClient(Protocol):
 
 
 class _TeamTableClient(Protocol):
+    async def find_many(self, *, where: Mapping[str, object]) -> "Sequence[PrismaTeamTable]": ...
+
     async def delete_many(self, where: Mapping[str, object]) -> int: ...
 
 
 class _VerificationTokenTableClient(Protocol):
+    async def find_many(self, where: Mapping[str, object] | None = None) -> "Sequence[PrismaVerificationToken]": ...
+
     async def delete_many(self, where: Mapping[str, object]) -> int: ...
+
+
+class _OrganizationIdFilter(TypedDict):
+    organization_id: ReadOnly[str]
 
 
 class _ObjectPermissionTxClient(Protocol):
@@ -178,7 +209,19 @@ class _ObjectPermissionTxClient(Protocol):
 
 
 class _BudgetTxClient(Protocol):
-    async def update(self, where: Mapping[str, object], data: Mapping[str, object]) -> "PrismaBudgetTable | None": ...
+    async def update(
+        self, *, where: Mapping[str, object], data: Mapping[str, object]
+    ) -> "PrismaBudgetTable | None": ...
+
+
+class _OrganizationTxClient(Protocol):
+    async def update(
+        self,
+        *,
+        where: Mapping[str, object],
+        data: Mapping[str, object],
+        include: Mapping[str, object] | None = None,
+    ) -> "PrismaOrganizationTable | None": ...
 
 
 class _TransactionTables(Protocol):
@@ -189,7 +232,7 @@ class _TransactionTables(Protocol):
     def litellm_budgettable(self) -> "_BudgetTxClient": ...
 
     @property
-    def litellm_organizationtable(self) -> "_OrganizationTableClient": ...
+    def litellm_organizationtable(self) -> "_OrganizationTxClient": ...
 
 
 class _TransactionManager(Protocol):
@@ -200,6 +243,7 @@ class _TransactionManager(Protocol):
         exc_type: type[BaseException] | None,
         exc_value: BaseException | None,
         traceback: "TracebackType | None",
+        /,
     ) -> bool | None: ...
 
 
@@ -244,7 +288,7 @@ def _table(
     return prisma_table
 
 
-async def _verify_org_access(
+async def verify_org_access(
     organization_id: str,
     user_api_key_dict: UserAPIKeyAuth,
     prisma_client: PrismaClient,
@@ -254,7 +298,7 @@ async def _verify_org_access(
 
     Raises HTTPException(403) if the caller does not have access.
     """
-    if _user_has_admin_view(user_api_key_dict):
+    if user_api_key_has_admin_view(user_api_key_dict):
         return
 
     if not user_api_key_dict.user_id:
@@ -288,9 +332,17 @@ async def _verify_org_access(
     )
 
 
-_STR_OBJECT_DICT_ADAPTER: Final = TypeAdapter(dict[str, object])
-_BUDGET_SETTABLE_FIELDS: Final = frozenset(LiteLLM_BudgetTable.model_fields.keys()) - {"budget_id"}
+_verify_org_access: Final = verify_org_access
+
+
+_STR_OBJECT_DICT_ADAPTER: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
+_BUDGET_SETTABLE_FIELDS: Final = (
+    frozenset(LiteLLM_BudgetTable.model_fields.keys()) - {"budget_id"} - CUSTOMER_ONLY_BUDGET_FIELDS
+)
 _ORG_COLUMN_FIELDS: Final = frozenset({"organization_alias", "models"})
+_ORG_METADATA_FIELDS: Final = tuple(
+    field for field in LiteLLM_ManagementEndpoint_MetadataFields if field not in _BUDGET_SETTABLE_FIELDS
+)
 
 
 def build_budget_write_data(budget_updates: Mapping[str, object], updated_by: str) -> Mapping[str, object]:
@@ -360,8 +412,10 @@ async def new_organization(
     - budget_id: *Optional[str]* - The id for a budget (tpm/rpm/max budget) for the organization.
     ### IF NO BUDGET ID - CREATE ONE WITH THESE PARAMS ###
     - max_budget: *Optional[float]* - Max budget for org
+    - rollover_max_budget: *Optional[float]* - Does not enable rollover for organization spend. Leave unset for organization budgets.
     - tpm_limit: *Optional[int]* - Max tpm limit for org
     - rpm_limit: *Optional[int]* - Max rpm limit for org
+    - tpd_limit: *Optional[int]* - Max tokens per day stored on the org budget. Batch submissions enforce tpd_limit at the key, team and end user scopes only.
     - model_rpm_limit: *Optional[Dict[str, int]]* - The RPM (Requests Per Minute) limit per model for this organization.
     - model_tpm_limit: *Optional[Dict[str, int]]* - The TPM (Tokens Per Minute) limit per model for this organization.
     - max_parallel_requests: *Optional[int]* - [Not Implemented Yet] Max parallel requests for org
@@ -375,12 +429,14 @@ async def new_organization(
     - model_aliases: Optional[dict] - Model aliases for the team. [Docs](https://docs.litellm.ai/docs/proxy/team_based_routing#create-team-with-model-alias)
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - organization-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"]}. IF null or {} then no object permission.
     - allowed_models: Optional[List[str]] - List of models the organization is allowed to access. If not set, defaults to the models field.
+    - temp_budget_increase: *Optional[float]* - Stored on the org budget row but only enforced for team member budgets today.
+    - temp_budget_expiry: *Optional[str]* - Stored on the org budget row but only enforced for team member budgets today.
     Case 1: Create new org **without** a budget_id
 
     ```bash
     curl --location 'http://0.0.0.0:4000/organization/new' \
 
-    --header 'Authorization: Bearer sk-1234' \
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
 
     --header 'Content-Type: application/json' \
 
@@ -398,7 +454,7 @@ async def new_organization(
     ```bash
     curl --location 'http://0.0.0.0:4000/organization/new' \
 
-    --header 'Authorization: Bearer sk-1234' \
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
 
     --header 'Content-Type: application/json' \
 
@@ -455,13 +511,16 @@ async def new_organization(
         except Exception:
             pass
 
+    from litellm.proxy.management_helpers.utils import validate_scalar_budget_attachment
+
+    await validate_scalar_budget_attachment(prisma_client, data.budget_id)
     if data.budget_id is None:
         """
         Every organization needs a budget attached.
 
         If none provided, create one based on provided values
         """
-        budget_params: Final = LiteLLM_BudgetTable.model_fields.keys()
+        budget_params: Final = LiteLLM_BudgetTable.model_fields.keys() - CUSTOMER_ONLY_BUDGET_FIELDS
 
         # Only include Budget Params when creating an entry in litellm_budgettable
         _json_data: Final = _STR_OBJECT_DICT_ADAPTER.validate_python(data.json(exclude_none=True))
@@ -474,9 +533,8 @@ async def new_organization(
 
         _budget: Final = await _table(BudgetRepository(prisma_client)).create(
             data={
-                **new_budget,
+                **build_budget_write_data(new_budget, user_api_key_dict.user_id or litellm_proxy_admin_name),
                 "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
-                "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
             }
         )
 
@@ -486,6 +544,7 @@ async def new_organization(
     object_permission_id: Final = await _set_object_permission(
         data=data,
         prisma_client=prisma_client,
+        can_grant_apps=user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN,
     )
 
     """
@@ -511,12 +570,12 @@ async def new_organization(
     organization_payload["updated_by"] = user_api_key_dict.user_id or litellm_proxy_admin_name
     organization_row: Final = LiteLLM_OrganizationTable.model_validate(organization_payload)
 
-    for field in LiteLLM_ManagementEndpoint_MetadataFields:
+    for field in _ORG_METADATA_FIELDS:
         if getattr(data, field, None) is not None:
-            _set_object_metadata_field(
+            set_object_metadata_field(
                 object_data=organization_row,
                 field_name=field,
-                value=getattr(data, field),
+                value=attribute_or_none(data, field),
             )
 
     new_organization_row: Final = _STR_OBJECT_DICT_ADAPTER.validate_python(
@@ -562,43 +621,23 @@ async def get_organization_daily_activity(
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
-    # Parse comma-separated ids
-    org_ids_list = organization_ids.split(",") if organization_ids else None
+    org_ids: Final = tuple(organization_ids.split(",")) if organization_ids else None
     exclude_org_ids_list: list[str] | None = None
     if exclude_organization_ids:
         exclude_org_ids_list = exclude_organization_ids.split(",") if exclude_organization_ids else None
 
-    # Restrict non-proxy-admins to only organizations where they are org_admin
-    if not _user_has_admin_view(user_api_key_dict):
-        memberships: Final = await _table(OrganizationMembershipRepository(prisma_client)).find_many(
-            where={"user_id": user_api_key_dict.user_id}
-        )
-        admin_org_ids = [m.organization_id for m in memberships if m.user_role == LitellmUserRoles.ORG_ADMIN.value]
-        if org_ids_list is None:
-            # Default to orgs where user is org_admin
-            org_ids_list = admin_org_ids
-        else:
-            # Ensure user is org_admin for all requested orgs
-            for org_id in org_ids_list:
-                if org_id not in admin_org_ids:
-                    raise HTTPException(
-                        status_code=403,
-                        detail={"error": f"User is not org_admin for Organization= {org_id}."},
-                    )
+    org_scope: Final = await resolve_organization_daily_activity_scope(
+        organization_ids=org_ids,
+        prisma_client=prisma_client,
+        user_api_key_dict=user_api_key_dict,
+    )
 
-    # Fetch organization aliases for metadata
-    where_condition: Final = _STR_OBJECT_DICT_ADAPTER.validate_python({})
-    if org_ids_list is not None:
-        where_condition["organization_id"] = {"in": list(org_ids_list)}
-    org_aliases: Final = await _table(OrganizationRepository(prisma_client)).find_many(where=where_condition)
-
-    # Query daily activity for organizations
     return await get_daily_activity(
         prisma_client=prisma_client,
         table_name="litellm_dailyorganizationspend",
         entity_id_field="organization_id",
-        entity_id=org_ids_list,
-        entity_metadata_field={o.organization_id: {"organization_alias": o.organization_alias} for o in org_aliases},
+        entity_id=None if org_scope.organization_ids is None else list(org_scope.organization_ids),
+        entity_metadata_field=org_scope.organization_metadata,
         exclude_entity_ids=exclude_org_ids_list,
         start_date=start_date,
         end_date=end_date,
@@ -609,9 +648,62 @@ async def get_organization_daily_activity(
     )
 
 
+class _OrganizationDailyActivityScope(NamedTuple):
+    organization_ids: tuple[str, ...] | None
+    organization_metadata: Mapping[str, dict[str, object]]
+
+
+async def resolve_organization_daily_activity_scope(
+    *,
+    organization_ids: tuple[str, ...] | None,
+    prisma_client: PrismaClient,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> _OrganizationDailyActivityScope:
+    is_admin: Final = user_api_key_has_admin_view(user_api_key_dict)
+    memberships: Final = (
+        await _table(OrganizationMembershipRepository(prisma_client)).find_many(
+            where={"user_id": user_api_key_dict.user_id}
+        )
+        if not is_admin
+        else ()
+    )
+    admin_organization_ids: Final = tuple(
+        membership.organization_id
+        for membership in memberships
+        if membership.user_role == LitellmUserRoles.ORG_ADMIN.value
+    )
+    if not is_admin and organization_ids is not None:
+        for organization_id in organization_ids:
+            if organization_id not in admin_organization_ids:
+                raise HTTPException(
+                    status_code=403,
+                    detail={"error": f"User is not org_admin for Organization= {organization_id}."},
+                )
+    resolved_organization_ids: Final[tuple[str, ...] | None] = (
+        organization_ids if is_admin or organization_ids is not None else admin_organization_ids
+    )
+
+    organization_table: Final = _table(OrganizationRepository(prisma_client))
+    organization_rows: Final = await unless_database_fails(
+        find_many_in(organization_table, "organization_id", resolved_organization_ids)
+        if resolved_organization_ids is not None
+        else organization_table.find_many(where={}),
+        (),
+        "its organization aliases",
+    )
+    metadata: Final = MappingProxyType(
+        {
+            organization.organization_id: {"organization_alias": organization.organization_alias}
+            for organization in organization_rows
+        }
+    )
+    return _OrganizationDailyActivityScope(resolved_organization_ids, metadata)
+
+
 async def _set_object_permission(
     data: NewOrganizationRequest,
     prisma_client: PrismaClient | None,
+    can_grant_apps: bool = False,
 ) -> str | None:
     """
     Creates the LiteLLM_ObjectPermissionTable record for the organization.
@@ -623,6 +715,7 @@ async def _set_object_permission(
         return None
 
     if data.object_permission is not None:
+        reject_app_grant_change(data.object_permission.apps, None, can_grant_apps)
         await reject_ambiguous_mcp_tool_permission_keys(
             new_mcp_tool_permissions=data.object_permission.mcp_tool_permissions,
             existing_mcp_tool_permissions=None,
@@ -666,7 +759,7 @@ async def update_organization(
         )
 
     # Transform UI payload to expected format
-    raw_data: Final[dict[str, object]] = await request.json()
+    raw_data: Final = _STR_OBJECT_DICT_ADAPTER.validate_python(await request.json())
     raw_data_with_flat_budget_fields: Final = handle_nested_budget_structure_in_organization_update_request(raw_data)
 
     # Create validated data model
@@ -696,7 +789,7 @@ async def update_organization(
     # IDOR guard: only proxy admins / org admins of THIS org may update
     # it. Without this, any authenticated key holder could rewrite
     # another organization's metadata, budgets, and object permissions.
-    await _verify_org_access(
+    await verify_org_access(
         organization_id=data.organization_id,
         user_api_key_dict=user_api_key_dict,
         prisma_client=prisma_client,
@@ -713,8 +806,10 @@ async def update_organization(
     # Merge metadata from existing organization with updated metadata
     if updated_organization_row_json.get("metadata") is not None:
         existing_metadata: Final = existing_organization_row.metadata or {}
-        updated_metadata: Final[dict[str, object]] = updated_organization_row_json.get("metadata", {})
-        merged_metadata: Final[Mapping[str, object]] = _update_dictionary(
+        updated_metadata: Final = _STR_OBJECT_DICT_ADAPTER.validate_python(
+            updated_organization_row_json.get("metadata", {})
+        )
+        merged_metadata: Final[Mapping[str, object]] = update_dictionary(
             existing_dict=cast(  # cast-ok: prisma de-serializes a Json column to the plain python dict it stores
                 "dict[str, object]", existing_metadata
             ).copy(),
@@ -729,15 +824,20 @@ async def update_organization(
         updated_organization_row = await handle_update_object_permission(
             data_json=updated_organization_row,
             existing_organization_row=existing_organization_row,
+            can_grant_apps=user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN,
         )
 
     budget_fields: Final = {
-        k: v for k, v in data.model_dump().items() if k in _BUDGET_SETTABLE_FIELDS and k in data.model_fields_set
+        k: v
+        for k, v in _STR_OBJECT_DICT_ADAPTER.validate_python(data.model_dump()).items()
+        if k in _BUDGET_SETTABLE_FIELDS and k in data.model_fields_set
     }
 
     if budget_fields and existing_organization_row.budget_id:
         await update_budget(
-            budget_obj=BudgetNewRequest(budget_id=existing_organization_row.budget_id, **budget_fields),
+            budget_obj=BudgetNewRequest.model_validate(
+                {"budget_id": existing_organization_row.budget_id, **budget_fields}
+            ),
             user_api_key_dict=user_api_key_dict,
         )
 
@@ -751,12 +851,18 @@ async def update_organization(
         include={"members": True, "teams": True, "litellm_budget_table": True},
     )
 
+    if data.spend is not None:
+        from litellm.proxy.proxy_server import spend_counter_store
+
+        await drop_committed_spend(spend_counter_store, (org_counter(data.organization_id),))
+
     return response
 
 
 async def handle_update_object_permission(
     data_json: dict[str, object],
     existing_organization_row: _ObjectPermissionRow,
+    can_grant_apps: bool = False,
 ) -> dict[str, object]:
     """
     Handle the update of object permission for an organization.
@@ -772,6 +878,7 @@ async def handle_update_object_permission(
         data_json=data_json,
         existing_object_permission_id=existing_organization_row.object_permission_id,
         prisma_client=prisma_client,
+        can_grant_apps=can_grant_apps,
     )
 
     # Add the object_permission_id to data_json if one was created/updated
@@ -867,7 +974,7 @@ async def update_organization_v2(
             },
         )
 
-    await _verify_org_access(
+    await verify_org_access(
         organization_id=organization_id,
         user_api_key_dict=user_api_key_dict,
         prisma_client=prisma_client,
@@ -891,11 +998,20 @@ async def update_organization_v2(
     }
 
     object_permission_cleared: Final = "object_permission" in present_fields and data.object_permission is None
+    can_grant_apps: Final = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+    await reject_clearing_app_grants(
+        existing_object_permission_id=(
+            existing_organization_row.object_permission_id if object_permission_cleared else None
+        ),
+        can_grant_apps=can_grant_apps,
+        prisma_client=prisma_client,
+    )
     object_permission_upsert: Final = (
         await prepare_object_permission_upsert(
             new_object_permission=data.object_permission.model_dump(exclude_none=True),
             existing_object_permission_id=existing_organization_row.object_permission_id,
             prisma_client=prisma_client,
+            can_grant_apps=can_grant_apps,
         )
         if data.object_permission is not None
         else None
@@ -960,7 +1076,7 @@ async def delete_organization(
 
     - organization_ids: List[str] - The organization ids to delete.
     """
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import llm_router, prisma_client, proxy_logging_obj, user_api_key_cache
 
     if prisma_client is None:
         raise HTTPException(
@@ -974,16 +1090,26 @@ async def delete_organization(
             detail={"error": "Only proxy admins can delete organizations"},
         )
 
-    deleted_orgs: Final = []
+    teams_in_deleted_orgs: Final = await find_many_in(
+        _table(TeamRepository(prisma_client)), "organization_id", data.organization_ids
+    )
+    team_ids_in_deleted_orgs: Final = tuple(team.team_id for team in teams_in_deleted_orgs)
+    raise_if_teams_hold_ptu_shares(team_ids_in_deleted_orgs, llm_router)
+
+    deleted_orgs: Final[list[PrismaOrganizationTable]] = []
     for organization_id in data.organization_ids:
-        # delete all teams in the organization
-        await _table(TeamRepository(prisma_client)).delete_many(where={"organization_id": organization_id})
-        # delete all members in the organization
-        await _table(OrganizationMembershipRepository(prisma_client)).delete_many(
-            where={"organization_id": organization_id}
+        async with prisma_client.tx() as transaction:
+            _ = await transaction.query_raw(_LOCK_ORG_TEAMS_SQL, organization_id)
+            _ = await transaction.litellm_teamtable.delete_many(where={"organization_id": organization_id})
+        async with prisma_client.tx() as transaction:
+            _ = await transaction.query_raw(_LOCK_ORG_MEMBERS_SQL, organization_id)
+            _ = await transaction.litellm_organizationmembership.delete_many(where={"organization_id": organization_id})
+        await _delete_organization_keys(
+            organization_id=organization_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
         )
-        # delete all keys in the organization
-        await _table(VerificationTokenRepository(prisma_client)).delete_many(where={"organization_id": organization_id})
         # delete the organization
         deleted_org = await _table(OrganizationRepository(prisma_client)).delete(
             where={"organization_id": organization_id},
@@ -996,7 +1122,53 @@ async def delete_organization(
             )
         deleted_orgs.append(deleted_org)
 
+    from litellm.proxy.proxy_server import spend_counter_store
+
+    await drop_committed_spend(
+        spend_counter_store,
+        (
+            *(org_counter(organization_id) for organization_id in data.organization_ids),
+            *(team_counter(team_id) for team_id in team_ids_in_deleted_orgs),
+        ),
+    )
     return deleted_orgs
+
+
+_LOCK_ORG_TEAMS_SQL: Final = (
+    'SELECT 1 AS locked FROM "LiteLLM_TeamTable" WHERE organization_id = $1 ORDER BY team_id COLLATE "C" FOR UPDATE'
+)
+_LOCK_ORG_MEMBERS_SQL: Final = (
+    'SELECT 1 AS locked FROM "LiteLLM_OrganizationMembership" WHERE organization_id = $1 '
+    'ORDER BY organization_id COLLATE "C", user_id COLLATE "C" FOR UPDATE'
+)
+_LOCK_ORG_KEYS_SQL: Final = (
+    'SELECT 1 AS locked FROM "LiteLLM_VerificationToken" WHERE organization_id = $1 '
+    'ORDER BY token COLLATE "C" FOR UPDATE'
+)
+
+
+async def _delete_organization_keys(
+    organization_id: str,
+    prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging | None,
+) -> None:
+    key_filter: Final[_OrganizationIdFilter] = {"organization_id": organization_id}
+    keys_to_delete: Final = await _table(VerificationTokenRepository(prisma_client)).find_many(where=key_filter)
+    hashed_tokens_to_delete: Final = tuple(key.token for key in keys_to_delete)
+    jwt_mapping_cache_keys: Final = await get_jwt_key_mapping_cache_keys_for_tokens(
+        hashed_tokens=hashed_tokens_to_delete,
+        prisma_client=prisma_client,
+    )
+    async with prisma_client.tx() as transaction:
+        _ = await transaction.query_raw(_LOCK_ORG_KEYS_SQL, organization_id)
+        _ = await transaction.litellm_verificationtoken.delete_many(where={"organization_id": organization_id})
+    await delete_cache_key_objects(
+        hashed_tokens=hashed_tokens_to_delete,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+    await evict_and_broadcast(cache_keys=jwt_mapping_cache_keys, user_api_key_cache=user_api_key_cache)
 
 
 @router.get(
@@ -1025,13 +1197,13 @@ async def list_organization(
     Example:
     ```
     curl --location --request GET 'http://0.0.0.0:4000/organization/list?org_alias=my-org' \
-        --header 'Authorization: Bearer sk-1234'
+        --header "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
 
     Example with org_id:
     ```
     curl --location --request GET 'http://0.0.0.0:4000/organization/list?org_id=123e4567-e89b-12d3-a456-426614174000' \
-        --header 'Authorization: Bearer sk-1234'
+        --header "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     """
     from litellm.proxy.proxy_server import prisma_client
@@ -1058,7 +1230,7 @@ async def list_organization(
         }
 
     # if proxy admin or admin viewer - get all orgs (with optional filters)
-    if _user_has_admin_view(user_api_key_dict):
+    if user_api_key_has_admin_view(user_api_key_dict):
         response = await _table(OrganizationRepository(prisma_client)).find_many(
             where=where_conditions if where_conditions else None,
             include={"litellm_budget_table": True, "members": True, "teams": True},
@@ -1124,7 +1296,7 @@ async def info_organization(
         raise HTTPException(status_code=500, detail={"error": "No db connected"})
 
     # Verify caller has access to this organization
-    await _verify_org_access(
+    await verify_org_access(
         organization_id=organization_id,
         user_api_key_dict=user_api_key_dict,
         prisma_client=prisma_client,
@@ -1177,7 +1349,7 @@ async def deprecated_info_organization(
 
     # Verify caller has access to each requested organization
     for org_id in data.organizations:
-        await _verify_org_access(
+        await verify_org_access(
             organization_id=org_id,
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
@@ -1225,7 +1397,7 @@ async def organization_member_add(
     Example:
     ```
     curl -X POST 'http://0.0.0.0:4000/organization/member_add' \
-    -H 'Authorization: Bearer sk-1234' \
+    -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
     -H 'Content-Type: application/json' \
     -d '{
         "organization_id": "45e3e396-ee08-4a61-a88e-16b3ce7e0849",
@@ -1253,7 +1425,7 @@ async def organization_member_add(
         # organization, allowed to access this endpoint" — but the code
         # never enforced that. Any authenticated key holder could add
         # members to any org. Now gated explicitly.
-        await _verify_org_access(
+        await verify_org_access(
             organization_id=data.organization_id,
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
@@ -1300,21 +1472,9 @@ async def organization_member_add(
         )
     except Exception as e:
         verbose_proxy_logger.exception("Error adding member to organization: %s", e)
-        if isinstance(e, HTTPException):
-            raise ProxyException(
-                message=getattr(e, "detail", f"Authentication Error({e})"),
-                type=ProxyErrorTypes.auth_error,
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
-            )
-        elif isinstance(e, ProxyException):
-            raise e
-        raise ProxyException(
-            message="Authentication Error, " + str(e),
-            type=ProxyErrorTypes.auth_error,
-            param=getattr(e, "param", "None"),
-            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        )
+        if isinstance(e, ProxyException):
+            raise
+        raise proxy_exception_for(e, default_status_code=status.HTTP_500_INTERNAL_SERVER_ERROR) from e
 
 
 async def find_member_if_email(user_email: str, prisma_client: PrismaClient) -> LiteLLM_UserTable:
@@ -1367,7 +1527,7 @@ async def organization_member_update(
         # update member roles. The PROXY_ADMIN-target check below was
         # the only access control; without this, any authenticated user
         # could change any non-admin member's role in any org.
-        await _verify_org_access(
+        await verify_org_access(
             organization_id=data.organization_id,
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
@@ -1516,7 +1676,7 @@ async def organization_member_delete(
         # IDOR guard: only proxy admins / org admins of THIS org may
         # delete members. Without this, any authenticated key holder
         # could remove any user from any org.
-        await _verify_org_access(
+        await verify_org_access(
             organization_id=data.organization_id,
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,

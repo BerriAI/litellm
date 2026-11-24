@@ -1,4 +1,5 @@
-from typing import Any, Final
+from collections.abc import Mapping
+from typing import Final
 
 from .flux_pro_v11_ultra_transformation import FalAIFluxProV11UltraConfig
 
@@ -23,7 +24,7 @@ class FalAIBytedanceBaseConfig(FalAIFluxProV11UltraConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
+        non_default_params: Mapping[str, object],
         optional_params: dict,
         model: str,
         drop_params: bool,
@@ -60,7 +61,7 @@ class FalAIBytedanceBaseConfig(FalAIFluxProV11UltraConfig):
 
         return optional_params
 
-    def _map_image_size(self, size: Any) -> Any:
+    def _map_image_size(self, size: object) -> object:
         if isinstance(size, dict):
             return size
 
@@ -91,6 +92,7 @@ class FalAIBytedanceSeedreamV3Config(FalAIBytedanceBaseConfig):
     """
 
     IMAGE_GENERATION_ENDPOINT: str = "fal-ai/bytedance/seedream/v3/text-to-image"
+    MODEL_FAMILY_ROOTS: tuple[str, ...] = ("fal-ai/bytedance/seedream/", "bytedance/seedream/")
 
 
 class FalAIBytedanceDreaminaV31Config(FalAIBytedanceBaseConfig):

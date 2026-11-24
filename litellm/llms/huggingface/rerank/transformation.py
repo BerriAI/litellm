@@ -7,6 +7,7 @@ from typing_extensions import TypedDict
 
 import litellm
 from litellm._uuid import uuid
+from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.secret_managers.main import get_secret_str
@@ -64,36 +65,30 @@ class HuggingFaceRerankConfig(BaseRerankConfig):
         self,
         api_base: str | None,
         model: str,
-        optional_params: dict | None = None,
+        optional_params: Mapping[str, object] | None = None,
     ) -> str:
         """
         Get the complete URL for the API call, including the /rerank suffix if necessary.
         """
-        # Get base URL from api_base or default
-        base_url = self.get_api_base(model=model, api_base=api_base)
+        return ensure_api_route(self.get_api_base(model=model, api_base=api_base), "rerank")
 
-        # Remove trailing slashes and ensure we have the /rerank endpoint
-        base_url = base_url.rstrip("/")
-        if not base_url.endswith("/rerank"):
-            base_url = f"{base_url}/rerank"
-
-        return base_url
-
-    def get_supported_cohere_rerank_params(self, model: str) -> list:
+    def get_supported_cohere_rerank_params(self, model: str) -> list[str]:
         return [
             "query",
             "documents",
             "top_n",
             "return_documents",
+            "truncate",
+            "truncation_direction",
         ]
 
     def map_cohere_rerank_params(
         self,
-        non_default_params: dict | None,
+        non_default_params: Mapping[str, object] | None,
         model: str,
         drop_params: bool,
         query: str,
-        documents: list[str | dict[str, Any]],
+        documents: list[str | dict[str, object]],
         custom_llm_provider: str | None = None,
         top_n: int | None = None,
         rank_fields: list[str] | None = None,
@@ -111,6 +106,10 @@ class HuggingFaceRerankConfig(BaseRerankConfig):
                     optional_rerank_params["return_text"] = v
                 elif k == "top_n" and v is not None:
                     optional_rerank_params["top_n"] = v
+                elif k == "truncate" and isinstance(v, bool):
+                    optional_rerank_params["truncate"] = v
+                elif k == "truncation_direction" and v is not None:
+                    optional_rerank_params["truncation_direction"] = v
                 elif k == "documents" and v is not None:
                     optional_rerank_params["texts"] = v
                 elif k == "query" and v is not None:
@@ -123,7 +122,7 @@ class HuggingFaceRerankConfig(BaseRerankConfig):
         headers: dict,
         model: str,
         api_key: str | None = None,
-        optional_params: dict | None = None,
+        optional_params: Mapping[str, object] | None = None,
         litellm_params: Mapping[str, object] | None = None,
         api_base: str | None = None,
     ) -> dict:
@@ -146,19 +145,18 @@ class HuggingFaceRerankConfig(BaseRerankConfig):
     def transform_rerank_request(
         self,
         model: str,
-        optional_rerank_params: OptionalRerankParams | dict,
-        headers: dict,
-        litellm_params: dict | None = None,
-    ) -> dict:
+        optional_rerank_params: OptionalRerankParams | Mapping[str, object],
+        headers: Mapping[str, object],
+        litellm_params: Mapping[str, object] | None = None,
+    ) -> dict[str, object]:
         if "query" not in optional_rerank_params:
             raise ValueError("query is required for HuggingFace rerank")
         if "texts" not in optional_rerank_params:
             raise ValueError("Cohere 'documents' param is required for HuggingFace rerank")
         # Ensure return_text is a boolean value
         # HuggingFace API expects return_text parameter, corresponding to our return_documents parameter
-        request_body: Final = {
+        request_body: Final[dict[str, object]] = {
             "raw_scores": False,
-            "truncate": False,
             "truncation_direction": "Right",
         }
 
@@ -174,8 +172,8 @@ class HuggingFaceRerankConfig(BaseRerankConfig):
         logging_obj: LoggingClass,
         api_key: str | None = None,
         request_data: dict = {},
-        optional_params: dict = {},
-        litellm_params: dict = {},
+        optional_params: Mapping[str, object] = {},
+        litellm_params: Mapping[str, object] = {},
     ) -> RerankResponse:
         try:
             raw_response_json: Final[HuggingFaceRerankResponseList] = raw_response.json()
@@ -220,7 +218,7 @@ class HuggingFaceRerankConfig(BaseRerankConfig):
         should_return_documents = request_data.get("return_text", False) or request_data.get("return_documents", False)
         original_documents: Final = request_data.get("texts", [])
 
-        results: Final = []
+        results: Final[list[RerankResponseResult]] = []
         for item in raw_response_json:
             # Extract required fields with defaults to handle None values
             index = item.get("index")
@@ -256,7 +254,9 @@ class HuggingFaceRerankConfig(BaseRerankConfig):
             meta=rerank_meta,
         )
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: Mapping[str, object] | httpx.Headers
+    ) -> BaseLLMException:
         return HuggingFaceError(message=error_message, status_code=status_code)
 
     def get_api_credentials(

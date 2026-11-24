@@ -4,6 +4,7 @@ Wandb Chat Completions API - Transformation
 This is OpenAI compatible - no translation needed / occurs
 """
 
+from collections.abc import Mapping
 from typing import Final
 
 import litellm
@@ -14,12 +15,12 @@ class WandbConfig(OpenAIGPTConfig):
     def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: inherited contract
         supported_params: Final = super().get_supported_openai_params(model)
         if litellm.supports_reasoning(model=model, custom_llm_provider="wandb"):
-            return supported_params + ["reasoning_effort"]  # mutable-ok: inherited contract
+            return supported_params + ["reasoning_effort"]
         return supported_params
 
     def map_openai_params(
         self,
-        non_default_params: dict,
+        non_default_params: Mapping[str, object],
         optional_params: dict,
         model: str,
         drop_params: bool,

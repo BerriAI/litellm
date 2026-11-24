@@ -4,13 +4,15 @@ Azure Anthropic handler - reuses AnthropicChatCompletion logic with Azure authen
 
 import copy
 import json
-from collections.abc import Callable
-from typing import Final
+from collections.abc import Callable, Mapping
+from typing import TYPE_CHECKING, Final
 
 import httpx
 
+from litellm.anthropic_beta_gated_fields import strip_beta_gated_request_body
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.anthropic.chat.handler import AnthropicChatCompletion
+from litellm.llms.anthropic.chat.transformation import JsonModeRequest
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
@@ -19,6 +21,9 @@ from litellm.types.utils import ModelResponse
 from litellm.utils import CustomStreamWrapper
 
 from .transformation import AzureAnthropicConfig
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
 
 class AzureAnthropicChatCompletion(AnthropicChatCompletion):
@@ -38,16 +43,16 @@ class AzureAnthropicChatCompletion(AnthropicChatCompletion):
         custom_llm_provider: str,
         custom_prompt_dict: dict,
         model_response: ModelResponse,
-        print_verbose: Callable,
-        encoding,
-        api_key,
+        print_verbose: Callable[..., object],
+        encoding: "Tokenizer",
+        api_key: str | None,
         logging_obj: LiteLLMLoggingObj,
         optional_params: dict,
         timeout: float | httpx.Timeout,
         litellm_params: dict,
-        acompletion=None,
-        logger_fn=None,
-        headers={},
+        acompletion: object = None,
+        logger_fn: object = None,
+        headers: dict[str, object] = {},
         client=None,
     ):
         """
@@ -74,12 +79,21 @@ class AzureAnthropicChatCompletion(AnthropicChatCompletion):
             litellm_params=litellm_params,
         )
 
-        data: Final = config.transform_request(
+        request_body: Final[Mapping[str, object]] = config.transform_request(
             model=model,
             messages=messages,
             optional_params=optional_params,
             litellm_params=litellm_params,
             headers=headers,
+        )
+        data: Final = dict(
+            strip_beta_gated_request_body(
+                request_body,
+                headers,  # pyright: ignore[reportUnknownArgumentType]  # validate_environment returns a bare dict
+                drop_params=litellm_params.get("drop_params"),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # litellm_params is the handler's bare dict
+                model=model,
+                provider=custom_llm_provider,
+            )
         )
 
         ## LOGGING
@@ -162,6 +176,9 @@ class AzureAnthropicChatCompletion(AnthropicChatCompletion):
                     logging_obj=logging_obj,
                     timeout=timeout,
                     json_mode=json_mode,
+                    response_format_schema=(
+                        JsonModeRequest.model_validate(optional_params).tool_schema() if json_mode else None
+                    ),
                 )
                 from litellm.llms.anthropic.common_utils import (
                     process_anthropic_headers,
@@ -177,9 +194,9 @@ class AzureAnthropicChatCompletion(AnthropicChatCompletion):
 
             else:
                 if client is None or not isinstance(client, HTTPHandler):
-                    from litellm.llms.custom_httpx.http_handler import _get_httpx_client
+                    from litellm.llms.custom_httpx.http_handler import get_httpx_client
 
-                    client = _get_httpx_client(params={"timeout": timeout})
+                    client = get_httpx_client(params={"timeout": timeout})
                 else:
                     client = client
 
@@ -196,7 +213,7 @@ class AzureAnthropicChatCompletion(AnthropicChatCompletion):
                     status_code: Final = getattr(e, "status_code", 500)
                     error_headers = getattr(e, "headers", None)
                     error_text = getattr(e, "text", str(e))
-                    error_response: Final = getattr(e, "response", None)
+                    error_response: Final[object] = getattr(e, "response", None)
                     if error_headers is None and error_response:
                         error_headers = getattr(error_response, "headers", None)
                     if error_response and hasattr(error_response, "text"):

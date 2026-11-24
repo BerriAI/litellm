@@ -10,14 +10,16 @@ import os
 import tempfile
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from enum import StrEnum
+from enum import Enum
 from pathlib import Path
 from types import MappingProxyType
 from typing import Annotated, Final
 
 import requests
-from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError, model_validator
+from pydantic import ConfigDict, JsonValue, TypeAdapter, ValidationError, model_validator
 from pydantic.types import StringConstraints
+
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 PI_CONFIG_DIR_ENV: Final = "PI_CODING_AGENT_DIR"
 PI_PROVIDER_NAME: Final = "litellm"
@@ -25,7 +27,7 @@ LITELLM_PROXY_API_KEY_ENV: Final = "LITELLM_PROXY_API_KEY"
 _REJECTED_STATUSES: Final = frozenset((401, 403))
 
 
-class ListingFailure(StrEnum):
+class ListingFailure(str, Enum):
     """Why a proxy could not be listed, decided once where the HTTP outcome is classified.
 
     `unreachable` means no response at all; the other kinds prove the proxy answered, so callers
@@ -48,21 +50,24 @@ class PiSyncError:
 
 @dataclass(frozen=True, slots=True)
 class ModelLimits:
+    """What /model_group/info says about one model group; `supported_reasoning_efforts` is None when unknown."""
+
     context_window: int | None
     max_tokens: int | None
+    supported_reasoning_efforts: tuple[str, ...] | None = None
 
 
 _NonEmptyString = Annotated[str, StringConstraints(min_length=1)]
 
 
-class ListedModel(BaseModel):
+class ListedModel(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     id: _NonEmptyString
     source_model: _NonEmptyString | None = None
 
 
-class _ModelList(BaseModel):
+class _ModelList(LiteLLMBaseModel):
     data: tuple[ListedModel, ...]
 
     @model_validator(mode="after")
@@ -73,13 +78,16 @@ class _ModelList(BaseModel):
         return self
 
 
-class _ModelGroup(BaseModel):
+class _ModelGroup(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
     model_group: str
     max_input_tokens: float | None = None
     max_output_tokens: float | None = None
+    supported_reasoning_efforts: tuple[str, ...] | None = None
 
 
-class _ModelGroupList(BaseModel):
+class _ModelGroupList(LiteLLMBaseModel):
     data: tuple[_ModelGroup, ...]
 
 
@@ -94,7 +102,7 @@ def fetch_model_listing(
     try:
         resp: Final = get(
             url,
-            headers={"Authorization": f"Bearer {api_key}", **headers},  # mutable-ok: requests headers require a dict
+            headers={"Authorization": f"Bearer {api_key}", **headers},
             timeout=10,
         )
     except requests.RequestException as e:
@@ -135,13 +143,13 @@ def fetch_model_limits(
     *,
     get: Callable[..., requests.Response] = requests.get,
 ) -> Mapping[str, ModelLimits]:
-    """Best effort: pi falls back to its own defaults for models without limits,
-    so an unavailable /model_group/info must not block the launch."""
+    """Best effort: pi, OpenCode and Codex fall back to their own defaults for models without
+    limits or reasoning efforts, so an unavailable /model_group/info must not block the launch."""
     url: Final = base_url.rstrip("/") + "/model_group/info"
     try:
         resp: Final = get(
             url,
-            headers={"Authorization": f"Bearer {api_key}"},  # mutable-ok: requests headers require a dict
+            headers={"Authorization": f"Bearer {api_key}"},
             timeout=10,
         )
         if resp.status_code != 200:
@@ -154,6 +162,7 @@ def fetch_model_limits(
             group.model_group: ModelLimits(
                 context_window=int(group.max_input_tokens) if group.max_input_tokens else None,
                 max_tokens=int(group.max_output_tokens) if group.max_output_tokens else None,
+                supported_reasoning_efforts=group.supported_reasoning_efforts,
             )
             for group in listing.data
         }
@@ -166,17 +175,44 @@ def models_json_path(env: Mapping[str, str]) -> Path:
     return root / "models.json"
 
 
+_PI_LADDER_LEVELS: Final = ("minimal", "low", "medium", "high")
+_PI_OPT_IN_LEVELS: Final = ("xhigh", "max")
+_REASONING_OFF_EFFORT: Final = "none"
+
+
+def _thinking_level_map(efforts: tuple[str, ...]) -> dict[str, JsonValue]:  # mutable-ok: JSON object is serialized
+    """Each level pi offers maps to a value: pi drops a level mapped to null and shows xhigh and max only when set."""
+    return {
+        "off": _REASONING_OFF_EFFORT if _REASONING_OFF_EFFORT in efforts else None,
+        **{level: level if level in efforts else None for level in _PI_LADDER_LEVELS},
+        **{level: level for level in _PI_OPT_IN_LEVELS if level in efforts},
+    }
+
+
+def _reasoning_fields(limit: ModelLimits | None) -> Mapping[str, JsonValue]:
+    efforts: Final = limit.supported_reasoning_efforts if limit else None
+    if not efforts:
+        return MappingProxyType({})
+    return MappingProxyType(
+        {
+            "reasoning": True,
+            "thinkingLevelMap": _thinking_level_map(efforts),
+            "compat": {"supportsDeveloperRole": False},
+        }
+    )
+
+
 def _model_entry(
     model_id: str, limits: Mapping[str, ModelLimits]
 ) -> dict[str, JsonValue]:  # mutable-ok: JSON object is serialized
     limit: Final = limits.get(model_id)
     context: Final[dict[str, JsonValue]] = (  # mutable-ok: JSON field
-        {"contextWindow": limit.context_window} if limit and limit.context_window else {}  # mutable-ok: JSON field
+        {"contextWindow": limit.context_window} if limit and limit.context_window else {}
     )
     output: Final[dict[str, JsonValue]] = (  # mutable-ok: JSON field
         {"maxTokens": limit.max_tokens} if limit and limit.max_tokens else {}
-    )  # mutable-ok: JSON field
-    return {"id": model_id, **context, **output}  # mutable-ok: JSON serialization requires a mutable object
+    )
+    return {"id": model_id, **context, **output, **_reasoning_fields(limit)}
 
 
 def provider_block(
@@ -188,12 +224,20 @@ def provider_block(
 
     Real contextWindow/maxTokens matter: pi otherwise assumes 128k/16384, which
     breaks compaction thresholds and over-asks models with smaller output caps.
+    pi sniffs compat from the base URL, and one gateway URL fronts models with
+    different capabilities, so the store and long-cache flags are pinned off.
     """
-    return {  # mutable-ok: JSON serialization requires a mutable object
+    return {
         "baseUrl": base_url.rstrip("/") + "/v1",
         "api": "openai-completions",
+        "compat": {
+            "supportsStore": False,
+            "supportsLongCacheRetention": False,
+            "sendSessionAffinityHeaders": True,
+            "sessionAffinityFormat": "openrouter",
+        },
         "apiKey": f"${LITELLM_PROXY_API_KEY_ENV}",
-        "models": [_model_entry(model_id, limits) for model_id in model_ids],  # mutable-ok: JSON array
+        "models": [_model_entry(model_id, limits) for model_id in model_ids],
     }
 
 
@@ -208,17 +252,15 @@ def sync_models_json(
 ) -> PiSyncError | None:
     """Replace only the litellm provider entry, leaving the rest of the file intact."""
     try:
-        current: Final = (  # mutable-ok: JSON object default
-            _MODELS_FILE_ADAPTER.validate_json(path.read_text()) if path.exists() else {}
-        )
+        current: Final = _MODELS_FILE_ADAPTER.validate_json(path.read_text()) if path.exists() else {}
     except (OSError, ValidationError) as e:
         return PiSyncError(f"Could not read {path} as a JSON object: {e}. Fix or move the file, then retry.")
-    existing_providers: Final = current.get("providers", {})  # mutable-ok: JSON object default
+    existing_providers: Final = current.get("providers", {})
     if not isinstance(existing_providers, dict):
         return PiSyncError(f'"providers" in {path} is not an object; fix or move the file, then retry.')
-    updated: Final = {  # mutable-ok: JSON serialization requires a mutable object
+    updated: Final = {
         **current,
-        "providers": {  # mutable-ok: JSON serialization requires a mutable object
+        "providers": {
             **existing_providers,
             PI_PROVIDER_NAME: provider_block(base_url, model_ids, limits),
         },

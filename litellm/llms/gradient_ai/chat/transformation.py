@@ -1,5 +1,8 @@
+from collections.abc import Mapping, Sequence
+from types import MappingProxyType
 from typing import Final, Literal
 
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -34,7 +37,7 @@ class GradientAIConfig(OpenAILikeChatConfig):
         temperature: float | None = None,
         top_p: float | None = None,
         k: int | None = None,
-        kb_filters: list[dict] | None = None,
+        kb_filters: Sequence[Mapping[str, object]] | None = None,
         filter_kb_content_by_query_metadata: bool | None = None,
         instruction_override: str | None = None,
         include_functions_info: bool | None = None,
@@ -42,7 +45,7 @@ class GradientAIConfig(OpenAILikeChatConfig):
         include_guardrails_info: bool | None = None,
         provide_citations: bool | None = None,
     ) -> None:
-        locals_: Final = locals().copy()
+        locals_: Final[Mapping[str, object]] = MappingProxyType(locals().copy())
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -51,7 +54,7 @@ class GradientAIConfig(OpenAILikeChatConfig):
     def get_config(cls):
         return super().get_config()
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         supported_params: Final = [
             "frequency_penalty",
             "max_tokens",
@@ -80,11 +83,11 @@ class GradientAIConfig(OpenAILikeChatConfig):
         headers: dict,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ):
+    ) -> dict[str, object]:
         api_key = api_key or get_secret_str("GRADIENT_AI_API_KEY")
         if api_key is None:
             raise ValueError("GradientAI API key not found")
@@ -99,19 +102,17 @@ class GradientAIConfig(OpenAILikeChatConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
-        gradient_ai_endpoint: Final = get_secret_str("GRADIENT_AI_AGENT_ENDPOINT")
-        complete_url = f"{GRADIENT_AI_SERVERLESS_ENDPOINT}/v1/chat/completions"
-
-        if api_base and api_base != GRADIENT_AI_SERVERLESS_ENDPOINT:
-            complete_url = f"{api_base}/api/v1/chat/completions"
-        elif gradient_ai_endpoint and gradient_ai_endpoint != GRADIENT_AI_SERVERLESS_ENDPOINT:
-            complete_url = f"{gradient_ai_endpoint}/api/v1/chat/completions"
-
-        return complete_url
+        clean_api_base: Final = (api_base or "").rstrip("/")
+        if clean_api_base and clean_api_base != GRADIENT_AI_SERVERLESS_ENDPOINT:
+            return join_api_base(clean_api_base, "api/v1/chat/completions")
+        agent_endpoint: Final = (get_secret_str("GRADIENT_AI_AGENT_ENDPOINT") or "").rstrip("/")
+        if agent_endpoint and agent_endpoint != GRADIENT_AI_SERVERLESS_ENDPOINT:
+            return join_api_base(agent_endpoint, "api/v1/chat/completions")
+        return f"{GRADIENT_AI_SERVERLESS_ENDPOINT}/v1/chat/completions"
 
     def _get_openai_compatible_provider_info(
         self, api_base: str | None, api_key: str | None
@@ -126,14 +127,21 @@ class GradientAIConfig(OpenAILikeChatConfig):
         dynamic_api_key: Final = api_key or get_secret_str("GRADIENT_AI_API_KEY")
         return api_base, dynamic_api_key
 
+    def get_openai_compatible_provider_info(
+        self,
+        api_base: str | None,
+        api_key: str | None,
+    ) -> tuple[str | None, str | None]:
+        return self._get_openai_compatible_provider_info(api_base, api_key)
+
     def map_openai_params(
         self,
-        non_default_params: dict,
+        non_default_params: Mapping[str, object],
         optional_params: dict,
         model: str,
         drop_params: bool = False,
         replace_max_completion_tokens_with_max_tokens: bool = False,
-    ) -> dict:
+    ) -> dict[str, object]:
         supported_openai_params: Final = self.get_supported_openai_params(model=model)
         for param, value in non_default_params.items():
             if param in supported_openai_params:

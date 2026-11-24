@@ -6,8 +6,10 @@ import random
 import sys
 import threading
 import time
-from collections.abc import Mapping, Sequence
+import uuid
+from collections.abc import Awaitable, Iterable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
+from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, TypeVar
 
@@ -19,45 +21,59 @@ if TYPE_CHECKING:
     from litellm.router import Router
 
 logger: Final = logging.getLogger(__name__)
-_DeploymentT: Final = TypeVar("_DeploymentT", bound=Mapping[str, object])
+_DeploymentT = TypeVar("_DeploymentT", bound=Mapping[str, object])
+_ResultT = TypeVar("_ResultT")
 from litellm.constants import (
     BACKGROUND_HEALTH_CHECK_MAX_TOKENS,
     BACKGROUND_HEALTH_CHECK_MAX_TOKENS_REASONING,
     DEFAULT_HEALTH_CHECK_PROMPT,
     HEALTH_CHECK_TIMEOUT_SECONDS,
 )
-from litellm.router_utils.auto_router_model_naming import (
+from litellm.litellm_core_utils.get_llm_provider_logic import resolve_model_and_provider_for_metadata
+from litellm.litellm_core_utils.health_check_helpers import native_health_check_mode
+from litellm.litellm_core_utils.routing_common_utils import deployment_model_id_pin, is_model_capability_field
+from litellm.router_strategy.auto_router.auto_router_model_naming import (
     StrategyRouterDependency,
     classify_strategy_router_model,
     strategy_router_dependencies,
 )
+from litellm.types.utils import secret_bearing_wif_litellm_params, server_owned_wif_litellm_params
 
-ILLEGAL_DISPLAY_PARAMS: Final = [
-    "messages",
-    "api_key",
-    "prompt",
-    "input",
-    "client_secret",
-    "azure_ad_token",
-    "azure_username",
-    "azure_password",
-    "vertex_credentials",
-    "vertex_ai_credentials",
-    "aws_access_key_id",
-    "aws_secret_access_key",
-    "aws_session_token",
-    "aws_web_identity_token",
-    "extra_headers",
-    "headers",
-    "exception",  # internal; not JSON-serializable, never for display
-    "litellm_metadata",  # internal tracking metadata with auth objects; not for display
-]
-# Provider routing fields. Allowed for proxy admins so they can see which
-# region/version a deployment is checking; gated at the endpoint layer for
-# non-admin callers (see _strip_admin_only_fields_from_health_result).
-ADMIN_ONLY_HEALTH_DISPLAY_PARAMS: Final = ("api_base", "api_version")
+# Provider routing and server-owned federation or OAuth token-exchange fields. Allowed for proxy
+# admins so they can see which region/version a deployment is checking and which identity it uses;
+# gated at the endpoint layer for non-admin callers (see _strip_admin_only_fields_from_health_result).
+ADMIN_ONLY_HEALTH_DISPLAY_PARAMS: Final = (
+    "api_base",
+    "api_version",
+    "aws_bedrock_runtime_endpoint",
+    *(name for name in server_owned_wif_litellm_params if name not in secret_bearing_wif_litellm_params),
+)
 
-MINIMAL_DISPLAY_PARAMS: Final = ["model", "mode_error"]
+MINIMAL_DISPLAY_PARAMS: Final = frozenset({"model", "mode_error"})
+
+HEALTH_DISPLAY_PARAMS: Final = (
+    MINIMAL_DISPLAY_PARAMS
+    | frozenset(ADMIN_ONLY_HEALTH_DISPLAY_PARAMS)
+    | frozenset(
+        {
+            "custom_llm_provider",
+            "mode",
+            "base_model",
+            "aws_region_name",
+            "region_name",
+            "watsonx_region_name",
+            "vertex_project",
+            "vertex_location",
+            "tpm",
+            "rpm",
+            "error",
+            "raw_request_typed_dict",
+            "x-ratelimit-remaining-requests",
+            "x-ratelimit-remaining-tokens",
+            "x-ms-region",
+        }
+    )
+)
 
 # Modes whose health-check probe is a chat-style completion call and
 # therefore accept `max_tokens`. Other modes (embedding, image_generation,
@@ -65,18 +81,29 @@ MINIMAL_DISPLAY_PARAMS: Final = ["model", "mode_error"]
 # endpoints that reject unknown fields with 400 "Unknown parameter:
 # 'max_tokens'". Allow-list so new modes are safe by default.
 # Per-deployment override: `model_info.health_check_supports_max_tokens`.
-_MAX_TOKEN_SUPPORT_MODES: Final[frozenset[str]] = frozenset({"chat", "completion", "responses"})
+_MAX_TOKEN_SUPPORT_MODES: Final[frozenset[str]] = frozenset({"chat", "completion", "responses", "anthropic_messages"})
 
 
-def _resolve_health_check_mode(model_info: Mapping[str, object], litellm_params: Mapping[str, object]) -> str | None:
+def _native_health_check_mode(model: str, provider_param: object) -> str | None:
+    try:
+        resolved_model, custom_llm_provider, _, _ = litellm.get_llm_provider(
+            model=model, custom_llm_provider=provider_param if isinstance(provider_param, str) else None
+        )
+    except Exception:
+        return None
+    return native_health_check_mode(model=resolved_model, custom_llm_provider=custom_llm_provider)
+
+
+def resolve_health_check_mode(model_info: Mapping[str, object], litellm_params: Mapping[str, object]) -> str | None:
     """
     Effective mode for a deployment's health-check probe.
 
-    Prefers operator-set `model_info.mode`; otherwise resolves it from the model
-    cost map, which understands `bedrock/` and cross-region inference-profile
-    prefixes (`us.`, `eu.`, `apac.`). Without this, non-chat Bedrock deployments
-    (e.g. embeddings) are probed as chat, so `max_tokens` is injected and the
-    request 400s on "extraneous key [max_tokens]".
+    Prefers operator-set `model_info.mode`; then the mode the provider requires for
+    that model family (Bedrock Mantle serves Claude ids on the Messages API only);
+    otherwise resolves it from the model cost map, which understands `bedrock/` and
+    cross-region inference-profile prefixes (`us.`, `eu.`, `apac.`). Without this,
+    non-chat Bedrock deployments (e.g. embeddings) are probed as chat, so
+    `max_tokens` is injected and the request 400s on "extraneous key [max_tokens]".
     """
     explicit_mode: Final = model_info.get("mode")
     if isinstance(explicit_mode, str):
@@ -84,6 +111,9 @@ def _resolve_health_check_mode(model_info: Mapping[str, object], litellm_params:
     model: Final = litellm_params.get("model")
     if not isinstance(model, str):
         return None
+    native_mode: Final = _native_health_check_mode(model, litellm_params.get("custom_llm_provider"))
+    if native_mode is not None:
+        return native_mode
     try:
         return litellm.get_model_info(model=model).get("mode")
     except Exception:
@@ -103,6 +133,52 @@ def _should_inject_health_check_max_tokens(model_info: Mapping[str, object], mod
     if explicit is not None:
         return bool(explicit)
     return (mode or "chat") in _MAX_TOKEN_SUPPORT_MODES
+
+
+_AUDIO_OUTPUT_PROBE_PROVIDERS: Final[frozenset[str]] = frozenset({"openai", "azure"})
+
+
+def _health_check_requires_audio_output(
+    model_info: Mapping[str, object], probe_params: Mapping[str, object], mode: str | None, deployment_model: str | None
+) -> bool:
+    if (mode or "chat") != "chat":
+        return False
+    operator_modalities: Final = probe_params.get("modalities")
+    if isinstance(operator_modalities, list) and "audio" not in operator_modalities:
+        return False
+    model: Final = probe_params.get("model")
+    if not isinstance(model, str):
+        return False
+    provider_param: Final = probe_params.get("custom_llm_provider")
+    try:
+        _, provider, _, _ = litellm.get_llm_provider(
+            model=model, custom_llm_provider=provider_param if isinstance(provider_param, str) else None
+        )
+    except litellm.exceptions.BadRequestError:
+        return False
+    if provider not in _AUDIO_OUTPUT_PROBE_PROVIDERS:
+        return False
+    base_model: Final = model_info.get("base_model") or probe_params.get("base_model")
+    checked_model: Final = base_model if isinstance(base_model, str) and model == deployment_model else model
+    checked_model_prefix: Final = checked_model.partition("/")[0]
+    return litellm.supports_audio_output(
+        model=checked_model,
+        custom_llm_provider=checked_model_prefix if checked_model_prefix in _AUDIO_OUTPUT_PROBE_PROVIDERS else provider,
+    )
+
+
+def _health_check_audio_output_params(
+    model_info: Mapping[str, object], probe_params: Mapping[str, object], mode: str | None, deployment_model: str | None
+) -> Mapping[str, object]:
+    if not _health_check_requires_audio_output(model_info, probe_params, mode, deployment_model):
+        return MappingProxyType({})
+    voice: Final = model_info.get("health_check_voice")
+    return MappingProxyType(
+        {
+            "modalities": ["text", "audio"],
+            "audio": {"voice": voice if isinstance(voice, str) else "alloy", "format": "wav"},
+        }
+    )
 
 
 # Health-check modes that forward `reasoning_effort` to the provider (chat-style calls).
@@ -141,21 +217,20 @@ def _get_random_llm_message():
     return [{"role": "user", "content": random.choice(messages)}]
 
 
-def _clean_endpoint_data(endpoint_data: dict, details: bool | None = True):
+def clean_endpoint_data(endpoint_data: Mapping[str, object], details: bool | None = True) -> dict[str, object]:
     """
-    Clean the endpoint data for display to users.
+    Keep only the explicitly approved, JSON-safe diagnostic fields for display to users.
     """
-    endpoint_data.pop("litellm_logging_obj", None)
-    return (
-        {k: v for k, v in endpoint_data.items() if k not in ILLEGAL_DISPLAY_PARAMS}
-        if details is not False
-        else {k: v for k, v in endpoint_data.items() if k in MINIMAL_DISPLAY_PARAMS}
-    )
+    displayed: Final = HEALTH_DISPLAY_PARAMS if details is not False else MINIMAL_DISPLAY_PARAMS
+    return {k: v for k, v in endpoint_data.items() if k in displayed}
+
+
+_clean_endpoint_data: Final = clean_endpoint_data
 
 
 def health_check_filter_kwargs_from_general_settings(
-    general_settings: dict | None,
-) -> dict:
+    general_settings: Mapping[str, object] | None,
+) -> dict[str, bool]:
     """
     Build kwargs for ``perform_health_check`` from ``general_settings``.
 
@@ -205,9 +280,9 @@ def filter_deployments_to_model_groups(
 
 def filter_deployments_by_id(
     model_list: Sequence[Mapping[str, object]],
-) -> list:
-    seen_ids: Final = set()
-    filtered_deployments: Final = []
+) -> list[Mapping[str, object]]:
+    seen_ids: Final[set[object]] = set()
+    filtered_deployments: Final[list[Mapping[str, object]]] = []
 
     for deployment in model_list:
         _model_info = deployment.get("model_info") or {}
@@ -222,7 +297,9 @@ def filter_deployments_by_id(
     return filtered_deployments
 
 
-async def run_with_timeout(task, timeout):
+async def run_with_timeout(
+    task: Awaitable[_ResultT], timeout: float | None
+) -> _ResultT | dict[str, str | litellm.Timeout]:
     try:
         return await asyncio.wait_for(task, timeout)
     except asyncio.TimeoutError:
@@ -258,8 +335,52 @@ def _deployment_model(deployment: Mapping[str, object]) -> str | None:
     return params.get("model") if isinstance(params, Mapping) else None
 
 
+def _owner_team_id(deployment: Mapping[str, object]) -> str | None:
+    info: Final = deployment.get("model_info")
+    owner: Final = info.get("team_id") if isinstance(info, Mapping) else None
+    return owner if isinstance(owner, str) else None
+
+
+def _team_public_model_name(deployment: Mapping[str, object]) -> str | None:
+    info: Final = deployment.get("model_info")
+    name: Final = info.get("team_public_model_name") if isinstance(info, Mapping) else None
+    return name if isinstance(name, str) else None
+
+
+def _deployments_routed_by_name(
+    model_list: Sequence[Mapping[str, object]], model_name: str, team_id: str | None
+) -> tuple[Mapping[str, object], ...]:
+    """The deployments a request for ``model_name`` from this caller routes to.
+
+    A team's own copies published under that name win, then deployments carrying it as
+    ``model_name``. A caller with no team reaches a public name only when nothing carries
+    it as ``model_name``, and only an admin still has another team's deployment in a
+    scoped ``model_list`` by then.
+    """
+    own_copies: Final = tuple(
+        x
+        for x in model_list
+        if team_id is not None and _owner_team_id(x) == team_id and _team_public_model_name(x) == model_name
+    )
+    if own_copies:
+        return own_copies
+    by_name: Final = tuple(x for x in model_list if x.get("model_name") == model_name)
+    if by_name or team_id is not None:
+        return by_name
+    return tuple(x for x in model_list if _team_public_model_name(x) == model_name)
+
+
+def deployments_targeted_by_name(
+    model_list: Sequence[Mapping[str, object]], model: str, team_id: str | None
+) -> tuple[Mapping[str, object], ...]:
+    """``model`` targets deployments the way a request for it routes, else by ``litellm_params.model``."""
+    return _deployments_routed_by_name(model_list, model, team_id) or tuple(
+        x for x in model_list if _deployment_model(x) == model
+    )
+
+
 def _narrow_to_target(
-    model_list: Sequence[Mapping[str, object]], model: str | None, model_id: str | None
+    model_list: Sequence[Mapping[str, object]], model: str | None, model_id: str | None, team_id: str | None
 ) -> tuple[Mapping[str, object], ...]:
     """Narrow to the requested deployment. An id matching nothing keeps the whole list."""
     if model_id is not None:
@@ -267,8 +388,7 @@ def _narrow_to_target(
         return by_id or tuple(model_list)
     if model is None:
         return tuple(model_list)
-    by_param: Final = tuple(x for x in model_list if _deployment_model(x) == model)
-    return by_param or tuple(x for x in model_list if x.get("model_name") == model)
+    return deployments_targeted_by_name(model_list, model, team_id)
 
 
 def _is_strategy_router_deployment(litellm_params: Mapping[str, object]) -> bool:
@@ -296,10 +416,108 @@ def _resolved_deployment_ids(router: "Router", model_name: str) -> frozenset[str
     working tier broken. An alias whose target is gone resolves to nothing, which fails a
     request exactly like an unknown name.
     """
-    resolved: Final = router.get_model_list(model_name=model_name)
+    resolved: Final = router.registry().deployments(model_name)
     if not resolved:
         return None
     return frozenset(ident for entry in resolved if (ident := _deployment_id(entry)))
+
+
+_WILDCARD_CHILD_ID_NAMESPACE: Final = uuid.uuid5(uuid.NAMESPACE_URL, "litellm:public-wildcard-health-check")
+
+
+def _is_probe_tuning(key: str) -> bool:
+    return key in ("id", "mode", "base_model") or (key.startswith("health_check_") and key != "health_check_timeout")
+
+
+def _as_mapping(value: object) -> Mapping[str, object]:
+    try:
+        return _MODEL_INFO_ADAPTER.validate_python(value)
+    except ValidationError:
+        return MappingProxyType({})
+
+
+def _wildcard_child(
+    public_name: str, wildcard_id: str, row: Mapping[str, object], configured: Mapping[str, object]
+) -> Mapping[str, object]:
+    """``row`` checked as ``public_name``, its id stable per wildcard and routed model across pods and cycles."""
+    params: Final = {**_as_mapping(row.get("litellm_params")), **configured}
+    info: Final = _as_mapping(row.get("model_info"))
+    child_id: Final = uuid.uuid5(_WILDCARD_CHILD_ID_NAMESPACE, f"{wildcard_id}|{params.get('model')}")
+    return {
+        **row,
+        "model_name": public_name,
+        "litellm_params": dict(params),
+        "model_info": {**{k: v for k, v in info.items() if not _is_probe_tuning(k)}, "id": str(child_id)},
+    }
+
+
+def _configured_params(router: "Router", wildcard_id: str) -> Mapping[str, object]:
+    stored: Final = _as_mapping(router.registry().deployment_dict(wildcard_id))
+    return {key: value for key, value in _as_mapping(stored.get("litellm_params")).items() if key != "model"}
+
+
+def _in_model_groups(public_name: str, row: Mapping[str, object], model_groups: AbstractSet[str] | None) -> bool:
+    return model_groups is None or public_name in model_groups or row.get("model_name") in model_groups
+
+
+def _wildcard_children_for(
+    public_name: str, router: "Router", model_groups: AbstractSet[str] | None
+) -> tuple[Mapping[str, object], ...]:
+    served_name: Final = router.registry().resolve(public_name, kind="alias") or public_name
+    rows: Final = router.registry().deployments(served_name, source="wildcard")
+    ids: Final = tuple(_deployment_id(row) for row in rows)
+    if _resolved_deployment_ids(router, served_name) != frozenset(i for i in ids if i):
+        return ()
+    eligible: Final = (
+        (row, wildcard_id) for row, wildcard_id in zip(rows, ids) if wildcard_id and not _skips_health_checks(row)
+    )
+    return tuple(
+        _wildcard_child(public_name, wildcard_id, row, _configured_params(router, wildcard_id))
+        for row, wildcard_id in eligible
+        if _in_model_groups(public_name, row, model_groups)
+    )
+
+
+def public_wildcard_children(
+    public_names: Iterable[str], router: "Router", model_groups: AbstractSet[str] | None
+) -> tuple[Mapping[str, object], ...]:
+    """A background-check entry per wildcard for each public name that only wildcards serve, under that name.
+
+    A failure here is logged and yields none, so it never stops the background loop that calls it.
+    """
+    try:
+        return tuple(
+            chain.from_iterable(
+                _wildcard_children_for(name, router, model_groups) for name in dict.fromkeys(public_names)
+            )
+        )
+    except Exception:
+        logger.exception("background_health_check_public_wildcard_children_failed")
+        return ()
+
+
+def deployment_ids(deployments: Iterable[Mapping[str, object]]) -> frozenset[str]:
+    return frozenset(ident for deployment in deployments if (ident := _deployment_id(deployment)))
+
+
+_ENDPOINTS_ADAPTER: Final = TypeAdapter(tuple[object, ...])
+
+
+def _endpoint_model_id(endpoint: object) -> str | None:
+    match endpoint:
+        case {"model_id": str(model_id)}:
+            return model_id
+        case _:
+            return None
+
+
+def split_by_model_ids(endpoints: object, model_ids: AbstractSet[str]) -> tuple[tuple[object, ...], tuple[object, ...]]:
+    """``endpoints`` untouched, split into those without, then with, a ``model_id`` in ``model_ids``."""
+    checked: Final = _ENDPOINTS_ADAPTER.validate_python(endpoints)
+    return (
+        tuple(e for e in checked if _endpoint_model_id(e) not in model_ids),
+        tuple(e for e in checked if _endpoint_model_id(e) in model_ids),
+    )
 
 
 def _dependency_failure(
@@ -334,6 +552,7 @@ def _strategy_router_dependency_error(
         (
             failure
             for dependency in strategy_router_dependencies(params)
+            if dependency.role != "evaluation"
             if (failure := _dependency_failure(dependency, router, unhealthy_ids))
         ),
         None,
@@ -376,6 +595,7 @@ def _dependency_deployments_to_probe(
             for deployment in frontier
             if isinstance(params := deployment.get("litellm_params"), Mapping)
             for dependency in strategy_router_dependencies(params)
+            if dependency.role != "evaluation"
         )
         fresh_ids = (
             frozenset(ident for name in names for ident in (_resolved_deployment_ids(router, name) or ())) - reached
@@ -462,11 +682,7 @@ def _finalize_strategy_router_endpoints(
     return (
         tuple(e for e in kept_healthy if verdict_for(e) is None),
         tuple(e for e in unhealthy_endpoints if keep(e))
-        + tuple(
-            dict(e, error=error)  # mutable-ok: the /health payload must stay a plain JSON-serializable dict
-            for e in kept_healthy
-            if (error := verdict_for(e)) is not None
-        ),
+        + tuple(dict(e, error=error) for e in kept_healthy if (error := verdict_for(e)) is not None),
     )
 
 
@@ -477,16 +693,21 @@ async def _run_model_health_check(model: dict):
     if _is_strategy_router_deployment(litellm_params):
         return {}
 
-    mode: Final = _resolve_health_check_mode(
+    mode: Final = resolve_health_check_mode(
         model_info,
         litellm_params,  # any-ok: untyped router config dict
     )
-    litellm_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+    litellm_params = update_litellm_params_for_health_check(  # rebind-ok: pre-existing rebinding on a rename-only line
+        model_info, litellm_params
+    )
     timeout: Final = model_info.get("health_check_timeout") or HEALTH_CHECK_TIMEOUT_SECONDS
+    probe_params: Final = (
+        {**litellm_params, "model_info": {"mode": model_info["mode"]}} if "mode" in model_info else litellm_params
+    )
 
     return await run_with_timeout(
         litellm.ahealth_check(
-            litellm_params,
+            probe_params,
             mode=mode,
             prompt=DEFAULT_HEALTH_CHECK_PROMPT,
             input=["test from litellm"],
@@ -539,7 +760,7 @@ async def _perform_health_check(
     model_list: list,
     details: bool | None = True,
     max_concurrency: int | None = None,
-    instrumentation_context: dict | None = None,
+    instrumentation_context: Mapping[str, object] | None = None,
 ):
     """
     Perform a health check for each model in the list.
@@ -587,12 +808,12 @@ async def _perform_health_check(
         _model_id = (model.get("model_info") or {}).get("id")
 
         if isinstance(is_healthy, dict) and "error" not in is_healthy:
-            cleaned = _clean_endpoint_data({**litellm_params, **is_healthy}, details)
+            cleaned = clean_endpoint_data({**litellm_params, **is_healthy}, details)
             if _model_id:
                 cleaned["model_id"] = _model_id
             healthy_endpoints.append(cleaned)
         elif isinstance(is_healthy, dict):
-            cleaned = _clean_endpoint_data({**litellm_params, **is_healthy}, details)
+            cleaned = clean_endpoint_data({**litellm_params, **is_healthy}, details)
             if _model_id:
                 cleaned["model_id"] = _model_id
                 if "exception" in is_healthy:
@@ -603,7 +824,7 @@ async def _perform_health_check(
                     cleaned["exception_status"] = getattr(exc, "status_code", 500)
             unhealthy_endpoints.append(cleaned)
         else:
-            cleaned = _clean_endpoint_data(litellm_params, details)
+            cleaned = clean_endpoint_data(litellm_params, details)
             if _model_id:
                 cleaned["model_id"] = _model_id
                 if isinstance(is_healthy, Exception):
@@ -615,8 +836,8 @@ async def _perform_health_check(
 
 
 def build_deployment_health_states(
-    healthy_endpoints: list,
-    unhealthy_endpoints: list,
+    healthy_endpoints: Sequence[Mapping[str, object]],
+    unhealthy_endpoints: Sequence[Mapping[str, object]],
 ) -> dict:
     """
     Build a dict mapping deployment_id -> DeploymentHealthStateValue from
@@ -710,7 +931,31 @@ def _resolve_health_check_max_tokens(model_info: dict, litellm_params: dict) -> 
     return None
 
 
-def _update_litellm_params_for_health_check(model_info: dict, litellm_params: dict) -> dict:
+_PROBE_PARAMS_ADAPTER: Final = TypeAdapter(dict[str, object])
+_MODEL_INFO_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+
+
+def _same_health_check_model(deployment_model: str | None, probe_params: Mapping[str, object]) -> bool:
+    model: Final = probe_params.get("model")
+    if model == deployment_model:
+        return True
+    if not isinstance(model, str) or deployment_model is None:
+        return False
+    provider_param: Final = probe_params.get("custom_llm_provider")
+    provider: Final = provider_param if isinstance(provider_param, str) else None
+    try:
+        deployment_name, deployment_provider = resolve_model_and_provider_for_metadata(
+            model=deployment_model, custom_llm_provider=provider
+        )
+        probe_name, probe_provider = resolve_model_and_provider_for_metadata(model=model, custom_llm_provider=provider)
+    except litellm.exceptions.BadRequestError:
+        return False
+    return (deployment_name, deployment_provider) == (probe_name, probe_provider)
+
+
+def update_litellm_params_for_health_check(
+    model_info: dict, litellm_params: dict, deployment_model: str | None = None
+) -> dict:
     """
     Update the litellm params for health check.
 
@@ -726,8 +971,18 @@ def _update_litellm_params_for_health_check(model_info: dict, litellm_params: di
     - updates the `model` param with the `health_check_model` if it exists Doc: https://docs.litellm.ai/docs/proxy/health#wildcard-routes
     - updates the `voice` param with the `health_check_voice` for `audio_speech` mode if it exists Doc: https://docs.litellm.ai/docs/proxy/health#text-to-speech-models
     - for Bedrock models with region routing (bedrock/region/model), strips the litellm routing prefix but preserves the model ID, and pins `custom_llm_provider` to `bedrock` (only when the deployment hasn't already set one, so an explicit `bedrock_converse` survives) so the bare model id still resolves to the provider (e.g. cross-region ids like `us.cohere.embed-v4:0`)
+    - asks OpenAI and Azure chat models that support audio output for `modalities` text + audio and a wav
+      `audio` in the `health_check_voice` (default "alloy"), since those models reject text-only requests.
+      `base_model` (from `model_info`, then `litellm_params`) decides it only while the probe still targets
+      `deployment_model` (default: the incoming `litellm_params` model), so a `health_check_model` or a `model`
+      in `health_check_params` is judged on its own. Keys already set through `health_check_params` are kept,
+      and `modalities` set there without "audio" turns the audio fields off
+    - sends a SageMaker deployment's `X-Amzn-SageMaker-Inference-Component` extra header as `model_id` when the
+      deployment sets none, so legacy `sagemaker/` probes reach that component the way routed requests do
     """
-    mode: Final = _resolve_health_check_mode(
+    incoming_model: Final = _PROBE_PARAMS_ADAPTER.validate_python(litellm_params).get("model")
+    base_model_owner: Final = deployment_model or (incoming_model if isinstance(incoming_model, str) else None)
+    mode: Final = resolve_health_check_mode(
         model_info,
         litellm_params,  # any-ok: untyped router config dict
     )
@@ -761,6 +1016,15 @@ def _update_litellm_params_for_health_check(model_info: dict, litellm_params: di
         litellm_params["model"] = _health_check_model
     if mode == "audio_speech":
         litellm_params["voice"] = model_info.get("health_check_voice", "alloy")
+
+    logging_model_info: Final = _MODEL_INFO_ADAPTER.validate_python(
+        _PROBE_PARAMS_ADAPTER.validate_python(litellm_params).get("model_info") or {}
+    )
+    probe_logging_model_info: Final = (
+        logging_model_info
+        if _same_health_check_model(base_model_owner, _PROBE_PARAMS_ADAPTER.validate_python(litellm_params))
+        else {key: value for key, value in logging_model_info.items() if key == "id"}
+    )
 
     # Handle Bedrock region routing format: bedrock/region/model
     # This is needed because health checks bypass get_llm_provider() for the model param
@@ -800,7 +1064,25 @@ def _update_litellm_params_for_health_check(model_info: dict, litellm_params: di
                 "bedrock"
             )
 
-    return litellm_params
+    probe_params: Final = _PROBE_PARAMS_ADAPTER.validate_python(litellm_params)
+    audio_output_params: Final = _health_check_audio_output_params(
+        _MODEL_INFO_ADAPTER.validate_python(model_info), probe_params, mode, base_model_owner
+    )
+    model_id_pin: Final = deployment_model_id_pin(probe_params)
+    model_id_params: Final = {} if model_id_pin is None else {"model_id": model_id_pin}
+    return {
+        key: value
+        for key, value in {
+            **audio_output_params,
+            **model_id_params,
+            **probe_params,
+            **({"model_info": probe_logging_model_info} if "model_info" in probe_params else {}),
+        }.items()
+        if not is_model_capability_field(key)
+    }
+
+
+_update_litellm_params_for_health_check: Final = update_litellm_params_for_health_check
 
 
 async def perform_health_check(
@@ -810,16 +1092,21 @@ async def perform_health_check(
     details: bool | None = True,
     model_id: str | None = None,
     max_concurrency: int | None = None,
-    instrumentation_context: dict | None = None,
+    instrumentation_context: Mapping[str, object] | None = None,
     health_check_skip_disabled_background_models: bool = False,
     router: "Router | None" = None,
+    team_id: str | None = None,
 ):
     """
     Perform a health check on the system.
 
     When model_id is provided, only the deployment with that id is checked
     (so models that share the same name but have different ids are checked separately).
-    When model (name) is provided, all deployments matching that name are checked.
+    When model (name) is provided, the deployments a request for that name from the
+    caller (``team_id``) would route to are checked: the caller's team copies published
+    under that name, else the deployments named that way, else a public name that only
+    another team's deployment carries, else the deployments whose ``litellm_params.model``
+    is that string.
 
     When ``health_check_skip_disabled_background_models`` is True (via
     ``general_settings.health_check_skip_disabled_background_models``), deployments
@@ -850,7 +1137,7 @@ async def perform_health_check(
     cycle_start_time: Final = time.monotonic()
     requested_model_count: Final = len(model_list)
     skip_disabled: Final = health_check_skip_disabled_background_models
-    narrowed: Final = _health_check_eligible(_narrow_to_target(model_list, model, model_id), skip_disabled)
+    narrowed: Final = _health_check_eligible(_narrow_to_target(model_list, model, model_id, team_id), skip_disabled)
     if not narrowed:
         if instrumentation_enabled:
             logger.debug(
@@ -869,7 +1156,7 @@ async def perform_health_check(
         if router is not None
         else ()
     )
-    checked: Final = requested + list(dependency_probes)  # mutable-ok: _perform_health_check takes a list
+    checked: Final = requested + list(dependency_probes)
 
     if instrumentation_enabled:
         logger.debug(

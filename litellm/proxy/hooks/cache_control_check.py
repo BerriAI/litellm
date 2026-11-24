@@ -2,6 +2,7 @@
 ## Checks if key is allowed to use the cache controls passed in to the completion() call
 
 
+from collections.abc import Mapping
 from typing import Final
 
 from fastapi import HTTPException
@@ -9,8 +10,10 @@ from fastapi import HTTPException
 from litellm import verbose_logger
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
+from litellm.constants import SEMANTIC_CACHE_POLICY_KEY
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.types.semantic_cache import SemanticCachePolicy
 
 
 class _PROXY_CacheControlCheck(CustomLogger):
@@ -22,9 +25,9 @@ class _PROXY_CacheControlCheck(CustomLogger):
         self,
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
-        data: dict,
+        data: Mapping[str, object],
         call_type: str,
-    ):
+    ) -> None:
         try:
             verbose_proxy_logger.debug("Inside Cache Control Check Pre-Call Hook")
             allowed_cache_controls: Final = user_api_key_dict.allowed_cache_controls
@@ -35,6 +38,8 @@ class _PROXY_CacheControlCheck(CustomLogger):
             cache_args: Final = data.get("cache", None)
             if isinstance(cache_args, dict):
                 for k, v in cache_args.items():
+                    if k == SEMANTIC_CACHE_POLICY_KEY and isinstance(v, SemanticCachePolicy):
+                        continue
                     if (
                         (allowed_cache_controls is not None)
                         and (isinstance(allowed_cache_controls, list))
@@ -56,3 +61,6 @@ class _PROXY_CacheControlCheck(CustomLogger):
             verbose_logger.exception(
                 "litellm.proxy.hooks.cache_control_check.py::async_pre_call_hook(): Exception occured - %s", e
             )
+
+
+PROXY_CacheControlCheck: Final = _PROXY_CacheControlCheck

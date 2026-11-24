@@ -1,6 +1,6 @@
 import re
 from abc import ABC, abstractmethod
-from typing import Any, Final
+from typing import Final
 
 import httpx
 
@@ -73,7 +73,7 @@ class BaseSecretManager(ABC):
         optional_params: dict | None = None,
         timeout: float | httpx.Timeout | None = None,
         tags: dict | list | None = None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """
         Asynchronously write a secret to the secret manager.
 
@@ -118,7 +118,7 @@ class BaseSecretManager(ABC):
         new_secret_value: str,
         optional_params: dict | None = None,
         timeout: float | httpx.Timeout | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Async function to rotate a secret by creating a new one and deleting the old one.
         This allows for both value and name changes during rotation.

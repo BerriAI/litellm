@@ -6,11 +6,14 @@ Handles transformation between OpenAI-compatible format and ModelScope API forma
 API Reference: https://modelscope.cn/docs/model-service/API-Inference/intro
 """
 
+from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 from typing_extensions import override
 
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
@@ -28,6 +31,10 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = object
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_DECODED_JSON: Final = TypeAdapter(object)
+_JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
 
 
 class ModelScopeImageGenerationConfig(BaseImageGenerationConfig):
@@ -56,11 +63,11 @@ class ModelScopeImageGenerationConfig(BaseImageGenerationConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: Mapping[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Map OpenAI parameters to ModelScope parameters.
 
@@ -78,30 +85,29 @@ class ModelScopeImageGenerationConfig(BaseImageGenerationConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         """
         Get the complete URL for the ModelScope image generation API request.
         """
-        base_url: str = api_base or get_secret_str("MODELSCOPE_API_BASE") or self.DEFAULT_BASE_URL
-        base_url = base_url.rstrip("/")
+        base_url: Final = api_base or get_secret_str("MODELSCOPE_API_BASE") or self.DEFAULT_BASE_URL
 
         # Return the images endpoint
-        return f"{base_url}/images/generations"
+        return join_api_base(base_url, "images/generations")
 
     @override
     def validate_environment(
         self,
-        headers: dict,
+        headers: Mapping[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Validate environment and set up headers for ModelScope.
         """
@@ -124,17 +130,17 @@ class ModelScopeImageGenerationConfig(BaseImageGenerationConfig):
         self,
         model: str,
         prompt: str,
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
+        headers: Mapping[str, object],
+    ) -> dict[str, object]:
         """
         Transform OpenAI-style request to ModelScope request format.
 
         ModelScope uses the same format as OpenAI for image generation.
         """
         # Build the request body (same as OpenAI)
-        request_data: Final[dict] = {
+        request_data: Final[dict[str, object]] = {
             "model": model,
             "prompt": prompt,
         }
@@ -154,9 +160,9 @@ class ModelScopeImageGenerationConfig(BaseImageGenerationConfig):
         raw_response: httpx.Response,
         model_response: ImageResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
-        optional_params: dict,
-        litellm_params: dict,
+        request_data: Mapping[str, object],
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         encoding: object,
         api_key: str | None = None,
         json_mode: bool | None = None,
@@ -168,7 +174,7 @@ class ModelScopeImageGenerationConfig(BaseImageGenerationConfig):
         {"created": timestamp, "data": [{"url": "..."}]}
         """
         try:
-            response_data: Final = raw_response.json()
+            response_data: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Error parsing ModelScope response: {e}",
@@ -177,8 +183,10 @@ class ModelScopeImageGenerationConfig(BaseImageGenerationConfig):
             )
 
         # Check for errors in response
-        if "error" in response_data:
-            error_msg: Final = response_data["error"].get("message", str(response_data["error"]))
+        response_object: Final = _JSON_OBJECT.validate_python(response_data)
+        if "error" in response_object:
+            error: Final = _JSON_OBJECT.validate_python(response_object["error"])
+            error_msg: Final = error.get("message", str(error))
             raise self.get_error_class(
                 error_message=f"ModelScope error: {error_msg}",
                 status_code=raw_response.status_code,
@@ -186,7 +194,7 @@ class ModelScopeImageGenerationConfig(BaseImageGenerationConfig):
             )
 
         # Extract images from response
-        data_list: Final = response_data.get("data", [])
+        data_list: Final = _JSON_OBJECTS.validate_python(response_object.get("data", []))
         if not model_response.data:
             model_response.data = []
 
@@ -204,7 +212,7 @@ class ModelScopeImageGenerationConfig(BaseImageGenerationConfig):
         self,
         error_message: str,
         status_code: int,
-        headers: dict | httpx.Headers,
+        headers: Mapping[str, object] | httpx.Headers,
     ) -> BaseLLMException:
         """Return the appropriate error class for ModelScope."""
         from litellm.exceptions import (

@@ -1,20 +1,17 @@
+import datetime
+from collections.abc import Callable, Mapping
 from typing import Final
+
+from litellm.litellm_core_utils.core_helpers import iter_items, subscript
 
 imported_openAIResponse = True
 try:
     import io
     import logging
-    import sys
-    from typing import Any, TypeVar
+    from collections.abc import Mapping
+    from typing import Literal, Protocol, TypeVar
 
     from wandb.sdk.data_types import trace_tree
-
-    if sys.version_info >= (3, 8):
-        from typing import Literal, Protocol
-    else:
-        from typing import Literal
-
-        from typing_extensions import Protocol
 
     logger: Final = logging.getLogger(__name__)
 
@@ -32,7 +29,7 @@ try:
     class OpenAIRequestResponseResolver:
         def __call__(
             self,
-            request: dict[str, Any],
+            request: Mapping[str, object],
             response: OpenAIResponse,
             time_elapsed: float,
         ) -> trace_tree.WBTraceTree | None:
@@ -51,7 +48,7 @@ try:
 
         @staticmethod
         def results_to_trace_tree(
-            request: dict[str, Any],
+            request: Mapping[str, object],
             response: OpenAIResponse,
             results: list[trace_tree.Result],
             time_elapsed: float,
@@ -81,7 +78,7 @@ try:
 
         def _resolve_edit(
             self,
-            request: dict[str, Any],
+            request: Mapping[str, object],
             response: OpenAIResponse,
             time_elapsed: float,
         ) -> trace_tree.WBTraceTree:
@@ -99,7 +96,7 @@ try:
 
         def _resolve_completion(
             self,
-            request: dict[str, Any],
+            request: Mapping[str, object],
             response: OpenAIResponse,
             time_elapsed: float,
         ) -> trace_tree.WBTraceTree:
@@ -117,14 +114,14 @@ try:
 
         def _resolve_chat_completion(
             self,
-            request: dict[str, Any],
+            request: Mapping[str, object],
             response: OpenAIResponse,
             time_elapsed: float,
         ) -> trace_tree.WBTraceTree:
             """Resolves the request and response objects for `openai.Completion`."""
             prompt: Final = io.StringIO()
-            for message in request["messages"]:
-                prompt.write(f"\n\n**{message['role']}**: {message['content']}\n")
+            for message in iter_items(request["messages"]):
+                prompt.write(f"\n\n**{subscript(message, 'role')}**: {subscript(message, 'content')}\n")
             request_str: Final = prompt.getvalue()
 
             choices: Final = [
@@ -142,7 +139,7 @@ try:
 
         def _request_response_result_to_trace(
             self,
-            request: dict[str, Any],
+            request: Mapping[str, object],
             response: OpenAIResponse,
             request_str: str,
             choices: list[str],
@@ -170,7 +167,7 @@ import traceback
 
 class WeightsBiasesLogger:
     # Class variables or attributes
-    def __init__(self):
+    def __init__(self) -> None:
         try:
             pass
         except Exception:
@@ -179,7 +176,14 @@ class WeightsBiasesLogger:
             raise Exception("\033[91m wandb not installed, try running 'pip install wandb' to fix this error\033[0m")
         self.resolver = OpenAIRequestResponseResolver()
 
-    def log_event(self, kwargs, response_obj, start_time, end_time, print_verbose):
+    def log_event(
+        self,
+        kwargs: Mapping[str, object],
+        response_obj,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+        print_verbose: Callable[[object], object],
+    ) -> None:
         # Method definition
         import wandb
 

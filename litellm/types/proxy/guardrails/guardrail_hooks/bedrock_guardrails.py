@@ -1,6 +1,7 @@
+from collections.abc import Mapping
 from typing import Literal
 
-from typing_extensions import TypedDict
+from typing_extensions import ReadOnly, TypedDict
 
 # Bedrock contextual grounding tags each content block so the guardrail knows
 # which text is the reference source, the user question, and the content to grade.
@@ -12,8 +13,18 @@ class BedrockTextContent(TypedDict, total=False):
     qualifiers: list[BedrockGuardrailQualifier]
 
 
+class BedrockImageSource(TypedDict):
+    bytes: ReadOnly[str]
+
+
+class BedrockImageContent(TypedDict):
+    format: ReadOnly[Literal["png", "jpeg"]]
+    source: ReadOnly[BedrockImageSource]
+
+
 class BedrockContentItem(TypedDict, total=False):
     text: BedrockTextContent
+    image: ReadOnly[BedrockImageContent]
 
 
 class BedrockRequest(TypedDict, total=False):
@@ -105,6 +116,7 @@ class BedrockGuardrailContextualGroundingPolicy(TypedDict, total=False):
 
 class BedrockGuardrailCoverage(TypedDict, total=False):
     textCharacters: dict[str, int]
+    images: ReadOnly[Mapping[str, int]]
 
 
 class BedrockGuardrailInvocationMetrics(TypedDict, total=False):
@@ -129,6 +141,7 @@ class BedrockGuardrailResponse(TypedDict, total=False):
     output: list[BedrockGuardrailOutput] | None
     outputs: list[BedrockGuardrailOutput] | None
     assessments: list[BedrockGuardrailAssessment] | None
+    guardrailCoverage: ReadOnly[BedrockGuardrailCoverage | None]
 
 
 # ---------------------------------------------------------------------------

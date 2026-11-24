@@ -1,6 +1,8 @@
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.types.llms.openai import OpenAIImageGenerationOptionalParams
 from litellm.types.utils import ImageObject, ImageResponse
@@ -8,13 +10,15 @@ from litellm.types.utils import ImageObject, ImageResponse
 from .transformation import FalAIBaseConfig
 
 if TYPE_CHECKING:
-    import tiktoken
-
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+_JSON_VALUE: Final = TypeAdapter(object)
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
 class FalAIBriaConfig(FalAIBaseConfig):
@@ -46,7 +50,7 @@ class FalAIBriaConfig(FalAIBaseConfig):
         optional_params: dict,
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Map OpenAI parameters to Bria 3.2 parameters.
 
@@ -151,10 +155,10 @@ class FalAIBriaConfig(FalAIBaseConfig):
         self,
         model: str,
         prompt: str,
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
+        headers: Mapping[str, object],
+    ) -> dict[str, object]:
         """
         Transform the image generation request to Bria 3.2 request body.
 
@@ -184,10 +188,10 @@ class FalAIBriaConfig(FalAIBaseConfig):
         raw_response: httpx.Response,
         model_response: ImageResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
-        optional_params: dict,
-        litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        request_data: Mapping[str, object],
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ImageResponse:
@@ -207,7 +211,7 @@ class FalAIBriaConfig(FalAIBaseConfig):
         }
         """
         try:
-            response_data: Final = raw_response.json()
+            response_data: Final = _JSON_VALUE.validate_python(raw_response.json())
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Error transforming image generation response: {e}",
@@ -219,7 +223,7 @@ class FalAIBriaConfig(FalAIBaseConfig):
             model_response.data = []
 
         # Handle Bria response format - uses "image" (singular) not "images"
-        image_data: Final = response_data.get("image")
+        image_data: Final = _JSON_OBJECT.validate_python(response_data).get("image")
         if image_data and isinstance(image_data, dict):
             model_response.data.append(
                 ImageObject(

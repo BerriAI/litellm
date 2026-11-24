@@ -22,11 +22,14 @@ Supported models:
 Reference: https://docs.oracle.com/en-us/iaas/api/#/en/generative-ai-inference/latest/EmbedTextResult/EmbedText
 """
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 import litellm
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.llms.oci.common_utils import (
@@ -51,6 +54,9 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_DECODED_JSON: Final = TypeAdapter(object)
 
 # OCI sends up to 96 texts per embedText request (Cohere limit).
 OCI_EMBED_BATCH_LIMIT: Final = 96
@@ -77,7 +83,11 @@ class OCIEmbedConfig(BaseEmbeddingConfig):
 
     Required call-time params (via optional_params or env vars):
     - ``oci_compartment_id`` / ``OCI_COMPARTMENT_ID``
-    - ``oci_region`` / ``OCI_REGION`` (default: ``us-ashburn-1``)
+    - ``oci_region`` / ``OCI_REGION`` (default: ``us-ashburn-1``). The realm comes from the realm
+      key in ``oci_compartment_id`` (``ocid1.compartment.oc2..`` is the Government realm), so
+      non-commercial realms need no extra setting. A realm unknown to litellm can be described in
+      ``OCI_REGION_METADATA`` or ``~/.oci/regions-config.json``, resolved through the OCI SDK when
+      it is installed, or given as ``api_base``.
 
     Optional call-time params:
     - ``oci_serving_mode``: ``"ON_DEMAND"`` (default) or ``"DEDICATED"``
@@ -92,7 +102,7 @@ class OCIEmbedConfig(BaseEmbeddingConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
+        non_default_params: Mapping[str, object],
         optional_params: dict,
         model: str,
         drop_params: bool = False,
@@ -108,8 +118,8 @@ class OCIEmbedConfig(BaseEmbeddingConfig):
         headers: dict,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
@@ -143,18 +153,18 @@ class OCIEmbedConfig(BaseEmbeddingConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         base: Final = get_oci_base_url(optional_params, api_base or litellm.api_base)
-        return f"{base}/{OCI_API_VERSION}/actions/embedText"
+        return join_api_base(base, f"{OCI_API_VERSION}/actions/embedText")
 
     def sign_request(
         self,
         headers: dict,
         optional_params: dict,
-        request_data: dict,
+        request_data: Mapping[str, object],
         api_base: str,
         api_key: str | None = None,
         model: str | None = None,
@@ -177,8 +187,8 @@ class OCIEmbedConfig(BaseEmbeddingConfig):
         model: str,
         input: AllEmbeddingInputValues,
         optional_params: dict,
-        headers: dict,
-    ) -> dict:
+        headers: Mapping[str, object],
+    ) -> dict[str, object]:
         creds: Final = resolve_oci_credentials(optional_params)
         compartment_id: Final = creds["oci_compartment_id"]
         if not compartment_id:
@@ -252,9 +262,9 @@ class OCIEmbedConfig(BaseEmbeddingConfig):
         model_response: EmbeddingResponse,
         logging_obj: LiteLLMLoggingObj,
         api_key: str | None,
-        request_data: dict,
-        optional_params: dict,
-        litellm_params: dict,
+        request_data: Mapping[str, object],
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
     ) -> EmbeddingResponse:
         if raw_response.status_code != 200:
             raise OCIError(
@@ -263,7 +273,7 @@ class OCIEmbedConfig(BaseEmbeddingConfig):
             )
 
         try:
-            json_response: Final = raw_response.json()
+            json_response: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception as e:
             raise OCIError(
                 status_code=raw_response.status_code,
@@ -271,7 +281,7 @@ class OCIEmbedConfig(BaseEmbeddingConfig):
             )
 
         try:
-            parsed: Final = OCIEmbedResponse(**json_response)
+            parsed: Final = OCIEmbedResponse.model_validate(_JSON_OBJECT.validate_python(json_response))
         except Exception as e:
             raise OCIError(
                 status_code=500,
@@ -309,7 +319,7 @@ class OCIEmbedConfig(BaseEmbeddingConfig):
         self,
         error_message: str,
         status_code: int,
-        headers: dict | httpx.Headers,
+        headers: Mapping[str, object] | httpx.Headers,
     ) -> BaseLLMException:
         return OCIError(status_code=status_code, message=error_message)
 

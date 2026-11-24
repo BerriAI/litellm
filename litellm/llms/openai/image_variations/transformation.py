@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
 from aiohttp import ClientResponse
@@ -12,7 +13,7 @@ from ...base_llm.image_variations.transformation import BaseImageVariationConfig
 from ..common_utils import OpenAIError
 
 if TYPE_CHECKING:
-    import tiktoken
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
 
 class OpenAIImageVariationConfig(BaseImageVariationConfig):
@@ -21,11 +22,11 @@ class OpenAIImageVariationConfig(BaseImageVariationConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: Mapping[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         optional_params.update(non_default_params)
         return optional_params
 
@@ -33,8 +34,8 @@ class OpenAIImageVariationConfig(BaseImageVariationConfig):
         self,
         model: str | None,
         image: FileTypes,
-        optional_params: dict,
-        headers: dict,
+        optional_params: Mapping[str, object],
+        headers: Mapping[str, object],
     ) -> HttpHandlerRequestFields:
         return {
             "data": {
@@ -49,11 +50,11 @@ class OpenAIImageVariationConfig(BaseImageVariationConfig):
         raw_response: ClientResponse,
         model_response: ImageResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
+        request_data: Mapping[str, object],
         image: FileTypes,
-        optional_params: dict,
-        litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
     ) -> ImageResponse:
         return model_response
@@ -64,16 +65,18 @@ class OpenAIImageVariationConfig(BaseImageVariationConfig):
         raw_response: Response,
         model_response: ImageResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
+        request_data: Mapping[str, object],
         image: FileTypes,
-        optional_params: dict,
-        litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
     ) -> ImageResponse:
         return model_response
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | Headers
+    ) -> BaseLLMException:
         return OpenAIError(
             status_code=status_code,
             message=error_message,

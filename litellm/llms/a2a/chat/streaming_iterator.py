@@ -2,12 +2,13 @@
 A2A Streaming Response Iterator
 """
 
+from collections.abc import Mapping
 from typing import Final
 
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.types.utils import GenericStreamingChunk, ModelResponseStream
 
-from ..common_utils import extract_text_from_a2a_response
+from ..common_utils import A2AError, extract_text_from_a2a_response
 
 
 class A2AModelResponseIterator(BaseModelResponseIterator):
@@ -19,7 +20,7 @@ class A2AModelResponseIterator(BaseModelResponseIterator):
 
     def __init__(
         self,
-        streaming_response,
+        streaming_response: object,
         sync_stream: bool,
         json_mode: bool | None = False,
         model: str = "a2a/agent",
@@ -31,7 +32,7 @@ class A2AModelResponseIterator(BaseModelResponseIterator):
         )
         self.model = model
 
-    def chunk_parser(self, chunk: dict) -> GenericStreamingChunk | ModelResponseStream:
+    def chunk_parser(self, chunk: Mapping[str, object]) -> GenericStreamingChunk | ModelResponseStream:
         """
         Parse A2A streaming chunk to OpenAI format.
 
@@ -56,6 +57,10 @@ class A2AModelResponseIterator(BaseModelResponseIterator):
             }
         }
         """
+        error: Final = chunk.get("error")
+        if isinstance(error, dict):
+            raise A2AError(status_code=500, message=f"A2A error: {error.get('message', 'Unknown error')}")
+
         try:
             # Extract text from A2A response
             text: Final = extract_text_from_a2a_response(chunk)
@@ -83,7 +88,7 @@ class A2AModelResponseIterator(BaseModelResponseIterator):
                 tool_use=None,
             )
 
-    def _get_finish_reason(self, chunk: dict) -> str | None:
+    def _get_finish_reason(self, chunk: Mapping[str, object]) -> str | None:
         """Extract finish reason from A2A chunk"""
         result: Final = chunk.get("result", {})
 

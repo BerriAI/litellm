@@ -3,8 +3,9 @@
 
 import os
 import traceback
+from collections.abc import Callable, Mapping
 from enum import Enum
-from typing import Any, Final, NamedTuple
+from typing import Final, NamedTuple
 
 from typing_extensions import LiteralString
 
@@ -15,7 +16,7 @@ from litellm.litellm_core_utils.redact_messages import redact_user_api_key_info
 
 class SpanConfig(NamedTuple):
     message_template: LiteralString
-    span_data: dict[str, Any]
+    span_data: Mapping[str, object]
 
 
 class LogfireLevel(str, Enum):
@@ -38,7 +39,7 @@ class LogfireLogger:
             print_verbose(f"Got exception on init logfire client {e}")
             raise e
 
-    def _get_span_config(self, payload) -> SpanConfig:
+    def _get_span_config(self, payload: Mapping[str, object]) -> SpanConfig:
         if payload["call_type"] == "completion" or payload["call_type"] == "acompletion":
             return SpanConfig(
                 message_template="Chat Completion with {request_data[model]!r}",
@@ -66,7 +67,7 @@ class LogfireLogger:
         response_obj,
         start_time,
         end_time,
-        print_verbose,
+        print_verbose: Callable[[str], object],
         level: LogfireLevel,
     ):
         self.log_event(
@@ -83,7 +84,7 @@ class LogfireLogger:
         kwargs,
         start_time,
         end_time,
-        print_verbose,
+        print_verbose: Callable[[str], object],
         level: LogfireLevel,
         response_obj,
     ):

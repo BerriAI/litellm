@@ -7,17 +7,23 @@ secrets from strings without depending on the logging-configuration module.
 """
 
 import re
+import sys
+from functools import lru_cache
 from typing import Final
 
 from litellm.constants import MINIMUM_CUSTOM_KEY_LENGTH
+from litellm.rust_bridge import _native, diagnostics
 
 REDACTED: Final = "REDACTED"
+_MINIMUM_TOKEN_LENGTH: Final = min(MINIMUM_CUSTOM_KEY_LENGTH, len("xoxb-") + 10)
+
+_PEM_PRIVATE_KEY_BLOCK: Final = r"-----BEGIN[A-Z \-]*PRIVATE KEY-----[\s\S]*?-----END[A-Z \-]*PRIVATE KEY-----"
 
 
 def _build_secret_patterns() -> "re.Pattern[str]":
     patterns: Final[list[str]] = [
         # PEM private key / certificate blocks
-        r"-----BEGIN[A-Z \-]*PRIVATE KEY-----[\s\S]*?-----END[A-Z \-]*PRIVATE KEY-----",
+        _PEM_PRIVATE_KEY_BLOCK,
         # GCP OAuth2 access tokens (ya29.*)
         r"\bya29\.[A-Za-z0-9_.~+/-]+",
         # Credential %s formatting (space separator, no key= prefix)
@@ -65,13 +71,13 @@ def _build_secret_patterns() -> "re.Pattern[str]":
         # private_key with PEM-aware value capture
         r"""private_key['\"]?\s*[:=]\s*['\"]?(?:-----BEGIN[A-Z \-]*PRIVATE KEY-----[\s\S]*?-----END[A-Z \-]*PRIVATE KEY-----|[^\s,'\"})\]{}>]+)""",
         r"(?:master_key|xai_key|database_url|db_url|connection_string|"
-        r"aws_secret_access_key|aws_session_token|aws_access_key_id|"
+        r"aws_secret_access_key|aws_session_token|aws_access_key_id|s3_secret_access_key|s3_access_key_id|"
         r"signing_key|encryption_key|"
-        r"auth_token|access_token|refresh_token|"
+        r"auth_token|access_token|refresh_token|authorization_token|"
         r"slack_webhook_url|webhook_url|"
         r"database_connection_string|"
         r"huggingface_token|jwt_secret)"
-        r"""['\"]?\s*[:=]\s*['\"]?[^\s,'\"})\]{}>]+""",
+        r"""['\"]?\s*[:=]\s*['\"]?(?:(?:Bearer|Basic)\s+)?[^\s,'\"})\]{}>]+""",
         # Raw JWTs (without Bearer prefix)
         r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*",
         # Azure SAS tokens in URLs. The delimiter is a lookbehind, like the
@@ -87,9 +93,81 @@ def _build_secret_patterns() -> "re.Pattern[str]":
 _SECRET_RE: Final = _build_secret_patterns()
 
 
+def python_redact_string(value: str) -> str:
+    return _SECRET_RE.sub(REDACTED, value)
+
+
+_python_redact_string = python_redact_string
+
+
 def redact_string(value: str) -> str:
     """Scrub known secret/credential patterns from *value* and return the result."""
-    return _SECRET_RE.sub(REDACTED, value)
+    return diagnostics.run(lambda native: native.redact_text(value), lambda: python_redact_string(value))
+
+
+_TOKEN_SHAPES: Final = (
+    r"ya29\.[A-Za-z0-9_.~+/-]{20,}",
+    r"(?:AKIA|ASIA)[0-9A-Z]{16}\b",
+    rf"sk-[A-Za-z0-9\-_]{{{MINIMUM_CUSTOM_KEY_LENGTH - len('sk-')},}}",
+    r"(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{24,}",
+    r"AIza[0-9A-Za-z\-_]{35}",
+    r"dapi[0-9a-f]{32}\b",
+    r"(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36,}",
+    r"github_pat_[A-Za-z0-9_]{82}",
+    r"glpat-[A-Za-z0-9\-_]{20,}",
+    r"lin_api_[A-Za-z0-9]{40}\b",
+    r"xox[abposr]-[A-Za-z0-9-]{10,}",
+    r"hf_[A-Za-z0-9]{34,}",
+    r"npm_[A-Za-z0-9]{36}\b",
+    r"pypi-AgEIcHlwaS5vcmc[A-Za-z0-9\-_]{50,}",
+    r"SG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])",
+    r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+",
+)
+# Tokens start at a word boundary or right after a JSON escape like "\n", since tool output is often serialized JSON
+_TOKEN_START: Final = r"(?:(?<!\w)|(?<=\\[nrt])|(?<=\\u[0-9A-Fa-f]{4}))"
+_TOKEN_PEM_PRIVATE_KEY_BLOCK: Final = (
+    r"-----BEGIN(?:[A-Z ]|-(?!----))*?PRIVATE KEY-----"
+    r"(?:[^-]|-(?!----))*?-----END(?:[A-Z ]|-(?!----))*?PRIVATE KEY-----"
+)
+_NON_JWT_TOKEN_RE: Final = re.compile(
+    f"{_TOKEN_PEM_PRIVATE_KEY_BLOCK}|{_TOKEN_START}(?:{'|'.join(_TOKEN_SHAPES[:-1])})"
+)
+_DOTTED_TOKEN: Final = f"{_TOKEN_START}(?:{_TOKEN_SHAPES[0]}|{_TOKEN_SHAPES[-2]})"
+# Consume failed JWT headers once, including dotted keys and their boundary so the second pass sees them whole.
+_UNMATCHED_JWT: Final = (
+    rf"(?P<unmatched_jwt>eyJ(?:(?!-----BEGIN|{_DOTTED_TOKEN})[A-Za-z0-9_-])*"
+    rf"(?:{_DOTTED_TOKEN})?[^A-Za-z0-9_-]?)"
+)
+_TOKEN_RE: Final = re.compile(f"{_NON_JWT_TOKEN_RE.pattern}|{_TOKEN_START}(?:{_TOKEN_SHAPES[-1]}|{_UNMATCHED_JWT})")
+
+
+def _python_redact_tokens(value: str, replacement: str = REDACTED) -> str:
+    def replace(match: re.Match[str]) -> str:
+        if match.lastgroup == "unmatched_jwt":
+            return _NON_JWT_TOKEN_RE.sub(replacement, match.group())
+        return match.expand(replacement)
+
+    return _TOKEN_RE.sub(replace, value)
+
+
+@lru_cache(maxsize=1)
+def _token_redactor() -> _native.NativeTokenRedactor:
+    characters: Final = "".join(map(chr, range(128, sys.maxunicode + 1)))
+    word_ranges: Final = tuple((match.start() + 128, match.end() + 127) for match in re.finditer(r"\w+", characters))
+    return _native.NativeTokenRedactor(MINIMUM_CUSTOM_KEY_LENGTH, word_ranges)
+
+
+def redact_tokens(value: str, replacement: str = REDACTED) -> str:
+    """Replace credential-shaped tokens without matching surrounding words or field names."""
+    if "\\" in replacement:
+        return _python_redact_tokens(value, replacement)
+    if len(value) < _MINIMUM_TOKEN_LENGTH:
+        return value
+    try:
+        redacted: Final = _token_redactor().redact(value, replacement)
+    except UnicodeEncodeError:
+        return _python_redact_tokens(value, replacement)
+    return value if redacted is None else redacted
 
 
 _UNIX_SYSTEM_PATH: Final = r"/(?:etc|var|opt|usr|home|root|private|Users|tmp|mnt|srv)/[^\s'\"\)\]}>,]+"
@@ -105,15 +183,21 @@ _INTERNAL_DETAIL_RE: Final = re.compile(
 _TRACEBACK_MARKER: Final = "Traceback (most recent call last):"
 
 
-def redact_internal_details(value: str) -> str:
+def _python_redact_internal_details(value: str) -> str:
     """Drop an embedded traceback and scrub filesystem paths and internal hostnames,
     on top of redact_string(). For client-facing messages only: server logs keep this detail."""
     marker_index: Final = value.find(_TRACEBACK_MARKER)
     without_traceback: Final = value[:marker_index].rstrip() if marker_index != -1 else value
-    return _INTERNAL_DETAIL_RE.sub(REDACTED, redact_string(without_traceback))
+    return _INTERNAL_DETAIL_RE.sub(REDACTED, python_redact_string(without_traceback))
 
 
-def redact_structured_value(key: str | None, value: str) -> str:
+def redact_internal_details(value: str) -> str:
+    return diagnostics.run(
+        lambda native: native.redact_client_message(value), lambda: _python_redact_internal_details(value)
+    )
+
+
+def python_redact_structured_value(key: str | None, value: str) -> str:
     """Scrub *value* as it appeared under *key* inside a structured record.
 
     redact_string() replaces a whole ``key: value`` span with REDACTED, which is
@@ -122,8 +206,18 @@ def redact_structured_value(key: str | None, value: str) -> str:
     repr would, so the key-name patterns still fire, but collapses only the value
     so the caller's structure survives.
     """
-    scrubbed: Final = redact_string(value)
+    scrubbed: Final = python_redact_string(value)
     if scrubbed != value or key is None:
         return scrubbed
     rendered: Final = f"'{key}': '{value}'"
-    return REDACTED if redact_string(rendered) != rendered else value
+    return REDACTED if python_redact_string(rendered) != rendered else value
+
+
+_python_redact_structured_value = python_redact_structured_value
+
+
+def redact_structured_value(key: str | None, value: str) -> str:
+    return diagnostics.run(
+        lambda native: native.redact_structured_text(key, value),
+        lambda: python_redact_structured_value(key, value),
+    )

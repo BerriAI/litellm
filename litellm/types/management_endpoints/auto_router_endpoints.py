@@ -2,33 +2,24 @@
 Types for auto-router management endpoints
 """
 
-from collections.abc import Mapping, Sequence
+import importlib
+from collections.abc import Mapping
 from datetime import datetime, timezone
-from types import MappingProxyType
 from typing import Final, Literal, TypeAlias
 
-from pydantic import BaseModel, Field, computed_field, field_validator, model_validator
+from pydantic import ConfigDict, Field, TypeAdapter, computed_field, field_validator, model_validator
 
-from litellm.router_strategy.complexity_router.config import ComplexityRouterConfig
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.utils import StandardLoggingRoutingDecision
 
 DEFAULT_ROUTING_TEST_ROUTER_NAME: Final[str] = "auto_router_routing_test"
 
-
-class RequestComplexityRouterConfig(ComplexityRouterConfig):
-    """The part of a complexity-router config a request can carry.
-
-    `plugins` holds live RoutingPlugin objects, which no JSON body can express and which have no
-    OpenAPI schema, so it is closed off here rather than left as an arbitrary-type field.
-    """
-
-    plugins: None = Field(default=None, description="Not settable over HTTP; routing plugins are runtime objects")
-    classifier_plugin: None = Field(  # pyright: ignore[reportIncompatibleVariableOverride]  # narrowing to None is the point: runtime objects are not settable over HTTP
-        default=None, description="Not settable over HTTP; the classifier plugin is a runtime object"
-    )
+_REQUEST_MODELS_MODULE: Final = "litellm.router_strategy.complexity_router.request_models"
+_REQUEST_MODELS_EXPORTS: Final = frozenset({"RequestComplexityRouterConfig", "AutoRouterRoutingTestRequest"})
+_LAZY_EXPORT: Final = TypeAdapter(object)
 
 
-class ComplexityRouterConfigValidationRequest(BaseModel):
+class ComplexityRouterConfigValidationRequest(LiteLLMBaseModel):
     """A complexity-router config to validate without saving, so a form can surface the
     backend's own verdict inline instead of a raw 400 at write time."""
 
@@ -39,108 +30,31 @@ class ComplexityRouterConfigValidationRequest(BaseModel):
     )
 
 
-class ComplexityRouterConfigValidationResponse(BaseModel):
+class ComplexityRouterConfigValidationResponse(LiteLLMBaseModel):
     valid: bool
     error: str | None = None
 
 
-class AutoRouterRoutingTestRequest(BaseModel):
-    """A single request to classify against a complexity-router config that need not be saved yet.
-
-    Carries the same fields the serving path carries, so a dry run classifies what a real turn
-    would classify. `messages`, `system` and `tools` are forwarded to the routing hook untranslated,
-    which is why they are typed loosely: the hook reads whatever dialect the surface produced, and
-    validating them against one surface's schema would reject the others.
-    """
-
-    prompt: str | None = Field(
-        default=None,
-        description="A single ask to route, as an end user would send it. Mutually exclusive with messages",
-    )
-    messages: Sequence[Mapping[str, object]] | None = Field(
-        default=None,
-        description="The full message list to route, exactly as the serving path would receive it. Mutually exclusive with prompt",
-    )
-    system: str | Sequence[Mapping[str, object]] | None = Field(
-        default=None,
-        description="The top-level system prompt an Anthropic /v1/messages body carries beside its messages",
-    )
-    tools: Sequence[Mapping[str, object]] | None = Field(
-        default=None,
-        description="The tool definitions the request advertises, which decide whether the plan-mode floor applies",
-    )
-    complexity_router_config: RequestComplexityRouterConfig = Field(
-        description="The complexity router config to route against, in the shape /model/new accepts",
-    )
-    default_model: str | None = Field(
-        default=None,
-        description="Model to route to when no tier resolves, i.e. complexity_router_default_model",
-    )
-    router_name: str = Field(
-        default=DEFAULT_ROUTING_TEST_ROUTER_NAME,
-        description="Name reported as the router in the routing decision. Display only",
-    )
-    team_id: str | None = Field(
-        default=None,
-        description="Team the router is being created for. Required for a team admin, who may only test their own team's routers",
-    )
-
-    @field_validator("messages")
-    @classmethod
-    def _reject_messages_no_surface_accepts(
-        cls, value: Sequence[Mapping[str, object]] | None
-    ) -> Sequence[Mapping[str, object]] | None:
-        """Reject what every supported surface rejects, and nothing beyond it.
-
-        A real request carrying a message with no string role, or with content that is neither text
-        nor a block list, is a 400 on the serving path, so answering it here with a routed tier
-        would promise a decision the request never gets. Only the two keys the dialects agree on
-        are constrained: anything else in a message stays untranslated and unread.
-        """
-        if value is None:
-            return value
-        for index, message in enumerate(value):
-            if not isinstance(role := message.get("role"), str) or not role.strip():
-                raise ValueError(f"messages[{index}] needs a non-empty string role")
-            if (content := message.get("content")) is not None and not isinstance(content, str | list):
-                raise ValueError(f"messages[{index}] content must be a string, a list of blocks, or null")
-        return value
-
-    @model_validator(mode="after")
-    def _resolve_request_carrier(self) -> "AutoRouterRoutingTestRequest":
-        if self.prompt is not None and not self.prompt.strip():
-            raise ValueError("prompt must not be blank")
-        if self.messages is not None and not self.messages:
-            raise ValueError("messages must not be empty")
-        if (self.prompt is None) == (self.messages is None):
-            raise ValueError("provide exactly one of prompt or messages")
-        if self.messages is not None:
-            return self
-        return self.model_copy(
-            update={  # mutable-ok: model_copy types update as a plain dict
-                "messages": [  # mutable-ok: the routing hook's signature takes a list of message dicts
-                    {"role": "user", "content": self.prompt}  # mutable-ok: a message is dict-shaped
-                ]
-            }
-        )
-
-    def wire_body(self) -> Mapping[str, object]:
-        """The request kwargs a serving-path request would carry for this body.
-
-        Every value is handed out by identity rather than copied, so the messages the routing hook
-        classifies and the messages its raw-body plan-mode scan reads are one value, as they are on
-        the serving path.
-        """
-        return MappingProxyType(
-            {  # mutable-ok: MappingProxyType needs a dict to wrap
-                key: value
-                for key, value in (("messages", self.messages), ("system", self.system), ("tools", self.tools))
-                if value is not None
-            }
-        )
+class AutoRouterAvailabilityRequest(LiteLLMBaseModel):
+    team_id: str | None = None
+    saved_model_id: str | None = None
+    complexity_router_config: Mapping[str, object] | None = None
 
 
-class AutoRouterRoutingTestResponse(BaseModel):
+class AutoRouterAllowance(LiteLLMBaseModel):
+    key: str
+    limit: int | None
+    remaining: int | None
+    used_by_this_router: bool = False
+    available: bool = True
+
+
+class AutoRouterAvailabilityResponse(LiteLLMBaseModel):
+    allowances: tuple[AutoRouterAllowance, ...]
+    error: str | None = None
+
+
+class AutoRouterRoutingTestResponse(LiteLLMBaseModel):
     """Where one prompt would have been routed, and why."""
 
     routed_model: str = Field(description="The model group the router picked")
@@ -152,7 +66,7 @@ class AutoRouterRoutingTestResponse(BaseModel):
     )
 
 
-class AutoRouterCacheBucket(BaseModel):
+class AutoRouterCacheBucket(LiteLLMBaseModel):
     """One prompt-caching bucket of turns, with how often those turns hit the cache."""
 
     turns: int = Field(description="Turns classified into this bucket")
@@ -160,7 +74,7 @@ class AutoRouterCacheBucket(BaseModel):
     hit_rate_pct: float = Field(description="hits over this bucket's turns, as a percentage")
 
 
-class AutoRouterCacheStats(BaseModel):
+class AutoRouterCacheStats(LiteLLMBaseModel):
     """Prompt-caching behaviour of auto-routed turns, bucketed by what the router did.
 
     Every in-order turn falls in exactly one bucket: the session stayed on the same model,
@@ -186,26 +100,53 @@ class AutoRouterCacheStats(BaseModel):
     ttl_1h_turns: int = Field(description="Turns whose cache write used the one-hour TTL")
 
 
-class AutoRouterBenchmarkTotals(BaseModel):
-    """Session-shape and savings aggregates over auto-routed traffic in the window."""
+class AutoRouterBenchmarkTotals(LiteLLMBaseModel):
+    """Auto-routed traffic in the window. Turns, spend and savings count requests on the selected UTC days;
+    the session averages and cache stats describe every session overlapping the window, whole."""
 
-    sessions: int
-    turns: int
-    avg_turns_per_session: float
-    avg_session_seconds: float
-    avg_tokens_per_session: float
-    spend: float = Field(description="What the routed traffic actually cost")
+    sessions: int = Field(description="Sessions overlapping the window, counted whole")
+    turns: int = Field(description="Auto-routed requests on the selected UTC days")
+    total_tokens: int | None = Field(
+        default=None,
+        description="Input and output tokens of routed generation requests on the selected UTC days, excluding "
+        "classifier tokens; null when any selected requests predate daily token recording",
+    )
+    avg_turns_per_session: float | None = Field(
+        description="Lifetime turns per overlapping session; null when the window has routed requests but no session "
+        "rows for this router type, such as an alias whose router type changed mid-session"
+    )
+    avg_session_seconds: float | None = Field(description="Lifetime seconds per overlapping session; null as above")
+    avg_tokens_per_session: float | None = Field(description="Lifetime tokens per overlapping session; null as above")
+    spend: float = Field(description="What the selected days' routed traffic actually cost")
     classifier_cost: float | None = Field(
         description="Recorded LLM classifier cost already included in spend; null when any session turns predate "
         "subtotal recording, and zero for an empty window"
     )
-    saved_spend: float = Field(
-        description="Signed dollars saved versus each router's savings baseline (derived from its hardest "
-        "tier, or the configured override), from the same per-request savings record the usage tab reads"
+    savings_estimated_turns: int = Field(
+        description="Requests compared against the baseline: every request on complexity routers that recorded savings"
     )
-    baseline_spend: float = Field(description="spend plus saved_spend: the estimated single-model cost")
-    saved_pct: float = Field(description="saved_spend over baseline_spend, as a percentage")
-    saved_per_session: float
+    savings_estimated_actual_spend: float = Field(
+        description="Actual spend, including classifier cost, for the compared requests"
+    )
+    savings_estimated_classifier_cost: float | None = Field(
+        default=None,
+        description="Classifier cost included in the compared actual spend; "
+        "null when classification costs for those requests are unavailable",
+    )
+    saved_spend: float | None = Field(
+        description="Recorded savings on the selected UTC days; null when traffic has no recorded savings estimates. "
+        "On totals this is the same daily figure the Overall savings view reports"
+    )
+    unattributed_saved_spend: float | None = Field(
+        default=None,
+        description="Part of saved_spend no router's daily rows account for, such as history recorded before "
+        "per-router daily tracking; when set, baseline_spend and saved_pct are null",
+    )
+    baseline_spend: float | None = Field(
+        description="Estimated single-model cost: compared actual spend plus recorded savings; "
+        "null when traffic has no recorded savings"
+    )
+    saved_pct: float | None = Field(description="Recorded savings over baseline_spend, as a percentage")
     cache: AutoRouterCacheStats
 
 
@@ -226,8 +167,53 @@ class AutoRouterBenchmarkGroup(AutoRouterBenchmarkTotals):
     )
 
 
-class AutoRouterBenchmarksResponse(BaseModel):
-    """Benchmarks for the auto-router dashboard, aggregated from the per-session rollup."""
+class AutoRouterSessionResponse(LiteLLMBaseModel):
+    """One auto-routed session as its own key sees it: what the last turn ran on, and what the session cost
+    against the router's savings baseline (the priciest model in its hardest tier)."""
+
+    session_id: str
+    router_name: str = Field(description="The auto-router alias the session's requests were sent to")
+    router_type: str = Field(description="complexity, adaptive or quality")
+    turns: int = Field(description="Auto-routed turns the rollup has recorded for this session so far")
+    last_model: str = Field(description="The deployment model the most recent turn was routed to")
+    spend: float = Field(description="What the session's routed traffic actually cost, classifier calls included")
+    total_spend: float | None = Field(
+        default=None,
+        description="Spend billed to this key under the session id, routed or not, from a shared Redis counter "
+        "whose one-hour expiry every billed request resets. None without a shared Redis or once the counter "
+        "expired. A best-effort figure, not a lifetime total: a session idle past the expiry restarts from zero, "
+        "and a failed Redis write, eviction or flush drops spend without notice",
+    )
+    savings_estimated_turns: int = Field(description="Requests whose savings estimate recorded its baseline cost")
+    savings_estimated_actual_spend: float = Field(
+        description="Actual spend, including classifier cost, for requests whose estimate recorded its baseline cost"
+    )
+    saved_spend: float | None = Field(
+        description="Recorded historical savings plus newer estimates, net of classifier cost. None until a turn is "
+        "estimated. A turn that starts within the longest prompt-cache TTL its breakpoints use (5 minutes, or 1 hour "
+        "with a 1h breakpoint) of the session's first observed turn, or of the last turn whose observation was "
+        "incomplete, is not estimated, because the baseline's cache state is unknown then. Two kinds of turn are "
+        "still estimated inside that window: turns that took the identical baseline path, and turns whose whole "
+        "cached prefix the session had already written"
+    )
+    baseline_spend: float | None = Field(description="Estimated single-model cost: spend plus recorded savings")
+    savings_estimated_baseline_spend: float | None = Field(
+        description="Estimated single-model cost for requests whose estimate recorded its baseline cost"
+    )
+    baseline_model: str | None = Field(
+        description="The savings baseline recorded by most session turns, including historical turns, recorded turn by "
+        "turn, so it still names the counterfactual after the router is reconfigured or removed. None when no "
+        "turn recorded one: rows from before the baseline was recorded, and adaptive and quality routers, "
+        "which derive no baseline and so report no savings"
+    )
+    baseline_models: Mapping[str, int] = Field(
+        description="Session turns recording each baseline model; more than one entry means the router's "
+        "baseline changed mid-session; these counts do not imply savings coverage"
+    )
+
+
+class AutoRouterBenchmarksResponse(LiteLLMBaseModel):
+    """Benchmarks for the auto-router dashboard, aggregated from the per-session and per-day rollups."""
 
     start_date: str = Field(description="Window start day, YYYY-MM-DD UTC, inclusive")
     end_date: str = Field(description="Window end day, YYYY-MM-DD UTC, inclusive")
@@ -261,8 +247,14 @@ SHADOW_EVAL_TURN_VALVE: Final[int] = 10_000
 
 SHADOW_EVAL_MAX_ROUTERS: Final[int] = 4
 
+SHADOW_EVAL_RUBRIC_MAX_CHARS: Final[int] = 4_000
 
-class StartShadowEvalRequest(BaseModel):
+# Identifies the rubric grading contract (prompt, anchors, 1-5 scale) a job was created
+# under. A sampler only runs rubric jobs whose version it implements.
+SHADOW_EVAL_RUBRIC_VERSION: Final[int] = 1
+
+
+class StartShadowEvalRequest(LiteLLMBaseModel):
     """Start duplicating one or more targets' traffic for blind comparison against an auto-router.
 
     A target is a virtual key, a team, or a user; each becomes its own leg with its own
@@ -340,6 +332,16 @@ class StartShadowEvalRequest(BaseModel):
         description=(
             "Required when direction is reverse and rejected otherwise: the fixed model the router's own "
             "responses are judged against. Must be a plain model rather than another auto-router"
+        ),
+    )
+    skip_same_model: bool = Field(
+        default=False,
+        description=(
+            "Reverse jobs only. When true, a sampled request whose response came from baseline_model's own "
+            "model group (aliases resolved) is skipped instead of judged, so no shadow or judge call is made "
+            "or billed for it and it never counts toward win, tie, or error rates. Skips are reported as "
+            "same_model_skipped_count. Different model group names stay distinct even when they share a "
+            "provider model"
         ),
     )
     shadow_percentage: float = Field(
@@ -429,6 +431,8 @@ class StartShadowEvalRequest(BaseModel):
             raise ValueError("baseline_model is required when direction is 'reverse'")
         if self.direction == "forward" and self.baseline_model is not None:
             raise ValueError("baseline_model is only meaningful when direction is 'reverse'")
+        if self.direction == "forward" and self.skip_same_model:
+            raise ValueError("skip_same_model is only meaningful when direction is 'reverse'")
         return self
 
     @model_validator(mode="after")
@@ -449,7 +453,28 @@ class StartShadowEvalRequest(BaseModel):
         return self
 
 
-class ShadowEvalSlice(BaseModel):
+class StartShadowEvalRubricRequest(StartShadowEvalRequest):  # frozen-ok: parent validator assigns router_names
+    """A shadow eval whose judge also grades each response from 1 to 5 against an operator rubric."""
+
+    rubric: str = Field(
+        min_length=1,
+        max_length=SHADOW_EVAL_RUBRIC_MAX_CHARS,
+        description=(
+            "The criteria the judge grades both responses against, in plain language, at most "
+            f"{SHADOW_EVAL_RUBRIC_MAX_CHARS} characters. Each response gets an integer grade on a fixed scale "
+            "where 1 fails the criteria and 5 fully meets them. Stored unchanged with the job and never edited"
+        ),
+    )
+
+    @field_validator("rubric")
+    @classmethod
+    def _rubric_is_not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("rubric must contain criteria, not only whitespace")
+        return value
+
+
+class ShadowEvalSlice(LiteLLMBaseModel):
     """Judge outcomes for one slice of a job's verdicts: a router tier, one of the
     models that served the real arm, or one scoped target (embedded on that target's
     own entry, so slices never need re-joining to a target by id)."""
@@ -493,7 +518,7 @@ class ShadowEvalSlice(BaseModel):
     )
 
 
-class ShadowEvalResult(BaseModel):
+class ShadowEvalResult(LiteLLMBaseModel):
     """Stratified results of a shadow-eval job's verdicts so far."""
 
     by_tier: tuple[ShadowEvalSlice, ...]
@@ -551,7 +576,7 @@ class ShadowEvalResult(BaseModel):
     )
 
 
-class ShadowEvalJobTargetResponse(BaseModel):
+class ShadowEvalJobTargetResponse(LiteLLMBaseModel):
     """One target a job shadows (a key, team, or user), with its own budget and stop state."""
 
     target_type: ShadowEvalTargetType = Field(description="What kind of entity this entry scopes")
@@ -617,7 +642,7 @@ class ShadowEvalJobTargetResponse(BaseModel):
     )
 
 
-class ShadowEvalJobResponse(BaseModel):
+class ShadowEvalJobResponse(LiteLLMBaseModel):
     """A shadow-eval job over one or more targets, each with its own budget and stop state;
     status is derived from stopped_by, the targets' stop and budget state, and ends_at,
     never stored, so no writer anywhere can produce an inconsistent one. Aggregate
@@ -641,6 +666,10 @@ class ShadowEvalJobResponse(BaseModel):
     )
     direction: ShadowEvalDirection = "forward"
     baseline_model: str | None = None
+    skip_same_model: bool = Field(
+        default=False,
+        description="Whether this reverse job skips samples that baseline_model's own model group served",
+    )
     judge_model: str
     shadow_percentage: float
     created_at: datetime
@@ -659,6 +688,14 @@ class ShadowEvalJobResponse(BaseModel):
     judge_spend: float | None = Field(default=None, description="Judge cost so far; detail endpoint only")
     last_error: str | None = Field(default=None, description="Most recent attempt error; detail endpoint only")
     results: ShadowEvalResult | None = Field(default=None, description="Stratified verdicts; detail endpoint only")
+    same_model_skipped_count: int | None = Field(
+        default=None,
+        description=(
+            "Sampled requests skipped because baseline_model's own model group served them, summed over "
+            "targets; detail endpoint only and reported even before any turn is judged. None when coverage "
+            "counts are unknown for any target"
+        ),
+    )
 
     @computed_field
     @property
@@ -686,3 +723,68 @@ class ShadowEvalJobResponse(BaseModel):
         if all(target.stopped_at is not None for target in self.targets):
             return "stopped"
         return "running"
+
+
+class ShadowEvalRubricJobResponse(ShadowEvalJobResponse):
+    """A rubric shadow eval job: the regular job view plus the rubric it grades against."""
+
+    model_config = ConfigDict(frozen=True)
+
+    rubric: str = Field(description="The criteria both responses are graded against, as stored at start")
+    rubric_version: int = Field(description="The grading contract (prompt, anchors, 1-5 scale) the job runs under")
+
+
+class ShadowEvalGradePair(LiteLLMBaseModel):
+    """How many judged turns gave the real and shadow responses this pair of grades."""
+
+    model_config = ConfigDict(frozen=True)
+
+    real_grade: int = Field(description="Grade of the response the caller actually received, 1 to 5")
+    shadow_grade: int = Field(description="Grade of the duplicated response nobody was served, 1 to 5")
+    turn_count: int
+
+
+class ShadowEvalRubricSlice(LiteLLMBaseModel):
+    """Rubric grades for one router arm, or for every arm together."""
+
+    model_config = ConfigDict(frozen=True)
+
+    group: str
+    graded_count: int = Field(description="Judged turns that carry both grades")
+    ungraded_count: int = Field(
+        description=(
+            "Judged turns with a preference but no grades, such as turns a worker without rubric support "
+            "judged. They are excluded from grade_distribution, never counted as low grades"
+        )
+    )
+    grade_distribution: tuple[ShadowEvalGradePair, ...] = Field(
+        description=(
+            "Joint counts of (real_grade, shadow_grade) over graded turns, ordered by real then shadow grade, "
+            "so turns where both responses were good or both were bad stay distinguishable"
+        )
+    )
+
+
+class ShadowEvalRubricResultResponse(LiteLLMBaseModel):
+    """A rubric job's grades so far. Error attempts are excluded, like the job's preference results."""
+
+    model_config = ConfigDict(frozen=True)
+
+    job_id: str
+    rubric: str
+    rubric_version: int
+    overall: ShadowEvalRubricSlice = Field(
+        description=(
+            "Every arm together. A judged turn is one (request, router arm) pair, so a multi-router job "
+            "counts each real response once per arm; compare routers with by_router"
+        )
+    )
+    by_router: tuple[ShadowEvalRubricSlice, ...] = Field(
+        description="One slice per router arm, ordered by router name, each graded against the same real responses"
+    )
+
+
+def __getattr__(name: str) -> object:
+    if name in _REQUEST_MODELS_EXPORTS:
+        return _LAZY_EXPORT.validate_python(getattr(importlib.import_module(_REQUEST_MODELS_MODULE), name))
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

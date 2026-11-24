@@ -1,5 +1,6 @@
 import os
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+from types import MappingProxyType
 from typing import Final, Protocol
 
 import httpx
@@ -10,11 +11,11 @@ from litellm._logging import verbose_logger
 from litellm.caching import InMemoryCache
 from litellm.constants import SECRET_MANAGER_REFRESH_INTERVAL
 from litellm.llms.custom_httpx.http_handler import (
-    _get_httpx_client,
     get_async_httpx_client,
+    get_httpx_client,
     httpxSpecialProvider,
 )
-from litellm.proxy._types import KeyManagementSystem
+from litellm.types.secret_managers.main import KeyManagementSystem
 
 from .base_secret_manager import BaseSecretManager, raise_if_unsafe_secret_name
 
@@ -85,6 +86,10 @@ def _json_object_body(response: _JsonObjectSource) -> dict[str, object]:
     return response.json()
 
 
+def _as_json_object(value: object) -> Mapping[str, object] | None:
+    return value if isinstance(value, Mapping) else None
+
+
 class HashicorpSecretManager(BaseSecretManager):
     def __init__(self):
         from litellm.proxy.proxy_server import CommonProxyErrors, premium_user
@@ -92,8 +97,9 @@ class HashicorpSecretManager(BaseSecretManager):
         # Vault-specific config
         self.vault_addr = os.getenv("HCP_VAULT_ADDR", "http://127.0.0.1:8200")
         self.vault_token = os.getenv("HCP_VAULT_TOKEN", "")
-        # Vault namespace (for X-Vault-Namespace header)
         self.vault_namespace = os.getenv("HCP_VAULT_NAMESPACE", None)
+        self.login_namespace_override = os.getenv("HCP_VAULT_LOGIN_NAMESPACE", None)
+        self.secret_namespace_override = os.getenv("HCP_VAULT_SECRET_NAMESPACE", None)
         # KV engine mount name (default: "secret")
         # If your KV engine is mounted somewhere other than "secret", set HCP_VAULT_MOUNT_NAME
         self.vault_mount_name = os.getenv("HCP_VAULT_MOUNT_NAME", "secret")
@@ -182,12 +188,10 @@ class HashicorpSecretManager(BaseSecretManager):
         # Vault endpoint for AppRole login
         login_url: Final = f"{self.vault_addr}/v1/auth/{self.approle_mount_path}/login"
 
-        headers: Final = {}
-        if hasattr(self, "vault_namespace") and self.vault_namespace:
-            headers["X-Vault-Namespace"] = self.vault_namespace
+        headers: Final = self._get_login_headers()
 
         try:
-            client: Final = _get_httpx_client()
+            client: Final = get_httpx_client()
             resp: Final = client.post(
                 url=login_url,
                 headers=headers,
@@ -245,12 +249,7 @@ class HashicorpSecretManager(BaseSecretManager):
         # Vault endpoint for cert-based login, e.g. '/v1/auth/cert/login'
         login_url: Final = f"{self.vault_addr}/v1/auth/cert/login"
 
-        # Include your Vault namespace in the header if you're using namespaces.
-        # E.g. self.vault_namespace = 'mynamespace/'
-        # If you only have root namespace, you can omit this header entirely.
-        headers: Final = {}
-        if hasattr(self, "vault_namespace") and self.vault_namespace:
-            headers["X-Vault-Namespace"] = self.vault_namespace
+        headers: Final = self._get_login_headers()
         try:
             # We use the client cert and key for mutual TLS
             client: Final = httpx.Client(cert=(self.tls_cert_path, self.tls_key_path))
@@ -270,8 +269,25 @@ class HashicorpSecretManager(BaseSecretManager):
         except Exception as e:
             raise RuntimeError(f"Could not authenticate to Vault via TLS cert: {e}")
 
-    def _get_tls_cert_auth_body(self) -> dict:
+    def _get_tls_cert_auth_body(self) -> dict[str, object]:
         return {"name": self.vault_cert_role}
+
+    @property
+    def vault_login_namespace(self) -> str | None:
+        if self.login_namespace_override is not None:
+            return self.login_namespace_override
+        return self.vault_namespace
+
+    @property
+    def vault_secret_namespace(self) -> str | None:
+        if self.secret_namespace_override is not None:
+            return self.secret_namespace_override
+        return self.vault_namespace
+
+    def _get_login_headers(self) -> Mapping[str, str]:
+        if self.vault_login_namespace:
+            return MappingProxyType({"X-Vault-Namespace": self.vault_login_namespace})
+        return MappingProxyType({})
 
     def get_url(
         self,
@@ -292,7 +308,9 @@ class HashicorpSecretManager(BaseSecretManager):
         - With path prefix: http://127.0.0.1:8200/v1/secret/data/myapp/mykey
         """
         raise_if_unsafe_secret_name(secret_name)
-        resolved_namespace = self._sanitize_path_component(namespace if namespace is not None else self.vault_namespace)
+        resolved_namespace = self._sanitize_path_component(
+            namespace if namespace is not None else self.vault_secret_namespace
+        )
         resolved_mount = self._sanitize_path_component(mount_name if mount_name is not None else self.vault_mount_name)
         if resolved_mount is None:
             resolved_mount = "secret"
@@ -324,7 +342,7 @@ class HashicorpSecretManager(BaseSecretManager):
         sanitized_value = sanitized_value.strip("/")
         return sanitized_value or None
 
-    def _extract_secret_manager_settings(self, optional_params: dict | None) -> dict[str, object]:
+    def _extract_secret_manager_settings(self, optional_params: Mapping[str, object] | None) -> dict[str, object]:
         if not isinstance(optional_params, dict):
             return {}
 
@@ -333,10 +351,12 @@ class HashicorpSecretManager(BaseSecretManager):
         allowed_keys: Final = {"namespace", "mount", "path_prefix", "data"}
         return {k: source[k] for k in allowed_keys if k in source}
 
-    def _build_secret_target(self, secret_name: str, optional_params: dict | None) -> _VaultSecretTarget:
+    def _build_secret_target(
+        self, secret_name: str, optional_params: Mapping[str, object] | None
+    ) -> _VaultSecretTarget:
         settings: Final = self._extract_secret_manager_settings(optional_params)
 
-        namespace: Final = settings.get("namespace", self.vault_namespace)
+        namespace: Final = settings.get("namespace", self.vault_secret_namespace)
         mount: Final = settings.get("mount", self.vault_mount_name)
         path_prefix: Final = settings.get("path_prefix", self.vault_path_prefix)
         data_key_override: Final = settings.get("data")
@@ -356,7 +376,7 @@ class HashicorpSecretManager(BaseSecretManager):
             "secret_name": secret_name,
         }
 
-    def _get_request_headers(self) -> dict:
+    def _get_request_headers(self) -> dict[str, str]:
         """
         Get the headers for Vault API requests.
 
@@ -379,7 +399,7 @@ class HashicorpSecretManager(BaseSecretManager):
     async def async_read_secret(
         self,
         secret_name: str,
-        optional_params: dict | None = None,
+        optional_params: Mapping[str, object] | None = None,
         timeout: float | httpx.Timeout | None = None,
     ) -> str | None:
         """
@@ -387,25 +407,21 @@ class HashicorpSecretManager(BaseSecretManager):
         secret_name is just the path inside the KV mount (e.g., 'myapp/config').
         Returns the entire data dict from data.data, or None on failure.
         """
-        if self.cache.get_cache(secret_name) is not None:
-            return self.cache.get_cache(secret_name)
         async_client: Final = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.SecretManager,
         )
         try:
-            # For KV v2: /v1/<mount>/data/<path>
-            # Example: http://127.0.0.1:8200/v1/secret/data/myapp/config
-            _url: Final = self.get_url(secret_name)
-            url: Final = _url
+            target: Final = self._build_secret_target(secret_name, optional_params)
+            cached_body: Final = self.cache.get_cache(target["url"])
+            if cached_body is not None:
+                return self._get_secret_value_from_json_response(cached_body, target["data_key"])
 
-            response: Final = await async_client.get(url, headers=self._get_request_headers())
+            response: Final = await async_client.get(target["url"], headers=self._get_request_headers())
             response.raise_for_status()
 
-            # For KV v2, the secret is in response.json()["data"]["data"]
             json_resp: Final = _json_object_body(response)
-            _value: Final = self._get_secret_value_from_json_response(json_resp)
-            self.cache.set_cache(secret_name, _value)
-            return _value
+            self.cache.set_cache(target["url"], json_resp)
+            return self._get_secret_value_from_json_response(json_resp, target["data_key"])
 
         except Exception as e:
             verbose_logger.exception("Error reading secret from Hashicorp Vault: %s", e)
@@ -414,7 +430,7 @@ class HashicorpSecretManager(BaseSecretManager):
     def sync_read_secret(
         self,
         secret_name: str,
-        optional_params: dict | None = None,
+        optional_params: Mapping[str, object] | None = None,
         timeout: float | httpx.Timeout | None = None,
     ) -> str | None:
         """
@@ -422,21 +438,19 @@ class HashicorpSecretManager(BaseSecretManager):
         secret_name is just the path inside the KV mount (e.g., 'myapp/config').
         Returns the entire data dict from data.data, or None on failure.
         """
-        if self.cache.get_cache(secret_name) is not None:
-            return self.cache.get_cache(secret_name)
-        sync_client: Final = _get_httpx_client()
+        sync_client: Final = get_httpx_client()
         try:
-            # For KV v2: /v1/<mount>/data/<path>
-            url: Final = self.get_url(secret_name)
+            target: Final = self._build_secret_target(secret_name, optional_params)
+            cached_body: Final = self.cache.get_cache(target["url"])
+            if cached_body is not None:
+                return self._get_secret_value_from_json_response(cached_body, target["data_key"])
 
-            response: Final = sync_client.get(url, headers=self._get_request_headers())
+            response: Final = sync_client.get(target["url"], headers=self._get_request_headers())
             response.raise_for_status()
 
-            # For KV v2, the secret is in response.json()["data"]["data"]
             json_resp: Final = _json_object_body(response)
-            _value: Final = self._get_secret_value_from_json_response(json_resp)
-            self.cache.set_cache(secret_name, _value)
-            return _value
+            self.cache.set_cache(target["url"], json_resp)
+            return self._get_secret_value_from_json_response(json_resp, target["data_key"])
 
         except Exception as e:
             verbose_logger.exception("Error reading secret from Hashicorp Vault: %s", e)
@@ -447,9 +461,9 @@ class HashicorpSecretManager(BaseSecretManager):
         secret_name: str,
         secret_value: str,
         description: str | None = None,
-        optional_params: dict | None = None,
+        optional_params: Mapping[str, object] | None = None,
         timeout: float | httpx.Timeout | None = None,
-        tags: dict | list | None = None,
+        tags: Mapping[str, object] | Sequence[object] | None = None,
     ) -> dict[str, object]:
         """
         Writes a secret to Vault KV v2 using an async HTTPX client.
@@ -494,9 +508,9 @@ class HashicorpSecretManager(BaseSecretManager):
         current_secret_name: str,
         new_secret_name: str,
         new_secret_value: str,
-        optional_params: dict | None = None,
+        optional_params: Mapping[str, object] | None = None,
         timeout: float | httpx.Timeout | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Rotates a secret by creating a new one and deleting the old one.
         Uses _build_secret_target to handle optional_params for namespace, mount, path_prefix customization.
@@ -625,10 +639,10 @@ class HashicorpSecretManager(BaseSecretManager):
                     )
                 else:
                     # Clear cache for the old secret only if deletion was successful
-                    self.cache.delete_cache(current_secret_name)
+                    self.cache.delete_cache(current_target["url"])
 
             # Clear cache for the new secret (or updated secret if names are the same)
-            self.cache.delete_cache(new_secret_name)
+            self.cache.delete_cache(new_target["url"])
 
             return create_response
 
@@ -643,9 +657,9 @@ class HashicorpSecretManager(BaseSecretManager):
         self,
         secret_name: str,
         recovery_window_in_days: int | None = 7,
-        optional_params: dict | None = None,
+        optional_params: Mapping[str, object] | None = None,
         timeout: float | httpx.Timeout | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Async function to delete a secret from Hashicorp Vault.
         In KV v2, this marks the latest version of the secret as deleted.
@@ -669,10 +683,7 @@ class HashicorpSecretManager(BaseSecretManager):
             response: Final = await async_client.delete(url=target["url"], headers=self._get_request_headers())
             response.raise_for_status()
 
-            # Clear the cache for this secret
-            self.cache.delete_cache(secret_name)
-            if target["secret_name"] != secret_name:
-                self.cache.delete_cache(target["secret_name"])
+            self.cache.delete_cache(target["url"])
 
             return {
                 "status": "success",
@@ -682,7 +693,9 @@ class HashicorpSecretManager(BaseSecretManager):
             verbose_logger.exception("Error deleting secret from Hashicorp Vault: %s", e)
             return {"status": "error", "message": str(e)}
 
-    def _get_secret_value_from_json_response(self, json_resp: dict | None) -> str | None:
+    def _get_secret_value_from_json_response(
+        self, json_resp: Mapping[str, object] | None, data_key: str = "key"
+    ) -> str | None:
         """
         Get the secret value from the JSON response
 
@@ -708,4 +721,11 @@ class HashicorpSecretManager(BaseSecretManager):
         """
         if json_resp is None:
             return None
-        return json_resp.get("data", {}).get("data", {}).get("key", None)
+        outer: Final = _as_json_object(json_resp.get("data"))
+        if outer is None:
+            return None
+        inner: Final = _as_json_object(outer.get("data"))
+        if inner is None:
+            return None
+        value: Final = inner.get(data_key)
+        return value if isinstance(value, str) else None

@@ -1,37 +1,138 @@
 import asyncio
 import io
-import traceback
-from collections.abc import Sequence
-from typing import Final, get_type_hints
+from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
+from datetime import datetime
+from functools import partial
+from itertools import chain
+from types import MappingProxyType
+from typing import Final, Protocol, get_type_hints
 
+import anyio
 import orjson
 from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile, status
 from fastapi.responses import ORJSONResponse
+from pydantic import TypeAdapter
 
 import litellm
-from litellm._logging import verbose_proxy_logger
+from litellm.constants import MODEL_GROUP_ALIAS_RESOLVED_SCOPE_KEY
+from litellm.images.streaming import (
+    AsyncImageStream,
+    completed_image_events,
+    image_event_sse_frame,
+    image_generation_stream_requested,
+    image_response_from_completed_event,
+    image_stream_requested,
+    is_completed_image_event,
+)
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_str_from_messages,
 )
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
-from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+from litellm.proxy.common_request_processing import (
+    ProxyBaseLLMRequestProcessing,
+    create_response,
+    hierarchical_router_settings_updates,
+    log_llm_api_exception,
+    resolve_litellm_call_id,
+)
 from litellm.proxy.common_utils.http_parsing_utils import (
     coerce_numeric_form_fields,
     numeric_form_fields,
+    resolve_inference_model,
 )
 from litellm.proxy.common_utils.openai_error_payload import (
     error_status_code,
+    litellm_call_id_headers,
     openai_error_param,
     openai_error_type,
 )
 from litellm.proxy.route_llm_request import route_request
 from litellm.types.images.main import ImageEditRequestParams
 from litellm.types.llms.openai import ChatCompletionUserMessage
+from litellm.types.utils import CallTypes, ImageResponse
 
 router: Final = APIRouter()
+_IMAGE_GENERATION_MODEL_ADAPTER: Final[TypeAdapter[object]] = TypeAdapter(object)
 
 IMAGE_EDIT_NUMERIC_FORM_FIELDS: Final = numeric_form_fields(get_type_hints(ImageEditRequestParams))
+IMAGE_EDIT_OPTIONAL_FIELD_DEFAULTS: Final = MappingProxyType({"prompt": None, "image": None})
+
+IMAGE_ARRAY_FIELD: Final = "image[]"
+MASK_ARRAY_FIELD: Final = "mask[]"
+BRACKETED_FILE_FIELDS: Final = frozenset({IMAGE_ARRAY_FIELD, MASK_ARRAY_FIELD})
+
+
+class _PostCallSuccessHook(Protocol):
+    @property
+    def post_call_success_hook(self) -> Callable[..., Awaitable[object]]: ...
+
+
+def _post_call_success_hook_of(proxy_logging: _PostCallSuccessHook) -> Callable[..., Awaitable[object]]:
+    return proxy_logging.post_call_success_hook
+
+
+def _generation_streams(request_data: Mapping[str, object]) -> bool:
+    return image_generation_stream_requested(request_data.get("stream"), request_data.get("extra_body"))
+
+
+async def image_event_sse_stream(
+    response: ImageResponse | AsyncImageStream,
+    user_api_key_dict: UserAPIKeyAuth,
+    request_data: dict[str, object],
+    request: Request | None = None,
+    *,
+    event_prefix: str,
+) -> AsyncGenerator[str, None]:
+    """Answer a streamed image request with the provider's events as server-sent events.
+
+    The finished image always goes through `post_call_success_hook` before it is sent. Partial images are
+    held back when a post-call guardrail applies, since only the finished image can be checked."""
+    from litellm.proxy.proxy_server import openai_sse_error_frame, proxy_logging_obj
+
+    async def checked_completed_frames(image_response: ImageResponse, provider_frame: str | None) -> tuple[str, ...]:
+        unchecked: Final = image_response.model_dump()
+        checked: Final = await _post_call_success_hook_of(proxy_logging_obj)(
+            data=request_data, user_api_key_dict=user_api_key_dict, response=image_response
+        )
+        served: Final = (
+            checked
+            if isinstance(checked, ImageResponse)
+            else image_response
+            if checked is None
+            else ImageResponse.model_validate(checked)
+        )
+        if provider_frame is not None and served.model_dump() == unchecked:
+            return (provider_frame,)
+        return tuple(
+            image_event_sse_frame(event) for event in completed_image_events(served, event_prefix=event_prefix)
+        )
+
+    try:
+        if isinstance(response, ImageResponse):
+            for frame in await checked_completed_frames(response, None):
+                yield frame
+            return
+        guarded: Final = ProxyBaseLLMRequestProcessing(data=request_data)._has_post_call_guardrails_for_passthrough()  # pyright: ignore[reportPrivateUsage]  # the gate post_call_success_hook itself applies
+        async for event in response:
+            if is_completed_image_event(event):
+                for frame in await checked_completed_frames(
+                    image_response_from_completed_event(event), image_event_sse_frame(event)
+                ):
+                    yield frame
+            elif not guarded:
+                yield image_event_sse_frame(event)
+    except Exception as stream_error:  # noqa: BLE001  # stream boundary: a failure ends the SSE body as an error event
+        replacement: Final = await proxy_logging_obj.post_call_failure_hook(
+            user_api_key_dict=user_api_key_dict,
+            original_exception=stream_error,
+            request_data=request_data,
+        )
+        yield openai_sse_error_frame(stream_error if replacement is None else replacement)
+    finally:
+        if isinstance(response, AsyncImageStream):
+            with anyio.CancelScope(shield=True):
+                await response.aclose()
 
 
 async def uploadfile_to_bytesio(upload: UploadFile) -> io.BytesIO:
@@ -91,11 +192,12 @@ async def image_generation(
         version,
     )
 
-    data = {}
+    litellm_call_id: Final = resolve_litellm_call_id(request.headers.get("x-litellm-call-id"))
+    data = {"litellm_call_id": litellm_call_id}
     try:
         # Use orjson to parse JSON data, orjson speeds up requests significantly
         body: Final = await request.body()
-        data = orjson.loads(body)
+        data = orjson.loads(body) | data
 
         # Include original request and headers in the data
         data = await add_litellm_data_to_request(
@@ -110,20 +212,31 @@ async def image_generation(
         if isinstance(model, str):
             reject_url_valued_destination("model", model)
 
-        data["model"] = (
-            model
-            or general_settings.get("image_generation_model", None)  # server default
-            or user_model  # model name passed via cli args
-            or data.get("model", None)  # default passed in http request
+        streams: Final = _generation_streams(data)
+        if streams:
+            data["stream"] = True
+        data["model"] = resolve_inference_model(
+            data.get("model"), general_settings, user_model, model, kind="image_generation"
         )
-        if user_model:
-            data["model"] = user_model
 
         ### MODEL ALIAS MAPPING ###
         # check if model name in model alias map
         # get the actual model name
         if data["model"] in litellm.model_alias_map:
             data["model"] = litellm.model_alias_map[data["model"]]
+
+        if llm_router is not None:
+            requested_model: Final = _IMAGE_GENERATION_MODEL_ADAPTER.validate_python(data.get("model"))
+            data.update(
+                await hierarchical_router_settings_updates(
+                    requested_model=requested_model,
+                    user_api_key_dict=user_api_key_dict,
+                    llm_router=llm_router,
+                    proxy_config=proxy_config,
+                    proxy_logging_obj=proxy_logging_obj,
+                    apply_model_group_alias=request.scope.get(MODEL_GROUP_ALIAS_RESOLVED_SCOPE_KEY) is not True,
+                )
+            )
 
         ### CALL HOOKS ### - modify incoming data / reject request before calling the model
         prompt_value: Final = data.get("prompt")
@@ -143,70 +256,90 @@ async def image_generation(
             data["prompt"] = get_str_from_messages(messages)
         data.pop("messages", None)
 
+        if "prompt" in data:
+            logging_obj, data = litellm.utils.function_setup(
+                original_function="aimage_generation",
+                rules_obj=litellm.utils.Rules(),
+                start_time=datetime.now(),  # noqa: DTZ005  # Logging subtracts it from naive end times
+                is_async_call=True,
+                **data,
+            )
+            data["litellm_logging_obj"] = logging_obj
+
         ## ROUTE TO CORRECT ENDPOINT ##
         llm_call: Final = await route_request(
             data=data,
             route_type="aimage_generation",
             llm_router=llm_router,
             user_model=user_model,
+            user_api_key_dict=user_api_key_dict,
         )
-        response = await llm_call
+        generated: Final = await llm_call
 
         ### ALERTING ###
-        asyncio.create_task(
-            proxy_logging_obj.update_request_status(litellm_call_id=data.get("litellm_call_id", ""), status="success")
-        )
+        asyncio.create_task(proxy_logging_obj.update_request_status(litellm_call_id=litellm_call_id, status="success"))
+
+        async def response_headers(served: object) -> dict[str, str]:
+            hidden_params: Final = getattr(served, "_hidden_params", {}) or {}
+            # Call response headers hook (matches base_process_llm_request behavior)
+            callback_headers: Final = await proxy_logging_obj.post_call_response_headers_hook(
+                data=data,
+                user_api_key_dict=user_api_key_dict,
+                response=served,
+                request_headers=dict(request.headers),
+            )
+            return {
+                **ProxyBaseLLMRequestProcessing.get_custom_headers(
+                    user_api_key_dict=user_api_key_dict,
+                    model_id=hidden_params.get("model_id", None) or "",
+                    cache_key=hidden_params.get("cache_key", None) or "",
+                    api_base=hidden_params.get("api_base", None) or "",
+                    version=version,
+                    response_cost=hidden_params.get("response_cost", None) or "",
+                    model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
+                    call_id=hidden_params.get("litellm_call_id", None) or "",
+                    request_data=data,
+                    hidden_params=hidden_params,
+                ),
+                **(callback_headers or {}),
+            }
+
+        if isinstance(generated, AsyncImageStream) or (streams and isinstance(generated, ImageResponse)):
+            return await create_response(
+                generator=image_event_sse_stream(
+                    response=generated,
+                    user_api_key_dict=user_api_key_dict,
+                    request_data=data,
+                    event_prefix="image_generation",
+                ),
+                media_type="text/event-stream",
+                headers=await response_headers(generated),
+                request=request,
+                general_settings=general_settings,
+            )
 
         ### CALL HOOKS ### - modify outgoing data (guardrails, otel, etc.)
-        response = await proxy_logging_obj.post_call_success_hook(
-            data=data, user_api_key_dict=user_api_key_dict, response=response
+        response: Final = await _post_call_success_hook_of(proxy_logging_obj)(
+            data=data, user_api_key_dict=user_api_key_dict, response=generated
         )
 
-        ### RESPONSE HEADERS ###
-        hidden_params: Final = getattr(response, "_hidden_params", {}) or {}
-        model_id: Final = hidden_params.get("model_id", None) or ""
-        cache_key: Final = hidden_params.get("cache_key", None) or ""
-        api_base: Final = hidden_params.get("api_base", None) or ""
-        response_cost: Final = hidden_params.get("response_cost", None) or ""
-        litellm_call_id: Final = hidden_params.get("litellm_call_id", None) or ""
-
-        fastapi_response.headers.update(
-            ProxyBaseLLMRequestProcessing.get_custom_headers(
-                user_api_key_dict=user_api_key_dict,
-                model_id=model_id,
-                cache_key=cache_key,
-                api_base=api_base,
-                version=version,
-                response_cost=response_cost,
-                model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
-                call_id=litellm_call_id,
-                request_data=data,
-                hidden_params=hidden_params,
-            )
-        )
-
-        # Call response headers hook (matches base_process_llm_request behavior)
-        callback_headers: Final = await proxy_logging_obj.post_call_response_headers_hook(
-            data=data,
-            user_api_key_dict=user_api_key_dict,
-            response=response,
-            request_headers=dict(request.headers),
-        )
-        if callback_headers:
-            fastapi_response.headers.update(callback_headers)
+        fastapi_response.headers.update(await response_headers(response))
 
         return response
     except Exception as e:
         await proxy_logging_obj.post_call_failure_hook(
-            user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
+            user_api_key_dict=user_api_key_dict,
+            original_exception=e,
+            request_data=data,
+            dispatched_call_type=CallTypes.aimage_generation.value,
         )
-        verbose_proxy_logger.error("litellm.proxy.proxy_server.image_generation(): Exception occured - %s", e)
-        verbose_proxy_logger.debug(traceback.format_exc())
+        log_llm_api_exception(e, litellm_call_id)
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "message", str(e)),
                 type=openai_error_type(e, error_status_code(e, status.HTTP_400_BAD_REQUEST)),
                 param=openai_error_param(e),
+                headers=litellm_call_id_headers(litellm_call_id),
                 code=error_status_code(e, status.HTTP_400_BAD_REQUEST),
             )
         else:
@@ -215,6 +348,7 @@ async def image_generation(
                 message=getattr(e, "message", error_msg),
                 type=openai_error_type(e, error_status_code(e, 500)),
                 param=openai_error_param(e),
+                headers=litellm_call_id_headers(litellm_call_id),
                 openai_code=getattr(e, "code", None),
                 code=error_status_code(e, 500),
             )
@@ -241,9 +375,9 @@ async def image_edit_api(
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     image: list[UploadFile] | None = File(None),
-    image_array: list[UploadFile] | None = File(None, alias="image[]"),
+    image_array: list[UploadFile] | None = File(None, alias=IMAGE_ARRAY_FIELD),
     mask: list[UploadFile] | None = File(None),
-    mask_array: list[UploadFile] | None = File(None, alias="mask[]"),
+    mask_array: list[UploadFile] | None = File(None, alias=MASK_ARRAY_FIELD),
     model: str | None = None,
 ):
     """
@@ -253,7 +387,7 @@ async def image_edit_api(
     curl -s -D >(grep -i x-request-id >&2) \
     -o >(jq -r '.data[0].b64_json' | base64 --decode > gift-basket.png) \
     -X POST "http://localhost:4000/v1/images/edits" \
-    -H "Authorization: Bearer sk-1234" \
+    -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
         -F "model=gpt-image-1" \
         -F "image[]=@soap.png" \
         -F 'prompt=Create a studio ghibli image of this'
@@ -274,12 +408,11 @@ async def image_edit_api(
     # The validation will be done at the model level if image is truly required
 
     from litellm.proxy.proxy_server import (
-        _read_request_body,
         general_settings,
         llm_router,
         proxy_config,
         proxy_logging_obj,
-        select_data_generator,
+        read_request_body,
         user_api_base,
         user_max_tokens,
         user_model,
@@ -291,12 +424,17 @@ async def image_edit_api(
     #########################################################
     # Read request body and convert UploadFiles to BytesIO
     #########################################################
-    data: Final = dict(
-        coerce_numeric_form_fields(
-            parsed_body=await _read_request_body(request=request),
-            numeric_fields=IMAGE_EDIT_NUMERIC_FORM_FIELDS,
-        )
+    form_fields: Final = coerce_numeric_form_fields(
+        parsed_body=await read_request_body(request=request),
+        numeric_fields=IMAGE_EDIT_NUMERIC_FORM_FIELDS,
     )
+    data: Final = {
+        key: value
+        for key, value in chain(IMAGE_EDIT_OPTIONAL_FIELD_DEFAULTS.items(), form_fields.items())
+        if key not in BRACKETED_FILE_FIELDS
+    }
+    if "stream" in data:
+        data["stream"] = image_stream_requested(data["stream"])
     image_files: Final = await batch_to_bytesio(image)
     mask_files: Final = await batch_to_bytesio(mask)
     if image_files:
@@ -311,16 +449,6 @@ async def image_edit_api(
                 detail=f"'{_field}' must be provided as a multipart file upload, not a string.",
             )
 
-    # Ensure prompt exists in data (default to None for models that don't require it)
-    if "prompt" not in data:
-        data["prompt"] = None
-
-    data["model"] = (
-        model
-        or general_settings.get("image_generation_model", None)  # server default
-        or user_model  # model name passed via cli args
-        or data.get("model", None)  # default passed in http request
-    )
     #########################################################
     # Process request
     #########################################################
@@ -336,8 +464,8 @@ async def image_edit_api(
             llm_router=llm_router,
             general_settings=general_settings,
             proxy_config=proxy_config,
-            select_data_generator=select_data_generator,
-            model=None,
+            select_data_generator=partial(image_event_sse_stream, event_prefix="image_edit"),
+            model=model,
             user_model=user_model,
             user_temperature=user_temperature,
             user_request_timeout=user_request_timeout,
@@ -346,7 +474,7 @@ async def image_edit_api(
             version=version,
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,

@@ -7,19 +7,22 @@ FT.SEARCH KNN query itself via redis-py instead of shaping an httpx request.
 Documents are HASHes indexed by an FT index named after the vector_store_id.
 """
 
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Generator, Mapping, Sequence
+from contextlib import contextmanager
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, NoReturn
+from typing import TYPE_CHECKING, Final, NoReturn, Protocol
 
 import httpx
-from pydantic import BaseModel, ConfigDict
+from pydantic import ConfigDict
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import attribute_items, require_attributes
 from litellm.llms.base_llm.vector_store.transformation import (
     BaseDirectVectorStoreConfig,
     VectorStoreEmbeddingExecutor,
 )
 from litellm.llms.valkey.common_utils import build_valkey_url, pack_vector
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.utils import EmbeddingResponse
 from litellm.types.vector_stores import (
     VectorStoreCreateOptionalRequestParams,
@@ -32,7 +35,6 @@ from litellm.types.vector_stores import (
 if TYPE_CHECKING:
     from redis import Redis
     from redis.asyncio import Redis as AsyncRedis
-    from redis.commands.search.document import Document
     from redis.commands.search.query import Query
     from redis.commands.search.result import Result
 
@@ -48,7 +50,7 @@ DEFAULT_EMBEDDING_FIELD_NAME: Final = "embedding"
 DEFAULT_TEXT_FIELD_NAME: Final = "text"
 DISTANCE_FIELD_NAME: Final = "vector_distance"
 
-_EMPTY_EMBEDDING_CONFIG: Final = MappingProxyType({})
+_EMPTY_EMBEDDING_CONFIG: Final[Mapping[str, object]] = MappingProxyType({})
 _REDIS_INSTALL_HINT: Final = (
     "The Valkey vector store requires the 'redis' package. Run 'pip install redis' to install it."
 )
@@ -79,7 +81,33 @@ def _import_query() -> "type[Query]":
     return RedisQuery
 
 
-class _ValkeySearchParams(BaseModel):
+class _DistanceScoredDocument(Protocol):
+    @property
+    def vector_distance(self) -> str: ...
+
+
+@contextmanager
+def _valkey_search_errors(vector_store_id: str) -> Generator[None]:
+    from redis.exceptions import AuthenticationError, AuthorizationError, ConnectionError, TimeoutError
+
+    try:
+        yield
+    except AuthenticationError as error:
+        raise litellm.AuthenticationError(message=str(error), model=vector_store_id, llm_provider="valkey") from error
+    except AuthorizationError as error:
+        raise litellm.PermissionDeniedError(
+            message=str(error),
+            model=vector_store_id,
+            llm_provider="valkey",
+            response=httpx.Response(403, request=httpx.Request("FT.SEARCH", "valkey://vector-store")),
+        ) from error
+    except TimeoutError as error:
+        raise litellm.Timeout(message=str(error), model=vector_store_id, llm_provider="valkey") from error
+    except ConnectionError as error:
+        raise litellm.APIConnectionError(message=str(error), model=vector_store_id, llm_provider="valkey") from error
+
+
+class _ValkeySearchParams(LiteLLMBaseModel):
     """Typed view over the vector store's litellm_params; unrelated keys are ignored."""
 
     model_config = ConfigDict(frozen=True, extra="ignore")
@@ -184,12 +212,10 @@ class ValkeyVectorStoreConfig(BaseDirectVectorStoreConfig):
         return query_cls(knn_expr).return_fields(text_field, DISTANCE_FIELD_NAME).paging(0, k).dialect(2)
 
     @staticmethod
-    def _to_result(doc: "Document", text_field: str) -> VectorStoreSearchResult:
-        content: Final = [  # mutable-ok: VectorStoreSearchResult declares a list of content parts
-            VectorStoreResultContent(text=str(getattr(doc, text_field, "")), type="text")
-        ]
+    def _to_result(doc: object, text_field: str) -> VectorStoreSearchResult:
+        content: Final = [VectorStoreResultContent(text=str(getattr(doc, text_field, "")), type="text")]
         return VectorStoreSearchResult(
-            score=1.0 - float(getattr(doc, DISTANCE_FIELD_NAME)),
+            score=1.0 - float(require_attributes(doc, _DistanceScoredDocument, DISTANCE_FIELD_NAME).vector_distance),
             content=content,
             file_id=getattr(doc, "id", None),
             filename=getattr(doc, "id", None),
@@ -197,7 +223,7 @@ class ValkeyVectorStoreConfig(BaseDirectVectorStoreConfig):
 
     @classmethod
     def _to_response(cls, search_result: "Result", query_text: str, text_field: str) -> VectorStoreSearchResponse:
-        docs: Final = getattr(search_result, "docs", None) or ()
+        docs: Final = attribute_items(search_result, "docs")
         data: Final = sorted(
             (cls._to_result(doc, text_field) for doc in docs),
             key=lambda result: result.get("score") or 0.0,
@@ -235,14 +261,15 @@ class ValkeyVectorStoreConfig(BaseDirectVectorStoreConfig):
             if embedding_executor is not None
             else self.embedding_fn(
                 model=params.require_embedding_model(),
-                input=[query_text],  # mutable-ok: the injected embedding callable requires list input
+                input=[query_text],
                 **(params.litellm_embedding_config or _EMPTY_EMBEDDING_CONFIG),
             )
         )
-        vec_params: Final = {"vec": pack_vector(embedding_response.data[0]["embedding"])}  # mutable-ok: redis-py API
+        vec_params: Final = {"vec": pack_vector(embedding_response.data[0]["embedding"])}
 
         if self.sync_client is not None:
-            raw: Final = self.sync_client.ft(vector_store_id).search(knn, query_params=vec_params)
+            with _valkey_search_errors(vector_store_id):
+                raw: Final = self.sync_client.ft(vector_store_id).search(knn, query_params=vec_params)
             return self._to_response(raw, query_text, params.text_field)
 
         connect_timeout, op_timeout = self._socket_timeouts(timeout)
@@ -252,7 +279,8 @@ class ValkeyVectorStoreConfig(BaseDirectVectorStoreConfig):
             socket_timeout=op_timeout,
         )
         try:
-            raw_result: Final = client.ft(vector_store_id).search(knn, query_params=vec_params)
+            with _valkey_search_errors(vector_store_id):
+                raw_result: Final = client.ft(vector_store_id).search(knn, query_params=vec_params)
             return self._to_response(raw_result, query_text, params.text_field)
         finally:
             client.close()
@@ -283,16 +311,17 @@ class ValkeyVectorStoreConfig(BaseDirectVectorStoreConfig):
             if embedding_executor is not None
             else await self.aembedding_fn(
                 model=params.require_embedding_model(),
-                input=[query_text],  # mutable-ok: the injected embedding callable requires list input
+                input=[query_text],
                 **(params.litellm_embedding_config or _EMPTY_EMBEDDING_CONFIG),
             )
         )
-        vec_params: Final = {"vec": pack_vector(embedding_response.data[0]["embedding"])}  # mutable-ok: redis-py API
+        vec_params: Final = {"vec": pack_vector(embedding_response.data[0]["embedding"])}
 
         if self.async_client is not None:
-            raw: Final = await self.async_client.ft(vector_store_id).search(  # pyright: ignore[reportGeneralTypeIssues]  # types-redis 4.6 stubs shadow redis 5.3.1 and type the async client's ft() as the sync Search, so search() returns a non-awaitable Result; it is a coroutine at runtime
-                knn, query_params=vec_params
-            )
+            with _valkey_search_errors(vector_store_id):
+                raw: Final = await self.async_client.ft(vector_store_id).search(  # pyright: ignore[reportGeneralTypeIssues]  # types-redis 4.6 stubs shadow redis 5.3.1 and type the async client's ft() as the sync Search, so search() returns a non-awaitable Result; it is a coroutine at runtime
+                    knn, query_params=vec_params
+                )
             return self._to_response(raw, query_text, params.text_field)
 
         connect_timeout, op_timeout = self._socket_timeouts(timeout)
@@ -302,9 +331,10 @@ class ValkeyVectorStoreConfig(BaseDirectVectorStoreConfig):
             socket_timeout=op_timeout,
         )
         try:
-            raw_result: Final = await client.ft(vector_store_id).search(  # pyright: ignore[reportGeneralTypeIssues]  # types-redis 4.6 stubs shadow redis 5.3.1 and type the async client's ft() as the sync Search, so search() returns a non-awaitable Result; it is a coroutine at runtime
-                knn, query_params=vec_params
-            )
+            with _valkey_search_errors(vector_store_id):
+                raw_result: Final = await client.ft(vector_store_id).search(  # pyright: ignore[reportGeneralTypeIssues]  # types-redis 4.6 stubs shadow redis 5.3.1 and type the async client's ft() as the sync Search, so search() returns a non-awaitable Result; it is a coroutine at runtime
+                    knn, query_params=vec_params
+                )
             return self._to_response(raw_result, query_text, params.text_field)
         finally:
             await client.aclose()

@@ -10,16 +10,21 @@ Has 4 methods:
 
 import asyncio
 import json
+from collections.abc import Iterable, Sequence
 from contextlib import suppress
 from typing import Final
+
+from pydantic import TypeAdapter
 
 from litellm._logging import print_verbose, verbose_logger
 
 from .base_cache import BaseCache
 
+_DECODED_BLOB: Final = TypeAdapter(object)
+
 
 class AzureBlobCache(BaseCache):
-    def __init__(self, account_url, container) -> None:
+    def __init__(self, account_url: str | None, container: str | None) -> None:
         from azure.core.exceptions import ResourceExistsError
         from azure.identity import DefaultAzureCredential
         from azure.identity.aio import (
@@ -40,7 +45,7 @@ class AzureBlobCache(BaseCache):
         with suppress(ResourceExistsError):
             self.container_client.create_container()
 
-    def set_cache(self, key, value, **kwargs) -> None:
+    def set_cache(self, key: object, value: object, **kwargs: object) -> None:
         print_verbose(f"LiteLLM SET Cache - Azure Blob. Key={key}. Value={value}")
         serialized_value: Final = json.dumps(value)
         try:
@@ -49,7 +54,7 @@ class AzureBlobCache(BaseCache):
             # NON blocking - notify users Azure Blob is throwing an exception
             print_verbose(f"LiteLLM set_cache() - Got exception from Azure Blob: {e}")
 
-    async def async_set_cache(self, key, value, **kwargs) -> None:
+    async def async_set_cache(self, key: object, value: object, **kwargs: object) -> None:
         print_verbose(f"LiteLLM SET Cache - Azure Blob. Key={key}. Value={value}")
         serialized_value: Final = json.dumps(value)
         try:
@@ -58,14 +63,14 @@ class AzureBlobCache(BaseCache):
             # NON blocking - notify users Azure Blob is throwing an exception
             print_verbose(f"LiteLLM set_cache() - Got exception from Azure Blob: {e}")
 
-    def get_cache(self, key, **kwargs):
+    def get_cache(self, key: object, **kwargs: object):
         from azure.core.exceptions import ResourceNotFoundError
 
         try:
             print_verbose(f"Get Azure Blob Cache: key: {key}")
             as_bytes: Final = self.container_client.download_blob(key).readall()
             as_str: Final = as_bytes.decode("utf-8")
-            cached_response: Final = json.loads(as_str)
+            cached_response: Final = _DECODED_BLOB.validate_python(json.loads(as_str))
 
             verbose_logger.debug(
                 "Got Azure Blob Cache: key: %s, cached_response %s. Type Response %s",
@@ -78,7 +83,7 @@ class AzureBlobCache(BaseCache):
         except ResourceNotFoundError:
             return None
 
-    async def async_get_cache(self, key, **kwargs):
+    async def async_get_cache(self, key: object, **kwargs: object):
         from azure.core.exceptions import ResourceNotFoundError
 
         try:
@@ -86,7 +91,7 @@ class AzureBlobCache(BaseCache):
             blob: Final = await self.async_container_client.download_blob(key)
             as_bytes: Final = await blob.readall()
             as_str: Final = as_bytes.decode("utf-8")
-            cached_response: Final = json.loads(as_str)
+            cached_response: Final = _DECODED_BLOB.validate_python(json.loads(as_str))
             verbose_logger.debug(
                 "Got Azure Blob Cache: key: %s, cached_response %s. Type Response %s",
                 key,
@@ -105,7 +110,7 @@ class AzureBlobCache(BaseCache):
         self.container_client.close()
         await self.async_container_client.close()
 
-    async def async_set_cache_pipeline(self, cache_list, **kwargs) -> None:
+    async def async_set_cache_pipeline(self, cache_list: Iterable[Sequence[object]], **kwargs: object) -> None:
         tasks: Final = []
         for val in cache_list:
             tasks.append(self.async_set_cache(val[0], val[1], **kwargs))

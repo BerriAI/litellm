@@ -5,6 +5,7 @@ Provides guardrail-agnostic compliance validation based on guardrail modes
 and execution results rather than specific guardrail names.
 """
 
+from collections.abc import Mapping, Sequence
 from typing import Final
 
 from litellm.types.proxy.compliance_endpoints import (
@@ -26,9 +27,11 @@ class ComplianceChecker:
 
     def __init__(self, data: ComplianceCheckRequest):
         self.data = data
-        self.guardrails = data.guardrail_information or []
+        self.guardrails: tuple[Mapping[object, object], ...] = tuple(
+            g for g in data.guardrail_information or () if g.get("guardrail_status") != "not_run"
+        )
 
-    def _get_guardrails_by_mode(self, mode: str) -> list[dict]:
+    def _get_guardrails_by_mode(self, mode: str) -> list[Mapping[object, object]]:
         """
         Get all guardrails that ran in a specific mode.
 
@@ -79,7 +82,7 @@ class ComplianceChecker:
             return all(_branch_runs_in_mode(branch) for branch in [default, *tag_branches])
         return False
 
-    def _has_guardrail_intervention(self, guardrails: list[dict]) -> bool:
+    def _has_guardrail_intervention(self, guardrails: Sequence[Mapping[object, object]]) -> bool:
         """Check if any guardrail intervened (blocked/masked content)."""
         for g in guardrails:
             status = g.get("guardrail_status", "")
@@ -87,7 +90,7 @@ class ComplianceChecker:
                 return True
         return False
 
-    def _all_guardrails_passed(self, guardrails: list[dict]) -> bool:
+    def _all_guardrails_passed(self, guardrails: Sequence[Mapping[object, object]]) -> bool:
         """Check if all guardrails passed (no issues detected)."""
         if not guardrails:
             return False
@@ -128,7 +131,7 @@ class ComplianceChecker:
         has_guardrails: Final = len(self.guardrails) > 0
         audit_complete: Final = has_user and has_model and has_timestamp and has_guardrails
 
-        missing: Final = []
+        missing: Final[list[str]] = []
         if not has_user:
             missing.append("user_id")
         if not has_model:
@@ -191,7 +194,7 @@ class ComplianceChecker:
         has_guardrails: Final = len(self.guardrails) > 0
         audit_complete: Final = has_user and has_model and has_timestamp and has_guardrails
 
-        missing: Final = []
+        missing: Final[list[str]] = []
         if not has_user:
             missing.append("user_id")
         if not has_model:

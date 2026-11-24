@@ -9,14 +9,7 @@ Has 4 methods:
 """
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Final
-
-if TYPE_CHECKING:
-    from opentelemetry.trace import Span as _Span
-
-    Span = _Span | Any
-else:
-    Span = Any
+from typing import Final
 
 
 class BaseCache(ABC):
@@ -32,26 +25,26 @@ class BaseCache(ABC):
                 return self.default_ttl
         return self.default_ttl
 
-    def set_cache(self, key, value, **kwargs):
+    def set_cache(self, key, value: object, **kwargs) -> None:
         raise NotImplementedError
 
-    async def async_set_cache(self, key, value, **kwargs):
+    async def async_set_cache(self, key, value: object, **kwargs) -> object:
         raise NotImplementedError
 
     @abstractmethod
-    async def async_set_cache_pipeline(self, cache_list, **kwargs):
+    async def async_set_cache_pipeline(self, cache_list: list[tuple[str, object]], **kwargs) -> None:
         pass
 
-    def get_cache(self, key, **kwargs):
+    def get_cache(self, key, **kwargs) -> object:
         raise NotImplementedError
 
-    async def async_get_cache(self, key, **kwargs):
+    async def async_get_cache(self, key, **kwargs) -> object:
         raise NotImplementedError
 
-    async def batch_cache_write(self, key, value, **kwargs):
+    async def batch_cache_write(self, key, value: object, **kwargs) -> None:
         raise NotImplementedError
 
-    async def disconnect(self):
+    async def disconnect(self) -> None:
         raise NotImplementedError
 
     async def test_connection(self) -> dict:

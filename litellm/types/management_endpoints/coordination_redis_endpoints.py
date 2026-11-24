@@ -4,14 +4,14 @@ Types and field definitions for coordination Redis settings management endpoints
 
 from typing import Final, Literal
 
-from pydantic import BaseModel
+from litellm.types.llms.base import LiteLLMBaseModel
 
 CoordinationRedisSection = Literal["connection", "cluster", "sentinel"]
 
 CoordinationRedisSource = Literal["coordination_redis", "cache_backend", "environment"]
 
 
-class CoordinationRedisSettingsField(BaseModel):
+class CoordinationRedisSettingsField(LiteLLMBaseModel):
     field_name: str
     field_type: str
     field_value: object | None = None

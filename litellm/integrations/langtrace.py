@@ -1,14 +1,24 @@
 import json
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
-from litellm.proxy._types import SpanAttributes
+from litellm.litellm_core_utils.safe_json_dumps import jsonable_or_str
+from litellm.types.integrations.otel_span_attributes import SpanAttributes
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    Span = _Span | Any
+    Span = _Span
 else:
     Span = Any
+
+LANGTRACE_DEFAULT_HOST: Final = "https://app.langtrace.ai"
+LANGTRACE_TRACE_PATH: Final = "/api/trace"
+
+
+def langtrace_trace_endpoint(api_host: str | None) -> str:
+    host: Final = (api_host or LANGTRACE_DEFAULT_HOST).rstrip("/")
+    return host if host.endswith(LANGTRACE_TRACE_PATH) else host + LANGTRACE_TRACE_PATH
 
 
 class LangtraceAttributes:
@@ -16,7 +26,7 @@ class LangtraceAttributes:
     This class is used to save trace attributes to Langtrace's spans
     """
 
-    def set_langtrace_attributes(self, span: Span, kwargs, response_obj):
+    def set_langtrace_attributes(self, span: Span, kwargs, response_obj: object):
         """
         This function is used to log the event to Langtrace
         """
@@ -28,7 +38,7 @@ class LangtraceAttributes:
         self.set_response_attributes(span, response_obj)
         self.set_usage_attributes(span, response_obj)
 
-    def set_request_attributes(self, span: Span, kwargs, vendor):
+    def set_request_attributes(self, span: Span, kwargs: Mapping[str, object], vendor: object):
         """
         This function is used to get span attributes for the LLM request
         """
@@ -52,7 +62,7 @@ class LangtraceAttributes:
         if prompts:
             span.add_event(
                 name="gen_ai.content.prompt",
-                attributes={SpanAttributes.LLM_PROMPTS.value: json.dumps(prompts)},
+                attributes={SpanAttributes.LLM_PROMPTS.value: json.dumps(prompts, default=jsonable_or_str)},
             )
 
         self.set_span_attributes(span, span_attributes)

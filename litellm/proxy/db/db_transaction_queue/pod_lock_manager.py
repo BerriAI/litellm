@@ -1,19 +1,30 @@
 import asyncio
 import json
 import logging
-from typing import TYPE_CHECKING, Any, Final
+from collections.abc import Awaitable, Callable
+from typing import TYPE_CHECKING, Any, Final, Protocol, TypeAlias
 
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.caching.redis_cache import RedisCache, log_redis_failure
 from litellm.constants import DEFAULT_CRON_JOB_LOCK_TTL_SECONDS
+from litellm.litellm_core_utils.core_helpers import has_attributes, int_of
 from litellm.proxy.db.db_transaction_queue.base_update_queue import service_logger_obj
 from litellm.types.services import ServiceTypes
 
+POD_LOCK_TARGET: Final = "pod_lock"
+
 if TYPE_CHECKING:
-    ProxyLogging = Any
+    from litellm.proxy.utils import ProxyLogging as _ProxyLogging
+
+    ProxyLogging: TypeAlias = _ProxyLogging
 else:
     ProxyLogging = Any
+
+
+class _LuaScriptRegistry(Protocol):
+    def async_register_script(self, script: str) -> Callable[..., Awaitable[object]]: ...
 
 
 class PodLockManager:
@@ -34,12 +45,13 @@ end
     def __init__(self, redis_cache: RedisCache | None = None):
         self.pod_id = str(uuid.uuid4())
         self.redis_cache = redis_cache
-        self._release_lock_script: Any | None = None
+        self._release_lock_script: Callable[..., Awaitable[object]] | None = None
 
     @staticmethod
     def get_redis_lock_key(cronjob_id: str) -> str:
         return f"cronjob_lock:{cronjob_id}"
 
+    @with_service_target(POD_LOCK_TARGET)
     async def acquire_lock(
         self,
         cronjob_id: str,
@@ -154,6 +166,7 @@ end
         except Exception as e:
             log_redis_failure(verbose_proxy_logger, logging.ERROR, f"Error releasing Redis lock for {cronjob_id}", e)
 
+    @with_service_target(POD_LOCK_TARGET)
     async def _compare_and_delete_lock(self, lock_key: str) -> int:
         """
         Atomically delete lock key only if current pod owns it.
@@ -161,7 +174,11 @@ end
         Falls back to get/delete for non-RedisCache implementations that do not
         expose Lua script registration.
         """
-        script_register: Final = getattr(self.redis_cache, "async_register_script", None)
+        script_register: Final = (
+            self.redis_cache.async_register_script
+            if has_attributes(self.redis_cache, _LuaScriptRegistry, "async_register_script")
+            else None
+        )
         if callable(script_register):
             try:
                 if self._release_lock_script is None:
@@ -170,7 +187,7 @@ end
                 # JSON-encodes the value; compare against the same encoding so
                 # the Lua equality check matches and the lock is released
                 result = await self._release_lock_script(keys=[lock_key], args=[json.dumps(self.pod_id)])
-                return int(result or 0)
+                return int_of(result or 0)
             except Exception:
                 # Lua execution failed (e.g. Redis restart cleared loaded scripts,
                 # or scripting is disabled). Reset cached script handle and fall

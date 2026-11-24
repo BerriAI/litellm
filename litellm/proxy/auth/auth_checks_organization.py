@@ -2,7 +2,7 @@
 Auth Checks for Organizations
 """
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Final
 
 from fastapi import status
@@ -133,8 +133,8 @@ def get_user_organization_info(
     return _user_organizations, _user_organization_role_mapping
 
 
-def _user_is_org_admin(
-    request_data: dict,
+def user_is_org_admin(
+    request_data: Mapping[str, object],
     user_object: LiteLLM_UserTable | None = None,
 ) -> bool:
     """
@@ -151,7 +151,7 @@ def _user_is_org_admin(
         return False
 
     # Collect candidate org IDs from both fields
-    candidate_org_ids: Final[list[str]] = []
+    candidate_org_ids: Final[list[object]] = []
     singular: Final = request_data.get("organization_id", None)
     if singular is not None:
         candidate_org_ids.append(singular)
@@ -171,6 +171,9 @@ def _user_is_org_admin(
 
     # User must be admin of ALL requested orgs, not just any one
     return all(org_id in admin_org_ids for org_id in candidate_org_ids)
+
+
+_user_is_org_admin: Final = user_is_org_admin
 
 
 TEAM_ORG_CONTEXT_ROUTES: Final = frozenset({"/team/update"})

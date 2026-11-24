@@ -4,6 +4,7 @@ Transformation logic from OpenAI /v1/embeddings format to Bedrock Cohere /invoke
 Why separate file? Make it easy to see how transformation works
 """
 
+from collections.abc import Mapping
 from typing import Final
 
 from litellm.llms.cohere.embed.transformation import CohereEmbeddingConfig
@@ -17,7 +18,7 @@ class BedrockCohereEmbeddingConfig:
     def get_supported_openai_params(self) -> list[str]:
         return ["encoding_format", "dimensions"]
 
-    def map_openai_params(self, non_default_params: dict, optional_params: dict) -> dict:
+    def map_openai_params(self, non_default_params: Mapping[str, object], optional_params: dict) -> dict:
         for k, v in non_default_params.items():
             if k == "encoding_format":
                 optional_params["embedding_types"] = [
@@ -30,7 +31,9 @@ class BedrockCohereEmbeddingConfig:
     def _is_v3_model(self, model: str) -> bool:
         return "3" in model
 
-    def _transform_request(self, model: str, input: list[str], inference_params: dict) -> CohereEmbeddingRequest:
+    def _transform_request(
+        self, model: str, input: list[str], inference_params: dict[str, object]
+    ) -> CohereEmbeddingRequest:
         transformed_request: Final = CohereEmbeddingConfig()._transform_request(model, input, inference_params)
 
         new_transformed_request: Final = CohereEmbeddingRequest(
@@ -41,3 +44,11 @@ class BedrockCohereEmbeddingConfig:
                 new_transformed_request[k] = transformed_request[k]
 
         return new_transformed_request
+
+    def transform_request(
+        self,
+        model: str,
+        input: list[str],  # mutable-ok: mirrors override contract
+        inference_params: dict[str, object],  # mutable-ok: mirrors override contract
+    ) -> CohereEmbeddingRequest:
+        return self._transform_request(model, input, inference_params)

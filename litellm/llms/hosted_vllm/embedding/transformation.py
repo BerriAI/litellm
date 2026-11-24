@@ -7,10 +7,12 @@ VLLM is OpenAI-compatible and supports embeddings via the /v1/embeddings endpoin
 Docs: https://docs.vllm.ai/en/latest/serving/openai_compatible_server.html
 """
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
+from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.secret_managers.main import get_secret_str
@@ -39,14 +41,14 @@ class HostedVLLMEmbeddingConfig(BaseEmbeddingConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: Mapping[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Validate environment and set up headers for Hosted VLLM API.
         """
@@ -69,8 +71,8 @@ class HostedVLLMEmbeddingConfig(BaseEmbeddingConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         """
@@ -81,22 +83,15 @@ class HostedVLLMEmbeddingConfig(BaseEmbeddingConfig):
             if api_base is None:
                 raise ValueError("api_base is required for hosted_vllm embeddings")
 
-        # Remove trailing slashes
-        api_base = api_base.rstrip("/")
-
-        # Ensure the URL ends with /embeddings
-        if not api_base.endswith("/embeddings"):
-            api_base = f"{api_base}/embeddings"
-
-        return api_base
+        return ensure_api_route(api_base, "embeddings")
 
     def transform_embedding_request(
         self,
         model: str,
         input: AllEmbeddingInputValues,
-        optional_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: Mapping[str, object],
+        headers: Mapping[str, object],
+    ) -> dict[str, object]:
         """
         Transform embedding request to Hosted VLLM format (OpenAI-compatible).
         """
@@ -121,9 +116,9 @@ class HostedVLLMEmbeddingConfig(BaseEmbeddingConfig):
         model_response: EmbeddingResponse,
         logging_obj: LiteLLMLoggingObj,
         api_key: str | None,
-        request_data: dict,
-        optional_params: dict,
-        litellm_params: dict,
+        request_data: Mapping[str, object],
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
     ) -> EmbeddingResponse:
         """
         Transform embedding response from Hosted VLLM format (OpenAI-compatible).
@@ -139,7 +134,7 @@ class HostedVLLMEmbeddingConfig(BaseEmbeddingConfig):
             response_type="embedding",
         )
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         """
         Get list of supported OpenAI parameters for Hosted VLLM embeddings.
         """
@@ -152,7 +147,7 @@ class HostedVLLMEmbeddingConfig(BaseEmbeddingConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
+        non_default_params: Mapping[str, object],
         optional_params: dict,
         model: str,
         drop_params: bool,

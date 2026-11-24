@@ -50,6 +50,8 @@ from __future__ import annotations
 
 import pytest
 
+from e2e_metadata import Capability, Domain, Mode, Provider, Route, Subject, meta
+
 from claude_code._env import require_proxy_client
 from claude_code.http_probe import (
     assert_tool_search_replay_shape,
@@ -67,6 +69,16 @@ BEDROCK_INVOKE_MODELS = [
 
 
 @pytest.mark.covers("llm.messages.bedrock_invoke.tool_search.nonstream.works")
+@meta(
+    Subject(
+        domain=Domain.LLM_TRANSLATION,
+        route=Route.MESSAGES,
+        providers=(Provider.BEDROCK,),
+        models=tuple(BEDROCK_INVOKE_MODELS),
+        capabilities=(Capability.TOOL_SEARCH,),
+        mode=Mode.NONSTREAM,
+    )
+)
 def test_tool_search_bedrock_invoke(compat_result):
     """Probe `/v1/messages` with a `tool_search_tool_regex_20251119`
     tool and assert the proxy + upstream accept it for every Bedrock (Invoke)
@@ -90,6 +102,16 @@ def test_tool_search_bedrock_invoke(compat_result):
 
 
 @pytest.mark.covers("llm.messages.bedrock_invoke.tool_search_history.nonstream.works")
+@meta(
+    Subject(
+        domain=Domain.LLM_TRANSLATION,
+        route=Route.MESSAGES,
+        providers=(Provider.BEDROCK,),
+        models=tuple(BEDROCK_INVOKE_MODELS),
+        capabilities=(Capability.TOOL_SEARCH,),
+        mode=Mode.NONSTREAM,
+    )
+)
 def test_tool_search_history_bedrock_invoke(compat_result):
     """Send the tool-search request, take the real assistant turn back, and
     replay it as history with the tools still declared.

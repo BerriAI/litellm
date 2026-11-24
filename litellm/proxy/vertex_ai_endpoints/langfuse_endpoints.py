@@ -21,8 +21,14 @@ import litellm
 from litellm.litellm_core_utils.url_utils import SSRFError, validate_url
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_utils.http_parsing_utils import _safe_get_request_headers
-from litellm.proxy.litellm_pre_call_utils import _get_dynamic_logging_metadata
+from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
+    _safe_get_request_headers,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    safe_get_request_headers,
+)
+from litellm.proxy.litellm_pre_call_utils import (  # noqa: F401  # legacy module exports
+    _get_dynamic_logging_metadata,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    get_dynamic_logging_metadata,
+)
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     create_pass_through_route,
 )
@@ -32,11 +38,11 @@ default_vertex_config: Final = None
 _DEFAULT_LANGFUSE_HOST: Final = "https://cloud.langfuse.com"
 
 
-def create_request_copy(request: Request):
+def create_request_copy(request: Request) -> dict[str, object]:
     return {
         "method": request.method,
         "url": str(request.url),
-        "headers": _safe_get_request_headers(request).copy(),
+        "headers": safe_get_request_headers(request).copy(),
         "cookies": request.cookies,
         "query_params": dict(request.query_params),
     }
@@ -106,7 +112,7 @@ def _get_langfuse_proxy_credentials(
     dynamic_host_supplied: bool,
     dynamic_langfuse_public_key: str | None,
     dynamic_langfuse_secret_key: str | None,
-):
+) -> tuple[object, object]:
     if dynamic_host_supplied:
         if not dynamic_langfuse_public_key or not dynamic_langfuse_secret_key:
             raise HTTPException(
@@ -126,11 +132,11 @@ def _build_langfuse_proxy_target(
     endpoint: str,
     base_target_url: str,
     dynamic_host_supplied: bool,
-):
+) -> tuple[str, dict[str, str]]:
     endpoint_path: Final = _validate_langfuse_proxy_path(endpoint)
     base_url: Final = httpx.URL(_normalize_langfuse_base_url(base_target_url))
     updated_url: Final = base_url.copy_with(path=endpoint_path)
-    custom_headers: Final = {}
+    custom_headers: Final[dict[str, str]] = {}
 
     if dynamic_host_supplied and getattr(litellm, "user_url_validation", True):
         try:
@@ -175,7 +181,7 @@ async def langfuse_proxy_route(
 
     user_api_key_dict: Final = await user_api_key_auth(request=request, api_key=f"Bearer {api_key}")
 
-    callback_settings_obj: Final[TeamCallbackMetadata | None] = _get_dynamic_logging_metadata(
+    callback_settings_obj: Final[TeamCallbackMetadata | None] = get_dynamic_logging_metadata(
         user_api_key_dict=user_api_key_dict, proxy_config=proxy_config
     )
 

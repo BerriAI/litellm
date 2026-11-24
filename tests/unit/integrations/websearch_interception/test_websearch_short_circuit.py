@@ -1,0 +1,643 @@
+"""
+Unit tests for WebSearch Short-Circuit
+
+Tests the short-circuit path that detects web-search-only /v1/messages requests
+and executes the search directly without routing through the backend LLM.
+"""
+
+import datetime
+import json
+from collections.abc import Iterator, Mapping, Sequence
+from typing import Final
+from unittest.mock import AsyncMock, patch
+
+import pytest
+import respx
+
+import litellm
+from litellm.integrations.websearch_interception.handler import (
+    WebSearchInterceptionLogger,
+)
+from litellm.messages.dispatch import MessagesResult
+
+# ---------------------------------------------------------------------------
+# Detection tests
+# ---------------------------------------------------------------------------
+
+
+class TestTryShortCircuitSearch:
+    """Tests for WebSearchInterceptionLogger.try_short_circuit_search"""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("provider", "model"),
+        [
+            ("github_copilot", "github_copilot/claude-sonnet-5.5"),
+            ("databricks", "databricks/databricks-claude-sonnet-5-5"),
+            ("databricks", "databricks/system.ai.claude-sonnet-5-5"),
+            ("dashscope", "dashscope/qwen3.7-plus"),
+        ],
+    )
+    async def test_short_circuits_single_web_search_tool(self, provider, model):
+        """Single web_search_20250305 tool → short-circuit fires"""
+        logger = WebSearchInterceptionLogger(enabled_providers=[provider])
+
+        with patch.object(
+            logger, "_execute_search", new_callable=AsyncMock
+        ) as mock_search:
+            mock_search.return_value = (
+                "Title: Result\nURL: https://example.com\nSnippet: test",
+                None,
+            )
+
+            result = await logger.try_short_circuit_search(
+                model=model,
+                messages=[
+                    {"role": "user", "content": "Search for Claude Code releases"}
+                ],
+                tools=[
+                    {"type": "web_search_20250305", "name": "web_search", "max_uses": 8}
+                ],
+                custom_llm_provider=provider,
+            )
+
+        assert result is not None
+        assert result["type"] == "message"
+        assert result["role"] == "assistant"
+        assert result["stop_reason"] == "end_turn"
+        # Native web_search_20250305 client → short-circuit emits native
+        # blocks (server_tool_use + web_search_tool_result) plus the legacy
+        # text block so Cowork / Claude Desktop citations panels populate.
+        block_types = [b["type"] for b in result["content"]]
+        assert "server_tool_use" in block_types
+        assert "web_search_tool_result" in block_types
+        assert "text" in block_types
+        text_block = next(b for b in result["content"] if b["type"] == "text")
+        assert "Result" in text_block["text"]
+        mock_search.assert_called_once_with("Search for Claude Code releases")
+
+    @pytest.mark.asyncio
+    async def test_emits_native_blocks_when_tools_already_converted(self, perplexity_search: respx.Route):
+        """Pre-request/deployment hooks convert the native tool to the LiteLLM
+        standard shape before the short-circuit runs and record that in
+        WEBSEARCH_EMIT_NATIVE_BLOCKS_KEY; the flag alone must be enough for
+        native blocks to be emitted."""
+        from litellm.integrations.websearch_interception.handler import (
+            WEBSEARCH_EMIT_NATIVE_BLOCKS_KEY,
+        )
+
+        logger: Final = WebSearchInterceptionLogger(enabled_providers=["hosted_vllm"])
+
+        result: Final = await logger.try_short_circuit_search(
+            model="hosted_vllm/some-model",
+            messages=[{"role": "user", "content": "Search for something"}],
+            tools=[
+                {
+                    "name": "litellm_web_search",
+                    "description": "Search the web for information.",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {"query": {"type": "string"}},
+                        "required": ["query"],
+                    },
+                }
+            ],
+            custom_llm_provider="hosted_vllm",
+            kwargs={WEBSEARCH_EMIT_NATIVE_BLOCKS_KEY: True},
+        )
+
+        assert perplexity_search.call_count == 1
+        assert result is not None
+        assert [b["type"] for b in result["content"]] == ["server_tool_use", "web_search_tool_result", "text"]
+        assert result["content"][0]["name"] == "web_search"
+        assert [r["url"] for r in result["content"][1]["content"]] == ["https://example.com/releases"]
+
+    @pytest.mark.asyncio
+    async def test_does_not_short_circuit_mixed_tools(self):
+        """Mix of web_search and other tools → NOT short-circuited"""
+        logger = WebSearchInterceptionLogger(enabled_providers=["github_copilot"])
+
+        result = await logger.try_short_circuit_search(
+            model="github_copilot/claude-sonnet-5.5",
+            messages=[{"role": "user", "content": "Do something"}],
+            tools=[
+                {"type": "web_search_20250305", "name": "web_search", "max_uses": 8},
+                {"name": "Read", "description": "Read a file", "input_schema": {}},
+            ],
+            custom_llm_provider="github_copilot",
+        )
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_does_not_short_circuit_no_tools(self):
+        """No tools → NOT short-circuited"""
+        logger = WebSearchInterceptionLogger(enabled_providers=["github_copilot"])
+
+        result = await logger.try_short_circuit_search(
+            model="github_copilot/claude-sonnet-5.5",
+            messages=[{"role": "user", "content": "Hello"}],
+            tools=None,
+            custom_llm_provider="github_copilot",
+        )
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_does_not_short_circuit_empty_tools(self):
+        """Empty tools list → NOT short-circuited"""
+        logger = WebSearchInterceptionLogger(enabled_providers=["github_copilot"])
+
+        result = await logger.try_short_circuit_search(
+            model="github_copilot/claude-sonnet-5.5",
+            messages=[{"role": "user", "content": "Hello"}],
+            tools=[],
+            custom_llm_provider="github_copilot",
+        )
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_does_not_short_circuit_wrong_provider(self):
+        """Provider not in enabled_providers → NOT short-circuited"""
+        logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
+
+        result = await logger.try_short_circuit_search(
+            model="github_copilot/claude-sonnet-5.5",
+            messages=[{"role": "user", "content": "Search for something"}],
+            tools=[
+                {"type": "web_search_20250305", "name": "web_search", "max_uses": 8}
+            ],
+            custom_llm_provider="github_copilot",
+        )
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_does_not_short_circuit_bedrock(self):
+        """Bedrock has native agentic loop support → NOT short-circuited.
+
+        Providers with a BaseAnthropicMessagesConfig (bedrock, vertex_ai, etc.)
+        use the agentic loop which includes a follow-up LLM synthesis step.
+        The short-circuit must not fire for them.
+        """
+        logger = WebSearchInterceptionLogger(
+            enabled_providers=["bedrock", "github_copilot"]
+        )
+
+        result = await logger.try_short_circuit_search(
+            model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            messages=[{"role": "user", "content": "Search for something"}],
+            tools=[
+                {"type": "web_search_20250305", "name": "web_search", "max_uses": 8}
+            ],
+            custom_llm_provider="bedrock",
+        )
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_does_not_short_circuit_no_messages(self):
+        """Empty messages → NOT short-circuited"""
+        logger = WebSearchInterceptionLogger(enabled_providers=["github_copilot"])
+
+        result = await logger.try_short_circuit_search(
+            model="github_copilot/claude-sonnet-5.5",
+            messages=[],
+            tools=[
+                {"type": "web_search_20250305", "name": "web_search", "max_uses": 8}
+            ],
+            custom_llm_provider="github_copilot",
+        )
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "empty_prompt",
+        [
+            "   ",
+            "Perform a web search for the query:   ",
+        ],
+    )
+    async def test_does_not_short_circuit_empty_or_whitespace_user_message(self, empty_prompt: str):
+        """User message that is whitespace or empty query → returns None without executing search."""
+        logger = WebSearchInterceptionLogger(enabled_providers=["github_copilot"])
+
+        result = await logger.try_short_circuit_search(
+            model="github_copilot/claude-sonnet-4",
+            messages=[{"role": "user", "content": empty_prompt}],
+            tools=[{"type": "web_search_20250305", "name": "web_search", "max_uses": 8}],
+            custom_llm_provider="github_copilot",
+        )
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_search_failure_returns_error_text(self):
+        """Search failure → response with error message, not exception"""
+        logger = WebSearchInterceptionLogger(enabled_providers=["github_copilot"])
+
+        with patch.object(
+            logger, "_execute_search", new_callable=AsyncMock
+        ) as mock_search:
+            mock_search.side_effect = RuntimeError("Tavily API error")
+
+            result = await logger.try_short_circuit_search(
+                model="github_copilot/claude-sonnet-5.5",
+                messages=[{"role": "user", "content": "Search for something"}],
+                tools=[
+                    {"type": "web_search_20250305", "name": "web_search", "max_uses": 8}
+                ],
+                custom_llm_provider="github_copilot",
+            )
+
+        assert result is not None
+        text_block = next(b for b in result["content"] if b["type"] == "text")
+        assert "Search failed" in text_block["text"]
+
+    @pytest.mark.asyncio
+    async def test_response_has_valid_structure(self):
+        """Synthetic response has all required AnthropicMessagesResponse fields"""
+        logger = WebSearchInterceptionLogger(enabled_providers=["github_copilot"])
+
+        with patch.object(
+            logger, "_execute_search", new_callable=AsyncMock
+        ) as mock_search:
+            mock_search.return_value = ("search results here", None)
+
+            result = await logger.try_short_circuit_search(
+                model="github_copilot/claude-sonnet-5.5",
+                messages=[{"role": "user", "content": "Search query"}],
+                tools=[{"type": "web_search_20250305", "name": "web_search"}],
+                custom_llm_provider="github_copilot",
+            )
+
+        assert result is not None
+        # Required fields
+        assert "id" in result
+        assert result["id"].startswith("msg_")
+        assert result["type"] == "message"
+        assert result["role"] == "assistant"
+        assert result["model"] == "github_copilot/claude-sonnet-5.5"
+        assert result["stop_reason"] == "end_turn"
+        assert result["stop_sequence"] is None
+        assert "usage" in result
+        assert "content" in result
+
+
+# ---------------------------------------------------------------------------
+# Query extraction tests
+# ---------------------------------------------------------------------------
+
+PERPLEXITY_SEARCH_URL: Final = "https://api.perplexity.ai/search"
+
+
+@pytest.fixture
+def perplexity_search(monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter) -> respx.Route:
+    monkeypatch.setenv("PERPLEXITYAI_API_KEY", "test-perplexity-key")
+    monkeypatch.delenv("PERPLEXITY_API_BASE", raising=False)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    return respx_mock.post(PERPLEXITY_SEARCH_URL).respond(
+        json={"results": [{"title": "Releases", "url": "https://example.com/releases", "snippet": "Release notes"}]}
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("user_message", "searched_query"),
+    [
+        ("Perform a web search for the query: litellm latest release", "litellm latest release"),
+        ('Perform a web search for the query: "litellm proxy"', '"litellm proxy"'),
+    ],
+)
+async def test_short_circuit_searches_the_query_inside_claude_codes_prompt(
+    perplexity_search: respx.Route, user_message: str, searched_query: str
+):
+    logger: Final = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
+
+    result: Final = await logger.try_short_circuit_search(
+        model="bedrock/converse/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        messages=[{"role": "user", "content": user_message}],
+        tools=[{"type": "web_search_20250305", "name": "web_search", "max_uses": 8}],
+        custom_llm_provider="bedrock",
+    )
+
+    assert perplexity_search.call_count == 1
+    assert json.loads(perplexity_search.calls.last.request.content)["query"] == searched_query
+    assert result is not None
+    server_tool_use: Final = next(block for block in result["content"] if block["type"] == "server_tool_use")
+    assert server_tool_use["input"]["query"] == searched_query
+
+
+# ---------------------------------------------------------------------------
+# Integration with entry point
+# ---------------------------------------------------------------------------
+
+
+class TestShortCircuitEntryPoint:
+    """Tests for _try_websearch_short_circuit in the /v1/messages handler"""
+
+    @pytest.mark.asyncio
+    async def test_returns_none_when_no_callbacks(self):
+        """No callbacks configured → returns None"""
+        from litellm.llms.anthropic.messages.native.handler import (
+            _try_websearch_short_circuit,
+        )
+
+        with patch("litellm.callbacks", []):
+            result = await _try_websearch_short_circuit(
+                model="test",
+                messages=[],
+                tools=[],
+                custom_llm_provider="github_copilot",
+                stream=False,
+            )
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_returns_dict_when_not_streaming(self):
+        """Non-streaming short-circuit → returns dict"""
+        from litellm.llms.anthropic.messages.native.handler import (
+            _try_websearch_short_circuit,
+        )
+
+        logger = WebSearchInterceptionLogger(enabled_providers=["github_copilot"])
+        with patch.object(
+            logger, "_execute_search", new_callable=AsyncMock
+        ) as mock_search:
+            mock_search.return_value = ("results", None)
+            with patch("litellm.callbacks", [logger]):
+                result = await _try_websearch_short_circuit(
+                    model="github_copilot/claude-sonnet-5.5",
+                    messages=[{"role": "user", "content": "search query"}],
+                    tools=[{"type": "web_search_20250305", "name": "web_search"}],
+                    custom_llm_provider="github_copilot",
+                    stream=False,
+                )
+
+        assert isinstance(result, dict)
+        text_block = next(b for b in result["content"] if b["type"] == "text")
+        assert text_block["text"] == "results"
+
+    @pytest.mark.asyncio
+    async def test_returns_stream_iterator_when_streaming(self):
+        """Streaming short-circuit → returns FakeAnthropicMessagesStreamIterator"""
+        from litellm.llms.anthropic.messages.native.fake_stream_iterator import (
+            FakeAnthropicMessagesStreamIterator,
+        )
+        from litellm.llms.anthropic.messages.native.handler import (
+            _try_websearch_short_circuit,
+        )
+
+        logger = WebSearchInterceptionLogger(enabled_providers=["github_copilot"])
+        with patch.object(
+            logger, "_execute_search", new_callable=AsyncMock
+        ) as mock_search:
+            mock_search.return_value = ("streaming results", None)
+            with patch("litellm.callbacks", [logger]):
+                result = await _try_websearch_short_circuit(
+                    model="github_copilot/claude-sonnet-5.5",
+                    messages=[{"role": "user", "content": "search query"}],
+                    tools=[{"type": "web_search_20250305", "name": "web_search"}],
+                    custom_llm_provider="github_copilot",
+                    stream=True,
+                )
+
+        assert isinstance(result, FakeAnthropicMessagesStreamIterator)
+
+        # Verify stream produces valid SSE events
+        chunks = []
+        async for chunk in result:
+            chunks.append(chunk)
+
+        assert len(chunks) > 0
+        # First chunk should be message_start
+        assert b"event: message_start" in chunks[0]
+        # Last chunk should be message_stop
+        assert b"event: message_stop" in chunks[-1]
+        # Should contain the search results text
+        all_data = b"".join(chunks)
+        assert b"streaming results" in all_data
+
+    @pytest.mark.asyncio
+    async def test_skips_non_websearch_callbacks(self):
+        """Non-WebSearchInterceptionLogger callbacks are ignored"""
+        from unittest.mock import MagicMock
+
+        from litellm.llms.anthropic.messages.native.handler import (
+            _try_websearch_short_circuit,
+        )
+
+        other_callback = MagicMock()
+        with patch("litellm.callbacks", [other_callback]):
+            result = await _try_websearch_short_circuit(
+                model="test",
+                messages=[{"role": "user", "content": "search"}],
+                tools=[{"type": "web_search_20250305", "name": "web_search"}],
+                custom_llm_provider="github_copilot",
+                stream=False,
+            )
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_uses_original_stream_not_hook_converted(self):
+        """Verify that the entry point passes original_stream to the short-circuit.
+
+        The pre-request hook converts stream=True → stream=False for the agentic
+        loop. The short-circuit must use the ORIGINAL stream value so streaming
+        callers get SSE events instead of a plain dict.
+        """
+        from litellm.llms.anthropic.messages.native.fake_stream_iterator import (
+            FakeAnthropicMessagesStreamIterator,
+        )
+        from litellm.llms.anthropic.messages.native.handler import (
+            _try_websearch_short_circuit,
+        )
+
+        logger = WebSearchInterceptionLogger(enabled_providers=["github_copilot"])
+        with patch.object(
+            logger, "_execute_search", new_callable=AsyncMock
+        ) as mock_search:
+            mock_search.return_value = ("streaming results", None)
+            with patch("litellm.callbacks", [logger]):
+                # Simulate what anthropic_messages() does: original_stream=True
+                # is passed to the short-circuit, even though the hook would have
+                # already converted stream to False in request_kwargs.
+                result = await _try_websearch_short_circuit(
+                    model="github_copilot/claude-sonnet-5.5",
+                    messages=[{"role": "user", "content": "search query"}],
+                    tools=[{"type": "web_search_20250305", "name": "web_search"}],
+                    custom_llm_provider="github_copilot",
+                    stream=True,  # original_stream, NOT the hook-converted value
+                )
+
+        # Must return a stream iterator, not a plain dict
+        assert isinstance(result, FakeAnthropicMessagesStreamIterator)
+
+    @pytest.mark.asyncio
+    async def test_short_circuits_with_provider_from_model_string(self):
+        """Provider embedded in model string (custom_llm_provider=None) should
+        still fire the short-circuit when the caller propagates the derived
+        provider.
+        """
+        from litellm.llms.anthropic.messages.native.handler import (
+            _try_websearch_short_circuit,
+        )
+
+        logger = WebSearchInterceptionLogger(enabled_providers=["github_copilot"])
+        with patch.object(
+            logger, "_execute_search", new_callable=AsyncMock
+        ) as mock_search:
+            mock_search.return_value = ("results", None)
+            with patch("litellm.callbacks", [logger]):
+                # Simulate the caller having derived custom_llm_provider from
+                # the model string before calling _try_websearch_short_circuit
+                result = await _try_websearch_short_circuit(
+                    model="github_copilot/claude-sonnet-5.5",
+                    messages=[{"role": "user", "content": "search query"}],
+                    tools=[{"type": "web_search_20250305", "name": "web_search"}],
+                    custom_llm_provider="github_copilot",
+                    stream=False,
+                )
+
+        assert result is not None
+        text_block = next(b for b in result["content"] if b["type"] == "text")
+        assert text_block["text"] == "results"
+
+
+class TestShortCircuitThroughMessagesEntryPoint:
+    """The pre-request hook renames the native tool before the short-circuit
+    runs, so only a request through anthropic_messages shows whether native
+    clients still get their server_tool_use and web_search_tool_result blocks."""
+
+    NATIVE_TOOL: Final = {"type": "web_search_20250305", "name": "web_search"}
+
+    @pytest.fixture(autouse=True)
+    def _intercept_web_search(self, perplexity_search: respx.Route) -> Iterator[respx.Route]:
+        with patch("litellm.callbacks", [WebSearchInterceptionLogger(enabled_providers=["bedrock"])]):
+            yield perplexity_search
+
+    @staticmethod
+    async def _send(*, tools: Sequence[Mapping[str, object]], stream: bool, **kwargs: object) -> MessagesResult:
+        return await litellm.anthropic_messages(
+            model="bedrock/converse/us.anthropic.claude-sonnet-5-5",
+            messages=[{"role": "user", "content": "latest python release"}],
+            tools=tools,
+            max_tokens=64,
+            stream=stream,
+            **kwargs,
+        )
+
+    @pytest.mark.asyncio
+    async def test_native_tool_gets_native_blocks(self, perplexity_search: respx.Route):
+        response: Final = await self._send(tools=[self.NATIVE_TOOL], stream=False)
+
+        assert perplexity_search.call_count == 1
+        assert [block["type"] for block in response["content"]] == [
+            "server_tool_use",
+            "web_search_tool_result",
+            "text",
+        ]
+        server_tool_use, tool_result, text = response["content"]
+        assert server_tool_use["name"] == "web_search"
+        assert server_tool_use["input"] == {"query": "latest python release"}
+        assert tool_result["tool_use_id"] == server_tool_use["id"]
+        assert [result["url"] for result in tool_result["content"]] == ["https://example.com/releases"]
+        assert "Release notes" in text["text"]
+        assert "Release notes" not in json.dumps(tool_result)
+
+    @pytest.mark.asyncio
+    async def test_native_blocks_reply_can_be_costed(self):
+        from litellm.litellm_core_utils.litellm_logging import Logging
+
+        logging_obj: Final = Logging(
+            model="bedrock/converse/us.anthropic.claude-sonnet-5-5",
+            messages=[{"role": "user", "content": "latest python release"}],
+            stream=False,
+            call_type="anthropic_messages",
+            start_time=datetime.datetime(2026, 1, 1),
+            litellm_call_id="short-circuit-cost",
+            function_id="short-circuit-cost",
+        )
+        logging_obj.update_environment_variables(litellm_params={}, optional_params={})
+        response: Final = await self._send(tools=[self.NATIVE_TOOL], stream=False, litellm_logging_obj=logging_obj)
+
+        assert logging_obj.response_cost_calculator(result=response) == 0.0
+
+    @pytest.mark.asyncio
+    async def test_native_tool_streams_native_blocks(self):
+        stream: Final = await self._send(tools=[self.NATIVE_TOOL], stream=True)
+        body: Final = b"".join([chunk async for chunk in stream])
+
+        starts: Final = [
+            json.loads(line.removeprefix(b"data: "))["content_block"]
+            for line in body.splitlines()
+            if line.startswith(b"data: ") and b'"content_block_start"' in line
+        ]
+        assert [block["type"] for block in starts] == ["server_tool_use", "web_search_tool_result", "text"]
+        assert starts[1]["tool_use_id"] == starts[0]["id"]
+
+    @pytest.mark.asyncio
+    async def test_litellm_standard_tool_stays_text_only(self):
+        from litellm.integrations.websearch_interception.tools import (
+            get_litellm_web_search_tool,
+        )
+
+        response: Final = await self._send(tools=[get_litellm_web_search_tool()], stream=False)
+
+        assert [block["type"] for block in response["content"]] == ["text"]
+
+
+class TestShortCircuitSafeguardResults:
+    """A short-circuited reply never reaches the backend, so the proxy answers Claude Code's safeguards itself."""
+
+    SAFEGUARDS = [{"type": "dangerous_tool_use", "classifier_context": {"v": 1, "permission_mode": "auto"}}]
+    NO_TOOL_USES_AVAILABLE = [{"type": "dangerous_tool_use", "status": {"type": "available", "tool_uses": {}}}]
+
+    async def _short_circuit(self, *, stream: bool, kwargs: dict | None):
+        from litellm.llms.anthropic.messages.native.handler import (
+            _try_websearch_short_circuit,
+        )
+
+        logger = WebSearchInterceptionLogger(enabled_providers=["github_copilot"])
+        with patch.object(logger, "_execute_search", new_callable=AsyncMock) as mock_search:
+            mock_search.return_value = ("results", None)
+            with (
+                patch("litellm.callbacks", [logger]),
+                patch("litellm.proxy.proxy_server.general_settings", {"safeguards_classifier_model": "classifier"}),
+            ):
+                return await _try_websearch_short_circuit(
+                    model="github_copilot/gpt-5.4",
+                    messages=[{"role": "user", "content": "search query"}],
+                    tools=[{"type": "web_search_20250305", "name": "web_search"}],
+                    custom_llm_provider="github_copilot",
+                    stream=stream,
+                    kwargs=kwargs,
+                )
+
+    @pytest.mark.asyncio
+    async def test_non_streaming_reply_answers_safeguards_with_no_tool_uses(self):
+        result = await self._short_circuit(stream=False, kwargs={"safeguards": self.SAFEGUARDS})
+
+        assert list(result["safeguard_results"]) == self.NO_TOOL_USES_AVAILABLE
+        assert "tool_use" not in [block["type"] for block in result["content"]]
+
+    @pytest.mark.asyncio
+    async def test_streaming_reply_carries_safeguard_results_in_the_final_message_delta(self):
+        result = await self._short_circuit(stream=True, kwargs={"safeguards": self.SAFEGUARDS})
+
+        raw = b"".join([chunk async for chunk in result]).decode()
+        events = [json.loads(line[len("data: ") :]) for line in raw.splitlines() if line.startswith("data: ")]
+        message_delta = next(event for event in events if event["type"] == "message_delta")
+        assert message_delta["delta"]["safeguard_results"] == self.NO_TOOL_USES_AVAILABLE
+        assert message_delta["delta"]["stop_reason"] == "end_turn"
+        assert [event["type"] for event in events][-2:] == ["message_delta", "message_stop"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("kwargs", [None, {"metadata": {"user_id": "u1"}}])
+    async def test_request_without_safeguards_gets_no_results(self, kwargs):
+        result = await self._short_circuit(stream=False, kwargs=kwargs)
+
+        assert "safeguard_results" not in result

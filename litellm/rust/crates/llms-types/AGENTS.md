@@ -1,0 +1,63 @@
+# rules
+
+## Scope
+
+- This crate owns shared API data contracts and their serialization, nothing else
+- A type belongs here when consumers must agree on a request, response, event or value independently of how a call executes
+- Being public, serializable or used by several crates is not enough on its own
+
+## Layout
+
+- `formats/<format>/` holds a provider-neutral API format, `providers/<provider>/` holds one provider's shared pieces
+- Every format and provider is a folder with a `mod.rs` entrypoint and its own `AGENTS.md`. No standalone `<name>.rs` next to a folder
+- A `mod.rs` only declares modules and glob re-exports them (`pub use request::*`). Constants go in `constants.rs`, types in a file named for what they describe (`request.rs`, `response.rs`, `streaming.rs`)
+- A submodule stays namespaced (`pub mod streaming`) only when its names would clash with the parent's
+- Format-independent helpers (`headers`, `recognized`, `serde_compat`, `json_schema`) stay at the crate root
+- AGENTS.md files follow the convention in `../llms/AGENTS.md`. Nested files: `src/formats/<format>/` for every format, `src/providers/<provider>/` for every provider
+
+## Formats
+
+- Name types after the format, never the originator (`formats::messages::MessagesRequest`, not `AnthropicMessagesRequest`)
+- A field defined by the format stays in the format type even when provider support varies
+- Keep one canonical definition and import path. Move consumers with the type instead of adding re-exports
+- LiteLLM's normalized contracts live here too. `ChatCompletionsResponse` is the response handed to the host, so do not swap it for a fuller upstream schema
+
+## Providers
+
+- A provider with more than one endpoint format puts shared endpoint paths, default headers and wire types used by several of its formats in `providers/<provider>/`
+- Projections that only one adapter decodes (`InvokeChunkPayload`, the count-tokens and batches adapter structs, `ReplayedWebSearchResult`) stay in `llms/src/<provider>/<format>/`
+- A typed provider extension of a format (MiniMax media blocks) belongs here once a consumer must construct or interpret it
+- Provider types may use format types. Format types never depend on provider types
+
+## Behavior on types
+
+- Allowed: deterministic constructors, accessors, serialization, schema generation, shape validation and exact value conversions
+- Not allowed: clamping, budget selection, content rewriting, finish-reason mapping, usage normalization or cross-format translation. These belong in `llms`, even when pure
+- Provider capability checks, defaults, auth and header selection belong in `llms`
+
+## What lives elsewhere
+
+- Call envelopes and execution state (`MessagesCall`, prepared requests, live streams) belong in `inference-<format>`
+- Adapter contracts and transform state (`MessagesTransformContext`, `StreamShape`) belong in `llms`
+- SSE and AWS framing belong in `framer`. Catalog records and pricing belong in `model-catalog`
+- Host hooks, Python objects, credentials, clients and routing decisions are not payload types
+
+## Dependencies
+
+- Data, serde and optional schema libraries only. No workspace execution crates, async runtimes, transport clients or Python bindings
+- No I/O, env lookup, clock access or global config reads. Defaults describe the data contract, not runtime policy
+
+## Unknown data
+
+- Model known discriminators as enum variants and keep each contract's existing handling of unknown variants, extra fields, missing fields and explicit nulls
+- Use `Recognized<T>` only where permissive passthrough is already part of the contract
+- Typing an opaque field must neither reject previously accepted input nor accept previously rejected input
+
+## Tests
+
+- Cover serialization, malformed-input rejection, unknown-value preservation and value semantics here
+- Transformations and header policy are tested in their owning crates
+
+# references
+
+- https://json-schema.org/draft/2020-12/json-schema-core

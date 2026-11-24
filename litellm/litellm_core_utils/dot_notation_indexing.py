@@ -23,7 +23,8 @@ Used by JWT Auth to get the user role from the token, and by
 additional_drop_params to remove nested fields from optional parameters.
 """
 
-from collections.abc import Mapping
+import copy
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Any, Final, TypeVar
 
 T = TypeVar("T")
@@ -79,7 +80,7 @@ def get_nested_value(data: Mapping[str, object], key_path: str, default: T | Non
     return current if isinstance(current, type(default)) else default
 
 
-def _parse_path_segments(path: str) -> list:
+def _parse_path_segments(path: str) -> list[str]:
     """
     Parse a JSONPath-like string into segments using regex.
 
@@ -101,15 +102,15 @@ def _parse_path_segments(path: str) -> list:
     import re
 
     # Match field names OR bracket expressions
-    # Pattern: field_name (anything except . or [) | [anything_in_brackets]
-    pattern: Final = r"[^\.\[]+|\[[^\]]*\]"
+    # Pattern: field_name (anything except . or [) | [anything_in_brackets except [ or ]]
+    pattern: Final = r"[^\.\[]+|\[[^\]\[]*\]"
     segments: Final = re.findall(pattern, path)
     return segments
 
 
 def _delete_nested_value_custom(
     data: dict[str, object] | list[object],
-    segments: list,
+    segments: Sequence[str],
     segment_index: int = 0,
 ) -> None:
     """
@@ -181,7 +182,7 @@ def _delete_nested_value_custom(
 
 
 def delete_nested_value(
-    data: dict[str, Any],
+    data: Mapping[str, object],
     path: str,
     depth: int = 0,
     max_depth: int = 20,
@@ -212,9 +213,7 @@ def delete_nested_value(
         >>> delete_nested_value(data, "tools[*].input_examples")
         {"tools": [{"name": "t1"}]}
     """
-    import copy
-
-    result: Final = copy.deepcopy(data)
+    result: Final = copy.deepcopy(data if isinstance(data, dict) else dict(data))
 
     try:
         # Parse path into segments
@@ -230,6 +229,13 @@ def delete_nested_value(
         # Invalid path or parsing error - silently skip
         pass
 
+    return result
+
+
+def delete_nested_values(data: Mapping[str, object], paths: Iterable[str]) -> Mapping[str, object]:
+    result: Final = copy.deepcopy(dict(data))
+    for path in dict.fromkeys(paths):
+        _delete_nested_value_custom(result, _parse_path_segments(path), 0)
     return result
 
 

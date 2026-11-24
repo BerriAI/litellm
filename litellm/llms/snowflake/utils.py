@@ -1,6 +1,8 @@
 import re
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
+from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
@@ -31,11 +33,11 @@ class SnowflakeBaseConfig:
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: Mapping[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         If any supported_openai_params are in non_default_params, add them to optional_params, so they are used in API call
 
@@ -53,7 +55,7 @@ class SnowflakeBaseConfig:
                 optional_params[param] = value
         return optional_params
 
-    def _get_api_base(self, api_base, optional_params):
+    def _get_api_base(self, api_base: str | None, optional_params) -> str:
         if not api_base:
             if "account_id" in optional_params:
                 account_id = optional_params.pop("account_id")
@@ -65,21 +67,18 @@ class SnowflakeBaseConfig:
                 raise ValueError("Invalid account_id format")
             api_base = f"https://{account_id}.snowflakecomputing.com/api/v2"
 
-        api_base = api_base.rstrip("/")
-        if not api_base.endswith("/api/v2"):
-            api_base += "/api/v2"
-        return api_base
+        return ensure_api_route(api_base, "api/v2")
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Return headers to use for Snowflake completion request
 
@@ -118,3 +117,10 @@ class SnowflakeBaseConfig:
     ) -> tuple[str | None, str | None]:
         dynamic_api_key: Final = api_key or get_secret_str("SNOWFLAKE_JWT")
         return api_base, dynamic_api_key
+
+    def get_openai_compatible_provider_info(
+        self,
+        api_base: str | None,
+        api_key: str | None,
+    ) -> tuple[str | None, str | None]:
+        return self._get_openai_compatible_provider_info(api_base, api_key)

@@ -1,5 +1,7 @@
 ## This is a template base class to be used for adding new LLM providers via API calls
-from typing import TYPE_CHECKING, Any, Union
+from collections.abc import Mapping, Sequence
+from types import TracebackType
+from typing import TYPE_CHECKING, Union
 
 import httpx
 
@@ -21,12 +23,12 @@ class BaseLLM:
         model_response: "ModelResponse",
         stream: bool,
         logging_obj: "LiteLLMLoggingObj",
-        optional_params: dict,
+        optional_params: Mapping[str, object],
         api_key: str,
-        data: dict | str,
-        messages: list,
-        print_verbose,
-        encoding,
+        data: Mapping[str, object] | str,
+        messages: Sequence[object],
+        print_verbose: object,
+        encoding: object,
     ) -> Union["ModelResponse", "CustomStreamWrapper"]:
         """
         Helper function to process the response across sync + async completion calls
@@ -40,12 +42,12 @@ class BaseLLM:
         model_response: "TextCompletionResponse",
         stream: bool,
         logging_obj: "LiteLLMLoggingObj",
-        optional_params: dict,
+        optional_params: Mapping[str, object],
         api_key: str,
-        data: dict | str,
-        messages: list,
-        print_verbose,
-        encoding,
+        data: Mapping[str, object] | str,
+        messages: Sequence[object],
+        print_verbose: object,
+        encoding: object,
     ) -> Union["TextCompletionResponse", "CustomStreamWrapper"]:
         """
         Helper function to process the response across sync + async completion calls
@@ -72,15 +74,26 @@ class BaseLLM:
         if hasattr(self, "_client_session") and self._client_session is not None:
             self._client_session.close()
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ):
         if hasattr(self, "_aclient_session"):
             await self._aclient_session.aclose()
 
-    def validate_environment(self, *args, **kwargs) -> Any | None:  # set up the environment required to run the model
+    def validate_environment(
+        self, *args, **kwargs
+    ) -> object | None:  # set up the environment required to run the model
         return None
 
-    def completion(self, *args, **kwargs) -> Any:  # logic for parsing in - calling - parsing out model completion calls
+    def completion(
+        self, *args, **kwargs
+    ) -> object | None:  # logic for parsing in - calling - parsing out model completion calls
         return None
 
-    def embedding(self, *args, **kwargs) -> Any:  # logic for parsing in - calling - parsing out model embedding calls
+    def embedding(
+        self, *args, **kwargs
+    ) -> object | None:  # logic for parsing in - calling - parsing out model embedding calls
         return None

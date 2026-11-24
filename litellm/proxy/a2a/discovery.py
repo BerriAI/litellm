@@ -14,11 +14,15 @@ fetcher dispatches by ``discovery_mode``:
   pure-A2A fallback strategy returns 404 for these deployments.
 """
 
+from collections.abc import Mapping
 from enum import Enum
-from typing import Any, Final
+from typing import Final
 from urllib.parse import urlencode
 
+from pydantic import TypeAdapter
+
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.url_utils import SSRFError, async_safe_get
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.types.llms.custom_http import httpxSpecialProvider
@@ -45,6 +49,8 @@ AGENT_CARD_WELL_KNOWN_PATHS: Final[tuple[str, ...]] = (
 
 DEFAULT_DISCOVERY_TIMEOUT_SECONDS: Final = 10.0
 
+_DECODED_JSON: Final = TypeAdapter(object)
+
 
 class AgentCardDiscoveryError(Exception):
     """Raised when none of the well-known paths returned a usable agent card."""
@@ -55,7 +61,7 @@ def _normalize_base_url(base_url: str) -> str:
 
 
 def _build_langgraph_platform_paths(
-    params: dict[str, Any] | None,
+    params: Mapping[str, object] | None,
 ) -> tuple[str, ...]:
     """Build the paths to try for LangGraph Platform discovery.
 
@@ -71,7 +77,7 @@ def _build_langgraph_platform_paths(
     return tuple(f"{path}?{query}" for path in AGENT_CARD_WELL_KNOWN_PATHS)
 
 
-def _paths_for_mode(mode: DiscoveryMode, params: dict[str, Any] | None) -> tuple[str, ...]:
+def _paths_for_mode(mode: DiscoveryMode, params: Mapping[str, object] | None) -> tuple[str, ...]:
     if mode == DiscoveryMode.WELL_KNOWN_FALLBACK:
         return AGENT_CARD_WELL_KNOWN_PATHS
     if mode == DiscoveryMode.LANGGRAPH_PLATFORM:
@@ -83,10 +89,10 @@ async def fetch_well_known_card(
     base_url: str,
     *,
     discovery_mode: DiscoveryMode = DiscoveryMode.WELL_KNOWN_FALLBACK,
-    params: dict[str, Any] | None = None,
+    params: Mapping[str, object] | None = None,
     timeout: float = DEFAULT_DISCOVERY_TIMEOUT_SECONDS,
     headers: dict[str, str] | None = None,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """
     Fetch an agent card from ``base_url`` using the strategy chosen by
     ``discovery_mode``. Returns the parsed JSON from the first path that
@@ -136,13 +142,14 @@ async def fetch_well_known_card(
             continue
 
         try:
-            card = response.json()
+            decoded = _DECODED_JSON.validate_python(response.json())
         except Exception as exc:
             last_error = f"{url}: invalid JSON ({exc})"
             continue
 
+        card = as_str_mapping(decoded)
         if not isinstance(card, dict):
-            last_error = f"{url}: expected JSON object, got {type(card).__name__}"
+            last_error = f"{url}: expected JSON object, got {type(decoded).__name__}"
             continue
 
         verbose_proxy_logger.debug("A2A discovery succeeded at %s", url)

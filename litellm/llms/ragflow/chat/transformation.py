@@ -10,10 +10,11 @@ Model name format:
 - Agent: ragflow/agent/{agent_id}/{model_name}
 """
 
+from collections.abc import Mapping
 from typing import Final
 
 import litellm
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.openai.openai import OpenAIConfig
 from litellm.secret_managers.main import get_secret, get_secret_str
 from litellm.types.llms.openai import AllMessageValues
@@ -65,8 +66,8 @@ class RAGFlowConfig(OpenAIConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         """
@@ -122,7 +123,7 @@ class RAGFlowConfig(OpenAIConfig):
         if not path.startswith("/"):
             path = "/" + path
 
-        return f"{api_base}{path}"
+        return join_api_base(api_base, path)
 
     def _get_openai_compatible_provider_info(
         self,
@@ -157,16 +158,25 @@ class RAGFlowConfig(OpenAIConfig):
 
         return dynamic_api_base, dynamic_api_key, custom_llm_provider
 
+    def get_openai_compatible_provider_info(
+        self,
+        model: str,
+        api_base: str | None,
+        api_key: str | None,
+        custom_llm_provider: str,
+    ) -> tuple[str | None, str | None, str]:
+        return self._get_openai_compatible_provider_info(model, api_base, api_key, custom_llm_provider)
+
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Validate environment and set up headers for RAGFlow API.
 
@@ -212,10 +222,10 @@ class RAGFlowConfig(OpenAIConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
+        optional_params: dict[str, object],
         litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        headers: dict[str, object],
+    ) -> dict[str, object]:
         """
         Transform request for RAGFlow API.
 
